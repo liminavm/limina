@@ -36,5 +36,7 @@ gitignored; `.xz` backup alongside it).
 
 ## Host environment (reference)
 
-- macOS 26.0, Apple M4 Pro, 64 GB RAM, arm64
-- Rust 1.90 (edition 2024), Apple clang 17 (Command Line Tools)
+- macOS 26.5, Apple M1 Max, 32 GB RAM, arm64
+- Rust 1.88 (edition 2024), full Xcode 26.4 / Apple clang 21
+- Homebrew already provides libkrun, krunkit, libkrunfw, virglrenderer,
+  molten-vk, vulkan-loader, gvproxy, libusb, qemu, etc.

@@ -10,8 +10,8 @@
 Cargo.lock.orig
 
 # Vendored / built native deps (libkrun, virglrenderer, etc.)
-/third_party/**/build
-/third_party/**/_build
+# For now these are research clones; later they become tracked submodules/patches.
+/third_party/
 /vendor-build
 
 # Editor / OS cruft
