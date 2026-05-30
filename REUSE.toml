@@ -1,0 +1,40 @@
+version = 1
+SPDX-PackageName = "limina"
+SPDX-PackageSupplier = "Gustavo Noronha Silva <gustavo@noronha.eti.br>"
+
+# Catch-all: everything is GPLv2-only + the limina linking exception,
+# © Gustavo Noronha Silva, unless an in-file SPDX header (precedence
+# "closest") or a later override says otherwise.
+[[annotations]]
+path = "**"
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 Gustavo Noronha Silva"
+SPDX-License-Identifier = "GPL-2.0-only WITH LicenseRef-limina-exception"
+
+# Linux-kernel-derived guest driver bits.
+[[annotations]]
+path = "guest/virtio-gpu-dkms/**"
+precedence = "override"
+SPDX-FileCopyrightText = ["2026 Gustavo Noronha Silva", "The Linux kernel contributors"]
+SPDX-License-Identifier = "GPL-2.0-only"
+
+# Patches against Mesa (MIT) — our authorship, Mesa's license.
+[[annotations]]
+path = ["patches/mesa-guest/**", "spikes/venus-draw-probe/kk-patches/**"]
+precedence = "override"
+SPDX-FileCopyrightText = ["2026 Gustavo Noronha Silva", "The Mesa contributors"]
+SPDX-License-Identifier = "MIT"
+
+# Instrumentation patch against MoltenVK (Apache-2.0).
+[[annotations]]
+path = "spikes/archive/moltenvk/mvk-instrument.patch"
+precedence = "override"
+SPDX-FileCopyrightText = ["2026 Gustavo Noronha Silva", "The MoltenVK contributors"]
+SPDX-License-Identifier = "Apache-2.0"
+
+# Instrumentation patch against EDK2 (BSD-2-Clause-Patent).
+[[annotations]]
+path = "spikes/archive/windowed-firmware-hang/pl011-capture-ring.patch"
+precedence = "override"
+SPDX-FileCopyrightText = ["2026 Gustavo Noronha Silva", "The EDK II contributors"]
+SPDX-License-Identifier = "BSD-2-Clause-Patent"

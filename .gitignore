@@ -1,0 +1,25 @@
+# Disk images (large; kept locally, backup is the .xz)
+*.raw
+*.raw.xz
+*.qcow2
+*.img
+
+# Rust build artifacts
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Vendored / built native deps (libkrun, virglrenderer, etc.)
+/third_party/**/build
+/third_party/**/_build
+/vendor-build
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local environment overrides
+.env
+.env.local

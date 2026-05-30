@@ -1,0 +1,24 @@
+The limina linking exception (an additional permission under GNU GPL version 2)
+
+In addition, as a special exception, the copyright holders of limina give you
+permission to combine limina with material licensed under any of the following
+licenses (each, a "permitted license"):
+
+  - the Apache License, Version 2.0, or any later version of the Apache
+    License whose terms satisfy the Debian Free Software Guidelines —
+    including, without limitation, libkrun and its Apache-2.0-licensed
+    dependencies;
+  - the Blue Oak Model License 1.0.0;
+  - the BSD-2-Clause Plus Patent License (BSD-2-Clause-Patent);
+  - the Mozilla Public License, version 2.0;
+
+whether by linking statically or dynamically or by other forms of combination,
+and to copy and convey the resulting combined work, provided that you comply
+with the permitted license for the material licensed under it.
+
+You must obey the GNU General Public License, version 2, in all respects for
+all code used other than material under a permitted license.
+
+If you modify this software, you may extend this exception to your version,
+but you are not obligated to do so. If you do not wish to do so, delete this
+exception statement from your version.
