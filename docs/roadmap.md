@@ -304,10 +304,11 @@ it to macOS when idle, with `phys_footprint` actually dropping.
 
 **Key tasks (in order — the first is cheap and makes the existing path actually work):**
 1. **Fix free-page-reporting reclaim.** Replace `libc::MADV_DONTNEED` at balloon `device.rs:100`
-   with macOS `MADV_FREE_REUSABLE`/`MADV_FREE_REUSE` so `phys_footprint` drops; this is the
-   highest-leverage bug. Enforce 16 KiB host-page alignment/coalescing in `process_frq` (Apple
-   Silicon page-size mismatch — the balloon assumes 4 KiB). This alone makes the one already-working
-   path (free-page reporting) effective.
+   with macOS `MADV_FREE_REUSABLE`/`MADV_FREE_REUSE` so `phys_footprint` drops — **spike-confirmed
+   required** (`spikes/balloon-madvise`: DONTNEED returns nothing, REUSABLE reclaims fully even while
+   `hv_vm_map`'d). Then enforce 16 KiB host-page alignment/coalescing in `process_frq` for the
+   4K-guest/16K-host mismatch (option (a) of the page-size menu — see Risks below and doc 08 §1.2).
+   This alone makes the one already-working path (free-page reporting) effective.
 2. **Implement the stubbed inflate/deflate handlers** (`event_handler.rs:14-40`, currently log
    "unsupported" and drain the eventfd) and set `num_pages`/`actual` + a config-change interrupt for
    target-driven shrink toward `min`. Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` (not currently in
@@ -330,11 +331,18 @@ handlers, DEFLATE_ON_OOM feature bit, and the new `krun_*balloon*` C API (none e
 `phys_footprint` drop back toward 2G as pages are madvised back to macOS.
 
 **Risks / spike first:**
-- **Spike #1:** does `MADV_FREE_REUSABLE` on the HVF-mapped MAP_ANON region actually drop
-  `phys_footprint` while it stays `hv_vm_map`'d, or must we also `hv_vm_protect`/`hv_vm_unmap` the
-  IPA range? This determines whether ballooning is even achievable without deeper HVF surgery.
-- Does stock Fedora report free pages in >=16 KiB-aligned runs, or do we need a guest patch / 16 KiB
-  guest granule for clean 1:1 reclamation?
+- **Spike #1 — RESOLVED** (`spikes/balloon-madvise`, 2026-05-30): `MADV_FREE_REUSABLE` drops
+  `phys_footprint` fully on the HVF-mapped MAP_ANON region with **no** `hv_vm_unmap`/`hv_vm_protect`
+  first (`hv_vm_map` does not pin pages); `MADV_DONTNEED` returns nothing, `MADV_FREE` is lazy.
+  Ballooning is achievable without deeper HVF surgery. Re-confirm on the shipping macOS version.
+- **Now the live unknown — the 4K↔16K page-size mismatch.** Both boot paths use 4 KiB guest pages
+  (libkrunfw `linux-6.12.87` + Fedora EFI kernel; verified). Because we own the guest kernel this is
+  a menu, not a wall: **(a)** host-side coalesce/align in `process_frq` (M6 default — measure waste);
+  **(b)** boot a `CONFIG_ARM64_16K_PAGES` guest kernel for 1:1 reclaim + lower stage-2 TLB pressure
+  (custom-kernel track); **(c)** patch `mm/page_reporting.c` for host-page-aware, boundary-aligned
+  free-page reporting negotiated via a new virtio-balloon feature bit (upstreamable; pursue if (a)'s
+  waste is material); **(d)** virtio-mem (later). See doc 08 §1.2. **Spike: measure how much stock
+  Fedora reporting actually returns under (a).**
 - Re-touch latency/cost of MADV_FREE_REUSE on deflate for an interactive desktop.
 - PSI watermark/hysteresis tuning to avoid balloon thrash (build/browser/IDE workloads).
 

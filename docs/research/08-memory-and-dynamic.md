@@ -99,6 +99,32 @@ Two consequences for our macOS target:
    nothing. Effectiveness on Apple Silicon is gated on the guest reporting in
    16 KiB-aligned runs (modern reporting batches at `pageblock_order`, typically
    2 MiB, so most ranges are large and aligned — but this must be measured).
+   **Confirmed: both boot paths use 4 KiB guest pages** — libkrunfw bundles
+   `linux-6.12.87` with `CONFIG_ARM64_4K_PAGES=y` (no 16K/64K, THP off;
+   `config-libkrunfw_aarch64`), and the M1 EFI path runs Fedora's stock arm64
+   kernel (also 4 KiB). So the mismatch is real on both paths.
+
+   Because **we own the guest kernel**, the 4K↔16K mismatch is a menu, not a wall
+   (cheapest → deepest):
+   - **(a) Coalesce host-side, no guest change.** In `process_frq`, merge adjacent
+     reported descriptors and only `madvise` the 16 KiB-aligned sub-runs. Free
+     given `pageblock_order` (~2 MiB) batching; the M6 default. Measure the waste.
+   - **(b) Boot the guest with 16 KiB pages.** Rebuild libkrunfw (or a Fedora
+     kernel) with `CONFIG_ARM64_16K_PAGES`. Page sizes then match 1:1 — every
+     reported page is trivially reclaimable *and* stage-2 TLB pressure drops (16K
+     is Apple's native granularity). Cost: a custom kernel (lose stock-distro boot
+     on EFI) + some 4K-assuming guest userspace. Best for the custom-kernel /
+     low-overhead track.
+   - **(c) Host-page-aware free-page reporting (new guest kernel feature).** Patch
+     `mm/page_reporting.c` / the virtio-balloon reporting path to batch & align
+     free runs to a host-page order negotiated via a new virtio-balloon feature
+     bit. The correct *general* fix (host-page > guest-page is not unique to us);
+     carry as our kernel patch now, upstream later. The "we have the sources" play.
+   - **(d) virtio-mem** for large swings — block-based, 16K-friendly granularity,
+     but a from-scratch device (see §3 Option E). Long-term, not M6.
+
+   Plan: ship (a) in M6; keep (b) as the lever for the custom-kernel track; pursue
+   (c) once measurements show (a)'s waste is material.
 
 > Summary: today the balloon device gives us **free-page reporting only**, and
 > even that reclaim call is **wrong for macOS** — `MADV_DONTNEED` returns nothing
