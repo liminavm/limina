@@ -48,6 +48,13 @@ These are settled by the research and constrain every milestone:
 login prompt on the host terminal (serial console). No window, no GPU, no real NIC. This is the
 smallest end-to-end path that exercises HVF + disk + console + entitlement.
 
+> This stock-distro boot is not just the first milestone — it is the **permanent
+> compatibility floor** (see CLAUDE.md "two-tier guarantee"). Every later milestone
+> must preserve it: an unmodified Fedora guest on upstream-shaped libkrun must keep
+> booting and stay usable, degraded where our enhancements aren't installed. Our
+> custom kernel/drivers/agent are the *enhanced* tier layered on top, never a
+> precondition for the VM to run.
+
 **Key tasks (concrete):**
 1. **Build/vendor libkrun-efi.** Build `third_party/libkrun` with `make GPU=1 INPUT=1 NET=1 BLK=1`.
    For the firmware blob: Homebrew already ships `/opt/homebrew/lib/libkrunfw-efi.dylib`

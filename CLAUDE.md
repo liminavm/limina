@@ -26,11 +26,14 @@ right tool — not treat upstream as immutable:
   scanout, USB).
 - **virglrenderer / rutabaga** — patchable; we already depend on the Apple-blob
   additions and will fork if Homebrew's build lacks them.
-- **The guest Linux kernel** — we control it. We can change its config (page size,
-  drivers), carry kernel patches, or **build entirely new kernel features** when
-  that's the cleanest fix (e.g. host-page-aware free-page reporting for the
-  16 KiB-host / 4 KiB-guest mismatch). Both boot paths (libkrunfw's bundled
-  `linux-6.12.x`, and Fedora's own kernel on the EFI path) are fair game.
+- **The guest Linux kernel** — we control it for the *enhanced* tier. We can change
+  its config (page size, drivers), carry kernel patches, or **build entirely new
+  kernel features** when that's the cleanest fix (e.g. host-page-aware free-page
+  reporting for the 16 KiB-host / 4 KiB-guest mismatch). Both boot paths
+  (libkrunfw's bundled `linux-6.12.x`, and Fedora's own kernel on the EFI path) are
+  fair game — but the stock-distro kernel must always still **boot** (degraded is
+  OK; see the two-tier guarantee below). A custom kernel is an upgrade, not a
+  requirement.
 - **Custom guest drivers and a guest agent** (`limina-agent`) — ours to write.
 
 "The sky is the limit; we have the sources and can try things out." When a problem
@@ -39,6 +42,31 @@ looks like a wall, check whether owning the source turns it into a menu. Prefer 
 but don't rule out the deep fix — and keep patches minimal and **upstreamable**
 (mechanism in the dependency, policy in limina) so we can carry them cheaply and give
 them back.
+
+### Two-tier guarantee: stock-compatible baseline + enhanced custom tier
+
+This is a hard design constraint, not a preference. limina must always support **two
+tiers**, and nothing in our design may collapse them into one:
+
+1. **Stock baseline (compatibility floor).** limina must *always* be able to boot an
+   **unmodified stock distro** (Fedora's own kernel, stock Mesa, no limina guest
+   components) on **upstream-shaped libkrun**. This is allowed to be **degraded** —
+   lower 3D perf, no dynamic memory, no USB, no clipboard, software fallbacks —
+   but it must **boot and be usable**. We never make a stock guest *fail to run*;
+   missing limina enhancements degrade gracefully, they don't break the VM.
+2. **Enhanced tier (full experience).** Installing our **custom kernel / drivers /
+   guest agent** (and running our patched libkrun) **restores/unlocks** full
+   performance and features — 16 KiB pages, host-page-aware ballooning, accelerated
+   3D, USB, clipboard, dynamic display, etc. Enhancements are *additive*: they layer
+   on top of the baseline, they are not a precondition for it.
+
+Concretely: **we are bound to neither Fedora's stock kernel nor libkrun's defaults**
+— krun config/defaults are just configuration management for our work, ours to set.
+But every feature should be designed with a stock-guest fallback path, and a guest
+that hasn't installed our components must still come up. Custom kernel/drivers/agent
+are the *upgrade*, never the *entry fee*. (Example: dynamic memory uses
+`MADV_FREE_REUSABLE` + host-side coalescing so it does *something* on a stock 4 KiB
+Fedora kernel; a 16 KiB / host-page-aware-reporting custom kernel makes it optimal.)
 
 ## High-level architecture decisions (the load-bearing ones)
 
