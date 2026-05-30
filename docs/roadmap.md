@@ -452,7 +452,7 @@ second display attaches at runtime, and resizing the window reflows the guest re
 | M3 networking | gvproxy supervision; bridged helper integration | (optional) worker.rs reconnect-on-HANG_UP |
 | M4 3D | virgl flags wiring; IOSurface present-texture backend | virglrenderer Apple-blob fork build; SET_SCANOUT_BLOB accept path + display-vtable surface-export callback (zero-copy scanout) |
 | M5 clipboard/fs/agent | guest agent, liminad, NSPasteboard bridge | none for transport (vsock+virtiofs exist) |
-| M6 dynamic memory | PSI autoballoon policy | reclaim fix + 16KiB align + inflate/deflate + krun_*balloon* API + DEFLATE_ON_OOM |
+| M6 dynamic memory | PSI autoballoon policy | reclaim fix (MADV_FREE_REUSABLE — spike-confirmed) + 16KiB align + inflate/deflate + krun_*balloon* API + DEFLATE_ON_OOM |
 | M7 USB | host claim/attach, usbip plumbing | libkrunfw kernel rebuild (USB on); later native virtio-usb + krun_add_usb* |
 | M8 audio/x86/polish | fullscreen, keymap, multi-display, FEX wiring | native virtio-snd; runtime resize/EDID; hw cursor; LED parity (zero-copy scanout already landed in M4) |
 

@@ -1,0 +1,4 @@
+# Build + run artifacts; keep source (*.c, *.entitlements, run.sh, RESULTS.md)
+footprint
+*.txt
+*.dSYM/

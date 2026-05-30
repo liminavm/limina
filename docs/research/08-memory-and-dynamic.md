@@ -83,8 +83,16 @@ Two consequences for our macOS target:
    `MADV_DONTNEED` exists but does **not** decrement the process footprint the
    way Linux does; the memory-accounting API macOS respects is
    `MADV_FREE_REUSABLE`/`MADV_FREE_REUSE` (used by libmalloc, reflected in
-   `phys_footprint` and Activity Monitor). So reported pages may not actually
+   `phys_footprint` and Activity Monitor). So reported pages do not actually
    reduce the footprint the user sees. **This is the single most important fix.**
+   **[CONFIRMED by spike `spikes/balloon-madvise`, 2026-05-30, macOS 26.5 / M1
+   Max.]** Measured on a 1 GiB `hv_vm_map`'d MAP_ANON region: `MADV_DONTNEED`
+   leaves `phys_footprint` at the full ~1026 MiB (returns nothing); `MADV_FREE` is
+   lazy (also no drop until pressure); only **`MADV_FREE_REUSABLE` drops it to
+   ~2 MiB** — and it does so **even while the region stays `hv_vm_map`'d, with no
+   `hv_vm_unmap` first** (`hv_vm_map` does not pin the pages). Note `madvise`
+   returns `rc=0` in *all* cases, including the ones that free nothing — success
+   ≠ reclaim. See the spike's `RESULTS.md` for the full 7-case matrix.
 2. **Granularity**: `desc.len` comes straight from the guest in 4 KiB-page-based
    reporting batches. The macOS host page is **16 KiB**. `madvise` only releases
    whole, aligned host pages, so a 4 KiB or unaligned reported range frees
@@ -93,9 +101,12 @@ Two consequences for our macOS target:
    2 MiB, so most ranges are large and aligned — but this must be measured).
 
 > Summary: today the balloon device gives us **free-page reporting only**, and
-> even that reclaim call is wrong for macOS. Classic inflate/deflate ballooning
-> is **not implemented** (handlers are stubs). There is no public API for any of
-> it.
+> even that reclaim call is **wrong for macOS** — `MADV_DONTNEED` returns nothing
+> to the host (confirmed by spike `spikes/balloon-madvise`); the fix is
+> `MADV_FREE_REUSABLE`, which works even on the live `hv_vm_map`'d region. Classic
+> inflate/deflate ballooning is **not implemented** (handlers are stubs), no
+> host-driven `num_pages` target is ever written, and there is **no public API**
+> for any of it. Those are the real work.
 
 ### 1.3 How guest RAM is mapped via HVF
 
@@ -110,14 +121,16 @@ do not by themselves free host RAM — the backing `mmap` pages must be `madvise
 
 ### 1.4 macOS reclaim primitives (host side)
 
-| Primitive | Behavior on macOS | Fit for ballooning |
+| Primitive | Behavior on macOS (measured 2026-05-30, macOS 26.5 / M1 Max) | Fit for ballooning |
 |-----------|-------------------|--------------------|
-| `madvise(MADV_DONTNEED)` (current code) | Weaker than Linux; does not reliably drop `phys_footprint`. | Wrong primitive — what's used today |
-| `madvise(MADV_FREE)` | Marks reclaimable; kernel reclaims under pressure; contents may persist until then. Lazy, cheap, reversible. | Soft return |
-| `madvise(MADV_FREE_REUSABLE)` + `MADV_FREE_REUSE` | Darwin pair used by libmalloc: `REUSABLE` returns pages and decrements footprint (visible in Activity Monitor); `REUSE` reclaims before re-touch. | **Best fit** — accurate footprint reduction |
+| `madvise(MADV_DONTNEED)` (current code) | `rc=0` but `phys_footprint` **does not drop** (~1026 MiB stays), mapped or not. | Wrong primitive — what's used today, returns nothing |
+| `madvise(MADV_FREE)` | Lazy: `rc=0`, footprint **does not drop until pressure**; contents may persist. | Soft return only (not prompt) |
+| `madvise(MADV_FREE_REUSABLE)` + `MADV_FREE_REUSE` | Darwin libmalloc pair: `REUSABLE` drops footprint immediately (1 GiB → ~2 MiB, measured); `REUSE` re-validates before re-touch. | **Best fit** — accurate, immediate footprint reduction |
 | `mmap(MAP_FIXED|MAP_ANON)` over the range | Hard reset to zero-fill-on-demand. | Heavyweight fallback |
 
-All operate at 16 KiB granularity on Apple Silicon.
+All operate at 16 KiB granularity on Apple Silicon. **Measured:** `hv_vm_map` does
+**not** pin pages — `MADV_FREE_REUSABLE` reclaims fully while the region stays
+mapped into the VM (no `hv_vm_unmap` first). See `spikes/balloon-madvise/RESULTS.md`.
 
 ### 1.5 Guest-side overhead and requirements
 
@@ -242,8 +255,11 @@ dynamic memory.
 
 1. **Fix the macOS reclaim call** in `process_frq()` (`balloon/device.rs:96-102`):
    on macOS use `madvise(MADV_FREE_REUSABLE)` (with `MADV_FREE_REUSE` where the
-   guest later re-touches via deflate) instead of `MADV_DONTNEED`. This is the
-   highest-leverage, smallest patch and is required by every option except A.
+   guest later re-touches via deflate) instead of `MADV_DONTNEED`. **Confirmed by
+   spike:** `MADV_DONTNEED` returns nothing on macOS 26.5 while `MADV_FREE_REUSABLE`
+   reclaims the full region even while `hv_vm_map`'d. This is the highest-leverage,
+   smallest patch and is required by every option except A. (Re-measure on the
+   shipping macOS version — this is OS-specific behavior.)
 2. **Enforce 16 KiB alignment** in the reclaim loop: only `madvise` the
    host-page-aligned, fully-covered sub-range of each descriptor; log/measure
    waste. Confirm with a spike how much stock Fedora reporting actually returns.
@@ -286,7 +302,9 @@ limina (host) so libkrun stays mechanism, not policy.
 ## 5. What must be patched / built (checklist)
 
 libkrun:
-- [ ] macOS reclaim branch (`MADV_FREE_REUSABLE`/`_REUSE`) in `balloon/device.rs:96-102`.
+- [ ] macOS reclaim branch (`MADV_FREE_REUSABLE`/`_REUSE`) in `balloon/device.rs:96-102`
+      — **required** (spike: `MADV_DONTNEED` returns nothing on macOS; `_REUSABLE` works,
+      even while `hv_vm_map`'d).
 - [ ] 16 KiB host-page alignment/coalescing in `process_frq()` (and the new inflate handler).
 - [ ] Implement IFQ (and DFQ) handlers (currently stubs, `event_handler.rs:14-40`); update `num_pages`/`actual` in config; config-change interrupt.
 - [ ] Advertise `F_DEFLATE_ON_OOM` (and consider `STATS` impl) at `device.rs:27-30`.
@@ -303,10 +321,12 @@ guest image (Fedora 43 likely already provides — verify on the raw):
 
 ## 6. Open questions / things to prototype
 
-1. **Does `MADV_FREE_REUSABLE` on the HVF-mapped `MAP_ANON` region actually drop
-   `phys_footprint` while it stays `hv_vm_map`'d?** Or must we also
-   `hv_vm_protect`/`hv_vm_unmap` the IPA range? Spike: 1 GiB region, watch
-   `phys_footprint`/Activity Monitor.
+1. **RESOLVED (spike `spikes/balloon-madvise`, 2026-05-30, macOS 26.5 / M1 Max):**
+   `MADV_FREE_REUSABLE` **does** drop `phys_footprint` (1 GiB → ~2 MiB) while the
+   region stays `hv_vm_map`'d, and `hv_vm_map` does **not** pin the pages — no
+   `hv_vm_unmap`/`hv_vm_protect` needed first. `MADV_DONTNEED` (current code)
+   returns nothing; `MADV_FREE` is lazy. So balloon reclaim on macOS/HVF is viable
+   **with the `MADV_FREE_REUSABLE` fix**. Re-confirm on the shipping OS version.
 2. **How much does stock Fedora free-page reporting actually return on Apple
    Silicon** given the 4 KiB→16 KiB mismatch? Does the guest report in
    ≥16 KiB-aligned runs (pageblock_order batching), or do we need a guest patch?
