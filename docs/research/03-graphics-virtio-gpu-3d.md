@@ -111,6 +111,49 @@ Display metadata: `DisplayInfo { width, height, edid }` (`display.rs:7-24`); EDI
 - **virgl (GL)**: guest Mesa `virgl` Gallium driver → host virglrenderer GL backend. Upstream virglrenderer's GL path needs a host GL context (EGL/GLX). macOS has no system EGL; Homebrew `libepoxy` + a software/ANGLE-ish path would be needed, and there is no evidence libkrun's macOS build wires a working host GL context. **Assume virgl GL is effectively non-functional / unaccelerated on the macOS host** unless proven otherwise; the supported macOS path is Venus.
 - **zink** (guest): guest OpenGL → Mesa `zink` → guest Vulkan → Venus → MoltenVK → Metal. This is how GL apps get acceleration on a Venus-only host: do GL→VK translation *in the guest*, not on the host. This is the strategically important path for a Linux desktop (most desktop apps are GL/GLX/EGL).
 
+### 1.10a Copy vs share: a consolidated answer (verified)
+
+The single most-asked question — "do guest and host share buffers, or is there copying?" —
+has **three different answers depending on the path**, all verified against this tree:
+
+| Path | What moves | Copy / serialize? |
+|---|---|---|
+| **Bulk GPU memory** (3D resources, Venus host-visible blobs) | the buffer's host pages are mapped into the guest | **Zero-copy, genuinely shared** |
+| **Venus command submission** (Vulkan API forwarding) | the verbs are marshalled into the ring; large payloads are *referenced*, not streamed | Per-call (de)serialize of commands; **no buffer copy** |
+| **Scanout → host window present** | the whole framebuffer is read back to a CPU buffer each flush | **Full-frame copy per present** |
+
+1. **Bulk GPU memory is shared, not copied.** `resource_map_blob` (macOS path,
+   `virtio_gpu.rs:891-942`) takes the renderer's own allocation via
+   `rutabaga.map_ptr(resource_id)` (`:903`, backed by `virgl_renderer_resource_get_map_ptr`),
+   and for `RUTABAGA_MEM_HANDLE_TYPE_APPLE` (`:906`) sends
+   `WorkerMessage::GpuAddMapping(map_ptr, guest_addr, size)` to the VMM thread (`:918-926`).
+   `Vm::add_mapping` (`vmm/src/macos/vstate.rs:133-151`) then does `hvf_vm.unmap_memory` +
+   **`hvf_vm.map_memory(host_addr, guest_addr, len)` → `hv_vm_map`** (`hvf/src/lib.rs:274`).
+   So the host GPU buffer's physical pages are stitched directly into the guest's SHM "vRAM
+   window"; the guest CPU/GPU reads and writes the *same memory* — no copy, no serialization.
+   This is the whole point of host-visible blobs / `USE_EXTERNAL_BLOB` / the `map2` patch.
+2. **Venus serializes verbs, shares nouns.** Venus is API-remoting: Vulkan calls are encoded
+   into the command ring and replayed on the host (the per-call cost behind the ~77% figure
+   in §1.10), but the large data (textures, vertex/index/uniform buffers, render targets)
+   lives in the shared host-visible blobs from (1) and is *referenced by handle*, not pushed
+   through the ring. "Serialize the commands, share the buffers."
+3. **Scanout present is a full-frame CPU copy — the one real copy on the hot path.**
+   `flush_resource` (`virtio_gpu.rs:518-546`) runs, per flush:
+   `alloc_frame(scanout_id)` → **`read_2d_resource`** → `present_frame`. `read_2d_resource`
+   (`:491-515`) calls `rutabaga.transfer_read(...)`, copying the **entire** framebuffer
+   (tightly packed BGRA, `stride = width*4`) out of GPU memory into the backend's CPU buffer.
+   At 4K that is ~33 MB/frame (~2 GB/s at 60 Hz). Two sharp edges: the readback does
+   `.unwrap()` on the transfer (`:512`) — a resource the renderer can't read **panics the GPU
+   worker**; and `SET_SCANOUT_BLOB` (the zero-copy alternative) currently `panic!`s
+   (`worker.rs:334`).
+
+> **Nuance on (3) for our M1 host:** on UMA, if the limina display backend returns an
+> `MTLBuffer.contents()` (`StorageModeShared`) pointer from `alloc_frame`, libkrun's
+> `transfer_read` writes straight into memory Metal can sample — so it is effectively **one
+> copy total** (the unavoidable virtio readback), not two, and there is no second host-side
+> upload. See doc 09 §"Frame path". The fully zero-copy goal (no readback at all) is option C
+> below: make the scanout resource itself a host-visible/IOSurface blob the layer samples.
+
 ### 1.10 Performance (external, label = reported)
 
 Confirmed via web: **llama.cpp ggml-vulkan on macOS runs at ~77% of llama.cpp ggml-metal** on the same Mac, and libkrun's Vulkan *API-forwarding* (Venus→virglrenderer→MoltenVK) adds **minimal overhead on top of that** — i.e. the dominant gap is Vulkan-vs-Metal in the app, not the virtualization layer (Red Hat Developer 2025-09-18; Sergio López / sinrega.org; LunarG "State of Vulkan on Apple" Jan 2026). Red Hat also reports a combined ~40x improvement over the prior macOS-container GPU baseline. `vulkaninfo` in the guest shows the device as **"Virtio-GPU Venus (Apple M1)"**. Caveat: all of this measures **compute**; the *graphics present* overhead (the per-flush CPU read-back in §1.6) is a separate, publicly unmeasured cost that limina must benchmark itself.
@@ -184,10 +227,14 @@ The limina display feature splits into two largely independent decisions: **(A) 
 
 ### C. Zero-copy / accelerated scanout (optimization, patch libkrun)
 
-**C1. Implement `SET_SCANOUT_BLOB` + present a GPU texture directly.**
+**C1. Implement `SET_SCANOUT_BLOB` + present a GPU texture directly (the way to kill the one
+remaining hot-path copy — see §1.10a path 3). This is a scheduled M4 task, not vague "later".**
 - Today `SET_SCANOUT_BLOB` `panic!`s (`worker.rs:334`). Patch libkrun to (a) accept scanout-from-blob, (b) export the blob's Metal/IOSurface-backed texture, (c) extend the display vtable with a "present_texture(scanout_id, iosurface/blob_id)" path so the backend can wrap it in a `CAMetalLayer` drawable with no CPU copy.
-- Pros: eliminates the per-frame read-back; needed for smooth full-screen 3D/video.
+- Pros: eliminates the per-frame read-back (§1.10a); needed for smooth full-screen 3D/video; also removes the `read_2d_resource` `.unwrap()` panic on the present path.
 - Cons: requires libkrun + display-ABI changes and a virglrenderer that can export an IOSurface/Metal texture for a scanout resource (the Apple blob path exports a `map_ptr`, not necessarily a renderable texture handle). New ABI surface to design and maintain.
+- **Sequencing:** the bulk-memory zero-copy (§1.10a path 1) already works and ships in M4
+  with Venus; this scanout zero-copy is the *second* M4 deliverable, layered on the M2
+  CPU-pull present path. Until it lands, present stays the (single, UMA-shared) copy from M2.
 
 **C2. Present-sync / fences for tear-free display.**
 - Couple `present_frame` to the guest's flush fence and to CAMetalLayer vsync. Likely needs explicit-sync plumbing (Mesa `virtio-gpu` explicit sync) to avoid presenting half-rendered frames. Patch territory.
@@ -203,7 +250,12 @@ For the first milestone (boot `Fedora-Workstation-43.raw` to a usable desktop) a
 
 1. **Rendering: A1 (Venus over MoltenVK).** Build libkrun ourselves with `--features gpu`. Pass `virgl_flags = USE_EGL | VENUS | RENDER_SERVER | THREAD_SYNC | USE_ASYNC_FENCE_CB` to match the in-tree `gui_vm` macOS config (`main.rs:153-161`); the EGL/RENDER_SERVER bits are effectively no-ops on the macOS virglrenderer but we keep them for parity with the proven config. Do **not** set `NO_VIRGL` (keep virgl advertised) and do not bother with `DRM`/`USE_EXTERNAL_BLOB`. Rely on Fedora 43's in-guest Mesa `venus` for Vulkan and **`zink` for GL desktop apps**. Spike whether `virgl_resource_map2` is relevant on macOS (its `resource_map_blob` is a separate `cfg(macos)` impl, so likely Linux-only).
 2. **Present: B1/B2 — write a macOS `CAMetalLayer` display backend** implementing the `krun_display_basic_framebuffer_vtable`. This is the single biggest piece of net-new code and unblocks the milestone with **no libkrun patch**. Use multi-buffering so `alloc_frame` never blocks; honor the damage rect in `present_frame`.
-3. **Defer C (zero-copy scanout) until after a working desktop.** Then patch libkrun to implement `SET_SCANOUT_BLOB` and extend the display ABI for texture/IOSurface present, to remove the per-frame CPU read-back for full-screen 3D.
+3. **C (zero-copy scanout) is a scheduled M4 task, sequenced after the M2 CPU-pull present and the
+   M4 Venus/bulk-blob work — not an open-ended "someday".** Bulk 3D memory is already shared
+   zero-copy via `hv_vm_map` (§1.10a path 1); the remaining copy is the per-flush scanout readback
+   (§1.10a path 3). Removing it = patch libkrun to implement `SET_SCANOUT_BLOB` + extend the display
+   ABI for an IOSurface/texture present (reusing the M4 virglrenderer Apple-blob build). Spike the
+   IOSurface↔MoltenVK interop before committing the ABI.
 
 What must be patched / built by us:
 - **Build by us**: a macOS Metal/Cocoa display backend (the vtable) — required.

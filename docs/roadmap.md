@@ -208,21 +208,40 @@ subnet reachable from another host.
    pointer into the guest (host-visible/DAX); without these patches Venus host-visible memory breaks.
 3. **GPU SHM vRAM window.** Keep the 8 GiB-default guest-physical SHM window (lazy `hv_vm_map`, not
    committed RAM) via `krun_set_gpu_options2`; reconcile its GPA layout with M6 ballooning.
+   NB: bulk 3D buffers are already **zero-copy/shared** here (guest reads/writes the renderer's
+   own pages via `hv_vm_map`); only the *scanout present* still copies — see task 4.
+4. **Zero-copy scanout present (`SET_SCANOUT_BLOB`) — second M4 deliverable.** The M2 present path
+   copies the whole framebuffer out of GPU memory every flush (`read_2d_resource` →
+   `transfer_read`, `virtio_gpu.rs:491-515`; full-frame, tightly-packed `width*4`); on M1 UMA that
+   is one shared-buffer copy, fine for desktop UI but a real cost for full-screen 3D/video at
+   Retina. `SET_SCANOUT_BLOB` currently `panic!`s (`worker.rs:334`). Patch libkrun to: (a) accept
+   scanout-from-blob; (b) export the scanout blob as an IOSurface/Metal-texture handle (depends on
+   the same virglrenderer Apple-blob support as task 2); (c) add a display-vtable **feature bit +
+   `present_texture(scanout_id, surface)` callback** (joint change to `libkrun_display.h`, shared
+   with doc 09 option C) so the limina backend wraps it straight into a `CAMetalLayer` drawable with
+   no readback. This also removes the `read_2d_resource` `.unwrap()` panic on the present path.
+   Spike IOSurface↔virglrenderer/MoltenVK interop *before* committing the ABI (see risks).
 
-**libkrun patches:** likely a virglrenderer fork build (Apple blob patches). Defer the
-`SET_SCANOUT_BLOB` zero-copy path (currently panics) — present stays the CPU-pull 2D path from M2
-for now.
+**libkrun patches:** (1) a virglrenderer fork build (Apple blob patches), shared by tasks 2 & 4;
+(2) the `SET_SCANOUT_BLOB` accept path + a new display-vtable surface-export callback for task 4.
+Tasks 1–3 land first (Venus + bulk zero-copy); task 4 layers on the M2 CPU-pull present.
 
-**Done test:** In the guest, `glxinfo`/`vulkaninfo` reports the virtio-gpu/Venus renderer (not
+**Done test:** (a) In the guest, `glxinfo`/`vulkaninfo` reports the virtio-gpu/Venus renderer (not
 llvmpipe), `glmark2` runs on the GPU, and GNOME Shell animations are smooth in the limina window.
+(b) With task 4 landed, a full-screen `glmark2`/video shows **no per-frame `read_2d_resource`
+readback** in a libkrun trace and present is driven from an IOSurface-backed texture; frame pacing
+holds at the display refresh at Retina resolution.
 
 **Risks / spike first:**
 - **Spike #1: does Homebrew virglrenderer carry the Apple blob patches?** Decides whether MAP_BLOB
   and Venus host-visible memory work at all. Test with `examples/gpu_vulkan.c` early.
 - Does Fedora 43 Mesa 25.2 auto-select venus and does zink-on-venus accelerate GNOME/Firefox or fall
   back to llvmpipe? Verify in the actual `.raw`.
-- Per-frame `read_2d_resource` cost at Retina — is CPU-copy present good enough or is SET_SCANOUT_BLOB
-  zero-copy needed sooner (the public 77% figure is compute-only)?
+- **Spike before committing task 4's ABI:** IOSurface ↔ virglrenderer/MoltenVK interop — can a
+  scanout blob be exported as an IOSurface-backed `MTLTexture` the renderer writes into directly?
+  If not, task 4's `present_texture` design changes shape. Measure the M2 per-frame
+  `read_2d_resource` cost at Retina first to confirm how urgently task 4 is needed (the public 77%
+  figure is compute-only and says nothing about present cost).
 - MoltenVK feature coverage vs what zink/venus request (tessellation, hostImageCopy, extensions).
 
 ---
@@ -431,11 +450,11 @@ second display attaches at runtime, and resizing the window reflows the guest re
 | M1 boot | CLI, krun-sys, child supervisor, codesign | (optional) harden panic exit paths |
 | M2 display+input | Metal display backend, input provider, kVK->KEY table | (likely) Darwin input-worker epoll/eventfd shim |
 | M3 networking | gvproxy supervision; bridged helper integration | (optional) worker.rs reconnect-on-HANG_UP |
-| M4 3D | virgl flags wiring | virglrenderer Apple-blob fork build |
+| M4 3D | virgl flags wiring; IOSurface present-texture backend | virglrenderer Apple-blob fork build; SET_SCANOUT_BLOB accept path + display-vtable surface-export callback (zero-copy scanout) |
 | M5 clipboard/fs/agent | guest agent, liminad, NSPasteboard bridge | none for transport (vsock+virtiofs exist) |
 | M6 dynamic memory | PSI autoballoon policy | reclaim fix + 16KiB align + inflate/deflate + krun_*balloon* API + DEFLATE_ON_OOM |
 | M7 USB | host claim/attach, usbip plumbing | libkrunfw kernel rebuild (USB on); later native virtio-usb + krun_add_usb* |
-| M8 audio/x86/polish | fullscreen, keymap, multi-display, FEX wiring | native virtio-snd; runtime resize/EDID; hw cursor; (opt) zero-copy scanout; LED parity |
+| M8 audio/x86/polish | fullscreen, keymap, multi-display, FEX wiring | native virtio-snd; runtime resize/EDID; hw cursor; LED parity (zero-copy scanout already landed in M4) |
 
 ## First three things to spike (highest uncertainty, gate the most)
 
