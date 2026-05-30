@@ -110,6 +110,11 @@ prerequisite.
 > the *entire* USB feature, every option below included. Note the configs *do*
 > already carry `CONFIG_USB_OHCI_LITTLE_ENDIAN=y`, a stale leftover that is
 > inert while `USB_SUPPORT` is off.
+>
+> **Two-tier framing (per [CLAUDE.md](../../CLAUDE.md)):** the kernel rebuild
+> gates *USB*, never *stock boot*. USB passthrough is an **enhanced-tier**
+> feature — a stock guest simply lacks it and still boots/runs fine. The
+> custom-kernel prerequisite here is the entry fee for *USB*, not for the VM.
 
 ### 1.5 macOS device-claiming reality (the hard part)
 

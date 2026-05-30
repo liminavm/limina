@@ -16,6 +16,16 @@ Host baseline: macOS 26.5, Apple M1 Max, 32 GB, arm64, 16 KiB host pages, Rust 1
 
 ## 1. Guiding decisions (the load-bearing ones)
 
+> **D0 — Two-tier guarantee (governs everything below).** limina must *always* boot an
+> **unmodified stock distro** (Fedora's own kernel, stock Mesa, no limina guest components)
+> on **upstream-shaped libkrun** as a usable—if degraded—baseline; missing limina features
+> degrade gracefully and never make a stock guest fail. Our custom kernel / drivers /
+> `limina-agent` + patched libkrun are an **additive enhanced tier** (full perf+features),
+> never a precondition for the VM to run. We are bound to neither Fedora's stock kernel nor
+> libkrun's defaults. Every decision below must preserve a stock-guest fallback path. See
+> [CLAUDE.md](../../CLAUDE.md) and [00-overview §2](../research/00-overview.md). The M1 boot
+> is the permanent compatibility floor; later milestones may not regress it.
+
 | # | Decision | Why | Source |
 |---|----------|-----|--------|
 | D1 | **Keep libkrun's HVF backend; patch it selectively (Option B).** Do not adopt Apple Virtualization.framework; do not rewrite the VMM. | Vz is closed/unpatchable and forbids limina's differentiators (custom virtio devices, USB passthrough, fine-grained ballooning, custom guest agent) and *still* needs `com.apple.vm.networking`/root for bridged net. libkrun's HVF run loop, PSCI/SMP bringup, in-kernel `hv_gic`, vtimer, WFI-parking already work. | [02] |
@@ -26,7 +36,7 @@ Host baseline: macOS 26.5, Apple M1 Max, 32 GB, arm64, 16 KiB host pages, Rust 1
 | D6 | **Display: native NSWindow + CAMetalLayer presenter implementing the verified `krun_display_backend` vtable** (`configure_scanout`/`disable_scanout`/`alloc_frame`/`present_frame`), in Rust via the in-tree `krun-sys` crate. No GTK/SDL in the product. | The display ABI is real and works; `alloc_frame` hands back a shared-storage `MTLBuffer.contents()` so on M1 UMA there is one copy total. | [03][09] |
 | D7 | **Input: vtable path `krun_add_input_device`** (config-backend + event-provider `#[repr(C)]` structs), macOS UI thread → ring + readable fd → libkrun input worker. Guest owns the keyboard layout; host owns the `kVK_*`→`KEY_*` table and Command/Option swap. | The `_fd`/passthrough path is Linux-host only. Translation needs no libkrun patch. | [04] |
 | D8 | **One multiplexed control connection over a single `krun_add_vsock_port` with the guest connecting out** (no `listen` flag), TSI left on. 16-byte `FrameHeader` + CBOR. This is the limina-agent ↔ liminad control plane. | IPC ports coexist with TSI with no patch (`unix_ipc_port_map` is separate from `tsi_flags`). | [05][10] |
-| D9 | **Dynamic memory requires a libkrun patch.** Phase 0 ships static RAM. The balloon device exists but only free-page-reporting is wired, `num_pages`/`actual` are never set, and reclaim uses Linux `MADV_DONTNEED` which doesn't drop `phys_footprint` on macOS. | No public balloon API in `libkrun.h`. Highest-leverage fix: `MADV_FREE_REUSABLE` + 16 KiB alignment. | [08][10] |
+| D9 | **Dynamic memory requires a libkrun patch — feasibility now proven.** Phase 0 ships static RAM. The balloon device exists but only free-page-reporting is wired, `num_pages`/`actual` are never set, and reclaim uses `MADV_DONTNEED`. **Spike confirmed** (macOS 26.5/M1 Max): `hv_vm_map` does not pin pages — reclaim works on the live mapped region with no unmap — and `MADV_FREE_REUSABLE` drops `phys_footprint` fully (`MADV_DONTNEED` returns nothing). | No public balloon API in `libkrun.h`. Fix: `MADV_FREE_REUSABLE` + 16 KiB align (4K-guest/16K-host page menu), inflate/deflate, public API, PSI policy. | [08][10], `spikes/balloon-madvise` |
 
 ---
 
@@ -476,17 +486,22 @@ libusb-claimable devices to avoid that. [02][06][07]
 
 ## 10. Milestone roadmap
 
-- **M1 — Boot.** EFI + `krun_add_disk` of the Fedora `.raw`; CAMetalLayer display backend
-  (model B, in-worker window); abs-tablet + keyboard input; gvproxy NAT; vsock control plane
-  with HELLO/HEARTBEAT/SHUTDOWN; static RAM. Codesigned `limina-vmm`.
-- **M2 — Desktop usable.** Venus 3D verified (zink-on-venus, not llvmpipe); relative-mouse +
-  capture/grab; CGEventTap system-combo capture; Cmd/Option swap + custom keybindings;
-  text clipboard; fullscreen + HiDPI; net-worker reconnect; panic hardening.
-- **M3 — Differentiators.** Dynamic memory (balloon patch + PSI policy + 16 KiB reclaim);
-  native virtio-snd→CoreAudio; runtime display resize patch; image clipboard; virtiofs file
-  sharing; FEX x86.
-- **M4 — Advanced.** USB passthrough (libkrunfw USB rebuild → USB/IP → native virtio-usb);
-  bridged networking (vmnet); zero-copy IOSurface scanout (move to display model A).
+The canonical, milestone-by-milestone plan lives in **[../roadmap.md](../roadmap.md)** (M1
+boot → M8 polish), with per-milestone goals, libkrun patches, done-tests, and spikes. It is
+the single source of truth for sequencing; do not maintain a parallel scheme here.
+
+This doc's job is the *architecture* those milestones build on. The mapping at a glance:
+
+| Roadmap milestone | Architecture pieces it exercises |
+|---|---|
+| **M1** boot to serial console | child-process `limina-vmm` (§2), EFI+disk boot flow (§6), codesign (§9), `krun-sys` (§5) |
+| **M2** display + input | display model B in-worker window (§2.4), `limina-display`/`limina-input` (§4.1), vsock control plane (D8) |
+| **M3** networking | `limina-net` + gvproxy supervision (§4.1), net-worker HANG_UP patch (§3.4) |
+| **M4** 3D + zero-copy scanout | virgl flags (§3.2), virglrenderer Apple-blob build, `SET_SCANOUT_BLOB` patch + display model A migration (§2.4) |
+| **M5** clipboard + virtiofs + agent | `liminad` bridge (§4.1), `limina-agent` (§4.2), virtiofs-overlay delivery |
+| **M6** dynamic memory | balloon patch series (§3.4 D9), PSI policy host-side, page-size menu |
+| **M7** USB | libkrunfw USB rebuild + native virtio-usb (§3.4), privileged-helper/entitlement (§9) |
+| **M8** audio + x86 + polish | native virtio-snd→CoreAudio (§3.4), FEX wiring (§4.2), runtime display resize, fullscreen/multi-display |
 
 ---
 
@@ -497,8 +512,8 @@ These gate or reshape decisions above; track in issues:
 2. Fedora `.raw` boots end-to-end via EFI/disk; rootfs layout (btrfs/LVM) for the remount fallback. [01][03]
 3. Does the input worker (epoll/eventfd shim) build/run on macOS arm64 with `--features input`; what fd does `get_ready_efd` return (pipe read-end?). [04]
 4. Display model A vs B long-term: IOSurface ⇄ virglrenderer/MoltenVK interop feasibility before committing to zero-copy export. [03][09]
-5. Does `MADV_FREE_REUSABLE` on the HVF-mapped `MAP_ANON` region actually drop `phys_footprint` while it stays `hv_vm_map`'d? (gates dynamic memory) [08]
-6. 4 KiB-guest vs 16 KiB-host: does Fedora report free pages in ≥16 KiB-aligned runs, or do we need a 16 KiB guest granule / guest patch? [08]
+5. **RESOLVED** (`spikes/balloon-madvise`): `MADV_FREE_REUSABLE` drops `phys_footprint` on the live `hv_vm_map`'d region with no unmap; `MADV_DONTNEED` returns nothing. Dynamic memory is feasible on macOS/HVF. [08]
+6. 4 KiB-guest vs 16 KiB-host (both boot paths are 4 KiB, verified): how much does stock Fedora reporting actually return under host-side coalescing (menu option a), and is a 16 KiB guest kernel (option b) / a host-page-aware reporting patch (option c) worth it? [08] §1.2
 7. gvproxy speaks the `VFKT` dgram handshake `unixgram.rs` sends; outbound DHCP+curl works. [07]
 8. GNOME/Mutter Fedora 43 implements `wlr/ext-data-control` so an unfocused agent can read/set the clipboard. (clipboard #1 blocker) [05]
 9. Native virtio-snd spike: card enumerates in guest and plays a tone via a CoreAudio AudioUnit; latency vs Parallels. [11]

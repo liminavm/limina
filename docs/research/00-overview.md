@@ -63,12 +63,29 @@ vsock control plane + a shutdown eventfd.
 
 ## 2. The findings that shape everything
 
+> **Governing constraint — the two-tier guarantee (see [CLAUDE.md](../../CLAUDE.md)).**
+> limina must *always* boot an **unmodified stock distro** (Fedora's own kernel,
+> stock Mesa, no limina guest components) on **upstream-shaped libkrun** as a
+> usable—if **degraded**—baseline. Missing limina features degrade gracefully; they
+> never make a stock guest fail to run. Our custom kernel / drivers / `limina-agent`
+> + patched libkrun are an **additive enhanced tier** that restores full
+> performance and features — an upgrade, never the entry fee. We are bound to
+> *neither* Fedora's stock kernel *nor* libkrun's defaults (krun config is just our
+> configuration management). Every feature below is designed with a stock-guest
+> fallback path. The M1 Fedora boot is the **permanent compatibility floor** every
+> later milestone must preserve.
+
 1. **libkrun is NOT headless.** It has a complete virtio-gpu (Venus/Vulkan via
    MoltenVK->Metal), a virtio-input vtable ABI, and a display-backend vtable.
    The single biggest *net-new* piece is a native macOS NSWindow + CAMetalLayer
-   presenter — no libkrun patch needed for a first display. See
-   [03](03-graphics-virtio-gpu-3d.md), [04](04-input-and-keyboard.md),
-   [09](09-display-host-integration.md).
+   presenter — no libkrun patch needed for a first display. **Bulk 3D GPU memory
+   is already zero-copy/shared** (guest maps the renderer's own pages via
+   `resource_map_blob` -> `GpuAddMapping` -> `hv_vm_map`; Venus serializes only the
+   *commands*, not the buffers); the **only** copy on the graphics hot path is the
+   scanout->window present (a full-frame `read_2d_resource`). Removing that —
+   `SET_SCANOUT_BLOB` + a `present_texture` display-vtable callback — is a
+   **scheduled M4 task**, not deferred. See [03](03-graphics-virtio-gpu-3d.md),
+   [04](04-input-and-keyboard.md), [09](09-display-host-integration.md).
 
 2. **The process dies on guest shutdown.** `krun_start_enter` never returns
    normally; guest PSCI SYSTEM_OFF -> `exit_evt` -> process teardown. limina must
@@ -86,11 +103,31 @@ vsock control plane + a shutdown eventfd.
    backend (run loop, PSCI/SMP, in-kernel `hv_gic` GICv3, vtimer, WFI parking)
    already works. See [02](02-macos-hvf.md).
 
-5. **Dynamic memory requires a libkrun patch.** A virtio-balloon device is
-   attached unconditionally but only free-page-reporting is wired, the reclaim
-   uses Linux `MADV_DONTNEED` (ineffective on macOS / wrong page granularity),
-   and no `krun_*` API drives it. This is the hardest target feature. See
-   [08](08-memory-and-dynamic.md).
+5. **Dynamic memory requires a libkrun patch — but it is now proven viable on
+   macOS/HVF.** A virtio-balloon device is attached unconditionally, but only
+   free-page-reporting is wired, `num_pages`/`actual` are never driven, and the
+   reclaim uses Linux `MADV_DONTNEED`. **Spike (2026-05-30, macOS 26.5/M1 Max)
+   resolved the feasibility question:** `hv_vm_map` does **not** pin pages —
+   reclaim works on the live mapped region with no `hv_vm_unmap` first — and
+   `MADV_FREE_REUSABLE` drops `phys_footprint` fully (`MADV_DONTNEED` returns
+   nothing on macOS; `MADV_FREE` is lazy). So the patch is: swap to
+   `MADV_FREE_REUSABLE`, implement inflate/deflate + a public balloon API, and
+   drive a min..max policy from guest PSI. The remaining open question is the
+   page-size tax (finding 5b), not viability. Still the hardest feature, but no
+   longer the riskiest. See [08](08-memory-and-dynamic.md),
+   [`spikes/balloon-madvise/RESULTS.md`](../../spikes/balloon-madvise/RESULTS.md).
+
+5b. **The guest is 4 KiB-paged, the host is 16 KiB — a menu we own, not a wall.**
+   Both boot paths use 4 KiB guest pages (libkrunfw `linux-6.12.87`
+   `CONFIG_ARM64_4K_PAGES`; Fedora's EFI kernel). `madvise` only frees whole
+   aligned 16 KiB host pages, so reclaim effectiveness depends on the guest
+   reporting in aligned runs. Because we own the guest kernel this is a graded
+   choice: **(a)** host-side coalesce/align in `process_frq` (M6 default, no guest
+   change); **(b)** boot a `CONFIG_ARM64_16K_PAGES` guest kernel (1:1 reclaim +
+   lower stage-2 TLB pressure; enhanced-tier custom kernel); **(c)** a new
+   host-page-aware free-page-reporting kernel feature (upstreamable); **(d)**
+   virtio-mem later. Stock 4 KiB Fedora still works under (a) — degraded, per the
+   two-tier guarantee. See [08](08-memory-and-dynamic.md) §1.2.
 
 6. **The guest kernel has USB entirely disabled** (`# CONFIG_USB_SUPPORT is not
    set` in every libkrunfw profile). USB passthrough is blocked until libkrunfw
@@ -122,7 +159,7 @@ vsock control plane + a shutdown eventfd.
 | Boot Fedora .raw (M1) | EFI firmware + `krun_add_disk` path exists | EFI firmware sourcing; child-process VMM; boot bring-up | [01](01-libkrun-internals-and-api.md), [03](03-graphics-virtio-gpu-3d.md) |
 | HVF backend / SMP / GIC | Yes — run loop, hv_gic, vtimer, WFI park | Harden panic paths; QoS hints; codesign exe | [02](02-macos-hvf.md) |
 | Display / present | virtio-gpu + display vtable (CPU pull, full-frame) | **Native NSWindow + CAMetalLayer presenter** (biggest new piece) | [09](09-display-host-integration.md), [03](03-graphics-virtio-gpu-3d.md) |
-| 3D accel | Venus->MoltenVK->Metal via rutabaga | Pass virgl flags; verify Apple blob patches in virglrenderer; defer zero-copy scanout | [03](03-graphics-virtio-gpu-3d.md) |
+| 3D accel | Venus->MoltenVK->Metal via rutabaga; bulk GPU buffers already zero-copy/shared via hv_vm_map | Pass virgl flags; verify Apple blob patches in virglrenderer; add zero-copy scanout (SET_SCANOUT_BLOB + present_texture) in **M4** | [03](03-graphics-virtio-gpu-3d.md) |
 | Fullscreen / HiDPI | display geometry + EDID config (pre-boot only) | NSWindow toggleFullScreen; patch runtime resize/EDID/hotplug | [09](09-display-host-integration.md), [04](04-input-and-keyboard.md) |
 | Mouse / abs+rel pointer | virtio-input vtable, shape set by capability bitmaps | Register abs tablet + rel mouse; switch on capture | [04](04-input-and-keyboard.md) |
 | Keyboard + macOS combos | virtio-input vtable (verbatim events) | NSView events -> CGEventTap (toggle); host kVK->KEY_* table | [04](04-input-and-keyboard.md) |
@@ -131,7 +168,7 @@ vsock control plane + a shutdown eventfd.
 | USB passthrough | **None** (kernel USB disabled, no libkrun code) | Rebuild libkrunfw kernel; USB/IP over vsock; later native virtio-usb | [06](06-usb-passthrough.md) |
 | NAT networking | virtio-net + unixgram/unixstream; TSI default | gvproxy via `krun_add_net_unixgram` + VFKIT; supervise gateway | [07](07-networking.md) |
 | Bridged networking | virtio-net transport exists | vmnet helper + `com.apple.vm.networking` entitlement (later) | [07](07-networking.md) |
-| Low memory overhead | demand-paged MAP_ANON guest RAM | Tune; 16 KiB-aware reclaim | [08](08-memory-and-dynamic.md) |
+| Low memory overhead | demand-paged MAP_ANON guest RAM (reclaim works on the live hv_vm_map'd region — spike) | `MADV_FREE_REUSABLE` reclaim + 16 KiB align; page-size menu (4K-guest/16K-host) | [08](08-memory-and-dynamic.md) |
 | Dynamic memory (balloon) | balloon device present, only reporting wired | **Patch:** fix reclaim (MADV_FREE_REUSABLE), implement inflate/deflate, add `krun_add_balloon` API + PSI agent | [08](08-memory-and-dynamic.md), [10](10-guest-agent-and-vsock.md) |
 | Guest agent / control plane | vsock<->AF_UNIX, shutdown eventfd, timesync | limina-agent (vsock connect-out), CBOR protocol, virtiofs-overlay delivery | [10](10-guest-agent-and-vsock.md) |
 | Audio | vhost-user-snd only (Linux-only path) | **Native in-VMM virtio-snd -> CoreAudio** | [11](11-audio-rosetta-misc.md) |
@@ -152,8 +189,9 @@ vsock control plane + a shutdown eventfd.
 | **gvproxy user-mode NAT** as default networking | No root, no Apple-gated entitlement; bridged/vmnet is opt-in later. |
 | **Codesign the limina executable** (not the dylib) with `com.apple.security.hypervisor` | HVF refuses to start without it; ad-hoc signing suffices, notarization-compatible. |
 | **Mechanism in libkrun, policy in limina** (esp. balloon/PSI, keymap) | Keep patches minimal and upstreamable; behavior lives in the app. |
+| **Two-tier guarantee**: stock distro always boots on upstream-shaped libkrun (degraded); custom kernel/drivers/agent are an additive enhanced tier | Hard constraint — see governing note in §2 and [CLAUDE.md](../../CLAUDE.md). Bound to neither Fedora's stock kernel nor libkrun defaults. |
 | Deliver the guest agent via **virtiofs overlay**, not editing the .raw | Keeps the user's disk image pristine. |
-| **Defer** zero-copy scanout, hardware cursor, bridged net, USB, virtio-mem | All require patches/firmware rebuilds; not needed for milestone 1. |
+| **Defer** hardware cursor, bridged net, USB, virtio-mem (NOT zero-copy scanout — that's M4) | All require patches/firmware rebuilds; not needed for milestone 1. |
 
 ---
 
