@@ -48,6 +48,11 @@ These are settled by the research and constrain every milestone:
 login prompt on the host terminal (serial console). No window, no GPU, no real NIC. This is the
 smallest end-to-end path that exercises HVF + disk + console + entitlement.
 
+> **The boot path is validated** (`spikes/m1-boot`, link spike against the brew bottle): EDK2 →
+> shim/GRUB 2.12 → Fedora `6.19.13-200.fc43.aarch64` → systemd PID 1 → root(btrfs)+/boot(ext4)
+> mounted r/w → `getty.target`, with full kernel dmesg captured on serial. Findings below are
+> updated from that spike — read `spikes/m1-boot/RESULTS.md` before implementing.
+
 > This stock-distro boot is not just the first milestone — it is the **permanent
 > compatibility floor** (see CLAUDE.md "two-tier guarantee"). Every later milestone
 > must preserve it: an unmodified Fedora guest on upstream-shaped libkrun must keep
@@ -56,13 +61,15 @@ smallest end-to-end path that exercises HVF + disk + console + entitlement.
 > precondition for the VM to run.
 
 **Key tasks (concrete):**
-1. **Build/vendor libkrun-efi.** Build `third_party/libkrun` with `make GPU=1 INPUT=1 NET=1 BLK=1`.
-   For the firmware blob: Homebrew already ships `/opt/homebrew/lib/libkrunfw-efi.dylib`
-   (confirmed present) — this is the EDK2/EFI guest firmware libkrun links so the guest can boot a
-   distro kernel off the ESP. Build/link the `-efi` flavor (libkrun built against libkrunfw-efi
-   rather than the bundled-Linux libkrunfw). The gpu+input features can be compiled in now even
-   though M1 does not use them — keeps one library for the whole product. Verify with `nm -gU` that
-   the resulting dylib exports `krun_set_firmware`, `krun_add_disk2`, `krun_set_console_output`.
+1. **Firmware + libkrun.** **Correction (spike):** there is **no** `libkrunfw-efi.dylib` — the EFI
+   firmware is **not** linked. `krun_set_firmware(ctx, path)` just `std::fs::read`s a flat EDK2 blob
+   into guest RAM (`builder.rs:1568`, `Payload::Firmware`). Use krunkit's blob,
+   `/opt/homebrew/Cellar/krunkit/<ver>/share/krunkit/KRUN_EFI.silent.fd` (or build EDK2 ourselves
+   later). The brew bottle (1.17.4) is enough to *boot* — it exports every needed symbol — so a
+   from-source build is **not** on the M1 critical path. Still build `third_party/libkrun` with
+   `make GPU=1 INPUT=1 NET=1 BLK=1` for the product (patches, 1.18 APIs, GPU/input); verify with
+   `nm -gU` that it exports `krun_set_firmware`, `krun_add_disk2`, `krun_disable_implicit_console`,
+   `krun_add_serial_console_default`.
 2. **Minimal limina binary / `krun-sys` bindings.** Crate that links the vendored libkrun and exposes
    the C API. The M1 launch sequence:
    - `krun_create_ctx()` -> ctx_id
@@ -70,10 +77,17 @@ smallest end-to-end path that exercises HVF + disk + console + entitlement.
    - `krun_set_firmware(ctx, <path to EFI firmware>)` — boots the distro kernel from the ESP.
      (No `efi` Cargo feature exists; `krun_set_firmware` is gated only by `not(tee)`.)
    - `krun_add_disk2(ctx, "root", "Fedora-Workstation-43.raw", DISK_FORMAT_RAW, read_only=false)`
-     — the image is a multi-GiB MBR/GPT disk with an EFI partition; EFI+disk lets the distro boot
-     its own kernel/initramfs/drivers, sidestepping the bundled-kernel `root_disk_remount` path.
-   - `krun_set_console_output(ctx, ...)` and/or default console to the controlling TTY so the guest
-     serial console is visible in the host terminal.
+     — confirmed an **MBR** disk presented as `vda`: vda1 FAT ESP, vda2 ext4 `/boot` (XBOOTLDR),
+     vda3 btrfs root (`subvol=root`). EFI+disk boots the distro's own kernel/initramfs/drivers,
+     sidestepping the bundled-kernel `root_disk_remount` path entirely.
+   - **Console (spike correction):** `krun_set_console_output` does **not** capture the EFI/firmware
+     serial (that implicit serial is hardcoded output-dropped, `builder.rs:731`, and the firmware is
+     silent). Instead `krun_disable_implicit_console(ctx)` + `krun_add_serial_console_default(ctx,
+     in_fd, out_fd)` — ours becomes the PL011 EDK2 uses as ConOut. `in_fd` must be a real
+     kqueue-pollable fd (pipe/FIFO; the bottle asserts `fd != -1`). To see the **kernel** dmesg the
+     guest cmdline needs an explicit `console=` — libkrun's PL011 is at `0x0a001000`, so
+     `earlycon=pl011,mmio32,0x0a001000 console=ttyAMA0,115200` (stock Fedora has none; serial goes
+     quiet after early boot — full interactive console is the M2 display, not serial).
    - **Networking: TSI default** (zero glue). Optionally `krun_set_port_map` BEFORE adding any net
      device. Do NOT add a virtio-net device yet (that is M3).
    - `krun_start_enter(ctx)` in the child VMM process.
@@ -92,13 +106,11 @@ kernel boot log and reaches the Fedora login / `getty` prompt on the serial cons
 `poweroff` shuts the guest down and the limina child process exits 0.
 
 **Risks / spike first:**
-- **Boot path is the #1 risk.** Spike EFI+disk first. If the firmware does not find/boot the ESP,
-  fall back to `krun_add_disk` + `krun_set_root_disk_remount(device, fstype, options)` — but Fedora
-  rootfs is btrfs and may be on LVM / multiple partitions, which breaks the simple `/dev/vdaN`
-  remount assumption. Audit the actual partition layout of the `.raw` before relying on remount.
-- Confirm `libkrunfw-efi.dylib` is the firmware libkrun expects and how the `-efi` build selects it
-  (vs the bundled-Linux `libkrunfw`). If brew's `-efi` blob is stale/incompatible, build it from
-  `third_party/libkrunfw` (libkrunfw-efi / EDK2).
+- **Boot path (#1 risk): RESOLVED** by `spikes/m1-boot` — EFI+disk boots to userspace, no
+  `root_disk_remount` fallback needed (the distro's own initramfs mounts the btrfs root).
+- ~~Confirm `libkrunfw-efi.dylib`~~ — **resolved/wrong:** no such dylib; firmware is a flat `.fd`
+  blob read by `krun_set_firmware`. Building EDK2 ourselves is only needed if we want a non-silent /
+  patched firmware (e.g. to wire ConIn for interactive GRUB over serial).
 - Verify `krun_has_feature(KRUN_FEATURE_BLK)` / `NET` on whichever libkrun we link.
 
 ---

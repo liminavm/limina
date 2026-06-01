@@ -166,7 +166,7 @@ krunkit is the headless vfkit-compatible front-end that builds a libkrun ctx (di
 ### Boot Fedora raw (milestone 1)
 | Option | Pros | Cons |
 |---|---|---|
-| **A. Firmware (EFI) + `krun_add_disk(raw)`** — GRUB boots the distro's own kernel | unmodified distro; distro kernel has full drivers (virtio-gpu DRM/input/balloon) | need an EFI firmware bundled with libkrunfw-efi; brew ships plain `libkrun`+`krunkit`, so likely **build libkrun ourselves**. |
+| **A. Firmware (EFI) + `krun_add_disk(raw)`** — GRUB boots the distro's own kernel | unmodified distro; distro kernel has full drivers (virtio-gpu DRM/input/balloon) | **chosen & spike-validated.** No libkrunfw-efi needed: `krun_set_firmware` reads krunkit's `KRUN_EFI.silent.fd`; the brew bottle boots it (from-source build still wanted for patches/GPU, not to boot). |
 | **B. libkrunfw kernel + `krun_add_disk` + `krun_set_root_disk_remount("/dev/vda1",…)`** (`lib.rs:2358`) | uses the built-in init→pivot machinery; no EFI | libkrunfw's minimal kernel may lack desktop configs (would need kernel-config patch); Fedora rootfs may be btrfs/LVM/multi-partition, breaking a simple `/dev/vdaN` remount. |
 | **C. External distro kernel via `krun_set_kernel` + initramfs** | full control | brittle, must extract & track kernel/initramfs per update. |
 | **D. krunkit as-is** | zero work | headless; fails GUI/desktop goal. |
@@ -193,8 +193,13 @@ krunkit is the headless vfkit-compatible front-end that builds a libkrun ctx (di
 
 ## 6. Open questions / things to prototype
 
-1. **Boot Fedora 43 raw end-to-end** via Option A; if it fails, try B and check whether the rootfs is a plain partition or btrfs/LVM (affects `root_disk_remount`).
-2. **EFI firmware on macOS arm64** — does any brew package ship it, or must we build libkrunfw-efi / source EDK2?
+1. ~~**Boot Fedora 43 raw end-to-end** via Option A~~ — **RESOLVED** (`spikes/m1-boot`): Option A
+   (EFI firmware + `krun_add_disk2`) boots to userspace; rootfs is btrfs on an MBR `vda3`
+   (`subvol=root`) but the distro's own initramfs mounts it, so `root_disk_remount` is never needed.
+2. ~~**EFI firmware on macOS arm64**~~ — **RESOLVED** (`spikes/m1-boot`): no brew dylib bundles it and
+   none is linked; `krun_set_firmware` reads a flat EDK2 `.fd` blob into guest RAM. Reuse krunkit's
+   `share/krunkit/KRUN_EFI.silent.fd`. Building EDK2 ourselves is optional (non-silent / ConIn-wired
+   firmware for interactive serial).
 3. **libkrunfw kernel `.config` audit** — virtio-gpu DRM / virtio-input / virtio-balloon / fbcon present? Determines if B works without kernel patching.
 4. **Balloon control patch** — read `balloon/device.rs` + `event_handler.rs` fully; design a host-driven inflate/deflate API + guest pressure reporting; prototype min..max.
 5. **In-process vs child-process VMM** — measure whether patching out `libc::exit` (replace with EventManager break) is clean enough to host the VMM in-process, or commit to the child-process IPC model.

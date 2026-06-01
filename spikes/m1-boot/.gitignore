@@ -1,0 +1,6 @@
+# Build artifacts and runtime files — keep source + RESULTS + serial-grub.cfg + clean log
+boot
+boot.dSYM/
+console.log
+spike.stderr
+in.fifo
