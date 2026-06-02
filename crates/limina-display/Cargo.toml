@@ -11,5 +11,16 @@ license.workspace = true
 krun_display = { workspace = true }
 
 anyhow = { workspace = true }
+libc   = { workspace = true }
 log    = { workspace = true }
 png    = { workspace = true }
+
+# IOSurface-backed display (the window present path): create a shared host scanout the
+# supervisor can look up by id and show via CALayer.contents. macOS-only (the whole app is).
+objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef"] }
+objc2-core-foundation = { version = "0.3", features = [
+    "CFDictionary",
+    "CFNumber",
+    "CFString",
+    "CFBase",
+] }

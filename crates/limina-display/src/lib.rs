@@ -29,6 +29,9 @@ use krun_display::{
     IntoDisplayBackend, Rect, ResourceFormat,
 };
 
+mod iosurface;
+pub use iosurface::{window_backend, WindowBackend, WindowConfig};
+
 /// How many scanouts a [`CaptureBackend`] tracks. M2 drives a single display.
 const MAX_TRACKED_SCANOUTS: usize = 1;
 
