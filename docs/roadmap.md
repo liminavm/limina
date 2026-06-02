@@ -52,16 +52,23 @@ clean teardown that can never leak a live VM). Three layers:
 - **L0 — unit.** Pure Rust in each crate (facade `VmSpec → VmResources`, supervisor
   state machine). No HVF; runs anywhere under plain `cargo test`.
 - **L1 — fast boot (primary).** Our own tiny direct-boot guest: a static Rust `init`
-  (cross-built to `aarch64-unknown-linux-musl` with `rust-lld` — no C toolchain or
-  container needed) served as the guest root over **virtio-fs** (rootfs is just a host
-  dir; no mkfs/image). Boots to userspace and powers off cleanly in **~0.4s**
-  (`crates/limina-test/tests/l1_boot.rs`, `guest/limina-init`, `scripts/build-test-guest.sh`).
+  (cross-built to `aarch64-unknown-linux-musl` with `rust-lld`) served as the guest root
+  over **virtio-fs** (rootfs is just a host dir; no mkfs/image). Boots to userspace and
+  powers off cleanly in **~0.3s** (`crates/limina-test/tests/l1_boot.rs`, `guest/limina-init`).
   Implemented via libkrun's `ExternalKernel` (`set_external_kernel`, `KernelFormat::Raw`).
-  *Kernel for now:* libkrunfw's bundled 6.12.76 Image, extracted from the dylib — it has
-  virtio-fs but **no `CONFIG_BLK_DEV_INITRD`** (so we use a virtiofs root, not an
-  initramfs). A **custom shallow-clone kernel** (16 KiB pages, GPU, balloon, initramfs,
-  and a vsock test-agent in the init) is the next enhancement and needs a Linux build env.
-  The init is the seed of `limina-agent` (D8).
+  **Kernel:** our **custom 6.12** Image built by `scripts/build-test-kernel.sh` (config:
+  virtio-fs root, vsock, real initramfs, PL011 console); `scripts/build-test-guest.sh`
+  uses it when present and falls back to libkrunfw's bundled Image (extracted from the
+  dylib) when it isn't — the zero-dependency default. The init is the seed of `limina-agent`
+  (D8); next L1 steps are a vsock test-agent and 16 KiB-page / GPU configs.
+
+  **Linux build environment.** We build the kernel with **Apple `container`** (`brew
+  install container` — lightweight Linux VM on Apple Silicon) as a *build tool only*, not
+  a deliverable. `build-test-kernel.sh` clones + compiles aarch64 natively inside a
+  `fedora:43` container (the host is case-insensitive and has no kernel toolchain) and
+  bind-mounts out only the `Image`. `docker/kernel-builder.Containerfile` documents the
+  deps. (Note: Apple `container` uses Virtualization.framework — fine for a build tool;
+  unrelated to limina's runtime, which deliberately avoids Vz — see architecture D1.)
 - **L2 — stock baseline.** The unmodified Fedora `.raw`, opened **read-only**, asserts
   the user-facing chain boots through firmware + bootloader. This is the permanent
   two-tier compatibility floor. (Pristine Fedora has no `console=`, so the kernel goes

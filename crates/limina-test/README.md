@@ -25,8 +25,9 @@ End-to-end / regression test harness for limina. It drives the **shipped binarie
 The **L1 guest** (`guest/limina-init` + `scripts/build-test-guest.sh`) boots a kernel Image
 directly (libkrun `ExternalKernel`) with its root served over virtio-fs from a host
 directory — so it reaches *our* init, which prints a marker and powers off via PSCI. It's
-the workhorse for the RED-first rule. (Kernel is libkrunfw's bundled one for now; a custom
-shallow-clone kernel is a later enhancement — see `docs/roadmap.md`.)
+the workhorse for the RED-first rule. The kernel is our **custom 6.12** build
+(`scripts/build-test-kernel.sh`, via Apple `container`); if you haven't built one,
+`build-test-guest.sh` falls back to libkrunfw's bundled Image. See `docs/roadmap.md`.
 
 For **L2**, a pristine Fedora image has no `console=`, so the kernel goes silent after
 GRUB — reaching GRUB proves the whole chain (limina → firmware → virtio-blk → ESP →
