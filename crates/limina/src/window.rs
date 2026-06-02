@@ -32,14 +32,13 @@ use objc2_quartz_core::CALayer;
 /// main-thread render timer. Only `Send` data — never AppKit objects.
 #[derive(Default)]
 pub struct Shared {
-    /// Latest scanout surface id reported by the worker, and its geometry.
-    surface_id: Option<u32>,
+    /// The surface id the worker wants shown right now (alternates between its double
+    /// buffer so the layer's contents object changes and Core Animation re-reads).
+    show_id: Option<u32>,
     width: u32,
     height: u32,
-    /// Bumped when `surface_id` changes (a new surface to look up).
-    surface_gen: u64,
-    /// Bumped on each `frame` (the current surface's pixels changed; re-present).
-    frame_gen: u64,
+    /// Bumped on any update (new surface geometry or a new frame) — the timer re-applies.
+    gen: u64,
     /// Set when the worker/control channel is gone — the window should close.
     worker_exited: bool,
 }
@@ -65,28 +64,41 @@ pub fn spawn_reader(fd: RawFd, shared: Arc<Mutex<Shared>>) {
             let mut parts = line.split_whitespace();
             match parts.next() {
                 Some("surface") => {
-                    let id = parts.next().and_then(|s| s.parse::<u32>().ok());
+                    log::info!("window: <- {line}");
+                    // surface <id0> <id1> <w> <h> — geometry + the initial buffer to show.
+                    let id0 = parts.next().and_then(|s| s.parse::<u32>().ok());
+                    let _id1 = parts.next();
                     let w = parts.next().and_then(|s| s.parse::<u32>().ok());
                     let h = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    if let (Some(id), Some(w), Some(h)) = (id, w, h) {
+                    if let (Some(id0), Some(w), Some(h)) = (id0, w, h) {
                         let mut s = shared.lock().unwrap();
-                        s.surface_id = Some(id);
+                        s.show_id = Some(id0);
                         s.width = w;
                         s.height = h;
-                        s.surface_gen += 1;
+                        s.gen += 1;
                     }
                 }
-                Some("frame") => shared.lock().unwrap().frame_gen += 1,
+                Some("frame") => {
+                    // frame <id> — the buffer to show now.
+                    if let Some(id) = parts.next().and_then(|s| s.parse::<u32>().ok()) {
+                        let mut s = shared.lock().unwrap();
+                        s.show_id = Some(id);
+                        s.gen += 1;
+                    }
+                }
                 _ => {}
             }
         }
+        log::info!("window: control channel closed (worker gone)");
         shared.lock().unwrap().worker_exited = true;
     });
 }
 
-/// Run the AppKit window on the main thread until the worker exits (or forever). The
-/// render timer polls `shared` and updates the window contents.
-pub fn run(shared: Arc<Mutex<Shared>>, mtm: MainThreadMarker) {
+/// Run the AppKit window on the main thread. The render timer polls `shared`, updates the
+/// window contents, and — when the worker exits, the window is closed, or Ctrl-C is hit —
+/// kills the worker's process group (`worker_pid`) and exits the process. (We exit from
+/// the timer rather than `NSApplication::stop`, which doesn't return without a UI event.)
+pub fn run(shared: Arc<Mutex<Shared>>, mtm: MainThreadMarker, worker_pid: i32) -> ! {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
@@ -113,50 +125,41 @@ pub fn run(shared: Arc<Mutex<Shared>>, mtm: MainThreadMarker) {
     app.activate();
 
     // Per-timer state (main thread only).
-    let last_surface_gen = Cell::new(0u64);
-    let last_frame_gen = Cell::new(0u64);
-    let current: RefCell<Option<CFRetained<IOSurfaceRef>>> = RefCell::new(None);
+    let last_gen = Cell::new(0u64);
+    let geom = Cell::new((0u32, 0u32));
+    // Cache looked-up surfaces by id (the worker reuses a small fixed set, its double buffer).
+    let cache: RefCell<std::collections::HashMap<u32, CFRetained<IOSurfaceRef>>> =
+        RefCell::new(std::collections::HashMap::new());
 
-    let app_for_timer = app.clone();
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
-        let snapshot = {
+        let (exited, gen, show_id, width, height) = {
             let s = shared.lock().unwrap();
-            (
-                s.worker_exited,
-                s.surface_gen,
-                s.frame_gen,
-                s.surface_id,
-                s.width,
-                s.height,
-            )
+            (s.worker_exited, s.gen, s.show_id, s.width, s.height)
         };
-        let (exited, surface_gen, frame_gen, surface_id, width, height) = snapshot;
 
-        if exited {
-            app_for_timer.stop(None);
+        // Quit when the worker is gone, the user closed the window, or Ctrl-C was hit:
+        // kill the worker's whole process group and exit now.
+        if exited || crate::supervisor::stop_requested() || !window.isVisible() {
+            unsafe { libc::kill(-worker_pid, libc::SIGKILL) };
+            std::process::exit(0);
+        }
+        if gen == last_gen.get() {
             return;
         }
+        last_gen.set(gen);
 
-        if surface_gen != last_surface_gen.get() {
-            last_surface_gen.set(surface_gen);
-            if let Some(id) = surface_id {
-                if let Some(surface) = IOSurfaceLookup(id) {
-                    window.setContentSize(NSSize::new(width as f64, height as f64));
-                    set_layer_surface(&layer, &surface);
-                    *current.borrow_mut() = Some(surface);
-                    last_frame_gen.set(frame_gen);
-                } else {
-                    log::error!("window: IOSurfaceLookup({id}) failed");
-                }
-            }
-        } else if frame_gen != last_frame_gen.get() {
-            last_frame_gen.set(frame_gen);
-            if let Some(surface) = current.borrow().as_ref() {
-                // The worker mutated the same surface in place; nudge CA to re-read.
-                unsafe { layer.setContents(None) };
-                set_layer_surface(&layer, surface);
-            }
+        let Some(id) = show_id else { return };
+        if geom.get() != (width, height) {
+            geom.set((width, height));
+            window.setContentSize(NSSize::new(width as f64, height as f64));
         }
+
+        let mut cache = cache.borrow_mut();
+        let surface = cache
+            .entry(id)
+            .or_insert_with(|| IOSurfaceLookup(id).expect("IOSurfaceLookup of a worker surface"));
+        // Distinct object each frame (the worker alternates ids) → CA re-reads.
+        set_layer_surface(&layer, surface);
     });
 
     // ~60 Hz poll. Keep the timer alive for the app's lifetime.
@@ -164,6 +167,9 @@ pub fn run(shared: Arc<Mutex<Shared>>, mtm: MainThreadMarker) {
         unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(1.0 / 60.0, true, &block) };
 
     app.run();
+    // The run loop only returns if AppKit tears down unexpectedly; the timer is what
+    // normally exits us. Either way, don't fall through.
+    std::process::exit(0);
 }
 
 /// Set an IOSurface as the layer's contents (it's a CF object accepted by `contents`).

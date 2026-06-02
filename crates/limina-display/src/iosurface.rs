@@ -54,6 +54,7 @@ pub struct WindowBackend {
     control: Option<File>,
     scanout: Option<Scanout>,
     next_frame_id: u32,
+    presents: u64,
 }
 
 struct Scanout {
@@ -61,8 +62,12 @@ struct Scanout {
     format: ResourceFormat,
     /// Staging buffer libkrun fills (we then transform → BGRA into the IOSurface).
     staging: Vec<u8>,
-    /// The shared host surface, and its id (handed to the supervisor).
-    surface: CFRetained<IOSurfaceRef>,
+    /// Double buffer: we write the back surface each present and tell the supervisor which
+    /// id to show, so its `CALayer.contents` changes object identity → Core Animation
+    /// actually re-reads (re-setting the *same* surface is a no-op and never refreshes).
+    surfaces: [CFRetained<IOSurfaceRef>; 2],
+    ids: [u32; 2],
+    idx: usize,
 }
 
 impl DisplayBackendNew<WindowConfig> for WindowBackend {
@@ -84,6 +89,7 @@ impl DisplayBackendNew<WindowConfig> for WindowBackend {
             control,
             scanout: None,
             next_frame_id: 0,
+            presents: 0,
         }
     }
 }
@@ -116,18 +122,22 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
             .and_then(|px| px.checked_mul(ResourceFormat::BYTES_PER_PIXEL))
             .ok_or(DisplayBackendError::InvalidParam)?;
 
-        let surface =
+        let s0 =
             create_global_iosurface(width, height).ok_or(DisplayBackendError::InternalError)?;
-        let id = IOSurfaceGetID(&surface);
-        log::info!("window: scanout 0 -> IOSurface id={id} ({width}x{height} {format:?})");
+        let s1 =
+            create_global_iosurface(width, height).ok_or(DisplayBackendError::InternalError)?;
+        let ids = [IOSurfaceGetID(&s0), IOSurfaceGetID(&s1)];
+        log::info!("window: scanout 0 -> IOSurfaces {ids:?} ({width}x{height} {format:?})");
 
         self.scanout = Some(Scanout {
             height,
             format,
             staging: vec![0u8; len],
-            surface,
+            surfaces: [s0, s1],
+            ids,
+            idx: 0,
         });
-        self.send(&format!("surface {id} {width} {height}"));
+        self.send(&format!("surface {} {} {width} {height}", ids[0], ids[1]));
         Ok(())
     }
 
@@ -160,18 +170,23 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
             return Err(DisplayBackendError::InvalidScanoutId);
         }
         // Take the scanout out so we can write the surface and call &mut self.send().
-        let scanout = self
+        let mut scanout = self
             .scanout
             .take()
             .ok_or(DisplayBackendError::InvalidScanoutId)?;
+        // Write the *back* buffer, then publish it as the one to show.
+        scanout.idx ^= 1;
+        let i = scanout.idx;
         copy_into_surface(
-            &scanout.surface,
+            &scanout.surfaces[i],
             &scanout.staging,
             scanout.format,
             scanout.height,
         );
+        let show_id = scanout.ids[i];
+        self.presents += 1;
         self.scanout = Some(scanout);
-        self.send("frame");
+        self.send(&format!("frame {show_id}"));
         Ok(())
     }
 }

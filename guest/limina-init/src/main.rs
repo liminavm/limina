@@ -127,6 +127,8 @@ fn run_agent(port: u32) {
 
 const FBIOGET_VSCREENINFO: libc::c_int = 0x4600;
 const FBIOGET_FSCREENINFO: libc::c_int = 0x4602;
+const FBIOPAN_DISPLAY: libc::c_int = 0x4606;
+const FBIOPUT_VSCREENINFO: libc::c_int = 0x4601;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -188,14 +190,28 @@ struct FbFixScreeninfo {
     reserved: [u16; 2],
 }
 
-/// A mapped `/dev/fb0`. `base`/`len` are the mmap; `bpp` is bytes per pixel.
+/// A mapped `/dev/fb0`. `base`/`len` are the mmap; `bpp` is bytes per pixel. `fd`/`var`
+/// are kept so we can force a scanout flush (FBIOPAN_DISPLAY) — on the virtio-gpu DRM
+/// fbdev, mmap writes alone are not pushed to the host until something pans/closes it.
 struct Fb {
+    fd: libc::c_int,
+    var: FbVarScreeninfo,
     base: *mut u8,
     len: usize,
     stride: usize,
     bpp: usize,
     xres: usize,
     yres: usize,
+}
+
+impl Fb {
+    /// Force the DRM fbdev to push the current framebuffer to the host scanout. On the
+    /// virtio-gpu fbdev, mmap writes alone don't issue a RESOURCE_FLUSH; FBIOPUT_VSCREENINFO
+    /// (set_par) does. (FBIOPAN_DISPLAY is a no-op here — single-buffered — but harmless.)
+    unsafe fn flush(&mut self) {
+        libc::ioctl(self.fd, FBIOPAN_DISPLAY, &mut self.var);
+        libc::ioctl(self.fd, FBIOPUT_VSCREENINFO, &mut self.var);
+    }
 }
 
 /// Open + mmap `/dev/fb0`, returning its geometry. Best-effort: `None` if there's no
@@ -236,6 +252,8 @@ fn open_framebuffer() -> Option<Fb> {
             return None;
         }
         Some(Fb {
+            fd,
+            var,
             base: base as *mut u8,
             len,
             stride,
@@ -250,7 +268,9 @@ fn open_framebuffer() -> Option<Fb> {
 /// deferred-IO writeback so the host presents (and captures) the frame. Two solid bands
 /// give a frame with >1 colour and known top/bottom pixels to assert on.
 fn draw_test_pattern() {
-    let Some(fb) = open_framebuffer() else { return };
+    let Some(fb) = open_framebuffer() else {
+        return;
+    };
     unsafe {
         let top = [0u8, 0, 255, 0]; // BGRX -> red
         let bot = [255u8, 0, 0, 0]; // BGRX -> blue
@@ -265,7 +285,8 @@ fn draw_test_pattern() {
             }
         }
         libc::msync(fb.base as *mut libc::c_void, fb.len, libc::MS_SYNC);
-        // Give the async present a moment to reach the host before we power off.
+        // The present reaches the host via the driver flush on power-off (this is the
+        // one-shot capture oracle, not the live path — no FBIOPUT, which would clear the fb).
         sleep_ms(300);
     }
 }
@@ -273,12 +294,25 @@ fn draw_test_pattern() {
 /// Animate scrolling colour bands forever (never returns) — keeps a guest alive with live
 /// frames so the host window has something to show. Used when `limina.hold` is on the cmdline.
 fn animate_forever() -> ! {
-    let fb = open_framebuffer();
+    let mut fb = open_framebuffer();
+    match &fb {
+        Some(fb) => klog(
+            format!(
+                "[limina-init] hold: animating {}x{} bpp={} stride={}",
+                fb.xres,
+                fb.yres,
+                fb.bpp * 8,
+                fb.stride
+            )
+            .as_bytes(),
+        ),
+        None => klog(b"[limina-init] hold: no /dev/fb0 (cannot animate)"),
+    }
     // BGRX bands: red, green, blue.
     let bands = [[0u8, 0, 255, 0], [0, 255, 0, 0], [255, 0, 0, 0]];
     let mut frame = 0usize;
     loop {
-        if let Some(fb) = &fb {
+        if let Some(fb) = &mut fb {
             unsafe {
                 for y in 0..fb.yres {
                     let color = &bands[((y + frame) / 48) % bands.len()];
@@ -290,12 +324,20 @@ fn animate_forever() -> ! {
                         }
                     }
                 }
-                libc::msync(fb.base as *mut libc::c_void, fb.len, libc::MS_SYNC);
+                fb.flush();
             }
         }
         frame += 3;
         unsafe { sleep_ms(33) };
     }
+}
+
+/// Write a line to /dev/kmsg (printk -> serial), best-effort.
+fn klog(msg: &[u8]) {
+    let mut line = Vec::with_capacity(msg.len() + 1);
+    line.extend_from_slice(msg);
+    line.push(b'\n');
+    unsafe { write_to(c"/dev/kmsg", &line) };
 }
 
 unsafe fn sleep_ms(ms: i64) {

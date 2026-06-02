@@ -121,6 +121,11 @@ pub fn monitor(mut child: std::process::Child, grace: Duration) -> Result<i32> {
     }
 }
 
+/// True once a SIGINT/SIGTERM has asked us to stop (observed by the window loop).
+pub fn stop_requested() -> bool {
+    STOP.load(Ordering::SeqCst)
+}
+
 /// Spawn and supervise the worker until it exits (headless/non-windowed path).
 pub fn run(spec: &WorkerSpec) -> Result<i32> {
     let child = spawn_worker(spec, &[])?;

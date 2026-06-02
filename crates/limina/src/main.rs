@@ -211,22 +211,24 @@ fn run_windowed(
         shutdown_grace: grace,
     };
     let child = supervisor::spawn_worker(&spec, &[worker_fd])?;
+    let pid = child.id() as libc::pid_t;
     // The worker holds its own copy now; drop ours so the reader sees EOF when it exits.
     unsafe { libc::close(worker_fd) };
 
     let shared = window::Shared::new();
     window::spawn_reader(sup_fd, shared.clone());
 
+    // Monitor the worker on a background thread; when it exits on its own (guest
+    // power-off), mark the state so the window loop notices and quits.
     let shared_for_monitor = shared.clone();
-    let monitor = std::thread::spawn(move || {
-        let code = supervisor::monitor(child, grace).unwrap_or(1);
+    std::thread::spawn(move || {
+        let _ = supervisor::monitor(child, grace);
         window::mark_worker_exited(&shared_for_monitor);
-        code
     });
 
-    window::run(shared, mtm); // blocks until the worker exits
-    let code = monitor.join().unwrap_or(1);
-    std::process::exit(code);
+    // Runs the AppKit window on this (main) thread; never returns — on quit it kills the
+    // worker process group and exits.
+    window::run(shared, mtm, pid);
 }
 
 /// Parse a `WIDTHxHEIGHT` string into `(width, height)`.
