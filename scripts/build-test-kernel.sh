@@ -10,13 +10,20 @@
 # container (case-sensitive ext4, native compile on Apple Silicon — no cross-compiler)
 # and copy only the finished Image out to a bind-mounted host dir.
 #
+# Caching (two layers): the source is downloaded once into a BARE repo on the host bind
+# mount (target/test-guest/kernel/cache); the worktree + build artifacts live in a
+# PERSISTENT per-variant `container volume` (case-sensitive ext4) so re-runs are
+# incremental — a warm rebuild is ~40s vs ~220s cold. Reset a variant's tree with
+# `container volume rm limina-kbuild-<KVER>-<PAGESIZE>`.
+#
 # This is the enhanced-tier kernel: our own config (virtio-fs root, vsock, real
 # initramfs support, PL011 console). The libkrunfw kernel that build-test-guest.sh
 # extracts remains the zero-dependency fallback.
 #
 # Usage: scripts/build-test-kernel.sh
-#   KVER=v6.12  scripts/build-test-kernel.sh     # pin a different kernel tag
-# Prereq: `container system start` (Apple container running). Network required.
+#   KVER=v6.12   scripts/build-test-kernel.sh    # pin a different kernel tag
+#   PAGESIZE=16k scripts/build-test-kernel.sh    # 16 KiB pages -> Image-16k
+# Prereq: `container system start` (Apple container running). Network required (1st run).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -60,26 +67,38 @@ echo "$PAGE_CONFIG" >> "$OUT/limina.fragment"   # page-size choice (4k default /
 
 DEPS="gcc make flex bison bc elfutils-libelf-devel openssl-devel perl findutils diffutils gzip xz cpio git rsync kmod python3"
 
+# Persistent, case-sensitive (ext4) build volume per (version, page size): it holds the
+# worktree AND build artifacts, so re-runs are incremental (`make` reuses .o files).
+# Source is downloaded once into a bare repo on the host bind mount (survives volume
+# prune; new variants local-clone from it instead of re-downloading).
+VOL="limina-kbuild-${KVER}-${PAGESIZE}"
+container volume create -s 24g "$VOL" >/dev/null 2>&1 || true
+
 echo "==> building Linux $KVER (arm64, $PAGESIZE pages, -j$JOBS) in an Apple container"
+echo "    build volume: $VOL (incremental across runs)"
 container run --rm --cpus "$JOBS" --memory "$MEM" \
     -v "$(pwd)/$OUT:/out" \
+    -v "$VOL:/build" \
     docker.io/library/fedora:43 bash -euo pipefail -c "
         OUT_NAME='$OUT_NAME'
         echo '--- installing build deps'
         dnf -y install $DEPS >/dev/null
-        # Cache the source as a BARE repo on the bind-mounted host dir (bare = no
-        # worktree → no case-collisions on the case-insensitive host FS). The worktree
-        # is a fast local clone onto the container's ext4. Re-runs skip the download.
+        # Source download cache: a BARE repo on the host bind mount (bare = no worktree →
+        # safe on the case-insensitive host FS). Downloaded once per \$KVER.
         CACHE=/out/cache/linux-$KVER.git
         if [ ! -d \"\$CACHE\" ]; then
             echo '--- shallow-cloning $KVER into cache (first run)'
             mkdir -p /out/cache
             git clone --bare --depth 1 --branch '$KVER' https://github.com/torvalds/linux \"\$CACHE\"
-        else
-            echo '--- reusing cached $KVER source'
         fi
-        git clone \"\$CACHE\" /tmp/linux
-        cd /tmp/linux
+        # Worktree lives in the PERSISTENT volume (/build, ext4) for incremental builds.
+        if [ ! -d /build/linux/.git ]; then
+            echo '--- creating worktree in build volume (local clone)'
+            git clone \"\$CACHE\" /build/linux
+        else
+            echo '--- reusing build volume (incremental)'
+        fi
+        cd /build/linux
         make ARCH=arm64 defconfig
         ./scripts/kconfig/merge_config.sh -m .config /out/limina.fragment
         make ARCH=arm64 olddefconfig
@@ -88,7 +107,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
             grep -q \"^\$opt=y\" .config || { echo \"MISSING \$opt\" >&2; exit 1; }
         done
         grep -q '^$PAGE_CONFIG' .config || { echo 'MISSING $PAGE_CONFIG' >&2; exit 1; }
-        echo '--- compiling Image'
+        echo '--- compiling Image (incremental if the volume is warm)'
         make ARCH=arm64 -j\"\$(nproc)\" Image
         cp -f arch/arm64/boot/Image \"/out/\$OUT_NAME\"
         echo \"--- done: \$(wc -c < /out/\$OUT_NAME) bytes\"
