@@ -1,0 +1,26 @@
+# limina M1 boot spike — INTERNAL API variant.
+# Proves we can boot Fedora via libkrun's internal Rust crates (vmm/devices/polly/
+# utils) directly, with NO C ABI. Path-deps into the vendored workspace; the empty
+# [workspace] table detaches this crate so Cargo doesn't walk up into either the
+# limina root or third_party/libkrun's own workspace.
+[package]
+name = "m1-boot-internal"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "boot-internal"
+path = "src/main.rs"
+
+[dependencies]
+vmm = { package = "krun-vmm", path = "../../third_party/libkrun/src/vmm", features = ["blk"] }
+devices = { package = "krun-devices", path = "../../third_party/libkrun/src/devices", features = ["blk"] }
+polly = { package = "krun-polly", path = "../../third_party/libkrun/src/polly" }
+utils = { package = "krun-utils", path = "../../third_party/libkrun/src/utils" }
+crossbeam-channel = ">=0.5.15"
+env_logger = "0.11"
+log = "0.4"
+libc = "0.2"
+
+[workspace]

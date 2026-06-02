@@ -1,0 +1,5 @@
+/target
+console.log
+spike.stderr
+in.fifo
+Cargo.lock
