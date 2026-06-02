@@ -74,20 +74,28 @@ pub struct VsockSpec {
     pub socket_path: PathBuf,
 }
 
-/// A virtio-gpu display attached to the guest.
-///
-/// M2 / Tier 1: a single 2D scanout (no 3D accel) whose frames the host captures to a
-/// PNG — the headless display oracle. `width`/`height` set the advertised mode (EDID),
-/// so the captured image has deterministic dimensions. A real on-screen window sink and
-/// the Tier-2 zero-copy path are added later behind the same device.
+/// A virtio-gpu display attached to the guest. `width`/`height` set the advertised mode
+/// (EDID). The host sink is one of: PNG capture (the headless oracle) or a shared
+/// IOSurface published to the supervisor window over a control fd. Tier-1 (software 2D)
+/// today; the Tier-2 zero-copy path slots in behind the same device.
 #[derive(Debug, Clone)]
 pub struct DisplaySpec {
     /// Advertised display width in pixels.
     pub width: u32,
     /// Advertised display height in pixels.
     pub height: u32,
-    /// If set, capture presented frames to this PNG path (latest frame wins).
-    pub capture_png: Option<PathBuf>,
+    /// The host sink for presented frames.
+    pub sink: DisplaySink,
+}
+
+/// Where the host sends presented guest frames.
+#[derive(Debug, Clone)]
+pub enum DisplaySink {
+    /// Capture each frame to a PNG (latest wins) — the headless test oracle.
+    CapturePng(PathBuf),
+    /// Publish frames into a shared IOSurface and report it to the supervisor over this
+    /// control fd (the window present path). `-1` = create the surface but send nothing.
+    Window { control_fd: i32 },
 }
 
 /// How the guest boots.

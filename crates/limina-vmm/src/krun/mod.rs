@@ -16,7 +16,7 @@ use anyhow::{anyhow, Context, Result};
 use crossbeam_channel::unbounded;
 use devices::virtio::block::{CacheType, ImageType, SyncMode};
 use devices::virtio::display::DisplayInfo;
-use limina_display::CaptureConfig;
+use limina_display::{CaptureConfig, WindowConfig};
 use polly::event_manager::EventManager;
 use vmm::resources::VmResources;
 use vmm::vmm_config::block::BlockDeviceConfig;
@@ -26,7 +26,9 @@ use vmm::vmm_config::fs::FsDeviceConfig;
 use vmm::vmm_config::machine_config::VmConfig;
 use vmm::vmm_config::vsock::VsockDeviceConfig;
 
-use crate::config::{BootSource, DiskSpec, DisplaySpec, FsShare, KernelSpec, VmSpec, VsockSpec};
+use crate::config::{
+    BootSource, DiskSpec, DisplaySink, DisplaySpec, FsShare, KernelSpec, VmSpec, VsockSpec,
+};
 
 /// Standard libkrun guest CID.
 const GUEST_CID: u32 = 3;
@@ -123,11 +125,14 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
     vmr.displays
         .push(DisplayInfo::new(display.width, display.height));
 
-    if let Some(png_path) = &display.capture_png {
-        vmr.display_backend = Some(limina_display::capture_backend(CaptureConfig {
+    vmr.display_backend = Some(match &display.sink {
+        DisplaySink::CapturePng(png_path) => limina_display::capture_backend(CaptureConfig {
             png_path: png_path.clone(),
-        }));
-    }
+        }),
+        DisplaySink::Window { control_fd } => limina_display::window_backend(WindowConfig {
+            control_fd: *control_fd,
+        }),
+    });
 
     Ok(())
 }

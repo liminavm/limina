@@ -21,7 +21,8 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::config::{
-    BootSource, ConsoleSpec, DiskSpec, DisplaySpec, FsShare, KernelSpec, VmSpec, VsockSpec,
+    BootSource, ConsoleSpec, DiskSpec, DisplaySink, DisplaySpec, FsShare, KernelSpec, VmSpec,
+    VsockSpec,
 };
 
 /// Boot a Linux guest on libkrun + Hypervisor.framework.
@@ -83,11 +84,20 @@ struct Cli {
     console_input: Option<PathBuf>,
 
     /// Attach a virtio-gpu display and capture presented frames to this PNG path
-    /// (the headless display oracle). Presence of this flag enables the display.
-    #[arg(long)]
+    /// (the headless display oracle). Mutually exclusive with --display-window.
+    #[arg(long, conflicts_with = "display_window")]
     display_capture: Option<PathBuf>,
 
-    /// Display mode as WIDTHxHEIGHT (e.g. 1280x800). Used only with --display-capture.
+    /// Attach a virtio-gpu display and publish frames as a shared IOSurface to the
+    /// supervisor window. Pair with --control-fd for the worker→supervisor channel.
+    #[arg(long)]
+    display_window: bool,
+
+    /// fd of the worker→supervisor control channel (used with --display-window).
+    #[arg(long, requires = "display_window")]
+    control_fd: Option<i32>,
+
+    /// Display mode as WIDTHxHEIGHT (e.g. 1280x800). Used with the display flags.
     #[arg(long, default_value = "1280x800")]
     display_size: String,
 }
@@ -150,16 +160,25 @@ fn main() -> Result<()> {
         _ => None,
     };
 
-    let display = match cli.display_capture {
-        Some(png) => {
-            let (width, height) = parse_display_size(&cli.display_size)?;
-            Some(DisplaySpec {
-                width,
-                height,
-                capture_png: Some(png),
+    let display = {
+        let sink = if cli.display_window {
+            Some(DisplaySink::Window {
+                control_fd: cli.control_fd.unwrap_or(-1),
             })
+        } else {
+            cli.display_capture.map(DisplaySink::CapturePng)
+        };
+        match sink {
+            Some(sink) => {
+                let (width, height) = parse_display_size(&cli.display_size)?;
+                Some(DisplaySpec {
+                    width,
+                    height,
+                    sink,
+                })
+            }
+            None => None,
         }
-        None => None,
     };
 
     let spec = VmSpec {
