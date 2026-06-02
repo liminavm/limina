@@ -70,27 +70,28 @@ smallest end-to-end path that exercises HVF + disk + console + entitlement.
    `make GPU=1 INPUT=1 NET=1 BLK=1` for the product (patches, 1.18 APIs, GPU/input); verify with
    `nm -gU` that it exports `krun_set_firmware`, `krun_add_disk2`, `krun_disable_implicit_console`,
    `krun_add_serial_console_default`.
-2. **Minimal limina binary / `krun-sys` bindings.** Crate that links the vendored libkrun and exposes
-   the C API. The M1 launch sequence:
-   - `krun_create_ctx()` -> ctx_id
-   - `krun_set_vm_config(ctx, vcpus=4, ram_mib=4096)` (static RAM; dynamic memory is M6)
-   - `krun_set_firmware(ctx, <path to EFI firmware>)` — boots the distro kernel from the ESP.
-     (No `efi` Cargo feature exists; `krun_set_firmware` is gated only by `not(tee)`.)
-   - `krun_add_disk2(ctx, "root", "Fedora-Workstation-43.raw", DISK_FORMAT_RAW, read_only=false)`
-     — confirmed an **MBR** disk presented as `vda`: vda1 FAT ESP, vda2 ext4 `/boot` (XBOOTLDR),
-     vda3 btrfs root (`subvol=root`). EFI+disk boots the distro's own kernel/initramfs/drivers,
-     sidestepping the bundled-kernel `root_disk_remount` path entirely.
-   - **Console (spike correction):** `krun_set_console_output` does **not** capture the EFI/firmware
-     serial (that implicit serial is hardcoded output-dropped, `builder.rs:731`, and the firmware is
-     silent). Instead `krun_disable_implicit_console(ctx)` + `krun_add_serial_console_default(ctx,
-     in_fd, out_fd)` — ours becomes the PL011 EDK2 uses as ConOut. `in_fd` must be a real
-     kqueue-pollable fd (pipe/FIFO; the bottle asserts `fd != -1`). To see the **kernel** dmesg the
-     guest cmdline needs an explicit `console=` — libkrun's PL011 is at `0x0a001000`, so
-     `earlycon=pl011,mmio32,0x0a001000 console=ttyAMA0,115200` (stock Fedora has none; serial goes
-     quiet after early boot — full interactive console is the M2 display, not serial).
-   - **Networking: TSI default** (zero glue). Optionally `krun_set_port_map` BEFORE adding any net
-     device. Do NOT add a virtio-net device yet (that is M3).
-   - `krun_start_enter(ctx)` in the child VMM process.
+2. **Minimal `limina-vmm` binary via the INTERNAL Rust API (no C ABI, D2.1).** Depend on the
+   vendored `krun-vmm`/`krun-devices`/`krun-polly`/`krun-utils` crates by path; assemble a
+   `VmResources` in a `krun/` facade module. **Proven in `spikes/m1-boot-internal`.** Sequence:
+   - `let mut vmr = VmResources::default();`
+   - `vmr.set_vm_config(&VmConfig { vcpu_count: Some(4), mem_size_mib: Some(4096), .. })`
+     (static RAM; dynamic memory is M6).
+   - `vmr.set_firmware_config(FirmwareConfig { path })` — boots the distro kernel from the ESP
+     (`Payload::Firmware`; reads the flat EDK2 `.fd`, e.g. krunkit's `KRUN_EFI.silent.fd`).
+   - `vmr.add_block_device(BlockDeviceConfig { block_id: "root", disk_image_format:
+     ImageType::Raw, is_disk_read_only: false, .. })` — confirmed an **MBR** disk presented as
+     `vda`: vda1 FAT ESP, vda2 ext4 `/boot` (XBOOTLDR), vda3 btrfs root (`subvol=root`). EFI+disk
+     boots the distro's own kernel/initramfs/drivers, no `root_disk_remount`.
+   - **Console (spike):** set `vmr.disable_implicit_console = true` and push a
+     `SerialConsoleConfig { input_fd, output_fd }` — ours becomes the PL011 EDK2 uses as ConOut
+     (the implicit firmware serial is hardcoded output-dropped, `builder.rs:731`, and the
+     firmware is silent). `input_fd` must be a kqueue-pollable fd (pipe/FIFO). To see the
+     **kernel** dmesg the guest cmdline needs explicit `console=` — libkrun's PL011 is at
+     `0x0a001000` → `earlycon=pl011,mmio32,0x0a001000 console=ttyAMA0,115200` (stock Fedora has
+     none; serial goes quiet after early boot — full interactive console is the M2 display).
+   - **Networking: TSI default** (zero glue); do NOT add a virtio-net device yet (that is M3).
+   - `vmm::builder::build_microvm(&vmr, &mut event_manager, shutdown_efd, tx)` then
+     `loop { event_manager.run() }` in the child VMM process.
 3. **Codesign** the limina executable with `com.apple.security.hypervisor` via `hvf-entitlements.plist`
    (`codesign --entitlements hvf-entitlements.plist -s - limina`). Wire this into the build so every
    binary that calls HVF is signed.
@@ -123,7 +124,8 @@ work. Fedora boots to a graphical login (llvmpipe/software GL is fine — 3D is 
 **Key tasks:**
 1. **Native NSWindow + CAMetalLayer display backend** implementing the verified
    `krun_display_backend` vtable (`libkrun_display.h`): `configure_scanout`, `disable_scanout`,
-   `alloc_frame`, `present_frame`. Written in Rust against `krun-sys`. `alloc_frame` returns a
+   `alloc_frame`, `present_frame`. Implemented as the **native Rust** display backend on
+   `VmResources.display_backend` (D2.1 — no C `#[repr(C)]` vtable). `alloc_frame` returns a
    shared-storage `MTLBuffer.contents()` pointer with **exactly width*4 bytes-per-row** (libkrun's
    `read_2d_resource` uses a tightly packed `width*BYTES_PER_PIXEL` stride; on M1 UMA this is one
    copy total). `present_frame` publishes; do the actual CAMetalLayer present on the main thread via
@@ -474,7 +476,7 @@ second display attaches at runtime, and resizing the window reflows the guest re
 
 | Milestone | Net-new limina code | libkrun (or fw/virgl) patches |
 |---|---|---|
-| M1 boot | CLI, krun-sys, child supervisor, codesign | (optional) harden panic exit paths |
+| M1 boot | CLI, internal-API `limina-vmm` (D2.1), child supervisor, codesign | (optional) harden panic exit paths |
 | M2 display+input | Metal display backend, input provider, kVK->KEY table | (likely) Darwin input-worker epoll/eventfd shim |
 | M3 networking | gvproxy supervision; bridged helper integration | (optional) worker.rs reconnect-on-HANG_UP |
 | M4 3D | virgl flags wiring; IOSurface present-texture backend | virglrenderer Apple-blob fork build; SET_SCANOUT_BLOB accept path + display-vtable surface-export callback (zero-copy scanout) |

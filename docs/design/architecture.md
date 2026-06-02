@@ -30,11 +30,12 @@ Host baseline: macOS 26.5, Apple M1 Max, 32 GB, arm64, 16 KiB host pages, Rust 1
 |---|----------|-----|--------|
 | D1 | **Keep libkrun's HVF backend; patch it selectively (Option B).** Do not adopt Apple Virtualization.framework; do not rewrite the VMM. | Vz is closed/unpatchable and forbids limina's differentiators (custom virtio devices, USB passthrough, fine-grained ballooning, custom guest agent) and *still* needs `com.apple.vm.networking`/root for bridged net. libkrun's HVF run loop, PSCI/SMP bringup, in-kernel `hv_gic`, vtimer, WFI-parking already work. | [02] |
 | D2 | **Vendor libkrun + libkrunfw + virglrenderer under `third_party/` and build our own**, applying a maintained patch series. The Homebrew 1.17.4 bottle lacks 1.18 APIs (overlay files, multiport console, vhost-user, `disable_implicit_init`) and we must patch anyway (balloon control, USB kernel, reclaim, runtime resize). | We can't ship features that need patches against a binary dylib. | [01][04] |
-| D3 | **Run the VMM in a dedicated child process** ("vmm worker"), not in-process with the Cocoa UI. `krun_start_enter` loops forever and the guest-shutdown path calls `exit()` and tears the process down. | Verified chain: `krun_start_enter` → `loop { event_manager.run() }` (lib.rs:3032-3040); guest PSCI SYSTEM_OFF/RESET → `VcpuExit::Shutdown` → `self.exit(FC_EXIT_CODE_OK)` → `exit_evt` → process teardown. A GUI must not die when the guest powers off. | [01][02] |
+| D2.1 | **Consume libkrun through its internal Rust crates (`krun-vmm`/`krun-devices`/`krun-polly`/`krun-utils`/`krun-hvf`), NOT the C ABI.** `limina-vmm` builds a `VmResources`, calls `vmm::builder::build_microvm`, and runs its own `EventManager` loop — no `krun-sys`, no FFI. **Spike-validated** (`spikes/m1-boot-internal`): boots Fedora-43 to systemd userspace via pure Rust, at parity with the C-ABI spike. | Compile-time type safety (typed config structs/enums instead of `u32`-over-FFI; display/input become native Rust traits, not `#[repr(C)]` vtables); full control of the run loop and direct device/memory access. Cost: we reimplement libkrun's `ctx_cfg → VmResources` orchestration (becomes our policy, in `limina-vmm`) and track internal-API drift on rebase — judged acceptable since we own the fork and our usage is concentrated. | [01], `spikes/m1-boot-internal` |
+| D3 | **Run the VMM in a dedicated child process** ("vmm worker"), not in-process with the Cocoa UI. Even though we now own the event loop (D2.1), the guest-shutdown path still calls `libc::exit()` and tears the process down. | Verified chain: guest PSCI SYSTEM_OFF/RESET → `VcpuExit::Shutdown` → `exit_evt` → `Vmm::process` → **`Vmm::stop` → `libc::exit`** — and that exit lives **inside the `krun-vmm` crate** (`src/vmm/src/lib.rs:361`), not the C entrypoint, so it bites the internal-API path too. A GUI must not die when the guest powers off. In-process control is possible later but requires a deliberate patch to `Vmm::stop`/the exit `Subscriber` — not on the critical path. | [01][02], `spikes/m1-boot-internal` |
 | D4 | **The limina host executable carries the `com.apple.security.hypervisor` entitlement** (ad-hoc signable). Specifically, the *vmm worker* binary that calls `hv_vm_create`. Default networking is **gvproxy user-mode NAT** to avoid the Apple-gated `com.apple.vm.networking`. | Without the entitlement `hv_vm_create` → `Error::VmCreate`. Entitlement must be on the executable, not the dylib. | [02][07] |
 | D5 | **Milestone-1 boot path: EFI firmware + `krun_add_disk`** of `Fedora-Workstation-43.raw` (60 GiB MBR image w/ EFI partition). Fallback: `krun_add_disk` + `krun_set_root_disk_remount`. | The distro boots its own kernel/drivers; avoids depending on libkrunfw's minimal kernel for a desktop guest. | [01][03] |
-| D6 | **Display: native NSWindow + CAMetalLayer presenter implementing the verified `krun_display_backend` vtable** (`configure_scanout`/`disable_scanout`/`alloc_frame`/`present_frame`), in Rust via the in-tree `krun-sys` crate. No GTK/SDL in the product. | The display ABI is real and works; `alloc_frame` hands back a shared-storage `MTLBuffer.contents()` so on M1 UMA there is one copy total. | [03][09] |
-| D7 | **Input: vtable path `krun_add_input_device`** (config-backend + event-provider `#[repr(C)]` structs), macOS UI thread → ring + readable fd → libkrun input worker. Guest owns the keyboard layout; host owns the `kVK_*`→`KEY_*` table and Command/Option swap. | The `_fd`/passthrough path is Linux-host only. Translation needs no libkrun patch. | [04] |
+| D6 | **Display: native NSWindow + CAMetalLayer presenter implementing libkrun's display backend in native Rust** (`VmResources.display_backend: DisplayBackend`; methods `configure_scanout`/`disable_scanout`/`alloc_frame`/`present_frame`). Per D2.1 we implement the Rust backend type directly — **not** the C `#[repr(C)]` `krun_display_backend` vtable. No GTK/SDL in the product. | The backend works; `alloc_frame` hands back a shared-storage `MTLBuffer.contents()` so on M1 UMA there is one copy total. Implementing in Rust drops the vtable-ABI footgun entirely. | [03][09] |
+| D7 | **Input: native Rust backends via `VmResources.input_backends`** (config + event-provider), macOS UI thread → ring + readable fd → libkrun input worker. Per D2.1 these are the Rust backend types, not the C `#[repr(C)]` `InputConfigBackend`/`InputEventProviderBackend` structs. Guest owns the keyboard layout; host owns the `kVK_*`→`KEY_*` table and Command/Option swap. | The `_fd`/passthrough path is Linux-host only. Translation needs no libkrun patch; the Rust path removes the worst documented ABI footgun. | [04] |
 | D8 | **One multiplexed control connection over a single `krun_add_vsock_port` with the guest connecting out** (no `listen` flag), TSI left on. 16-byte `FrameHeader` + CBOR. This is the limina-agent ↔ liminad control plane. | IPC ports coexist with TSI with no patch (`unix_ipc_port_map` is separate from `tsi_flags`). | [05][10] |
 | D9 | **Dynamic memory requires a libkrun patch — feasibility now proven.** Phase 0 ships static RAM. The balloon device exists but only free-page-reporting is wired, `num_pages`/`actual` are never set, and reclaim uses `MADV_DONTNEED`. **Spike confirmed** (macOS 26.5/M1 Max): `hv_vm_map` does not pin pages — reclaim works on the live mapped region with no unmap — and `MADV_FREE_REUSABLE` drops `phys_footprint` fully (`MADV_DONTNEED` returns nothing). | No public balloon API in `libkrun.h`. Fix: `MADV_FREE_REUSABLE` + 16 KiB align (4K-guest/16K-host page menu), inflate/deflate, public API, PSI policy. | [08][10], `spikes/balloon-madvise` |
 
@@ -66,15 +67,16 @@ limina is **two processes** plus the guest:
 
 ### 2.1 Why two processes (D3)
 
-`krun_start_enter` never returns under normal operation and the guest power-off path calls
-`exit()`. If the VMM ran inside the Cocoa app, a guest shutdown would kill the UI, and we'd
-have no clean way to host the AppKit run loop alongside libkrun's blocking enter call.
-The **vmm worker** is therefore a separate executable whose `main()` is essentially:
+Our run loop (`loop { event_manager.run() }`, D2.1) blocks forever, and the guest power-off
+path calls `libc::exit()` from inside `krun-vmm` (`Vmm::stop`, D3). If the VMM ran inside the
+Cocoa app, a guest shutdown would kill the UI, and we'd have no clean way to host the AppKit
+run loop alongside libkrun's blocking event loop. The **vmm worker** is therefore a separate
+executable whose `main()` is essentially:
 
 1. parse the resolved VM config (passed via fd/argv/env),
-2. build the libkrun context (all `krun_*` device/config calls),
-3. hand display/input backend FFI handles to libkrun,
-4. call `krun_start_enter()` and block.
+2. assemble a `VmResources` (device/config) via the `krun/` facade,
+3. install the native Rust display/input backends on the `VmResources`,
+4. `vmm::builder::build_microvm(...)` then `loop { event_manager.run() }` and block.
 
 When the guest powers off, the worker process exits with `FC_EXIT_CODE_OK`; the UI's
 **supervisor thread** observes the exit and transitions the window to a "powered off" state
@@ -231,17 +233,18 @@ A Cargo workspace. Host crates build for macOS arm64; the agent crate builds for
 ```
 limina/                      (workspace root: Cargo.toml)
 ├─ third_party/            (vendored libkrun/libkrunfw/virglrenderer + patches)
+│                          consumed as path-dep crates: krun-vmm, krun-devices,
+│                          krun-polly, krun-utils, krun-hvf, krun-display, krun-input
 ├─ crates/
-│  ├─ krun-sys/            FFI: raw bindings to the patched libkrun C API
-│  │                       - generated/maintained extern "C" decls (incl. patched fns:
-│  │                         krun_add_balloon, krun_display_reconfigure, krun_add_usb...)
-│  │                       - the #[repr(C)] vtable structs: krun_display_backend,
-│  │                         InputConfigBackend, InputEventProviderBackend
-│  │                       - build.rs links the locally built libkrun.dylib (rpath)
-│  │
 │  ├─ limina-vmm/            the worker BINARY (entitled w/ com.apple.security.hypervisor)
-│  │                       - main(): build ctx -> add devices -> krun_start_enter()
-│  │                       - display/  CAMetalLayer presenter (impls display vtable) [M1: here]
+│  │                       - depends DIRECTLY on the vendored krun-* crates (no C ABI,
+│  │                         no krun-sys); see D2.1
+│  │                       - main(): build VmResources -> add devices ->
+│  │                         vmm::builder::build_microvm -> loop { event_manager.run() }
+│  │                       - krun/    thin limina-side facade: VmResources assembly + the
+│  │                         ctx-orchestration we reimplement (cmdline, device order,
+│  │                         firmware/krunfw, vsock/net heuristics) — our policy layer
+│  │                       - display/  CAMetalLayer presenter (impls the Rust display backend) [M1: here]
 │  │                       - input/    NSEvent capture -> event-provider ring
 │  │                       - ipc/      AF_UNIX link to limina UI (lifecycle, chrome events)
 │  │
@@ -267,14 +270,15 @@ limina/                      (workspace root: Cargo.toml)
 
 ### 4.1 Module responsibilities (host)
 
-- **`krun-sys`** — the *only* crate that talks `unsafe extern "C"`. It exposes the patched
-  superset of libkrun's API. Critical ABI note: the input vtable args to
-  `krun_add_input_device` are the Rust `#[repr(C)]` `InputConfigBackend` /
-  `InputEventProviderBackend` structs (`features+userdata+PhantomData+create_fn+vtable`), NOT
-  the `krun_input_config` header structs the doc comment names. Lay them out exactly, or use
-  the upstream `krun_input` crate's `into_input_config`/`into_input_events`. The display
-  backend is a zero-initialized `krun_display_backend` vtable passed by value + size to
-  `krun_set_display_backend`. [04][09]
+- **libkrun integration (no `krun-sys`)** — `limina-vmm` depends on the vendored `krun-vmm`,
+  `krun-devices`, `krun-polly`, `krun-utils`, `krun-hvf` crates by path and calls their Rust
+  APIs directly (D2.1). The `krun/` facade module inside `limina-vmm` is the one place that
+  assembles a `VmResources` and reimplements the orchestration that lived in libkrun's C
+  entrypoint (`src/libkrun/src/lib.rs`): kernel-cmdline assembly, device ordering, firmware/
+  krunfw selection, vsock/net heuristics. Input/display backends are the **native Rust**
+  backend types (`VmResources.input_backends`, `VmResources.display_backend`) — no
+  `#[repr(C)]` vtables, so the documented input-ABI footgun is gone. `unsafe` now lives only
+  where it always did (inside libkrun: HVF, `libc`, `mmap`), not at a limina FFI seam. [04][09]
 - **`limina-display`** — implements `configure_scanout` (reconcile the two sizes it receives:
   display config size from `krun_add_display` vs guest `SET_SCANOUT` resource size —
   letterbox vs scale-blit, interacting with `backingScaleFactor`), `disable_scanout`,
@@ -322,40 +326,47 @@ systemd unit so it has the graphical session's Wayland socket. Responsibilities:
 
 ---
 
-## 5. FFI boundary (`krun-sys`)
+## 5. libkrun integration (internal Rust API, D2.1)
 
-- `krun-sys` is the single `unsafe` seam. All other host crates call safe Rust wrappers.
-- It is built against the **locally built, patched** libkrun, with the rpath pointing at our
-  `third_party/libkrun` output, so we never accidentally bind the Homebrew dylib.
-- It declares the full patched superset: stock `krun_*` plus our additions
-  (`krun_add_balloon`, `krun_balloon_set_target`, `krun_balloon_get_actual`,
-  `krun_display_reconfigure`, `krun_add_usb*`, native-snd config). Each addition is gated so a
-  build against unpatched upstream fails loudly rather than silently linking a missing symbol.
-- libkrun is a **builder over an opaque `uint32 ctx_id`** (global non-recyclable map; panics
-  on exhaustion). One ctx per VM; the vmm worker owns exactly one. [01]
-- The display/input vtables are passed as `#[repr(C)]` structs; `krun-sys` owns these layouts
-  (the highest-risk ABI footgun — see §4.1). [04][09]
-- `krun_get_shutdown_eventfd` returns a host→guest eventfd-shim fd; on macOS wait on it via
-  kqueue/pipe (no `eventfd(2)`). [10]
+- **No FFI seam.** `limina-vmm` depends on the vendored `krun-*` crates by path and calls Rust
+  directly; there is no `krun-sys` and no `unsafe extern "C"` in limina. The only `unsafe` is
+  the HVF/`libc`/`mmap` code *inside* libkrun, which we already vendor.
+- **We construct `VmResources` ourselves** (public `Default` + setters + fields:
+  `set_vm_config`, `set_firmware_config`, `add_block_device`, `display_backend`,
+  `input_backends`, `serial_consoles`, `disable_implicit_console`, …) and drive
+  `vmm::builder::build_microvm(&vmr, &mut event_manager, shutdown_efd, worker_tx)
+  -> Arc<Mutex<Vmm>>`, then run our own `polly::EventManager` loop. No opaque `ctx_id` — we
+  hold the typed `VmResources`/`Vmm` directly. [01], `spikes/m1-boot-internal`
+- **Our patches are now Rust edits to the vendored crates**, not added C functions: balloon
+  target/inflate (`krun-devices` + a host policy API in our `krun/` facade), runtime display
+  reconfigure, USB, native virtio-snd. Keep them small/upstreamable (mechanism in the crate,
+  policy in limina) so rebases stay cheap.
+- **Rebase discipline:** internal APIs carry no stability guarantee. Concentrate all calls
+  into `limina-vmm`'s `krun/` facade so an upstream signature change touches one module. Pin the
+  vendored libkrun commit; bump deliberately.
+- Guest-shutdown eventfd: `build_microvm` takes the `shutdown_efd` directly (an `EventFd`); on
+  macOS wait on it via kqueue/pipe (no `eventfd(2)`). [10]
 
 ---
 
 ## 6. Boot flow (milestone-1)
 
+Internal Rust API (D2.1) — all via our `krun/` facade assembling one `VmResources`:
+
 ```
 limina UI
   └─ spawn limina-vmm (entitled) with resolved config fd
-       1. krun_create_ctx
-       2. krun_set_vm_config(ctx, vcpus, ram_mib)         # static RAM, Phase 0 [08]
-       3. krun_set_firmware(<EFI firmware>)               # gated only by not(tee) [01]
-       4. krun_add_disk(ctx, "Fedora-Workstation-43.raw") # EFI boots distro kernel [05]
-       5. krun_add_vsock_port(ctx, LIMINA_CTRL_PORT, ctrl.sock)   # control plane [10]
-       6. krun_add_net_unixgram(... gvproxy ... NET_FLAG_VFKIT) # NAT [07]
-       7. krun_set_gpu_options2(VENUS|...); krun_add_display(...)# GPU + scanout [03]
-       8. krun_set_display_backend(<CAMetalLayer vtable>)        # [09]
-       9. krun_add_input_device(<kbd>); (...abs tablet); (...rel mouse)  # [04]
-      10. krun_fs_add_overlay_* (limina-agent)              # inject agent, .raw untouched [10]
-      11. krun_start_enter()   # BLOCKS; exit() on guest power-off
+       let mut vmr = VmResources::default();
+       1. vmr.set_vm_config(&VmConfig{ vcpu_count, mem_size_mib, .. })  # static RAM, Phase 0 [08]
+       2. vmr.set_firmware_config(FirmwareConfig{ path: <EFI fw> })     # Payload::Firmware [01]
+       3. vmr.add_block_device(BlockDeviceConfig{ ImageType::Raw, .. }) # EFI boots distro kernel [05]
+       4. vmr.set_vsock_device(VsockDeviceConfig{ LIMINA_CTRL_PORT, .. }) # control plane [10]
+       5. vmr.add_network_interface(... gvproxy ... VFKIT)             # NAT [07]
+       6. vmr.set_gpu_virgl_flags(VENUS|...); vmr.displays.push(..)     # GPU + scanout [03]
+       7. vmr.display_backend = Some(DisplayBackend(<CAMetalLayer>))    # native Rust [09]
+       8. vmr.input_backends.push(kbd); (abs tablet); (rel mouse)       # native Rust [04]
+       9. vmr.add_fs_device(<overlay: limina-agent>)                      # inject agent, .raw untouched [10]
+      ── build_microvm(&vmr, &mut em, shutdown_efd, tx); loop { em.run() }  # BLOCKS; libc::exit on power-off
 ```
 
 **Open boot risks to validate first (from research):** does the Fedora EFI/disk path boot
@@ -447,12 +458,13 @@ located EFI firmware; `memory.max_mib` is the libkrun `ram_mib` and the balloon 
 │  1. apply patch series (libkrun, libkrunfw, virglrenderer)               │
 │  2. build virglrenderer (Apple blob patches) -> libvirglrenderer.dylib   │
 │  3. build libkrunfw (edited .config) -> guest firmware blob              │
-│  4. make GPU=1 INPUT=1 NET=1 BLK=1 VHOST_USER=1 -> libkrun.dylib         │
-│     (auto-downloads Debian sysroot; cross-compiles Linux init via lld)    │
+│     (NB: we do NOT `make` the libkrun cdylib — cargo compiles krun-vmm    │
+│      et al. from source as path-deps; only the C artifacts above are      │
+│      prebuilt, linked by krun-rutabaga / loaded at runtime)               │
 └─────────────────────────────────────────────────┬───────────────────────┘
-                                                   │ (rpath)
+                                                   │ (link/load C libs)
 ┌─ cargo build ───────────────────────────────────▼───────────────────────┐
-│  krun-sys links third_party/libkrun/.../libkrun.dylib                    │
+│  limina-vmm depends on vendored krun-* crates directly (no krun-sys, D2.1)  │
 │  cargo build -p limina-vmm   (the entitled worker)                         │
 │  cargo build -p limina       (UI/control front-end)                        │
 │  cross: cargo build -p limina-agent --target aarch64-unknown-linux-gnu     │
@@ -494,7 +506,7 @@ This doc's job is the *architecture* those milestones build on. The mapping at a
 
 | Roadmap milestone | Architecture pieces it exercises |
 |---|---|
-| **M1** boot to serial console | child-process `limina-vmm` (§2), EFI+disk boot flow (§6), codesign (§9), `krun-sys` (§5) |
+| **M1** boot to serial console | child-process `limina-vmm` (§2), EFI+disk boot flow (§6), codesign (§9), internal-API integration (§5, D2.1) |
 | **M2** display + input | display model B in-worker window (§2.4), `limina-display`/`limina-input` (§4.1), vsock control plane (D8) |
 | **M3** networking | `limina-net` + gvproxy supervision (§4.1), net-worker HANG_UP patch (§3.4) |
 | **M4** 3D + zero-copy scanout | virgl flags (§3.2), virglrenderer Apple-blob build, `SET_SCANOUT_BLOB` patch + display model A migration (§2.4) |
@@ -523,16 +535,20 @@ These gate or reshape decisions above; track in issues:
 
 ### Appendix A — verified libkrun facts this design relies on
 
-- `krun_start_enter` → `loop { event_manager.run() }` (lib.rs:3032-3040); guest power-off →
-  `VcpuExit::Shutdown` → `self.exit(...)` → `exit_evt` → process teardown. (D3) [01]
+- The C `krun_start_enter` is just `build_microvm(...)` + `loop { event_manager.run() }`
+  (lib.rs:3004-3040) — we replicate it in Rust (D2.1). Guest power-off → `VcpuExit::Shutdown`
+  → `exit_evt` → `Vmm::process` → `Vmm::stop` → `libc::exit` **inside `krun-vmm`**
+  (src/vmm/src/lib.rs:361), so the child-process model holds for the internal-API path too.
+  (D3) [01], `spikes/m1-boot-internal`
 - HVF dlopen'd at runtime; vCPU loop handles CANCELED/EXCEPTION/VTIMER; WFx parks (no busy
   spin); in-kernel `hv_gic` GICv3 is the **default** (not a patch we need). [02]
 - virtio-gpu is real; display vtable `configure/disable/alloc/present` confirmed in
   `virtio_gpu.rs:518-536`; CPU pull model, full-frame, width*4 stride; no cursor queue / no
   zero-copy yet. [03][09]
-- virtio-input C ABI: `krun_add_input_device(config_backend, size, event_provider, size)`
-  with `#[repr(C)]` backend structs; worker copies events verbatim (emit `SYN_REPORT`); `_fd`
-  path Linux-only. [04]
+- virtio-input: the C ABI is `krun_add_input_device(config_backend, size, event_provider,
+  size)` with `#[repr(C)]` backend structs — but on the internal-API path (D2.1, D7) we push
+  the native Rust backends onto `VmResources.input_backends` and skip the `#[repr(C)]` layer.
+  Worker copies events verbatim (emit `SYN_REPORT`); `_fd` path Linux-only. [04]
 - vsock IPC ports (`unix_ipc_port_map`) coexist with TSI; guest connects out to host CID 2.
   [05][10]
 - No USB anywhere; libkrunfw kernel has USB fully disabled in every profile. [06]

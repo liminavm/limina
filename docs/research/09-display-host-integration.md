@@ -111,7 +111,12 @@ Verified facts:
 - The gpu path requires `krun_set_gpu_options2` (virgl flags). For a pure 2D framebuffer boot we still likely need the gpu device enabled; `[VERIFY]` whether a display works without virgl/venus or if gpu options are mandatory.
 - `krun_init_log(fd_or_target, level, style, 0)` (`main.rs:130-146`) — use `KRUN_LOG_LEVEL_TRACE` while bringing up the backend.
 
-The `krun-sys` crate already exposes all of these as Rust FFI (`use krun_sys::{...}` in `main.rs:8-16`), so limina can depend on `krun-sys` rather than re-binding the headers.
+The `krun-sys` crate exposes all of these as Rust FFI (`use krun_sys::{...}` in `main.rs:8-16`).
+**Superseded by decision D2.1** (`docs/design/architecture.md`): limina does **not** use the C ABI /
+`krun-sys` — it depends on the vendored `krun-*` crates directly and sets these via `VmResources`
+fields (`displays`, `display_backend`, `gpu_virgl_flags`) in native Rust. The C-symbol analysis
+above still holds as the description of what capability exists; the runtime-resize gap becomes a
+Rust API we add to `krun-vmm`/`krun-devices` rather than a new C call.
 
 ---
 
@@ -160,7 +165,8 @@ libkrun drives `configure_scanout`/`alloc_frame`/`present_frame` from **one gpu 
 Pursue **B (native NSWindow + CAMetalLayer, CPU pull path)** for v1, using `MTKView` (D) for bring-up speed, and architect toward **C (IOSurface zero-copy)** for v2.
 
 Concretely:
-1. Depend on the in-tree **`krun-sys`** crate for the FFI (it already exports `krun_add_display`, `krun_set_display_backend`, `krun_display_set_*`, `krun_add_input_device*`, gpu/log consts).
+1. ~~Depend on the in-tree `krun-sys` crate for the FFI.~~ **(D2.1)** Depend on the vendored
+   `krun-vmm`/`krun-display`/`krun-devices` crates directly; configure via `VmResources` in Rust.
 2. Implement `struct krun_display_backend` in `limina/src/display/macos.rs`: zero-init it, set `features = KRUN_DISPLAY_FEATURE_BASIC_FRAMEBUFFER`, fill the 4 required `extern "C"` fns + optional create/destroy. Keep a per-`scanout_id` map of `{MTLTexture, ring of shared-storage MTLBuffers, ready-index}`.
 3. `alloc_frame`: return `MTLBuffer.contents()` (StorageModeShared — zero extra copy on M1 UMA) and a monotonic `frame_id`; recycle buffers; return `OUT_OF_BUFFERS (-5)` if the ring is exhausted.
 4. `present_frame`: blit `damage_area` from the buffer into the texture and atomically publish; return 0 immediately. A `CVDisplayLink`/`MTKView.draw` on the **main thread** presents the latest texture to the `CAMetalLayer` drawable.
