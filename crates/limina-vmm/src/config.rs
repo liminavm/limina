@@ -33,18 +33,57 @@ pub struct ConsoleSpec {
     pub input: Option<PathBuf>,
 }
 
-/// A fully-resolved VM specification. M1 boot path: EFI firmware + raw disk.
+/// Direct kernel boot: a raw aarch64 kernel `Image` loaded straight into guest RAM,
+/// with our own initramfs and command line. No bootloader, no ESP. This is the L1 test
+/// path (and the basis for our enhanced/custom-kernel tier).
+#[derive(Debug, Clone)]
+pub struct KernelSpec {
+    /// Raw aarch64 kernel `Image` (libkrun `KernelFormat::Raw`).
+    pub image: PathBuf,
+    /// Optional initramfs (cpio) loaded alongside the kernel.
+    pub initramfs: Option<PathBuf>,
+    /// Optional kernel command line (e.g. `console=ttyAMA0`); a default is used if None.
+    pub cmdline: Option<String>,
+}
+
+/// A host directory shared into the guest over virtio-fs.
+///
+/// The tag is the virtiofs mount tag. The special tag `/dev/root` makes this share the
+/// guest's **root filesystem** (with `rootfstype=virtiofs` on the cmdline) — which is
+/// how the L1 guest boots: no disk image, the rootfs is just a host directory.
+#[derive(Debug, Clone)]
+pub struct FsShare {
+    /// virtiofs tag; `/dev/root` = root filesystem.
+    pub tag: String,
+    /// Host directory to share.
+    pub path: PathBuf,
+    /// Share read-only.
+    pub read_only: bool,
+}
+
+/// How the guest boots.
+#[derive(Debug, Clone)]
+pub enum BootSource {
+    /// EFI firmware blob (EDK2 `.fd`) loaded into guest RAM; the guest's own
+    /// bootloader/kernel then boots off a disk's ESP. The stock-baseline path.
+    Firmware(PathBuf),
+    /// Direct kernel boot — the fast L1 path and the custom-kernel tier.
+    Kernel(KernelSpec),
+}
+
+/// A fully-resolved VM specification.
 #[derive(Debug, Clone)]
 pub struct VmSpec {
     /// Number of vCPUs.
     pub cpus: u8,
     /// Guest RAM in MiB (static; dynamic memory is a later milestone).
     pub ram_mib: usize,
-    /// EFI firmware blob (EDK2 `.fd`) loaded into guest RAM; the guest's own
-    /// bootloader/kernel then boots off the disk's ESP.
-    pub firmware: PathBuf,
+    /// How the guest boots (EFI firmware or a direct kernel).
+    pub boot: BootSource,
     /// Disks to attach, in order.
     pub disks: Vec<DiskSpec>,
+    /// virtio-fs shares (a `/dev/root`-tagged share becomes the root filesystem).
+    pub shares: Vec<FsShare>,
     /// Optional serial console wiring.
     pub console: Option<ConsoleSpec>,
 }

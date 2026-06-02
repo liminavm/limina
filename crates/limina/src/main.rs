@@ -22,13 +22,30 @@ use crate::supervisor::WorkerSpec;
 #[derive(Parser, Debug)]
 #[command(name = "limina", about, version)]
 struct Cli {
-    /// EFI firmware blob (EDK2 .fd) to load into guest RAM.
-    #[arg(long)]
-    firmware: PathBuf,
+    /// EFI firmware blob (EDK2 .fd) to load into guest RAM. The stock-baseline boot
+    /// path; mutually exclusive with --kernel.
+    #[arg(long, conflicts_with = "kernel", required_unless_present = "kernel")]
+    firmware: Option<PathBuf>,
 
-    /// Raw disk image to boot (attached as virtio-blk `vda`).
+    /// Raw aarch64 kernel Image for direct kernel boot (the fast L1 path).
     #[arg(long)]
-    disk: PathBuf,
+    kernel: Option<PathBuf>,
+
+    /// Initramfs (cpio) for direct kernel boot.
+    #[arg(long, requires = "kernel")]
+    initramfs: Option<PathBuf>,
+
+    /// Kernel command line for direct kernel boot.
+    #[arg(long, requires = "kernel")]
+    cmdline: Option<String>,
+
+    /// Host directory to serve as the guest root over virtio-fs (tag `/dev/root`).
+    #[arg(long)]
+    rootfs: Option<PathBuf>,
+
+    /// Raw disk image to attach as virtio-blk `vda` (optional for direct kernel boot).
+    #[arg(long)]
+    disk: Option<PathBuf>,
 
     /// Open the disk read-only (protects the image from guest writes).
     #[arg(long)]
@@ -66,15 +83,35 @@ fn main() -> Result<()> {
 
     // Forward the VM options to the worker's CLI.
     let mut args: Vec<String> = vec![
-        "--firmware".into(),
-        path_arg(&cli.firmware)?,
-        "--disk".into(),
-        path_arg(&cli.disk)?,
         "--cpus".into(),
         cli.cpus.to_string(),
         "--ram-mib".into(),
         cli.ram_mib.to_string(),
     ];
+    // Boot source (clap guarantees exactly one of firmware / kernel).
+    if let Some(kernel) = &cli.kernel {
+        args.push("--kernel".into());
+        args.push(path_arg(kernel)?);
+        if let Some(initramfs) = &cli.initramfs {
+            args.push("--initramfs".into());
+            args.push(path_arg(initramfs)?);
+        }
+        if let Some(cmdline) = &cli.cmdline {
+            args.push("--cmdline".into());
+            args.push(cmdline.clone());
+        }
+    } else if let Some(firmware) = &cli.firmware {
+        args.push("--firmware".into());
+        args.push(path_arg(firmware)?);
+    }
+    if let Some(rootfs) = &cli.rootfs {
+        args.push("--rootfs".into());
+        args.push(path_arg(rootfs)?);
+    }
+    if let Some(disk) = &cli.disk {
+        args.push("--disk".into());
+        args.push(path_arg(disk)?);
+    }
     if cli.read_only {
         args.push("--read-only".into());
     }

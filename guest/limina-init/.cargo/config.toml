@@ -1,0 +1,8 @@
+# Cross-compile this guest binary to aarch64 Linux from the macOS host with no C
+# toolchain or container: use the rust-lld bundled in the Rust toolchain as the linker.
+# (Pure-Rust static musl binary — std for the target ships precompiled via rustup.)
+[build]
+target = "aarch64-unknown-linux-musl"
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"

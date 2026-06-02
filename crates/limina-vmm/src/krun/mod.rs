@@ -18,10 +18,12 @@ use devices::virtio::block::{CacheType, ImageType, SyncMode};
 use polly::event_manager::EventManager;
 use vmm::resources::VmResources;
 use vmm::vmm_config::block::BlockDeviceConfig;
+use vmm::vmm_config::external_kernel::{ExternalKernel, KernelFormat};
 use vmm::vmm_config::firmware::FirmwareConfig;
+use vmm::vmm_config::fs::FsDeviceConfig;
 use vmm::vmm_config::machine_config::VmConfig;
 
-use crate::config::{DiskSpec, VmSpec};
+use crate::config::{BootSource, DiskSpec, FsShare, KernelSpec, VmSpec};
 
 /// Translate a [`VmSpec`] into a libkrun [`VmResources`]. No VM is started yet.
 pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
@@ -35,14 +37,22 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     })
     .map_err(|e| anyhow!("set_vm_config: {e:?}"))?;
 
-    // EFI boot: load the EDK2 firmware blob; the guest boots its own kernel off the
-    // disk's ESP (Payload::Firmware). No bundled kernel, no root_disk_remount.
-    vmr.set_firmware_config(FirmwareConfig {
-        path: spec.firmware.clone(),
-    });
+    match &spec.boot {
+        // EFI boot: load the EDK2 firmware blob; the guest boots its own kernel off the
+        // disk's ESP (Payload::Firmware). No bundled kernel, no root_disk_remount.
+        BootSource::Firmware(path) => {
+            vmr.set_firmware_config(FirmwareConfig { path: path.clone() });
+        }
+        // Direct kernel boot (Payload::ExternalKernel): our own raw Image + initramfs.
+        BootSource::Kernel(kernel) => set_external_kernel(&mut vmr, kernel)?,
+    }
 
     for disk in &spec.disks {
         add_disk(&mut vmr, disk)?;
+    }
+
+    for share in &spec.shares {
+        add_fs_share(&mut vmr, share)?;
     }
 
     if let Some(console) = &spec.console {
@@ -50,6 +60,50 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     }
 
     Ok(vmr)
+}
+
+/// Configure a direct kernel boot (raw aarch64 `Image` + optional cpio initramfs).
+///
+/// libkrun loads the Image at `0x8000_0000`, the initramfs just below the FDT, and
+/// passes our cmdline through the device tree. `initramfs_size` must be the real file
+/// size — libkrun reserves guest RAM for it from that figure.
+fn set_external_kernel(vmr: &mut VmResources, kernel: &KernelSpec) -> Result<()> {
+    let initramfs_size = match &kernel.initramfs {
+        Some(path) => std::fs::metadata(path)
+            .with_context(|| format!("stat initramfs {path:?}"))?
+            .len(),
+        None => 0,
+    };
+
+    vmr.set_external_kernel(ExternalKernel {
+        path: kernel.image.clone(),
+        format: KernelFormat::Raw,
+        initramfs_path: kernel.initramfs.clone(),
+        initramfs_size,
+        cmdline: kernel.cmdline.clone(),
+    });
+
+    Ok(())
+}
+
+/// Share a host directory into the guest over virtio-fs. A `/dev/root`-tagged share
+/// becomes the guest root (paired with `rootfstype=virtiofs` on the cmdline).
+fn add_fs_share(vmr: &mut VmResources, share: &FsShare) -> Result<()> {
+    let path = share
+        .path
+        .to_str()
+        .with_context(|| format!("share path is not valid UTF-8: {:?}", share.path))?
+        .to_string();
+
+    vmr.add_fs_device(FsDeviceConfig {
+        fs_id: share.tag.clone(),
+        shared_dir: Some(path),
+        shm_size: None,
+        read_only: share.read_only,
+        virtual_entries: Vec::new(),
+    });
+
+    Ok(())
 }
 
 fn add_disk(vmr: &mut VmResources, disk: &DiskSpec) -> Result<()> {
@@ -89,11 +143,16 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     // The worker channel carries gpu/virgl messages; unused until we enable the GPU.
     let (worker_tx, _worker_rx) = unbounded();
 
+    let boot = match &spec.boot {
+        BootSource::Firmware(_) => "EFI firmware",
+        BootSource::Kernel(_) => "direct kernel",
+    };
     log::info!(
-        "building microVM: {} vcpu(s), {} MiB, {} disk(s)",
+        "building microVM: {} vcpu(s), {} MiB, {} disk(s), {} share(s), boot={boot}",
         spec.cpus,
         spec.ram_mib,
-        spec.disks.len()
+        spec.disks.len(),
+        spec.shares.len()
     );
     let _vmm = vmm::builder::build_microvm(&vmr, &mut event_manager, Some(shutdown_efd), worker_tx)
         .map_err(|e| anyhow!("build_microvm: {e:?}"))?;

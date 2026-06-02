@@ -8,7 +8,9 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-exclude = ["third_party", "spikes"]
+# guest/ holds aarch64-linux guest binaries (their own workspace, built for a different
+# target); third_party/ is the vendored libkrun workspace; spikes/ are standalone.
+exclude = ["third_party", "spikes", "guest"]
 
 [workspace.package]
 version = "0.1.0"

@@ -6,6 +6,7 @@
 
 # Rust build artifacts
 /target
+/guest/*/target
 **/*.rs.bk
 Cargo.lock.orig
 

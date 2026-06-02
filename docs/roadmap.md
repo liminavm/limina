@@ -51,10 +51,17 @@ clean teardown that can never leak a live VM). Three layers:
 
 - **L0 — unit.** Pure Rust in each crate (facade `VmSpec → VmResources`, supervisor
   state machine). No HVF; runs anywhere under plain `cargo test`.
-- **L1 — fast boot (primary).** Our own **tiny kernel (shallow Linux clone, pinned
-  config) + static Rust `init`** that talks vsock back to the host harness. Sub-second
-  boots make the RED-first rule painless; the init is also the seed of `limina-agent`
-  (D8). *Next to build.*
+- **L1 — fast boot (primary).** Our own tiny direct-boot guest: a static Rust `init`
+  (cross-built to `aarch64-unknown-linux-musl` with `rust-lld` — no C toolchain or
+  container needed) served as the guest root over **virtio-fs** (rootfs is just a host
+  dir; no mkfs/image). Boots to userspace and powers off cleanly in **~0.4s**
+  (`crates/limina-test/tests/l1_boot.rs`, `guest/limina-init`, `scripts/build-test-guest.sh`).
+  Implemented via libkrun's `ExternalKernel` (`set_external_kernel`, `KernelFormat::Raw`).
+  *Kernel for now:* libkrunfw's bundled 6.12.76 Image, extracted from the dylib — it has
+  virtio-fs but **no `CONFIG_BLK_DEV_INITRD`** (so we use a virtiofs root, not an
+  initramfs). A **custom shallow-clone kernel** (16 KiB pages, GPU, balloon, initramfs,
+  and a vsock test-agent in the init) is the next enhancement and needs a Linux build env.
+  The init is the seed of `limina-agent` (D8).
 - **L2 — stock baseline.** The unmodified Fedora `.raw`, opened **read-only**, asserts
   the user-facing chain boots through firmware + bootloader. This is the permanent
   two-tier compatibility floor. (Pristine Fedora has no `console=`, so the kernel goes

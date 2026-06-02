@@ -27,10 +27,7 @@ fn fedora_stock_image_boots_to_bootloader() {
     }
 
     let cfg = GuestConfig::fedora_from_env().expect("resolving guest config");
-    eprintln!(
-        "booting {:?} (ro={}) via {:?}",
-        cfg.disk, cfg.read_only, cfg.limina_bin
-    );
+    eprintln!("booting Fedora (read-only) via {:?}: {:?}", cfg.limina_bin, cfg.boot);
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 

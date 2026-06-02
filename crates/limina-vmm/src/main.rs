@@ -20,19 +20,37 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 
-use crate::config::{ConsoleSpec, DiskSpec, VmSpec};
+use crate::config::{BootSource, ConsoleSpec, DiskSpec, FsShare, KernelSpec, VmSpec};
 
 /// Boot a Linux guest on libkrun + Hypervisor.framework.
 #[derive(Parser, Debug)]
 #[command(name = "limina-vmm", about, version)]
 struct Cli {
-    /// EFI firmware blob (EDK2 .fd) to load into guest RAM.
-    #[arg(long)]
-    firmware: PathBuf,
+    /// EFI firmware blob (EDK2 .fd) to load into guest RAM. The stock-baseline boot
+    /// path; mutually exclusive with --kernel.
+    #[arg(long, conflicts_with = "kernel", required_unless_present = "kernel")]
+    firmware: Option<PathBuf>,
 
-    /// Raw disk image to boot (attached as virtio-blk `vda`).
+    /// Raw aarch64 kernel Image for direct kernel boot (the fast L1 path).
     #[arg(long)]
-    disk: PathBuf,
+    kernel: Option<PathBuf>,
+
+    /// Initramfs (cpio) for direct kernel boot.
+    #[arg(long, requires = "kernel")]
+    initramfs: Option<PathBuf>,
+
+    /// Kernel command line for direct kernel boot.
+    #[arg(long, requires = "kernel")]
+    cmdline: Option<String>,
+
+    /// Host directory to serve as the guest root over virtio-fs (tag `/dev/root`).
+    /// Pair with `--cmdline "... rootfstype=virtiofs rw init=/init"`. The L1 path.
+    #[arg(long)]
+    rootfs: Option<PathBuf>,
+
+    /// Raw disk image to attach as virtio-blk `vda` (optional for direct kernel boot).
+    #[arg(long)]
+    disk: Option<PathBuf>,
 
     /// Open the disk read-only (protects the image from guest writes).
     #[arg(long)]
@@ -62,15 +80,42 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    // clap guarantees exactly one of --firmware / --kernel is present.
+    let boot = match cli.kernel {
+        Some(image) => BootSource::Kernel(KernelSpec {
+            image,
+            initramfs: cli.initramfs,
+            cmdline: cli.cmdline,
+        }),
+        None => BootSource::Firmware(cli.firmware.expect("clap requires firmware or kernel")),
+    };
+
+    let disks = cli
+        .disk
+        .map(|path| DiskSpec {
+            id: "root".to_string(),
+            path,
+            read_only: cli.read_only,
+        })
+        .into_iter()
+        .collect();
+
+    let shares = cli
+        .rootfs
+        .map(|path| FsShare {
+            tag: "/dev/root".to_string(),
+            path,
+            read_only: false,
+        })
+        .into_iter()
+        .collect();
+
     let spec = VmSpec {
         cpus: cli.cpus,
         ram_mib: cli.ram_mib,
-        firmware: cli.firmware,
-        disks: vec![DiskSpec {
-            id: "root".to_string(),
-            path: cli.disk,
-            read_only: cli.read_only,
-        }],
+        boot,
+        disks,
+        shares,
         console: cli.console.map(|output| ConsoleSpec {
             output,
             input: cli.console_input,

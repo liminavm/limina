@@ -1,0 +1,27 @@
+# limina's guest test init — PID 1 for the L1 tiny guest.
+#
+# Standalone workspace (NOT a member of the host workspace at the repo root): it builds
+# for aarch64-unknown-linux-musl, so it must stay out of host `cargo build --workspace`.
+# Built via scripts/build-test-guest.sh. This is also the seed of the future limina-agent.
+[package]
+name = "limina-init"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-only WITH LicenseRef-limina-exception"
+
+[[bin]]
+name = "limina-init"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+
+# Tiny, panic-free PID 1: abort (never unwind past main), optimize for size.
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]

@@ -94,6 +94,24 @@ fn resolve_bin(name: &str, env_override: &str) -> Result<PathBuf> {
     Ok(p)
 }
 
+/// What the guest boots from.
+#[derive(Debug, Clone)]
+pub enum Boot {
+    /// EFI firmware + a disk image — the L2 stock-baseline path.
+    Firmware {
+        firmware: PathBuf,
+        disk: PathBuf,
+        /// Open the disk read-only so tests never mutate a shared image.
+        read_only: bool,
+    },
+    /// Direct kernel + virtio-fs rootfs directory + cmdline — the fast L1 path.
+    Kernel {
+        kernel: PathBuf,
+        rootfs: PathBuf,
+        cmdline: String,
+    },
+}
+
 /// How to boot a guest under the harness.
 #[derive(Debug, Clone)]
 pub struct GuestConfig {
@@ -102,23 +120,19 @@ pub struct GuestConfig {
     /// The `limina-vmm` worker binary — not launched directly, but tracked so the harness
     /// can guarantee no orphaned VM survives a wedged supervisor.
     pub vmm_bin: PathBuf,
-    /// EFI firmware blob.
-    pub firmware: PathBuf,
-    /// Guest disk image.
-    pub disk: PathBuf,
-    /// Open the disk read-only — the default, so tests never mutate a shared image.
-    pub read_only: bool,
+    /// What the guest boots from.
+    pub boot: Boot,
     /// vCPUs.
     pub cpus: u8,
     /// Guest RAM in MiB.
     pub ram_mib: usize,
     /// Grace the *supervisor* gives the guest to power off before it force-kills the
-    /// worker. Kept short for tests (stock guests don't honor the power button).
+    /// worker. Kept short for tests.
     pub shutdown_grace: Duration,
 }
 
 impl GuestConfig {
-    /// Build a config from environment + defaults, pointing at the in-repo Fedora image.
+    /// L2 config: the in-repo Fedora image via EFI firmware (read-only).
     ///
     /// Overrides: `LIMINA_BIN`, `LIMINA_VMM_BIN`, `LIMINA_FIRMWARE`, `LIMINA_TEST_DISK`,
     /// `LIMINA_TEST_SHUTDOWN_GRACE` (seconds).
@@ -133,7 +147,6 @@ impl GuestConfig {
 
         let disk = match std::env::var("LIMINA_TEST_DISK") {
             Ok(p) => PathBuf::from(p),
-            // Repo root is two levels up from this crate's manifest dir.
             Err(_) => repo_root().join("Fedora-Workstation-43.raw"),
         };
         anyhow::ensure!(
@@ -141,22 +154,61 @@ impl GuestConfig {
             "guest disk not found at {disk:?} (set LIMINA_TEST_DISK)"
         );
 
-        let grace = std::env::var("LIMINA_TEST_SHUTDOWN_GRACE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(3);
+        Ok(GuestConfig {
+            limina_bin: resolve_bin("limina", "LIMINA_BIN")?,
+            vmm_bin: resolve_bin("limina-vmm", "LIMINA_VMM_BIN")?,
+            boot: Boot::Firmware {
+                firmware,
+                disk,
+                read_only: true,
+            },
+            cpus: 4,
+            ram_mib: 4096,
+            shutdown_grace: Duration::from_secs(grace_from_env()),
+        })
+    }
+
+    /// L1 config: our tiny direct-boot guest (kernel Image + virtio-fs rootfs).
+    ///
+    /// Build it first with `scripts/build-test-guest.sh`. Overrides: `LIMINA_BIN`,
+    /// `LIMINA_VMM_BIN`, `LIMINA_TEST_KERNEL`, `LIMINA_TEST_ROOTFS`, `LIMINA_TEST_CMDLINE`,
+    /// `LIMINA_TEST_SHUTDOWN_GRACE`.
+    pub fn l1_from_env() -> Result<GuestConfig> {
+        let guest_dir = repo_root().join("target/test-guest");
+        let kernel = std::env::var("LIMINA_TEST_KERNEL")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| guest_dir.join("Image"));
+        let rootfs = std::env::var("LIMINA_TEST_ROOTFS")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| guest_dir.join("rootfs"));
+        anyhow::ensure!(
+            kernel.exists() && rootfs.exists(),
+            "L1 guest missing ({kernel:?} / {rootfs:?}); run scripts/build-test-guest.sh"
+        );
+        let cmdline = std::env::var("LIMINA_TEST_CMDLINE")
+            .unwrap_or_else(|_| "console=ttyAMA0 rootfstype=virtiofs rw init=/init".to_string());
 
         Ok(GuestConfig {
             limina_bin: resolve_bin("limina", "LIMINA_BIN")?,
             vmm_bin: resolve_bin("limina-vmm", "LIMINA_VMM_BIN")?,
-            firmware,
-            disk,
-            read_only: true,
-            cpus: 4,
-            ram_mib: 4096,
-            shutdown_grace: Duration::from_secs(grace),
+            boot: Boot::Kernel {
+                kernel,
+                rootfs,
+                cmdline,
+            },
+            cpus: 2,
+            ram_mib: 1024,
+            shutdown_grace: Duration::from_secs(grace_from_env()),
         })
     }
+}
+
+/// Supervisor power-off grace (seconds), from `LIMINA_TEST_SHUTDOWN_GRACE` or 3.
+fn grace_from_env() -> u64 {
+    std::env::var("LIMINA_TEST_SHUTDOWN_GRACE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3)
 }
 
 /// Repo root, derived from this crate's compile-time manifest dir
@@ -215,11 +267,7 @@ impl Guest {
         let console_path = scratch.join("console.log");
 
         let mut cmd = Command::new(&cfg.limina_bin);
-        cmd.arg("--firmware")
-            .arg(&cfg.firmware)
-            .arg("--disk")
-            .arg(&cfg.disk)
-            .arg("--cpus")
+        cmd.arg("--cpus")
             .arg(cfg.cpus.to_string())
             .arg("--ram-mib")
             .arg(cfg.ram_mib.to_string())
@@ -231,8 +279,29 @@ impl Guest {
             // supervisor never disagree about which binary is under test.
             .arg("--vmm-bin")
             .arg(&cfg.vmm_bin);
-        if cfg.read_only {
-            cmd.arg("--read-only");
+        match &cfg.boot {
+            Boot::Firmware {
+                firmware,
+                disk,
+                read_only,
+            } => {
+                cmd.arg("--firmware").arg(firmware).arg("--disk").arg(disk);
+                if *read_only {
+                    cmd.arg("--read-only");
+                }
+            }
+            Boot::Kernel {
+                kernel,
+                rootfs,
+                cmdline,
+            } => {
+                cmd.arg("--kernel")
+                    .arg(kernel)
+                    .arg("--rootfs")
+                    .arg(rootfs)
+                    .arg("--cmdline")
+                    .arg(cmdline);
+            }
         }
         // Let supervisor/worker logs flow to the test's stderr (visible with --nocapture).
         cmd.stdin(Stdio::null());
