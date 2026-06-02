@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+# Copyright © 2026 Gustavo Noronha Silva
+
+# Build + codesign the limina binaries, then run the HVF-gated boot tests.
+#
+# The boot tests drive Hypervisor.framework, so the worker must be codesigned with
+# com.apple.security.hypervisor and the gate (LIMINA_HVF_TESTS) must be on. Plain
+# `cargo test` skips them; this is the recipe that actually runs them.
+#
+# Usage: scripts/test-boot.sh [debug|release] [extra cargo test args...]
+#   LIMINA_TEST_DISK=/path/to.raw  scripts/test-boot.sh        # override the guest image
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+PROFILE="${1:-debug}"
+[ $# -gt 0 ] && shift || true
+
+CARGO_PROFILE_FLAG=()
+[ "$PROFILE" = "release" ] && CARGO_PROFILE_FLAG=(--release)
+
+echo "==> building limina + limina-vmm ($PROFILE)"
+cargo build ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina -p limina-vmm
+
+echo "==> codesigning the worker (hypervisor entitlement)"
+crates/limina-vmm/sign.sh "$PROFILE"
+
+echo "==> running boot tests (LIMINA_HVF_TESTS=1)"
+# Build the test crate with the same profile; limina-test doesn't depend on the worker so
+# this won't rebuild/unsign it. --test-threads=1: one VM at a time.
+LIMINA_HVF_TESTS=1 cargo test ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina-test --test boot -- \
+    --nocapture --test-threads=1 "$@"

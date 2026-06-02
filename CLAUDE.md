@@ -92,6 +92,16 @@ tracks claims still needing verification.
 - **Verify against real source, not memory or summaries.** Every non-obvious claim
   about libkrun/deps in the docs carries a `path:line` citation into `third_party/`.
   Keep doing that. The research clones are in `third_party/` (gitignored).
+- **Full validation = `scripts/test-boot.sh` (sets `LIMINA_HVF_TESTS=1`).** This is the
+  go-to "did I break anything" command: it builds, codesigns the worker, and runs the
+  real boot tests against HVF (`limina` → `limina-vmm` → guest). A plain `cargo test`
+  deliberately **skips** the HVF tests (no codesign / sandbox) — green there means
+  almost nothing for boot behavior, so always run `scripts/test-boot.sh` before
+  declaring something works. It needs `dangerouslyDisableSandbox` (hits `hv_vm_*`).
+- **Fix bugs RED-first.** Every bug fix starts with a failing test that reproduces it,
+  then the fix turns it green. Tests drive the *shipped binaries* (`limina` → `limina-vmm`),
+  not libkrun internals — the harness is `crates/limina-test`. See the testing section in
+  `docs/roadmap.md` for the L0/L1/L2 layers.
 - **Spikes prove the risky assumptions.** Standalone experiments live in `spikes/`
   with a `RESULTS.md` (source kept, build artifacts gitignored). When a finding
   drives an architecture decision, measure it before committing to it. **Read the

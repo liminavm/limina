@@ -1,0 +1,16 @@
+[package]
+name = "limina-test"
+description = "End-to-end / regression test harness that drives the real limina binaries"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# This crate is a *test harness library* plus integration tests. It deliberately has
+# NO dependency on the libkrun internal crates: it drives the shipped `limina` supervisor
+# binary as a black box (decision: validate from the user's perspective, no shortcuts to
+# internal APIs). Boot tests touch Hypervisor.framework, so they are gated behind the
+# LIMINA_HVF_TESTS env var and need the signed `limina-vmm` worker on disk — see README.md
+# and scripts/test-boot.sh.
+[dependencies]
+anyhow = { workspace = true }
+libc   = { workspace = true }

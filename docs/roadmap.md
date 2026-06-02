@@ -42,6 +42,36 @@ These are settled by the research and constrain every milestone:
 
 ---
 
+## Testing infrastructure (cross-cutting)
+
+Tests drive the **shipped binaries** the way a user does — `limina` (supervisor) →
+`limina-vmm` (worker) → libkrun/HVF — with no shortcuts to libkrun's internal API. The
+harness lives in `crates/limina-test` (the [`Guest`] type: boot, await a console marker,
+clean teardown that can never leak a live VM). Three layers:
+
+- **L0 — unit.** Pure Rust in each crate (facade `VmSpec → VmResources`, supervisor
+  state machine). No HVF; runs anywhere under plain `cargo test`.
+- **L1 — fast boot (primary).** Our own **tiny kernel (shallow Linux clone, pinned
+  config) + static Rust `init`** that talks vsock back to the host harness. Sub-second
+  boots make the RED-first rule painless; the init is also the seed of `limina-agent`
+  (D8). *Next to build.*
+- **L2 — stock baseline.** The unmodified Fedora `.raw`, opened **read-only**, asserts
+  the user-facing chain boots through firmware + bootloader. This is the permanent
+  two-tier compatibility floor. (Pristine Fedora has no `console=`, so the kernel goes
+  silent after GRUB — userspace/feature assertions are L1's job.) Implemented in
+  `crates/limina-test/tests/boot.rs`.
+
+HVF boot tests need codesigning + the entitlement, so they're **gated behind
+`LIMINA_HVF_TESTS=1`** (plain `cargo test` skips them) and run via `scripts/test-boot.sh`,
+which builds → signs the worker → runs the gate. CI needs a **self-hosted Apple-Silicon
+runner** (hosted macOS runners can't do hypervisor); the multi-GB Fedora image is hosted
+out-of-repo for L2.
+
+**Rule: fix bugs RED-first.** Every bug fix starts with a failing test that reproduces
+it (see CLAUDE.md). L1 is what makes this cheap enough to always do.
+
+---
+
 ## Milestone 1 — Boot Fedora-Workstation-43.raw to a serial console
 
 **Goal:** `limina run Fedora-Workstation-43.raw` boots the distro's own kernel via EFI and reaches a
