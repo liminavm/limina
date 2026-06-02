@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+# Copyright © 2026 Gustavo Noronha Silva
+
+# limina pre-commit: rustfmt + clippy must be clean for the code we own.
+#
+# Never touches third_party/ (vendored libkrun is built, not linted; our libkrun changes
+# live in patches/libkrun/). Enable with: git config core.hooksPath .githooks
+# (scripts/setup-hooks.sh does this). Bypass a single commit with `git commit --no-verify`.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+fail() {
+    echo "pre-commit: FAILED — $1" >&2
+    echo "            fix it, or bypass once with: git commit --no-verify" >&2
+    exit 1
+}
+
+# --- rustfmt: build-free and fast, so check every workspace we own. ---
+echo "pre-commit: cargo fmt --check (all crates)"
+cargo fmt --check || fail "rustfmt — run 'cargo fmt'"
+cargo fmt --manifest-path guest/limina-init/Cargo.toml --check || fail "rustfmt (guest) — run 'cargo fmt --manifest-path guest/limina-init/Cargo.toml'"
+for s in spikes/*/Cargo.toml; do
+    cargo fmt --manifest-path "$s" --check || fail "rustfmt ($s) — run 'cargo fmt --manifest-path $s'"
+done
+
+# --- clippy on the SHIPPED code (-D warnings). Spikes are experimental and skipped here
+#     to keep commits fast (m1-boot-internal would rebuild the whole libkrun stack). ---
+echo "pre-commit: cargo clippy --workspace (-D warnings)"
+cargo clippy --workspace --all-targets -- -D warnings || fail "clippy (workspace)"
+echo "pre-commit: cargo clippy guest (-D warnings)"
+cargo clippy --manifest-path guest/limina-init/Cargo.toml --target aarch64-unknown-linux-musl --all-targets -- -D warnings \
+    || fail "clippy (guest)"
+
+echo "pre-commit: ok"

@@ -633,7 +633,10 @@ impl Guest {
             libc::kill(self.pid, libc::SIGKILL);
         }
         self.kill_stray_workers();
-        let status = self.child.wait().context("waiting on supervisor after SIGKILL")?;
+        let status = self
+            .child
+            .wait()
+            .context("waiting on supervisor after SIGKILL")?;
         Ok(self.outcome_from(status, true))
     }
 

@@ -100,6 +100,12 @@ tracks claims still needing verification.
   deliberately **skips** the HVF tests (no codesign / sandbox) — green there means
   almost nothing for boot behavior, so always run `scripts/test-boot.sh` before
   declaring something works. It needs `dangerouslyDisableSandbox` (hits `hv_vm_*`).
+- **fmt + clippy stay clean.** A pre-commit hook (`.githooks/pre-commit`, enabled via
+  `scripts/setup-hooks.sh` → `core.hooksPath`) runs `cargo fmt --check` on every workspace
+  we own and `cargo clippy --workspace -- -D warnings` on the shipped code (+ the guest at
+  its `aarch64-unknown-linux-musl` target). It never touches `third_party/`. Run
+  `scripts/setup-hooks.sh` once per clone; bypass a commit with `--no-verify` only in a
+  pinch.
 - **Fix bugs RED-first.** Every bug fix starts with a failing test that reproduces it,
   then the fix turns it green. Tests drive the *shipped binaries* (`limina` → `limina-vmm`),
   not libkrun internals — the harness is `crates/limina-test`. See the testing section in

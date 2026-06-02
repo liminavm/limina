@@ -66,5 +66,9 @@ fn l1_guest_agent_reports_over_vsock() {
         .expect("supervisor did not stop");
     eprintln!("teardown outcome: {outcome:?}");
     assert!(!outcome.forced, "harness had to force teardown");
-    assert_eq!(outcome.code, Some(0), "expected clean power-off, got {outcome:?}");
+    assert_eq!(
+        outcome.code,
+        Some(0),
+        "expected clean power-off, got {outcome:?}"
+    );
 }

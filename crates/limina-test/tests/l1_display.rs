@@ -31,7 +31,10 @@ fn l1_guest_presents_a_nonblank_frame() {
     let cfg = GuestConfig::l1_from_env()
         .expect("resolving L1 guest config")
         .with_display(WIDTH, HEIGHT);
-    eprintln!("booting L1 guest with display via {:?}: {:?}", cfg.limina_bin, cfg.boot);
+    eprintln!(
+        "booting L1 guest with display via {:?}: {:?}",
+        cfg.limina_bin, cfg.boot
+    );
 
     let guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 

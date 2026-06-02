@@ -18,7 +18,7 @@
 
 use std::time::Duration;
 
-use limina_test::{assert_console_has, GuestConfig, Guest};
+use limina_test::{assert_console_has, Guest, GuestConfig};
 
 #[test]
 fn fedora_stock_image_boots_to_bootloader() {
@@ -27,7 +27,10 @@ fn fedora_stock_image_boots_to_bootloader() {
     }
 
     let cfg = GuestConfig::fedora_from_env().expect("resolving guest config");
-    eprintln!("booting Fedora (read-only) via {:?}: {:?}", cfg.limina_bin, cfg.boot);
+    eprintln!(
+        "booting Fedora (read-only) via {:?}: {:?}",
+        cfg.limina_bin, cfg.boot
+    );
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 

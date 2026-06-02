@@ -181,8 +181,7 @@ fn write_png(path: &std::path::Path, scanout: &Scanout) -> anyhow::Result<()> {
     // Write to a temp sibling then rename, so a reader never sees a half-written PNG.
     let tmp = path.with_extension("png.tmp");
     {
-        let file = std::fs::File::create(&tmp)
-            .with_context(|| format!("create {tmp:?}"))?;
+        let file = std::fs::File::create(&tmp).with_context(|| format!("create {tmp:?}"))?;
         let w = std::io::BufWriter::new(file);
         let mut encoder = png::Encoder::new(w, scanout.width, scanout.height);
         encoder.set_color(png::ColorType::Rgba);

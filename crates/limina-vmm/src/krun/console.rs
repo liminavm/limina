@@ -40,14 +40,16 @@ pub fn attach(vmr: &mut VmResources, console: &ConsoleSpec) -> Result<()> {
             .read(true)
             .write(true)
             .open(path)
-            .with_context(|| format!("opening console input {:?}", path))?
+            .with_context(|| format!("opening console input {path:?}"))?
             .into_raw_fd(),
         None => -1,
     };
 
     vmr.disable_implicit_console = true;
-    vmr.serial_consoles
-        .push(SerialConsoleConfig { input_fd, output_fd });
+    vmr.serial_consoles.push(SerialConsoleConfig {
+        input_fd,
+        output_fd,
+    });
 
     Ok(())
 }
