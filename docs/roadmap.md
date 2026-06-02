@@ -59,8 +59,13 @@ clean teardown that can never leak a live VM). Three layers:
   **Kernel:** our **custom 6.12** Image built by `scripts/build-test-kernel.sh` (config:
   virtio-fs root, vsock, real initramfs, PL011 console); `scripts/build-test-guest.sh`
   uses it when present and falls back to libkrunfw's bundled Image (extracted from the
-  dylib) when it isn't — the zero-dependency default. The init is the seed of `limina-agent`
-  (D8); next L1 steps are a vsock test-agent and 16 KiB-page / GPU configs.
+  dylib) when it isn't — the zero-dependency default. Source is cached as a bare repo so
+  rebuilds skip the download; `PAGESIZE=4k|16k` selects the page size (a 16 KiB guest
+  validated booting + reporting `pagesize=16384`, relevant to M6's host/guest page menu).
+  **vsock agent:** the init now also runs a tiny vsock agent (gated on a
+  `limina.agent_port=` cmdline token) so L1 tests make structured host↔guest assertions
+  (`tests/l1_vsock.rs`) — the seed of `limina-agent` (D8). Remaining L1: richer agent
+  protocol, GPU/virtio-gpu configs, build-artifact (not just source) caching.
 
   **Linux build environment.** We build the kernel with **Apple `container`** (`brew
   install container` — lightweight Linux VM on Apple Silicon) as a *build tool only*, not

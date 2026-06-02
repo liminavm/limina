@@ -24,6 +24,8 @@
 
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -112,6 +114,14 @@ pub enum Boot {
     },
 }
 
+/// A vsock channel to the guest agent: the host listens on `socket_path`, the guest
+/// connects to `CID_HOST:port`.
+#[derive(Debug, Clone)]
+pub struct VsockCfg {
+    pub port: u32,
+    pub socket_path: PathBuf,
+}
+
 /// How to boot a guest under the harness.
 #[derive(Debug, Clone)]
 pub struct GuestConfig {
@@ -122,6 +132,8 @@ pub struct GuestConfig {
     pub vmm_bin: PathBuf,
     /// What the guest boots from.
     pub boot: Boot,
+    /// Optional vsock channel to the guest agent.
+    pub vsock: Option<VsockCfg>,
     /// vCPUs.
     pub cpus: u8,
     /// Guest RAM in MiB.
@@ -162,6 +174,7 @@ impl GuestConfig {
                 disk,
                 read_only: true,
             },
+            vsock: None,
             cpus: 4,
             ram_mib: 4096,
             shutdown_grace: Duration::from_secs(grace_from_env()),
@@ -196,10 +209,27 @@ impl GuestConfig {
                 rootfs,
                 cmdline,
             },
+            vsock: None,
             cpus: 2,
             ram_mib: 1024,
             shutdown_grace: Duration::from_secs(grace_from_env()),
         })
+    }
+
+    /// Enable the guest vsock agent on `port`: the host listens on a UNIX socket and the
+    /// kernel cmdline gets `limina.agent_port=<port>` so the init runs the agent. Kernel
+    /// boot only (the L1 guest).
+    pub fn with_vsock(mut self, port: u32) -> GuestConfig {
+        let socket_path = std::env::temp_dir().join(format!(
+            "limina-vsock-{}-{}.sock",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        if let Boot::Kernel { cmdline, .. } = &mut self.boot {
+            cmdline.push_str(&format!(" limina.agent_port={port}"));
+        }
+        self.vsock = Some(VsockCfg { port, socket_path });
+        self
     }
 }
 
@@ -237,6 +267,10 @@ pub struct Guest {
     scratch: PathBuf,
     /// Worker binary path, used by the orphan safety-net.
     vmm_bin: PathBuf,
+    /// Host vsock listener (bound before boot so the guest agent can connect).
+    vsock_listener: Option<UnixListener>,
+    /// vsock socket path, removed on drop.
+    vsock_socket: Option<PathBuf>,
     /// Set once teardown has run, so Drop doesn't double-kill.
     torn_down: bool,
 }
@@ -303,6 +337,22 @@ impl Guest {
                     .arg(cmdline);
             }
         }
+        // vsock: bind the host listener BEFORE spawning, so the guest agent's connect
+        // (which libkrun bridges to this socket) can't race ahead of us.
+        let (vsock_listener, vsock_socket) = match &cfg.vsock {
+            Some(v) => {
+                let _ = fs::remove_file(&v.socket_path);
+                let listener = UnixListener::bind(&v.socket_path)
+                    .with_context(|| format!("binding vsock socket {:?}", v.socket_path))?;
+                cmd.arg("--vsock-port")
+                    .arg(v.port.to_string())
+                    .arg("--vsock-socket")
+                    .arg(&v.socket_path);
+                (Some(listener), Some(v.socket_path.clone()))
+            }
+            None => (None, None),
+        };
+
         // Let supervisor/worker logs flow to the test's stderr (visible with --nocapture).
         cmd.stdin(Stdio::null());
 
@@ -317,8 +367,45 @@ impl Guest {
             console_path,
             scratch,
             vmm_bin: cfg.vmm_bin.clone(),
+            vsock_listener,
+            vsock_socket,
             torn_down: false,
         })
+    }
+
+    /// Accept the guest agent's vsock connection (the guest connects shortly after boot),
+    /// returning a line-protocol channel. Errors if no vsock was configured, the guest
+    /// never connects within `timeout`, or the supervisor exits first.
+    pub fn vsock_accept(&mut self, timeout: Duration) -> Result<VsockConn> {
+        let listener = self
+            .vsock_listener
+            .as_ref()
+            .context("no vsock configured (use GuestConfig::with_vsock)")?;
+        listener
+            .set_nonblocking(true)
+            .context("set_nonblocking on vsock listener")?;
+
+        let deadline = Instant::now() + timeout;
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).ok();
+                    return Ok(VsockConn {
+                        reader: BufReader::new(stream),
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if let Some(status) = self.child.try_wait().context("polling supervisor")? {
+                        bail!("supervisor exited ({status}) before the guest agent connected");
+                    }
+                    if Instant::now() >= deadline {
+                        bail!("timed out after {timeout:?} waiting for the guest agent");
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => return Err(e).context("accepting guest agent connection"),
+            }
+        }
     }
 
     /// Current captured console text (lossy UTF-8; empty if nothing yet).
@@ -435,6 +522,41 @@ impl Drop for Guest {
         let grace = Duration::from_secs(8);
         let _ = self.terminate(grace);
         let _ = fs::remove_dir_all(&self.scratch);
+        if let Some(sock) = &self.vsock_socket {
+            let _ = fs::remove_file(sock);
+        }
+    }
+}
+
+/// A line-oriented connection to the guest vsock agent.
+pub struct VsockConn {
+    reader: BufReader<UnixStream>,
+}
+
+impl VsockConn {
+    /// Read one newline-terminated line from the agent (trailing newline trimmed),
+    /// honoring `timeout`. Errors on timeout or EOF.
+    pub fn read_line(&mut self, timeout: Duration) -> Result<String> {
+        self.reader
+            .get_ref()
+            .set_read_timeout(Some(timeout))
+            .context("set_read_timeout")?;
+        let mut line = String::new();
+        let n = self
+            .reader
+            .read_line(&mut line)
+            .context("reading from guest agent (timeout?)")?;
+        anyhow::ensure!(n > 0, "guest agent closed the connection (EOF)");
+        Ok(line.trim_end().to_string())
+    }
+
+    /// Send a command line to the agent (a newline is appended).
+    pub fn write_line(&mut self, line: &str) -> Result<()> {
+        let stream = self.reader.get_mut();
+        stream
+            .write_all(line.as_bytes())
+            .and_then(|_| stream.write_all(b"\n"))
+            .context("writing to guest agent")
     }
 }
 

@@ -58,8 +58,8 @@ INIT="guest/limina-init/target/aarch64-unknown-linux-musl/release/limina-init"
 echo "==> staging rootfs (/init + /dev mountpoint) for virtio-fs root"
 ROOTFS="$OUT/rootfs"
 rm -rf "$ROOTFS"
-mkdir -p "$ROOTFS/dev"
-install -m 0755 "$INIT" "$ROOTFS/init"   # limina-init mounts devtmpfs on /dev itself
+mkdir -p "$ROOTFS/dev" "$ROOTFS/proc"    # mountpoints; limina-init mounts devtmpfs + procfs
+install -m 0755 "$INIT" "$ROOTFS/init"
 echo "    -> $ROOTFS (init $(wc -c < "$ROOTFS/init") bytes)"
 
 echo "==> L1 guest ready:"

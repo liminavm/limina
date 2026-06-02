@@ -59,6 +59,14 @@ struct Cli {
     #[arg(long, default_value_t = 4096)]
     ram_mib: usize,
 
+    /// Guest vsock port for the guest agent (host listens on --vsock-socket).
+    #[arg(long, requires = "vsock_socket")]
+    vsock_port: Option<u32>,
+
+    /// Host UNIX socket path the host side listens on for the guest agent.
+    #[arg(long, requires = "vsock_port")]
+    vsock_socket: Option<PathBuf>,
+
     /// Capture the guest serial console to this file.
     #[arg(long)]
     console: Option<PathBuf>,
@@ -114,6 +122,12 @@ fn main() -> Result<()> {
     }
     if cli.read_only {
         args.push("--read-only".into());
+    }
+    if let (Some(port), Some(socket)) = (&cli.vsock_port, &cli.vsock_socket) {
+        args.push("--vsock-port".into());
+        args.push(port.to_string());
+        args.push("--vsock-socket".into());
+        args.push(path_arg(socket)?);
     }
     if let Some(console) = &cli.console {
         args.push("--console".into());

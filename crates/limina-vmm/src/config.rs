@@ -61,6 +61,19 @@ pub struct FsShare {
     pub read_only: bool,
 }
 
+/// A vsock channel between host and guest.
+///
+/// libkrun bridges the guest vsock port to a host UNIX socket. With our wiring the
+/// **host listens** on `socket_path` and the **guest connects** to `CID_HOST(2):port`
+/// — used by the L1 guest agent for structured, in-guest test assertions.
+#[derive(Debug, Clone)]
+pub struct VsockSpec {
+    /// Guest vsock port the agent connects to (on CID_HOST).
+    pub port: u32,
+    /// Host UNIX socket path the host side listens on.
+    pub socket_path: PathBuf,
+}
+
 /// How the guest boots.
 #[derive(Debug, Clone)]
 pub enum BootSource {
@@ -84,6 +97,8 @@ pub struct VmSpec {
     pub disks: Vec<DiskSpec>,
     /// virtio-fs shares (a `/dev/root`-tagged share becomes the root filesystem).
     pub shares: Vec<FsShare>,
+    /// Optional vsock channel (host<->guest agent).
+    pub vsock: Option<VsockSpec>,
     /// Optional serial console wiring.
     pub console: Option<ConsoleSpec>,
 }

@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 
-use crate::config::{BootSource, ConsoleSpec, DiskSpec, FsShare, KernelSpec, VmSpec};
+use crate::config::{BootSource, ConsoleSpec, DiskSpec, FsShare, KernelSpec, VmSpec, VsockSpec};
 
 /// Boot a Linux guest on libkrun + Hypervisor.framework.
 #[derive(Parser, Debug)]
@@ -63,6 +63,14 @@ struct Cli {
     /// Guest RAM in MiB (static; dynamic memory is a later milestone).
     #[arg(long, default_value_t = 4096)]
     ram_mib: usize,
+
+    /// Guest vsock port for the guest agent (host listens on --vsock-socket).
+    #[arg(long, requires = "vsock_socket")]
+    vsock_port: Option<u32>,
+
+    /// Host UNIX socket path the host side listens on for the guest agent.
+    #[arg(long, requires = "vsock_port")]
+    vsock_socket: Option<PathBuf>,
 
     /// Capture the guest serial console to this file.
     #[arg(long)]
@@ -110,12 +118,18 @@ fn main() -> Result<()> {
         .into_iter()
         .collect();
 
+    let vsock = match (cli.vsock_port, cli.vsock_socket) {
+        (Some(port), Some(socket_path)) => Some(VsockSpec { port, socket_path }),
+        _ => None,
+    };
+
     let spec = VmSpec {
         cpus: cli.cpus,
         ram_mib: cli.ram_mib,
         boot,
         disks,
         shares,
+        vsock,
         console: cli.console.map(|output| ConsoleSpec {
             output,
             input: cli.console_input,

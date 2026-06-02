@@ -22,8 +22,12 @@ use vmm::vmm_config::external_kernel::{ExternalKernel, KernelFormat};
 use vmm::vmm_config::firmware::FirmwareConfig;
 use vmm::vmm_config::fs::FsDeviceConfig;
 use vmm::vmm_config::machine_config::VmConfig;
+use vmm::vmm_config::vsock::VsockDeviceConfig;
 
-use crate::config::{BootSource, DiskSpec, FsShare, KernelSpec, VmSpec};
+use crate::config::{BootSource, DiskSpec, FsShare, KernelSpec, VmSpec, VsockSpec};
+
+/// Standard libkrun guest CID.
+const GUEST_CID: u32 = 3;
 
 /// Translate a [`VmSpec`] into a libkrun [`VmResources`]. No VM is started yet.
 pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
@@ -53,6 +57,10 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
 
     for share in &spec.shares {
         add_fs_share(&mut vmr, share)?;
+    }
+
+    if let Some(vsock) = &spec.vsock {
+        add_vsock(&mut vmr, vsock)?;
     }
 
     if let Some(console) = &spec.console {
@@ -102,6 +110,25 @@ fn add_fs_share(vmr: &mut VmResources, share: &FsShare) -> Result<()> {
         read_only: share.read_only,
         virtual_entries: Vec::new(),
     });
+
+    Ok(())
+}
+
+/// Wire a vsock device so the guest agent can reach the host. `listen = false` means
+/// the host listens on `socket_path` and the guest connects to `CID_HOST(2):port`;
+/// libkrun bridges the two.
+fn add_vsock(vmr: &mut VmResources, vsock: &VsockSpec) -> Result<()> {
+    let mut unix_ipc_port_map = std::collections::HashMap::new();
+    unix_ipc_port_map.insert(vsock.port, (vsock.socket_path.clone(), false));
+
+    vmr.set_vsock_device(VsockDeviceConfig {
+        vsock_id: "vsock0".to_string(),
+        guest_cid: GUEST_CID,
+        host_port_map: None,
+        unix_ipc_port_map: Some(unix_ipc_port_map),
+        tsi_flags: devices::virtio::TsiFlags::empty(),
+    })
+    .map_err(|e| anyhow!("set_vsock_device: {e:?}"))?;
 
     Ok(())
 }
