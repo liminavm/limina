@@ -20,10 +20,12 @@ fixed dependencies.** We are willing to fork, patch, and rebuild *any* layer to 
 the behavior we want, and the design should reach for that lever whenever it's the
 right tool — not treat upstream as immutable:
 
-- **libkrun** — vendored under `third_party/`, built from source, carried as a
-  patch series we rebase onto upstream. We add devices, APIs, and behavior it
-  lacks (e.g. balloon target/inflate control, runtime display resize, zero-copy
-  scanout, USB).
+- **libkrun** — vendored under `third_party/` (gitignored), built from source, carried as a
+  `git format-patch` series under `patches/libkrun/` (with `UPSTREAM_BASE`); apply with
+  `scripts/apply-libkrun-patches.sh`. We add devices, APIs, and behavior it lacks (e.g.
+  software 2D scanout for GL-less hosts [shipped], balloon target/inflate control, runtime
+  display resize, zero-copy scanout, USB). To change libkrun: edit the checkout, commit on
+  a `limina/*` branch, re-export the series (see `patches/libkrun/README.md`).
 - **virglrenderer / rutabaga** — patchable; we already depend on the Apple-blob
   additions and will fork if Homebrew's build lacks them.
 - **The guest Linux kernel** — we control it for the *enhanced* tier. We can change

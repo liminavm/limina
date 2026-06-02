@@ -62,6 +62,15 @@ CONFIG_DEVTMPFS_MOUNT=y
 CONFIG_SERIAL_AMBA_PL011=y
 CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
 CONFIG_DEBUG_INFO_BTF=n
+# Display (M2): virtio-gpu DRM + fbdev emulation + fbcon, so the guest produces a
+# scanout the host can capture. fbcon renders the kernel console to the framebuffer
+# (a non-blank frame) even before userspace draws anything; KMS dumb-buffer fills from
+# our init come later (a byte-deterministic capture oracle).
+CONFIG_DRM=y
+CONFIG_DRM_VIRTIO_GPU=y
+CONFIG_DRM_FBDEV_EMULATION=y
+CONFIG_FB=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
 FRAG
 echo "$PAGE_CONFIG" >> "$OUT/limina.fragment"   # page-size choice (4k default / 16k)
 
@@ -103,7 +112,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         ./scripts/kconfig/merge_config.sh -m .config /out/limina.fragment
         make ARCH=arm64 olddefconfig
         echo '--- verifying key options survived'
-        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS; do
+        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS CONFIG_DRM_VIRTIO_GPU CONFIG_FRAMEBUFFER_CONSOLE; do
             grep -q \"^\$opt=y\" .config || { echo \"MISSING \$opt\" >&2; exit 1; }
         done
         grep -q '^$PAGE_CONFIG' .config || { echo 'MISSING $PAGE_CONFIG' >&2; exit 1; }

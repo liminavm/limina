@@ -24,6 +24,9 @@ fn main() {
     if let Some(port) = agent_port_from_cmdline() {
         run_agent(port);
     }
+    // Draw a known pattern to the framebuffer last, so nothing overwrites it before the
+    // host captures the scanout (the M2 display oracle). Best-effort: no fb -> skip.
+    draw_test_pattern();
     power_off();
 }
 
@@ -107,6 +110,137 @@ fn run_agent(port: u32) {
         let mut buf = [0u8; 64];
         let _ = libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
         libc::close(fd);
+    }
+}
+
+// --- framebuffer test pattern (M2 display oracle) ---------------------------------
+
+const FBIOGET_VSCREENINFO: libc::c_int = 0x4600;
+const FBIOGET_FSCREENINFO: libc::c_int = 0x4602;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct FbBitfield {
+    offset: u32,
+    length: u32,
+    msb_right: u32,
+}
+
+#[repr(C)]
+struct FbVarScreeninfo {
+    xres: u32,
+    yres: u32,
+    xres_virtual: u32,
+    yres_virtual: u32,
+    xoffset: u32,
+    yoffset: u32,
+    bits_per_pixel: u32,
+    grayscale: u32,
+    red: FbBitfield,
+    green: FbBitfield,
+    blue: FbBitfield,
+    transp: FbBitfield,
+    nonstd: u32,
+    activate: u32,
+    height: u32,
+    width: u32,
+    accel_flags: u32,
+    pixclock: u32,
+    left_margin: u32,
+    right_margin: u32,
+    upper_margin: u32,
+    lower_margin: u32,
+    hsync_len: u32,
+    vsync_len: u32,
+    sync: u32,
+    vmode: u32,
+    rotate: u32,
+    colorspace: u32,
+    reserved: [u32; 4],
+}
+
+#[repr(C)]
+struct FbFixScreeninfo {
+    id: [u8; 16],
+    smem_start: libc::c_ulong,
+    smem_len: u32,
+    type_: u32,
+    type_aux: u32,
+    visual: u32,
+    xpanstep: u16,
+    ypanstep: u16,
+    ywrapstep: u16,
+    line_length: u32,
+    mmio_start: libc::c_ulong,
+    mmio_len: u32,
+    accel: u32,
+    capabilities: u16,
+    reserved: [u16; 2],
+}
+
+/// Fill `/dev/fb0` with a deterministic pattern — top half red, bottom half blue — and
+/// `msync` to force the deferred-IO writeback so the host presents (and captures) the
+/// frame. Best-effort and panic-free: if there's no framebuffer, just return.
+///
+/// The virtio-gpu fbdev format is BGRX (bytes `[B, G, R, X]`). Two solid bands give the
+/// host a frame with >1 colour and known top/bottom pixels to assert on.
+fn draw_test_pattern() {
+    unsafe {
+        let fd = libc::open(c"/dev/fb0".as_ptr(), libc::O_RDWR);
+        if fd < 0 {
+            return; // no framebuffer (non-display guest) — nothing to draw.
+        }
+        let mut var: FbVarScreeninfo = std::mem::zeroed();
+        let mut fix: FbFixScreeninfo = std::mem::zeroed();
+        if libc::ioctl(fd, FBIOGET_VSCREENINFO, &mut var) < 0
+            || libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix) < 0
+        {
+            libc::close(fd);
+            return;
+        }
+
+        let len = fix.smem_len as usize;
+        let stride = fix.line_length as usize;
+        let bpp = (var.bits_per_pixel / 8) as usize;
+        let (xres, yres) = (var.xres as usize, var.yres as usize);
+        if len == 0 || bpp == 0 || stride == 0 {
+            libc::close(fd);
+            return;
+        }
+
+        let base = libc::mmap(
+            std::ptr::null_mut(),
+            len,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        );
+        if base == libc::MAP_FAILED {
+            libc::close(fd);
+            return;
+        }
+
+        let p = base as *mut u8;
+        let top = [0u8, 0, 255, 0]; // BGRX -> red
+        let bot = [255u8, 0, 0, 0]; // BGRX -> blue
+        for y in 0..yres {
+            let color = if y < yres / 2 { &top } else { &bot };
+            let row = p.add(y * stride);
+            for x in 0..xres {
+                let px = row.add(x * bpp);
+                for (b, &v) in color.iter().enumerate().take(bpp.min(4)) {
+                    *px.add(b) = v;
+                }
+            }
+        }
+
+        // Force the framebuffer's deferred-IO writeback -> virtio-gpu transfer+flush.
+        libc::msync(base, len, libc::MS_SYNC);
+        libc::munmap(base, len);
+        libc::close(fd);
+        // Give the async present a moment to reach the host before we power off.
+        sleep_ms(300);
     }
 }
 

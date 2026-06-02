@@ -19,10 +19,17 @@ license = "GPL-2.0-only WITH LicenseRef-limina-exception"
 
 [workspace.dependencies]
 # --- vendored libkrun internal crates (D2.1) ---
-vmm     = { package = "krun-vmm",     path = "third_party/libkrun/src/vmm" }
-devices = { package = "krun-devices", path = "third_party/libkrun/src/devices" }
-polly   = { package = "krun-polly",   path = "third_party/libkrun/src/polly" }
-utils   = { package = "krun-utils",   path = "third_party/libkrun/src/utils" }
+vmm          = { package = "krun-vmm",     path = "third_party/libkrun/src/vmm" }
+devices      = { package = "krun-devices", path = "third_party/libkrun/src/devices" }
+polly        = { package = "krun-polly",   path = "third_party/libkrun/src/polly" }
+utils        = { package = "krun-utils",   path = "third_party/libkrun/src/utils" }
+# Display backend trait + the safe IntoDisplayBackend FFI wrapper (M2). Same path-dep
+# the devices/gpu feature pulls in, so cargo unifies it; we register a native Rust
+# backend through its generic wrapper (no manual repr(C) vtable — decision D2.1).
+krun_display = { package = "krun-display", path = "third_party/libkrun/src/display", features = ["bindgen_clang_runtime"] }
+
+# --- our crates ---
+limina-display = { path = "crates/limina-display" }
 
 # --- shared third-party ---
 anyhow            = "1"
@@ -31,3 +38,4 @@ crossbeam-channel = ">=0.5.15"
 env_logger        = "0.11"
 libc              = "0.2"
 log               = "0.4"
+png               = "0.17"

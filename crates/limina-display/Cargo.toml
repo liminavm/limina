@@ -1,0 +1,15 @@
+[package]
+name = "limina-display"
+description = "limina display backends — host-side scanout sinks for the libkrun virtio-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# The display-backend trait + libkrun's generic, safe IntoDisplayBackend FFI wrapper.
+# We impl the trait in plain safe Rust; libkrun auto-generates the extern "C" vtable.
+krun_display = { workspace = true }
+
+anyhow = { workspace = true }
+log    = { workspace = true }
+png    = { workspace = true }

@@ -14,3 +14,6 @@ license.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 libc   = { workspace = true }
+# Decode captured scanout PNGs for display assertions (the M2 display oracle). Still a
+# black-box dep: we read the worker's output file, not any libkrun internal API.
+png    = { workspace = true }

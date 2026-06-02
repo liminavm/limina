@@ -20,7 +20,9 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 
-use crate::config::{BootSource, ConsoleSpec, DiskSpec, FsShare, KernelSpec, VmSpec, VsockSpec};
+use crate::config::{
+    BootSource, ConsoleSpec, DiskSpec, DisplaySpec, FsShare, KernelSpec, VmSpec, VsockSpec,
+};
 
 /// Boot a Linux guest on libkrun + Hypervisor.framework.
 #[derive(Parser, Debug)]
@@ -79,6 +81,31 @@ struct Cli {
     /// Optional FIFO/file feeding the guest serial console input.
     #[arg(long, requires = "console")]
     console_input: Option<PathBuf>,
+
+    /// Attach a virtio-gpu display and capture presented frames to this PNG path
+    /// (the headless display oracle). Presence of this flag enables the display.
+    #[arg(long)]
+    display_capture: Option<PathBuf>,
+
+    /// Display mode as WIDTHxHEIGHT (e.g. 1280x800). Used only with --display-capture.
+    #[arg(long, default_value = "1280x800")]
+    display_size: String,
+}
+
+/// Parse a `WIDTHxHEIGHT` display mode string into `(width, height)`.
+fn parse_display_size(s: &str) -> Result<(u32, u32)> {
+    let (w, h) = s
+        .split_once(['x', 'X'])
+        .ok_or_else(|| anyhow::anyhow!("display size must be WIDTHxHEIGHT, got {s:?}"))?;
+    let width = w
+        .trim()
+        .parse::<u32>()
+        .map_err(|e| anyhow::anyhow!("invalid display width {w:?}: {e}"))?;
+    let height = h
+        .trim()
+        .parse::<u32>()
+        .map_err(|e| anyhow::anyhow!("invalid display height {h:?}: {e}"))?;
+    Ok((width, height))
 }
 
 fn main() -> Result<()> {
@@ -123,6 +150,18 @@ fn main() -> Result<()> {
         _ => None,
     };
 
+    let display = match cli.display_capture {
+        Some(png) => {
+            let (width, height) = parse_display_size(&cli.display_size)?;
+            Some(DisplaySpec {
+                width,
+                height,
+                capture_png: Some(png),
+            })
+        }
+        None => None,
+    };
+
     let spec = VmSpec {
         cpus: cli.cpus,
         ram_mib: cli.ram_mib,
@@ -134,6 +173,7 @@ fn main() -> Result<()> {
             output,
             input: cli.console_input,
         }),
+        display,
     };
 
     krun::boot(&spec)

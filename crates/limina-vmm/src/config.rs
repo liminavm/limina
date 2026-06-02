@@ -74,6 +74,22 @@ pub struct VsockSpec {
     pub socket_path: PathBuf,
 }
 
+/// A virtio-gpu display attached to the guest.
+///
+/// M2 / Tier 1: a single 2D scanout (no 3D accel) whose frames the host captures to a
+/// PNG — the headless display oracle. `width`/`height` set the advertised mode (EDID),
+/// so the captured image has deterministic dimensions. A real on-screen window sink and
+/// the Tier-2 zero-copy path are added later behind the same device.
+#[derive(Debug, Clone)]
+pub struct DisplaySpec {
+    /// Advertised display width in pixels.
+    pub width: u32,
+    /// Advertised display height in pixels.
+    pub height: u32,
+    /// If set, capture presented frames to this PNG path (latest frame wins).
+    pub capture_png: Option<PathBuf>,
+}
+
 /// How the guest boots.
 #[derive(Debug, Clone)]
 pub enum BootSource {
@@ -101,4 +117,6 @@ pub struct VmSpec {
     pub vsock: Option<VsockSpec>,
     /// Optional serial console wiring.
     pub console: Option<ConsoleSpec>,
+    /// Optional virtio-gpu display (M2). None = headless (no GPU device).
+    pub display: Option<DisplaySpec>,
 }

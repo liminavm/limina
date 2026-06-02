@@ -11,11 +11,15 @@ path = "src/main.rs"
 
 [dependencies]
 # libkrun internal crates (D2.1). blk on vmm transitively enables devices/blk; we
-# also depend on devices directly for the ImageType/CacheType/SyncMode enums.
-vmm     = { workspace = true, features = ["blk"] }
-devices = { workspace = true, features = ["blk"] }
+# also depend on devices directly for the ImageType/CacheType/SyncMode enums. gpu
+# pulls in the virtio-gpu device + rutabaga + krun_display (M2 display).
+vmm     = { workspace = true, features = ["blk", "gpu"] }
+devices = { workspace = true, features = ["blk", "gpu"] }
 polly   = { workspace = true }
 utils   = { workspace = true }
+
+# Our virtio-gpu display backends (the capture sink; window/zero-copy later).
+limina-display = { workspace = true }
 
 anyhow            = { workspace = true }
 clap              = { workspace = true }
@@ -23,3 +27,7 @@ crossbeam-channel = { workspace = true }
 env_logger        = { workspace = true }
 libc              = { workspace = true }
 log               = { workspace = true }
+
+[build-dependencies]
+# Emit the virglrenderer link search path (see build.rs).
+pkg-config = "0.3"

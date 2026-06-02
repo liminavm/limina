@@ -122,6 +122,13 @@ pub struct VsockCfg {
     pub socket_path: PathBuf,
 }
 
+/// A virtio-gpu display attached to the guest, with frame capture for assertions.
+#[derive(Debug, Clone)]
+pub struct DisplayCfg {
+    pub width: u32,
+    pub height: u32,
+}
+
 /// How to boot a guest under the harness.
 #[derive(Debug, Clone)]
 pub struct GuestConfig {
@@ -134,6 +141,8 @@ pub struct GuestConfig {
     pub boot: Boot,
     /// Optional vsock channel to the guest agent.
     pub vsock: Option<VsockCfg>,
+    /// Optional virtio-gpu display; when set, frames are captured for assertions.
+    pub display: Option<DisplayCfg>,
     /// vCPUs.
     pub cpus: u8,
     /// Guest RAM in MiB.
@@ -175,6 +184,7 @@ impl GuestConfig {
                 read_only: true,
             },
             vsock: None,
+            display: None,
             cpus: 4,
             ram_mib: 4096,
             shutdown_grace: Duration::from_secs(grace_from_env()),
@@ -210,10 +220,20 @@ impl GuestConfig {
                 cmdline,
             },
             vsock: None,
+            display: None,
             cpus: 2,
             ram_mib: 1024,
             shutdown_grace: Duration::from_secs(grace_from_env()),
         })
+    }
+
+    /// Attach a virtio-gpu display at `width`x`height` and capture presented frames. Use
+    /// [`Guest::display_capture_path`]/[`Guest::wait_for_capture`] after boot to read the
+    /// captured PNG. The L1 init draws a deterministic pattern to `/dev/fb0` and forces a
+    /// flush, so the present is explicit rather than relying on fbcon's deferred I/O.
+    pub fn with_display(mut self, width: u32, height: u32) -> GuestConfig {
+        self.display = Some(DisplayCfg { width, height });
+        self
     }
 
     /// Enable the guest vsock agent on `port`: the host listens on a UNIX socket and the
@@ -271,8 +291,59 @@ pub struct Guest {
     vsock_listener: Option<UnixListener>,
     /// vsock socket path, removed on drop.
     vsock_socket: Option<PathBuf>,
+    /// Captured-scanout PNG path (inside `scratch`), if a display was configured.
+    capture_png: Option<PathBuf>,
     /// Set once teardown has run, so Drop doesn't double-kill.
     torn_down: bool,
+}
+
+/// A decoded captured scanout frame (8-bit RGBA, row-major).
+#[derive(Debug, Clone)]
+pub struct CapturedFrame {
+    pub width: u32,
+    pub height: u32,
+    /// `width * height * 4` bytes, RGBA8.
+    pub rgba: Vec<u8>,
+}
+
+impl CapturedFrame {
+    /// The RGBA pixel at `(x, y)` (zero if out of bounds).
+    pub fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
+        if x >= self.width || y >= self.height {
+            return [0, 0, 0, 0];
+        }
+        let i = ((y * self.width + x) * 4) as usize;
+        [
+            self.rgba[i],
+            self.rgba[i + 1],
+            self.rgba[i + 2],
+            self.rgba[i + 3],
+        ]
+    }
+
+    /// Count of distinct RGBA pixel values — a cheap "is there content?" probe. A blank
+    /// (uniform) frame yields 1; rendered text/graphics yields many.
+    pub fn distinct_colors(&self) -> usize {
+        let mut set = std::collections::HashSet::new();
+        for px in self.rgba.chunks_exact(4) {
+            set.insert([px[0], px[1], px[2], px[3]]);
+        }
+        set.len()
+    }
+
+    /// The most common RGBA pixel (the presumed background) and its share of all pixels.
+    pub fn dominant_color(&self) -> ([u8; 4], f64) {
+        let mut counts = std::collections::HashMap::new();
+        let total = (self.rgba.len() / 4).max(1);
+        for px in self.rgba.chunks_exact(4) {
+            *counts.entry([px[0], px[1], px[2], px[3]]).or_insert(0u64) += 1;
+        }
+        counts
+            .into_iter()
+            .max_by_key(|&(_, n)| n)
+            .map(|(c, n)| (c, n as f64 / total as f64))
+            .unwrap_or(([0, 0, 0, 0], 1.0))
+    }
 }
 
 /// How the supervisor (and thus the VM) ended.
@@ -337,6 +408,19 @@ impl Guest {
                     .arg(cmdline);
             }
         }
+        // Display: capture the scanout into the scratch dir (auto-cleaned on Drop).
+        let capture_png = match &cfg.display {
+            Some(d) => {
+                let png = scratch.join("scanout.png");
+                cmd.arg("--display-capture")
+                    .arg(&png)
+                    .arg("--display-size")
+                    .arg(format!("{}x{}", d.width, d.height));
+                Some(png)
+            }
+            None => None,
+        };
+
         // vsock: bind the host listener BEFORE spawning, so the guest agent's connect
         // (which libkrun bridges to this socket) can't race ahead of us.
         let (vsock_listener, vsock_socket) = match &cfg.vsock {
@@ -369,8 +453,69 @@ impl Guest {
             vmm_bin: cfg.vmm_bin.clone(),
             vsock_listener,
             vsock_socket,
+            capture_png,
             torn_down: false,
         })
+    }
+
+    /// Path to the captured-scanout PNG (inside the scratch dir), if a display was
+    /// configured. The file appears once the guest presents its first frame and is
+    /// overwritten with each subsequent frame (latest wins). Removed on Drop.
+    pub fn display_capture_path(&self) -> Option<&Path> {
+        self.capture_png.as_deref()
+    }
+
+    /// Decode the current captured scanout PNG. Errors if no display was configured or no
+    /// frame has been captured yet. The worker writes the PNG atomically (temp + rename),
+    /// so any file that exists is complete.
+    pub fn read_capture(&self) -> Result<CapturedFrame> {
+        let path = self
+            .capture_png
+            .as_ref()
+            .context("no display configured (use GuestConfig::with_display)")?;
+        let file = fs::File::open(path).with_context(|| format!("opening capture {path:?}"))?;
+        let mut reader = png::Decoder::new(BufReader::new(file))
+            .read_info()
+            .context("reading PNG header")?;
+        let mut rgba = vec![0u8; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut rgba).context("decoding PNG frame")?;
+        rgba.truncate(info.buffer_size());
+        anyhow::ensure!(
+            info.color_type == png::ColorType::Rgba && info.bit_depth == png::BitDepth::Eight,
+            "unexpected capture format {:?}/{:?} (expected RGBA8)",
+            info.color_type,
+            info.bit_depth
+        );
+        Ok(CapturedFrame {
+            width: info.width,
+            height: info.height,
+            rgba,
+        })
+    }
+
+    /// Block until at least one scanout frame has been captured (and decode it), or
+    /// `timeout` elapses, or the supervisor exits first. The returned frame is the latest
+    /// one present when the wait succeeds.
+    pub fn wait_for_capture(&mut self, timeout: Duration) -> Result<CapturedFrame> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.capture_png.as_ref().is_some_and(|p| p.exists()) {
+                if let Ok(frame) = self.read_capture() {
+                    return Ok(frame);
+                }
+            }
+            if let Some(status) = self.child.try_wait().context("polling supervisor")? {
+                // The supervisor exited; a final frame may have landed just before it did.
+                if let Ok(frame) = self.read_capture() {
+                    return Ok(frame);
+                }
+                bail!("supervisor exited ({status}) before any frame was captured");
+            }
+            if Instant::now() >= deadline {
+                bail!("timed out after {timeout:?} waiting for a captured frame");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Accept the guest agent's vsock connection (the guest connects shortly after boot),

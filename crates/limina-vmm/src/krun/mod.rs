@@ -15,6 +15,8 @@ mod console;
 use anyhow::{anyhow, Context, Result};
 use crossbeam_channel::unbounded;
 use devices::virtio::block::{CacheType, ImageType, SyncMode};
+use devices::virtio::display::DisplayInfo;
+use limina_display::CaptureConfig;
 use polly::event_manager::EventManager;
 use vmm::resources::VmResources;
 use vmm::vmm_config::block::BlockDeviceConfig;
@@ -24,10 +26,36 @@ use vmm::vmm_config::fs::FsDeviceConfig;
 use vmm::vmm_config::machine_config::VmConfig;
 use vmm::vmm_config::vsock::VsockDeviceConfig;
 
-use crate::config::{BootSource, DiskSpec, FsShare, KernelSpec, VmSpec, VsockSpec};
+use crate::config::{BootSource, DiskSpec, DisplaySpec, FsShare, KernelSpec, VmSpec, VsockSpec};
 
 /// Standard libkrun guest CID.
 const GUEST_CID: u32 = 3;
+
+// virglrenderer init flag bits (see docs/research/03 §1.3).
+#[allow(dead_code)]
+const VIRGLRENDERER_USE_EGL: u32 = 1 << 0;
+#[allow(dead_code)]
+const VIRGLRENDERER_THREAD_SYNC: u32 = 1 << 1;
+#[allow(dead_code)]
+const VIRGLRENDERER_VENUS: u32 = 1 << 6;
+const VIRGLRENDERER_NO_VIRGL: u32 = 1 << 7;
+#[allow(dead_code)]
+const VIRGLRENDERER_USE_ASYNC_FENCE_CB: u32 = 1 << 8;
+#[allow(dead_code)]
+const VIRGLRENDERER_RENDER_SERVER: u32 = 1 << 9;
+
+/// virgl_flags for the virtio-gpu device.
+///
+/// Tier 1 (current): `NO_VIRGL`. Our libkrun patch handles 2D scanout entirely in host
+/// CPU memory (software 2D), so the renderer needs no virgl/GL context — which is good,
+/// because virgl GL has no host context on macOS and the brew virglrenderer has no render
+/// server for Venus. This gives a clean rutabaga init (no "falling back to safe defaults").
+///
+/// Tier 2 (later, accelerated): the macOS Venus mask — `USE_EGL | VENUS | RENDER_SERVER |
+/// THREAD_SYNC | USE_ASYNC_FENCE_CB` (libkrun's `gui_vm` example) — once we build a
+/// virglrenderer with the render server and a Venus-capable guest. Override at runtime
+/// with `LIMINA_VIRGL_FLAGS` (e.g. `0x343`).
+const GPU_VIRGL_FLAGS: u32 = VIRGLRENDERER_NO_VIRGL;
 
 /// Translate a [`VmSpec`] into a libkrun [`VmResources`]. No VM is started yet.
 pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
@@ -63,11 +91,45 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
         add_vsock(&mut vmr, vsock)?;
     }
 
+    if let Some(display) = &spec.display {
+        add_display(&mut vmr, display)?;
+    }
+
     if let Some(console) = &spec.console {
         console::attach(&mut vmr, console).context("attaching serial console")?;
     }
 
     Ok(vmr)
+}
+
+/// Attach a virtio-gpu display. The GPU device is created iff `gpu_virgl_flags` is set,
+/// so this is what turns the display on. Tier 1: one 2D scanout at the requested mode,
+/// with our capture backend as the host sink (PNG oracle). With no `capture_png` the
+/// builder falls back to a no-op backend, so the device exists but frames go nowhere.
+fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
+    // Allow a quick flag sweep without recompiling (e.g. LIMINA_VIRGL_FLAGS=0x103).
+    let flags = std::env::var("LIMINA_VIRGL_FLAGS")
+        .ok()
+        .and_then(|s| {
+            let s = s.trim();
+            s.strip_prefix("0x")
+                .map(|h| u32::from_str_radix(h, 16))
+                .unwrap_or_else(|| s.parse::<u32>())
+                .ok()
+        })
+        .unwrap_or(GPU_VIRGL_FLAGS);
+    log::info!("virtio-gpu virgl_flags = {flags:#x}");
+    vmr.set_gpu_virgl_flags(flags);
+    vmr.displays
+        .push(DisplayInfo::new(display.width, display.height));
+
+    if let Some(png_path) = &display.capture_png {
+        vmr.display_backend = Some(limina_display::capture_backend(CaptureConfig {
+            png_path: png_path.clone(),
+        }));
+    }
+
+    Ok(())
 }
 
 /// Configure a direct kernel boot (raw aarch64 `Image` + optional cpio initramfs).
@@ -167,24 +229,38 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     let shutdown_efd = crate::shutdown::install().context("installing shutdown handler")?;
 
     let mut event_manager = EventManager::new().map_err(|e| anyhow!("EventManager::new: {e:?}"))?;
-    // The worker channel carries gpu/virgl messages; unused until we enable the GPU.
-    let (worker_tx, _worker_rx) = unbounded();
+    // The worker channel carries virtio-gpu blob-mapping messages (macOS): the GPU
+    // device asks the VMM to map host GPU memory into guest space. We service it on a
+    // dedicated thread below, exactly as `krun_start_enter` does (required once the GPU
+    // device exists; harmless otherwise).
+    let (worker_tx, worker_rx) = unbounded();
 
     let boot = match &spec.boot {
         BootSource::Firmware(_) => "EFI firmware",
         BootSource::Kernel(_) => "direct kernel",
     };
     log::info!(
-        "building microVM: {} vcpu(s), {} MiB, {} disk(s), {} share(s), boot={boot}",
+        "building microVM: {} vcpu(s), {} MiB, {} disk(s), {} share(s), display={}, boot={boot}",
         spec.cpus,
         spec.ram_mib,
         spec.disks.len(),
-        spec.shares.len()
+        spec.shares.len(),
+        spec.display.is_some(),
     );
-    let _vmm = vmm::builder::build_microvm(&vmr, &mut event_manager, Some(shutdown_efd), worker_tx)
+    let vmm = vmm::builder::build_microvm(&vmr, &mut event_manager, Some(shutdown_efd), worker_tx)
         .map_err(|e| anyhow!("build_microvm: {e:?}"))?;
+
+    // Start the GPU worker-message servicer when a display is attached (mirrors
+    // krun_start_enter's `if gpu_virgl_flags.is_some()`). Without it, a guest blob map
+    // would block the GPU worker forever waiting on a reply.
+    if spec.display.is_some() {
+        vmm::worker::start_worker_thread(vmm.clone(), worker_rx)
+            .map_err(|e| anyhow!("start_worker_thread: {e:?}"))?;
+    }
     log::info!("microVM running; entering event loop (SIGTERM/SIGINT → guest power-off)");
 
+    // Keep the Vmm alive for the lifetime of the event loop.
+    let _vmm = vmm;
     loop {
         event_manager
             .run()

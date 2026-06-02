@@ -71,6 +71,14 @@ struct Cli {
     #[arg(long)]
     console: Option<PathBuf>,
 
+    /// Attach a virtio-gpu display and capture presented frames to this PNG path.
+    #[arg(long)]
+    display_capture: Option<PathBuf>,
+
+    /// Display mode as WIDTHxHEIGHT (e.g. 1280x800). Used only with --display-capture.
+    #[arg(long, default_value = "1280x800")]
+    display_size: String,
+
     /// Seconds to wait for an orderly guest power-off before force-killing.
     #[arg(long, default_value_t = 20)]
     shutdown_grace_secs: u64,
@@ -132,6 +140,12 @@ fn main() -> Result<()> {
     if let Some(console) = &cli.console {
         args.push("--console".into());
         args.push(path_arg(console)?);
+    }
+    if let Some(display_capture) = &cli.display_capture {
+        args.push("--display-capture".into());
+        args.push(path_arg(display_capture)?);
+        args.push("--display-size".into());
+        args.push(cli.display_size.clone());
     }
 
     let spec = WorkerSpec {
