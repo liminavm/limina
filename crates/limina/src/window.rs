@@ -118,8 +118,11 @@ pub fn run(shared: Arc<Mutex<Shared>>, mtm: MainThreadMarker, worker_pid: i32) -
     };
     window.setTitle(&NSString::from_str("limina"));
     let view = window.contentView().expect("content view");
+    // Layer-HOSTING (not layer-backed): we own the layer, so AppKit never draws over the
+    // IOSurface we set as its contents. Order matters: setLayer before setWantsLayer.
+    let layer = CALayer::new();
+    view.setLayer(Some(&layer));
     view.setWantsLayer(true);
-    let layer = view.layer().expect("layer-backed view");
     window.center();
     window.makeKeyAndOrderFront(None);
     app.activate();
@@ -127,6 +130,9 @@ pub fn run(shared: Arc<Mutex<Shared>>, mtm: MainThreadMarker, worker_pid: i32) -
     // Per-timer state (main thread only).
     let last_gen = Cell::new(0u64);
     let geom = Cell::new((0u32, 0u32));
+    // Diagnostic: render the layer to a PNG after a few frames (no screen-record perm).
+    let capture_path = std::env::var("LIMINA_WINDOW_CAPTURE").ok();
+    let applies = Cell::new(0u64);
     // Cache looked-up surfaces by id (the worker reuses a small fixed set, its double buffer).
     let cache: RefCell<std::collections::HashMap<u32, CFRetained<IOSurfaceRef>>> =
         RefCell::new(std::collections::HashMap::new());
@@ -152,6 +158,13 @@ pub fn run(shared: Arc<Mutex<Shared>>, mtm: MainThreadMarker, worker_pid: i32) -
         if geom.get() != (width, height) {
             geom.set((width, height));
             window.setContentSize(NSSize::new(width as f64, height as f64));
+            // A layer-HOSTING view doesn't auto-size its layer — give it the view's bounds
+            // or it stays 0×0 and nothing shows on screen (even though contents is set).
+            let bounds = NSRect::new(
+                NSPoint::new(0.0, 0.0),
+                NSSize::new(width as f64, height as f64),
+            );
+            layer.setFrame(bounds);
         }
 
         let mut cache = cache.borrow_mut();
@@ -160,6 +173,14 @@ pub fn run(shared: Arc<Mutex<Shared>>, mtm: MainThreadMarker, worker_pid: i32) -
             .or_insert_with(|| IOSurfaceLookup(id).expect("IOSurfaceLookup of a worker surface"));
         // Distinct object each frame (the worker alternates ids) → CA re-reads.
         set_layer_surface(&layer, surface);
+
+        // Diagnostic capture of what CA actually renders for the layer (after a few frames).
+        applies.set(applies.get() + 1);
+        if applies.get() == 30 {
+            if let Some(path) = &capture_path {
+                capture_layer(&layer, width, height, path);
+            }
+        }
     });
 
     // ~60 Hz poll. Keep the timer alive for the app's lifetime.
@@ -170,6 +191,60 @@ pub fn run(shared: Arc<Mutex<Shared>>, mtm: MainThreadMarker, worker_pid: i32) -
     // The run loop only returns if AppKit tears down unexpectedly; the timer is what
     // normally exits us. Either way, don't fall through.
     std::process::exit(0);
+}
+
+/// Render the layer (including its IOSurface contents) into an offscreen bitmap and write
+/// it as a PNG — an in-app capture that needs no Screen Recording permission. Diagnostic.
+fn capture_layer(layer: &CALayer, width: u32, height: u32, path: &str) {
+    use objc2_core_graphics::{
+        CGBitmapContextCreate, CGBitmapContextGetBytesPerRow, CGBitmapContextGetData,
+        CGColorSpaceCreateDeviceRGB, CGImageAlphaInfo,
+    };
+    let (w, h) = (width as usize, height as usize);
+    unsafe {
+        let Some(cs) = CGColorSpaceCreateDeviceRGB() else {
+            log::error!("capture: no colorspace");
+            return;
+        };
+        // RGBA8, premultiplied last → R,G,B,A bytes in memory (CG allocates the buffer).
+        let info = CGImageAlphaInfo::PremultipliedLast.0;
+        let Some(ctx) = CGBitmapContextCreate(std::ptr::null_mut(), w, h, 8, 0, Some(&cs), info)
+        else {
+            log::error!("capture: no bitmap context");
+            return;
+        };
+        layer.renderInContext(&ctx);
+
+        let data = CGBitmapContextGetData(Some(&ctx)) as *const u8;
+        if data.is_null() {
+            log::error!("capture: null bitmap data");
+            return;
+        }
+        let bpr = CGBitmapContextGetBytesPerRow(Some(&ctx));
+        let mut rgba = vec![0u8; w * h * 4];
+        for y in 0..h {
+            std::ptr::copy_nonoverlapping(
+                data.add(y * bpr),
+                rgba.as_mut_ptr().add(y * w * 4),
+                w * 4,
+            );
+        }
+        match std::fs::File::create(path) {
+            Ok(f) => {
+                let mut enc = png::Encoder::new(std::io::BufWriter::new(f), width, height);
+                enc.set_color(png::ColorType::Rgba);
+                enc.set_depth(png::BitDepth::Eight);
+                match enc
+                    .write_header()
+                    .and_then(|mut w| w.write_image_data(&rgba))
+                {
+                    Ok(()) => log::info!("capture: wrote layer render to {path}"),
+                    Err(e) => log::error!("capture: png write failed: {e}"),
+                }
+            }
+            Err(e) => log::error!("capture: create {path} failed: {e}"),
+        }
+    }
 }
 
 /// Set an IOSurface as the layer's contents (it's a CF object accepted by `contents`).

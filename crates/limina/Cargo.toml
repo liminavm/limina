@@ -36,6 +36,14 @@ objc2-app-kit = { version = "0.3", features = [
     "NSView",
     "NSResponder",
 ] }
-objc2-quartz-core = { version = "0.3", features = ["CALayer"] }
+objc2-quartz-core = { version = "0.3", features = ["CALayer", "objc2-core-graphics"] }
 objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef"] }
 objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
+objc2-core-graphics = { version = "0.3", features = [
+    "CGContext",
+    "CGColorSpace",
+    "CGImage",
+    "CGBitmapContext",
+] }
+# Diagnostic: dump the rendered layer to a PNG (LIMINA_WINDOW_CAPTURE) without screen-record.
+png = { workspace = true }

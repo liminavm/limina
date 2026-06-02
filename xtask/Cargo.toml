@@ -1,0 +1,14 @@
+# limina dev-task runner (the `cargo xtask` convention). Pure orchestration — it shells out
+# to cargo, the build scripts, and codesign — so it stays light (no libkrun deps) and
+# fast to build. Start with `bundle` (assemble + sign a Limina.app); fold in sign /
+# run-window / build-test-guest as subcommands over time.
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+clap   = { workspace = true }

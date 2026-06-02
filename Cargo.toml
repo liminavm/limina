@@ -7,7 +7,7 @@
 # of external path dependencies, not a member of this one.
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = ["crates/*", "xtask"]
 # guest/ holds aarch64-linux guest binaries (their own workspace, built for a different
 # target); third_party/ is the vendored libkrun workspace; spikes/ are standalone.
 exclude = ["third_party", "spikes", "guest"]
