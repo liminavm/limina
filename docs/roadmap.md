@@ -92,19 +92,27 @@ smallest end-to-end path that exercises HVF + disk + console + entitlement.
    - **Networking: TSI default** (zero glue); do NOT add a virtio-net device yet (that is M3).
    - `vmm::builder::build_microvm(&vmr, &mut event_manager, shutdown_efd, tx)` then
      `loop { event_manager.run() }` in the child VMM process.
-3. **Codesign** the limina executable with `com.apple.security.hypervisor` via `hvf-entitlements.plist`
-   (`codesign --entitlements hvf-entitlements.plist -s - limina`). Wire this into the build so every
-   binary that calls HVF is signed.
-4. **Child-process supervision skeleton.** GUI/CLI parent spawns the signed VMM child, forwards the
-   console, and treats child exit (PSCI shutdown -> process teardown) as VM-stopped.
+3. **Codesign** the worker with `com.apple.security.hypervisor`. **Done:**
+   `crates/limina-vmm/{hvf-entitlements.plist,sign.sh}` (`codesign --entitlements ... -s - --force
+   target/<profile>/limina-vmm`). Only the worker (which calls `hv_vm_create`) needs it; the `limina`
+   supervisor does not.
+4. **Child-process supervision skeleton. Done:** `crates/limina` spawns the signed `limina-vmm` in its
+   own process group, forwards a graceful shutdown on SIGINT/SIGTERM (→ worker → libkrun shutdown
+   eventfd → guest GPIO power button), escalates to SIGKILL after a grace period, and reports the
+   worker's exit as VM-stopped. **Finding:** a *stock* EFI Fedora guest does not honor the GPIO
+   power button (KRUN_EFI's ACPI doesn't advertise it), so graceful power-off is an **enhanced-tier**
+   feature (our DT / `limina-agent`); the baseline relies on the SIGKILL fallback.
 
 **libkrun patches:** none required for the happy path. Stretch: harden the `panic!` exit paths a
 real Fedora boot may hit — `hvf/lib.rs:549` (unknown PSCI), `:595-602` (unknown exit reason),
 `:728` (unknown ESR_EL2 EC). Convert panics to logged graceful stops once we see which fire.
 
-**Done test:** From a clean terminal, `limina run Fedora-Workstation-43.raw` prints the EFI +
-kernel boot log and reaches the Fedora login / `getty` prompt on the serial console; entering
-`poweroff` shuts the guest down and the limina child process exits 0.
+**Done test:** From a clean terminal, `limina --firmware <KRUN_EFI.fd> --disk Fedora-Workstation-43.raw
+--console <file>` boots the distro: EFI + GRUB + (with `console=ttyAMA0`) the kernel dmesg reach the
+serial file, and the guest reaches `getty.target`. Ctrl-C/SIGTERM stops the VM and the supervisor
+reports it (clean exit 0 on the enhanced tier; SIGKILL fallback on a stock guest). **Status:**
+boot + supervision done (`crates/limina`, `crates/limina-vmm`); guest-initiated `poweroff` → worker
+exit 0 awaits the enhanced-tier power-button/agent path.
 
 **Risks / spike first:**
 - **Boot path (#1 risk): RESOLVED** by `spikes/m1-boot` — EFI+disk boots to userspace, no

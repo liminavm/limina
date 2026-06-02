@@ -82,6 +82,9 @@ fn add_disk(vmr: &mut VmResources, disk: &DiskSpec) -> Result<()> {
 pub fn boot(spec: &VmSpec) -> Result<()> {
     let vmr = build_resources(spec).context("building VmResources")?;
 
+    // Guest shutdown eventfd + SIGTERM/SIGINT handlers (graceful power-off request).
+    let shutdown_efd = crate::shutdown::install().context("installing shutdown handler")?;
+
     let mut event_manager = EventManager::new().map_err(|e| anyhow!("EventManager::new: {e:?}"))?;
     // The worker channel carries gpu/virgl messages; unused until we enable the GPU.
     let (worker_tx, _worker_rx) = unbounded();
@@ -92,11 +95,9 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         spec.ram_mib,
         spec.disks.len()
     );
-    // `shutdown_efd = None` for now; we'll pass an EventFd here to observe guest-
-    // requested shutdown cleanly once the supervisor link lands.
-    let _vmm = vmm::builder::build_microvm(&vmr, &mut event_manager, None, worker_tx)
+    let _vmm = vmm::builder::build_microvm(&vmr, &mut event_manager, Some(shutdown_efd), worker_tx)
         .map_err(|e| anyhow!("build_microvm: {e:?}"))?;
-    log::info!("microVM running; entering event loop");
+    log::info!("microVM running; entering event loop (SIGTERM/SIGINT → guest power-off)");
 
     loop {
         event_manager

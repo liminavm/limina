@@ -13,6 +13,7 @@
 
 mod config;
 mod krun;
+mod shutdown;
 
 use std::path::PathBuf;
 

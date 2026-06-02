@@ -1,0 +1,19 @@
+[package]
+name = "limina"
+description = "limina front-end / supervisor — spawns and supervises the limina-vmm worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "limina"
+path = "src/main.rs"
+
+[dependencies]
+# The supervisor does not call hv_vm_create itself, so it needs no entitlement and
+# no libkrun deps — it spawns the (signed) limina-vmm worker and monitors it.
+anyhow     = { workspace = true }
+clap       = { workspace = true }
+env_logger = { workspace = true }
+libc       = { workspace = true }
+log        = { workspace = true }
