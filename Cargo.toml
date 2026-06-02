@@ -1,6 +1,31 @@
-[package]
-name = "limina"
-version = "0.1.0"
-edition = "2024"
+# limina workspace.
+#
+# Our crates live under crates/ (host, macOS arm64) and agent/ (guest, aarch64-linux).
+# We consume libkrun through its INTERNAL Rust crates by path (decision D2.1 — no C
+# ABI, no krun-sys); those path-deps live in [workspace.dependencies] below. The
+# vendored libkrun tree under third_party/ is its own Cargo workspace, so it is a set
+# of external path dependencies, not a member of this one.
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+exclude = ["third_party", "spikes"]
 
-[dependencies]
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-only WITH LicenseRef-limina-exception"
+
+[workspace.dependencies]
+# --- vendored libkrun internal crates (D2.1) ---
+vmm     = { package = "krun-vmm",     path = "third_party/libkrun/src/vmm" }
+devices = { package = "krun-devices", path = "third_party/libkrun/src/devices" }
+polly   = { package = "krun-polly",   path = "third_party/libkrun/src/polly" }
+utils   = { package = "krun-utils",   path = "third_party/libkrun/src/utils" }
+
+# --- shared third-party ---
+anyhow            = "1"
+clap              = { version = "4", features = ["derive"] }
+crossbeam-channel = ">=0.5.15"
+env_logger        = "0.11"
+libc              = "0.2"
+log               = "0.4"

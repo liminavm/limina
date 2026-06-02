@@ -1,0 +1,25 @@
+[package]
+name = "limina-vmm"
+description = "limina VMM worker — boots a Linux guest on libkrun + Hypervisor.framework"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "limina-vmm"
+path = "src/main.rs"
+
+[dependencies]
+# libkrun internal crates (D2.1). blk on vmm transitively enables devices/blk; we
+# also depend on devices directly for the ImageType/CacheType/SyncMode enums.
+vmm     = { workspace = true, features = ["blk"] }
+devices = { workspace = true, features = ["blk"] }
+polly   = { workspace = true }
+utils   = { workspace = true }
+
+anyhow            = { workspace = true }
+clap              = { workspace = true }
+crossbeam-channel = { workspace = true }
+env_logger        = { workspace = true }
+libc              = { workspace = true }
+log               = { workspace = true }
