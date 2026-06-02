@@ -24,10 +24,20 @@ fn main() {
     if let Some(port) = agent_port_from_cmdline() {
         run_agent(port);
     }
-    // Draw a known pattern to the framebuffer last, so nothing overwrites it before the
-    // host captures the scanout (the M2 display oracle). Best-effort: no fb -> skip.
+    // `limina.hold`: keep the guest alive animating the framebuffer (for the interactive
+    // window). Otherwise draw the one-shot test pattern (the capture oracle) and power off.
+    if cmdline_has("limina.hold") {
+        animate_forever();
+    }
     draw_test_pattern();
     power_off();
+}
+
+/// True if `needle` appears as a whitespace-separated token on the kernel cmdline.
+fn cmdline_has(needle: &str) -> bool {
+    std::fs::read_to_string("/proc/cmdline")
+        .map(|c| c.split_whitespace().any(|t| t == needle))
+        .unwrap_or(false)
 }
 
 /// Mount devtmpfs on /dev and procfs on /proc (best-effort). The kernel may not have
@@ -178,17 +188,23 @@ struct FbFixScreeninfo {
     reserved: [u16; 2],
 }
 
-/// Fill `/dev/fb0` with a deterministic pattern — top half red, bottom half blue — and
-/// `msync` to force the deferred-IO writeback so the host presents (and captures) the
-/// frame. Best-effort and panic-free: if there's no framebuffer, just return.
-///
-/// The virtio-gpu fbdev format is BGRX (bytes `[B, G, R, X]`). Two solid bands give the
-/// host a frame with >1 colour and known top/bottom pixels to assert on.
-fn draw_test_pattern() {
+/// A mapped `/dev/fb0`. `base`/`len` are the mmap; `bpp` is bytes per pixel.
+struct Fb {
+    base: *mut u8,
+    len: usize,
+    stride: usize,
+    bpp: usize,
+    xres: usize,
+    yres: usize,
+}
+
+/// Open + mmap `/dev/fb0`, returning its geometry. Best-effort: `None` if there's no
+/// framebuffer (non-display guest) or anything fails.
+fn open_framebuffer() -> Option<Fb> {
     unsafe {
         let fd = libc::open(c"/dev/fb0".as_ptr(), libc::O_RDWR);
         if fd < 0 {
-            return; // no framebuffer (non-display guest) — nothing to draw.
+            return None;
         }
         let mut var: FbVarScreeninfo = std::mem::zeroed();
         let mut fix: FbFixScreeninfo = std::mem::zeroed();
@@ -196,18 +212,16 @@ fn draw_test_pattern() {
             || libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix) < 0
         {
             libc::close(fd);
-            return;
+            return None;
         }
-
         let len = fix.smem_len as usize;
         let stride = fix.line_length as usize;
         let bpp = (var.bits_per_pixel / 8) as usize;
         let (xres, yres) = (var.xres as usize, var.yres as usize);
         if len == 0 || bpp == 0 || stride == 0 {
             libc::close(fd);
-            return;
+            return None;
         }
-
         let base = libc::mmap(
             std::ptr::null_mut(),
             len,
@@ -216,31 +230,71 @@ fn draw_test_pattern() {
             fd,
             0,
         );
+        // Keep the fd open for the surface's lifetime by leaking it (PID 1 never exits).
         if base == libc::MAP_FAILED {
             libc::close(fd);
-            return;
+            return None;
         }
+        Some(Fb {
+            base: base as *mut u8,
+            len,
+            stride,
+            bpp,
+            xres,
+            yres,
+        })
+    }
+}
 
-        let p = base as *mut u8;
+/// Fill the framebuffer: top half red, bottom half blue (BGRX), and `msync` to force the
+/// deferred-IO writeback so the host presents (and captures) the frame. Two solid bands
+/// give a frame with >1 colour and known top/bottom pixels to assert on.
+fn draw_test_pattern() {
+    let Some(fb) = open_framebuffer() else { return };
+    unsafe {
         let top = [0u8, 0, 255, 0]; // BGRX -> red
         let bot = [255u8, 0, 0, 0]; // BGRX -> blue
-        for y in 0..yres {
-            let color = if y < yres / 2 { &top } else { &bot };
-            let row = p.add(y * stride);
-            for x in 0..xres {
-                let px = row.add(x * bpp);
-                for (b, &v) in color.iter().enumerate().take(bpp.min(4)) {
+        for y in 0..fb.yres {
+            let color = if y < fb.yres / 2 { &top } else { &bot };
+            let row = fb.base.add(y * fb.stride);
+            for x in 0..fb.xres {
+                let px = row.add(x * fb.bpp);
+                for (b, &v) in color.iter().enumerate().take(fb.bpp.min(4)) {
                     *px.add(b) = v;
                 }
             }
         }
-
-        // Force the framebuffer's deferred-IO writeback -> virtio-gpu transfer+flush.
-        libc::msync(base, len, libc::MS_SYNC);
-        libc::munmap(base, len);
-        libc::close(fd);
+        libc::msync(fb.base as *mut libc::c_void, fb.len, libc::MS_SYNC);
         // Give the async present a moment to reach the host before we power off.
         sleep_ms(300);
+    }
+}
+
+/// Animate scrolling colour bands forever (never returns) — keeps a guest alive with live
+/// frames so the host window has something to show. Used when `limina.hold` is on the cmdline.
+fn animate_forever() -> ! {
+    let fb = open_framebuffer();
+    // BGRX bands: red, green, blue.
+    let bands = [[0u8, 0, 255, 0], [0, 255, 0, 0], [255, 0, 0, 0]];
+    let mut frame = 0usize;
+    loop {
+        if let Some(fb) = &fb {
+            unsafe {
+                for y in 0..fb.yres {
+                    let color = &bands[((y + frame) / 48) % bands.len()];
+                    let row = fb.base.add(y * fb.stride);
+                    for x in 0..fb.xres {
+                        let px = row.add(x * fb.bpp);
+                        for (b, &v) in color.iter().enumerate().take(fb.bpp.min(4)) {
+                            *px.add(b) = v;
+                        }
+                    }
+                }
+                libc::msync(fb.base as *mut libc::c_void, fb.len, libc::MS_SYNC);
+            }
+        }
+        frame += 3;
+        unsafe { sleep_ms(33) };
     }
 }
 

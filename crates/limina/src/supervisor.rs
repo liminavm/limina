@@ -58,21 +58,42 @@ pub struct WorkerSpec {
     pub shutdown_grace: Duration,
 }
 
-/// Spawn and supervise the worker until it exits. Returns the process exit code
-/// (or `128 + signal` if it was terminated by a signal).
-pub fn run(spec: &WorkerSpec) -> Result<i32> {
+/// Spawn the worker in its own process group. `inherit_fds` are extra file descriptors
+/// the child should keep open across exec (the windowed control channel) — Rust sets
+/// `O_CLOEXEC` on fds it doesn't know about, so we clear it via `pre_exec`.
+pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<std::process::Child> {
     install_signal_handlers()?;
-
-    let mut child = Command::new(&spec.vmm_bin)
-        .args(&spec.args)
-        // Own process group: terminal SIGINT won't reach the worker directly; we
-        // forward a graceful shutdown ourselves.
-        .process_group(0)
+    let mut cmd = Command::new(&spec.vmm_bin);
+    cmd.args(&spec.args).process_group(0);
+    if !inherit_fds.is_empty() {
+        let fds = inherit_fds.to_vec();
+        // SAFETY: only async-signal-safe fcntl calls between fork and exec.
+        unsafe {
+            cmd.pre_exec(move || {
+                for &fd in &fds {
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+    }
+    let child = cmd
         .spawn()
         .with_context(|| format!("spawning worker {:?}", spec.vmm_bin))?;
-    let pid = child.id() as libc::pid_t;
-    log::info!("VM worker started (pid {pid}); Ctrl-C to power off");
+    log::info!(
+        "VM worker started (pid {}); Ctrl-C to power off",
+        child.id()
+    );
+    Ok(child)
+}
 
+/// Monitor an already-spawned worker until it exits, honoring the stop signal and grace
+/// period. Returns the process exit code (or `128 + signal`).
+pub fn monitor(mut child: std::process::Child, grace: Duration) -> Result<i32> {
+    let pid = child.id() as libc::pid_t;
     let mut shutdown_at: Option<Instant> = None;
     loop {
         if let Some(status) = child.try_wait().context("polling worker")? {
@@ -88,11 +109,8 @@ pub fn run(spec: &WorkerSpec) -> Result<i32> {
         }
 
         if let Some(t) = shutdown_at {
-            if t.elapsed() >= spec.shutdown_grace {
-                log::warn!(
-                    "guest did not power off within {:?}; forcing (SIGKILL)",
-                    spec.shutdown_grace
-                );
+            if t.elapsed() >= grace {
+                log::warn!("guest did not power off within {grace:?}; forcing (SIGKILL)");
                 let _ = child.kill();
                 let status = child.wait().context("waiting on worker after SIGKILL")?;
                 return Ok(report_exit(status));
@@ -101,6 +119,12 @@ pub fn run(spec: &WorkerSpec) -> Result<i32> {
 
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// Spawn and supervise the worker until it exits (headless/non-windowed path).
+pub fn run(spec: &WorkerSpec) -> Result<i32> {
+    let child = spawn_worker(spec, &[])?;
+    monitor(child, spec.shutdown_grace)
 }
 
 fn report_exit(status: ExitStatus) -> i32 {
