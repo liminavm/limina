@@ -19,7 +19,7 @@ use limina_input::constants::{
     ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
     REL_WHEEL,
 };
-use limina_input::keymap::macos_keycode_to_linux;
+use limina_input::keymap::{macos_keycode_to_linux, modifier_is_down};
 use limina_input::InputEvent;
 
 /// The supervisor ends of the two input sockets (one datagram = one event).
@@ -62,7 +62,7 @@ impl InputState {
                 true
             }
             NSEventType::FlagsChanged => {
-                self.emit_modifier(event.keyCode());
+                self.emit_modifier(event.keyCode(), event.modifierFlags().0 as u64);
                 true
             }
             NSEventType::MouseMoved
@@ -93,21 +93,31 @@ impl InputState {
         }
     }
 
-    /// `flagsChanged` reports the modifier whose state flipped but not the direction; toggle
-    /// our own pressed-set to derive it (handles left/right of the same modifier separately).
-    fn emit_modifier(&self, macos_keycode: u16) {
+    /// `flagsChanged` reports which modifier key changed but not the direction. We read the
+    /// modifier's *actual* state from the event's flag bitmask (see [`modifier_is_down`])
+    /// rather than toggling a guess — a single dropped `flagsChanged` (macOS suppresses
+    /// events while Command is held, and across focus changes) can't then wedge a modifier
+    /// "down" in the guest, which would make the compositor eat every later key. We still
+    /// keep a pressed-set, but only to de-duplicate (emit one press/one release per change).
+    fn emit_modifier(&self, macos_keycode: u16, raw_flags: u64) {
         let Some(code) = macos_keycode_to_linux(macos_keycode) else {
             return;
         };
-        let down = {
-            let mut pressed = self.pressed_mods.borrow_mut();
-            if pressed.remove(&macos_keycode) {
-                false
-            } else {
-                pressed.insert(macos_keycode);
-                true
-            }
+        let Some(down) = modifier_is_down(macos_keycode, raw_flags) else {
+            return;
         };
+        {
+            let mut pressed = self.pressed_mods.borrow_mut();
+            let was = pressed.contains(&macos_keycode);
+            if down == was {
+                return; // no actual change for this key; don't double-emit
+            }
+            if down {
+                pressed.insert(macos_keycode);
+            } else {
+                pressed.remove(&macos_keycode);
+            }
+        }
         self.send_kbd(InputEvent::new(EV_KEY, code, down as i32));
         self.send_kbd(InputEvent::syn());
     }
@@ -181,9 +191,19 @@ fn abs_coords(event: &NSEvent, view: &NSView) -> (i32, i32) {
 
 fn send_event(fd: RawFd, ev: InputEvent) {
     let bytes = ev.to_bytes();
-    // One datagram per event; drop on error (a full/closed socket shouldn't wedge the UI).
+    // One datagram per event. The fd is non-blocking (set in the supervisor) so a full
+    // socket can never block the AppKit main thread and freeze the whole UI — we drop the
+    // event instead. With the generous socket buffers we set, EAGAIN only happens if the
+    // worker has stopped draining (e.g. its input thread died), so warn loudly: it points
+    // at a real stall rather than normal backpressure.
     let n = unsafe { libc::send(fd, bytes.as_ptr() as *const libc::c_void, bytes.len(), 0) };
     if n < 0 {
-        log::trace!("input send failed: {}", std::io::Error::last_os_error());
+        let err = std::io::Error::last_os_error();
+        match err.raw_os_error() {
+            Some(libc::EAGAIN) | Some(libc::ENOBUFS) => {
+                log::warn!("input: dropped event {ev:?} — worker socket full (worker stalled?)")
+            }
+            _ => log::trace!("input send failed: {err}"),
+        }
     }
 }

@@ -62,7 +62,7 @@ impl InputEvent {
 mod tests {
     use super::*;
     use crate::constants::*;
-    use crate::keymap::macos_keycode_to_linux;
+    use crate::keymap::{macos_keycode_to_linux, modifier_is_down};
 
     #[test]
     fn wire_roundtrip_including_negative_values() {
@@ -89,6 +89,38 @@ mod tests {
         assert_eq!(macos_keycode_to_linux(0x36), Some(KEY_RIGHTMETA));
         // An unused keycode maps to nothing.
         assert_eq!(macos_keycode_to_linux(0xFF), None);
+    }
+
+    #[test]
+    fn modifier_direction_comes_from_flags_not_a_toggle() {
+        // Device-dependent (left/right) masks: LCMD=0x08, RCMD=0x10, LSHIFT=0x02.
+        const LCMD: u64 = 0x08;
+        const RCMD: u64 = 0x10;
+
+        // Left Command (kVK 0x37): down iff its device bit is set in the flags.
+        assert_eq!(modifier_is_down(0x37, LCMD), Some(true));
+        assert_eq!(modifier_is_down(0x37, 0), Some(false));
+
+        // The core regression: even if we somehow *missed* the press, the *release*
+        // flagsChanged (LCMD bit now clear) still reads as "up" — so Super can't wedge
+        // down in the guest and swallow every subsequent key. A blind toggle would have
+        // inverted here and reported "down".
+        assert_eq!(modifier_is_down(0x37, 0), Some(false));
+
+        // Holding left Command while right Command taps: device bits keep them distinct,
+        // so releasing one doesn't strand the other.
+        assert_eq!(modifier_is_down(0x36, LCMD | RCMD), Some(true)); // right down
+        assert_eq!(modifier_is_down(0x36, LCMD), Some(false)); // right up, left still held
+        assert_eq!(modifier_is_down(0x37, LCMD), Some(true)); // left still down
+
+        // Fallback to the device-independent class bit when the low word is clear
+        // (some events don't carry device bits): Command class = 1<<20, Shift = 1<<17.
+        assert_eq!(modifier_is_down(0x37, 1 << 20), Some(true));
+        assert_eq!(modifier_is_down(0x38, 1 << 17), Some(true));
+        assert_eq!(modifier_is_down(0x38, 0), Some(false));
+
+        // Non-modifier keycodes aren't handled here.
+        assert_eq!(modifier_is_down(0x00, 0xffff_ffff), None);
     }
 
     #[test]

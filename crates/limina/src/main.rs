@@ -195,6 +195,16 @@ fn run_windowed(
     // preserves the 8-byte record boundaries the worker's backends rely on.
     let (kbd_sup_fd, kbd_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
     let (ptr_sup_fd, ptr_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
+    // Input events are tiny (8 bytes) but bursty (a key chord, a fast drag). Give the
+    // datagram pipes a deep buffer (~32k events) so a momentary worker lag never drops
+    // input, and make the supervisor *send* ends non-blocking so a pathological full
+    // socket (a stalled/dead worker input thread) can never block the AppKit main thread
+    // and freeze the whole UI — send() returns EAGAIN and we drop instead (see input.rs).
+    for fd in [kbd_sup_fd, kbd_worker_fd, ptr_sup_fd, ptr_worker_fd] {
+        set_socket_buffer(fd, 256 * 1024);
+    }
+    set_nonblocking(kbd_sup_fd);
+    set_nonblocking(ptr_sup_fd);
 
     args.push("--display-window".into());
     args.push("--control-fd".into());
@@ -268,6 +278,32 @@ fn socketpair(sock_type: libc::c_int) -> Result<(libc::c_int, libc::c_int)> {
         );
     }
     Ok((sup_fd, worker_fd))
+}
+
+/// Mark `fd` non-blocking so a write to a full socket fails fast (EAGAIN) instead of
+/// blocking the caller. Best-effort: a failure here only forfeits the non-blocking property.
+fn set_nonblocking(fd: libc::c_int) {
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags >= 0 {
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
+}
+
+/// Request `bytes` of send and receive buffer on `fd` (best-effort; the kernel may clamp).
+fn set_socket_buffer(fd: libc::c_int, bytes: libc::c_int) {
+    for opt in [libc::SO_SNDBUF, libc::SO_RCVBUF] {
+        unsafe {
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                opt,
+                &bytes as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+        }
+    }
 }
 
 /// Parse a `WIDTHxHEIGHT` string into `(width, height)`.

@@ -148,3 +148,43 @@ pub fn macos_keycode_to_linux(keycode: u16) -> Option<u16> {
     };
     Some(k)
 }
+
+/// Decide whether the modifier identified by `keycode` is **now down**, from the raw
+/// `NSEvent.modifierFlags` bitmask carried by a `flagsChanged` event — or `None` if
+/// `keycode` isn't a modifier we track.
+///
+/// `flagsChanged` reports *which* modifier key changed but not the direction, so we read the
+/// resulting flag state instead of toggling a guess. This is self-correcting: a single
+/// dropped `flagsChanged` (macOS suppresses events while Command is held and across focus
+/// changes) can no longer leave a modifier wedged "down" in the guest forever.
+///
+/// Prefers the device-dependent (left/right-specific) low bits for an exact answer; if those
+/// are absent (low word clear) it falls back to the device-independent *class* bit, which
+/// loses the left/right distinction but never wedges every modifier off.
+pub fn modifier_is_down(keycode: u16, flags: u64) -> Option<bool> {
+    // Device-dependent masks (IOLLEvent.h `NX_DEVICE*KEYMASK`) and the matching
+    // device-independent class mask (`NSEventModifierFlag*`).
+    const SHIFT: u64 = 1 << 17;
+    const CONTROL: u64 = 1 << 18;
+    const OPTION: u64 = 1 << 19;
+    const COMMAND: u64 = 1 << 20;
+    const CAPSLOCK: u64 = 1 << 16;
+    let (dev, class): (u64, u64) = match keycode {
+        0x37 => (0x0000_0008, COMMAND), // left Command
+        0x36 => (0x0000_0010, COMMAND), // right Command
+        0x38 => (0x0000_0002, SHIFT),   // left Shift
+        0x3C => (0x0000_0004, SHIFT),   // right Shift
+        0x3A => (0x0000_0020, OPTION),  // left Option
+        0x3D => (0x0000_0040, OPTION),  // right Option
+        0x3B => (0x0000_0001, CONTROL), // left Control
+        0x3E => (0x0000_2000, CONTROL), // right Control
+        0x39 => (0, CAPSLOCK),          // Caps Lock (latch; no left/right)
+        _ => return None,
+    };
+    const DEV_MASK: u64 = 0x0000_ffff;
+    if dev != 0 && flags & DEV_MASK != 0 {
+        Some(flags & dev != 0)
+    } else {
+        Some(flags & class != 0)
+    }
+}
