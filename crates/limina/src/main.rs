@@ -72,10 +72,24 @@ struct Cli {
     #[arg(long)]
     console: Option<PathBuf>,
 
+    /// Optional FIFO/file feeding the guest serial console input (pairs with --console).
+    #[arg(long, requires = "console")]
+    console_input: Option<PathBuf>,
+
     /// Wire the guest serial to an interactive pseudo-terminal instead of a file; the
     /// worker prints the slave device path to attach with `screen <path>`.
     #[arg(long, conflicts_with = "console")]
     console_pty: bool,
+
+    /// Capture the guest virtio-console (`hvc0`) output to this file — the robust
+    /// bidirectional console. Pair with `console=hvc0` on the cmdline and
+    /// --virtio-console-input to make hvc0 the guest's interactive `/dev/console`.
+    #[arg(long)]
+    virtio_console: Option<PathBuf>,
+
+    /// Optional FIFO/file feeding the guest virtio-console (`hvc0`) input.
+    #[arg(long, requires = "virtio_console")]
+    virtio_console_input: Option<PathBuf>,
 
     /// Open a native window showing the guest display (the worker streams its scanout as
     /// a shared IOSurface). Mutually exclusive with --display-capture.
@@ -151,6 +165,18 @@ fn main() -> Result<()> {
     if let Some(console) = &cli.console {
         args.push("--console".into());
         args.push(path_arg(console)?);
+    }
+    if let Some(console_input) = &cli.console_input {
+        args.push("--console-input".into());
+        args.push(path_arg(console_input)?);
+    }
+    if let Some(virtio_console) = &cli.virtio_console {
+        args.push("--virtio-console".into());
+        args.push(path_arg(virtio_console)?);
+    }
+    if let Some(virtio_console_input) = &cli.virtio_console_input {
+        args.push("--virtio-console-input".into());
+        args.push(path_arg(virtio_console_input)?);
     }
     if cli.console_pty {
         args.push("--console-pty".into());

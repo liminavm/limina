@@ -22,7 +22,7 @@ use clap::Parser;
 
 use crate::config::{
     BootSource, ConsoleSpec, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec,
-    VmSpec, VsockSpec,
+    VirtioConsoleSpec, VmSpec, VsockSpec,
 };
 
 /// Boot a Linux guest on libkrun + Hypervisor.framework.
@@ -87,6 +87,16 @@ struct Cli {
     /// slave device path is printed at startup (attach with `screen <path>`).
     #[arg(long, conflicts_with_all = ["console", "console_input"])]
     console_pty: bool,
+
+    /// Capture the guest virtio-console (`hvc0`) output to this file. Pair with
+    /// `console=hvc0` on the cmdline to make hvc0 the guest's interactive `/dev/console`
+    /// (the robust bidirectional path; PL011 stays the firmware/early-boot console).
+    #[arg(long)]
+    virtio_console: Option<PathBuf>,
+
+    /// Optional FIFO/file feeding the guest virtio-console (`hvc0`) input.
+    #[arg(long, requires = "virtio_console")]
+    virtio_console_input: Option<PathBuf>,
 
     /// Attach a virtio-gpu display and capture presented frames to this PNG path
     /// (the headless display oracle). Mutually exclusive with --display-window.
@@ -215,6 +225,10 @@ fn main() -> Result<()> {
                 input: cli.console_input,
             })
         },
+        virtio_console: cli.virtio_console.map(|output| VirtioConsoleSpec {
+            output,
+            input: cli.virtio_console_input,
+        }),
         display,
         input,
     };

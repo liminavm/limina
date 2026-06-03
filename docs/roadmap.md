@@ -93,6 +93,12 @@ it (see CLAUDE.md). L1 is what makes this cheap enough to always do.
 
 ## Milestone 1 — Boot Fedora-Workstation-43.raw to a serial console
 
+**Status: ✅ done.** Boots the stock distro via EFI to userspace with full dmesg on the serial
+console; child-process supervision + codesign shipped (`crates/limina`, `crates/limina-vmm`). The one
+caveat is guest-initiated `poweroff` → worker exit 0, which needs the enhanced-tier
+power-button/agent path (a stock EFI guest ignores the GPIO power button; baseline uses the
+SIGKILL fallback).
+
 **Goal:** `limina run Fedora-Workstation-43.raw` boots the distro's own kernel via EFI and reaches a
 login prompt on the host terminal (serial console). No window, no GPU, no real NIC. This is the
 smallest end-to-end path that exercises HVF + disk + console + entitlement.
@@ -175,10 +181,37 @@ exit 0 awaits the enhanced-tier power-button/agent path.
 
 ## Milestone 2 — Display + input (native Metal window)
 
+**Status: ✅ done (functional); closing out polish.** Real Fedora boots into a native limina window
+to the GNOME desktop, and the host keyboard + pointer drive it. What shipped, and where it differs
+from the plan below:
+
+- **Display is supervisor-hosted via a shared IOSurface, not an in-process CAMetalLayer.** The
+  worker (`limina-vmm --display-window`) runs the native-Rust `krun_display` backend and publishes
+  each scanout into a cross-process `IOSurface`; the supervisor (`limina --window`) owns the NSWindow
+  and presents it via `CALayer.contents` (the process-topology decision — see the `limina-m2-display`
+  note and `spikes/m2-window`). This keeps the AppKit UI in the surviving supervisor, off the VMM
+  child. (commits `f6be85e`, `41fe2fa`, `2756830`, `8d346fa`, `fd1d038`)
+- **Tier-1 is software-2D — M2 needed *no* M4 GPU machinery.** Our libkrun patch (0001) serves the
+  2D scanout straight from host CPU memory and **skips virglrenderer/rutabaga init entirely**, so it
+  works on a GL-less host (resolves the "can the gpu device output 2D without VENUS flags?" spike by
+  sidestepping the renderer). A headless PNG-capture sink is the test oracle. (`c0c5fc4`, `6e95029`)
+- **Input worker builds and runs on macOS arm64** (the top M2 risk — resolved). NSEvent capture →
+  virtio-keyboard + absolute pointer, with a kVK→KEY table and device-dependent modifier handling.
+  (`d1dfb8f`, `4eac11a`)
+- **Stability fixes landed this round:** synchronous software-2D fence retire (GTK4/nautilus hang),
+  input modifier desync + main-thread send freeze. (`74c7b9b`, `4eac11a`)
+- **Console split out to M2.5.** The interactive console (`--console-pty`, hvc0 + L1 round-trip
+  test) started here but is now tracked under M2.5 below.
+
+**Remaining to formally close M2:** verify the Done-test's *window-close → orderly guest shutdown*
+clause (stock guest: SIGKILL fallback; enhanced tier: agent); confirm the mouse-over-menu stall
+(diagnosed as a guest-side GNOME hang) is not ours; cursor stays software-composited (hardware
+cursor is M8).
+
 **Goal:** A native macOS window shows the guest framebuffer (2D scanout) and a keyboard + pointer
 work. Fedora boots to a graphical login (llvmpipe/software GL is fine — 3D is M4).
 
-**Key tasks:**
+**Key tasks (original plan, retained for the verified API references):**
 1. **Native NSWindow + CAMetalLayer display backend** implementing the verified
    `krun_display_backend` vtable (`libkrun_display.h`): `configure_scanout`, `disable_scanout`,
    `alloc_frame`, `present_frame`. Implemented as the **native Rust** display backend on
@@ -226,6 +259,75 @@ login field and the pointer moves and clicks. Window close triggers an orderly g
   interacts with backingScaleFactor. Latency of the gpu-thread -> main-thread present hop.
 - Cursor: UPDATE/MOVE_CURSOR are unimplemented (panic) — use a software-composited guest cursor for
   M2; hardware cursor is an M8 patch.
+
+---
+
+## Milestone 2.5 — Console & serial (full-boot visibility + debug shell)
+
+**Status: 🚧 in progress.** A debuggability *enabler* milestone, inserted before networking
+because every later milestone (M3 NAT, M4 3D, M6 balloon) is far easier to diagnose with a real
+boot console and an interactive serial shell. Not a new product feature so much as making the boot
+chain observable end to end — and finishing the "serial console" promise M1 deferred to "the M2
+display."
+
+**Already shipped toward this** (don't redo): hvc0 bidirectional console + the L1 round-trip test
+(`l1_console.rs`, libkrun patch 0003 `PortConfig::ConsoleInOut`); the interactive PL011 pty
+(`--console-pty`); PL011 drop-on-`WouldBlock` (patch 0002); and a full diagnostic workup of the
+PL011-tty deadlock (see the `limina-pl011-tty-deadlock` note). hvc0 is the working *post-boot*
+interactive channel; M2.5 is about the *serial* path and the *visual* boot.
+
+**Goal:** (A) an interactive **serial** shell on `/dev/ttyAMA0` (PL011) for both stock and custom
+guests — to read logs, kill processes, poke a wedged userspace — and (B) the **full boot process
+(EFI → GRUB → early kernel) visible in the limina window**, not just post-DRM frames.
+
+**Key tasks:**
+
+1. **Track A — fix the PL011 serial *tty* deadlock (start here).** Exposing `/dev/ttyAMA0` needs
+   `arm,primecell` on the FDT serial node (`devices/src/fdt/aarch64.rs::create_serial_node`), but
+   adding it deadlocks the guest's `amba-pl011` probe — an IRQs-off spinlock right after the AMBA
+   ID read, before any UART register write (not console-handover; survives dropping
+   `console=`/`stdout-path`; invisible to printk + hung-task watchdog). Diagnostics are already
+   captured; the restart recipe is in the `limina-pl011-tty-deadlock` memory:
+   - Reproduce with the one-line `compatible = b"arm,pl011\0arm,primecell\0"` edit (`touch` after
+     editing libkrun — cargo misses Edit-tool writes; revert when done, it breaks all L1 tests).
+   - Get the stuck PC by rebuilding the L1 kernel with `CONFIG_PROVE_LOCKING=y` +
+     `CONFIG_DEBUG_ATOMIC_SLEEP=y` (lockdep) via `scripts/build-test-kernel.sh` and reading the
+     splat off earlycon (`keep_bootcon ignore_loglevel`).
+   - Fix libkrun's PL011 emulation so `amba-pl011` binds cleanly (mechanism in libkrun; policy in
+     limina). Then a `ConsoleSpec`/CLI path wires PL011 input for a real serial getty/shell, and
+     `--console-pty` becomes usable for an interactive login (not just output).
+   - **Two-tier:** must keep the *stock* Fedora EFI guest booting (the compatibility floor) — the
+     fix is additive, never a precondition.
+
+2. **Track B — graphical boot console (EDK2 GOP).** So EFI/GRUB/early-kernel render into the window.
+   Patch the `KRUN_EFI` firmware (ArmVirtKrun / EDK2) to add `VirtioGpuDxe` + a graphics console
+   bound to our virtio-gpu scanout, so the firmware paints ConOut to the same surface the M2 window
+   presents. (See the `limina-efi-console` note: the EFI-path cmdline is GRUB-owned and FDT bootargs
+   are ignored, so a *firmware* graphics console — not a kernel `console=` — is the lever for the
+   pre-kernel stages.) Reconcile with the M2 IOSurface present path (firmware frames before the
+   guest's own DRM driver loads).
+
+3. **Wire both into the harness + window UX.** A serial-console view alongside the display (a
+   separate pane/window the user can open), and keep the L1 console round-trip test green as the
+   regression oracle; extend it toward "type a command, assert its output" once a shell is present.
+
+**libkrun / firmware patches:** PL011 emulation completion (Track A, the amba-probe fix); a
+`KRUN_EFI` EDK2 rebuild with VirtioGpuDxe + graphics console (Track B). Both carried as tracked
+series (`patches/libkrun`, and a firmware build recipe).
+
+**Done test:** (A) `limina ... --console-pty` (or a serial pane) gives an interactive shell on a
+booted guest — type `dmesg`/`kill`, see output — on **both** the custom L1 guest and stock Fedora,
+with the stock guest still booting unchanged. (B) The limina window shows EFI + GRUB + early-kernel
+output during boot, not a black screen until DRM takes over.
+
+**Risks / spike first:**
+- **The PL011 deadlock may be a non-trivial emulation gap** (not a one-liner). Lockdep first; if the
+  fix balloons, hvc0 already covers the post-boot shell, so Track A can be timeboxed.
+- **EDK2 rebuild friction** (Track B): ArmVirtKrun is built via Fedora rpmbuild; adding VirtioGpuDxe
+  + wiring its GOP to libkrun's virtio-gpu may need firmware-side surface plumbing. Spike a minimal
+  GOP-renders-to-window proof before committing.
+- Keep the **compatibility floor** green throughout (stock Fedora EFI boot) — add a stock-path smoke
+  check to the loop so enhanced-tier console work can't silently regress it.
 
 ---
 
@@ -533,8 +635,9 @@ second display attaches at runtime, and resizing the window reflows the guest re
 
 | Milestone | Net-new limina code | libkrun (or fw/virgl) patches |
 |---|---|---|
-| M1 boot | CLI, internal-API `limina-vmm` (D2.1), child supervisor, codesign | (optional) harden panic exit paths |
-| M2 display+input | Metal display backend, input provider, kVK->KEY table | (likely) Darwin input-worker epoll/eventfd shim |
+| M1 boot ✅ | CLI, internal-API `limina-vmm` (D2.1), child supervisor, codesign | (optional) harden panic exit paths |
+| M2 display+input ✅ | supervisor IOSurface window, native-Rust display backend, input provider, kVK->KEY table | software-2D scanout (0001); Darwin input worker ran as-is |
+| M2.5 console/serial 🚧 | serial-getty/pty wiring; serial pane in window; console harness | **PL011 amba-probe deadlock fix** (Track A); KRUN_EFI EDK2 + VirtioGpuDxe GOP (Track B); already: hvc0 ConsoleInOut (0003), PL011 WouldBlock (0002) |
 | M3 networking | gvproxy supervision; bridged helper integration | (optional) worker.rs reconnect-on-HANG_UP |
 | M4 3D | virgl flags wiring; IOSurface present-texture backend | virglrenderer Apple-blob fork build; SET_SCANOUT_BLOB accept path + display-vtable surface-export callback (zero-copy scanout) |
 | M5 clipboard/fs/agent | guest agent, liminad, NSPasteboard bridge | none for transport (vsock+virtiofs exist) |
@@ -544,8 +647,12 @@ second display attaches at runtime, and resizing the window reflows the guest re
 
 ## First three things to spike (highest uncertainty, gate the most)
 
-1. **M1 boot path:** EFI+disk vs root_disk_remount against the real Fedora `.raw` layout (btrfs/LVM).
-2. **M2 input worker on macOS:** does `--features input`'s epoll/eventfd shim build and wake on
-   Darwin arm64?
+1. ~~**M1 boot path:** EFI+disk vs root_disk_remount against the real Fedora `.raw` layout.~~
+   **RESOLVED** (`spikes/m1-boot`): EFI+disk boots to userspace, no remount needed.
+2. ~~**M2 input worker on macOS:** does `--features input`'s epoll/eventfd shim build/wake on Darwin
+   arm64?~~ **RESOLVED**: it does; keyboard + absolute pointer drive the live desktop.
 3. **M6 reclaim:** does `MADV_FREE_REUSABLE` actually drop `phys_footprint` on an `hv_vm_map`'d
-   region? (Decides whether dynamic memory is feasible at all.)
+   region? (Decides whether dynamic memory is feasible at all.) — still the key open spike.
+
+New near-term spike (M2.5): the **PL011 amba-probe deadlock** — lockdep the guest kernel to get the
+stuck PC before attempting the libkrun PL011 emulation fix (see `limina-pl011-tty-deadlock`).

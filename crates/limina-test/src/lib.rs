@@ -150,6 +150,9 @@ pub struct GuestConfig {
     /// Grace the *supervisor* gives the guest to power off before it force-kills the
     /// worker. Kept short for tests.
     pub shutdown_grace: Duration,
+    /// Wire an interactive console: the harness feeds the guest serial *input* via a FIFO
+    /// (so a test can type), in addition to capturing output. See [`Guest::console_send`].
+    pub console_input: bool,
 }
 
 impl GuestConfig {
@@ -188,6 +191,7 @@ impl GuestConfig {
             cpus: 4,
             ram_mib: 4096,
             shutdown_grace: Duration::from_secs(grace_from_env()),
+            console_input: false,
         })
     }
 
@@ -224,6 +228,7 @@ impl GuestConfig {
             cpus: 2,
             ram_mib: 1024,
             shutdown_grace: Duration::from_secs(grace_from_env()),
+            console_input: false,
         })
     }
 
@@ -249,6 +254,32 @@ impl GuestConfig {
             cmdline.push_str(&format!(" limina.agent_port={port}"));
         }
         self.vsock = Some(VsockCfg { port, socket_path });
+        self
+    }
+
+    /// Enable an interactive console: the harness feeds the guest console input via a FIFO
+    /// (see [`Guest::console_send`]) on top of capturing output. Pair with a guest that
+    /// reads the console — e.g. the L1 init's echo mode (`limina.console_echo`).
+    ///
+    /// This routes the console over **virtio-console (`hvc0`)**, not the PL011 serial: the
+    /// guest kernel exposes hvc0 as a real readable tty out of the box, whereas a PL011 tty
+    /// needs an FDT change that currently deadlocks the guest amba probe. To make hvc0 the
+    /// guest's `/dev/console` (so both kernel log and the init's I/O flow through it) we
+    /// swap `console=ttyAMA0` → `console=hvc0` on the kernel cmdline.
+    pub fn with_console_input(mut self) -> GuestConfig {
+        self.console_input = true;
+        if let Boot::Kernel { cmdline, .. } = &mut self.boot {
+            *cmdline = cmdline.replace("console=ttyAMA0", "console=hvc0");
+        }
+        self
+    }
+
+    /// Append `extra` (space-prefixed) to the kernel command line. Kernel boot only.
+    pub fn append_cmdline(mut self, extra: &str) -> GuestConfig {
+        if let Boot::Kernel { cmdline, .. } = &mut self.boot {
+            cmdline.push(' ');
+            cmdline.push_str(extra);
+        }
         self
     }
 }
@@ -293,6 +324,8 @@ pub struct Guest {
     vsock_socket: Option<PathBuf>,
     /// Captured-scanout PNG path (inside `scratch`), if a display was configured.
     capture_png: Option<PathBuf>,
+    /// Write handle to the guest console input FIFO, if an interactive console was enabled.
+    console_in: Option<fs::File>,
     /// Set once teardown has run, so Drop doesn't double-kill.
     torn_down: bool,
 }
@@ -376,8 +409,6 @@ impl Guest {
             .arg(cfg.cpus.to_string())
             .arg("--ram-mib")
             .arg(cfg.ram_mib.to_string())
-            .arg("--console")
-            .arg(&console_path)
             .arg("--shutdown-grace-secs")
             .arg(cfg.shutdown_grace.as_secs().to_string())
             // Point the supervisor at our built worker explicitly, so the harness and
@@ -408,6 +439,32 @@ impl Guest {
                     .arg(cmdline);
             }
         }
+        // Console capture. Two channels, by use case:
+        //  - Interactive (`with_console_input`): route over virtio-console (`hvc0`). The
+        //    guest exposes hvc0 as a real bidirectional tty out of the box; with
+        //    `console=hvc0` (set by `with_console_input`) it's the guest's `/dev/console`,
+        //    so kernel log AND the init's I/O both land in `console_path`. A FIFO feeds
+        //    input — opened O_RDWR here (never blocks, never EOFs) before spawn, so a test
+        //    can `console_send` the instant the guest starts reading.
+        //  - Output-only: the PL011 serial captured to `console_path` (the default path).
+        let console_in = if cfg.console_input {
+            let fifo = scratch.join("console.in");
+            mkfifo(&fifo)?;
+            cmd.arg("--virtio-console")
+                .arg(&console_path)
+                .arg("--virtio-console-input")
+                .arg(&fifo);
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&fifo)
+                .with_context(|| format!("opening console input fifo {fifo:?}"))?;
+            Some(file)
+        } else {
+            cmd.arg("--console").arg(&console_path);
+            None
+        };
+
         // Display: capture the scanout into the scratch dir (auto-cleaned on Drop).
         let capture_png = match &cfg.display {
             Some(d) => {
@@ -454,6 +511,7 @@ impl Guest {
             vsock_listener,
             vsock_socket,
             capture_png,
+            console_in,
             torn_down: false,
         })
     }
@@ -587,6 +645,21 @@ impl Guest {
         }
     }
 
+    /// Feed `line` (a newline is appended) to the guest serial console input. Requires
+    /// [`GuestConfig::with_console_input`]. Lets a test "type" at the guest — e.g. a command
+    /// for the L1 init's echo mode (or, later, a real shell) to read and respond to.
+    pub fn console_send(&mut self, line: &str) -> Result<()> {
+        let f = self
+            .console_in
+            .as_mut()
+            .context("console input not enabled (use GuestConfig::with_console_input)")?;
+        f.write_all(line.as_bytes())
+            .and_then(|()| f.write_all(b"\n"))
+            .and_then(|()| f.flush())
+            .context("writing to console input fifo")?;
+        Ok(())
+    }
+
     /// Request a clean shutdown (SIGTERM to the supervisor, which asks the guest to
     /// power off and force-kills the worker after its own grace), then wait up to
     /// `timeout` for the supervisor to exit. Escalates to SIGKILL if it overruns.
@@ -713,6 +786,17 @@ fn tail(s: &str, n: usize) -> String {
     let lines: Vec<&str> = s.lines().collect();
     let start = lines.len().saturating_sub(n);
     lines[start..].join("\n")
+}
+
+/// Create a FIFO (named pipe) at `path`, mode 0600.
+fn mkfifo(path: &Path) -> Result<()> {
+    let c = std::ffi::CString::new(path.to_string_lossy().into_owned())
+        .with_context(|| format!("path with NUL: {path:?}"))?;
+    // SAFETY: `c` is a valid NUL-terminated C string for the lifetime of the call.
+    if unsafe { libc::mkfifo(c.as_ptr(), 0o600) } != 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| format!("mkfifo {path:?}"));
+    }
+    Ok(())
 }
 
 /// Convenience: assert that a captured console contains all of `needles`, with a

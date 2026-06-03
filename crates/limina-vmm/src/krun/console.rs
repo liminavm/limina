@@ -19,9 +19,9 @@ use std::fs::OpenOptions;
 use std::os::unix::io::{IntoRawFd, RawFd};
 
 use anyhow::{Context, Result};
-use vmm::resources::{SerialConsoleConfig, VmResources};
+use vmm::resources::{PortConfig, SerialConsoleConfig, VirtioConsoleConfigMode, VmResources};
 
-use crate::config::ConsoleSpec;
+use crate::config::{ConsoleSpec, VirtioConsoleSpec};
 
 /// Attach `console` to `vmr` as the guest's primary serial device.
 ///
@@ -59,6 +59,50 @@ pub fn attach(vmr: &mut VmResources, console: &ConsoleSpec) -> Result<()> {
         input_fd,
         output_fd,
     });
+
+    Ok(())
+}
+
+/// Attach `spec` as a virtio-console (`hvc0`) — a bidirectional console the guest kernel
+/// exposes as a real tty without any FDT/driver workaround (the PL011 tty path deadlocks
+/// the guest amba probe; see [`VirtioConsoleSpec`]).
+///
+/// We disable the implicit console so this *explicit* port lands at console id 0 (`hvc0`),
+/// then wire it via [`PortConfig::InOut`] — which, unlike libkrun's autoconfigure path,
+/// takes the fds verbatim with no `isatty` gating (our output is a plain file and our
+/// input a FIFO, neither a tty). Output is truncated-on-open; input is opened `O_RDWR` so
+/// the FIFO is kqueue-pollable and never reports EOF (the VM reads; a host writer feeds it).
+/// The fds are intentionally leaked into libkrun for the VM's lifetime (= this process).
+pub fn attach_virtio(vmr: &mut VmResources, spec: &VirtioConsoleSpec) -> Result<()> {
+    let output_fd = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&spec.output)
+        .with_context(|| format!("opening virtio-console output {:?}", spec.output))?
+        .into_raw_fd();
+
+    let input_fd: RawFd = match &spec.input {
+        Some(path) => OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .with_context(|| format!("opening virtio-console input {path:?}"))?
+            .into_raw_fd(),
+        None => -1,
+    };
+
+    // disable_implicit_console so our explicit port is hvc0 (console id 0), not hvc1.
+    // ConsoleInOut (not InOut) marks it as a *console* port so the guest exposes it as
+    // hvc0 (a data port would be /dev/vport0p1, and `console=hvc0` would find nothing).
+    vmr.disable_implicit_console = true;
+    vmr.virtio_consoles
+        .push(VirtioConsoleConfigMode::Explicit(vec![
+            PortConfig::ConsoleInOut {
+                input_fd,
+                output_fd,
+            },
+        ]));
 
     Ok(())
 }

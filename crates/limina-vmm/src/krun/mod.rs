@@ -106,6 +106,10 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
         console::attach(&mut vmr, console).context("attaching serial console")?;
     }
 
+    if let Some(vc) = &spec.virtio_console {
+        console::attach_virtio(&mut vmr, vc).context("attaching virtio-console")?;
+    }
+
     Ok(vmr)
 }
 

@@ -24,6 +24,12 @@ fn main() {
     if let Some(port) = agent_port_from_cmdline() {
         run_agent(port);
     }
+    // `limina.console_echo`: prove the serial console works both ways for the host harness —
+    // echo each line back as `ECHO:<line>` until `QUIT`. The seed of typing commands at the
+    // guest and reading their output. Runs to completion, then falls through to power-off.
+    if cmdline_has("limina.console_echo") {
+        run_console_echo();
+    }
     // `limina.hold`: keep the guest alive animating the framebuffer (for the interactive
     // window). Otherwise draw the one-shot test pattern (the capture oracle) and power off.
     if cmdline_has("limina.hold") {
@@ -119,6 +125,62 @@ fn run_agent(port: u32) {
         // Wait for a command line from the host (content ignored; gates shutdown).
         let mut buf = [0u8; 64];
         let _ = libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
+        libc::close(fd);
+    }
+}
+
+/// Marker the host harness waits for before sending input — proves guest→host output works.
+const ECHO_READY: &[u8] = b"LIMINA_CONSOLE_ECHO_READY\n";
+
+/// Interactive console echo loop over `/dev/console` (whatever the cmdline `console=`
+/// selects — the harness wires this over virtio-console `hvc0`). Sets the tty raw so input
+/// isn't line-edited or echoed by the line discipline (a deterministic round-trip),
+/// announces readiness, then replies `ECHO:<line>` to every line until `QUIT`. Best-effort:
+/// any failure just returns (we still power off). Validates input AND output of the console
+/// through the real binaries; typed commands and their responses build on it.
+fn run_console_echo() {
+    unsafe {
+        // /dev/console is the active console (hvc0 under the test harness); devtmpfs creates
+        // it for whatever device backs console=. announce() already proved it's writable.
+        let fd = libc::open(c"/dev/console".as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+        if fd < 0 {
+            klog(b"[limina-init] console_echo: cannot open /dev/console");
+            return;
+        }
+        let mut tio: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(fd, &mut tio) == 0 {
+            libc::cfmakeraw(&mut tio);
+            libc::tcsetattr(fd, libc::TCSANOW, &tio);
+        }
+        write_all(fd, ECHO_READY);
+
+        let mut line: Vec<u8> = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            let n = libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1);
+            if n <= 0 {
+                sleep_ms(5); // EOF/EAGAIN shouldn't happen on a raw tty; don't spin hard
+                continue;
+            }
+            match byte[0] {
+                b'\r' | b'\n' => {
+                    if line == b"QUIT" {
+                        break;
+                    }
+                    let mut resp = b"ECHO:".to_vec();
+                    resp.extend_from_slice(&line);
+                    resp.push(b'\n');
+                    write_all(fd, &resp);
+                    line.clear();
+                }
+                b => {
+                    line.push(b);
+                    if line.len() > 1024 {
+                        line.clear(); // guard against an unbounded line
+                    }
+                }
+            }
+        }
         libc::close(fd);
     }
 }

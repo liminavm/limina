@@ -37,6 +37,22 @@ pub enum ConsoleSpec {
     Pty,
 }
 
+/// A virtio-console (`hvc0`) wired bidirectionally — the robust interactive console.
+///
+/// Unlike the PL011 serial, the guest kernel exposes a virtio-console as a real readable
+/// tty (`/dev/hvc0`) out of the box, with no FDT/driver workarounds. (Exposing a PL011
+/// *tty* needs `arm,primecell` in the FDT, which currently deadlocks the guest kernel's
+/// amba probe — see `docs`/memory. PL011 stays the firmware/EFI/early-boot console; this
+/// is the post-boot bidirectional channel.) With `console=hvc0` on the cmdline this device
+/// becomes the guest's `/dev/console`, carrying both kernel log and an interactive shell.
+#[derive(Debug, Clone)]
+pub struct VirtioConsoleSpec {
+    /// File to capture guest hvc0 output into.
+    pub output: PathBuf,
+    /// Optional FIFO feeding guest hvc0 input (`None` = output-only).
+    pub input: Option<PathBuf>,
+}
+
 /// Direct kernel boot: a raw aarch64 kernel `Image` loaded straight into guest RAM,
 /// with our own initramfs and command line. No bootloader, no ESP. This is the L1 test
 /// path (and the basis for our enhanced/custom-kernel tier).
@@ -140,6 +156,8 @@ pub struct VmSpec {
     pub vsock: Option<VsockSpec>,
     /// Optional serial console wiring.
     pub console: Option<ConsoleSpec>,
+    /// Optional virtio-console (`hvc0`) for a robust interactive bidirectional console.
+    pub virtio_console: Option<VirtioConsoleSpec>,
     /// Optional virtio-gpu display (M2). None = headless (no GPU device).
     pub display: Option<DisplaySpec>,
     /// Optional virtio-input devices (M2). None = no keyboard/pointer.
