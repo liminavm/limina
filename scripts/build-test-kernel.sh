@@ -71,6 +71,11 @@ CONFIG_DRM_VIRTIO_GPU=y
 CONFIG_DRM_FBDEV_EMULATION=y
 CONFIG_FB=y
 CONFIG_FRAMEBUFFER_CONSOLE=y
+# Input (M2): virtio-input + evdev, so the guest exposes our virtual keyboard/pointer as
+# /dev/input/event* and userspace (and our init) can read events.
+CONFIG_INPUT=y
+CONFIG_INPUT_EVDEV=y
+CONFIG_VIRTIO_INPUT=y
 FRAG
 echo "$PAGE_CONFIG" >> "$OUT/limina.fragment"   # page-size choice (4k default / 16k)
 
@@ -112,7 +117,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         ./scripts/kconfig/merge_config.sh -m .config /out/limina.fragment
         make ARCH=arm64 olddefconfig
         echo '--- verifying key options survived'
-        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS CONFIG_DRM_VIRTIO_GPU CONFIG_FRAMEBUFFER_CONSOLE; do
+        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS CONFIG_DRM_VIRTIO_GPU CONFIG_FRAMEBUFFER_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_INPUT_EVDEV; do
             grep -q \"^\$opt=y\" .config || { echo \"MISSING \$opt\" >&2; exit 1; }
         done
         grep -q '^$PAGE_CONFIG' .config || { echo 'MISSING $PAGE_CONFIG' >&2; exit 1; }

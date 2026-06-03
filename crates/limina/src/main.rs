@@ -187,33 +187,38 @@ fn run_windowed(
 
     let mtm = MainThreadMarker::new().context("the window must run on the main thread")?;
 
-    // Control channel: sup_fd stays here (CLOEXEC so the worker can't inherit it); worker_fd
-    // is inherited by the worker and referenced by --control-fd.
-    let mut fds = [0 as libc::c_int; 2];
-    if unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) } != 0 {
-        anyhow::bail!("socketpair: {}", std::io::Error::last_os_error());
-    }
-    let (sup_fd, worker_fd) = (fds[0], fds[1]);
-    unsafe {
-        let f = libc::fcntl(sup_fd, libc::F_GETFD);
-        libc::fcntl(sup_fd, libc::F_SETFD, f | libc::FD_CLOEXEC);
-    }
+    // Control channel (worker→supervisor scanout): sup_fd stays here (CLOEXEC so the worker
+    // can't inherit it); worker_fd is inherited and referenced by --control-fd. Stream type
+    // since it carries newline-delimited text.
+    let (sup_fd, worker_fd) = socketpair(libc::SOCK_STREAM)?;
+    // Input channels (supervisor→worker evdev events): one datagram per event, so SOCK_DGRAM
+    // preserves the 8-byte record boundaries the worker's backends rely on.
+    let (kbd_sup_fd, kbd_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
+    let (ptr_sup_fd, ptr_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
 
     args.push("--display-window".into());
     args.push("--control-fd".into());
     args.push(worker_fd.to_string());
     args.push("--display-size".into());
     args.push(format!("{width}x{height}"));
+    args.push("--input-kbd-fd".into());
+    args.push(kbd_worker_fd.to_string());
+    args.push("--input-ptr-fd".into());
+    args.push(ptr_worker_fd.to_string());
 
     let spec = WorkerSpec {
         vmm_bin,
         args,
         shutdown_grace: grace,
     };
-    let child = supervisor::spawn_worker(&spec, &[worker_fd])?;
+    let child = supervisor::spawn_worker(&spec, &[worker_fd, kbd_worker_fd, ptr_worker_fd])?;
     let pid = child.id() as libc::pid_t;
-    // The worker holds its own copy now; drop ours so the reader sees EOF when it exits.
-    unsafe { libc::close(worker_fd) };
+    // The worker holds its own copies now; drop ours so it sees EOF / owns the read ends.
+    unsafe {
+        libc::close(worker_fd);
+        libc::close(kbd_worker_fd);
+        libc::close(ptr_worker_fd);
+    }
 
     let shared = window::Shared::new();
     window::spawn_reader(sup_fd, shared.clone());
@@ -227,8 +232,42 @@ fn run_windowed(
     });
 
     // Runs the AppKit window on this (main) thread; never returns — on quit it kills the
-    // worker process group and exits.
-    window::run(shared, mtm, pid);
+    // worker process group and exits. The window captures NSEvents and writes evdev events
+    // to the supervisor ends of the input channels.
+    window::run(
+        shared,
+        mtm,
+        pid,
+        window::InputSinks {
+            kbd_fd: kbd_sup_fd,
+            ptr_fd: ptr_sup_fd,
+        },
+    );
+}
+
+/// Create a socketpair of the given type; set CLOEXEC on the supervisor end (fd.0) so the
+/// worker doesn't inherit it. Returns `(supervisor_end, worker_end)`.
+fn socketpair(sock_type: libc::c_int) -> Result<(libc::c_int, libc::c_int)> {
+    let mut fds = [0 as libc::c_int; 2];
+    if unsafe { libc::socketpair(libc::AF_UNIX, sock_type, 0, fds.as_mut_ptr()) } != 0 {
+        anyhow::bail!("socketpair: {}", std::io::Error::last_os_error());
+    }
+    let (sup_fd, worker_fd) = (fds[0], fds[1]);
+    unsafe {
+        let f = libc::fcntl(sup_fd, libc::F_GETFD);
+        libc::fcntl(sup_fd, libc::F_SETFD, f | libc::FD_CLOEXEC);
+        // Writing to a socket whose peer (the worker) has exited must fail with an error,
+        // not raise SIGPIPE and kill the supervisor (macOS has no MSG_NOSIGNAL).
+        let on: libc::c_int = 1;
+        libc::setsockopt(
+            sup_fd,
+            libc::SOL_SOCKET,
+            libc::SO_NOSIGPIPE,
+            &on as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+    }
+    Ok((sup_fd, worker_fd))
 }
 
 /// Parse a `WIDTHxHEIGHT` string into `(width, height)`.

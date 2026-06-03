@@ -13,13 +13,15 @@ path = "src/main.rs"
 # libkrun internal crates (D2.1). blk on vmm transitively enables devices/blk; we
 # also depend on devices directly for the ImageType/CacheType/SyncMode enums. gpu
 # pulls in the virtio-gpu device + rutabaga + krun_display (M2 display).
-vmm     = { workspace = true, features = ["blk", "gpu"] }
-devices = { workspace = true, features = ["blk", "gpu"] }
+vmm     = { workspace = true, features = ["blk", "gpu", "input"] }
+devices = { workspace = true, features = ["blk", "gpu", "input"] }
 polly   = { workspace = true }
 utils   = { workspace = true }
 
 # Our virtio-gpu display backends (the capture sink; window/zero-copy later).
 limina-display = { workspace = true }
+# Our virtio-input backends (keyboard + absolute pointer), worker side.
+limina-input   = { workspace = true, features = ["backends"] }
 
 anyhow            = { workspace = true }
 clap              = { workspace = true }

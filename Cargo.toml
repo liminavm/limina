@@ -27,9 +27,14 @@ utils        = { package = "krun-utils",   path = "third_party/libkrun/src/utils
 # the devices/gpu feature pulls in, so cargo unifies it; we register a native Rust
 # backend through its generic wrapper (no manual repr(C) vtable — decision D2.1).
 krun_display = { package = "krun-display", path = "third_party/libkrun/src/display", features = ["bindgen_clang_runtime"] }
+# virtio-input backend trait + safe IntoInput* FFI wrappers (M2 input). Same path-dep the
+# devices/input feature pulls in, so cargo unifies it; we register native Rust input
+# backends through the generic wrappers (no manual repr(C) vtable — decision D2.1).
+krun_input   = { package = "krun-input",   path = "third_party/libkrun/src/input", features = ["bindgen_clang_runtime"] }
 
 # --- our crates ---
 limina-display = { path = "crates/limina-display" }
+limina-input   = { path = "crates/limina-input" }
 
 # --- shared third-party ---
 anyhow            = "1"

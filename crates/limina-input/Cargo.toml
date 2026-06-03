@@ -1,0 +1,22 @@
+# limina-input — input plumbing shared by the supervisor and the worker.
+#
+# Always available: Linux evdev constants, the macOS-keycode -> Linux-keycode map, and the
+# 8-byte wire event the supervisor sends to the worker. The `backends` feature additionally
+# pulls in libkrun's krun_input crate and provides the worker-side virtio-input backends
+# (keyboard + absolute pointer) that read those wire events off an inherited fd. The
+# supervisor depends on this crate WITHOUT `backends` (no bindgen/krun_input there).
+[package]
+name = "limina-input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc      = { workspace = true }
+log       = { workspace = true }
+# Worker-side virtio-input backends (D2.1: consume libkrun's safe Rust input API).
+krun_input = { workspace = true, optional = true }
+
+[features]
+default = []
+backends = ["dep:krun_input"]

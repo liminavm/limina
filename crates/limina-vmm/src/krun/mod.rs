@@ -27,7 +27,8 @@ use vmm::vmm_config::machine_config::VmConfig;
 use vmm::vmm_config::vsock::VsockDeviceConfig;
 
 use crate::config::{
-    BootSource, DiskSpec, DisplaySink, DisplaySpec, FsShare, KernelSpec, VmSpec, VsockSpec,
+    BootSource, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec, VmSpec,
+    VsockSpec,
 };
 
 /// Standard libkrun guest CID.
@@ -97,6 +98,10 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
         add_display(&mut vmr, display)?;
     }
 
+    if let Some(input) = &spec.input {
+        add_input(&mut vmr, input);
+    }
+
     if let Some(console) = &spec.console {
         console::attach(&mut vmr, console).context("attaching serial console")?;
     }
@@ -141,6 +146,22 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
     });
 
     Ok(())
+}
+
+/// Attach a virtio-keyboard and a virtio-absolute-pointer. Each reads evdev events the
+/// supervisor writes (as 8-byte datagrams) to an inherited socket fd; we register the
+/// native Rust backends (D2.1) on those fds. libkrun attaches the devices iff
+/// `input_backends` is non-empty.
+fn add_input(vmr: &mut VmResources, input: &InputSpec) {
+    log::info!(
+        "virtio-input: keyboard fd={}, pointer fd={}",
+        input.kbd_fd,
+        input.ptr_fd
+    );
+    vmr.input_backends
+        .push(limina_input::backends::keyboard_backends(input.kbd_fd));
+    vmr.input_backends
+        .push(limina_input::backends::pointer_backends(input.ptr_fd));
 }
 
 /// Configure a direct kernel boot (raw aarch64 `Image` + optional cpio initramfs).

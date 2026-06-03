@@ -18,6 +18,10 @@ env_logger = { workspace = true }
 libc       = { workspace = true }
 log        = { workspace = true }
 
+# Shared evdev constants + macOS->Linux keymap + wire format (NO `backends` feature here,
+# so this pulls in no libkrun/bindgen; only the worker enables the krun_input backends).
+limina-input = { workspace = true }
+
 # Native window (decision D3: the UI lives in the supervisor). Looks up the worker's
 # shared IOSurface by id and shows it via CALayer.contents; an NSTimer on the main thread
 # polls state updated by the control-channel reader thread.
@@ -35,6 +39,8 @@ objc2-app-kit = { version = "0.3", features = [
     "NSWindow",
     "NSView",
     "NSResponder",
+    "NSEvent",
+    "block2",
 ] }
 objc2-quartz-core = { version = "0.3", features = ["CALayer", "objc2-core-graphics"] }
 objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef"] }

@@ -21,12 +21,16 @@ use block2::RcBlock;
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSEventMask,
+    NSWindow, NSWindowStyleMask,
 };
 use objc2_core_foundation::CFRetained;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSTimer};
 use objc2_io_surface::{IOSurfaceLookup, IOSurfaceRef};
 use objc2_quartz_core::CALayer;
+
+mod input;
+pub use input::InputSinks;
 
 /// State shared between the control-channel reader thread, the worker monitor, and the
 /// main-thread render timer. Only `Send` data — never AppKit objects.
@@ -98,7 +102,12 @@ pub fn spawn_reader(fd: RawFd, shared: Arc<Mutex<Shared>>) {
 /// window contents, and — when the worker exits, the window is closed, or Ctrl-C is hit —
 /// kills the worker's process group (`worker_pid`) and exits the process. (We exit from
 /// the timer rather than `NSApplication::stop`, which doesn't return without a UI event.)
-pub fn run(shared: Arc<Mutex<Shared>>, mtm: MainThreadMarker, worker_pid: i32) -> ! {
+pub fn run(
+    shared: Arc<Mutex<Shared>>,
+    mtm: MainThreadMarker,
+    worker_pid: i32,
+    input: InputSinks,
+) -> ! {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
@@ -124,6 +133,8 @@ pub fn run(shared: Arc<Mutex<Shared>>, mtm: MainThreadMarker, worker_pid: i32) -
     view.setLayer(Some(&layer));
     view.setWantsLayer(true);
     window.center();
+    // Required for hover (non-dragging) motion to be delivered as MouseMoved events.
+    window.setAcceptsMouseMovedEvents(true);
     window.makeKeyAndOrderFront(None);
     app.activate();
 
@@ -186,6 +197,38 @@ pub fn run(shared: Arc<Mutex<Shared>>, mtm: MainThreadMarker, worker_pid: i32) -
     // ~60 Hz poll. Keep the timer alive for the app's lifetime.
     let _timer =
         unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(1.0 / 60.0, true, &block) };
+
+    // Capture keyboard + mouse via a local event monitor and forward them to the worker as
+    // evdev events. Swallowed key events return null; pass-through events return themselves.
+    let input_state = input::InputState::new(input);
+    let monitor_view = view.clone();
+    let input_block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
+        // SAFETY: the monitor hands us a valid, live event for the call's duration.
+        let ev = unsafe { event.as_ref() };
+        let swallow = input_state.handle(ev, &monitor_view);
+        if swallow {
+            std::ptr::null_mut()
+        } else {
+            event.as_ptr()
+        }
+    });
+    let input_mask = NSEventMask::KeyDown
+        | NSEventMask::KeyUp
+        | NSEventMask::FlagsChanged
+        | NSEventMask::MouseMoved
+        | NSEventMask::LeftMouseDown
+        | NSEventMask::LeftMouseUp
+        | NSEventMask::LeftMouseDragged
+        | NSEventMask::RightMouseDown
+        | NSEventMask::RightMouseUp
+        | NSEventMask::RightMouseDragged
+        | NSEventMask::OtherMouseDown
+        | NSEventMask::OtherMouseUp
+        | NSEventMask::OtherMouseDragged
+        | NSEventMask::ScrollWheel;
+    // Keep the monitor alive for the app's lifetime (dropping it removes the monitor).
+    let _monitor =
+        unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(input_mask, &input_block) };
 
     app.run();
     // The run loop only returns if AppKit tears down unexpectedly; the timer is what

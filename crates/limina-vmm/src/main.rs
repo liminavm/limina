@@ -21,8 +21,8 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::config::{
-    BootSource, ConsoleSpec, DiskSpec, DisplaySink, DisplaySpec, FsShare, KernelSpec, VmSpec,
-    VsockSpec,
+    BootSource, ConsoleSpec, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec,
+    VmSpec, VsockSpec,
 };
 
 /// Boot a Linux guest on libkrun + Hypervisor.framework.
@@ -100,6 +100,15 @@ struct Cli {
     /// Display mode as WIDTHxHEIGHT (e.g. 1280x800). Used with the display flags.
     #[arg(long, default_value = "1280x800")]
     display_size: String,
+
+    /// fd of the keyboard event socket (supervisor→worker). Enables the virtio-keyboard.
+    /// Requires --input-ptr-fd (the pointer comes as a pair).
+    #[arg(long, requires = "input_ptr_fd")]
+    input_kbd_fd: Option<i32>,
+
+    /// fd of the pointer event socket (supervisor→worker). Enables the virtio-pointer.
+    #[arg(long, requires = "input_kbd_fd")]
+    input_ptr_fd: Option<i32>,
 }
 
 /// Parse a `WIDTHxHEIGHT` display mode string into `(width, height)`.
@@ -181,6 +190,11 @@ fn main() -> Result<()> {
         }
     };
 
+    let input = match (cli.input_kbd_fd, cli.input_ptr_fd) {
+        (Some(kbd_fd), Some(ptr_fd)) => Some(InputSpec { kbd_fd, ptr_fd }),
+        _ => None,
+    };
+
     let spec = VmSpec {
         cpus: cli.cpus,
         ram_mib: cli.ram_mib,
@@ -193,6 +207,7 @@ fn main() -> Result<()> {
             input: cli.console_input,
         }),
         display,
+        input,
     };
 
     krun::boot(&spec)

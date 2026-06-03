@@ -392,6 +392,7 @@ dependencies = [
  "block2",
  "clap",
  "env_logger",
+ "limina-input",
  "libc",
  "log",
  "objc2",
@@ -418,6 +419,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "limina-input"
+version = "0.1.0"
+dependencies = [
+ "krun-input",
+ "libc",
+ "log",
+]
+
+[[package]]
 name = "limina-test"
 version = "0.1.0"
 dependencies = [
@@ -435,6 +445,7 @@ dependencies = [
  "crossbeam-channel",
  "env_logger",
  "limina-display",
+ "limina-input",
  "krun-devices",
  "krun-polly",
  "krun-utils",
@@ -575,6 +586,7 @@ dependencies = [
  "krun-arch",
  "krun-display",
  "krun-hvf",
+ "krun-input",
  "krun-polly",
  "krun-rutabaga-gfx",
  "krun-utils",
@@ -612,6 +624,18 @@ dependencies = [
  "krun-arch",
  "libloading",
  "log",
+]
+
+[[package]]
+name = "krun-input"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "bitflags 2.11.1",
+ "libc",
+ "log",
+ "static_assertions",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -681,6 +705,7 @@ dependencies = [
  "krun-devices",
  "krun-display",
  "krun-hvf",
+ "krun-input",
  "krun-kernel",
  "krun-polly",
  "krun-utils",
