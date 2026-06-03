@@ -58,6 +58,7 @@ pub struct WindowBackend {
 }
 
 struct Scanout {
+    width: u32,
     height: u32,
     format: ResourceFormat,
     /// Staging buffer libkrun fills (we then transform → BGRA into the IOSurface).
@@ -117,6 +118,16 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         if scanout_id != 0 {
             return Err(DisplayBackendError::InvalidScanoutId);
         }
+        // Reuse the existing surfaces on a same-geometry remodeset. A real guest (Fedora:
+        // simpledrm → plymouth → GDM) reconfigures the scanout many times at the same mode;
+        // reallocating fresh global IOSurfaces each time would churn their ids and free
+        // surfaces out from under the supervisor's pending lookups. Keeping them stable
+        // makes the steady state a no-op and avoids that race.
+        if let Some(s) = self.scanout.as_ref() {
+            if s.width == width && s.height == height && s.format == format {
+                return Ok(());
+            }
+        }
         let len = (width as usize)
             .checked_mul(height as usize)
             .and_then(|px| px.checked_mul(ResourceFormat::BYTES_PER_PIXEL))
@@ -130,6 +141,7 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         log::info!("window: scanout 0 -> IOSurfaces {ids:?} ({width}x{height} {format:?})");
 
         self.scanout = Some(Scanout {
+            width,
             height,
             format,
             staging: vec![0u8; len],

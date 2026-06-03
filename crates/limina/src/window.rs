@@ -176,18 +176,33 @@ pub fn run(
                 NSSize::new(width as f64, height as f64),
             );
             layer.setFrame(bounds);
+            // A mode change means the worker allocated fresh surfaces; ids from the old mode
+            // are gone (and could be reused for unrelated surfaces), so drop the cache.
+            cache.borrow_mut().clear();
         }
 
         let mut cache = cache.borrow_mut();
-        let surface = cache
-            .entry(id)
-            .or_insert_with(|| IOSurfaceLookup(id).expect("IOSurfaceLookup of a worker surface"));
+        // Look the surface up by id once and keep our own retained reference. A failed
+        // lookup (the worker freed it during a rapid remodeset before we caught up) is not
+        // fatal — skip this frame rather than panic the UI; the next frame recovers.
+        use std::collections::hash_map::Entry;
+        let surface = match cache.entry(id) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => match IOSurfaceLookup(id) {
+                Some(s) => e.insert(s),
+                None => {
+                    log::warn!("window: IOSurfaceLookup({id}) failed; skipping frame");
+                    return;
+                }
+            },
+        };
         // Distinct object each frame (the worker alternates ids) → CA re-reads.
         set_layer_surface(&layer, surface);
 
-        // Diagnostic capture of what CA actually renders for the layer (after a few frames).
+        // Diagnostic capture of what CA actually renders for the layer. Periodic (overwrite)
+        // so a long-running headless check ends with a recent frame, not just early boot.
         applies.set(applies.get() + 1);
-        if applies.get() == 30 {
+        if applies.get() % 120 == 0 {
             if let Some(path) = &capture_path {
                 capture_layer(&layer, width, height, path);
             }
