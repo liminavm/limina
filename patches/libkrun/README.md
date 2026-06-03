@@ -26,9 +26,15 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
 
 ## Current patches
 
-- **0001 — software 2D virtio-gpu scanout for GL-less hosts.** libkrun maps
-  `RESOURCE_CREATE_2D` onto a virgl GL render target, which has no host context on macOS,
-  so 2D resource creation fails and nothing reaches the display. Shadows 2D resources in
-  host CPU memory (create/attach-backing/transfer/set-scanout/flush) without touching
-  rutabaga — a working software scanout baseline (fbcon, EFI GOP, simpledrm). The
-  accelerated Venus/blob/3D path is unchanged. This is limina's Tier-1 display floor.
+- **0001 — software 2D virtio-gpu scanout for GL-less hosts (no renderer init).** libkrun
+  maps `RESOURCE_CREATE_2D` onto a virgl GL render target, which has no host context on
+  macOS, so 2D resource creation fails and nothing reaches the display. Shadows 2D
+  resources in host CPU memory (create/attach-backing/transfer/set-scanout/flush) without
+  touching rutabaga — a working software scanout baseline (fbcon, EFI GOP, simpledrm).
+  Adds an opt-in software-2D-only device mode (`set_gpu_software_2d`) that skips renderer
+  init entirely: `rutabaga` stays `None` (renderer-backed 3D/blob/context/capset/fence
+  commands degrade to ERR_UNSPEC), and the device advertises a plain 2D virtio-gpu (no
+  VIRGL/BLOB/CONTEXT_INIT, 0 capsets) so the guest never issues 3D. This removes the
+  virglrenderer/Metal dependency (and its init cost/hangs) from limina's Tier-1 display
+  floor. With the mode off, renderer init and the accelerated Venus/blob/3D path are
+  unchanged.

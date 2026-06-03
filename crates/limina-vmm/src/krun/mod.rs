@@ -109,19 +109,25 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
 /// with our capture backend as the host sink (PNG oracle). With no `capture_png` the
 /// builder falls back to a no-op backend, so the device exists but frames go nowhere.
 fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
-    // Allow a quick flag sweep without recompiling (e.g. LIMINA_VIRGL_FLAGS=0x103).
-    let flags = std::env::var("LIMINA_VIRGL_FLAGS")
-        .ok()
-        .and_then(|s| {
-            let s = s.trim();
-            s.strip_prefix("0x")
-                .map(|h| u32::from_str_radix(h, 16))
-                .unwrap_or_else(|| s.parse::<u32>())
-                .ok()
-        })
-        .unwrap_or(GPU_VIRGL_FLAGS);
-    log::info!("virtio-gpu virgl_flags = {flags:#x}");
+    // Allow a quick flag sweep without recompiling (e.g. LIMINA_VIRGL_FLAGS=0x103). Setting
+    // this also opts INTO the real virglrenderer (tier-2 experiments); the default tier-1
+    // path is software-2D, where the renderer is never initialized at all.
+    let virgl_override = std::env::var("LIMINA_VIRGL_FLAGS").ok().and_then(|s| {
+        let s = s.trim();
+        s.strip_prefix("0x")
+            .map(|h| u32::from_str_radix(h, 16))
+            .unwrap_or_else(|| s.parse::<u32>())
+            .ok()
+    });
+    // Tier-1 (default): software-2D — our libkrun patch serves 2D scanout from host CPU
+    // memory and never inits virglrenderer/rutabaga (no host GL/Metal), so it works on a
+    // GL-less host and doesn't depend on a usable Metal context. An explicit
+    // LIMINA_VIRGL_FLAGS switches to the real renderer (tier-2).
+    let software_2d = virgl_override.is_none();
+    let flags = virgl_override.unwrap_or(GPU_VIRGL_FLAGS);
+    log::info!("virtio-gpu virgl_flags = {flags:#x}, software_2d = {software_2d}");
     vmr.set_gpu_virgl_flags(flags);
+    vmr.set_gpu_software_2d(software_2d);
     vmr.displays
         .push(DisplayInfo::new(display.width, display.height));
 
