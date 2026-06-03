@@ -43,11 +43,12 @@ rm -f "$SCRATCH"
 cp -c "$IMAGE" "$SCRATCH"
 
 echo "==> launching Fedora in a limina window ($CPUS vcpu, ${RAM}MiB, $SIZE; close window or Ctrl-C to quit)"
-echo "    serial console -> /tmp/limina-fedora-console.log"
+echo "    interactive serial console: watch for 'limina: interactive serial console at /dev/ttysNNN'"
+echo "    then, in another terminal:  screen /dev/ttysNNN   (drives EDK2/GRUB; a login shell with console=ttyAMA0)"
 exec "target/$PROFILE/limina" --window \
     --firmware "$FIRMWARE" \
     --disk "$SCRATCH" \
     --cpus "$CPUS" \
     --ram-mib "$RAM" \
     --display-size "$SIZE" \
-    --console /tmp/limina-fedora-console.log
+    --console-pty

@@ -9,8 +9,11 @@
 //! ConOut, so EDK2 + GRUB + (with `console=ttyAMA0` in the guest cmdline) the kernel
 //! are all visible. Verified end-to-end in `spikes/m1-boot` and `spikes/m1-boot-internal`.
 //!
-//! Output goes to a file we control; input is optional — `input_fd = -1` yields an
-//! output-only console, which the vendored builder handles (no epoll subscriber).
+//! Two wirings (see [`ConsoleSpec`]):
+//! - [`ConsoleSpec::File`]: output to a file we control; input optional (`-1` = none).
+//! - [`ConsoleSpec::Pty`]: a pseudo-terminal for an *interactive* console — the guest
+//!   serial is both readable and writable, and the slave path is printed so a human can
+//!   `screen <path>` into EDK2/GRUB and (with a console attached) a login shell.
 
 use std::fs::OpenOptions;
 use std::os::unix::io::{IntoRawFd, RawFd};
@@ -22,27 +25,33 @@ use crate::config::ConsoleSpec;
 
 /// Attach `console` to `vmr` as the guest's primary serial device.
 ///
-/// The opened fds are intentionally leaked into libkrun (`into_raw_fd`): the device
-/// owns them for the lifetime of the VM, which lives until this process exits.
+/// The opened fds are intentionally leaked into libkrun (`into_raw_fd` / raw pty fds):
+/// the device owns them for the lifetime of the VM, which lives until this process exits.
 pub fn attach(vmr: &mut VmResources, console: &ConsoleSpec) -> Result<()> {
-    let output_fd = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&console.output)
-        .with_context(|| format!("opening console output {:?}", console.output))?
-        .into_raw_fd();
+    let (input_fd, output_fd) = match console {
+        ConsoleSpec::File { output, input } => {
+            let output_fd = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(output)
+                .with_context(|| format!("opening console output {output:?}"))?
+                .into_raw_fd();
 
-    // Open input O_RDWR so a FIFO is kqueue-pollable and never sees EOF; `None` -> -1
-    // (output-only). The VM is the reader; a host writer feeds guest input.
-    let input_fd: RawFd = match &console.input {
-        Some(path) => OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .with_context(|| format!("opening console input {path:?}"))?
-            .into_raw_fd(),
-        None => -1,
+            // Open input O_RDWR so a FIFO is kqueue-pollable and never sees EOF; `None`
+            // -> -1 (output-only). The VM is the reader; a host writer feeds guest input.
+            let input_fd: RawFd = match input {
+                Some(path) => OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(path)
+                    .with_context(|| format!("opening console input {path:?}"))?
+                    .into_raw_fd(),
+                None => -1,
+            };
+            (input_fd, output_fd)
+        }
+        ConsoleSpec::Pty => open_pty()?,
     };
 
     vmr.disable_implicit_console = true;
@@ -52,4 +61,53 @@ pub fn attach(vmr: &mut VmResources, console: &ConsoleSpec) -> Result<()> {
     });
 
     Ok(())
+}
+
+/// Allocate a pseudo-terminal master and return `(input_fd, output_fd)` for the guest
+/// serial, both referring to the master (separate fds so the builder can own each without
+/// a double close). The master is non-blocking: the guest writes serial bytes from the
+/// vCPU thread (`PL011::handle_write`), so a slow or absent reader must never block it —
+/// detached, output bytes are dropped rather than stalling a vCPU. The slave device path
+/// is printed for a human to attach with `screen <path>` (or `minicom`, `cu`).
+fn open_pty() -> Result<(RawFd, RawFd)> {
+    // SAFETY: standard POSIX pty allocation; we check every return value.
+    let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
+    if master < 0 {
+        return Err(std::io::Error::last_os_error()).context("posix_openpt");
+    }
+    if unsafe { libc::grantpt(master) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("grantpt");
+    }
+    if unsafe { libc::unlockpt(master) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("unlockpt");
+    }
+
+    // ptsname is not thread-safe, but we call it once before any threads touch the pty.
+    let slave_ptr = unsafe { libc::ptsname(master) };
+    if slave_ptr.is_null() {
+        return Err(std::io::Error::last_os_error()).context("ptsname");
+    }
+    let slave_path = unsafe { std::ffi::CStr::from_ptr(slave_ptr) }
+        .to_string_lossy()
+        .into_owned();
+
+    // Non-blocking master so a detached/slow reader can't stall the vCPU serial write.
+    let flags = unsafe { libc::fcntl(master, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(master, libc::F_SETFL, flags | libc::O_NONBLOCK) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("set pty master O_NONBLOCK");
+    }
+
+    // The builder owns input_fd and output_fd separately (each wrapped in a File), so hand
+    // it two distinct fds for the one master; dup shares the file description (and its
+    // O_NONBLOCK), so both ends stay non-blocking.
+    let output_fd = unsafe { libc::dup(master) };
+    if output_fd < 0 {
+        return Err(std::io::Error::last_os_error()).context("dup pty master");
+    }
+
+    // Printed (not logged) so it's visible regardless of RUST_LOG; this is how the human
+    // finds the console to attach to.
+    println!("limina: interactive serial console at {slave_path} — attach with: screen {slave_path}");
+
+    Ok((master, output_fd))
 }

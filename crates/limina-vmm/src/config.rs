@@ -22,15 +22,19 @@ pub struct DiskSpec {
 }
 
 /// Where the guest's serial console is wired.
-///
-/// Output-only is fine (the facade passes `input_fd = -1`); provide `input` — a FIFO
-/// or pty — for an interactive console.
 #[derive(Debug, Clone)]
-pub struct ConsoleSpec {
-    /// File to capture guest console output into.
-    pub output: PathBuf,
-    /// Optional source of guest console input.
-    pub input: Option<PathBuf>,
+pub enum ConsoleSpec {
+    /// Capture guest console output to a file. Output-only is fine (the facade passes
+    /// `input_fd = -1`); provide `input` — a FIFO — for a (non-interactive) input source.
+    File {
+        /// File to capture guest console output into.
+        output: PathBuf,
+        /// Optional source of guest console input.
+        input: Option<PathBuf>,
+    },
+    /// Allocate a pseudo-terminal and wire the guest serial to it, for an interactive
+    /// console. The slave device path is printed at startup (attach with `screen <path>`).
+    Pty,
 }
 
 /// Direct kernel boot: a raw aarch64 kernel `Image` loaded straight into guest RAM,

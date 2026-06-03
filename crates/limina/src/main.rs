@@ -72,6 +72,11 @@ struct Cli {
     #[arg(long)]
     console: Option<PathBuf>,
 
+    /// Wire the guest serial to an interactive pseudo-terminal instead of a file; the
+    /// worker prints the slave device path to attach with `screen <path>`.
+    #[arg(long, conflicts_with = "console")]
+    console_pty: bool,
+
     /// Open a native window showing the guest display (the worker streams its scanout as
     /// a shared IOSurface). Mutually exclusive with --display-capture.
     #[arg(long, conflicts_with = "display_capture")]
@@ -146,6 +151,9 @@ fn main() -> Result<()> {
     if let Some(console) = &cli.console {
         args.push("--console".into());
         args.push(path_arg(console)?);
+    }
+    if cli.console_pty {
+        args.push("--console-pty".into());
     }
     let grace = Duration::from_secs(cli.shutdown_grace_secs);
 

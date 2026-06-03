@@ -83,6 +83,11 @@ struct Cli {
     #[arg(long, requires = "console")]
     console_input: Option<PathBuf>,
 
+    /// Wire the guest serial to an interactive pseudo-terminal instead of a file; the
+    /// slave device path is printed at startup (attach with `screen <path>`).
+    #[arg(long, conflicts_with_all = ["console", "console_input"])]
+    console_pty: bool,
+
     /// Attach a virtio-gpu display and capture presented frames to this PNG path
     /// (the headless display oracle). Mutually exclusive with --display-window.
     #[arg(long, conflicts_with = "display_window")]
@@ -202,10 +207,14 @@ fn main() -> Result<()> {
         disks,
         shares,
         vsock,
-        console: cli.console.map(|output| ConsoleSpec {
-            output,
-            input: cli.console_input,
-        }),
+        console: if cli.console_pty {
+            Some(ConsoleSpec::Pty)
+        } else {
+            cli.console.map(|output| ConsoleSpec::File {
+                output,
+                input: cli.console_input,
+            })
+        },
         display,
         input,
     };
