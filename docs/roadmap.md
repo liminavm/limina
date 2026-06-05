@@ -319,14 +319,17 @@ guests — to read logs, kill processes, poke a wedged userspace — and (B) the
    ignoring the avail ring (worker kicked, saw no descriptor). Fix = libkrun patch **0006** (snap a
    ready-but-unsized queue to `max_size`, QEMU-compatible). VirtioGpuDxe now produces a **1280×800
    GOP**, GRUB runs, the kernel boots — confirmed both host-side (a frame presents) and from the
-   firmware log (`VirtioGpuDriverBindingStart: produced GOP`, `Graphics Console Started`). Two
-   follow-ons remain (details in `limina-krun-efi-build`): **(a)** this krun-fork VirtioGpuDxe exposes a
-   *native linear framebuffer* and only issues ONE `RESOURCE_FLUSH` (zero `TransferToHost2d`), so
-   GraphicsConsole/GRUB text written to the FB never reaches the host scanout (captured frame is the
-   initial black clear) — needs a periodic/dirty flush (firmware patch or host-side timer re-scan);
-   **(b)** when the guest *kernel* re-initializes virtio-gpu, the firmware-era worker thread keeps
-   running on the stale queue and busy-loops on garbage — a device re-activation bug that blocks the
-   guest's own frames. Then reconcile with the M2 IOSurface present path.
+   firmware log (`VirtioGpuDriverBindingStart: produced GOP`, `Graphics Console Started`).
+   Follow-on **(b) ✅ FIXED (libkrun 0007)**: the guest *kernel*'s re-init of virtio-gpu (EFI→kernel
+   hand-off) left the firmware-era worker thread busy-looping on the freed ring, blocking the kernel's
+   own frames. The worker now epolls a stop eventfd and the device's `reset()` signals+joins it before
+   re-activation. With 0006+0007 the kernel's virtio-gpu driver presents the **live full-color console**
+   through software-2D (verified: 157 frames, fbcon render). Remaining **(a)**: this krun-fork
+   VirtioGpuDxe exposes a *native linear framebuffer* and issues only ONE `RESOURCE_FLUSH` (zero
+   `TransferToHost2d`), so the *firmware/GRUB* pre-kernel text never reaches the host scanout (the
+   kernel path flushes fine; only EFI/GRUB and the very-early pre-DRM kernel are black) — needs a
+   periodic/dirty flush (firmware flush-timer or host-side re-scan). Then reconcile with the M2
+   IOSurface present path.
 
 3. **Wire both into the harness + window UX.** A serial-console view alongside the display (a
    separate pane/window the user can open), and keep the L1 console round-trip test green as the

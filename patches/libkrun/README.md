@@ -59,3 +59,12 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
   max); we snap a ready-but-unsized queue to `max_size` (the ring the driver allocated from
   QueueNumMax). Compliant drivers (blk/rng/net/console) program QueueNum and are unaffected.
   Unblocked the Track B GOP graphical boot console (VirtioGpuDxe now produces a 1280x800 GOP).
+- **0007 — virtio-gpu stop the worker thread on device reset.** The gpu worker ran an
+  unbounded blocking loop on the control eventfd with no stop path, and the device had no
+  `reset()`. On guest re-init (EFI→kernel hand-off, driver rebind, reboot) the stale worker
+  kept running on the freed firmware-era ring, busy-looping `pop()`→None on garbage and
+  pinning a CPU so the kernel's fresh virtio-gpu driver never presented. Adopt the
+  block/input/fs pattern: worker epolls control + a stop eventfd and exits when signalled;
+  the device holds the JoinHandle + stop fd and `reset()` signals+joins then goes Inactive
+  (returns true), so re-activation spawns a clean worker on the new rings. With 0006+0007 the
+  GOP boot hands off to the kernel and the live console renders (verified: 157 frames).
