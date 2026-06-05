@@ -302,7 +302,7 @@ guests — to read logs, kill processes, poke a wedged userspace — and (B) the
      `arm,primecell` node only affects the direct-kernel path, since the EFI path uses EDK2's own DT).
      L2 `boot` stays green.
 
-2. **Track B — graphical boot console (EDK2 GOP). 🚧 firmware built; one blocker.** So
+2. **Track B — graphical boot console (EDK2 GOP). 🚧 Phase 2 BDS hang fixed; GOP binds.** So
    EFI/GRUB/early-kernel render into the window. We build the `KRUN_EFI` firmware ourselves
    (`scripts/build-krun-efi.sh`, Apple `container`, slp/edk2@krun-support `ArmVirtKrun.dsc`) and add
    `OvmfPkg/VirtioGpuDxe` so the firmware's graphics console paints to our virtio-gpu scanout — which
@@ -313,14 +313,20 @@ guests — to read logs, kill processes, poke a wedged userspace — and (B) the
    support/FrameBufferBlt) — it's "silent" only because no GOP-*producing* video driver was
    included; adding VirtioGpuDxe is the change. **Done:** Phase 0 (toolchain proven — rebuilt
    firmware boots Fedora end-to-end), Phase 1 (`KRUN_EFI.gop.fd` builds, VirtioGpuDxe loads, the
-   firmware sees the virtio-gpu mmio device). **Blocker (Phase 2):** with VirtioGpuDxe present the
-   firmware *hangs deterministically in BDS* before GRUB — the gpu worker gets the queue kick but
-   sees no descriptor (the firmware's `GET_DISPLAY_INFO` on the control queue isn't visible to the
-   worker → it polls forever). A virtqueue layout/visibility mismatch between EDK2 VirtioGpuDxe and
-   libkrun's virtio-gpu mmio queue (GPU-specific; blk/rng work). **This hang blocks boot → must be
-   fixed or made non-fatal (two-tier: stock Fedora must still boot).** Next: instrument the gpu
-   queue addresses + avail.idx; fix is mechanism-in-libkrun. Details in `limina-krun-efi-build` memory.
-   Then reconcile with the M2 IOSurface present path (firmware frames before the guest's DRM loads).
+   firmware sees the virtio-gpu mmio device). **Phase 2 ✅ (the BDS hang is FIXED).** Root cause was
+   NOT a virtqueue layout mismatch: VirtioGpuDxe over virtio-mmio marks its control queue ready
+   *without* programming QueueNum (reg 0x38), so libkrun's `size`-0 init left `actual_size()`/`pop()`
+   ignoring the avail ring (worker kicked, saw no descriptor). Fix = libkrun patch **0006** (snap a
+   ready-but-unsized queue to `max_size`, QEMU-compatible). VirtioGpuDxe now produces a **1280×800
+   GOP**, GRUB runs, the kernel boots — confirmed both host-side (a frame presents) and from the
+   firmware log (`VirtioGpuDriverBindingStart: produced GOP`, `Graphics Console Started`). Two
+   follow-ons remain (details in `limina-krun-efi-build`): **(a)** this krun-fork VirtioGpuDxe exposes a
+   *native linear framebuffer* and only issues ONE `RESOURCE_FLUSH` (zero `TransferToHost2d`), so
+   GraphicsConsole/GRUB text written to the FB never reaches the host scanout (captured frame is the
+   initial black clear) — needs a periodic/dirty flush (firmware patch or host-side timer re-scan);
+   **(b)** when the guest *kernel* re-initializes virtio-gpu, the firmware-era worker thread keeps
+   running on the stale queue and busy-loops on garbage — a device re-activation bug that blocks the
+   guest's own frames. Then reconcile with the M2 IOSurface present path.
 
 3. **Wire both into the harness + window UX.** A serial-console view alongside the display (a
    separate pane/window the user can open), and keep the L1 console round-trip test green as the

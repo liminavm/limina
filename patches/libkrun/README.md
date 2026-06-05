@@ -52,3 +52,10 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
 - **0005 — FDT mark PL011 serial node as arm,primecell.** Lets the guest's AMBA layer bind
   `amba-pl011` and expose a real bidirectional `/dev/ttyAMA0` (the interactive serial debug
   console), instead of PL011 being an earlycon/output-only stdout-path. Safe given 0004.
+- **0006 — virtio-mmio default ready queue to max_size when QueueNum unset.** EDK2's
+  VirtioGpuDxe over virtio-mmio marks its control queue ready (reg 0x44) without ever
+  programming QueueNum (reg 0x38), so our `size`-0 init made `actual_size()`/`pop()` ignore
+  the avail ring and the GOP firmware hung in BDS. QEMU tolerates this (vring.num defaults to
+  max); we snap a ready-but-unsized queue to `max_size` (the ring the driver allocated from
+  QueueNumMax). Compliant drivers (blk/rng/net/console) program QueueNum and are unaffected.
+  Unblocked the Track B GOP graphical boot console (VirtioGpuDxe now produces a 1280x800 GOP).
