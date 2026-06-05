@@ -37,14 +37,14 @@ pub enum ConsoleSpec {
     Pty,
 }
 
-/// A virtio-console (`hvc0`) wired bidirectionally — the robust interactive console.
+/// A virtio-console (`hvc0`) wired bidirectionally — a robust interactive data console.
 ///
-/// Unlike the PL011 serial, the guest kernel exposes a virtio-console as a real readable
-/// tty (`/dev/hvc0`) out of the box, with no FDT/driver workarounds. (Exposing a PL011
-/// *tty* needs `arm,primecell` in the FDT, which currently deadlocks the guest kernel's
-/// amba probe — see `docs`/memory. PL011 stays the firmware/EFI/early-boot console; this
-/// is the post-boot bidirectional channel.) With `console=hvc0` on the cmdline this device
-/// becomes the guest's `/dev/console`, carrying both kernel log and an interactive shell.
+/// This is the higher-throughput, queue-based channel for bulk console data. The PL011
+/// serial (`ttyAMA0`) is *also* a working bidirectional tty now (via [`ConsoleSpec::File`],
+/// the `arm,primecell` FDT node, and the HVF halfword-MMIO fix); it stays the
+/// firmware/EFI/early-boot console and a serial debug shell, while hvc0 is the post-boot
+/// data path. With `console=hvc0` on the cmdline this device becomes the guest's
+/// `/dev/console`, carrying both kernel log and an interactive shell.
 #[derive(Debug, Clone)]
 pub struct VirtioConsoleSpec {
     /// File to capture guest hvc0 output into.

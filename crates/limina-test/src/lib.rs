@@ -129,6 +129,16 @@ pub struct DisplayCfg {
     pub height: u32,
 }
 
+/// Which guest console device an interactive (`console_input`) session is wired through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsoleChannel {
+    /// The PL011 serial tty (`ttyAMA0`) — the firmware/early-boot console *and*, since the
+    /// halfword-MMIO fix, a working interactive serial shell (the M2.5 Track A goal).
+    Serial,
+    /// virtio-console (`hvc0`) — the robust bidirectional data console.
+    Virtio,
+}
+
 /// How to boot a guest under the harness.
 #[derive(Debug, Clone)]
 pub struct GuestConfig {
@@ -153,6 +163,9 @@ pub struct GuestConfig {
     /// Wire an interactive console: the harness feeds the guest serial *input* via a FIFO
     /// (so a test can type), in addition to capturing output. See [`Guest::console_send`].
     pub console_input: bool,
+    /// Which device an interactive console is wired through (only meaningful when
+    /// `console_input` is set).
+    pub console_channel: ConsoleChannel,
 }
 
 impl GuestConfig {
@@ -192,6 +205,7 @@ impl GuestConfig {
             ram_mib: 4096,
             shutdown_grace: Duration::from_secs(grace_from_env()),
             console_input: false,
+            console_channel: ConsoleChannel::Virtio,
         })
     }
 
@@ -229,6 +243,7 @@ impl GuestConfig {
             ram_mib: 1024,
             shutdown_grace: Duration::from_secs(grace_from_env()),
             console_input: false,
+            console_channel: ConsoleChannel::Virtio,
         })
     }
 
@@ -261,16 +276,28 @@ impl GuestConfig {
     /// (see [`Guest::console_send`]) on top of capturing output. Pair with a guest that
     /// reads the console — e.g. the L1 init's echo mode (`limina.console_echo`).
     ///
-    /// This routes the console over **virtio-console (`hvc0`)**, not the PL011 serial: the
-    /// guest kernel exposes hvc0 as a real readable tty out of the box, whereas a PL011 tty
-    /// needs an FDT change that currently deadlocks the guest amba probe. To make hvc0 the
-    /// guest's `/dev/console` (so both kernel log and the init's I/O flow through it) we
+    /// This routes the console over **virtio-console (`hvc0`)**, the robust queue-based data
+    /// console. (For the PL011 serial tty instead, use [`with_serial_input`].) To make hvc0
+    /// the guest's `/dev/console` (so both kernel log and the init's I/O flow through it) we
     /// swap `console=ttyAMA0` → `console=hvc0` on the kernel cmdline.
     pub fn with_console_input(mut self) -> GuestConfig {
         self.console_input = true;
+        self.console_channel = ConsoleChannel::Virtio;
         if let Boot::Kernel { cmdline, .. } = &mut self.boot {
             *cmdline = cmdline.replace("console=ttyAMA0", "console=hvc0");
         }
+        self
+    }
+
+    /// Enable an interactive console over the **PL011 serial tty** (`ttyAMA0`) — the
+    /// firmware/early-boot console, now also a working interactive serial shell after the
+    /// halfword-MMIO fix (M2.5 Track A). Unlike [`with_console_input`] this keeps
+    /// `console=ttyAMA0`, so the guest's `/dev/console` is the PL011 and both kernel log
+    /// and the init's I/O flow through it. The harness feeds input via a FIFO on the same
+    /// `--console`/`--console-input` device path (see [`Guest::console_send`]).
+    pub fn with_serial_input(mut self) -> GuestConfig {
+        self.console_input = true;
+        self.console_channel = ConsoleChannel::Serial;
         self
     }
 
@@ -450,10 +477,13 @@ impl Guest {
         let console_in = if cfg.console_input {
             let fifo = scratch.join("console.in");
             mkfifo(&fifo)?;
-            cmd.arg("--virtio-console")
-                .arg(&console_path)
-                .arg("--virtio-console-input")
-                .arg(&fifo);
+            let (out_flag, in_flag) = match cfg.console_channel {
+                // PL011 serial tty (ttyAMA0): the same --console device, now bidirectional.
+                ConsoleChannel::Serial => ("--console", "--console-input"),
+                // virtio-console (hvc0): the robust bidirectional data console.
+                ConsoleChannel::Virtio => ("--virtio-console", "--virtio-console-input"),
+            };
+            cmd.arg(out_flag).arg(&console_path).arg(in_flag).arg(&fifo);
             let file = fs::OpenOptions::new()
                 .read(true)
                 .write(true)

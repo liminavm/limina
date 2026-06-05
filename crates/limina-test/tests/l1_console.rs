@@ -4,11 +4,10 @@
 //! L1 console I/O test: prove the guest console works **both ways** end-to-end.
 //!
 //! Where `l1_vsock.rs` uses a vsock side-channel, this exercises the real console through
-//! the actual `limina` → `limina-vmm` → virtio-console (`hvc0`) path. (We use hvc0, not the
-//! PL011 serial: the guest kernel exposes hvc0 as a readable tty out of the box, whereas a
-//! PL011 tty needs an FDT change that currently deadlocks the guest amba probe — see the
-//! `limina-pl011-tty-deadlock` note. PL011 stays the firmware/early-boot console.) With
-//! `console=hvc0` (set by `with_console_input`) hvc0 is the guest's `/dev/console`:
+//! the actual `limina` → `limina-vmm` → virtio-console (`hvc0`) path — the robust queue-based
+//! data console. (The PL011 serial tty is exercised by its companion `l1_serial.rs`; both
+//! are real bidirectional consoles.) With `console=hvc0` (set by `with_console_input`) hvc0
+//! is the guest's `/dev/console`:
 //!   - OUTPUT (guest→host): the init prints a ready marker; we read it from the captured
 //!     console (`wait_for`).
 //!   - INPUT (host→guest): we `console_send` lines; the init (in `limina.console_echo` mode)

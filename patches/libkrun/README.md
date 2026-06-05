@@ -38,3 +38,17 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
   virglrenderer/Metal dependency (and its init cost/hangs) from limina's Tier-1 display
   floor. With the mode off, renderer init and the accelerated Venus/blob/3D path are
   unchanged.
+- **0002 — PL011 drops serial output on WouldBlock instead of erroring.** The serial TX
+  path runs on the vCPU thread; a non-blocking sink (e.g. a pty with no reader) returns
+  WouldBlock on a full buffer. Drop the byte rather than stall the vCPU or error per byte.
+- **0003 — virtio-console `ConsoleInOut` port + quiet raw-mode ENOTTY.** Adds a
+  `PortConfig::ConsoleInOut` that wires non-tty fds (a file + a FIFO) as a *console* port
+  (so the guest exposes it as `hvc0`, not a `/dev/vport` data port) with no `isatty`
+  gating; downgrades the terminal raw-mode ENOTTY on a non-tty fd from error to debug.
+- **0004 — HVF support 16-bit (halfword) MMIO writes.** The aarch64 data-abort write path
+  matched only len 1/4/8 and `panic!`ed on len=2, killing the vCPU thread. The ARM PL011
+  driver uses 16-bit `writew`/`readw`; the read side already handled len=2. Add the write
+  case. (Was the real cause of the apparent "PL011 amba-probe deadlock".)
+- **0005 — FDT mark PL011 serial node as arm,primecell.** Lets the guest's AMBA layer bind
+  `amba-pl011` and expose a real bidirectional `/dev/ttyAMA0` (the interactive serial debug
+  console), instead of PL011 being an earlycon/output-only stdout-path. Safe given 0004.

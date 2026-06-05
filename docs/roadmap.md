@@ -272,9 +272,10 @@ display."
 
 **Already shipped toward this** (don't redo): hvc0 bidirectional console + the L1 round-trip test
 (`l1_console.rs`, libkrun patch 0003 `PortConfig::ConsoleInOut`); the interactive PL011 pty
-(`--console-pty`); PL011 drop-on-`WouldBlock` (patch 0002); and a full diagnostic workup of the
-PL011-tty deadlock (see the `limina-pl011-tty-deadlock` note). hvc0 is the working *post-boot*
-interactive channel; M2.5 is about the *serial* path and the *visual* boot.
+(`--console-pty`); PL011 drop-on-`WouldBlock` (patch 0002); and **Track A's core: the PL011
+serial *tty* now works** — `/dev/ttyAMA0` is a real bidirectional console, proven by `l1_serial.rs`
+(patches 0004 HVF halfword-MMIO + 0005 FDT `arm,primecell`). What's left of M2.5 is a real
+serial *login/getty* (vs the test's echo mode) and the *visual* boot console (Track B).
 
 **Goal:** (A) an interactive **serial** shell on `/dev/ttyAMA0` (PL011) for both stock and custom
 guests — to read logs, kill processes, poke a wedged userspace — and (B) the **full boot process
@@ -282,22 +283,24 @@ guests — to read logs, kill processes, poke a wedged userspace — and (B) the
 
 **Key tasks:**
 
-1. **Track A — fix the PL011 serial *tty* deadlock (start here).** Exposing `/dev/ttyAMA0` needs
-   `arm,primecell` on the FDT serial node (`devices/src/fdt/aarch64.rs::create_serial_node`), but
-   adding it deadlocks the guest's `amba-pl011` probe — an IRQs-off spinlock right after the AMBA
-   ID read, before any UART register write (not console-handover; survives dropping
-   `console=`/`stdout-path`; invisible to printk + hung-task watchdog). Diagnostics are already
-   captured; the restart recipe is in the `limina-pl011-tty-deadlock` memory:
-   - Reproduce with the one-line `compatible = b"arm,pl011\0arm,primecell\0"` edit (`touch` after
-     editing libkrun — cargo misses Edit-tool writes; revert when done, it breaks all L1 tests).
-   - Get the stuck PC by rebuilding the L1 kernel with `CONFIG_PROVE_LOCKING=y` +
-     `CONFIG_DEBUG_ATOMIC_SLEEP=y` (lockdep) via `scripts/build-test-kernel.sh` and reading the
-     splat off earlycon (`keep_bootcon ignore_loglevel`).
-   - Fix libkrun's PL011 emulation so `amba-pl011` binds cleanly (mechanism in libkrun; policy in
-     limina). Then a `ConsoleSpec`/CLI path wires PL011 input for a real serial getty/shell, and
-     `--console-pty` becomes usable for an interactive login (not just output).
-   - **Two-tier:** must keep the *stock* Fedora EFI guest booting (the compatibility floor) — the
-     fix is additive, never a precondition.
+1. **Track A — PL011 serial *tty*. ✅ The "deadlock" is fixed; getty remains.** Exposing
+   `/dev/ttyAMA0` needs `arm,primecell` on the FDT serial node
+   (`devices/src/fdt/aarch64.rs::create_serial_node`) so the guest's AMBA layer binds `amba-pl011`.
+   Adding it *appeared* to deadlock the probe — but re-deriving from a traced boot, the real cause
+   was the **HVF MMIO handler `panic!`ing on `len=2`**: the bound driver's first 16-bit `writew`
+   (REG_IMSC) killed the vCPU thread, which looked like a guest hang (no PSCI SYSTEM_OFF). The prior
+   "IRQs-off spinlock, needs lockdep" diagnosis was inverted — lockdep would have found nothing.
+   Fixed by two minimal libkrun patches: **0004** (HVF: handle len=2 halfword writes — the read side
+   already did) and **0005** (FDT: `arm,primecell`). The L1 guest now boots fully over
+   `console=ttyAMA0` and round-trips input+output through it (`l1_serial.rs`, RED-first verified).
+   - **Done:** the tty itself + the `--console`/`--console-input` (and `--console-pty`) input path —
+     these were already wired; the len=2 panic was the only blocker.
+   - **Remaining:** a real serial **getty/login** on `ttyAMA0` for an actual debug shell (the test
+     uses the init's echo mode). For the custom L1 guest, add a getty; for stock Fedora, ensure
+     `serial-getty@ttyAMA0` comes up. Then extend the harness toward "type a command, assert output".
+   - **Two-tier:** the stock Fedora EFI guest keeps booting (the len=2 fix is global + additive; the
+     `arm,primecell` node only affects the direct-kernel path, since the EFI path uses EDK2's own DT).
+     L2 `boot` stays green.
 
 2. **Track B — graphical boot console (EDK2 GOP).** So EFI/GRUB/early-kernel render into the window.
    Patch the `KRUN_EFI` firmware (ArmVirtKrun / EDK2) to add `VirtioGpuDxe` + a graphics console
@@ -311,18 +314,20 @@ guests — to read logs, kill processes, poke a wedged userspace — and (B) the
    separate pane/window the user can open), and keep the L1 console round-trip test green as the
    regression oracle; extend it toward "type a command, assert its output" once a shell is present.
 
-**libkrun / firmware patches:** PL011 emulation completion (Track A, the amba-probe fix); a
-`KRUN_EFI` EDK2 rebuild with VirtioGpuDxe + graphics console (Track B). Both carried as tracked
-series (`patches/libkrun`, and a firmware build recipe).
+**libkrun / firmware patches:** Track A's PL011 fix is shipped (patches 0004 HVF halfword-MMIO +
+0005 FDT `arm,primecell`). Track B still needs a `KRUN_EFI` EDK2 rebuild with VirtioGpuDxe + a
+graphics console. Both carried as tracked series (`patches/libkrun`, and a firmware build recipe).
 
-**Done test:** (A) `limina ... --console-pty` (or a serial pane) gives an interactive shell on a
-booted guest — type `dmesg`/`kill`, see output — on **both** the custom L1 guest and stock Fedora,
-with the stock guest still booting unchanged. (B) The limina window shows EFI + GRUB + early-kernel
-output during boot, not a black screen until DRM takes over.
+**Done test:** (A) the PL011 *tty* round-trips input+output (`l1_serial` ✅); the remaining bar is
+`limina ... --console-pty` (or a serial pane) giving an interactive **login shell** on a booted guest
+— type `dmesg`/`kill`, see output — on **both** the custom L1 guest and stock Fedora, with the stock
+guest still booting unchanged. (B) The limina window shows EFI + GRUB + early-kernel output during
+boot, not a black screen until DRM takes over.
 
 **Risks / spike first:**
-- **The PL011 deadlock may be a non-trivial emulation gap** (not a one-liner). Lockdep first; if the
-  fix balloons, hvc0 already covers the post-boot shell, so Track A can be timeboxed.
+- ~~The PL011 deadlock may be a non-trivial emulation gap.~~ **Resolved:** it was a one-line HVF
+  halfword-MMIO gap (patch 0004), not a kernel spinlock. Lesson logged — the "needs lockdep"
+  diagnosis was an inverted finding; re-derive from a traced boot before prescribing the deep dive.
 - **EDK2 rebuild friction** (Track B): ArmVirtKrun is built via Fedora rpmbuild; adding VirtioGpuDxe
   + wiring its GOP to libkrun's virtio-gpu may need firmware-side surface plumbing. Spike a minimal
   GOP-renders-to-window proof before committing.
@@ -637,7 +642,7 @@ second display attaches at runtime, and resizing the window reflows the guest re
 |---|---|---|
 | M1 boot ✅ | CLI, internal-API `limina-vmm` (D2.1), child supervisor, codesign | (optional) harden panic exit paths |
 | M2 display+input ✅ | supervisor IOSurface window, native-Rust display backend, input provider, kVK->KEY table | software-2D scanout (0001); Darwin input worker ran as-is |
-| M2.5 console/serial 🚧 | serial-getty/pty wiring; serial pane in window; console harness | **PL011 amba-probe deadlock fix** (Track A); KRUN_EFI EDK2 + VirtioGpuDxe GOP (Track B); already: hvc0 ConsoleInOut (0003), PL011 WouldBlock (0002) |
+| M2.5 console/serial 🚧 | serial getty/login; serial pane in window; console harness | Track A PL011 tty ✅ (0004 HVF halfword-MMIO + 0005 FDT `arm,primecell`, `l1_serial`); remaining: serial getty; KRUN_EFI EDK2 + VirtioGpuDxe GOP (Track B); already: hvc0 ConsoleInOut (0003), PL011 WouldBlock (0002) |
 | M3 networking | gvproxy supervision; bridged helper integration | (optional) worker.rs reconnect-on-HANG_UP |
 | M4 3D | virgl flags wiring; IOSurface present-texture backend | virglrenderer Apple-blob fork build; SET_SCANOUT_BLOB accept path + display-vtable surface-export callback (zero-copy scanout) |
 | M5 clipboard/fs/agent | guest agent, liminad, NSPasteboard bridge | none for transport (vsock+virtiofs exist) |

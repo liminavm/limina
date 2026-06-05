@@ -63,9 +63,8 @@ pub fn attach(vmr: &mut VmResources, console: &ConsoleSpec) -> Result<()> {
     Ok(())
 }
 
-/// Attach `spec` as a virtio-console (`hvc0`) — a bidirectional console the guest kernel
-/// exposes as a real tty without any FDT/driver workaround (the PL011 tty path deadlocks
-/// the guest amba probe; see [`VirtioConsoleSpec`]).
+/// Attach `spec` as a virtio-console (`hvc0`) — a robust, queue-based bidirectional data
+/// console (the PL011 serial is also a working tty now; see [`VirtioConsoleSpec`]).
 ///
 /// We disable the implicit console so this *explicit* port lands at console id 0 (`hvc0`),
 /// then wire it via [`PortConfig::InOut`] — which, unlike libkrun's autoconfigure path,
