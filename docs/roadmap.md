@@ -302,13 +302,25 @@ guests — to read logs, kill processes, poke a wedged userspace — and (B) the
      `arm,primecell` node only affects the direct-kernel path, since the EFI path uses EDK2's own DT).
      L2 `boot` stays green.
 
-2. **Track B — graphical boot console (EDK2 GOP).** So EFI/GRUB/early-kernel render into the window.
-   Patch the `KRUN_EFI` firmware (ArmVirtKrun / EDK2) to add `VirtioGpuDxe` + a graphics console
-   bound to our virtio-gpu scanout, so the firmware paints ConOut to the same surface the M2 window
-   presents. (See the `limina-efi-console` note: the EFI-path cmdline is GRUB-owned and FDT bootargs
-   are ignored, so a *firmware* graphics console — not a kernel `console=` — is the lever for the
-   pre-kernel stages.) Reconcile with the M2 IOSurface present path (firmware frames before the
-   guest's own DRM driver loads).
+2. **Track B — graphical boot console (EDK2 GOP). 🚧 firmware built; one blocker.** So
+   EFI/GRUB/early-kernel render into the window. We build the `KRUN_EFI` firmware ourselves
+   (`scripts/build-krun-efi.sh`, Apple `container`, slp/edk2@krun-support `ArmVirtKrun.dsc`) and add
+   `OvmfPkg/VirtioGpuDxe` so the firmware's graphics console paints to our virtio-gpu scanout — which
+   the software-2D libkrun patch (0001) already presents. (See `limina-efi-console`: the EFI-path
+   cmdline is GRUB-owned and FDT bootargs are ignored, so a *firmware* graphics console — not a
+   kernel `console=` — is the lever for the pre-kernel stages.) **Big finding:** the ArmVirtKrun
+   firmware *already* wires the whole graphics-console stack (ConSplitter/GraphicsConsole/GOP
+   support/FrameBufferBlt) — it's "silent" only because no GOP-*producing* video driver was
+   included; adding VirtioGpuDxe is the change. **Done:** Phase 0 (toolchain proven — rebuilt
+   firmware boots Fedora end-to-end), Phase 1 (`KRUN_EFI.gop.fd` builds, VirtioGpuDxe loads, the
+   firmware sees the virtio-gpu mmio device). **Blocker (Phase 2):** with VirtioGpuDxe present the
+   firmware *hangs deterministically in BDS* before GRUB — the gpu worker gets the queue kick but
+   sees no descriptor (the firmware's `GET_DISPLAY_INFO` on the control queue isn't visible to the
+   worker → it polls forever). A virtqueue layout/visibility mismatch between EDK2 VirtioGpuDxe and
+   libkrun's virtio-gpu mmio queue (GPU-specific; blk/rng work). **This hang blocks boot → must be
+   fixed or made non-fatal (two-tier: stock Fedora must still boot).** Next: instrument the gpu
+   queue addresses + avail.idx; fix is mechanism-in-libkrun. Details in `limina-krun-efi-build` memory.
+   Then reconcile with the M2 IOSurface present path (firmware frames before the guest's DRM loads).
 
 3. **Wire both into the harness + window UX.** A serial-console view alongside the display (a
    separate pane/window the user can open), and keep the L1 console round-trip test green as the
