@@ -443,8 +443,12 @@ guidance below and establishes the architecture. Two findings gate everything:
    while routing 2D resource/scanout commands through the software-2D CPU path. Also make the init
    *fallback* land on software-2D (today it falls back to a `NO_VIRGL`-only rutabaga that still can't
    do 2D). Advertise the right feature bits so the guest negotiates 3D/venus (capsets) without losing
-   the 2D scanout. Host virgl **GL** is a dead end on Apple Silicon — desktop GL apps go through
-   in-guest Mesa **zink** (GL->VK->Venus).
+   the 2D scanout. **Coexist is the DEFAULT** (not opt-in): venus-init failure degrades gracefully to
+   software-2D, so the default path tries venus and you get 3D when it works. Keep a
+   `--gpu-software-2d` override for the capture test oracle and the local-Terminal GPU-init hang
+   (graceful degradation catches venus *failure*, not the launch-context *hang*). Host virgl **GL**
+   is a dead end on Apple Silicon — desktop GL apps go through in-guest Mesa **zink** (GL->VK->Venus).
+   Full design: `docs/design/tier2-coexist-gpu.md`.
 2. **Verify/patch virglrenderer Apple blob support.** Confirm our virglrenderer carries the Apple
    blob patches (`RUTABAGA_MEM_HANDLE_TYPE_APPLE = 0x0006`, `VIRGL_RENDERER_BLOB_FD_TYPE_APPLE`,
    `virgl_renderer_resource_get_map_ptr`). If Homebrew's lacks them, build the libkrun-flavored fork

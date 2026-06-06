@@ -28,9 +28,9 @@ Patch 0001 didn't just add a 2D fast-path; it left every handler able to serve b
 
 So a venus-rendered resource presented through the **normal** `SET_SCANOUT`+`RESOURCE_FLUSH` path
 already presents today (via `read_2d_resource`). The only reasons it's currently either/or are the
-**two switches** below.
+**switches** below (three mechanism changes + a graceful fallback).
 
-## The two switches to flip
+## The switches to flip
 
 ### 1. Decouple rutabaga creation from the 2D path (`VirtioGpu::new`, `device.rs`)
 
@@ -66,22 +66,52 @@ bool. `create_rutabaga` keeps taking `virgl_flags`; the facade supplies `0xC0` (
   rutabaga, so only the *count* in `read_config` needs to match. Resolve the exact rutabaga
   count API during impl (`RUTABAGA_CAPSETS` + the build's capset_mask; or loop `get_capset_info`).
 
-### 3. Graceful fallback = software-2D, not a broken rutabaga (two-tier guarantee)
+### 3. Fence routing by ring (the actual `0xC0` wedge — confirmed in source)
+
+This is the real cause of the spike's `0xC0` firmware wedge, not the 2D data path (sw2d already
+serves 2D, and the scanout configured fine). `worker.rs:456-475` calls `virtio_gpu.create_fence`
+for **every** fenced command. Patch 0001's `create_fence` (`virtio_gpu.rs:960`) only sync-completes
+when `rutabaga` is `None`; with a venus rutabaga it routes **all** fences to `rutabaga.create_fence`
+— including the firmware's **2D global-ring** fences, which venus rejects (`ComponentError(22)`) →
+ERR_UNSPEC → `ASSERT Gop.c(109)`.
+
+Fix: route by ring. A fence on the **Global ring** (`flags & VIRTIO_GPU_FLAG_INFO_RING_IDX == 0` —
+2D/sw2d commands, firmware/fbcon) → `mark_fence_completed_sync` (it already finished synchronously).
+A **context-specific** fence (a real venus 3D context) → `rutabaga.create_fence`. The
+`RutabagaFence` already carries `flags`/`ctx_id`/`ring_idx`, so the routing is local to
+`create_fence`. This is what lets 2D and venus fences coexist.
+
+### 4. Graceful fallback = no rutabaga, not a broken one (two-tier guarantee)
 
 `create_fallback_rutabaga` currently falls back to a `NO_VIRGL`-only rutabaga that **still can't do
 2D** (the spike's EGL combos hit this → firmware ASSERT). Change the fallback: if the venus rutabaga
-fails to build, set `rutabaga = None` **and** drop to `SoftwareOnly` feature/capset advertisement,
-so the guest comes up degraded-but-booting on pure software-2D. This is the compatibility floor —
-a host without working venus must still boot the desktop.
+fails to build, set `rutabaga = None` (drop the broken-fallback rutabaga entirely). The methods
+already handle `None` — 2D via sw2d keeps working, 3D commands return `ErrUnspec`.
+
+**Ordering caveat (important):** feature/capset advertisement happens at `read_config`, *before*
+`activate` → worker → rutabaga creation, so we **can't** retroactively drop to software-2D
+advertisement once venus fails. Features are decided up-front by **intent** (`enable_3d`). If venus
+then fails at activate, the device has advertised VIRGL/CONTEXT_INIT/capsets but answers 3D commands
+with `ErrUnspec` → the **guest** Mesa falls back to llvmpipe, while 2D (firmware/fbcon/scanout via
+sw2d) is unaffected and the desktop still boots. So graceful degradation manifests at the
+guest-rendering layer, not the host-feature layer — still the compatibility floor (boots, usable),
+just software-rendered. (Pre-OS firmware never uses 3D features, so boot is never at risk from the
+advertisement.)
 
 ## limina facade / CLI
 
-- Replace `set_gpu_software_2d(bool)` with a mode: default `SoftwareOnly`; opt into `Coexist` via a
-  `--gpu-3d` flag (worker) / supervisor passthrough, and/or keep `LIMINA_VIRGL_FLAGS` as the
-  power-user override. When `Coexist`, the facade passes venus flags `0xC0` (not the raw user value,
-  unless overridden) — encode the "no EGL / yes NO_VIRGL" rule in one place with a comment pointing
-  at the spike.
-- Keep tier-1 the default so stock boots are unchanged until 3D is explicitly requested.
+- **`Coexist` is the DEFAULT** — 3D is not opt-in. Because venus-init failure degrades gracefully to
+  software-2D (see fallback above), the default path just *tries* venus and you get 3D when it works.
+  This is the two-tier guarantee: the enhancement is additive and self-degrading, never a gate.
+- Keep a **`--gpu-software-2d` override** (replacing today's implicit `software_2d` default) that
+  forces `SoftwareOnly` — needed for: (i) the headless capture/PNG test oracle and the L2
+  compatibility-floor test (assert the floor *specifically*); (ii) **the local-Terminal GPU-init
+  hang** — graceful degradation catches venus *failure* (an error) but NOT the launch-context
+  *hang* (a block in virglrenderer/Metal init from the user's local Terminal; `.app`/ssh/scripts are
+  fine). The override is the escape hatch for `cargo run` from a local Terminal. `LIMINA_VIRGL_FLAGS`
+  stays as the power-user flag override.
+- The facade passes venus flags `0xC0` for `Coexist` (not a raw user value unless overridden) —
+  encode the "no EGL / yes NO_VIRGL" rule in one place with a comment pointing at the spike.
 
 ## Phasing (each independently testable)
 
@@ -107,9 +137,10 @@ a host without working venus must still boot the desktop.
   (`DRM_VIRTIO_GPU` 3D / `CONFIG_DRM_VIRTIO_GPU` already on; verify venus needs nothing else) — a
   test that with `Coexist` the guest sees `num_capsets≥1` and a 3D context can be created (a tiny
   guest-side ioctl probe), while 2D `l1_display` **still passes** (the floor mustn't regress).
-- **L2 (stock Fedora):** boot stays green in `SoftwareOnly` (default) — proves we didn't disturb the
-  compatibility floor. A separate, explicitly `Coexist` Fedora boot is the Phase-1 venus check
-  (headless: assert renderer init + a non-black frame; `vulkaninfo` once a guest shell exists).
+- **L2 (stock Fedora):** the default (`Coexist`) boot stays green via graceful degradation; a
+  `--gpu-software-2d`-forced boot asserts the compatibility floor *specifically* (proves we didn't
+  disturb it). The default `Coexist` Fedora boot is also the Phase-1 venus check (headless: assert
+  renderer init + a non-black frame; `vulkaninfo` once a guest shell exists).
 
 ## Open questions / risks (resolve in Phase 1)
 
