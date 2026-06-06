@@ -61,16 +61,22 @@ struct Scanout {
     width: u32,
     height: u32,
     format: ResourceFormat,
-    /// Staging buffer libkrun fills (we then transform → BGRA into the IOSurface).
+    /// Staging buffer libkrun fills (guest pixel format; full current frame).
     staging: Vec<u8>,
+    /// CPU-side BGRA mirror of the frame, kept current by cheap per-rect swizzles. It is the
+    /// source of truth we memcpy (no swizzle) into whichever back surface we're about to show,
+    /// so each surface is always a complete, self-consistent frame — and we never write the
+    /// on-screen one (writing both surfaces per present raced the compositor → flicker).
+    canvas: Vec<u8>,
     /// Double buffer: we write the back surface each present and tell the supervisor which
     /// id to show, so its `CALayer.contents` changes object identity → Core Animation
     /// actually re-reads (re-setting the *same* surface is a no-op and never refreshes).
     surfaces: [CFRetained<IOSurfaceRef>; 2],
     ids: [u32; 2],
     idx: usize,
-    /// Force the next present to repaint the whole frame into both surfaces (fresh/reused
-    /// surfaces have no prior content). Cleared after the first full present.
+    /// Force the next present to swizzle the whole frame into the canvas (a fresh canvas has
+    /// no prior content for the area outside the damage rect). Cleared after the first full
+    /// present.
     needs_full: bool,
 }
 
@@ -151,6 +157,7 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
             height,
             format,
             staging: vec![0u8; len],
+            canvas: vec![0u8; len],
             surfaces: [s0, s1],
             ids,
             idx: 0,
@@ -194,12 +201,12 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
             .take()
             .ok_or(DisplayBackendError::InvalidScanoutId)?;
 
-        // Only swizzle the damaged region. EDK2's GOP flushes one glyph cell (~8×19 px) per
-        // present; swizzling the whole 1280×800 frame each time made the firmware/GRUB
-        // console crawl (thousands of full-frame transforms). `staging` always holds the
-        // full current frame, so copying just the rect keeps every pixel correct while
-        // touching ~150 px instead of ~1M. The first present after (re)configure must be
-        // full — fresh/reused surfaces have no prior content for the untouched area.
+        // Only swizzle the damaged region into the BGRA canvas. EDK2's GOP flushes one glyph
+        // cell (~8×19 px) per present; swizzling the whole 1280×800 frame each time made the
+        // firmware/GRUB console crawl (thousands of full-frame transforms). `staging` always
+        // holds the full current frame, so swizzling just the rect keeps the canvas correct
+        // while touching ~150 px instead of ~1M. The first present after (re)configure must
+        // be full — a fresh canvas has no prior content for the untouched area.
         let (rx, ry, rw, rh) = if scanout.needs_full {
             (0, 0, scanout.width, scanout.height)
         } else {
@@ -209,25 +216,27 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
             }
         };
         scanout.needs_full = false;
+        let (format, width, height) = (scanout.format, scanout.width, scanout.height);
+        // Disjoint-field borrow: canvas (&mut) and staging (&) are different fields.
+        swizzle_rect_into_canvas(
+            &mut scanout.canvas,
+            &scanout.staging,
+            format,
+            width,
+            rx,
+            ry,
+            rw,
+            rh,
+        );
 
-        // Write the rect into BOTH surfaces. We only ever alternate which surface to *show*,
-        // so the not-shown one must also receive each damage rect or it goes stale and the
-        // next flip would resurrect an old region.
+        // Flip, then memcpy the FULL canvas into the now-off-screen back surface (a plain copy,
+        // no swizzle — fast). We only ever write the surface we're about to show, which is
+        // off-screen until the `frame` below; the on-screen one is never touched, so the
+        // compositor never samples a half-written surface.
         scanout.idx ^= 1;
-        let show_id = scanout.ids[scanout.idx];
-        for surface in &scanout.surfaces {
-            copy_rect_into_surface(
-                surface,
-                &scanout.staging,
-                scanout.format,
-                scanout.width,
-                scanout.height,
-                rx,
-                ry,
-                rw,
-                rh,
-            );
-        }
+        let i = scanout.idx;
+        copy_canvas_into_surface(&scanout.surfaces[i], &scanout.canvas, width, height);
+        let show_id = scanout.ids[i];
         self.presents += 1;
         self.scanout = Some(scanout);
         self.send(&format!("frame {show_id}"));
@@ -242,42 +251,54 @@ pub fn window_backend(config: WindowConfig) -> DisplayBackend<'static> {
     WindowBackend::into_display_backend(Some(leaked))
 }
 
-/// Copy the damage rect of a guest scanout (`format`, `src_width`×`src_height`, full frame in
-/// `src`) into the BGRA IOSurface, forcing opaque alpha (a guest desktop framebuffer is opaque;
-/// `X` channels would otherwise read as transparent). The rect is clamped to the frame bounds,
-/// so an out-of-range or empty rect is a no-op.
+/// Swizzle just the damage rect of the guest frame (`src`, `format`, `src_width` wide) into the
+/// BGRA `canvas` (same dims, tight `src_width*4` stride), forcing opaque alpha (a guest desktop
+/// framebuffer is opaque; `X` channels would otherwise read as transparent). The rect is clamped
+/// to the frame bounds, so an out-of-range or empty rect is a no-op. This is the only swizzle on
+/// the hot path; keeping it rect-sized is what makes the GOP console fast.
 #[allow(clippy::too_many_arguments)]
-fn copy_rect_into_surface(
-    surface: &IOSurfaceRef,
+fn swizzle_rect_into_canvas(
+    canvas: &mut [u8],
     src: &[u8],
     format: ResourceFormat,
     src_width: u32,
-    src_height: u32,
     rx: u32,
     ry: u32,
     rw: u32,
     rh: u32,
 ) {
-    // Clamp [rx, rx+rw) × [ry, ry+rh) to [0, src_width) × [0, src_height).
+    let stride = src_width as usize * 4;
+    let height = (canvas.len() / stride.max(1)) as u32;
+    // Clamp [rx, rx+rw) × [ry, ry+rh) to [0, src_width) × [0, height).
     let x0 = rx.min(src_width) as usize;
-    let y0 = ry.min(src_height) as usize;
+    let y0 = ry.min(height) as usize;
     let x1 = rx.saturating_add(rw).min(src_width) as usize;
-    let y1 = ry.saturating_add(rh).min(src_height) as usize;
+    let y1 = ry.saturating_add(rh).min(height) as usize;
     if x1 <= x0 || y1 <= y0 {
         return;
     }
-    let src_stride = src_width as usize * 4;
+    for y in y0..y1 {
+        let row = y * stride;
+        for x in x0..x1 {
+            let o = row + x * 4;
+            let bgra = to_bgra(format, &src[o..o + 4]);
+            canvas[o..o + 4].copy_from_slice(&bgra);
+        }
+    }
+}
+
+/// Copy the full BGRA `canvas` (`width`×`height`, tight stride) into the IOSurface, honoring the
+/// surface's own row stride. No swizzle — a straight per-row memcpy, so it's cheap even at full
+/// frame, which lets us refresh a stale back buffer without re-swizzling.
+fn copy_canvas_into_surface(surface: &IOSurfaceRef, canvas: &[u8], width: u32, height: u32) {
+    let src_stride = width as usize * 4;
     unsafe {
         IOSurfaceLock(surface, IOSurfaceLockOptions(0), ptr::null_mut());
         let base = IOSurfaceGetBaseAddress(surface).as_ptr() as *mut u8;
         let dst_stride = IOSurfaceGetBytesPerRow(surface);
-        for y in y0..y1 {
-            let s = &src[y * src_stride..y * src_stride + src_stride];
-            let d = base.add(y * dst_stride);
-            for x in x0..x1 {
-                let bgra = to_bgra(format, &s[x * 4..x * 4 + 4]);
-                ptr::copy_nonoverlapping(bgra.as_ptr(), d.add(x * 4), 4);
-            }
+        for y in 0..height as usize {
+            let s = &canvas[y * src_stride..y * src_stride + src_stride];
+            ptr::copy_nonoverlapping(s.as_ptr(), base.add(y * dst_stride), src_stride);
         }
         IOSurfaceUnlock(surface, IOSurfaceLockOptions(0), ptr::null_mut());
     }
@@ -391,94 +412,113 @@ mod tests {
         v
     }
 
-    #[test]
-    fn rect_copy_touches_only_the_damaged_region() {
-        let (w, h) = (4u32, 4u32);
-        let s = create_global_iosurface(w, h).expect("create");
-
-        // Full copy with tag=100, then a rect (1,1,2,2) copy with tag=200. Outside the rect
-        // must keep tag=100; inside must flip to tag=200 — proving the rect bound holds.
-        copy_rect_into_surface(
-            &s,
-            &staging(w, h, 100),
-            ResourceFormat::BGRX,
-            w,
-            h,
-            0,
-            0,
-            w,
-            h,
-        );
-        copy_rect_into_surface(
-            &s,
-            &staging(w, h, 200),
-            ResourceFormat::BGRX,
-            w,
-            h,
-            1,
-            1,
-            2,
-            2,
-        );
-
-        unsafe {
-            IOSurfaceLock(&s, IOSurfaceLockOptions(0), ptr::null_mut());
-            // Corners are outside the rect → tag 100, opaque alpha, correct x/y.
-            assert_eq!(px(&s, 0, 0), [0, 0, 100, 255]);
-            assert_eq!(px(&s, 3, 3), [3, 3, 100, 255]);
-            assert_eq!(px(&s, 3, 0), [3, 0, 100, 255]);
-            // Inside [1,3)×[1,3) → tag 200.
-            assert_eq!(px(&s, 1, 1), [1, 1, 200, 255]);
-            assert_eq!(px(&s, 2, 2), [2, 2, 200, 255]);
-            // Edge just outside the rect stays 100.
-            assert_eq!(px(&s, 3, 1), [3, 1, 100, 255]);
-            IOSurfaceUnlock(&s, IOSurfaceLockOptions(0), ptr::null_mut());
-        }
+    // Read one BGRA pixel out of a tight-stride canvas.
+    fn cpx(canvas: &[u8], w: u32, x: usize, y: usize) -> [u8; 4] {
+        let o = (y * w as usize + x) * 4;
+        [canvas[o], canvas[o + 1], canvas[o + 2], canvas[o + 3]]
     }
 
     #[test]
-    fn rect_copy_clamps_out_of_bounds() {
+    fn rect_swizzle_touches_only_the_damaged_region() {
         let (w, h) = (4u32, 4u32);
-        let s = create_global_iosurface(w, h).expect("create");
-        copy_rect_into_surface(
-            &s,
+        let mut canvas = vec![0u8; (w * h * 4) as usize];
+
+        // Full swizzle with tag=100, then a rect (1,1,2,2) swizzle with tag=200. Outside the
+        // rect must keep tag=100; inside must flip to tag=200 — proving the rect bound holds.
+        swizzle_rect_into_canvas(
+            &mut canvas,
+            &staging(w, h, 100),
+            ResourceFormat::BGRX,
+            w,
+            0,
+            0,
+            w,
+            h,
+        );
+        swizzle_rect_into_canvas(
+            &mut canvas,
+            &staging(w, h, 200),
+            ResourceFormat::BGRX,
+            w,
+            1,
+            1,
+            2,
+            2,
+        );
+
+        // Corners are outside the rect → tag 100, opaque alpha, correct x/y.
+        assert_eq!(cpx(&canvas, w, 0, 0), [0, 0, 100, 255]);
+        assert_eq!(cpx(&canvas, w, 3, 3), [3, 3, 100, 255]);
+        assert_eq!(cpx(&canvas, w, 3, 0), [3, 0, 100, 255]);
+        // Inside [1,3)×[1,3) → tag 200.
+        assert_eq!(cpx(&canvas, w, 1, 1), [1, 1, 200, 255]);
+        assert_eq!(cpx(&canvas, w, 2, 2), [2, 2, 200, 255]);
+        // Edge just outside the rect stays 100.
+        assert_eq!(cpx(&canvas, w, 3, 1), [3, 1, 100, 255]);
+    }
+
+    #[test]
+    fn rect_swizzle_clamps_out_of_bounds() {
+        let (w, h) = (4u32, 4u32);
+        let mut canvas = vec![0u8; (w * h * 4) as usize];
+        swizzle_rect_into_canvas(
+            &mut canvas,
             &staging(w, h, 50),
             ResourceFormat::BGRX,
             w,
-            h,
             0,
             0,
             w,
             h,
         );
         // A rect that runs off the right/bottom edge must clamp, not panic or read OOB.
-        copy_rect_into_surface(
-            &s,
+        swizzle_rect_into_canvas(
+            &mut canvas,
             &staging(w, h, 60),
             ResourceFormat::BGRX,
             w,
-            h,
             3,
             3,
             99,
             99,
         );
         // A fully out-of-range rect is a no-op.
-        copy_rect_into_surface(
-            &s,
+        swizzle_rect_into_canvas(
+            &mut canvas,
             &staging(w, h, 70),
             ResourceFormat::BGRX,
             w,
-            h,
             99,
             99,
             4,
             4,
         );
+        assert_eq!(cpx(&canvas, w, 3, 3), [3, 3, 60, 255]); // clamped rect reached the last pixel
+        assert_eq!(cpx(&canvas, w, 0, 0), [0, 0, 50, 255]); // untouched by either later swizzle
+    }
+
+    #[test]
+    fn canvas_copies_whole_frame_into_surface() {
+        // The full-frame memcpy must land every pixel through the surface's own row stride.
+        let (w, h) = (16u32, 8u32);
+        let s = create_global_iosurface(w, h).expect("create");
+        let mut canvas = vec![0u8; (w * h * 4) as usize];
+        swizzle_rect_into_canvas(
+            &mut canvas,
+            &staging(w, h, 77),
+            ResourceFormat::BGRX,
+            w,
+            0,
+            0,
+            w,
+            h,
+        );
+        copy_canvas_into_surface(&s, &canvas, w, h);
         unsafe {
             IOSurfaceLock(&s, IOSurfaceLockOptions(0), ptr::null_mut());
-            assert_eq!(px(&s, 3, 3), [3, 3, 60, 255]); // clamped rect reached the last pixel
-            assert_eq!(px(&s, 0, 0), [0, 0, 50, 255]); // untouched by either later copy
+            assert_eq!(px(&s, 0, 0), [0, 0, 77, 255]);
+            assert_eq!(px(&s, 15, 7), [15, 7, 77, 255]);
+            assert_eq!(px(&s, 9, 3), [9, 3, 77, 255]);
             IOSurfaceUnlock(&s, IOSurfaceLockOptions(0), ptr::null_mut());
         }
     }
