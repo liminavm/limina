@@ -43,11 +43,20 @@ fn fedora_gets_nat_dhcp_and_outbound() {
         .wait_for_gateway_log("DstPort=53(domain)", Duration::from_secs(45))
         .expect("guest never made an outbound DNS query");
 
+    // The well-known vfkit MAC gets gvproxy's static `.2` lease (deterministic guest IP),
+    // which is what makes the built-in 127.0.0.1:2222 → .2:22 forward land on the guest.
     let log = guest.gateway_log();
     assert!(
-        log.contains("YourClientIP=192.168.127."),
-        "expected a 192.168.127.x lease in the gateway log"
+        log.contains("YourClientIP=192.168.127.2 "),
+        "expected the static 192.168.127.2 lease in the gateway log"
     );
+
+    // Inbound NAT: gvproxy's default port-forward reaches the guest's sshd — the path that
+    // makes `ssh -p 2222 user@127.0.0.1` work (what the M3 SSH goal is for).
+    let banner = guest
+        .wait_for_ssh_banner(Duration::from_secs(30))
+        .expect("guest SSH not reachable through the gvproxy forward");
+    eprintln!("guest SSH reachable: {banner}");
 
     // Clean teardown. Stock Fedora ignores the GPIO power button, so the supervisor
     // force-kills the worker after its short grace — still a clean supervisor stop. The

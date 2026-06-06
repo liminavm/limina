@@ -56,10 +56,13 @@ const NET_COMPAT_FEATURES: u32 = NET_FEATURE_CSUM
     | NET_FEATURE_HOST_TSO4
     | NET_FEATURE_HOST_UFO;
 
-/// Guest MAC for the NAT NIC: a stable locally-administered unicast address (`0x02` =
-/// locally-administered, unicast). Fixed so the guest's DHCP lease/identity is stable
-/// across boots; gvproxy keys its lease on this.
-const NET_GUEST_MAC: [u8; 6] = [0x02, 0x67, 0x6b, 0x76, 0x6d, 0x01];
+/// Guest MAC for the NAT NIC: the well-known vfkit/krunkit MAC. gvproxy's default config
+/// has a *static* DHCP lease binding this MAC to `192.168.127.2` and a built-in port-forward
+/// `127.0.0.1:2222 → 192.168.127.2:22`. Using it (rather than an arbitrary locally-administered
+/// MAC, which gets a dynamic .3 lease) makes the guest IP deterministic and gives inbound SSH
+/// (`ssh -p 2222 user@127.0.0.1`) for free — no gvproxy REST forwarding needed. (`5a` =
+/// locally-administered, unicast.)
+const NET_GUEST_MAC: [u8; 6] = [0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee];
 
 // virglrenderer init flag bits (see docs/research/03 §1.3).
 #[allow(dead_code)]

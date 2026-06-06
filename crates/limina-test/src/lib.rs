@@ -24,7 +24,8 @@
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -36,6 +37,10 @@ use anyhow::{anyhow, bail, Context, Result};
 /// Stable location of the krunkit EFI firmware blob (an EDK2 `.fd`). Overridable with
 /// `LIMINA_FIRMWARE`. This is the same firmware the M1 boot spikes used.
 const DEFAULT_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
+
+/// gvproxy's default inbound port-forward: `127.0.0.1:2222 → 192.168.127.2:22`. With the
+/// well-known vfkit MAC the guest gets the static `.2` lease, so this reaches its sshd.
+const FORWARDED_SSH_ADDR: &str = "127.0.0.1:2222";
 
 /// Is HVF-backed boot testing enabled for this run?
 ///
@@ -758,6 +763,36 @@ impl Guest {
                 );
             }
             std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    /// Block until the guest's SSH server answers through gvproxy's inbound port-forward
+    /// (`127.0.0.1:2222 → guest:22`), returning its banner (e.g. `SSH-2.0-OpenSSH_10.0`).
+    /// Proves the inbound NAT path end-to-end (host → gvproxy forward → guest sshd) — what
+    /// makes `ssh -p 2222 user@127.0.0.1` work. Requires [`GuestConfig::with_net`] and a guest
+    /// running sshd. gvproxy listens on 2222 immediately but only yields a banner once it can
+    /// dial the guest, so an empty/short read just means "not ready yet" — keep polling.
+    pub fn wait_for_ssh_banner(&mut self, timeout: Duration) -> Result<String> {
+        let deadline = Instant::now() + timeout;
+        let addr: std::net::SocketAddr = FORWARDED_SSH_ADDR.parse().expect("valid forward addr");
+        loop {
+            if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+                stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+                let mut buf = [0u8; 128];
+                if let Ok(n) = stream.read(&mut buf) {
+                    let banner = String::from_utf8_lossy(&buf[..n]).trim().to_string();
+                    if banner.starts_with("SSH-") {
+                        return Ok(banner);
+                    }
+                }
+            }
+            if let Some(status) = self.child.try_wait().context("polling supervisor")? {
+                bail!("supervisor exited ({status}) before SSH was reachable");
+            }
+            if Instant::now() >= deadline {
+                bail!("no SSH banner from {FORWARDED_SSH_ADDR} within {timeout:?}");
+            }
+            std::thread::sleep(Duration::from_millis(500));
         }
     }
 

@@ -385,6 +385,24 @@ unblocks general guest work far better than a serial getty.)
 **Goal:** Real virtio-net NIC with outbound internet and DNS via user-mode NAT; bridged as an
 opt-in later sub-step.
 
+**STATUS (2026-06-06): NAT outbound DONE.** `limina --net` spawns + supervises a gvproxy gateway
+(`-listen-vfkit unixgram:///abs/socket`) and connects the guest's virtio-net to it via the new
+`krun_add_net_unixgram` path (`UnixgramPath(_, vfkit=true)`, `NET_COMPAT_FEATURES`, fixed
+locally-administered MAC). No libkrun patch needed. Verified end-to-end against stock Fedora (spike
+`spikes/m3-gvproxy` + L2 test `tests/net.rs`): full DHCP Discover→Ack (guest `192.168.127.3`), DNS
+resolution, outbound TCP to a real mirror. Gotchas recorded: (a) gvproxy's `-listen-vfkit` URL must
+be ABSOLUTE; (b) the guest must reach **userspace** for NetworkManager to DHCP, so net tests boot a
+**writable** APFS COW clone (a read-only root never reaches NM). Oracle is host-side gvproxy `-debug`
+(`--net-log`) since pristine Fedora is silent on serial after GRUB. Supervisor tears the gateway down
+on both exit paths (headless Drop; windowed `gateway::cleanup()` before `process::exit`).
+
+**REMAINING for the SSH goal (next): inbound port-forwarding.** Outbound works, but the guest sits
+behind NAT — to `ssh` in we need gvproxy port-forwarding (host `127.0.0.1:2222` → guest
+`192.168.127.3:22`) via its REST control endpoint (`-listen unix://api.sock` + `services/forwarder/
+expose`), NOT `krun_set_port_map` (TSI-only, EINVALs once a net device exists). Then guest-side:
+confirm the Fedora image has a user account + `sshd` enabled (Workstation ships sshd disabled and a
+fresh image hasn't run initial-setup) — may need GNOME initial-setup or a console step first.
+
 **Key tasks:**
 1. **NAT default via gvproxy** (Homebrew-installed, userspace, no root/entitlement, built-in
    DHCP/DNS + REST port-forward). Use the NEW API directly:
@@ -465,10 +483,20 @@ degrades gracefully to software-2D on renderer-init failure (no panic). Design:
    Fix = persist the Rutabaga across the worker restart (hoist to the `Gpu` device; design around the
    fence-handler's per-activation queue/interrupt binding) or rework 0007. Currently graceful (no
    panic, degrades).
-3. **Confirm venus is actually selected** (vs llvmpipe presented via sw2d) — Fedora's `quiet`/no-
-   `console=` cmdline hides the drm capset probe on serial. **Gated on M3 networking:** SSH into the
-   guest is the clean observation/control path (`vulkaninfo`, install Mesa bits, GL→zink config) for
-   this and all later tier-2 guest work — which is why **M3 is pulled ahead of finishing M4**.
+3. ~~Confirm venus is actually selected~~ **ANSWERED (2026-06-06, via M3 SSH): venus 3D is BROKEN —
+   not selected.** SSH'd into the guest (M3 done) and read the worker GPU debug under the default
+   coexist GPU. The guest kernel sees venus (capset id 4, size 156; `+context_init`), but **every
+   `CtxCreate` fails `ErrRutabaga(ComponentError(22))` (EINVAL)** → no venus context ever exists →
+   the desktop runs on software (llvmpipe/lavapipe). Phase 1's "venus inits / negotiates 3D" was
+   over-optimistic (host `virgl_renderer_init` ok; guest per-context create fails). Worse,
+   `ResourceMapBlob → ErrUnspec` + host `Error removing/adding memory map` — venus blob mapping
+   destabilizes the guest (SSH dropped mid-run; the software-2D path is rock-solid). **Prime suspect:
+   capset advertisement (item 1's `num_capsets` hardcoded 5 + capset table not derived from the real
+   venus rutabaga) → the guest's venus context-create params mismatch → EINVAL. This makes item 1's
+   capset fix LOAD-BEARING for venus, not cosmetic.** Re-evaluate keeping coexist as the *default*
+   until venus works (graceful degrade covers init failure, not these per-context EINVALs + blob-map
+   instability). Details: memory `limina-tier2-venus`. (This finding is exactly why M3 was pulled
+   ahead.)
 
 **Key tasks:**
 1. **Coexist device: software-2D (2D + present) + `VENUS|NO_VIRGL` rutabaga (3D) in one virtio-gpu.**
