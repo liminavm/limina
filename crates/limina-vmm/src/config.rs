@@ -106,6 +106,11 @@ pub struct DisplaySpec {
     pub height: u32,
     /// The host sink for presented frames.
     pub sink: DisplaySink,
+    /// Force the software-2D-only GPU (no virglrenderer/venus init). Default is the
+    /// coexist device (software-2D 2D + Venus 3D, degrading to software-2D if venus init
+    /// fails). Set this for the headless 2D capture oracle and to dodge the local-Terminal
+    /// GPU-init hang. `LIMINA_VIRGL_FLAGS` overrides both (forces a specific renderer flag set).
+    pub software_2d: bool,
 }
 
 /// Where the host sends presented guest frames.

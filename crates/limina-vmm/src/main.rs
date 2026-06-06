@@ -116,6 +116,12 @@ struct Cli {
     #[arg(long, default_value = "1280x800")]
     display_size: String,
 
+    /// Force the software-2D-only GPU (no virglrenderer/venus). Default is the coexist
+    /// device (software-2D 2D + Venus 3D). Use for the capture oracle or the local-Terminal
+    /// GPU-init hang.
+    #[arg(long)]
+    gpu_software_2d: bool,
+
     /// fd of the keyboard event socket (supervisor→worker). Enables the virtio-keyboard.
     /// Requires --input-ptr-fd (the pointer comes as a pair).
     #[arg(long, requires = "input_ptr_fd")]
@@ -199,6 +205,7 @@ fn main() -> Result<()> {
                     width,
                     height,
                     sink,
+                    software_2d: cli.gpu_software_2d,
                 })
             }
             None => None,

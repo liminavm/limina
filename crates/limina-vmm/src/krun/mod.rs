@@ -39,7 +39,6 @@ const GUEST_CID: u32 = 3;
 const VIRGLRENDERER_USE_EGL: u32 = 1 << 0;
 #[allow(dead_code)]
 const VIRGLRENDERER_THREAD_SYNC: u32 = 1 << 1;
-#[allow(dead_code)]
 const VIRGLRENDERER_VENUS: u32 = 1 << 6;
 const VIRGLRENDERER_NO_VIRGL: u32 = 1 << 7;
 #[allow(dead_code)]
@@ -47,18 +46,20 @@ const VIRGLRENDERER_USE_ASYNC_FENCE_CB: u32 = 1 << 8;
 #[allow(dead_code)]
 const VIRGLRENDERER_RENDER_SERVER: u32 = 1 << 9;
 
-/// virgl_flags for the virtio-gpu device.
+/// virgl_flags for the **coexist** virtio-gpu (tier-2, the default): the macOS Venus mask.
 ///
-/// Tier 1 (current): `NO_VIRGL`. Our libkrun patch handles 2D scanout entirely in host
-/// CPU memory (software 2D), so the renderer needs no virgl/GL context — which is good,
-/// because virgl GL has no host context on macOS and the brew virglrenderer has no render
-/// server for Venus. This gives a clean rutabaga init (no "falling back to safe defaults").
+/// `VENUS | NO_VIRGL` — and ONLY these — per `spikes/venus-viability` (verified by sweep +
+/// crash report on M1 Max / macOS 26.5):
+/// - `USE_EGL` (0x1) must be OFF: there is no EGL on macOS, so `virgl_renderer_init` returns -1.
+/// - `NO_VIRGL` (0x80) must be ON: otherwise virglrenderer runs the GL path
+///   (`vrend_renderer_init → create_gl_context`) which SIGSEGVs — no GL context on Apple Silicon.
+/// - `RENDER_SERVER` (0x200) is unavailable (the brew virglrenderer ships no render-server
+///   binary) but harmless unused — Venus runs in-process against MoltenVK.
 ///
-/// Tier 2 (later, accelerated): the macOS Venus mask — `USE_EGL | VENUS | RENDER_SERVER |
-/// THREAD_SYNC | USE_ASYNC_FENCE_CB` (libkrun's `gui_vm` example) — once we build a
-/// virglrenderer with the render server and a Venus-capable guest. Override at runtime
-/// with `LIMINA_VIRGL_FLAGS` (e.g. `0x343`).
-const GPU_VIRGL_FLAGS: u32 = VIRGLRENDERER_NO_VIRGL;
+/// This is NOT libkrun's Linux `gui_vm` mask (`0x343`). With these flags the software-2D path
+/// still serves all 2D/scanout commands (it is unconditional); Venus adds 3D contexts on top.
+/// Override at runtime with `LIMINA_VIRGL_FLAGS` (e.g. for experiments).
+const GPU_VENUS_FLAGS: u32 = VIRGLRENDERER_VENUS | VIRGLRENDERER_NO_VIRGL;
 
 /// Translate a [`VmSpec`] into a libkrun [`VmResources`]. No VM is started yet.
 pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
@@ -113,14 +114,13 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     Ok(vmr)
 }
 
-/// Attach a virtio-gpu display. The GPU device is created iff `gpu_virgl_flags` is set,
-/// so this is what turns the display on. Tier 1: one 2D scanout at the requested mode,
-/// with our capture backend as the host sink (PNG oracle). With no `capture_png` the
-/// builder falls back to a no-op backend, so the device exists but frames go nowhere.
+/// Attach a virtio-gpu display at the requested mode, with the chosen host sink (PNG capture
+/// oracle or shared-IOSurface window). Selects the GPU mode: the coexist device by default
+/// (software-2D 2D/scanout + Venus 3D, degrading to software-2D if venus init fails), or
+/// software-2D-only when forced via `--gpu-software-2d`.
 fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
-    // Allow a quick flag sweep without recompiling (e.g. LIMINA_VIRGL_FLAGS=0x103). Setting
-    // this also opts INTO the real virglrenderer (tier-2 experiments); the default tier-1
-    // path is software-2D, where the renderer is never initialized at all.
+    // Power-user escape hatch: LIMINA_VIRGL_FLAGS=0x.. forces a specific renderer flag set
+    // (and thus the renderer/coexist path) without recompiling — for experiments/sweeps.
     let virgl_override = std::env::var("LIMINA_VIRGL_FLAGS").ok().and_then(|s| {
         let s = s.trim();
         s.strip_prefix("0x")
@@ -128,13 +128,21 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
             .unwrap_or_else(|| s.parse::<u32>())
             .ok()
     });
-    // Tier-1 (default): software-2D — our libkrun patch serves 2D scanout from host CPU
-    // memory and never inits virglrenderer/rutabaga (no host GL/Metal), so it works on a
-    // GL-less host and doesn't depend on a usable Metal context. An explicit
-    // LIMINA_VIRGL_FLAGS switches to the real renderer (tier-2).
-    let software_2d = virgl_override.is_none();
-    let flags = virgl_override.unwrap_or(GPU_VIRGL_FLAGS);
-    log::info!("virtio-gpu virgl_flags = {flags:#x}, software_2d = {software_2d}");
+    // GPU mode (precedence: env override > --gpu-software-2d > default coexist):
+    //  - coexist (DEFAULT): software-2D serves 2D/scanout, a VENUS|NO_VIRGL rutabaga adds 3D.
+    //    If venus init fails, libkrun degrades to software-2D (no panic), so making this the
+    //    default is safe — the enhancement is additive and self-degrading.
+    //  - --gpu-software-2d: force software-2D only (the 2D capture oracle; the local-Terminal
+    //    GPU-init hang, which graceful degradation can't catch because it's a block not an error).
+    let (software_2d, flags) = match (virgl_override, display.software_2d) {
+        (Some(f), _) => (false, f),
+        (None, true) => (true, GPU_VENUS_FLAGS), // flags unused when software_2d (no rutabaga)
+        (None, false) => (false, GPU_VENUS_FLAGS),
+    };
+    log::info!(
+        "virtio-gpu virgl_flags = {flags:#x}, software_2d = {software_2d} (coexist = {})",
+        !software_2d
+    );
     vmr.set_gpu_virgl_flags(flags);
     vmr.set_gpu_software_2d(software_2d);
     vmr.displays

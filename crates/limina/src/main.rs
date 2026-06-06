@@ -104,6 +104,11 @@ struct Cli {
     #[arg(long, default_value = "1280x800")]
     display_size: String,
 
+    /// Force the software-2D-only GPU (no virglrenderer/venus). Default is the coexist device
+    /// (software-2D 2D + Venus 3D). Use for the capture oracle or the local-Terminal GPU-init hang.
+    #[arg(long)]
+    gpu_software_2d: bool,
+
     /// Seconds to wait for an orderly guest power-off before force-killing.
     #[arg(long, default_value_t = 20)]
     shutdown_grace_secs: u64,
@@ -182,6 +187,12 @@ fn main() -> Result<()> {
         args.push("--console-pty".into());
     }
     let grace = Duration::from_secs(cli.shutdown_grace_secs);
+
+    // GPU mode applies to both the windowed and capture display paths (worker default is the
+    // coexist device; this forwards the software-2D-only override).
+    if cli.gpu_software_2d {
+        args.push("--gpu-software-2d".into());
+    }
 
     // Windowed mode: open a native window in the supervisor and stream the guest scanout
     // from the worker over a control socketpair (the worker publishes shared IOSurfaces).

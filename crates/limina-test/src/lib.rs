@@ -502,7 +502,11 @@ impl Guest {
                 cmd.arg("--display-capture")
                     .arg(&png)
                     .arg("--display-size")
-                    .arg(format!("{}x{}", d.width, d.height));
+                    .arg(format!("{}x{}", d.width, d.height))
+                    // The capture oracle is a 2D pixel test: force the software-2D GPU so it's
+                    // deterministic and independent of venus/Metal (the worker default is the
+                    // coexist device). A coexist/3D test would opt back in explicitly.
+                    .arg("--gpu-software-2d");
                 Some(png)
             }
             None => None,
