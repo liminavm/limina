@@ -27,7 +27,7 @@ use objc2_app_kit::{
 use objc2_core_foundation::CFRetained;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSTimer};
 use objc2_io_surface::{IOSurfaceLookup, IOSurfaceRef};
-use objc2_quartz_core::CALayer;
+use objc2_quartz_core::{CALayer, CATransaction};
 
 mod input;
 pub use input::InputSinks;
@@ -175,7 +175,11 @@ pub fn run(
                 NSPoint::new(0.0, 0.0),
                 NSSize::new(width as f64, height as f64),
             );
+            // No implicit animation on the resize either (same reason as set_layer_surface).
+            CATransaction::begin();
+            CATransaction::setDisableActions(true);
             layer.setFrame(bounds);
+            CATransaction::commit();
             // A mode change means the worker allocated fresh surfaces; ids from the old mode
             // are gone (and could be reused for unrelated surfaces), so drop the cache.
             cache.borrow_mut().clear();
@@ -306,7 +310,16 @@ fn capture_layer(layer: &CALayer, width: u32, height: u32, path: &str) {
 }
 
 /// Set an IOSurface as the layer's contents (it's a CF object accepted by `contents`).
+///
+/// Wrapped in a `CATransaction` with actions disabled: this is a layer-HOSTING layer, so a
+/// `contents` change otherwise fires an implicit ~0.25 s fade. At 60 fps the fades overlap
+/// and the guest desktop visibly flickers; disabling actions makes each frame swap instant.
 fn set_layer_surface(layer: &CALayer, surface: &CFRetained<IOSurfaceRef>) {
     let obj: &AnyObject = unsafe { &*(&**surface as *const IOSurfaceRef as *const AnyObject) };
-    unsafe { layer.setContents(Some(obj)) };
+    unsafe {
+        CATransaction::begin();
+        CATransaction::setDisableActions(true);
+        layer.setContents(Some(obj));
+        CATransaction::commit();
+    }
 }
