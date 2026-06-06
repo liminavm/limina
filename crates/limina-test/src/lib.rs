@@ -166,6 +166,9 @@ pub struct GuestConfig {
     /// Which device an interactive console is wired through (only meaningful when
     /// `console_input` is set).
     pub console_channel: ConsoleChannel,
+    /// Attach a user-mode NAT NIC (the supervisor spawns + supervises a gvproxy gateway and
+    /// captures its `-debug` packet log — the host-side network oracle). See [`Guest::wait_for_gateway_log`].
+    pub net: bool,
 }
 
 impl GuestConfig {
@@ -206,6 +209,7 @@ impl GuestConfig {
             shutdown_grace: Duration::from_secs(grace_from_env()),
             console_input: false,
             console_channel: ConsoleChannel::Virtio,
+            net: false,
         })
     }
 
@@ -244,7 +248,15 @@ impl GuestConfig {
             shutdown_grace: Duration::from_secs(grace_from_env()),
             console_input: false,
             console_channel: ConsoleChannel::Virtio,
+            net: false,
         })
+    }
+
+    /// Attach a user-mode NAT NIC. The supervisor spawns a gvproxy gateway and captures its
+    /// `-debug` log; assert on it via [`Guest::wait_for_gateway_log`] (DHCP lease, outbound).
+    pub fn with_net(mut self) -> GuestConfig {
+        self.net = true;
+        self
     }
 
     /// Attach a virtio-gpu display at `width`x`height` and capture presented frames. Use
@@ -353,6 +365,8 @@ pub struct Guest {
     capture_png: Option<PathBuf>,
     /// Write handle to the guest console input FIFO, if an interactive console was enabled.
     console_in: Option<fs::File>,
+    /// Path to the gvproxy gateway's `-debug` log (inside `scratch`), if net was enabled.
+    gateway_log: Option<PathBuf>,
     /// Set once teardown has run, so Drop doesn't double-kill.
     torn_down: bool,
 }
@@ -448,8 +462,23 @@ impl Guest {
                 disk,
                 read_only,
             } => {
-                cmd.arg("--firmware").arg(firmware).arg("--disk").arg(disk);
-                if *read_only {
+                // Networking needs the guest to reach userspace (NetworkManager does DHCP),
+                // but a read-only root never gets there — Fedora can't mount rw and stalls
+                // before NM. So for net tests, boot a *writable* APFS COW clone (`cp -c`:
+                // instant, space-shared) inside the scratch dir, removed with it on Drop.
+                let (disk_arg, read_only) = if cfg.net {
+                    let clone = scratch.join("disk.raw");
+                    cow_clone(disk, &clone)
+                        .with_context(|| format!("cow-cloning {disk:?} for a writable net boot"))?;
+                    (clone, false)
+                } else {
+                    (disk.clone(), *read_only)
+                };
+                cmd.arg("--firmware")
+                    .arg(firmware)
+                    .arg("--disk")
+                    .arg(&disk_arg);
+                if read_only {
                     cmd.arg("--read-only");
                 }
             }
@@ -528,6 +557,17 @@ impl Guest {
             None => (None, None),
         };
 
+        // Networking: ask the supervisor to bring up the gvproxy NAT gateway and capture its
+        // -debug packet log into the scratch dir (the host-side network oracle — stock Fedora
+        // is silent on serial after GRUB, so the guest console can't witness DHCP/DNS).
+        let gateway_log = if cfg.net {
+            let log = scratch.join("gvproxy.log");
+            cmd.arg("--net").arg("--net-log").arg(&log);
+            Some(log)
+        } else {
+            None
+        };
+
         // Let supervisor/worker logs flow to the test's stderr (visible with --nocapture).
         cmd.stdin(Stdio::null());
 
@@ -546,6 +586,7 @@ impl Guest {
             vsock_socket,
             capture_png,
             console_in,
+            gateway_log,
             torn_down: false,
         })
     }
@@ -676,6 +717,47 @@ impl Guest {
                 );
             }
             std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// Current gvproxy gateway `-debug` log text (lossy UTF-8; empty if no net / nothing yet).
+    pub fn gateway_log(&self) -> String {
+        self.gateway_log
+            .as_ref()
+            .and_then(|p| fs::read(p).ok())
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default()
+    }
+
+    /// Block until `needle` appears in the gvproxy gateway log, or `timeout` elapses, or the
+    /// supervisor exits early. The gateway log is the host-side network oracle (DHCP, DNS,
+    /// NAT packets). Requires [`GuestConfig::with_net`].
+    pub fn wait_for_gateway_log(&mut self, needle: &str, timeout: Duration) -> Result<()> {
+        anyhow::ensure!(
+            self.gateway_log.is_some(),
+            "no gateway log (use GuestConfig::with_net)"
+        );
+        let deadline = Instant::now() + timeout;
+        loop {
+            let log = self.gateway_log();
+            if log.contains(needle) {
+                return Ok(());
+            }
+            if let Some(status) = self.child.try_wait().context("polling supervisor")? {
+                bail!(
+                    "supervisor exited ({status}) before the gateway log showed {needle:?}.\n\
+                     --- gateway log tail ---\n{}",
+                    tail(&log, 20)
+                );
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "timed out after {timeout:?} waiting for {needle:?} in the gateway log.\n\
+                     --- gateway log tail ---\n{}",
+                    tail(&log, 20)
+                );
+            }
+            std::thread::sleep(Duration::from_millis(200));
         }
     }
 
@@ -820,6 +902,19 @@ fn tail(s: &str, n: usize) -> String {
     let lines: Vec<&str> = s.lines().collect();
     let start = lines.len().saturating_sub(n);
     lines[start..].join("\n")
+}
+
+/// APFS copy-on-write clone `src` → `dst` (`cp -c`): instant and space-shared, so a test
+/// can boot a *writable* copy of the multi-GB image without mutating or duplicating it.
+fn cow_clone(src: &Path, dst: &Path) -> Result<()> {
+    let status = Command::new("cp")
+        .arg("-c")
+        .arg(src)
+        .arg(dst)
+        .status()
+        .with_context(|| format!("running cp -c {src:?} {dst:?}"))?;
+    anyhow::ensure!(status.success(), "cp -c {src:?} {dst:?} failed ({status})");
+    Ok(())
 }
 
 /// Create a FIFO (named pipe) at `path`, mode 0600.

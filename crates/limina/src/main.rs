@@ -8,6 +8,7 @@
 //! power-off on Ctrl-C, force-kill on timeout, report when the VM stops). The
 //! AppKit UI grows on top of this supervisor later.
 
+mod gateway;
 mod supervisor;
 mod window;
 
@@ -109,6 +110,17 @@ struct Cli {
     #[arg(long)]
     gpu_software_2d: bool,
 
+    /// Attach a user-mode NAT NIC: spawn and supervise a gvproxy gateway (DHCP/DNS/NAT,
+    /// no root) and connect the guest's virtio-net to it. The guest gets an IP and outbound
+    /// internet automatically (e.g. for SSH).
+    #[arg(long)]
+    net: bool,
+
+    /// Capture the gvproxy gateway's `-debug` packet log to this file (DHCP/DNS/NAT — the
+    /// host-side network oracle). Requires --net; without it gvproxy logs quietly.
+    #[arg(long, requires = "net")]
+    net_log: Option<PathBuf>,
+
     /// Seconds to wait for an orderly guest power-off before force-killing.
     #[arg(long, default_value_t = 20)]
     shutdown_grace_secs: u64,
@@ -194,11 +206,24 @@ fn main() -> Result<()> {
         args.push("--gpu-software-2d".into());
     }
 
+    // User-mode NAT: spawn + supervise a gvproxy gateway and connect the guest NIC to it.
+    // Kept alive for the VM's lifetime; cleaned up on both exit paths (Drop here, the global
+    // gateway::cleanup() in the windowed timer's process::exit).
+    let gateway = if cli.net {
+        let gw =
+            gateway::start(cli.net_log.as_deref()).context("starting the gvproxy NAT gateway")?;
+        args.push("--net-gvproxy".into());
+        args.push(path_arg(gw.socket_path())?);
+        Some(gw)
+    } else {
+        None
+    };
+
     // Windowed mode: open a native window in the supervisor and stream the guest scanout
     // from the worker over a control socketpair (the worker publishes shared IOSurfaces).
     if cli.window {
         let (width, height) = parse_display_size(&cli.display_size)?;
-        return run_windowed(vmm_bin, args, grace, width, height);
+        return run_windowed(vmm_bin, args, grace, width, height, gateway);
     }
 
     if let Some(display_capture) = &cli.display_capture {
@@ -215,6 +240,8 @@ fn main() -> Result<()> {
     };
 
     let code = supervisor::run(&spec)?;
+    // Explicit: process::exit skips destructors, so tear the gateway down before exiting.
+    drop(gateway);
     std::process::exit(code);
 }
 
@@ -227,8 +254,14 @@ fn run_windowed(
     grace: Duration,
     width: u32,
     height: u32,
+    gateway: Option<gateway::Gateway>,
 ) -> Result<()> {
     use objc2::MainThreadMarker;
+
+    // Keep the gateway alive for the window's lifetime. window::run never returns (it
+    // `process::exit`s on quit), so this binding outlives the VM; the windowed exit path
+    // calls gateway::cleanup() (a module global) to kill gvproxy, since Drop won't run.
+    let _gateway = gateway;
 
     let mtm = MainThreadMarker::new().context("the window must run on the main thread")?;
 

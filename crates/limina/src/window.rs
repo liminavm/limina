@@ -216,6 +216,7 @@ pub fn run(
         // kill the worker's whole process group and exit now.
         if exited || crate::supervisor::stop_requested() || !window.isVisible() {
             unsafe { libc::kill(-worker_pid, libc::SIGKILL) };
+            crate::gateway::cleanup();
             std::process::exit(0);
         }
 
@@ -332,6 +333,7 @@ pub fn run(
     app.run();
     // The run loop only returns if AppKit tears down unexpectedly; the timer is what
     // normally exits us. Either way, don't fall through.
+    crate::gateway::cleanup();
     std::process::exit(0);
 }
 
