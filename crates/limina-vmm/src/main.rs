@@ -22,7 +22,7 @@ use clap::Parser;
 
 use crate::config::{
     BootSource, ConsoleSpec, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec,
-    VirtioConsoleSpec, VmSpec, VsockSpec,
+    NetSpec, VirtioConsoleSpec, VmSpec, VsockSpec,
 };
 
 /// Boot a Linux guest on libkrun + Hypervisor.framework.
@@ -122,6 +122,12 @@ struct Cli {
     #[arg(long)]
     gpu_software_2d: bool,
 
+    /// Attach a user-mode NAT NIC (`eth0`) connected to a gvproxy gateway listening on
+    /// this vfkit unixgram socket. The supervisor spawns gvproxy and guarantees it is up
+    /// before the guest activates the device.
+    #[arg(long)]
+    net_gvproxy: Option<PathBuf>,
+
     /// fd of the keyboard event socket (supervisor→worker). Enables the virtio-keyboard.
     /// Requires --input-ptr-fd (the pointer comes as a pair).
     #[arg(long, requires = "input_ptr_fd")]
@@ -217,6 +223,10 @@ fn main() -> Result<()> {
         _ => None,
     };
 
+    let net = cli
+        .net_gvproxy
+        .map(|gvproxy_socket| NetSpec { gvproxy_socket });
+
     let spec = VmSpec {
         cpus: cli.cpus,
         ram_mib: cli.ram_mib,
@@ -238,6 +248,7 @@ fn main() -> Result<()> {
         }),
         display,
         input,
+        net,
     };
 
     krun::boot(&spec)

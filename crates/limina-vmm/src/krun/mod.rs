@@ -24,15 +24,42 @@ use vmm::vmm_config::external_kernel::{ExternalKernel, KernelFormat};
 use vmm::vmm_config::firmware::FirmwareConfig;
 use vmm::vmm_config::fs::FsDeviceConfig;
 use vmm::vmm_config::machine_config::VmConfig;
+use vmm::vmm_config::net::NetworkInterfaceConfig;
 use vmm::vmm_config::vsock::VsockDeviceConfig;
 
+use devices::virtio::net::device::VirtioNetBackend;
+
 use crate::config::{
-    BootSource, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec, VmSpec,
-    VsockSpec,
+    BootSource, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec, NetSpec,
+    VmSpec, VsockSpec,
 };
 
 /// Standard libkrun guest CID.
 const GUEST_CID: u32 = 3;
+
+// virtio-net feature bits (mirrors libkrun's C-API `NET_FEATURE_*` so we don't depend on
+// private consts). We request the IPv4 offload set `NET_COMPAT_FEATURES` — the same baseline
+// krunkit uses with gvproxy. TSO6/UFO6 are reachable but left off until verified non-corrupting
+// (see roadmap M3).
+const NET_FEATURE_CSUM: u32 = 1 << 0;
+const NET_FEATURE_GUEST_CSUM: u32 = 1 << 1;
+const NET_FEATURE_GUEST_TSO4: u32 = 1 << 7;
+const NET_FEATURE_GUEST_UFO: u32 = 1 << 10;
+const NET_FEATURE_HOST_TSO4: u32 = 1 << 11;
+const NET_FEATURE_HOST_UFO: u32 = 1 << 14;
+
+/// virtio-net offload features for the gvproxy NAT NIC (IPv4-only baseline).
+const NET_COMPAT_FEATURES: u32 = NET_FEATURE_CSUM
+    | NET_FEATURE_GUEST_CSUM
+    | NET_FEATURE_GUEST_TSO4
+    | NET_FEATURE_GUEST_UFO
+    | NET_FEATURE_HOST_TSO4
+    | NET_FEATURE_HOST_UFO;
+
+/// Guest MAC for the NAT NIC: a stable locally-administered unicast address (`0x02` =
+/// locally-administered, unicast). Fixed so the guest's DHCP lease/identity is stable
+/// across boots; gvproxy keys its lease on this.
+const NET_GUEST_MAC: [u8; 6] = [0x02, 0x67, 0x6b, 0x76, 0x6d, 0x01];
 
 // virglrenderer init flag bits (see docs/research/03 §1.3).
 #[allow(dead_code)]
@@ -101,6 +128,10 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
 
     if let Some(input) = &spec.input {
         add_input(&mut vmr, input);
+    }
+
+    if let Some(net) = &spec.net {
+        add_net(&mut vmr, net)?;
     }
 
     if let Some(console) = &spec.console {
@@ -236,6 +267,29 @@ fn add_vsock(vmr: &mut VmResources, vsock: &VsockSpec) -> Result<()> {
     })
     .map_err(|e| anyhow!("set_vsock_device: {e:?}"))?;
 
+    Ok(())
+}
+
+/// Attach the user-mode NAT NIC: a virtio-net device whose backend is a vfkit-style UNIX
+/// datagram connection to a gvproxy gateway. The connection (and the `VFKT` handshake) is
+/// established lazily when the guest activates the device during boot, so gvproxy only needs
+/// to be listening on the socket by then — the supervisor guarantees that ordering.
+///
+/// `dhcp_client = true` adds `KRUN_DHCP=1` to the cmdline; that drives libkrun's *own* guest
+/// init (the L1/krun-guest path). A stock Fedora guest ignores it and runs DHCP via
+/// NetworkManager against gvproxy's built-in DHCP server either way.
+fn add_net(vmr: &mut VmResources, net: &NetSpec) -> Result<()> {
+    vmr.add_network_interface(NetworkInterfaceConfig {
+        iface_id: "eth0".to_string(),
+        backend: VirtioNetBackend::UnixgramPath(
+            net.gvproxy_socket.clone(),
+            /* vfkit magic */ true,
+        ),
+        mac: NET_GUEST_MAC,
+        features: NET_COMPAT_FEATURES,
+    })
+    .map_err(|e| anyhow!("add_network_interface(gvproxy): {e:?}"))?;
+    vmr.dhcp_client = true;
     Ok(())
 }
 

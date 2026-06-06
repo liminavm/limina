@@ -123,6 +123,20 @@ pub enum DisplaySink {
     Window { control_fd: i32 },
 }
 
+/// A user-mode NAT network interface (M3) backed by a **gvproxy** gateway over a
+/// vfkit-style UNIX *datagram* socket. gvproxy provides DHCP, DNS and the NAT to the
+/// host network entirely in userspace — no root, no entitlement.
+///
+/// The gateway process is spawned and supervised by the limina supervisor (it must be
+/// listening on `gvproxy_socket` before the guest's virtio-net activates); the worker
+/// just connects libkrun's virtio-net backend to that socket (sending the `VFKT` magic).
+/// Presented to the guest as `eth0`.
+#[derive(Debug, Clone)]
+pub struct NetSpec {
+    /// Path to gvproxy's vfkit unixgram socket (`gvproxy -listen-vfkit unixgram://<path>`).
+    pub gvproxy_socket: PathBuf,
+}
+
 /// virtio-input devices attached to the guest (M2). A keyboard and an absolute pointer,
 /// each fed from an inherited socket the supervisor writes evdev events to. The supervisor
 /// sets these up; the worker just registers the backends on the given fds.
@@ -167,4 +181,6 @@ pub struct VmSpec {
     pub display: Option<DisplaySpec>,
     /// Optional virtio-input devices (M2). None = no keyboard/pointer.
     pub input: Option<InputSpec>,
+    /// Optional user-mode NAT NIC (M3). None = no network.
+    pub net: Option<NetSpec>,
 }
