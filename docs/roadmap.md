@@ -376,6 +376,12 @@ boot, not a black screen until DRM takes over.
 
 ## Milestone 3 — Networking (NAT, then bridged)
 
+**Pulled ahead of finishing M4 (2026-06-06):** with the coexist device booting Fedora→GNOME, the
+limiting factor for the rest of tier-2 is *guest observability/control* — confirming venus is
+selected (`vulkaninfo`), installing Mesa bits, GL→zink config. **SSH into the guest is the right tool
+for all of it**, so we do M3 NAT now and return to M4's open items with a real guest shell. (Also
+unblocks general guest work far better than a serial getty.)
+
 **Goal:** Real virtio-net NIC with outbound internet and DNS via user-mode NAT; bridged as an
 opt-in later sub-step.
 
@@ -435,6 +441,34 @@ guidance below and establishes the architecture. Two findings gate everything:
   to make software-2D 2D handling and a `VENUS|NO_VIRGL` rutabaga live in one device, routed by
   command/resource type** (2D → software-2D CPU path; 3D ctx/submit/capset → rutabaga/venus). The
   scanout present stays the software-2D CPU path initially; zero-copy present (task 4) layers on top.
+
+**Coexist device IMPLEMENTED (2026-06-06, libkrun patch 0010) — Phase 1 partially proven.** Fedora
+boots to the **full GNOME desktop with venus initialized** on the **silent** firmware
+(`LIMINA_VIRGL_FLAGS=0xC0`); the captured frame is the live rendered desktop, the guest negotiates 3D
+(CTX commands), and the full boot suite stays green (software-2D floor unaffected). The fix was
+smaller than expected: switch #1 (decouple) was already done by patch 0001 (`resource_create_2d`
+always uses sw2d); the real blocker was **fence routing** (Global-ring 2D fences were sent to the
+venus rutabaga, which rejects ctx-0 → the firmware wedge). Patch 0010 routes fences by ring +
+degrades gracefully to software-2D on renderer-init failure (no panic). Design:
+`docs/design/tier2-coexist-gpu.md`; venus orientation: memory `limina-tier2-venus`.
+
+**Open M4 items (deferred, in priority order):**
+1. **Productize:** make coexist the default (graceful degrade makes opt-in pointless) + a
+   `--gpu-software-2d` override (capture oracle, local-Terminal GPU-init hang) + split the test
+   harness (software-2D for the fast floor tests, a coexist test). Fix `num_capsets` (hardcoded 5 →
+   venus's actual count) for clean capset enumeration. The non-fatal `CTX_DETACH_RESOURCE` (0x203 →
+   ERR_UNSPEC) dmesg error.
+2. **GOP-firmware + venus (the real blocker):** `virgl_renderer_init` is a process-global singleton,
+   but patch 0007 stops+re-activates the gpu worker on the EFI→kernel reset → second init hits
+   `AlreadyInUse`. So GOP graphical boot console (Track B) and venus don't yet coexist (silent
+   firmware avoids it but loses the boot console; GOP firmware degrades the desktop to software-2D).
+   Fix = persist the Rutabaga across the worker restart (hoist to the `Gpu` device; design around the
+   fence-handler's per-activation queue/interrupt binding) or rework 0007. Currently graceful (no
+   panic, degrades).
+3. **Confirm venus is actually selected** (vs llvmpipe presented via sw2d) — Fedora's `quiet`/no-
+   `console=` cmdline hides the drm capset probe on serial. **Gated on M3 networking:** SSH into the
+   guest is the clean observation/control path (`vulkaninfo`, install Mesa bits, GL→zink config) for
+   this and all later tier-2 guest work — which is why **M3 is pulled ahead of finishing M4**.
 
 **Key tasks:**
 1. **Coexist device: software-2D (2D + present) + `VENUS|NO_VIRGL` rutabaga (3D) in one virtio-gpu.**
