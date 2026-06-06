@@ -23,6 +23,8 @@
 //!   readback. The seam is deliberately kept small so that backend slots in alongside.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::JoinHandle;
 
 use krun_display::{
     DisplayBackend, DisplayBackendBasicFramebuffer, DisplayBackendError, DisplayBackendNew,
@@ -50,7 +52,6 @@ pub struct CaptureConfig {
 /// test boot a guest, let it render, and then assert on real pixels — dimensions, byte
 /// order, and content — instead of eyeballing a window.
 pub struct CaptureBackend {
-    config: CaptureConfig,
     /// The single scanout we track: its current geometry + the host-side frame buffer
     /// libkrun fills. `None` until `configure_scanout`.
     scanout: Option<Scanout>,
@@ -58,6 +59,12 @@ pub struct CaptureBackend {
     next_frame_id: u32,
     /// Count of frames presented so far — surfaced for tests/logging.
     presented: u64,
+    /// Off-thread PNG encoder. `present_frame` only snapshots the buffer and returns; the
+    /// writer thread encodes the latest frame. Encoding a 1280x800 PNG takes ~20ms, and the
+    /// guest's `RESOURCE_FLUSH` is *synchronous* — a firmware/GRUB console that Blts a glyph
+    /// at a time would otherwise stall the boot for tens of seconds. Frames are coalesced:
+    /// the encoder always works on the most recent one, dropping any it couldn't keep up with.
+    writer: AsyncWriter,
 }
 
 struct Scanout {
@@ -75,11 +82,12 @@ impl DisplayBackendNew<CaptureConfig> for CaptureBackend {
         let config = userdata
             .cloned()
             .expect("CaptureBackend requires a CaptureConfig userdata");
+        let writer = AsyncWriter::new(config.png_path.clone());
         CaptureBackend {
-            config,
             scanout: None,
             next_frame_id: 0,
             presented: 0,
+            writer,
         }
     }
 }
@@ -146,20 +154,114 @@ impl DisplayBackendBasicFramebuffer for CaptureBackend {
             .filter(|_| (scanout_id as usize) < MAX_TRACKED_SCANOUTS)
             .ok_or(DisplayBackendError::InvalidScanoutId)?;
 
-        if let Err(e) = write_png(&self.config.png_path, scanout) {
-            // A failed capture must not wedge the guest's display pipeline — log and move on.
-            log::error!("capture: failed to write {:?}: {e:#}", self.config.png_path);
-            return Err(DisplayBackendError::InternalError);
-        }
+        // Snapshot and hand off to the encoder thread; never block the guest's flush on PNG
+        // encoding. The writer coalesces, so the file always converges on the latest frame.
+        self.writer.submit(PendingFrame {
+            width: scanout.width,
+            height: scanout.height,
+            format: scanout.format,
+            buffer: scanout.buffer.clone(),
+        });
         self.presented += 1;
-        log::debug!(
-            "capture: presented frame #{} to {:?} ({}x{})",
-            self.presented,
-            self.config.png_path,
-            scanout.width,
-            scanout.height
-        );
         Ok(())
+    }
+}
+
+/// A frame snapshot handed from the GPU worker thread to the [`AsyncWriter`].
+struct PendingFrame {
+    width: u32,
+    height: u32,
+    format: ResourceFormat,
+    /// Raw scanout bytes in `format`'s byte order; swizzled to RGBA by the writer.
+    buffer: Vec<u8>,
+}
+
+/// Shared state between `present_frame` and the encoder thread: a single coalescing slot
+/// plus a stop flag.
+struct WriterShared {
+    state: Mutex<WriterState>,
+    cv: Condvar,
+}
+
+struct WriterState {
+    /// The most recent frame awaiting encode (older un-encoded frames are dropped).
+    pending: Option<PendingFrame>,
+    stop: bool,
+}
+
+/// Encodes captured frames to PNG on a dedicated thread so a synchronous guest flush never
+/// waits on PNG encoding. Frames are coalesced to the latest; on drop the thread drains the
+/// final pending frame and joins.
+struct AsyncWriter {
+    shared: Arc<WriterShared>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl AsyncWriter {
+    fn new(path: PathBuf) -> Self {
+        let shared = Arc::new(WriterShared {
+            state: Mutex::new(WriterState {
+                pending: None,
+                stop: false,
+            }),
+            cv: Condvar::new(),
+        });
+        let worker = shared.clone();
+        let handle = std::thread::Builder::new()
+            .name("capture writer".into())
+            .spawn(move || {
+                let mut presented: u64 = 0;
+                loop {
+                    let frame = {
+                        let mut guard = worker.state.lock().unwrap();
+                        loop {
+                            if let Some(frame) = guard.pending.take() {
+                                break frame;
+                            }
+                            if guard.stop {
+                                return;
+                            }
+                            guard = worker.cv.wait(guard).unwrap();
+                        }
+                    };
+                    if let Err(e) = write_png(&path, &frame) {
+                        log::error!("capture: failed to write {path:?}: {e:#}");
+                    } else {
+                        presented += 1;
+                        log::debug!(
+                            "capture: wrote frame #{presented} to {path:?} ({}x{})",
+                            frame.width,
+                            frame.height
+                        );
+                    }
+                }
+            })
+            .expect("spawn capture writer thread");
+        AsyncWriter {
+            shared,
+            handle: Some(handle),
+        }
+    }
+
+    fn submit(&self, frame: PendingFrame) {
+        {
+            let mut guard = self.shared.state.lock().unwrap();
+            guard.pending = Some(frame); // coalesce: replace any not-yet-encoded frame
+        }
+        self.shared.cv.notify_one();
+    }
+}
+
+impl Drop for AsyncWriter {
+    fn drop(&mut self) {
+        {
+            let mut guard = self.shared.state.lock().unwrap();
+            guard.stop = true;
+        }
+        self.shared.cv.notify_one();
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -174,19 +276,19 @@ pub fn capture_backend(config: CaptureConfig) -> DisplayBackend<'static> {
     CaptureBackend::into_display_backend(Some(leaked))
 }
 
-/// Encode a scanout's BGRA/RGBA host buffer as an 8-bit RGBA PNG.
-fn write_png(path: &std::path::Path, scanout: &Scanout) -> anyhow::Result<()> {
+/// Encode a captured frame's BGRA/RGBA host buffer as an 8-bit RGBA PNG.
+fn write_png(path: &std::path::Path, frame: &PendingFrame) -> anyhow::Result<()> {
     use anyhow::Context;
 
-    let mut rgba = vec![0u8; scanout.buffer.len()];
-    swizzle_to_rgba(scanout.format, &scanout.buffer, &mut rgba);
+    let mut rgba = vec![0u8; frame.buffer.len()];
+    swizzle_to_rgba(frame.format, &frame.buffer, &mut rgba);
 
     // Write to a temp sibling then rename, so a reader never sees a half-written PNG.
     let tmp = path.with_extension("png.tmp");
     {
         let file = std::fs::File::create(&tmp).with_context(|| format!("create {tmp:?}"))?;
         let w = std::io::BufWriter::new(file);
-        let mut encoder = png::Encoder::new(w, scanout.width, scanout.height);
+        let mut encoder = png::Encoder::new(w, frame.width, frame.height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header().context("png write_header")?;

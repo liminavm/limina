@@ -68,7 +68,8 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         fi
         cd edk2
         # Restore pristine platform files (we patch them in-place below).
-        git checkout -- ArmVirtPkg/ArmVirtKrun.dsc ArmVirtPkg/ArmVirtKrun.fdf 2>/dev/null || true
+        git checkout -- ArmVirtPkg/ArmVirtKrun.dsc ArmVirtPkg/ArmVirtKrun.fdf \
+            ArmVirtPkg/Library/PlatformBootManagerLib/PlatformBm.c 2>/dev/null || true
         # Init ONLY the submodules ArmVirtKrun actually needs (idempotent — already-init'd
         # ones are skipped). Avoids the UnitTestFrameworkPkg submodules (subhook/googletest/
         # cmocka) we never build, one of which failed to clone. libfdt = FDT parsing (ArmVirt),
@@ -90,6 +91,8 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         #     HEAD still references it, which is why the shipped blob is built from an older
         #     commit — ArmVirtQemu.dsc on this same branch already dropped it).
         # (2) GOP=1: add OvmfPkg/VirtioGpuDxe so GraphicsConsoleDxe has a GOP to bind.
+        # (3) GOP=1: patch PlatformBm.c to connect the virtio-mmio GPU into ConOut before
+        #     console setup (else the non-PCI GOP never enters ConOut; blank boot console).
         echo '--- patching ArmVirtKrun platform (drop stale lib; GOP='\"\$GOP\"')'
         GOP_ENABLED=\"\$GOP\" python3 - <<'PY'
 import os
@@ -127,6 +130,69 @@ if os.environ.get('GOP_ENABLED') == '1':
     add(fdf, '  INF OvmfPkg/VirtioSerialDxe/VirtioSerial.inf\n',
         '  INF OvmfPkg/VirtioGpuDxe/VirtioGpu.inf\n')
     print('  added OvmfPkg/VirtioGpuDxe')
+
+    # (3) Connect the virtio-mmio GPU in BDS *before* ConOut is populated. ArmVirt's
+    #     PlatformBootManagerBeforeConsole only connects PCI displays before adding GOP
+    #     handles to ConOut; our (non-PCI) virtio-mmio GOP is produced later (during
+    #     EfiBootManagerConnectAll) and never enters ConOut, so the firmware/GRUB graphics
+    #     console stays blank. Add an IsVirtioGpu filter + connect it before AddOutput.
+    pbm = 'ArmVirtPkg/Library/PlatformBootManagerLib/PlatformBm.c'
+    p = open(pbm).read()
+    if 'IsVirtioGpu' not in p:
+        nl = '\r\n' if '\r\n' in p else '\n'
+        inc_anchor = '#include <IndustryStandard/Virtio095.h>' + nl
+        assert inc_anchor in p, 'Virtio095.h include anchor missing in PlatformBm.c'
+        p = p.replace(
+            inc_anchor,
+            inc_anchor + '#include <IndustryStandard/Virtio10.h>' + nl, 1)
+        rng_tail = ('  return (BOOLEAN)(VirtIo->SubSystemDeviceId ==' + nl +
+                    '                   VIRTIO_SUBSYSTEM_ENTROPY_SOURCE);' + nl + '}' + nl)
+        assert rng_tail in p, 'IsVirtioRng tail anchor missing in PlatformBm.c'
+        gpu_fn = (
+            '\n'
+            '/**\n'
+            '  This FILTER_FUNCTION checks if a handle corresponds to a Virtio GPU device at\n'
+            '  the VIRTIO_DEVICE_PROTOCOL level.\n'
+            '**/\n'
+            'STATIC\n'
+            'BOOLEAN\n'
+            'EFIAPI\n'
+            'IsVirtioGpu (\n'
+            '  IN EFI_HANDLE    Handle,\n'
+            '  IN CONST CHAR16  *ReportText\n'
+            '  )\n'
+            '{\n'
+            '  EFI_STATUS              Status;\n'
+            '  VIRTIO_DEVICE_PROTOCOL  *VirtIo;\n'
+            '\n'
+            '  Status = gBS->HandleProtocol (\n'
+            '                  Handle,\n'
+            '                  &gVirtioDeviceProtocolGuid,\n'
+            '                  (VOID **)&VirtIo\n'
+            '                  );\n'
+            '  if (EFI_ERROR (Status)) {\n'
+            '    return FALSE;\n'
+            '  }\n'
+            '\n'
+            '  return (BOOLEAN)(VirtIo->SubSystemDeviceId ==\n'
+            '                   VIRTIO_SUBSYSTEM_GPU_DEVICE);\n'
+            '}\n'
+        ).replace('\n', nl)
+        p = p.replace(rng_tail, rng_tail + gpu_fn, 1)
+        add_out = '  FilterAndProcess (&gEfiGraphicsOutputProtocolGuid, NULL, AddOutput);'
+        assert add_out in p, 'AddOutput anchor missing in PlatformBm.c'
+        connect = (
+            '  //\n'
+            '  // limina: connect the virtio-mmio GPU so VirtioGpuDxe produces its GOP before\n'
+            '  // ConOut is populated below; the mmio (non-PCI) GOP otherwise appears only\n'
+            '  // after EfiBootManagerConnectAll() and never enters ConOut (blank console).\n'
+            '  //\n'
+            '  FilterAndProcess (&gVirtioDeviceProtocolGuid, IsVirtioGpu, Connect);\n'
+            '\n'
+        ).replace('\n', nl)
+        p = p.replace(add_out, connect + add_out, 1)
+        open(pbm, 'w').write(p)
+        print('  patched PlatformBm.c: connect virtio-gpu into ConOut before console setup')
 PY
 
         echo '--- building BaseTools (incremental; no-op if already built)'

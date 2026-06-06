@@ -324,12 +324,21 @@ guests — to read logs, kill processes, poke a wedged userspace — and (B) the
    hand-off) left the firmware-era worker thread busy-looping on the freed ring, blocking the kernel's
    own frames. The worker now epolls a stop eventfd and the device's `reset()` signals+joins it before
    re-activation. With 0006+0007 the kernel's virtio-gpu driver presents the **live full-color console**
-   through software-2D (verified: 157 frames, fbcon render). Remaining **(a)**: this krun-fork
-   VirtioGpuDxe exposes a *native linear framebuffer* and issues only ONE `RESOURCE_FLUSH` (zero
-   `TransferToHost2d`), so the *firmware/GRUB* pre-kernel text never reaches the host scanout (the
-   kernel path flushes fine; only EFI/GRUB and the very-early pre-DRM kernel are black) — needs a
-   periodic/dirty flush (firmware flush-timer or host-side re-scan). Then reconcile with the M2
-   IOSurface present path.
+   through software-2D (verified: 157 frames, fbcon render). Follow-on **(a) ✅ FIXED (firmware
+   PlatformBm.c patch)**: the *firmware/GRUB* text was never drawn to the GOP. NOT a flush bug —
+   VirtioGpuDxe's GOP is Blt-only and flushes correctly per Blt; the cause was that ArmVirt's
+   `PlatformBootManagerBeforeConsole` connects only **PCI** displays before populating `ConOut`
+   (then `AddOutput`s every GOP handle), so our virtio-**mmio** GOP — produced later, during
+   `EfiBootManagerConnectAll` — never entered `ConOut`. Fix: `scripts/build-krun-efi.sh` patches
+   PlatformBm.c to `FilterAndProcess(&gVirtioDeviceProtocolGuid, IsVirtioGpu, Connect)` before
+   `AddOutput`. Now the **TianoCore logo, BdsDxe messages, and the full GRUB 2.12 menu** render on
+   the GOP (verified by capture). Also needed a host-side change: the capture backend (`limina-display`)
+   now encodes PNGs on a **background coalescing thread** — the firmware's *synchronous* per-Blt
+   `RESOURCE_FLUSH` against a ~20ms PNG-per-frame encoder otherwise stalled the GRUB menu for tens of
+   seconds (the real IOSurface window present is cheap; the kernel batches damage so it was never
+   affected). With this, a full GOP boot reaches the kernel under capture. **Track B is now
+   end-to-end: firmware → GRUB → kernel all render on the GOP.** Remaining: reconcile with the M2
+   IOSurface present path and make limina default to the GOP firmware for windowed boots (Phase 3).
 
 3. **Wire both into the harness + window UX.** A serial-console view alongside the display (a
    separate pane/window the user can open), and keep the L1 console round-trip test green as the
