@@ -12,7 +12,8 @@
 #
 # Usage: scripts/run-fedora-window.sh [debug|release]
 #   Env: LIMINA_FEDORA_IMAGE (default ./Fedora-Workstation-43.raw),
-#        LIMINA_FIRMWARE (default krunkit's KRUN_EFI.silent.fd),
+#        LIMINA_FIRMWARE (default: our GOP firmware target/krun-efi/KRUN_EFI.gop.fd if built —
+#                       so EFI/GRUB also render in the window — else krunkit's silent .fd),
 #        LIMINA_FEDORA_RAM_MIB (default 6144), LIMINA_FEDORA_CPUS (default 4),
 #        LIMINA_DISPLAY_SIZE (default 1280x800).
 set -euo pipefail
@@ -23,7 +24,19 @@ CARGO_FLAGS=()
 [ "$PROFILE" = "release" ] && CARGO_FLAGS=(--release)
 
 IMAGE="${LIMINA_FEDORA_IMAGE:-Fedora-Workstation-43.raw}"
-FIRMWARE="${LIMINA_FIRMWARE:-/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd}"
+# Prefer our GOP firmware (VirtioGpuDxe + ConOut patch) so EFI/GRUB render in the window too;
+# fall back to krunkit's silent .fd (serial-only firmware) if it hasn't been built yet.
+GOP_FIRMWARE="target/krun-efi/KRUN_EFI.gop.fd"
+if [ -n "${LIMINA_FIRMWARE:-}" ]; then
+    FIRMWARE="$LIMINA_FIRMWARE"
+elif [ -f "$GOP_FIRMWARE" ]; then
+    FIRMWARE="$GOP_FIRMWARE"
+    echo "==> using GOP firmware ($GOP_FIRMWARE) — EFI/GRUB will render in the window"
+else
+    FIRMWARE="/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd"
+    echo "==> using silent firmware (no GOP); build it for a graphical boot console:" >&2
+    echo "    GOP=1 scripts/build-krun-efi.sh   (then re-run; or set LIMINA_FIRMWARE)" >&2
+fi
 SCRATCH="Fedora-Workstation-43.scratch.raw"   # *.raw is gitignored
 RAM="${LIMINA_FEDORA_RAM_MIB:-6144}"
 CPUS="${LIMINA_FEDORA_CPUS:-4}"
