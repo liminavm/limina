@@ -49,6 +49,12 @@ pub struct WindowConfig {
     pub control_fd: RawFd,
 }
 
+/// Depth of the surface ring. Must be ≥ 2 (we alternate ids so Core Animation re-reads). 3
+/// gives ~50 ms between reuses of a given surface at 60 fps — comfortably past the window
+/// server's composite-hold (~16–33 ms), which is what kills the residual flicker. Bump it if
+/// a guest ever presents well above the display refresh.
+const SURFACE_RING: usize = 3;
+
 /// A display backend that publishes guest scanouts as shared IOSurfaces.
 pub struct WindowBackend {
     control: Option<File>,
@@ -68,11 +74,17 @@ struct Scanout {
     /// so each surface is always a complete, self-consistent frame — and we never write the
     /// on-screen one (writing both surfaces per present raced the compositor → flicker).
     canvas: Vec<u8>,
-    /// Double buffer: we write the back surface each present and tell the supervisor which
-    /// id to show, so its `CALayer.contents` changes object identity → Core Animation
-    /// actually re-reads (re-setting the *same* surface is a no-op and never refreshes).
-    surfaces: [CFRetained<IOSurfaceRef>; 2],
-    ids: [u32; 2],
+    /// Ring of surfaces: each present writes the next one and tells the supervisor which id
+    /// to show, so its `CALayer.contents` changes object identity → Core Animation re-reads
+    /// (re-setting the *same* surface is a no-op and never refreshes). The ring is deeper than
+    /// a double buffer on purpose: the supervisor's 60 Hz timer latches a surface and the
+    /// window server then samples it for ~1–2 composites (~16–33 ms), entirely decoupled from
+    /// us. With only two buffers we'd cycle back and overwrite a surface still being composited
+    /// (`IOSurfaceLock` is advisory — it doesn't block the compositor's read) → flicker. A
+    /// [`SURFACE_RING`]-deep ring keeps a surface untouched long enough for the composite to
+    /// finish before we reuse it.
+    surfaces: Vec<CFRetained<IOSurfaceRef>>,
+    ids: Vec<u32>,
     idx: usize,
     /// Force the next present to swizzle the whole frame into the canvas (a fresh canvas has
     /// no prior content for the area outside the damage rect). Cleared after the first full
@@ -145,25 +157,32 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
             .and_then(|px| px.checked_mul(ResourceFormat::BYTES_PER_PIXEL))
             .ok_or(DisplayBackendError::InvalidParam)?;
 
-        let s0 =
-            create_global_iosurface(width, height).ok_or(DisplayBackendError::InternalError)?;
-        let s1 =
-            create_global_iosurface(width, height).ok_or(DisplayBackendError::InternalError)?;
-        let ids = [IOSurfaceGetID(&s0), IOSurfaceGetID(&s1)];
+        let mut surfaces = Vec::with_capacity(SURFACE_RING);
+        for _ in 0..SURFACE_RING {
+            surfaces.push(
+                create_global_iosurface(width, height).ok_or(DisplayBackendError::InternalError)?,
+            );
+        }
+        let ids: Vec<u32> = surfaces.iter().map(|s| IOSurfaceGetID(s)).collect();
         log::info!("window: scanout 0 -> IOSurfaces {ids:?} ({width}x{height} {format:?})");
 
+        // The supervisor looks surfaces up lazily by id (one IOSurfaceLookup per `frame <id>`),
+        // so the protocol still only needs to name the initial buffer; the rest are discovered
+        // as they're shown. Keep the two-id shape for wire compatibility (id1 is ignored).
+        let id1 = ids.get(1).copied().unwrap_or(ids[0]);
         self.scanout = Some(Scanout {
             width,
             height,
             format,
             staging: vec![0u8; len],
             canvas: vec![0u8; len],
-            surfaces: [s0, s1],
+            surfaces,
             ids,
             idx: 0,
             needs_full: true,
         });
-        self.send(&format!("surface {} {} {width} {height}", ids[0], ids[1]));
+        let id0 = self.scanout.as_ref().unwrap().ids[0];
+        self.send(&format!("surface {id0} {id1} {width} {height}"));
         Ok(())
     }
 
@@ -229,11 +248,11 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
             rh,
         );
 
-        // Flip, then memcpy the FULL canvas into the now-off-screen back surface (a plain copy,
-        // no swizzle — fast). We only ever write the surface we're about to show, which is
-        // off-screen until the `frame` below; the on-screen one is never touched, so the
-        // compositor never samples a half-written surface.
-        scanout.idx ^= 1;
+        // Advance the ring, then memcpy the FULL canvas into the next surface (a plain copy,
+        // no swizzle — fast). We only ever write the surface we're about to show; by the time
+        // the ring wraps back to it, the supervisor + window server are long done compositing
+        // it, so the compositor never samples a half-written surface.
+        scanout.idx = (scanout.idx + 1) % scanout.surfaces.len();
         let i = scanout.idx;
         copy_canvas_into_surface(&scanout.surfaces[i], &scanout.canvas, width, height);
         let show_id = scanout.ids[i];
