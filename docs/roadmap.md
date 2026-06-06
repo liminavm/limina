@@ -181,9 +181,9 @@ exit 0 awaits the enhanced-tier power-button/agent path.
 
 ## Milestone 2 — Display + input (native Metal window)
 
-**Status: ✅ done (functional); closing out polish.** Real Fedora boots into a native limina window
-to the GNOME desktop, and the host keyboard + pointer drive it. What shipped, and where it differs
-from the plan below:
+**Status: ✅ done.** Real Fedora boots into a native limina window to the GNOME desktop, the host
+keyboard + pointer drive it, the present path is flicker-free, and the guest pointer renders as a
+crisp hardware cursor. What shipped, and where it differs from the plan below:
 
 - **Display is supervisor-hosted via a shared IOSurface, not an in-process CAMetalLayer.** The
   worker (`limina-vmm --display-window`) runs the native-Rust `krun_display` backend and publishes
@@ -202,11 +202,18 @@ from the plan below:
   input modifier desync + main-thread send freeze. (`74c7b9b`, `4eac11a`)
 - **Console split out to M2.5.** The interactive console (`--console-pty`, hvc0 + L1 round-trip
   test) started here but is now tracked under M2.5 below.
+- **Present path hardened + flicker eliminated.** Rect-limited swizzle into a CPU-side BGRA canvas
+  → memcpy into a 3-deep off-screen IOSurface ring (no write-while-composite tear); implicit Core
+  Animation actions disabled (`CATransaction`) to kill the per-frame fade. (`3e46c02`, `7cdcde4`,
+  `c8f7de3`, `2eaaaab`)
+- **Hardware cursor** as a dedicated supervisor overlay sublayer, driven by a now-serviced
+  virtio-gpu cursor queue (libkrun patch 0008 + additive `set_cursor`/`move_cursor` ABI). Upstream
+  libkrun never implemented the cursor queue, so the guest was compositing its pointer into the
+  scanout — the last source of cursor-area flicker. (limina `acf7e1e`, libkrun `0814184`)
 
 **Remaining to formally close M2:** verify the Done-test's *window-close → orderly guest shutdown*
 clause (stock guest: SIGKILL fallback; enhanced tier: agent); confirm the mouse-over-menu stall
-(diagnosed as a guest-side GNOME hang) is not ours; cursor stays software-composited (hardware
-cursor is M8).
+(diagnosed as a guest-side GNOME hang) is not ours.
 
 **Goal:** A native macOS window shows the guest framebuffer (2D scanout) and a keyboard + pointer
 work. Fedora boots to a graphical login (llvmpipe/software GL is fine — 3D is M4).
@@ -257,8 +264,9 @@ login field and the pointer moves and clicks. Window close triggers an orderly g
   minimal flags; affects memory footprint and whether M2 needs any M4 machinery.
 - Mode-vs-window reconciliation (guest scanout size != window size): letterbox vs scale-blit; how it
   interacts with backingScaleFactor. Latency of the gpu-thread -> main-thread present hop.
-- Cursor: UPDATE/MOVE_CURSOR are unimplemented (panic) — use a software-composited guest cursor for
-  M2; hardware cursor is an M8 patch.
+- Cursor: UPDATE/MOVE_CURSOR were unimplemented (panic) in upstream — **now serviced** (libkrun
+  patch 0008) and presented as a supervisor overlay sublayer, so the guest no longer composites its
+  pointer into the scanout.
 
 ---
 
@@ -302,8 +310,8 @@ guests — to read logs, kill processes, poke a wedged userspace — and (B) the
      `arm,primecell` node only affects the direct-kernel path, since the EFI path uses EDK2's own DT).
      L2 `boot` stays green.
 
-2. **Track B — graphical boot console (EDK2 GOP). 🚧 Phase 2 BDS hang fixed; GOP binds.** So
-   EFI/GRUB/early-kernel render into the window. We build the `KRUN_EFI` firmware ourselves
+2. **Track B — graphical boot console (EDK2 GOP). ✅ Done end-to-end: firmware → GRUB → kernel all
+   render on the GOP.** So EFI/GRUB/early-kernel render into the window. We build the `KRUN_EFI` firmware ourselves
    (`scripts/build-krun-efi.sh`, Apple `container`, slp/edk2@krun-support `ArmVirtKrun.dsc`) and add
    `OvmfPkg/VirtioGpuDxe` so the firmware's graphics console paints to our virtio-gpu scanout — which
    the software-2D libkrun patch (0001) already presents. (See `limina-efi-console`: the EFI-path

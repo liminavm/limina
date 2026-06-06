@@ -61,6 +61,9 @@ pub struct WindowBackend {
     scanout: Option<Scanout>,
     next_frame_id: u32,
     presents: u64,
+    /// The current hardware-cursor IOSurface (kept retained so the supervisor can look it up
+    /// before we replace it on the next shape change). `None` when the cursor is hidden.
+    cursor: Option<CFRetained<IOSurfaceRef>>,
 }
 
 struct Scanout {
@@ -112,6 +115,7 @@ impl DisplayBackendNew<WindowConfig> for WindowBackend {
             scanout: None,
             next_frame_id: 0,
             presents: 0,
+            cursor: None,
         }
     }
 }
@@ -259,6 +263,45 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         self.presents += 1;
         self.scanout = Some(scanout);
         self.send(&format!("frame {show_id}"));
+        Ok(())
+    }
+
+    fn set_cursor(
+        &mut self,
+        width: u32,
+        height: u32,
+        hot_x: u32,
+        hot_y: u32,
+        format: ResourceFormat,
+        buffer: &[u8],
+    ) -> Result<(), DisplayBackendError> {
+        // A zero-size image (or too-small buffer) means hide the cursor.
+        let need = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|px| px.checked_mul(4));
+        let Some(need) = need.filter(|&n| n > 0 && buffer.len() >= n) else {
+            self.cursor = None;
+            self.send("cursorhide");
+            return Ok(());
+        };
+
+        // Publish the cursor image as its own global IOSurface (the supervisor shows it in an
+        // overlay layer, never the scanout — so cursor motion never touches the present path).
+        let surface =
+            create_global_iosurface(width, height).ok_or(DisplayBackendError::InternalError)?;
+        let id = IOSurfaceGetID(&surface);
+        // Swizzle the cursor pixels into BGRA via the (tested) canvas path, then copy in.
+        let mut canvas = vec![0u8; need];
+        swizzle_rect_into_canvas(&mut canvas, buffer, format, width, 0, 0, width, height);
+        copy_canvas_into_surface(&surface, &canvas, width, height);
+
+        self.cursor = Some(surface);
+        self.send(&format!("cursor {id} {width} {height} {hot_x} {hot_y}"));
+        Ok(())
+    }
+
+    fn move_cursor(&mut self, x: u32, y: u32) -> Result<(), DisplayBackendError> {
+        self.send(&format!("cursormove {x} {y}"));
         Ok(())
     }
 }
@@ -514,6 +557,32 @@ mod tests {
         );
         assert_eq!(cpx(&canvas, w, 3, 3), [3, 3, 60, 255]); // clamped rect reached the last pixel
         assert_eq!(cpx(&canvas, w, 0, 0), [0, 0, 50, 255]); // untouched by either later swizzle
+    }
+
+    #[test]
+    fn set_cursor_publishes_surface_then_hides() {
+        let mut b = WindowBackend::new(None); // control_fd -1 → no channel, surface still made
+        assert!(b.cursor.is_none());
+
+        // A 2×2 BGRX cursor: pixel (x,y) = [x, y, 9, 0].
+        let data = staging(2, 2, 9);
+        b.set_cursor(2, 2, 1, 1, ResourceFormat::BGRX, &data)
+            .unwrap();
+        let surf = b.cursor.as_ref().expect("cursor surface published");
+        unsafe {
+            IOSurfaceLock(surf, IOSurfaceLockOptions(0), ptr::null_mut());
+            assert_eq!(px(surf, 0, 0), [0, 0, 9, 255]);
+            assert_eq!(px(surf, 1, 1), [1, 1, 9, 255]); // opaque alpha forced
+            IOSurfaceUnlock(surf, IOSurfaceLockOptions(0), ptr::null_mut());
+        }
+
+        // Zero size hides the cursor (and an empty buffer must not panic).
+        b.set_cursor(0, 0, 0, 0, ResourceFormat::BGRX, &[]).unwrap();
+        assert!(b.cursor.is_none());
+        // A too-small buffer is also treated as hide, not a panic.
+        b.set_cursor(4, 4, 0, 0, ResourceFormat::BGRX, &[0, 0, 0, 0])
+            .unwrap();
+        assert!(b.cursor.is_none());
     }
 
     #[test]

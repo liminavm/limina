@@ -45,6 +45,20 @@ pub struct Shared {
     gen: u64,
     /// Set when the worker/control channel is gone — the window should close.
     worker_exited: bool,
+
+    /// Hardware-cursor overlay state (decoupled from the scanout above; the worker publishes
+    /// the cursor as its own IOSurface and reports moves separately, so the cursor never
+    /// touches the scanout present path).
+    cursor_id: Option<u32>,
+    cursor_w: u32,
+    cursor_h: u32,
+    hot_x: u32,
+    hot_y: u32,
+    cursor_x: u32,
+    cursor_y: u32,
+    cursor_visible: bool,
+    /// Bumped on any cursor change (new image, move, or hide) — the timer re-applies.
+    cursor_gen: u64,
 }
 
 impl Shared {
@@ -90,6 +104,40 @@ pub fn spawn_reader(fd: RawFd, shared: Arc<Mutex<Shared>>) {
                         s.gen += 1;
                     }
                 }
+                Some("cursor") => {
+                    // cursor <id> <w> <h> <hot_x> <hot_y> — new cursor image + hotspot.
+                    let id = parts.next().and_then(|s| s.parse::<u32>().ok());
+                    let w = parts.next().and_then(|s| s.parse::<u32>().ok());
+                    let h = parts.next().and_then(|s| s.parse::<u32>().ok());
+                    let hx = parts.next().and_then(|s| s.parse::<u32>().ok());
+                    let hy = parts.next().and_then(|s| s.parse::<u32>().ok());
+                    if let (Some(id), Some(w), Some(h), Some(hx), Some(hy)) = (id, w, h, hx, hy) {
+                        let mut s = shared.lock().unwrap();
+                        s.cursor_id = Some(id);
+                        s.cursor_w = w;
+                        s.cursor_h = h;
+                        s.hot_x = hx;
+                        s.hot_y = hy;
+                        s.cursor_visible = true;
+                        s.cursor_gen += 1;
+                    }
+                }
+                Some("cursormove") => {
+                    // cursormove <x> <y> — reposition the cursor in scanout pixels.
+                    let x = parts.next().and_then(|s| s.parse::<u32>().ok());
+                    let y = parts.next().and_then(|s| s.parse::<u32>().ok());
+                    if let (Some(x), Some(y)) = (x, y) {
+                        let mut s = shared.lock().unwrap();
+                        s.cursor_x = x;
+                        s.cursor_y = y;
+                        s.cursor_gen += 1;
+                    }
+                }
+                Some("cursorhide") => {
+                    let mut s = shared.lock().unwrap();
+                    s.cursor_visible = false;
+                    s.cursor_gen += 1;
+                }
                 _ => {}
             }
         }
@@ -132,6 +180,12 @@ pub fn run(
     let layer = CALayer::new();
     view.setLayer(Some(&layer));
     view.setWantsLayer(true);
+    // Hardware-cursor overlay: a sublayer above the scanout contents. anchorPoint (0,0) makes
+    // its position the image's corner (we convert from the guest's top-left origin below).
+    let cursor_layer = CALayer::new();
+    cursor_layer.setAnchorPoint(NSPoint::new(0.0, 0.0));
+    cursor_layer.setHidden(true);
+    layer.addSublayer(&cursor_layer);
     window.center();
     // Required for hover (non-dragging) motion to be delivered as MouseMoved events.
     window.setAcceptsMouseMovedEvents(true);
@@ -147,6 +201,10 @@ pub fn run(
     // Cache looked-up surfaces by id (the worker reuses a small fixed set, its double buffer).
     let cache: RefCell<std::collections::HashMap<u32, CFRetained<IOSurfaceRef>>> =
         RefCell::new(std::collections::HashMap::new());
+    // Cursor overlay per-timer state: the last applied cursor gen and the currently-shown
+    // cursor surface (id + retained ref, so it stays alive while displayed).
+    let last_cursor_gen = Cell::new(0u64);
+    let cursor_surf: RefCell<Option<(u32, CFRetained<IOSurfaceRef>)>> = RefCell::new(None);
 
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         let (exited, gen, show_id, width, height) = {
@@ -160,6 +218,28 @@ pub fn run(
             unsafe { libc::kill(-worker_pid, libc::SIGKILL) };
             std::process::exit(0);
         }
+
+        // Cursor overlay first — it has its own gen so a move (or hide) applies even when the
+        // scanout hasn't produced a new frame.
+        let cur = {
+            let s = shared.lock().unwrap();
+            (
+                s.cursor_gen,
+                s.cursor_visible,
+                s.cursor_id,
+                s.cursor_w,
+                s.cursor_h,
+                s.hot_x,
+                s.hot_y,
+                s.cursor_x,
+                s.cursor_y,
+            )
+        };
+        if cur.0 != last_cursor_gen.get() {
+            last_cursor_gen.set(cur.0);
+            apply_cursor(&cursor_layer, &mut cursor_surf.borrow_mut(), &cur, height);
+        }
+
         if gen == last_gen.get() {
             return;
         }
@@ -307,6 +387,50 @@ fn capture_layer(layer: &CALayer, width: u32, height: u32, path: &str) {
             Err(e) => log::error!("capture: create {path} failed: {e}"),
         }
     }
+}
+
+/// Apply the latest cursor state to the overlay sublayer. `cur` is
+/// `(gen, visible, id, w, h, hot_x, hot_y, x, y)`; `slot` holds the currently-shown cursor
+/// surface (id + retained ref) so it survives across calls and is only re-looked-up when the
+/// image id changes. `scanout_h` flips the guest's top-left origin into the layer's
+/// bottom-left coordinate space.
+#[allow(clippy::type_complexity)]
+fn apply_cursor(
+    layer: &CALayer,
+    slot: &mut Option<(u32, CFRetained<IOSurfaceRef>)>,
+    cur: &(u64, bool, Option<u32>, u32, u32, u32, u32, u32, u32),
+    scanout_h: u32,
+) {
+    let (_gen, visible, id, w, h, hot_x, hot_y, x, y) = *cur;
+    CATransaction::begin();
+    CATransaction::setDisableActions(true);
+    match id {
+        Some(id) if visible && w > 0 && h > 0 => {
+            // Re-look-up only on an image change; the worker keeps the surface alive until the
+            // next shape change, and we retain our own ref in `slot`.
+            if slot.as_ref().map(|(sid, _)| *sid != id).unwrap_or(true) {
+                match IOSurfaceLookup(id) {
+                    Some(s) => {
+                        set_layer_surface(layer, &s);
+                        layer.setBounds(NSRect::new(
+                            NSPoint::new(0.0, 0.0),
+                            NSSize::new(w as f64, h as f64),
+                        ));
+                        *slot = Some((id, s));
+                    }
+                    None => log::warn!("window: cursor IOSurfaceLookup({id}) failed"),
+                }
+            }
+            // Guest position is top-left origin with the hotspot inside the image; the parent
+            // layer is bottom-left origin and the cursor's anchor is its own (0,0) corner.
+            let px = x as f64 - hot_x as f64;
+            let py = scanout_h as f64 - (y as f64 - hot_y as f64) - h as f64;
+            layer.setPosition(NSPoint::new(px, py));
+            layer.setHidden(false);
+        }
+        _ => layer.setHidden(true),
+    }
+    CATransaction::commit();
 }
 
 /// Set an IOSurface as the layer's contents (it's a CF object accepted by `contents`).
