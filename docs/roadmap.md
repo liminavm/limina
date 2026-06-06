@@ -414,16 +414,37 @@ subnet reachable from another host.
 
 ---
 
-## Milestone 4 — 3D acceleration (Venus)
+## Milestone 4 — 3D acceleration (Venus) — a.k.a. "tier-2"
 
 **Goal:** Hardware-accelerated 3D in the guest: GNOME runs on real GPU, GL apps work via Mesa zink.
 
+**Venus-viability spike done (2026-06-06, `spikes/venus-viability`)** — it corrects the flag
+guidance below and establishes the architecture. Two findings gate everything:
+- **macOS venus flag set is `VENUS | NO_VIRGL` (0xC0)**, optionally `| THREAD_SYNC | ASYNC_FENCE_CB`
+  (0x1C2) — **NOT** the in-tree Linux gui_vm `0x343`. Confirmed by sweep + crash report: `USE_EGL`
+  (0x1) must be **off** (no EGL on macOS → `virgl_renderer_init` returns -1); `NO_VIRGL` (0x80) must
+  be **on** (else virglrenderer runs the GL path `vrend_renderer_init → create_gl_context` which
+  **SIGSEGVs** — no GL context on Apple Silicon). `RENDER_SERVER` is unavailable (no
+  `virgl_render_server` binary) but harmless unused — venus runs in-process against MoltenVK.
+- **Tier-2 is a "coexist" device, not a flag flip.** A `VENUS|NO_VIRGL` rutabaga serves only Vulkan
+  3D contexts; it does **not** implement the 2D commands (`RESOURCE_CREATE_2D`/`TRANSFER_TO_HOST_2D`/
+  `SET_SCANOUT`/backing) that the firmware GOP, efifb, fbcon, and the scanout *present* all use. Our
+  software-2D patch (0001) serves exactly those, but is today **mutually exclusive** with the
+  renderer (`software_2d=true ⟹ rutabaga=None`, `virtio_gpu.rs:389`). So booting Fedora with venus
+  flags wedges (firmware 2D cmd → ERR_UNSPEC → `ASSERT Gop.c(109)`). **The foundational M4 patch is
+  to make software-2D 2D handling and a `VENUS|NO_VIRGL` rutabaga live in one device, routed by
+  command/resource type** (2D → software-2D CPU path; 3D ctx/submit/capset → rutabaga/venus). The
+  scanout present stays the software-2D CPU path initially; zero-copy present (task 4) layers on top.
+
 **Key tasks:**
-1. **Reuse upstream Venus(Vulkan) -> MoltenVK -> Metal.** Build libkrun `--features gpu` and pass
-   `virgl_flags = USE_EGL | VENUS | RENDER_SERVER | THREAD_SYNC | USE_ASYNC_FENCE_CB` (matching the
-   in-tree gui_vm macOS config; EGL/RENDER_SERVER are effective no-ops on macOS virglrenderer). Do
-   NOT set `NO_VIRGL`, `DRM`, or `USE_EXTERNAL_BLOB`. Host virgl **GL** is a dead end on Apple
-   Silicon — desktop GL apps go through in-guest Mesa **zink** (GL->VK->Venus).
+1. **Coexist device: software-2D (2D + present) + `VENUS|NO_VIRGL` rutabaga (3D) in one virtio-gpu.**
+   Build libkrun `--features gpu` (already on). Patch the gpu device so `software_2d` no longer means
+   "rutabaga = None" — instead always create a `VENUS|NO_VIRGL` rutabaga for 3D context commands
+   while routing 2D resource/scanout commands through the software-2D CPU path. Also make the init
+   *fallback* land on software-2D (today it falls back to a `NO_VIRGL`-only rutabaga that still can't
+   do 2D). Advertise the right feature bits so the guest negotiates 3D/venus (capsets) without losing
+   the 2D scanout. Host virgl **GL** is a dead end on Apple Silicon — desktop GL apps go through
+   in-guest Mesa **zink** (GL->VK->Venus).
 2. **Verify/patch virglrenderer Apple blob support.** Confirm our virglrenderer carries the Apple
    blob patches (`RUTABAGA_MEM_HANDLE_TYPE_APPLE = 0x0006`, `VIRGL_RENDERER_BLOB_FD_TYPE_APPLE`,
    `virgl_renderer_resource_get_map_ptr`). If Homebrew's lacks them, build the libkrun-flavored fork
@@ -456,10 +477,16 @@ readback** in a libkrun trace and present is driven from an IOSurface-backed tex
 holds at the display refresh at Retina resolution.
 
 **Risks / spike first:**
-- **Spike #1: does Homebrew virglrenderer carry the Apple blob patches?** Decides whether MAP_BLOB
-  and Venus host-visible memory work at all. Test with `examples/gpu_vulkan.c` early.
-- Does Fedora 43 Mesa 25.2 auto-select venus and does zink-on-venus accelerate GNOME/Firefox or fall
-  back to llvmpipe? Verify in the actual `.raw`.
+- ~~**Spike #1: does Homebrew virglrenderer carry the Apple blob patches + does venus init?**~~
+  **Partly answered (`spikes/venus-viability`):** the `slp/krun` bottle carries the Apple-blob API
+  (`virgl_renderer_resource_get_map_ptr`, `VIRGL_RENDERER_BLOB_FD_TYPE_APPLE`) and venus is compiled
+  in (links MoltenVK); venus **initializes** with `VENUS|NO_VIRGL`. MAP_BLOB host-visible memory at
+  runtime is still unproven (no 3D context has run yet).
+- **Next spike (guest-side, now the gating unknown): does Fedora 43 Mesa select venus + accelerate?**
+  Can't be tested until the coexist device (task 1) exists, since the guest only sees venus once the
+  host offers the capset. Cheap pre-check: is the Mesa venus driver (`libvulkan_virtio.so`) even
+  present in the `.raw`? If not, it's a guest-side enhanced-tier component to install. Then: does
+  zink-on-venus accelerate GNOME/Firefox or fall back to llvmpipe?
 - **Spike before committing task 4's ABI:** IOSurface ↔ virglrenderer/MoltenVK interop — can a
   scanout blob be exported as an IOSurface-backed `MTLTexture` the renderer writes into directly?
   If not, task 4's `present_texture` design changes shape. Measure the M2 per-frame
