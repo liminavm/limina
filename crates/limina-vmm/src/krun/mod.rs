@@ -73,23 +73,37 @@ const VIRGLRENDERER_VENUS: u32 = 1 << 6;
 const VIRGLRENDERER_NO_VIRGL: u32 = 1 << 7;
 #[allow(dead_code)]
 const VIRGLRENDERER_USE_ASYNC_FENCE_CB: u32 = 1 << 8;
-#[allow(dead_code)]
 const VIRGLRENDERER_RENDER_SERVER: u32 = 1 << 9;
 
 /// virgl_flags for the **coexist** virtio-gpu (tier-2, the default): the macOS Venus mask.
 ///
-/// `VENUS | NO_VIRGL` — and ONLY these — per `spikes/venus-viability` (verified by sweep +
-/// crash report on M1 Max / macOS 26.5):
+/// `VENUS | NO_VIRGL | RENDER_SERVER` per `spikes/venus-viability` + the virglrenderer-1.3.0
+/// relink (M4; M1 Max / macOS 26.5):
 /// - `USE_EGL` (0x1) must be OFF: there is no EGL on macOS, so `virgl_renderer_init` returns -1.
 /// - `NO_VIRGL` (0x80) must be ON: otherwise virglrenderer runs the GL path
 ///   (`vrend_renderer_init → create_gl_context`) which SIGSEGVs — no GL context on Apple Silicon.
-/// - `RENDER_SERVER` (0x200) is unavailable (the brew virglrenderer ships no render-server
-///   binary) but harmless unused — Venus runs in-process against MoltenVK.
+/// - `RENDER_SERVER` (0x200) is now REQUIRED. Our virglrenderer is upstream 1.3.0 built with
+///   `render-server-mode=thread` (in-process render-server thread), and 1.3.0 only initializes
+///   Venus when this flag is set (`virglrenderer.c`: `proxy_renderer_init` is gated on it; the
+///   inline-Venus path the old slp `0.10.4e-krunkit` bottle used was upstream-dropped). Without
+///   it the guest sees the static Venus capset but `vkEnumeratePhysicalDevices` finds no GPU.
+///
+/// - `THREAD_SYNC` (0x2) + `ASYNC_FENCE_CB` (0x100) are REQUIRED with the 1.3.0 render-server
+///   model. Venus now runs in a separate render-server thread, so per-context fences complete
+///   ASYNCHRONOUSLY: the proxy sets up a fence eventfd (`THREAD_SYNC`) and a sync thread that
+///   calls our `write_context_fence` callback (`ASYNC_FENCE_CB`) → rutabaga `fence_handler` →
+///   guest IRQ. Without them the proxy never retires venus fences, so the guest hangs forever in
+///   `glFinish`/`vkQueueWaitIdle` (the slp `0.10.4e` inline model retired fences synchronously on
+///   the caller thread, so it did not need these).
 ///
 /// This is NOT libkrun's Linux `gui_vm` mask (`0x343`). With these flags the software-2D path
 /// still serves all 2D/scanout commands (it is unconditional); Venus adds 3D contexts on top.
 /// Override at runtime with `LIMINA_VIRGL_FLAGS` (e.g. for experiments).
-const GPU_VENUS_FLAGS: u32 = VIRGLRENDERER_VENUS | VIRGLRENDERER_NO_VIRGL;
+const GPU_VENUS_FLAGS: u32 = VIRGLRENDERER_VENUS
+    | VIRGLRENDERER_NO_VIRGL
+    | VIRGLRENDERER_THREAD_SYNC
+    | VIRGLRENDERER_USE_ASYNC_FENCE_CB
+    | VIRGLRENDERER_RENDER_SERVER;
 
 /// Translate a [`VmSpec`] into a libkrun [`VmResources`]. No VM is started yet.
 pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
