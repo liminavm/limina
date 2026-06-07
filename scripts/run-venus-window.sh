@@ -46,6 +46,9 @@ DISK="$(mktemp -d)/fedora-venus.raw"
 cp -c "$DISK_SRC" "$DISK"
 trap 'rm -rf "$(dirname "$DISK")"' EXIT
 
+# Guard: a worker linked to Homebrew virglrenderer silently degrades to software-2D (no venus).
+"$(dirname "$0")/check-virgl-link.sh" "target/$PROFILE/limina-vmm"
+
 echo "==> enhanced/Venus tier: $KERNEL + $DISK_SRC (cow clone), coexist Venus + NAT, ${CPUS}vcpu/${RAM}MiB/$SIZE"
 echo "    Once the GNOME desktop is up, in ANOTHER terminal run:"
 echo "        scripts/venus-gl-test.sh            # glmark2 on zink→Venus, prints GL_RENDERER"

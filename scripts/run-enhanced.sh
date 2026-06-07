@@ -38,6 +38,9 @@ DISK="$(mktemp -d)/fedora-enhanced.raw"
 cp -c "$DISK_SRC" "$DISK"
 trap 'rm -rf "$(dirname "$DISK")"' EXIT
 
+# Guard: a worker linked to Homebrew virglrenderer silently degrades to software-2D (no venus).
+"$(dirname "$0")/check-virgl-link.sh" "target/$PROFILE/limina-vmm"
+
 echo "==> enhanced tier: $KERNEL + $DISK_SRC (cow clone), coexist venus + NAT"
 exec "target/$PROFILE/limina" --vmm-bin "target/$PROFILE/limina-vmm" \
     --kernel "$KERNEL" \

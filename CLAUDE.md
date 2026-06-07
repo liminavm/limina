@@ -100,6 +100,20 @@ tracks claims still needing verification.
   deliberately **skips** the HVF tests (no codesign / sandbox) — green there means
   almost nothing for boot behavior, so always run `scripts/test-boot.sh` before
   declaring something works. It needs `dangerouslyDisableSandbox` (hits `hv_vm_*`).
+- **The worker MUST link our `third_party/virgl-prefix` virglrenderer, not Homebrew's.**
+  This is a costly silent trap: a plain `cargo build -p limina-vmm` with no `PKG_CONFIG_PATH`
+  used to relink the worker against Homebrew's stock `virglrenderer` (whose `.pc` pkg-config
+  finds by default). That build lacks venus render-server support → on boot
+  `virgl_renderer_init` returns -1 and the GPU **silently degrades to software-2D**: the VM
+  still runs (2D/SSH/llvmpipe desktop all fine) but venus never enumerates in the guest
+  (`vkEnumeratePhysicalDevices → ERROR_INITIALIZATION_FAILED`), which reads like a venus/guest
+  bug and burns hours. `build.rs` now prepends our prefix to `PKG_CONFIG_PATH` and prints a
+  `cargo:warning` naming the resolved lib, so plain builds are safe and a wrong link is loud.
+  Still: **verify with `otool -L target/debug/limina-vmm | grep virgl`** (must show
+  `third_party/virgl-prefix/…`); if the worker log shows `degrading to software-2D` /
+  `ComponentError(-1)` after `virgl_flags`, check the link before suspecting venus. To debug
+  venus host init, bump `crates/limina-vmm/src/main.rs` `filter_level(Info)` → `Debug` (it
+  overrides `RUST_LOG`).
 - **fmt + clippy stay clean.** A pre-commit hook (`.githooks/pre-commit`, enabled via
   `scripts/setup-hooks.sh` → `core.hooksPath`) runs `cargo fmt --check` on every workspace
   we own and `cargo clippy --workspace -- -D warnings` on the shipped code (+ the guest at

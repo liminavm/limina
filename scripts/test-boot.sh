@@ -25,6 +25,9 @@ cargo build ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina -p lim
 echo "==> codesigning the worker (hypervisor entitlement)"
 crates/limina-vmm/sign.sh "$PROFILE"
 
+echo "==> checking the worker links our virglrenderer (venus guard)"
+scripts/check-virgl-link.sh "target/$PROFILE/limina-vmm"
+
 echo "==> building the L1 test guest (kernel + rootfs)"
 scripts/build-test-guest.sh >/dev/null
 
