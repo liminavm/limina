@@ -86,6 +86,30 @@ Open follow-ups to pin down next (host-only where possible):
 - Does a *guest*-allocated venus host-visible blob need to be IOSurface-backed too, or only
   the scanout image? (Readback/#28 is separate — that's crossing C, not this.)
 
+## Phase 1a (2026-06-07): the real vkr allocator, proven host-side
+
+Implemented `vkr_mtl_iosurface_alloc`/`_free` + `struct vkr_mtl_iosurface` in the
+virglrenderer fork (`src/venus/vkr_metal_helpers.{m,h}`, commit `59d02c6`; linked the
+IOSurface apple framework in `meson.build`). It creates a **`kIOSurfaceIsGlobal`** IOSurface
++ an IOSurface-backed `StorageModeShared` MTLTexture (usage ShaderRead|RenderTarget) — the
+backing a venus scanout VkImage will import via `VkImportMetalTextureInfoEXT`.
+
+`vkr_alloc_test.m` links the **real** built object (`venus_vkr_metal_helpers.m.o`) and runs
+the full chain:
+```
+alloc: id=6 256x256 bpr=1024 tex=0x… io=0x…
+after GPU clear, IOSurfaceLookup(6) base=BGRA(204,102,51,255) <-- MATCH (zero-copy)
+VERDICT: real vkr_mtl_iosurface_alloc -> global IOSurface + GPU render visible via IOSurfaceLookup: PASS
+```
+So the allocator yields a global IOSurface, the GPU renders into it, and **`IOSurfaceLookup(id)`
+— exactly how the limina supervisor resolves a surface for present — finds it with the GPU
+write visible zero-copy.** That closes Phase 1's allocator (B). Next (Phase 1b): capture what
+the guest actually issues for a venus scanout (the CRUX in
+`docs/design/tier2-iosurface-zerocopy-present.md`) before wiring the vkr image-create import
+(A) + resolve API (C).
+
 ## Reproduce
-`bash spikes/moltenvk-iosurface/run.sh` (builds `probe.m`, points the loader at MoltenVK).
-`TILING=0 ./probe` to compare OPTIMAL vs LINEAR for the export-direction experiment.
+- `bash spikes/moltenvk-iosurface/run.sh` (builds `probe.m`, points the loader at MoltenVK).
+  `TILING=0 ./probe` to compare OPTIMAL vs LINEAR for the export-direction experiment.
+- `bash spikes/moltenvk-iosurface/run-vkr-alloc.sh` (build virglrenderer first via
+  `scripts/build-virglrenderer.sh`) — tests the real `vkr_mtl_iosurface_alloc`.

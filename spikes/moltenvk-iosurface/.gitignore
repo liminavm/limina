@@ -1,3 +1,4 @@
 probe
+vkr_alloc_test
 *.o
 *.dSYM/
