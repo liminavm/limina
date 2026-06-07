@@ -27,9 +27,9 @@ REPO="$PWD"
 
 # Pin to the mesa main commit the in-guest /opt/mesa-zink was built from (2026-06-07).
 MESA_COMMIT="${MESA_COMMIT:-3515c52e8cf31549b6068ef43c23c89830b6db46}"
-# gitlab.freedesktop.org is Anubis-bot-blocked; the container has network but prefer a
-# mirror. Override with MESA_GIT if needed.
-MESA_GIT="${MESA_GIT:-https://github.com/Mesa3D/mesa.git}"
+# Anubis blocks gitlab.freedesktop.org's *web UI*, NOT the git protocol — `git clone` over
+# https works there (that's how the in-guest /opt/mesa-zink was built). Override with MESA_GIT.
+MESA_GIT="${MESA_GIT:-https://gitlab.freedesktop.org/mesa/mesa.git}"
 
 OUT="$REPO/target/test-guest/mesa-zink"
 mkdir -p "$OUT"
