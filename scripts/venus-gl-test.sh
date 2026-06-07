@@ -24,6 +24,11 @@ SSH=(ssh -p "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null 
 "${SSH[@]}" true 2>/dev/null || { echo "guest not reachable on :$PORT — is run-venus-window.sh up?" >&2; exit 1; }
 
 # zink-on-Venus environment (Mesa loaders -> /opt/mesa-zink, Vulkan ICD -> guest virtio/venus).
+# VN_PERF=no_*_feedback forces Venus's sync onto the virtio-gpu per-context ring fence (which our
+# macOS eventfd shim retires, see virglrenderer src/virgl_util.c) instead of its host-visible
+# *feedback* buffers (semaphore/fence/event/query). The feedback buffers depend on the guest seeing
+# host GPU writes to a host-visible blob, which is not yet coherent on the 16 KiB hv_vm_map path —
+# without this, glFinish/vkWaitSemaphores hang. With it, GL apps render fully (glmark2 ~445).
 read -r -d '' ZINK_ENV <<'EOF' || true
 export LD_LIBRARY_PATH=/opt/mesa-zink/lib64
 export LIBGL_DRIVERS_PATH=/opt/mesa-zink/lib64/dri
@@ -31,6 +36,7 @@ export __EGL_VENDOR_LIBRARY_DIRS=/opt/mesa-zink/share/glvnd/egl_vendor.d
 export MESA_LOADER_DRIVER_OVERRIDE=zink
 export GALLIUM_DRIVER=zink
 export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json
+export VN_PERF=no_semaphore_feedback,no_fence_feedback,no_event_feedback,no_query_feedback
 EOF
 # Desktop session env so windowed apps appear on the GNOME wayland display (uid 1000).
 read -r -d '' DESK_ENV <<'EOF' || true
@@ -40,8 +46,7 @@ export DISPLAY=:0
 EOF
 
 # Renderer check via a SURFACELESS EGL probe (no display/Xauth, ONE context) — a single
-# glGetString binds zink→Venus and reports the renderer WITHOUT a full draw/glFinish, so it
-# returns even while the fence path (#27) is unfixed. (We avoid glxinfo — it needs an Xauth
+# glGetString binds zink→Venus and reports the renderer. (We avoid glxinfo — it needs an Xauth
 # cookie over SSH — and eglinfo, which spins up many contexts and can wedge the GPU.)
 echo "==> [1/2] GL renderer string (zink→Venus binds?)"
 "${SSH[@]}" "$ZINK_ENV; cat > /tmp/limina-eglprobe.c <<'PROBE'
@@ -91,8 +96,9 @@ rc=$?
 set -e
 if [ "$rc" = 124 ]; then
   echo
-  echo "!! '$APP' did not finish in ${TIMEOUT}s. If it produced NO 'GL_RENDERER ... Venus' line,"
-  echo "   this is the known async-fence hang (task #27): context creates on Venus but command"
-  echo "   submission / fence wait stalls. Rendering isn't done yet — expected until #27 lands."
+  echo "!! '$APP' was still running at the ${TIMEOUT}s timeout (normal for --run-forever / a"
+  echo "   continuous app — it was reaped). A 'GL_RENDERER ... Venus' line above means it rendered."
+  echo "   A true HANG (no output, uninterruptible) would mean VN_PERF feedback-disable didn't take"
+  echo "   — confirm the env above is exported into the guest."
 fi
 echo "==> a 'renderer = ... Virtio-GPU Venus (Apple M1 Max)' line means GL is on the GPU."

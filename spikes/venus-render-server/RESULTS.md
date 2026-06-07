@@ -102,16 +102,41 @@ Result (with `GPU_VENUS_FLAGS=0x3C2`): the full chain now fires —
 XXX found fence` (guest `signal_used_queue` IRQ delivered). **Confirmed on a real app's Venus context**
 (vkr names it `context 3 (glmark2-wayland)`). The #27 fence-retirement blocker is fixed.
 
-### Still-open hang (narrower; next)
-GL apps don't run to completion yet:
-- `glmark2-wayland`: zink→Venus screen creates, ~2 fences retire with guest IRQ, then it stalls before
-  any FPS (no further frames) — likely the wayland present path / continuous-frame loop, not fence retire.
-- `eglrender` (FBO clear + `glReadPixels`, ctx=4): `RENDERER=zink…Venus` prints, FBO complete, hangs at
-  the **readback** (host→guest `TRANSFER_FROM_HOST_3D` / blob map), a path the desktop/glmark2 don't use.
-- `CtxCreate→ComponentError(22)` spam is the EXPECTED capset-2 GL-probe rejection under NO_VIRGL (the
-  venus capset-4 context succeeds; ignore unless it correlates with a real failure).
-Next: isolate one app on a fresh VM, trace its single ctx's fences + transfers; check whether the stall
-is the present/readback transfer vs multi-fence continuous rendering.
+## Finding 6 — #27 RESOLVED: GL renders end-to-end on the Apple GPU (Venus feedback was the hang)
+
+The remaining `glFinish`/`glmark2` stall was **not** the ring-fence path (Finding 5 fixed that). It was
+Venus's **feedback** mechanism, a *second*, independent sync path. Venus has two ways to retire work:
+1. **virtio-gpu per-context ring fences** — proxy `submit_fence` → render-server `retire_fence` → eventfd
+   → proxy sync thread → `write_context_fence` → rutabaga `fence_handler` → guest IRQ. (Finding 5's fix.)
+2. **Feedback buffers** — `vn_WaitSemaphores`/`vn_update_sync_result` (vn_queue.c) **poll a host-written
+   counter in a host-visible blob** with `nanosleep` backoff. zink's `glFinish` uses THIS (vkWaitSemaphores),
+   not ring fences.
+
+A staged `eglrender` localised the hang to `vn_update_sync_result`'s poll loop — the guest sat in
+`hrtimer_nanosleep` (userspace poll), never a DRM ioctl. The host-visible feedback blob is **not coherent
+on the 16 KiB `hv_vm_map` path** (the guest never sees the host's counter write), so the poll spins forever.
+
+**Fix/workaround:** `VN_PERF=no_semaphore_feedback,no_fence_feedback,no_event_feedback,no_query_feedback`
+forces Venus onto path (1) — which our eventfd shim retires correctly. With it:
+```
+GL_RENDERER = zink Vulkan 1.2(Virtio-GPU Venus (Apple M1 Max) (MOLTENVK))
+glmark2-wayland: 18/18 scenes render, FPS 32–51, glmark2 Score ~40   (llvmpipe scores ~5 → real GPU)
+glFinish / glReadPixels / vkQueueWaitIdle all return, guest_exit=0    (no hang)
+```
+**zink→Venus→MoltenVK→Metal renders the GL desktop on the Apple M1 Max GPU. Gap A / task #27 done.**
+The flags are wired into `scripts/venus-gl-test.sh`.
+
+### Open follow-ups (not blockers)
+- **Host-visible blob coherency on the 16 KiB `hv_vm_map` path** is the *real* root cause behind both the
+  feedback hang (worked around above) and the black `glReadPixels` (`PIXEL=0,0,0,0`). Rendering output and
+  the feedback counter are GPU/host-CPU writes the guest doesn't observe through its mapped view. Fixing it
+  re-enables Venus's faster feedback path AND fixes readback/`TRANSFER_FROM_HOST_3D`. Likely a
+  MoltenVK managed-vs-shared storage / cache-invalidate or a `hv_vm_map` cache-attribute issue.
+- **Perf:** a single windowed VM measured Score ~40; an earlier run measured ~445. The 445 was not cleanly
+  reproduced (warm guest shader cache and/or fewer competing VMs — at one point **11 stale capture VMs**
+  from un-cleaned `run-enhanced.sh` runs were contending for the GPU). Treat ~40 as the verified floor and
+  investigate the window present-path vs cache warmth before quoting a headline number.
+- `CtxCreate→ComponentError(22)` spam is the EXPECTED capset-2 GL-probe rejection under NO_VIRGL — ignore.
 
 NOTE: all debug instrumentation has been reverted; `GPU_VENUS_FLAGS=0x3C2` is now correct + required and
 kept (uncommitted, limina side).

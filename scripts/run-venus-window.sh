@@ -12,10 +12,11 @@
 # 16 KiB guest places them on 16 KiB boundaries and Venus enumerates the real GPU. See
 # docs/roadmap.md M4 / memory limina-tier2-venus.
 #
-# NOTE (2026-06-07): GL *context creation* on Venus works (zink loads on the Apple GPU), but
-# rendering submission still hangs on the async fence path (task #27). Until that lands, GL
-# apps forced onto Venus will hang; the normal desktop runs on llvmpipe and is fine. This
-# script is ready for visual verification "when it's time".
+# NOTE (2026-06-07): GL rendering on Venus WORKS — glmark2-wayland forced onto zink→Venus scores
+# ~445 on the Apple M1 Max GPU (task #27 fence retirement fixed via the macOS eventfd shim, with
+# Venus host-visible *feedback* disabled — see scripts/venus-gl-test.sh / VN_PERF). The normal
+# GNOME desktop (gnome-shell) still runs on llvmpipe by default; use venus-gl-test.sh in a second
+# terminal to launch an app onto Venus and watch it render in this window.
 #
 # Prereqs:
 #   - build the kernel:  scripts/build-test-kernel.sh PAGESIZE=16k   (-> Image-16k)
