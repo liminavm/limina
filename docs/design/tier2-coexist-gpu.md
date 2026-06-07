@@ -3,6 +3,14 @@
 Status: design (2026-06-06). Grounds the M4 work after the `spikes/venus-viability` gate.
 See `docs/roadmap.md` M4 and the spike RESULTS for why this shape is forced.
 
+> **Update (2026-06-07):** the coexist device shipped (libkrun patches 0001/0009/0010/0011) and
+> **venus rendering now works on the enhanced-tier 16 KiB-page kernel** (`vulkaninfo` enumerates
+> the M1 Max GPU). The host-visible-blob blocker turned out to be the 16k-host/4k-guest `hv_vm_map`
+> alignment mismatch (a guest-side problem fixed by the 16k kernel), **not** the venus context-create
+> or capset issues an earlier note suspected. Current status + next steps (accelerated present, GL→zink)
+> live in `docs/roadmap.md` M4 item 3. This document is the original design rationale; trust the
+> roadmap for live status.
+
 ## Goal
 
 One virtio-gpu device that simultaneously:

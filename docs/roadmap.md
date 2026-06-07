@@ -530,6 +530,13 @@ degrades gracefully to software-2D on renderer-init failure (no panic). Design:
      (guest Vulkan apps still fall to llvmpipe). Acceptable for the baseline/degraded case. This is
      a real "own the stack" project (virglrenderer fork + ANGLE integration), parked as a potential
      improvement to the stock-4k degraded tier — the enhanced-tier 16 KiB kernel is the primary path.
+   - **VERY-LOW-PRIORITY / unlikely: native-context (vdrm) backed by Metal.** mesa probes a native
+     context (the guest's own GPU driver forwarding submissions to a host DRM device for the *same*
+     GPU — what the `could not connect vdrm` / `Asahi native context` vkcube lines are) before falling
+     back to venus. It assumes a **Linux host with the Apple AGX/Asahi kernel driver**; on macOS there
+     is no DRM and Metal won't accept raw AGX command buffers, so a Metal-backed vdrm ≈ reimplementing
+     the AGX UAPI on Metal — enormous and fighting Metal's abstraction. Recorded only as an eventual
+     curiosity; **venus is our path.** Not a real consideration for accelerated present.
 
 **Key tasks:**
 1. **Coexist device: software-2D (2D + present) + `VENUS|NO_VIRGL` rutabaga (3D) in one virtio-gpu.**

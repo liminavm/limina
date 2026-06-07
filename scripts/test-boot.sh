@@ -31,6 +31,9 @@ scripts/build-test-guest.sh >/dev/null
 echo "==> running boot tests (LIMINA_HVF_TESTS=1)"
 # Build the test crate with the same profile; limina-test doesn't depend on the worker so
 # this won't rebuild/unsign it. --test-threads=1: one VM at a time.
+# `venus` is the enhanced-tier (16 KiB kernel) 3D test; it SKIPs instantly unless
+# `Image-16k` exists (build with `scripts/build-test-kernel.sh PAGESIZE=16k`), and when it
+# does it runs a full Fedora-on-custom-kernel boot (~minutes) to confirm venus enumerates.
 LIMINA_HVF_TESTS=1 cargo test ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina-test \
-    --test l1_boot --test l1_vsock --test l1_display --test l1_console --test l1_serial --test boot --test net \
+    --test l1_boot --test l1_vsock --test l1_display --test l1_console --test l1_serial --test boot --test net --test venus \
     -- --nocapture --test-threads=1 "$@"

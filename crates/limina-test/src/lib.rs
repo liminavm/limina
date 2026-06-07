@@ -117,6 +117,15 @@ pub enum Boot {
         rootfs: PathBuf,
         cmdline: String,
     },
+    /// Direct kernel + a virtio-blk disk holding the root fs + cmdline — the **enhanced
+    /// tier**: our custom (e.g. 16 KiB-page) kernel direct-booting a real distro disk with
+    /// no initramfs (all drivers built in). The cmdline names the root device (e.g.
+    /// `root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs`).
+    KernelDisk {
+        kernel: PathBuf,
+        disk: PathBuf,
+        cmdline: String,
+    },
 }
 
 /// A vsock channel to the guest agent: the host listens on `socket_path`, the guest
@@ -132,6 +141,11 @@ pub struct VsockCfg {
 pub struct DisplayCfg {
     pub width: u32,
     pub height: u32,
+    /// Force the software-2D-only GPU (`--gpu-software-2d`). True for the deterministic 2D
+    /// capture oracle (no venus/Metal dep); false to run the default **coexist** device so
+    /// venus 3D is available (the enhanced-tier path). A display is required for the GPU
+    /// device to exist at all, even when a test only probes 3D over SSH.
+    pub software_2d: bool,
 }
 
 /// Which guest console device an interactive (`console_input`) session is wired through.
@@ -257,6 +271,57 @@ impl GuestConfig {
         })
     }
 
+    /// Enhanced-tier config: our custom **16 KiB-page** kernel direct-booting the in-repo
+    /// Fedora image's btrfs root (no initramfs), with the coexist (venus) GPU and NAT so a
+    /// test can SSH in and confirm venus. A 16 KiB guest places host-visible virtio-gpu blobs
+    /// on 16 KiB boundaries, so `hv_vm_map` accepts them and venus works (vs the stock 4 KiB
+    /// guest, which degrades to llvmpipe) — see memory `limina-tier2-venus`.
+    ///
+    /// Build the kernel first: `scripts/build-test-kernel.sh PAGESIZE=16k`. Overrides:
+    /// `LIMINA_TEST_KERNEL_16K` (default `target/test-guest/kernel/Image-16k`), `LIMINA_TEST_DISK`,
+    /// plus the usual `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the
+    /// 16 KiB kernel or the disk is missing.
+    pub fn enhanced_fedora_from_env() -> Result<GuestConfig> {
+        let kernel = std::env::var("LIMINA_TEST_KERNEL_16K")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| repo_root().join("target/test-guest/kernel/Image-16k"));
+        anyhow::ensure!(
+            kernel.exists(),
+            "16 KiB kernel not found at {kernel:?}; build it with \
+             `scripts/build-test-kernel.sh PAGESIZE=16k` (or set LIMINA_TEST_KERNEL_16K)"
+        );
+        let disk = match std::env::var("LIMINA_TEST_DISK") {
+            Ok(p) => PathBuf::from(p),
+            Err(_) => repo_root().join("Fedora-Workstation-43.raw"),
+        };
+        anyhow::ensure!(
+            disk.exists(),
+            "guest disk not found at {disk:?} (set LIMINA_TEST_DISK)"
+        );
+
+        Ok(GuestConfig {
+            limina_bin: resolve_bin("limina", "LIMINA_BIN")?,
+            vmm_bin: resolve_bin("limina-vmm", "LIMINA_VMM_BIN")?,
+            boot: Boot::KernelDisk {
+                kernel,
+                disk,
+                // vda3 = Fedora's btrfs root (subvol=root); selinux=0 keeps a custom-kernel
+                // boot simple; ttyAMA0 surfaces the kernel/login banner in the console capture.
+                cmdline: "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 \
+                          console=ttyAMA0"
+                    .to_string(),
+            },
+            vsock: None,
+            display: None,
+            cpus: 4,
+            ram_mib: 4096,
+            shutdown_grace: Duration::from_secs(grace_from_env()),
+            console_input: false,
+            console_channel: ConsoleChannel::Virtio,
+            net: false,
+        })
+    }
+
     /// Attach a user-mode NAT NIC. The supervisor spawns a gvproxy gateway and captures its
     /// `-debug` log; assert on it via [`Guest::wait_for_gateway_log`] (DHCP lease, outbound).
     pub fn with_net(mut self) -> GuestConfig {
@@ -269,7 +334,24 @@ impl GuestConfig {
     /// captured PNG. The L1 init draws a deterministic pattern to `/dev/fb0` and forces a
     /// flush, so the present is explicit rather than relying on fbcon's deferred I/O.
     pub fn with_display(mut self, width: u32, height: u32) -> GuestConfig {
-        self.display = Some(DisplayCfg { width, height });
+        self.display = Some(DisplayCfg {
+            width,
+            height,
+            software_2d: true,
+        });
+        self
+    }
+
+    /// Attach a virtio-gpu display running the default **coexist** device (software-2D 2D +
+    /// venus 3D) — i.e. *without* `--gpu-software-2d`, so venus is available. Use when a test
+    /// needs the GPU device present to probe 3D (e.g. `vulkaninfo` over SSH) rather than to
+    /// assert on captured 2D pixels. See [`GuestConfig::enhanced_fedora_from_env`].
+    pub fn with_coexist_display(mut self, width: u32, height: u32) -> GuestConfig {
+        self.display = Some(DisplayCfg {
+            width,
+            height,
+            software_2d: false,
+        });
         self
     }
 
@@ -499,6 +581,24 @@ impl Guest {
                     .arg("--cmdline")
                     .arg(cmdline);
             }
+            Boot::KernelDisk {
+                kernel,
+                disk,
+                cmdline,
+            } => {
+                // The guest mounts this disk rw as its root (and NetworkManager needs to write),
+                // so boot a writable APFS COW clone — never mutate the shared image. (Same
+                // reasoning as the Firmware+net path above.)
+                let clone = scratch.join("disk.raw");
+                cow_clone(disk, &clone)
+                    .with_context(|| format!("cow-cloning {disk:?} for an enhanced-tier boot"))?;
+                cmd.arg("--kernel")
+                    .arg(kernel)
+                    .arg("--cmdline")
+                    .arg(cmdline)
+                    .arg("--disk")
+                    .arg(&clone);
+            }
         }
         // Console capture. Two channels, by use case:
         //  - Interactive (`with_console_input`): route over virtio-console (`hvc0`). The
@@ -536,11 +636,13 @@ impl Guest {
                 cmd.arg("--display-capture")
                     .arg(&png)
                     .arg("--display-size")
-                    .arg(format!("{}x{}", d.width, d.height))
-                    // The capture oracle is a 2D pixel test: force the software-2D GPU so it's
-                    // deterministic and independent of venus/Metal (the worker default is the
-                    // coexist device). A coexist/3D test would opt back in explicitly.
-                    .arg("--gpu-software-2d");
+                    .arg(format!("{}x{}", d.width, d.height));
+                // The 2D capture oracle forces the software-2D GPU so it's deterministic and
+                // independent of venus/Metal (the worker default is the coexist device). A
+                // coexist/3D test (`with_coexist_display`) leaves venus on.
+                if d.software_2d {
+                    cmd.arg("--gpu-software-2d");
+                }
                 Some(png)
             }
             None => None,
@@ -794,6 +896,42 @@ impl Guest {
             }
             std::thread::sleep(Duration::from_millis(500));
         }
+    }
+
+    /// Run `remote_cmd` in the guest over SSH (through gvproxy's `127.0.0.1:2222 → guest:22`
+    /// forward) and return its stdout. Logs in as the in-image `claude` user via the host's
+    /// default key (passwordless — see memory `limina-fedora-access`); host-key checks are
+    /// disabled (the forward reuses 127.0.0.1:2222 across boots). Requires [`GuestConfig::with_net`]
+    /// and a booted guest running sshd — call [`Guest::wait_for_ssh_banner`] first. Errors if
+    /// ssh exits non-zero (stderr is included in the message).
+    pub fn ssh_exec(&self, remote_cmd: &str) -> Result<String> {
+        let out = Command::new("ssh")
+            .args([
+                "-p",
+                "2222",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                "-o",
+                "LogLevel=ERROR",
+                "claude@127.0.0.1",
+                remote_cmd,
+            ])
+            .output()
+            .context("spawning ssh to the guest (127.0.0.1:2222)")?;
+        if !out.status.success() {
+            bail!(
+                "ssh `{remote_cmd}` failed ({}):\n{}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
     /// Feed `line` (a newline is appended) to the guest serial console input. Requires
