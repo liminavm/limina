@@ -38,6 +38,16 @@ use anyhow::{anyhow, bail, Context, Result};
 /// `LIMINA_FIRMWARE`. This is the same firmware the M1 boot spikes used.
 const DEFAULT_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
 
+/// The guest image the tests boot from, by default — a **frozen CoW snapshot** of the dev
+/// image, NOT the live `Fedora-Workstation-43.raw` (which evolves as we provision/develop the
+/// guest). Created once with `cp -c Fedora-Workstation-43.raw Fedora-Workstation-43.test.raw`
+/// (APFS clone: instant, shares blocks; each side copies only what it writes, so the dev image
+/// can change without perturbing tests). Refresh the fixture by re-cloning. Per-run the harness
+/// still makes its own writable clone of this for net/disk-root boots. Override: `LIMINA_TEST_DISK`.
+/// NOTE: this image carries a baked-in `claude` test user + SSH key (see memory
+/// `limina-fedora-access`); making that provisioning reproducible is a tracked follow-up.
+const DEFAULT_TEST_DISK: &str = "Fedora-Workstation-43.test.raw";
+
 /// gvproxy's default inbound port-forward: `127.0.0.1:2222 → 192.168.127.2:22`. With the
 /// well-known vfkit MAC the guest gets the static `.2` lease, so this reaches its sshd.
 const FORWARDED_SSH_ADDR: &str = "127.0.0.1:2222";
@@ -206,7 +216,7 @@ impl GuestConfig {
 
         let disk = match std::env::var("LIMINA_TEST_DISK") {
             Ok(p) => PathBuf::from(p),
-            Err(_) => repo_root().join("Fedora-Workstation-43.raw"),
+            Err(_) => repo_root().join(DEFAULT_TEST_DISK),
         };
         anyhow::ensure!(
             disk.exists(),
@@ -292,7 +302,7 @@ impl GuestConfig {
         );
         let disk = match std::env::var("LIMINA_TEST_DISK") {
             Ok(p) => PathBuf::from(p),
-            Err(_) => repo_root().join("Fedora-Workstation-43.raw"),
+            Err(_) => repo_root().join(DEFAULT_TEST_DISK),
         };
         anyhow::ensure!(
             disk.exists(),
