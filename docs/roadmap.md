@@ -538,6 +538,56 @@ degrades gracefully to software-2D on renderer-init failure (no panic). Design:
      the AGX UAPI on Metal — enormous and fighting Metal's abstraction. Recorded only as an eventual
      curiosity; **venus is our path.** Not a real consideration for accelerated present.
 
+**ZERO-COPY END-TO-END PLAN (2026-06-07) — the strategic frame for the remaining M4 work.**
+GL now renders on the M1 Max GPU (#21/#27 done: `zink→venus→vkr 1.3.0→MoltenVK→Metal`, glmark2 18/18,
+commit 52fad19) — but that is only the *first* of four data crossings. "End-to-end zero-copy"
+decomposes into four, and the desktop milestone needs **B+D**, not C:
+
+| # | Crossing | Status | Copy today? |
+|---|----------|--------|-------------|
+| A | guest app → GPU (uploads, draws) | ✅ works (#21/#27) | zero-copy (blob map) |
+| B | rendered image → macOS display (scanout present) | ⚠️ works via **full-framebuffer CPU readback/frame** | **copy** (`flush_resource`→`read_2d_resource`) |
+| C | GPU → guest CPU readback (`glReadPixels`, screenshots, **venus feedback**) | ❌ #28 | black-holed |
+| D | mutter can run on venus at all (image *creation*) | ❌ #30 | fails before any copy |
+
+**The load-bearing insight: B and D are the same missing capability, and IOSurface is the macOS
+dmabuf.** D fails because mutter wants a *dmabuf-exportable* image for KMS scanout and venus/MoltenVK
+can't make one (we strip `external_memory_dma_buf`/`drm_format_modifier`). B is slow because the
+scanout resource is an ordinary venus image the host must CPU-read every frame. On macOS the export
+currency is **IOSurface**, which MoltenVK *does* speak (`VK_EXT_metal_objects`, `MTLTexture` from
+`IOSurface`). So one fix closes both: make venus "exportable images" resolve host-side to an
+**IOSurface-backed `MTLTexture`** → mutter's `vkCreateImage(extHandleTypes=…)` succeeds (D), and
+`SET_SCANOUT_BLOB` references that IOSurface for libkrun to hand straight to `CALayer.contents` /
+`CAMetalLayer` with no readback (B becomes zero-copy). This is task 4 below, now also the **#30 unblock**.
+We own every layer the seam crosses — venus/vkr, MoltenVK (open), libkrun, the present path.
+
+**#28 (crossing C) is separate and narrower — coherency, not copy — and below B/D for the desktop.**
+Proven: host CPU IS coherent with GPU writes (`mtl-shm-coherency`); the guest `hv_vm_map` view reads
+stale; guest-side `dc ivac/civac/cvac` (PAN cleared) does NOT reveal the write (`coherency-civac-mod`)
+→ **guest-invalidate-alone is dead** (GPU write lives in the Apple SLC, inside the host CPU's domain
+but beyond the guest mapping's PoC). C only matters for guest-side readback (glReadPixels/screenshots/
+WSI/feedback), NOT the host-side desktop present. ⭐ **ZERO-COPY ONLY — the memcpy/transfer model is
+REJECTED.** Remaining zero-copy candidates for C: (b) host clean-to-PoC + guest invalidate (cheapest,
+untested — extend `coherency-civac-mod` with a HOST `dc cvac` before the guest invalidate); (d2) back
+host-visible blobs from within the guest-RAM-coherent region instead of the shm window above RAM;
+(d1) HVF stage-2 cache/shareability attrs on `hv_vm_map` (RWX-only today — needs an HVF capability).
+
+**What we need to LEARN, ranked by leverage:**
+1. **(gates everything) MoltenVK IOSurface/`MTLTexture`-backed `VkImage`** — does our MoltenVK 1.4.1
+   give vkr an IOSurface-backed texture via `VK_EXT_metal_objects`? Host-only spike (extend the
+   `venus-render-server` harness, no VM boot). Decides the entire B+D present architecture — do it
+   *before* writing present-path code.
+2. **mutter's exact requirement** — which external-memory ext + image props make mutter pick its
+   GBM/KMS-scanout path on venus, and whether an IOSurface-backed venus image satisfies it (#30/D).
+3. **`SET_SCANOUT_BLOB` → IOSurface → `CALayer.contents`** present path in libkrun (today
+   `worker.rs:392` panics) — crossing B, correctness-first then zero-copy.
+4. **#28 host-clean-to-PoC spike** (crossing C, cheap) — host `dc cvac` then guest invalidate+read.
+5. **Productize the win** (#26): deliver `/opt/mesa-zink` into the guest image (DIAG-free), put apps
+   on venus by default; clean perf baseline (#29: `pkill` stale capture VMs first).
+
+Suggested order: finish #26 → spike #1 (MoltenVK-IOSurface, decides architecture) → build B+D present
+on its result → #28 host-clean spike in parallel. Memory: `limina-tier2-venus`.
+
 **Key tasks:**
 1. **Coexist device: software-2D (2D + present) + `VENUS|NO_VIRGL` rutabaga (3D) in one virtio-gpu.**
    Build libkrun `--features gpu` (already on). Patch the gpu device so `software_2d` no longer means

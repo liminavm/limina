@@ -74,10 +74,12 @@ container run --rm \
     ninja -C build-zink
     DESTDIR=/tmp/stage ninja -C build-zink install
 
-    # Export the install tree (becomes /opt/mesa-zink in the guest).
-    rm -rf /out/*
-    cp -a /tmp/stage/opt/mesa-zink/. /out/
+    # Export the install tree (becomes /opt/mesa-zink in the guest). Tar FIRST (the
+    # canonical delivery artifact), then mirror into /out — cp -a cannot set times on
+    # the bind-mount root, so tolerate that (files copy fine; only the root mtime fails).
     tar -C /tmp/stage/opt -cf - mesa-zink | zstd -19 -o /out/../mesa-zink.tar.zst -f
+    rm -rf /out/*
+    cp -a /tmp/stage/opt/mesa-zink/. /out/ 2>/dev/null || cp -rp /tmp/stage/opt/mesa-zink/. /out/ 2>/dev/null || true
     ls -la /out/lib64/dri/ | grep -iE "zink|dril" || true
   '
 echo "==> done: $OUT (+ target/test-guest/mesa-zink.tar.zst). Deliver to the guest /opt/mesa-zink."
