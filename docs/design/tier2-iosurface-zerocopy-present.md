@@ -146,12 +146,20 @@ The IOSurface image path (A) must coexist with this — we satisfy the guest's e
 
 ## Phasing (each independently testable, host-side first)
 
-1. **vkr IOSurface image backing (A+B+C).** Make an exportable venus image IOSurface-backed and
-   add the resolve API. Test host-side first by extending the `moltenvk-iosurface` spike / a vkr
-   unit harness (no VM): create image via the vkr path, confirm a global IOSurface id comes out.
-2. **#30 unblock (D′+A).** Boot mutter on venus; confirm `vkCreateImage` for scanout now
-   succeeds (no `VK_ERROR_FEATURE_NOT_PRESENT`) and gnome-shell stays on venus (no llvmpipe
-   crash-loop). May not be zero-copy-presented yet — correctness first.
+1. ✅ **DONE — vkr IOSurface image backing (A+B).** Allocator `vkr_mtl_iosurface_alloc` (fork
+   `59d02c6`, proven host-side, `spikes/moltenvk-iosurface/vkr_alloc_test.m`). Fix A
+   (`vkr_image.c` fork `c99448b`): on `__APPLE__`, a vkCreateImage carrying
+   `VkExternalMemoryImageCreateInfo` (handleTypes!=0) with a mappable format → allocate a global
+   IOSurface, drop the external info, chain `VkImportMetalTextureInfoEXT`; track on
+   `struct vkr_image.mtl_iosurface`, free on destroy. (C resolve API still TODO — needs part-(b).)
+2. ✅ **DONE (image-create) — #30 Vulkan wall cleared.** Booted mutter-on-venus (2026-06-07):
+   all 14 external scanout `vkCreateImage` now return **ret=0** (IOSurface-backed) instead of -8,
+   and gnome-shell loads `libvulkan_virtio`. **NEW WALL (separate): mutter's KMS/GBM scanout** —
+   `Failed to initialize accelerated iGPU/dGPU framebuffer sharing: KMS CRTC doesn't support GBM
+   format` → gnome-shell `ABRT`, *before* it reaches SET_SCANOUT_BLOB. This is a virtio-gpu KMS
+   plane/format-negotiation issue (guest kernel + how the device advertises scanout formats),
+   distinct from the Vulkan image path. Part-(b) (image→SET_SCANOUT_BLOB linkage) is still
+   unobservable until this KMS wall is cleared. **→ next investigation.**
 3. **Zero-copy present (D+E).** Implement SET_SCANOUT_BLOB + `present_surface`; publish vkr's
    IOSurface id; remove the readback for IOSurface scanouts. Verify no `read_2d_resource` per
    frame (trace) and that windowed perf rises toward the headless ~440 (#29).
