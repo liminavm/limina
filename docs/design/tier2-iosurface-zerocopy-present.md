@@ -117,13 +117,21 @@ The IOSurface image path (A) must coexist with this — we satisfy the guest's e
 
 ## Open design questions (resolve when implementing — host-side where possible)
 
-1. **Resource→IOSurface linkage for a blob-backed scanout.** mutter's KMS scanout is a
-   virtio-gpu **blob** resource created from the venus image's *memory* (dma_buf on Linux). We
-   need the chain "scanout resource_id → venus image → its IOSurface" to resolve at
-   SET_SCANOUT_BLOB time. Decide whether to tag the IOSurface on the image, on the exported
-   memory/blob, or on the virgl_resource — and confirm what RESOURCE_CREATE_BLOB / blob_mem the
-   guest actually issues for a venus scanout (capture it from a booted guest). **This is the
-   crux of the implementation.**
+1. **~~Resource→IOSurface linkage~~ — PARTLY RESOLVED by the Phase 1b capture (2026-06-07,
+   `spikes/moltenvk-iosurface/scanout-capture.md`).** The failing scanout image is a single,
+   precise type: `VK_FORMAT_B8G8R8A8_UNORM` (BGRA8 — our IOSurface format), display-sized
+   (1280×800), OPTIMAL, `MUTABLE_FORMAT`, with `VkExternalMemoryImageCreateInfo handleTypes=0x1`
+   (OPAQUE_FD) + `VkImageFormatListCreateInfo`. It fails **host-side** at vkCreateImage with
+   `VK_ERROR_FEATURE_NOT_PRESENT` (host MoltenVK lacks external_memory_fd, which we strip). So
+   **fix A's trigger = on `__APPLE__`, vkCreateImage with a `VkExternalMemoryImageCreateInfo`
+   (handleTypes != 0)** — narrow (only this one image type; the other ~325 format-list-only
+   images already succeed). The scanout image uses a **dedicated allocation** (`vkAllocateMemory
+   dedImage=…, exportHandleTypes=0`) and does **NOT** go through `export_blob` — so the resolve
+   (C) is **image→IOSurface directly** (track the id on `struct vkr_image`), not via the blob
+   channel. STILL OPEN: part (b) — how the image links to the SET_SCANOUT_BLOB resource — is
+   unobservable until A makes the create succeed; capture it in Phase 2. Also handle
+   `MUTABLE_FORMAT`: the IOSurface MTLTexture must allow the format-list view formats (BGRA8
+   UNORM+sRGB; `MTLTextureUsagePixelFormatView`).
 2. **Multi-buffering / tearing.** Today's backend uses a 3-deep IOSurface ring so the
    compositor never samples a half-written surface (iosurface.rs comments ~:83). With venus
    rendering directly, rely on the guest's own swapchain/double-buffering, or have vkr rotate a
