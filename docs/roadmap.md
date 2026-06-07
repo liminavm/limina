@@ -483,20 +483,34 @@ degrades gracefully to software-2D on renderer-init failure (no panic). Design:
    Fix = persist the Rutabaga across the worker restart (hoist to the `Gpu` device; design around the
    fence-handler's per-activation queue/interrupt binding) or rework 0007. Currently graceful (no
    panic, degrades).
-3. ~~Confirm venus is actually selected~~ **ANSWERED (2026-06-06, via M3 SSH): venus 3D is BROKEN —
-   not selected.** SSH'd into the guest (M3 done) and read the worker GPU debug under the default
-   coexist GPU. The guest kernel sees venus (capset id 4, size 156; `+context_init`), but **every
-   `CtxCreate` fails `ErrRutabaga(ComponentError(22))` (EINVAL)** → no venus context ever exists →
-   the desktop runs on software (llvmpipe/lavapipe). Phase 1's "venus inits / negotiates 3D" was
-   over-optimistic (host `virgl_renderer_init` ok; guest per-context create fails). Worse,
-   `ResourceMapBlob → ErrUnspec` + host `Error removing/adding memory map` — venus blob mapping
-   destabilizes the guest (SSH dropped mid-run; the software-2D path is rock-solid). **Prime suspect:
-   capset advertisement (item 1's `num_capsets` hardcoded 5 + capset table not derived from the real
-   venus rutabaga) → the guest's venus context-create params mismatch → EINVAL. This makes item 1's
-   capset fix LOAD-BEARING for venus, not cosmetic.** Re-evaluate keeping coexist as the *default*
-   until venus works (graceful degrade covers init failure, not these per-context EINVALs + blob-map
-   instability). Details: memory `limina-tier2-venus`. (This finding is exactly why M3 was pulled
-   ahead.)
+3. ~~Confirm venus is actually selected~~ **ANSWERED (2026-06-07, via M3 SSH + empirical diagnostics):
+   venus context-create WORKS; the blocker is the 16 KiB-host / 4 KiB-guest blob map.** The
+   2026-06-06 "venus BROKEN at CtxCreate" conclusion was a **misread, now disproven**:
+   - Logged the actual `context_init`/capset at `rutabaga_core.create_context`. The
+     `ComponentError(22)/EINVAL` failures were for **capset_id=2 (VIRGL2 = native OpenGL)** — which
+     we intentionally reject under `NO_VIRGL` — while the **venus context (capset_id=4) SUCCEEDS**
+     (`create_context OK ... context_init=0x4 capset_id=4`). venus is selected and contexts are
+     created. So virglrenderer/venus are NOT at fault (a virglrenderer fork is not needed here), and
+     the `num_capsets`-hardcoded-5 suspicion is **cosmetic after all**, not load-bearing.
+   - The real failure is the **host-visible blob map**: after the venus ctx, RESOURCE_MAP_BLOB →
+     `hv_vm_map(map_ptr, guest_addr, resource.size)` returns **HV_BAD_ARGUMENT (0xfae94003)** →
+     guest `OUT_OF_HOST_MEMORY` → `vkCreateInstance` fails → degrade to llvmpipe. `hv_vm_map`
+     requires host addr, guest addr, AND size to be 16 KiB-multiples. The first venus blob is
+     `0x21000` (size%16k≠0); rounding size up host-side fixes that blob, but the **next** blob then
+     lands at guest `base+0x21000` (guest%16k≠0) — **the stock 4 KiB guest packs host-visible blobs
+     at 4 KiB granularity, and two blobs sharing one 16 KiB host page cannot be mapped
+     independently.** No host-only fix exists (the size round-up was tried and reverted: moot on a
+     16k guest, harmful on a 4k guest where it overlaps the neighbor). Kept only libkrun patch
+     **0011** (log `hv_vm_map` failures with the alignment breakdown — the diagnostic that found
+     this). The guest **stays up and degrades cleanly** (the 2026-06-06 "destabilizes the guest"
+     was not reproduced).
+   - **THE FIX IS GUEST-SIDE (enhanced tier):** a **16 KiB-page guest kernel** makes venus blobs
+     16 KiB-sized AND 16 KiB-spaced → `hv_vm_map` works with zero host changes (or, smaller: patch
+     the guest virtio-gpu blob allocator to 16 KiB-align while keeping 4 KiB pages). On **stock
+     4 KiB Fedora**, accelerated venus is not achievable on a 16k host → llvmpipe is the accepted
+     degraded baseline (two-tier guarantee holds: it boots and is usable). Re-evaluate whether
+     coexist stays the *default* for stock guests (today they pay venus-attempt cost then degrade).
+     Details: memory `limina-tier2-venus`. (This is exactly why M3/SSH was pulled ahead.)
 
 **Key tasks:**
 1. **Coexist device: software-2D (2D + present) + `VENUS|NO_VIRGL` rutabaga (3D) in one virtio-gpu.**
