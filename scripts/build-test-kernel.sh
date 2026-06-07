@@ -76,6 +76,11 @@ CONFIG_FRAMEBUFFER_CONSOLE=y
 CONFIG_INPUT=y
 CONFIG_INPUT_EVDEV=y
 CONFIG_VIRTIO_INPUT=y
+# Enhanced tier (tier-2 venus): boot a real distro root off the virtio-blk disk without an
+# initramfs — needs the root fs + net drivers built in. btrfs is Fedora's root fs (subvol=root
+# on vda3); virtio-net carries gvproxy NAT/SSH. (Harmless for the minimal L1 guest.)
+CONFIG_BTRFS_FS=y
+CONFIG_VIRTIO_NET=y
 FRAG
 echo "$PAGE_CONFIG" >> "$OUT/limina.fragment"   # page-size choice (4k default / 16k)
 
@@ -117,7 +122,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         ./scripts/kconfig/merge_config.sh -m .config /out/limina.fragment
         make ARCH=arm64 olddefconfig
         echo '--- verifying key options survived'
-        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS CONFIG_DRM_VIRTIO_GPU CONFIG_FRAMEBUFFER_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_INPUT_EVDEV; do
+        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS CONFIG_DRM_VIRTIO_GPU CONFIG_FRAMEBUFFER_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_INPUT_EVDEV CONFIG_BTRFS_FS CONFIG_VIRTIO_NET; do
             grep -q \"^\$opt=y\" .config || { echo \"MISSING \$opt\" >&2; exit 1; }
         done
         grep -q '^$PAGE_CONFIG' .config || { echo 'MISSING $PAGE_CONFIG' >&2; exit 1; }

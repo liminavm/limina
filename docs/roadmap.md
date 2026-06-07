@@ -504,13 +504,32 @@ degrades gracefully to software-2D on renderer-init failure (no panic). Design:
      **0011** (log `hv_vm_map` failures with the alignment breakdown — the diagnostic that found
      this). The guest **stays up and degrades cleanly** (the 2026-06-06 "destabilizes the guest"
      was not reproduced).
-   - **THE FIX IS GUEST-SIDE (enhanced tier):** a **16 KiB-page guest kernel** makes venus blobs
-     16 KiB-sized AND 16 KiB-spaced → `hv_vm_map` works with zero host changes (or, smaller: patch
-     the guest virtio-gpu blob allocator to 16 KiB-align while keeping 4 KiB pages). On **stock
-     4 KiB Fedora**, accelerated venus is not achievable on a 16k host → llvmpipe is the accepted
-     degraded baseline (two-tier guarantee holds: it boots and is usable). Re-evaluate whether
-     coexist stays the *default* for stock guests (today they pay venus-attempt cost then degrade).
-     Details: memory `limina-tier2-venus`. (This is exactly why M3/SSH was pulled ahead.)
+   - **THE FIX IS GUEST-SIDE (enhanced tier) — ✅ PROVEN 2026-06-07:** a **16 KiB-page guest kernel**
+     makes venus blobs 16 KiB-sized AND 16 KiB-spaced → `hv_vm_map` works with zero host changes.
+     Built `Image-16k` (`scripts/build-test-kernel.sh PAGESIZE=16k`; added `BTRFS_FS`+`VIRTIO_NET` so
+     it direct-boots Fedora's btrfs root, no initramfs) and booted Fedora 43 on it:
+     `limina --kernel Image-16k --cmdline "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw
+     selinux=0 console=ttyAMA0" --disk <cow> --net --display-capture`. Result: **GNOME desktop
+     renders; `vulkaninfo` enumerates `Virtio-GPU Venus (Apple M1 Max)` (driver venus, Mesa
+     26.1.0-devel); 0 `hv_vm_map` failures.** (Smaller alt not needed now: patch the guest
+     virtio-gpu blob allocator to 16 KiB-align while keeping 4 KiB pages.) On **stock 4 KiB Fedora**,
+     accelerated venus stays unachievable on a 16k host → llvmpipe degraded baseline (two-tier
+     guarantee holds); ANGLE-backed virgl GL is the parked accel idea for that tier (above).
+     Remaining for the enhanced tier: WSI/swapchain for accelerated *present* (`vkcube` selected
+     venus but lacks `VK_KHR_swapchain`), GL→zink routing, and productizing a 16k boot profile +
+     kernel delivery. Details: memory `limina-tier2-venus`. (This is exactly why M3/SSH was pulled
+     ahead.)
+   - **DEGRADED-TIER ACCELERATION IDEA (future, not blocking): GL via virgl + ANGLE.** virgl (GL,
+     capset VIRGL2) uses a **copy/transfer** memory model (guest provides backing pages, host copies
+     via `TRANSFER_TO_HOST`) — **no `hv_vm_map` of host memory into the guest**, so it is immune to
+     the 16k/4k blob problem and works on a **stock 4 KiB guest**. We can't use virgl's *native* GL
+     path on Apple Silicon (no GL → `vrend` SIGSEGVs, hence `NO_VIRGL`), BUT we could back
+     virglrenderer's GL with **ANGLE (GL→Vulkan→MoltenVK→Metal)** to give the degraded tier real
+     GPU-accelerated **GL** without venus's host-visible-blob requirement. Cost: heavy translation
+     stack (GL→virgl→ANGLE→Vulkan→Metal) — much less efficient than zero-copy venus, and GL-only
+     (guest Vulkan apps still fall to llvmpipe). Acceptable for the baseline/degraded case. This is
+     a real "own the stack" project (virglrenderer fork + ANGLE integration), parked as a potential
+     improvement to the stock-4k degraded tier — the enhanced-tier 16 KiB kernel is the primary path.
 
 **Key tasks:**
 1. **Coexist device: software-2D (2D + present) + `VENUS|NO_VIRGL` rutabaga (3D) in one virtio-gpu.**
