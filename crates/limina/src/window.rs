@@ -178,6 +178,11 @@ pub fn run(
     // Layer-HOSTING (not layer-backed): we own the layer, so AppKit never draws over the
     // IOSurface we set as its contents. Order matters: setLayer before setWantsLayer.
     let layer = CALayer::new();
+    // The guest scanout is XRGB (opaque; the X/alpha channel is "don't care" and Venus/zink
+    // leaves it 0). Our IOSurface is BGRA, so without this Core Animation alpha-blends the
+    // surface and a 0 alpha makes the whole desktop composite transparent (reads as black/
+    // white depending on the backdrop). Mark the scanout layer opaque so CA ignores alpha.
+    layer.setOpaque(true);
     view.setLayer(Some(&layer));
     view.setWantsLayer(true);
     // Hardware-cursor overlay: a sublayer above the scanout contents. anchorPoint (0,0) makes
@@ -195,7 +200,7 @@ pub fn run(
     // Per-timer state (main thread only).
     let last_gen = Cell::new(0u64);
     let geom = Cell::new((0u32, 0u32));
-    // Diagnostic: render the layer to a PNG after a few frames (no screen-record perm).
+    // Diagnostic: dump the presented IOSurface to a PNG (no screen-record perm). LIMINA_WINDOW_CAPTURE.
     let capture_path = std::env::var("LIMINA_WINDOW_CAPTURE").ok();
     let applies = Cell::new(0u64);
     // Cache looked-up surfaces by id (the worker reuses a small fixed set, its double buffer).
@@ -284,12 +289,12 @@ pub fn run(
         // Distinct object each frame (the worker alternates ids) → CA re-reads.
         set_layer_surface(&layer, surface);
 
-        // Diagnostic capture of what CA actually renders for the layer. Periodic (overwrite)
-        // so a long-running headless check ends with a recent frame, not just early boot.
+        // Diagnostic capture of the presented scanout. Periodic (overwrite) so a long-running
+        // headless check ends with a recent frame, not just early boot.
         applies.set(applies.get() + 1);
         if applies.get() % 120 == 0 {
             if let Some(path) = &capture_path {
-                capture_layer(&layer, width, height, path);
+                capture_iosurface(surface, id, path);
             }
         }
     });
@@ -337,52 +342,58 @@ pub fn run(
     std::process::exit(0);
 }
 
-/// Render the layer (including its IOSurface contents) into an offscreen bitmap and write
-/// it as a PNG — an in-app capture that needs no Screen Recording permission. Diagnostic.
-fn capture_layer(layer: &CALayer, width: u32, height: u32, path: &str) {
-    use objc2_core_graphics::{
-        CGBitmapContextCreate, CGBitmapContextGetBytesPerRow, CGBitmapContextGetData,
-        CGColorSpaceCreateDeviceRGB, CGImageAlphaInfo,
-    };
-    let (w, h) = (width as usize, height as usize);
+/// GPU-coherent diagnostic capture: lock the IOSurface (which syncs against the GPU), read its
+/// BGRA bytes directly, and write a PNG with alpha forced opaque. Needs no Screen Recording
+/// permission. (A premultiplied `CALayer.renderInContext` would zero the RGB wherever the guest's
+/// "don't care" scanout alpha is 0; reading the surface directly shows the true scanout content.)
+fn capture_iosurface(surface: &IOSurfaceRef, id: u32, path: &str) {
+    use objc2_io_surface::IOSurfaceLockOptions;
     unsafe {
-        let Some(cs) = CGColorSpaceCreateDeviceRGB() else {
-            log::error!("capture: no colorspace");
-            return;
-        };
-        // RGBA8, premultiplied last → R,G,B,A bytes in memory (CG allocates the buffer).
-        let info = CGImageAlphaInfo::PremultipliedLast.0;
-        let Some(ctx) = CGBitmapContextCreate(std::ptr::null_mut(), w, h, 8, 0, Some(&cs), info)
-        else {
-            log::error!("capture: no bitmap context");
-            return;
-        };
-        layer.renderInContext(&ctx);
-
-        let data = CGBitmapContextGetData(Some(&ctx)) as *const u8;
-        if data.is_null() {
-            log::error!("capture: null bitmap data");
+        // ReadOnly + default (no AvoidSync) → waits for the GPU to finish writing.
+        if surface.lock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut()) != 0 {
+            log::error!("capture: IOSurfaceLock failed");
             return;
         }
-        let bpr = CGBitmapContextGetBytesPerRow(Some(&ctx));
+        let w = surface.width();
+        let h = surface.height();
+        let bpr = surface.bytes_per_row();
+        let base = surface.base_address().as_ptr() as *const u8;
         let mut rgba = vec![0u8; w * h * 4];
         for y in 0..h {
-            std::ptr::copy_nonoverlapping(
-                data.add(y * bpr),
-                rgba.as_mut_ptr().add(y * w * 4),
-                w * 4,
-            );
+            let row = base.add(y * bpr);
+            for x in 0..w {
+                let px = row.add(x * 4); // BGRA in memory
+                let b = *px;
+                let g = *px.add(1);
+                let r = *px.add(2);
+                let o = (y * w + x) * 4;
+                rgba[o] = r;
+                rgba[o + 1] = g;
+                rgba[o + 2] = b;
+                rgba[o + 3] = 255; // force opaque — the scanout alpha is "don't care"
+            }
         }
+        let _ = surface.unlock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut());
+
         match std::fs::File::create(path) {
             Ok(f) => {
-                let mut enc = png::Encoder::new(std::io::BufWriter::new(f), width, height);
+                let mut enc = png::Encoder::new(std::io::BufWriter::new(f), w as u32, h as u32);
                 enc.set_color(png::ColorType::Rgba);
                 enc.set_depth(png::BitDepth::Eight);
                 match enc
                     .write_header()
-                    .and_then(|mut w| w.write_image_data(&rgba))
+                    .and_then(|mut wr| wr.write_image_data(&rgba))
                 {
-                    Ok(()) => log::info!("capture: wrote layer render to {path}"),
+                    Ok(()) => {
+                        // Report a coarse luminance sum so the log alone tells black vs content.
+                        let nonzero = rgba
+                            .chunks_exact(4)
+                            .filter(|p| p[0] | p[1] | p[2] != 0)
+                            .count();
+                        log::info!(
+                            "capture: wrote IOSurface id={id} {w}x{h} to {path} (nonzero_px={nonzero})"
+                        );
+                    }
                     Err(e) => log::error!("capture: png write failed: {e}"),
                 }
             }

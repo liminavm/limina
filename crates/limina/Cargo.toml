@@ -43,7 +43,7 @@ objc2-app-kit = { version = "0.3", features = [
     "block2",
 ] }
 objc2-quartz-core = { version = "0.3", features = ["CALayer", "objc2-core-graphics"] }
-objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef"] }
+objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef", "IOSurfaceTypes", "libc"] }
 objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-core-graphics = { version = "0.3", features = [
     "CGContext",
