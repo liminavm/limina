@@ -19,6 +19,36 @@ index c492057..2b1ac56 100644
                      if (mtlFeats.baseVertexInstanceDrawing) {
                          [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                            vertexStart: _firstVertex
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm b/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm
+index a3ef8cb..bac0d6b 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm
+@@ -1015,6 +1015,25 @@ static inline MTLPixelFormat getDepthStencilAspectFormat(const MTLPixelFormat fo
+ 	id<MTLBuffer> dstMTLBuff = _dstBuffer->getMTLBuffer();
+ 	NSUInteger dstMTLBuffOffset = _dstBuffer->getMTLBufferOffset();
+ 
++	static int limina_copy_n = 0; limina_copy_n++;
++	// Only dump EVEN copies: in vkcoh the 1st copy's source is the guest-written `src` (reading it
++	// host-side would POISON the host CPU cache with a stale zero line the GPU may snoop); the 2nd
++	// copy's source is the GPU-written `mid` (host-coherent per Finding 1 = the reliable oracle).
++	if (getenv("LIMINA_COPY_DUMP") && (limina_copy_n % 2 == 0)) { // [LIMINA-COPY] #28
++		const void* base = srcMTLBuff ? [srcMTLBuff contents] : nullptr;
++		if (base) {
++			const unsigned char* b = (const unsigned char*)base + srcMTLBuffOffset;
++			unsigned long n = (unsigned long)[srcMTLBuff length];
++			long firstnz = -1;
++			for (unsigned long i = 0; i < n; i++) { if (b[i]) { firstnz = (long)i; break; } }
++			const float* p = (const float*)b;
++			fprintf(stderr, "[LIMINA-COPY] srcLen=%lu storage=%lu firstNonzeroByte=%ld f: %.3f %.3f %.3f %.3f %.3f %.3f\n",
++				n, (unsigned long)[srcMTLBuff storageMode], firstnz, p[0],p[1],p[2],p[3],p[4],p[5]);
++		} else {
++			fprintf(stderr, "[LIMINA-COPY] srcMTLBuff=%p contents=NIL\n", (void*)srcMTLBuff);
++		}
++	}
++
+ 	VkDeviceSize buffAlign = cmdEncoder->getMetalFeatures().mtlCopyBufferAlignment;
+ 
+ 	for (const auto& cpyRgn : _bufferCopyRegions) {
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
 index 16fd614..4466f3a 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
