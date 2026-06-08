@@ -198,6 +198,25 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         Ok(())
     }
 
+    /// limina tier-2: zero-copy present of a venus-rendered global IOSurface (SET_SCANOUT_BLOB).
+    /// The renderer (vkr) already drew straight into this IOSurface, so we just hand its global
+    /// id to the supervisor — which `IOSurfaceLookup`s any id lazily (window.rs) — with no
+    /// alloc_frame/swizzle/copy. `configure_scanout` (called by set_scanout_blob) already sized
+    /// the window and announced the ring; this overrides which surface to show this frame.
+    fn present_surface(
+        &mut self,
+        scanout_id: u32,
+        iosurface_id: u32,
+        _rect: Option<&Rect>,
+    ) -> Result<(), DisplayBackendError> {
+        if scanout_id != 0 {
+            return Err(DisplayBackendError::InvalidScanoutId);
+        }
+        self.presents += 1;
+        self.send(&format!("frame {iosurface_id}"));
+        Ok(())
+    }
+
     fn alloc_frame(&mut self, scanout_id: u32) -> Result<(u32, &mut [u8]), DisplayBackendError> {
         let scanout = self
             .scanout

@@ -160,9 +160,48 @@ The IOSurface image path (A) must coexist with this — we satisfy the guest's e
    plane/format-negotiation issue (guest kernel + how the device advertises scanout formats),
    distinct from the Vulkan image path. Part-(b) (image→SET_SCANOUT_BLOB linkage) is still
    unobservable until this KMS wall is cleared. **→ next investigation.**
-3. **Zero-copy present (D+E).** Implement SET_SCANOUT_BLOB + `present_surface`; publish vkr's
-   IOSurface id; remove the readback for IOSurface scanouts. Verify no `read_2d_resource` per
-   frame (trace) and that windowed perf rises toward the headless ~440 (#29).
+2b. ✅ **OBSERVED (2026-06-08) — part-(b) linkage resolved.** The KMS wall above was cleared
+   (headless ring-stall fix `1f9b328` + a writable/seated boot); the seated desktop now reaches
+   the scanout-allocation path and the linkage is captured. mutter's seated path does, per host
+   vkr DIAG logs:
+   (1) `vkCreateImage` of a 1280×800 BGRA8 external scanout image → fix A backs it with a global
+       IOSurface (`vkr_image.mtl_iosurface`, ret=0);
+   (2) `vkAllocateMemory` of a **dedicated DEVICE_LOCAL** memory (e.g. id 59, 4325376 B) carrying
+       `VkExportMemoryAllocateInfo(handleTypes = DMA_BUF/OPAQUE_FD)` — MoltenVK **cannot** export
+       device-local memory that way → raw alloc fails `VK_ERROR_INITIALIZATION_FAILED` (-3);
+   (3) `vkBindImageMemory2` binds the IOSurface-backed image ← that memory;
+   (4) the guest then **exports that memory as a virtio-gpu blob** (`vkr_device_memory_export_blob`)
+       — the KMS scanout dmabuf it ADDFBs + SET_SCANOUT_BLOBs.
+   So **part-(b) = the SET_SCANOUT_BLOB resource is the *memory*'s blob, and the memory is bound to
+   the IOSurface-backed image** — resolve is `resource → memory → (linked) image IOSurface id`, via
+   the blob channel after all (not image-direct as open-Q1 first guessed). Two refinements to the
+   touch-points below:
+   - **A/strip:** on `__APPLE__`, drop the unsupported OPAQUE/DMA_BUF `export_info` from the raw
+     `vkAllocateMemory` chain so alloc succeeds (the IOSurface-backed image needs the memory only
+     as a placeholder bind target), but **still make the memory exportable** by giving it an
+     `mtl_shm` carrier (real SHM fd → satisfies the proxy/rutabaga resource creation that crosses
+     the render-server socket; `proxy: invalid reply for blob N` is what a non-exportable memory
+     produces). The SHM bytes are never the scanout pixels — present uses the IOSurface (C/D).
+   - **C link:** at `vkBindImageMemory2`, copy the image's `mtl_iosurface` onto the bound
+     `vkr_device_memory` so `resource → memory → IOSurface id` resolves. `get_iosurface_id` reads
+     it from the memory backing the resource.
+3. ✅ **IMPLEMENTED (2026-06-08) — Zero-copy present (D+E) host path.** Built end-to-end:
+   virglrenderer `5225d5c` (export-via-mtl_shm-carrier + bind IOSurface link +
+   `virgl_renderer_resource_get_iosurface_id`), libkrun `ec99951` (rutabaga cached
+   `iosurface_id`, `present_surface` vtable across the C ABI, `set_scanout_blob` +
+   `flush_resource` zero-copy branch, `SetScanoutBlob` dispatch was a `panic!`), limina-display
+   `present_surface` → `send("frame {iosurface_id}")` (supervisor `IOSurfaceLookup`s any id,
+   unchanged). Compiles/links/signs; the blob-export blocker is **cleared** (no more
+   `invalid reply for blob N`; the mtl_shm-carrier + IOSurface-link paths execute, verified in
+   the host vkr log). **NOT yet exercised end-to-end**: gnome-shell on venus now crashes one
+   step earlier — a **guest-side mesa/zink SEGV at `cogl_onscreen_swap_buffers`** (its first
+   frame present), *before* any SET_SCANOUT_BLOB reaches the host (0 zero-copy presents
+   observed). So `present_surface`/the readback-skip are still UNVERIFIED at runtime. Also still
+   present: mutter logs `Failed to initialize accelerated iGPU/dGPU framebuffer sharing: KMS CRTC
+   doesn't support GBM format` (non-fatal; falls back to a plain gbm renderer, then SEGVs on
+   swap). **→ next: the guest swap_buffers SEGV (needs guest mesa debuginfo; backtrace is
+   unsymbolized).** Once that clears and SET_SCANOUT_BLOB flows, verify no `read_2d_resource`
+   per frame (trace) and windowed perf vs headless ~440 (#29).
 4. **Hardening.** Multi-buffer/acquire handshake; format/modifier matrix; capture-oracle parity.
 
 ## RED-first tests (drive the shipped binaries; `crates/limina-test`)
