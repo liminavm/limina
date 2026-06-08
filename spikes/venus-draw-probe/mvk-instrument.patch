@@ -20,10 +20,10 @@ index c492057..2b1ac56 100644
                          [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                            vertexStart: _firstVertex
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
-index 16fd614..d0b4c8e 100644
+index 16fd614..4466f3a 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
 +++ b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
-@@ -779,6 +779,25 @@ static void bindVertexBuffersTemplate(id<MTLCommandEncoder> encoder,
+@@ -779,6 +779,34 @@ static void bindVertexBuffersTemplate(id<MTLCommandEncoder> encoder,
  	for (size_t vkidx : pipeline->getVkVertexBuffers()) {
  		const auto& buffer = vkState._vertexBuffers[vkidx];
  		uint32_t idx = pipeline->getMetalBufferIndexForVertexAttributeBinding(static_cast<uint32_t>(vkidx));
@@ -41,6 +41,15 @@ index 16fd614..d0b4c8e 100644
 +				fprintf(stderr, "[LIMINA-VTX] vkidx=%zu mtlidx=%u off=%llu stride=%u len=%lu storage=%lu firstNonzeroByte=%ld v: %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f\n",
 +					vkidx, idx, (unsigned long long)buffer.offset, buffer.stride, blen,
 +					(unsigned long)[mb storageMode], firstnz, p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7]);
++				// [LIMINA-FORCE-QUAD] #28 EXP-A: if the buffer the GPU fetches is all-zero (the bug), write
++				// tri.c's known NDC fullscreen quad HOST-side. If the draw then renders green, the host
++				// CPU->GPU path for this memory is fine and the ONLY defect is the guest's write not
++				// reaching it. Env-gated; only when stride matches tri's vec2 layout.
++				if (firstnz == -1 && buffer.stride == 8 && getenv("LIMINA_FORCE_QUAD")) {
++					static const float quad[12] = { -1.f,-1.f, 1.f,-1.f, -1.f,1.f,  -1.f,1.f, 1.f,-1.f, 1.f,1.f };
++					memcpy((char*)base + buffer.offset, quad, sizeof quad);
++					fprintf(stderr, "[LIMINA-FORCE-QUAD] wrote known quad into mtlidx=%u off=%llu\n", idx, (unsigned long long)buffer.offset);
++				}
 +			} else {
 +				fprintf(stderr, "[LIMINA-VTX] vkidx=%zu mtlidx=%u off=%llu stride=%u mtlBuffer=%p contents=NIL\n",
 +					vkidx, idx, (unsigned long long)buffer.offset, buffer.stride, (void*)mb);
@@ -49,7 +58,7 @@ index 16fd614..d0b4c8e 100644
  		bindVertexBuffer<DynamicStride>(encoder, buffer.mtlBuffer, buffer.offset, buffer.stride,
  		                                idx, exists, bindings, binder);
  	}
-@@ -1049,6 +1068,18 @@ static uint32_t getSampleCount(VkSampleCountFlags vk) {
+@@ -1049,6 +1077,18 @@ static uint32_t getSampleCount(VkSampleCountFlags vk) {
  	bindSampler(encoder, sampler, index, _exists.fragment(), _bindings.fragment(), MVKFragmentBinder());
  }
  void MVKMetalGraphicsCommandEncoderState::bindVertexBuffer(id<MTLRenderCommandEncoder> encoder, id<MTLBuffer> buffer, VkDeviceSize offset, NSUInteger index) {
