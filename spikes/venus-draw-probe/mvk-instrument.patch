@@ -1,0 +1,70 @@
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
+index c492057..2b1ac56 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
+@@ -355,6 +355,16 @@
+                     uint32_t viewCount = subpass->isMultiview() ? subpass->getViewCountInMetalPass(cmdEncoder->getMultiviewPassIndex()) : 1;
+                     uint32_t instanceCount = _instanceCount * viewCount;
+                     cmdEncoder->getState().offsetZeroDivisorVertexBuffers(*cmdEncoder, stage, pipeline, _firstInstance);
++                    { // [LIMINA-DRAW] bug A (#31) probe: what does Metal actually get for this non-indexed draw?
++                        auto& mg = cmdEncoder->getMtlGraphics();
++                        fprintf(stderr, "[LIMINA-DRAW] prim=%d firstVtx=%u vtxCount=%u instCount=%u cull=%u front=%u poly=%d rastDisabled=%d nVP=%u nSC=%u vp0=(%.0f,%.0f,%.0fx%.0f) sc0=(%d,%d,%ux%u)\n",
++                            (int)mg.getPrimitiveType(), _firstVertex, _vertexCount, instanceCount,
++                            (unsigned)mg._cullMode, (unsigned)mg._frontFace, (int)mg._polygonMode,
++                            (int)pipeline->isRasterizationDisabled(),
++                            (unsigned)mg._numViewports, (unsigned)mg._numScissors,
++                            mg._viewports[0].x, mg._viewports[0].y, mg._viewports[0].width, mg._viewports[0].height,
++                            mg._scissors[0].offset.x, mg._scissors[0].offset.y, mg._scissors[0].extent.width, mg._scissors[0].extent.height);
++                    }
+                     if (mtlFeats.baseVertexInstanceDrawing) {
+                         [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
+                                                           vertexStart: _firstVertex
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
+index 16fd614..d0b4c8e 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
+@@ -779,6 +779,25 @@ static void bindVertexBuffersTemplate(id<MTLCommandEncoder> encoder,
+ 	for (size_t vkidx : pipeline->getVkVertexBuffers()) {
+ 		const auto& buffer = vkState._vertexBuffers[vkidx];
+ 		uint32_t idx = pipeline->getMetalBufferIndexForVertexAttributeBinding(static_cast<uint32_t>(vkidx));
++		{ // [LIMINA-VTX] bug A (#31): the actual vertex attribute buffer the GPU will fetch
++			id<MTLBuffer> mb = buffer.mtlBuffer;
++			const void* base = mb ? [mb contents] : nullptr;
++			if (base) {
++				const float* p = (const float*)((const char*)base + buffer.offset);
++				// Scan the WHOLE buffer for the first nonzero byte → distinguishes "all zero" (coherency)
++				// from "data present at another offset" (offset bug).
++				const unsigned char* bytes = (const unsigned char*)base;
++				unsigned long blen = (unsigned long)[mb length];
++				long firstnz = -1;
++				for (unsigned long i = 0; i < blen; i++) { if (bytes[i]) { firstnz = (long)i; break; } }
++				fprintf(stderr, "[LIMINA-VTX] vkidx=%zu mtlidx=%u off=%llu stride=%u len=%lu storage=%lu firstNonzeroByte=%ld v: %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f\n",
++					vkidx, idx, (unsigned long long)buffer.offset, buffer.stride, blen,
++					(unsigned long)[mb storageMode], firstnz, p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7]);
++			} else {
++				fprintf(stderr, "[LIMINA-VTX] vkidx=%zu mtlidx=%u off=%llu stride=%u mtlBuffer=%p contents=NIL\n",
++					vkidx, idx, (unsigned long long)buffer.offset, buffer.stride, (void*)mb);
++			}
++		}
+ 		bindVertexBuffer<DynamicStride>(encoder, buffer.mtlBuffer, buffer.offset, buffer.stride,
+ 		                                idx, exists, bindings, binder);
+ 	}
+@@ -1049,6 +1068,18 @@ static uint32_t getSampleCount(VkSampleCountFlags vk) {
+ 	bindSampler(encoder, sampler, index, _exists.fragment(), _bindings.fragment(), MVKFragmentBinder());
+ }
+ void MVKMetalGraphicsCommandEncoderState::bindVertexBuffer(id<MTLRenderCommandEncoder> encoder, id<MTLBuffer> buffer, VkDeviceSize offset, NSUInteger index) {
++	if (buffer) { // [LIMINA-VTX] bug A (#31) probe: what vertex data will the GPU actually fetch?
++		const void* base = [buffer contents];
++		if (base) {
++			const float* p = (const float*)((const char*)base + offset);
++			fprintf(stderr, "[LIMINA-VTX] idx=%lu off=%llu len=%lu storage=%lu v: %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f\n",
++				(unsigned long)index, (unsigned long long)offset, (unsigned long)[buffer length],
++				(unsigned long)[buffer storageMode], p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7]);
++		} else {
++			fprintf(stderr, "[LIMINA-VTX] idx=%lu off=%llu len=%lu storage=%lu contents=NIL(private)\n",
++				(unsigned long)index, (unsigned long long)offset, (unsigned long)[buffer length], (unsigned long)[buffer storageMode]);
++		}
++	}
+ 	bindBuffer(encoder, buffer, offset, index, _exists.vertex(), _bindings.vertex(), MVKVertexBinder());
+ }
+ void MVKMetalGraphicsCommandEncoderState::bindVertexBytes(id<MTLRenderCommandEncoder> encoder, const void* data, size_t size, NSUInteger index) {

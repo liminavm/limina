@@ -134,6 +134,39 @@ tracks claims still needing verification.
 - **Commit early and often for bisectability**, but only meaningful commits — the
   user has authorized committing without asking. End commit messages with the
   `Co-Authored-By` trailer.
+- **Keepable artifacts go in the repo, NOT `/tmp`.** Debug scripts, probes, oracles, and
+  notes we'll want again belong under `spikes/` (or the relevant crate), committed. `/tmp`
+  is only for genuinely throwaway scratch and transient runtime deploy dirs — it gets wiped
+  and the work is lost. When the source we instrument lives in gitignored `third_party/`,
+  save the change as a `*.patch` in the repo (e.g. `spikes/venus-draw-probe/mvk-instrument.patch`).
+
+### Debugging discipline: verify premises, verify pixels, instrument what we own
+
+This earned its place the hard way on the venus/tier-2 work (#30/#31): the fixes came not from
+cleverness but from refusing to trust anything we hadn't directly observed.
+
+- **Enumerate and verify premises before you deep-dive.** List the assumptions a bug "obviously"
+  rests on, then prove each one empirically — don't inherit them. We twice built on false premises
+  ("the present pipe is broken", "glmark2 18/18 means GL renders") and burned hours; the cheap check
+  up front would have saved them. When you catch yourself reasoning *from* a premise, stop and test it.
+- **A scary warning is a LEAD, not a cause.** We nearly "fixed" two non-bugs by reasoning from a log
+  line (`depth_clip_enable`, then `primitive restart`). Before acting on a warning, read its emission
+  site in the (owned) source to see whether it's even fatal — then confirm by observation. Never
+  conclude from the message text alone.
+- **Pixel-verify; proxies lie.** FPS counters, "no GL error", "18/18 scenes", exit-0 — none prove
+  anything actually rendered. Read the real pixels: the IOSurface scanout via
+  `spikes/venus-draw-probe/iosdump.swift` (cross-process, any global IOSurface id), or the window
+  capture (`LIMINA_WINDOW_CAPTURE`). NOT `glReadPixels` (#28 black readback). When only a human can see
+  the window, ask the user to eyeball — and allow that they're human and may be slow to look.
+- **Instrument the stack you own.** When behavior is opaque, a few `fprintf`s in the dependency
+  (MoltenVK / virglrenderer / libkrun) beat any amount of outside-in guessing. The instrumented
+  MoltenVK (`spikes/venus-draw-probe/rebuild-mvk.sh` + `mvk-instrument.patch`, loaded into the worker
+  via `VK_ICD_FILENAMES`) is what turned "venus renders black" from open theories into one fact: the
+  vertex buffer the GPU fetches is all-zero. Keep such oracles in the repo; they pay off repeatedly.
+- **Isolate with a minimal vehicle, then reason to rule out the innocent explanation.** `tri.c` (a
+  textureless, self-contained draw) had no confounders, so its result was decisive. And when an
+  observation has a benign alternative ("the buffer's zero only because a copy hasn't run yet"), kill
+  it with logic (the render is black ⟹ the GPU read zeros *at execution*) rather than assuming.
 
 ### Environment quirks
 
