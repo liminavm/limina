@@ -19,6 +19,21 @@ This replaces the old ad-hoc in-guest `~/mesa` build (task #26).
   that lack `robustness2.nullDescriptor` — which MoltenVK does. Without it zink bails
   (`Zink requires the nullDescriptor feature of KHR/EXT robustness2`) → llvmpipe. Clean (no
   LIMINA-DIAG debug hacks). Not in any Mesa release/main — we must carry it until it lands.
+- **`0002-fbobject-guard-null-pipe-resource-in-discard.diff`** — `do_discard_framebuffer()`
+  dereferences `att->Renderbuffer->texture` (a `pipe_resource`) without a NULL check. A
+  gbm/kopper winsys back buffer can be `Complete` yet have no `pipe_resource` while the
+  swapchain rotates it, so `glInvalidateFramebuffer(GL_BACK)` crashed gnome-shell at swap
+  on the mutter native/KMS path. Guard `prsc` for NULL. Upstreamable (#30 seated, wall 1).
+- **`0003-zink-guard-missing-external-semaphore-fd-on-dmabuf-import.diff`** — and
+  **`0004-...-on-dmabuf-export.diff`** — `zink_screen_import/export_dmabuf_semaphore()`
+  call `VKSCR(GetSemaphoreFdKHR)` / `VKSCR(ImportSemaphoreFdKHR)` whenever built with
+  libdrm on Linux, without checking `VK_KHR_external_semaphore_fd` is supported. venus over
+  MoltenVK has no fd-based external semaphores → those entrypoints are NULL → swap-buffers
+  jumps through a NULL function pointer. Gate both on
+  `screen->info.have_KHR_external_semaphore_fd` (the flag zink already uses for dmabuf /
+  cl_gl_sharing elsewhere); fall back to implicit dmabuf sync. Upstreamable (#30 seated,
+  walls 2–3). Together 0002+0003+0004 make seated gnome-shell *survive* on venus (no more
+  crash-loop); the remaining blocker is KMS-CRTC scanout-format negotiation, not a crash.
 
 ## What we DON'T build here
 Venus (`libvulkan_virtio`) is the guest's **stock** Mesa Vulkan driver (`-Dvulkan-drivers=`
