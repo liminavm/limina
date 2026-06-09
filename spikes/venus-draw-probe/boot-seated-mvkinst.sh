@@ -25,13 +25,20 @@ ICD=/tmp/mvk-instrumented/MoltenVK_icd.json
 rm -f "$WORK"; cp -c Fedora-Workstation-43.dev-enh.raw "$WORK" || { echo CLONE_FAIL; exit 1; }
 rm -f "$LOG"
 # Export the instrument env cleanly (a bare ${VAR:+VAR=$VAR} prefix mis-parses as a command).
+# LIMINA_IDX_DUMP defaults ON (the firehose); pass LIMINA_IDX_DUMP=0 to silence it for a DS-only differential.
 export VK_ICD_FILENAMES="$ICD"
-export LIMINA_IDX_DUMP="${LIMINA_IDX_DUMP:-1}"
+[ "${LIMINA_IDX_DUMP:-1}" != "0" ] && export LIMINA_IDX_DUMP=1
 [ -n "${LIMINA_VTX_DUMP:-}" ] && export LIMINA_VTX_DUMP
+[ -n "${LIMINA_DS_DUMP:-}" ] && export LIMINA_DS_DUMP   # [LIMINA-DS] depth/stencil differential (batched vs fan)
+# --net is on by default (SSH into the guest); pass LIMINA_NET=0 to skip it — e.g. a worker-log-only
+# differential (reading [LIMINA-DS]/[LIMINA-IDX] stderr) needs no guest network and avoids a stale-gvproxy
+# port-2222 conflict.
+NET_FLAG=--net
+[ "${LIMINA_NET:-1}" = "0" ] && NET_FLAG=
 target/debug/limina --vmm-bin target/debug/limina-vmm \
   --kernel target/test-guest/kernel/Image-16k \
   --cmdline "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 console=ttyAMA0" \
-  --disk "$WORK" --cpus 4 --ram-mib 4096 --net --window \
+  --disk "$WORK" --cpus 4 --ram-mib 4096 $NET_FLAG --window \
   >"$LOG" 2>&1 &
 echo "limina pid=$! (worker log $LOG)"
 wait

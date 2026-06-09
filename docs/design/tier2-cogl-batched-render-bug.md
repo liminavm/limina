@@ -1,5 +1,24 @@
 # Tier-2 seated-desktop render defect: cogl batched-quad path (OPEN)
 
+> ⚠️ **REFRAME 2026-06-09 (read first — supersedes the "RASTERIZATION/STATE" framing below).**
+> Two corrections invalidated several conclusions in the body of this doc:
+> 1. **The scene is UNSTABLE when the bug reproduces** (larger regions paint→decay→only damage repaints) —
+>    NOT just under `disable-texturing`. So single-frame full-scene scanout grabs are unreliable. (The
+>    dash/dock-icon "bottom-left-triangle-only" pattern IS stable and trustworthy; window-thumbnail/large-area
+>    reads are not.)
+> 2. The cogl pixel-knobs gave no clean answer: `wireframe` no-op, `disable-texturing` destabilizes,
+>    `disable-blending` ambiguous. **RETRACTED: "tri2 covered", "tri2 not covered", "GPU gets PERFECT data →
+>    post-raster rasterization-STATE kill."** Those rested on host-side reads + a (false) stable-scene
+>    assumption.
+>
+> **The ONE solid causal fact:** `disable-batching` is the only intervention that has ever changed the
+> outcome → the bug lives in the batched **indexed `TRIANGLES`** draw over cogl's **shared rectangle index
+> buffer**; the per-quad **fan** path (no index buffer) is immune. **SOLID eliminations (instrument,
+> frame-independent):** depth, stencil, clip, cull, uint8, first-vertex offset. **OPEN:** the data/coherency
+> line at the GPU level (host-side reads don't prove GPU-side), and whether tri2 is even rasterized.
+> **NEXT:** instrument the working `disable-batching` path and diff the Metal-level draw vs the broken batched
+> path. Authoritative running state: memory `limina-tier2-venus`.
+
 Status: **root localized, not yet fixed.** 2026-06-09.
 Context: [[tier2-coexist-gpu]], [[tier2-host-visible-coherency]]. Prereqs: bug A (#31/#28) fixed, #30
 zero-copy present working — the seated GNOME desktop renders on venus (zink→venus→MoltenVK→Metal,
@@ -207,6 +226,37 @@ thing that provably differs between clean and broken and that `[LIMINA-RAST]` ha
 which names the culprit state directly. (`[LIMINA-RAST]` already added cull/front/poly/raster/viewport/scissor
 to the `[LIMINA-IDX]` site; one residual curiosity is a negative-height `vp0` on some batches, harmless with
 cull off but worth confirming it isn't the discriminator.)
+
+### Depth/stencil differential RESULT — depth, stencil, and clip are ELIMINATED (2026-06-09)
+Added `[LIMINA-DS]` (`liminaDumpDepthStencil`, gated `LIMINA_DS_DUMP`) to **both** draw sites — the indexed
+(batched, broken) and the non-indexed (fan) — dumping the Metal depth/stencil descriptor + stencil ref +
+provoking-vertex. Booted the seated desktop (instrumented MoltenVK, no net), 1219 `[LIMINA-DS]` lines over a
+seated session that **reproduces the bug** (scanout IOSurface 69/72). Result — **uniform and fully benign on
+every single draw**:
+- **depth `cmp=7` (Always), `write=0`** → depth test is a no-op.
+- **`stencilTest=0`** on all 1219 draws, all stencil ops Keep, masks `0xffffffff`, front+back identical →
+  **no stencil / no clip anywhere in the session** (12 draws carry a stencil `ref=1/1` but with the test off
+  it's inert; no draw ever has `stencilTest=1`, so cogl is not stencil-clipping at all here).
+- `provoke=0` uniform.
+
+⇒ **Depth-test, stencil, and clip are conclusively OUT** — and this is conclusive *from the batched run
+alone*: you can't have less depth/stencil than "off," so a `disable-batching` run cannot reveal a
+depth/stencil difference. Combined with the prior `[LIMINA-RAST]` (`cull=NONE`, rasterization on, scissor
+covers the region), **none of Metal's fixed-function fragment tests are dropping tri2.** The "cogl clip-stack
+on the batch" branch of the live mechanism is dead.
+
+**What that forces.** With cull / depth / stencil / scissor / rasterizer-discard all benign AND the submitted
+geometry correct, a *covered* fragment can only be dropped by the **fragment shader (`discard`), color-write
+mask, or blend** — but those are per-pipeline and would hit tri1 identically, so they can't selectively kill
+tri2. The one remaining selective explanation is that **tri2 is never actually covered** — i.e. its
+coverage/geometry is degenerate *at GPU execution* even though the host-side instrument reads v0..v3
+correctly at bind time (the `[LIMINA-Q]` reads are the host CPU view; for a Shared-storage buffer host==GPU, so
+confirm the storage mode — if Shared, tri2 *is* covered and we're back to a genuine Metal rasterization quirk
+on the batched indexed draw; if not Shared, a stale GPU-side copy of a tri2-only vertex like v3 is back in
+play). **Next experiment = COVERAGE test: is tri2 rasterized at all?** `COGL_DEBUG=wireframe` (needs the
+environment.d inject + fresh login; capture the dock/window): missing-triangle edges ABSENT ⇒ geometrically
+not covered (degenerate/collapsed at execution); both triangles' edges PRESENT with only one filled ⇒ covered
+but its fragments are dropped. That single bit splits the last two hypotheses.
 
 ## (superseded) Earlier dead-end: vehicles exhausted
 Every standalone vehicle is clean: static indexed, mapped indexed, uint8, non-zero offset, textured fan,

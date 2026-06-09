@@ -1,8 +1,40 @@
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
-index c492057..e31cde4 100644
+index c492057..b5a72ba 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
 +++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
-@@ -355,6 +355,16 @@
+@@ -24,6 +24,31 @@
+ #include "MVKFoundation.h"
+ #include "mvk_datatypes.hpp"
+ 
++// [LIMINA-DS] #31 seated-desktop differential probe. The bug drops the 2nd sub-triangle of every BATCHED
++// indexed quad; COGL_DEBUG=disable-batching (per-quad TRIANGLE_FAN) fixes it, and identical geometry rules
++// out a screen-space clip — so the killer is keyed to the indexed-multi-quad draw's BOUND STATE. This dumps
++// the Metal depth/stencil descriptor + stencil ref + provoking-vertex + primitive at the SAME format from
++// BOTH the indexed (batched, broken) and non-indexed (fan, clean) draw sites, so the two modes can be
++// diffed line-for-line. Gated by LIMINA_DS_DUMP. (cull/front/poly/vp/scissor already in [LIMINA-RAST]/[LIMINA-DRAW].)
++static inline void liminaDumpDepthStencil(MVKCommandEncoder* cmdEncoder) {
++	if (!getenv("LIMINA_DS_DUMP")) { return; }
++	auto& mg = cmdEncoder->getMtlGraphics();
++	const auto& ds = mg._depthStencil;
++	const auto& f = ds.frontFaceStencilData;
++	const auto& b = ds.backFaceStencilData;
++	fprintf(stderr, "[LIMINA-DS] prim=%d depth(cmp=%u write=%u) stencilTest=%u "
++		"front(cmp=%u fail=%u dfail=%u pass=%u r=0x%x w=0x%x) "
++		"back(cmp=%u fail=%u dfail=%u pass=%u r=0x%x w=0x%x) ref=%u/%u provoke=%u\n",
++		(int)mg.getPrimitiveType(),
++		(unsigned)ds.depthCompareFunction, (unsigned)ds.depthWriteEnabled, (unsigned)ds.stencilTestEnabled,
++		(unsigned)f.op.stencilCompareFunction, (unsigned)f.op.stencilFailureOperation,
++		(unsigned)f.op.depthFailureOperation, (unsigned)f.op.depthStencilPassOperation, f.readMask, f.writeMask,
++		(unsigned)b.op.stencilCompareFunction, (unsigned)b.op.stencilFailureOperation,
++		(unsigned)b.op.depthFailureOperation, (unsigned)b.op.depthStencilPassOperation, b.readMask, b.writeMask,
++		mg._stencilReference.frontFaceValue, mg._stencilReference.backFaceValue,
++		(unsigned)mg._provokingVertexMode);
++}
++
+ 
+ #pragma mark -
+ #pragma mark MVKCmdBindVertexBuffers
+@@ -355,6 +380,17 @@
                      uint32_t viewCount = subpass->isMultiview() ? subpass->getViewCountInMetalPass(cmdEncoder->getMultiviewPassIndex()) : 1;
                      uint32_t instanceCount = _instanceCount * viewCount;
                      cmdEncoder->getState().offsetZeroDivisorVertexBuffers(*cmdEncoder, stage, pipeline, _firstInstance);
@@ -16,10 +48,11 @@ index c492057..e31cde4 100644
 +                            mg._viewports[0].x, mg._viewports[0].y, mg._viewports[0].width, mg._viewports[0].height,
 +                            mg._scissors[0].offset.x, mg._scissors[0].offset.y, mg._scissors[0].extent.width, mg._scissors[0].extent.height);
 +                    }
++                    liminaDumpDepthStencil(cmdEncoder); // [LIMINA-DS] fan / disable-batching site
                      if (mtlFeats.baseVertexInstanceDrawing) {
                          [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                            vertexStart: _firstVertex
-@@ -574,6 +584,46 @@
+@@ -574,6 +610,47 @@
                      MVKRenderSubpass* subpass = cmdEncoder->getSubpass();
                      uint32_t viewCount = subpass->isMultiview() ? subpass->getViewCountInMetalPass(cmdEncoder->getMultiviewPassIndex()) : 1;
                      uint32_t instanceCount = _instanceCount * viewCount;
@@ -63,6 +96,7 @@ index c492057..e31cde4 100644
 +                                mg._scissors[0].offset.x, mg._scissors[0].offset.y, mg._scissors[0].extent.width, mg._scissors[0].extent.height);
 +                        }
 +                    }
++                    liminaDumpDepthStencil(cmdEncoder); // [LIMINA-DS] batched indexed (broken) site
                      cmdEncoder->getState().offsetZeroDivisorVertexBuffers(*cmdEncoder, stage, pipeline, _firstInstance);
                      if (mtlFeats.baseVertexInstanceDrawing) {
                          [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
