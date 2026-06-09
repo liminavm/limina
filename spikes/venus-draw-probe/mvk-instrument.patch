@@ -520,12 +520,78 @@ index 7357ff1..330e325 100644
  	if (!addFragmentShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, pFragmentSS, pFragmentFB)) { return nil; }
  
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
-index 42e5646..a2b38e6 100644
+index 42e5646..948c70a 100644
 --- a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
 +++ b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
-@@ -554,6 +554,13 @@
+@@ -24,9 +24,63 @@
+ #include "MVKFoundation.h"
+ #include "MVKOSExtensions.h"
+ #include "MVKGPUCapture.h"
++#include <mutex>
+ 
+ using namespace std;
+ 
++// [LIMINA-CAP] #31: programmatic Metal frame capture of the live (broken) desktop. Encode-side
++// instrumentation is exhausted — tri1/tri2 sub-draws are byte-identical except index values — so
++// the next observation must be execution-side: a .gputrace the user replays in Xcode (geometry
++// viewer => is tri2 rasterized; shader source; attachment before/after). Env: LIMINA_MTL_CAPTURE=1
++// arms it (also needs METAL_CAPTURE_ENABLED=1 for the GPUTraceDocument destination);
++// LIMINA_MTL_CAPTURE_AT=<secs after first submit> (default 45) and LIMINA_MTL_CAPTURE_LEN=<secs>
++// (default 0.75) tune the window. Called once per command-buffer commit.
++static void liminaMaybeCapture(id<MTLDevice> gkDev) {
++	static std::mutex gkCapLock;
++	std::lock_guard<std::mutex> gkGuard(gkCapLock);
++	static int gkState = 0;          // 0=waiting 1=capturing 2=done
++	static NSDate* gkT0 = nil;
++	static NSDate* gkCapStart = nil;
++	static double gkStartAt = 45.0, gkLen = 0.75;
++	if (gkState == 2) return;
++	if (!gkT0) {
++		gkT0 = [[NSDate date] retain];
++		const char* gkE = getenv("LIMINA_MTL_CAPTURE_AT");  if (gkE) gkStartAt = atof(gkE);
++		const char* gkL = getenv("LIMINA_MTL_CAPTURE_LEN"); if (gkL) gkLen = atof(gkL);
++		fprintf(stderr, "[LIMINA-CAP] armed: start at +%.1fs, len %.2fs -> /tmp/limina-broken.gputrace (METAL_CAPTURE_ENABLED=%s)\n",
++			gkStartAt, gkLen, getenv("METAL_CAPTURE_ENABLED") ?: "UNSET");
++	}
++	double gkElapsed = -[gkT0 timeIntervalSinceNow];
++	if (gkState == 0 && gkElapsed >= gkStartAt) {
++		MTLCaptureManager* gkMgr = [MTLCaptureManager sharedCaptureManager];
++		if (![gkMgr supportsDestination: MTLCaptureDestinationGPUTraceDocument]) {
++			fprintf(stderr, "[LIMINA-CAP] FAIL: GPUTraceDocument unsupported — METAL_CAPTURE_ENABLED=1 not set in worker env?\n");
++			gkState = 2; return;
++		}
++		[[NSFileManager defaultManager] removeItemAtPath: @"/tmp/limina-broken.gputrace" error: nil];
++		MTLCaptureDescriptor* gkDesc = [MTLCaptureDescriptor new];
++		gkDesc.captureObject = gkDev;
++		gkDesc.destination = MTLCaptureDestinationGPUTraceDocument;
++		gkDesc.outputURL = [NSURL fileURLWithPath: @"/tmp/limina-broken.gputrace"];
++		NSError* gkErr = nil;
++		bool gkOk = [gkMgr startCaptureWithDescriptor: gkDesc error: &gkErr];
++		[gkDesc release];
++		if (!gkOk) {
++			fprintf(stderr, "[LIMINA-CAP] startCapture FAILED: %s\n", gkErr ? gkErr.localizedDescription.UTF8String : "?");
++			gkState = 2; return;
++		}
++		gkCapStart = [[NSDate date] retain];
++		gkState = 1;
++		fprintf(stderr, "[LIMINA-CAP] capture STARTED at +%.1fs\n", gkElapsed);
++		return;
++	}
++	if (gkState == 1 && -[gkCapStart timeIntervalSinceNow] >= gkLen) {
++		[[MTLCaptureManager sharedCaptureManager] stopCapture];
++		gkState = 2;
++		fprintf(stderr, "[LIMINA-CAP] capture STOPPED -> /tmp/limina-broken.gputrace\n");
++	}
++}
++
+ 
+ #pragma mark -
+ #pragma mark MVKQueueFamily
+@@ -553,7 +607,15 @@
+ 
  	// Retrieve the result before committing MTLCommandBuffer, because finish() will destroy this instance.
  	VkResult rslt = mtlCmdBuff ? getConfigurationResult() : VK_ERROR_OUT_OF_POOL_MEMORY;
++	if (mtlCmdBuff && getenv("LIMINA_MTL_CAPTURE")) { liminaMaybeCapture([mtlCmdBuff device]); } // [LIMINA-CAP]
  	[mtlCmdBuff commit];
 +	// [LIMINA-SYNC] #31 fence-race test: fully serialize the GPU. venus/MoltenVK lacks external-semaphore-fd
 +	// so zink falls back to implicit sync; if that isn't enforced, zink recycles the host-visible batched
