@@ -13,13 +13,45 @@
 >
 > **The ONE solid causal fact:** `disable-batching` is the only intervention that has ever changed the
 > outcome → the bug lives in the batched **indexed `TRIANGLES`** draw over cogl's **shared rectangle index
-> buffer**; the per-quad **fan** path (no index buffer) is immune. **SOLID eliminations (instrument,
-> frame-independent):** depth, stencil, clip, cull, uint8, first-vertex offset. **OPEN:** the data/coherency
-> line at the GPU level (host-side reads don't prove GPU-side), and whether tri2 is even rasterized.
-> **NEXT:** instrument the working `disable-batching` path and diff the Metal-level draw vs the broken batched
-> path. Authoritative running state: memory `limina-tier2-venus`.
+> buffer**; the per-quad **fan** path is immune. **SOLID eliminations (instrument, frame-independent):**
+> depth, stencil, clip, cull, uint8, first-vertex offset; **data/coherency** (both index+vertex buffers are
+> Metal `Shared` storage=0 ⇒ host reads == GPU fetches; GPU provably gets correct `0 1 2 0 2 3` + verts);
+> **Metal-submit fence/reuse timing** (`LIMINA_SYNC_SUBMIT` full serialize fixes neither symptom); **index
+> buffer** (`LIMINA_IDX_REALIGN` fresh-aligned copy doesn't fix); **granularity** (`LIMINA_DRAW_SPLIT` re-issues
+> the batch as N per-quad 6-index sub-draws → dock STILL bottom-left-triangle-only ⇒ NOT batch size).
+> **THE PUZZLE:** topology is the only diff left, yet indexed `TRIANGLE_LIST 0 1 2 0 2 3` and `TRIANGLE_FAN
+> {0,1,2,3}` make the IDENTICAL two triangles+winding — and MoltenVK lowers the fan to an indexed list too
+> (apex-last `{1,2,0}{2,3,0}` + `:indirect`). Residual diffs = (a) vertex ORDER/provoking-vertex within each
+> triangle, (b) direct `drawIndexedPrimitives` vs the fan's `:indirect`. **NEXT:** `LIMINA_IDX_REORDER` — permute
+> each 6-index group to apex-last `[i1,i2,i0,i4,i5,i3]` keeping LIST; tri2 returns ⇒ order/provoking, still
+> broken ⇒ draw variant.
+> **REORDER RESULT (2026-06-09): still broken, dock pixel-identical, icons geometrically correct ⇒ provoking-
+> vertex/order is OUT too.** Narrowed: working = non-indexed `vkCmdDraw(FAN)` (`MVKCmdDraw`), broken =
+> `vkCmdDrawIndexed(LIST)` (`MVKCmdDrawIndexed`); only the draw MECHANISM differs. BUT standalone indexed-list
+> vehicles are CLEAN ⇒ it's **[indexed-list draw] × [a gnome-shell pipeline STATE the vehicles lack]** (blend/
+> colorMask/fragment-pipeline/vertex-descriptor/multitexture — not the already-dumped cull/depth/stencil/
+> scissor). **NEXT:** dump FULL pipeline state on a broken indexed draw and diff vs a clean vehicle's indexed
+> draw. **OPEN:** whether tri2 is even rasterized. Authoritative running state: memory `limina-tier2-venus`.
 
-Status: **root localized, not yet fixed.** 2026-06-09.
+> **SESSION ADDENDUM 2026-06-09 (supersedes the NEXT items above — encode side is now EXHAUSTED).**
+> Six further single-factor experiments, all engagement-verified, all still broken (evidence/ + commits
+> 7dd9322/43f9c2a/fd1cea0/8eea7ec): **direct-vs-`:indirect`** (`LIMINA_FORCE_INDIRECT`), **per-TRIANGLE
+> isolation** (`LIMINA_DRAW_SPLIT=3`, each triangle its own draw from its own fresh aligned temp — v1 was
+> confounded by off&3==2 on odd 3-idx chunks), **uint16→uint32** (`LIMINA_IDX_WIDEN`), **per-draw render-pass
+> restart** (`LIMINA_PASS_RESTART`), **vertex-buffer OBJECT** (`LIMINA_VTX_REALIGN`, fresh Metal-allocated
+> buffers, dynamic-vertex-stride-aware rebind), and the **layer-1 texcoord padding** theory — [LIMINA-COL]
+> found REAL stale garbage (v3 tex1.u=4.1e33) in the record tail cogl pads-but-never-writes for 1-layer
+> entries (MIN_LAYER_PADDING ≥2, `compare_entry_strides` merges 1- and 2-layer entries), but
+> `LIMINA_TEX1_ZERO` doesn't heal AND [LIMINA-PIPE]+`pipe=%p` joins prove the broken draws' pipelines declare
+> ONLY pos float3 + color uchar4norm + tex0 float2 (nothing reads the padding). [LIMINA-COL] also verified
+> pos **z** and color alpha — the last unchecked vertex bytes.
+> **Conclusion: a tri2 sub-draw is byte-identical to a rendering tri1 sub-draw at the Metal interface except
+> for the three index values; dropping one half of a coplanar quad under those conditions is geometrically
+> impossible ⟹ the divergence is EXECUTION-side (shader execution / actual GPU fetch).** Next: Metal frame
+> capture (.gputrace), visibility-result counters on split-3 sub-draws, zink VS fan-vs-list shader diff.
+> Running state: memory `limina-tier2-venus`.
+
+Status: **encode-side fully eliminated; execution-side observation next.** 2026-06-09.
 Context: [[tier2-coexist-gpu]], [[tier2-host-visible-coherency]]. Prereqs: bug A (#31/#28) fixed, #30
 zero-copy present working — the seated GNOME desktop renders on venus (zink→venus→MoltenVK→Metal,
 custom 16 KiB-page guest kernel, Fedora 43 / GNOME 49 / mutter 49.5).

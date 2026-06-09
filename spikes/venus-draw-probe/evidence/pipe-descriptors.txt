@@ -1,0 +1,17 @@
+[LIMINA-PIPE] pipe=0x99fc4d200 attrs: a0(fmt=30 off=0 buf=30) a1(fmt=9 off=0 buf=29) a2(fmt=29 off=0 buf=28) layouts: b28(stride=18446744073709551615 step=1) b29(stride=18446744073709551615 step=1) b30(stride=18446744073709551615 step=1)
+[LIMINA-PIPE] pipe=0x99fc4de00 attrs: a0(fmt=30 off=0 buf=30) a1(fmt=9 off=0 buf=29) a2(fmt=29 off=0 buf=28) layouts: b28(stride=18446744073709551615 step=1) b29(stride=18446744073709551615 step=1) b30(stride=18446744073709551615 step=1)
+[LIMINA-PIPE] pipe=0x99fc4f600 attrs: a0(fmt=30 off=0 buf=30) a1(fmt=9 off=0 buf=29) a2(fmt=29 off=0 buf=28) layouts: b28(stride=18446744073709551615 step=1) b29(stride=18446744073709551615 step=1) b30(stride=18446744073709551615 step=1)
+[LIMINA-PIPE] pipe=0x99fccc000 attrs: a0(fmt=30 off=0 buf=30) a1(fmt=9 off=0 buf=29) a2(fmt=29 off=0 buf=28) layouts: b28(stride=18446744073709551615 step=1) b29(stride=18446744073709551615 step=1) b30(stride=18446744073709551615 step=1)
+[LIMINA-PIPE] pipe=0x9a0441800 attrs: a0(fmt=29 off=0 buf=30) a1(fmt=31 off=0 buf=29) layouts: b29(stride=18446744073709551615 step=1) b30(stride=18446744073709551615 step=1)
+[LIMINA-PIPE] pipe=0x9a0443000 attrs: a0(fmt=30 off=0 buf=30) a1(fmt=29 off=0 buf=29) layouts: b29(stride=18446744073709551615 step=1) b30(stride=18446744073709551615 step=1)
+[LIMINA-PIPE] pipe=0x9a0f90600 attrs: a0(fmt=30 off=0 buf=30) a1(fmt=9 off=0 buf=29) a2(fmt=29 off=0 buf=28) layouts: b28(stride=18446744073709551615 step=1) b29(stride=18446744073709551615 step=1) b30(stride=18446744073709551615 step=1)
+[LIMINA-PIPE] pipe=0x9a0f90c00 attrs: a0(fmt=30 off=0 buf=30) a1(fmt=9 off=0 buf=29) a2(fmt=29 off=0 buf=28) a3(fmt=29 off=0 buf=27) layouts: b27(stride=18446744073709551615 step=1) b28(stride=18446744073709551615 step=1) b29(stride=18446744073709551615 step=1) b30(stride=18446744073709551615 step=1)
+[LIMINA-PIPE] pipe=0x9a0f91200 attrs: a0(fmt=30 off=0 buf=30) a1(fmt=9 off=0 buf=29) layouts: b29(stride=18446744073709551615 step=1) b30(stride=18446744073709551615 step=1)
+[LIMINA-PIPE] pipe=0x9a0f91e00 attrs: a0(fmt=30 off=0 buf=30) a1(fmt=9 off=0 buf=29) layouts: b29(stride=18446744073709551615 step=1) b30(stride=18446744073709551615 step=1)
+[LIMINA-PIPE] pipe=0x9a0f92400 attrs: a0(fmt=30 off=0 buf=30) a1(fmt=9 off=0 buf=29) a2(fmt=29 off=0 buf=28) layouts: b28(stride=18446744073709551615 step=1) b29(stride=18446744073709551615 step=1) b30(stride=18446744073709551615 step=1)
+[LIMINA-PIPE] pipe=0x9a0f92a00 attrs: a0(fmt=30 off=0 buf=30) a1(fmt=9 off=0 buf=29) layouts: b29(stride=18446744073709551615 step=1) b30(stride=18446744073709551615 step=1)
+[LIMINA-PIPE] pipe=0x9a0f93000 attrs: a0(fmt=30 off=0 buf=30) a1(fmt=9 off=0 buf=29) a2(fmt=29 off=0 buf=28) layouts: b28(stride=18446744073709551615 step=1) b29(stride=18446744073709551615 step=1) b30(stride=18446744073709551615 step=1)
+
+# cogl-signature draw pipelines (pipe= counts):
+ 117 pipe=0x9a0f90600
+  34 pipe=0x9a0443000

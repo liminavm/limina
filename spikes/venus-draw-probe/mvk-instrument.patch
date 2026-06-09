@@ -1,5 +1,5 @@
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
-index c492057..61e5072 100644
+index c492057..3eb78e3 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
 +++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
 @@ -24,6 +24,31 @@
@@ -52,7 +52,55 @@ index c492057..61e5072 100644
                      if (mtlFeats.baseVertexInstanceDrawing) {
                          [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                            vertexStart: _firstVertex
-@@ -574,13 +610,75 @@
+@@ -440,6 +476,47 @@
+ 		return;
+ 	}
+ 
++	// [LIMINA-PASS-RESTART] #31: the working fan path's adjustment compute forcibly ENDS the Metal
++	// render encoder and re-begins the pass around every draw; after FORCE_INDIRECT/SPLIT=3/WIDEN
++	// eliminated everything else mechanical about the draw, this restart is one of the two deltas
++	// left standing (the other: GPU-compute-written index buffer). Mimic it with the same calls the
++	// adjustment path makes, but keep the direct uint16 draw. Placed BEFORE the stage loop so
++	// finalizeDrawState rebinds all state onto the fresh encoder, exactly as the fan path recovers.
++	// Dock renders whole => pass-level/encoder state is the trigger. Env-gated LIMINA_PASS_RESTART.
++	if (getenv("LIMINA_PASS_RESTART")) {
++		static long gkRst = 0;
++		cmdEncoder->encodeStoreActions(true);
++		(void)cmdEncoder->getMTLComputeEncoder(kMVKCommandUseDrawIndirectConvertBuffers);
++		cmdEncoder->beginMetalRenderPass(kMVKCommandUseRestartSubpass);
++		if (getenv("LIMINA_IDX_DUMP") && gkRst < 8) { fprintf(stderr, "[LIMINA-PASS-RESTART] restart #%ld\n", gkRst); }
++		gkRst++;
++	}
++
++	// [LIMINA-FORCE-INDIRECT] #31 POSITIVE-CONTROL test: with data/order/alignment/granularity all
++	// eliminated, the complete remaining mechanical delta between the broken batched draw and the
++	// working fan path is {direct drawIndexedPrimitives vs :indirect} x {uint16 vs uint32 indices}.
++	// Route EVERY indexed-list draw through the fan's own encodeIndexedIndirect (same indices, same
++	// bound index buffer, only the encode mechanism changes). Dock renders whole => the direct encode
++	// is the trigger (and this is a viable workaround). Still broken => only the index-type/compute-
++	// conversion delta remains. Env-gated LIMINA_FORCE_INDIRECT.
++	if (getenv("LIMINA_FORCE_INDIRECT")) {
++		if (getenv("LIMINA_IDX_DUMP")) {
++			const MVKIndexMTLBufferBinding& gkIbb = cmdEncoder->getVkGraphics()._indexBuffer;
++			size_t gkIdxSize = mvkMTLIndexTypeSizeInBytes((MTLIndexType)gkIbb.mtlIndexType);
++			unsigned gkIx[6] = {0,0,0,0,0,0};
++			if (gkIbb.mtlBuffer && [gkIbb.mtlBuffer storageMode] != MTLStorageModePrivate) {
++				const unsigned char* gkIp = (const unsigned char*)[gkIbb.mtlBuffer contents] + gkIbb.offset + _firstIndex * gkIdxSize;
++				for (uint32_t k = 0; k < 6 && k < _indexCount; k++)
++					gkIx[k] = (gkIdxSize == 2) ? (unsigned)((const uint16_t*)gkIp)[k] : ((const uint32_t*)gkIp)[k];
++			}
++			fprintf(stderr, "[LIMINA-FORCE-INDIRECT] idxType=%d idxCount=%u firstIdx=%u baseVtx=%d idx0-5: %u %u %u %u %u %u\n",
++				(int)gkIbb.mtlIndexType, _indexCount, _firstIndex, _vertexOffset,
++				gkIx[0],gkIx[1],gkIx[2],gkIx[3],gkIx[4],gkIx[5]);
++		}
++		encodeIndexedIndirect(cmdEncoder);
++		return;
++	}
++
+     cmdEncoder->_isIndexedDraw = true;
+ 
+ 	MVKPiplineStages stages;
+@@ -574,23 +651,252 @@
                      MVKRenderSubpass* subpass = cmdEncoder->getSubpass();
                      uint32_t viewCount = subpass->isMultiview() ? subpass->getViewCountInMetalPass(cmdEncoder->getMultiviewPassIndex()) : 1;
                      uint32_t instanceCount = _instanceCount * viewCount;
@@ -82,8 +130,8 @@ index c492057..61e5072 100644
 +                            // [LIMINA-IDX] #31 index-buffer offset/alignment probe (the reading localized the
 +                            // bug to cogl's raw index buffer vs the fan path's fresh MoltenVK buffer): dump
 +                            // the Metal indexBufferOffset, its 4-byte residue, ibb.offset, and firstIndex.
-+                            fprintf(stderr, "[LIMINA-IDX] prim=%d idxType=%d idxCount=%u restart=%d baseVtx=%d inst=%u storage=%lu maxIdx=%ld restarts=%ld idxByteOff=%llu off&3=%llu ibbOff=%llu firstIdx=%u idx0-5: %u %u %u %u %u %u\n",
-+                                pt, (int)ibb.mtlIndexType, _indexCount, restart, _vertexOffset, instanceCount,
++                            fprintf(stderr, "[LIMINA-IDX] pipe=%p prim=%d idxType=%d idxCount=%u restart=%d baseVtx=%d inst=%u storage=%lu maxIdx=%ld restarts=%ld idxByteOff=%llu off&3=%llu ibbOff=%llu firstIdx=%u idx0-5: %u %u %u %u %u %u\n",
++                                (void*)pipeline, pt, (int)ibb.mtlIndexType, _indexCount, restart, _vertexOffset, instanceCount,
 +                                ib ? (unsigned long)[ib storageMode] : 99UL, maxIdx, restarts,
 +                                (unsigned long long)idxBuffOffset, (unsigned long long)(idxBuffOffset & 3),
 +                                (unsigned long long)ibb.offset, _firstIndex,
@@ -103,6 +151,123 @@ index c492057..61e5072 100644
 +                    }
 +                    liminaDumpDepthStencil(cmdEncoder); // [LIMINA-DS] batched indexed (broken) site
                      cmdEncoder->getState().offsetZeroDivisorVertexBuffers(*cmdEncoder, stage, pipeline, _firstInstance);
+-                    if (mtlFeats.baseVertexInstanceDrawing) {
+-                        [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
+-                                                                  indexCount: _indexCount
+-                                                                   indexType: (MTLIndexType)ibb.mtlIndexType
+-                                                                 indexBuffer: ibb.mtlBuffer
+-                                                           indexBufferOffset: idxBuffOffset
+-                                                               instanceCount: instanceCount
+-                                                                  baseVertex: _vertexOffset
+-                                                                baseInstance: _firstInstance];
+-                    } else {
+-                        [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
+-                                                                  indexCount: _indexCount
+-                                                                   indexType: (MTLIndexType)ibb.mtlIndexType
+-                                                                 indexBuffer: ibb.mtlBuffer
+-                                                           indexBufferOffset: idxBuffOffset
+-                                                               instanceCount: instanceCount];
++                    // [LIMINA-COL] #31: [LIMINA-Q] verified the position+texcoord bindings but NEVER the packed
++                    // u8x4 COLOR attribute (floats-misread garbage, so it was skipped). cogl colors are
++                    // PREMULTIPLIED — a (0,0,0,0) v3 makes tri2 blend to invisible while tri1 (v0,v1,v2)
++                    // renders, a sharp per-triangle drop that NO fixed-function dump would catch. Dump the
++                    // first 2 quads' raw bytes per binding (first 16 bytes of each vertex record).
++                    if (getenv("LIMINA_COL_DUMP")) {
++                        static long gkColLog = 0;
++                        if (gkColLog < 24) {
++                            auto& gkVkC = cmdEncoder->getVkGraphics();
++                            for (size_t gkVi : pipeline->getVkVertexBuffers()) {
++                                const auto& gkVb = gkVkC._vertexBuffers[gkVi];
++                                id<MTLBuffer> gkMb = gkVb.mtlBuffer;
++                                if (!gkMb || [gkMb storageMode] == MTLStorageModePrivate) continue;
++                                const unsigned char* gkBase = (const unsigned char*)[gkMb contents] + gkVb.offset;
++                                unsigned gkStride = gkVb.stride ? gkVb.stride : 32;
++                                char gkLine[640]; int gkPos = 0;
++                                gkPos += snprintf(gkLine + gkPos, sizeof gkLine - gkPos, "[LIMINA-COL] vkidx=%zu stride=%u ", gkVi, gkStride);
++                                for (int gkV = 0; gkV < 8; gkV++) {
++                                    gkPos += snprintf(gkLine + gkPos, sizeof gkLine - gkPos, "v%d:", gkV);
++                                    for (unsigned gkB = 0; gkB < 16 && gkB < gkStride; gkB++)
++                                        gkPos += snprintf(gkLine + gkPos, sizeof gkLine - gkPos, "%02x", gkBase[(unsigned)gkV * gkStride + gkB]);
++                                    gkPos += snprintf(gkLine + gkPos, sizeof gkLine - gkPos, " ");
++                                }
++                                fprintf(stderr, "%s\n", gkLine);
++                            }
++                            gkColLog++;
++                        }
++                    }
++                    // [LIMINA-VTX-REALIGN] #31: the LEDGER GAP — the index buffer got a fresh-copy test
++                    // (LIMINA_IDX_REALIGN) but the VERTEX buffers never did. They are guest-blob-backed
++                    // newBufferWithBytesNoCopy wrappers over hv_vm_map'd shm; their CONTENT host-reads
++                    // correct, but if the GPU's indexed FETCH from that wrapped MTLBuffer misbehaves, a
++                    // content dump can't see it. Copy every bound vertex buffer's range into a fresh
++                    // Metal-allocated pooled temp (genuinely device-allocated Shared) and rebind. Dock
++                    // renders whole => the blob-backed vertex MTLBuffer is the culprit (a #28 cousin).
++                    // LIMINA_TEX1_ZERO (implies the realign copy): the [LIMINA-COL] dump caught STALE GARBAGE in
++                    // the layer-1 texcoords (record bytes 24+; v3's tex1.u = 4e33 while v0-v2 are ~0) — the
++                    // one attribute [LIMINA-Q] never verified. Premultiplied layer-1 modulate sampled at an
++                    // interpolated-huge coordinate => tri2 blends to invisible, sharp diagonal. Zero every
++                    // record's bytes beyond pos+color+tex0 in the fresh copy: dock renders whole => stale
++                    // tex1 IS the mechanism (guest-side cogl/zink data bug, NOT a draw bug).
++                    if (getenv("LIMINA_VTX_REALIGN") || getenv("LIMINA_TEX1_ZERO")) {
++                        auto& gkVk = cmdEncoder->getVkGraphics();
++                        if (getenv("LIMINA_IDX_DUMP")) {
++                            static long gkVrEnter = 0;
++                            if (gkVrEnter < 4) { fprintf(stderr, "[LIMINA-VTX-REALIGN] enter nXltd=%zu\n", pipeline->getTranslatedVertexBindings().size()); gkVrEnter++; }
++                        }
++                        for (size_t gkVi : pipeline->getVkVertexBuffers()) {
++                            const auto& gkVb = gkVk._vertexBuffers[gkVi];
++                            id<MTLBuffer> gkMb = gkVb.mtlBuffer;
++                            if (!gkMb || [gkMb storageMode] == MTLStorageModePrivate) continue;
++                            NSUInteger gkVbLen = [gkMb length];
++                            if (gkVbLen <= gkVb.offset) continue;
++                            NSUInteger gkCpLen = gkVbLen - gkVb.offset;
++                            if (gkCpLen > (2u << 20)) gkCpLen = 2u << 20; // cap 2MB (journal VBO ~1MB)
++                            auto* gkVt = cmdEncoder->getTempMTLBuffer(gkCpLen);
++                            memcpy((char*)[gkVt->_mtlBuffer contents] + gkVt->_offset,
++                                   (const char*)[gkMb contents] + gkVb.offset, gkCpLen);
++                            // Zero record bytes [24, stride) — the layer-1+ texcoord PADDING cogl never
++                            // writes for 1-layer entries — in EVERY binding's copy (each binding is a
++                            // different view of the same interleaved record; the tex1 attribute may ride
++                            // ANY of them, so zeroing just the tex binding's view is not enough).
++                            if (getenv("LIMINA_TEX1_ZERO") && gkVb.stride > 24) {
++                                NSUInteger gkAttrOff = gkVb.offset % gkVb.stride; // binding's offset within the record
++                                if (gkAttrOff < 24) {
++                                    NSUInteger gkRelStart = 24 - gkAttrOff;
++                                    char* gkRec = (char*)[gkVt->_mtlBuffer contents] + gkVt->_offset;
++                                    for (NSUInteger gkV = 0; gkV + gkVb.stride <= gkCpLen; gkV += gkVb.stride)
++                                        memset(gkRec + gkV + gkRelStart, 0, gkVb.stride - 24);
++                                    if (getenv("LIMINA_IDX_DUMP")) {
++                                        static long gkTzLog = 0;
++                                        if (gkTzLog < 6) { fprintf(stderr, "[LIMINA-TEX1-ZERO] vkidx=%zu zeroed rec[24,%u) (relStart=%lu, %lu bytes)\n", gkVi, gkVb.stride, (unsigned long)gkRelStart, (unsigned long)gkCpLen); gkTzLog++; }
++                                    }
++                                }
++                            }
++                            uint32_t gkMtlIdx = pipeline->getMetalBufferIndexForVertexAttributeBinding((uint32_t)gkVi);
++                            // zink uses dynamic vertex stride: those bindings go through the
++                            // setVertexBuffer:offset:attributeStride: selector, and a plain rebind
++                            // CLOBBERS the stride (first attempt garbled the whole scene). Mimic the
++                            // binder's dynamic/static split exactly.
++                            bool gkDynStride = pipeline->getDynamicStateFlags().has(MVKRenderStateFlag::VertexStride);
++                            if (gkDynStride) {
++                                [cmdEncoder->_mtlRenderEncoder setVertexBuffer: gkVt->_mtlBuffer
++                                                                        offset: gkVt->_offset
++                                                               attributeStride: gkVb.stride
++                                                                       atIndex: gkMtlIdx];
++                            } else {
++                                [cmdEncoder->_mtlRenderEncoder setVertexBuffer: gkVt->_mtlBuffer
++                                                                        offset: gkVt->_offset
++                                                                       atIndex: gkMtlIdx];
++                            }
++                            if (getenv("LIMINA_IDX_DUMP")) {
++                                static long gkVrLog = 0;
++                                if (gkVrLog < 12) { fprintf(stderr, "[LIMINA-VTX-REALIGN] vkidx=%zu mtlidx=%u dynStride=%d stride=%u copied %lu bytes (srcOff=%llu srcLen=%lu)\n", gkVi, gkMtlIdx, (int)gkDynStride, gkVb.stride, (unsigned long)gkCpLen, (unsigned long long)gkVb.offset, (unsigned long)gkVbLen); gkVrLog++; }
++                            }
++                        }
++                        if (pipeline->getTranslatedVertexBindings().size() > 0 && getenv("LIMINA_IDX_DUMP")) {
++                            static bool gkXltWarned = false;
++                            if (!gkXltWarned) { fprintf(stderr, "[LIMINA-VTX-REALIGN] WARNING: pipeline has translated vertex bindings, left UNREALIGNED\n"); gkXltWarned = true; }
++                        }
++                    }
 +                    // [LIMINA-IDX-REALIGN] #31 decisive test: the working fan path draws from a FRESH,
 +                    // MoltenVK-allocated index buffer; the batched path draws from cogl's RAW buffer at its
 +                    // raw offset. Mimic the fan path — copy this draw's index range into a fresh temp buffer
@@ -110,37 +275,100 @@ index c492057..61e5072 100644
 +                    // returns, the index-buffer provenance/offset IS the bug. Env-gated LIMINA_IDX_REALIGN.
 +                    id<MTLBuffer> drawIdxBuf = ibb.mtlBuffer;
 +                    VkDeviceSize drawIdxOff = idxBuffOffset;
-+                    if (getenv("LIMINA_IDX_REALIGN") && ibb.mtlBuffer && [ibb.mtlBuffer storageMode] != MTLStorageModePrivate) {
-+                        NSUInteger gkLen = (NSUInteger)_indexCount * idxSize;
++                    // LIMINA_IDX_REORDER #31 decisive test: the fan path (the WORKING path) reaches Metal as an
++                    // indexed list too, but in APEX-LAST order ({1,2,0}{2,3,0}); the broken batched list is
++                    // APEX-FIRST ({0,1,2}{0,2,3}). Same triangles+winding, different vertex order ⇒ different
++                    // PROVOKING vertex. Permute each cogl 6-index group [i0..i5] -> [i1,i2,i0,i4,i5,i3] while
++                    // KEEPING TRIANGLE_LIST. If tri2 returns => it's vertex-order/provoking-vertex on the list;
++                    // if still broken => it's the direct-vs-:indirect draw variant (the fan's only other diff).
++                    // LIMINA_IDX_WIDEN #31: the working fan path's conversion buffer is uint32; after
++                    // FORCE_INDIRECT and aligned SPLIT=3 eliminated the encode mechanism and position-in-
++                    // draw, uint16-vs-uint32 index type is one of the last deltas standing. Widen the copied
++                    // indices u16->u32 (CPU-side, fresh aligned temp) and draw MTLIndexTypeUInt32. Dock
++                    // renders whole => uint16 index fetch (x state) is the trigger.
++                    MTLIndexType gkIdxType = (MTLIndexType)ibb.mtlIndexType;
++                    NSUInteger gkDrawIdxSize = idxSize;
++                    bool gkWiden = getenv("LIMINA_IDX_WIDEN") && idxSize == 2;
++                    if ((gkWiden || getenv("LIMINA_IDX_REALIGN") || getenv("LIMINA_IDX_REORDER")) && ibb.mtlBuffer && [ibb.mtlBuffer storageMode] != MTLStorageModePrivate) {
++                        NSUInteger gkLen = (NSUInteger)_indexCount * (gkWiden ? 4 : idxSize);
 +                        auto* gkTmp = cmdEncoder->getTempMTLBuffer(gkLen); // isPrivate=false → host-visible (memcpy-able)
-+                        const void* gkSrc = (const char*)[ibb.mtlBuffer contents] + idxBuffOffset;
-+                        memcpy((char*)[gkTmp->_mtlBuffer contents] + gkTmp->_offset, gkSrc, gkLen);
++                        const char* gkSrc = (const char*)[ibb.mtlBuffer contents] + idxBuffOffset;
++                        char* gkDst = (char*)[gkTmp->_mtlBuffer contents] + gkTmp->_offset;
++                        bool gkReorder = !gkWiden && getenv("LIMINA_IDX_REORDER") && (_indexCount % 6 == 0);
++                        if (gkWiden) {
++                            const uint16_t* gkS16 = (const uint16_t*)gkSrc;
++                            uint32_t* gkD32 = (uint32_t*)gkDst;
++                            for (uint32_t k = 0; k < _indexCount; k++) gkD32[k] = gkS16[k];
++                            gkIdxType = MTLIndexTypeUInt32;
++                            gkDrawIdxSize = 4;
++                        } else if (gkReorder) {
++                            static const int gkPerm[6] = {1,2,0, 4,5,3}; // apex-first list -> apex-last fan order
++                            for (NSUInteger g = 0; g < _indexCount; g += 6)
++                                for (int j = 0; j < 6; j++)
++                                    memcpy(gkDst + (g + j) * idxSize, gkSrc + (g + gkPerm[j]) * idxSize, idxSize);
++                        } else {
++                            memcpy(gkDst, gkSrc, gkLen);
++                        }
 +                        drawIdxBuf = gkTmp->_mtlBuffer;
 +                        drawIdxOff = gkTmp->_offset;
-+                        if (getenv("LIMINA_IDX_DUMP")) { fprintf(stderr, "[LIMINA-IDX-REALIGN] copied %lu bytes -> off=%llu off&3=%llu\n", (unsigned long)gkLen, (unsigned long long)drawIdxOff, (unsigned long long)(drawIdxOff & 3)); }
++                        if (getenv("LIMINA_IDX_DUMP")) { fprintf(stderr, "[LIMINA-IDX-%s] copied %lu bytes -> off=%llu off&3=%llu\n", gkWiden ? "WIDEN" : (gkReorder ? "REORDER" : "REALIGN"), (unsigned long)gkLen, (unsigned long long)drawIdxOff, (unsigned long long)(drawIdxOff & 3)); }
 +                    }
-                     if (mtlFeats.baseVertexInstanceDrawing) {
-                         [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
-                                                                   indexCount: _indexCount
-                                                                    indexType: (MTLIndexType)ibb.mtlIndexType
--                                                                 indexBuffer: ibb.mtlBuffer
--                                                           indexBufferOffset: idxBuffOffset
-+                                                                 indexBuffer: drawIdxBuf
-+                                                           indexBufferOffset: drawIdxOff
-                                                                instanceCount: instanceCount
-                                                                   baseVertex: _vertexOffset
-                                                                 baseInstance: _firstInstance];
-@@ -588,8 +686,8 @@
-                         [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
-                                                                   indexCount: _indexCount
-                                                                    indexType: (MTLIndexType)ibb.mtlIndexType
--                                                                 indexBuffer: ibb.mtlBuffer
--                                                           indexBufferOffset: idxBuffOffset
-+                                                                 indexBuffer: drawIdxBuf
-+                                                           indexBufferOffset: drawIdxOff
-                                                                instanceCount: instanceCount];
++                    // [LIMINA-DRAW-SPLIT] #31 STRUCTURAL test: cogl's shared rect index buffer lays each
++                    // quad out as a contiguous 6-index run (0 1 2 0 2 3, 4 5 6 4 6 7, ...). Issue the
++                    // batched draw as N separate per-quad (6-index) drawIndexedPrimitives — the GRANULARITY
++                    // of the working disable-batching fan path, while KEEPING indexed-TRIANGLES topology.
++                    // If the dock's tri2 returns => the bug is "many quads in ONE indexed draw" (granularity
++                    // / large index count), NOT the indexed topology. If still broken => topology itself.
++                    // LIMINA_DRAW_SPLIT=3 splits per-TRIANGLE (3-index sub-draws): does tri2 render when it
++                    // is its OWN draw call? Renders => the drop is keyed to position-in-draw (2nd primitive);
++                    // still missing => the triangle itself won't rasterize under this state, independent of
++                    // the draw it rides in. Any other value keeps the original per-quad (6-index) split.
++                    const char* gkSplitEnv = getenv("LIMINA_DRAW_SPLIT");
++                    NSUInteger gkChunkSz = (gkSplitEnv && gkSplitEnv[0] == '3' && gkSplitEnv[1] == 0) ? 3 : 6;
++                    bool gkSplit = gkSplitEnv && (_indexCount % gkChunkSz == 0) && _indexCount > gkChunkSz;
++                    NSUInteger gkChunks = gkSplit ? (_indexCount / gkChunkSz) : 1;
++                    if (gkSplit && getenv("LIMINA_IDX_DUMP")) {
++                        static int gkSplitLog = 0;
++                        if (gkSplitLog < 20) { fprintf(stderr, "[LIMINA-DRAW-SPLIT] %lu chunks x %lu idx (was indexCount=%u)\n", (unsigned long)gkChunks, (unsigned long)gkChunkSz, _indexCount); gkSplitLog++; }
++                    }
++                    for (NSUInteger gkC = 0; gkC < gkChunks; gkC++) {
++                        uint32_t gkCount = gkSplit ? (uint32_t)gkChunkSz : _indexCount;
++                        VkDeviceSize gkOff = drawIdxOff + (VkDeviceSize)gkC * gkChunkSz * gkDrawIdxSize;
++                        id<MTLBuffer> gkBuf = drawIdxBuf;
++                        // 3-index chunks land at off&3==2 on every odd chunk (3*2=6 bytes), which Metal may
++                        // reject/misdraw — copy EACH chunk into its own fresh aligned temp buffer so tri1 and
++                        // tri2 sub-draws are mechanically identical except for the index VALUES.
++                        if (gkSplit && gkChunkSz == 3 && [drawIdxBuf storageMode] != MTLStorageModePrivate) {
++                            auto* gkT = cmdEncoder->getTempMTLBuffer(16);
++                            memcpy((char*)[gkT->_mtlBuffer contents] + gkT->_offset,
++                                   (const char*)[drawIdxBuf contents] + gkOff, gkChunkSz * gkDrawIdxSize);
++                            gkBuf = gkT->_mtlBuffer;
++                            gkOff = gkT->_offset;
++                            if (getenv("LIMINA_IDX_DUMP")) {
++                                static int gkTriLog = 0;
++                                if (gkTriLog < 8) { fprintf(stderr, "[LIMINA-TRI-COPY] chunk=%lu tempOff=%llu off&3=%llu\n", (unsigned long)gkC, (unsigned long long)gkOff, (unsigned long long)(gkOff & 3)); gkTriLog++; }
++                            }
++                        }
++                        if (mtlFeats.baseVertexInstanceDrawing) {
++                            [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
++                                                                      indexCount: gkCount
++                                                                       indexType: gkIdxType
++                                                                     indexBuffer: gkBuf
++                                                               indexBufferOffset: gkOff
++                                                                   instanceCount: instanceCount
++                                                                      baseVertex: _vertexOffset
++                                                                    baseInstance: _firstInstance];
++                        } else {
++                            [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
++                                                                      indexCount: gkCount
++                                                                       indexType: gkIdxType
++                                                                     indexBuffer: gkBuf
++                                                               indexBufferOffset: gkOff
++                                                                   instanceCount: instanceCount];
++                        }
                      }
                  }
+                 break;
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm b/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm
 index a3ef8cb..bac0d6b 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm
@@ -257,6 +485,40 @@ index 16fd614..4d2fb7c 100644
  	bindBuffer(encoder, buffer, offset, index, _exists.vertex(), _bindings.vertex(), MVKVertexBinder());
  }
  void MVKMetalGraphicsCommandEncoderState::bindVertexBytes(id<MTLRenderCommandEncoder> encoder, const void* data, size_t size, NSUInteger index) {
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+index 7357ff1..330e325 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+@@ -1190,6 +1190,29 @@ static bool usesConstantColor(MVKRenderStateFlags dynamic, const VkPipelineColor
+ 	// This needs to happen before compiling the fragment shader, or we'll lose information on vertex attributes.
+ 	if (!addVertexInputToPipeline(plDesc.vertexDescriptor, pCreateInfo->pVertexInputState, shaderConfig)) { return nil; }
+ 
++	// [LIMINA-PIPE] #31: dump each pipeline's Metal vertex descriptor once at build, keyed by the
++	// MVKGraphicsPipeline pointer ([LIMINA-IDX] logs pipe=%p at draw time for the join). The open
++	// question is whether the broken draws' pipelines declare an attribute over the journal
++	// record's PADDING bytes (24+) — cogl pads 1-layer entries to 2-layer stride and never writes
++	// the tail; an attribute fetching it reads stale garbage.
++	if (getenv("LIMINA_PIPE_DUMP")) {
++		MTLVertexDescriptor* gkVd = plDesc.vertexDescriptor;
++		char gkBuf[1024]; int gkP = 0;
++		gkP += snprintf(gkBuf + gkP, sizeof gkBuf - gkP, "[LIMINA-PIPE] pipe=%p attrs:", (void*)this);
++		for (int gkA = 0; gkA < 31; gkA++) {
++			MTLVertexAttributeDescriptor* gkAd = gkVd.attributes[gkA];
++			if (gkAd.format == MTLVertexFormatInvalid) continue;
++			gkP += snprintf(gkBuf + gkP, sizeof gkBuf - gkP, " a%d(fmt=%lu off=%lu buf=%lu)", gkA, (unsigned long)gkAd.format, (unsigned long)gkAd.offset, (unsigned long)gkAd.bufferIndex);
++		}
++		gkP += snprintf(gkBuf + gkP, sizeof gkBuf - gkP, " layouts:");
++		for (int gkL = 0; gkL < 31; gkL++) {
++			MTLVertexBufferLayoutDescriptor* gkLd = gkVd.layouts[gkL];
++			if (gkLd.stride == 0) continue;
++			gkP += snprintf(gkBuf + gkP, sizeof gkBuf - gkP, " b%d(stride=%lu step=%lu)", gkL, (unsigned long)gkLd.stride, (unsigned long)gkLd.stepFunction);
++		}
++		fprintf(stderr, "%s\n", gkBuf);
++	}
++
+ 	// Fragment shader - only add if rasterization is enabled
+ 	if (!addFragmentShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, pFragmentSS, pFragmentFB)) { return nil; }
+ 
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
 index 42e5646..a2b38e6 100644
 --- a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm

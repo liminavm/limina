@@ -15,7 +15,7 @@
 #   [LIMINA-VTX]  the actual Shared vertex buffer the GPU fetches (firstNonzeroByte scan = coherency tell)
 #
 # First-time setup of a fresh MoltenVK checkout also needs:  (cd third_party/MoltenVK-src && ./fetchDependencies --macos)
-set -e
+set -e -o pipefail  # pipefail is load-bearing: without it `make | tail` masks compile failures and DEPLOYS A STALE DYLIB
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 MVK="$ROOT/third_party/MoltenVK-src"
 HERE="$ROOT/spikes/venus-draw-probe"
