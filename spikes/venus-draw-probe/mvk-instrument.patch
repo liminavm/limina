@@ -1,5 +1,5 @@
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
-index c492057..49ee925 100644
+index c492057..e31cde4 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
 +++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
 @@ -355,6 +355,16 @@
@@ -19,7 +19,7 @@ index c492057..49ee925 100644
                      if (mtlFeats.baseVertexInstanceDrawing) {
                          [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                            vertexStart: _firstVertex
-@@ -574,6 +584,35 @@
+@@ -574,6 +584,46 @@
                      MVKRenderSubpass* subpass = cmdEncoder->getSubpass();
                      uint32_t viewCount = subpass->isMultiview() ? subpass->getViewCountInMetalPass(cmdEncoder->getMultiviewPassIndex()) : 1;
                      uint32_t instanceCount = _instanceCount * viewCount;
@@ -50,6 +50,17 @@ index c492057..49ee925 100644
 +                                pt, (int)ibb.mtlIndexType, _indexCount, restart, _vertexOffset, instanceCount,
 +                                ib ? (unsigned long)[ib storageMode] : 99UL, maxIdx, restarts,
 +                                ix[0],ix[1],ix[2],ix[3],ix[4],ix[5]);
++                            // [LIMINA-RAST] data (indices/verts/texcoords) is proven correct, so dump the
++                            // Metal RENDER STATE for this indexed draw: cull/front/poly/raster + viewport
++                            // (a negative-height vp flips winding!) + scissor. Compares the broken indexed
++                            // draws against the working fan draws ([LIMINA-DRAW]) and the clean texfan.
++                            auto& mg = cmdEncoder->getMtlGraphics();
++                            fprintf(stderr, "[LIMINA-RAST] cull=%u front=%u poly=%d rastDisabled=%d nVP=%u nSC=%u vp0=(%.0f,%.0f,%.0fx%.0f) sc0=(%d,%d,%ux%u)\n",
++                                (unsigned)mg._cullMode, (unsigned)mg._frontFace, (int)mg._polygonMode,
++                                (int)pipeline->isRasterizationDisabled(),
++                                (unsigned)mg._numViewports, (unsigned)mg._numScissors,
++                                mg._viewports[0].x, mg._viewports[0].y, mg._viewports[0].width, mg._viewports[0].height,
++                                mg._scissors[0].offset.x, mg._scissors[0].offset.y, mg._scissors[0].extent.width, mg._scissors[0].extent.height);
 +                        }
 +                    }
                      cmdEncoder->getState().offsetZeroDivisorVertexBuffers(*cmdEncoder, stage, pipeline, _firstInstance);
@@ -86,10 +97,10 @@ index a3ef8cb..bac0d6b 100644
  
  	for (const auto& cpyRgn : _bufferCopyRegions) {
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
-index 16fd614..8fee5eb 100644
+index 16fd614..4d2fb7c 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
 +++ b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
-@@ -779,6 +779,50 @@ static void bindVertexBuffersTemplate(id<MTLCommandEncoder> encoder,
+@@ -779,6 +779,62 @@ static void bindVertexBuffersTemplate(id<MTLCommandEncoder> encoder,
  	for (size_t vkidx : pipeline->getVkVertexBuffers()) {
  		const auto& buffer = vkState._vertexBuffers[vkidx];
  		uint32_t idx = pipeline->getMetalBufferIndexForVertexAttributeBinding(static_cast<uint32_t>(vkidx));
@@ -123,6 +134,18 @@ index 16fd614..8fee5eb 100644
 +					vkidx, idx, (unsigned long long)buffer.offset, stride, blen,
 +					(unsigned long)[mb storageMode], nverts, outliers, axmin, axmax, firstOut, foX, foY,
 +					p[0],p[1],p[2]);
++				// [LIMINA-Q] tier-2 stretched-triangle probe: dump the first TWO quads' 4 verts each (x,y).
++				// cogl quad order is v0=TL v1=BL v2=BR v3=TR; the bug drops tri2 {v0,v2,v3}, so if v3 (the
++				// 4th vert) is stale/zero while v0,v1,v2 are sane corners, that IS the data bug. Reads this
++				// binding's own (x,y) per vertex at its stride, so the POSITION binding shows real corners.
++				if (getenv("LIMINA_VTX4") && nverts >= 4) {
++					float q[16]; for (int qq=0; qq<8 && (unsigned long)qq<nverts; qq++){
++						const float* vp=(const float*)((const char*)base + buffer.offset + (unsigned long)qq*stride);
++						q[qq*2]=vp[0]; q[qq*2+1]=vp[1];
++					}
++					fprintf(stderr, "[LIMINA-Q] mtlidx=%u stride=%lu quad0: (%.2f,%.2f) (%.2f,%.2f) (%.2f,%.2f) (%.2f,%.2f)  quad1: (%.2f,%.2f) (%.2f,%.2f) (%.2f,%.2f) (%.2f,%.2f)\n",
++						idx, stride, q[0],q[1],q[2],q[3],q[4],q[5],q[6],q[7], q[8],q[9],q[10],q[11],q[12],q[13],q[14],q[15]);
++				}
 +				// [LIMINA-FORCE-QUAD] #28 EXP-A: if the buffer the GPU fetches is all-zero (the bug), write
 +				// tri.c's known NDC fullscreen quad HOST-side. If the draw then renders green, the host
 +				// CPU->GPU path for this memory is fine and the ONLY defect is the guest's write not
@@ -140,7 +163,7 @@ index 16fd614..8fee5eb 100644
  		bindVertexBuffer<DynamicStride>(encoder, buffer.mtlBuffer, buffer.offset, buffer.stride,
  		                                idx, exists, bindings, binder);
  	}
-@@ -1049,6 +1093,18 @@ static uint32_t getSampleCount(VkSampleCountFlags vk) {
+@@ -1049,6 +1105,18 @@ static uint32_t getSampleCount(VkSampleCountFlags vk) {
  	bindSampler(encoder, sampler, index, _exists.fragment(), _bindings.fragment(), MVKFragmentBinder());
  }
  void MVKMetalGraphicsCommandEncoderState::bindVertexBuffer(id<MTLRenderCommandEncoder> encoder, id<MTLBuffer> buffer, VkDeviceSize offset, NSUInteger index) {

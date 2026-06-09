@@ -24,7 +24,10 @@ ICD=/tmp/mvk-instrumented/MoltenVK_icd.json
 [ -f "$ICD" ] || { echo "no instrumented MoltenVK at $ICD — run spikes/venus-draw-probe/rebuild-mvk.sh first"; exit 1; }
 rm -f "$WORK"; cp -c Fedora-Workstation-43.dev-enh.raw "$WORK" || { echo CLONE_FAIL; exit 1; }
 rm -f "$LOG"
-VK_ICD_FILENAMES="$ICD" LIMINA_IDX_DUMP="${LIMINA_IDX_DUMP:-1}" ${LIMINA_VTX_DUMP:+LIMINA_VTX_DUMP=$LIMINA_VTX_DUMP} \
+# Export the instrument env cleanly (a bare ${VAR:+VAR=$VAR} prefix mis-parses as a command).
+export VK_ICD_FILENAMES="$ICD"
+export LIMINA_IDX_DUMP="${LIMINA_IDX_DUMP:-1}"
+[ -n "${LIMINA_VTX_DUMP:-}" ] && export LIMINA_VTX_DUMP
 target/debug/limina --vmm-bin target/debug/limina-vmm \
   --kernel target/test-guest/kernel/Image-16k \
   --cmdline "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 console=ttyAMA0" \

@@ -111,8 +111,8 @@ exactly these axes. Each has a discriminator and a prediction.
 |---|--------|-----------|---------------|--------|
 | **U** | **uint8 indices** (zink layer) | cogl makes a GL uint8 index buffer; zink converts uint8→uint16 (venus uint8 disabled); a bad conversion would hit ≤64-rect batches = small icons | `u8test U8=1` on this build (`/tmp/ios-41.png`) | ❌ **DISPROVEN** — perfect 8×8 grid, uint8 is clean |
 | **O** | **non-zero `first_vertex` offset** | `current_vertex*6/4` starts the indexed draw partway in; offset base may be mishandled | `texfan MODE=batch IDX8=1 OFFSET=1` — group A offset 0, group B non-zero (`/tmp/ios-75.png`) | ❌ **DISPROVEN** — both groups clean, even uint8+offset |
-| **L** | **journal 2→4 vertex expansion + layout** | `upload_vertices` logs 2 diagonal corners/quad, expands to 4 (v0,v1,v2,v3) in a specific interleaved color+pos+tex layout | replicate the exact expansion + interleave in a mapped-buffer vehicle | untested |
-| **C** | **a LARGE per-frame MAPPED multi-quad buffer fetched incoherently by the host GPU** (and/or the indexed draw reading from it) | `upload_vertices` (cogl-journal.c:1162) **maps** a pooled `DYNAMIC` `CoglAttributeBuffer` every frame (`_cogl_buffer_map_range_for_fill_or_fallback`) and writes the 2→4 expanded verts — host-visible mapped-buffer = **#28 territory**. My vehicles use `glBufferData(STATIC_DRAW)` and never map per frame. | map-per-frame vehicle: `glMapBufferRange` a DYNAMIC buffer, write MANY expanded quads, draw indexed, loop frames | **next** |
+| **L** | **journal 2→4 vertex expansion + layout** | `upload_vertices` logs 2 diagonal corners/quad, expands to 4 (v0,v1,v2,v3) in a specific interleaved color+pos+tex layout | the instrument dumps the expanded verts the GPU fetches (`[LIMINA-Q]`) | ❌ **DISPROVEN** — expansion is exact (v0..v3 correct positions+texcoords); see "INSTRUMENTED THE REAL DRAW" |
+| **C** | **a LARGE per-frame MAPPED multi-quad buffer fetched incoherently by the host GPU** (and/or the indexed draw reading from it) | `upload_vertices` (cogl-journal.c:1162) **maps** a pooled `DYNAMIC` `CoglAttributeBuffer` every frame (`_cogl_buffer_map_range_for_fill_or_fallback`) and writes the 2→4 expanded verts — host-visible mapped-buffer = **#28 territory**. My vehicles use `glBufferData(STATIC_DRAW)` and never map per frame. | `mapquad MAP=1`, then the instrument's dump of the bytes the GPU actually fetches | ❌ **DISPROVEN** — `mapquad` clean (weakened it); the instrument then proved the GPU fetches PERFECT data, killing it outright. See "INSTRUMENTED THE REAL DRAW" |
 | **P** | **CPU software-transform fill path** | the verts are CPU-transformed via `transform_points` during the per-frame fill | `COGL_DEBUG=disable-software-transform` (`/tmp/dock-swxform2x.png`, env exact-confirmed) | ❌ **DISPROVEN** — dock still broken; GPU-side transform doesn't help |
 
 ### ⚠️ Corrected reasoning — what `disable-batching` actually does
@@ -124,7 +124,10 @@ not. `disable-batching` has exactly **one** effect site (cogl-journal.c:1635): a
 `TRIANGLE_FAN`. So **disable-batching does not bypass the mapped-buffer path** — if "mapping is broken"
 were the whole story, disable-batching (which also maps) would break too, and it's clean.
 
-### Standout suspect: C (refined)
+### (superseded — C is DISPROVEN; see "INSTRUMENTED THE REAL DRAW" below) Earlier reasoning that made C the standout
+⚠️ This section made C the leading suspect; the instrument later **killed it** (the GPU fetches perfect
+data). Kept for the reasoning trail only — do NOT treat C as live.
+
 U, O, and the software-transform fill (P) are disproven. The three data points:
 
 | case | buffer | quads | draw | result |
@@ -150,7 +153,31 @@ frames with swaps) renders a **perfect grid** (`/tmp/ios-69.png`). So the mapped
   host-visible VkBuffer, so it very likely *did* exercise the coherency path — but a mesa staging/shadow
   fallback can't be 100% ruled out. So C is weakened, not cleanly killed.
 
-## Where this leaves us — vehicles exhausted, instrument next
+## ⭐ INSTRUMENTED THE REAL DRAW — it's RASTERIZATION/STATE, not data (2026-06-09)
+Built the instrumented MoltenVK (`spikes/venus-draw-probe/mvk-instrument.patch`, `rebuild-mvk.sh`,
+`VK_ICD_FILENAMES`), booted the seated desktop with it (`boot-seated-mvkinst.sh`,
+`LIMINA_IDX_DUMP=1 LIMINA_VTX_DUMP=1 LIMINA_VTX4=1`), and **verified the bug reproduces under the instrument**
+(dock icons still bottom-left triangles — premise checked, the capture is of the genuinely broken render).
+Filtered the firehose to cogl's rectangle batches via the index signature `idx0-5: 0 1 2 0 2 3`.
+
+For every broken cogl quad, the data Metal receives is **PERFECT**:
+- **Indices** (`[LIMINA-IDX]`): `prim=3` (triangle), `idxType=0` (uint16), `idxCount = 6·nquads` (both
+  triangles submitted), `maxIdx = 4·nquads−1`, `restart=0`, `idx0-5 = 0 1 2 0 2 3`.
+- **Positions** (`[LIMINA-Q]`, position binding): every quad a flawless rectangle,
+  e.g. `(-46.38,25.76) (-46.38,-27.42) (-41.16,-27.42) (-41.16,25.76)` = TL,BL,BR,TR with **`v3`=TR exact**.
+- **Texcoords** (`[LIMINA-Q]`, texcoord binding): `(0,0)(0,1)(1,1)(1,0)` = TL,BL,BR,TR, **`v3`=`(1,0)` exact**
+  (atlas sub-`0.5` ranges also well-formed).
+
+⇒ **The GPU is handed geometrically and texturally correct data for BOTH triangles, yet tri2 produces
+no visible output. This kills the entire data/coherency line — C, stale-v3, index, texcoord all dead.**
+It is a **rasterization / pipeline-STATE** defect. Winding is identical for both triangles (both CCW,
+same signed area), so it is **not** simple back-face culling either. The remaining unknown is the Metal
+render state on these indexed draws (cull/front/depth/stencil/scissor/blend) — which `texfan` (clean)
+didn't replicate. Added `[LIMINA-RAST]` to the `[LIMINA-IDX]` site (cull/front/poly/raster/viewport/scissor)
+to capture it. **Key clue to watch: a negative-height `vp0` flips winding** — the working fan path and
+the broken indexed path may differ there.
+
+## (superseded) Earlier dead-end: vehicles exhausted
 Every standalone vehicle is clean: static indexed, mapped indexed, uint8, non-zero offset, textured fan,
 FBO, coherency probes. U/O/P disproven, C weakened. Yet the real batched indexed draw breaks and
 `disable-batching` (which keeps clipping/pipeline but forces per-quad fan) fixes it — so the defect is
