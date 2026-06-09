@@ -216,3 +216,21 @@ index 16fd614..4d2fb7c 100644
  	bindBuffer(encoder, buffer, offset, index, _exists.vertex(), _bindings.vertex(), MVKVertexBinder());
  }
  void MVKMetalGraphicsCommandEncoderState::bindVertexBytes(id<MTLRenderCommandEncoder> encoder, const void* data, size_t size, NSUInteger index) {
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+index 42e5646..a2b38e6 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+@@ -554,6 +554,13 @@
+ 	// Retrieve the result before committing MTLCommandBuffer, because finish() will destroy this instance.
+ 	VkResult rslt = mtlCmdBuff ? getConfigurationResult() : VK_ERROR_OUT_OF_POOL_MEMORY;
+ 	[mtlCmdBuff commit];
++	// [LIMINA-SYNC] #31 fence-race test: fully serialize the GPU. venus/MoltenVK lacks external-semaphore-fd
++	// so zink falls back to implicit sync; if that isn't enforced, zink recycles the host-visible batched
++	// vertex/index buffer before this draw's GPU read completes (later verts clobber first → tri2 using v3
++	// degenerates; whole buffer clobbers → scene decays). Blocking here makes the fence/semaphore signal
++	// only after true GPU completion. If LIMINA_SYNC_SUBMIT fixes BOTH symptoms, the reuse race is confirmed.
++	// (After this returns, finish() may already have run via the completion handler — touch only locals.)
++	if (mtlCmdBuff && getenv("LIMINA_SYNC_SUBMIT")) { [mtlCmdBuff waitUntilCompleted]; }
+ 	[mtlCmdBuff release];		// retained
+ 
+ 	// If we need to signal completion, but an error occurred and the MTLCommandBuffer
