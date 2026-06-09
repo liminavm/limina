@@ -171,11 +171,42 @@ For every broken cogl quad, the data Metal receives is **PERFECT**:
 ⇒ **The GPU is handed geometrically and texturally correct data for BOTH triangles, yet tri2 produces
 no visible output. This kills the entire data/coherency line — C, stale-v3, index, texcoord all dead.**
 It is a **rasterization / pipeline-STATE** defect. Winding is identical for both triangles (both CCW,
-same signed area), so it is **not** simple back-face culling either. The remaining unknown is the Metal
-render state on these indexed draws (cull/front/depth/stencil/scissor/blend) — which `texfan` (clean)
-didn't replicate. Added `[LIMINA-RAST]` to the `[LIMINA-IDX]` site (cull/front/poly/raster/viewport/scissor)
-to capture it. **Key clue to watch: a negative-height `vp0` flips winding** — the working fan path and
-the broken indexed path may differ there.
+same signed area), so it is **not** simple back-face culling either.
+
+### What the disable-batching interaction tells us — a screen-space clip is FALSIFIED
+Grounding deduction (the right question: how does `disable-batching` interact with a post-raster kill?).
+Batched (broken) and `disable-batching` (clean) submit the **identical two triangles at identical pixels** —
+same v0..v3 (both run the same `upload_vertices` 2→4 expansion), same coverage, same winding. The only
+differences are **non-geometric**: indexed-`TRIANGLES` vs `TRIANGLE_FAN`, batch size / first-index offset,
+and the per-batch shared state setup. Two consequences:
+
+1. **Any kill keyed to *where tri2 lands* on screen** (scissor, stencil, depth, a position-based `discard`,
+   a clip plane on v3) **would fire in the fan path too** — tri2 occupies the same pixels there. It doesn't.
+   So the killer is **not** screen-position-keyed. (Retract the earlier "almost certainly a clip keyed to
+   the geometry" framing.)
+2. **The defect's pattern makes a screen-space clip impossible anyway:** it drops the **NE half of every
+   quad in quad-local coordinates**, wherever that quad sits. No single screen-space clip region is "the
+   lower-left triangle of every quad at once" (a scissor is one rectangle; nothing writes a per-quad
+   diagonal stencil mask). So the kill is **structural — the 2nd sub-triangle of each quad** — keyed to the
+   indexed multi-quad draw shape, not to screen geometry.
+
+But `texfan` already does indexed multi-quad `TRIANGLES` (with offset, uint8) **cleanly** — so the draw
+*structure* alone isn't sufficient. The real batch must also carry **per-batch bound STATE that `texfan`
+doesn't replicate**: the real multitexture/blend pipeline, the cogl clip stack active on that batch, or the
+exact interleaved color+pos+padded-texcoord vertex layout. Batching is what binds that state once across
+many quads; `disable-batching` re-establishes it per quad and the defect vanishes.
+
+**Live mechanism:** *indexed multi-quad draw* × *the real shell's per-batch pipeline/state* → the structural
+2nd sub-triangle executes to zero coverage on Metal, despite perfect MoltenVK command-level data.
+
+**Decisive next experiment (differential, not "find the clip"):** capture the **same icon** under batched
+vs `disable-batching` and **diff the Metal render-pipeline descriptor** each draw binds — depth/stencil
+descriptor, blend, color-write mask, two-sided/front-face, provoking-vertex. That bound state is the one
+thing that provably differs between clean and broken and that `[LIMINA-RAST]` hasn't dumped. Secondarily, grow
+`texfan` toward the real batch (real vertex layout → multitexture pipeline → push a clip) until it breaks,
+which names the culprit state directly. (`[LIMINA-RAST]` already added cull/front/poly/raster/viewport/scissor
+to the `[LIMINA-IDX]` site; one residual curiosity is a negative-height `vp0` on some batches, harmless with
+cull off but worth confirming it isn't the discriminator.)
 
 ## (superseded) Earlier dead-end: vehicles exhausted
 Every standalone vehicle is clean: static indexed, mapped indexed, uint8, non-zero offset, textured fan,
