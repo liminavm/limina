@@ -18,11 +18,17 @@
 set -u
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 cd "$ROOT"
-WORK=/tmp/seated-mvkinst.raw
 LOG=/tmp/seated-mvkinst-worker.log
 ICD=/tmp/mvk-instrumented/MoltenVK_icd.json
 [ -f "$ICD" ] || { echo "no instrumented MoltenVK at $ICD — run spikes/venus-draw-probe/rebuild-mvk.sh first"; exit 1; }
-rm -f "$WORK"; cp -c Fedora-Workstation-43.dev-enh.raw "$WORK" || { echo CLONE_FAIL; exit 1; }
+# LIMINA_DISK=<path> reuses an already-prepared disk WITHOUT re-cloning — e.g. /tmp/seated-clean.raw with a
+# disable-batching environment.d already injected, to instrument the WORKING (fixed) path. Default = fresh clone.
+if [ -n "${LIMINA_DISK:-}" ]; then
+  WORK="$LIMINA_DISK"; echo "reusing prepared disk $WORK (no clone)"
+else
+  WORK=/tmp/seated-mvkinst.raw
+  rm -f "$WORK"; cp -c Fedora-Workstation-43.dev-enh.raw "$WORK" || { echo CLONE_FAIL; exit 1; }
+fi
 rm -f "$LOG"
 # Export the instrument env cleanly (a bare ${VAR:+VAR=$VAR} prefix mis-parses as a command).
 # LIMINA_IDX_DUMP defaults ON (the firehose); pass LIMINA_IDX_DUMP=0 to silence it for a DS-only differential.
