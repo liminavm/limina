@@ -1,4 +1,47 @@
-# Tier-2 seated-desktop render defect: cogl batched-quad path (OPEN)
+# Tier-2 seated-desktop render defect: cogl batched-quad path (✅ SOLVED 2026-06-09)
+
+> ## ✅ ROOT CAUSE FOUND & FIXED 2026-06-09 — supersedes everything below
+>
+> **The bug: MoltenVK's triangle-fan emulation only consulted the pipeline's STATIC topology
+> (`pipeline->getVkPrimitiveTopology()`, `MVKCmdDraw.mm` sites 254/483/1005/1301). zink sets primitive
+> topology DYNAMICALLY (`vkCmdSetPrimitiveTopology`), and `MVKCmdSetPrimitiveTopology::encode` stored only
+> the lowered `MTLPrimitiveType` — `mvk_datatypes.mm:497` maps `VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN` to
+> `MTLPrimitiveTypeTriangle`, erasing fan-ness.** A 4-vertex fan on a pipeline whose static topology is
+> LIST therefore bypassed fan emulation entirely and was encoded as a plain
+> `[drawPrimitives:Triangle vertexStart:N vertexCount:4]` — Metal rasterizes ⌊4/3⌋ = **one** triangle
+> {v0,v1,v2} = TL,BL,BR = the bottom-left half; v3 (top-right) is silently dropped. Deterministic, clean
+> TL→BR diagonal, texture correct in the surviving half. Every symptom.
+>
+> **The broken draws were never the batched indexed draws.** Dash/dock icons are drawn as per-quad
+> NON-indexed fans even in normal batched mode (each icon = own texture ⇒ own pipeline ⇒ cogl batch breaks ⇒
+> `batch_len==1` ⇒ `glDrawArrays(GL_TRIANGLE_FAN,…,4)`). The `0 1 2 0 2 3` indexed draws this doc spent its
+> life on render fine and always did; the elimination ledger below is correct but was aimed at innocent
+> draws. Our fan-path probes never fired because broken fans exit `MVKCmdDraw::encode` before every probe.
+>
+> **disable-batching paradox resolved:** zink bakes the creation-time topology into the pipeline's static
+> value. With `disable-batching`, every draw is a fan from frame 1 ⇒ pipelines are created with static=FAN ⇒
+> the old static-only check caught them ⇒ correct rendering. In mixed mode the same pipeline is first
+> created during a LIST draw ⇒ static=LIST ⇒ later dynamic-FAN draws on it lose v3.
+>
+> **Evidence:** Xcode GPU trace (`/tmp/limina-broken.gputrace`, defect reproduces on replay): geometry table
+> shows 4 perfect vertices 28–31 with v31 unshaded (`spikes/venus-draw-probe/evidence/
+> xcode-fan-geometry-4verts.png`); the icon's actual draw step is the literal
+> `[drawPrimitives:Triangle vertexStart:28 vertexCount:4 instanceCount:1]`
+> (`evidence/xcode-drawPrimitives-triangle-count4.png`).
+>
+> **Fix** (in `spikes/venus-draw-probe/mvk-instrument.patch`; TODO: extract into a clean carried MoltenVK
+> patch and check/PR upstream): carry the Vulkan topology through render state —
+> `MVKRenderStateData.vkPrimTopology` set both statically (`MVKPipeline.mm`) and dynamically
+> (`MVKCmdSetPrimitiveTopology`), an effective getter `vkGraphics().getVkPrimitiveTopology()` using the
+> existing `pickRenderState` dynamic-vs-static arbitration, consulted at all four fan-emulation sites.
+> Kill switch `LIMINA_FANFIX_OFF` restores the old static-only behavior for A/B.
+>
+> **Verified:** boot log shows 24× `[LIMINA-FANFIX] dynamic-topology fan caught (static topo=3) vtxCount=4`
+> (`evidence/fanfix-probe-hits.txt`); the dock canary renders ALL icons complete for the first time across
+> ~10 instrumented boots (`evidence/fanfix-dock-FIXED.png`, full frame `evidence/fanfix-fullframe-FIXED.png`).
+> Scene decay/instability remains tracked separately as #32.
+
+## Historical hunt log (superseded by the root cause above)
 
 > ⚠️ **REFRAME 2026-06-09 (read first — supersedes the "RASTERIZATION/STATE" framing below).**
 > Two corrections invalidated several conclusions in the body of this doc:

@@ -1,11 +1,14 @@
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
-index c492057..3eb78e3 100644
+index c492057..4871b91 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
 +++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
-@@ -24,6 +24,31 @@
+@@ -23,6 +23,33 @@
+ #include "MVKPipeline.h"
  #include "MVKFoundation.h"
  #include "mvk_datatypes.hpp"
- 
++#include <atomic>
++#include <CoreFoundation/CoreFoundation.h>
++
 +// [LIMINA-DS] #31 seated-desktop differential probe. The bug drops the 2nd sub-triangle of every BATCHED
 +// indexed quad; COGL_DEBUG=disable-batching (per-quad TRIANGLE_FAN) fixes it, and identical geometry rules
 +// out a screen-space clip — so the killer is keyed to the indexed-multi-quad draw's BOUND STATE. This dumps
@@ -30,11 +33,29 @@ index c492057..3eb78e3 100644
 +		mg._stencilReference.frontFaceValue, mg._stencilReference.backFaceValue,
 +		(unsigned)mg._provokingVertexMode);
 +}
-+
+ 
  
  #pragma mark -
- #pragma mark MVKCmdBindVertexBuffers
-@@ -355,6 +380,17 @@
+@@ -224,7 +251,17 @@
+ 	auto& dvcLimits = cmdEncoder->getDeviceProperties().limits;
+ 
+ 	// Metal doesn't support triangle fans, so encode it as triangles via an indexed indirect triangles command instead.
+-	if (pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
++	// #31 FIX: zink sets topology DYNAMICALLY (vkCmdSetPrimitiveTopology); checking only the pipeline's
++	// static topology missed those fans, encoding them as plain MTLPrimitiveTypeTriangle draws — a
++	// 4-vertex fan quad then rasterizes floor(4/3)=1 triangle (the bottom-left half; vertex 3 dropped).
++	if ((getenv("LIMINA_FANFIX_OFF") ? pipeline->getVkPrimitiveTopology()
++		 : cmdEncoder->getState().vkGraphics().getVkPrimitiveTopology()) == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
++		static long gkFanFix = 0;
++		if (pipeline->getVkPrimitiveTopology() != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN && gkFanFix < 24) {
++			fprintf(stderr, "[LIMINA-FANFIX] dynamic-topology fan caught (static topo=%d): vtxCount=%u firstVtx=%u -> fan emulation\n",
++					(int)pipeline->getVkPrimitiveTopology(), _vertexCount, _firstVertex);
++			gkFanFix++;
++		}
+ 		encodeIndexedIndirect(cmdEncoder);
+ 		return;
+ 	}
+@@ -355,6 +392,17 @@
                      uint32_t viewCount = subpass->isMultiview() ? subpass->getViewCountInMetalPass(cmdEncoder->getMultiviewPassIndex()) : 1;
                      uint32_t instanceCount = _instanceCount * viewCount;
                      cmdEncoder->getState().offsetZeroDivisorVertexBuffers(*cmdEncoder, stage, pipeline, _firstInstance);
@@ -52,10 +73,36 @@ index c492057..3eb78e3 100644
                      if (mtlFeats.baseVertexInstanceDrawing) {
                          [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                            vertexStart: _firstVertex
-@@ -440,6 +476,47 @@
- 		return;
- 	}
+@@ -424,10 +472,17 @@
+ 	diiCmd.encode(cmdEncoder);
+ }
  
++// [LIMINA-CAP] activity beacon: the first capture window caught an IDLE desktop (22s submit gap,
++// zero draws in the trace). The capture trigger in MVKQueue.mm gates on this timestamp so the
++// window only opens while cogl-signature indexed draws (the broken path) are actually flowing.
++std::atomic<double> liminaLastCoglDrawTime{0.0};
++
+ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
+ 
+ 	if (_indexCount == 0 || _instanceCount == 0) { return; }	// Nothing to do.
+ 
++	if (_indexCount >= 18 && _indexCount % 6 == 0) { liminaLastCoglDrawTime.store(CFAbsoluteTimeGetCurrent()); }
++
+ 	cmdEncoder->restartMetalRenderPassIfNeeded();
+ 
+ 	auto* pipeline = cmdEncoder->getGraphicsPipeline();
+@@ -435,7 +490,50 @@
+ 	auto& dvcLimits = cmdEncoder->getDeviceProperties().limits;
+ 
+ 	// Metal doesn't support triangle fans, so encode it as triangles via an indexed indirect triangles command instead.
+-	if (pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
++	// #31 FIX: consult the effective (dynamic-aware) topology, not just the pipeline's static one.
++	if ((getenv("LIMINA_FANFIX_OFF") ? pipeline->getVkPrimitiveTopology()
++		 : cmdEncoder->getState().vkGraphics().getVkPrimitiveTopology()) == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
++		encodeIndexedIndirect(cmdEncoder);
++		return;
++	}
++
 +	// [LIMINA-PASS-RESTART] #31: the working fan path's adjustment compute forcibly ENDS the Metal
 +	// render encoder and re-begins the pass around every draw; after FORCE_INDIRECT/SPLIT=3/WIDEN
 +	// eliminated everything else mechanical about the draw, this restart is one of the two deltas
@@ -93,14 +140,10 @@ index c492057..3eb78e3 100644
 +				(int)gkIbb.mtlIndexType, _indexCount, _firstIndex, _vertexOffset,
 +				gkIx[0],gkIx[1],gkIx[2],gkIx[3],gkIx[4],gkIx[5]);
 +		}
-+		encodeIndexedIndirect(cmdEncoder);
-+		return;
-+	}
-+
-     cmdEncoder->_isIndexedDraw = true;
- 
- 	MVKPiplineStages stages;
-@@ -574,23 +651,252 @@
+ 		encodeIndexedIndirect(cmdEncoder);
+ 		return;
+ 	}
+@@ -574,23 +672,252 @@
                      MVKRenderSubpass* subpass = cmdEncoder->getSubpass();
                      uint32_t viewCount = subpass->isMultiview() ? subpass->getViewCountInMetalPass(cmdEncoder->getMultiviewPassIndex()) : 1;
                      uint32_t instanceCount = _instanceCount * viewCount;
@@ -369,6 +412,43 @@ index c492057..3eb78e3 100644
                      }
                  }
                  break;
+@@ -687,7 +1014,9 @@
+ 	auto& dvcLimits = cmdEncoder->getDeviceProperties().limits;
+ 
+ 	// Metal doesn't support triangle fans, so encode it as indexed indirect triangles instead.
+-	if (pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
++	// #31 FIX: consult the effective (dynamic-aware) topology, not just the pipeline's static one.
++	if ((getenv("LIMINA_FANFIX_OFF") ? pipeline->getVkPrimitiveTopology()
++		 : cmdEncoder->getState().vkGraphics().getVkPrimitiveTopology()) == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
+ 		encodeIndexedIndirect(cmdEncoder);
+ 		return;
+ 	}
+@@ -983,7 +1312,9 @@
+ 	vtxAdjmts.mtlIndexType = ibb.mtlIndexType;
+ 	vtxAdjmts.isMultiView = (cmdEncoder->getSubpass()->isMultiview() &&
+ 							 cmdEncoder->getPhysicalDevice()->canUseInstancingForMultiview());
+-	vtxAdjmts.isTriangleFan = pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
++	// #31 FIX: consult the effective (dynamic-aware) topology, not just the pipeline's static one.
++	vtxAdjmts.isTriangleFan = (getenv("LIMINA_FANFIX_OFF") ? pipeline->getVkPrimitiveTopology()
++							   : cmdEncoder->getState().vkGraphics().getVkPrimitiveTopology()) == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+ #if MVK_USE_METAL_PRIVATE_API
+ 	// With private APIs for primitive restart, we need to handle disabled restart and raw Uint8 indices.
+ 	vtxAdjmts.isPrimRestart = cmdEncoder->getState().vkGraphics().isPrimitiveRestartEnabled();
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm b/MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm
+index 2586a80..ebcb0cc 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm
+@@ -549,7 +549,9 @@ void mvkPopulateFromOrFillAscending(Vec& dst, const uint32_t* pSrc, size_t count
+ #pragma mark MVKCmdSetPrimitiveTopology
+ 
+ void MVKCmdSetPrimitiveTopology::encode(MVKCommandEncoder* cmdEncoder) {
+-	cmdEncoder->getState().updateDynamicState(MVKRenderStateFlag::PrimitiveTopology)._renderState.primitiveType = mvkMTLPrimitiveTypeFromVkPrimitiveTopology(_value);
++	auto& rs = cmdEncoder->getState().updateDynamicState(MVKRenderStateFlag::PrimitiveTopology)._renderState;
++	rs.primitiveType = mvkMTLPrimitiveTypeFromVkPrimitiveTopology(_value);
++	rs.vkPrimTopology = (uint8_t)_value;
+ }
+ 
+ 
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm b/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm
 index a3ef8cb..bac0d6b 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm
@@ -399,6 +479,25 @@ index a3ef8cb..bac0d6b 100644
  	VkDeviceSize buffAlign = cmdEncoder->getMetalFeatures().mtlCopyBufferAlignment;
  
  	for (const auto& cpyRgn : _bufferCopyRegions) {
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.h b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.h
+index 8cce5c2..c4482d0 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.h
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.h
+@@ -201,6 +201,14 @@ struct MVKVulkanGraphicsCommandEncoderState: public MVKVulkanCommonEncoderState
+ 	bool getProvokingVertexMode() const {
+ 		return pickRenderState(MVKRenderStateFlag::ProvokingVertexMode).provokingVertexMode;
+ 	}
++	/**
++	 * The effective Vulkan primitive topology: dynamic if the pipeline marks topology
++	 * dynamic, else the pipeline's static topology. Needed because the lowered Metal
++	 * primitiveType erases the LIST-vs-FAN distinction the fan-emulation paths rely on.
++	 */
++	VkPrimitiveTopology getVkPrimitiveTopology() const {
++		return (VkPrimitiveTopology)pickRenderState(MVKRenderStateFlag::PrimitiveTopology).vkPrimTopology;
++	}
+ 
+ 	/** Bind the given descriptor sets, placing their bindings into `_descriptorSetBindings`. */
+ 	void bindDescriptorSets(MVKPipelineLayout* layout,
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
 index 16fd614..4d2fb7c 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
@@ -486,10 +585,18 @@ index 16fd614..4d2fb7c 100644
  }
  void MVKMetalGraphicsCommandEncoderState::bindVertexBytes(id<MTLRenderCommandEncoder> encoder, const void* data, size_t size, NSUInteger index) {
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
-index 7357ff1..330e325 100644
+index 7357ff1..1173fc8 100644
 --- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
 +++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
-@@ -1190,6 +1190,29 @@ static bool usesConstantColor(MVKRenderStateFlags dynamic, const VkPipelineColor
+@@ -873,6 +873,7 @@ static bool usesConstantColor(MVKRenderStateFlags dynamic, const VkPipelineColor
+ 	}
+ 
+ 	_staticStateData.primitiveType = mvkMTLPrimitiveTypeFromVkPrimitiveTopology(_vkPrimitiveTopology);
++	_staticStateData.vkPrimTopology = (uint8_t)_vkPrimitiveTopology;
+ 	_staticStateData.enable.set(MVKRenderStateEnableFlag::PrimitiveRestart, primitiveRestart);
+ 
+ #if MVK_USE_METAL_PRIVATE_API
+@@ -1190,6 +1191,29 @@ static bool usesConstantColor(MVKRenderStateFlags dynamic, const VkPipelineColor
  	// This needs to happen before compiling the fragment shader, or we'll lose information on vertex attributes.
  	if (!addVertexInputToPipeline(plDesc.vertexDescriptor, pCreateInfo->pVertexInputState, shaderConfig)) { return nil; }
  
@@ -520,14 +627,15 @@ index 7357ff1..330e325 100644
  	if (!addFragmentShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, pFragmentSS, pFragmentFB)) { return nil; }
  
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
-index 42e5646..948c70a 100644
+index 42e5646..31e6180 100644
 --- a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
 +++ b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
-@@ -24,9 +24,63 @@
+@@ -24,9 +24,73 @@
  #include "MVKFoundation.h"
  #include "MVKOSExtensions.h"
  #include "MVKGPUCapture.h"
 +#include <mutex>
++#include <atomic>
  
  using namespace std;
  
@@ -555,6 +663,15 @@ index 42e5646..948c70a 100644
 +	}
 +	double gkElapsed = -[gkT0 timeIntervalSinceNow];
 +	if (gkState == 0 && gkElapsed >= gkStartAt) {
++		// Activity gate: only open the window while cogl-signature indexed draws are flowing
++		// (set in MVKCmdDraw.mm). An idle desktop submits nothing — the first capture proved it.
++		extern std::atomic<double> liminaLastCoglDrawTime;
++		double gkSince = CFAbsoluteTimeGetCurrent() - liminaLastCoglDrawTime.load();
++		if (gkSince > 0.25) {
++			static bool gkWaitLogged = false;
++			if (!gkWaitLogged) { fprintf(stderr, "[LIMINA-CAP] past +%.0fs, WAITING for cogl draw activity (hover the dock!)\n", gkStartAt); gkWaitLogged = true; }
++			return;
++		}
 +		MTLCaptureManager* gkMgr = [MTLCaptureManager sharedCaptureManager];
 +		if (![gkMgr supportsDestination: MTLCaptureDestinationGPUTraceDocument]) {
 +			fprintf(stderr, "[LIMINA-CAP] FAIL: GPUTraceDocument unsupported — METAL_CAPTURE_ENABLED=1 not set in worker env?\n");
@@ -587,7 +704,7 @@ index 42e5646..948c70a 100644
  
  #pragma mark -
  #pragma mark MVKQueueFamily
-@@ -553,7 +607,15 @@
+@@ -553,7 +617,15 @@
  
  	// Retrieve the result before committing MTLCommandBuffer, because finish() will destroy this instance.
  	VkResult rslt = mtlCmdBuff ? getConfigurationResult() : VK_ERROR_OUT_OF_POOL_MEMORY;
@@ -603,3 +720,18 @@ index 42e5646..948c70a 100644
  	[mtlCmdBuff release];		// retained
  
  	// If we need to signal completion, but an error occurred and the MTLCommandBuffer
+diff --git a/MoltenVK/MoltenVK/Utility/MVKStateTracking.h b/MoltenVK/MoltenVK/Utility/MVKStateTracking.h
+index 9d48511..f13f14b 100644
+--- a/MoltenVK/MoltenVK/Utility/MVKStateTracking.h
++++ b/MoltenVK/MoltenVK/Utility/MVKStateTracking.h
+@@ -322,6 +322,10 @@ struct MVKRenderStateData {
+ 	uint8_t cullMode = MTLCullModeNone;
+ 	uint8_t frontFace = MTLWindingClockwise;
+ 	uint8_t primitiveType = MTLPrimitiveTypePoint;
++	// The Vulkan topology this primitiveType was lowered from. Metal has no triangle
++	// fans, so MTLPrimitiveTypeTriangle is ambiguous (LIST or FAN); the fan-emulation
++	// draw paths need the original Vulkan value, including when set dynamically.
++	uint8_t vkPrimTopology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+ 	MVKPolygonMode polygonMode = MVKPolygonMode::Fill;
+ 	MVKLineRasterizationMode lineRasterizationMode = MVKLineRasterizationMode::Default;
+ 	MVKRenderStateEnableFlags enable;
