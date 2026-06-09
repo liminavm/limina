@@ -1,5 +1,5 @@
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
-index c492057..b5a72ba 100644
+index c492057..61e5072 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
 +++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
 @@ -24,6 +24,31 @@
@@ -52,7 +52,7 @@ index c492057..b5a72ba 100644
                      if (mtlFeats.baseVertexInstanceDrawing) {
                          [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                            vertexStart: _firstVertex
-@@ -574,6 +610,47 @@
+@@ -574,13 +610,75 @@
                      MVKRenderSubpass* subpass = cmdEncoder->getSubpass();
                      uint32_t viewCount = subpass->isMultiview() ? subpass->getViewCountInMetalPass(cmdEncoder->getMultiviewPassIndex()) : 1;
                      uint32_t instanceCount = _instanceCount * viewCount;
@@ -79,9 +79,14 @@ index c492057..b5a72ba 100644
 +                                for (uint32_t k = 0; k < 6 && k < _indexCount; k++)
 +                                    ix[k] = (idxSize == 2) ? (unsigned)g16[k] : g32[k];
 +                            }
-+                            fprintf(stderr, "[LIMINA-IDX] prim=%d idxType=%d idxCount=%u restart=%d baseVtx=%d inst=%u storage=%lu maxIdx=%ld restarts=%ld idx0-5: %u %u %u %u %u %u\n",
++                            // [LIMINA-IDX] #31 index-buffer offset/alignment probe (the reading localized the
++                            // bug to cogl's raw index buffer vs the fan path's fresh MoltenVK buffer): dump
++                            // the Metal indexBufferOffset, its 4-byte residue, ibb.offset, and firstIndex.
++                            fprintf(stderr, "[LIMINA-IDX] prim=%d idxType=%d idxCount=%u restart=%d baseVtx=%d inst=%u storage=%lu maxIdx=%ld restarts=%ld idxByteOff=%llu off&3=%llu ibbOff=%llu firstIdx=%u idx0-5: %u %u %u %u %u %u\n",
 +                                pt, (int)ibb.mtlIndexType, _indexCount, restart, _vertexOffset, instanceCount,
 +                                ib ? (unsigned long)[ib storageMode] : 99UL, maxIdx, restarts,
++                                (unsigned long long)idxBuffOffset, (unsigned long long)(idxBuffOffset & 3),
++                                (unsigned long long)ibb.offset, _firstIndex,
 +                                ix[0],ix[1],ix[2],ix[3],ix[4],ix[5]);
 +                            // [LIMINA-RAST] data (indices/verts/texcoords) is proven correct, so dump the
 +                            // Metal RENDER STATE for this indexed draw: cull/front/poly/raster + viewport
@@ -98,8 +103,44 @@ index c492057..b5a72ba 100644
 +                    }
 +                    liminaDumpDepthStencil(cmdEncoder); // [LIMINA-DS] batched indexed (broken) site
                      cmdEncoder->getState().offsetZeroDivisorVertexBuffers(*cmdEncoder, stage, pipeline, _firstInstance);
++                    // [LIMINA-IDX-REALIGN] #31 decisive test: the working fan path draws from a FRESH,
++                    // MoltenVK-allocated index buffer; the batched path draws from cogl's RAW buffer at its
++                    // raw offset. Mimic the fan path — copy this draw's index range into a fresh temp buffer
++                    // (Shared, host-readable; getTempMTLBuffer aligns) and draw from offset 0 of it. If tri2
++                    // returns, the index-buffer provenance/offset IS the bug. Env-gated LIMINA_IDX_REALIGN.
++                    id<MTLBuffer> drawIdxBuf = ibb.mtlBuffer;
++                    VkDeviceSize drawIdxOff = idxBuffOffset;
++                    if (getenv("LIMINA_IDX_REALIGN") && ibb.mtlBuffer && [ibb.mtlBuffer storageMode] != MTLStorageModePrivate) {
++                        NSUInteger gkLen = (NSUInteger)_indexCount * idxSize;
++                        auto* gkTmp = cmdEncoder->getTempMTLBuffer(gkLen); // isPrivate=false → host-visible (memcpy-able)
++                        const void* gkSrc = (const char*)[ibb.mtlBuffer contents] + idxBuffOffset;
++                        memcpy((char*)[gkTmp->_mtlBuffer contents] + gkTmp->_offset, gkSrc, gkLen);
++                        drawIdxBuf = gkTmp->_mtlBuffer;
++                        drawIdxOff = gkTmp->_offset;
++                        if (getenv("LIMINA_IDX_DUMP")) { fprintf(stderr, "[LIMINA-IDX-REALIGN] copied %lu bytes -> off=%llu off&3=%llu\n", (unsigned long)gkLen, (unsigned long long)drawIdxOff, (unsigned long long)(drawIdxOff & 3)); }
++                    }
                      if (mtlFeats.baseVertexInstanceDrawing) {
                          [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
+                                                                   indexCount: _indexCount
+                                                                    indexType: (MTLIndexType)ibb.mtlIndexType
+-                                                                 indexBuffer: ibb.mtlBuffer
+-                                                           indexBufferOffset: idxBuffOffset
++                                                                 indexBuffer: drawIdxBuf
++                                                           indexBufferOffset: drawIdxOff
+                                                                instanceCount: instanceCount
+                                                                   baseVertex: _vertexOffset
+                                                                 baseInstance: _firstInstance];
+@@ -588,8 +686,8 @@
+                         [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
+                                                                   indexCount: _indexCount
+                                                                    indexType: (MTLIndexType)ibb.mtlIndexType
+-                                                                 indexBuffer: ibb.mtlBuffer
+-                                                           indexBufferOffset: idxBuffOffset
++                                                                 indexBuffer: drawIdxBuf
++                                                           indexBufferOffset: drawIdxOff
+                                                                instanceCount: instanceCount];
+                     }
+                 }
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm b/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm
 index a3ef8cb..bac0d6b 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm

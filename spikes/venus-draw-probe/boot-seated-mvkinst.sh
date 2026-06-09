@@ -37,6 +37,7 @@ export VK_ICD_FILENAMES="$ICD"
 [ -n "${LIMINA_VTX_DUMP:-}" ] && export LIMINA_VTX_DUMP
 [ -n "${LIMINA_DS_DUMP:-}" ] && export LIMINA_DS_DUMP   # [LIMINA-DS] depth/stencil differential (batched vs fan)
 [ -n "${LIMINA_SYNC_SUBMIT:-}" ] && export LIMINA_SYNC_SUBMIT  # [LIMINA-SYNC] fully serialize GPU (fence-race test)
+[ -n "${LIMINA_IDX_REALIGN:-}" ] && export LIMINA_IDX_REALIGN  # [LIMINA-IDX-REALIGN] copy idx buf to fresh aligned temp
 # --net is on by default (SSH into the guest); pass LIMINA_NET=0 to skip it — e.g. a worker-log-only
 # differential (reading [LIMINA-DS]/[LIMINA-IDX] stderr) needs no guest network and avoids a stale-gvproxy
 # port-2222 conflict.
