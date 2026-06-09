@@ -1,9 +1,44 @@
 # Tier-2 #28 — host-visible blob coherency (and why venus renders black)
 
-**Status:** root cause of bug A (#31) verified; the *fix* is open. This is a findings write-up, not a
-decision. Read it before touching the venus host-visible memory path.
+**Status: RESOLVED (2026-06-08).** Bug A (#31) and #28 are fixed by sharing MoltenVK's own
+`vkMapMemory` pointer for HOST_VISIBLE memory instead of an imported shm. Read "The fix" below; the
+findings sections under it are kept as the diagnostic record that led there.
 
-## TL;DR
+## The fix (what shipped)
+
+The defect: the old macOS host-visible path allocated a POSIX shm + Metal buffer
+(`newBufferWithBytesNoCopy`), imported it as the `VkDeviceMemory`, and exported the **shm fd**. The
+VMM then `mmap`'d that fd a **second** time for the guest — so the guest's CPU mapping and the GPU's
+`MTLBuffer` view were two independent mappings that did not stay coherent across `hv_vm_map`. Guest
+writes landed in one; the GPU read the other (zeros).
+
+The fix (the krunkit/slp model, ported onto our virglrenderer 1.3.0 tree, branch
+`limina/macos-blob-map-ptr`): for HOST_VISIBLE memory, let MoltenVK allocate its **own** Shared
+`MTLBuffer`, `vkMapMemory` it, and share **MoltenVK's own pointer** with the VMM (`hv_vm_map`). One
+mapping → guest CPU + host GPU coherent. Pieces:
+
+- `virgl_context_blob` / `virgl_resource` gain a `map_ptr`; `resource_map` / `get_map_ptr` return it
+  directly, `unmap` is a no-op, and `export_blob` bails (`-EINVAL`) for `map_ptr` resources (the
+  `VkDeviceMemory` owns the mapping; `vkFreeMemory`'s implicit unmap releases it — an explicit
+  `vkUnmapMemory` in release double-frees and SIGSEGVs at teardown).
+- `vkr_device_memory`: HOST_VISIBLE no longer gets a shm carrier; `export_blob` `vkMapMemory`s the
+  memory into an `OPAQUE_HANDLE` blob carrying `map_ptr` (`map_info = CACHED`, hardcoded — a `NONE`
+  map_info makes `get_map_info` return `-EINVAL` → the guest sees `VK_ERROR_MEMORY_MAP_FAILED`). The
+  #30 scanout carrier path is untouched.
+- **The render-server proxy boundary** was the load-bearing surprise: it serialized blobs as an
+  *fd* and rejected fd-less replies. `map_ptr` is now threaded through it (`render_protocol.h` reply
+  struct + `render_context.c` server + `proxy_context.c` client, plus `vkr_renderer_create_resource`
+  / `render_state_create_resource` signatures) and an fd-less reply is allowed. This is sound only
+  because the render server is a **thread in the same process** (`ENABLE_SAME_PROCESS_RENDER_SERVER`),
+  so the host VA is valid on the client side.
+
+**Verification (the oracle):** a guest GLES full-screen quad (`spikes/venus-draw-probe/tri.c`, green
+fragment shader over a blue clear) now fills the scanout IOSurface **green** — the guest-written
+vertices reach the GPU. Pre-fix it was **blue** (clear only; degenerate geometry). Read host-side via
+`iosdump.swift <id>` → uniform `(0,255,0)`. This is EXP-A, but driven by the *guest* writing the data.
+Zero-copy, no transfer model.
+
+## TL;DR (original findings)
 
 Venus "renders black" (bug A, #31) is **not a rendering bug** — it is a **data bug**, and it *is* #28:
 **the guest's writes to host-visible memory are not visible to the host GPU.** Every draw reads
