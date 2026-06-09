@@ -88,26 +88,42 @@ int main(void){
     float cell=2.f/N, gap=cell*0.18f, s=cell-gap;
     if (use_batch) {
         // cogl-faithful: 4 verts/quad in order TL,BL,BR,TR (cogl-journal.c:1216-1223),
-        // ONE indexed glDrawElements with pattern {0,1,2, 0,2,3} per quad (cogl-indices.c).
+        // indexed glDrawElements with pattern {0,1,2, 0,2,3} per quad (cogl-indices.c).
+        // IDX8=1 -> uint8 indices (cogl uses uint8 for <=64 rects). OFFSET=1 -> theory O: draw the
+        // grid in TWO groups, the SECOND via glDrawElements at a NON-ZERO first_vertex (index) offset
+        // 6*(Q/2), exactly like cogl's per-batch current_vertex*6/4. If only the offset group breaks,
+        // the non-zero index-buffer base offset is the venus/MoltenVK bug.
+        int idx8 = getenv("IDX8")?atoi(getenv("IDX8")):0;
+        int off  = getenv("OFFSET")?atoi(getenv("OFFSET")):0;
+        printf("batch: idx8=%d offset=%d Q=%d\n", idx8, off, Q);
         float* all=malloc(Q*4*4*sizeof(float));
-        unsigned short* ind=malloc(Q*6*sizeof(short));
+        unsigned char*  ind8 =malloc(Q*6);
+        unsigned short* ind16=malloc(Q*6*sizeof(short));
         int vi=0, ii=0, base=0;
         for(int gy=0;gy<N;gy++)for(int gx=0;gx<N;gx++){
             float x0=-1.f+gx*cell+gap*.5f, y0=-1.f+gy*cell+gap*.5f, x1=x0+s, y1=y0+s;
             // TL=(x0,y1) BL=(x0,y0) BR=(x1,y0) TR=(x1,y1); uv: TL(0,0) BL(0,1) BR(1,1) TR(1,0)
             float TL[4]={x0,y1,0,0},BL[4]={x0,y0,0,1},BR[4]={x1,y0,1,1},TR[4]={x1,y1,1,0};
             memcpy(all+vi,TL,16);memcpy(all+vi+4,BL,16);memcpy(all+vi+8,BR,16);memcpy(all+vi+12,TR,16); vi+=16;
-            ind[ii++]=base+0; ind[ii++]=base+1; ind[ii++]=base+2;   // tri1 {TL,BL,BR}=bottom-left
-            ind[ii++]=base+0; ind[ii++]=base+2; ind[ii++]=base+3;   // tri2 {TL,BR,TR}=top-right
-            base+=4;
+            int seq[6]={base+0,base+1,base+2, base+0,base+2,base+3}; // tri1 BL-half, tri2 TR-half
+            for(int k=0;k<6;k++){ ind16[ii+k]=seq[k]; ind8[ii+k]=seq[k]; }
+            ii+=6; base+=4;
         }
         GLuint vbo; glGenBuffers(1,&vbo); glBindBuffer(GL_ARRAY_BUFFER,vbo);
         glBufferData(GL_ARRAY_BUFFER, Q*4*4*sizeof(float), all, GL_STATIC_DRAW);
         GLuint ibo; glGenBuffers(1,&ibo); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,ibo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, Q*6*sizeof(short), ind, GL_STATIC_DRAW);
+        GLenum itype = idx8?GL_UNSIGNED_BYTE:GL_UNSIGNED_SHORT;
+        int isz = idx8?1:2;
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, Q*6*isz, idx8?(void*)ind8:(void*)ind16, GL_STATIC_DRAW);
         glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,4*sizeof(float),0);
         glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,4*sizeof(float),(void*)(2*sizeof(float)));
-        glDrawElements(GL_TRIANGLES, Q*6, GL_UNSIGNED_SHORT, 0);   // ONE batched indexed draw
+        if (off) {
+            int half=Q/2;
+            glDrawElements(GL_TRIANGLES, half*6, itype, 0);                     // group A: offset 0
+            glDrawElements(GL_TRIANGLES, (Q-half)*6, itype, (void*)(half*6*isz)); // group B: NON-ZERO offset
+        } else {
+            glDrawElements(GL_TRIANGLES, Q*6, itype, 0);                        // ONE batched indexed draw
+        }
     } else {
         int vpq = use_tris?6:4;
         float* all=malloc(Q*vpq*4*sizeof(float)); int idx=0;
