@@ -1,12 +1,12 @@
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
-index c492057..2b1ac56 100644
+index c492057..49ee925 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
 +++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
 @@ -355,6 +355,16 @@
                      uint32_t viewCount = subpass->isMultiview() ? subpass->getViewCountInMetalPass(cmdEncoder->getMultiviewPassIndex()) : 1;
                      uint32_t instanceCount = _instanceCount * viewCount;
                      cmdEncoder->getState().offsetZeroDivisorVertexBuffers(*cmdEncoder, stage, pipeline, _firstInstance);
-+                    { // [LIMINA-DRAW] bug A (#31) probe: what does Metal actually get for this non-indexed draw?
++                    if (getenv("LIMINA_VTX_DUMP")) { // [LIMINA-DRAW] bug A (#31) probe: what does Metal actually get for this non-indexed draw?
 +                        auto& mg = cmdEncoder->getMtlGraphics();
 +                        fprintf(stderr, "[LIMINA-DRAW] prim=%d firstVtx=%u vtxCount=%u instCount=%u cull=%u front=%u poly=%d rastDisabled=%d nVP=%u nSC=%u vp0=(%.0f,%.0f,%.0fx%.0f) sc0=(%d,%d,%ux%u)\n",
 +                            (int)mg.getPrimitiveType(), _firstVertex, _vertexCount, instanceCount,
@@ -19,6 +19,42 @@ index c492057..2b1ac56 100644
                      if (mtlFeats.baseVertexInstanceDrawing) {
                          [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                            vertexStart: _firstVertex
+@@ -574,6 +584,35 @@
+                     MVKRenderSubpass* subpass = cmdEncoder->getSubpass();
+                     uint32_t viewCount = subpass->isMultiview() ? subpass->getViewCountInMetalPass(cmdEncoder->getMultiviewPassIndex()) : 1;
+                     uint32_t instanceCount = _instanceCount * viewCount;
++                    { // [LIMINA-IDX] tier-2 "stretched-triangle" probe: the indexed draw the desktop uses.
++                      // Dumps primitive type, restart state, baseVertex, and an index-buffer scan
++                      // (max index = does it exceed the bound vertex count? + restart-sentinel count).
++                      // Gated by LIMINA_IDX_DUMP so it stays silent until asked.
++                        if (getenv("LIMINA_IDX_DUMP")) {
++                            int pt = (int)cmdEncoder->getMtlGraphics().getPrimitiveType();
++                            int restart = (int)cmdEncoder->getState().vkGraphics().isPrimitiveRestartEnabled();
++                            id<MTLBuffer> ib = ibb.mtlBuffer;
++                            const void* ibase = ib ? [ib contents] : nullptr;
++                            long maxIdx = -1, restarts = 0;
++                            unsigned ix[6] = {0,0,0,0,0,0};
++                            if (ibase) {
++                                const unsigned char* ip = (const unsigned char*)ibase + idxBuffOffset;
++                                const uint16_t* g16 = (const uint16_t*)ip; const uint32_t* g32 = (const uint32_t*)ip;
++                                uint32_t restartVal = (idxSize == 2) ? 0xFFFFu : 0xFFFFFFFFu;
++                                for (uint32_t k = 0; k < _indexCount; k++) {
++                                    uint32_t v = (idxSize == 2) ? (uint32_t)g16[k] : g32[k];
++                                    if (v == restartVal) { restarts++; continue; }
++                                    if ((long)v > maxIdx) maxIdx = (long)v;
++                                }
++                                for (uint32_t k = 0; k < 6 && k < _indexCount; k++)
++                                    ix[k] = (idxSize == 2) ? (unsigned)g16[k] : g32[k];
++                            }
++                            fprintf(stderr, "[LIMINA-IDX] prim=%d idxType=%d idxCount=%u restart=%d baseVtx=%d inst=%u storage=%lu maxIdx=%ld restarts=%ld idx0-5: %u %u %u %u %u %u\n",
++                                pt, (int)ibb.mtlIndexType, _indexCount, restart, _vertexOffset, instanceCount,
++                                ib ? (unsigned long)[ib storageMode] : 99UL, maxIdx, restarts,
++                                ix[0],ix[1],ix[2],ix[3],ix[4],ix[5]);
++                        }
++                    }
+                     cmdEncoder->getState().offsetZeroDivisorVertexBuffers(*cmdEncoder, stage, pipeline, _firstInstance);
+                     if (mtlFeats.baseVertexInstanceDrawing) {
+                         [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm b/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm
 index a3ef8cb..bac0d6b 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm
@@ -50,14 +86,14 @@ index a3ef8cb..bac0d6b 100644
  
  	for (const auto& cpyRgn : _bufferCopyRegions) {
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
-index 16fd614..4466f3a 100644
+index 16fd614..8fee5eb 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
 +++ b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
-@@ -779,6 +779,34 @@ static void bindVertexBuffersTemplate(id<MTLCommandEncoder> encoder,
+@@ -779,6 +779,50 @@ static void bindVertexBuffersTemplate(id<MTLCommandEncoder> encoder,
  	for (size_t vkidx : pipeline->getVkVertexBuffers()) {
  		const auto& buffer = vkState._vertexBuffers[vkidx];
  		uint32_t idx = pipeline->getMetalBufferIndexForVertexAttributeBinding(static_cast<uint32_t>(vkidx));
-+		{ // [LIMINA-VTX] bug A (#31): the actual vertex attribute buffer the GPU will fetch
++		if (getenv("LIMINA_VTX_DUMP") || getenv("LIMINA_FORCE_QUAD")) { // [LIMINA-VTX] bug A (#31): the actual vertex attribute buffer the GPU will fetch
 +			id<MTLBuffer> mb = buffer.mtlBuffer;
 +			const void* base = mb ? [mb contents] : nullptr;
 +			if (base) {
@@ -68,9 +104,25 @@ index 16fd614..4466f3a 100644
 +				unsigned long blen = (unsigned long)[mb length];
 +				long firstnz = -1;
 +				for (unsigned long i = 0; i < blen; i++) { if (bytes[i]) { firstnz = (long)i; break; } }
-+				fprintf(stderr, "[LIMINA-VTX] vkidx=%zu mtlidx=%u off=%llu stride=%u len=%lu storage=%lu firstNonzeroByte=%ld v: %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f\n",
-+					vkidx, idx, (unsigned long long)buffer.offset, buffer.stride, blen,
-+					(unsigned long)[mb storageMode], firstnz, p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7]);
++				// [LIMINA-VTX] ATTRIBUTE-STEPPED scan: vertex buffers are interleaved, so scanning the whole
++				// buffer as contiguous floats misreads packed colors/ints as garbage. Step by stride and
++				// read this attribute's first 2 floats (x,y) per vertex — that is the real per-vertex
++				// value. A stretched triangle = a vertex whose x/y is huge or NaN. Report outlier verts.
++				unsigned long stride = buffer.stride ? buffer.stride : 8;
++				unsigned long nverts = (blen > buffer.offset) ? (blen - buffer.offset)/stride : 0;
++				if (nverts > 4096) nverts = 4096;
++				unsigned long outliers=0; long firstOut=-1; float foX=0, foY=0; float axmin=1e30f, axmax=-1e30f;
++				for (unsigned long k=0;k<nverts;k++){
++					const float* vp=(const float*)((const char*)base + buffer.offset + k*stride);
++					float x=vp[0], y=vp[1];
++					int bad = (x!=x)||(y!=y)||(x>1e4f)||(x<-1e4f)||(y>1e4f)||(y<-1e4f);
++					if (bad){ outliers++; if (firstOut<0){firstOut=(long)k; foX=x; foY=y;} continue; }
++					if (x<axmin)axmin=x; if (x>axmax)axmax=x;
++				}
++				fprintf(stderr, "[LIMINA-VTX] vkidx=%zu mtlidx=%u off=%llu stride=%lu len=%lu storage=%lu nverts=%lu outlierVerts=%lu xrange=[%.1f,%.1f] firstOut=%ld (%.2g,%.2g) v0: %.3f %.3f %.3f\n",
++					vkidx, idx, (unsigned long long)buffer.offset, stride, blen,
++					(unsigned long)[mb storageMode], nverts, outliers, axmin, axmax, firstOut, foX, foY,
++					p[0],p[1],p[2]);
 +				// [LIMINA-FORCE-QUAD] #28 EXP-A: if the buffer the GPU fetches is all-zero (the bug), write
 +				// tri.c's known NDC fullscreen quad HOST-side. If the draw then renders green, the host
 +				// CPU->GPU path for this memory is fine and the ONLY defect is the guest's write not
@@ -88,11 +140,11 @@ index 16fd614..4466f3a 100644
  		bindVertexBuffer<DynamicStride>(encoder, buffer.mtlBuffer, buffer.offset, buffer.stride,
  		                                idx, exists, bindings, binder);
  	}
-@@ -1049,6 +1077,18 @@ static uint32_t getSampleCount(VkSampleCountFlags vk) {
+@@ -1049,6 +1093,18 @@ static uint32_t getSampleCount(VkSampleCountFlags vk) {
  	bindSampler(encoder, sampler, index, _exists.fragment(), _bindings.fragment(), MVKFragmentBinder());
  }
  void MVKMetalGraphicsCommandEncoderState::bindVertexBuffer(id<MTLRenderCommandEncoder> encoder, id<MTLBuffer> buffer, VkDeviceSize offset, NSUInteger index) {
-+	if (buffer) { // [LIMINA-VTX] bug A (#31) probe: what vertex data will the GPU actually fetch?
++	if (buffer && getenv("LIMINA_VTX_DUMP")) { // [LIMINA-VTX] bug A (#31) probe: what vertex data will the GPU actually fetch?
 +		const void* base = [buffer contents];
 +		if (base) {
 +			const float* p = (const float*)((const char*)base + offset);
