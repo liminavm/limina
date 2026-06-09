@@ -141,13 +141,34 @@ No single existing test isolates one variable, but together they corner it: vs `
 break, big single-quad background doesn't." **Likely a residual of #28** on the per-frame-mapped journal
 buffer (not the one-shot blobs #28's fix covered).
 
-### Decisive next test for C
-**map-per-frame vehicle** — `glMapBufferRange` a `DYNAMIC` `GL_ARRAY_BUFFER`, write **many**
-cogl-expanded quads (v0..v3 order), draw indexed `TRIANGLES`, loop several frames. It is the one combo
-no vehicle hit (mapped + many quads + indexed), isolating exactly the static→mapped variable.
-- Reproduces ⇒ mapped-multi-quad coherency confirmed (C).
-- Stays clean ⇒ the bug is the indexed **draw** reading a mapped source, not the data → then instrument
-  the real fetch with MoltenVK `[LIMINA-VTX]`.
+### map-per-frame vehicle result: CLEAN (C weakened) — `spikes/venus-draw-probe/mapquad.c`
+`mapquad MAP=1` (glMapBufferRange WRITE|INVALIDATE a `DYNAMIC` buffer, 64 quads, indexed `TRIANGLES`, 60
+frames with swaps) renders a **perfect grid** (`/tmp/ios-69.png`). So the mapped-multi-quad path does
+**not** reproduce the desktop bug.
+- ⚠️**Confound:** this mesa-zink EGL/GBM exposes **no ES3 config**, so the context fell back to **ES2**.
+  `glMapBufferRange` still resolved and succeeded (`map_fail=0`), and zink backs every GL buffer with a
+  host-visible VkBuffer, so it very likely *did* exercise the coherency path — but a mesa staging/shadow
+  fallback can't be 100% ruled out. So C is weakened, not cleanly killed.
+
+## Where this leaves us — vehicles exhausted, instrument next
+Every standalone vehicle is clean: static indexed, mapped indexed, uint8, non-zero offset, textured fan,
+FBO, coherency probes. U/O/P disproven, C weakened. Yet the real batched indexed draw breaks and
+`disable-batching` (which keeps clipping/pipeline but forces per-quad fan) fixes it — so the defect is
+tied to the **batched indexed `TRIANGLES` draw with the real shell's full draw STATE**, which the
+vehicles don't replicate. Remaining real-vs-vehicle deltas on that draw: the **multitexture/color/blend
+pipeline**, the **clip stack** active during the draw, and the **exact journal vertex layout** (packed
+color + pos + padded per-`n_layers` stride). Per CLAUDE.md ("instrument the stack you own"), the
+decisive move is now to **instrument the real draw** rather than build more vehicles:
+
+- **MoltenVK `[LIMINA-IDX]`/`[LIMINA-VTX]`** (`spikes/venus-draw-probe/mvk-instrument.patch`,
+  `rebuild-mvk.sh`, boot via `VK_ICD_FILENAMES`): for a real broken icon's indexed draw, dump the draw
+  state (prim, index count, index type, base) + the **index and vertex bytes the GPU actually fetches**.
+  - verts/indices correct but tri2 absent ⇒ it's the **draw/rasterization** (state), not data.
+  - tri2's vertices stale/zero ⇒ it's **data/coherency** after all (and we learn which bytes).
+  The filtering challenge: select the small textured indexed-TRIANGLES draws among thousands per frame.
+- Cheap knobs still worth a pass (no rebuild): `COGL_DEBUG=disable-software-clip`, `disable-atlas`,
+  `disable-blending`, `disable-texturing`, `COGL_DEBUG=wireframe` (geometry-vs-texture confirmation).
+  But note `disable-batching` already fixing it points at the batched indexed draw over clip/atlas.
 
 Geometry/wireframe cross-check (theory T2 from the bisection): `COGL_DEBUG=wireframe` / `rectangles`
 would show whether the missing triangle is geometrically absent (wireframe shows one triangle) vs
