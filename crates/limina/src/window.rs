@@ -202,6 +202,27 @@ pub fn run(
     let geom = Cell::new((0u32, 0u32));
     // Diagnostic: dump the presented IOSurface to a PNG (no screen-record perm). LIMINA_WINDOW_CAPTURE.
     let capture_path = std::env::var("LIMINA_WINDOW_CAPTURE").ok();
+    // Diagnostic: ALSO dump specific global IOSurface ids by lookup each tick, regardless of
+    // what the window presents. Lets us peek the venus SET_SCANOUT_BLOB surface (e.g. id 38)
+    // even when a competing 2D ring is what's on screen. LIMINA_CAPTURE_IDS="33,38,39".
+    // Accepts a comma list ("33,38") and/or inclusive ranges ("30-50").
+    let capture_ids: Vec<u32> = std::env::var("LIMINA_CAPTURE_IDS")
+        .ok()
+        .map(|s| {
+            let mut out = Vec::new();
+            for t in s.split(',') {
+                let t = t.trim();
+                if let Some((a, b)) = t.split_once('-') {
+                    if let (Ok(a), Ok(b)) = (a.trim().parse::<u32>(), b.trim().parse::<u32>()) {
+                        out.extend(a..=b);
+                    }
+                } else if let Ok(v) = t.parse::<u32>() {
+                    out.push(v);
+                }
+            }
+            out
+        })
+        .unwrap_or_default();
     let applies = Cell::new(0u64);
     // Cache looked-up surfaces by id (the worker reuses a small fixed set, its double buffer).
     let cache: RefCell<std::collections::HashMap<u32, CFRetained<IOSurfaceRef>>> =
@@ -295,6 +316,19 @@ pub fn run(
         if applies.get() % 120 == 0 {
             if let Some(path) = &capture_path {
                 capture_iosurface(surface, id, path);
+            }
+        }
+        // Targeted per-id sweep — look each requested global id up fresh (no cache) and dump it,
+        // so we can read the venus blob surface directly even when it isn't the presented one.
+        if !capture_ids.is_empty() && applies.get() % 30 == 0 {
+            if let Some(base) = &capture_path {
+                for &cid in &capture_ids {
+                    if let Some(s) = IOSurfaceLookup(cid) {
+                        capture_iosurface(&s, cid, &format!("{base}.id{cid}.png"));
+                    } else {
+                        log::info!("capture: IOSurfaceLookup({cid}) -> none (not alive)");
+                    }
+                }
             }
         }
     });

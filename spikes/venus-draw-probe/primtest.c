@@ -76,21 +76,26 @@ int main(void){
     glClearColor(0.,0.,1.,1.); glClear(GL_COLOR_BUFFER_BIT);
     glEnableVertexAttribArray(0);
 
+    // Like cogl: ONE shared VBO holds all quads; each rect is drawn with glDrawArrays at a NON-ZERO
+    // first-vertex offset (q*vpq). cogl's single-rect path uses TRIANGLE_FAN at first=current_vertex.
+    int Q=N*N; int vpq = (mode==GL_TRIANGLES)?6:4;
+    float* all=malloc(Q*vpq*2*sizeof(float)); int idx=0;
     float cell=2.f/N, gap=cell*0.18f, s=cell-gap;
     for(int gy=0;gy<N;gy++)for(int gx=0;gx<N;gx++){
         float x0=-1.f+gx*cell+gap*.5f, y0=-1.f+gy*cell+gap*.5f, x1=x0+s, y1=y0+s;
         float TL[2]={x0,y1},TR[2]={x1,y1},BL[2]={x0,y0},BR[2]={x1,y0};
-        float quad[12]; int nv;
-        if(mode==GL_TRIANGLE_FAN){     // around the quad: TL,TR,BR,BL  (fan from TL → 2 tris)
-            float q[8]={TL[0],TL[1], TR[0],TR[1], BR[0],BR[1], BL[0],BL[1]}; memcpy(quad,q,sizeof q); nv=4;
-        } else if(mode==GL_TRIANGLE_STRIP){ // TL,TR,BL,BR → tri(0,1,2),tri(2,1,3)
-            float q[8]={TL[0],TL[1], TR[0],TR[1], BL[0],BL[1], BR[0],BR[1]}; memcpy(quad,q,sizeof q); nv=4;
-        } else {                        // 6-vert triangle list
-            float q[12]={TL[0],TL[1], TR[0],TR[1], BL[0],BL[1], BL[0],BL[1], TR[0],TR[1], BR[0],BR[1]}; memcpy(quad,q,sizeof q); nv=6;
+        if(mode==GL_TRIANGLE_FAN){      // TL,TR,BR,BL
+            float q[8]={TL[0],TL[1],TR[0],TR[1],BR[0],BR[1],BL[0],BL[1]}; memcpy(all+idx,q,sizeof q); idx+=8;
+        } else if(mode==GL_TRIANGLE_STRIP){ // TL,TR,BL,BR
+            float q[8]={TL[0],TL[1],TR[0],TR[1],BL[0],BL[1],BR[0],BR[1]}; memcpy(all+idx,q,sizeof q); idx+=8;
+        } else {                        // 6-vert list
+            float q[12]={TL[0],TL[1],TR[0],TR[1],BL[0],BL[1],BL[0],BL[1],TR[0],TR[1],BR[0],BR[1]}; memcpy(all+idx,q,sizeof q); idx+=12;
         }
-        glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,0,quad);
-        glDrawArrays(mode,0,nv);
     }
+    GLuint vbo; glGenBuffers(1,&vbo); glBindBuffer(GL_ARRAY_BUFFER,vbo);
+    glBufferData(GL_ARRAY_BUFFER, Q*vpq*2*sizeof(float), all, GL_STATIC_DRAW);
+    glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,0,0);
+    for(int q=0;q<Q;q++) glDrawArrays(mode, q*vpq, vpq);   // <-- non-zero first vertex per rect
     glFinish();
     printf("glGetError=0x%x\n", glGetError());
     EGLBoolean sw=eglSwapBuffers(dpy,surf); printf("swap=%d\n",sw);
