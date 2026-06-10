@@ -34,6 +34,14 @@ This replaces the old ad-hoc in-guest `~/mesa` build (task #26).
   cl_gl_sharing elsewhere); fall back to implicit dmabuf sync. Upstreamable (#30 seated,
   walls 2–3). Together 0002+0003+0004 make seated gnome-shell *survive* on venus (no more
   crash-loop); the remaining blocker is KMS-CRTC scanout-format negotiation, not a crash.
+- **`0005-venus-deep-copy-present-region-rectangles.diff`** — venus's async present thread
+  (`vn_wsi_clone_present_info`) deep-copies the `VkPresentRegionKHR` array but NOT the
+  per-region `pRectangles` (`VkRectLayerKHR[]`); zink's kopper frees its rectangle storage
+  as soon as `vkQueuePresentKHR` returns, so the present thread read freed memory —
+  `assert(rect->layer == 0)` in wsi_common_wayland on debug builds (killed Firefox at
+  first damage-rect present), garbage wl damage on release. Deep-copy the rectangles too.
+  Upstream MR candidate. (Found 2026-06-10 chasing WebGL2-aquarium-on-KK; also baked
+  directly into `Fedora-Workstation-43.dev-enh.raw`'s `~/mesa-venus` + installed lib.)
 
 ## What we DON'T build here
 Venus (`libvulkan_virtio`) is the guest's **stock** Mesa Vulkan driver (`-Dvulkan-drivers=`

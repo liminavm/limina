@@ -1,0 +1,349 @@
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.m b/src/kosmickrisp/bridge/mtl_command_buffer.m
+index d5b9174..225685f 100644
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.m
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.m
+@@ -51,6 +51,14 @@
+ {
+    @autoreleasepool {
+       id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>)cmd_buffer;
++      if (getenv("LIMINA_KK_RTLOG")) {
++         [cmd_buf addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull done) {
++            if (done.error || done.status != MTLCommandBufferStatusCompleted)
++               fprintf(stderr, "[LIMINA-KK-CBERR] status=%lu error=%s\n",
++                       (unsigned long)done.status,
++                       done.error ? [[done.error description] UTF8String] : "nil");
++         }];
++      }
+       [cmd_buf commit];
+    }
+ }
+diff --git a/src/kosmickrisp/bridge/mtl_encoder.m b/src/kosmickrisp/bridge/mtl_encoder.m
+index dd5037b..a73c962 100644
+--- a/src/kosmickrisp/bridge/mtl_encoder.m
++++ b/src/kosmickrisp/bridge/mtl_encoder.m
+@@ -7,9 +7,49 @@
+ #include "mtl_encoder.h"
+ 
+ #include <Metal/MTLBlitCommandEncoder.h>
++#include <Metal/MTLCaptureManager.h>
++#include <Metal/MTLCaptureScope.h>
+ #include <Metal/MTLComputeCommandEncoder.h>
+ #include <Metal/MTLRenderCommandEncoder.h>
+ 
++/* limina: LIMINA_KK_STATS=1 — once-per-second aggregate counters to stderr.
++ * Measures render-pass split rate (renc + Load-action reloads) vs draw rate. */
++#include <stdatomic.h>
++#include <time.h>
++static _Atomic uint64_t limina_st_renc, limina_st_benc, limina_st_cenc,
++   limina_st_draw, limina_st_loadc, limina_st_loadds;
++static bool
++limina_stats_on(void)
++{
++   static int enabled = -1;
++   if (enabled < 0)
++      enabled = getenv("LIMINA_KK_STATS") != NULL;
++   return enabled;
++}
++static void
++limina_stats_bump(_Atomic uint64_t *ctr)
++{
++   if (!limina_stats_on())
++      return;
++   atomic_fetch_add_explicit(ctr, 1, memory_order_relaxed);
++   static _Atomic long last_sec;
++   struct timespec ts;
++   clock_gettime(CLOCK_MONOTONIC, &ts);
++   long prev = atomic_load_explicit(&last_sec, memory_order_relaxed);
++   if (ts.tv_sec != prev &&
++       atomic_compare_exchange_strong(&last_sec, &prev, ts.tv_sec)) {
++      fprintf(stderr,
++              "[LIMINA-KK-STATS] renc=%llu loadC=%llu loadDS=%llu benc=%llu "
++              "cenc=%llu draw=%llu (last interval)\n",
++              (unsigned long long)atomic_exchange(&limina_st_renc, 0),
++              (unsigned long long)atomic_exchange(&limina_st_loadc, 0),
++              (unsigned long long)atomic_exchange(&limina_st_loadds, 0),
++              (unsigned long long)atomic_exchange(&limina_st_benc, 0),
++              (unsigned long long)atomic_exchange(&limina_st_cenc, 0),
++              (unsigned long long)atomic_exchange(&limina_st_draw, 0));
++   }
++}
++
+ /* Common encoder utils */
+ void
+ mtl_end_encoding(void *encoder)
+@@ -26,6 +66,7 @@
+ {
+    @autoreleasepool {
+       id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>)cmd_buffer;
++      limina_stats_bump(&limina_st_benc);
+       return [[cmd_buf blitCommandEncoder] retain];
+    }
+ }
+@@ -62,6 +103,10 @@
+       id<MTLBlitCommandEncoder> blit = (id<MTLBlitCommandEncoder>)blit_enc_handle;
+       id<MTLBuffer> mtl_src_buffer = (id<MTLBuffer>)src_buf;
+       id<MTLBuffer> mtl_dst_buffer = (id<MTLBuffer>)dst_buf;
++      if (getenv("LIMINA_KK_RTLOG"))
++         fprintf(stderr, "[LIMINA-KK-B2B] src=%p+%zu dst=%p+%zu size=%zu\n",
++                 (void *)mtl_src_buffer.contents, src_offset,
++                 (void *)mtl_dst_buffer.contents, dst_offset, size);
+       [blit copyFromBuffer:mtl_src_buffer sourceOffset:src_offset toBuffer:mtl_dst_buffer destinationOffset:dst_offset size:size];
+    }
+ }
+@@ -145,6 +190,7 @@
+ {
+    @autoreleasepool {
+       id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>)cmd_buffer;
++      limina_stats_bump(&limina_st_cenc);
+       return [[cmd_buf computeCommandEncoder] retain];
+    }
+ }
+@@ -254,7 +300,75 @@
+    @autoreleasepool {
+       id<MTLCommandBuffer> cmd = (id<MTLCommandBuffer>)command_buffer;
+       MTLRenderPassDescriptor *desc = (MTLRenderPassDescriptor *)descriptor;
+-      return [[cmd renderCommandEncoderWithDescriptor:desc] retain];
++      /* limina: targeted single-pass GPU capture — arm with LIMINA_KK_CAPTURE=<W>;
++       * captures the first render pass whose color0 is a buffer-backed (linear)
++       * texture of width W AND has a depth attachment; writes /tmp/kk-pass.gputrace. */
++      static int limina_captured = 0;
++      const char *limina_capw = getenv("LIMINA_KK_CAPTURE");
++      bool limina_capturing = false;
++      if (limina_capw && !limina_captured) {
++         id<MTLTexture> c0 = desc.colorAttachments[0].texture;
++         id<MTLTexture> root = c0;
++         while (root && !root.buffer && root.parentTexture)
++            root = root.parentTexture;
++         if (c0 && root && root.buffer && desc.depthAttachment.texture &&
++             c0.width == (NSUInteger)atoi(limina_capw)) {
++            MTLCaptureManager *mgr = [MTLCaptureManager sharedCaptureManager];
++            MTLCaptureDescriptor *cd = [[MTLCaptureDescriptor alloc] init];
++            cd.captureObject = [(id<MTLCommandBuffer>)cmd device];
++            cd.destination = MTLCaptureDestinationGPUTraceDocument;
++            cd.outputURL = [NSURL fileURLWithPath:@"/tmp/kk-pass.gputrace"];
++            NSError *err = nil;
++            if ([mgr startCaptureWithDescriptor:cd error:&err]) {
++               limina_captured = 1;
++               limina_capturing = true;
++               fprintf(stderr, "[LIMINA-KK-CAPTURE] started for %sx pass\n", limina_capw);
++            } else {
++               fprintf(stderr, "[LIMINA-KK-CAPTURE] failed: %s\n",
++                       err ? [[err description] UTF8String] : "?");
++            }
++            [cd release];
++         }
++      }
++      limina_stats_bump(&limina_st_renc);
++      if (limina_stats_on()) {
++         if (desc.colorAttachments[0].texture &&
++             desc.colorAttachments[0].loadAction == MTLLoadActionLoad)
++            atomic_fetch_add_explicit(&limina_st_loadc, 1, memory_order_relaxed);
++         if (desc.depthAttachment.texture &&
++             desc.depthAttachment.loadAction == MTLLoadActionLoad)
++            atomic_fetch_add_explicit(&limina_st_loadds, 1, memory_order_relaxed);
++      }
++      id<MTLRenderCommandEncoder> enc =
++         [[cmd renderCommandEncoderWithDescriptor:desc] retain];
++      if (limina_capturing) {
++         [(id<MTLCommandBuffer>)cmd addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull d) {
++            [[MTLCaptureManager sharedCaptureManager] stopCapture];
++            fprintf(stderr, "[LIMINA-KK-CAPTURE] stopped, trace at /tmp/kk-pass.gputrace\n");
++         }];
++      }
++      /* limina probe: render-pass structure. A texture VIEW of a buffer-backed
++       * (linear) texture reports .buffer == nil — walk parentTexture too. */
++      if (getenv("LIMINA_KK_RTLOG")) {
++         id<MTLTexture> c0 = desc.colorAttachments[0].texture;
++         id<MTLTexture> root = c0;
++         while (root && !root.buffer && root.parentTexture)
++            root = root.parentTexture;
++         if (c0) {
++            static int rp_count = 0;
++            fprintf(stderr,
++                    "[LIMINA-KK-RP] #%d enc=%p %lux%lu linear=%d view=%d load=%lu "
++                    "store=%lu ds=%p dsload=%lu\n",
++                    ++rp_count, (void *)enc, (unsigned long)c0.width,
++                    (unsigned long)c0.height, root && root.buffer ? 1 : 0,
++                    c0.parentTexture ? 1 : 0,
++                    (unsigned long)desc.colorAttachments[0].loadAction,
++                    (unsigned long)desc.colorAttachments[0].storeAction,
++                    (void *)desc.depthAttachment.texture,
++                    (unsigned long)desc.depthAttachment.loadAction);
++         }
++      }
++      return enc;
+    }
+ }
+ 
+@@ -285,6 +399,11 @@
+    @autoreleasepool {
+       id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+       MTLViewport *vps = (MTLViewport *)viewports;
++      if (getenv("LIMINA_KK_RTLOG"))
++         for (uint32_t i = 0; i < count; i++)
++            fprintf(stderr, "[LIMINA-KK-VP] enc=%p vp[%u]=(%.1f,%.1f %.1fx%.1f z=%.2f..%.2f)\n",
++                    (void *)enc, i, vps[i].originX, vps[i].originY, vps[i].width,
++                    vps[i].height, vps[i].znear, vps[i].zfar);
+       [enc setViewports:vps count:count];
+    }
+ }
+@@ -296,6 +415,11 @@
+    @autoreleasepool {
+       id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+       MTLScissorRect *rects = (MTLScissorRect *)scissor_rects;
++      if (getenv("LIMINA_KK_RTLOG"))
++         for (uint32_t i = 0; i < count; i++)
++            fprintf(stderr, "[LIMINA-KK-SC] enc=%p sc[%u]=(%lu,%lu %lux%lu)\n",
++                    (void *)enc, i, (unsigned long)rects[i].x, (unsigned long)rects[i].y,
++                    (unsigned long)rects[i].width, (unsigned long)rects[i].height);
+       [enc setScissorRects:rects count:count];
+    }
+ }
+@@ -305,6 +429,7 @@
+                               mtl_render_pipeline_state *pipeline)
+ {
+    @autoreleasepool {
++      if (getenv("LIMINA_KK_RTLOG")) fprintf(stderr, "[LIMINA-KK-ST] mtl_render_set_pipeline_state enc=%p pso=%p\n", (void *)encoder, (void *)pipeline);
+       id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+       id<MTLRenderPipelineState> pipe = (id<MTLRenderPipelineState>)pipeline;
+       [enc setRenderPipelineState:pipe];
+@@ -316,6 +441,7 @@
+                             mtl_depth_stencil_state *state)
+ {
+    @autoreleasepool {
++      if (getenv("LIMINA_KK_RTLOG")) fprintf(stderr, "[LIMINA-KK-ST] mtl_set_depth_stencil_state enc=%p dss=%p\n", (void *)encoder, (void *)state);
+       id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+       id<MTLDepthStencilState> s = (id<MTLDepthStencilState>)state;
+       [enc setDepthStencilState:s];
+@@ -327,6 +453,7 @@
+                            uint32_t back)
+ {
+    @autoreleasepool {
++      if (getenv("LIMINA_KK_RTLOG")) fprintf(stderr, "[LIMINA-KK-ST] mtl_set_stencil_references enc=%p\n", (void *)encoder);
+       id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+       [enc setStencilFrontReferenceValue:front backReferenceValue:back];
+    }
+@@ -337,6 +464,7 @@
+                            enum mtl_winding winding)
+ {
+    @autoreleasepool {
++      if (getenv("LIMINA_KK_RTLOG")) fprintf(stderr, "[LIMINA-KK-ST] mtl_set_front_face_winding enc=%p wind=%lu\n", (void *)encoder, (unsigned long)winding);
+       id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+       [enc setFrontFacingWinding:(MTLWinding)winding];
+    }
+@@ -346,6 +474,7 @@
+ mtl_set_cull_mode(mtl_render_encoder *encoder, enum mtl_cull_mode mode)
+ {
+    @autoreleasepool {
++      if (getenv("LIMINA_KK_RTLOG")) fprintf(stderr, "[LIMINA-KK-ST] mtl_set_cull_mode enc=%p mode=%lu\n", (void *)encoder, (unsigned long)mode);
+       id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+       [enc setCullMode:(MTLCullMode)mode];
+    }
+@@ -357,6 +486,7 @@
+                                size_t offset)
+ {
+    @autoreleasepool {
++      if (getenv("LIMINA_KK_RTLOG")) fprintf(stderr, "[LIMINA-KK-ST] mtl_set_visibility_result_mode enc=%p mode=%lu off=%zu\n", (void *)encoder, (unsigned long)mode, offset);
+       id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+       [enc setVisibilityResultMode:(MTLVisibilityResultMode)mode offset:offset];
+    }
+@@ -404,6 +534,30 @@
+    @autoreleasepool {
+       id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+       id<MTLBuffer> buf = (id<MTLBuffer>)buffer;
++      if (getenv("LIMINA_KK_RTLOG")) {
++         const float *f = buf.contents ? (const float *)((const char *)buf.contents + offset) : NULL;
++         size_t nz = 0, len = buf.length, firstnz[8], nfound = 0;
++         const unsigned char *raw = (const unsigned char *)buf.contents;
++         if (raw)
++            for (size_t i = 0; i < len; i++)
++               if (raw[i]) { if (nfound < 8) firstnz[nfound++] = i; nz++; }
++         fprintf(stderr,
++                 "[LIMINA-KK-VB] enc=%p idx=%u off=%lu len=%lu base=%p nonzero=%zu "
++                 "nzoff=[%zd %zd %zd %zd %zd %zd %zd %zd] first4=(%.2f %.2f %.2f %.2f)\n",
++                 (void *)enc, index, (unsigned long)offset, (unsigned long)len,
++                 (void *)raw, nz,
++                 nfound > 0 ? (ssize_t)firstnz[0] : -1, nfound > 1 ? (ssize_t)firstnz[1] : -1,
++                 nfound > 2 ? (ssize_t)firstnz[2] : -1, nfound > 3 ? (ssize_t)firstnz[3] : -1,
++                 nfound > 4 ? (ssize_t)firstnz[4] : -1, nfound > 5 ? (ssize_t)firstnz[5] : -1,
++                 nfound > 6 ? (ssize_t)firstnz[6] : -1, nfound > 7 ? (ssize_t)firstnz[7] : -1,
++                 f ? f[0] : -999, f ? f[1] : -999, f ? f[2] : -999, f ? f[3] : -999);
++         if (raw && nfound > 0) {
++            size_t s0 = firstnz[0] & ~(size_t)3;
++            const float *g = (const float *)(raw + s0);
++            fprintf(stderr, "[LIMINA-KK-VBF] @%zu: %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f\n",
++                    s0, g[0], g[1], g[2], g[3], g[4], g[5], g[6], g[7], g[8], g[9], g[10], g[11]);
++         }
++      }
+       [enc setVertexBuffer:buf offset:offset atIndex:index];
+    }
+ }
+@@ -448,6 +602,10 @@
+    @autoreleasepool {
+       id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+       MTLPrimitiveType type = (MTLPrimitiveType)primitve_type;
++      if (getenv("LIMINA_KK_RTLOG"))
++         fprintf(stderr, "[LIMINA-KK-DRAW] enc=%p type=%lu count=%u\n", (void *)enc,
++                 (unsigned long)type, vertexCount);
++      limina_stats_bump(&limina_st_draw);
+       [enc drawPrimitives:type vertexStart:vertexStart vertexCount:vertexCount instanceCount:instanceCount baseInstance:baseInstance];
+    }
+ }
+@@ -464,6 +622,7 @@
+       id<MTLBuffer> buf = (id<MTLBuffer>)index_buffer;
+       MTLIndexType ndx_type = (MTLIndexType)index_type;
+       MTLPrimitiveType primitive = (MTLPrimitiveType)primitve_type;
++      limina_stats_bump(&limina_st_draw);
+       [enc drawIndexedPrimitives:primitive indexCount:index_count indexType:ndx_type indexBuffer:buf indexBufferOffset:index_buffer_offset instanceCount:instance_count baseVertex:base_vertex baseInstance:base_instance];
+    }
+ }
+@@ -478,6 +637,7 @@
+       id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+       id<MTLBuffer> buf = (id<MTLBuffer>)indirect_buffer;
+       MTLPrimitiveType type = (MTLPrimitiveType)primitve_type;
++      limina_stats_bump(&limina_st_draw);
+       [enc drawPrimitives:type indirectBuffer:buf indirectBufferOffset:indirect_buffer_offset];
+    }
+ }
+@@ -497,6 +657,7 @@
+       id<MTLBuffer> ndx_buf = (id<MTLBuffer>)index_buffer;
+       MTLPrimitiveType type = (MTLPrimitiveType)primitve_type;
+       MTLIndexType ndx_type = (MTLIndexType)index_type;
++      limina_stats_bump(&limina_st_draw);
+       [enc drawIndexedPrimitives:type indexType:ndx_type indexBuffer:ndx_buf indexBufferOffset:index_buffer_offset indirectBuffer:buf indirectBufferOffset:indirect_buffer_offset];
+    }
+ }
+diff --git a/src/kosmickrisp/bridge/mtl_texture.m b/src/kosmickrisp/bridge/mtl_texture.m
+index 496ce14..2ea01cb 100644
+--- a/src/kosmickrisp/bridge/mtl_texture.m
++++ b/src/kosmickrisp/bridge/mtl_texture.m
+@@ -76,7 +76,13 @@
+                                                                         mtl_texture_swizzle(layout->swizzle.green),
+                                                                         mtl_texture_swizzle(layout->swizzle.blue),
+                                                                         mtl_texture_swizzle(layout->swizzle.alpha));
+-      return [tex newTextureViewWithPixelFormat:layout->format.mtl textureType:type levels:levels slices:slices swizzle:swizzle];
++      id<MTLTexture> v = [tex newTextureViewWithPixelFormat:layout->format.mtl textureType:type levels:levels slices:slices swizzle:swizzle];
++      if (getenv("LIMINA_KK_RTLOG") && (!v || tex.buffer))
++         fprintf(stderr, "[LIMINA-KK-VIEW] %s parent=%p(linear=%d %lux%lu) type=%lu fmt=%lu -> %p\n",
++                 v ? "ok" : "NIL", (void *)tex, tex.buffer ? 1 : 0,
++                 (unsigned long)tex.width, (unsigned long)tex.height,
++                 (unsigned long)type, (unsigned long)layout->format.mtl, (void *)v);
++      return v;
+    }
+ }
+ 
+@@ -88,7 +94,13 @@
+       MTLTextureType type = mtl_texture_view_type(layout->view_type, layout->sample_count_sa);
+       NSRange levels = NSMakeRange(layout->base_level, layout->num_levels);
+       NSRange slices = NSMakeRange(layout->base_array_layer, layout->array_len);
+-      return [tex newTextureViewWithPixelFormat:layout->format.mtl textureType:type levels:levels slices:slices];
++      id<MTLTexture> v = [tex newTextureViewWithPixelFormat:layout->format.mtl textureType:type levels:levels slices:slices];
++      if (getenv("LIMINA_KK_RTLOG") && (!v || tex.buffer))
++         fprintf(stderr, "[LIMINA-KK-VIEW] %s(nosw) parent=%p(linear=%d %lux%lu) type=%lu fmt=%lu -> %p\n",
++                 v ? "ok" : "NIL", (void *)tex, tex.buffer ? 1 : 0,
++                 (unsigned long)tex.width, (unsigned long)tex.height,
++                 (unsigned long)type, (unsigned long)layout->format.mtl, (void *)v);
++      return v;
+    }
+ }
+ 

@@ -1,0 +1,70 @@
+diff --git a/src/kosmickrisp/bridge/mtl_buffer.m b/src/kosmickrisp/bridge/mtl_buffer.m
+index dedb309..165a711 100644
+--- a/src/kosmickrisp/bridge/mtl_buffer.m
++++ b/src/kosmickrisp/bridge/mtl_buffer.m
+@@ -70,6 +70,19 @@
+       id<MTLBuffer> buf = (id<MTLBuffer>)buffer;
+       MTLTextureDescriptor *descriptor = [mtl_new_texture_descriptor(layout) autorelease];
+       descriptor.resourceOptions = buf.resourceOptions;
++      /* limina: Metal requires buffer-backed (linear) textures to be MTLTextureType2D;
++       * vk_image_to_mtl_texture_type promotes single-layer images to 2DArray for input
++       * attachments, which trips _mtlValidateStrideTextureParameters. Demote — array
++       * views of a 2D texture remain creatable via newTextureView. */
++      if (descriptor.textureType == MTLTextureType2DArray && descriptor.arrayLength == 1)
++         descriptor.textureType = MTLTextureType2D;
++      if (getenv("LIMINA_KK_RTLOG"))
++         fprintf(stderr,
++                 "[LIMINA-KK-LINTEX] %lux%lu type=%lu(layout %u) usage=0x%lx fmt=%lu stride=%u off=%llu\n",
++                 (unsigned long)descriptor.width, (unsigned long)descriptor.height,
++                 (unsigned long)descriptor.textureType, layout->type,
++                 (unsigned long)descriptor.usage, (unsigned long)descriptor.pixelFormat,
++                 layout->linear_stride_B, (unsigned long long)offset);
+       id<MTLTexture> texture = [buf newTextureWithDescriptor:descriptor offset:offset bytesPerRow:layout->linear_stride_B];
+ 
+       return texture;
+diff --git a/src/kosmickrisp/vulkan/kk_device_memory.c b/src/kosmickrisp/vulkan/kk_device_memory.c
+index c706e44..01c42a0 100644
+--- a/src/kosmickrisp/vulkan/kk_device_memory.c
++++ b/src/kosmickrisp/vulkan/kk_device_memory.c
+@@ -112,7 +112,8 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
+    bool import_host = host_info && host_info->handleType;
+ 
+    if (import_metal || import_host) {
+-      assert(metal_info->handleType ==
++      /* limina: metal_info is NULL on a host-pointer-only import — don't deref it. */
++      assert(!import_metal || metal_info->handleType ==
+              VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT);
+       mem->bo = CALLOC_STRUCT(kk_bo);
+       if (!mem->bo) {
+@@ -133,6 +134,19 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
+           * only be usable for buffers */
+          mem->bo->map = mtl_new_buffer_with_bytes_no_copy(
+             dev->mtl_handle, host_info->pHostPointer, mem->vk.size);
++         /* limina: newBufferWithBytesNoCopy returns nil on a rejected pointer/length;
++          * adding nil to the residency set makes the AGX residency commit segfault
++          * at the next submit. Fail the allocation loudly instead. */
++         if (!mem->bo->map) {
++            fprintf(stderr,
++                    "[LIMINA-KK-IMPORT] newBufferWithBytesNoCopy FAILED ptr=%p "
++                    "size=%llu (page-aligned ptr + page-multiple size required)\n",
++                    host_info->pHostPointer, (unsigned long long)mem->vk.size);
++            FREE(mem->bo);
++            result = vk_errorf(&dev->vk.base, VK_ERROR_INVALID_EXTERNAL_HANDLE,
++                               "host pointer import rejected by Metal");
++            goto fail_alloc;
++         }
+          mem->bo->size_B = mtl_buffer_get_length(mem->bo->map);
+          kk_device_add_buffer_to_residency_set(dev, mem->bo->map);
+       }
+@@ -217,6 +231,11 @@ kk_MapMemory2KHR(VkDevice device, const VkMemoryMapInfoKHR *pMemoryMapInfo,
+ 
+    *ppData = mem->map + offset;
+ 
++   if (getenv("LIMINA_KK_RTLOG"))
++      fprintf(stderr, "[LIMINA-KK-MAP] mem=%p size=%llu cpu=%p heap=%d\n", (void *)mem,
++              (unsigned long long)mem->vk.size, mem->bo->cpu,
++              mem->bo->mtl_handle ? 1 : 0);
++
+    return result;
+ }
+ 

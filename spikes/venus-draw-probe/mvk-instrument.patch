@@ -698,7 +698,7 @@ index c09f136..0f5387c 100644
  }
  
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
-index e1f3c04..6c29678 100644
+index e1f3c04..ce3d6e9 100644
 --- a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
 +++ b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
 @@ -1505,7 +1505,10 @@
@@ -713,7 +713,21 @@ index e1f3c04..6c29678 100644
  
  	if ( !pImageFormatProperties ) { return VK_SUCCESS; }
  
-@@ -1755,7 +1758,8 @@
+@@ -1577,7 +1580,12 @@
+ 	uint32_t maxLevels = 1;
+ 	uint32_t maxLayers = hasAttachmentUsage ? pLimits->maxFramebufferLayers : pLimits->maxImageArrayLayers;
+ 
+-	bool supportsMSAA =  mvkAreAllFlagsEnabled(_pixelFormats.getCapabilities(format), kMVKMTLFmtCapsMSAA);
++	// limina: resolve through the substitute (getMTLPixelFormat falls back, e.g. D24S8->D32S8)
++	// so substitutable formats report the sample counts of the format images will actually
++	// use. With the bare VkFormat lookup, substituted formats got caps 0 => sampleCounts=1,
++	// and guest GL MSAA framebuffers with a D24S8 depth-stencil came out INCOMPLETE
++	// (Firefox WebGL antialias backbuffer).
++	bool supportsMSAA =  mvkAreAllFlagsEnabled(_pixelFormats.getCapabilities(_pixelFormats.getMTLPixelFormat(format)), kMVKMTLFmtCapsMSAA);
+ 	VkSampleCountFlags sampleCounts = supportsMSAA ? _metalFeatures.supportedSampleCounts : VK_SAMPLE_COUNT_1_BIT;
+ 
+ 	switch (type) {
+@@ -1755,7 +1763,8 @@
          }
      }
  
@@ -766,7 +780,7 @@ index 7357ff1..1173fc8 100644
  	if (!addFragmentShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, pFragmentSS, pFragmentFB)) { return nil; }
  
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKPixelFormats.mm b/MoltenVK/MoltenVK/GPUObjects/MVKPixelFormats.mm
-index cdc72f3..12a9f2c 100644
+index cdc72f3..b3764be 100644
 --- a/MoltenVK/MoltenVK/GPUObjects/MVKPixelFormats.mm
 +++ b/MoltenVK/MoltenVK/GPUObjects/MVKPixelFormats.mm
 @@ -1550,6 +1550,20 @@
@@ -790,6 +804,27 @@ index cdc72f3..12a9f2c 100644
      vkProps.optimalTilingFeatures = kMVKVkFormatFeatureFlagsTexNone;
      vkProps.linearTilingFeatures = kMVKVkFormatFeatureFlagsTexNone;
  
+@@ -1618,4 +1632,20 @@
+ 		enableFormatFeatures(Atomic, Buf, mtlPixFmtCaps, vkProps.bufferFeatures);
+ 		enableFormatFeatures(Vertex, Buf, getMTLVertexFormatDesc(vkDesc.mtlVertexFormat).mtlFmtCaps, vkProps.bufferFeatures);
+ 	}
++
++	// limina: depth/stencil-capable formats can never actually honor HOST_TRANSFER usage:
++	// MVKImage::getMemoryRequirements restricts every image of a DS-attachment-capable
++	// format to private memory, then HOST_TRANSFER usage strips the private types,
++	// leaving memoryTypeBits == 0 — spec-invalid and unallocatable. zink (incl. through
++	// venus) adds HOST_TRANSFER usage to any image whose format advertises the feature,
++	// so the GL window-system depth/stencil buffer fails to allocate and GL stencil
++	// silently dies (limina #32). Don't advertise the feature on these formats; the
++	// usage/feature gate in getImageFormatProperties then rejects stray attempts and
++	// clients negotiate the image without HOST_TRANSFER by design.
++	// Kill switch: LIMINA_HICFIX_OFF restores upstream behavior for A/B.
++	if (mvkIsAnyFlagEnabled(vkProps.optimalTilingFeatures, VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT) &&
++		!getenv("LIMINA_HICFIX_OFF")) {
++		mvkDisableFlags(vkProps.optimalTilingFeatures, VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT);
++		mvkDisableFlags(vkProps.linearTilingFeatures, VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT);
++	}
+ }
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
 index 42e5646..31e6180 100644
 --- a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
