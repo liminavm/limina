@@ -1,0 +1,34 @@
+diff --git a/spirv_msl.cpp b/spirv_msl.cpp
+index db40c443..dbaa0054 100644
+--- a/spirv_msl.cpp
++++ b/spirv_msl.cpp
+@@ -16252,6 +16252,29 @@ const std::unordered_set<std::string> &CompilerMSL::get_reserved_keyword_set()
+ 		"quad_broadcast",
+ 		"thread",
+ 		"threadgroup",
++		// Metal resource and template type names. A SPIR-V variable carrying one of
++		// these names (all legal GLSL identifiers — e.g. Mesa's PBO-download shader
++		// names a variable "sampler") would otherwise shadow the type in the emitted
++		// MSL and break compilation of any later declaration using that type.
++		"sampler",
++		"texture",
++		"texture1d",
++		"texture1d_array",
++		"texture2d",
++		"texture2d_array",
++		"texture2d_ms",
++		"texture2d_ms_array",
++		"texture3d",
++		"texturecube",
++		"texturecube_array",
++		"texture_buffer",
++		"depth2d",
++		"depth2d_array",
++		"depth2d_ms",
++		"depth2d_ms_array",
++		"depthcube",
++		"depthcube_array",
++		"array",
+ 	};
+ 
+ 	return keywords;

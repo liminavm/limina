@@ -29,7 +29,14 @@ if [ "$1" = "--apply-patch" ]; then
 fi
 
 cd "$MVK"
-make macos 2>&1 | tail -3
+# MVK_USE_METAL_PRIVATE_API is ON by default (validated 2026-06-10, RESULTS.md): unlocks logicOp,
+# provoking-vertex-last, wide lines, legacy dithering, non-seamless cubemaps, and real primitive-restart
+# control — all features zink wants for GL correctness; killed the logicOp "base Zink requirements"
+# warning, desktop canary clean. Opt out at build time with LIMINA_MVK_PRIVATE_API=0, or at runtime with
+# MVK_CONFIG_USE_METAL_PRIVATE_API=0 on the worker (config defaults to the build-time value).
+MAKEARGS="MVK_USE_METAL_PRIVATE_API=1"
+[ "${LIMINA_MVK_PRIVATE_API:-1}" = "0" ] && MAKEARGS=
+make macos MAKEARGS="$MAKEARGS" 2>&1 | tail -3
 mkdir -p "$DEST"
 cp Package/Release/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib "$DEST/libMoltenVK.dylib"
 codesign -s - --force "$DEST/libMoltenVK.dylib"   # worker is adhoc/no-hardened-runtime, so it loads this

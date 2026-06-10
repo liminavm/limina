@@ -1,5 +1,5 @@
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
-index c492057..4871b91 100644
+index c492057..8739271 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
 +++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
 @@ -23,6 +23,33 @@
@@ -36,7 +36,43 @@ index c492057..4871b91 100644
  
  
  #pragma mark -
-@@ -224,7 +251,17 @@
+@@ -107,6 +134,17 @@
+         const auto numIndices = _binding.size;
+         auto* uint16Buf = cmdEncoder->getTempMTLBuffer(numIndices * 2);
+ 
++        // LIMINA: the temp buffer is a suballocation at uint16Buf->_offset inside a pooled
++        // MTLBuffer, but the conversion kernel below historically wrote at offset 0 while
++        // the draw reads at _offset — stale pool bytes become indices whenever _offset != 0.
++        // LIMINA_U8FIX_OFF restores the broken behavior for A/B verification.
++        const NSUInteger outBase = getenv("LIMINA_U8FIX_OFF") ? 0 : uint16Buf->_offset;
++        if (getenv("LIMINA_U8_DUMP")) {
++            fprintf(stderr, "[LIMINA-U8CONV] numIndices=%llu tmpOffset=%llu outBase=%llu mtlBuf=%p\n",
++                    (unsigned long long)numIndices, (unsigned long long)uint16Buf->_offset,
++                    (unsigned long long)outBase, uint16Buf->_mtlBuffer);
++        }
++
+         cmdEncoder->encodeStoreActions(true);
+ 
+         // Determine the number of full threadgroups we can dispatch to cover the buffer content efficiently.
+@@ -120,7 +158,7 @@
+         id<MTLComputeCommandEncoder> mtlComputeEnc = cmdEncoder->getMTLComputeEncoder(kMVKCommandConvertUint8Indices);
+         state.bindPipeline(mtlComputeEnc, cps);
+         state.bindBuffer(mtlComputeEnc, _binding.mtlBuffer, _binding.offset, 0);
+-        state.bindBuffer(mtlComputeEnc, uint16Buf->_mtlBuffer, 0, 1);
++        state.bindBuffer(mtlComputeEnc, uint16Buf->_mtlBuffer, outBase, 1);
+ 
+         // Run as many full threadgroups as will fit into the buffer content.
+         if (tgCount > 0) {
+@@ -135,7 +173,7 @@
+             if (tgCount > 0) {
+                 const auto indicesConverted = tgCount * tgWidth;
+                 state.bindBuffer(mtlComputeEnc, _binding.mtlBuffer, _binding.offset + indicesConverted, 0);
+-                state.bindBuffer(mtlComputeEnc, uint16Buf->_mtlBuffer, indicesConverted * 2, 1);
++                state.bindBuffer(mtlComputeEnc, uint16Buf->_mtlBuffer, outBase + indicesConverted * 2, 1);
+             }
+             [mtlComputeEnc dispatchThreadgroups: MTLSizeMake(1, 1, 1)
+                            threadsPerThreadgroup: MTLSizeMake(remainderIndexCount, 1, 1)];
+@@ -224,7 +262,17 @@
  	auto& dvcLimits = cmdEncoder->getDeviceProperties().limits;
  
  	// Metal doesn't support triangle fans, so encode it as triangles via an indexed indirect triangles command instead.
@@ -55,7 +91,7 @@ index c492057..4871b91 100644
  		encodeIndexedIndirect(cmdEncoder);
  		return;
  	}
-@@ -355,6 +392,17 @@
+@@ -355,6 +403,17 @@
                      uint32_t viewCount = subpass->isMultiview() ? subpass->getViewCountInMetalPass(cmdEncoder->getMultiviewPassIndex()) : 1;
                      uint32_t instanceCount = _instanceCount * viewCount;
                      cmdEncoder->getState().offsetZeroDivisorVertexBuffers(*cmdEncoder, stage, pipeline, _firstInstance);
@@ -73,7 +109,7 @@ index c492057..4871b91 100644
                      if (mtlFeats.baseVertexInstanceDrawing) {
                          [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                            vertexStart: _firstVertex
-@@ -424,10 +472,17 @@
+@@ -424,10 +483,17 @@
  	diiCmd.encode(cmdEncoder);
  }
  
@@ -91,7 +127,7 @@ index c492057..4871b91 100644
  	cmdEncoder->restartMetalRenderPassIfNeeded();
  
  	auto* pipeline = cmdEncoder->getGraphicsPipeline();
-@@ -435,7 +490,50 @@
+@@ -435,7 +501,50 @@
  	auto& dvcLimits = cmdEncoder->getDeviceProperties().limits;
  
  	// Metal doesn't support triangle fans, so encode it as triangles via an indexed indirect triangles command instead.
@@ -143,7 +179,7 @@ index c492057..4871b91 100644
  		encodeIndexedIndirect(cmdEncoder);
  		return;
  	}
-@@ -574,23 +672,252 @@
+@@ -574,23 +683,252 @@
                      MVKRenderSubpass* subpass = cmdEncoder->getSubpass();
                      uint32_t viewCount = subpass->isMultiview() ? subpass->getViewCountInMetalPass(cmdEncoder->getMultiviewPassIndex()) : 1;
                      uint32_t instanceCount = _instanceCount * viewCount;
@@ -412,7 +448,7 @@ index c492057..4871b91 100644
                      }
                  }
                  break;
-@@ -687,7 +1014,9 @@
+@@ -687,7 +1025,9 @@
  	auto& dvcLimits = cmdEncoder->getDeviceProperties().limits;
  
  	// Metal doesn't support triangle fans, so encode it as indexed indirect triangles instead.
@@ -423,7 +459,7 @@ index c492057..4871b91 100644
  		encodeIndexedIndirect(cmdEncoder);
  		return;
  	}
-@@ -983,7 +1312,9 @@
+@@ -983,7 +1323,9 @@
  	vtxAdjmts.mtlIndexType = ibb.mtlIndexType;
  	vtxAdjmts.isMultiView = (cmdEncoder->getSubpass()->isMultiview() &&
  							 cmdEncoder->getPhysicalDevice()->canUseInstancingForMultiview());
@@ -435,10 +471,54 @@ index c492057..4871b91 100644
  	// With private APIs for primitive restart, we need to handle disabled restart and raw Uint8 indices.
  	vtxAdjmts.isPrimRestart = cmdEncoder->getState().vkGraphics().isPrimitiveRestartEnabled();
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm b/MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm
-index 2586a80..ebcb0cc 100644
+index 2586a80..a9a48f3 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm
 +++ b/MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm
-@@ -549,7 +549,9 @@ void mvkPopulateFromOrFillAscending(Vec& dst, const uint32_t* pSrc, size_t count
+@@ -143,12 +143,43 @@
+ 	_renderingInfo.pColorAttachments = _colorAttachments.data();
+ 	for (auto caAtt : _colorAttachments) { caAtt.pNext = nullptr; }
+ 
++	// [LIMINA-LOADOP] #32 partial-repaint decay: on Apple TBDR, loadAction DontCare genuinely loses
++	// the attachment region a pass doesn't re-render (immediate-mode GPUs usually keep it in VRAM,
++	// which is what mutter's clipped-redraw path implicitly relies on). Log color loadOps + render
++	// area (LIMINA_LOADOP_DUMP), and rewrite DONT_CARE -> LOAD (LIMINA_FORCE_LOAD) as the experiment.
++	{
++		static long gkLoadN = 0;
++		bool gkDump = getenv("LIMINA_LOADOP_DUMP") != nullptr;
++		bool gkForce = getenv("LIMINA_FORCE_LOAD") != nullptr;
++		for (auto& gkAtt : _colorAttachments) {
++			if (gkDump && gkLoadN < 400) {
++				fprintf(stderr, "[LIMINA-LOADOP] color view=%p loadOp=%d storeOp=%d area=(%d,%d %ux%u) layers=%u%s\n",
++						(void*)gkAtt.imageView, (int)gkAtt.loadOp, (int)gkAtt.storeOp,
++						_renderingInfo.renderArea.offset.x, _renderingInfo.renderArea.offset.y,
++						_renderingInfo.renderArea.extent.width, _renderingInfo.renderArea.extent.height,
++						_renderingInfo.layerCount,
++						(gkForce && gkAtt.loadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE) ? " ->FORCED_LOAD" : "");
++				gkLoadN++;
++			}
++			if (gkForce && gkAtt.loadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE) {
++				gkAtt.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
++			}
++		}
++	}
++
+ 	if (mvkSetOrClear(&_depthAttachment, _renderingInfo.pDepthAttachment)) {
+ 		_renderingInfo.pDepthAttachment = &_depthAttachment;
+ 	}
+ 	if (mvkSetOrClear(&_stencilAttachment, _renderingInfo.pStencilAttachment)) {
+ 		_renderingInfo.pStencilAttachment = &_stencilAttachment;
+ 	}
++	if (getenv("LIMINA_DS_DUMP")) {
++		const auto* d = _renderingInfo.pDepthAttachment;
++		const auto* s = _renderingInfo.pStencilAttachment;
++		fprintf(stderr, "[LIMINA-BEGREND] depthAtt(view=%p loadOp=%d) stencilAtt(view=%p loadOp=%d)\n",
++				d ? (void*)d->imageView : nullptr, d ? (int)d->loadOp : -1,
++				s ? (void*)s->imageView : nullptr, s ? (int)s->loadOp : -1);
++	}
+ 
+ 	cmdBuff->_currentSubpassInfo.beginRendering(pRenderingInfo->viewMask);
+ 
+@@ -549,7 +580,9 @@ void mvkPopulateFromOrFillAscending(Vec& dst, const uint32_t* pSrc, size_t count
  #pragma mark MVKCmdSetPrimitiveTopology
  
  void MVKCmdSetPrimitiveTopology::encode(MVKCommandEncoder* cmdEncoder) {
@@ -499,7 +579,7 @@ index 8cce5c2..c4482d0 100644
  	/** Bind the given descriptor sets, placing their bindings into `_descriptorSetBindings`. */
  	void bindDescriptorSets(MVKPipelineLayout* layout,
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
-index 16fd614..4d2fb7c 100644
+index 16fd614..cc9885b 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
 +++ b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
 @@ -779,6 +779,62 @@ static void bindVertexBuffersTemplate(id<MTLCommandEncoder> encoder,
@@ -584,6 +664,65 @@ index 16fd614..4d2fb7c 100644
  	bindBuffer(encoder, buffer, offset, index, _exists.vertex(), _bindings.vertex(), MVKVertexBinder());
  }
  void MVKMetalGraphicsCommandEncoderState::bindVertexBytes(id<MTLRenderCommandEncoder> encoder, const void* data, size_t size, NSUInteger index) {
+@@ -1248,6 +1316,13 @@ static uint32_t getSampleCount(VkSampleCountFlags vk) {
+ 		_stateReady.addAll(FlagsDepthStencil);
+ 		MVKRenderSubpass* subpass = mvkEncoder.getSubpass();
+ 		MVKMTLDepthStencilDescriptorData desc;
++		if (getenv("LIMINA_DS_DUMP")) {
++			fprintf(stderr, "[LIMINA-DSCOMP] stencilAttUsed=%d depthAttUsed=%d "
++				"stencilTestEnabled(picked)=%d dynHasStencilEnable=%d\n",
++				(int)subpass->isStencilAttachmentUsed(), (int)subpass->isDepthAttachmentUsed(),
++				(int)PICK_STATE(StencilTestEnable)->depthStencil.stencilTestEnabled,
++				(int)dynamicStateFlags.has(MVKRenderStateFlag::StencilTestEnable));
++		}
+ 		if (subpass->isStencilAttachmentUsed() && PICK_STATE(StencilTestEnable)->depthStencil.stencilTestEnabled) {
+ 			const MVKMTLDepthStencilDescriptorData& op = PICK_STATE(StencilOp)->depthStencil;
+ 			desc.backFaceStencilData.op = op.backFaceStencilData.op;
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandResourceFactory.mm b/MoltenVK/MoltenVK/Commands/MVKCommandResourceFactory.mm
+index c09f136..0f5387c 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandResourceFactory.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandResourceFactory.mm
+@@ -592,6 +592,14 @@
+ 		return newMTLComputePipelineState("convertUint8IndicesRaw", owner);
+ 	}
+ #endif
++	// LIMINA: the sentinel-mapping kernel below turns the LEGAL index value 255 into Metal's
++	// always-on primitive-restart sentinel 0xFFFF, corrupting assembly for restart-disabled
++	// draws (e.g. cogl's full 64-rect batches, whose last index is exactly 255). Raw is
++	// correct whenever the app doesn't use restart-with-uint8 (incl. all list topologies).
++	// LIMINA_U8_SENTINEL=1 restores upstream behavior for A/B testing.
++	if (!getenv("LIMINA_U8_SENTINEL")) {
++		return newMTLComputePipelineState("convertUint8IndicesRaw", owner);
++	}
+ 	return newMTLComputePipelineState("convertUint8Indices", owner);
+ }
+ 
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
+index e1f3c04..6c29678 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
+@@ -1505,7 +1505,10 @@
+ 													 VkImageCreateFlags flags,
+ 													 VkImageFormatProperties* pImageFormatProperties) {
+ 
+-	if ( !_pixelFormats.isSupported(format) ) { return VK_ERROR_FORMAT_NOT_SUPPORTED; }
++	// limina: substitutable formats (D24S8 over Depth32Float_Stencil8) pass here and are
++	// gated by the per-usage feature checks below, which only succeed for formats whose
++	// properties were populated (see setFormatProperties D24S8 advertisement).
++	if ( !_pixelFormats.isSupportedOrSubstitutable(format) ) { return VK_ERROR_FORMAT_NOT_SUPPORTED; }
+ 
+ 	if ( !pImageFormatProperties ) { return VK_SUCCESS; }
+ 
+@@ -1755,7 +1758,8 @@
+         }
+     }
+ 
+-	if ( !_pixelFormats.isSupported(pImageFormatInfo->format) ) { return VK_ERROR_FORMAT_NOT_SUPPORTED; }
++	// limina: substitutable formats pass (see the basic getImageFormatProperties above).
++	if ( !_pixelFormats.isSupportedOrSubstitutable(pImageFormatInfo->format) ) { return VK_ERROR_FORMAT_NOT_SUPPORTED; }
+ 
+ 	return getImageFormatProperties(pImageFormatInfo->format, pImageFormatInfo->type,
+ 									pImageFormatInfo->tiling, usage,
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
 index 7357ff1..1173fc8 100644
 --- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
@@ -625,6 +764,31 @@ index 7357ff1..1173fc8 100644
 +
  	// Fragment shader - only add if rasterization is enabled
  	if (!addFragmentShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, pFragmentSS, pFragmentFB)) { return nil; }
+ 
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKPixelFormats.mm b/MoltenVK/MoltenVK/GPUObjects/MVKPixelFormats.mm
+index cdc72f3..12a9f2c 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPixelFormats.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPixelFormats.mm
+@@ -1550,6 +1550,20 @@
+ 
+ 	VkFormatProperties3& vkProps = vkDesc.properties;
+ 	MVKMTLFmtCaps mtlPixFmtCaps = getMTLPixelFormatDesc(vkDesc.mtlPixelFormat).mtlFmtCaps;
++	// limina: Apple GPUs lack MTLPixelFormatDepth24Unorm_Stencil8, so D24S8 normally reports
++	// no features and Vulkan apps must handle its absence — which Mesa's GL frontend (zink)
++	// does poorly for window-system depth-stencil buffers (GL stencil silently dies).
++	// MoltenVK already substitutes Depth32Float_Stencil8 at image-creation time; let D24S8
++	// also ADVERTISE the substitute's capabilities so guests take their native D24S8 path.
++	// Rendering is then correct; only raw depth-aspect copies see float32 instead of
++	// unorm24-in-32 (no known client does this for window depth buffers).
++	// Kill switch: LIMINA_NO_D24S8_EMU.
++	if (vkDesc.vkFormat == VK_FORMAT_D24_UNORM_S8_UINT &&
++		vkDesc.mtlPixelFormat == MTLPixelFormatInvalid &&
++		vkDesc.mtlPixelFormatSubstitute != MTLPixelFormatInvalid &&
++		!getenv("LIMINA_NO_D24S8_EMU")) {
++		mtlPixFmtCaps = getMTLPixelFormatDesc(vkDesc.mtlPixelFormatSubstitute).mtlFmtCaps;
++	}
+     vkProps.optimalTilingFeatures = kMVKVkFormatFeatureFlagsTexNone;
+     vkProps.linearTilingFeatures = kMVKVkFormatFeatureFlagsTexNone;
  
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
 index 42e5646..31e6180 100644

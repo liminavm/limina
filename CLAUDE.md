@@ -167,6 +167,22 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   textureless, self-contained draw) had no confounders, so its result was decisive. And when an
   observation has a benign alternative ("the buffer's zero only because a copy hasn't run yet"), kill
   it with logic (the render is black ⟹ the GPU read zeros *at execution*) rather than assuming.
+- **Verify the fix is actually LOADED before judging it — at the path the process maps.** A half-day
+  was lost (2026-06-10) bisecting a "regression" that was really a half-installed fix: the bake put
+  `libmutter-17.so.0.0.0` in `/usr/lib64/mutter-17/`, but gnome-shell loads it from `/usr/lib64/`
+  directly — the lib holding the actual #32 mitigation sat inert while a *different* piece of the fix
+  (cogl's one-time warning) kept firing and made the install look alive. A sub-oracle proving one
+  piece is loaded proves nothing about the load-bearing piece: check the artifact itself (mtime/size
+  at the path in `/proc/PID/maps`). Guest mutter installs go through
+  `spikes/venus-draw-probe/install-mutter-fix.sh`, never by hand.
+- **Identical A/B results across many configs mean the differential isn't reaching the system under
+  test — stop toggling and re-verify the baseline.** Five "exonerations" in a row (private API, D24S8
+  emu, sampler fix, clipped redraws, stock-vs-fixed mutter) all returned pixel-identical damage
+  because every one of them ran the same unmitigated stack. Invariance is a smell, not a verdict.
+- **The user's episodic memory and the session transcripts are oracles.** "I could not reproduce it
+  at any point" falsified a comfortable no-regression theory, and grepping the transcript for the
+  verified moment recovered the exact working install commands. Reconstructing ground truth from
+  records beats re-deriving it with boot cycles.
 
 ### Environment quirks
 
