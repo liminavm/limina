@@ -309,9 +309,12 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         let surface =
             create_global_iosurface(width, height).ok_or(DisplayBackendError::InternalError)?;
         let id = IOSurfaceGetID(&surface);
-        // Swizzle the cursor pixels into BGRA via the (tested) canvas path, then copy in.
+        // Swizzle the cursor pixels into BGRA, PRESERVING alpha (unlike the scanout path,
+        // which forces opaque): the cursor image is mostly transparent surround.
         let mut canvas = vec![0u8; need];
-        swizzle_rect_into_canvas(&mut canvas, buffer, format, width, 0, 0, width, height);
+        for (dst, src) in canvas.chunks_exact_mut(4).zip(buffer.chunks_exact(4)) {
+            dst.copy_from_slice(&to_bgra_keep_alpha(format, src));
+        }
         copy_canvas_into_surface(&surface, &canvas, width, height);
 
         self.cursor = Some(surface);
@@ -383,6 +386,20 @@ fn copy_canvas_into_surface(surface: &IOSurfaceRef, canvas: &[u8], width: u32, h
         }
         IOSurfaceUnlock(surface, IOSurfaceLockOptions(0), ptr::null_mut());
     }
+}
+
+/// Convert one pixel from `format`'s byte order to BGRA, preserving the source alpha
+/// (X formats carry none → opaque). The cursor overlay needs this: its transparent
+/// surround flattened to opaque renders as a black rectangle riding with the cursor.
+#[inline]
+fn to_bgra_keep_alpha(format: ResourceFormat, p: &[u8]) -> [u8; 4] {
+    let a = match format {
+        ResourceFormat::BGRA | ResourceFormat::RGBA => p[3],
+        ResourceFormat::ARGB | ResourceFormat::ABGR => p[0],
+        _ => 255,
+    };
+    let [b, g, r, _] = to_bgra(format, p);
+    [b, g, r, a]
 }
 
 /// Convert one pixel from `format`'s byte order to BGRA with opaque alpha.
@@ -576,6 +593,29 @@ mod tests {
         );
         assert_eq!(cpx(&canvas, w, 3, 3), [3, 3, 60, 255]); // clamped rect reached the last pixel
         assert_eq!(cpx(&canvas, w, 0, 0), [0, 0, 50, 255]); // untouched by either later swizzle
+    }
+
+    #[test]
+    fn set_cursor_preserves_source_alpha() {
+        let mut b = WindowBackend::new(None);
+
+        // A 2×2 BGRA cursor: one opaque white pixel at (0,0), transparent black elsewhere —
+        // the shape of a real GNOME cursor image. The transparent surround must stay
+        // transparent in the published surface; flattening it to opaque puts a black
+        // rectangle around the cursor on screen (seen live on the venus desktop).
+        let data = [
+            255, 255, 255, 255, /* (1,0) */ 0, 0, 0, 0, //
+            /* (0,1) */ 0, 0, 0, 0, /* (1,1) */ 0, 0, 0, 0,
+        ];
+        b.set_cursor(2, 2, 0, 0, ResourceFormat::BGRA, &data)
+            .unwrap();
+        let surf = b.cursor.as_ref().expect("cursor surface published");
+        unsafe {
+            IOSurfaceLock(surf, IOSurfaceLockOptions(0), ptr::null_mut());
+            assert_eq!(px(surf, 0, 0), [255, 255, 255, 255]);
+            assert_eq!(px(surf, 1, 1), [0, 0, 0, 0]);
+            IOSurfaceUnlock(surf, IOSurfaceLockOptions(0), ptr::null_mut());
+        }
     }
 
     #[test]
