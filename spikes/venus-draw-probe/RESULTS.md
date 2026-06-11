@@ -1015,6 +1015,33 @@ validated on a window unmap), flicker-hunt.sh (boot-cycle objective session verd
 /tmp/scan-anomalies.swift + extract-frames.swift (recording forensics — promoted to
 spikes/venus-draw-probe/).
 
+## Round 22 (2026-06-11): fence-accurate presents (half 1) — implemented, A/B convicts the REUSE race
+
+**Built (#8 half 1, host-only):** LIMINA_FENCE_PRESENT — virgl fork 3c58f79's reserved
+per-context fence ring (VKR_LIMINA_PRESENT_RING=63: ring-decode barrier at flush-time tail,
+then zero-command vkQueueSubmit per queue = true Metal completion) + libkrun patch 0017
+(flush parks the frame keyed by cookie; worker presents on retirement via eventfd; frames
+latency-shift, never drop). Rides the existing proxy/render-server fence plumbing — no new
+protocol ops. Boot suite 8/8 green knob-off; [FENCEPRESENT] oracle proves the deferred
+path live (512 presents/24s).
+
+**A/B verdict: NOT clean — 4 anomalies in 58 s** (same wallpaper signature rgb≈133,124,122).
+Better than lock-only (6/7.4 s, which also had the completeness race) but decisively worse
+than copy (0 in 84k frames). Since the presented frame is now PROVABLY complete at present
+time, the surviving mechanism is the **reuse race alone**: guest flip events are FAKE
+(no_vblank), so mutter repaints a buffer ~33 ms after its flush regardless of our presents,
+while CA samples it for ~16-33 ms after latch. Deferral even WIDENS the window (present
+fires GPU-latency later; the guest's repaint clock doesn't move). During scene changes the
+repaint content is the bare desktop — exactly the signature.
+
+**Conclusion: zero-copy display + fake guest pacing is unfixable host-side.** The display
+hop needs either immutability (the copy — stays the universal default) or a guest-side
+buffer hold = **half 2**: the small guest-kernel patch fencing blob-scanout flushes (the
+dumb-2D path already does this: vgfb->fence + synchronous dma_fence_wait in
+virtio_gpu_resource_flush), with the host signaling that fence at present+CA-latch. Half 1
+is the foundation half 2 needs (GPU-complete gating before the present), not wasted work.
+Until half 2 lands: LIMINA_PRESENT_COPY default-ON everywhere; LIMINA_FENCE_PRESENT off.
+
 **Verification leg (same day):** dedicated copy-ON recording, tight texture/shading loop:
 **zero anomalies in 55,925 frames / 16 min** (scan-anomalies threshold 40). Mitigation
 confirmed beyond the blind A/B.
