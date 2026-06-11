@@ -24,9 +24,17 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSEventMask,
     NSWindow, NSWindowStyleMask,
 };
-use objc2_core_foundation::CFRetained;
+use objc2_core_foundation::{
+    kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber,
+    CFNumberType, CFRetained, CFString,
+};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSTimer};
-use objc2_io_surface::{IOSurfaceLookup, IOSurfaceRef};
+use objc2_io_surface::{
+    kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight, kIOSurfacePixelFormat,
+    kIOSurfaceWidth, IOSurfaceCreate, IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow,
+    IOSurfaceGetHeight, IOSurfaceGetWidth, IOSurfaceLock, IOSurfaceLockOptions, IOSurfaceLookup,
+    IOSurfaceRef, IOSurfaceUnlock,
+};
 use objc2_quartz_core::{CALayer, CATransaction};
 
 mod input;
@@ -224,6 +232,18 @@ pub fn run(
         })
         .unwrap_or_default();
     let applies = Cell::new(0u64);
+    // Diagnostic (LIMINA_PRESENT_COPY=1): never hand the GUEST's scanout surface to Core
+    // Animation — copy it into a private 3-deep ring and show the copy. The zero-copy venus
+    // path shares mutter's own double-buffered swapchain with the window server; with no
+    // flip-completion feedback the guest reuses/repaints a buffer while CA may still be
+    // compositing it (IOSurfaceLock is advisory), so mid-repaint states reach glass — seen
+    // as the damaged region (a busy window) blinking out while the rest stays intact. The
+    // copy decouples CA from the guest's write cycle entirely; if the flicker vanishes with
+    // this on, that race is convicted (the real fix is flip-completion pacing, roadmap #8).
+    let present_copy = std::env::var_os("LIMINA_PRESENT_COPY").is_some();
+    let copy_ring: RefCell<Vec<CFRetained<IOSurfaceRef>>> = RefCell::new(Vec::new());
+    let copy_geom = Cell::new((0u32, 0u32));
+    let copy_idx = Cell::new(0usize);
     // Cache looked-up surfaces by id (the worker reuses a small fixed set, its double buffer).
     let cache: RefCell<std::collections::HashMap<u32, CFRetained<IOSurfaceRef>>> =
         RefCell::new(std::collections::HashMap::new());
@@ -308,7 +328,29 @@ pub fn run(
             },
         };
         // Distinct object each frame (the worker alternates ids) → CA re-reads.
-        set_layer_surface(&layer, surface);
+        if present_copy {
+            if copy_geom.get() != (width, height) {
+                copy_geom.set((width, height));
+                let mut ring = copy_ring.borrow_mut();
+                ring.clear();
+                for _ in 0..3 {
+                    if let Some(s) = create_local_iosurface(width, height) {
+                        ring.push(s);
+                    }
+                }
+            }
+            let ring = copy_ring.borrow();
+            if ring.len() == 3 {
+                let dst = &ring[copy_idx.get() % 3];
+                copy_idx.set(copy_idx.get().wrapping_add(1));
+                copy_surface(surface, dst);
+                set_layer_surface(&layer, dst);
+            } else {
+                set_layer_surface(&layer, surface);
+            }
+        } else {
+            set_layer_surface(&layer, surface);
+        }
 
         // Diagnostic capture of the presented scanout. Periodic (overwrite) so a long-running
         // headless check ends with a recent frame, not just early boot.
@@ -483,6 +525,74 @@ fn apply_cursor(
 /// Set an IOSurface as the layer's contents (it's a CF object accepted by `contents`).
 ///
 /// Wrapped in a `CATransaction` with actions disabled: this is a layer-HOSTING layer, so a
+/// Plain local BGRA IOSurface for the LIMINA_PRESENT_COPY ring (not global — only this
+/// process touches it).
+fn create_local_iosurface(width: u32, height: u32) -> Option<CFRetained<IOSurfaceRef>> {
+    use std::ffi::c_void;
+    let pixel_format = i32::from_be_bytes(*b"BGRA");
+    let bytes_per_row = (width * 4) as i32;
+    unsafe fn cfnum(v: i32) -> Option<CFRetained<CFNumber>> {
+        unsafe {
+            CFNumber::new(
+                None,
+                CFNumberType::SInt32Type,
+                &v as *const i32 as *const c_void,
+            )
+        }
+    }
+    unsafe {
+        let vw = cfnum(width as i32)?;
+        let vh = cfnum(height as i32)?;
+        let vbpe = cfnum(4)?;
+        let vbpr = cfnum(bytes_per_row)?;
+        let vpf = cfnum(pixel_format)?;
+        let mut keys: [*const c_void; 5] = [
+            (kIOSurfaceWidth as *const CFString).cast(),
+            (kIOSurfaceHeight as *const CFString).cast(),
+            (kIOSurfaceBytesPerElement as *const CFString).cast(),
+            (kIOSurfaceBytesPerRow as *const CFString).cast(),
+            (kIOSurfacePixelFormat as *const CFString).cast(),
+        ];
+        let mut values: [*const c_void; 5] = [
+            (&*vw as *const CFNumber).cast(),
+            (&*vh as *const CFNumber).cast(),
+            (&*vbpe as *const CFNumber).cast(),
+            (&*vbpr as *const CFNumber).cast(),
+            (&*vpf as *const CFNumber).cast(),
+        ];
+        let dict = CFDictionary::new(
+            None,
+            keys.as_mut_ptr(),
+            values.as_mut_ptr(),
+            keys.len() as isize,
+            &kCFTypeDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks,
+        )?;
+        IOSurfaceCreate(&dict)
+    }
+}
+
+/// Row-wise copy of one BGRA IOSurface into another (clamped to the smaller geometry).
+/// ~4 MB/frame at 1280×800 — trivially cheap next to what it buys (see LIMINA_PRESENT_COPY).
+fn copy_surface(src: &CFRetained<IOSurfaceRef>, dst: &CFRetained<IOSurfaceRef>) {
+    unsafe {
+        IOSurfaceLock(src, IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut());
+        IOSurfaceLock(dst, IOSurfaceLockOptions(0), std::ptr::null_mut());
+        let sb = IOSurfaceGetBaseAddress(src).as_ptr() as *const u8;
+        let db = IOSurfaceGetBaseAddress(dst).as_ptr() as *mut u8;
+        let ss = IOSurfaceGetBytesPerRow(src);
+        let ds = IOSurfaceGetBytesPerRow(dst);
+        let w = IOSurfaceGetWidth(src).min(IOSurfaceGetWidth(dst));
+        let h = IOSurfaceGetHeight(src).min(IOSurfaceGetHeight(dst));
+        let row = w * 4;
+        for y in 0..h {
+            std::ptr::copy_nonoverlapping(sb.add(y * ss), db.add(y * ds), row);
+        }
+        IOSurfaceUnlock(dst, IOSurfaceLockOptions(0), std::ptr::null_mut());
+        IOSurfaceUnlock(src, IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut());
+    }
+}
+
 /// `contents` change otherwise fires an implicit ~0.25 s fade. At 60 fps the fades overlap
 /// and the guest desktop visibly flickers; disabling actions makes each frame swap instant.
 fn set_layer_surface(layer: &CALayer, surface: &CFRetained<IOSurfaceRef>) {
