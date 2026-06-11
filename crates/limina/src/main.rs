@@ -309,12 +309,12 @@ fn run_windowed(
     }
 
     let shared = window::Shared::new();
-    // Shown-ack write half (#8 leg 2): a dup of the control socketpair end, non-blocking so
-    // a wedged worker can never stall the AppKit main thread mid-completion-block.
+    // Shown-ack write half (#8 leg 2): a dup of the control socketpair end. NOTE: a dup
+    // shares the open file description — setting O_NONBLOCK here would make the reader
+    // thread's blocking reads on sup_fd fail too (EWOULDBLOCK read as worker-gone, killing
+    // the VM at boot; learned the hard way). The ack writes use MSG_DONTWAIT per send
+    // instead, so a wedged worker still can't stall the AppKit main thread.
     let ack_fd = unsafe { libc::dup(sup_fd) };
-    if ack_fd >= 0 {
-        set_nonblocking(ack_fd);
-    }
     window::spawn_reader(sup_fd, shared.clone());
 
     // Monitor the worker on a background thread; when it exits on its own (guest

@@ -308,14 +308,10 @@ pub fn run(
 
     // Shown-ack channel (#8 leg 2): after Core Animation processes a frame's transaction,
     // tell the worker "shown <id>" so it can complete the guest's held flush fence at the
-    // real latch boundary instead of an open-loop timer. Non-blocking; a dropped ack is
-    // covered by the worker's fallback deadline.
-    let ack: Option<std::rc::Rc<File>> = if ack_fd >= 0 {
-        // SAFETY: main.rs dup'd this fd for us; we own it.
-        Some(std::rc::Rc::new(unsafe { File::from_raw_fd(ack_fd) }))
-    } else {
-        None
-    };
+    // real latch boundary instead of an open-loop timer. Sends use MSG_DONTWAIT (the fd's
+    // open file description is shared with the reader and must stay blocking); a dropped
+    // ack is covered by the worker's fallback deadline.
+    let ack: Option<RawFd> = (ack_fd >= 0).then_some(ack_fd);
 
     // The frame-apply path, shared by the 60 Hz timer (fallback/liveness) and the
     // dispatch wake-up from the reader thread (event-driven, leg 1 of the latency
@@ -371,7 +367,7 @@ pub fn run(
             };
             // The ack identifies the frame by the GUEST's surface id even in copy mode
             // (the worker tracks holds by the id it presented).
-            let ack_for_frame = ack.as_ref().map(|f| (f.clone(), id));
+            let ack_for_frame = ack.map(|fd| (fd, id));
             // Distinct object each frame (the worker alternates ids) → CA re-reads.
             let present_copy =
                 present_copy_env || std::fs::metadata("/tmp/limina-present-copy").is_ok();
@@ -711,7 +707,7 @@ fn copy_surface(src: &CFRetained<IOSurfaceRef>, dst: &CFRetained<IOSurfaceRef>) 
 fn set_layer_surface(
     layer: &CALayer,
     surface: &CFRetained<IOSurfaceRef>,
-    ack: Option<(std::rc::Rc<File>, u32)>,
+    ack: Option<(RawFd, u32)>,
 ) {
     let obj: &AnyObject = unsafe { &*(&**surface as *const IOSurfaceRef as *const AnyObject) };
     unsafe {
@@ -719,12 +715,18 @@ fn set_layer_surface(
         CATransaction::setDisableActions(true);
         // #8 leg 2: the completion block fires once Core Animation has processed this
         // transaction (the new contents latched) — the truthful "shown" boundary the
-        // worker needs to complete the guest's held flush fence. Best-effort write; the
-        // fd is non-blocking and the worker has a fallback deadline.
-        if let Some((file, id)) = ack {
+        // worker needs to complete the guest's held flush fence. Best-effort
+        // MSG_DONTWAIT send (the fd's description must stay blocking for the reader);
+        // a dropped ack is covered by the worker's fallback deadline.
+        if let Some((fd, id)) = ack {
             let cb = RcBlock::new(move || {
-                use std::io::Write;
-                let _ = writeln!(&mut &*file, "shown {id}");
+                let line = format!("shown {id}\n");
+                let _ = libc::send(
+                    fd,
+                    line.as_ptr() as *const libc::c_void,
+                    line.len(),
+                    libc::MSG_DONTWAIT,
+                );
             });
             CATransaction::setCompletionBlock(Some(&cb));
         }
