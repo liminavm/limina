@@ -31,8 +31,8 @@ use objc2_core_foundation::{
 use objc2_io_surface::{
     kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight, kIOSurfaceIsGlobal,
     kIOSurfacePixelFormat, kIOSurfaceWidth, IOSurfaceCreate, IOSurfaceGetBaseAddress,
-    IOSurfaceGetBytesPerRow, IOSurfaceGetID, IOSurfaceLock, IOSurfaceLockOptions, IOSurfaceRef,
-    IOSurfaceUnlock,
+    IOSurfaceGetBytesPerRow, IOSurfaceGetHeight, IOSurfaceGetID, IOSurfaceGetWidth, IOSurfaceLock,
+    IOSurfaceLockOptions, IOSurfaceLookup, IOSurfaceRef, IOSurfaceUnlock,
 };
 
 use krun_display::{
@@ -213,6 +213,7 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
             return Err(DisplayBackendError::InvalidScanoutId);
         }
         self.presents += 1;
+        red_probe(iosurface_id, self.presents);
         self.send(&format!("frame {iosurface_id}"));
         Ok(())
     }
@@ -325,6 +326,59 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
     fn move_cursor(&mut self, x: u32, y: u32) -> Result<(), DisplayBackendError> {
         self.send(&format!("cursormove {x} {y}"));
         Ok(())
+    }
+}
+
+/// Flicker oracle (`LIMINA_RED_PROBE=1`): with the guest desktop set to solid red and the
+/// workload fullscreen, a correct presented frame contains zero red — any red pixels mean
+/// the background bled through (the transition-flicker artifact). Samples a sparse grid of
+/// the presented scanout IOSurface and logs offending frames with the surface id; the
+/// adjacent `[FLUSHDBG]` line then identifies WHICH guest resource carried the bad frame
+/// (fresh client buffer vs compositor swapchain — the load-bearing discriminator).
+/// Detection-only, ≤64×64 samples/frame, env-gated; scanout format is BGRA.
+fn red_probe(iosurface_id: u32, frame: u64) {
+    use std::sync::atomic::{AtomicI8, Ordering};
+    static ENABLED: AtomicI8 = AtomicI8::new(-1);
+    let mut on = ENABLED.load(Ordering::Relaxed);
+    if on < 0 {
+        on = std::env::var_os("LIMINA_RED_PROBE").is_some() as i8;
+        ENABLED.store(on, Ordering::Relaxed);
+    }
+    if on == 0 {
+        return;
+    }
+    let Some(surface) = IOSurfaceLookup(iosurface_id) else {
+        return;
+    };
+    unsafe {
+        let opts = IOSurfaceLockOptions::ReadOnly;
+        IOSurfaceLock(&surface, opts, ptr::null_mut());
+        let base = IOSurfaceGetBaseAddress(&surface).as_ptr() as *const u8;
+        let stride = IOSurfaceGetBytesPerRow(&surface);
+        let w = IOSurfaceGetWidth(&surface);
+        let h = IOSurfaceGetHeight(&surface);
+        let step_x = (w / 64).max(1);
+        let step_y = (h / 64).max(1);
+        let mut red = 0u32;
+        let mut samples = 0u32;
+        let mut y = 0;
+        while y < h {
+            let mut x = 0;
+            while x < w {
+                let p = base.add(y * stride + x * 4);
+                let (b, g, r) = (*p, *p.add(1), *p.add(2));
+                if r > 200 && g < 60 && b < 60 {
+                    red += 1;
+                }
+                samples += 1;
+                x += step_x;
+            }
+            y += step_y;
+        }
+        IOSurfaceUnlock(&surface, opts, ptr::null_mut());
+        if red > 0 {
+            log::warn!("[REDPROBE] frame={frame} iosurface={iosurface_id} red={red}/{samples}");
+        }
     }
 }
 
