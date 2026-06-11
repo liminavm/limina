@@ -442,6 +442,22 @@ subnet reachable from another host.
 
 **Goal:** Hardware-accelerated 3D in the guest: GNOME runs on real GPU, GL apps work via Mesa zink.
 
+> **STATUS 2026-06-11 — M4 substantially DONE (tier-2 GREEN).** The seated GNOME desktop runs on
+> venus with zero-copy IOSurface scanout and cross-context buffer sharing; WebGL2 works (we
+> implemented VK_EXT_transform_feedback in KosmicKrisp); the 5000-fish WebGL aquarium runs at
+> 60fps vsync-capped @46% GPU — matching host-native Firefox (root-caused from 16fps: KK's per-draw
+> GPU index-unroll under GLES3's always-on primitive restart). Host Vulkan driver: **KosmicKrisp**
+> (daily driver, `spikes/venus-draw-probe/boot-seated-kk.sh`); MoltenVK is the GBM-only alternate
+> (no windowed WSI without sync_fd semaphores). Converged truth + the open-threads ledger live in
+> memory `limina-tier2-venus` (CURRENT STATE section) and `spikes/venus-draw-probe/RESULTS.md`
+> (rounds 13–17). Everything below this box is the historical plan, kept for context.
+> **Remaining M4-adjacent work:** productize the KK perf knobs (LIMINA_KK_NOLISTRESTART baked;
+> LIMINA_KK_EARLYZ pending correctness review) + re-run the perf battery; profile limina-vmm host CPU;
+> the upstream patch queue (MoltenVK / mesa zink+venus / KosmicKrisp / virglrenderer / SPIRV-Cross /
+> Fedora-zink backport / mutter); KK per-draw rebind cost (3.3× MVK); the virtio-gpu
+> flip-completion gap (kmscube-class clients hang; mutter degraded frame clock); GOP-firmware +
+> venus singleton (EFI path); Firefox MSAA cosmetic thread; guest debug-spam hygiene before ship.
+
 **Venus-viability spike done (2026-06-06, `spikes/venus-viability`)** — it corrects the flag
 guidance below and establishes the architecture. Two findings gate everything:
 - **macOS venus flag set is `VENUS | NO_VIRGL` (0xC0)**, optionally `| THREAD_SYNC | ASYNC_FENCE_CB`

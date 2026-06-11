@@ -28,6 +28,15 @@ export VK_ICD_FILENAMES="$ICD"
 # vkr_log emits at virgl INFO; the default logger level is WARNING, which silently
 # swallows every limina: line in vkr_*.c — keep INFO on for this A/B vehicle.
 export VIRGL_LOG_LEVEL=info
+# Skip KK's per-draw GPU index-unroll for list topologies (round 17: GLES3/WebGL2 always-on
+# primitive restart made EVERY indexed list draw pay ~10us of compute — 16fps -> 60fps on the
+# aquarium). Policy default ON; LIMINA_KK_NOLISTRESTART=0 disables (the knob is presence-tested,
+# so we only export it when enabled).
+if [ "${LIMINA_KK_NOLISTRESTART-1}" = "0" ]; then
+  unset LIMINA_KK_NOLISTRESTART
+else
+  export LIMINA_KK_NOLISTRESTART=1
+fi
 # KK debug levers (docs/drivers/kosmickrisp.rst): MESA_KK_DEBUG=msl logs generated MSL;
 # MESA_KK_GPU_CAPTURE=1 arms Metal capture device-create..destroy.
 [ -n "${MESA_KK_DEBUG:-}" ] && export MESA_KK_DEBUG
