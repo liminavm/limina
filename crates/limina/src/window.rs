@@ -244,6 +244,16 @@ pub fn run(
     // /tmp/limina-present-copy) so an intermittent flicker can be A/B'd within one session —
     // flicker present → touch → gone → rm → returns is the within-session conviction.
     let present_copy_env = std::env::var_os("LIMINA_PRESENT_COPY").is_some();
+    // Lock-only variant (LIMINA_PRESENT_LOCK / touch /tmp/limina-present-lock): keep zero-copy,
+    // but IOSurfaceLock+Unlock the guest surface before handing it to CA. The lock blocks
+    // until the worker's in-flight GPU writes to the surface complete, so the convicted
+    // stale-content race (present-at-flush before the repaint executed) is closed without a
+    // memcpy. What it does NOT close: CA keeps sampling the surface ~16-33ms after our
+    // present, and the guest's next repaint of the same (double-buffered) slot lands ~33ms
+    // later — a marginal reuse overlap the copy ring also protects against (same race the
+    // 2D path's SURFACE_RING=3 exists for). A/B candidate: if long recordings stay clean,
+    // this beats COPY as the stopgap. COPY wins if both are set.
+    let present_lock_env = std::env::var_os("LIMINA_PRESENT_LOCK").is_some();
     let copy_ring: RefCell<Vec<CFRetained<IOSurfaceRef>>> = RefCell::new(Vec::new());
     let copy_geom = Cell::new((0u32, 0u32));
     let copy_idx = Cell::new(0usize);
@@ -353,6 +363,11 @@ pub fn run(
                 set_layer_surface(&layer, surface);
             }
         } else {
+            let present_lock =
+                present_lock_env || std::fs::metadata("/tmp/limina-present-lock").is_ok();
+            if present_lock {
+                sync_surface(surface);
+            }
             set_layer_surface(&layer, surface);
         }
 
@@ -578,6 +593,24 @@ fn create_local_iosurface(width: u32, height: u32) -> Option<CFRetained<IOSurfac
 
 /// Row-wise copy of one BGRA IOSurface into another (clamped to the smaller geometry).
 /// ~4 MB/frame at 1280×800 — trivially cheap next to what it buys (see LIMINA_PRESENT_COPY).
+/// Wait for in-flight GPU writes to the surface to land, then release it untouched.
+/// IOSurfaceLock is the only cross-process "GPU writes done?" primitive available to us
+/// here; the lock/unlock pair costs only the wait itself (no copy, no page faults).
+fn sync_surface(surface: &CFRetained<IOSurfaceRef>) {
+    unsafe {
+        IOSurfaceLock(
+            surface,
+            IOSurfaceLockOptions::ReadOnly,
+            std::ptr::null_mut(),
+        );
+        IOSurfaceUnlock(
+            surface,
+            IOSurfaceLockOptions::ReadOnly,
+            std::ptr::null_mut(),
+        );
+    }
+}
+
 fn copy_surface(src: &CFRetained<IOSurfaceRef>, dst: &CFRetained<IOSurfaceRef>) {
     unsafe {
         IOSurfaceLock(src, IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut());
