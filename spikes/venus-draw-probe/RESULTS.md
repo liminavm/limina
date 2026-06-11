@@ -943,3 +943,33 @@ swap/present-bound (scenes run at 2300+ fps internally), so the per-draw knobs d
 them. The knobs' value shows on draw-heavy workloads (aquarium 5k 16→60fps, 10k 42→54fps).
 No broad regression from the round-17/18/19 stack. GBM offscreen legs deferred to the
 rebind-cost thread (they're its measurement vehicle, and need the session stopped).
+
+### Round 20, continued: the flicker is PER-SESSION; probe validated; hunt automated
+
+Key session (2026-06-11 afternoon, post-gdm-restart boot): **certifiably clean** — jellyfish
+4 min + 2s-transition loop 3 min (~90 transitions) with LIMINA_RED_PROBE armed = **zero bleed
+events**, user eyeball agrees, on the exact workloads that flickered repeatedly the previous
+boot. The probe demonstrably works: it captured my jellyfish→glmark2 workload switch with
+frame-level precision (window unmap = red→95% for 6 frames; mutter map animation = 4-frame
+decay back to baseline) — that signature (full-window absence, animated return) is also what
+a real flicker event should look like if the surface unmaps, vs a 1-frame square hole if the
+compositor loses a texture.
+
+Other findings on the way:
+- **Jellyfish steady-state translucency** (user question) = ARGB visual honored by mutter +
+  scene writes alpha<1: forcing --visual-config alpha=0 makes the window opaque. Separate
+  from the flicker (which persists on a no-alpha visual and = full window absence). Policy
+  question (XRGB preference) parked.
+- The flicker therefore is NOT alpha bleed-through: with an opaque visual the desktop still
+  showed through = mutter composited those frames WITHOUT the window's content.
+- A flickery-boot session also DIED under the tight loop (12:35–12:46, no coredump), and
+  gnome-shell+vkmark double-SIGSEGV'd at 12:28:39 (cores banked, unsymbolized). Same boot.
+  Possibly all symptoms of one per-session defect.
+- gdm-restart sessions land in the GNOME overview (probe blind there — dimmed backdrop);
+  flicker-hunt.sh escapes it with ydotool per cycle.
+
+**flicker-hunt.sh**: boot-cycles the template (red wallpaper + ydotool baked), counts bleed
+frames objectively per session, archives every worker log (/tmp/flicker-hunt/), stops on a
+flickery catch. Diff target: evidence/worker-clean-session-2026-06-11.log.gz (the clean
+reference). Worker REBUILD GOTCHA hit on the way: bare cargo build strips the hypervisor
+entitlement — run crates/limina-vmm/sign.sh after any rebuild (VmCreate fails otherwise).
