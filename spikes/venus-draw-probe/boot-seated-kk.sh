@@ -69,6 +69,12 @@ if [ "${LIMINA_PRESENT_COPY-1}" = "0" ]; then unset LIMINA_PRESENT_COPY; else ex
 # not the GPU sync (repaint may be unsubmitted at present time; guest reuses the buffer while
 # CA still samples). Kept only as the documented negative result — do not enable.
 [ -n "${LIMINA_PRESENT_LOCK:-}" ] && export LIMINA_PRESENT_LOCK
+# LIMINA_FENCE_PRESENT (#8 half 1, zero-copy, under A/B): the worker parks each scanout flush
+# and presents only when a fence injected on the rendering context retires at TRUE GPU
+# completion (vkr ring-decode barrier + per-queue zero-command submit; see fence-present
+# design doc). Candidate replacement for the PRESENT_COPY stopgap on the display hop —
+# A/B with LIMINA_PRESENT_COPY=0 LIMINA_FENCE_PRESENT=1. Live toggle: /tmp/limina-fence-present.
+[ -n "${LIMINA_FENCE_PRESENT:-}" ] && export LIMINA_FENCE_PRESENT
 NET_FLAG=--net
 [ "${LIMINA_NET:-1}" = "0" ] && NET_FLAG=
 target/debug/limina --vmm-bin target/debug/limina-vmm \
