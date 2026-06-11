@@ -198,9 +198,14 @@ fn main() -> Result<()> {
 
     let display = {
         let sink = if cli.display_window {
-            Some(DisplaySink::Window {
-                control_fd: cli.control_fd.unwrap_or(-1),
-            })
+            let control_fd = cli.control_fd.unwrap_or(-1);
+            if control_fd >= 0 {
+                // #8 leg 2: the GPU device reads the supervisor's "shown <id>" acks off
+                // the control socketpair (same fd; the display backend only writes).
+                // The fd number is process-wide — env is just the in-process rendezvous.
+                std::env::set_var("LIMINA_SHOWN_ACK_FD", control_fd.to_string());
+            }
+            Some(DisplaySink::Window { control_fd })
         } else {
             cli.display_capture.map(DisplaySink::CapturePng)
         };

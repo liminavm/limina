@@ -40,6 +40,41 @@ use objc2_quartz_core::{CALayer, CATransaction};
 mod input;
 pub use input::InputSinks;
 
+// libdispatch: wake the main thread to apply a frame the moment it arrives, instead of
+// waiting out the 60 Hz poll timer (leg 1 of the present-latency collapse, #8). The
+// trampoline runs on the main thread via the main queue, which NSApplication's run loop
+// services; it calls the frame-apply hook `run()` registers.
+#[allow(non_camel_case_types)]
+type dispatch_queue_t = *mut std::ffi::c_void;
+extern "C" {
+    static _dispatch_main_q: std::ffi::c_void;
+    fn dispatch_async_f(
+        queue: dispatch_queue_t,
+        context: *mut std::ffi::c_void,
+        work: extern "C" fn(*mut std::ffi::c_void),
+    );
+}
+
+thread_local! {
+    /// Main-thread frame-apply hook (set once by `run()`); the dispatch trampoline calls it.
+    static APPLY_HOOK: RefCell<Option<std::rc::Rc<dyn Fn()>>> = const { RefCell::new(None) };
+}
+
+extern "C" fn apply_trampoline(_ctx: *mut std::ffi::c_void) {
+    let hook = APPLY_HOOK.with(|h| h.borrow().clone());
+    if let Some(f) = hook {
+        f();
+    }
+}
+
+/// Schedule an immediate frame apply on the main thread (callable from any thread).
+fn wake_main_apply() {
+    unsafe {
+        let main_q = &_dispatch_main_q as *const _ as dispatch_queue_t;
+        dispatch_async_f(main_q, std::ptr::null_mut(), apply_trampoline);
+    }
+}
+
 /// State shared between the control-channel reader thread, the worker monitor, and the
 /// main-thread render timer. Only `Send` data — never AppKit objects.
 #[derive(Default)]
@@ -102,6 +137,8 @@ pub fn spawn_reader(fd: RawFd, shared: Arc<Mutex<Shared>>) {
                         s.width = w;
                         s.height = h;
                         s.gen += 1;
+                        drop(s);
+                        wake_main_apply();
                     }
                 }
                 Some("frame") => {
@@ -110,6 +147,8 @@ pub fn spawn_reader(fd: RawFd, shared: Arc<Mutex<Shared>>) {
                         let mut s = shared.lock().unwrap();
                         s.show_id = Some(id);
                         s.gen += 1;
+                        drop(s);
+                        wake_main_apply();
                     }
                 }
                 Some("cursor") => {
@@ -163,6 +202,7 @@ pub fn run(
     mtm: MainThreadMarker,
     worker_pid: i32,
     input: InputSinks,
+    ack_fd: RawFd,
 ) -> ! {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
@@ -266,10 +306,134 @@ pub fn run(
     let last_cursor_gen = Cell::new(0u64);
     let cursor_surf: RefCell<Option<(u32, CFRetained<IOSurfaceRef>)>> = RefCell::new(None);
 
+    // Shown-ack channel (#8 leg 2): after Core Animation processes a frame's transaction,
+    // tell the worker "shown <id>" so it can complete the guest's held flush fence at the
+    // real latch boundary instead of an open-loop timer. Non-blocking; a dropped ack is
+    // covered by the worker's fallback deadline.
+    let ack: Option<std::rc::Rc<File>> = if ack_fd >= 0 {
+        // SAFETY: main.rs dup'd this fd for us; we own it.
+        Some(std::rc::Rc::new(unsafe { File::from_raw_fd(ack_fd) }))
+    } else {
+        None
+    };
+
+    // The frame-apply path, shared by the 60 Hz timer (fallback/liveness) and the
+    // dispatch wake-up from the reader thread (event-driven, leg 1 of the latency
+    // collapse): applying the moment a frame arrives instead of at the next tick.
+    let apply: std::rc::Rc<dyn Fn()> = std::rc::Rc::new({
+        let shared = shared.clone();
+        let window = window.clone();
+        let layer = layer.clone();
+        move || {
+            let (gen, show_id, width, height) = {
+                let s = shared.lock().unwrap();
+                (s.gen, s.show_id, s.width, s.height)
+            };
+            if gen == last_gen.get() {
+                return;
+            }
+            last_gen.set(gen);
+
+            let Some(id) = show_id else { return };
+            if geom.get() != (width, height) {
+                geom.set((width, height));
+                window.setContentSize(NSSize::new(width as f64, height as f64));
+                // A layer-HOSTING view doesn't auto-size its layer — give it the view's bounds
+                // or it stays 0×0 and nothing shows on screen (even though contents is set).
+                let bounds = NSRect::new(
+                    NSPoint::new(0.0, 0.0),
+                    NSSize::new(width as f64, height as f64),
+                );
+                // No implicit animation on the resize either (same reason as set_layer_surface).
+                CATransaction::begin();
+                CATransaction::setDisableActions(true);
+                layer.setFrame(bounds);
+                CATransaction::commit();
+                // A mode change means the worker allocated fresh surfaces; ids from the old mode
+                // are gone (and could be reused for unrelated surfaces), so drop the cache.
+                cache.borrow_mut().clear();
+            }
+
+            let mut cache = cache.borrow_mut();
+            // Look the surface up by id once and keep our own retained reference. A failed
+            // lookup (the worker freed it during a rapid remodeset before we caught up) is not
+            // fatal — skip this frame rather than panic the UI; the next frame recovers.
+            use std::collections::hash_map::Entry;
+            let surface = match cache.entry(id) {
+                Entry::Occupied(e) => e.into_mut(),
+                Entry::Vacant(e) => match IOSurfaceLookup(id) {
+                    Some(s) => e.insert(s),
+                    None => {
+                        log::warn!("window: IOSurfaceLookup({id}) failed; skipping frame");
+                        return;
+                    }
+                },
+            };
+            // The ack identifies the frame by the GUEST's surface id even in copy mode
+            // (the worker tracks holds by the id it presented).
+            let ack_for_frame = ack.as_ref().map(|f| (f.clone(), id));
+            // Distinct object each frame (the worker alternates ids) → CA re-reads.
+            let present_copy =
+                present_copy_env || std::fs::metadata("/tmp/limina-present-copy").is_ok();
+            if present_copy {
+                if copy_geom.get() != (width, height) {
+                    copy_geom.set((width, height));
+                    let mut ring = copy_ring.borrow_mut();
+                    ring.clear();
+                    for _ in 0..3 {
+                        if let Some(s) = create_local_iosurface(width, height) {
+                            ring.push(s);
+                        }
+                    }
+                }
+                let ring = copy_ring.borrow();
+                if ring.len() == 3 {
+                    let dst = &ring[copy_idx.get() % 3];
+                    copy_idx.set(copy_idx.get().wrapping_add(1));
+                    copy_surface(surface, dst);
+                    set_layer_surface(&layer, dst, ack_for_frame);
+                } else {
+                    set_layer_surface(&layer, surface, ack_for_frame);
+                }
+            } else {
+                let present_lock =
+                    present_lock_env || std::fs::metadata("/tmp/limina-present-lock").is_ok();
+                if present_lock {
+                    sync_surface(surface);
+                }
+                set_layer_surface(&layer, surface, ack_for_frame);
+            }
+
+            // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
+            // long-running headless check ends with a recent frame, not just early boot.
+            applies.set(applies.get() + 1);
+            if applies.get() % 120 == 0 {
+                if let Some(path) = &capture_path {
+                    capture_iosurface(surface, id, path);
+                }
+            }
+            // Targeted per-id sweep — look each requested global id up fresh (no cache) and
+            // dump it, so we can read the venus blob surface directly even when it isn't the
+            // presented one.
+            if !capture_ids.is_empty() && applies.get() % 30 == 0 {
+                if let Some(base) = &capture_path {
+                    for &cid in &capture_ids {
+                        if let Some(s) = IOSurfaceLookup(cid) {
+                            capture_iosurface(&s, cid, &format!("{base}.id{cid}.png"));
+                        } else {
+                            log::info!("capture: IOSurfaceLookup({cid}) -> none (not alive)");
+                        }
+                    }
+                }
+            }
+        }
+    });
+    APPLY_HOOK.with(|h| *h.borrow_mut() = Some(apply.clone()));
+
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
-        let (exited, gen, show_id, width, height) = {
+        let (exited, height) = {
             let s = shared.lock().unwrap();
-            (s.worker_exited, s.gen, s.show_id, s.width, s.height)
+            (s.worker_exited, s.height)
         };
 
         // Quit when the worker is gone, the user closed the window, or Ctrl-C was hit:
@@ -301,98 +465,9 @@ pub fn run(
             apply_cursor(&cursor_layer, &mut cursor_surf.borrow_mut(), &cur, height);
         }
 
-        if gen == last_gen.get() {
-            return;
-        }
-        last_gen.set(gen);
-
-        let Some(id) = show_id else { return };
-        if geom.get() != (width, height) {
-            geom.set((width, height));
-            window.setContentSize(NSSize::new(width as f64, height as f64));
-            // A layer-HOSTING view doesn't auto-size its layer — give it the view's bounds
-            // or it stays 0×0 and nothing shows on screen (even though contents is set).
-            let bounds = NSRect::new(
-                NSPoint::new(0.0, 0.0),
-                NSSize::new(width as f64, height as f64),
-            );
-            // No implicit animation on the resize either (same reason as set_layer_surface).
-            CATransaction::begin();
-            CATransaction::setDisableActions(true);
-            layer.setFrame(bounds);
-            CATransaction::commit();
-            // A mode change means the worker allocated fresh surfaces; ids from the old mode
-            // are gone (and could be reused for unrelated surfaces), so drop the cache.
-            cache.borrow_mut().clear();
-        }
-
-        let mut cache = cache.borrow_mut();
-        // Look the surface up by id once and keep our own retained reference. A failed
-        // lookup (the worker freed it during a rapid remodeset before we caught up) is not
-        // fatal — skip this frame rather than panic the UI; the next frame recovers.
-        use std::collections::hash_map::Entry;
-        let surface = match cache.entry(id) {
-            Entry::Occupied(e) => e.into_mut(),
-            Entry::Vacant(e) => match IOSurfaceLookup(id) {
-                Some(s) => e.insert(s),
-                None => {
-                    log::warn!("window: IOSurfaceLookup({id}) failed; skipping frame");
-                    return;
-                }
-            },
-        };
-        // Distinct object each frame (the worker alternates ids) → CA re-reads.
-        let present_copy = present_copy_env || std::fs::metadata("/tmp/limina-present-copy").is_ok();
-        if present_copy {
-            if copy_geom.get() != (width, height) {
-                copy_geom.set((width, height));
-                let mut ring = copy_ring.borrow_mut();
-                ring.clear();
-                for _ in 0..3 {
-                    if let Some(s) = create_local_iosurface(width, height) {
-                        ring.push(s);
-                    }
-                }
-            }
-            let ring = copy_ring.borrow();
-            if ring.len() == 3 {
-                let dst = &ring[copy_idx.get() % 3];
-                copy_idx.set(copy_idx.get().wrapping_add(1));
-                copy_surface(surface, dst);
-                set_layer_surface(&layer, dst);
-            } else {
-                set_layer_surface(&layer, surface);
-            }
-        } else {
-            let present_lock =
-                present_lock_env || std::fs::metadata("/tmp/limina-present-lock").is_ok();
-            if present_lock {
-                sync_surface(surface);
-            }
-            set_layer_surface(&layer, surface);
-        }
-
-        // Diagnostic capture of the presented scanout. Periodic (overwrite) so a long-running
-        // headless check ends with a recent frame, not just early boot.
-        applies.set(applies.get() + 1);
-        if applies.get() % 120 == 0 {
-            if let Some(path) = &capture_path {
-                capture_iosurface(surface, id, path);
-            }
-        }
-        // Targeted per-id sweep — look each requested global id up fresh (no cache) and dump it,
-        // so we can read the venus blob surface directly even when it isn't the presented one.
-        if !capture_ids.is_empty() && applies.get() % 30 == 0 {
-            if let Some(base) = &capture_path {
-                for &cid in &capture_ids {
-                    if let Some(s) = IOSurfaceLookup(cid) {
-                        capture_iosurface(&s, cid, &format!("{base}.id{cid}.png"));
-                    } else {
-                        log::info!("capture: IOSurfaceLookup({cid}) -> none (not alive)");
-                    }
-                }
-            }
-        }
+        // Frame apply: normally event-driven (dispatch from the reader thread); this is
+        // the fallback so a lost wake-up costs one tick, not a stuck frame.
+        apply();
     });
 
     // ~60 Hz poll. Keep the timer alive for the app's lifetime.
@@ -520,7 +595,7 @@ fn apply_cursor(
             if slot.as_ref().map(|(sid, _)| *sid != id).unwrap_or(true) {
                 match IOSurfaceLookup(id) {
                     Some(s) => {
-                        set_layer_surface(layer, &s);
+                        set_layer_surface(layer, &s, None);
                         layer.setBounds(NSRect::new(
                             NSPoint::new(0.0, 0.0),
                             NSSize::new(w as f64, h as f64),
@@ -633,11 +708,26 @@ fn copy_surface(src: &CFRetained<IOSurfaceRef>, dst: &CFRetained<IOSurfaceRef>) 
 
 /// `contents` change otherwise fires an implicit ~0.25 s fade. At 60 fps the fades overlap
 /// and the guest desktop visibly flickers; disabling actions makes each frame swap instant.
-fn set_layer_surface(layer: &CALayer, surface: &CFRetained<IOSurfaceRef>) {
+fn set_layer_surface(
+    layer: &CALayer,
+    surface: &CFRetained<IOSurfaceRef>,
+    ack: Option<(std::rc::Rc<File>, u32)>,
+) {
     let obj: &AnyObject = unsafe { &*(&**surface as *const IOSurfaceRef as *const AnyObject) };
     unsafe {
         CATransaction::begin();
         CATransaction::setDisableActions(true);
+        // #8 leg 2: the completion block fires once Core Animation has processed this
+        // transaction (the new contents latched) — the truthful "shown" boundary the
+        // worker needs to complete the guest's held flush fence. Best-effort write; the
+        // fd is non-blocking and the worker has a fallback deadline.
+        if let Some((file, id)) = ack {
+            let cb = RcBlock::new(move || {
+                use std::io::Write;
+                let _ = writeln!(&mut &*file, "shown {id}");
+            });
+            CATransaction::setCompletionBlock(Some(&cb));
+        }
         layer.setContents(Some(obj));
         CATransaction::commit();
     }
