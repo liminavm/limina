@@ -1014,3 +1014,26 @@ Oracles built this round: LIMINA_RED_PROBE (worker present-path bleed detector; 
 validated on a window unmap), flicker-hunt.sh (boot-cycle objective session verdicts),
 /tmp/scan-anomalies.swift + extract-frames.swift (recording forensics — promoted to
 spikes/venus-draw-probe/).
+
+**Verification leg (same day):** dedicated copy-ON recording, tight texture/shading loop:
+**zero anomalies in 55,925 frames / 16 min** (scan-anomalies threshold 40). Mitigation
+confirmed beyond the blind A/B.
+
+**Lock-only variant FAILED (same day):** LIMINA_PRESENT_LOCK (IOSurfaceLock+Unlock the live
+guest surface before each present — the zero-copy version of the sync, commit fe79a9a).
+Fresh boot, same loop: user saw **several anomalies within seconds** of starting to record
+— far worse than untreated copy-OFF (~5 bursts/hour). Scanner-confirmed on the aborted
+clip: **6 anomalies in 7.4 s (432 frames)**. Live-toggling copy back on in the same session
+(touch /tmp/limina-present-copy, rm the lock marker) returned it to clean — a fresh 8-min
+recording scanned **0 anomalies in 27,876 frames**. Verdict: the copy's load-bearing
+property is **immutability**, not the GPU sync. Two mechanisms the lock can't close:
+(a) at present (= mutter flush) time the repaint may not even be *submitted* to Metal yet
+(venus ring decode is async) — IOSurfaceLock can only wait on GPU work the kernel already
+knows about, so the "sync" can be a no-op exactly when it matters; (b) even a
+complete-at-lock frame is overwritten by the guest's next repaint (~33 ms) while CA is
+still sampling it — the same reuse race SURFACE_RING=3 fixes on the 2D path. The copy wins
+because CA gets a snapshot nobody ever touches again, regardless of write timing.
+Consequence for #8: fence-accurate presents must ALSO provide immutability (hold the
+buffer from guest reuse until flip completion — i.e. flip-completion pacing, not fences
+alone), or keep the copy for the display hop. LIMINA_PRESENT_COPY stays default-ON;
+LIMINA_PRESENT_LOCK kept in-tree as the documented negative result.

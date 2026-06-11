@@ -245,14 +245,15 @@ pub fn run(
     // flicker present → touch → gone → rm → returns is the within-session conviction.
     let present_copy_env = std::env::var_os("LIMINA_PRESENT_COPY").is_some();
     // Lock-only variant (LIMINA_PRESENT_LOCK / touch /tmp/limina-present-lock): keep zero-copy,
-    // but IOSurfaceLock+Unlock the guest surface before handing it to CA. The lock blocks
-    // until the worker's in-flight GPU writes to the surface complete, so the convicted
-    // stale-content race (present-at-flush before the repaint executed) is closed without a
-    // memcpy. What it does NOT close: CA keeps sampling the surface ~16-33ms after our
-    // present, and the guest's next repaint of the same (double-buffered) slot lands ~33ms
-    // later — a marginal reuse overlap the copy ring also protects against (same race the
-    // 2D path's SURFACE_RING=3 exists for). A/B candidate: if long recordings stay clean,
-    // this beats COPY as the stopgap. COPY wins if both are set.
+    // but IOSurfaceLock+Unlock the guest surface before handing it to CA.
+    // A/B VERDICT (2026-06-11): FAILED — visibly worse than no mitigation at all (several
+    // anomalies within seconds vs ~5 bursts/hour untreated). Kept as a documented negative
+    // result: the copy's load-bearing property is IMMUTABILITY, not the GPU-write sync.
+    // (a) At present time the repaint may not be submitted to Metal yet (venus ring decode
+    // is async), so the lock has nothing to wait on exactly when it matters; (b) even a
+    // complete-at-lock frame is repainted by the guest ~33ms later while CA still samples
+    // it (the SURFACE_RING reuse race). Do not enable; use LIMINA_PRESENT_COPY. COPY wins if
+    // both are set.
     let present_lock_env = std::env::var_os("LIMINA_PRESENT_LOCK").is_some();
     let copy_ring: RefCell<Vec<CFRetained<IOSurfaceRef>>> = RefCell::new(Vec::new());
     let copy_geom = Cell::new((0u32, 0u32));

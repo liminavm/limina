@@ -64,10 +64,10 @@ fi
 # the copy waits for pending GPU writes, so copied frames are always complete. Real fix =
 # fence-accurate presents (roadmap #8). Toggle live via /tmp/limina-present-copy.
 if [ "${LIMINA_PRESENT_COPY-1}" = "0" ]; then unset LIMINA_PRESENT_COPY; else export LIMINA_PRESENT_COPY=1; fi
-# Zero-copy alternative under test: LIMINA_PRESENT_COPY=0 LIMINA_PRESENT_LOCK=1 keeps the live
-# guest surface but IOSurfaceLock/Unlocks it before each present (waits for in-flight GPU
-# writes — closes the convicted stale-frame race without the memcpy; does NOT close the
-# marginal CA-still-sampling-while-guest-repaints overlap). Live toggle: /tmp/limina-present-lock.
+# LIMINA_PRESENT_LOCK (lock-only, zero-copy): A/B FAILED 2026-06-11 — several anomalies within
+# seconds (worse than untreated). The copy's immutable snapshot is the load-bearing property,
+# not the GPU sync (repaint may be unsubmitted at present time; guest reuses the buffer while
+# CA still samples). Kept only as the documented negative result — do not enable.
 [ -n "${LIMINA_PRESENT_LOCK:-}" ] && export LIMINA_PRESENT_LOCK
 NET_FLAG=--net
 [ "${LIMINA_NET:-1}" = "0" ] && NET_FLAG=
