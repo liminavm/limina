@@ -1,0 +1,156 @@
+=== 1-boot-idle  09:55:43  pid=81148 ===
+host worker: RSS 5.22 GiB  VSZ 427.82 GiB
+REGION TYPE                        SIZE     SIZE     SIZE     SIZE     SIZE     SIZE     SIZE    COUNT (non-coalesced) 
+IOAccelerator                      256K     256K     256K       0K       0K       0K       0K        6 
+IOAccelerator (graphics)         417.3M   257.4M   257.4M       0K       0K   257.4M       0K     1143 
+IOSurface                         23.5M    23.4M    23.4M       0K       0K    23.4M       0K        9 
+MALLOC guard page                 3488K       0K       0K       0K       0K       0K       0K        4 
+MALLOC metadata                    784K     480K     480K       0K       0K       0K       0K        4 
+MALLOC_LARGE                      11.7M    11.7M    11.7M       0K       0K       0K       0K        3         see MALLOC ZONE table below
+MALLOC_LARGE (empty)              39.0M    39.0M    39.0M       0K       0K       0K       0K        1         see MALLOC ZONE table below
+MALLOC_NANO metadata                64K      48K      48K       0K       0K       0K       0K        2         see MALLOC ZONE table below
+MALLOC_SMALL                      44.0M    13.9M    13.9M       0K       0K       0K       0K       11         see MALLOC ZONE table below
+MALLOC_SMALL (empty)              4096K      48K      48K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+MALLOC_TINY                       4096K     320K     320K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+--- guest ---
+               total        used        free      shared  buff/cache   available
+Mem:            3969        2079         288          11        2181        1890
+
+  RSS COMMAND
+315312 gnome-software
+304336 packagekitd
+216352 gnome-shell
+133200 evolution-alarm
+110976 evolution-sourc
+79056 epiphany-webapp
+
+=== 2-webgl-aquarium-60fps  09:56:30  pid=81148 ===
+host worker: RSS 6.27 GiB  VSZ 428.61 GiB
+REGION TYPE                        SIZE     SIZE     SIZE     SIZE     SIZE     SIZE     SIZE    COUNT (non-coalesced) 
+IOAccelerator                      448K     448K     448K       0K       0K       0K       0K       10 
+IOAccelerator (graphics)         906.6M   733.4M   733.4M       0K       0K   733.4M       0K     2049 
+IOSurface                         59.2M    59.2M    59.2M       0K       0K    59.2M       0K       18 
+MALLOC guard page                 3488K       0K       0K       0K       0K       0K       0K        4 
+MALLOC metadata                    784K     656K     656K       0K       0K       0K       0K        4 
+MALLOC_LARGE                      11.7M    11.7M    11.7M       0K       0K       0K       0K        3         see MALLOC ZONE table below
+MALLOC_LARGE (empty)              39.0M    39.0M    39.0M       0K       0K       0K       0K        1         see MALLOC ZONE table below
+MALLOC_NANO metadata                64K      64K      64K       0K       0K       0K       0K        2         see MALLOC ZONE table below
+MALLOC_SMALL                      84.0M    62.1M    62.1M       0K       0K       0K       0K       21         see MALLOC ZONE table below
+MALLOC_SMALL (empty)              8192K     176K     176K       0K       0K       0K       0K        2         see MALLOC ZONE table below
+MALLOC_TINY                       4096K     336K     336K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+--- guest ---
+               total        used        free      shared  buff/cache   available
+Mem:            3969        2838         363          73        1411        1130
+
+  RSS COMMAND
+582400 firefox
+259296 gnome-software
+214016 gnome-shell
+213296 Isolated Web Co
+183520 fwupd
+163024 Privileged Cont
+
+=== 3-post-webgl-idle  09:56:52  pid=81148 ===
+host worker: RSS 6.66 GiB  VSZ 428.00 GiB
+REGION TYPE                        SIZE     SIZE     SIZE     SIZE     SIZE     SIZE     SIZE    COUNT (non-coalesced) 
+IOAccelerator                      448K     448K     448K       0K       0K       0K       0K       10 
+IOAccelerator (graphics)         452.0M   268.4M   268.4M       0K       0K   268.4M       0K     1224 
+IOSurface                         59.2M    59.2M    59.2M       0K       0K    59.2M       0K       18 
+MALLOC guard page                 3488K       0K       0K       0K       0K       0K       0K        4 
+MALLOC metadata                    784K     672K     672K       0K       0K       0K       0K        4 
+MALLOC_LARGE                      11.7M    11.7M    11.7M       0K       0K       0K       0K        3         see MALLOC ZONE table below
+MALLOC_LARGE (empty)              39.0M    39.0M    39.0M       0K       0K       0K       0K        1         see MALLOC ZONE table below
+MALLOC_NANO metadata                64K      64K      64K       0K       0K       0K       0K        2         see MALLOC ZONE table below
+MALLOC_SMALL                      60.0M    45.5M    45.5M       0K       0K       0K       0K       15         see MALLOC ZONE table below
+MALLOC_SMALL (empty)              36.0M    16.9M    16.9M       0K       0K       0K       0K        9         see MALLOC ZONE table below
+MALLOC_TINY                       4096K     336K     336K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+--- guest ---
+               total        used        free      shared  buff/cache   available
+Mem:            3969        2206         286          11        2073        1762
+
+  RSS COMMAND
+254368 packagekitd
+225776 gnome-software
+203296 gnome-shell
+167776 flatpak-system-
+123984 evolution-alarm
+106880 evolution-sourc
+
+=== 4-css-heavy-apple.com  09:57:38  pid=81148 ===
+host worker: RSS 6.87 GiB  VSZ 428.31 GiB
+REGION TYPE                        SIZE     SIZE     SIZE     SIZE     SIZE     SIZE     SIZE    COUNT (non-coalesced) 
+IOAccelerator                      448K     448K     448K       0K       0K       0K       0K       10 
+IOAccelerator (graphics)         640.4M   457.0M   457.0M       0K       0K   457.0M       0K     1363 
+IOSurface                         74.8M    74.8M    74.8M       0K       0K    74.8M       0K       22 
+MALLOC guard page                 3488K       0K       0K       0K       0K       0K       0K        4 
+MALLOC metadata                    784K     688K     688K       0K       0K       0K       0K        4 
+MALLOC_LARGE                      11.7M    11.7M    11.7M       0K       0K       0K       0K        3         see MALLOC ZONE table below
+MALLOC_LARGE (empty)              39.0M    39.0M    39.0M       0K       0K       0K       0K        1         see MALLOC ZONE table below
+MALLOC_NANO metadata                64K      64K      64K       0K       0K       0K       0K        2         see MALLOC ZONE table below
+MALLOC_SMALL                      72.0M    48.2M    48.2M       0K       0K       0K       0K       18         see MALLOC ZONE table below
+MALLOC_SMALL (empty)              28.0M    15.7M    15.7M       0K       0K       0K       0K        7         see MALLOC ZONE table below
+MALLOC_TINY                       4096K     336K     336K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+--- guest ---
+               total        used        free      shared  buff/cache   available
+Mem:            3969        2754         294          49        1555        1214
+
+  RSS COMMAND
+441680 firefox
+357552 packagekitd
+220016 gnome-software
+200304 Isolated Web Co
+190592 gnome-shell
+184672 flatpak-system-
+
+=== 5-image-heavy-unsplash  09:58:25  pid=81148 ===
+host worker: RSS 6.92 GiB  VSZ 428.33 GiB
+REGION TYPE                        SIZE     SIZE     SIZE     SIZE     SIZE     SIZE     SIZE    COUNT (non-coalesced) 
+IOAccelerator                      448K     448K     448K       0K       0K       0K       0K       10 
+IOAccelerator (graphics)         600.1M   424.7M   424.7M       0K       0K   424.7M       0K     1341 
+IOSurface                         90.5M    90.4M    90.4M       0K       0K    90.4M       0K       26 
+MALLOC guard page                 3488K       0K       0K       0K       0K       0K       0K        4 
+MALLOC metadata                    784K     736K     736K       0K       0K       0K       0K        4 
+MALLOC_LARGE                      11.7M    11.7M    11.7M       0K       0K       0K       0K        3         see MALLOC ZONE table below
+MALLOC_LARGE (empty)              39.0M    39.0M    39.0M       0K       0K       0K       0K        1         see MALLOC ZONE table below
+MALLOC_NANO metadata                64K      64K      64K       0K       0K       0K       0K        2         see MALLOC ZONE table below
+MALLOC_SMALL                      92.0M    65.0M    65.0M       0K       0K       0K       0K       23         see MALLOC ZONE table below
+MALLOC_SMALL (empty)              20.0M    11.7M    11.7M       0K       0K       0K       0K        5         see MALLOC ZONE table below
+MALLOC_TINY                       4096K     336K     336K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+--- guest ---
+               total        used        free      shared  buff/cache   available
+Mem:            3969        2815         281          26        1484        1153
+
+  RSS COMMAND
+457232 firefox
+357552 packagekitd
+259232 Isolated Web Co
+220928 gnome-software
+188864 gnome-shell
+184672 flatpak-system-
+
+=== 6-final-idle  09:58:47  pid=81148 ===
+host worker: RSS 6.83 GiB  VSZ 428.08 GiB
+REGION TYPE                        SIZE     SIZE     SIZE     SIZE     SIZE     SIZE     SIZE    COUNT (non-coalesced) 
+IOAccelerator                      448K     448K     448K       0K       0K       0K       0K       10 
+IOAccelerator (graphics)         453.9M   270.2M   270.2M       0K       0K   270.2M       0K     1229 
+IOSurface                         90.5M    90.4M    90.4M       0K       0K    90.4M       0K       26 
+MALLOC guard page                 3488K       0K       0K       0K       0K       0K       0K        4 
+MALLOC metadata                    784K     736K     736K       0K       0K       0K       0K        4 
+MALLOC_LARGE                      11.7M    11.7M    11.7M       0K       0K       0K       0K        3         see MALLOC ZONE table below
+MALLOC_NANO metadata                64K      64K      64K       0K       0K       0K       0K        2         see MALLOC ZONE table below
+MALLOC_SMALL                      80.0M    53.6M    34.0M       0K       0K       0K       0K       20         see MALLOC ZONE table below
+MALLOC_SMALL (empty)              32.0M    23.3M    1008K       0K       0K       0K       0K        8         see MALLOC ZONE table below
+MALLOC_TINY                       4096K     336K     336K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+VM_ALLOCATE                      251.0M       0K       0K       0K       0K       0K       0K       69 
+--- guest ---
+               total        used        free      shared  buff/cache   available
+Mem:            3969        2374         707          11        1483        1594
+
+  RSS COMMAND
+357552 packagekitd
+220880 gnome-software
+185392 gnome-shell
+184672 flatpak-system-
+109136 evolution-alarm
+95104 evolution-sourc
+

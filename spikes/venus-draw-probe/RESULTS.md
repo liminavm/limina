@@ -737,3 +737,209 @@ LIMINA_KK_NOLISTRESTART (kk-xfb.patch); LIMINA_KK_STATS (kk-probes.patch);
 MESA_KK_DISABLE_WORKAROUNDS=4,5,6,7 (upstream mechanism). Next: EARLYZ correctness
 review (why does msl_ensure_depth_write exist?), rebind-path cost (3.3×), re-run
 glmark2/vkmark battery with knobs, upstream all of it.
+
+### Round 17 addendum: limina-vmm host CPU profile (user-flagged)
+
+`sample limina-vmm 5` under the 60fps aquarium (evidence/vmm-cpu-aquarium-60fps.sample.txt):
+**idle desktop 7.9% (no leak); 60fps aquarium 185%** ≈ 1 core of vCPU threads (guest's own 60fps
+work) + ~1 core of venus/KK command processing spread over the per-context vkr ring threads.
+Hot ring thread breakdown (vkr-ring-6 / Firefox, 63% busy): 45% in kk_queue_submit →
+vk_cmd_queue_execute — KK **records** vkCmds at venus-decode time (vk_cmd_enqueue_*) then
+**replays** them on the CPU at submit (double processing); the replay inner loop is per-draw
+kk_flush_gfx_state → kk_upload_descriptor_root + kk_cmd_buffer_flush_push_descriptors (~50% of
+replay — the CPU twin of the 3.3× per-draw rebind cost from the microbench, same dirty-tracking
+lever); mtl_residency_set_commit ~5%/submit; ~30% of ring-thread samples parked in the ring's
+nanosleep busy-poll (wakeup churn). Levers, cheap→deep: dirty-track root/push-descriptor uploads
+in KK (cuts CPU and GPU rebind cost together); event-driven ring wait; direct-encode at decode
+time (skips the vk_cmd_queue replay entirely — upstream-scale change).
+
+### Round 17 addendum 2: memory-overhead investigation (host + guest, staged workloads)
+
+Method: fresh boot, then `memsnap.sh` (new, in this spike) snapshots at idle → WebGL aquarium
+60fps → idle → apple.com (CSS-heavy) → unsplash.com (image-heavy) → final idle. Full log
+preserved in evidence/memlog-2026-06-11.txt.
+
+**Host worker RSS: 5.22 GiB (boot idle) → 6.27 (aquarium) → 6.83 GiB (final idle) — never
+returns.** Accounting (vmmap): `shared memory` = 12 GiB VA / ~2.7 GiB resident = the 4 GiB guest
+RAM + the 8 GiB venus shm-blob window; the growth is the **guest-page high-water mark** — touched
+guest pages stay host-resident forever absent ballooning. This is the M6 dynamic-memory case,
+now measured. VSZ ~428 GiB is reserved VA (shm window + Metal), harmless.
+
+**⭐IOSurface LEAK (confirmed, ours):** count 9 → 26 over the first browsing session, then a
+targeted test — launch+quit Firefox 3× — leaked **exactly +4 surfaces (+15.6 MB ≈ 4× 1280×800
+BGRA, the wayland swapchain depth) per cycle**, monotonic: 30/34/38. Unbounded for a long-lived
+VM under window churn. Suspects: vkr forced-dedicated winsys IOSurface (vkCreateImage-alloc /
+vkDestroyImage-release — does context teardown hit it?) and the cross-context import retain
+(vkr_mtl_iosurface_lookup ref released in vkr_device_memory_release — importer = gnome-shell,
+which outlives Firefox). Next: vkr_log counters on alloc/retain/release, find the unpaired path.
+
+**Healthy:** `IOAccelerator (graphics)` (KK/Metal buffers) recycles correctly — 257 MB idle,
+733 MB under aquarium, back to 270 MB. MALLOC zones flat. No host-side heap growth.
+
+**Guest:** idle "used" ≈ 2.0–2.4 GiB of 3.9 — dominated by Fedora Workstation services, not VM
+overhead: packagekitd up to 357 MB, gnome-software 220–315 MB, evolution daemons ~230 MB, fwupd
+183 MB ≈ >1 GiB of distro daemons. gnome-shell 185–216 MB (normal for zink/venus); Firefox ~580 MB
+under WebGL (normal). Product note: 4 GiB is a comfortable Workstation minimum; ballooning (M6)
+is what turns the high-water mark back into shared headroom.
+
+### Round 17 addendum 3: IOSurface leak FIXED (virgl fork 0bafb6e)
+
+Root cause read straight from vkr_device.c once the cycle oracle confirmed the leak:
+`vkr_device_object_destroy()` — the leftover-object sweep for guests that exit without
+destroying their Vulkan objects (Firefox fast shutdown skips vkDestroyImage) — called the
+driver's DestroyImage but had no "vkr allocs" release case for VK_OBJECT_TYPE_IMAGE, so
+`vkr_image.mtl_iosurface` (our winsys/scanout backing surface) leaked once per winsys image.
+DEVICE_MEMORY had its release case (why the cross-context import refs never leaked) — IMAGE
+didn't. Fix: new `vkr_image_release()` called from BOTH destroy paths. **Verified: vmmap
+IOSurface count 9/9/9 flat across three Firefox launch/quit cycles (was 30/34/38).**
+Upstream-relevant: the teardown sweep's asymmetry between per-type driver destroys and
+per-type vkr-alloc releases is an easy trap for any fork hanging allocations off objects.
+
+## Round 18 (2026-06-11): LIMINA_KK_EARLYZ correctness review — CLEAN, promoted to boot default
+
+The knob (round 16/17 archaeology) drops KK's two blanket FS injections that force late-Z on
+every pipeline with a depth attachment: `msl_ensure_depth_write` (writes `gl_FragCoord.z` to a
+`[[depth(any)]]` output in EVERY fragment shader under a depth attachment) and the helper-quad
+`msl_lower_static_sample_mask(0xFFFFFFFF)` (any texturing FS). Both date to the initial KK
+import commit (`7c268a1e918`) with no rationale; the sample-mask one cites Vulkan-Portability
+#54 (implicit-LOD/derivative accuracy via live helper quads). Dropping them restores early-Z /
+hidden-surface removal on Apple GPUs (kk-draw-bench fill: 3× → near-parity vs MoltenVK).
+
+**Evidence, both legs of the review:**
+
+1. **Vulkan CTS A/B (host KK, M1 Max):** built VK-GL-CTS in `third_party/`, ran the 10,907
+   early-Z-sensitive cases (`fragment_operations.early_fragment.*`, `glsl.discard.*`,
+   `glsl.derivate.*`, `query_pool.occlusion_query.*`, `pipeline.monolithic.depth.*`,
+   `...multisample.sample_mask.*`) via deqp-runner, baseline vs `LIMINA_KK_EARLYZ=1` —
+   harness: `cts-earlyz-ab.sh`. Result: **status-identical** (4010 Pass / 2 Warn / 0 Fail /
+   6895 Skip both legs; skips = unsupported formats/exts: maintenance5, early_and_late ext,
+   16x MSAA, exotic depth formats). The groups that would break if the hammer were
+   load-bearing all ran green: every discard test (25), the invocation-counting
+   early-fragment tests, occlusion queries (434), derivatives (1656), sample-mask (32).
+   The 2 Warns (sample_count_early_fragment_tests_depth_samples_2/4, quality warnings)
+   exist in BOTH legs — pre-existing, not EARLYZ.
+   **Knob-loaded proof (the invariance lesson):** MSL dump of an early_fragment test FS has
+   the injected `[[depth(any)]]` output with the knob off and NOT with it on; test passes
+   both ways. The identical A/B is a real exoneration, not a dead differential.
+2. **Human eyeball pass (the pixel oracle):** user drove the seated desktop booted with
+   `LIMINA_KK_EARLYZ=1` — windows, overview, Firefox scrolling — and reports **correctness
+   clean**. (Stutters seen during the pass were host CPU contention from the concurrent CTS
+   build + cargo install + Spotlight indexing the fresh clone, not the knob: EARLYZ only
+   removes GPU-side work.)
+
+**Why it's safe (the model):** Metal's fixed-function depth path performs its own
+early-vs-late promotion per spec — it punts to late-Z automatically when the FS discards,
+writes depth, or has visible side effects. Vulkan only *requires* late-Z in those same cases.
+The blanket injection was conservatism, not a semantic need KK's MSL backend has — none of
+the CTS cases that exist precisely to catch wrong-early-Z (invocation counting via SSBO
+atomics, occlusion counters, discard+derivative interactions) can tell the difference.
+
+**Perf payoff on the flagship workload (measured post-review):** aquarium 5k fish on the
+EARLYZ boot holds 60fps (draws ≈308k/s, same as round 17) at **28–30% device utilization vs
+46% without EARLYZ** — ~1.6× GPU headroom at the vsync cap, free. (kk-draw-bench had predicted
+this: the fill variant went 3×-vs-MVK → near-parity with the injections dropped.)
+
+**Decision: default-ON in boot-seated-kk.sh** (same opt-out pattern as NOLISTRESTART:
+`LIMINA_KK_EARLYZ=0` disables). Upstream note: the right KK fix is narrowing the injection
+condition to shaders that actually need it (or deleting it if Metal's promotion is fully
+trusted); our 11k-case slice is strong evidence but KK upstream would want a full-CTS run
+before changing conformance-adjacent behavior.
+
+### Round 18 addendum: 10k-fish probe — ceiling is now the CPU replay thread, not the GPU
+
+With 5k vsync-capped, jumped to numFish=10000 (host-native Firefox: 57–59fps). Result:
+**~42fps** (draws ≈420k/s ÷ ~10,100 draws/frame) at only **28–38% device utilization** —
+EARLYZ removed the GPU wall; the new ceiling is CPU. `sample` confirms: one vkr ring thread
+~76% busy in kk_queue_submit → vk_cmd_queue_execute (KK record-then-replay), inner loop
+kk_flush_gfx_state → kk_upload_descriptor_root + flush_push_descriptors + residency-set
+add/remove/commit — the same per-draw path as round 17 addendum 1, now quantified as the
+throughput cap: **~420k draws/s on one core ≈ 2.4µs CPU per draw**. The lever is unchanged
+and now top of the perf queue: KK dirty-tracking for root/push-descriptor state (helps CPU
+and GPU), then event-driven ring wakeups / direct-encode-at-decode (bigger, upstream-level).
+
+## Round 19 (2026-06-11): replay-thread relief — BO-cache cap + slim push uploads, 42→54fps @10k
+
+Attacked the round-18 CPU ceiling (serial ring-thread replay, 2.4µs/draw) with the weighted
+sample tree from the 10k run. The surprise: **27% of the thread was allocator/residency
+machinery, not memcpy** — `kk_cmd_bo_create` 8.5% + `mtl_residency_set_commit` 7% + pool paths.
+Cause: per draw the replay uploads the full 2 KiB push-descriptor array + the 2.2 KiB root
+table ≈ 44 MB/frame ≈ ~350 BOs (128 KiB each) per frame, while `KK_CMD_POOL_BO_MAX=32` caps
+the pool's free list at 4 MiB — so ~300 Metal buffers are CREATED and DESTROYED every frame.
+
+Two fixes (kk-patches/kk-perf.patch, knobs default-ON in boot-seated-kk.sh, =0 disables):
+1. **LIMINA_KK_BOCACHE** — free-BO cache cap 32 → 512 (env value ≥64 = custom cap). Microbench
+   (kk-draw-bench attr6 --rebind, 5k draws): 1.07 → 0.84 µs/draw (−22%).
+2. **LIMINA_KK_SLIMPUSH** — size push uploads by `layout->non_variable_descriptor_buffer_size`
+   (what regular descriptor sets already do) instead of sizeof(data)=2 KiB. Zink pushes
+   descriptors every draw, so this scales the upload burn directly. (`set_sizes` has no
+   readers; verified write-only.)
+
+**Aquarium 10k: 420k → ~550k draws/s ≈ 54–55 fps (was 42), GPU 41–46%.** Host native is
+57–59 — the gap is nearly closed. Correctness: all 1,190 `*push_descriptor*` dEQP-VK cases
+A/B status-identical (80 runnable = the monolithic graphics+compute push matrix; rest skip
+on unsupported variants), plus the seated desktop is itself a per-draw push-descriptor
+workload. BOCACHE is semantics-free (pure caching).
+
+Remaining on the replay thread (ranked): vk_cmd_enqueue deep-copies per command at decode
+(malloc per cmd), per-draw root-table upload (2.2 KiB, could slim the unused
+dynamic_buffers tail / skip when only sets[] changed), VB-bind compare-skip, and the
+structural fix — direct encode at decode instead of record-then-replay (upstream-level).
+
+### Round 19 addendum: post-fix profile + ring relax-cap EXONERATED — the hunt converges
+
+Fresh weighted sample at 10k post-round-19: BO churn and residency are GONE from the hot
+tree; the ring thread now has ~33% idle-poll headroom (no longer saturated), GPU 41–50%,
+guest 59% idle — **nothing is pegged**, so the residual vs host (54–55 vs 57–59) is
+chain latency, not stage throughput. Hottest remaining slice: descriptor bytes handled
+3× per draw (venus decode ~5% + vk_cmd_enqueue deep-copy ~9% + replay push-set update
+~7%) — only worth attacking via direct-encode-at-decode (upstream-level, on the ledger).
+
+Tested the one cheap latency lever: `LIMINA_RING_RELAX_US` (virgl f29cbb9) caps the ring
+poll's unbounded exponential backoff (a burst landing mid-sleep can eat multi-ms). A/B at
+10k: **no change** (~550k draws/s both legs; env + fresh dylib verified in the worker) —
+ring wake-up latency is not the limiter. Knob kept default-off for future latency work.
+
+**Verdict: at 93–95% of host-native Firefox on the flagship workload, the aquarium gap
+hunt is converged.** Remaining residue is most plausibly Firefox-side frame pacing +
+guest-side vn_relax fence-wait backoff (guest mesa, bake-time experiment). Side finding
+for the hygiene ledger: VN-DBG journal spam costs rsyslogd 30% + abrt 20% of a guest core
+under load. Also: LIMINA_KK_STATS itself costs ~2% of the submit thread (limina_stats_bump in
+the sample) — drop it for max-perf runs.
+
+## Round 19 erratum + round 20 (2026-06-11): SLIMPUSH truncation bug FIXED; transition flicker pre-existing
+
+**The user's eyeball battery caught a real SLIMPUSH bug.** glmark2 scenes with multi-binding
+push sets (texture, shading, effect2d-edge) flickered — background through the window.
+Root cause: **pushed descriptors ACCUMULATE** (a push overwrites only the bindings it names
+and retains the rest), so sizing the upload by the LATEST push's layout truncates retained
+bindings written earlier under a larger layout. Confirmed empirically by a detection counter:
+`used=256 > latest-layout=80` firing steadily on those scenes. Fix (kk-perf.patch): track a
+per-set high-water mark (`limina_used_size`, monotonic per cmd buffer) and size uploads by it.
+Lesson for the patch notes: the upload-size invariant for push sets is NOT the latest
+layout's size — regular sets get away with layout-sizing only because each set object has
+exactly one layout for life.
+
+**Residual flicker EXONERATES the knobs — it's pre-existing.** After the fix, a fainter
+flicker remained, correlated 1:1 with glmark2 SCENE TRANSITIONS (every 10s in the loop;
+timeline: IFP2 format sweeps + new winsys image allocs in the guest journal 4s before the
+user's "now!", GPU dipping to 0% for 2-11s). Discriminator boot with ALL FOUR KK knobs off:
+**flicker still there** → pre-existing first-present-class gap (a freshly allocated winsys
+buffer reaches the compositor before first valid render; undefined alpha → background shows
+through). New ledger thread; repro = `glmark2-es2-wayland -b texture -b shading -b
+"effect2d:kernel=..." --run-forever`, watch a transition. Suspects: zink first-acquire
+present, mutter dmabuf import timing, glmark2 attach-before-draw. Also filed: guest sends
+CTX_ATTACH/DETACH for a dead ctx=2 every ~20-40s (benign-looking lifecycle wart, worker log).
+
+### Round 20 addendum: round-15 battery re-run (windowed legs, full knob stack + SLIMPUSH fix)
+
+| bench (windowed, in-session)   | round 15 | round 20 | delta |
+|--------------------------------|----------|----------|-------|
+| glmark2-es2-wayland            | 1983     | 1882     | −5%   |
+| glmark2-wayland                | 1852     | 1944     | +5%   |
+| vkmark                         | 3419     | 3266     | −4%   |
+
+Flat within run-to-run noise — expected: windowed glmark2/vkmark at 800×600 are
+swap/present-bound (scenes run at 2300+ fps internally), so the per-draw knobs don't move
+them. The knobs' value shows on draw-heavy workloads (aquarium 5k 16→60fps, 10k 42→54fps).
+No broad regression from the round-17/18/19 stack. GBM offscreen legs deferred to the
+rebind-cost thread (they're its measurement vehicle, and need the session stopped).

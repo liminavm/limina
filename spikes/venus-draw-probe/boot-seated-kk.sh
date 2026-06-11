@@ -37,6 +37,22 @@ if [ "${LIMINA_KK_NOLISTRESTART-1}" = "0" ]; then
 else
   export LIMINA_KK_NOLISTRESTART=1
 fi
+# Round-19 replay-thread relief (both default ON, =0 disables):
+# - LIMINA_KK_BOCACHE: raise the cmd-pool free-BO cache cap 32 -> 512. A 10k-draw frame
+#   burns ~350 128KiB upload BOs; the stock cap re-created ~300 Metal buffers per frame.
+# - LIMINA_KK_SLIMPUSH: size push-descriptor uploads by the set layout instead of the
+#   full 2 KiB array (zink pushes per draw). 420k -> ~550k draws/s on the aquarium.
+if [ "${LIMINA_KK_BOCACHE-1}" = "0" ]; then unset LIMINA_KK_BOCACHE; else export LIMINA_KK_BOCACHE=1; fi
+if [ "${LIMINA_KK_SLIMPUSH-1}" = "0" ]; then unset LIMINA_KK_SLIMPUSH; else export LIMINA_KK_SLIMPUSH=1; fi
+# Drop KK's blanket injected FS depth-write + helper-quad sample-mask write, restoring
+# early-Z/HSR (round 18: CTS A/B status-identical over the 10.9k early-Z-sensitive cases +
+# human eyeball clean; kk-draw-bench fill 3x -> ~parity vs MVK). Policy default ON;
+# LIMINA_KK_EARLYZ=0 disables (presence-tested knob, only exported when enabled).
+if [ "${LIMINA_KK_EARLYZ-1}" = "0" ]; then
+  unset LIMINA_KK_EARLYZ
+else
+  export LIMINA_KK_EARLYZ=1
+fi
 # KK debug levers (docs/drivers/kosmickrisp.rst): MESA_KK_DEBUG=msl logs generated MSL;
 # MESA_KK_GPU_CAPTURE=1 arms Metal capture device-create..destroy.
 [ -n "${MESA_KK_DEBUG:-}" ] && export MESA_KK_DEBUG
