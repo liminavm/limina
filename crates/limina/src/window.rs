@@ -240,7 +240,10 @@ pub fn run(
     // as the damaged region (a busy window) blinking out while the rest stays intact. The
     // copy decouples CA from the guest's write cycle entirely; if the flicker vanishes with
     // this on, that race is convicted (the real fix is flip-completion pacing, roadmap #8).
-    let present_copy = std::env::var_os("LIMINA_PRESENT_COPY").is_some();
+    // Env arms it for the whole run; the marker file toggles it LIVE (touch/rm
+    // /tmp/limina-present-copy) so an intermittent flicker can be A/B'd within one session —
+    // flicker present → touch → gone → rm → returns is the within-session conviction.
+    let present_copy_env = std::env::var_os("LIMINA_PRESENT_COPY").is_some();
     let copy_ring: RefCell<Vec<CFRetained<IOSurfaceRef>>> = RefCell::new(Vec::new());
     let copy_geom = Cell::new((0u32, 0u32));
     let copy_idx = Cell::new(0usize);
@@ -328,6 +331,7 @@ pub fn run(
             },
         };
         // Distinct object each frame (the worker alternates ids) → CA re-reads.
+        let present_copy = present_copy_env || std::fs::metadata("/tmp/limina-present-copy").is_ok();
         if present_copy {
             if copy_geom.get() != (width, height) {
                 copy_geom.set((width, height));
