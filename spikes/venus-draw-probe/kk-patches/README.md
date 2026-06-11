@@ -29,6 +29,10 @@ with `PATH=/opt/homebrew/opt/llvm/bin:$PATH ninja -C /Volumes/mesa-cs/build-kk`.
   Upstream MR candidate (carries its `[LIMINA-KK-XFB]`/draw probes — strip for upstream).
   Verified end-to-end: xfb-test.c (capture byte-correct, pause/resume appends,
   primitives_written==4) and Firefox WebGL2 aquarium on the seated KK desktop.
+- `kk-perf.patch` — env-knobbed perf changes (`LIMINA_KK_SLIMPUSH` latest-layout push-
+  descriptor sizing + the `LIMINA_KK_STATS` oversize check, `LIMINA_KK_BOCACHE` cmd-pool
+  buffer cache). `LIMINA_KK_NOLISTRESTART`/`LIMINA_KK_EARLYZ` ride in kk-xfb.patch's
+  kk_cmd_draw.c. Knob defaults/verdicts live in `boot-seated-kk.sh`.
 - `kk-probes.patch` — `LIMINA_KK_RTLOG`-gated instrumentation only (render-pass/state/
   texture logging in the bridge) plus the `LIMINA_KK_CAPTURE=<width>` +
   `METAL_CAPTURE_ENABLED=1` targeted single-pass Metal GPU capture in `mtl_encoder.m`.

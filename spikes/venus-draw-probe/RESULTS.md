@@ -1064,3 +1064,111 @@ Consequence for #8: fence-accurate presents must ALSO provide immutability (hold
 buffer from guest reuse until flip completion — i.e. flip-completion pacing, not fences
 alone), or keep the copy for the display hop. LIMINA_PRESENT_COPY stays default-ON;
 LIMINA_PRESENT_LOCK kept in-tree as the documented negative result.
+
+## Round 23 (2026-06-11): ⭐ #8 COMPLETE — fence-accurate zero-copy at display rate
+
+**Half 2 (guest hold) VERIFIED:** patches/linux/0001 fences blob-scanout flushes
+(prepare_fb gate let host3d blobs through + fence alloc; the existing 50ms
+dma_fence_wait gates commit-tail = the fake flip event). libkrun 0018 holds the
+fenced flush's descriptor until present + latch. Scanner verdict on the v1
+open-loop stack (35ms latch): **0 anomalies in 24,681 frames / 7 min, ZERO-COPY**
+— the reuse race is closed by the guest-side hold, model validated end-to-end.
+Cost of v1: ~17 presents/s to glass (flip latency ~50ms vs double buffering).
+
+**Latency legs COLLAPSED (libkrun 0019 + supervisor):** leg 1 — the reader thread
+dispatches an immediate main-thread apply per frame (libdispatch), the 60Hz timer
+is now fallback only; leg 2 — set_layer_surface registers a CATransaction
+completion block that sends "shown <id>" back over the control socketpair
+(MSG_DONTWAIT), and the worker completes the held fence on that ack (apply-order
+semantics confirm gen-collapsed frames; 150ms fallback for lost acks). Measured:
+**~57-60 deferred presents/s** on the seated loop (512-present log intervals every
+8.5-9s) — display-rate pacing, honest flip events, zero-copy, no open-loop delay.
+
+GOTCHA for the ages: dup'd fds share the open file description — O_NONBLOCK set
+via the ack dup broke the reader thread's blocking reads (EWOULDBLOCK → treated
+as worker-EOF → VM killed at boot). MSG_DONTWAIT per send instead.
+
+Config going forward: LIMINA_FENCE_PRESENT=1 + LIMINA_PRESENT_COPY=0 (fence-accurate
+zero-copy) pending the final full-rate correctness recording; the copy remains
+the stock-kernel tier's mitigation (unfenced flushes can't be held).
+
+## Round 24-25 (2026-06-11): CPU overhead — getenv was serializing the per-draw path
+
+Workload: 10k-fish WebGL aquarium (fullscreen kiosk Firefox), fence-accurate
+zero-copy stack, LIMINA_KK_STATS=1. Profiles: /tmp/vmm-cpu-r24.sample (before),
+/tmp/vmm-cpu-r25.sample (after).
+
+**Round 24 (before):** limina-vmm 253.8% CPU, hot vkr-ring thread 94% busy
+(2755/2945). `getenv("LIMINA_KK_RTLOG")` / `("LIMINA_KK_STATS")` on the per-draw
+bridge paths = 216 leaf samples in `__findenv_locked` (~7% of the core) — but
+getenv takes the environ lock, so the true cost was larger than the leaf count.
+
+**Fix:** cache the knobs once (`static int v = -1` helpers) in
+bridge/mtl_{command_buffer,buffer,encoder,texture}.m and kk_cmd_buffer.c's
+flush-path STATS check. (Trap for the record: the first string-replace rewrote
+the helper's own getenv into a self-call → stack-overflow SIGSEGV on vkr-ring-3
+at first RTLOG check. Crash log named the recursion; fixed, rebuilt.)
+
+**Round 25 (after):** limina-vmm 242.5%, getenv leaf samples 216 → 4, hot ring
+thread **94% → 61% busy** at the same workload rate (~58k draws/s,
+[LIMINA-KK-STATS] draw≈580k/10s interval). Whole-process attribution (sample,
+wait-leaf classified): 4×fc_vcpu ≈ 1.9 cores (guest Firefox+WebGL, not host
+overhead), vkr-ring-6 0.61, vkr-queue-6 0.17, everything else ≤3% each. Host
+GPU-stack overhead ≈ 0.9 core total.
+
+Hot ring thread breakdown (1957 busy samples): vkQueueSubmit 1162 — replay
+`vk_cmd_queue_execute` 706 (kk_CmdDrawMultiIndexedEXT 608: kk_draw/encode 550,
+of which kk_flush_gfx_state+descriptor-root upload ~250; CmdPushDescriptorSet
+replay 283) — and decode+enqueue `vkExecuteCommandStreamsMESA` 691
+(vk_cmd_enqueue push-descriptor staging 310 + venus decode 174). Found and
+fixed in-flight: limina_stats_bump did clock_gettime per draw (62 samples) → now
+polls the clock every 1024 bumps (takes effect next boot).
+
+**Replay-elimination assessment (direct-encode-at-decode):** KK records vkCmd*
+via vk_cmd_enqueue then CPU-replays at submit. Collapsing record+replay would
+save the enqueue staging + execute trampoline (~400-500 samples ≈ 0.15-0.2
+core) but NOT the kk_draw/encode work (~550), which runs either way. Real but
+not dominant; the bigger per-draw cost is KK's kk_flush_gfx_state descriptor
+root re-upload per draw. Parked as an upstream-KK project; not the next lever.
+
+## Round 26 (2026-06-11): guest-side profile — the journal was eating 8% of the guest
+
+Question (user): firefox CPU looks high; how much is mesa? Method: guest perf
+(`sudo perf record -a -g -F 499` + report --sort=comm,dso; perf ships in the
+image, works on the 16k kernel).
+
+**Answer: mesa is ~7% of guest CPU** (CanvasRenderer/Renderer in libgallium =
+zink ~4%, firefox:gdrv0 in libvulkan_virtio = venus encode ~2.5%; hot symbols
+unremarkable: hash lookups, vn_cs_encoder_write, memcpy). Firefox's real cost
+is itself: libxul 14%+ (WebGLParent::RecvDispatchCommands IPC + JS) — the 10k
+aquarium at speed is just expensive in Firefox's architecture.
+
+**The actionable find: ~1290 journal lines/s = 7.9% of total guest CPU**
+(rsyslogd in:imjournal 7% + abrt-dump-journ 2.5% chewing the flood):
+- 11 unconditional `VN_DEBUG:` fprintf probes baked into the guest venus
+  (~/mesa-venus → /usr/lib64/libvulkan_virtio.so) from the #28 debugging, PLUS
+  a 12th probe family `VN-DBG:` (dash!) in vn_physical_device.c — grep for
+  BOTH spellings.
+- `MUTTER_DEBUG=backend`/`CLUTTER_DEBUG=backend` left in
+  ~/.config/environment.d/99-mutter-debug.conf (per-frame BACKEND: lines).
+Fix: all 12 probes `if (0)`-gated (compiler dead-strips them — 0 VN_DEBUG/
+VN-DBG strings in the .so), debug envs removed. Also baked (ledger item):
+`VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1` (venus TSD teardown-crash
+mitigation) in environment.d/90-vk-loader-no-unload.conf.
+Verified on a fresh clone: journal 38,000/30s → **41/60s**; imjournal/abrt
+gone from the profile; aquarium draws unchanged (~556k/interval, zero-copy
+fence-present stack live).
+
+**Traps re-learned, for the record:**
+- boot-seated-kk.sh boots a FRESH CoW CLONE of Fedora-Workstation-43.dev-enh.raw
+  every time — guest edits die at reboot. Durable guest changes go through a
+  bake boot: `LIMINA_DISK=$PWD/Fedora-Workstation-43.dev-enh.raw boot-seated-kk.sh`,
+  edit, `sync; sudo poweroff`. (Lost one full edit-rebuild-install cycle to this.)
+- The guest venus driver loads from /usr/lib64/libvulkan_virtio.so (RPM file
+  hand-overwritten; ICD json pins the absolute path) — but ~/mesa-venus's
+  build-venus meson prefix is /usr/local = WRONG path, `ninja install` puts a
+  whole stale mesa where nothing loads it (and pollutes /usr/local for other
+  things). Install = `cp build-venus/src/virtio/vulkan/libvulkan_virtio.so
+  /usr/lib64/`. (`ninja uninstall` cleaned the pollution.)
+- zink/gallium load from /opt/mesa-zink (built from ~/mesa, NOT ~/mesa-venus).
+  Two trees, two artifacts, two load paths.

@@ -1,8 +1,26 @@
 diff --git a/src/kosmickrisp/bridge/mtl_buffer.m b/src/kosmickrisp/bridge/mtl_buffer.m
-index dedb309..165a711 100644
+index dedb309e7fd..6255830d0dc 100644
 --- a/src/kosmickrisp/bridge/mtl_buffer.m
 +++ b/src/kosmickrisp/bridge/mtl_buffer.m
-@@ -70,6 +70,19 @@
+@@ -12,6 +12,17 @@
+ #include <Metal/MTLBuffer.h>
+ #include <Metal/MTLTexture.h>
+ 
++/* limina: RTLOG knob, cached — a getenv here sat on the per-draw path (round 24:
++ * ~7% of the hot ring core in __findenv_locked). */
++static inline bool
++limina_kk_rtlog_cached(void)
++{
++   static int v = -1;
++   if (v < 0)
++      v = getenv("LIMINA_KK_RTLOG") != NULL;
++   return v;
++}
++
+ uint64_t
+ mtl_buffer_get_length(mtl_buffer *buffer)
+ {
+@@ -70,6 +81,19 @@
        id<MTLBuffer> buf = (id<MTLBuffer>)buffer;
        MTLTextureDescriptor *descriptor = [mtl_new_texture_descriptor(layout) autorelease];
        descriptor.resourceOptions = buf.resourceOptions;
@@ -12,7 +30,7 @@ index dedb309..165a711 100644
 +       * views of a 2D texture remain creatable via newTextureView. */
 +      if (descriptor.textureType == MTLTextureType2DArray && descriptor.arrayLength == 1)
 +         descriptor.textureType = MTLTextureType2D;
-+      if (getenv("LIMINA_KK_RTLOG"))
++      if (limina_kk_rtlog_cached())
 +         fprintf(stderr,
 +                 "[LIMINA-KK-LINTEX] %lux%lu type=%lu(layout %u) usage=0x%lx fmt=%lu stride=%u off=%llu\n",
 +                 (unsigned long)descriptor.width, (unsigned long)descriptor.height,
@@ -23,7 +41,7 @@ index dedb309..165a711 100644
  
        return texture;
 diff --git a/src/kosmickrisp/vulkan/kk_device_memory.c b/src/kosmickrisp/vulkan/kk_device_memory.c
-index c706e44..01c42a0 100644
+index c706e44a782..01c42a0d44e 100644
 --- a/src/kosmickrisp/vulkan/kk_device_memory.c
 +++ b/src/kosmickrisp/vulkan/kk_device_memory.c
 @@ -112,7 +112,8 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,

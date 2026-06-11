@@ -330,15 +330,19 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
 }
 
 /// Flicker oracle (`LIMINA_RED_PROBE=1`): with the guest desktop set to solid red and the
-/// workload fullscreen, a correct presented frame contains zero red — any red pixels mean
-/// the background bled through (the transition-flicker artifact). Samples a sparse grid of
-/// the presented scanout IOSurface and logs offending frames with the surface id; the
-/// adjacent `[FLUSHDBG]` line then identifies WHICH guest resource carried the bad frame
-/// (fresh client buffer vs compositor swapchain — the load-bearing discriminator).
+/// workload windowed on top of it, the wallpaper visible AROUND the window contributes a
+/// steady baseline of red samples — and a frame where the compositor drops the window's
+/// content (the flicker artifact) shows red INSIDE the window region too, spiking the count
+/// above baseline. The probe tracks the baseline as a slowly-rising running minimum (so it
+/// follows window moves/resizes) and logs frames whose red count jumps above it; the
+/// adjacent `[FLUSHDBG]` line identifies which guest resource carried the bad frame.
 /// Detection-only, ≤64×64 samples/frame, env-gated; scanout format is BGRA.
 fn red_probe(iosurface_id: u32, frame: u64) {
-    use std::sync::atomic::{AtomicI8, Ordering};
+    use std::sync::atomic::{AtomicI8, AtomicU32, Ordering};
     static ENABLED: AtomicI8 = AtomicI8::new(-1);
+    /// Running minimum of the per-frame red count (the "window fully drawn" state),
+    /// decayed upward by +1/frame so it re-learns after the window moves or shrinks.
+    static BASELINE: AtomicU32 = AtomicU32::new(u32::MAX);
     let mut on = ENABLED.load(Ordering::Relaxed);
     if on < 0 {
         on = std::env::var_os("LIMINA_RED_PROBE").is_some() as i8;
@@ -376,8 +380,16 @@ fn red_probe(iosurface_id: u32, frame: u64) {
             y += step_y;
         }
         IOSurfaceUnlock(&surface, opts, ptr::null_mut());
-        if red > 0 {
-            log::warn!("[REDPROBE] frame={frame} iosurface={iosurface_id} red={red}/{samples}");
+        let baseline = BASELINE
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |b| {
+                Some(red.min(b.saturating_add(1)))
+            })
+            .unwrap_or(u32::MAX);
+        let threshold = baseline.saturating_add((baseline / 10).max(15));
+        if baseline != u32::MAX && red > threshold {
+            log::warn!(
+                "[REDPROBE] frame={frame} iosurface={iosurface_id} red={red} baseline={baseline} ({samples} samples)"
+            );
         }
     }
 }

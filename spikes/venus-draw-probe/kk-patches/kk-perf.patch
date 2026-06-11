@@ -1,5 +1,5 @@
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
-index 31c2e49e7a3..ed5e17a749c 100644
+index 31c2e49e7a3..70fff130946 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
 +++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
 @@ -277,6 +277,9 @@ kk_cmd_push_descriptors(struct kk_cmd_buffer *cmd,
@@ -12,7 +12,7 @@ index 31c2e49e7a3..ed5e17a749c 100644
     desc->sets[set] = NULL;
     desc->push_dirty |= BITFIELD_BIT(set);
  
-@@ -475,19 +478,55 @@ kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
+@@ -475,19 +478,58 @@ kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
     return root_gpu.gpu;
  }
  
@@ -44,7 +44,10 @@ index 31c2e49e7a3..ed5e17a749c 100644
 +          * the upload. Latest-layout sizing truncated them — visible as
 +          * flickering/transparent frames in glmark2 texture/shading/effect2d
 +          * (round 19 regression, caught by eyeball). */
-+         if (getenv("LIMINA_KK_STATS") &&
++         static int limina_stats = -1;
++         if (limina_stats < 0)
++            limina_stats = getenv("LIMINA_KK_STATS") != NULL;
++         if (limina_stats &&
 +             push_set->limina_used_size >
 +                push_set->layout->non_variable_descriptor_buffer_size) {
 +            static int truncs = 0;
