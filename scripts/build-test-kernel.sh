@@ -97,6 +97,7 @@ echo "==> building Linux $KVER (arm64, $PAGESIZE pages, -j$JOBS) in an Apple con
 echo "    build volume: $VOL (incremental across runs)"
 container run --rm --cpus "$JOBS" --memory "$MEM" \
     -v "$(pwd)/$OUT:/out" \
+    -v "$(pwd)/patches/linux:/patches" \
     -v "$VOL:/build" \
     docker.io/library/fedora:43 bash -euo pipefail -c "
         OUT_NAME='$OUT_NAME'
@@ -118,6 +119,17 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
             echo '--- reusing build volume (incremental)'
         fi
         cd /build/linux
+        # limina kernel patches (patches/linux/*.patch in the repo): reset tracked files
+        # to pristine (idempotent across incremental runs — only touched sources
+        # rebuild), then apply the series. No git clean: build artifacts stay.
+        echo '--- restoring pristine tree + applying limina patches'
+        git checkout -f -- .
+        shopt -s nullglob
+        for p in /patches/*.patch; do
+            echo \"    applying \$(basename \"\$p\")\"
+            git apply --verbose \"\$p\"
+        done
+        shopt -u nullglob
         make ARCH=arm64 defconfig
         ./scripts/kconfig/merge_config.sh -m .config /out/limina.fragment
         make ARCH=arm64 olddefconfig

@@ -1,0 +1,41 @@
+From: limina <gustavo@noronha.eti.br>
+Subject: [PATCH] drm/virtio: attach a fence to blob-scanout RESOURCE_FLUSH (limina #8 half 2)
+
+virtio-gpu delivers flip-completion events from drm_atomic_helper_fake_vblank
+(no vblank support), i.e. at commit-tail time, decoupled from anything the
+host does. The only host-pacing lever in the driver is the dumb-buffer path:
+prepare_fb attaches a per-FB fence, RESOURCE_FLUSH carries it, and
+virtio_gpu_resource_flush dma_fence_wait()s (50 ms cap) before commit-tail
+completes - so the host's fence response gates the (fake) flip event.
+
+Host3d blob scanouts (venus) get neither: prepare_fb bails early for primary
+planes unless bo->guest_blob, so their flushes are unfenced and the guest
+repaints buffers on its own clock while the host compositor may still be
+sampling them (limina rounds 21/22: stale-frame flicker on the zero-copy
+display path; host-side present timing alone proven insufficient).
+
+Give host3d blob primary-plane FBs the same fence the dumb path has. On a
+host that completes fences at command execution (QEMU, crosvm, stock
+libkrun) the wait returns immediately - behavior unchanged. A host that
+understands the fence as a present gate (limina's LIMINA_FENCE_PRESENT path) can
+delay its response until the frame is actually on glass, giving the guest
+honest flip pacing and race-free buffer reuse.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+--- a/drivers/gpu/drm/virtio/virtgpu_plane.c
++++ b/drivers/gpu/drm/virtio/virtgpu_plane.c
+@@ -254,10 +254,11 @@
+ 
+ 	vgfb = to_virtio_gpu_framebuffer(new_state->fb);
+ 	bo = gem_to_virtio_gpu_obj(vgfb->base.obj[0]);
+-	if (!bo || (plane->type == DRM_PLANE_TYPE_PRIMARY && !bo->guest_blob))
++	if (!bo || (plane->type == DRM_PLANE_TYPE_PRIMARY && !bo->guest_blob &&
++		    !bo->host3d_blob))
+ 		return 0;
+ 
+-	if (bo->dumb && (plane->state->fb != new_state->fb)) {
++	if ((bo->dumb || bo->host3d_blob) && (plane->state->fb != new_state->fb)) {
+ 		vgfb->fence = virtio_gpu_fence_alloc(vgdev, vgdev->fence_drv.context,
+ 						     0);
+ 		if (!vgfb->fence)
