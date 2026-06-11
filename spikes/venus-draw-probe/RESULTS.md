@@ -973,3 +973,44 @@ frames objectively per session, archives every worker log (/tmp/flicker-hunt/), 
 flickery catch. Diff target: evidence/worker-clean-session-2026-06-11.log.gz (the clean
 reference). Worker REBUILD GOTCHA hit on the way: bare cargo build strips the hypervisor
 entitlement — run crates/limina-vmm/sign.sh after any rebuild (VmCreate fails otherwise).
+
+## Round 21 (2026-06-11): ⭐ FLICKER ROOT-CAUSED — present-before-GPU-complete on the zero-copy path
+
+**The artifact:** single stale frames presented to glass (user-visible as "the window briefly
+disappears"). Captured in screen recordings: the stale frames are complete, perfectly
+rendered OLD frames — overview content whose on-frame clock matches the event minute.
+
+**Mechanism (convicted by a 3-recording, 8-phase blind A/B):** mutter repaints its
+double-buffered KMS surface and flushes; the worker presents the IOSurface to Core
+Animation AT FLUSH TIME = mutter's SUBMIT time, before KK/Metal executed the repaint. CA
+samples with NO synchronization → shows the buffer's previous content. Normally that's
+33 ms old (invisible); when window churn left an unpresented overview/no-window frame in a
+buffer, the race exposes it as a visible flicker. The flight recorder shows a perfectly
+regular 415/574 present ping-pong through events — nothing wrong at the virtio-gpu level;
+the staleness is GPU-timing-only. The famous "alternating stale/clean at 60 Hz for 5
+frames" burst = one buffer's repaint lagging repeatedly while its sibling stayed timely.
+
+**The A/B:** LIMINA_PRESENT_COPY (supervisor copies the scanout into a private 3-deep ring
+before CA sees it; IOSurfaceLock SYNCHRONIZES WITH PENDING GPU WRITES, so every copied
+frame is complete). An automated toggle alternated it every 5 min while the user recorded
+the window for ~1 h; a frame-anomaly scanner (spikes tools: /tmp scan — promoted below)
+found **25 stale frames in 5 bursts, ALL in copy-OFF phases; zero in 10+ min of copy-ON**
+(Poisson p≈0.001). The toggle file (/tmp/limina-present-copy) flips it live.
+
+**Earlier theories now closed:** SLIMPUSH truncation (real bug, fixed, but unrelated to
+this artifact) · alpha bleed (refuted: opaque visual still flickered) · per-session coin
+flip (was timing variance) · mutter import failure (journal silent) · supervisor id cache
+(exonerated: the copy reads through the same cache and fixed it) · ring relax backoff
+(exonerated round 19) · buffer-age lie (disfavored: copy-ON clean means under-repair
+isn't reaching glass).
+
+**Fix policy:** LIMINA_PRESENT_COPY default-ON in boot-seated-kk.sh (4 MB CPU copy + GPU
+sync wait per present at ≤60 Hz — trivial). The REAL fix is fence-accurate presentation
+(#8 flip-completion thread): present only after the guest's GPU work for the scanout
+buffer completes (vkr fence for the resource), which also unblocks the kmscube stall and
+gives mutter honest frame pacing. The copy doubles as the software-2D-style fallback.
+
+Oracles built this round: LIMINA_RED_PROBE (worker present-path bleed detector; frame-precise,
+validated on a window unmap), flicker-hunt.sh (boot-cycle objective session verdicts),
+/tmp/scan-anomalies.swift + extract-frames.swift (recording forensics — promoted to
+spikes/venus-draw-probe/).

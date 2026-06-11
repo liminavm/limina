@@ -57,6 +57,13 @@ fi
 # MESA_KK_GPU_CAPTURE=1 arms Metal capture device-create..destroy.
 [ -n "${MESA_KK_DEBUG:-}" ] && export MESA_KK_DEBUG
 [ -n "${MESA_KK_GPU_CAPTURE:-}" ] && export MESA_KK_GPU_CAPTURE
+# Round-21 flicker mitigation (default ON, =0 disables): present a private copy of the
+# scanout to Core Animation instead of the live guest surface. The zero-copy present fires
+# at flush (mutter's submit) time, before the GPU repaint executed; CA samples unsynced and
+# can show the buffer's previous content (visible stale-frame flicker). IOSurfaceLock in
+# the copy waits for pending GPU writes, so copied frames are always complete. Real fix =
+# fence-accurate presents (roadmap #8). Toggle live via /tmp/limina-present-copy.
+if [ "${LIMINA_PRESENT_COPY-1}" = "0" ]; then unset LIMINA_PRESENT_COPY; else export LIMINA_PRESENT_COPY=1; fi
 NET_FLAG=--net
 [ "${LIMINA_NET:-1}" = "0" ] && NET_FLAG=
 target/debug/limina --vmm-bin target/debug/limina-vmm \
