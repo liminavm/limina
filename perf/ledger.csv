@@ -1,0 +1,5 @@
+date,commit,workload,metric,value,notes
+2026-06-12,ca44986,gl-replay-venus,fps,49.7313,first ledger run (clone of dev-enh golden)
+2026-06-12,ca44986,gl-replay-llvmpipe,fps,829.298,first ledger run (clone of dev-enh golden)
+2026-06-12,ca44986,vk-replay-venus-headless,fps,1425.733963,first ledger run (clone of dev-enh golden)
+2026-06-12,ca44986,glmark2-wayland-venus,score,1968,first ledger run (clone of dev-enh golden)

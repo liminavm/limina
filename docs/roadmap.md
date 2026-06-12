@@ -109,12 +109,12 @@ capture records instance extensions lavapipe lacks). The reference leg's backend
 PROVEN via gfxrecon's `Replay device info` mismatch warning (FPS can't tell — both
 legs vsync-cap ~60 through the session WSI); fixture
 `fixtures/traces/vkcube.gfxr`, regenerate via
-`spikes/trace-replay/capture-replay-vk.sh`. Remaining phases (memory
-`limina-trace-replay-plan`): the **perf trend ledger** (its own on-demand script,
-explicitly NOT a pass/fail gate — VM-on-dev-machine variance), and the real prize:
-capturing gnome-shell/mutter compositing itself as a replayable fixture. NOT covered by
-replay: the present/scanout path (fence-present, zero-copy) — that stays with the
-seated-desktop + iosdump oracles.
+`spikes/trace-replay/capture-replay-vk.sh`. **Phase 3: the perf trend ledger**
+(`scripts/perf-ledger.sh` → git-tracked `perf/ledger.csv`; explicitly NOT a pass/fail
+gate — VM-on-dev-machine variance; see perf/README.md). Remaining (memory
+`limina-trace-replay-plan`): the real prize — capturing gnome-shell/mutter compositing
+itself as a replayable fixture. NOT covered by replay: the present/scanout path
+(fence-present, zero-copy) — that stays with the seated-desktop + iosdump oracles.
 
 **Rule: fix bugs RED-first.** Every bug fix starts with a failing test that reproduces
 it (see CLAUDE.md). L1 is what makes this cheap enough to always do.
