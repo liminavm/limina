@@ -36,7 +36,7 @@ index d5b9174eaa7..2295b5b123a 100644
     }
  }
 diff --git a/src/kosmickrisp/bridge/mtl_encoder.m b/src/kosmickrisp/bridge/mtl_encoder.m
-index dd5037ba84f..4d4b77f1c9b 100644
+index dd5037ba84f..4cfaebe116b 100644
 --- a/src/kosmickrisp/bridge/mtl_encoder.m
 +++ b/src/kosmickrisp/bridge/mtl_encoder.m
 @@ -7,9 +7,66 @@
@@ -282,7 +282,7 @@ index dd5037ba84f..4d4b77f1c9b 100644
        id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
        [enc setVisibilityResultMode:(MTLVisibilityResultMode)mode offset:offset];
     }
-@@ -404,6 +551,30 @@
+@@ -404,10 +551,54 @@
     @autoreleasepool {
        id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
        id<MTLBuffer> buf = (id<MTLBuffer>)buffer;
@@ -313,7 +313,31 @@ index dd5037ba84f..4d4b77f1c9b 100644
        [enc setVertexBuffer:buf offset:offset atIndex:index];
     }
  }
-@@ -448,6 +619,10 @@
+ 
++/* limina: offset-only rebinds — valid only while a buffer is bound at index on
++ * this encoder (the caller's bind cache guarantees it). Much cheaper than
++ * setBuffer (no residency/binding-table update); no autoreleasepool needed
++ * (creates no objects). */
++void
++mtl_set_vertex_buffer_offset(mtl_render_encoder *encoder, uint32_t offset,
++                             uint32_t index)
++{
++   id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
++   [enc setVertexBufferOffset:offset atIndex:index];
++}
++
++void
++mtl_set_fragment_buffer_offset(mtl_render_encoder *encoder, uint32_t offset,
++                               uint32_t index)
++{
++   id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
++   [enc setFragmentBufferOffset:offset atIndex:index];
++}
++
+ void
+ mtl_set_vertex_bytes(mtl_render_encoder *encoder, const void *bytes,
+                      uint32_t length, uint32_t index)
+@@ -448,6 +639,10 @@
     @autoreleasepool {
        id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
        MTLPrimitiveType type = (MTLPrimitiveType)primitve_type;
@@ -324,7 +348,7 @@ index dd5037ba84f..4d4b77f1c9b 100644
        [enc drawPrimitives:type vertexStart:vertexStart vertexCount:vertexCount instanceCount:instanceCount baseInstance:baseInstance];
     }
  }
-@@ -464,6 +639,7 @@
+@@ -464,6 +659,7 @@
        id<MTLBuffer> buf = (id<MTLBuffer>)index_buffer;
        MTLIndexType ndx_type = (MTLIndexType)index_type;
        MTLPrimitiveType primitive = (MTLPrimitiveType)primitve_type;
@@ -332,7 +356,7 @@ index dd5037ba84f..4d4b77f1c9b 100644
        [enc drawIndexedPrimitives:primitive indexCount:index_count indexType:ndx_type indexBuffer:buf indexBufferOffset:index_buffer_offset instanceCount:instance_count baseVertex:base_vertex baseInstance:base_instance];
     }
  }
-@@ -478,6 +654,7 @@
+@@ -478,6 +674,7 @@
        id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
        id<MTLBuffer> buf = (id<MTLBuffer>)indirect_buffer;
        MTLPrimitiveType type = (MTLPrimitiveType)primitve_type;
@@ -340,7 +364,7 @@ index dd5037ba84f..4d4b77f1c9b 100644
        [enc drawPrimitives:type indirectBuffer:buf indirectBufferOffset:indirect_buffer_offset];
     }
  }
-@@ -497,6 +674,7 @@
+@@ -497,6 +694,7 @@
        id<MTLBuffer> ndx_buf = (id<MTLBuffer>)index_buffer;
        MTLPrimitiveType type = (MTLPrimitiveType)primitve_type;
        MTLIndexType ndx_type = (MTLIndexType)index_type;

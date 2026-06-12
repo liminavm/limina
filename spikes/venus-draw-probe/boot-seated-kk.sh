@@ -28,31 +28,26 @@ export VK_ICD_FILENAMES="$ICD"
 # vkr_log emits at virgl INFO; the default logger level is WARNING, which silently
 # swallows every limina: line in vkr_*.c — keep INFO on for this A/B vehicle.
 export VIRGL_LOG_LEVEL=info
-# Skip KK's per-draw GPU index-unroll for list topologies (round 17: GLES3/WebGL2 always-on
-# primitive restart made EVERY indexed list draw pay ~10us of compute — 16fps -> 60fps on the
-# aquarium). Policy default ON; LIMINA_KK_NOLISTRESTART=0 disables (the knob is presence-tested,
-# so we only export it when enabled).
-if [ "${LIMINA_KK_NOLISTRESTART-1}" = "0" ]; then
-  unset LIMINA_KK_NOLISTRESTART
-else
-  export LIMINA_KK_NOLISTRESTART=1
-fi
-# Round-19 replay-thread relief (both default ON, =0 disables):
-# - LIMINA_KK_BOCACHE: raise the cmd-pool free-BO cache cap 32 -> 512. A 10k-draw frame
-#   burns ~350 128KiB upload BOs; the stock cap re-created ~300 Metal buffers per frame.
-# - LIMINA_KK_SLIMPUSH: size push-descriptor uploads by the set layout instead of the
-#   full 2 KiB array (zink pushes per draw). 420k -> ~550k draws/s on the aquarium.
-if [ "${LIMINA_KK_BOCACHE-1}" = "0" ]; then unset LIMINA_KK_BOCACHE; else export LIMINA_KK_BOCACHE=1; fi
-if [ "${LIMINA_KK_SLIMPUSH-1}" = "0" ]; then unset LIMINA_KK_SLIMPUSH; else export LIMINA_KK_SLIMPUSH=1; fi
-# Drop KK's blanket injected FS depth-write + helper-quad sample-mask write, restoring
-# early-Z/HSR (round 18: CTS A/B status-identical over the 10.9k early-Z-sensitive cases +
-# human eyeball clean; kk-draw-bench fill 3x -> ~parity vs MVK). Policy default ON;
-# LIMINA_KK_EARLYZ=0 disables (presence-tested knob, only exported when enabled).
-if [ "${LIMINA_KK_EARLYZ-1}" = "0" ]; then
-  unset LIMINA_KK_EARLYZ
-else
-  export LIMINA_KK_EARLYZ=1
-fi
+# KK perf knobs are DEFAULT-ON IN KK ITSELF since 2026-06-11 (kk-perf/kk-xfb patches);
+# set LIMINA_KK_<X>=0 in the environment to disable one — the script just passes them through.
+# - LIMINA_KK_NOLISTRESTART: skip the per-draw GPU index-unroll for list topologies
+#   (round 17: zink's GLES3 always-on restart made every indexed list draw pay ~10us
+#   of compute; 16fps -> 60fps on the aquarium).
+# - LIMINA_KK_BOCACHE: cmd-pool free-BO cache cap 32 -> 512 (round 19: ~300 Metal buffer
+#   create/destroys per 10k-draw frame). Numeric value >= 64 sets a custom cap.
+# - LIMINA_KK_SLIMPUSH: size push-descriptor uploads by the per-set high-water mark
+#   instead of the full 2 KiB array (round 19; 420k -> ~550k draws/s).
+# - LIMINA_KK_EARLYZ: drop the blanket injected FS depth-write + helper-quad sample-mask
+#   write, restoring early-Z/HSR (round 18: 10.9k-case CTS A/B status-identical).
+# - LIMINA_KK_SLIMROOT: upload only the root-table prefix the bound shaders can address
+#   (~900B vs ~2.2KiB per draw on zink-shaped pipelines; round 28: bench rebind leg
+#   +43%, 14.7k-case CTS A/B status-identical).
+# - LIMINA_KK_FASTBIND: per-encoder bind cache for the hot per-draw buffer binds (root
+#   idx0, per-draw data idx2) — setBufferOffset / skip instead of full setBuffer, and
+#   per-draw-data upload dedup (round 28b).
+for knob in LIMINA_KK_NOLISTRESTART LIMINA_KK_BOCACHE LIMINA_KK_SLIMPUSH LIMINA_KK_EARLYZ LIMINA_KK_SLIMROOT LIMINA_KK_FASTBIND; do
+  [ -n "$(eval echo "\${$knob:-}")" ] && export "$knob"
+done
 # KK debug levers (docs/drivers/kosmickrisp.rst): MESA_KK_DEBUG=msl logs generated MSL;
 # MESA_KK_GPU_CAPTURE=1 arms Metal capture device-create..destroy.
 [ -n "${MESA_KK_DEBUG:-}" ] && export MESA_KK_DEBUG

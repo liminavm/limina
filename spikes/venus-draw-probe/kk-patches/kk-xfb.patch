@@ -1,5 +1,5 @@
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
-index 967c1b6..26f91fb 100644
+index 967c1b6714d..203ed2686d9 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
 +++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
 @@ -39,6 +39,19 @@ struct kk_root_descriptor_table {
@@ -22,7 +22,37 @@ index 967c1b6..26f91fb 100644
        } draw;
        struct {
           uint32_t base_group[3];
-@@ -174,6 +187,32 @@ struct kk_graphics_state {
+@@ -164,6 +177,29 @@ struct kk_graphics_state {
+       mtl_buffer *handles[KK_MAX_VBUFS];
+    } vb;
+ 
++   /* limina: per-attribute format block size, cached when VI dirties so the
++    * per-VB-bind clamp recompute (per draw on zink streams) skips the
++    * util_format_description chain. */
++   uint8_t attrib_elsize_B[KK_MAX_ATTRIBS];
++
++   /* limina: per-encoder binding cache for the hot per-draw buffer binds
++    * (root table at index 0, per-draw data at index 2). The bound buffers
++    * live in the upload pool, so consecutive draws rebind the SAME MTLBuffer
++    * at a new offset — Metal's setBufferOffset skips the residency/binding-
++    * table work of setBuffer, and a fully unchanged bind is skipped outright.
++    * Zeroed when a new render encoder is created (fresh binding tables). */
++   struct kk_bound_buf {
++      mtl_buffer *buf;
++      uint32_t offset;
++   } bind_cache_v0, bind_cache_f0, bind_cache_v2, bind_cache_f2;
++
++   /* limina: last-uploaded per-draw data + its pool location; non-tess draws
++    * usually repeat the same content (draw_id varies only across multidraw),
++    * so the per-draw pool upload can be skipped (pool data is immutable).
++    * .gpu == 0 = invalid (cmd->state is zeroed at Begin). */
++   struct kk_per_draw_data last_per_draw_data;
++   struct kk_ptr per_draw_gpu;
++
+    /* Tessellation state */
+    struct {
+       /* Grid buffer for when the draw is indirect */
+@@ -174,6 +210,32 @@ struct kk_graphics_state {
        enum mesa_prim prim;
     } tess;
  
@@ -56,14 +86,126 @@ index 967c1b6..26f91fb 100644
     struct vk_vertex_input_state _dynamic_vi;
     struct vk_sample_locations_state _dynamic_sl;
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
-index cd0bc85..825cac2 100644
+index cd0bc8578a9..fafbed36a55 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
 +++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
-@@ -1276,6 +1276,28 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
-                vb.addr, 0, vk_format_to_pipe_format(attr.format), vb.range,
+@@ -27,6 +27,75 @@
+ #include "vulkan/runtime/vk_render_pass.h"
+ #include "vulkan/util/vk_format.h"
+ 
++/* limina: NEVER getenv on a draw path — it takes the environ lock and
++ * serializes the thread (leaf samples undercount it badly). Presence-tested
++ * opt-in debug knob, cached once. */
++static inline bool
++kk_limina_rtlog(void)
++{
++   static int v = -1;
++   if (v < 0)
++      v = getenv("LIMINA_KK_RTLOG") != NULL;
++   return v;
++}
++
++/* limina: hot per-draw buffer rebinds. The root table (index 0) and per-draw
++ * data (index 2) live in the upload pool, so consecutive draws bind the SAME
++ * MTLBuffer at a new offset — Metal's setBufferOffset skips setBuffer's
++ * residency/binding-table work, and a fully unchanged bind is skipped
++ * outright. Per-encoder cache in kk_graphics_state, zeroed on encoder
++ * creation. LIMINA_KK_FASTBIND=0 restores plain setBuffer calls. */
++static inline bool
++kk_limina_fastbind(void)
++{
++   static int v = -1;
++   if (v < 0) {
++      const char *e = getenv("LIMINA_KK_FASTBIND");
++      v = !e || e[0] != '0';
++   }
++   return v;
++}
++
++static inline void
++kk_bind_vbuf_cached(mtl_render_encoder *enc, struct kk_bound_buf *slot,
++                    mtl_buffer *buf, uint32_t offset, uint32_t index)
++{
++   if (!kk_limina_fastbind()) {
++      mtl_set_vertex_buffer(enc, buf, offset, index);
++      return;
++   }
++   if (slot->buf == buf) {
++      if (slot->offset != offset) {
++         mtl_set_vertex_buffer_offset(enc, offset, index);
++         slot->offset = offset;
++      }
++   } else {
++      mtl_set_vertex_buffer(enc, buf, offset, index);
++      slot->buf = buf;
++      slot->offset = offset;
++   }
++}
++
++static inline void
++kk_bind_fbuf_cached(mtl_render_encoder *enc, struct kk_bound_buf *slot,
++                    mtl_buffer *buf, uint32_t offset, uint32_t index)
++{
++   if (!kk_limina_fastbind()) {
++      mtl_set_fragment_buffer(enc, buf, offset, index);
++      return;
++   }
++   if (slot->buf == buf) {
++      if (slot->offset != offset) {
++         mtl_set_fragment_buffer_offset(enc, offset, index);
++         slot->offset = offset;
++      }
++   } else {
++      mtl_set_fragment_buffer(enc, buf, offset, index);
++      slot->buf = buf;
++      slot->offset = offset;
++   }
++}
++
+ static void
+ kk_cmd_buffer_dirty_render_pass(struct kk_cmd_buffer *cmd)
+ {
+@@ -709,11 +778,10 @@ kk_flush_vp_state(struct kk_cmd_buffer *cmd)
+ }
+ 
+ static inline uint32_t
+-kk_calculate_vbo_clamp(uint64_t vbuf, uint64_t sink, enum pipe_format format,
++kk_calculate_vbo_clamp(uint64_t vbuf, uint64_t sink, uint32_t elsize_B,
+                        uint32_t size_B, uint32_t stride_B, uint32_t offset_B,
+                        uint64_t *vbuf_out)
+ {
+-   unsigned elsize_B = util_format_get_blocksize(format);
+    unsigned subtracted_B = offset_B + elsize_B;
+ 
+    /* If at least one index is valid, determine the max. Otherwise, direct reads
+@@ -1266,6 +1334,18 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
+    if (IS_DIRTY(VI) || IS_DIRTY(VI_BINDINGS_VALID) ||
+        IS_DIRTY(VI_BINDING_STRIDES) || gfx->dirty & KK_DIRTY_VB) {
+       struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
++
++      /* limina: format block sizes change only with VI state, not with vertex
++       * buffer binds — and VB binds re-enter this branch per draw on real
++       * (zink) streams. Cache them so the per-bind path skips the
++       * vk_format_to_pipe_format/util_format_description chain. */
++      if (IS_DIRTY(VI)) {
++         u_foreach_bit(i, dyn->vi->attributes_valid) {
++            gfx->attrib_elsize_B[i] = util_format_get_blocksize(
++               vk_format_to_pipe_format(dyn->vi->attributes[i].format));
++         }
++      }
++
+       unsigned slot = 0;
+       u_foreach_bit(i, vs->info.vs.attribs_read) {
+          if (dyn->vi->attributes_valid & BITFIELD_BIT(i)) {
+@@ -1273,9 +1353,31 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
+             struct kk_addr_range vb = gfx->vb.addr_range[attr.binding];
+ 
+             desc->root.draw.attrib_clamps[slot] = kk_calculate_vbo_clamp(
+-               vb.addr, 0, vk_format_to_pipe_format(attr.format), vb.range,
++               vb.addr, 0, gfx->attrib_elsize_B[i], vb.range,
                 dyn->vi_binding_strides[attr.binding], attr.offset,
                 &desc->root.draw.attrib_base[slot]);
-+            if (getenv("LIMINA_KK_RTLOG")) {
++            if (kk_limina_rtlog()) {
 +               mtl_buffer *h = gfx->vb.handles[attr.binding];
 +               const float *cf = NULL;
 +               if (h) {
@@ -88,25 +230,91 @@ index cd0bc85..825cac2 100644
              desc->root.draw.buffer_strides[attr.binding] =
                 dyn->vi_binding_strides[attr.binding];
           }
-@@ -1590,6 +1612,17 @@ requires_unroll_restart(struct kk_cmd_buffer *cmd,
+@@ -1289,8 +1391,10 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
+ 
+    struct kk_ptr root_buffer = desc->root.root_buffer;
+    if (root_buffer.gpu) {
+-      mtl_set_vertex_buffer(enc, root_buffer.buffer, root_buffer.offset, 0);
+-      mtl_set_fragment_buffer(enc, root_buffer.buffer, root_buffer.offset, 0);
++      kk_bind_vbuf_cached(enc, &gfx->bind_cache_v0, root_buffer.buffer,
++                          root_buffer.offset, 0);
++      kk_bind_fbuf_cached(enc, &gfx->bind_cache_f0, root_buffer.buffer,
++                          root_buffer.offset, 0);
+    }
+ 
+    if (gfx->dirty & KK_DIRTY_OCCLUSION) {
+@@ -1590,6 +1694,20 @@ requires_unroll_restart(struct kk_cmd_buffer *cmd,
         * restart flag enabled while using list primitives without any restarts,
         * and in these cases we can avoid the cost of unroll, even though they
         * are technically against spec. */
-+      /* limina A/B sizing knob: WebGL2/GLES3 mandate always-on restart, so zink
-+       * sets restartEnable on EVERY indexed draw and each list draw pays a
-+       * full GPU index-unroll even when no restart index is present (the
-+       * common case). LIMINA_KK_NOLISTRESTART=1 skips the unroll for lists. */
++      /* limina: WebGL2/GLES3 mandate always-on restart, so zink sets
++       * restartEnable on EVERY indexed draw and each list draw pays a full
++       * GPU index-unroll even when no restart index is present (the common
++       * case; round 17: 16→60fps on the aquarium). Default ON;
++       * LIMINA_KK_NOLISTRESTART=0 restores the spec-strict unroll. */
 +      {
 +         static int limina_skip = -1;
-+         if (limina_skip < 0)
-+            limina_skip = getenv("LIMINA_KK_NOLISTRESTART") != NULL;
++         if (limina_skip < 0) {
++            const char *e = getenv("LIMINA_KK_NOLISTRESTART");
++            limina_skip = !e || e[0] != '0';
++         }
 +         if (limina_skip)
 +            return false;
 +      }
        return dev->vk.enabled_features.primitiveTopologyListRestart;
     default:
        break;
-@@ -1875,6 +1908,306 @@ build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
+@@ -1703,25 +1821,39 @@ kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
+       }
+    }
+ 
+-   struct kk_ptr shader_data_gpu =
+-      kk_pool_upload(cmd, &gfx->per_draw_data, sizeof(gfx->per_draw_data), 8u);
+-   if (unlikely(!shader_data_gpu.gpu))
+-      return;
++   /* limina: non-tess draws usually repeat the same per-draw content (draw_id
++    * varies only across multidraw), so the upload can reuse the previous pool
++    * location — pool data is immutable for the life of the cmd buffer. Tess
++    * never matches (it pool-allocs fresh param addresses into the struct
++    * above). */
++   struct kk_ptr shader_data_gpu;
++   if (kk_limina_fastbind() && !tess && gfx->per_draw_gpu.gpu &&
++       memcmp(&gfx->per_draw_data, &gfx->last_per_draw_data,
++              sizeof(gfx->per_draw_data)) == 0) {
++      shader_data_gpu = gfx->per_draw_gpu;
++   } else {
++      shader_data_gpu = kk_pool_upload(cmd, &gfx->per_draw_data,
++                                       sizeof(gfx->per_draw_data), 8u);
++      if (unlikely(!shader_data_gpu.gpu))
++         return;
++      gfx->per_draw_gpu = shader_data_gpu;
++      gfx->last_per_draw_data = gfx->per_draw_data;
++   }
+ 
+    mtl_render_encoder *enc = kk_render_encoder(cmd);
+    if (upload_mask & BITFIELD_BIT(MESA_SHADER_VERTEX)) {
+-      mtl_set_vertex_buffer(enc, shader_data_gpu.buffer, shader_data_gpu.offset,
+-                            2);
++      kk_bind_vbuf_cached(enc, &gfx->bind_cache_v2, shader_data_gpu.buffer,
++                          shader_data_gpu.offset, 2);
+    }
+    if (tess) {
+       mtl_compute_set_buffer(kk_encoder_pre_gfx_encoder(cmd),
+                              shader_data_gpu.buffer, shader_data_gpu.offset, 2);
+-      mtl_set_vertex_buffer(enc, shader_data_gpu.buffer, shader_data_gpu.offset,
+-                            2);
++      kk_bind_vbuf_cached(enc, &gfx->bind_cache_v2, shader_data_gpu.buffer,
++                          shader_data_gpu.offset, 2);
+    }
+    if (upload_mask & BITFIELD_BIT(MESA_SHADER_FRAGMENT)) {
+-      mtl_set_fragment_buffer(enc, shader_data_gpu.buffer,
+-                              shader_data_gpu.offset, 2);
++      kk_bind_fbuf_cached(enc, &gfx->bind_cache_f2, shader_data_gpu.buffer,
++                          shader_data_gpu.offset, 2);
+    }
+ }
+ 
+@@ -1875,6 +2007,306 @@ build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
     return draw;
  }
  
@@ -223,12 +431,12 @@ index cd0bc85..825cac2 100644
 +      uint64_t value;
 +      if (kk_xfb_counter_shadow_load(dev, buffer->mtl_handle, off, &value))
 +         gfx->xfb.buf[idx].offset_B = value;
-+      if (getenv("LIMINA_KK_RTLOG"))
++      if (kk_limina_rtlog())
 +         fprintf(stderr, "[LIMINA-KK-XFB] Begin buf%u counter=%p+%llu resume=%llu\n",
 +                 idx, (void *)buffer->mtl_handle, (unsigned long long)off,
 +                 (unsigned long long)gfx->xfb.buf[idx].offset_B);
 +   }
-+   if (getenv("LIMINA_KK_RTLOG"))
++   if (kk_limina_rtlog())
 +      fprintf(stderr, "[LIMINA-KK-XFB] Begin count=%u (first=%u)\n",
 +              counterBufferCount, firstCounterBuffer);
 +}
@@ -254,7 +462,7 @@ index cd0bc85..825cac2 100644
 +      uint64_t off = pCounterBufferOffsets ? pCounterBufferOffsets[i] : 0;
 +      kk_xfb_counter_shadow_store(dev, buffer->mtl_handle, off,
 +                                  gfx->xfb.buf[idx].offset_B);
-+      if (getenv("LIMINA_KK_RTLOG"))
++      if (kk_limina_rtlog())
 +         fprintf(stderr, "[LIMINA-KK-XFB] End buf%u counter=%p+%llu store=%llu\n",
 +                 idx, (void *)buffer->mtl_handle, (unsigned long long)off,
 +                 (unsigned long long)gfx->xfb.buf[idx].offset_B);
@@ -376,7 +584,7 @@ index cd0bc85..825cac2 100644
 +   *captured = true;
 +   *fit_prims = *gen_prims;
 +
-+   if (getenv("LIMINA_KK_RTLOG"))
++   if (kk_limina_rtlog())
 +      fprintf(stderr,
 +              "[LIMINA-KK-XFB] capture mask=0x%x base0=0x%llx off0=%llu "
 +              "verts=%u inst=%u prims=%u\n",
@@ -413,7 +621,7 @@ index cd0bc85..825cac2 100644
  static void
  kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
  {
-@@ -1899,15 +2232,37 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+@@ -1899,15 +2331,37 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
     if (requires_unroll && !kk_unroll_geometry(cmd, data))
        return;
  
@@ -432,10 +640,10 @@ index cd0bc85..825cac2 100644
 +            struct kk_ptr root_buffer =
 +               cmd->state.gfx.descriptors.root.root_buffer;
 +            mtl_render_encoder *enc = kk_render_encoder(cmd);
-+            mtl_set_vertex_buffer(enc, root_buffer.buffer, root_buffer.offset,
-+                                  0);
-+            mtl_set_fragment_buffer(enc, root_buffer.buffer,
-+                                    root_buffer.offset, 0);
++            kk_bind_vbuf_cached(enc, &cmd->state.gfx.bind_cache_v0,
++                                root_buffer.buffer, root_buffer.offset, 0);
++            kk_bind_fbuf_cached(enc, &cmd->state.gfx.bind_cache_f0,
++                                root_buffer.buffer, root_buffer.offset, 0);
 +         }
 +      }
 +
@@ -452,7 +660,7 @@ index cd0bc85..825cac2 100644
  }
  
 diff --git a/src/kosmickrisp/vulkan/kk_device.h b/src/kosmickrisp/vulkan/kk_device.h
-index be4f3e7..1980708 100644
+index be4f3e7bbb9..19807087a81 100644
 --- a/src/kosmickrisp/vulkan/kk_device.h
 +++ b/src/kosmickrisp/vulkan/kk_device.h
 @@ -105,6 +105,21 @@ struct kk_device {
@@ -479,7 +687,7 @@ index be4f3e7..1980708 100644
  VK_DEFINE_HANDLE_CASTS(kk_device, vk.base, VkDevice, VK_OBJECT_TYPE_DEVICE)
 diff --git a/src/kosmickrisp/vulkan/kk_nir_lower_xfb.c b/src/kosmickrisp/vulkan/kk_nir_lower_xfb.c
 new file mode 100644
-index 0000000..51049c4
+index 00000000000..51049c4b055
 --- /dev/null
 +++ b/src/kosmickrisp/vulkan/kk_nir_lower_xfb.c
 @@ -0,0 +1,125 @@
@@ -609,7 +817,7 @@ index 0000000..51049c4
 +   return nir_shader_intrinsics_pass(nir, lower, nir_metadata_none, NULL);
 +}
 diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
-index 581df3a..d2854eb 100644
+index 581df3aad0f..d2854eb6e3d 100644
 --- a/src/kosmickrisp/vulkan/kk_physical_device.c
 +++ b/src/kosmickrisp/vulkan/kk_physical_device.c
 @@ -173,6 +173,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
@@ -671,7 +879,7 @@ index 581df3a..d2854eb 100644
  
        /* VK_KHR_vertex_attribute_divisor */
 diff --git a/src/kosmickrisp/vulkan/kk_query_pool.c b/src/kosmickrisp/vulkan/kk_query_pool.c
-index 06176ea..909c8f4 100644
+index 06176ea4994..909c8f41b95 100644
 --- a/src/kosmickrisp/vulkan/kk_query_pool.c
 +++ b/src/kosmickrisp/vulkan/kk_query_pool.c
 @@ -275,6 +275,26 @@ kk_CmdBeginQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
@@ -794,7 +1002,7 @@ index 06176ea..909c8f4 100644
  kk_query_is_available(struct kk_device *dev, struct kk_query_pool *pool,
                        uint32_t query)
 diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
-index b9408d3..e134edb 100644
+index b9408d3687d..b0e01909ced 100644
 --- a/src/kosmickrisp/vulkan/kk_shader.c
 +++ b/src/kosmickrisp/vulkan/kk_shader.c
 @@ -22,6 +22,7 @@
@@ -882,7 +1090,45 @@ index b9408d3..e134edb 100644
        nir_shaders[i] = nir;
     }
  
-@@ -1503,6 +1527,12 @@ kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
+@@ -1319,6 +1343,28 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
+    nir_opt_varyings_bulk(nir_shaders, total_shaders, true, UINT32_MAX,
+                          UINT32_MAX, nir_opts, NULL);
+ 
++   /* limina: per-shader bound on the addressable root-table prefix (see
++    * kk_shader_info::root_used_size). Shaders read root members at static
++    * offsets; without dynamic descriptors nothing past sets[set_layout_count]
++    * is reachable. The synthesized pass-through fragment reads no
++    * descriptors at all. */
++   uint16_t root_bounds[shader_count + 1u];
++   for (uint32_t i = 0u; i < shader_count; ++i) {
++      const struct vk_shader_compile_info *info = &infos[i];
++      bool has_dynamic = false;
++      for (uint32_t s = 0; s < info->set_layout_count; s++) {
++         if (info->set_layouts[s] &&
++             info->set_layouts[s]->dynamic_descriptor_count > 0)
++            has_dynamic = true;
++      }
++      root_bounds[i] =
++         has_dynamic ? sizeof(struct kk_root_descriptor_table)
++                     : offsetof(struct kk_root_descriptor_table, sets) +
++                          info->set_layout_count * sizeof(uint64_t);
++   }
++   root_bounds[shader_count] =
++      offsetof(struct kk_root_descriptor_table, sets);
++
+    for (uint32_t i = 0; i < total_shaders; i++) {
+       struct kk_shader *prev_stage = i > 0 ? shaders[i - 1] : NULL;
+       result =
+@@ -1339,6 +1385,8 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
+ 
+          return result;
+       }
++
++      shaders[i]->info.root_used_size = root_bounds[i];
+    }
+ 
+    /* Compile pipeline:
+@@ -1503,6 +1551,12 @@ kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
     cmd->state.shaders[stage] = shader;
     cmd->state.dirty_shaders |= BITFIELD_BIT(stage);
  
@@ -896,10 +1142,26 @@ index b9408d3..e134edb 100644
     if (stage != MESA_SHADER_VERTEX)
        return;
 diff --git a/src/kosmickrisp/vulkan/kk_shader.h b/src/kosmickrisp/vulkan/kk_shader.h
-index a45bd6c..4f77ee7 100644
+index a45bd6cd7d3..a5104d4687e 100644
 --- a/src/kosmickrisp/vulkan/kk_shader.h
 +++ b/src/kosmickrisp/vulkan/kk_shader.h
-@@ -88,6 +88,11 @@ struct kk_shader_info {
+@@ -52,6 +52,15 @@ struct kk_shader_info {
+    /* Required for fragment shader cull distance discards. */
+    uint8_t num_cull_distances;
+ 
++   /* limina: upper bound (bytes) on the root-descriptor-table prefix this
++    * shader can address — offsetof(sets) + set_layout_count * 8 when the
++    * pipeline layout has no dynamic descriptors (nothing past sets[] is
++    * addressable then), full table size otherwise. 0 = unknown (compiled
++    * without layout info) -> upload the full table. Consumed by
++    * kk_upload_descriptor_root to skip the dynamic_buffers tail (~half the
++    * table) on the per-draw upload. */
++   uint16_t root_used_size;
++
+    union {
+       /* Vertex shader is the pipeline, store all relevant data here. */
+       struct {
+@@ -88,6 +97,11 @@ struct kk_shader_info {
           bool has_ds;
           bool has_depth_write;
           bool has_stencil_test;
@@ -911,7 +1173,7 @@ index a45bd6c..4f77ee7 100644
        } vs;
  
        struct {
-@@ -133,9 +138,36 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_shader, vk.base, VkShaderEXT,
+@@ -133,9 +147,39 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_shader, vk.base, VkShaderEXT,
  
  extern const struct vk_device_shader_ops kk_device_shader_ops;
  
@@ -927,16 +1189,19 @@ index a45bd6c..4f77ee7 100644
 +   return v;
 +}
 +
-+/* limina A/B sizing knob: LIMINA_KK_EARLYZ=1 skips the injected FS depth write
-+ * (msl_ensure_depth_write) and the helper-quad [[sample_mask]] write — both
-+ * force late-Z on Metal, disabling early-Z/HSR for effectively all real
-+ * content. Sizing only until the workarounds' correctness scope is known. */
++/* limina: skip the injected FS depth write (msl_ensure_depth_write) and the
++ * helper-quad [[sample_mask]] write — both force late-Z on Metal, disabling
++ * early-Z/HSR for effectively all real content. Default ON since round 20
++ * (10.9k-case CTS early-Z A/B status-identical + battery clean);
++ * LIMINA_KK_EARLYZ=0 restores the stock blanket injections. */
 +static inline bool
 +kk_limina_earlyz(void)
 +{
 +   static int v = -1;
-+   if (v < 0)
-+      v = getenv("LIMINA_KK_EARLYZ") != NULL;
++   if (v < 0) {
++      const char *e = getenv("LIMINA_KK_EARLYZ");
++      v = !e || e[0] != '0';
++   }
 +   return v;
 +}
 +
@@ -948,7 +1213,7 @@ index a45bd6c..4f77ee7 100644
     switch (robustness) {
     case VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED:
        return nir_address_format_64bit_global_32bit_offset;
-@@ -153,6 +185,9 @@ kk_nir_lower_descriptors(nir_shader *nir,
+@@ -153,6 +197,9 @@ kk_nir_lower_descriptors(nir_shader *nir,
                           uint32_t set_layout_count,
                           struct vk_descriptor_set_layout *const *set_layouts);
  
@@ -959,7 +1224,7 @@ index a45bd6c..4f77ee7 100644
  bool kk_nir_lower_null_images(nir_shader *nir);
  
 diff --git a/src/kosmickrisp/vulkan/meson.build b/src/kosmickrisp/vulkan/meson.build
-index 52f7dbb..79a88cd 100644
+index 52f7dbb0f88..79a88cdbfe1 100644
 --- a/src/kosmickrisp/vulkan/meson.build
 +++ b/src/kosmickrisp/vulkan/meson.build
 @@ -84,6 +84,7 @@ kk_files = files(

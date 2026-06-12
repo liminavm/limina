@@ -1,5 +1,23 @@
+diff --git a/src/kosmickrisp/bridge/mtl_encoder.h b/src/kosmickrisp/bridge/mtl_encoder.h
+index beed5d5fbc5..0d5b48790fa 100644
+--- a/src/kosmickrisp/bridge/mtl_encoder.h
++++ b/src/kosmickrisp/bridge/mtl_encoder.h
+@@ -108,6 +108,13 @@ void mtl_set_vertex_amplification_count(mtl_render_encoder *encoder,
+ void mtl_set_vertex_buffer(mtl_render_encoder *encoder, mtl_buffer *buffer,
+                            uint32_t offset, uint32_t index);
+ 
++/* limina: offset-only rebinds (a buffer must already be bound at index). */
++void mtl_set_vertex_buffer_offset(mtl_render_encoder *encoder, uint32_t offset,
++                                  uint32_t index);
++
++void mtl_set_fragment_buffer_offset(mtl_render_encoder *encoder,
++                                    uint32_t offset, uint32_t index);
++
+ void mtl_set_vertex_bytes(mtl_render_encoder *encoder, const void *bytes,
+                           uint32_t length, uint32_t index);
+ 
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
-index 31c2e49e7a3..70fff130946 100644
+index 31c2e49e7a3..3dc74347f22 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
 +++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
 @@ -277,6 +277,9 @@ kk_cmd_push_descriptors(struct kk_cmd_buffer *cmd,
@@ -12,7 +30,64 @@ index 31c2e49e7a3..70fff130946 100644
     desc->sets[set] = NULL;
     desc->push_dirty |= BITFIELD_BIT(set);
  
-@@ -475,19 +478,58 @@ kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
+@@ -459,13 +462,55 @@ kk_pool_upload(struct kk_cmd_buffer *cmd, const void *data, uint32_t size,
+    return T;
+ }
+ 
++/* limina: upload only the root-table prefix the bound shaders can address
++ * instead of the full ~2.2 KiB table. Zink-shaped pipelines (no dynamic
++ * descriptors) never read past sets[], so the dynamic_buffers tail (~half
++ * the table) is dead weight on a memcpy that runs PER DRAW (every push-
++ * descriptor flush re-dirties the root). Bound comes from the pipeline's
++ * set layouts at compile time (kk_shader_info::root_used_size; 0 = unknown
++ * -> full size). LIMINA_KK_SLIMROOT=0 restores full-size uploads. */
++static inline bool
++kk_limina_slimroot(void)
++{
++   static int v = -1;
++   if (v < 0) {
++      const char *e = getenv("LIMINA_KK_SLIMROOT");
++      v = !e || e[0] != '0';
++   }
++   return v;
++}
++
+ uint64_t
+ kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
+                           VkPipelineBindPoint bind_point)
+ {
+    struct kk_descriptor_state *desc = kk_get_descriptors_state(cmd, bind_point);
+    struct kk_root_descriptor_table *root = &desc->root;
+-   struct kk_ptr root_gpu = kk_pool_upload(cmd, root, sizeof(*root), 8u);
++   uint32_t size = sizeof(*root);
++
++   if (kk_limina_slimroot()) {
++      uint32_t used = 0;
++      if (bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS) {
++         for (unsigned s = 0; s <= MESA_SHADER_FRAGMENT; s++) {
++            struct kk_shader *shader = cmd->state.shaders[s];
++            if (shader == NULL)
++               continue;
++            if (shader->info.root_used_size == 0) {
++               used = 0; /* unknown bound -> full size */
++               break;
++            }
++            used = MAX2(used, shader->info.root_used_size);
++         }
++      } else {
++         struct kk_shader *shader = cmd->state.shaders[MESA_SHADER_COMPUTE];
++         if (shader != NULL)
++            used = shader->info.root_used_size;
++      }
++      if (used != 0)
++         size = MIN2(align(used, 8u), (uint32_t)sizeof(*root));
++   }
++
++   struct kk_ptr root_gpu = kk_pool_upload(cmd, root, size, 8u);
+    if (unlikely(!root_gpu.gpu))
+       return 0u;
+ 
+@@ -475,19 +520,62 @@ kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
     return root_gpu.gpu;
  }
  
@@ -24,8 +99,12 @@ index 31c2e49e7a3..70fff130946 100644
 +kk_limina_slimpush(void)
 +{
 +   static int v = -1;
-+   if (v < 0)
-+      v = getenv("LIMINA_KK_SLIMPUSH") != NULL;
++   if (v < 0) {
++      /* Default ON (round 19; sized by per-set high-water mark, see
++       * limina_used_size); LIMINA_KK_SLIMPUSH=0 restores full-size uploads. */
++      const char *e = getenv("LIMINA_KK_SLIMPUSH");
++      v = !e || e[0] != '0';
++   }
 +   return v;
 +}
 +
@@ -135,3 +214,21 @@ index 741fcc73b5a..03665f8bd75 100644
  };
  
  void kk_push_descriptor_set_update(struct kk_push_descriptor_set *push_set,
+diff --git a/src/kosmickrisp/vulkan/kk_encoder.c b/src/kosmickrisp/vulkan/kk_encoder.c
+index a83a906e1a3..ded5aea4d5c 100644
+--- a/src/kosmickrisp/vulkan/kk_encoder.c
++++ b/src/kosmickrisp/vulkan/kk_encoder.c
+@@ -99,6 +99,13 @@ kk_encoder_start_render(struct kk_cmd_buffer *cmd,
+                             0u, 1u);
+       mtl_set_fragment_buffer(encoder->main.encoder,
+                               dev->samplers.table.bo->map, 0u, 1u);
++
++      /* limina: fresh encoder = fresh binding tables — drop the bind cache. */
++      struct kk_graphics_state *gfx = &cmd->state.gfx;
++      memset(&gfx->bind_cache_v0, 0, sizeof(gfx->bind_cache_v0));
++      memset(&gfx->bind_cache_f0, 0, sizeof(gfx->bind_cache_f0));
++      memset(&gfx->bind_cache_v2, 0, sizeof(gfx->bind_cache_v2));
++      memset(&gfx->bind_cache_f2, 0, sizeof(gfx->bind_cache_f2));
+    }
+    encoder->main.last_used = KK_ENC_RENDER;
+    return encoder->main.encoder;

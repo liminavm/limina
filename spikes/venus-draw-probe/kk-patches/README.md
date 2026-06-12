@@ -29,10 +29,23 @@ with `PATH=/opt/homebrew/opt/llvm/bin:$PATH ninja -C /Volumes/mesa-cs/build-kk`.
   Upstream MR candidate (carries its `[LIMINA-KK-XFB]`/draw probes — strip for upstream).
   Verified end-to-end: xfb-test.c (capture byte-correct, pause/resume appends,
   primitives_written==4) and Firefox WebGL2 aquarium on the seated KK desktop.
-- `kk-perf.patch` — env-knobbed perf changes (`LIMINA_KK_SLIMPUSH` latest-layout push-
+- `kk-perf.patch` — env-knobbed perf changes (`LIMINA_KK_SLIMPUSH` high-water push-
   descriptor sizing + the `LIMINA_KK_STATS` oversize check, `LIMINA_KK_BOCACHE` cmd-pool
-  buffer cache). `LIMINA_KK_NOLISTRESTART`/`LIMINA_KK_EARLYZ` ride in kk-xfb.patch's
-  kk_cmd_draw.c. Knob defaults/verdicts live in `boot-seated-kk.sh`.
+  buffer cache, `LIMINA_KK_SLIMROOT` layout-bounded root-table uploads — upload only
+  the prefix the bound shaders can address, ~900B instead of ~2.2KiB per draw for
+  zink-shaped pipelines; round 28, CTS push/dynamic-offset/vertex-input
+  status-identical A/B). `LIMINA_KK_NOLISTRESTART`/`LIMINA_KK_EARLYZ` ride in
+  kk-xfb.patch's kk_cmd_draw.c, as do the round-28 unconditional CPU fixes
+  (cached `kk_limina_rtlog()` — NEVER getenv per draw, it takes the environ lock —
+  and the per-attribute format-blocksize cache `attrib_elsize_B` refreshed on
+  VI-dirty so per-draw VB rebinds skip the util_format_description chain;
+  `kk_shader_info::root_used_size` plumbing in kk_shader.c/h). Round 28b adds
+  `LIMINA_KK_FASTBIND` (per-encoder bind cache: setBufferOffset / skip instead of
+  full setBuffer for the root idx0 + per-draw-data idx2 binds, and per-draw-data
+  upload dedup — kk_encoder.c invalidates the cache on encoder creation,
+  bridge/mtl_encoder.h declares the offset setters; the setter BODIES ride in
+  kk-probes.patch because mtl_encoder.m lives there). Knob defaults/verdicts
+  live in `boot-seated-kk.sh`.
 - `kk-probes.patch` — `LIMINA_KK_RTLOG`-gated instrumentation only (render-pass/state/
   texture logging in the bridge) plus the `LIMINA_KK_CAPTURE=<width>` +
   `METAL_CAPTURE_ENABLED=1` targeted single-pass Metal GPU capture in `mtl_encoder.m`.

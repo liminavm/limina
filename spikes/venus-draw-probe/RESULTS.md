@@ -1172,3 +1172,171 @@ fence-present stack live).
   /usr/lib64/`. (`ninja uninstall` cleaned the pollution.)
 - zink/gallium load from /opt/mesa-zink (built from ~/mesa, NOT ~/mesa-venus).
   Two trees, two artifacts, two load paths.
+
+## Round 27 (2026-06-11): X11-app-kills-session — repro'd WITH CORES, root-caused, fixed, baked
+
+Mid-battery, the seated session collapsed to gdm. Cores present this time
+(gnome-shell 16M + glmark2-es2 1.1M), so per the standing agreement we chased
+it immediately. gdb on the shell core: SIGSEGV in g_subprocess_wait_async ←
+meta_x11_display_init_frames_client ← Xwayland on-demand startup. Journal had
+the smoking gun: `Could not launch X11 frames client: Failed to execute child
+process "./src/frames/mutter-x11-frames"`.
+
+Two-layer defect:
+1. **Ours**: install-mutter-fix.sh configured the guest mutter build with the
+   default meson prefix → MUTTER_LIBEXECDIR=/usr/local/libexec (empty), and
+   the in-tree fallback path also missed → meta_frame_launch_client → NULL.
+   Fix: `--prefix=/usr --libexecdir=/usr/libexec` (stock Fedora 49.5 ships
+   the same-version frames client there).
+2. **Upstream mutter**: the NULL goes straight into g_subprocess_wait_async →
+   the whole compositor SIGSEGVs the moment ANY X11 client triggers Xwayland.
+   One-line guard added; upstream candidate (patches/mutter/0002).
+
+patches/mutter/ now carries the durable diffs (the #32 stencil fix had lived
+only in the gitignored checkout). Trigger: the flexible /usr/bin/glmark2*
+binaries probe X11 BEFORE wayland — use the *-wayland flavors for batteries.
+Secondary casualty: glmark2 died in zink_kopper_displaytarget_create (NULL
+callback) when the compositor vanished — not chased.
+
+**Verified** (golden + fresh clone): Xwayland up, mutter-x11-frames running
+from /usr/libexec, shell pid unchanged across the X11 trigger. Re-baked into
+dev-enh.raw (third bake boot of the day — and two traps bit on the way: a
+clone answered ssh while the golden boot had actually failed `hv_vm_create`,
+because a plain `cargo build` had replaced the codesigned worker — VmCreate
+failure after a rebuild means RE-SIGN: `crates/limina-vmm/sign.sh debug`; and
+verify the golden is really up with `lsof -p $(pgrep limina-vmm) | grep dev-enh`).
+
+**Battery re-run (fence-present zero-copy stack, knobs via in-code defaults):**
+glmark2-es2-wayland **1807**, glmark2-wayland **1818** (round-15/20 baselines
+1983/1882 and 1852/1944 — flat within noise), vkmark **2801** vs 3266 (-14%).
+vkmark A/B on the copy stack (round-20 present config): **2722** — the
+fence-present stack is EXONERATED (both legs equal); the residual delta vs
+round 20 is unattributed (mutter rebuild or variance), revisit only if a real
+workload shows it. Journal: **0 lines/30s** idle during the battery. Knob
+productization landed (5b09a63): LIMINA_KK_NOLISTRESTART/EARLYZ/BOCACHE/SLIMPUSH
+are now default-ON in KK itself, `=0` opts out; boot-seated-kk.sh passes env
+through. FLUSHDBG/SET_SCANOUT_BLOB worker spam demoted to debug (libkrun 0020).
+
+## Round 28 (2026-06-12): KK dirty-tracking bites — getenv (again), SLIMROOT, elsize cache: rebind leg +81%, ring thread 61%→38% busy
+
+Target: the per-draw descriptor-root re-upload + push-descriptor flush in
+`kk_flush_gfx_state` (~half the replay cost on the hot vkr ring thread; the CPU
+twin of the 3.3× GPU rebind cost). Vehicle: `spikes/kk-draw-bench`
+`--variant fish6u --rebind` (alternating VB/DS binds per draw — the zink-shaped
+worst case; 10k draws × 12 verts), host-only, minutes per iteration.
+
+**Bite 1 — getenv AGAIN (+20%: 930→1117 kdraws/s).** The first `sample` of the
+bench showed `__findenv_locked` as the #1 KK-attributable leaf (806): five raw
+`getenv("LIMINA_KK_RTLOG")` sites in kk_cmd_draw.c, the hot one inside the VI/VB
+branch (per ATTRIBUTE per draw). Round-25's lesson held: leaf counts undercount
+getenv — it takes the environ lock. Fixed with a cached `kk_limina_rtlog()`
+helper. Audited the rest of vulkan/+bridge: remaining raw getenvs are per-query
+/ shader-create / per-pass — cold, left alone.
+
+**Bite 2 — LIMINA_KK_SLIMROOT (+43%: 1117→1591 kdraws/s).** The root descriptor
+table is ~2.2 KiB and was memcpy'd + pool-alloc'd PER DRAW (every push flush
+sets root_dirty), but shaders read root members at STATIC offsets and nothing
+past `sets[set_layout_count]` is addressable unless the pipeline layout has
+dynamic descriptors — `dynamic_buffers[64]` (1 KiB, ~half the table) is dead
+weight for zink-shaped pipelines. New `kk_shader_info::root_used_size`
+(computed in kk_compile_shaders from the set layouts; 0 = unknown → full size;
+the synthesized empty FS gets the minimal bound), consumed in
+kk_upload_descriptor_root as max over bound stages. Default ON, `=0` opts out.
+`LIMINA_KK_SLIMROOT=0` leg reproduces the pre-change number exactly (1111).
+
+**Bite 3 — per-attribute blocksize cache (+6%: 1591→1686 kdraws/s).** The
+VI/VB-dirty branch recomputed `vk_format_to_pipe_format` +
+`util_format_get_blocksize` per attribute per draw (the chain was ~530 leaves
+post-SLIMROOT) for data that only changes with VI state. Cached as
+`gfx->attrib_elsize_B[]`, refreshed under IS_DIRTY(VI) only;
+kk_calculate_vbo_clamp now takes elsize directly. (Existing VI-correctness
+already relied on the same dirty gate, so the cache adds no new staleness
+class.) Non-rebind leg unchanged (3215 vs 3255 — noise).
+
+**Correctness:** CTS A/B (LIMINA_KK_SLIMROOT default vs =0), caselist =
+binding_model push_descriptor + pipeline.monolithic dynamic-offset /
+push-descriptor / push-constant / dynamic-vertex-attribute / vertex-input =
+**14,704 cases, status-identical: 4996 Pass / 9708 Skip / 0 Fail both legs**
+(the elsize cache ran in BOTH legs and 13k vertex-input cases are its surface).
+Soundness notes: the GPU never reads `root_buffer` (CPU bookkeeping written
+back AFTER the upload), so truncation can't clip it; binding a compatible
+super-layout doesn't extend what the PIPELINE's shaders can address; push
+constants sit below `sets[]` and are always uploaded.
+
+**Real stack (seated aquarium, canonical fence-present zero-copy config):**
+10k fish ≈ **598k draws/s ≈ 59fps** (round 25: ~55); hot vkr ring thread
+**38% busy** (round 25: 61% at lower fps) — kk_flush_gfx_state subtree is now
+~19% of kk_queue_submit (was ~50% of replay), root-upload memmove down to ~58
+samples in a 10s capture. limina-vmm 270% at 59fps (vs 242% at ~55fps; more
+frames = more guest+present work — the per-draw replay cost is what fell).
+Battery: glmark2-es2-wayland **1920** (+6% vs round-27 1807), glmark2-wayland
+**1911** (+5% vs 1818), vkmark **2752** (vs 2801, within its known variance).
+
+**Parked:** lever B (route the push-set address out of the root table so the
+root uploads only on REAL state change) — an ABI change to the NIR lowering +
+binding model; with kk_flush_gfx_state down to ~19% of submit its marginal win
+no longer justifies the correctness risk. Revisit only if the ring thread
+re-emerges as the bottleneck.
+
+Patches regenerated: kk-perf.patch (SLIMROOT in kk_cmd_buffer.c),
+kk-xfb.patch (rtlog helper + elsize cache in kk_cmd_draw.c/kk_cmd_buffer.h,
+root_used_size plumbing in kk_shader.c/h). Upstream-queue additions: SLIMROOT
+(layout-bounded root uploads), the elsize cache, and never-getenv-per-draw.
+
+### Round 28 addendum: limina-vmm 274% attribution (user question: "firefox is ~1 core in-guest, why 250%+ host-side?")
+
+Per-thread accounting (`threadacct.py` over a 10s `sample` during the 10k-fish
+aquarium at ~600k draws/s; sums to 2.56 vs ps 2.74 — sampling skew):
+
+| thread group        | cores | what it is |
+|---------------------|-------|------------|
+| fc_vcpu ×4 (guest)  | 1.42  | the guest itself executing (hv_trap): firefox ~1.0 + gnome-shell/Xwayland/kernel/guest-venus ~0.4 |
+| vkr-ring ×10        | 0.70  | venus decode + **KK record-then-replay + Metal encode** — the hottest (firefox's ring) is 0.39 cores, ~92% of it in kk_queue_submit replay (kk_draw/AGX encode now dominates; kk_flush_gfx_state is down to ~18% of the subtree post-SLIMROOT) |
+| vkr-queue ×5        | 0.20  | queue submit / fence retirement threads |
+| misc (Metal, ack)   | 0.15  | Metal internals, shown-ack present plumbing |
+| vcpu exit handling  | 0.07  | device emulation on the vcpu threads |
+
+So ~52% of the 2.7 cores is the guest's own execution (the in-guest ~1-core
+firefox reading EXCLUDES compositor+kernel+driver work that also runs on the
+vcpus), and the single biggest HOST-side offender is the per-draw CPU replay +
+Metal encoding at ~1 µs/draw × 600k draws/s ≈ 0.6 core — matches kk-draw-bench.
+Remaining levers: direct-encode-at-decode (parked round 25, ~0.2 core),
+the per-draw Metal encoder calls themselves (AGX encodeAndEmitRenderState).
+The wait-leaf set for classifying: psynch_cvwait/semwait/poll/read/recvmsg/
+kevent/swtch_pri/mutexwait/workq_kernreturn/mach_msg2_trap; GUEST = hv_trap
+(NOT hv_vcpu_run — the leaf inside Hypervisor.framework is hv_trap).
+
+## Round 28b (2026-06-12): LIMINA_KK_FASTBIND — bind-cache lever built, honest verdict: small (~2%)
+
+Follow-up to the attribution addendum ("what can we improve?"). The remaining
+per-draw Metal traffic was up to 4 setBuffer calls (root at idx0 vertex+frag,
+per-draw data at idx2) + a fresh per-draw-data pool upload. Built
+LIMINA_KK_FASTBIND (default-ON, =0 opts out): per-encoder bind cache in
+kk_graphics_state (zeroed at encoder creation in kk_encoder.c) routes the hot
+binds through setVertexBufferOffset/setFragmentBufferOffset when only the pool
+offset moved (same MTLBuffer — the common case) and skips unchanged binds
+outright; kk_upload_per_draw_data dedups the upload when content is unchanged
+(non-tess draws: only draw_id varies, and only across multidraw — tess never
+matches because it pool-allocs fresh param addresses into the struct).
+
+Numbers: bench rebind leg 1623(off)→1713(on) kdraws/s (+5%, record-side).
+REAL STACK (10k aquarium, same-build knob A/B, 30s-averaged ps): ON 241.4% @
+595k draws/s vs OFF 246.9% @ 598k — **~0.06 core (~2%), barely above noise**.
+⚠️Measurement lesson: the round-28 addendum's 270-274% single-snapshot ps
+readings were WARMUP-INFLATED (firefox page-load/JIT); steady-state on the
+canonical stack is ~245% either way, and threadacct totals (2.56 vs 2.58
+cores) already said the addendum's "0.28-core win" first read was bogus —
+average ps over 30s before believing a delta. CTS: same 14.7k caselist
+status-identical vs the pre-fastbind baseline (4996P/9708S/0F). Kept: small,
+safe, upstream-shaped (the AGX setBuffer path is genuinely heavier than
+setBufferOffset — it's just not where the real-stack time goes).
+
+Where the host CPU actually is now (steady state ~2.45 cores): guest vCPU
+execution ~1.45 (firefox + compositor + guest stack), vkr-ring ~0.67 (replay
++ AGX encodeAndEmitRenderState per draw — the ~1µs/draw floor), vkr-queue
+~0.22, misc ~0.15. Remaining levers, biggest first: (a) mutter DIRECT SCANOUT
+for fullscreen surfaces — would remove the compositor's GL pass from the
+guest 1.45 AND one venus context's ring work (needs the dmabuf/modifier path
+mutter requires for direct scanout on virtio-gpu — tier-2 thread); (b) the
+AGX per-draw encode floor — only ICB/GPU-side encoding or fewer draws moves
+it (guest-visible; parked); (c) replay-elimination (~0.2 core, parked r25).
