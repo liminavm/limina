@@ -1340,3 +1340,60 @@ guest 1.45 AND one venus context's ring work (needs the dmabuf/modifier path
 mutter requires for direct scanout on virtio-gpu — tier-2 thread); (b) the
 AGX per-draw encode floor — only ICB/GPU-side encoding or fewer draws moves
 it (guest-visible; parked); (c) replay-elimination (~0.2 core, parked r25).
+
+## Round 29 (2026-06-12): mutter DIRECT SCANOUT — works end-to-end (2 kernel patches), exposed+fixed a fence-present wedge; honest CPU verdict: small at this workload
+
+Investigated why fullscreen clients never direct-scanout (the round-28b "biggest
+untapped lever"). The gating chain (mutter MUTTER_DEBUG=render narrates every
+frame), walked one gate at a time:
+
+1. **"unredirect inhibited"** — the gate everyone hits first. gnome-shell holds
+   mutter's unredirect inhibitor for: the OVERVIEW (shown at login with no
+   windows!), modals, notification banners, OSK, and EVERY St animation
+   (environment.js wraps transitions). Our kiosk launches via systemd-run carry
+   no XDG activation token → focus-stealing prevention keeps the session AT THE
+   OVERVIEW → permanently inhibited. Diagnosed with a [LIMINA-UNRED] count probe
+   in compositor.c (diagnostic only, reverted). Dismiss programmatically:
+   `gdbus ... org.freedesktop.DBus.Properties.Set org.gnome.Shell
+   OverviewActive "<false>"` (the property is writable!). Real-user sessions
+   don't sit at the overview; kiosk/bench launches DO — measurement gotcha AND
+   a productization TODO (activation token or overview-dismiss in the launcher).
+2. **"DRM format AR24 (0x0) not supported by primary plane"** — two kernel
+   gaps, both ours to fix (patches/linux/):
+   - **0002**: virtio-gpu's primary plane only listed XRGB8888; Firefox's
+     buffers are ARGB8888. Add HOST_ARGB8888 (the translate table already
+     handled it; host present is layer.setOpaque(true) so alpha is ignored —
+     window.rs:230).
+   - **0003**: virtio-gpu set fb_modifiers_not_supported and passed no
+     modifier list → no IN_FORMATS property → mutter's crtc_supports_modifier
+     rejects any buffer with an EXPLICIT modifier — and every venus dmabuf
+     carries explicit LINEAR. Advertise {LINEAR} (core builds IN_FORMATS) and
+     accept modifier-tagged ADDFB2. Upstream candidates, both.
+   With both: **"Assigning scanout to stage view" at 60Hz** — zero-copy
+   client-buffer-to-glass, compositor GL pass gone.
+3. **WEDGE (user-visible hang, root-caused & fixed, libkrun 0021)**: restarting
+   the client under active scanout hard-froze the guest display. mutter keeps
+   flipping the dead client's buffer; its venus context is gone; per-frame
+   present-fence injection fails — and that path LEAKED its cookie into
+   flush_parked_cookies → the next fenced flush's GuestFlushHold contained a
+   cookie that can never present → guest display fence never signals → total
+   scanout pipeline wedge (worker idle in kevent; guest stats frozen; even
+   overview toggle dead). Fix: roll the cookie all the way back on injection
+   failure + a wedge-proof CEILING (every held flush fence completes at
+   creation+500ms via the latch thread, idempotent; stale holds dropped).
+   VERIFIED: client restart under scanout now seamless (scanout re-engages at
+   60Hz, stats flow, no hang).
+
+**CPU verdict (10k aquarium, 30s-avg)**: 238.9% scanout vs 241-247% composited
+— ~0.1 core. threadacct: busy 1.12→1.03, guest ~unchanged. The compositor's
+per-frame cost at this workload was ONE fullscreen-quad pass against firefox's
+10k draws — the round-28b "0.3-0.5 core" estimate was wrong (the non-firefox
+guest slice is kernel/IRQ/Xwayland, not mutter GL). What scanout actually buys:
+GPU-side (no composite into a second buffer), a frame less latency, and it
+scales with how light the client is (video playback >> WebGL stress).
+Two-tier: stock kernels keep composition (correct, degraded); enhanced kernel
+gets scanout.
+
+Loose ends: productize the activation/overview story for launched fullscreen
+apps; consider CTX-death scrubbing of parked cookies (the ceiling covers it);
+the diagnostic mutter probe is reverted (NOT in patches/mutter).
