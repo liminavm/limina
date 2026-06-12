@@ -23,20 +23,34 @@ use limina_proto::{read_message, write_message, Heartbeat, Hello, Message, CHANN
 /// How often the agent emits a HEARTBEAT while the channel is idle.
 const HEARTBEAT_EVERY: Duration = Duration::from_millis(1000);
 
-/// Run the agent until the host orders a shutdown or the channel dies. Returning means
-/// "proceed to power-off" either way.
-pub fn run(port: u32) {
+/// How the agent session ended — the caller's flow depends on it.
+#[derive(PartialEq, Eq)]
+pub enum AgentEnd {
+    /// The host ordered SHUTDOWN (acked): power off NOW, regardless of other cmdline
+    /// modes (`limina.hold` etc.).
+    Shutdown,
+    /// The channel ended without a shutdown order (host gone, connect/protocol failure):
+    /// fall through to the init's normal flow.
+    Disconnected,
+}
+
+/// Run the agent until the host orders a shutdown or the channel dies.
+pub fn run(port: u32) -> AgentEnd {
     let Some(mut stream) = connect(port) else {
         super::klog(b"[limina-init] agent: vsock connect failed");
-        return;
+        return AgentEnd::Disconnected;
     };
-    match serve(&mut stream) {
-        Ok(()) => {}
-        Err(_) => super::klog(b"[limina-init] agent: channel error; proceeding to power-off"),
-    }
+    let end = match serve(&mut stream) {
+        Ok(end) => end,
+        Err(_) => {
+            super::klog(b"[limina-init] agent: channel error; proceeding to power-off");
+            AgentEnd::Disconnected
+        }
+    };
     // Give the just-written final frame (SHUTDOWN_ACK) a moment to drain through the
     // virtio queue + host muxer before PID 1 yanks the machine down with reboot(2).
     unsafe { super::sleep_ms(50) };
+    end
 }
 
 /// Connect to `CID_HOST:port` with a brief retry (the host listener + libkrun muxer may
@@ -69,8 +83,8 @@ fn connect(port: u32) -> Option<File> {
     }
 }
 
-/// The control loop. `Ok(())` = orderly end (SHUTDOWN acked, or the host hung up).
-fn serve(stream: &mut File) -> std::io::Result<()> {
+/// The control loop. `Ok(_)` = orderly end (SHUTDOWN acked, or the host hung up).
+fn serve(stream: &mut File) -> std::io::Result<AgentEnd> {
     let pagesize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
     write_message(
         stream,
@@ -96,9 +110,9 @@ fn serve(stream: &mut File) -> std::io::Result<()> {
         }
         match read_message(stream) {
             Ok((_, Message::Shutdown(_))) => {
-                // Ack, then return — PID 1 falls through to its power-off path.
+                // Ack, then return — PID 1 powers off immediately.
                 let _ = write_message(stream, CHANNEL_CONTROL, &Message::ShutdownAck);
-                return Ok(());
+                return Ok(AgentEnd::Shutdown);
             }
             Ok((_, Message::Unknown { msg_type, .. })) => {
                 // Never fatal: report and keep serving.
@@ -111,7 +125,7 @@ fn serve(stream: &mut File) -> std::io::Result<()> {
             // Nonsensical from a host; ignore rather than die.
             Ok((_, Message::Hello(_))) | Ok((_, Message::ShutdownAck)) => {}
             // Host hung up: orderly end (the supervisor side owns forcing teardown).
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(()),
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(AgentEnd::Disconnected),
             Err(e) => return Err(e),
         }
     }

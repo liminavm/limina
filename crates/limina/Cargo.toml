@@ -22,6 +22,10 @@ log        = { workspace = true }
 # so this pulls in no libkrun/bindgen; only the worker enables the krun_input backends).
 limina-input = { workspace = true }
 
+# The host<->guest control-plane wire protocol (M5/D8): the supervisor owns the host side
+# of the guest-agent channel (HELLO/WELCOME, heartbeats, orderly SHUTDOWN).
+limina-proto = { workspace = true }
+
 # Native window (decision D3: the UI lives in the supervisor). Looks up the worker's
 # shared IOSurface by id and shows it via CALayer.contents; an NSTimer on the main thread
 # polls state updated by the control-channel reader thread.

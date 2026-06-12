@@ -393,6 +393,7 @@ dependencies = [
  "clap",
  "env_logger",
  "limina-input",
+ "limina-proto",
  "libc",
  "log",
  "objc2",

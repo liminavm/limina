@@ -203,6 +203,7 @@ pub fn run(
     worker_pid: i32,
     input: InputSinks,
     ack_fd: RawFd,
+    control: Option<crate::control::ControlPlane>,
 ) -> ! {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
@@ -423,16 +424,51 @@ pub fn run(
     });
     APPLY_HOOK.with(|h| *h.borrow_mut() = Some(apply.clone()));
 
+    // Quit escalation state: set when the user closed the window / hit Ctrl-C and we asked
+    // the guest agent to power off; reaching the deadline falls back to SIGKILL.
+    let quit_deadline: Cell<Option<std::time::Instant>> = Cell::new(None);
+
     let timer_cursor = host_cursor.clone();
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         let exited = shared.lock().unwrap().worker_exited;
 
-        // Quit when the worker is gone, the user closed the window, or Ctrl-C was hit:
-        // kill the worker's whole process group and exit now.
-        if exited || crate::supervisor::stop_requested() || !window.isVisible() {
+        // Worker gone (guest powered off, orderly or not): net any process-group
+        // stragglers and exit.
+        if exited {
             unsafe { libc::kill(-worker_pid, libc::SIGKILL) };
             crate::gateway::cleanup();
+            crate::control::cleanup();
             std::process::exit(0);
+        }
+
+        // The user closed the window or hit Ctrl-C: prefer an orderly guest power-off via
+        // the agent control plane (window-close = the M2 orderly-shutdown clause); without
+        // an agent — or once the grace runs out — kill the worker's process group.
+        if crate::supervisor::stop_requested() || !window.isVisible() {
+            let force_now = match quit_deadline.get() {
+                None => {
+                    let orderly = control
+                        .as_ref()
+                        .map(|c| c.request_shutdown(crate::control::AGENT_GRACE))
+                        .unwrap_or(false);
+                    if orderly {
+                        log::info!("window closed → asked the guest agent to power off");
+                        quit_deadline.set(Some(
+                            std::time::Instant::now() + crate::control::AGENT_GRACE,
+                        ));
+                        false
+                    } else {
+                        true
+                    }
+                }
+                Some(d) => std::time::Instant::now() >= d,
+            };
+            if force_now {
+                unsafe { libc::kill(-worker_pid, libc::SIGKILL) };
+                crate::gateway::cleanup();
+                crate::control::cleanup();
+                std::process::exit(0);
+            }
         }
 
         // Guest cursor shape first — it has its own gen so a shape change (or hide)
@@ -499,6 +535,7 @@ pub fn run(
     // The run loop only returns if AppKit tears down unexpectedly; the timer is what
     // normally exits us. Either way, don't fall through.
     crate::gateway::cleanup();
+    crate::control::cleanup();
     std::process::exit(0);
 }
 

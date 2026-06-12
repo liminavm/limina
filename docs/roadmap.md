@@ -221,8 +221,11 @@ crisp hardware cursor. What shipped, and where it differs from the plan below:
   positions are ignored — guest-initiated warps are the known gap, revisit with pointer capture
   (M8). User-verified.
 
-**Remaining to formally close M2:** verify the Done-test's *window-close → orderly guest shutdown*
-clause (stock guest: SIGKILL fallback; enhanced tier: agent).
+**Remaining to formally close M2:** ~~verify the Done-test's *window-close → orderly guest
+shutdown* clause~~ — implemented 2026-06-12 via the M5 control plane (window-close sends the
+agent SHUTDOWN, falls back to SIGKILL for stock guests; `l1_shutdown` asserts the orderly
+ladder headlessly). M2 is closed; the windowed variant gets an eyeball once a Fedora guest
+runs the real agent.
 
 **Goal:** A native macOS window shows the guest framebuffer (2D scanout) and a keyboard + pointer
 work. Fedora boots to a graphical login (llvmpipe/software GL is fine — 3D is M4).
@@ -703,6 +706,19 @@ holds at the display refresh at Retina resolution.
 
 **Goal:** Bidirectional text clipboard, a host folder shared into the guest, and a versioned
 control channel between limina and a guest agent.
+
+**Status: 🚧 started 2026-06-12 — task 1's control plane is LIVE.** `crates/limina-proto`
+(16-byte `LIMINA` frame header + CBOR/minicbor payloads; HELLO/WELCOME/HEARTBEAT/SHUTDOWN/
+SHUTDOWN_ACK/ERROR; unknown types → `ERR_UNSUPPORTED`, never fatal); the L1 guest agent
+(`guest/limina-init` `agent` module) speaks it; and the **supervisor owns the host side by
+default** (binds a private control socket at the well-known `CONTROL_PORT`, serves the
+handshake, and turns **window-close/SIGTERM into an orderly guest power-off**: SHUTDOWN →
+5s agent grace → power-button SIGTERM → SIGKILL — closing M2's orderly-shutdown clause for
+agent guests). Explicit `--vsock-*` still passes the raw plumbing through (the harness
+drives the protocol itself that way). Tests: limina-proto L0; `l1_agent` (protocol
+end-to-end through the shipped binaries); `l1_shutdown` (the supervisor-owned orderly
+path, exit 0 unforced in <5s). Next: heartbeat-liveness surfacing, the real `limina-agent`
+binary + delivery (sysext, below), then clipboard/virtiofs.
 
 **Key tasks:**
 1. **Guest agent + vsock control plane.** One multiplexed control connection over a single

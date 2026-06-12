@@ -198,6 +198,10 @@ pub struct GuestConfig {
     /// Attach a user-mode NAT NIC (the supervisor spawns + supervises a gvproxy gateway and
     /// captures its `-debug` packet log — the host-side network oracle). See [`Guest::wait_for_gateway_log`].
     pub net: bool,
+    /// Capture the supervisor's own stderr (its log) to a scratch file instead of letting
+    /// it flow to the test's stderr — for asserting on supervisor-side events (e.g. the
+    /// control plane's "guest agent connected"). See [`Guest::wait_for_supervisor_log`].
+    pub supervisor_log: bool,
 }
 
 impl GuestConfig {
@@ -239,6 +243,7 @@ impl GuestConfig {
             console_input: false,
             console_channel: ConsoleChannel::Virtio,
             net: false,
+            supervisor_log: false,
         })
     }
 
@@ -278,6 +283,7 @@ impl GuestConfig {
             console_input: false,
             console_channel: ConsoleChannel::Virtio,
             net: false,
+            supervisor_log: false,
         })
     }
 
@@ -329,6 +335,7 @@ impl GuestConfig {
             console_input: false,
             console_channel: ConsoleChannel::Virtio,
             net: false,
+            supervisor_log: false,
         })
     }
 
@@ -367,7 +374,8 @@ impl GuestConfig {
 
     /// Enable the guest vsock agent on `port`: the host listens on a UNIX socket and the
     /// kernel cmdline gets `limina.agent_port=<port>` so the init runs the agent. Kernel
-    /// boot only (the L1 guest).
+    /// boot only (the L1 guest). The HARNESS drives the host side of the protocol
+    /// (`agent_accept`) — limina passes the vsock plumbing through and stays out of it.
     pub fn with_vsock(mut self, port: u32) -> GuestConfig {
         let socket_path = std::env::temp_dir().join(format!(
             "limina-vsock-{}-{}.sock",
@@ -378,6 +386,26 @@ impl GuestConfig {
             cmdline.push_str(&format!(" limina.agent_port={port}"));
         }
         self.vsock = Some(VsockCfg { port, socket_path });
+        self
+    }
+
+    /// Run the guest agent against the **supervisor-owned** control plane (the product
+    /// path): append the `limina.agent_port=` cmdline token at the well-known
+    /// [`limina_proto::CONTROL_PORT`] WITHOUT binding a harness-side socket — limina itself
+    /// binds the control socket and serves HELLO/WELCOME/SHUTDOWN. Direct-kernel boots only.
+    pub fn with_control_agent(mut self) -> GuestConfig {
+        match &mut self.boot {
+            Boot::Kernel { cmdline, .. } | Boot::KernelDisk { cmdline, .. } => {
+                cmdline.push_str(&format!(" limina.agent_port={}", limina_proto::CONTROL_PORT));
+            }
+            Boot::Firmware { .. } => {}
+        }
+        self
+    }
+
+    /// Capture the supervisor's stderr (its log) into the scratch dir for assertions.
+    pub fn with_supervisor_log(mut self) -> GuestConfig {
+        self.supervisor_log = true;
         self
     }
 
@@ -464,6 +492,8 @@ pub struct Guest {
     console_in: Option<fs::File>,
     /// Path to the gvproxy gateway's `-debug` log (inside `scratch`), if net was enabled.
     gateway_log: Option<PathBuf>,
+    /// Path to the captured supervisor stderr (inside `scratch`), if enabled.
+    supervisor_log: Option<PathBuf>,
     /// Set once teardown has run, so Drop doesn't double-kill.
     torn_down: bool,
 }
@@ -685,8 +715,18 @@ impl Guest {
             None
         };
 
-        // Let supervisor/worker logs flow to the test's stderr (visible with --nocapture).
+        // Supervisor/worker logs: flow to the test's stderr by default (visible with
+        // --nocapture); captured to a scratch file when the test asserts on them.
         cmd.stdin(Stdio::null());
+        let supervisor_log = if cfg.supervisor_log {
+            let path = scratch.join("supervisor.log");
+            let file = fs::File::create(&path)
+                .with_context(|| format!("creating supervisor log {path:?}"))?;
+            cmd.stderr(Stdio::from(file));
+            Some(path)
+        } else {
+            None
+        };
 
         let child = cmd
             .spawn()
@@ -704,6 +744,7 @@ impl Guest {
             capture_png,
             console_in,
             gateway_log,
+            supervisor_log,
             torn_down: false,
         })
     }
@@ -842,6 +883,47 @@ impl Guest {
             .and_then(|p| fs::read(p).ok())
             .map(|b| String::from_utf8_lossy(&b).into_owned())
             .unwrap_or_default()
+    }
+
+    /// Current captured supervisor log text (lossy UTF-8; empty if not captured / nothing
+    /// yet). Requires [`GuestConfig::with_supervisor_log`].
+    pub fn supervisor_log(&self) -> String {
+        self.supervisor_log
+            .as_ref()
+            .and_then(|p| fs::read(p).ok())
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default()
+    }
+
+    /// Block until `needle` appears in the supervisor's log, or `timeout` elapses, or the
+    /// supervisor exits early. Requires [`GuestConfig::with_supervisor_log`].
+    pub fn wait_for_supervisor_log(&mut self, needle: &str, timeout: Duration) -> Result<()> {
+        anyhow::ensure!(
+            self.supervisor_log.is_some(),
+            "no supervisor log (use GuestConfig::with_supervisor_log)"
+        );
+        let deadline = Instant::now() + timeout;
+        loop {
+            let log = self.supervisor_log();
+            if log.contains(needle) {
+                return Ok(());
+            }
+            if let Some(status) = self.child.try_wait().context("polling supervisor")? {
+                bail!(
+                    "supervisor exited ({status}) before its log showed {needle:?}.\n\
+                     --- supervisor log tail ---\n{}",
+                    tail(&log, 20)
+                );
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "timed out after {timeout:?} waiting for {needle:?} in the supervisor log.\n\
+                     --- supervisor log tail ---\n{}",
+                    tail(&log, 20)
+                );
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     /// Block until `needle` appears in the gvproxy gateway log, or `timeout` elapses, or the

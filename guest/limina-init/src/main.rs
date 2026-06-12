@@ -21,7 +21,11 @@ fn main() {
     mount_pseudo_fs();
     announce();
     if let Some(port) = agent_port_from_cmdline() {
-        agent::run(port);
+        // A host-ordered SHUTDOWN powers off NOW — it must override `limina.hold` (the
+        // whole point is that closing the window ends a held/animating guest).
+        if agent::run(port) == agent::AgentEnd::Shutdown {
+            power_off();
+        }
     }
     // `limina.console_echo`: prove the serial console works both ways for the host harness —
     // echo each line back as `ECHO:<line>` until `QUIT`. The seed of typing commands at the

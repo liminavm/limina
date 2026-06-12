@@ -48,6 +48,10 @@ pub const HEADER_LEN: usize = 16;
 pub const MAX_PAYLOAD: u32 = 1 << 20;
 /// The control channel (HELLO/WELCOME/HEARTBEAT/SHUTDOWN live here).
 pub const CHANNEL_CONTROL: u32 = 0;
+/// The well-known guest vsock port of the control plane (`b"LIMI"` big-endian — vsock
+/// ports are a flat u32 space, so a distinctive value just avoids collisions). The
+/// supervisor listens here by default; agents connect to `CID_HOST:CONTROL_PORT`.
+pub const CONTROL_PORT: u32 = u32::from_be_bytes(MAGIC);
 
 /// Error code: the peer received a message type it does not implement (not fatal).
 pub const ERR_UNSUPPORTED: u32 = 1;

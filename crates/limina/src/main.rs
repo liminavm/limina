@@ -8,6 +8,7 @@
 //! power-off on Ctrl-C, force-kill on timeout, report when the VM stops). The
 //! AppKit UI grows on top of this supervisor later.
 
+mod control;
 mod gateway;
 mod supervisor;
 mod window;
@@ -173,12 +174,36 @@ fn main() -> Result<()> {
     if cli.read_only {
         args.push("--read-only".into());
     }
-    if let (Some(port), Some(socket)) = (&cli.vsock_port, &cli.vsock_socket) {
+    // Guest-agent control plane (M5/D8). Two modes:
+    //  - explicit --vsock-* given (the test harness driving the protocol itself): pass the
+    //    raw plumbing through and do NOT run our own host side;
+    //  - otherwise (the product default): the supervisor owns the channel — bind a private
+    //    control socket, wire the worker's vsock device at the well-known CONTROL_PORT,
+    //    and serve HELLO/WELCOME/heartbeats. Guests without an agent simply never connect;
+    //    guests with one get orderly SHUTDOWN on window-close/SIGTERM.
+    let control = if let (Some(port), Some(socket)) = (&cli.vsock_port, &cli.vsock_socket) {
         args.push("--vsock-port".into());
         args.push(port.to_string());
         args.push("--vsock-socket".into());
         args.push(path_arg(socket)?);
-    }
+        None
+    } else {
+        let socket = std::env::temp_dir().join(format!("limina-ctrl-{}.sock", std::process::id()));
+        match control::ControlPlane::start(&socket) {
+            Ok(cp) => {
+                args.push("--vsock-port".into());
+                args.push(limina_proto::CONTROL_PORT.to_string());
+                args.push("--vsock-socket".into());
+                args.push(path_arg(&socket)?);
+                Some(cp)
+            }
+            Err(e) => {
+                // The VM is fully usable without the control plane; degrade, don't die.
+                log::warn!("control plane disabled: {e:#}");
+                None
+            }
+        }
+    };
     if let Some(console) = &cli.console {
         args.push("--console".into());
         args.push(path_arg(console)?);
@@ -223,7 +248,7 @@ fn main() -> Result<()> {
     // from the worker over a control socketpair (the worker publishes shared IOSurfaces).
     if cli.window {
         let (width, height) = parse_display_size(&cli.display_size)?;
-        return run_windowed(vmm_bin, args, grace, width, height, gateway);
+        return run_windowed(vmm_bin, args, grace, width, height, gateway, control);
     }
 
     if let Some(display_capture) = &cli.display_capture {
@@ -239,9 +264,11 @@ fn main() -> Result<()> {
         shutdown_grace: grace,
     };
 
-    let code = supervisor::run(&spec)?;
-    // Explicit: process::exit skips destructors, so tear the gateway down before exiting.
+    let code = supervisor::run(&spec, control.as_ref())?;
+    // Explicit: process::exit skips destructors, so tear the gateway + control socket
+    // down before exiting.
     drop(gateway);
+    control::cleanup();
     std::process::exit(code);
 }
 
@@ -255,6 +282,7 @@ fn run_windowed(
     width: u32,
     height: u32,
     gateway: Option<gateway::Gateway>,
+    control: Option<control::ControlPlane>,
 ) -> Result<()> {
     use objc2::MainThreadMarker;
 
@@ -318,16 +346,19 @@ fn run_windowed(
     window::spawn_reader(sup_fd, shared.clone());
 
     // Monitor the worker on a background thread; when it exits on its own (guest
-    // power-off), mark the state so the window loop notices and quits.
+    // power-off), mark the state so the window loop notices and quits. The monitor also
+    // reacts to Ctrl-C/SIGTERM with the same agent-first ladder as the window loop.
     let shared_for_monitor = shared.clone();
+    let control_for_monitor = control.clone();
     std::thread::spawn(move || {
-        let _ = supervisor::monitor(child, grace);
+        let _ = supervisor::monitor(child, grace, control_for_monitor.as_ref());
         window::mark_worker_exited(&shared_for_monitor);
     });
 
-    // Runs the AppKit window on this (main) thread; never returns — on quit it kills the
-    // worker process group and exits. The window captures NSEvents and writes evdev events
-    // to the supervisor ends of the input channels.
+    // Runs the AppKit window on this (main) thread; never returns — on quit it asks the
+    // guest agent to power off (orderly), falling back to killing the worker process
+    // group. The window captures NSEvents and writes evdev events to the supervisor ends
+    // of the input channels.
     window::run(
         shared,
         mtm,
@@ -337,6 +368,7 @@ fn run_windowed(
             ptr_fd: ptr_sup_fd,
         },
         ack_fd,
+        control,
     );
 }
 

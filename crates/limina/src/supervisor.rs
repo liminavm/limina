@@ -92,23 +92,51 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<std::proce
 
 /// Monitor an already-spawned worker until it exits, honoring the stop signal and grace
 /// period. Returns the process exit code (or `128 + signal`).
-pub fn monitor(mut child: std::process::Child, grace: Duration) -> Result<i32> {
+///
+/// Shutdown ladder on SIGINT/SIGTERM: ask the guest **agent** over the control plane
+/// (orderly, the guest runs its own shutdown path) → after [`crate::control::AGENT_GRACE`]
+/// fall back to SIGTERM → worker → shutdown eventfd → GPIO power button (stock guests with
+/// no agent — most ignore it too) → after `grace`, SIGKILL.
+pub fn monitor(
+    mut child: std::process::Child,
+    grace: Duration,
+    control: Option<&crate::control::ControlPlane>,
+) -> Result<i32> {
     let pid = child.id() as libc::pid_t;
     let mut shutdown_at: Option<Instant> = None;
+    let mut sigterm_sent = false;
     loop {
         if let Some(status) = child.try_wait().context("polling worker")? {
             return Ok(report_exit(status));
         }
 
         if STOP.load(Ordering::SeqCst) && shutdown_at.is_none() {
-            log::info!("shutdown requested → asking guest to power off");
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
+            let orderly = control
+                .map(|c| c.request_shutdown(crate::control::AGENT_GRACE))
+                .unwrap_or(false);
+            if orderly {
+                log::info!("shutdown requested → asking the guest agent to power off");
+            } else {
+                log::info!("shutdown requested → asking guest to power off");
+                unsafe {
+                    libc::kill(pid, libc::SIGTERM);
+                }
+                sigterm_sent = true;
             }
             shutdown_at = Some(Instant::now());
         }
 
         if let Some(t) = shutdown_at {
+            if !sigterm_sent && t.elapsed() >= crate::control::AGENT_GRACE {
+                log::warn!(
+                    "agent did not power the guest off within {:?}; falling back to the power button",
+                    crate::control::AGENT_GRACE
+                );
+                unsafe {
+                    libc::kill(pid, libc::SIGTERM);
+                }
+                sigterm_sent = true;
+            }
             if t.elapsed() >= grace {
                 log::warn!("guest did not power off within {grace:?}; forcing (SIGKILL)");
                 let _ = child.kill();
@@ -127,9 +155,9 @@ pub fn stop_requested() -> bool {
 }
 
 /// Spawn and supervise the worker until it exits (headless/non-windowed path).
-pub fn run(spec: &WorkerSpec) -> Result<i32> {
+pub fn run(spec: &WorkerSpec, control: Option<&crate::control::ControlPlane>) -> Result<i32> {
     let child = spawn_worker(spec, &[])?;
-    monitor(child, spec.shutdown_grace)
+    monitor(child, spec.shutdown_grace, control)
 }
 
 fn report_exit(status: ExitStatus) -> i32 {
