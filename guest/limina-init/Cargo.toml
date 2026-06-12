@@ -1,8 +1,6 @@
-# limina's guest test init — PID 1 for the L1 tiny guest.
-#
-# Standalone workspace (NOT a member of the host workspace at the repo root): it builds
-# for aarch64-unknown-linux-musl, so it must stay out of host `cargo build --workspace`.
-# Built via scripts/build-test-guest.sh. This is also the seed of the future limina-agent.
+# limina's guest test init — PID 1 for the L1 tiny guest (member of the guest/ workspace).
+# Built via scripts/build-test-guest.sh. Hosts the in-init agent seed; the PRODUCT agent
+# is the sibling limina-agent crate.
 [package]
 name = "limina-init"
 version = "0.1.0"
@@ -18,13 +16,3 @@ libc = "0.2"
 # The host<->guest control-plane wire protocol (path dep into the host workspace's crate;
 # std-portable, builds for aarch64-unknown-linux-musl).
 limina-proto = { path = "../../crates/limina-proto" }
-
-# Tiny, panic-free PID 1: abort (never unwind past main), optimize for size.
-[profile.release]
-panic = "abort"
-opt-level = "z"
-lto = true
-strip = true
-codegen-units = 1
-
-[workspace]

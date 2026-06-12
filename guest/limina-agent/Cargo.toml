@@ -1,0 +1,18 @@
+# limina-agent — the product guest agent (control-plane daemon for real distro guests).
+#
+# Runs as a systemd unit (see limina-agent.service), connects out to the host at the
+# well-known control port, and serves the limina-proto channel: HELLO facts, heartbeats,
+# orderly SHUTDOWN. Static musl binary so one artifact works on any aarch64 guest.
+[package]
+name = "limina-agent"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-only WITH LicenseRef-limina-exception"
+
+[[bin]]
+name = "limina-agent"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+limina-proto = { path = "../../crates/limina-proto" }

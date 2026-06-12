@@ -1,0 +1,22 @@
+# limina-agent — the limina guest agent (control plane over vsock).
+#
+# Hand-install (until the sysext guest-tools image exists):
+#   install -m755 limina-agent /usr/local/bin/limina-agent
+#   install -m644 limina-agent.service /etc/systemd/system/limina-agent.service
+#   systemctl enable --now limina-agent
+# (scripts/install-guest-agent.sh does this over SSH.)
+[Unit]
+Description=limina guest agent (host control plane)
+# vsock is compiled into the guest kernels we care about; no network dependency.
+After=basic.target
+
+[Service]
+ExecStart=/usr/local/bin/limina-agent
+# The agent reconnects on its own; Restart is the outer safety net (crash, OOM).
+Restart=always
+RestartSec=2
+# Runs as root: SHUTDOWN needs `systemctl poweroff`, later channels stay system-level
+# (clipboard's per-user piece will be a separate session helper).
+
+[Install]
+WantedBy=multi-user.target

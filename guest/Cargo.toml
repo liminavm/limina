@@ -1,0 +1,20 @@
+# limina's guest-side workspace — binaries that run INSIDE the Linux guest.
+#
+# Standalone workspace (NOT part of the host workspace at the repo root): everything here
+# builds for aarch64-unknown-linux-musl (see .cargo/config.toml — rust-lld, no C
+# toolchain), so it must stay out of host `cargo build --workspace`.
+#
+# Members:
+#  - limina-init:  PID 1 of the L1 test guest (also hosts the in-init agent seed).
+#  - limina-agent: the product guest agent (control plane daemon for real distros).
+[workspace]
+resolver = "2"
+members = ["limina-init", "limina-agent"]
+
+# Tiny, panic-free static binaries: abort (never unwind), optimize for size.
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1

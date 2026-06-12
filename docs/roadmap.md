@@ -715,10 +715,16 @@ default** (binds a private control socket at the well-known `CONTROL_PORT`, serv
 handshake, and turns **window-close/SIGTERM into an orderly guest power-off**: SHUTDOWN →
 5s agent grace → power-button SIGTERM → SIGKILL — closing M2's orderly-shutdown clause for
 agent guests). Explicit `--vsock-*` still passes the raw plumbing through (the harness
-drives the protocol itself that way). Tests: limina-proto L0; `l1_agent` (protocol
-end-to-end through the shipped binaries); `l1_shutdown` (the supervisor-owned orderly
-path, exit 0 unforced in <5s). Next: heartbeat-liveness surfacing, the real `limina-agent`
-binary + delivery (sysext, below), then clipboard/virtiofs.
+drives the protocol itself that way). The **product `limina-agent` daemon ships too**
+(`guest/limina-agent`, a musl static binary + `limina-agent.service`): reconnect-forever loop,
+poll-driven heartbeats, SHUTDOWN → `systemctl poweroff` (raw `reboot(2)` fallback);
+installed via `scripts/install-guest-agent.sh` and **baked into the dev-enh golden image**
+— window-close on the seated desktop is now a verified orderly GNOME power-off (~1s,
+exit 0). Tests: limina-proto L0; `l1_agent` (protocol end-to-end through the shipped
+binaries); `l1_shutdown` (the supervisor-owned orderly path, exit 0 unforced in <5s);
+`l1_real_agent` (the product daemon, zero-config port + agent-driven power-off). Next:
+heartbeat-liveness surfacing, guest-tools delivery (sysext, below), then
+clipboard/virtiofs.
 
 **Key tasks:**
 1. **Guest agent + vsock control plane.** One multiplexed control connection over a single

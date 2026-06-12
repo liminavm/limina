@@ -50,17 +50,22 @@ MAGIC=$(dd if="$OUT/Image" bs=1 skip=56 count=4 2>/dev/null)
 [ "$MAGIC" = "ARMd" ] || { echo "Image lacks arm64 magic (got '$MAGIC')" >&2; exit 1; }
 echo "    -> $OUT/Image ($(wc -c < "$OUT/Image") bytes, arm64 magic OK)"
 
-echo "==> building limina-init (aarch64-unknown-linux-musl, static, rust-lld)"
-( cd guest/limina-init && cargo build --release )
-INIT="guest/limina-init/target/aarch64-unknown-linux-musl/release/limina-init"
+echo "==> building the guest workspace (aarch64-unknown-linux-musl, static, rust-lld)"
+( cd guest && cargo build --release )
+GUEST_BIN="guest/target/aarch64-unknown-linux-musl/release"
+INIT="$GUEST_BIN/limina-init"
+AGENT="$GUEST_BIN/limina-agent"
 [ -x "$INIT" ] || { echo "limina-init not built at $INIT" >&2; exit 1; }
+[ -x "$AGENT" ] || { echo "limina-agent not built at $AGENT" >&2; exit 1; }
 
-echo "==> staging rootfs (/init + /dev mountpoint) for virtio-fs root"
+echo "==> staging rootfs (/init + /limina-agent + /dev mountpoint) for virtio-fs root"
 ROOTFS="$OUT/rootfs"
 rm -rf "$ROOTFS"
 mkdir -p "$ROOTFS/dev" "$ROOTFS/proc"    # mountpoints; limina-init mounts devtmpfs + procfs
 install -m 0755 "$INIT" "$ROOTFS/init"
-echo "    -> $ROOTFS (init $(wc -c < "$ROOTFS/init") bytes)"
+# The PRODUCT agent, staged so L1 can exercise the real binary (cmdline limina.real_agent).
+install -m 0755 "$AGENT" "$ROOTFS/limina-agent"
+echo "    -> $ROOTFS (init $(wc -c < "$ROOTFS/init") bytes, agent $(wc -c < "$ROOTFS/limina-agent") bytes)"
 
 echo "==> L1 guest ready:"
 echo "    kernel = $OUT/Image"

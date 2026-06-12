@@ -409,6 +409,19 @@ impl GuestConfig {
         self
     }
 
+    /// Append a whitespace-separated token to the kernel cmdline (direct-kernel boots
+    /// only) — e.g. a `limina.*` mode flag the guest init understands.
+    pub fn with_cmdline_token(mut self, token: &str) -> GuestConfig {
+        match &mut self.boot {
+            Boot::Kernel { cmdline, .. } | Boot::KernelDisk { cmdline, .. } => {
+                cmdline.push(' ');
+                cmdline.push_str(token);
+            }
+            Boot::Firmware { .. } => {}
+        }
+        self
+    }
+
     /// Enable an interactive console: the harness feeds the guest console input via a FIFO
     /// (see [`Guest::console_send`]) on top of capturing output. Pair with a guest that
     /// reads the console — e.g. the L1 init's echo mode (`limina.console_echo`).

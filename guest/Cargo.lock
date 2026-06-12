@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "limina-agent"
+version = "0.1.0"
+dependencies = [
+ "limina-proto",
+ "libc",
+]
+
+[[package]]
 name = "limina-init"
 version = "0.1.0"
 dependencies = [

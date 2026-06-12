@@ -27,6 +27,16 @@ fn main() {
             power_off();
         }
     }
+    // `limina.real_agent`: spawn the PRODUCT agent binary (staged at /limina-agent by
+    // build-test-guest.sh) — the L1 vehicle for testing the real limina-agent end-to-end.
+    // It owns the control channel and powers the guest off itself on SHUTDOWN (via raw
+    // reboot(2) here; no systemd in this world). Init carries on (typically `limina.hold`).
+    if cmdline_has("limina.real_agent") {
+        match std::process::Command::new("/limina-agent").spawn() {
+            Ok(_) => klog(b"[limina-init] spawned /limina-agent"),
+            Err(_) => klog(b"[limina-init] failed to spawn /limina-agent"),
+        }
+    }
     // `limina.console_echo`: prove the serial console works both ways for the host harness —
     // echo each line back as `ECHO:<line>` until `QUIT`. The seed of typing commands at the
     // guest and reading their output. Runs to completion, then falls through to power-off.

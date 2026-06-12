@@ -19,7 +19,12 @@ fail() {
 # --- rustfmt: build-free and fast, so check every workspace we own. ---
 echo "pre-commit: cargo fmt --check (all crates)"
 cargo fmt --check || fail "rustfmt — run 'cargo fmt'"
-cargo fmt --manifest-path guest/limina-init/Cargo.toml --check || fail "rustfmt (guest) — run 'cargo fmt --manifest-path guest/limina-init/Cargo.toml'"
+# Per-member, not `--all --manifest-path guest/Cargo.toml`: guest/Cargo.toml is a virtual
+# workspace and cargo-fmt resolves --all through the path-dep limina-proto into the ROOT
+# workspace, dragging third_party/ into the check. Member manifests stay scoped.
+for g in guest/*/Cargo.toml; do
+    cargo fmt --manifest-path "$g" --check || fail "rustfmt ($g) — run 'cargo fmt --manifest-path $g'"
+done
 for s in spikes/*/Cargo.toml; do
     cargo fmt --manifest-path "$s" --check || fail "rustfmt ($s) — run 'cargo fmt --manifest-path $s'"
 done
@@ -29,7 +34,7 @@ done
 echo "pre-commit: cargo clippy --workspace (-D warnings)"
 cargo clippy --workspace --all-targets -- -D warnings || fail "clippy (workspace)"
 echo "pre-commit: cargo clippy guest (-D warnings)"
-cargo clippy --manifest-path guest/limina-init/Cargo.toml --target aarch64-unknown-linux-musl --all-targets -- -D warnings \
+cargo clippy --manifest-path guest/Cargo.toml --target aarch64-unknown-linux-musl --all-targets -- -D warnings \
     || fail "clippy (guest)"
 
 echo "pre-commit: ok"
