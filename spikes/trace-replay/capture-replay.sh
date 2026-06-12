@@ -30,6 +30,6 @@ env \$BASE \$ZINK apitrace trace --api egl --output ~/traces/glmark2-$SCENE.trac
 echo '== replay on llvmpipe (works):'
 env \$BASE GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1 eglretrace --headless --benchmark ~/traces/glmark2-$SCENE.trace 2>&1 | tail -1
 
-echo '== replay on zink->venus (CRASHES — the X11 kopper null-deref, see RESULTS.md):'
-env \$BASE \$ZINK eglretrace --headless --benchmark ~/traces/glmark2-$SCENE.trace 2>&1 | tail -1 || true
+echo '== replay on zink->venus (works since the 2026-06-12 fix, see RESULTS.md):'
+env \$BASE \$ZINK eglretrace --headless --benchmark ~/traces/glmark2-$SCENE.trace 2>&1 | tail -1
 "

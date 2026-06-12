@@ -22,7 +22,33 @@ This spike validated the pipeline pieces and found a real tier-2 bug.
 - eglretrace on Xwayland needs `DISPLAY=:0` + `XAUTHORITY=/run/user/1000/
   .mutter-Xwaylandauth.*` (mutter's private auth file).
 
-## BLOCKED + the bug it found: X11 EGL clients crash on zink→venus
+## FIXED (2026-06-12): X11 EGL clients crashed on zink→venus
+
+Both parts shipped and verified the same day; the section below is the original
+finding. The fix:
+
+1. **Capability (baked):** the venus ICD was built `-Dplatforms=wayland` only, so
+   the instance had no `VK_KHR_xcb_surface`. Rebuilt with `-Dplatforms=x11,wayland`
+   (guest `~/mesa-venus/build-venus`), installed as `/usr/lib64/libvulkan_virtio.so`
+   (`.wayland-only` backup kept beside it) and baked into the dev-enh golden.
+   X11 `glmark2-es2` now renders on real venus, and the venus trace replay completes
+   (4628 frames, exit 0) — the replay-test plan is unblocked.
+2. **Mechanism (upstreamable):** `patches/mesa/0006-zink-kopper-guard-missing-surface-
+   extensions.diff` — `kopper_CreateSurface()` called `VKSCR(CreateXcbSurfaceKHR)` /
+   `CreateWaylandSurfaceKHR` behind compile-time guards only; on an instance lacking
+   the extension that's a NULL-fp call (this crash). Now gated on the
+   `screen->instance_info->have_KHR_*_surface` flags zink already tracks. Verified by
+   pointing VK at the `.wayland-only` backup: X11 client gets
+   `MESA: error: zink: refusing X11 surface: instance lacks VK_KHR_xcb_surface` +
+   `could not create swapchain` and keeps running swapchain-less (exit 0) instead of
+   SIGSEGV in eglMakeCurrent. Same bug class as patches 0003/0004 (capability
+   tracked, call not gated).
+
+**NEW OPEN THREAD (perf):** the X11/Xwayland present path on zink→venus is ~40-60×
+slower than Wayland (glmark2 build: 35–62 vs 2221–2313; venus replay 48fps vs
+llvmpipe-replay 800fps). Functional only for now — needs its own investigation.
+
+### Original finding (pre-fix)
 
 `eglretrace` is X11-only (no Wayland/surfaceless backend; `EGL_PLATFORM=surfaceless`
 still XOpenDisplay()s), and **any X11 EGL GL client on zink→venus segfaults** —
@@ -46,14 +72,13 @@ null deref in kopper's X11 displaytarget path — we own `/opt/mesa-zink`
 
 ## Consequences for the test plan
 
-1. **Fix the kopper X11 null-deref first** — it unblocks BOTH the replay tests and
-   X11 GL apps on the desktop. Until then venus replay cannot run.
-2. After the fix, the `venus_replay` test shape stands as planned: capture fixtures
-   via this spike's script, replay venus + llvmpipe in the same boot, snapshot
+1. ~~Fix the kopper X11 null-deref first~~ **DONE (see above)** — venus replay runs.
+2. The `venus_replay` test shape stands as planned: capture fixtures via this
+   spike's script, replay venus + llvmpipe in the same boot, snapshot
    (`-S`/`--snapshot-interval`), tolerance-compare. (Snapshot comparison itself is
-   still UNTESTED on venus — first thing to prove post-fix.)
-3. Longer-term alternative if X11 stays awkward: patch apitrace for a Wayland or
-   surfaceless retrace backend (we own everything).
+   still UNTESTED on venus — first thing to prove next.)
+3. Longer-term alternative if X11 stays awkward (see the perf thread above): patch
+   apitrace for a Wayland or surfaceless retrace backend (we own everything).
 
 ## Files
 
