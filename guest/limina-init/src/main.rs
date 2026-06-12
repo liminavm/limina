@@ -20,21 +20,23 @@ const MARKER: &[u8] = b"\n[limina-init] LIMINA_L1_USERSPACE_OK\n";
 fn main() {
     mount_pseudo_fs();
     announce();
+    // `limina.real_agent`: spawn the PRODUCT agent binary (staged at /limina-agent by
+    // build-test-guest.sh) — the L1 vehicle for testing the real limina-agent end-to-end.
+    // It connects to the control plane on its own and powers the guest off itself on
+    // SHUTDOWN (via raw reboot(2) here; no systemd in this world). Spawned BEFORE the
+    // blocking seed below so both can be connected concurrently — the L1 vehicle for
+    // the multi-connection control plane (root agent + session helpers on real distros).
+    if cmdline_has("limina.real_agent") {
+        match std::process::Command::new("/limina-agent").spawn() {
+            Ok(_) => klog(b"[limina-init] spawned /limina-agent"),
+            Err(_) => klog(b"[limina-init] failed to spawn /limina-agent"),
+        }
+    }
     if let Some(port) = agent_port_from_cmdline() {
         // A host-ordered SHUTDOWN powers off NOW — it must override `limina.hold` (the
         // whole point is that closing the window ends a held/animating guest).
         if agent::run(port) == agent::AgentEnd::Shutdown {
             power_off();
-        }
-    }
-    // `limina.real_agent`: spawn the PRODUCT agent binary (staged at /limina-agent by
-    // build-test-guest.sh) — the L1 vehicle for testing the real limina-agent end-to-end.
-    // It owns the control channel and powers the guest off itself on SHUTDOWN (via raw
-    // reboot(2) here; no systemd in this world). Init carries on (typically `limina.hold`).
-    if cmdline_has("limina.real_agent") {
-        match std::process::Command::new("/limina-agent").spawn() {
-            Ok(_) => klog(b"[limina-init] spawned /limina-agent"),
-            Err(_) => klog(b"[limina-init] failed to spawn /limina-agent"),
         }
     }
     // `limina.console_echo`: prove the serial console works both ways for the host harness —

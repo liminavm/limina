@@ -4,18 +4,25 @@
 //! The host side of the limina-proto control plane (M5/D8).
 //!
 //! The supervisor owns this channel: it binds a unix socket the worker bridges to the
-//! guest's vsock (`CID_HOST:CONTROL_PORT`), accepts the agent when (if!) one connects,
-//! answers HELLO with WELCOME, tracks liveness, and — the first real payoff — turns
+//! guest's vsock (`CID_HOST:CONTROL_PORT`), accepts agents as they connect, answers
+//! HELLO with WELCOME, tracks the connected peers, and — the first real payoff — turns
 //! window-close / SIGTERM into an **orderly guest power-off** by sending SHUTDOWN and
 //! letting the agent run the guest's own shutdown path, instead of going straight to the
 //! GPIO power button (which stock EFI guests ignore) and SIGKILL.
 //!
+//! The plane serves **multiple concurrent connections** (the clipboard spike settled the
+//! guest topology: a root `limina-agent` plus per-session user helpers, each with its own
+//! vsock connection and capability set — vsock connect needs no root). Each peer gets its
+//! own serve thread and registry entry; requests are routed by capability (SHUTDOWN goes
+//! to every `shutdown`-capable peer; power-off is idempotent, first one wins).
+//!
 //! Everything here is opportunistic: a guest without an agent simply never connects and
-//! every caller falls back to the pre-existing teardown ladder. The agent may also
+//! every caller falls back to the pre-existing teardown ladder. Agents may also
 //! reconnect (guest reboot), so the accept loop runs for the supervisor's lifetime.
 
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -42,15 +49,31 @@ pub struct ControlPlane {
     inner: Arc<Inner>,
 }
 
+/// A connected, handshaken agent: the write half of its stream plus what it declared
+/// in HELLO. Registered after WELCOME, removed when its serve thread ends (or a write
+/// to it fails).
+struct Peer {
+    id: u64,
+    agent: String,
+    caps: Vec<String>,
+    stream: UnixStream,
+}
+
+impl Peer {
+    fn has_cap(&self, cap: &str) -> bool {
+        self.caps.iter().any(|c| c == cap)
+    }
+}
+
 struct Inner {
-    /// Write half (a `try_clone`) of the connected agent's stream, present between a
-    /// completed HELLO/WELCOME handshake and disconnect.
-    agent: Mutex<Option<UnixStream>>,
+    peers: Mutex<Vec<Peer>>,
+    next_id: AtomicU64,
 }
 
 impl ControlPlane {
-    /// Bind `socket_path` and start the accept/serve thread. The returned handle is what
-    /// shutdown paths use; the thread runs for the process's lifetime.
+    /// Bind `socket_path` and start the accept thread (which spawns a serve thread per
+    /// connection). The returned handle is what shutdown paths use; the threads run for
+    /// the process's lifetime.
     pub fn start(socket_path: &Path) -> Result<ControlPlane> {
         let _ = std::fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path)
@@ -58,7 +81,8 @@ impl ControlPlane {
         *CLEANUP_PATH.lock().unwrap() = Some(socket_path.to_path_buf());
 
         let inner = Arc::new(Inner {
-            agent: Mutex::new(None),
+            peers: Mutex::new(Vec::new()),
+            next_id: AtomicU64::new(1),
         });
         let serve_inner = inner.clone();
         std::thread::Builder::new()
@@ -68,40 +92,54 @@ impl ControlPlane {
         Ok(ControlPlane { inner })
     }
 
-    /// Ask the connected agent to power the guest off. Returns `true` if the request was
-    /// sent (the caller should give it [`AGENT_GRACE`] before escalating); `false` if no
-    /// agent is connected or the send failed (escalate immediately).
+    /// Ask the guest to power off, via every connected `shutdown`-capable agent (the
+    /// guest's power-off is idempotent — whichever acts first wins). Returns `true` if
+    /// at least one request was sent (the caller should give it [`AGENT_GRACE`] before
+    /// escalating); `false` if no capable agent is connected or every send failed
+    /// (escalate immediately). Peers whose send fails are dropped from the registry.
     pub fn request_shutdown(&self, grace: Duration) -> bool {
-        let mut slot = self.inner.agent.lock().unwrap();
-        let Some(stream) = slot.as_mut() else {
-            return false;
-        };
         let msg = Message::Shutdown(Shutdown {
             grace_ms: grace.as_millis() as u64,
         });
-        match write_message(stream, CHANNEL_CONTROL, &msg) {
-            Ok(()) => true,
-            Err(e) => {
-                log::warn!("control: sending SHUTDOWN failed ({e}); falling back");
-                *slot = None;
-                false
+        let mut sent = false;
+        self.inner.peers.lock().unwrap().retain_mut(|peer| {
+            if !peer.has_cap("shutdown") {
+                return true;
             }
-        }
+            match write_message(&mut peer.stream, CHANNEL_CONTROL, &msg) {
+                Ok(()) => {
+                    log::info!("control: SHUTDOWN sent to {}", peer.agent);
+                    sent = true;
+                    true
+                }
+                Err(e) => {
+                    log::warn!("control: sending SHUTDOWN to {} failed ({e})", peer.agent);
+                    false
+                }
+            }
+        });
+        sent
     }
 }
 
-/// Accept agents forever; one at a time (the channel is a singleton by design — a second
-/// connect replaces a dead predecessor after its serve loop ends).
+/// Accept connections forever, one serve thread per peer (agents are independent: the
+/// root daemon and per-session helpers must be able to talk concurrently).
 fn accept_loop(listener: UnixListener, inner: Arc<Inner>) {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 set_nosigpipe(&stream);
-                if let Err(e) = serve_agent(stream, &inner) {
-                    log::warn!("control: agent connection ended with error: {e}");
+                let peer_inner = inner.clone();
+                let spawned = std::thread::Builder::new()
+                    .name("limina-control-peer".into())
+                    .spawn(move || {
+                        if let Err(e) = serve_agent(stream, &peer_inner) {
+                            log::warn!("control: agent connection ended with error: {e}");
+                        }
+                    });
+                if let Err(e) = spawned {
+                    log::warn!("control: cannot spawn peer thread: {e}");
                 }
-                *inner.agent.lock().unwrap() = None;
-                log::info!("control: guest agent disconnected");
             }
             Err(e) => {
                 // Listener broken (e.g. socket unlinked early) — nothing left to serve.
@@ -112,8 +150,9 @@ fn accept_loop(listener: UnixListener, inner: Arc<Inner>) {
     }
 }
 
-/// One agent session: HELLO → WELCOME, then serve until EOF. Heartbeats keep liveness;
-/// unknown types get ERROR(UNSUPPORTED) — never fatal, per the protocol's ground rule.
+/// One agent session: HELLO → WELCOME, register, then serve until EOF. Heartbeats keep
+/// liveness; unknown types get ERROR(UNSUPPORTED) — never fatal, per the protocol's
+/// ground rule. The peer is deregistered on any exit.
 fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
     let (_, first) = read_message(&mut stream)?;
     let hello = match first {
@@ -136,10 +175,25 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
             caps: vec!["shutdown".to_string()],
         }),
     )?;
-    *inner.agent.lock().unwrap() = Some(stream.try_clone()?);
 
+    let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
+    inner.peers.lock().unwrap().push(Peer {
+        id,
+        agent: hello.agent.clone(),
+        caps: hello.caps,
+        stream: stream.try_clone()?,
+    });
+
+    let result = serve_loop(&mut stream);
+    inner.peers.lock().unwrap().retain(|p| p.id != id);
+    log::info!("control: guest agent disconnected: {}", hello.agent);
+    result
+}
+
+/// The post-handshake read loop for one peer.
+fn serve_loop(stream: &mut UnixStream) -> std::io::Result<()> {
     loop {
-        match read_message(&mut stream) {
+        match read_message(stream) {
             Ok((_, Message::Heartbeat(_))) => {} // liveness; nothing to track yet
             Ok((_, Message::ShutdownAck)) => {
                 log::info!("control: agent acknowledged shutdown");
@@ -148,11 +202,7 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
                 log::warn!("control: agent reported error: {e:?}");
             }
             Ok((_, Message::Unknown { msg_type, .. })) => {
-                write_message(
-                    &mut stream,
-                    CHANNEL_CONTROL,
-                    &Message::unsupported(msg_type),
-                )?;
+                write_message(stream, CHANNEL_CONTROL, &Message::unsupported(msg_type))?;
             }
             // HELLO twice / host-only messages from a guest: ignore rather than die.
             Ok((_, Message::Hello(_)))

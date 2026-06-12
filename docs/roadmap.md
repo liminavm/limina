@@ -792,10 +792,12 @@ clipboard/virtiofs.
      the later non-GNOME-guest path.
    - **Design consequence (from the spike):** the clipboard lives in a per-session **user**
      helper (`limina-agent-session` + systemd user unit; the RemoteDesktop session needs the
-     user's bus and must stay resident to service SelectionTransfer), so the **control plane
-     must accept multiple concurrent guest connections** (root agent + session helper; vsock
-     connect needs no root). Host `ControlPlane` currently stores a single agent stream —
-     extend to per-connection HELLO/caps before the bridge lands.
+     user's bus and must stay resident to service SelectionTransfer), so the control plane
+     must accept multiple concurrent guest connections (root agent + session helper; vsock
+     connect needs no root). **DONE (2026-06-12):** host `ControlPlane` keeps a peer
+     registry (serve thread + HELLO/caps per connection); SHUTDOWN routes to every
+     `shutdown`-capable peer. Covered by `l1_multi_agent` (init seed + real limina-agent
+     connected concurrently).
    - **M5 = text-only.** Images is a follow-up; files/primary-selection/HTML deferred.
 
 **libkrun patches:** none for the transport (vsock + virtiofs overlays already exist). Possibly a
