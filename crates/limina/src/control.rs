@@ -22,9 +22,9 @@
 
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use limina_proto::{
@@ -64,6 +64,12 @@ struct Peer {
     agent: String,
     caps: Vec<String>,
     stream: Arc<Mutex<UnixStream>>,
+    /// When the peer last said anything (updated by its serve loop on every inbound
+    /// message — heartbeats included). The liveness monitor reads this.
+    last_seen: Arc<Mutex<Instant>>,
+    /// Whether the monitor currently considers this peer silent (so transitions are
+    /// logged once, not every sweep).
+    silent: Arc<AtomicBool>,
 }
 
 impl Peer {
@@ -74,6 +80,17 @@ impl Peer {
     fn send(&self, msg: &Message, channel: u32) -> std::io::Result<()> {
         write_message(&mut *self.stream.lock().unwrap(), channel, msg)
     }
+}
+
+/// How long a peer may go without any inbound message before the supervisor reports it
+/// silent. Agents heartbeat every second, so the default 5s means ~5 missed beats.
+/// Override with `LIMINA_AGENT_SILENT_SECS` (tests shorten it).
+fn silent_threshold() -> Duration {
+    let secs = std::env::var("LIMINA_AGENT_SILENT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
+    Duration::from_secs(secs)
 }
 
 struct Inner {
@@ -118,6 +135,35 @@ impl ControlPlane {
                 }
             })
             .context("spawning the clipboard poll thread")?;
+
+        // The liveness monitor: agents heartbeat every second; report (once) any peer
+        // that goes quiet past the threshold, and its recovery. This is the signal a
+        // status surface (CLI/UI) consumes later — for now the supervisor log IS the
+        // surface.
+        let live_inner = inner.clone();
+        std::thread::Builder::new()
+            .name("limina-liveness".into())
+            .spawn(move || {
+                let threshold = silent_threshold();
+                loop {
+                    std::thread::sleep(threshold.min(Duration::from_secs(1)));
+                    for peer in live_inner.peers.lock().unwrap().iter() {
+                        let quiet = peer.last_seen.lock().unwrap().elapsed();
+                        if quiet > threshold {
+                            if !peer.silent.swap(true, Ordering::Relaxed) {
+                                log::warn!(
+                                    "control: agent {} silent for {:.1}s (no heartbeat)",
+                                    peer.agent,
+                                    quiet.as_secs_f64()
+                                );
+                            }
+                        } else if peer.silent.swap(false, Ordering::Relaxed) {
+                            log::info!("control: agent {} heartbeating again", peer.agent);
+                        }
+                    }
+                }
+            })
+            .context("spawning the liveness monitor thread")?;
         Ok(ControlPlane { inner })
     }
 
@@ -226,11 +272,14 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
 
     let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
     let writer = Arc::new(Mutex::new(stream.try_clone()?));
+    let last_seen = Arc::new(Mutex::new(Instant::now()));
     let peer = Peer {
         id,
         agent: hello.agent.clone(),
         caps: hello.caps,
         stream: writer.clone(),
+        last_seen: last_seen.clone(),
+        silent: Arc::new(AtomicBool::new(false)),
     };
     // A late joiner needs the CURRENT host clipboard, not just the next change.
     if peer.has_cap("clipboard") {
@@ -240,7 +289,7 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
     }
     inner.peers.lock().unwrap().push(peer);
 
-    let result = serve_loop(&mut stream, &writer, inner);
+    let result = serve_loop(&mut stream, &writer, inner, &last_seen);
     inner.peers.lock().unwrap().retain(|p| p.id != id);
     log::info!("control: guest agent disconnected: {}", hello.agent);
     result
@@ -252,13 +301,19 @@ fn serve_loop(
     stream: &mut UnixStream,
     writer: &Mutex<UnixStream>,
     inner: &Inner,
+    last_seen: &Mutex<Instant>,
 ) -> std::io::Result<()> {
     let reply = |msg: &Message, channel: u32| -> std::io::Result<()> {
         write_message(&mut *writer.lock().unwrap(), channel, msg)
     };
     loop {
-        match read_message(stream) {
-            Ok((_, Message::Heartbeat(_))) => {} // liveness; nothing to track yet
+        let msg = read_message(stream);
+        if msg.is_ok() {
+            // ANY inbound message proves the peer alive, not just heartbeats.
+            *last_seen.lock().unwrap() = Instant::now();
+        }
+        match msg {
+            Ok((_, Message::Heartbeat(_))) => {} // liveness only; tracked above
             Ok((_, Message::ShutdownAck)) => {
                 log::info!("control: agent acknowledged shutdown");
             }

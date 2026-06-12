@@ -778,9 +778,17 @@ No DAX/shm window yet — same shm-less shape as the proven L1 rootfs; DAX is a 
 perf enhancement (the 16 KiB-host alignment question moves there). Tested by `l1_share`
 (read + write round-trip through the shipped binaries, plus `:ro` write-refusal) and
 live-verified on the seated desktop both directions with the share-aware agent **baked
-into the dev-enh golden** (zero-install on fresh clones). Next: heartbeat-liveness
-surfacing, guest-tools delivery (sysext, below), images/files on the clipboard, DAX,
-uid mapping for shares.
+into the dev-enh golden** (zero-install on fresh clones). **Heartbeat-liveness
+surfacing is in (2026-06-12):** the control plane stamps every inbound message per
+peer; a monitor thread reports (once) any agent silent past `LIMINA_AGENT_SILENT_SECS`
+(default 5 s ≈ 5 missed beats) and its recovery — the supervisor log is the status
+surface until a CLI/UI consumes it (`l1_liveness` proves silent + recovery on a mute
+harness peer while the healthy seed agent stays unreported). **With that, every
+core M5 capability is DONE** (control plane + agents, clipboard, virtiofs sharing,
+liveness); what remains is the productization track (sysext guest-tools delivery +
+kernel RPM, below — gated on the GOP+venus singleton) and follow-ups: a `liminactl
+status`-style consumer, images/files on the clipboard, DAX, uid mapping for shares,
+the clipboard test-gap ledger.
 
 **Key tasks:**
 1. **Guest agent + vsock control plane.** One multiplexed control connection over a single
