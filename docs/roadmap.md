@@ -521,7 +521,9 @@ degrades gracefully to software-2D on renderer-init failure (no panic). Design:
    and move the enhanced-tier guest config out of the dev image (→ M5 agent/installer). Cosmetic:
    `num_capsets` (hardcoded 5) and the non-fatal `CTX_DETACH_RESOURCE` (0x203 → ERR_UNSPEC) dmesg
    error.
-2. **GOP-firmware + venus (the real blocker):** `virgl_renderer_init` is a process-global singleton,
+2. **GOP-firmware + venus — now a HARD PREREQUISITE for the productized enhanced tier** (the M5
+   delivery design settled 2026-06-12 boots the enhanced kernel through EFI/BLS, so the EFI path
+   must keep venus): `virgl_renderer_init` is a process-global singleton,
    but patch 0007 stops+re-activates the gpu worker on the EFI→kernel reset → second init hits
    `AlreadyInUse`. So GOP graphical boot console (Track B) and venus don't yet coexist (silent
    firmware avoids it but loses the boot console; GOP firmware degrades the desktop to software-2D).
@@ -718,13 +720,36 @@ control channel between limina and a guest agent.
      grow that into `limina-agent` rather than starting fresh.
    - **Agent delivery via virtiofs overlay** (`krun_fs_add_overlay_file`/`krun_fs_add_overlay_dir`)
      + a minimal per-user systemd unit, keeping the user's `.raw` untouched.
-   - **The agent is also the enhanced-tier configurator (learned from M4).** Tier-2 today depends
-     on guest config hand-baked into the dev image: `environment.d` entries (`VN_PERF`
-     feedback policy — #28 residue; the vk-loader no-unload mitigation), `/opt/mesa-zink` + the
-     patched venus ICD + patched mutter, and the 16 KiB kernel. The M4 ledger item "productize
-     seated-venus guest config via limina-agent instead of dev-image hacks" lands here: the agent
-     (or its installer) detects/installs/configures these, so a stock guest upgrades to the
-     enhanced tier through one component instead of image surgery.
+   - **The agent is also the enhanced-tier configurator (learned from M4), and the delivery
+     design is SETTLED (2026-06-12):** tier-2 today depends on guest config hand-baked into the
+     dev image (`environment.d` policy, `/opt/mesa-zink` + patched venus ICD + patched mutter,
+     the 16 KiB kernel); productizing moves all of it to two carriers:
+     - **Userspace rides a versioned `systemd-sysext` image (+ confext for `/etc`):**
+       `limina-guest-tools-<ver>.sysext.raw` carries the agent + units, the patched mutter
+       (overlayfs upper shadows the exact path gnome-shell loads — solves the
+       not-parallel-installable problem, `unmerge` = instant rollback), mesa zink + venus ICD
+       under a limina-owned dir selected via ICD JSON/env (do NOT shadow stock mesa — explicit
+       override mechanisms exist), and `/usr/lib/environment.d/` policy. Additive, reversible,
+       rpmdb-untouched — the package-manager-shaped form of the two-tier tenet. **Bonus:
+       distro-agnostic** — sysext is plain systemd (≥254), so the same image format serves
+       Debian-class guests later with only per-distro `extension-release` matching.
+       `systemd-sysupdate`/`importctl` (256+) is the ready-made update channel.
+     - **The kernel goes through the distro's own EFI boot machinery, NOT host direct-boot**
+       (that was the dev vehicle; BLS/GRUB fallback, kdump, dracut, the M2.5 boot console all
+       assume the guest boots itself): package as a kernel RPM (deb later) installed via
+       `kernel-install` → BLS entry alongside the stock kernels (stock = one GRUB choice away =
+       the degradation path). **Host-built primary** (our container pipeline already
+       cross-builds it; needs `CONFIG_EFI_STUB` + dracut-managed rootfs), in-guest rebuild as
+       the self-hosting fallback. A sysext cannot carry the kernel image (the bootloader reads
+       `/boot` before userspace exists; sysext overlays `/usr` only) — module trees could ride
+       one, but they ride the RPM anyway.
+     - **Bootstrap is a one-time Parallels-style "install guest tools"** (ISO or attached
+       volume): graceful degradation is exactly what makes this acceptable — the stock guest
+       has a working (software-GL) desktop before enrollment; the installer drops the sysext +
+       kernel package, and from then on the agent owns updates.
+     - **Consequence (priority change):** EFI-booting the enhanced tier makes the
+       **GOP-firmware + venus singleton fix a hard prerequisite** (M4 open item 2) — today the
+       EFI→kernel reset degrades the desktop to software-2D.
    - Reuse libkrun's existing macOS host->guest time sync (DGRAM vsock port 123, `timesync.rs`)
      instead of a custom TIME_SET — just confirm a guest-side consumer exists.
 2. **virtiofs file sharing.** `krun_add_virtiofs3` with a DAX/shm window (`VirtioShmRegion` in
@@ -766,6 +791,12 @@ heartbeats.
   default enhanced configuration; test stock-4k DAX separately.)
 - Validate large chunked vsock transfers respect credit flow control without stalling muxer threads;
   set a max-size cap / temp-file staging.
+- **Delivery-design spikes (both cheap):** (a) **SELinux labeling of sysext content** — the dev
+  guest runs `selinux=0` but stock Fedora is Enforcing; the overlaid mutter/agent files need
+  correct labels at image-build time or gnome-shell/systemd will refuse them. (b) **EFI-boot the
+  16 KiB kernel end-to-end** — kernel RPM → `kernel-install`/BLS → GRUB → venus desktop (verify
+  `CONFIG_EFI_STUB`, dracut initramfs on 16k, and BLS default selection with the stock fallback
+  entry intact). (b) is also where the GOP+venus singleton fix gets exercised.
 
 ---
 
