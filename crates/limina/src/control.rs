@@ -27,7 +27,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use limina_proto::{read_message, write_message, Message, Shutdown, Welcome, CHANNEL_CONTROL};
+use limina_proto::{
+    read_message, write_message, Message, Shutdown, Welcome, CHANNEL_CLIPBOARD, CHANNEL_CONTROL,
+};
 
 /// How long the orderly path gets before the caller escalates (power button / SIGKILL).
 pub const AGENT_GRACE: Duration = Duration::from_secs(5);
@@ -52,22 +54,32 @@ pub struct ControlPlane {
 /// A connected, handshaken agent: the write half of its stream plus what it declared
 /// in HELLO. Registered after WELCOME, removed when its serve thread ends (or a write
 /// to it fails).
+///
+/// The write half is mutexed because a peer has TWO writers: its serve thread (replies)
+/// and broadcasters (the clipboard poller, shutdown requests). `write_message` is two
+/// `write_all`s, so unsynchronized writers could interleave mid-frame and corrupt the
+/// stream.
 struct Peer {
     id: u64,
     agent: String,
     caps: Vec<String>,
-    stream: UnixStream,
+    stream: Arc<Mutex<UnixStream>>,
 }
 
 impl Peer {
     fn has_cap(&self, cap: &str) -> bool {
         self.caps.iter().any(|c| c == cap)
     }
+
+    fn send(&self, msg: &Message, channel: u32) -> std::io::Result<()> {
+        write_message(&mut *self.stream.lock().unwrap(), channel, msg)
+    }
 }
 
 struct Inner {
     peers: Mutex<Vec<Peer>>,
     next_id: AtomicU64,
+    clipboard: crate::clipboard::Clipboard,
 }
 
 impl ControlPlane {
@@ -83,12 +95,29 @@ impl ControlPlane {
         let inner = Arc::new(Inner {
             peers: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
+            clipboard: crate::clipboard::Clipboard::new(),
         });
         let serve_inner = inner.clone();
         std::thread::Builder::new()
             .name("limina-control".into())
             .spawn(move || accept_loop(listener, serve_inner))
             .context("spawning the control-plane thread")?;
+
+        // The clipboard poller: macOS has no pasteboard-change notification, so watch
+        // changeCount and broadcast host copies to clipboard-capable peers.
+        let poll_inner = inner.clone();
+        std::thread::Builder::new()
+            .name("limina-clipboard".into())
+            .spawn(move || {
+                let every = crate::clipboard::Clipboard::poll_interval();
+                loop {
+                    std::thread::sleep(every);
+                    if let Some(offer) = poll_inner.clipboard.poll_local_change() {
+                        poll_inner.broadcast_clipboard(&offer);
+                    }
+                }
+            })
+            .context("spawning the clipboard poll thread")?;
         Ok(ControlPlane { inner })
     }
 
@@ -102,11 +131,11 @@ impl ControlPlane {
             grace_ms: grace.as_millis() as u64,
         });
         let mut sent = false;
-        self.inner.peers.lock().unwrap().retain_mut(|peer| {
+        self.inner.peers.lock().unwrap().retain(|peer| {
             if !peer.has_cap("shutdown") {
                 return true;
             }
-            match write_message(&mut peer.stream, CHANNEL_CONTROL, &msg) {
+            match peer.send(&msg, CHANNEL_CONTROL) {
                 Ok(()) => {
                     log::info!("control: SHUTDOWN sent to {}", peer.agent);
                     sent = true;
@@ -119,6 +148,25 @@ impl ControlPlane {
             }
         });
         sent
+    }
+}
+
+impl Inner {
+    /// Send a clipboard message to every clipboard-capable peer, dropping any whose
+    /// send fails (dead connection).
+    fn broadcast_clipboard(&self, msg: &Message) {
+        self.peers.lock().unwrap().retain(|peer| {
+            if !peer.has_cap("clipboard") {
+                return true;
+            }
+            match peer.send(msg, CHANNEL_CLIPBOARD) {
+                Ok(()) => true,
+                Err(e) => {
+                    log::warn!("control: clipboard send to {} failed ({e})", peer.agent);
+                    false
+                }
+            }
+        });
     }
 }
 
@@ -172,37 +220,65 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
         &mut stream,
         CHANNEL_CONTROL,
         &Message::Welcome(Welcome {
-            caps: vec!["shutdown".to_string()],
+            caps: vec!["shutdown".to_string(), "clipboard".to_string()],
         }),
     )?;
 
     let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
-    inner.peers.lock().unwrap().push(Peer {
+    let writer = Arc::new(Mutex::new(stream.try_clone()?));
+    let peer = Peer {
         id,
         agent: hello.agent.clone(),
         caps: hello.caps,
-        stream: stream.try_clone()?,
-    });
+        stream: writer.clone(),
+    };
+    // A late joiner needs the CURRENT host clipboard, not just the next change.
+    if peer.has_cap("clipboard") {
+        if let Some(offer) = inner.clipboard.initial_offer() {
+            let _ = peer.send(&offer, CHANNEL_CLIPBOARD);
+        }
+    }
+    inner.peers.lock().unwrap().push(peer);
 
-    let result = serve_loop(&mut stream);
+    let result = serve_loop(&mut stream, &writer, inner);
     inner.peers.lock().unwrap().retain(|p| p.id != id);
     log::info!("control: guest agent disconnected: {}", hello.agent);
     result
 }
 
-/// The post-handshake read loop for one peer.
-fn serve_loop(stream: &mut UnixStream) -> std::io::Result<()> {
+/// The post-handshake read loop for one peer. Replies go through the peer's `writer`
+/// mutex — never the raw read stream — because broadcasters write concurrently.
+fn serve_loop(
+    stream: &mut UnixStream,
+    writer: &Mutex<UnixStream>,
+    inner: &Inner,
+) -> std::io::Result<()> {
+    let reply = |msg: &Message, channel: u32| -> std::io::Result<()> {
+        write_message(&mut *writer.lock().unwrap(), channel, msg)
+    };
     loop {
         match read_message(stream) {
             Ok((_, Message::Heartbeat(_))) => {} // liveness; nothing to track yet
             Ok((_, Message::ShutdownAck)) => {
                 log::info!("control: agent acknowledged shutdown");
             }
+            // The clipboard conversation (see crate::clipboard for the protocol rules).
+            Ok((_, Message::ClipOffer(o))) => {
+                if let Some(msg) = inner.clipboard.on_offer(o) {
+                    reply(&msg, CHANNEL_CLIPBOARD)?;
+                }
+            }
+            Ok((_, Message::ClipRequest(r))) => {
+                if let Some(msg) = inner.clipboard.on_request(r) {
+                    reply(&msg, CHANNEL_CLIPBOARD)?;
+                }
+            }
+            Ok((_, Message::ClipData(d))) => inner.clipboard.on_data(d),
             Ok((_, Message::Error(e))) => {
                 log::warn!("control: agent reported error: {e:?}");
             }
             Ok((_, Message::Unknown { msg_type, .. })) => {
-                write_message(stream, CHANNEL_CONTROL, &Message::unsupported(msg_type))?;
+                reply(&Message::unsupported(msg_type), CHANNEL_CONTROL)?;
             }
             // HELLO twice / host-only messages from a guest: ignore rather than die.
             Ok((_, Message::Hello(_)))

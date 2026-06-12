@@ -142,7 +142,13 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
             Ok((_, Message::Welcome(_)))
             | Ok((_, Message::Heartbeat(_)))
             | Ok((_, Message::Error(_))) => {}
-            Ok((_, Message::Hello(_))) | Ok((_, Message::ShutdownAck)) => {}
+            // Clipboard frames belong to the session helper (this daemon never
+            // advertises the cap); HELLO from a host / stray acks: ignore, don't die.
+            Ok((_, Message::ClipOffer(_)))
+            | Ok((_, Message::ClipRequest(_)))
+            | Ok((_, Message::ClipData(_)))
+            | Ok((_, Message::Hello(_)))
+            | Ok((_, Message::ShutdownAck)) => {}
             Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(End::Disconnected),
             Err(e) => return Err(e),
         }

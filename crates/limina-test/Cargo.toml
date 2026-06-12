@@ -20,3 +20,9 @@ png    = { workspace = true }
 # The control-plane wire protocol (M5): tests speak typed frames to the guest agent over
 # the vsock-bridged unix stream. Still black-box — the same bytes a product host sends.
 limina-proto = { workspace = true }
+# Clipboard assertions (M5): tests read/write the NAMED test pasteboard (LIMINA_PASTEBOARD)
+# the supervisor is pointed at — observing the bridge's output the way a macOS app would,
+# without ever touching the user's real clipboard.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString"] }
+objc2-app-kit = { version = "0.3", features = ["NSPasteboard"] }

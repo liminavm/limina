@@ -49,6 +49,9 @@ objc2-app-kit = { version = "0.3", features = [
     # pointer is the zero-latency host one wearing the guest's shape.
     "NSCursor",
     "NSImage",
+    # Clipboard bridge (M5): NSPasteboard polling + writes, host side of the guest
+    # clipboard channel.
+    "NSPasteboard",
     "objc2-core-graphics",
     "block2",
 ] }

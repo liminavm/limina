@@ -202,6 +202,11 @@ pub struct GuestConfig {
     /// it flow to the test's stderr — for asserting on supervisor-side events (e.g. the
     /// control plane's "guest agent connected"). See [`Guest::wait_for_supervisor_log`].
     pub supervisor_log: bool,
+    /// Pin the supervisor-owned control socket to a known scratch path (`--control-socket`)
+    /// so the harness can join the plane as a peer itself. See [`Guest::connect_control`].
+    pub control_socket: bool,
+    /// Extra environment variables for the supervisor process (e.g. `LIMINA_PASTEBOARD`).
+    pub envs: Vec<(String, String)>,
 }
 
 impl GuestConfig {
@@ -244,6 +249,8 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             supervisor_log: false,
+            control_socket: false,
+            envs: Vec::new(),
         })
     }
 
@@ -284,6 +291,8 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             supervisor_log: false,
+            control_socket: false,
+            envs: Vec::new(),
         })
     }
 
@@ -336,6 +345,8 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             supervisor_log: false,
+            control_socket: false,
+            envs: Vec::new(),
         })
     }
 
@@ -406,6 +417,22 @@ impl GuestConfig {
     /// Capture the supervisor's stderr (its log) into the scratch dir for assertions.
     pub fn with_supervisor_log(mut self) -> GuestConfig {
         self.supervisor_log = true;
+        self
+    }
+
+    /// Pin the supervisor-owned control socket to a known scratch path so the harness can
+    /// connect to the plane as a peer itself (playing e.g. a clipboard-capable agent —
+    /// protocol-identical to a guest connecting through the vsock bridge). Pair with
+    /// [`Guest::connect_control`].
+    pub fn with_control_socket(mut self) -> GuestConfig {
+        self.control_socket = true;
+        self
+    }
+
+    /// Set an environment variable on the spawned supervisor (e.g. `LIMINA_PASTEBOARD` to
+    /// point the clipboard bridge at a private named pasteboard).
+    pub fn with_env(mut self, key: &str, value: &str) -> GuestConfig {
+        self.envs.push((key.to_string(), value.to_string()));
         self
     }
 
@@ -507,6 +534,8 @@ pub struct Guest {
     gateway_log: Option<PathBuf>,
     /// Path to the captured supervisor stderr (inside `scratch`), if enabled.
     supervisor_log: Option<PathBuf>,
+    /// Path to the pinned supervisor-owned control socket (inside `scratch`), if enabled.
+    control_socket: Option<PathBuf>,
     /// Set once teardown has run, so Drop doesn't double-kill.
     torn_down: bool,
 }
@@ -728,6 +757,20 @@ impl Guest {
             None
         };
 
+        // Control socket at a known path, so the test can join the supervisor-owned
+        // plane as a peer (see connect_control).
+        let control_socket = if cfg.control_socket {
+            let sock = scratch.join("control.sock");
+            cmd.arg("--control-socket").arg(&sock);
+            Some(sock)
+        } else {
+            None
+        };
+
+        for (k, v) in &cfg.envs {
+            cmd.env(k, v);
+        }
+
         // Supervisor/worker logs: flow to the test's stderr by default (visible with
         // --nocapture); captured to a scratch file when the test asserts on them.
         cmd.stdin(Stdio::null());
@@ -758,8 +801,36 @@ impl Guest {
             console_in,
             gateway_log,
             supervisor_log,
+            control_socket,
             torn_down: false,
         })
+    }
+
+    /// Connect to the supervisor-owned control socket as a peer (requires
+    /// [`GuestConfig::with_control_socket`]), retrying until the supervisor binds it.
+    /// The returned [`AgentConn`] speaks raw limina-proto — the caller does its own
+    /// HELLO/WELCOME handshake, exactly like a guest agent would.
+    pub fn connect_control(&mut self, timeout: Duration) -> Result<AgentConn> {
+        let sock = self
+            .control_socket
+            .clone()
+            .context("no control socket (use GuestConfig::with_control_socket)")?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            match UnixStream::connect(&sock) {
+                Ok(stream) => return Ok(AgentConn { stream }),
+                Err(_) if Instant::now() < deadline => {
+                    if let Some(status) = self.child.try_wait().context("polling supervisor")? {
+                        bail!("supervisor exited ({status:?}) before binding {sock:?}");
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| format!("connecting to control socket {sock:?}"));
+                }
+            }
+        }
     }
 
     /// Path to the captured-scanout PNG (inside the scratch dir), if a display was
@@ -1208,4 +1279,33 @@ pub fn assert_console_has(console: &str, needles: &[&str]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// --- named-pasteboard helpers (the M5 clipboard-bridge oracle) -----------------------
+//
+// Tests point the supervisor at a private NAMED pasteboard via the LIMINA_PASTEBOARD env
+// (never the user's real clipboard) and use these to play the macOS side: reading what
+// the bridge wrote, and writing what the bridge should offer to the guest.
+
+/// Read the string content of the named pasteboard (None if empty/non-string).
+pub fn pasteboard_text(name: &str) -> Option<String> {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+    use objc2_foundation::NSString;
+    unsafe {
+        let pb = NSPasteboard::pasteboardWithName(&NSString::from_str(name));
+        pb.stringForType(NSPasteboardTypeString)
+            .map(|s| s.to_string())
+    }
+}
+
+/// Replace the named pasteboard's content with `text` (bumps its change count, exactly
+/// like a macOS app copying).
+pub fn set_pasteboard_text(name: &str, text: &str) {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+    use objc2_foundation::NSString;
+    unsafe {
+        let pb = NSPasteboard::pasteboardWithName(&NSString::from_str(name));
+        pb.clearContents();
+        pb.setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
+    }
 }

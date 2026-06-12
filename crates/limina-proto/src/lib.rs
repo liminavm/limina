@@ -48,6 +48,8 @@ pub const HEADER_LEN: usize = 16;
 pub const MAX_PAYLOAD: u32 = 1 << 20;
 /// The control channel (HELLO/WELCOME/HEARTBEAT/SHUTDOWN live here).
 pub const CHANNEL_CONTROL: u32 = 0;
+/// The clipboard channel (CLIP_OFFER/CLIP_REQUEST/CLIP_DATA live here).
+pub const CHANNEL_CLIPBOARD: u32 = 1;
 /// The well-known guest vsock port of the control plane (`b"LIMI"` big-endian — vsock
 /// ports are a flat u32 space, so a distinctive value just avoids collisions). The
 /// supervisor listens here by default; agents connect to `CID_HOST:CONTROL_PORT`.
@@ -64,6 +66,9 @@ pub mod msg_type {
     pub const SHUTDOWN: u8 = 4;
     pub const SHUTDOWN_ACK: u8 = 5;
     pub const ERROR: u8 = 6;
+    pub const CLIP_OFFER: u8 = 16;
+    pub const CLIP_REQUEST: u8 = 17;
+    pub const CLIP_DATA: u8 = 18;
 }
 
 /// Guest → host greeting: who the agent is, what it can do, and cheap boot-time facts.
@@ -104,6 +109,44 @@ pub struct Shutdown {
     pub grace_ms: u64,
 }
 
+/// Either direction: "my side's clipboard changed; I have these formats" (the clipboard
+/// conversation is symmetric — a guest copy offers to the host, a host copy offers to the
+/// guest). Eager-pull model: the receiver answers with [`ClipRequest`] when it wants the
+/// content; only the **newest** serial seen from a peer is honored, so a stale in-flight
+/// request can never resurrect an older clipboard.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct ClipOffer {
+    /// Sender-side monotonic offer number.
+    #[n(0)]
+    pub serial: u64,
+    /// Formats available, e.g. `text/plain;charset=utf-8` (M5: text only).
+    #[n(1)]
+    pub mime_types: Vec<String>,
+}
+
+/// Either direction: "send me the data of your offer `serial` as `mime_type`."
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct ClipRequest {
+    /// The [`ClipOffer::serial`] this answers.
+    #[n(0)]
+    pub serial: u64,
+    #[n(1)]
+    pub mime_type: String,
+}
+
+/// Reply to [`ClipRequest`]: the content, inline ([`MAX_PAYLOAD`]-bounded — fine for M5
+/// text; large payloads grow chunking later, not a bigger bound).
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct ClipData {
+    /// The [`ClipRequest::serial`] (== offer serial) this answers.
+    #[n(0)]
+    pub serial: u64,
+    #[n(1)]
+    pub mime_type: String,
+    #[cbor(n(2), with = "minicbor::bytes")]
+    pub data: Vec<u8>,
+}
+
 /// Either direction: a non-fatal protocol error report.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct ErrorMsg {
@@ -128,6 +171,9 @@ pub enum Message {
     Shutdown(Shutdown),
     /// Empty payload: acknowledges a [`Shutdown`]; the guest powers off right after.
     ShutdownAck,
+    ClipOffer(ClipOffer),
+    ClipRequest(ClipRequest),
+    ClipData(ClipData),
     Error(ErrorMsg),
     Unknown {
         msg_type: u8,
@@ -144,6 +190,9 @@ impl Message {
             Message::Heartbeat(_) => msg_type::HEARTBEAT,
             Message::Shutdown(_) => msg_type::SHUTDOWN,
             Message::ShutdownAck => msg_type::SHUTDOWN_ACK,
+            Message::ClipOffer(_) => msg_type::CLIP_OFFER,
+            Message::ClipRequest(_) => msg_type::CLIP_REQUEST,
+            Message::ClipData(_) => msg_type::CLIP_DATA,
             Message::Error(_) => msg_type::ERROR,
             Message::Unknown { msg_type, .. } => *msg_type,
         }
@@ -168,6 +217,9 @@ impl Message {
             Message::Heartbeat(m) => cbor(m),
             Message::Shutdown(m) => cbor(m),
             Message::ShutdownAck => Ok(Vec::new()),
+            Message::ClipOffer(m) => cbor(m),
+            Message::ClipRequest(m) => cbor(m),
+            Message::ClipData(m) => cbor(m),
             Message::Error(m) => cbor(m),
             Message::Unknown { payload, .. } => Ok(payload.clone()),
         }
@@ -183,6 +235,9 @@ impl Message {
             msg_type::HEARTBEAT => Message::Heartbeat(cbor(&payload)?),
             msg_type::SHUTDOWN => Message::Shutdown(cbor(&payload)?),
             msg_type::SHUTDOWN_ACK => Message::ShutdownAck,
+            msg_type::CLIP_OFFER => Message::ClipOffer(cbor(&payload)?),
+            msg_type::CLIP_REQUEST => Message::ClipRequest(cbor(&payload)?),
+            msg_type::CLIP_DATA => Message::ClipData(cbor(&payload)?),
             msg_type::ERROR => Message::Error(cbor(&payload)?),
             other => Message::Unknown {
                 msg_type: other,
@@ -311,6 +366,19 @@ mod tests {
             Message::Heartbeat(Heartbeat { seq: 3 }),
             Message::Shutdown(Shutdown { grace_ms: 5000 }),
             Message::ShutdownAck,
+            Message::ClipOffer(ClipOffer {
+                serial: 7,
+                mime_types: vec!["text/plain;charset=utf-8".into()],
+            }),
+            Message::ClipRequest(ClipRequest {
+                serial: 7,
+                mime_type: "text/plain;charset=utf-8".into(),
+            }),
+            Message::ClipData(ClipData {
+                serial: 7,
+                mime_type: "text/plain;charset=utf-8".into(),
+                data: "höst→guest ⌘V".as_bytes().to_vec(),
+            }),
             Message::Error(ErrorMsg {
                 code: ERR_UNSUPPORTED,
                 ref_type: 200,

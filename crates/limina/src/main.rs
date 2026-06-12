@@ -8,6 +8,7 @@
 //! power-off on Ctrl-C, force-kill on timeout, report when the VM stops). The
 //! AppKit UI grows on top of this supervisor later.
 
+mod clipboard;
 mod control;
 mod gateway;
 mod supervisor;
@@ -69,6 +70,12 @@ struct Cli {
     /// Host UNIX socket path the host side listens on for the guest agent.
     #[arg(long, requires = "vsock_port")]
     vsock_socket: Option<PathBuf>,
+
+    /// Bind the supervisor-owned control plane at this path instead of the private
+    /// default (lets a test harness join the plane as a peer). Unlike --vsock-*, the
+    /// supervisor still serves the protocol itself.
+    #[arg(long, conflicts_with = "vsock_socket")]
+    control_socket: Option<PathBuf>,
 
     /// Capture the guest serial console to this file.
     #[arg(long)]
@@ -188,7 +195,9 @@ fn main() -> Result<()> {
         args.push(path_arg(socket)?);
         None
     } else {
-        let socket = std::env::temp_dir().join(format!("limina-ctrl-{}.sock", std::process::id()));
+        let socket = cli.control_socket.clone().unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("limina-ctrl-{}.sock", std::process::id()))
+        });
         match control::ControlPlane::start(&socket) {
             Ok(cp) => {
                 args.push("--vsock-port".into());
