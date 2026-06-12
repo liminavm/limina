@@ -114,6 +114,21 @@ impl Clipboard {
             return None; // stale: they'll get a fresh offer soon enough
         }
         let text = self.host_text.lock().unwrap().clone()?;
+        // Content a frame can't carry gets an explicit error, not a doomed write that
+        // would kill the peer's serve thread (and never silent truncation). The guest
+        // keeps its current clipboard; chunking is the future fix.
+        if text.len() > limina_proto::MAX_CLIP_DATA {
+            log::warn!(
+                "clipboard: host content is {} bytes (> {} max); answering TOO_LARGE",
+                text.len(),
+                limina_proto::MAX_CLIP_DATA
+            );
+            return Some(Message::Error(limina_proto::ErrorMsg {
+                code: limina_proto::ERR_TOO_LARGE,
+                ref_type: limina_proto::msg_type::CLIP_REQUEST,
+                detail: format!("clipboard content is {} bytes", text.len()),
+            }));
+        }
         Some(Message::ClipData(ClipData {
             serial: req.serial,
             mime_type: TEXT_MIME.to_string(),

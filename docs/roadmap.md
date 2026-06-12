@@ -845,6 +845,24 @@ heartbeats.
   `CONFIG_EFI_STUB`, dracut initramfs on 16k, and BLS default selection with the stock fallback
   entry intact). (b) is also where the GOP+venus singleton fix gets exercised.
 
+**Clipboard test-coverage gaps (tracked 2026-06-12; ~~oversized-content~~ fixed same day with
+`l1_clipboard_oversized_content_keeps_channel_alive`):**
+- **`limina-agent-session` under automation** — the mutter-facing half (variant unwrapping,
+  cache-served transfers, reconnects) is live-verified only. Settled design: an L1 test with a
+  **mock-mutter helper** — a guest-side Rust binary that plays BOTH the session bus (a slice of
+  `org.freedesktop.DBus`: Hello/AddMatch/RequestName over a unix socket the helper's
+  `DBUS_SESSION_BUS_ADDRESS` points at) and the RemoteDesktop interfaces, scripted per test;
+  the real `limina-agent-session` runs against it in the L1 guest, the harness plays the macOS
+  side via the named pasteboard. Not trivial (a mini bus daemon), hence deferred — until then a
+  cheaper unit-test extraction of `unwrap_value`/bridge state is fair game.
+- **Initial-offer-on-connect** (host pushes its current clipboard to a late joiner) — live-verified;
+  the L1 test boots with an empty pasteboard so the path never fires there.
+- **Stale-serial races** — newest-wins exists on both sides; no test provokes an out-of-order
+  exchange yet.
+- **Multi-peer clipboard broadcast** + dead-peer pruning under broadcast failure.
+- **Helper resilience** — vsock reconnect after a supervisor restart; D-Bus session death → clean
+  exit (systemd restart into the new session).
+
 ---
 
 ## Milestone 6 — Dynamic memory (balloon, min..max)

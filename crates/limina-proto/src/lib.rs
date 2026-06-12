@@ -57,6 +57,14 @@ pub const CONTROL_PORT: u32 = u32::from_be_bytes(MAGIC);
 
 /// Error code: the peer received a message type it does not implement (not fatal).
 pub const ERR_UNSUPPORTED: u32 = 1;
+/// Error code: the requested content exceeds what a frame can carry (not fatal — the
+/// receiver keeps its current clipboard; chunking is the future fix, not a bigger frame).
+pub const ERR_TOO_LARGE: u32 = 2;
+
+/// Upper bound on clipboard content in a [`ClipData`] frame: [`MAX_PAYLOAD`] minus
+/// headroom for the CBOR envelope (serial + mime string + tags). A sender whose content
+/// exceeds this replies [`ERR_TOO_LARGE`] instead of attempting a doomed frame.
+pub const MAX_CLIP_DATA: usize = (MAX_PAYLOAD as usize) - 4096;
 
 /// Message type ids (the `msg_type` header byte).
 pub mod msg_type {

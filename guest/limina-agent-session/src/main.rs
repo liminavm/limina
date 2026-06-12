@@ -210,6 +210,21 @@ impl Bridge {
                     return; // stale: a newer offer is already on its way
                 }
                 match self.clip.selection_read(&r.mime_type) {
+                    // Content a frame can't carry gets an explicit error — a doomed
+                    // write_message would error and tear the channel down instead.
+                    Ok(data) if data.len() > limina_proto::MAX_CLIP_DATA => {
+                        eprintln!(
+                            "limina-agent-session: selection is {} bytes (> {} max); TOO_LARGE",
+                            data.len(),
+                            limina_proto::MAX_CLIP_DATA
+                        );
+                        let err = Message::Error(limina_proto::ErrorMsg {
+                            code: limina_proto::ERR_TOO_LARGE,
+                            ref_type: limina_proto::msg_type::CLIP_REQUEST,
+                            detail: format!("guest selection is {} bytes", data.len()),
+                        });
+                        self.send(CHANNEL_CLIPBOARD, &err);
+                    }
                     Ok(data) => {
                         let msg = Message::ClipData(ClipData {
                             serial: r.serial,
