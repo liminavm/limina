@@ -1,0 +1,23 @@
+# limina-agent-session — the per-session guest helper (M5 clipboard bridge, guest side).
+#
+# Runs as a systemd USER unit inside the graphical session (see
+# limina-agent-session.service): it needs the session D-Bus bus to drive mutter's
+# RemoteDesktop clipboard API, which the root limina-agent cannot reach. Holds its own
+# vsock connection to the host control plane (vsock connect needs no root) and
+# advertises the `clipboard` capability.
+[package]
+name = "limina-agent-session"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-only WITH LicenseRef-limina-exception"
+
+[[bin]]
+name = "limina-agent-session"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+limina-proto = { path = "../../crates/limina-proto" }
+# The session D-Bus client (mutter RemoteDesktop, fd passing included). Pure Rust, so
+# the no-C-toolchain musl cross-build keeps working.
+zbus = "5"

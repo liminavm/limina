@@ -722,9 +722,18 @@ installed via `scripts/install-guest-agent.sh` and **baked into the dev-enh gold
 — window-close on the seated desktop is now a verified orderly GNOME power-off (~1s,
 exit 0). Tests: limina-proto L0; `l1_agent` (protocol end-to-end through the shipped
 binaries); `l1_shutdown` (the supervisor-owned orderly path, exit 0 unforced in <5s);
-`l1_real_agent` (the product daemon, zero-config port + agent-driven power-off). Next:
-heartbeat-liveness surfacing, guest-tools delivery (sysext, below), then
-clipboard/virtiofs.
+`l1_real_agent` (the product daemon, zero-config port + agent-driven power-off);
+`l1_multi_agent` (two concurrent agents on the multi-peer registry). **The TEXT CLIPBOARD
+is LIVE end-to-end (2026-06-12):** `CHANNEL_CLIPBOARD` (OFFER/REQUEST/DATA, newest-serial
+wins both ways), the supervisor's NSPasteboard bridge (`crates/limina/src/clipboard.rs` —
+changeCount poller, self-change suppression, `LIMINA_PASTEBOARD` named-pasteboard test
+override, `l1_clipboard` proves both directions), and the **`limina-agent-session` user
+helper** (`guest/limina-agent-session`, zbus → mutter RemoteDesktop per the spike; systemd
+user unit, own vsock connection, caps=[clipboard]) — live-verified on the seated desktop
+(guest copy → `pbpaste`; `pbcopy` → Ctrl+Shift+V in ptyxis) and **baked into the dev-enh
+golden** (zero-install on fresh boots; host's current clipboard syncs on connect). Next:
+heartbeat-liveness surfacing, guest-tools delivery (sysext, below), images/files on the
+clipboard, virtiofs.
 
 **Key tasks:**
 1. **Guest agent + vsock control plane.** One multiplexed control connection over a single

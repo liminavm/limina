@@ -7,9 +7,11 @@
 # Members:
 #  - limina-init:  PID 1 of the L1 test guest (also hosts the in-init agent seed).
 #  - limina-agent: the product guest agent (control plane daemon for real distros).
+#  - limina-agent-session: the per-session user helper (clipboard bridge via mutter
+#    RemoteDesktop D-Bus; runs as a systemd user unit on the session bus).
 [workspace]
 resolver = "2"
-members = ["limina-init", "limina-agent"]
+members = ["limina-init", "limina-agent", "limina-agent-session"]
 
 # Tiny, panic-free static binaries: abort (never unwind), optimize for size.
 [profile.release]

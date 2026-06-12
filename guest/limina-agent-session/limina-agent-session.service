@@ -1,0 +1,20 @@
+# limina-agent-session — per-session limina helper (clipboard bridge).
+#
+# A systemd USER unit: install to /usr/lib/systemd/user/ and enable with
+# `systemctl --user enable --now limina-agent-session` (or globally via
+# `systemctl --user --global enable`). Tied to the graphical session: the
+# helper needs gnome-shell's RemoteDesktop D-Bus API, which only exists while
+# a Wayland session runs.
+
+[Unit]
+Description=limina per-session agent (clipboard bridge)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/local/bin/limina-agent-session
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
