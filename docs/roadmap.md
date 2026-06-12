@@ -787,7 +787,15 @@ clipboard/virtiofs.
      session bus — what gnome-remote-desktop uses), NOT a Wayland data-control protocol: mutter
      49.5 implements neither `wlr-data-control-unstable-v1` nor `ext-data-control-v1`, which also
      rules out the `wl-clipboard` shell-out for a background agent on stock GNOME. Works on the
-     **stock** tier (no mutter patch needed). Keep data-control as the later non-GNOME-guest path.
+     **stock** tier (no mutter patch needed) — **spike-verified end-to-end 2026-06-12, both
+     directions, real apps** (`spikes/clipboard-remotedesktop/RESULTS.md`). Keep data-control as
+     the later non-GNOME-guest path.
+   - **Design consequence (from the spike):** the clipboard lives in a per-session **user**
+     helper (`limina-agent-session` + systemd user unit; the RemoteDesktop session needs the
+     user's bus and must stay resident to service SelectionTransfer), so the **control plane
+     must accept multiple concurrent guest connections** (root agent + session helper; vsock
+     connect needs no root). Host `ControlPlane` currently stores a single agent stream —
+     extend to per-connection HELLO/caps before the bridge lands.
    - **M5 = text-only.** Images is a follow-up; files/primary-selection/HTML deferred.
 
 **libkrun patches:** none for the transport (vsock + virtiofs overlays already exist). Possibly a
@@ -803,9 +811,15 @@ heartbeats.
   / `ext-data-control-v1`?**~~ **ANSWERED (2026-06-12, by grepping `third_party/mutter` 49.5 — no
   runtime spike needed; we vendor the compositor):** it implements **neither**, so no data-control
   client (including `wl-clipboard`) can serve an unfocused agent on stock GNOME. The sanctioned
-  channel is mutter's **RemoteDesktop D-Bus clipboard API** (see task 3). Residual spike: confirm
-  a non-gnome-remote-desktop session client may create a RemoteDesktop session (permissions/
-  portal), and prototype get/set from a systemd user unit.
+  channel is mutter's **RemoteDesktop D-Bus clipboard API** (see task 3). ~~Residual spike:
+  confirm a non-gnome-remote-desktop session client may create a RemoteDesktop session
+  (permissions/portal), and prototype get/set from a systemd user unit.~~ **DONE (2026-06-12,
+  `spikes/clipboard-remotedesktop/`): YES on all counts** — no access control on CreateSession
+  (verified in vendored source + live), and a session-bus-only background client (the systemd
+  user-unit shape) set + read the selection AND round-tripped through real apps both ways
+  (paste into ptyxis → file; copy from gnome-text-editor → SelectionRead). Stock guest, zero
+  modifications. Operational traps (stuck-modifier keysym injection — use keycodes; resident
+  owner required; O_NONBLOCK fds; overview swallows input) in the spike RESULTS.md.
 - Can the NSPasteboard promised-data provider block long enough to round-trip a guest REQUEST/DATA
   without AppKit timing out the paste?
 - virtiofs DAX alignment on 16 KiB host pages. (Less scary than when written: the enhanced tier
