@@ -2,14 +2,16 @@
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 # Copyright © 2026 Gustavo Noronha Silva
 
-# Trace-replay spike driver: capture a glmark2 scene on zink->venus in the seated guest
-# and replay it on both backends. See RESULTS.md for what works and what's blocked.
+# Trace-replay driver: capture a glmark2 scene on zink->venus in the seated guest,
+# replay it on both backends, and pull the trace into fixtures/traces/ (the
+# venus_replay test fixture). See RESULTS.md for the pipeline details.
 #
 # Usage: spikes/trace-replay/capture-replay.sh [scene]   (default: build)
 # Needs: the seated desktop up with --net (boot-seated-kk.sh), apitrace installed in
-# the guest (sudo dnf install apitrace).
+# the guest (baked into dev-enh since 2026-06-12).
 set -euo pipefail
 SCENE="${1:-build}"
+ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 
 SSH=(ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null claude@127.0.0.1)
 
@@ -33,3 +35,8 @@ env \$BASE GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1 eglretrace --headless
 echo '== replay on zink->venus (works since the 2026-06-12 fix, see RESULTS.md):'
 env \$BASE \$ZINK eglretrace --headless --benchmark ~/traces/glmark2-$SCENE.trace 2>&1 | tail -1
 "
+
+mkdir -p "$ROOT/fixtures/traces"
+scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    "claude@127.0.0.1:traces/glmark2-$SCENE.trace" "$ROOT/fixtures/traces/"
+echo "fixture updated: fixtures/traces/glmark2-$SCENE.trace"

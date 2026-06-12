@@ -52,6 +52,21 @@ const DEFAULT_TEST_DISK: &str = "Fedora-Workstation-43.test.raw";
 /// well-known vfkit MAC the guest gets the static `.2` lease, so this reaches its sshd.
 const FORWARDED_SSH_ADDR: &str = "127.0.0.1:2222";
 
+/// Shared scp options matching [`Guest::ssh_exec`]'s ssh invocation.
+const SCP_OPTS: [&str; 11] = [
+    "-P",
+    "2222",
+    "-o",
+    "StrictHostKeyChecking=no",
+    "-o",
+    "UserKnownHostsFile=/dev/null",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "LogLevel=ERROR",
+    "-q",
+];
+
 /// Is HVF-backed boot testing enabled for this run?
 ///
 /// Returns true iff `LIMINA_HVF_TESTS` is set to a truthy value (`1`/`true`/`yes`). Boot
@@ -348,6 +363,34 @@ impl GuestConfig {
             control_socket: false,
             envs: Vec::new(),
         })
+    }
+
+    /// Like [`GuestConfig::enhanced_fedora_from_env`], but booting the **seated dev-enh
+    /// golden** (`Fedora-Workstation-43.dev-enh.raw`, override `LIMINA_TEST_DISK_ENH`): gdm
+    /// autologin to a gnome-shell-on-venus session with `/opt/mesa-zink`, the x11-enabled
+    /// venus ICD, and `apitrace` baked in (see memory `limina-fedora-access` for the bake
+    /// inventory). This is the vehicle for tests that need a *running graphical session*
+    /// (Xwayland, the zink→venus GL stack) rather than just venus enumeration.
+    ///
+    /// The caller must still pass the host Vulkan ICD for the worker (KosmicKrisp) via
+    /// [`GuestConfig::with_env`] — see `spikes/venus-draw-probe/boot-seated-kk.sh` for the
+    /// canonical seated-boot environment. Returns an error (the test should SKIP) if the
+    /// 16 KiB kernel or the dev-enh disk is missing.
+    pub fn seated_fedora_from_env() -> Result<GuestConfig> {
+        let mut cfg = GuestConfig::enhanced_fedora_from_env()?;
+        let disk = match std::env::var("LIMINA_TEST_DISK_ENH") {
+            Ok(p) => PathBuf::from(p),
+            Err(_) => repo_root().join("Fedora-Workstation-43.dev-enh.raw"),
+        };
+        anyhow::ensure!(
+            disk.exists(),
+            "seated dev-enh disk not found at {disk:?} (set LIMINA_TEST_DISK_ENH); this is the \
+             machine-local seated golden, see memory `limina-fedora-access`"
+        );
+        if let Boot::KernelDisk { disk: d, .. } = &mut cfg.boot {
+            *d = disk;
+        }
+        Ok(cfg)
     }
 
     /// Attach a user-mode NAT NIC. The supervisor spawns a gvproxy gateway and captures its
@@ -1106,6 +1149,67 @@ impl Guest {
             );
         }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// Keep running `remote_cmd` over SSH until it succeeds (exit 0) or `timeout` elapses;
+    /// returns the first successful stdout. For waiting on guest-side state that comes up
+    /// asynchronously after sshd (e.g. the autologin graphical session).
+    pub fn ssh_poll(&self, remote_cmd: &str, timeout: Duration) -> Result<String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let last_err = match self.ssh_exec(remote_cmd) {
+                Ok(out) => return Ok(out),
+                Err(e) => e,
+            };
+            if Instant::now() >= deadline {
+                bail!("`{remote_cmd}` did not succeed within {timeout:?}; last: {last_err}");
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+
+    /// Copy a local file into the guest at `remote_path` via scp (same forward and login
+    /// as [`Guest::ssh_exec`]).
+    pub fn scp_to_guest(&self, local: &Path, remote_path: &str) -> Result<()> {
+        let out = Command::new("scp")
+            .args(SCP_OPTS)
+            .arg(local)
+            .arg(format!("claude@127.0.0.1:{remote_path}"))
+            .output()
+            .context("spawning scp to the guest")?;
+        anyhow::ensure!(
+            out.status.success(),
+            "scp {local:?} -> guest:{remote_path} failed ({}):\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        Ok(())
+    }
+
+    /// Copy guest files matching `remote_glob` (expanded by the guest shell) into the local
+    /// directory `local_dir` via scp.
+    pub fn scp_from_guest(&self, remote_glob: &str, local_dir: &Path) -> Result<()> {
+        fs::create_dir_all(local_dir)
+            .with_context(|| format!("creating {local_dir:?} for scp output"))?;
+        let out = Command::new("scp")
+            .args(SCP_OPTS)
+            .arg(format!("claude@127.0.0.1:{remote_glob}"))
+            .arg(local_dir)
+            .output()
+            .context("spawning scp from the guest")?;
+        anyhow::ensure!(
+            out.status.success(),
+            "scp guest:{remote_glob} -> {local_dir:?} failed ({}):\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        Ok(())
+    }
+
+    /// The per-guest scratch directory (removed on drop) — a place for test-local
+    /// artifacts like pulled snapshot frames.
+    pub fn scratch_dir(&self) -> &Path {
+        &self.scratch
     }
 
     /// Feed `line` (a newline is appended) to the guest serial console input. Requires

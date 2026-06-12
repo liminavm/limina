@@ -37,6 +37,9 @@ echo "==> running boot tests (LIMINA_HVF_TESTS=1)"
 # `venus` is the enhanced-tier (16 KiB kernel) 3D test; it SKIPs instantly unless
 # `Image-16k` exists (build with `scripts/build-test-kernel.sh PAGESIZE=16k`), and when it
 # does it runs a full Fedora-on-custom-kernel boot (~minutes) to confirm venus enumerates.
+# `venus_replay` is the tier-2 RENDERING test (seated dev-enh boot + GL trace replay,
+# venus vs llvmpipe pixel compare); it SKIPs without the dev-enh golden, the KK ICD, or
+# the trace fixture (fixtures/traces/ — regenerate via spikes/trace-replay/).
 LIMINA_HVF_TESTS=1 cargo test ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina-test \
-    --test l1_boot --test l1_agent --test l1_shutdown --test l1_real_agent --test l1_multi_agent --test l1_clipboard --test l1_session_helper --test l1_display --test l1_console --test l1_serial --test boot --test net --test venus \
+    --test l1_boot --test l1_agent --test l1_shutdown --test l1_real_agent --test l1_multi_agent --test l1_clipboard --test l1_session_helper --test l1_display --test l1_console --test l1_serial --test boot --test net --test venus --test venus_replay \
     -- --nocapture --test-threads=1 "$@"

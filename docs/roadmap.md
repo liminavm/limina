@@ -86,6 +86,36 @@ which builds → signs the worker → runs the gate. CI needs a **self-hosted Ap
 runner** (hosted macOS runners can't do hypervisor); the multi-GB Fedora image is hosted
 out-of-repo for L2.
 
+**Trace-replay rendering tests (tier-2 pixels; phase 1 ✅ 2026-06-12).** Rendering
+correctness can't be asserted from exit codes or FPS (every historical venus bug — the
+all-zero vertex buffer, #32 stencil clip, the u8 sentinel — passed those); the replay
+tests mechanize the pixel-verify discipline. Design: capture a GL workload **once** with
+apitrace in the seated guest, then on every run replay the trace **twice in the same
+boot** — zink→venus and llvmpipe — and tolerance-compare snapshot frames. The software
+rasterizer is the reference, so there are no stored golden images and intentional
+mesa/KK changes never invalidate fixtures. Implemented: `venus_replay`
+(`crates/limina-test/tests/venus_replay.rs`) boots the seated dev-enh golden (KK ICD,
+autologin Xwayland session — eglretrace is X11-only), guards the backend via
+GL_RENDERER (the env-trap / silent-llvmpipe-fallback check, which doubles as the
+X11-EGL-crash regression test for mesa patch 0006), replays
+`fixtures/traces/glmark2-build.trace` (gitignored, regenerate via
+`spikes/trace-replay/capture-replay.sh`), and compares 47 frame pairs host-side
+(≤1% pixels off by >8/255; measured: 0). ~2.5 min; SKIPs cleanly without the
+machine-local artifacts. **Phase 2 (same day): `venus_vk_replay` — native Vulkan**
+(no zink): gfxreconstruct v1.0.4 (not in Fedora; built via
+`scripts/build-gfxreconstruct.sh`, `/opt/gfxreconstruct` baked into dev-enh) captures
+vkcube on venus; replay venus (strict) vs lavapipe (`--remove-unsupported` — the venus
+capture records instance extensions lavapipe lacks). The reference leg's backend is
+PROVEN via gfxrecon's `Replay device info` mismatch warning (FPS can't tell — both
+legs vsync-cap ~60 through the session WSI); fixture
+`fixtures/traces/vkcube.gfxr`, regenerate via
+`spikes/trace-replay/capture-replay-vk.sh`. Remaining phases (memory
+`limina-trace-replay-plan`): the **perf trend ledger** (its own on-demand script,
+explicitly NOT a pass/fail gate — VM-on-dev-machine variance), and the real prize:
+capturing gnome-shell/mutter compositing itself as a replayable fixture. NOT covered by
+replay: the present/scanout path (fence-present, zero-copy) — that stays with the
+seated-desktop + iosdump oracles.
+
 **Rule: fix bugs RED-first.** Every bug fix starts with a failing test that reproduces
 it (see CLAUDE.md). L1 is what makes this cheap enough to always do.
 

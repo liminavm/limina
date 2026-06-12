@@ -4,6 +4,11 @@
 *.qcow2
 *.img
 
+# Regenerable trace fixtures for the replay tests (like the .raw images:
+# kept locally; regenerate via spikes/trace-replay/capture-replay*.sh)
+/fixtures/traces/*.trace
+/fixtures/traces/*.gfxr
+
 # Rust build artifacts
 /target
 /guest/target

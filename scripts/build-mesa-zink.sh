@@ -32,6 +32,7 @@ MESA_COMMIT="${MESA_COMMIT:-3515c52e8cf31549b6068ef43c23c89830b6db46}"
 MESA_GIT="${MESA_GIT:-https://gitlab.freedesktop.org/mesa/mesa.git}"
 
 OUT="$REPO/target/test-guest/mesa-zink"
+OUTROOT="$REPO/target/test-guest"
 mkdir -p "$OUT"
 
 # Persistent ext4 build volume (source clone + ccache + ninja objects survive re-runs),
@@ -43,6 +44,7 @@ container run --rm \
   --cpus 8 --memory 8g \
   -v "$REPO/patches/mesa:/patches:ro" \
   -v "$OUT:/out" \
+  -v "$OUTROOT:/outroot" \
   -v "$VOL:/build" \
   fedora:43 bash -euxo pipefail -c '
     dnf -y install git meson ninja-build gcc gcc-c++ python3-mako bison flex glslang-devel zstd >/dev/null
@@ -77,7 +79,9 @@ container run --rm \
     # Export the install tree (becomes /opt/mesa-zink in the guest). Tar FIRST (the
     # canonical delivery artifact), then mirror into /out — cp -a cannot set times on
     # the bind-mount root, so tolerate that (files copy fine; only the root mtime fails).
-    tar -C /tmp/stage/opt -cf - mesa-zink | zstd -19 -o /out/../mesa-zink.tar.zst -f
+    # NOTE the tar must go through a bind mount (/outroot): "/out/.." is the container
+    # filesystem, not the host — an earlier version silently dropped the tar there.
+    tar -C /tmp/stage/opt -cf - mesa-zink | zstd -19 -o /outroot/mesa-zink.tar.zst -f
     rm -rf /out/*
     cp -a /tmp/stage/opt/mesa-zink/. /out/ 2>/dev/null || cp -rp /tmp/stage/opt/mesa-zink/. /out/ 2>/dev/null || true
     ls -la /out/lib64/dri/ | grep -iE "zink|dril" || true

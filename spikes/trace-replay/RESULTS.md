@@ -1,4 +1,31 @@
-# Trace-replay graphics tests — phase-1 spike results (2026-06-12)
+# Trace-replay graphics tests — phase-1/2 spike results (2026-06-12)
+
+## Phase 2 (native Vulkan via gfxreconstruct) — DONE same day
+
+gfxreconstruct is NOT in Fedora repos; we build v1.0.4 ourselves in the Apple
+`container` env (`scripts/build-gfxreconstruct.sh` — needs lz4-devel and
+`-Wno-error=deprecated-declarations` on gcc 15) and bake `/opt/gfxreconstruct`
+into the dev-enh golden. Proven pipeline (now the `venus_vk_replay` test +
+`capture-replay-vk.sh`):
+
+- **Capture:** `VK_LAYER_PATH=/opt/gfxreconstruct/share/vulkan/explicit_layer.d
+  LD_LIBRARY_PATH=/opt/gfxreconstruct/lib64
+  VK_INSTANCE_LAYERS=VK_LAYER_LUNARG_gfxreconstruct GFXRECON_CAPTURE_FILE=…
+  GFXRECON_CAPTURE_FILE_TIMESTAMP=false vkcube --c 200` on venus in the seated
+  session (Wayland WSI; ~380 KB for 200 frames).
+- **Replay:** `gfxrecon-replay --screenshots 10,50,… --screenshot-format png`.
+  The **lavapipe leg needs `--remove-unsupported`** — the venus capture records
+  instance extensions lavapipe lacks and vkCreateInstance hard-fails the replay
+  otherwise. The venus leg stays strict (same driver as capture).
+- **Backend proof, learned the suspicious way:** venus and lavapipe replays can
+  report ~identical FPS (both vsync-capped ~60 through the session WSI — the
+  prototype's lavapipe 8.9fps was just live-desktop contention), so FPS cannot
+  distinguish the legs. The reliable oracle is gfxrecon's `Replay device info`
+  warning, emitted iff the replay device differs from the capture device — the
+  test asserts it NAMES llvmpipe on the reference leg and is ABSENT on the venus
+  leg. Frames match pixel-perfect (0 off at >8/255) across both backends.
+
+## Phase-1 results (GL via apitrace)
 
 Plan context: memory `limina-trace-replay-plan` (apitrace/gfxreconstruct replay tests;
 correctness = llvmpipe-reference pixel compare; perf = trend ledger, NOT a gate).
@@ -73,10 +100,16 @@ null deref in kopper's X11 displaytarget path — we own `/opt/mesa-zink`
 ## Consequences for the test plan
 
 1. ~~Fix the kopper X11 null-deref first~~ **DONE (see above)** — venus replay runs.
-2. The `venus_replay` test shape stands as planned: capture fixtures via this
-   spike's script, replay venus + llvmpipe in the same boot, snapshot
-   (`-S`/`--snapshot-interval`), tolerance-compare. (Snapshot comparison itself is
-   still UNTESTED on venus — first thing to prove next.)
+2. ~~Prove snapshot comparison on venus~~ **DONE + test SHIPPED (2026-06-12):**
+   `eglretrace --snapshot-interval=100 -s` produces identical-call-numbered PNG sets on
+   both backends; venus-vs-llvmpipe frames of the glmark2-build trace differ by **0
+   pixels** (at >8/255 channel tolerance) while wrong-frame / vs-black controls differ
+   by >20% — the tolerance compare has enormous headroom. Implemented as the
+   `venus_replay` test target (`crates/limina-test/tests/venus_replay.rs`, in
+   test-boot.sh): seated dev-enh boot, GL_RENDERER backend guard (env-trap proof +
+   X11-crash regression), both replays, host-side compare of 47 frame pairs. First run
+   green in 154 s. Fixture lives at `fixtures/traces/glmark2-build.trace` (gitignored);
+   this spike's script regenerates AND pulls it.
 3. Longer-term alternative if X11 stays awkward (see the perf thread above): patch
    apitrace for a Wayland or surfaceless retrace backend (we own everything).
 
