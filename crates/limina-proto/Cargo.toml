@@ -1,0 +1,17 @@
+# limina-proto — the host<->guest control-plane wire protocol (roadmap M5 task 1, D8).
+#
+# Shared by BOTH sides of the vsock channel: the host (limina supervisor / limina-test
+# harness, macOS arm64) and the guest agent (limina-init / limina-agent,
+# aarch64-unknown-linux-musl — the guest workspace path-depends on this crate, so keep
+# the dependency tree tiny and the code std-only-portable).
+[package]
+name = "limina-proto"
+description = "limina host<->guest control-plane wire protocol (frames + CBOR messages)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# CBOR payloads (roadmap M5: 16-byte frame header + CBOR). minicbor: small, no_std-capable,
+# derive-based — suits the static musl guest binary.
+minicbor = { version = "2", features = ["alloc", "derive"] }

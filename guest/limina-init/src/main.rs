@@ -4,16 +4,15 @@
 //! limina-init — PID 1 for the L1 tiny test guest, and the seed of the future limina-agent.
 //!
 //! Flow: prove userspace (console marker), then — if the kernel cmdline carries
-//! `limina.agent_port=<N>` — run a tiny **vsock agent** that connects to the host
-//! (`CID_HOST:N`) and speaks a line protocol so the host test harness can make
-//! STRUCTURED assertions (not console scraping). Finally power the VM off cleanly via
-//! PSCI. Every path ends at [`power_off`]; as PID 1 it must never return or panic.
-//!
-//! vsock protocol (guest → host on connect):
-//!   send: `READY pagesize=<N>\n`
-//!   recv: one line (e.g. `POWEROFF`) — content ignored; it just gates shutdown.
+//! `limina.agent_port=<N>` — run the **control-plane agent** ([`agent`]): it connects to
+//! the host (`CID_HOST:N`) and speaks the limina-proto framed protocol (HELLO/WELCOME,
+//! HEARTBEAT, SHUTDOWN/SHUTDOWN_ACK) so the host harness makes STRUCTURED assertions
+//! (not console scraping). Finally power the VM off cleanly via PSCI. Every path ends
+//! at [`power_off`]; as PID 1 it must never return or panic.
 
 use std::ffi::CStr;
+
+mod agent;
 
 /// Marker the host harness asserts on. Keep in sync with `crates/limina-test`.
 const MARKER: &[u8] = b"\n[limina-init] LIMINA_L1_USERSPACE_OK\n";
@@ -22,7 +21,7 @@ fn main() {
     mount_pseudo_fs();
     announce();
     if let Some(port) = agent_port_from_cmdline() {
-        run_agent(port);
+        agent::run(port);
     }
     // `limina.console_echo`: prove the serial console works both ways for the host harness —
     // echo each line back as `ECHO:<line>` until `QUIT`. The seed of typing commands at the
@@ -84,49 +83,6 @@ fn agent_port_from_cmdline() -> Option<u32> {
         }
     }
     None
-}
-
-/// Connect to the host over vsock (`CID_HOST:port`) and run the tiny agent protocol.
-/// Best-effort: any failure just returns (we still power off).
-fn run_agent(port: u32) {
-    unsafe {
-        let fd = libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM, 0);
-        if fd < 0 {
-            return;
-        }
-        let mut addr: libc::sockaddr_vm = std::mem::zeroed();
-        addr.svm_family = libc::AF_VSOCK as libc::sa_family_t;
-        addr.svm_port = port;
-        addr.svm_cid = libc::VMADDR_CID_HOST;
-
-        // The host listener + libkrun muxer may need a moment after boot; retry briefly.
-        let mut connected = false;
-        for _ in 0..100 {
-            let r = libc::connect(
-                fd,
-                &addr as *const _ as *const libc::sockaddr,
-                std::mem::size_of::<libc::sockaddr_vm>() as libc::socklen_t,
-            );
-            if r == 0 {
-                connected = true;
-                break;
-            }
-            sleep_ms(20);
-        }
-        if !connected {
-            libc::close(fd);
-            return;
-        }
-
-        let pagesize = libc::sysconf(libc::_SC_PAGESIZE);
-        let hello = format!("READY pagesize={pagesize}\n");
-        write_all(fd, hello.as_bytes());
-
-        // Wait for a command line from the host (content ignored; gates shutdown).
-        let mut buf = [0u8; 64];
-        let _ = libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
-        libc::close(fd);
-    }
 }
 
 /// Marker the host harness waits for before sending input — proves guest→host output works.

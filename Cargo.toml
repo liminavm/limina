@@ -35,6 +35,7 @@ krun_input   = { package = "krun-input",   path = "third_party/libkrun/src/input
 # --- our crates ---
 limina-display = { path = "crates/limina-display" }
 limina-input   = { path = "crates/limina-input" }
+limina-proto   = { path = "crates/limina-proto" }
 
 # --- shared third-party ---
 anyhow            = "1"

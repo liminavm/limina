@@ -1,0 +1,390 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+// Copyright © 2026 Gustavo Noronha Silva
+
+//! The limina host↔guest control-plane wire protocol (roadmap M5 task 1, decision D8).
+//!
+//! One multiplexed connection (vsock: guest connects out to `CID_HOST`, the host listens
+//! on a unix socket libkrun bridges) carries every control-plane conversation. Each
+//! message is a **16-byte frame header + a CBOR payload**:
+//!
+//! ```text
+//! offset  size  field
+//!      0     4  magic   b"LIMI"
+//!      4     1  version (PROTOCOL_VERSION)
+//!      5     1  msg_type
+//!      6     2  flags   (reserved, 0; little-endian)
+//!      8     4  channel (0 = control; future: clipboard, display, …; little-endian)
+//!     12     4  payload length (little-endian; <= MAX_PAYLOAD)
+//! ```
+//!
+//! Robustness rules (the load-bearing ones):
+//! - **Unknown message types are NEVER fatal**: they decode to [`Message::Unknown`] and the
+//!   receiver replies [`Message::Error`] with [`ERR_UNSUPPORTED`], keeping the channel up —
+//!   that's what lets old agents talk to new hosts and vice versa.
+//! - Capability negotiation happens in HELLO/WELCOME (string capability sets), not via
+//!   header-version bumps; the header version only changes if the *framing* changes.
+//! - Payload length is bounded by [`MAX_PAYLOAD`] so a corrupt header can't OOM either end.
+//!
+//! First conversation (the M5 task-1 set):
+//! guest → HELLO (agent id, capabilities, facts) → host replies WELCOME (its capabilities);
+//! guest sends periodic HEARTBEAT; host may send SHUTDOWN, the guest acks with SHUTDOWN_ACK
+//! and powers itself off (the orderly window-close path; `krun_get_shutdown_eventfd` remains
+//! the forcing fallback).
+//!
+//! This crate is shared by the macOS host and the static musl guest binary — std-portable
+//! code only, tiny dependency tree (minicbor).
+
+use std::io::{self, Read, Write};
+
+use minicbor::{Decode, Encode};
+
+/// Frame magic: the first four bytes of every frame.
+pub const MAGIC: [u8; 4] = *b"LIMI";
+/// Framing version (bump only if the 16-byte header layout itself changes).
+pub const PROTOCOL_VERSION: u8 = 1;
+/// Size of the fixed frame header.
+pub const HEADER_LEN: usize = 16;
+/// Upper bound on a payload, so a corrupt/hostile length can't trigger huge allocations.
+pub const MAX_PAYLOAD: u32 = 1 << 20;
+/// The control channel (HELLO/WELCOME/HEARTBEAT/SHUTDOWN live here).
+pub const CHANNEL_CONTROL: u32 = 0;
+
+/// Error code: the peer received a message type it does not implement (not fatal).
+pub const ERR_UNSUPPORTED: u32 = 1;
+
+/// Message type ids (the `msg_type` header byte).
+pub mod msg_type {
+    pub const HELLO: u8 = 1;
+    pub const WELCOME: u8 = 2;
+    pub const HEARTBEAT: u8 = 3;
+    pub const SHUTDOWN: u8 = 4;
+    pub const SHUTDOWN_ACK: u8 = 5;
+    pub const ERROR: u8 = 6;
+}
+
+/// Guest → host greeting: who the agent is, what it can do, and cheap boot-time facts.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct Hello {
+    /// Agent identification, e.g. `limina-init/0.1`.
+    #[n(0)]
+    pub agent: String,
+    /// Capability strings (e.g. `shutdown`, `heartbeat`). Unknown ones are ignored.
+    #[n(1)]
+    pub caps: Vec<String>,
+    /// The guest's page size — the first structured fact the host cares about (16 KiB
+    /// guests get the enhanced memory path).
+    #[n(2)]
+    pub pagesize: u64,
+}
+
+/// Host → guest reply to [`Hello`]: the host's capability set.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct Welcome {
+    #[n(0)]
+    pub caps: Vec<String>,
+}
+
+/// Guest → host liveness beacon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub struct Heartbeat {
+    /// Monotonic per-connection sequence number.
+    #[n(0)]
+    pub seq: u64,
+}
+
+/// Host → guest: please power off cleanly (the orderly window-close path).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub struct Shutdown {
+    /// How long the host will wait before forcing teardown; advisory.
+    #[n(0)]
+    pub grace_ms: u64,
+}
+
+/// Either direction: a non-fatal protocol error report.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct ErrorMsg {
+    /// One of the `ERR_*` codes.
+    #[n(0)]
+    pub code: u32,
+    /// The `msg_type` byte this error refers to (0 if not applicable).
+    #[n(1)]
+    pub ref_type: u8,
+    /// Human-readable detail (for logs; never parsed).
+    #[n(2)]
+    pub detail: String,
+}
+
+/// A decoded control-plane message. `Unknown` carries anything from a newer peer — the
+/// receiver answers with `ERR_UNSUPPORTED` instead of dropping the connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Message {
+    Hello(Hello),
+    Welcome(Welcome),
+    Heartbeat(Heartbeat),
+    Shutdown(Shutdown),
+    /// Empty payload: acknowledges a [`Shutdown`]; the guest powers off right after.
+    ShutdownAck,
+    Error(ErrorMsg),
+    Unknown {
+        msg_type: u8,
+        payload: Vec<u8>,
+    },
+}
+
+impl Message {
+    /// The wire `msg_type` byte for this message.
+    pub fn msg_type(&self) -> u8 {
+        match self {
+            Message::Hello(_) => msg_type::HELLO,
+            Message::Welcome(_) => msg_type::WELCOME,
+            Message::Heartbeat(_) => msg_type::HEARTBEAT,
+            Message::Shutdown(_) => msg_type::SHUTDOWN,
+            Message::ShutdownAck => msg_type::SHUTDOWN_ACK,
+            Message::Error(_) => msg_type::ERROR,
+            Message::Unknown { msg_type, .. } => *msg_type,
+        }
+    }
+
+    /// The convenience ERROR reply for an unsupported message type.
+    pub fn unsupported(ref_type: u8) -> Message {
+        Message::Error(ErrorMsg {
+            code: ERR_UNSUPPORTED,
+            ref_type,
+            detail: format!("unsupported message type {ref_type}"),
+        })
+    }
+
+    fn encode_payload(&self) -> io::Result<Vec<u8>> {
+        fn cbor<T: Encode<()>>(v: &T) -> io::Result<Vec<u8>> {
+            minicbor::to_vec(v).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        }
+        match self {
+            Message::Hello(m) => cbor(m),
+            Message::Welcome(m) => cbor(m),
+            Message::Heartbeat(m) => cbor(m),
+            Message::Shutdown(m) => cbor(m),
+            Message::ShutdownAck => Ok(Vec::new()),
+            Message::Error(m) => cbor(m),
+            Message::Unknown { payload, .. } => Ok(payload.clone()),
+        }
+    }
+
+    fn decode_payload(msg_type_byte: u8, payload: Vec<u8>) -> io::Result<Message> {
+        fn cbor<'b, T: Decode<'b, ()>>(bytes: &'b [u8]) -> io::Result<T> {
+            minicbor::decode(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        }
+        Ok(match msg_type_byte {
+            msg_type::HELLO => Message::Hello(cbor(&payload)?),
+            msg_type::WELCOME => Message::Welcome(cbor(&payload)?),
+            msg_type::HEARTBEAT => Message::Heartbeat(cbor(&payload)?),
+            msg_type::SHUTDOWN => Message::Shutdown(cbor(&payload)?),
+            msg_type::SHUTDOWN_ACK => Message::ShutdownAck,
+            msg_type::ERROR => Message::Error(cbor(&payload)?),
+            other => Message::Unknown {
+                msg_type: other,
+                payload,
+            },
+        })
+    }
+}
+
+/// The fixed 16-byte header of every frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameHeader {
+    pub version: u8,
+    pub msg_type: u8,
+    pub flags: u16,
+    pub channel: u32,
+    pub len: u32,
+}
+
+impl FrameHeader {
+    pub fn encode(&self) -> [u8; HEADER_LEN] {
+        let mut b = [0u8; HEADER_LEN];
+        b[0..4].copy_from_slice(&MAGIC);
+        b[4] = self.version;
+        b[5] = self.msg_type;
+        b[6..8].copy_from_slice(&self.flags.to_le_bytes());
+        b[8..12].copy_from_slice(&self.channel.to_le_bytes());
+        b[12..16].copy_from_slice(&self.len.to_le_bytes());
+        b
+    }
+
+    pub fn decode(b: &[u8; HEADER_LEN]) -> io::Result<FrameHeader> {
+        if b[0..4] != MAGIC {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "bad frame magic (not a limina control stream?)",
+            ));
+        }
+        let h = FrameHeader {
+            version: b[4],
+            msg_type: b[5],
+            flags: u16::from_le_bytes([b[6], b[7]]),
+            channel: u32::from_le_bytes([b[8], b[9], b[10], b[11]]),
+            len: u32::from_le_bytes([b[12], b[13], b[14], b[15]]),
+        };
+        if h.len > MAX_PAYLOAD {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("frame payload {} exceeds MAX_PAYLOAD {MAX_PAYLOAD}", h.len),
+            ));
+        }
+        Ok(h)
+    }
+}
+
+/// Write one message as a frame. A frame is written with a single `write_all` of the
+/// header followed by one of the payload — small messages on a SOCK_STREAM byte stream;
+/// the reader reassembles via `read_exact` regardless.
+pub fn write_message(w: &mut impl Write, channel: u32, msg: &Message) -> io::Result<()> {
+    let payload = msg.encode_payload()?;
+    if payload.len() as u64 > MAX_PAYLOAD as u64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "payload exceeds MAX_PAYLOAD",
+        ));
+    }
+    let header = FrameHeader {
+        version: PROTOCOL_VERSION,
+        msg_type: msg.msg_type(),
+        flags: 0,
+        channel,
+        len: payload.len() as u32,
+    };
+    w.write_all(&header.encode())?;
+    w.write_all(&payload)?;
+    w.flush()
+}
+
+/// Read one message (blocking until a full frame arrives). Unknown message types come
+/// back as [`Message::Unknown`] — the caller decides to reply `ERR_UNSUPPORTED`, never
+/// treats it as a stream error. Returns `(channel, message)`.
+pub fn read_message(r: &mut impl Read) -> io::Result<(u32, Message)> {
+    let mut hbuf = [0u8; HEADER_LEN];
+    r.read_exact(&mut hbuf)?;
+    let header = FrameHeader::decode(&hbuf)?;
+    let mut payload = vec![0u8; header.len as usize];
+    r.read_exact(&mut payload)?;
+    let msg = Message::decode_payload(header.msg_type, payload)?;
+    Ok((header.channel, msg))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn round_trip(msg: Message) -> (u32, Message) {
+        let mut buf = Vec::new();
+        write_message(&mut buf, CHANNEL_CONTROL, &msg).expect("encode");
+        read_message(&mut Cursor::new(buf)).expect("decode")
+    }
+
+    #[test]
+    fn header_round_trip() {
+        let h = FrameHeader {
+            version: PROTOCOL_VERSION,
+            msg_type: msg_type::HELLO,
+            flags: 0,
+            channel: 7,
+            len: 42,
+        };
+        assert_eq!(FrameHeader::decode(&h.encode()).unwrap(), h);
+    }
+
+    #[test]
+    fn messages_round_trip() {
+        let msgs = [
+            Message::Hello(Hello {
+                agent: "limina-init/0.1".into(),
+                caps: vec!["shutdown".into(), "heartbeat".into()],
+                pagesize: 16384,
+            }),
+            Message::Welcome(Welcome {
+                caps: vec!["shutdown".into()],
+            }),
+            Message::Heartbeat(Heartbeat { seq: 3 }),
+            Message::Shutdown(Shutdown { grace_ms: 5000 }),
+            Message::ShutdownAck,
+            Message::Error(ErrorMsg {
+                code: ERR_UNSUPPORTED,
+                ref_type: 200,
+                detail: "unsupported message type 200".into(),
+            }),
+        ];
+        for msg in msgs {
+            let (channel, decoded) = round_trip(msg.clone());
+            assert_eq!(channel, CHANNEL_CONTROL);
+            assert_eq!(decoded, msg);
+        }
+    }
+
+    #[test]
+    fn unknown_type_is_not_an_error() {
+        let (_, decoded) = round_trip(Message::Unknown {
+            msg_type: 250,
+            payload: vec![1, 2, 3],
+        });
+        match decoded {
+            Message::Unknown { msg_type, payload } => {
+                assert_eq!(msg_type, 250);
+                assert_eq!(payload, vec![1, 2, 3]);
+            }
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn channel_is_preserved() {
+        let mut buf = Vec::new();
+        write_message(&mut buf, 9, &Message::Heartbeat(Heartbeat { seq: 1 })).unwrap();
+        let (channel, _) = read_message(&mut Cursor::new(buf)).unwrap();
+        assert_eq!(channel, 9);
+    }
+
+    #[test]
+    fn bad_magic_is_invalid_data() {
+        let mut buf = Vec::new();
+        write_message(&mut buf, 0, &Message::ShutdownAck).unwrap();
+        buf[0] = b'X';
+        let err = read_message(&mut Cursor::new(buf)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn oversized_length_is_rejected_without_allocating() {
+        let header = FrameHeader {
+            version: PROTOCOL_VERSION,
+            msg_type: msg_type::HEARTBEAT,
+            flags: 0,
+            channel: 0,
+            len: MAX_PAYLOAD + 1,
+        };
+        // Encode bypasses the check (it never produces such a frame); decode must reject.
+        let mut bytes = header.encode();
+        bytes[12..16].copy_from_slice(&(MAX_PAYLOAD + 1).to_le_bytes());
+        let err = read_message(&mut Cursor::new(bytes.to_vec())).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn truncated_payload_is_unexpected_eof() {
+        let mut buf = Vec::new();
+        write_message(&mut buf, 0, &Message::Heartbeat(Heartbeat { seq: 1234567 })).unwrap();
+        buf.truncate(buf.len() - 1);
+        let err = read_message(&mut Cursor::new(buf)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn unsupported_reply_references_the_offender() {
+        match Message::unsupported(250) {
+            Message::Error(e) => {
+                assert_eq!(e.code, ERR_UNSUPPORTED);
+                assert_eq!(e.ref_type, 250);
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+}

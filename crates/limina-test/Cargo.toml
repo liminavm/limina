@@ -17,3 +17,6 @@ libc   = { workspace = true }
 # Decode captured scanout PNGs for display assertions (the M2 display oracle). Still a
 # black-box dep: we read the worker's output file, not any libkrun internal API.
 png    = { workspace = true }
+# The control-plane wire protocol (M5): tests speak typed frames to the guest agent over
+# the vsock-bridged unix stream. Still black-box — the same bytes a product host sends.
+limina-proto = { workspace = true }

@@ -38,5 +38,5 @@ echo "==> running boot tests (LIMINA_HVF_TESTS=1)"
 # `Image-16k` exists (build with `scripts/build-test-kernel.sh PAGESIZE=16k`), and when it
 # does it runs a full Fedora-on-custom-kernel boot (~minutes) to confirm venus enumerates.
 LIMINA_HVF_TESTS=1 cargo test ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina-test \
-    --test l1_boot --test l1_vsock --test l1_display --test l1_console --test l1_serial --test boot --test net --test venus \
+    --test l1_boot --test l1_agent --test l1_display --test l1_console --test l1_serial --test boot --test net --test venus \
     -- --nocapture --test-threads=1 "$@"

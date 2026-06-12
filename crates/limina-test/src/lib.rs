@@ -24,7 +24,7 @@
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::TcpStream;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -769,9 +769,9 @@ impl Guest {
     }
 
     /// Accept the guest agent's vsock connection (the guest connects shortly after boot),
-    /// returning a line-protocol channel. Errors if no vsock was configured, the guest
-    /// never connects within `timeout`, or the supervisor exits first.
-    pub fn vsock_accept(&mut self, timeout: Duration) -> Result<VsockConn> {
+    /// returning a typed control-plane channel (limina-proto frames). Errors if no vsock was
+    /// configured, the guest never connects within `timeout`, or the supervisor exits first.
+    pub fn agent_accept(&mut self, timeout: Duration) -> Result<AgentConn> {
         let listener = self
             .vsock_listener
             .as_ref()
@@ -785,9 +785,7 @@ impl Guest {
             match listener.accept() {
                 Ok((stream, _)) => {
                     stream.set_nonblocking(false).ok();
-                    return Ok(VsockConn {
-                        reader: BufReader::new(stream),
-                    });
+                    return Ok(AgentConn { stream });
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     if let Some(status) = self.child.try_wait().context("polling supervisor")? {
@@ -1049,34 +1047,26 @@ impl Drop for Guest {
 }
 
 /// A line-oriented connection to the guest vsock agent.
-pub struct VsockConn {
-    reader: BufReader<UnixStream>,
+pub struct AgentConn {
+    stream: UnixStream,
 }
 
-impl VsockConn {
-    /// Read one newline-terminated line from the agent (trailing newline trimmed),
-    /// honoring `timeout`. Errors on timeout or EOF.
-    pub fn read_line(&mut self, timeout: Duration) -> Result<String> {
-        self.reader
-            .get_ref()
+impl AgentConn {
+    /// Receive one control-plane message, honoring `timeout`. Errors on timeout, EOF, or
+    /// a malformed frame. Returns `(channel, message)`; unknown message types come back
+    /// as [`limina_proto::Message::Unknown`], not as errors.
+    pub fn recv(&mut self, timeout: Duration) -> Result<(u32, limina_proto::Message)> {
+        self.stream
             .set_read_timeout(Some(timeout))
             .context("set_read_timeout")?;
-        let mut line = String::new();
-        let n = self
-            .reader
-            .read_line(&mut line)
-            .context("reading from guest agent (timeout?)")?;
-        anyhow::ensure!(n > 0, "guest agent closed the connection (EOF)");
-        Ok(line.trim_end().to_string())
+        limina_proto::read_message(&mut self.stream)
+            .context("reading control-plane message from guest agent (timeout?)")
     }
 
-    /// Send a command line to the agent (a newline is appended).
-    pub fn write_line(&mut self, line: &str) -> Result<()> {
-        let stream = self.reader.get_mut();
-        stream
-            .write_all(line.as_bytes())
-            .and_then(|_| stream.write_all(b"\n"))
-            .context("writing to guest agent")
+    /// Send one message to the agent on the control channel.
+    pub fn send(&mut self, msg: &limina_proto::Message) -> Result<()> {
+        limina_proto::write_message(&mut self.stream, limina_proto::CHANNEL_CONTROL, msg)
+            .context("sending control-plane message to guest agent")
     }
 }
 

@@ -15,6 +15,9 @@ path = "src/main.rs"
 
 [dependencies]
 libc = "0.2"
+# The host<->guest control-plane wire protocol (path dep into the host workspace's crate;
+# std-portable, builds for aarch64-unknown-linux-musl).
+limina-proto = { path = "../../crates/limina-proto" }
 
 # Tiny, panic-free PID 1: abort (never unwind past main), optimize for size.
 [profile.release]
