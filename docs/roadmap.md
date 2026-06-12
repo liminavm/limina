@@ -206,14 +206,23 @@ crisp hardware cursor. What shipped, and where it differs from the plan below:
   → memcpy into a 3-deep off-screen IOSurface ring (no write-while-composite tear); implicit Core
   Animation actions disabled (`CATransaction`) to kill the per-frame fade. (`3e46c02`, `7cdcde4`,
   `c8f7de3`, `2eaaaab`)
-- **Hardware cursor** as a dedicated supervisor overlay sublayer, driven by a now-serviced
-  virtio-gpu cursor queue (libkrun patch 0008 + additive `set_cursor`/`move_cursor` ABI). Upstream
-  libkrun never implemented the cursor queue, so the guest was compositing its pointer into the
-  scanout — the last source of cursor-area flicker. (limina `acf7e1e`, libkrun `0814184`)
+- **Hardware cursor** driven by a now-serviced virtio-gpu cursor queue (libkrun patch 0008 +
+  additive `set_cursor`/`move_cursor` ABI). Upstream libkrun never implemented the cursor queue, so
+  the guest was compositing its pointer into the scanout — the last source of cursor-area flicker.
+  (limina `acf7e1e`, libkrun `0814184`)
+- **Pointer redesign (2026-06-12, `c30df2b`) — host cursor adopts the guest shape.** The first
+  presentation (guest cursor as an overlay sublayer positioned from `cursormove` round-trips) gave
+  a double pointer, a round-trip of lag, and guest-pointer wander while the host pointer was
+  outside the window (AppKit delivers MouseMoved to the key window even then, with *screen*
+  coordinates when no window is associated). Now Parallels-style: the worker-published cursor
+  IOSurface becomes the macOS `NSCursor` worn inside the content view (one pointer, zero lag,
+  guest-correct shape; `cursorhide` → transparent cursor), and pointer events are gated to the
+  view (presses/drags/releases follow capture semantics via a forwarded-button mask). Guest
+  positions are ignored — guest-initiated warps are the known gap, revisit with pointer capture
+  (M8). User-verified.
 
 **Remaining to formally close M2:** verify the Done-test's *window-close → orderly guest shutdown*
-clause (stock guest: SIGKILL fallback; enhanced tier: agent); confirm the mouse-over-menu stall
-(diagnosed as a guest-side GNOME hang) is not ours.
+clause (stock guest: SIGKILL fallback; enhanced tier: agent).
 
 **Goal:** A native macOS window shows the guest framebuffer (2D scanout) and a keyboard + pointer
 work. Fedora boots to a graphical login (llvmpipe/software GL is fine — 3D is M4).
@@ -346,7 +355,11 @@ guests — to read logs, kill processes, poke a wedged userspace — and (B) the
    seconds (the real IOSurface window present is cheap; the kernel batches damage so it was never
    affected). With this, a full GOP boot reaches the kernel under capture. **Track B is now
    end-to-end: firmware → GRUB → kernel all render on the GOP.** Remaining: reconcile with the M2
-   IOSurface present path and make limina default to the GOP firmware for windowed boots (Phase 3).
+   IOSurface present path and make limina default to the GOP firmware for windowed boots (Phase 3) —
+   **now gated on the GOP+venus singleton conflict** (M4 open item 2: `virgl_renderer_init` is
+   process-global and the 0007 worker restart on the EFI→kernel reset can't re-init it, so GOP
+   firmware currently degrades the desktop to software-2D; fix = persist the Rutabaga across the
+   restart).
 
 3. **Wire both into the harness + window UX.** A serial-console view alongside the display (a
    separate pane/window the user can open), and keep the L1 console round-trip test green as the
@@ -385,7 +398,9 @@ unblocks general guest work far better than a serial getty.)
 **Goal:** Real virtio-net NIC with outbound internet and DNS via user-mode NAT; bridged as an
 opt-in later sub-step.
 
-**STATUS (2026-06-06): NAT outbound DONE.** `limina --net` spawns + supervises a gvproxy gateway
+**STATUS: ✅ NAT done, outbound + inbound SSH (bridged remains the opt-in later sub-step).**
+
+**Outbound (2026-06-06):** `limina --net` spawns + supervises a gvproxy gateway
 (`-listen-vfkit unixgram:///abs/socket`) and connects the guest's virtio-net to it via the new
 `krun_add_net_unixgram` path (`UnixgramPath(_, vfkit=true)`, `NET_COMPAT_FEATURES`, fixed
 locally-administered MAC). No libkrun patch needed. Verified end-to-end against stock Fedora (spike
@@ -396,12 +411,14 @@ be ABSOLUTE; (b) the guest must reach **userspace** for NetworkManager to DHCP, 
 (`--net-log`) since pristine Fedora is silent on serial after GRUB. Supervisor tears the gateway down
 on both exit paths (headless Drop; windowed `gateway::cleanup()` before `process::exit`).
 
-**REMAINING for the SSH goal (next): inbound port-forwarding.** Outbound works, but the guest sits
-behind NAT — to `ssh` in we need gvproxy port-forwarding (host `127.0.0.1:2222` → guest
-`192.168.127.3:22`) via its REST control endpoint (`-listen unix://api.sock` + `services/forwarder/
-expose`), NOT `krun_set_port_map` (TSI-only, EINVALs once a net device exists). Then guest-side:
-confirm the Fedora image has a user account + `sshd` enabled (Workstation ships sshd disabled and a
-fresh image hasn't run initial-setup) — may need GNOME initial-setup or a console step first.
+**Inbound SSH (done; simpler than planned — no REST forwarding needed):** gvproxy ships a built-in
+default forward `127.0.0.1:2222 → 192.168.127.2:22`, and the guest gets the static `.2` lease when
+the NIC uses the **well-known vfkit MAC `5a:94:ef:e4:0c:ee`** (`crates/limina-vmm/src/krun/mod.rs`).
+So `ssh -p 2222 user@127.0.0.1` works with zero forwarding configuration; the REST endpoint
+(`services/forwarder/expose`) is only needed for *additional* ports later. (`krun_set_port_map`
+stays TSI-only — EINVALs once a net device exists.) Guest side is provisioned (user account + sshd
+enabled); asserted by `tests/net.rs`. This is the daily-driver guest-access path — see the
+`limina-fedora-access` note.
 
 **Key tasks:**
 1. **NAT default via gvproxy** (Homebrew-installed, userspace, no root/entitlement, built-in
@@ -442,21 +459,32 @@ subnet reachable from another host.
 
 **Goal:** Hardware-accelerated 3D in the guest: GNOME runs on real GPU, GL apps work via Mesa zink.
 
-> **STATUS 2026-06-11 — M4 substantially DONE (tier-2 GREEN).** The seated GNOME desktop runs on
-> venus with zero-copy IOSurface scanout and cross-context buffer sharing; WebGL2 works (we
-> implemented VK_EXT_transform_feedback in KosmicKrisp); the 5000-fish WebGL aquarium runs at
-> 60fps vsync-capped @46% GPU — matching host-native Firefox (root-caused from 16fps: KK's per-draw
-> GPU index-unroll under GLES3's always-on primitive restart). Host Vulkan driver: **KosmicKrisp**
-> (daily driver, `spikes/venus-draw-probe/boot-seated-kk.sh`); MoltenVK is the GBM-only alternate
-> (no windowed WSI without sync_fd semaphores). Converged truth + the open-threads ledger live in
-> memory `limina-tier2-venus` (CURRENT STATE section) and `spikes/venus-draw-probe/RESULTS.md`
-> (rounds 13–17). Everything below this box is the historical plan, kept for context.
-> **Remaining M4-adjacent work:** productize the KK perf knobs (LIMINA_KK_NOLISTRESTART baked;
-> LIMINA_KK_EARLYZ pending correctness review) + re-run the perf battery; profile limina-vmm host CPU;
-> the upstream patch queue (MoltenVK / mesa zink+venus / KosmicKrisp / virglrenderer / SPIRV-Cross /
-> Fedora-zink backport / mutter); KK per-draw rebind cost (3.3× MVK); the virtio-gpu
-> flip-completion gap (kmscube-class clients hang; mutter degraded frame clock); GOP-firmware +
-> venus singleton (EFI path); Firefox MSAA cosmetic thread; guest debug-spam hygiene before ship.
+> **STATUS 2026-06-12 — M4 substantially DONE (tier-2 GREEN).** The seated GNOME desktop runs on
+> venus with **fence-accurate zero-copy presents** (#8 complete: guest kernel fences blob-scanout
+> flushes — `patches/linux/0001` — and the host holds them to the true CA latch; enhanced tier =
+> `FENCE_PRESENT=1 COPY=0`, 0 anomalies verified; stock-kernel tier keeps `PRESENT_COPY`) and
+> cross-context buffer sharing; WebGL2 works (we implemented VK_EXT_transform_feedback in
+> KosmicKrisp); the 5000-fish WebGL aquarium runs 60fps vsync-capped @46% GPU — matching
+> host-native Firefox. **Mutter direct scanout works** (fullscreen client buffers flip straight to
+> the primary plane: `patches/linux/0002+0003` ARGB-on-primary + LINEAR-modifier advertisement,
+> libkrun 0021 wedge-proofing; stock kernels keep composition). Host Vulkan driver: **KosmicKrisp**
+> (daily driver, `spikes/venus-draw-probe/boot-seated-kk.sh`; perf knobs default-ON in KK itself,
+> CTS-validated); MoltenVK is the GBM-only alternate (no windowed WSI without sync_fd semaphores).
+> Host CPU is attributed and lean (10k-fish aquarium: ~1.9 cores = the guest's own Firefox work,
+> ~0.9 core GPU stack; KK dirty-tracking round 28 took the rebind leg +81%, ring thread 38% busy).
+> Golden enhanced image: `Fedora-Workstation-43.dev-enh.raw` (16k kernel, zink, patched mutter,
+> journal-quiet). Converged truth + the open-threads ledger live in memory `limina-tier2-venus`
+> (CURRENT STATE section) and `spikes/venus-draw-probe/RESULTS.md` (rounds 13–29). Everything
+> below this box is the historical plan, kept for context.
+> **Remaining M4-adjacent work (the open ledger):** the upstream patch queue (MoltenVK / mesa
+> zink+venus / KosmicKrisp / virglrenderer / SPIRV-Cross / mutter ×2 / kernel 0002+0003 /
+> Fedora-zink backport ask); **productize the enhanced tier** — deliver what today is baked into
+> the dev image (kernel, mesa bits, mutter fix, environment.d policy) via the M5 agent/installer,
+> and make KK the shipped host-driver default in limina proper; the virtio-gpu flip-completion gap
+> (event-driven KMS clients hang; #8 gave mutter honest pacing but the generic gap remains);
+> GOP-firmware + venus singleton (EFI path; shared with M2.5 Phase 3); MVK windowed WSI (parity
+> only); #28 residue policy (`VN_PERF=no_*_feedback` via agent vs real fix); KK GPU-side per-draw
+> root re-fetch (only if GPU-bound workloads reappear); Firefox MSAA cosmetic thread.
 
 **Venus-viability spike done (2026-06-06, `spikes/venus-viability`)** — it corrects the flag
 guidance below and establishes the architecture. Two findings gate everything:
@@ -487,11 +515,12 @@ degrades gracefully to software-2D on renderer-init failure (no panic). Design:
 `docs/design/tier2-coexist-gpu.md`; venus orientation: memory `limina-tier2-venus`.
 
 **Open M4 items (deferred, in priority order):**
-1. **Productize:** make coexist the default (graceful degrade makes opt-in pointless) + a
-   `--gpu-software-2d` override (capture oracle, local-Terminal GPU-init hang) + split the test
-   harness (software-2D for the fast floor tests, a coexist test). Fix `num_capsets` (hardcoded 5 →
-   venus's actual count) for clean capset enumeration. The non-fatal `CTX_DETACH_RESOURCE` (0x203 →
-   ERR_UNSPEC) dmesg error.
+1. **Productize:** ~~make coexist the default~~ ✅ (coexist is the default, with the
+   `--gpu-software-2d` override shipped). Remaining: pick **KosmicKrisp as the shipped host-driver
+   default in limina proper** (today it's selected by `boot-seated-kk.sh` via `VK_ICD_FILENAMES`)
+   and move the enhanced-tier guest config out of the dev image (→ M5 agent/installer). Cosmetic:
+   `num_capsets` (hardcoded 5) and the non-fatal `CTX_DETACH_RESOURCE` (0x203 → ERR_UNSPEC) dmesg
+   error.
 2. **GOP-firmware + venus (the real blocker):** `virgl_renderer_init` is a process-global singleton,
    but patch 0007 stops+re-activates the gpu worker on the EFI→kernel reset → second init hits
    `AlreadyInUse`. So GOP graphical boot console (Track B) and venus don't yet coexist (silent
@@ -684,8 +713,18 @@ control channel between limina and a guest agent.
    types -> ERROR(UNSUPPORTED), never fatal. First messages: HELLO/WELCOME/HEARTBEAT +
    SHUTDOWN/SHUTDOWN_ACK, with `krun_get_shutdown_eventfd` (verified host->guest orderly shutdown)
    as the forcing fallback.
+   - **Start from the L1 vsock agent seed** — the test guest's init already runs a tiny vsock
+     agent (`guest/limina-init`, `tests/l1_vsock.rs`, gated on a `limina.agent_port=` cmdline token);
+     grow that into `limina-agent` rather than starting fresh.
    - **Agent delivery via virtiofs overlay** (`krun_fs_add_overlay_file`/`krun_fs_add_overlay_dir`)
      + a minimal per-user systemd unit, keeping the user's `.raw` untouched.
+   - **The agent is also the enhanced-tier configurator (learned from M4).** Tier-2 today depends
+     on guest config hand-baked into the dev image: `environment.d` entries (`VN_PERF`
+     feedback policy — #28 residue; the vk-loader no-unload mitigation), `/opt/mesa-zink` + the
+     patched venus ICD + patched mutter, and the 16 KiB kernel. The M4 ledger item "productize
+     seated-venus guest config via limina-agent instead of dev-image hacks" lands here: the agent
+     (or its installer) detects/installs/configures these, so a stock guest upgrades to the
+     enhanced tier through one component instead of image surgery.
    - Reuse libkrun's existing macOS host->guest time sync (DGRAM vsock port 123, `timesync.rs`)
      instead of a custom TIME_SET — just confirm a guest-side consumer exists.
 2. **virtiofs file sharing.** `krun_add_virtiofs3` with a DAX/shm window (`VirtioShmRegion` in
@@ -696,8 +735,13 @@ control channel between limina and a guest agent.
    mapping + promised/lazy data provider. App protocol: length-prefixed binary frames
    (HELLO/OFFER/REQUEST/DATA_HDR/DATA/CLEAR/PING) with monotonic serials + 32-64 KiB chunking on
    vsock credit flow control. Loop-prevention: ignore writes the bridge originated.
-   - **M5 = text-only** (optionally shell out to `wl-clipboard`/`xclip` to de-risk Wayland). Native
-     libwayland data-control + images is a follow-up; files/primary-selection/HTML deferred.
+   - **Guest-side mechanism (RESOLVED 2026-06-12 by reading our vendored mutter — see Risks):
+     the `org.gnome.Mutter.RemoteDesktop` D-Bus clipboard API** (`EnableClipboard`/`SetSelection`,
+     session bus — what gnome-remote-desktop uses), NOT a Wayland data-control protocol: mutter
+     49.5 implements neither `wlr-data-control-unstable-v1` nor `ext-data-control-v1`, which also
+     rules out the `wl-clipboard` shell-out for a background agent on stock GNOME. Works on the
+     **stock** tier (no mutter patch needed). Keep data-control as the later non-GNOME-guest path.
+   - **M5 = text-only.** Images is a follow-up; files/primary-selection/HTML deferred.
 
 **libkrun patches:** none for the transport (vsock + virtiofs overlays already exist). Possibly a
 small fix if the guest cannot cleanly reconnect a HANG_UP'd port without a VM restart
@@ -708,12 +752,18 @@ pastes on the macOS host and vice-versa; `liminactl status` shows the agent HELL
 heartbeats.
 
 **Risks / spike first:**
-- **#1 blocker: does GNOME/Mutter on Fedora 43 Wayland implement `wlr-data-control-unstable-v1` /
-  `ext-data-control-v1`** so an unfocused agent can read/set the clipboard? Spike this before
-  building the native bridge; the `wl-clipboard` shell-out is the de-risk fallback.
+- ~~**#1 blocker: does GNOME/Mutter on Fedora 43 Wayland implement `wlr-data-control-unstable-v1`
+  / `ext-data-control-v1`?**~~ **ANSWERED (2026-06-12, by grepping `third_party/mutter` 49.5 — no
+  runtime spike needed; we vendor the compositor):** it implements **neither**, so no data-control
+  client (including `wl-clipboard`) can serve an unfocused agent on stock GNOME. The sanctioned
+  channel is mutter's **RemoteDesktop D-Bus clipboard API** (see task 3). Residual spike: confirm
+  a non-gnome-remote-desktop session client may create a RemoteDesktop session (permissions/
+  portal), and prototype get/set from a systemd user unit.
 - Can the NSPasteboard promised-data provider block long enough to round-trip a guest REQUEST/DATA
   without AppKit timing out the paste?
-- virtiofs DAX alignment on 16 KiB host pages.
+- virtiofs DAX alignment on 16 KiB host pages. (Less scary than when written: the enhanced tier
+  already runs a 16 KiB-page guest kernel — venus requires it — so guest-page = host-page is the
+  default enhanced configuration; test stock-4k DAX separately.)
 - Validate large chunked vsock transfers respect credit flow control without stalling muxer threads;
   set a max-size cap / temp-file staging.
 
@@ -723,6 +773,13 @@ heartbeats.
 
 **Goal:** The VM is given a `min..max` RAM range; it takes memory under guest pressure and returns
 it to macOS when idle, with `phys_footprint` actually dropping.
+
+> **The case now has numbers (measured 2026-06-11 on the tier-2 desktop):** host RSS is a
+> guest-page **high-water mark** — 5.2 GiB at boot-idle → 6.8 GiB after a browsing session, and it
+> *never returns* without a balloon. (Shared mappings: 4 GiB guest RAM + the 8 GiB venus shm
+> window, lazily mapped.) Guest idle usage ~2 GiB is Fedora's own daemons, not VM overhead — so
+> reclaim is the lever, not guest slimming. Also: GPU/Metal buffers recycle correctly (the one
+> IOSurface leak was found and fixed), so the balloon is the remaining memory story.
 
 **Key tasks (in order — the first is cheap and makes the existing path actually work):**
 1. **Fix free-page-reporting reclaim.** Replace `libc::MADV_DONTNEED` at balloon `device.rs:100`
@@ -757,14 +814,16 @@ handlers, DEFLATE_ON_OOM feature bit, and the new `krun_*balloon*` C API (none e
   `phys_footprint` fully on the HVF-mapped MAP_ANON region with **no** `hv_vm_unmap`/`hv_vm_protect`
   first (`hv_vm_map` does not pin pages); `MADV_DONTNEED` returns nothing, `MADV_FREE` is lazy.
   Ballooning is achievable without deeper HVF surgery. Re-confirm on the shipping macOS version.
-- **Now the live unknown — the 4K↔16K page-size mismatch.** Both boot paths use 4 KiB guest pages
-  (libkrunfw `linux-6.12.87` + Fedora EFI kernel; verified). Because we own the guest kernel this is
-  a menu, not a wall: **(a)** host-side coalesce/align in `process_frq` (M6 default — measure waste);
-  **(b)** boot a `CONFIG_ARM64_16K_PAGES` guest kernel for 1:1 reclaim + lower stage-2 TLB pressure
-  (custom-kernel track); **(c)** patch `mm/page_reporting.c` for host-page-aware, boundary-aligned
-  free-page reporting negotiated via a new virtio-balloon feature bit (upstreamable; pursue if (a)'s
-  waste is material); **(d)** virtio-mem (later). See doc 08 §1.2. **Spike: measure how much stock
-  Fedora reporting actually returns under (a).**
+- **The 4K↔16K page-size mismatch — the menu has since collapsed in our favor (M4 learning).**
+  The enhanced tier **already runs a `CONFIG_ARM64_16K_PAGES` guest kernel** — venus host-visible
+  blob maps *require* it (`hv_vm_map` 16 KiB alignment), so option (b) is no longer a speculative
+  custom-kernel track, it is the shipped enhanced configuration: **1:1 reclaim is free on the
+  enhanced tier.** Host-side coalesce/align in `process_frq` **(a)** is therefore the *stock-tier*
+  fallback (measure how much stock 4 KiB Fedora reporting actually returns — still the spike).
+  Option **(c)** — host-page-aware `mm/page_reporting.c` negotiated via a feature bit — is now
+  cheap to carry if (a)'s waste is material: the kernel-patch pipeline exists
+  (`patches/linux/*.patch`, auto-applied by `scripts/build-test-kernel.sh`, three patches carried
+  today). **(d)** virtio-mem stays later. See doc 08 §1.2.
 - Re-touch latency/cost of MADV_FREE_REUSE on deflate for an interactive desktop.
 - PSI watermark/hysteresis tuning to avoid balloon thrash (build/browser/IDE workloads).
 
@@ -775,15 +834,16 @@ handlers, DEFLATE_ON_OOM feature bit, and the new `krun_*balloon*` C API (none e
 **Goal:** Pass a host USB device (initially libusb-claimable: FTDI/CP210x, YubiKey-class, etc.) into
 the guest.
 
-**Key tasks (USB is entirely net-new; the guest kernel has USB compiled OUT today):**
-1. **PREREQUISITE — rebuild the libkrunfw guest kernel with USB.** The stock kernel has
-   `# CONFIG_USB_SUPPORT is not set` in EVERY arch profile
-   (`config-libkrunfw_aarch64:2151`). Enable `CONFIG_USB_SUPPORT=y`, `CONFIG_USB=y`,
-   `CONFIG_USBIP_CORE`, `CONFIG_USBIP_VHCI_HCD`, and needed `CONFIG_USB_*` class drivers. This is a
-   config-edit + firmware rebuild via libkrunfw's Makefile, a hard prerequisite for ALL USB work.
-   (Note: M1 boots the *distro* kernel via EFI, which already has USB — but the rebuilt libkrunfw
-   kernel matters wherever limina uses the bundled kernel, and the vhci/usbip plumbing is what we
-   target.)
+**Key tasks (USB is entirely net-new; the bundled/custom guest kernels have USB compiled OUT today):**
+1. **PREREQUISITE — enable USB in OUR kernel config (cheap now).** Since this was written, the
+   enhanced tier standardized on **our own kernel** built by `scripts/build-test-kernel.sh`
+   (16 KiB pages, `patches/linux/` auto-applied) — so the prerequisite is a config edit in *our*
+   pipeline, not a libkrunfw rebuild: add `CONFIG_USB_SUPPORT=y`, `CONFIG_USB=y`,
+   `CONFIG_USBIP_CORE`, `CONFIG_USBIP_VHCI_HCD`, and needed `CONFIG_USB_*` class drivers (while
+   there: `CONFIG_UINPUT` — its absence already bit us, ydotool is unusable in the guest).
+   libkrunfw's bundled kernel (`# CONFIG_USB_SUPPORT is not set` in every arch profile,
+   `config-libkrunfw_aarch64:2151`) only matters where limina still uses it (L1 fallback). The EFI
+   distro kernel already has USB.
 2. **Start with USB/IP, not a native device.** Guest side is 100% upstream (`vhci_hcd` + `usbip`)
    once USB is enabled. Sequence:
    - **C:** prototype USB/IP over virtio-net/TCP (stock `usbip attach -r` works, no guest patching
@@ -840,16 +900,18 @@ replacement: fullscreen, keymap remap, multi-display, system-combo capture, hard
      swap is a table edit (guest owns the keyboard layout so dead keys/IME work natively).
    - **System-combo capture (Cmd-Tab/Cmd-Space/Super):** CGEventTap behind an Accessibility/TCC
      toggle; handle `kCGEventTapDisabledByTimeout` + Secure Input gracefully.
+   - **Pointer capture (relative mode):** switch the absolute tablet to the relative mouse on
+     capture (games, virt-viewer-style use). Known gap to close here (from the M2 pointer
+     redesign): the host pointer ignores guest `cursormove` positions, so **guest-initiated
+     pointer warps** aren't reflected host-side — capture mode is where that gets reconciled.
    - **Multi-display:** multiplex all displays through the single `krun_set_display_backend` by
      `scanout_id` (up to 16 displays), mapping each to its own NSWindow/CAMetalLayer.
    - **Runtime window-follow resize / EDID hotplug (libkrun patch):** no post-`krun_start_enter`
      entry point changes display size today. Add a C call that raises a virtio-gpu config-change
      interrupt + updates `DisplayInfo` (the virtio-gpu GET_DISPLAY_INFO/GET_EDID + config-change
      capability already exists — plumbing, not new device work). This is the #1 display gap.
-   - **Hardware cursor (libkrun patch):** implement UPDATE/MOVE_CURSOR (currently panic) + a
-     cursor-queue display callback.
-   - **Zero-copy scanout (libkrun + virglrenderer patch, optional):** implement `SET_SCANOUT_BLOB`
-     (currently panics) + an IOSurface/Metal-texture display ABI to drop the per-frame CPU readback.
+   - ~~**Hardware cursor**~~ — done in M2 (libkrun 0008 + the host-cursor adoption redesign).
+   - ~~**Zero-copy scanout**~~ — done in M4 (`SET_SCANOUT_BLOB` + IOSurface present, fence-accurate).
    - **CapsLock/NumLock LED parity (libkrun patch):** surface the statusq LED feedback
      (`worker.rs:238-248` no-op).
 
@@ -880,12 +942,12 @@ second display attaches at runtime, and resizing the window reflows the guest re
 | M1 boot ✅ | CLI, internal-API `limina-vmm` (D2.1), child supervisor, codesign | (optional) harden panic exit paths |
 | M2 display+input ✅ | supervisor IOSurface window, native-Rust display backend, input provider, kVK->KEY table | software-2D scanout (0001); Darwin input worker ran as-is |
 | M2.5 console/serial 🚧 | serial getty/login; serial pane in window; console harness | Track A PL011 tty ✅ (0004 HVF halfword-MMIO + 0005 FDT `arm,primecell`, `l1_serial`); remaining: serial getty; KRUN_EFI EDK2 + VirtioGpuDxe GOP (Track B); already: hvc0 ConsoleInOut (0003), PL011 WouldBlock (0002) |
-| M3 networking | gvproxy supervision; bridged helper integration | (optional) worker.rs reconnect-on-HANG_UP |
-| M4 3D | virgl flags wiring; IOSurface present-texture backend | virglrenderer Apple-blob fork build; SET_SCANOUT_BLOB accept path + display-vtable surface-export callback (zero-copy scanout) |
-| M5 clipboard/fs/agent | guest agent, liminad, NSPasteboard bridge | none for transport (vsock+virtiofs exist) |
+| M3 networking ✅ (NAT+SSH; bridged deferred) | gvproxy supervision + gateway cleanup; well-known-MAC static lease | none needed (reconnect-on-HANG_UP still optional) |
+| M4 3D 🟢 (substantially done) | coexist routing, zero-copy + fence-accurate present path, KK as host driver | shipped: coexist (0010), fence-present series (0017–0021), virglrenderer fork (blob/IOSurface/cross-context), KK perf/XFB patches, kernel `patches/linux/0001–0003`, mutter ×2; remaining: the upstream queue |
+| M5 clipboard/fs/agent | guest agent (from the L1 vsock seed), liminad, NSPasteboard bridge, mutter RemoteDesktop clipboard client, enhanced-tier installer | none for transport (vsock+virtiofs exist) |
 | M6 dynamic memory | PSI autoballoon policy | reclaim fix (MADV_FREE_REUSABLE — spike-confirmed) + 16KiB align + inflate/deflate + krun_*balloon* API + DEFLATE_ON_OOM |
-| M7 USB | host claim/attach, usbip plumbing | libkrunfw kernel rebuild (USB on); later native virtio-usb + krun_add_usb* |
-| M8 audio/x86/polish | fullscreen, keymap, multi-display, FEX wiring | native virtio-snd; runtime resize/EDID; hw cursor; LED parity (zero-copy scanout already landed in M4) |
+| M7 USB | host claim/attach, usbip plumbing | our-kernel config edit (USB+uinput on); later native virtio-usb + krun_add_usb* |
+| M8 audio/x86/polish | fullscreen, keymap, multi-display, pointer capture, FEX wiring | native virtio-snd; runtime resize/EDID; LED parity (hw cursor + zero-copy scanout already landed) |
 
 ## First three things to spike (highest uncertainty, gate the most)
 
@@ -893,8 +955,10 @@ second display attaches at runtime, and resizing the window reflows the guest re
    **RESOLVED** (`spikes/m1-boot`): EFI+disk boots to userspace, no remount needed.
 2. ~~**M2 input worker on macOS:** does `--features input`'s epoll/eventfd shim build/wake on Darwin
    arm64?~~ **RESOLVED**: it does; keyboard + absolute pointer drive the live desktop.
-3. **M6 reclaim:** does `MADV_FREE_REUSABLE` actually drop `phys_footprint` on an `hv_vm_map`'d
-   region? (Decides whether dynamic memory is feasible at all.) — still the key open spike.
+3. ~~**M6 reclaim:** does `MADV_FREE_REUSABLE` actually drop `phys_footprint` on an `hv_vm_map`'d
+   region?~~ **RESOLVED** (`spikes/balloon-madvise`, 2026-05-30): yes, fully, with no
+   unmap/protect first — dynamic memory is feasible; re-confirm on the shipping macOS release.
 
-New near-term spike (M2.5): the **PL011 amba-probe deadlock** — lockdep the guest kernel to get the
-stuck PC before attempting the libkrun PL011 emulation fix (see `limina-pl011-tty-deadlock`).
+All three founding spikes are resolved. The standing rule remains: spike the gating unknown
+before building on it (the M5 instance — "can a session client drive mutter's RemoteDesktop
+clipboard?" — is listed in M5's risks).
