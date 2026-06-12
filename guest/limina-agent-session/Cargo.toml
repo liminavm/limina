@@ -21,3 +21,7 @@ limina-proto = { path = "../../crates/limina-proto" }
 # The session D-Bus client (mutter RemoteDesktop, fd passing included). Pure Rust, so
 # the no-C-toolchain musl cross-build keeps working.
 zbus = "5"
+# The Wayland client for the enhanced-tier clipboard path (ext-data-control-v1 on our
+# patched mutter; see patches/mutter/). Default backend = pure Rust, no libwayland.
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }

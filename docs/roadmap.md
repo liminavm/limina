@@ -764,10 +764,22 @@ is LIVE end-to-end (2026-06-12):** `CHANNEL_CLIPBOARD` (OFFER/REQUEST/DATA, newe
 wins both ways), the supervisor's NSPasteboard bridge (`crates/limina/src/clipboard.rs` —
 changeCount poller, self-change suppression, `LIMINA_PASTEBOARD` named-pasteboard test
 override, `l1_clipboard` proves both directions), and the **`limina-agent-session` user
-helper** (`guest/limina-agent-session`, zbus → mutter RemoteDesktop per the spike; systemd
-user unit, own vsock connection, caps=[clipboard]) — live-verified on the seated desktop
-(guest copy → `pbpaste`; `pbcopy` → Ctrl+Shift+V in ptyxis) and **baked into the dev-enh
-golden** (zero-install on fresh boots; host's current clipboard syncs on connect). **virtiofs FILE
+helper** (`guest/limina-agent-session`; systemd user unit, own vsock connection,
+caps=[clipboard]) — live-verified on the seated desktop (guest copy → `pbpaste`;
+`pbcopy` → Ctrl+Shift+V in ptyxis) and **baked into the dev-enh golden** (zero-install
+on fresh boots; host's current clipboard syncs on connect). **The helper is two-tier
+(2026-06-12 redesign):** the original mutter-RemoteDesktop D-Bus backend keeps a remote
+session alive forever, which keeps GNOME's orange "screen is being shared" panel
+indicator lit for the VM's whole life. The enhanced tier now implements
+**ext-data-control-v1** (standardized wayland-protocols staging; KWin/wlroots parity) in
+our carried mutter (`patches/mutter/0003` — GNOME refuses the protocol upstream,
+mutter#524) and the helper probes for it at startup as a focusless pure-Rust Wayland
+client (`wayland_clip.rs`; loop prevention = track our live source, our own set echoes
+back `is_owner`); stock mutter falls back to the RemoteDesktop backend, where the
+indicator is the documented cosmetic cost. Pixel-verified indicator-free on the seated
+desktop with both copy directions live (rdclip oracle + iosdump). The Wayland foundation
+(compositor patch + session Wayland client) is also the stepping stone for future
+drag-n-drop. **virtiofs FILE
 SHARING is LIVE (2026-06-12):** `limina --share '[NAME=]PATH[:ro]'` (repeatable) attaches a
 host directory as virtiofs tag `limina-NAME`; the guest agent (and the L1 init seed)
 auto-mounts every `limina-`-tagged device at `/media/NAME`, discovering tags via sysfs
@@ -920,6 +932,10 @@ heartbeats.
 - **Multi-peer clipboard broadcast** + dead-peer pruning under broadcast failure.
 - **Helper resilience** — vsock reconnect after a supervisor restart; D-Bus session death → clean
   exit (systemd restart into the new session).
+- **The ext-data-control (enhanced) backend under automation** — `l1_session_helper` exercises
+  the RemoteDesktop fallback (the L1 guest has no compositor); the Wayland backend is
+  live-verified only. Closing this means a headless ext-data-control server stand-in (or a real
+  compositor in the L1 guest) — weigh cost vs. the live coverage.
 
 ---
 

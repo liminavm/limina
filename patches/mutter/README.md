@@ -18,3 +18,12 @@ path trap is encoded there).
   failed → instant session crash on any X11 app. Guard + configure the build with
   `--prefix=/usr --libexecdir=/usr/libexec` so the (same-version) Fedora-stock
   /usr/libexec/mutter-x11-frames is used. Upstream one-liner candidate.
+- `0003-ext-data-control-v1.patch` — implement the standardized ext-data-control-v1
+  protocol (wayland-protocols staging; KWin/wlroots parity) as a second front-end onto
+  MetaSelection, modeled on the primary-selection device minus focus gating. This is
+  what lets `limina-agent-session` manage the clipboard as a plain focusless Wayland
+  client (enhanced tier) instead of holding a RemoteDesktop D-Bus session that keeps
+  GNOME's screen-share indicator lit forever (the stock-tier fallback's cosmetic cost).
+  NOT an upstream candidate: GNOME explicitly rejects data-control (mutter#524, privacy
+  stance — any client may snoop/own the selection); carrying it is a deliberate limina
+  policy choice for a single-user VM. Protocol XML included (private protocol).

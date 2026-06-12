@@ -4,13 +4,20 @@
 //! limina-agent-session — the per-session guest helper: the guest side of the M5
 //! clipboard bridge.
 //!
-//! Why a separate binary from `limina-agent`: the clipboard on stock GNOME is only
-//! reachable through mutter's private RemoteDesktop D-Bus API on the **user's session
-//! bus** (the clipboard spike, `spikes/clipboard-remotedesktop/`, proved a background
-//! session-bus client can drive it — and that nothing else can: mutter 49.5 ships no
-//! data-control protocol). So this runs as a systemd *user* unit inside the graphical
-//! session and holds its own vsock connection to the host control plane (no root
-//! needed), advertising the `clipboard` capability.
+//! Why a separate binary from `limina-agent`: the clipboard is session state — it lives
+//! in the user's compositor, which the root limina-agent cannot reach. So this runs as
+//! a systemd *user* unit inside the graphical session and holds its own vsock
+//! connection to the host control plane (no root needed), advertising the `clipboard`
+//! capability.
+//!
+//! Two backends, probed in tier order (see [`wayland_clip`]):
+//! - **Enhanced**: ext-data-control-v1 Wayland client against our patched mutter
+//!   (`patches/mutter/`) — focusless selection management with no side effects.
+//! - **Stock fallback**: mutter's private RemoteDesktop D-Bus API on the session bus
+//!   (the clipboard spike, `spikes/clipboard-remotedesktop/`, proved a background
+//!   session-bus client can drive it — and that nothing else on stock mutter 49.5
+//!   can). Cosmetic cost: GNOME shows the screen-share indicator while the
+//!   RemoteDesktop session exists — which is exactly why the enhanced path exists.
 //!
 //! Bridge shape (see `crates/limina/src/clipboard.rs` for the host side and the protocol
 //! rules — symmetric eager-pull, newest serial wins):
@@ -37,6 +44,9 @@ use limina_proto::{
     CHANNEL_CLIPBOARD, CHANNEL_CONTROL, CONTROL_PORT,
 };
 
+mod wayland_clip;
+use wayland_clip::WaylandClip;
+
 const TEXT_MIME: &str = "text/plain;charset=utf-8";
 const OFFER_MIMES: [&str; 2] = [TEXT_MIME, "text/plain"];
 /// Idle heartbeat cadence on the vsock channel.
@@ -50,10 +60,13 @@ enum Event {
     Host(Message),
     /// The vsock channel died (reconnect).
     HostGone,
-    /// mutter: the compositor selection changed owner.
+    /// The compositor selection changed owner.
     OwnerChanged { has_text: bool, is_owner: bool },
-    /// mutter: a guest app wants our selection content (serial is mutter's, not ours).
+    /// A guest app wants our selection content (serial namespace is the backend's:
+    /// mutter's on the D-Bus path, our own on the Wayland path).
     Transfer { serial: u32 },
+    /// The session (compositor / D-Bus) is gone: exit, systemd restarts us.
+    SessionGone,
 }
 
 fn main() {
@@ -63,22 +76,38 @@ fn main() {
         .unwrap_or(CONTROL_PORT);
     eprintln!("limina-agent-session {}: starting", version());
 
-    // The RemoteDesktop session (retry: gnome-shell may still be coming up when the
-    // user unit starts). If the D-Bus session dies later we exit and systemd restarts
-    // us into the (new) graphical session.
+    // Pick a clipboard backend (retry: gnome-shell may still be coming up when the
+    // user unit starts). Enhanced tier first — ext-data-control on our patched
+    // mutter; a compositor without the protocol is stock tier and falls back to the
+    // RemoteDesktop D-Bus path. If the session dies later we exit and systemd
+    // restarts us into the (new) graphical session.
+    let (tx, rx) = mpsc::channel::<Event>();
     let clip = loop {
+        // Any Wayland failure falls through to the D-Bus probe: environments with
+        // no Wayland display at all (the L1 mock-mutter guest) must still reach
+        // the fallback, and in a real session that's still coming up BOTH probes
+        // fail and we retry the pair.
+        let wl_err = match WaylandClip::connect(tx.clone()) {
+            Ok(w) => {
+                eprintln!("limina-agent-session: ext-data-control backend up (enhanced tier)");
+                break Clip::Wayland(w);
+            }
+            Err(e) => e,
+        };
         match ClipSession::connect() {
-            Ok(c) => break c,
+            Ok(c) => {
+                eprintln!("limina-agent-session: RemoteDesktop backend up (wayland: {wl_err})");
+                c.spawn_signal_threads(tx.clone());
+                break Clip::RemoteDesktop(c);
+            }
             Err(e) => {
-                eprintln!("limina-agent-session: mutter not ready ({e}); retrying");
-                std::thread::sleep(RECONNECT_EVERY);
+                eprintln!(
+                    "limina-agent-session: no backend yet (wayland: {wl_err}; remotedesktop: {e}); retrying"
+                );
             }
         }
+        std::thread::sleep(RECONNECT_EVERY);
     };
-    eprintln!("limina-agent-session: RemoteDesktop session up");
-
-    let (tx, rx) = mpsc::channel::<Event>();
-    clip.spawn_signal_threads(tx.clone());
 
     let mut bridge = Bridge {
         clip,
@@ -111,9 +140,51 @@ fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// The clipboard backend behind the bridge: same [`Event`] vocabulary either way.
+enum Clip {
+    /// Enhanced tier: ext-data-control-v1 against our patched mutter.
+    Wayland(WaylandClip),
+    /// Stock tier: mutter's RemoteDesktop D-Bus API.
+    RemoteDesktop(ClipSession),
+}
+
+impl Clip {
+    fn selection_read(&self, mime: &str) -> Result<Vec<u8>, String> {
+        match self {
+            Clip::Wayland(w) => w.selection_read(mime),
+            Clip::RemoteDesktop(c) => c.selection_read(mime).map_err(|e| e.to_string()),
+        }
+    }
+
+    fn set_selection(&self) -> Result<(), String> {
+        match self {
+            Clip::Wayland(w) => w.set_selection(),
+            Clip::RemoteDesktop(c) => c.set_selection().map_err(|e| e.to_string()),
+        }
+    }
+
+    fn selection_write(&self, serial: u32, data: &[u8]) -> Result<(), String> {
+        match self {
+            Clip::Wayland(w) => w.selection_write(serial, data),
+            Clip::RemoteDesktop(c) => c.selection_write(serial, data).map_err(|e| e.to_string()),
+        }
+    }
+
+    /// Transfer postlude: only the D-Bus path has an explicit done call (on the
+    /// Wayland path closing the fd IS the completion).
+    fn selection_write_done(&self, serial: u32, success: bool) -> Result<(), String> {
+        match self {
+            Clip::Wayland(_) => Ok(()),
+            Clip::RemoteDesktop(c) => c
+                .selection_write_done(serial, success)
+                .map_err(|e| e.to_string()),
+        }
+    }
+}
+
 /// The bridge state machine (single-threaded: everything arrives as an [`Event`]).
 struct Bridge {
-    clip: ClipSession,
+    clip: Clip,
     /// Write half of the live vsock channel.
     host: Option<File>,
     /// Heartbeat sequence.
@@ -267,6 +338,10 @@ impl Bridge {
                 if let Err(e) = self.clip.selection_write_done(serial, ok) {
                     eprintln!("limina-agent-session: SelectionWriteDone failed: {e}");
                 }
+            }
+            Event::SessionGone => {
+                eprintln!("limina-agent-session: session gone; exiting for restart");
+                std::process::exit(0);
             }
             // Control-channel frames we don't act on (SHUTDOWN is the root agent's
             // job; unknown types get the protocol's standard non-fatal reply).

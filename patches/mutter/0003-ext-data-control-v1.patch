@@ -1,0 +1,890 @@
+diff --git a/src/meson.build b/src/meson.build
+index 508c341..edc6be4 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -619,6 +619,8 @@ if have_wayland
+     'wayland/meta-wayland-cursor-surface.h',
+     'wayland/meta-wayland-data-device.c',
+     'wayland/meta-wayland-data-device.h',
++    'wayland/meta-wayland-data-control.c',
++    'wayland/meta-wayland-data-control.h',
+     'wayland/meta-wayland-data-device-primary.c',
+     'wayland/meta-wayland-data-device-primary.h',
+     'wayland/meta-wayland-data-offer.c',
+@@ -1163,6 +1165,7 @@ if have_wayland
+     ['commit-timing', 'staging', 1, ],
+     ['cursor-shape', 'staging', 1, ],
+     ['drm-lease', 'staging', 1, ],
++    ['ext-data-control-v1', 'private', ],
+     ['fractional-scale', 'staging', 1, ],
+     ['fifo', 'staging', 1, ],
+     ['gtk-shell', 'private', ],
+diff --git a/src/wayland/meta-wayland-data-control.c b/src/wayland/meta-wayland-data-control.c
+new file mode 100644
+index 0000000..bd910de
+--- /dev/null
++++ b/src/wayland/meta-wayland-data-control.c
+@@ -0,0 +1,533 @@
++/*
++ * Copyright (C) 2026 limina contributors
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++/*
++ * ext-data-control-v1: clipboard/primary access for focusless clients
++ * (clipboard managers, VM guest agents). Server side of the wayland-protocols
++ * staging protocol; wired onto MetaSelection like the primary-selection
++ * device (meta-wayland-data-device-primary.c), minus the focus gating —
++ * every bound data-control device receives selection events immediately and
++ * on every owner change.
++ *
++ * Carried by limina (GNOME upstream declines data-control on privacy grounds,
++ * mutter#524): the limina guest agent uses this for host<->guest clipboard
++ * sync without holding a RemoteDesktop session (which keeps the screen-share
++ * indicator lit). No privileged-client gating: in a limina guest the
++ * compositor's clients are all the user's own.
++ */
++
++#include "config.h"
++
++#include <gio/gunixoutputstream.h>
++#include <unistd.h>
++
++#include "core/display-private.h"
++#include "core/meta-selection-private.h"
++#include "meta/meta-selection-source-memory.h"
++#include "wayland/meta-selection-source-wayland-private.h"
++#include "wayland/meta-wayland-data-control.h"
++#include "wayland/meta-wayland-data-offer.h"
++#include "wayland/meta-wayland-data-source.h"
++#include "wayland/meta-wayland-private.h"
++
++#include "ext-data-control-v1-server-protocol.h"
++
++typedef struct _MetaWaylandDataControl
++{
++  MetaWaylandCompositor *compositor;
++  /* Bound ext_data_control_device_v1 resources (no focus semantics). */
++  struct wl_list device_resource_list;
++  gulong selection_owner_signal_id;
++  /* The selection owners (per MetaSelectionType) set through this module,
++   * mirroring MetaWaylandDataDevicePrimary::owner. */
++  MetaSelectionSource *owners[META_N_SELECTION_TYPES];
++  MetaWaylandDataSource *data_sources[META_N_SELECTION_TYPES];
++} MetaWaylandDataControl;
++
++typedef struct _MetaWaylandDataSourceControl
++{
++  MetaWaylandDataSource parent;
++  /* Set once the source has been used in set_selection /
++   * set_primary_selection (further offers / reuse are protocol errors). */
++  gboolean used;
++} MetaWaylandDataSourceControl;
++
++#define META_TYPE_WAYLAND_DATA_SOURCE_CONTROL (meta_wayland_data_source_control_get_type ())
++G_DECLARE_FINAL_TYPE (MetaWaylandDataSourceControl,
++                      meta_wayland_data_source_control,
++                      META, WAYLAND_DATA_SOURCE_CONTROL,
++                      MetaWaylandDataSource)
++
++G_DEFINE_TYPE (MetaWaylandDataSourceControl, meta_wayland_data_source_control,
++               META_TYPE_WAYLAND_DATA_SOURCE)
++
++static MetaDisplay *
++display_from_data_control (MetaWaylandDataControl *data_control)
++{
++  MetaContext *context =
++    meta_wayland_compositor_get_context (data_control->compositor);
++
++  return meta_context_get_display (context);
++}
++
++/* ---- source ---- */
++
++static void
++control_source_offer (struct wl_client   *client,
++                      struct wl_resource *resource,
++                      const char         *type)
++{
++  MetaWaylandDataSourceControl *source = wl_resource_get_user_data (resource);
++
++  if (source->used)
++    {
++      wl_resource_post_error (resource,
++                              EXT_DATA_CONTROL_SOURCE_V1_ERROR_INVALID_OFFER,
++                              "offer sent after set_selection");
++      return;
++    }
++
++  if (!meta_wayland_data_source_add_mime_type (META_WAYLAND_DATA_SOURCE (source),
++                                               type))
++    wl_resource_post_no_memory (resource);
++}
++
++static void
++control_source_destroy (struct wl_client   *client,
++                        struct wl_resource *resource)
++{
++  wl_resource_destroy (resource);
++}
++
++static const struct ext_data_control_source_v1_interface control_source_interface = {
++  control_source_offer,
++  control_source_destroy,
++};
++
++static void
++destroy_control_source (struct wl_resource *resource)
++{
++  MetaWaylandDataSource *source = wl_resource_get_user_data (resource);
++
++  meta_wayland_data_source_set_resource (source, NULL);
++  g_object_unref (source);
++}
++
++static void
++meta_wayland_data_source_control_send (MetaWaylandDataSource *source,
++                                       const gchar           *mime_type,
++                                       gint                   fd)
++{
++  struct wl_resource *resource = meta_wayland_data_source_get_resource (source);
++
++  ext_data_control_source_v1_send_send (resource, mime_type, fd);
++  close (fd);
++}
++
++static void
++meta_wayland_data_source_control_cancel (MetaWaylandDataSource *source)
++{
++  struct wl_resource *resource = meta_wayland_data_source_get_resource (source);
++
++  if (resource)
++    ext_data_control_source_v1_send_cancelled (resource);
++}
++
++static void
++meta_wayland_data_source_control_init (MetaWaylandDataSourceControl *source_control)
++{
++}
++
++static void
++meta_wayland_data_source_control_class_init (MetaWaylandDataSourceControlClass *klass)
++{
++  MetaWaylandDataSourceClass *data_source_class =
++    META_WAYLAND_DATA_SOURCE_CLASS (klass);
++
++  data_source_class->send = meta_wayland_data_source_control_send;
++  data_source_class->cancel = meta_wayland_data_source_control_cancel;
++}
++
++/* ---- offer ---- */
++
++static void
++transfer_cb (MetaSelection *selection,
++             GAsyncResult  *res,
++             GOutputStream *stream)
++{
++  GError *error = NULL;
++
++  if (!meta_selection_transfer_finish (selection, res, &error))
++    {
++      g_warning ("data-control: could not fetch selection data: %s",
++                 error->message);
++      g_error_free (error);
++    }
++
++  g_output_stream_close (stream, NULL, NULL);
++  g_object_unref (stream);
++}
++
++static void
++control_offer_receive (struct wl_client   *client,
++                       struct wl_resource *resource,
++                       const char         *mime_type,
++                       int32_t             fd)
++{
++  MetaWaylandDataOffer *offer = wl_resource_get_user_data (resource);
++  MetaContext *context =
++    meta_wayland_compositor_get_context (offer->compositor);
++  MetaDisplay *display = meta_context_get_display (context);
++  MetaSelection *selection = meta_display_get_selection (display);
++  GOutputStream *stream;
++  GList *mime_types;
++  gboolean found;
++
++  mime_types = meta_selection_get_mimetypes (selection, offer->selection_type);
++  found = g_list_find_custom (mime_types, mime_type,
++                              (GCompareFunc) g_strcmp0) != NULL;
++  g_list_free_full (mime_types, g_free);
++
++  if (!found)
++    {
++      close (fd);
++      return;
++    }
++
++  stream = g_unix_output_stream_new (fd, TRUE);
++  meta_selection_transfer_async (selection,
++                                 offer->selection_type,
++                                 mime_type,
++                                 -1,
++                                 stream,
++                                 NULL,
++                                 (GAsyncReadyCallback) transfer_cb,
++                                 stream);
++}
++
++static void
++control_offer_destroy (struct wl_client   *client,
++                       struct wl_resource *resource)
++{
++  wl_resource_destroy (resource);
++}
++
++static const struct ext_data_control_offer_v1_interface control_offer_interface = {
++  control_offer_receive,
++  control_offer_destroy,
++};
++
++static void
++destroy_control_offer (struct wl_resource *resource)
++{
++  MetaWaylandDataOffer *offer = wl_resource_get_user_data (resource);
++
++  g_free (offer);
++}
++
++static struct wl_resource *
++create_and_send_control_offer (MetaWaylandDataControl *data_control,
++                               struct wl_resource     *device_resource,
++                               MetaSelectionType       selection_type)
++{
++  MetaDisplay *display = display_from_data_control (data_control);
++  MetaWaylandDataOffer *offer;
++  struct wl_resource *resource;
++  GList *mimetypes, *l;
++
++  mimetypes = meta_selection_get_mimetypes (meta_display_get_selection (display),
++                                            selection_type);
++  if (!mimetypes)
++    return NULL;
++
++  offer = g_new0 (MetaWaylandDataOffer, 1);
++  offer->compositor = data_control->compositor;
++  offer->selection_type = selection_type;
++  offer->resource =
++    wl_resource_create (wl_resource_get_client (device_resource),
++                        &ext_data_control_offer_v1_interface,
++                        wl_resource_get_version (device_resource), 0);
++  wl_resource_set_implementation (offer->resource,
++                                  &control_offer_interface,
++                                  offer,
++                                  destroy_control_offer);
++  resource = offer->resource;
++
++  ext_data_control_device_v1_send_data_offer (device_resource, resource);
++
++  for (l = mimetypes; l; l = l->next)
++    ext_data_control_offer_v1_send_offer (resource, l->data);
++
++  g_list_free_full (mimetypes, g_free);
++
++  return resource;
++}
++
++/* ---- device ---- */
++
++static void
++send_selection_for_type (MetaWaylandDataControl *data_control,
++                         struct wl_resource     *device_resource,
++                         MetaSelectionType       selection_type,
++                         gboolean                has_owner)
++{
++  struct wl_resource *offer = NULL;
++
++  if (has_owner)
++    {
++      offer = create_and_send_control_offer (data_control, device_resource,
++                                             selection_type);
++    }
++
++  if (selection_type == META_SELECTION_CLIPBOARD)
++    ext_data_control_device_v1_send_selection (device_resource, offer);
++  else if (selection_type == META_SELECTION_PRIMARY)
++    ext_data_control_device_v1_send_primary_selection (device_resource, offer);
++}
++
++static void
++data_source_destroyed (gpointer  data,
++                       GObject  *object_was_here)
++{
++  MetaWaylandDataControl *data_control = data;
++  MetaDisplay *display = display_from_data_control (data_control);
++  int i;
++
++  for (i = 0; i < META_N_SELECTION_TYPES; i++)
++    {
++      if (data_control->data_sources[i] == (MetaWaylandDataSource *) object_was_here)
++        {
++          data_control->data_sources[i] = NULL;
++          if (data_control->owners[i])
++            {
++              meta_selection_unset_owner (meta_display_get_selection (display),
++                                          i, data_control->owners[i]);
++              g_clear_object (&data_control->owners[i]);
++            }
++        }
++    }
++}
++
++static void
++data_control_set_selection (MetaWaylandDataControl *data_control,
++                            struct wl_resource     *device_resource,
++                            struct wl_resource     *source_resource,
++                            MetaSelectionType       selection_type)
++{
++  MetaDisplay *display = display_from_data_control (data_control);
++  MetaSelectionSource *selection_source;
++
++  if (data_control->data_sources[selection_type])
++    {
++      g_object_weak_unref (G_OBJECT (data_control->data_sources[selection_type]),
++                           data_source_destroyed,
++                           data_control);
++      data_control->data_sources[selection_type] = NULL;
++    }
++
++  if (source_resource)
++    {
++      MetaWaylandDataSourceControl *source_control =
++        wl_resource_get_user_data (source_resource);
++      MetaWaylandDataSource *source =
++        META_WAYLAND_DATA_SOURCE (source_control);
++
++      if (source_control->used)
++        {
++          wl_resource_post_error (device_resource,
++                                  EXT_DATA_CONTROL_DEVICE_V1_ERROR_USED_SOURCE,
++                                  "source was already used");
++          return;
++        }
++      source_control->used = TRUE;
++
++      data_control->data_sources[selection_type] = source;
++      g_object_weak_ref (G_OBJECT (source), data_source_destroyed, data_control);
++
++      selection_source = meta_selection_source_wayland_new (source);
++    }
++  else
++    {
++      selection_source = g_object_new (META_TYPE_SELECTION_SOURCE_MEMORY, NULL);
++    }
++
++  meta_selection_set_owner (meta_display_get_selection (display),
++                            selection_type, selection_source);
++  g_set_object (&data_control->owners[selection_type], selection_source);
++  g_object_unref (selection_source);
++}
++
++static void
++control_device_set_selection (struct wl_client   *client,
++                              struct wl_resource *resource,
++                              struct wl_resource *source_resource)
++{
++  MetaWaylandDataControl *data_control = wl_resource_get_user_data (resource);
++
++  data_control_set_selection (data_control, resource, source_resource,
++                              META_SELECTION_CLIPBOARD);
++}
++
++static void
++control_device_set_primary_selection (struct wl_client   *client,
++                                      struct wl_resource *resource,
++                                      struct wl_resource *source_resource)
++{
++  MetaWaylandDataControl *data_control = wl_resource_get_user_data (resource);
++
++  data_control_set_selection (data_control, resource, source_resource,
++                              META_SELECTION_PRIMARY);
++}
++
++static void
++control_device_destroy (struct wl_client   *client,
++                        struct wl_resource *resource)
++{
++  wl_resource_destroy (resource);
++}
++
++static const struct ext_data_control_device_v1_interface control_device_interface = {
++  control_device_set_selection,
++  control_device_destroy,
++  control_device_set_primary_selection,
++};
++
++static void
++unbind_device_resource (struct wl_resource *resource)
++{
++  wl_list_remove (wl_resource_get_link (resource));
++}
++
++static void
++owner_changed_cb (MetaSelection          *selection,
++                  MetaSelectionType       selection_type,
++                  MetaSelectionSource    *new_owner,
++                  MetaWaylandDataControl *data_control)
++{
++  struct wl_resource *device_resource;
++
++  if (selection_type != META_SELECTION_CLIPBOARD &&
++      selection_type != META_SELECTION_PRIMARY)
++    return;
++
++  wl_resource_for_each (device_resource, &data_control->device_resource_list)
++    {
++      send_selection_for_type (data_control, device_resource, selection_type,
++                               new_owner != NULL);
++    }
++}
++
++static void
++ensure_owner_changed_handler_connected (MetaWaylandDataControl *data_control)
++{
++  MetaDisplay *display = display_from_data_control (data_control);
++
++  if (data_control->selection_owner_signal_id != 0)
++    return;
++
++  data_control->selection_owner_signal_id =
++    g_signal_connect (meta_display_get_selection (display),
++                      "owner-changed",
++                      G_CALLBACK (owner_changed_cb), data_control);
++}
++
++/* ---- manager ---- */
++
++static void
++control_manager_create_data_source (struct wl_client   *client,
++                                    struct wl_resource *manager_resource,
++                                    uint32_t            id)
++{
++  struct wl_resource *source_resource;
++  MetaWaylandDataSource *source;
++
++  source_resource =
++    wl_resource_create (client, &ext_data_control_source_v1_interface,
++                        wl_resource_get_version (manager_resource), id);
++  source = g_object_new (META_TYPE_WAYLAND_DATA_SOURCE_CONTROL, NULL);
++  meta_wayland_data_source_set_resource (source, source_resource);
++  wl_resource_set_implementation (source_resource, &control_source_interface,
++                                  source, destroy_control_source);
++}
++
++static void
++control_manager_get_data_device (struct wl_client   *client,
++                                 struct wl_resource *manager_resource,
++                                 uint32_t            id,
++                                 struct wl_resource *seat_resource)
++{
++  MetaWaylandDataControl *data_control =
++    wl_resource_get_user_data (manager_resource);
++  struct wl_resource *cr;
++
++  cr = wl_resource_create (client, &ext_data_control_device_v1_interface,
++                           wl_resource_get_version (manager_resource), id);
++  wl_resource_set_implementation (cr, &control_device_interface,
++                                  data_control, unbind_device_resource);
++  wl_list_insert (&data_control->device_resource_list,
++                  wl_resource_get_link (cr));
++
++  ensure_owner_changed_handler_connected (data_control);
++
++  /* Per spec, the current selections are advertised upon binding (the offer
++   * degrades to NULL inside when there is nothing to offer). */
++  send_selection_for_type (data_control, cr, META_SELECTION_CLIPBOARD, TRUE);
++  send_selection_for_type (data_control, cr, META_SELECTION_PRIMARY, TRUE);
++}
++
++static void
++control_manager_destroy (struct wl_client   *client,
++                         struct wl_resource *resource)
++{
++  wl_resource_destroy (resource);
++}
++
++static const struct ext_data_control_manager_v1_interface control_manager_interface = {
++  control_manager_create_data_source,
++  control_manager_get_data_device,
++  control_manager_destroy,
++};
++
++static void
++bind_control_manager (struct wl_client *client,
++                      void             *data,
++                      uint32_t          version,
++                      uint32_t          id)
++{
++  struct wl_resource *resource;
++
++  resource = wl_resource_create (client,
++                                 &ext_data_control_manager_v1_interface,
++                                 version, id);
++  wl_resource_set_implementation (resource, &control_manager_interface,
++                                  data, NULL);
++}
++
++void
++meta_wayland_data_control_init (MetaWaylandCompositor *compositor)
++{
++  MetaWaylandDataControl *data_control;
++
++  data_control = g_new0 (MetaWaylandDataControl, 1);
++  data_control->compositor = compositor;
++  wl_list_init (&data_control->device_resource_list);
++
++  if (wl_global_create (compositor->wayland_display,
++                        &ext_data_control_manager_v1_interface,
++                        1, data_control, bind_control_manager) == NULL)
++    g_error ("Could not create ext-data-control manager global");
++}
+diff --git a/src/wayland/meta-wayland-data-control.h b/src/wayland/meta-wayland-data-control.h
+new file mode 100644
+index 0000000..569fe74
+--- /dev/null
++++ b/src/wayland/meta-wayland-data-control.h
+@@ -0,0 +1,22 @@
++/*
++ * Copyright (C) 2026 limina contributors
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#pragma once
++
++#include "wayland/meta-wayland-types.h"
++
++void meta_wayland_data_control_init (MetaWaylandCompositor *compositor);
+diff --git a/src/wayland/meta-wayland.c b/src/wayland/meta-wayland.c
+index f2f3775..fd19a3e 100644
+--- a/src/wayland/meta-wayland.c
++++ b/src/wayland/meta-wayland.c
+@@ -45,6 +45,7 @@
+ #include "wayland/meta-wayland-commit-timing.h"
+ #include "wayland/meta-wayland-cursor-shape.h"
+ #include "wayland/meta-wayland-fifo.h"
++#include "wayland/meta-wayland-data-control.h"
+ #include "wayland/meta-wayland-data-device.h"
+ #include "wayland/meta-wayland-dma-buf.h"
+ #include "wayland/meta-wayland-egl-stream.h"
+@@ -1004,6 +1005,7 @@ meta_wayland_compositor_new (MetaContext *context)
+   meta_wayland_outputs_init (compositor);
+   meta_wayland_data_device_manager_init (compositor);
+   meta_wayland_data_device_primary_manager_init (compositor);
++  meta_wayland_data_control_init (compositor);
+   meta_wayland_subsurfaces_init (compositor);
+   meta_wayland_shell_init (compositor);
+   meta_wayland_pointer_gestures_init (compositor);
+diff --git a/src/wayland/protocol/ext-data-control-v1.xml b/src/wayland/protocol/ext-data-control-v1.xml
+new file mode 100644
+index 0000000..37ee577
+--- /dev/null
++++ b/src/wayland/protocol/ext-data-control-v1.xml
+@@ -0,0 +1,276 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<protocol name="ext_data_control_v1">
++  <copyright>
++    Copyright © 2018 Simon Ser
++    Copyright © 2019 Ivan Molodetskikh
++    Copyright © 2024 Neal Gompa
++
++    Permission to use, copy, modify, distribute, and sell this
++    software and its documentation for any purpose is hereby granted
++    without fee, provided that the above copyright notice appear in
++    all copies and that both that copyright notice and this permission
++    notice appear in supporting documentation, and that the name of
++    the copyright holders not be used in advertising or publicity
++    pertaining to distribution of the software without specific,
++    written prior permission.  The copyright holders make no
++    representations about the suitability of this software for any
++    purpose.  It is provided "as is" without express or implied
++    warranty.
++
++    THE COPYRIGHT HOLDERS DISCLAIM ALL WARRANTIES WITH REGARD TO THIS
++    SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
++    FITNESS, IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY
++    SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
++    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
++    AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
++    ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
++    THIS SOFTWARE.
++  </copyright>
++
++  <description summary="control data devices">
++    This protocol allows a privileged client to control data devices. In
++    particular, the client will be able to manage the current selection and take
++    the role of a clipboard manager.
++
++    Warning! The protocol described in this file is currently in the testing
++    phase. Backward compatible changes may be added together with the
++    corresponding interface version bump. Backward incompatible changes can
++    only be done by creating a new major version of the extension.
++  </description>
++
++  <interface name="ext_data_control_manager_v1" version="1">
++    <description summary="manager to control data devices">
++      This interface is a manager that allows creating per-seat data device
++      controls.
++    </description>
++
++    <request name="create_data_source">
++      <description summary="create a new data source">
++        Create a new data source.
++      </description>
++      <arg name="id" type="new_id" interface="ext_data_control_source_v1"
++        summary="data source to create"/>
++    </request>
++
++    <request name="get_data_device">
++      <description summary="get a data device for a seat">
++        Create a data device that can be used to manage a seat's selection.
++      </description>
++      <arg name="id" type="new_id" interface="ext_data_control_device_v1"/>
++      <arg name="seat" type="object" interface="wl_seat"/>
++    </request>
++
++    <request name="destroy" type="destructor">
++      <description summary="destroy the manager">
++        All objects created by the manager will still remain valid, until their
++        appropriate destroy request has been called.
++      </description>
++    </request>
++  </interface>
++
++  <interface name="ext_data_control_device_v1" version="1">
++    <description summary="manage a data device for a seat">
++      This interface allows a client to manage a seat's selection.
++
++      When the seat is destroyed, this object becomes inert.
++    </description>
++
++    <request name="set_selection">
++      <description summary="copy data to the selection">
++        This request asks the compositor to set the selection to the data from
++        the source on behalf of the client.
++
++        The given source may not be used in any further set_selection or
++        set_primary_selection requests. Attempting to use a previously used
++        source triggers the used_source protocol error.
++
++        To unset the selection, set the source to NULL.
++      </description>
++      <arg name="source" type="object" interface="ext_data_control_source_v1"
++        allow-null="true"/>
++    </request>
++
++    <request name="destroy" type="destructor">
++      <description summary="destroy this data device">
++        Destroys the data device object.
++      </description>
++    </request>
++
++    <event name="data_offer">
++      <description summary="introduce a new ext_data_control_offer">
++        The data_offer event introduces a new ext_data_control_offer object,
++        which will subsequently be used in either the
++        ext_data_control_device.selection event (for the regular clipboard
++        selections) or the ext_data_control_device.primary_selection event (for
++        the primary clipboard selections). Immediately following the
++        ext_data_control_device.data_offer event, the new data_offer object
++        will send out ext_data_control_offer.offer events to describe the MIME
++        types it offers.
++      </description>
++      <arg name="id" type="new_id" interface="ext_data_control_offer_v1"/>
++    </event>
++
++    <event name="selection">
++      <description summary="advertise new selection">
++        The selection event is sent out to notify the client of a new
++        ext_data_control_offer for the selection for this device. The
++        ext_data_control_device.data_offer and the ext_data_control_offer.offer
++        events are sent out immediately before this event to introduce the data
++        offer object. The selection event is sent to a client when a new
++        selection is set. The ext_data_control_offer is valid until a new
++        ext_data_control_offer or NULL is received. The client must destroy the
++        previous selection ext_data_control_offer, if any, upon receiving this
++        event. Regardless, the previous selection will be ignored once a new
++        selection ext_data_control_offer is received.
++
++        The first selection event is sent upon binding the
++        ext_data_control_device object.
++      </description>
++      <arg name="id" type="object" interface="ext_data_control_offer_v1"
++        allow-null="true"/>
++    </event>
++
++    <event name="finished">
++      <description summary="this data control is no longer valid">
++        This data control object is no longer valid and should be destroyed by
++        the client.
++      </description>
++    </event>
++
++    <event name="primary_selection">
++      <description summary="advertise new primary selection">
++        The primary_selection event is sent out to notify the client of a new
++        ext_data_control_offer for the primary selection for this device. The
++        ext_data_control_device.data_offer and the ext_data_control_offer.offer
++        events are sent out immediately before this event to introduce the data
++        offer object. The primary_selection event is sent to a client when a
++        new primary selection is set. The ext_data_control_offer is valid until
++        a new ext_data_control_offer or NULL is received. The client must
++        destroy the previous primary selection ext_data_control_offer, if any,
++        upon receiving this event. Regardless, the previous primary selection
++        will be ignored once a new primary selection ext_data_control_offer is
++        received.
++
++        If the compositor supports primary selection, the first
++        primary_selection event is sent upon binding the
++        ext_data_control_device object.
++      </description>
++      <arg name="id" type="object" interface="ext_data_control_offer_v1"
++        allow-null="true"/>
++    </event>
++
++    <request name="set_primary_selection">
++      <description summary="copy data to the primary selection">
++        This request asks the compositor to set the primary selection to the
++        data from the source on behalf of the client.
++
++        The given source may not be used in any further set_selection or
++        set_primary_selection requests. Attempting to use a previously used
++        source triggers the used_source protocol error.
++
++        To unset the primary selection, set the source to NULL.
++
++        The compositor will ignore this request if it does not support primary
++        selection.
++      </description>
++      <arg name="source" type="object" interface="ext_data_control_source_v1"
++        allow-null="true"/>
++    </request>
++
++    <enum name="error">
++      <entry name="used_source" value="1"
++        summary="source given to set_selection or set_primary_selection was already used before"/>
++    </enum>
++  </interface>
++
++  <interface name="ext_data_control_source_v1" version="1">
++    <description summary="offer to transfer data">
++      The ext_data_control_source object is the source side of a
++      ext_data_control_offer. It is created by the source client in a data
++      transfer and provides a way to describe the offered data and a way to
++      respond to requests to transfer the data.
++    </description>
++
++    <enum name="error">
++      <entry name="invalid_offer" value="1"
++        summary="offer sent after ext_data_control_device.set_selection"/>
++    </enum>
++
++    <request name="offer">
++      <description summary="add an offered MIME type">
++        This request adds a MIME type to the set of MIME types advertised to
++        targets. Can be called several times to offer multiple types.
++
++        Calling this after ext_data_control_device.set_selection is a protocol
++        error.
++      </description>
++      <arg name="mime_type" type="string"
++        summary="MIME type offered by the data source"/>
++    </request>
++
++    <request name="destroy" type="destructor">
++      <description summary="destroy this source">
++        Destroys the data source object.
++      </description>
++    </request>
++
++    <event name="send">
++      <description summary="send the data">
++        Request for data from the client. Send the data as the specified MIME
++        type over the passed file descriptor, then close it.
++      </description>
++      <arg name="mime_type" type="string" summary="MIME type for the data"/>
++      <arg name="fd" type="fd" summary="file descriptor for the data"/>
++    </event>
++
++    <event name="cancelled">
++      <description summary="selection was cancelled">
++        This data source is no longer valid. The data source has been replaced
++        by another data source.
++
++        The client should clean up and destroy this data source.
++      </description>
++    </event>
++  </interface>
++
++  <interface name="ext_data_control_offer_v1" version="1">
++    <description summary="offer to transfer data">
++      A ext_data_control_offer represents a piece of data offered for transfer
++      by another client (the source client). The offer describes the different
++      MIME types that the data can be converted to and provides the mechanism
++      for transferring the data directly from the source client.
++    </description>
++
++    <request name="receive">
++      <description summary="request that the data is transferred">
++        To transfer the offered data, the client issues this request and
++        indicates the MIME type it wants to receive. The transfer happens
++        through the passed file descriptor (typically created with the pipe
++        system call). The source client writes the data in the MIME type
++        representation requested and then closes the file descriptor.
++
++        The receiving client reads from the read end of the pipe until EOF and
++        then closes its end, at which point the transfer is complete.
++
++        This request may happen multiple times for different MIME types.
++      </description>
++      <arg name="mime_type" type="string"
++        summary="MIME type desired by receiver"/>
++      <arg name="fd" type="fd" summary="file descriptor for data transfer"/>
++    </request>
++
++    <request name="destroy" type="destructor">
++      <description summary="destroy this offer">
++        Destroys the data offer object.
++      </description>
++    </request>
++
++    <event name="offer">
++      <description summary="advertise offered MIME type">
++        Sent immediately after creating the ext_data_control_offer object.
++        One event per offered MIME type.
++      </description>
++      <arg name="mime_type" type="string" summary="offered MIME type"/>
++    </event>
++  </interface>
++</protocol>
