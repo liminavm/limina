@@ -40,6 +40,12 @@ objc2-app-kit = { version = "0.3", features = [
     "NSView",
     "NSResponder",
     "NSEvent",
+    # Host-cursor adoption: the guest's cursor image (an IOSurface from the worker) becomes
+    # the macOS NSCursor while the pointer is over the guest view, so the only visible
+    # pointer is the zero-latency host one wearing the guest's shape.
+    "NSCursor",
+    "NSImage",
+    "objc2-core-graphics",
     "block2",
 ] }
 objc2-quartz-core = { version = "0.3", features = ["CALayer", "objc2-core-graphics"] }

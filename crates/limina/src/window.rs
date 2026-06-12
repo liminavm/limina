@@ -18,15 +18,20 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
 use block2::RcBlock;
+use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2::{AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSEventMask,
-    NSWindow, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor, NSEvent,
+    NSEventMask, NSImage, NSWindow, NSWindowStyleMask,
 };
 use objc2_core_foundation::{
     kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber,
     CFNumberType, CFRetained, CFString,
+};
+use objc2_core_graphics::{
+    CGBitmapContextCreate, CGBitmapContextCreateImage, CGBitmapContextGetBytesPerRow,
+    CGBitmapContextGetData, CGBitmapInfo, CGColorSpace, CGContext, CGImageAlphaInfo,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSTimer};
 use objc2_io_surface::{
@@ -89,18 +94,17 @@ pub struct Shared {
     /// Set when the worker/control channel is gone — the window should close.
     worker_exited: bool,
 
-    /// Hardware-cursor overlay state (decoupled from the scanout above; the worker publishes
-    /// the cursor as its own IOSurface and reports moves separately, so the cursor never
-    /// touches the scanout present path).
+    /// Guest hardware-cursor state (decoupled from the scanout above; the worker publishes
+    /// the cursor image as its own IOSurface). The host pointer *adopts* this shape over
+    /// the guest view (see `HostCursor`); guest-reported positions are ignored — the
+    /// pointer the user sees is the host one, which the guest tracks via absolute input.
     cursor_id: Option<u32>,
     cursor_w: u32,
     cursor_h: u32,
     hot_x: u32,
     hot_y: u32,
-    cursor_x: u32,
-    cursor_y: u32,
     cursor_visible: bool,
-    /// Bumped on any cursor change (new image, move, or hide) — the timer re-applies.
+    /// Bumped on any cursor shape/visibility change — the timer re-applies.
     cursor_gen: u64,
 }
 
@@ -170,15 +174,11 @@ pub fn spawn_reader(fd: RawFd, shared: Arc<Mutex<Shared>>) {
                     }
                 }
                 Some("cursormove") => {
-                    // cursormove <x> <y> — reposition the cursor in scanout pixels.
-                    let x = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    let y = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    if let (Some(x), Some(y)) = (x, y) {
-                        let mut s = shared.lock().unwrap();
-                        s.cursor_x = x;
-                        s.cursor_y = y;
-                        s.cursor_gen += 1;
-                    }
+                    // cursormove <x> <y> — the guest's cursor position. Deliberately
+                    // ignored: the visible pointer is the HOST cursor (wearing the guest
+                    // shape), and the guest position only echoes our own absolute input
+                    // back with a round-trip of lag. (A guest-initiated warp is the one
+                    // thing this loses; revisit with pointer capture.)
                 }
                 Some("cursorhide") => {
                     let mut s = shared.lock().unwrap();
@@ -233,12 +233,6 @@ pub fn run(
     layer.setOpaque(true);
     view.setLayer(Some(&layer));
     view.setWantsLayer(true);
-    // Hardware-cursor overlay: a sublayer above the scanout contents. anchorPoint (0,0) makes
-    // its position the image's corner (we convert from the guest's top-left origin below).
-    let cursor_layer = CALayer::new();
-    cursor_layer.setAnchorPoint(NSPoint::new(0.0, 0.0));
-    cursor_layer.setHidden(true);
-    layer.addSublayer(&cursor_layer);
     window.center();
     // Required for hover (non-dragging) motion to be delivered as MouseMoved events.
     window.setAcceptsMouseMovedEvents(true);
@@ -301,10 +295,13 @@ pub fn run(
     // Cache looked-up surfaces by id (the worker reuses a small fixed set, its double buffer).
     let cache: RefCell<std::collections::HashMap<u32, CFRetained<IOSurfaceRef>>> =
         RefCell::new(std::collections::HashMap::new());
-    // Cursor overlay per-timer state: the last applied cursor gen and the currently-shown
-    // cursor surface (id + retained ref, so it stays alive while displayed).
+    // Guest-cursor per-timer state: the last applied cursor gen and the IOSurface id of
+    // the shape the host pointer currently wears (so we rebuild only on a shape change).
     let last_cursor_gen = Cell::new(0u64);
-    let cursor_surf: RefCell<Option<(u32, CFRetained<IOSurfaceRef>)>> = RefCell::new(None);
+    let built_cursor: Cell<Option<u32>> = Cell::new(None);
+    // The host pointer's guest-shape adoption, shared with the input monitor (which
+    // tracks the pointer crossing the view boundary and asserts/clears the shape).
+    let host_cursor = input::HostCursor::new();
 
     // Shown-ack channel (#8 leg 2): after Core Animation processes a frame's transaction,
     // tell the worker "shown <id>" so it can complete the guest's held flush fence at the
@@ -426,11 +423,9 @@ pub fn run(
     });
     APPLY_HOOK.with(|h| *h.borrow_mut() = Some(apply.clone()));
 
+    let timer_cursor = host_cursor.clone();
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
-        let (exited, height) = {
-            let s = shared.lock().unwrap();
-            (s.worker_exited, s.height)
-        };
+        let exited = shared.lock().unwrap().worker_exited;
 
         // Quit when the worker is gone, the user closed the window, or Ctrl-C was hit:
         // kill the worker's whole process group and exit now.
@@ -440,8 +435,8 @@ pub fn run(
             std::process::exit(0);
         }
 
-        // Cursor overlay first — it has its own gen so a move (or hide) applies even when the
-        // scanout hasn't produced a new frame.
+        // Guest cursor shape first — it has its own gen so a shape change (or hide)
+        // applies even when the scanout hasn't produced a new frame.
         let cur = {
             let s = shared.lock().unwrap();
             (
@@ -452,13 +447,11 @@ pub fn run(
                 s.cursor_h,
                 s.hot_x,
                 s.hot_y,
-                s.cursor_x,
-                s.cursor_y,
             )
         };
         if cur.0 != last_cursor_gen.get() {
             last_cursor_gen.set(cur.0);
-            apply_cursor(&cursor_layer, &mut cursor_surf.borrow_mut(), &cur, height);
+            apply_cursor(&timer_cursor, &built_cursor, &cur);
         }
 
         // Frame apply: normally event-driven (dispatch from the reader thread); this is
@@ -472,7 +465,7 @@ pub fn run(
 
     // Capture keyboard + mouse via a local event monitor and forward them to the worker as
     // evdev events. Swallowed key events return null; pass-through events return themselves.
-    let input_state = input::InputState::new(input);
+    let input_state = input::InputState::new(input, host_cursor.clone());
     let monitor_view = view.clone();
     let input_block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
         // SAFETY: the monitor hands us a valid, live event for the call's duration.
@@ -569,48 +562,136 @@ fn capture_iosurface(surface: &IOSurfaceRef, id: u32, path: &str) {
     }
 }
 
-/// Apply the latest cursor state to the overlay sublayer. `cur` is
-/// `(gen, visible, id, w, h, hot_x, hot_y, x, y)`; `slot` holds the currently-shown cursor
-/// surface (id + retained ref) so it survives across calls and is only re-looked-up when the
-/// image id changes. `scanout_h` flips the guest's top-left origin into the layer's
-/// bottom-left coordinate space.
-#[allow(clippy::type_complexity)]
+/// Apply the latest guest cursor state to the host pointer. `cur` is
+/// `(gen, visible, id, w, h, hot_x, hot_y)`; `built` caches the IOSurface id of the shape
+/// the host pointer already wears, so we only rebuild on an actual shape change (the
+/// worker publishes each shape as a fresh IOSurface and keeps it alive until the next).
 fn apply_cursor(
-    layer: &CALayer,
-    slot: &mut Option<(u32, CFRetained<IOSurfaceRef>)>,
-    cur: &(u64, bool, Option<u32>, u32, u32, u32, u32, u32, u32),
-    scanout_h: u32,
+    host: &input::HostCursor,
+    built: &Cell<Option<u32>>,
+    cur: &(u64, bool, Option<u32>, u32, u32, u32, u32),
 ) {
-    let (_gen, visible, id, w, h, hot_x, hot_y, x, y) = *cur;
-    CATransaction::begin();
-    CATransaction::setDisableActions(true);
+    let (_gen, visible, id, w, h, hot_x, hot_y) = *cur;
     match id {
         Some(id) if visible && w > 0 && h > 0 => {
-            // Re-look-up only on an image change; the worker keeps the surface alive until the
-            // next shape change, and we retain our own ref in `slot`.
-            if slot.as_ref().map(|(sid, _)| *sid != id).unwrap_or(true) {
-                match IOSurfaceLookup(id) {
-                    Some(s) => {
-                        set_layer_surface(layer, &s, None);
-                        layer.setBounds(NSRect::new(
-                            NSPoint::new(0.0, 0.0),
-                            NSSize::new(w as f64, h as f64),
-                        ));
-                        *slot = Some((id, s));
-                    }
-                    None => log::warn!("window: cursor IOSurfaceLookup({id}) failed"),
-                }
+            if built.get() == Some(id) {
+                return;
             }
-            // Guest position is top-left origin with the hotspot inside the image; the parent
-            // layer is bottom-left origin and the cursor's anchor is its own (0,0) corner.
-            let px = x as f64 - hot_x as f64;
-            let py = scanout_h as f64 - (y as f64 - hot_y as f64) - h as f64;
-            layer.setPosition(NSPoint::new(px, py));
-            layer.setHidden(false);
+            match build_guest_cursor(id, w, h, hot_x, hot_y) {
+                Some(c) => {
+                    host.update(c);
+                    built.set(Some(id));
+                }
+                None => log::warn!("window: building guest cursor from IOSurface {id} failed"),
+            }
         }
-        _ => layer.setHidden(true),
+        _ => {
+            // The guest hid its cursor: honor that with a blank (fully transparent) host
+            // cursor over the view, falling back to the arrow if we can't build one. A
+            // hide before any shape was ever built keeps the default arrow (early boot).
+            if built.get().is_some() {
+                built.set(None);
+                host.update(blank_cursor().unwrap_or_else(NSCursor::arrowCursor));
+            }
+        }
     }
-    CATransaction::commit();
+}
+
+/// Build an `NSCursor` wearing the guest's cursor image: look up the worker-published
+/// IOSurface (BGRA, premultiplied alpha), copy it through a `CGBitmapContext` into a
+/// `CGImage`, and wrap it with the guest's hotspot (top-left origin, as NSCursor expects).
+/// 1 px = 1 pt — the window presents the scanout 1:1 today; revisit for HiDPI.
+fn build_guest_cursor(
+    id: u32,
+    w: u32,
+    h: u32,
+    hot_x: u32,
+    hot_y: u32,
+) -> Option<Retained<NSCursor>> {
+    let surface = IOSurfaceLookup(id)?;
+    let ctx = bgra_bitmap_context(w, h)?;
+    unsafe {
+        let dst = CGBitmapContextGetData(Some(&ctx)) as *mut u8;
+        if dst.is_null() {
+            return None;
+        }
+        let dst_bpr = CGBitmapContextGetBytesPerRow(Some(&ctx));
+        if IOSurfaceLock(
+            &surface,
+            IOSurfaceLockOptions::ReadOnly,
+            std::ptr::null_mut(),
+        ) != 0
+        {
+            return None;
+        }
+        let src = IOSurfaceGetBaseAddress(&surface).as_ptr() as *const u8;
+        let src_bpr = IOSurfaceGetBytesPerRow(&surface);
+        let row = (w as usize * 4)
+            .min(dst_bpr)
+            .min(src_bpr)
+            .min(IOSurfaceGetWidth(&surface) * 4);
+        let rows = (h as usize).min(IOSurfaceGetHeight(&surface));
+        for y in 0..rows {
+            std::ptr::copy_nonoverlapping(src.add(y * src_bpr), dst.add(y * dst_bpr), row);
+        }
+        IOSurfaceUnlock(
+            &surface,
+            IOSurfaceLockOptions::ReadOnly,
+            std::ptr::null_mut(),
+        );
+    }
+    nscursor_from_context(&ctx, w, h, hot_x, hot_y)
+}
+
+/// A fully transparent 1×1 cursor — what the host pointer wears while the guest hides its
+/// own (so "no pointer" is honored instead of showing a stale arrow over the view).
+fn blank_cursor() -> Option<Retained<NSCursor>> {
+    let ctx = bgra_bitmap_context(1, 1)?;
+    unsafe {
+        let dst = CGBitmapContextGetData(Some(&ctx)) as *mut u32;
+        if dst.is_null() {
+            return None;
+        }
+        dst.write(0);
+    }
+    nscursor_from_context(&ctx, 1, 1, 0, 0)
+}
+
+/// A BGRA (premultiplied, little-endian) bitmap context matching the worker's cursor
+/// IOSurface layout, so guest pixels copy in byte-for-byte.
+fn bgra_bitmap_context(w: u32, h: u32) -> Option<CFRetained<CGContext>> {
+    let space = CGColorSpace::new_device_rgb()?;
+    let info = CGBitmapInfo::ByteOrder32Little.0 | CGImageAlphaInfo::PremultipliedFirst.0;
+    // SAFETY: null data = CG allocates (and owns) the backing store; 0 bytes-per-row = CG
+    // chooses. All other arguments are plain values.
+    unsafe {
+        CGBitmapContextCreate(
+            std::ptr::null_mut(),
+            w as usize,
+            h as usize,
+            8,
+            0,
+            Some(&space),
+            info,
+        )
+    }
+}
+
+fn nscursor_from_context(
+    ctx: &CGContext,
+    w: u32,
+    h: u32,
+    hot_x: u32,
+    hot_y: u32,
+) -> Option<Retained<NSCursor>> {
+    let img = CGBitmapContextCreateImage(Some(ctx))?;
+    let size = NSSize::new(w as f64, h as f64);
+    let nsimage = NSImage::initWithCGImage_size(NSImage::alloc(), &img, size);
+    Some(NSCursor::initWithImage_hotSpot(
+        NSCursor::alloc(),
+        &nsimage,
+        NSPoint::new(hot_x as f64, hot_y as f64),
+    ))
 }
 
 /// Set an IOSurface as the layer's contents (it's a CF object accepted by `contents`).
