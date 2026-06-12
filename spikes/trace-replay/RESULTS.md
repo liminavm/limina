@@ -1,4 +1,38 @@
-# Trace-replay graphics tests — phase-1/2 spike results (2026-06-12)
+# Trace-replay graphics tests — phase-1/2/4 spike results (2026-06-12)
+
+## Phase 4 (gnome-shell itself) — DONE same day: THE desktop workload is a test
+
+Captured **the real seated gnome-shell** (mutter compositing on zink→venus) with
+apitrace and turned it into the `venus_shell_replay` test. Mechanics
+(`capture-replay-shell.sh` automates the whole dance):
+
+- gnome-shell is a **systemd user unit** (`org.gnome.Shell@wayland.service`); a user
+  drop-in sets `Environment=LD_PRELOAD=/usr/lib64/apitrace/wrappers/egltrace.so`. The
+  drop-in must sort LAST (`zz-*.conf`): the image's existing `gdb.conf` drop-in re-sets
+  LD_PRELOAD (abrtcatch.so) and systemd's later-file-wins would silently disarm the
+  tracer (verify via `/proc/$(pgrep -x gnome-shell)/environ`, not by assumption).
+- **No `TRACE_FILE`**: the shell fork/execs Xwayland which inherits LD_PRELOAD; with a
+  pinned filename both processes would corrupt one trace. Unset, each auto-names its
+  own in $HOME.
+- The trace finalizes on clean exit → disarm the drop-in, `poweroff`, pull on next boot.
+  ~14.5 MB for a seated-idle session (74 frames).
+- **Replay works on both backends** (the eglCreateSyncKHR/DupNativeFenceFDANDROID
+  warnings are no-op'd sync, harmless), and the shell's own render graph — StWidget
+  shaders, rounded-corner stencil clips (the #32 bug class!), text, the overview —
+  reproduces **pixel-exact (0 off) on venus vs llvmpipe**.
+- **Two divergence classes, both inherent to compositor traces, drive the capture
+  protocol** (seated idle overview, NO client windows; test drops the first snapshot):
+  (1) the startup fade samples uninitialized textures → undefined, backend-divergent
+  content on the first frames; (2) client-window content arrives as dmabuf imports of
+  OTHER processes' buffers, which cannot replay — venus showed stale-texture content
+  where llvmpipe showed black (an earlier capture with a glmark2 window on screen
+  diverged on exactly those frames, 42% of pixels, while its window-free frames were
+  0–0.3% off).
+
+Future: richer choreography (overview enter/leave animations via rdclip injection —
+still client-free) would exercise blur/crossfade harder; deferred.
+
+## Phase 2 (native Vulkan via gfxreconstruct) — DONE same day (earlier)
 
 ## Phase 2 (native Vulkan via gfxreconstruct) — DONE same day
 

@@ -272,6 +272,101 @@ fn venus_replay_matches_llvmpipe_reference() {
     eprintln!("teardown outcome: {outcome:?}");
 }
 
+/// Phase 4 — the prize: GNOME SHELL ITSELF (mutter compositing, captured from the real
+/// seated session via an LD_PRELOAD=egltrace.so systemd drop-in; fixture protocol in
+/// spikes/trace-replay/capture-replay-shell.sh). The shell's own render graph (StWidget
+/// shaders, rounded-corner stencil clips — the #32 bug class, text, blur) reproduces
+/// PIXEL-EXACT across venus and llvmpipe on the idle-overview protocol. The first
+/// snapshot pair is dropped: the startup fade samples uninitialized textures, which is
+/// undefined (backend-divergent) content by spec, not a rendering bug.
+#[test]
+fn venus_shell_replay_matches_llvmpipe_reference() {
+    if !limina_test::require_hvf_or_skip("venus_shell_replay_matches_llvmpipe_reference") {
+        return;
+    }
+    let trace = trace_fixture("LIMINA_TEST_SHELL_TRACE", "gnome-shell-seated.trace");
+    if !trace.exists() {
+        eprintln!(
+            "SKIPPED venus_shell_replay_matches_llvmpipe_reference: trace fixture missing at \
+             {trace:?}; regenerate with spikes/trace-replay/capture-replay-shell.sh (or set \
+             LIMINA_TEST_SHELL_TRACE)"
+        );
+        return;
+    }
+    let Some(guest) = boot_seated("venus_shell_replay_matches_llvmpipe_reference") else {
+        return;
+    };
+    let x11 = "DISPLAY=:0 XAUTHORITY=$(ls /run/user/1000/.mutter-Xwaylandauth.* | head -1) \
+               XDG_RUNTIME_DIR=/run/user/1000";
+
+    // Backend guard (the env trap): the venus leg must run on real venus.
+    let probe = guest
+        .ssh_exec(&format!(
+            "env {x11} {ZINK_ENV} glmark2-es2 -b build:duration=1 --size 256x256 2>&1 \
+             | grep GL_RENDERER"
+        ))
+        .expect("X11 EGL probe crashed");
+    eprintln!("X11 GL probe: {}", probe.trim());
+    assert!(
+        probe.contains("Virtio-GPU Venus"),
+        "X11 GL stack is not on venus (env trap / venus regression?): {probe}"
+    );
+
+    guest
+        .scp_to_guest(&trace, "/tmp/shell.trace")
+        .expect("pushing the shell trace fixture into the guest");
+
+    // The idle-overview capture is short (~74 frames), so snapshot densely.
+    for (name, env) in [
+        ("venus", ZINK_ENV),
+        (
+            "llvmpipe",
+            "GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1",
+        ),
+    ] {
+        let out = guest
+            .ssh_exec(&format!(
+                "mkdir -p /tmp/shellsnap-{name} && env {x11} {env} eglretrace --headless \
+                 --snapshot-interval=10 -s /tmp/shellsnap-{name}/ /tmp/shell.trace 2>&1 \
+                 | grep Rendered"
+            ))
+            .unwrap_or_else(|e| panic!("{name} shell replay failed: {e}"));
+        eprintln!("{name} shell replay: {}", out.trim());
+        assert!(
+            out.contains("Rendered") && out.contains("frames"),
+            "{name} shell replay did not report rendered frames:\n{out}"
+        );
+    }
+
+    let venus_dir = guest.scratch_dir().join("shellsnap-venus");
+    let ref_dir = guest.scratch_dir().join("shellsnap-llvmpipe");
+    guest
+        .scp_from_guest("/tmp/shellsnap-venus/*.png", &venus_dir)
+        .expect("pulling venus shell snapshots");
+    guest
+        .scp_from_guest("/tmp/shellsnap-llvmpipe/*.png", &ref_dir)
+        .expect("pulling llvmpipe shell snapshots");
+
+    // Drop the first snapshot pair (startup-fade undefined content) from both sets.
+    for dir in [&venus_dir, &ref_dir] {
+        let first = std::fs::read_dir(dir)
+            .expect("reading snapshot dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "png"))
+            .min()
+            .expect("no snapshots to drop");
+        eprintln!("dropping startup frame {first:?}");
+        std::fs::remove_file(first).expect("removing startup frame");
+    }
+    compare_snapshot_dirs(&venus_dir, &ref_dir, 3);
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(20))
+        .expect("shutting down the guest");
+    eprintln!("teardown outcome: {outcome:?}");
+}
+
 /// Phase 2: native Vulkan (no zink) — replay a gfxreconstruct capture of vkcube on venus
 /// and on lavapipe (the Vulkan software reference), compare screenshots. The lavapipe leg
 /// needs `--remove-unsupported` (the venus capture records instance extensions lavapipe
