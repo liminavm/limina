@@ -20,6 +20,14 @@ const MARKER: &[u8] = b"\n[limina-init] LIMINA_L1_USERSPACE_OK\n";
 fn main() {
     mount_pseudo_fs();
     announce();
+    // Mount host shares first: agents and test modes below may depend on them.
+    mount_limina_shares();
+    if let Some(name) = cmdline_value("limina.sharecheck") {
+        run_sharecheck(&name);
+    }
+    if let Some(name) = cmdline_value("limina.sharecheck_ro") {
+        run_sharecheck_ro(&name);
+    }
     // `limina.real_agent`: spawn the PRODUCT agent binary (staged at /limina-agent by
     // build-test-guest.sh) — the L1 vehicle for testing the real limina-agent end-to-end.
     // It connects to the control plane on its own and powers the guest off itself on
@@ -122,10 +130,95 @@ fn spawn_dbus_stack() {
 
 /// Mount devtmpfs on /dev and procfs on /proc (best-effort). The kernel may not have
 /// opened an initial console for us, so we need /dev/kmsg ourselves; /proc/cmdline tells
-/// us whether to run the agent.
+/// us whether to run the agent. sysfs feeds the virtiofs share-tag enumeration.
 fn mount_pseudo_fs() {
     mount(c"devtmpfs", c"/dev", c"devtmpfs");
     mount(c"proc", c"/proc", c"proc");
+    mount(c"sysfs", c"/sys", c"sysfs");
+}
+
+/// Auto-mount `limina-`-tagged virtiofs shares at `/media/<name>` — the product mount
+/// convention (the real limina-agent does the same on a distro guest). Tags are
+/// enumerated from sysfs (`/sys/fs/virtiofs/<id>/tag` — NOT the virtio-9p-style
+/// `mount_tag` device attribute), not the cmdline, so the mechanism also works on EFI
+/// boots where GRUB owns the cmdline. The rootfs share is tagged `/dev/root` and is
+/// skipped by the prefix filter. Best-effort per share.
+fn mount_limina_shares() {
+    let Ok(devices) = std::fs::read_dir("/sys/fs/virtiofs") else {
+        klog(b"[limina-init] no /sys/fs/virtiofs (no virtiofs devices?)");
+        return;
+    };
+    for dev in devices.filter_map(|e| e.ok()) {
+        let Ok(tag_raw) = std::fs::read(dev.path().join("tag")) else {
+            continue;
+        };
+        let tag = String::from_utf8_lossy(&tag_raw)
+            .trim_end_matches(['\0', '\n'])
+            .to_string();
+        let Some(name) = tag.strip_prefix("limina-") else {
+            continue;
+        };
+        let target = format!("/media/{name}");
+        let _ = std::fs::create_dir_all(&target);
+        let (Ok(c_tag), Ok(c_target)) = (
+            std::ffi::CString::new(tag.clone()),
+            std::ffi::CString::new(target.clone()),
+        ) else {
+            continue;
+        };
+        let rc = unsafe {
+            libc::mount(
+                c_tag.as_ptr(),
+                c_target.as_ptr(),
+                c"virtiofs".as_ptr(),
+                0,
+                std::ptr::null(),
+            )
+        };
+        if rc == 0 {
+            klog(format!("[limina-init] mounted share {tag} at {target}").as_bytes());
+        } else {
+            klog(format!("[limina-init] failed to mount share {tag}").as_bytes());
+        }
+    }
+}
+
+/// `limina.sharecheck=<name>`: prove the `/media/<name>` share end-to-end for the L1
+/// share test — read `ping` (staged by the host), write its content back to `pong`
+/// with a guest suffix, and log a marker carrying the ping content.
+fn run_sharecheck(name: &str) {
+    let dir = format!("/media/{name}");
+    match std::fs::read_to_string(format!("{dir}/ping")) {
+        Ok(ping) => {
+            let ok = std::fs::write(format!("{dir}/pong"), format!("{ping}+guest")).is_ok();
+            if ok {
+                klog(format!("[limina-init] LIMINA_SHARE_OK {ping}").as_bytes());
+            } else {
+                klog(b"[limina-init] LIMINA_SHARE_FAIL writing pong");
+            }
+        }
+        Err(e) => {
+            klog(format!("[limina-init] LIMINA_SHARE_FAIL reading ping: {e}").as_bytes());
+        }
+    }
+}
+
+/// `limina.sharecheck_ro=<name>`: prove a `:ro` share refuses writes — reads must work,
+/// writes must FAIL (that failing is the assertion, hence the inverted marker).
+fn run_sharecheck_ro(name: &str) {
+    let dir = format!("/media/{name}");
+    let readable = std::fs::read_to_string(format!("{dir}/ping")).is_ok();
+    let write_failed = std::fs::write(format!("{dir}/intruder"), b"nope").is_err();
+    if readable && write_failed {
+        klog(b"[limina-init] LIMINA_SHARE_RO_OK");
+    } else {
+        klog(
+            format!(
+                "[limina-init] LIMINA_SHARE_RO_FAIL readable={readable} write_failed={write_failed}"
+            )
+            .as_bytes(),
+        );
+    }
 }
 
 fn mount(src: &CStr, target: &CStr, fstype: &CStr) {

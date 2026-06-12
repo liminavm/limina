@@ -73,10 +73,15 @@ if [ "${LIMINA_PRESENT_COPY-1}" = "0" ]; then unset LIMINA_PRESENT_COPY; else ex
 [ -n "${LIMINA_FENCE_PRESENT:-}" ] && export LIMINA_FENCE_PRESENT
 NET_FLAG=--net
 [ "${LIMINA_NET:-1}" = "0" ] && NET_FLAG=
+# LIMINA_SHARE=<[NAME=]PATH[:ro]> attaches a host-directory share (M5 virtiofs;
+# the baked limina-agent auto-mounts it at /media/<NAME> in the guest).
+SHARE_FLAGS=()
+[ -n "${LIMINA_SHARE:-}" ] && SHARE_FLAGS=(--share "$LIMINA_SHARE")
 target/debug/limina --vmm-bin target/debug/limina-vmm \
   --kernel target/test-guest/kernel/Image-16k \
   --cmdline "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 console=ttyAMA0" \
   --disk "$WORK" --cpus 4 --ram-mib 4096 $NET_FLAG --window \
+  ${SHARE_FLAGS[@]+"${SHARE_FLAGS[@]}"} \
   >"$LOG" 2>&1 &
 echo "limina pid=$! (worker log $LOG, ICD $ICD)"
 wait

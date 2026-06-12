@@ -767,9 +767,20 @@ override, `l1_clipboard` proves both directions), and the **`limina-agent-sessio
 helper** (`guest/limina-agent-session`, zbus → mutter RemoteDesktop per the spike; systemd
 user unit, own vsock connection, caps=[clipboard]) — live-verified on the seated desktop
 (guest copy → `pbpaste`; `pbcopy` → Ctrl+Shift+V in ptyxis) and **baked into the dev-enh
-golden** (zero-install on fresh boots; host's current clipboard syncs on connect). Next:
-heartbeat-liveness surfacing, guest-tools delivery (sysext, below), images/files on the
-clipboard, virtiofs.
+golden** (zero-install on fresh boots; host's current clipboard syncs on connect). **virtiofs FILE
+SHARING is LIVE (2026-06-12):** `limina --share '[NAME=]PATH[:ro]'` (repeatable) attaches a
+host directory as virtiofs tag `limina-NAME`; the guest agent (and the L1 init seed)
+auto-mounts every `limina-`-tagged device at `/media/NAME`, discovering tags via sysfs
+(`/sys/fs/virtiofs/<id>/tag` — NOT the virtio-9p `mount_tag` attribute; and NOT the
+cmdline, so the mechanism survives EFI boots where GRUB owns the cmdline). A guest
+without the agent degrades to `mount -t virtiofs limina-NAME <dir>` by hand (two-tier).
+No DAX/shm window yet — same shm-less shape as the proven L1 rootfs; DAX is a tracked
+perf enhancement (the 16 KiB-host alignment question moves there). Tested by `l1_share`
+(read + write round-trip through the shipped binaries, plus `:ro` write-refusal) and
+live-verified on the seated desktop both directions with the share-aware agent **baked
+into the dev-enh golden** (zero-install on fresh clones). Next: heartbeat-liveness
+surfacing, guest-tools delivery (sysext, below), images/files on the clipboard, DAX,
+uid mapping for shares.
 
 **Key tasks:**
 1. **Guest agent + vsock control plane.** One multiplexed control connection over a single
@@ -819,9 +830,13 @@ clipboard, virtiofs.
        EFI→kernel reset degrades the desktop to software-2D.
    - Reuse libkrun's existing macOS host->guest time sync (DGRAM vsock port 123, `timesync.rs`)
      instead of a custom TIME_SET — just confirm a guest-side consumer exists.
-2. **virtiofs file sharing.** `krun_add_virtiofs3` with a DAX/shm window (`VirtioShmRegion` in
-   `fs/device.rs`; macOS-capable, not Linux-gated). Confirm shm-window alignment and
-   FUSE_SETUPMAPPING/SHMCAP on 16 KiB host pages and that `mount -o dax` works.
+2. ~~**virtiofs file sharing.**~~ **DONE (2026-06-12, shm-less).** `limina --share` →
+   worker `--share TAG=PATH[:ro]` → the existing `add_fs_device` plumbing (no DAX/shm
+   window — the L1-rootfs-proven shape); the agent auto-mounts `limina-*` tags at
+   `/media/<name>` via sysfs discovery. See the status block above. **Deferred to a perf
+   follow-up:** the DAX/shm window (`VirtioShmRegion` in `fs/device.rs`; confirm
+   shm-window alignment and FUSE_SETUPMAPPING/SHMCAP on 16 KiB host pages and that
+   `mount -o dax` works) and host↔guest uid mapping.
 3. **Clipboard bridge.** limina-agent (guest) <-> liminad (host) over a full-duplex vsock connection.
    Host side: NSPasteboard `changeCount` polling (no macOS push notification) + static MIME<->UTI
    mapping + promised/lazy data provider. App protocol: length-prefixed binary frames

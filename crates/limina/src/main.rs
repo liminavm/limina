@@ -55,6 +55,13 @@ struct Cli {
     #[arg(long)]
     read_only: bool,
 
+    /// Share a host directory into the guest (repeatable): `[NAME=]PATH[:ro]`. NAME
+    /// defaults to the directory's basename; the share is tagged `limina-NAME` over
+    /// virtio-fs and the guest agent auto-mounts it at /media/NAME (a guest without
+    /// the agent can `mount -t virtiofs limina-NAME <dir>` by hand).
+    #[arg(long = "share", value_name = "[NAME=]PATH[:ro]")]
+    share: Vec<String>,
+
     /// Number of vCPUs.
     #[arg(long, default_value_t = 4)]
     cpus: u8,
@@ -180,6 +187,27 @@ fn main() -> Result<()> {
     }
     if cli.read_only {
         args.push("--read-only".into());
+    }
+    {
+        let mut tags = std::collections::HashSet::new();
+        for spec in &cli.share {
+            let share = parse_share(spec)?;
+            anyhow::ensure!(
+                tags.insert(share.tag.clone()),
+                "duplicate share name (tag {}): pass NAME=PATH to disambiguate",
+                share.tag
+            );
+            args.push("--share".into());
+            args.push(format!(
+                "{}={}{}",
+                share.tag,
+                share
+                    .path
+                    .to_str()
+                    .with_context(|| format!("share path is not valid UTF-8: {:?}", share.path))?,
+                if share.read_only { ":ro" } else { "" }
+            ));
+        }
     }
     // Guest-agent control plane (M5/D8). Two modes:
     //  - explicit --vsock-* given (the test harness driving the protocol itself): pass the
@@ -468,4 +496,64 @@ fn path_arg(p: &std::path::Path) -> Result<String> {
     p.to_str()
         .map(str::to_string)
         .with_context(|| format!("path is not valid UTF-8: {p:?}"))
+}
+
+/// A parsed `--share [NAME=]PATH[:ro]` spec, normalized to the worker's `tag=path` form.
+struct ShareSpec {
+    tag: String,
+    path: PathBuf,
+    read_only: bool,
+}
+
+/// Parse a `--share [NAME=]PATH[:ro]` spec. NAME defaults to the directory basename; the
+/// virtiofs tag is `limina-NAME` (the prefix the guest agent auto-mounts under /media).
+/// virtio-fs tags are capped at 36 bytes on the wire, hence the length check.
+fn parse_share(spec: &str) -> Result<ShareSpec> {
+    let (name, rest) = match spec.split_once('=') {
+        Some((n, r)) => (Some(n.to_string()), r),
+        None => (None, spec),
+    };
+    let (path_str, read_only) = match rest.strip_suffix(":ro") {
+        Some(p) => (p, true),
+        None => (rest, false),
+    };
+    anyhow::ensure!(!path_str.is_empty(), "--share has an empty path: {spec:?}");
+    let path = PathBuf::from(path_str);
+    anyhow::ensure!(path.is_dir(), "share path is not a directory: {path:?}");
+
+    let name = match name {
+        Some(n) => n,
+        None => path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .with_context(|| format!("cannot derive a share name from {path:?}; pass NAME=PATH"))?
+            .to_string(),
+    };
+    // The name doubles as the guest mount-point basename and rides the virtiofs tag:
+    // keep it filesystem- and tag-safe.
+    let name: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    anyhow::ensure!(
+        !name.is_empty(),
+        "share name is empty after sanitizing: {spec:?}"
+    );
+    let tag = format!("limina-{name}");
+    anyhow::ensure!(
+        tag.len() <= 36,
+        "share name too long ({} bytes; virtiofs tags are capped at 36): {tag}",
+        tag.len()
+    );
+    Ok(ShareSpec {
+        tag,
+        path,
+        read_only,
+    })
 }

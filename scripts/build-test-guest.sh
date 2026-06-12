@@ -69,8 +69,9 @@ DBUS_TAR="$OUT/dbus.tar"
 echo "==> staging rootfs (/init + agents + dbus) for virtio-fs root"
 ROOTFS="$OUT/rootfs"
 rm -rf "$ROOTFS"
-# /dev,/proc: limina-init mounts devtmpfs + procfs; /tmp: the session bus socket.
-mkdir -p "$ROOTFS/dev" "$ROOTFS/proc" "$ROOTFS/tmp" "$ROOTFS/etc"
+# /dev,/proc,/sys: limina-init mounts devtmpfs + procfs + sysfs; /tmp: the session bus
+# socket; /media: virtiofs share mount points (limina-init/limina-agent auto-mount).
+mkdir -p "$ROOTFS/dev" "$ROOTFS/proc" "$ROOTFS/sys" "$ROOTFS/tmp" "$ROOTFS/etc" "$ROOTFS/media"
 install -m 0755 "$INIT" "$ROOTFS/init"
 # The PRODUCT agents, staged so L1 exercises the real binaries (cmdline limina.real_agent /
 # limina.session_helper), plus the TEST-ONLY mutter stand-in (limina.mock_mutter).

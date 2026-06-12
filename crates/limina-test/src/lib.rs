@@ -222,6 +222,10 @@ pub struct GuestConfig {
     pub control_socket: bool,
     /// Extra environment variables for the supervisor process (e.g. `LIMINA_PASTEBOARD`).
     pub envs: Vec<(String, String)>,
+    /// Host directories shared into the guest (`--share name=path[:ro]` → virtiofs tag
+    /// `limina-<name>`, auto-mounted at `/media/<name>` by the guest init/agent). The
+    /// bool is read-only.
+    pub shares: Vec<(String, PathBuf, bool)>,
 }
 
 impl GuestConfig {
@@ -266,6 +270,7 @@ impl GuestConfig {
             supervisor_log: false,
             control_socket: false,
             envs: Vec::new(),
+            shares: Vec::new(),
         })
     }
 
@@ -308,6 +313,7 @@ impl GuestConfig {
             supervisor_log: false,
             control_socket: false,
             envs: Vec::new(),
+            shares: Vec::new(),
         })
     }
 
@@ -362,6 +368,7 @@ impl GuestConfig {
             supervisor_log: false,
             control_socket: false,
             envs: Vec::new(),
+            shares: Vec::new(),
         })
     }
 
@@ -476,6 +483,21 @@ impl GuestConfig {
     /// point the clipboard bridge at a private named pasteboard).
     pub fn with_env(mut self, key: &str, value: &str) -> GuestConfig {
         self.envs.push((key.to_string(), value.to_string()));
+        self
+    }
+
+    /// Share a host directory into the guest (`--share name=path`): virtiofs tag
+    /// `limina-<name>`, auto-mounted at `/media/<name>` by the guest init/agent.
+    pub fn with_share(mut self, name: &str, host_dir: &Path) -> GuestConfig {
+        self.shares
+            .push((name.to_string(), host_dir.to_path_buf(), false));
+        self
+    }
+
+    /// Like [`GuestConfig::with_share`], but read-only (`--share name=path:ro`).
+    pub fn with_share_ro(mut self, name: &str, host_dir: &Path) -> GuestConfig {
+        self.shares
+            .push((name.to_string(), host_dir.to_path_buf(), true));
         self
     }
 
@@ -724,6 +746,13 @@ impl Guest {
                     .arg("--disk")
                     .arg(&clone);
             }
+        }
+        for (name, dir, read_only) in &cfg.shares {
+            let dir_str = dir
+                .to_str()
+                .with_context(|| format!("share dir is not valid UTF-8: {dir:?}"))?;
+            let ro = if *read_only { ":ro" } else { "" };
+            cmd.arg("--share").arg(format!("{name}={dir_str}{ro}"));
         }
         // Console capture. Two channels, by use case:
         //  - Interactive (`with_console_input`): route over virtio-console (`hvc0`). The

@@ -40,6 +40,11 @@ fn main() {
         .unwrap_or(CONTROL_PORT);
     eprintln!("limina-agent {}: connecting to host port {port}", version());
 
+    // Host shares first (independent of the control channel): mount every
+    // `limina-`-tagged virtiofs device at /media/<name>. Needs root, which this daemon
+    // has (system unit); a failed mount degrades to mount-by-hand, never fatal.
+    mount_limina_shares();
+
     let mut logged_waiting = false;
     loop {
         match connect_once(port) {
@@ -72,6 +77,59 @@ fn main() {
 
 fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// Auto-mount `limina-`-tagged virtiofs shares at `/media/<name>` (same convention as
+/// the L1 init seed). Tags come from sysfs (`/sys/fs/virtiofs/<id>/tag`), not the
+/// cmdline, so this also works on EFI boots where GRUB owns the cmdline. Skips tags
+/// already mounted (agent restarts must not stack mounts).
+fn mount_limina_shares() {
+    let Ok(devices) = std::fs::read_dir("/sys/fs/virtiofs") else {
+        return;
+    };
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    for dev in devices.filter_map(|e| e.ok()) {
+        let Ok(tag_raw) = std::fs::read(dev.path().join("tag")) else {
+            continue;
+        };
+        let tag = String::from_utf8_lossy(&tag_raw)
+            .trim_end_matches(['\0', '\n'])
+            .to_string();
+        let Some(name) = tag.strip_prefix("limina-") else {
+            continue;
+        };
+        let target = format!("/media/{name}");
+        if mounts
+            .lines()
+            .any(|l| l.split_whitespace().nth(1) == Some(target.as_str()))
+        {
+            continue;
+        }
+        let _ = std::fs::create_dir_all(&target);
+        let (Ok(c_tag), Ok(c_target)) = (
+            std::ffi::CString::new(tag.clone()),
+            std::ffi::CString::new(target.clone()),
+        ) else {
+            continue;
+        };
+        let rc = unsafe {
+            libc::mount(
+                c_tag.as_ptr(),
+                c_target.as_ptr(),
+                c"virtiofs".as_ptr(),
+                0,
+                std::ptr::null(),
+            )
+        };
+        if rc == 0 {
+            eprintln!("limina-agent: mounted share {tag} at {target}");
+        } else {
+            eprintln!(
+                "limina-agent: failed to mount share {tag} at {target}: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+    }
 }
 
 /// How a served session ended.

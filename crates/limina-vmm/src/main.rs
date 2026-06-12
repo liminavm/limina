@@ -51,6 +51,12 @@ struct Cli {
     #[arg(long)]
     rootfs: Option<PathBuf>,
 
+    /// Share a host directory into the guest over virtio-fs as `tag=path` (repeatable).
+    /// The guest mounts it with `mount -t virtiofs <tag> <dir>`; tags prefixed `limina-`
+    /// are auto-mounted under /media by the guest agent. Append `:ro` for read-only.
+    #[arg(long = "share", value_name = "TAG=PATH[:ro]")]
+    share: Vec<String>,
+
     /// Raw disk image to attach as virtio-blk `vda` (optional for direct kernel boot).
     #[arg(long)]
     disk: Option<PathBuf>,
@@ -154,6 +160,25 @@ fn parse_display_size(s: &str) -> Result<(u32, u32)> {
     Ok((width, height))
 }
 
+/// Parse a `--share TAG=PATH[:ro]` spec. The `=` split is first-match so the path may
+/// contain `=`; the `:ro` suffix is only treated as a flag when it is exactly `:ro`.
+fn parse_share(spec: &str) -> Result<FsShare> {
+    let (tag, rest) = spec
+        .split_once('=')
+        .ok_or_else(|| anyhow::anyhow!("--share must be TAG=PATH[:ro], got {spec:?}"))?;
+    anyhow::ensure!(!tag.is_empty(), "--share has an empty tag: {spec:?}");
+    let (path, read_only) = match rest.strip_suffix(":ro") {
+        Some(p) => (p, true),
+        None => (rest, false),
+    };
+    anyhow::ensure!(!path.is_empty(), "--share has an empty path: {spec:?}");
+    Ok(FsShare {
+        tag: tag.to_string(),
+        path: PathBuf::from(path),
+        read_only,
+    })
+}
+
 fn main() -> Result<()> {
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Info)
@@ -181,7 +206,7 @@ fn main() -> Result<()> {
         .into_iter()
         .collect();
 
-    let shares = cli
+    let mut shares: Vec<FsShare> = cli
         .rootfs
         .map(|path| FsShare {
             tag: "/dev/root".to_string(),
@@ -190,6 +215,9 @@ fn main() -> Result<()> {
         })
         .into_iter()
         .collect();
+    for spec in &cli.share {
+        shares.push(parse_share(spec)?);
+    }
 
     let vsock = match (cli.vsock_port, cli.vsock_socket) {
         (Some(port), Some(socket_path)) => Some(VsockSpec { port, socket_path }),
