@@ -55,17 +55,32 @@ echo "==> building the guest workspace (aarch64-unknown-linux-musl, static, rust
 GUEST_BIN="guest/target/aarch64-unknown-linux-musl/release"
 INIT="$GUEST_BIN/limina-init"
 AGENT="$GUEST_BIN/limina-agent"
+SESSION="$GUEST_BIN/limina-agent-session"
+MOCK="$GUEST_BIN/limina-mock-mutter"
 [ -x "$INIT" ] || { echo "limina-init not built at $INIT" >&2; exit 1; }
 [ -x "$AGENT" ] || { echo "limina-agent not built at $AGENT" >&2; exit 1; }
+[ -x "$SESSION" ] || { echo "limina-agent-session not built at $SESSION" >&2; exit 1; }
+[ -x "$MOCK" ] || { echo "limina-mock-mutter not built at $MOCK" >&2; exit 1; }
 
-echo "==> staging rootfs (/init + /limina-agent + /dev mountpoint) for virtio-fs root"
+# A session dbus-daemon (Alpine musl closure) for D-Bus-needing tests (limina.dbus).
+DBUS_TAR="$OUT/dbus.tar"
+[ -f "$DBUS_TAR" ] || scripts/build-dbus-guest.sh
+
+echo "==> staging rootfs (/init + agents + dbus) for virtio-fs root"
 ROOTFS="$OUT/rootfs"
 rm -rf "$ROOTFS"
-mkdir -p "$ROOTFS/dev" "$ROOTFS/proc"    # mountpoints; limina-init mounts devtmpfs + procfs
+# /dev,/proc: limina-init mounts devtmpfs + procfs; /tmp: the session bus socket.
+mkdir -p "$ROOTFS/dev" "$ROOTFS/proc" "$ROOTFS/tmp" "$ROOTFS/etc"
 install -m 0755 "$INIT" "$ROOTFS/init"
-# The PRODUCT agent, staged so L1 can exercise the real binary (cmdline limina.real_agent).
+# The PRODUCT agents, staged so L1 exercises the real binaries (cmdline limina.real_agent /
+# limina.session_helper), plus the TEST-ONLY mutter stand-in (limina.mock_mutter).
 install -m 0755 "$AGENT" "$ROOTFS/limina-agent"
-echo "    -> $ROOTFS (init $(wc -c < "$ROOTFS/init") bytes, agent $(wc -c < "$ROOTFS/limina-agent") bytes)"
+install -m 0755 "$SESSION" "$ROOTFS/limina-agent-session"
+install -m 0755 "$MOCK" "$ROOTFS/limina-mock-mutter"
+tar -xf "$DBUS_TAR" -C "$ROOTFS"
+# dbus EXTERNAL auth resolves the connecting uid to a name.
+echo 'root:x:0:0:root:/:/bin/false' > "$ROOTFS/etc/passwd"
+echo "    -> $ROOTFS (init $(wc -c < "$ROOTFS/init") bytes, agent $(wc -c < "$ROOTFS/limina-agent") bytes, dbus staged)"
 
 echo "==> L1 guest ready:"
 echo "    kernel = $OUT/Image"

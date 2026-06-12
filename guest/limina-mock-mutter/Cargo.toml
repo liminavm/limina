@@ -1,0 +1,20 @@
+# limina-mock-mutter — TEST-ONLY stand-in for mutter's RemoteDesktop clipboard API.
+#
+# Runs in the L1 test guest on a real (Alpine-extracted) session dbus-daemon and lets
+# the integration suite exercise the REAL limina-agent-session against a scripted
+# compositor: it claims org.gnome.Mutter.RemoteDesktop, serves the Session interface
+# (clipboard subset), and is driven/observed through files in the virtio-fs rootfs —
+# which the harness reads and writes directly on the host side.
+[package]
+name = "limina-mock-mutter"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-only WITH LicenseRef-limina-exception"
+
+[[bin]]
+name = "limina-mock-mutter"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+zbus = "5"

@@ -32,6 +32,14 @@ fn main() {
             Err(_) => klog(b"[limina-init] failed to spawn /limina-agent"),
         }
     }
+    // `limina.dbus`: bring up a session D-Bus bus (the Alpine-extracted dbus-daemon the
+    // build script stages) — infrastructure for tests that need real D-Bus services
+    // (first user: the limina-agent-session clipboard test against limina-mock-mutter).
+    // `limina.mock_mutter` and `limina.session_helper` then run on that bus; the mock's
+    // script/observation files are named by `limina.mock_id=<id>`.
+    if cmdline_has("limina.dbus") {
+        spawn_dbus_stack();
+    }
     if let Some(port) = agent_port_from_cmdline() {
         // A host-ordered SHUTDOWN powers off NOW — it must override `limina.hold` (the
         // whole point is that closing the window ends a held/animating guest).
@@ -59,6 +67,57 @@ fn cmdline_has(needle: &str) -> bool {
     std::fs::read_to_string("/proc/cmdline")
         .map(|c| c.split_whitespace().any(|t| t == needle))
         .unwrap_or(false)
+}
+
+/// The value of a `key=value` kernel cmdline token, if present.
+fn cmdline_value(key: &str) -> Option<String> {
+    let cmdline = std::fs::read_to_string("/proc/cmdline").ok()?;
+    let prefix = format!("{key}=");
+    cmdline
+        .split_whitespace()
+        .find_map(|t| t.strip_prefix(&prefix).map(str::to_string))
+}
+
+/// Address of the session bus `spawn_dbus_stack` brings up.
+const DBUS_ADDR: &str = "unix:path=/tmp/limina-bus";
+
+/// Bring up the test session-bus stack: dbus-daemon, then (per cmdline flags) the
+/// mock-mutter compositor stand-in and the REAL limina-agent-session helper, all wired
+/// via DBUS_SESSION_BUS_ADDRESS. Each child is best-effort: a missing binary klogs and
+/// the test asserting on its effects fails loudly.
+fn spawn_dbus_stack() {
+    let _ = std::fs::create_dir_all("/tmp");
+    match std::process::Command::new("/usr/bin/dbus-daemon")
+        .args(["--session", "--nofork", "--nopidfile"])
+        .arg(format!("--address={DBUS_ADDR}"))
+        .spawn()
+    {
+        Ok(_) => klog(b"[limina-init] spawned dbus-daemon"),
+        Err(_) => {
+            klog(b"[limina-init] failed to spawn dbus-daemon");
+            return;
+        }
+    }
+    if cmdline_has("limina.mock_mutter") {
+        let mock_id = cmdline_value("limina.mock_id").unwrap_or_else(|| "0".into());
+        match std::process::Command::new("/limina-mock-mutter")
+            .env("DBUS_SESSION_BUS_ADDRESS", DBUS_ADDR)
+            .env("LIMINA_MOCK_ID", &mock_id)
+            .spawn()
+        {
+            Ok(_) => klog(b"[limina-init] spawned /limina-mock-mutter"),
+            Err(_) => klog(b"[limina-init] failed to spawn /limina-mock-mutter"),
+        }
+    }
+    if cmdline_has("limina.session_helper") {
+        match std::process::Command::new("/limina-agent-session")
+            .env("DBUS_SESSION_BUS_ADDRESS", DBUS_ADDR)
+            .spawn()
+        {
+            Ok(_) => klog(b"[limina-init] spawned /limina-agent-session"),
+            Err(_) => klog(b"[limina-init] failed to spawn /limina-agent-session"),
+        }
+    }
 }
 
 /// Mount devtmpfs on /dev and procfs on /proc (best-effort). The kernel may not have

@@ -847,14 +847,13 @@ heartbeats.
 
 **Clipboard test-coverage gaps (tracked 2026-06-12; ~~oversized-content~~ fixed same day with
 `l1_clipboard_oversized_content_keeps_channel_alive`):**
-- **`limina-agent-session` under automation** — the mutter-facing half (variant unwrapping,
-  cache-served transfers, reconnects) is live-verified only. Settled design: an L1 test with a
-  **mock-mutter helper** — a guest-side Rust binary that plays BOTH the session bus (a slice of
-  `org.freedesktop.DBus`: Hello/AddMatch/RequestName over a unix socket the helper's
-  `DBUS_SESSION_BUS_ADDRESS` points at) and the RemoteDesktop interfaces, scripted per test;
-  the real `limina-agent-session` runs against it in the L1 guest, the harness plays the macOS
-  side via the named pasteboard. Not trivial (a mini bus daemon), hence deferred — until then a
-  cheaper unit-test extraction of `unwrap_value`/bridge state is fair game.
+- ~~**`limina-agent-session` under automation**~~ **DONE (same day, `l1_session_helper`):** the
+  L1 guest now carries a real session bus (`scripts/build-dbus-guest.sh` — Alpine's musl
+  dbus-daemon + 4-file closure; the rootfs is a host dir over virtio-fs so growth is free) and
+  **`limina-mock-mutter`** (a scripted zbus stand-in claiming `org.gnome.Mutter.RemoteDesktop`,
+  driven/observed through host-visible rootfs files). The REAL helper bridges both directions
+  against the REAL supervisor + named pasteboard in ~3.5s. The dbus stack (`limina.dbus` cmdline)
+  is general L1 infrastructure for future D-Bus-needing tests.
 - **Initial-offer-on-connect** (host pushes its current clipboard to a late joiner) — live-verified;
   the L1 test boots with an empty pasteboard so the path never fires there.
 - **Stale-serial races** — newest-wins exists on both sides; no test provokes an out-of-order

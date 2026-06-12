@@ -355,6 +355,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "limina-mock-mutter"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "zbus",
+]
+
+[[package]]
 name = "limina-proto"
 version = "0.1.0"
 dependencies = [

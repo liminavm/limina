@@ -9,9 +9,11 @@
 #  - limina-agent: the product guest agent (control plane daemon for real distros).
 #  - limina-agent-session: the per-session user helper (clipboard bridge via mutter
 #    RemoteDesktop D-Bus; runs as a systemd user unit on the session bus).
+#  - limina-mock-mutter: TEST-ONLY scripted stand-in for mutter's RemoteDesktop API, so
+#    the L1 guest can integration-test the real limina-agent-session without GNOME.
 [workspace]
 resolver = "2"
-members = ["limina-init", "limina-agent", "limina-agent-session"]
+members = ["limina-init", "limina-agent", "limina-agent-session", "limina-mock-mutter"]
 
 # Tiny, panic-free static binaries: abort (never unwind), optimize for size.
 [profile.release]
