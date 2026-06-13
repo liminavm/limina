@@ -20,6 +20,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::os::fd::RawFd;
 use std::rc::Rc;
+use std::sync::Arc;
+
+use super::WorkerConn;
 
 use objc2::rc::Retained;
 use objc2_app_kit::{NSCursor, NSEvent, NSEventType, NSView};
@@ -30,13 +33,6 @@ use limina_input::constants::{
 };
 use limina_input::keymap::{macos_keycode_to_linux, modifier_is_down};
 use limina_input::InputEvent;
-
-/// The supervisor ends of the two input sockets (one datagram = one event).
-#[derive(Clone, Copy)]
-pub struct InputSinks {
-    pub kbd_fd: RawFd,
-    pub ptr_fd: RawFd,
-}
 
 /// The host pointer's adoption of the guest cursor (main thread only). `cursor` is what
 /// the macOS pointer should look like over the guest view (the guest's current cursor
@@ -80,7 +76,8 @@ impl HostCursor {
 /// Main-thread input translator. Tracks which modifier keys are currently held so
 /// `flagsChanged` (which carries no up/down) can be turned into press/release pairs.
 pub struct InputState {
-    sinks: InputSinks,
+    /// The current worker's input sink fds (swapped on a reboot relaunch). Read fresh per event.
+    conn: Arc<WorkerConn>,
     /// macOS keycodes of modifiers believed to be down (toggled on each flagsChanged).
     pressed_mods: RefCell<HashSet<u16>>,
     /// Bitmask of mouse buttons whose *press* we forwarded to the guest. Releases and
@@ -91,9 +88,9 @@ pub struct InputState {
 }
 
 impl InputState {
-    pub fn new(sinks: InputSinks, host_cursor: Rc<HostCursor>) -> Self {
+    pub fn new(conn: Arc<WorkerConn>, host_cursor: Rc<HostCursor>) -> Self {
         Self {
-            sinks,
+            conn,
             pressed_mods: RefCell::new(HashSet::new()),
             guest_buttons: Cell::new(0),
             host_cursor,
@@ -271,11 +268,11 @@ impl InputState {
     }
 
     fn send_kbd(&self, ev: InputEvent) {
-        send_event(self.sinks.kbd_fd, ev);
+        send_event(self.conn.kbd_fd(), ev);
     }
 
     fn send_ptr(&self, ev: InputEvent) {
-        send_event(self.sinks.ptr_fd, ev);
+        send_event(self.conn.ptr_fd(), ev);
     }
 }
 

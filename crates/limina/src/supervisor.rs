@@ -41,6 +41,43 @@ const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(5);
 /// Give up relaunching after this many back-to-back rapid reboots (boot-loop backstop).
 const MAX_RAPID_REBOOTS: u32 = 5;
 
+/// Decides whether a worker exit should relaunch the VM (a guest reboot) or end it, capping
+/// runaway boot loops. Shared by the headless [`run`] loop and the windowed relaunch loop so
+/// the reboot policy lives in one place.
+#[derive(Default)]
+pub struct RebootGuard {
+    rapid_reboots: u32,
+}
+
+impl RebootGuard {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Given a finished worker's exit `code` and how long it ran (`uptime`), return whether to
+    /// relaunch. True only for a guest reboot that isn't a stop-in-progress and hasn't degenerated
+    /// into a boot loop (too many reboots each under [`MIN_HEALTHY_UPTIME`]).
+    pub fn should_relaunch(&mut self, code: i32, uptime: Duration) -> bool {
+        if code != WORKER_EXIT_REBOOT || stop_requested() {
+            return false;
+        }
+        if uptime < MIN_HEALTHY_UPTIME {
+            self.rapid_reboots += 1;
+            if self.rapid_reboots >= MAX_RAPID_REBOOTS {
+                log::error!(
+                    "guest rebooted {} times in under {MIN_HEALTHY_UPTIME:?} each — stopping the \
+                     VM (boot loop?)",
+                    self.rapid_reboots
+                );
+                return false;
+            }
+        } else {
+            self.rapid_reboots = 0;
+        }
+        true
+    }
+}
+
 /// Set by the SIGINT/SIGTERM handler; observed by the monitor loop.
 static STOP: AtomicBool = AtomicBool::new(false);
 
@@ -184,31 +221,15 @@ pub fn run(
     control: Option<&crate::control::ControlPlane>,
     gateway: Option<&crate::gateway::Gateway>,
 ) -> Result<i32> {
-    let mut rapid_reboots = 0u32;
+    let mut guard = RebootGuard::new();
     loop {
         let started = Instant::now();
         let child = spawn_worker(spec, &[])?;
         let code = monitor(child, spec.shutdown_grace, control)?;
 
-        // Anything other than a guest-initiated reboot (power-off, error, or a stop we asked
-        // for) ends the VM and propagates the code.
-        if code != WORKER_EXIT_REBOOT || stop_requested() {
+        // Relaunch only on a guest reboot (not power-off / error / stop / boot loop).
+        if !guard.should_relaunch(code, started.elapsed()) {
             return Ok(code);
-        }
-
-        // Guest rebooted. Guard against a boot loop: count reboots that happen too fast to be
-        // a healthy boot, and bail if they pile up.
-        if started.elapsed() < MIN_HEALTHY_UPTIME {
-            rapid_reboots += 1;
-            if rapid_reboots >= MAX_RAPID_REBOOTS {
-                log::error!(
-                    "guest rebooted {rapid_reboots} times in under {MIN_HEALTHY_UPTIME:?} each \
-                     — stopping the VM (boot loop?)"
-                );
-                return Ok(code);
-            }
-        } else {
-            rapid_reboots = 0;
         }
 
         // Recycle the NAT gateway: gvproxy's vfkit socket is single-connection, so the fresh

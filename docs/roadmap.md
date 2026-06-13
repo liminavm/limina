@@ -1117,6 +1117,22 @@ replacement: fullscreen, keymap remap, multi-display, system-combo capture, hard
      capability already exists — plumbing, not new device work). This is the #1 display gap.
    - ~~**Hardware cursor**~~ — done in M2 (libkrun 0008 + the host-cursor adoption redesign).
    - ~~**Zero-copy scanout**~~ — done in M4 (`SET_SCANOUT_BLOB` + IOSurface present, fence-accurate).
+   - **Capability-scope the scanout IOSurfaces (security hardening).** Today the worker exports each
+     guest scanout by its **global `IOSurfaceID`**, and the window process maps it with
+     `IOSurfaceLookup` (`window.rs`). That namespace is machine-wide and *not* capability-gated: the
+     IDs are low, sequential, and enumerable, so any **non-sandboxed same-user** process can brute-
+     force `1..N` and `IOSurfaceLookup` the guest's rendered frames — i.e. silently read the guest
+     screen with no screen-recording prompt and no window in front. `spikes/venus-draw-probe/iosdump.swift`
+     is a working proof of concept (it maps any global IOSurface id cross-process). Severity is
+     bounded — local-only, same-user (a process at that privilege can already screen-record / read our
+     memory), and the macOS app **sandbox already blocks** the App-Store-app case — so it's
+     productization hardening, not an emergency. Fix: have the worker export via
+     `IOSurfaceCreateMachPort` and hand the **port right** (a capability) to the window process instead
+     of a global id, mapping with `IOSurfaceLookupFromMachPort`; only our process can then map the
+     surface, and the global namespace is dropped entirely. The cost is a small **mach rendezvous** to
+     pass the port to the worker we spawn (`SCM_RIGHTS` passes fds, not port rights) — an initial mach
+     channel or a bootstrap-registered name. This is the concrete case where the host↔worker Mach-port
+     option earns its keep.
    - **CapsLock/NumLock LED parity (libkrun patch):** surface the statusq LED feedback
      (`worker.rs:238-248` no-op).
 

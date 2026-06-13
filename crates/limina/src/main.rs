@@ -312,24 +312,32 @@ fn main() -> Result<()> {
 /// Windowed run: socketpair control channel, spawn the worker in `--display-window` mode
 /// (inheriting the worker end), then run the AppKit window on the main thread while a
 /// background thread monitors the worker. Never returns (exits with the worker's code).
-fn run_windowed(
-    vmm_bin: PathBuf,
-    mut args: Vec<String>,
+/// One windowed worker plus the supervisor-side fds wiring the window to it. Re-created on a
+/// guest reboot ([`spawn_windowed_worker`]); the new fds are swapped into the window's
+/// [`window::WorkerConn`] so the same NSWindow keeps showing whichever worker is current.
+struct WindowedWorker {
+    child: std::process::Child,
+    pid: i32,
+    /// Worker→supervisor scanout control channel; once handed to `spawn_reader`, that reader
+    /// owns it and closes it on EOF (so the relaunch path must NOT close it).
+    sup_fd: libc::c_int,
+    /// Supervisor→worker evdev input ends (the window writes here), and the shown-ack fd (a dup
+    /// of `sup_fd`). These are the supervisor's to close when the worker is replaced.
+    kbd_sup_fd: libc::c_int,
+    ptr_sup_fd: libc::c_int,
+    ack_fd: libc::c_int,
+}
+
+/// Spawn a worker in `--display-window` mode and wire fresh scanout/input/ack socketpairs to
+/// it. `base_args` are the worker args *without* the windowed fd flags (added here, with the
+/// new fd numbers), so this can be called again to relaunch after a guest reboot.
+fn spawn_windowed_worker(
+    vmm_bin: &std::path::Path,
+    base_args: &[String],
     grace: Duration,
     width: u32,
     height: u32,
-    gateway: Option<gateway::Gateway>,
-    control: Option<control::ControlPlane>,
-) -> Result<()> {
-    use objc2::MainThreadMarker;
-
-    // Keep the gateway alive for the window's lifetime. window::run never returns (it
-    // `process::exit`s on quit), so this binding outlives the VM; the windowed exit path
-    // calls gateway::cleanup() (a module global) to kill gvproxy, since Drop won't run.
-    let _gateway = gateway;
-
-    let mtm = MainThreadMarker::new().context("the window must run on the main thread")?;
-
+) -> Result<WindowedWorker> {
     // Control channel (worker→supervisor scanout): sup_fd stays here (CLOEXEC so the worker
     // can't inherit it); worker_fd is inherited and referenced by --control-fd. Stream type
     // since it carries newline-delimited text.
@@ -349,6 +357,7 @@ fn run_windowed(
     set_nonblocking(kbd_sup_fd);
     set_nonblocking(ptr_sup_fd);
 
+    let mut args = base_args.to_vec();
     args.push("--display-window".into());
     args.push("--control-fd".into());
     args.push(worker_fd.to_string());
@@ -360,53 +369,112 @@ fn run_windowed(
     args.push(ptr_worker_fd.to_string());
 
     let spec = WorkerSpec {
-        vmm_bin,
+        vmm_bin: vmm_bin.to_path_buf(),
         args,
         shutdown_grace: grace,
     };
     let child = supervisor::spawn_worker(&spec, &[worker_fd, kbd_worker_fd, ptr_worker_fd])?;
-    let pid = child.id() as libc::pid_t;
+    let pid = child.id() as i32;
     // The worker holds its own copies now; drop ours so it sees EOF / owns the read ends.
     unsafe {
         libc::close(worker_fd);
         libc::close(kbd_worker_fd);
         libc::close(ptr_worker_fd);
     }
-
-    let shared = window::Shared::new();
     // Shown-ack write half (#8 leg 2): a dup of the control socketpair end. NOTE: a dup
     // shares the open file description — setting O_NONBLOCK here would make the reader
-    // thread's blocking reads on sup_fd fail too (EWOULDBLOCK read as worker-gone, killing
-    // the VM at boot; learned the hard way). The ack writes use MSG_DONTWAIT per send
-    // instead, so a wedged worker still can't stall the AppKit main thread.
+    // thread's blocking reads on sup_fd fail too. The ack writes use MSG_DONTWAIT per send.
     let ack_fd = unsafe { libc::dup(sup_fd) };
-    window::spawn_reader(sup_fd, shared.clone());
+    Ok(WindowedWorker {
+        child,
+        pid,
+        sup_fd,
+        kbd_sup_fd,
+        ptr_sup_fd,
+        ack_fd,
+    })
+}
 
-    // Monitor the worker on a background thread; when it exits on its own (guest
-    // power-off), mark the state so the window loop notices and quits. The monitor also
-    // reacts to Ctrl-C/SIGTERM with the same agent-first ladder as the window loop.
-    let shared_for_monitor = shared.clone();
-    let control_for_monitor = control.clone();
+fn run_windowed(
+    vmm_bin: PathBuf,
+    base_args: Vec<String>,
+    grace: Duration,
+    width: u32,
+    height: u32,
+    gateway: Option<gateway::Gateway>,
+    control: Option<control::ControlPlane>,
+) -> Result<()> {
+    use objc2::MainThreadMarker;
+
+    let mtm = MainThreadMarker::new().context("the window must run on the main thread")?;
+
+    // Spawn the first worker and wire its scanout/input/ack channels into a swappable conn.
+    let w = spawn_windowed_worker(&vmm_bin, &base_args, grace, width, height)?;
+    let conn = window::WorkerConn::new(w.pid, w.kbd_sup_fd, w.ptr_sup_fd, w.ack_fd);
+    let shared = window::Shared::new();
+    window::spawn_reader(w.sup_fd, shared.clone());
+
+    // Monitor the worker on a background thread. A guest *reboot* (distinct exit code) relaunches
+    // the worker — recycle gvproxy, spawn a fresh worker, swap its fds into `conn`, start a new
+    // reader — keeping the SAME NSWindow open. Any other exit (power-off, error, Ctrl-C, or a
+    // boot loop) marks the worker gone so the window loop quits. The gateway handle lives in this
+    // thread (it owns gvproxy's restart) for the VM's life.
+    let monitor_shared = shared.clone();
+    let monitor_conn = conn.clone();
+    let monitor_control = control.clone();
     std::thread::spawn(move || {
-        let _ = supervisor::monitor(child, grace, control_for_monitor.as_ref());
-        window::mark_worker_exited(&shared_for_monitor);
+        let mut child = w.child;
+        // Supervisor-side fds of the CURRENT worker to retire when it's replaced. NOT sup_fd:
+        // its reader thread owns it and closes it on EOF.
+        let mut old_io = [w.kbd_sup_fd, w.ptr_sup_fd, w.ack_fd];
+        let mut guard = supervisor::RebootGuard::new();
+        loop {
+            let started = std::time::Instant::now();
+            let code = supervisor::monitor(child, grace, monitor_control.as_ref()).unwrap_or(0);
+            if !guard.should_relaunch(code, started.elapsed()) {
+                window::mark_worker_exited(&monitor_shared);
+                break;
+            }
+            // Recycle gvproxy (single-connection vfkit socket) before the fresh worker dials it.
+            if let Some(gw) = &gateway {
+                if let Err(e) = gw.restart() {
+                    log::error!(
+                        "could not restart the NAT gateway for the reboot: {e:#}; stopping"
+                    );
+                    window::mark_worker_exited(&monitor_shared);
+                    break;
+                }
+            }
+            let next = match spawn_windowed_worker(&vmm_bin, &base_args, grace, width, height) {
+                Ok(n) => n,
+                Err(e) => {
+                    log::error!("relaunch after guest reboot failed: {e:#}; stopping");
+                    window::mark_worker_exited(&monitor_shared);
+                    break;
+                }
+            };
+            // Publish the new worker BEFORE closing the old fds (so a concurrent input send on
+            // the main thread can't race a reused fd number), then start its reader and retire
+            // the previous worker's input/ack fds.
+            monitor_conn.swap(next.pid, next.kbd_sup_fd, next.ptr_sup_fd, next.ack_fd);
+            window::spawn_reader(next.sup_fd, monitor_shared.clone());
+            for fd in old_io {
+                unsafe { libc::close(fd) };
+            }
+            log::info!(
+                "guest rebooted → relaunched the windowed VM worker (pid {})",
+                next.pid
+            );
+            child = next.child;
+            old_io = [next.kbd_sup_fd, next.ptr_sup_fd, next.ack_fd];
+        }
     });
 
-    // Runs the AppKit window on this (main) thread; never returns — on quit it asks the
-    // guest agent to power off (orderly), falling back to killing the worker process
-    // group. The window captures NSEvents and writes evdev events to the supervisor ends
-    // of the input channels.
-    window::run(
-        shared,
-        mtm,
-        pid,
-        window::InputSinks {
-            kbd_fd: kbd_sup_fd,
-            ptr_fd: ptr_sup_fd,
-        },
-        ack_fd,
-        control,
-    );
+    // Runs the AppKit window on this (main) thread; never returns — on quit it asks the guest
+    // agent to power off (orderly), falling back to killing the current worker's process group
+    // (`conn.pid()`). The window captures NSEvents and writes evdev events to the current
+    // worker's input fds (read from `conn`).
+    window::run(shared, mtm, conn, control);
 }
 
 /// Create a socketpair of the given type; set CLOEXEC on the supervisor end (fd.0) so the

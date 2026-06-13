@@ -15,6 +15,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::os::fd::{FromRawFd, RawFd};
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use block2::RcBlock;
@@ -43,7 +44,53 @@ use objc2_io_surface::{
 use objc2_quartz_core::{CALayer, CATransaction};
 
 mod input;
-pub use input::InputSinks;
+
+/// The supervisor's live connection to the *current* worker: its pid (for shutdown signaling)
+/// and the supervisor-side fds the window talks to it through (input sinks + the shown-ack fd).
+///
+/// All are swapped atomically when the worker is relaunched after a guest reboot, so the window
+/// keeps the same NSWindow/layer/event-monitor and just retargets whichever worker is current.
+/// Readers (the AppKit main thread) load each field fresh; the relaunch path publishes the new
+/// worker's values via [`WorkerConn::swap`] *before* closing the old fds, so a concurrent input
+/// `send` can't hit a reused fd number. A `pid` of 0 / fd of -1 means "no current worker".
+pub struct WorkerConn {
+    pid: AtomicI32,
+    kbd_fd: AtomicI32,
+    ptr_fd: AtomicI32,
+    ack_fd: AtomicI32,
+}
+
+impl WorkerConn {
+    pub fn new(pid: i32, kbd_fd: RawFd, ptr_fd: RawFd, ack_fd: RawFd) -> Arc<Self> {
+        Arc::new(Self {
+            pid: AtomicI32::new(pid),
+            kbd_fd: AtomicI32::new(kbd_fd),
+            ptr_fd: AtomicI32::new(ptr_fd),
+            ack_fd: AtomicI32::new(ack_fd),
+        })
+    }
+
+    pub fn pid(&self) -> i32 {
+        self.pid.load(Ordering::Acquire)
+    }
+    pub fn kbd_fd(&self) -> RawFd {
+        self.kbd_fd.load(Ordering::Acquire)
+    }
+    pub fn ptr_fd(&self) -> RawFd {
+        self.ptr_fd.load(Ordering::Acquire)
+    }
+    pub fn ack_fd(&self) -> RawFd {
+        self.ack_fd.load(Ordering::Acquire)
+    }
+
+    /// Publish a freshly-spawned worker's pid + supervisor-side fds (called on relaunch).
+    pub fn swap(&self, pid: i32, kbd_fd: RawFd, ptr_fd: RawFd, ack_fd: RawFd) {
+        self.kbd_fd.store(kbd_fd, Ordering::Release);
+        self.ptr_fd.store(ptr_fd, Ordering::Release);
+        self.ack_fd.store(ack_fd, Ordering::Release);
+        self.pid.store(pid, Ordering::Release);
+    }
+}
 
 // libdispatch: wake the main thread to apply a frame the moment it arrives, instead of
 // waiting out the 60 Hz poll timer (leg 1 of the present-latency collapse, #8). The
@@ -188,8 +235,11 @@ pub fn spawn_reader(fd: RawFd, shared: Arc<Mutex<Shared>>) {
                 _ => {}
             }
         }
+        // The control channel closed: this worker is gone. Do NOT set worker_exited here — the
+        // worker *monitor* is the sole authority on that, because a guest reboot also closes this
+        // channel and we must NOT quit the window before the monitor relaunches a new worker. On
+        // a relaunch a fresh reader is spawned on the new channel; this thread just ends.
         log::info!("window: control channel closed (worker gone)");
-        shared.lock().unwrap().worker_exited = true;
     });
 }
 
@@ -200,9 +250,7 @@ pub fn spawn_reader(fd: RawFd, shared: Arc<Mutex<Shared>>) {
 pub fn run(
     shared: Arc<Mutex<Shared>>,
     mtm: MainThreadMarker,
-    worker_pid: i32,
-    input: InputSinks,
-    ack_fd: RawFd,
+    conn: Arc<WorkerConn>,
     control: Option<crate::control::ControlPlane>,
 ) -> ! {
     let app = NSApplication::sharedApplication(mtm);
@@ -304,12 +352,32 @@ pub fn run(
     // tracks the pointer crossing the view boundary and asserts/clears the shape).
     let host_cursor = input::HostCursor::new();
 
-    // Shown-ack channel (#8 leg 2): after Core Animation processes a frame's transaction,
-    // tell the worker "shown <id>" so it can complete the guest's held flush fence at the
-    // real latch boundary instead of an open-loop timer. Sends use MSG_DONTWAIT (the fd's
-    // open file description is shared with the reader and must stay blocking); a dropped
-    // ack is covered by the worker's fallback deadline.
-    let ack: Option<RawFd> = (ack_fd >= 0).then_some(ack_fd);
+    // Shown-ack channel (#8 leg 2): after Core Animation latches a frame, tell the worker
+    // "shown <id>" so it can complete the guest's held flush fence. The blocking send is done on
+    // a DEDICATED thread, never the AppKit main thread: the ack fd shares a blocking open-file
+    // description with the reader (so it can't be made non-blocking), and MSG_DONTWAIT is NOT
+    // honored for AF_UNIX stream sockets on macOS — so a worker that briefly stops draining acks
+    // (notably the early-boot window just after a reboot relaunch) would otherwise block the main
+    // thread and beachball the whole UI. The completion block only `try_send`s the id (bounded,
+    // best-effort — drop if full); this thread sends it to whichever worker is current (conn is
+    // swapped on relaunch). A dropped ack is covered by the worker's fallback deadline.
+    let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel::<u32>(64);
+    {
+        let conn = conn.clone();
+        std::thread::spawn(move || {
+            while let Ok(id) = ack_rx.recv() {
+                let fd = conn.ack_fd();
+                if fd < 0 {
+                    continue;
+                }
+                let line = format!("shown {id}\n");
+                // Blocking is fine here — a wedged/booting worker only stalls this thread.
+                unsafe {
+                    libc::send(fd, line.as_ptr() as *const libc::c_void, line.len(), 0);
+                }
+            }
+        });
+    }
 
     // The frame-apply path, shared by the 60 Hz timer (fallback/liveness) and the
     // dispatch wake-up from the reader thread (event-driven, leg 1 of the latency
@@ -318,6 +386,7 @@ pub fn run(
         let shared = shared.clone();
         let window = window.clone();
         let layer = layer.clone();
+        let ack_tx = ack_tx.clone();
         move || {
             let (gen, show_id, width, height) = {
                 let s = shared.lock().unwrap();
@@ -363,9 +432,13 @@ pub fn run(
                     }
                 },
             };
-            // The ack identifies the frame by the GUEST's surface id even in copy mode
-            // (the worker tracks holds by the id it presented).
-            let ack_for_frame = ack.map(|fd| (fd, id));
+            // Shown-ack channel (#8 leg 2): after Core Animation processes this frame's
+            // transaction, hand the id to the dedicated ack-sender thread (a bounded, non-blocking
+            // try_send) so it can tell the worker "shown <id>" at the real latch boundary — the
+            // blocking socket write never touches the AppKit main thread. The ack identifies the
+            // frame by the GUEST's surface id even in copy mode (the worker tracks holds by the id
+            // it presented); the sender thread targets whichever worker is current after a relaunch.
+            let ack_for_frame = Some((ack_tx.clone(), id));
             // Distinct object each frame (the worker alternates ids) → CA re-reads.
             let present_copy =
                 present_copy_env || std::fs::metadata("/tmp/limina-present-copy").is_ok();
@@ -429,13 +502,14 @@ pub fn run(
     let quit_deadline: Cell<Option<std::time::Instant>> = Cell::new(None);
 
     let timer_cursor = host_cursor.clone();
+    let timer_conn = conn.clone();
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         let exited = shared.lock().unwrap().worker_exited;
 
         // Worker gone (guest powered off, orderly or not): net any process-group
-        // stragglers and exit.
+        // stragglers and exit. (`conn.pid()` is the *current* worker — relaunch keeps it fresh.)
         if exited {
-            unsafe { libc::kill(-worker_pid, libc::SIGKILL) };
+            unsafe { libc::kill(-timer_conn.pid(), libc::SIGKILL) };
             crate::gateway::cleanup();
             crate::control::cleanup();
             std::process::exit(0);
@@ -464,7 +538,7 @@ pub fn run(
                 Some(d) => std::time::Instant::now() >= d,
             };
             if force_now {
-                unsafe { libc::kill(-worker_pid, libc::SIGKILL) };
+                unsafe { libc::kill(-timer_conn.pid(), libc::SIGKILL) };
                 crate::gateway::cleanup();
                 crate::control::cleanup();
                 std::process::exit(0);
@@ -501,7 +575,7 @@ pub fn run(
 
     // Capture keyboard + mouse via a local event monitor and forward them to the worker as
     // evdev events. Swallowed key events return null; pass-through events return themselves.
-    let input_state = input::InputState::new(input, host_cursor.clone());
+    let input_state = input::InputState::new(conn.clone(), host_cursor.clone());
     let monitor_view = view.clone();
     let input_block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
         // SAFETY: the monitor hands us a valid, live event for the call's duration.
@@ -825,7 +899,7 @@ fn copy_surface(src: &CFRetained<IOSurfaceRef>, dst: &CFRetained<IOSurfaceRef>) 
 fn set_layer_surface(
     layer: &CALayer,
     surface: &CFRetained<IOSurfaceRef>,
-    ack: Option<(RawFd, u32)>,
+    ack: Option<(std::sync::mpsc::SyncSender<u32>, u32)>,
 ) {
     let obj: &AnyObject = unsafe { &*(&**surface as *const IOSurfaceRef as *const AnyObject) };
     unsafe {
@@ -833,18 +907,14 @@ fn set_layer_surface(
         CATransaction::setDisableActions(true);
         // #8 leg 2: the completion block fires once Core Animation has processed this
         // transaction (the new contents latched) — the truthful "shown" boundary the
-        // worker needs to complete the guest's held flush fence. Best-effort
-        // MSG_DONTWAIT send (the fd's description must stay blocking for the reader);
-        // a dropped ack is covered by the worker's fallback deadline.
-        if let Some((fd, id)) = ack {
+        // worker needs to complete the guest's held flush fence. The block only hands the id
+        // to the dedicated ack-sender thread via a bounded, non-blocking try_send: the actual
+        // socket write (which can block on a booting/wedged worker) must never run on the
+        // AppKit main thread. A dropped ack (channel full) is covered by the worker's fallback
+        // deadline.
+        if let Some((tx, id)) = ack {
             let cb = RcBlock::new(move || {
-                let line = format!("shown {id}\n");
-                let _ = libc::send(
-                    fd,
-                    line.as_ptr() as *const libc::c_void,
-                    line.len(),
-                    libc::MSG_DONTWAIT,
-                );
+                let _ = tx.try_send(id);
             });
             CATransaction::setCompletionBlock(Some(&cb));
         }
