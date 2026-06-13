@@ -132,6 +132,28 @@ fn resolve_bin(name: &str, env_override: &str) -> Result<PathBuf> {
     Ok(p)
 }
 
+/// Resolve the **KosmicKrisp** host Vulkan ICD — limina's one supported venus backend.
+///
+/// venus (the guest 3D path) is driven on the host by a Vulkan driver. We support exactly one:
+/// KosmicKrisp (mesa's Vulkan-on-Metal), a machine-local dev build under
+/// `/Volumes/mesa-cs/build-kk`. MoltenVK is **not** supported — its venus path corrupts the
+/// guest compositor (the #28 coherency / #32 stencil class of bugs KK fixed), so we never fall
+/// through to the Vulkan loader's MoltenVK default. Returns `None` when KK isn't built/mounted;
+/// callers either SKIP (a venus-requiring test) or degrade to software-2D (see [`Guest::boot`]).
+/// Same discovery as `spikes/venus-draw-probe/boot-seated-kk.sh`.
+pub fn kosmickrisp_icd() -> Option<PathBuf> {
+    let dir = Path::new("/Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan");
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n.starts_with("kosmickrisp_mesa_devenv_icd.") && n.ends_with(".json")
+            })
+        })
+}
+
 /// What the guest boots from.
 #[derive(Debug, Clone)]
 pub enum Boot {
@@ -410,10 +432,10 @@ impl GuestConfig {
     /// inventory). This is the vehicle for tests that need a *running graphical session*
     /// (Xwayland, the zink→venus GL stack) rather than just venus enumeration.
     ///
-    /// The caller must still pass the host Vulkan ICD for the worker (KosmicKrisp) via
-    /// [`GuestConfig::with_env`] — see `spikes/venus-draw-probe/boot-seated-kk.sh` for the
-    /// canonical seated-boot environment. Returns an error (the test should SKIP) if the
-    /// 16 KiB kernel or the dev-enh disk is missing.
+    /// The host Vulkan backend (KosmicKrisp) is wired automatically by [`Guest::boot`] for any
+    /// coexist/venus display — see [`kosmickrisp_icd`]; a venus-requiring test should still SKIP
+    /// up front when KK is absent (so it doesn't silently run on the software-2D fallback).
+    /// Returns an error (the test should SKIP) if the 16 KiB kernel or the dev-enh disk is missing.
     pub fn seated_fedora_from_env() -> Result<GuestConfig> {
         let mut cfg = GuestConfig::enhanced_fedora_from_env()?;
         let disk = match std::env::var("LIMINA_TEST_DISK_ENH") {
@@ -842,6 +864,28 @@ impl Guest {
                 // coexist/3D test (`with_coexist_display`) leaves venus on.
                 if d.software_2d {
                     cmd.arg("--gpu-software-2d");
+                } else {
+                    // Coexist/venus: KosmicKrisp is our ONLY supported host Vulkan backend.
+                    // Point the worker at it; if KK isn't built, degrade to software-2D
+                    // (llvmpipe) rather than fall through to the loader's MoltenVK default,
+                    // whose venus path crashes the guest compositor (#28/#32 class). Respect an
+                    // explicit caller-set VK_ICD_FILENAMES (e.g. a one-off A/B).
+                    let explicit_icd = cfg.envs.iter().any(|(k, _)| k == "VK_ICD_FILENAMES");
+                    if !explicit_icd {
+                        match kosmickrisp_icd() {
+                            Some(icd) => {
+                                cmd.env("VK_ICD_FILENAMES", &icd);
+                            }
+                            None => {
+                                eprintln!(
+                                    "limina-test: no KosmicKrisp ICD under /Volumes/mesa-cs/build-kk \
+                                     — venus unavailable, degrading to software-2D (MoltenVK is \
+                                     not a supported backend)"
+                                );
+                                cmd.arg("--gpu-software-2d");
+                            }
+                        }
+                    }
                 }
                 Some(png)
             }

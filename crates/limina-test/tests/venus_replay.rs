@@ -50,18 +50,6 @@ const ZINK_ENV: &str = "LD_LIBRARY_PATH=/opt/mesa-zink/lib64 \
 const MAX_BAD_PIXEL_FRACTION: f64 = 0.01;
 const CHANNEL_TOLERANCE: u8 = 8;
 
-/// The KosmicKrisp host ICD the seated boot uses (same discovery as
-/// spikes/venus-draw-probe/boot-seated-kk.sh). Machine-local dev build; SKIP without it.
-fn kosmickrisp_icd() -> Option<PathBuf> {
-    let dir = Path::new("/Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan");
-    let entries = std::fs::read_dir(dir).ok()?;
-    entries.filter_map(|e| e.ok()).map(|e| e.path()).find(|p| {
-        p.file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with("kosmickrisp_mesa_devenv_icd.") && n.ends_with(".json"))
-    })
-}
-
 fn trace_fixture(env_override: &str, name: &str) -> PathBuf {
     match std::env::var(env_override) {
         Ok(p) => PathBuf::from(p),
@@ -83,17 +71,19 @@ fn boot_seated(test_name: &str) -> Option<Guest> {
             return None;
         }
     };
-    let Some(icd) = kosmickrisp_icd() else {
+    // venus REQUIRES KosmicKrisp; SKIP up front if it isn't built (else Guest::boot would
+    // silently degrade this to the software-2D fallback and the pixel compare would be moot).
+    let Some(icd) = limina_test::kosmickrisp_icd() else {
         eprintln!(
             "SKIPPED {test_name}: no KosmicKrisp ICD under /Volumes/mesa-cs/build-kk \
              (mount third_party/mesa-cs.sparseimage and ninja)"
         );
         return None;
     };
+    // Guest::boot wires KK for the coexist display automatically; we only add present-copy.
     let cfg = cfg
         .with_coexist_display(1280, 800)
         .with_net()
-        .with_env("VK_ICD_FILENAMES", &icd.to_string_lossy())
         .with_env("LIMINA_PRESENT_COPY", "1");
     eprintln!("booting the seated dev-enh golden (KK ICD {icd:?})");
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");

@@ -3,7 +3,8 @@
 # Copyright © 2026 Gustavo Noronha Silva
 
 # Build our host virglrenderer for the limina worker: UPSTREAM virglrenderer 1.3.0 with
-# in-process venus (Vulkan→MoltenVK) on macOS. This replaces the homebrew slp
+# in-process venus (Vulkan→KosmicKrisp, our one supported host driver) on macOS. This replaces
+# the homebrew slp
 # `0.10.4e-krunkit` bottle whose vkr only knows VK_KHR_maintenance1..4 and caps the guest at
 # Vulkan 1.2 — too old for zink (which needs maintenance5). Upstream 1.3.0's vkr knows
 # maintenance1..9 and the krunkit macOS work is fully upstreamed, so this builds with NO

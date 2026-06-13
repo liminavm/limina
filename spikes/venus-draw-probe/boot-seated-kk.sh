@@ -6,8 +6,9 @@
 # /Volumes/mesa-cs/build-kk) as the host Vulkan driver instead of MoltenVK — the A/B vehicle
 # for evaluating KK as a MoltenVK alternative under virglrenderer/venus.
 #
-# Same plumbing as boot-seated-mvkinst.sh: the render server picks its Vulkan driver via
-# VK_ICD_FILENAMES. Build KK first (see docs/drivers/kosmickrisp.rst; deps via brew, mesa
+# The render server picks its Vulkan driver via VK_ICD_FILENAMES; this points it at KK, limina's
+# one supported venus backend (MoltenVK was retired 2026-06-13 — archived under
+# spikes/archive/moltenvk/). Build KK first (see docs/drivers/kosmickrisp.rst; deps via brew, mesa
 # checkout must live on the case-sensitive volume third_party/mesa-cs.sparseimage).
 #
 # LIMINA_DISK=<path> reuses a prepared disk without re-cloning (e.g. the golden dev-enh.raw).

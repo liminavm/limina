@@ -532,24 +532,40 @@ subnet reachable from another host.
 > KosmicKrisp); the 5000-fish WebGL aquarium runs 60fps vsync-capped @46% GPU — matching
 > host-native Firefox. **Mutter direct scanout works** (fullscreen client buffers flip straight to
 > the primary plane: `patches/linux/0002+0003` ARGB-on-primary + LINEAR-modifier advertisement,
-> libkrun 0021 wedge-proofing; stock kernels keep composition). Host Vulkan driver: **KosmicKrisp**
-> (daily driver, `spikes/venus-draw-probe/boot-seated-kk.sh`; perf knobs default-ON in KK itself,
-> CTS-validated); MoltenVK is the GBM-only alternate (no windowed WSI without sync_fd semaphores).
+> libkrun 0021 wedge-proofing; stock kernels keep composition). Host Vulkan driver: **KosmicKrisp
+> (KK), now the ONE supported venus backend** (daily driver, `spikes/venus-draw-probe/boot-seated-kk.sh`;
+> perf knobs default-ON in KK itself, CTS-validated). **MoltenVK retired as a venus backend
+> (2026-06-13):** it SIGSEGV-loops the gnome-shell compositor (the #28 coherency / #32 stencil class
+> corrupts the guest upstream of cogl, so it crashes instead of degrading) — verified A/B on the same
+> plain image (MVK: greeter crash-loop; KK: clean). Every venus boot path now forces the KK ICD and
+> **degrades to software-2D (llvmpipe) when KK is absent — never the loader's MoltenVK default**
+> (`scripts/run-venus-window.sh`, the `kosmickrisp_icd()` gate in `crates/limina-test`, `boot-seated-kk.sh`);
+> custom MoltenVK builds/patches archived under `spikes/archive/moltenvk/`. Productization follow-up:
+> **bundle KK inside `limina.app`** (loader + `libvulkan_kosmickrisp.dylib` + a relative-`library_path`
+> ICD JSON under `Contents/`, worker resolves it relative to its own path) and point the loader at
+> only that ICD — so MoltenVK isn't even on the loader's search path and can't load. Same-Team-ID
+> codesigning satisfies hardened runtime (no `disable-library-validation` needed).
 > Host CPU is attributed and lean (10k-fish aquarium: ~1.9 cores = the guest's own Firefox work,
 > ~0.9 core GPU stack; KK dirty-tracking round 28 took the rebind leg +81%, ring thread 38% busy).
 > Golden enhanced image: `Fedora-Workstation-43.dev-enh.raw` (16k kernel, zink, patched mutter,
 > journal-quiet). Converged truth + the open-threads ledger live in memory `limina-tier2-venus`
 > (CURRENT STATE section) and `spikes/venus-draw-probe/RESULTS.md` (rounds 13–29). Everything
 > below this box is the historical plan, kept for context.
-> **Remaining M4-adjacent work (the open ledger):** the upstream patch queue (MoltenVK / mesa
+> **Remaining M4-adjacent work (the open ledger):** the upstream patch queue (mesa
 > zink+venus / KosmicKrisp / virglrenderer / SPIRV-Cross / mutter ×2 / kernel 0002+0003 /
-> Fedora-zink backport ask); **productize the enhanced tier** — deliver what today is baked into
+> Fedora-zink backport ask — MoltenVK dropped from the queue, it's no longer a backend);
+> **productize the enhanced tier** — deliver what today is baked into
 > the dev image (kernel, mesa bits, mutter fix, environment.d policy) via the M5 agent/installer,
-> and make KK the shipped host-driver default in limina proper; the virtio-gpu flip-completion gap
+> and **bundle KK inside `limina.app`** as the host Vulkan driver (loader + KK dylib + relative-path
+> ICD JSON; loader pointed only at it) so it's the default *and* MoltenVK isn't on the search path
+> to load. Note bundling only removes *host-driver absence* as a fallback trigger — software-2D +
+> in-guest llvmpipe stays a shipping-tier path for guests that can't drive venus out of the box
+> (stock 4k kernel / no venus mesa = the stock-baseline floor); the fallback is guest-capability-
+> driven, not host-driver-driven. The virtio-gpu flip-completion gap
 > (event-driven KMS clients hang; #8 gave mutter honest pacing but the generic gap remains);
 > ~~GOP-firmware + venus singleton~~ **✅ FIXED (libkrun 0022, 2026-06-13 — renderer persists across
-> device reset)**; MVK windowed WSI (parity
-> only); #28 residue policy (`VN_PERF=no_*_feedback` via agent vs real fix); KK GPU-side per-draw
+> device reset)**; ~~MVK windowed WSI~~ **moot (MVK retired)**;
+> #28 residue policy (`VN_PERF=no_*_feedback` via agent vs real fix); KK GPU-side per-draw
 > root re-fetch (only if GPU-bound workloads reappear); Firefox MSAA cosmetic thread.
 
 **Venus-viability spike done (2026-06-06, `spikes/venus-viability`)** — it corrects the flag

@@ -24,6 +24,17 @@ fn venus_enumerates_on_16k_kernel() {
         return;
     }
 
+    // venus's one supported host backend is KosmicKrisp; without it Guest::boot degrades the
+    // coexist display to software-2D (never MoltenVK), on which venus can't enumerate — so SKIP
+    // up front rather than fail the enumeration assert below.
+    if limina_test::kosmickrisp_icd().is_none() {
+        eprintln!(
+            "SKIPPED venus_enumerates_on_16k_kernel: no KosmicKrisp ICD under \
+             /Volumes/mesa-cs/build-kk (mount third_party/mesa-cs.sparseimage and ninja)"
+        );
+        return;
+    }
+
     // SKIP (not fail) if the 16 KiB kernel or the Fedora disk isn't present — this is an
     // enhanced-tier test that needs an artifact built via `scripts/build-test-kernel.sh`.
     let cfg = match GuestConfig::enhanced_fedora_from_env() {

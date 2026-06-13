@@ -138,7 +138,7 @@ tracks claims still needing verification.
   notes we'll want again belong under `spikes/` (or the relevant crate), committed. `/tmp`
   is only for genuinely throwaway scratch and transient runtime deploy dirs — it gets wiped
   and the work is lost. When the source we instrument lives in gitignored `third_party/`,
-  save the change as a `*.patch` in the repo (e.g. `spikes/venus-draw-probe/mvk-instrument.patch`).
+  save the change as a `*.patch` in the repo (e.g. `spikes/archive/moltenvk/mvk-instrument.patch`).
 
 ### Debugging discipline: verify premises, verify pixels, instrument what we own
 
@@ -159,10 +159,13 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   capture (`LIMINA_WINDOW_CAPTURE`). NOT `glReadPixels` (#28 black readback). When only a human can see
   the window, ask the user to eyeball — and allow that they're human and may be slow to look.
 - **Instrument the stack you own.** When behavior is opaque, a few `fprintf`s in the dependency
-  (MoltenVK / virglrenderer / libkrun) beat any amount of outside-in guessing. The instrumented
-  MoltenVK (`spikes/venus-draw-probe/rebuild-mvk.sh` + `mvk-instrument.patch`, loaded into the worker
-  via `VK_ICD_FILENAMES`) is what turned "venus renders black" from open theories into one fact: the
-  vertex buffer the GPU fetches is all-zero. Keep such oracles in the repo; they pay off repeatedly.
+  (the host Vulkan driver / virglrenderer / libkrun) beat any amount of outside-in guessing. The
+  instrumented host Vulkan driver, loaded into the worker via `VK_ICD_FILENAMES`, is what turned
+  "venus renders black" from open theories into one fact: the vertex buffer the GPU fetches is
+  all-zero. (That oracle was an instrumented *MoltenVK* — now archived under
+  `spikes/archive/moltenvk/`; MoltenVK was **retired as a venus backend** 2026-06-13 because it
+  crashes the compositor. **KosmicKrisp (KK) is the one supported backend now** — instrument KK the
+  same way.) Keep such oracles in the repo; they pay off repeatedly.
 - **Isolate with a minimal vehicle, then reason to rule out the innocent explanation.** `tri.c` (a
   textureless, self-contained draw) had no confounders, so its result was decisive. And when an
   observation has a benign alternative ("the buffer's zero only because a copy hasn't run yet"), kill
