@@ -743,7 +743,9 @@ holds at the display refresh at Retina resolution.
 **Goal:** Bidirectional text clipboard, a host folder shared into the guest, and a versioned
 control channel between limina and a guest agent.
 
-**Status: 🚧 started 2026-06-12 — task 1's control plane is LIVE.** `crates/limina-proto`
+**Status: 🟢 core done 2026-06-12 — control plane, clipboard, virtiofs sharing, and liveness
+all live; only the productization track (sysext guest-tools + kernel RPM) and follow-ups remain
+(see the end of this block).** `crates/limina-proto`
 (16-byte `LIMINA` frame header + CBOR/minicbor payloads; HELLO/WELCOME/HEARTBEAT/SHUTDOWN/
 SHUTDOWN_ACK/ERROR; unknown types → `ERR_UNSUPPORTED`, never fatal); the L1 guest agent
 (`guest/limina-init` `agent` module) speaks it; and the **supervisor owns the host side by
