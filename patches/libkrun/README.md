@@ -68,3 +68,21 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
   the device holds the JoinHandle + stop fd and `reset()` signals+joins then goes Inactive
   (returns true), so re-activation spawns a clean worker on the new rings. With 0006+0007 the
   GOP boot hands off to the kernel and the live console renders (verified: 157 frames).
+  **Superseded by 0022** for the reset lifecycle: stop+join dropped the renderer, which
+  can't be re-init'd (singleton), so the worker now persists instead of being joined.
+- **0022 — virtio-gpu persist the renderer across device reset (singleton fix).**
+  `virgl_renderer_init` is a process-global, init-once, thread-bound singleton (a successful
+  init leaves a static `INIT_ONCE` set forever; `VirglRenderer::drop` runs
+  `virgl_renderer_cleanup` but never clears it). 0007's stop+join dropped `VirtioGpu` →
+  `Rutabaga` → cleanup AND left `INIT_ONCE` set, so the next `activate()` re-ran init →
+  `AlreadyInUse` → "degrading to software-2D". Every guest-driven reset (EFI→kernel hand-off,
+  driver unbind/rebind, reboot) therefore killed venus → llvmpipe — the blocker for the GOP
+  boot console and the EFI-booted enhanced tier. Now the gpu worker is spawned ONCE (first
+  activate) and lives for the whole VMM process (renderer init'd once, on one thread, never
+  dropped); `activate()`/`reset()` message it (`WorkerCmd::Activate/Deactivate/Shutdown` over
+  an mpsc channel, woken via the stop eventfd) to bind/unbind the per-activation transport.
+  The long-lived fence handler reaches the current queue/mem/interrupt through a shared
+  `Arc<Mutex<Option<GpuActivation>>>` swapped on activate and cleared on reset; reset drops
+  the session bookkeeping (resources/sw2d/scanouts + fence descriptors indexing the freed
+  queue) but keeps rutabaga + the display backend; `Gpu::drop` joins the worker. Verified:
+  limina `venus_reset` (unbind/rebind → venus still enumerates) + the full boot suite green.

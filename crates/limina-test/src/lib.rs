@@ -433,6 +433,21 @@ impl GuestConfig {
         self
     }
 
+    /// Append `extra` to the guest kernel cmdline (direct-kernel boots only). E.g.
+    /// `systemd.unit=multi-user.target` to boot without a graphical session — useful when a
+    /// test must manipulate the GPU device (driver unbind/rebind) without a compositor
+    /// holding `card0`. No-op for firmware boots (the cmdline is GRUB-owned there).
+    pub fn with_cmdline_extra(mut self, extra: &str) -> GuestConfig {
+        match &mut self.boot {
+            Boot::Kernel { cmdline, .. } | Boot::KernelDisk { cmdline, .. } => {
+                cmdline.push(' ');
+                cmdline.push_str(extra);
+            }
+            Boot::Firmware { .. } => {}
+        }
+        self
+    }
+
     /// Enable the guest vsock agent on `port`: the host listens on a UNIX socket and the
     /// kernel cmdline gets `limina.agent_port=<port>` so the init runs the agent. Kernel
     /// boot only (the L1 guest). The HARNESS drives the host side of the protocol

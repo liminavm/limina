@@ -394,11 +394,10 @@ guests — to read logs, kill processes, poke a wedged userspace — and (B) the
    seconds (the real IOSurface window present is cheap; the kernel batches damage so it was never
    affected). With this, a full GOP boot reaches the kernel under capture. **Track B is now
    end-to-end: firmware → GRUB → kernel all render on the GOP.** Remaining: reconcile with the M2
-   IOSurface present path and make limina default to the GOP firmware for windowed boots (Phase 3) —
-   **now gated on the GOP+venus singleton conflict** (M4 open item 2: `virgl_renderer_init` is
-   process-global and the 0007 worker restart on the EFI→kernel reset can't re-init it, so GOP
-   firmware currently degrades the desktop to software-2D; fix = persist the Rutabaga across the
-   restart).
+   IOSurface present path and make limina default to the GOP firmware for windowed boots (Phase 3).
+   **The GOP+venus singleton blocker is now FIXED** (M4 open item 2; libkrun 0022, 2026-06-13: the
+   renderer persists across the EFI→kernel reset instead of being dropped+re-init'd), so Phase 3 is
+   unblocked — what remains is the present-path reconcile + flipping the windowed default to GOP.
 
 3. **Wire both into the harness + window UX.** A serial-console view alongside the display (a
    separate pane/window the user can open), and keep the L1 console round-trip test green as the
@@ -521,7 +520,8 @@ subnet reachable from another host.
 > the dev image (kernel, mesa bits, mutter fix, environment.d policy) via the M5 agent/installer,
 > and make KK the shipped host-driver default in limina proper; the virtio-gpu flip-completion gap
 > (event-driven KMS clients hang; #8 gave mutter honest pacing but the generic gap remains);
-> GOP-firmware + venus singleton (EFI path; shared with M2.5 Phase 3); MVK windowed WSI (parity
+> ~~GOP-firmware + venus singleton~~ **✅ FIXED (libkrun 0022, 2026-06-13 — renderer persists across
+> device reset)**; MVK windowed WSI (parity
 > only); #28 residue policy (`VN_PERF=no_*_feedback` via agent vs real fix); KK GPU-side per-draw
 > root re-fetch (only if GPU-bound workloads reappear); Firefox MSAA cosmetic thread.
 
@@ -560,15 +560,19 @@ degrades gracefully to software-2D on renderer-init failure (no panic). Design:
    and move the enhanced-tier guest config out of the dev image (→ M5 agent/installer). Cosmetic:
    `num_capsets` (hardcoded 5) and the non-fatal `CTX_DETACH_RESOURCE` (0x203 → ERR_UNSPEC) dmesg
    error.
-2. **GOP-firmware + venus — now a HARD PREREQUISITE for the productized enhanced tier** (the M5
-   delivery design settled 2026-06-12 boots the enhanced kernel through EFI/BLS, so the EFI path
-   must keep venus): `virgl_renderer_init` is a process-global singleton,
-   but patch 0007 stops+re-activates the gpu worker on the EFI→kernel reset → second init hits
-   `AlreadyInUse`. So GOP graphical boot console (Track B) and venus don't yet coexist (silent
-   firmware avoids it but loses the boot console; GOP firmware degrades the desktop to software-2D).
-   Fix = persist the Rutabaga across the worker restart (hoist to the `Gpu` device; design around the
-   fence-handler's per-activation queue/interrupt binding) or rework 0007. Currently graceful (no
-   panic, degrades).
+2. **GOP-firmware + venus singleton — ✅ the renderer now survives a device reset (libkrun 0022,
+   2026-06-13).** `virgl_renderer_init` is a process-global, init-once, thread-bound singleton, and
+   patch 0007 dropped+recreated the renderer on the EFI→kernel reset (and any driver rebind/reboot),
+   so the second init hit `AlreadyInUse` → the desktop degraded to software-2D. **Fixed by reworking
+   0007 (→ libkrun patch 0022): a persistent gpu worker** spawned once for the whole VMM process owns
+   the renderer; `activate()`/`reset()` message it to bind/unbind the per-activation transport (the
+   long-lived fence handler reaches the current queue/mem/interrupt via a shared cell). RED-first
+   verified by the `venus_reset` test (unbind/rebind virtio-gpu → venus still enumerates) and the full
+   boot suite (venus, venus_replay ×3) stays green. This unblocks the prerequisite. **Still remaining
+   to actually run the desktop through the GOP console (separate, deferred):** wire GOP firmware as the
+   windowed-boot default (M2.5 Phase 3), and make the 16 KiB kernel EFI/BLS-bootable so it's the kernel
+   GRUB selects (M5 productization — today the EFI path boots the stock 4 KiB kernel, on which venus is
+   moot). The singleton was the shared blocker for both.
 3. ~~Confirm venus is actually selected~~ **ANSWERED (2026-06-07, via M3 SSH + empirical diagnostics):
    venus context-create WORKS; the blocker is the 16 KiB-host / 4 KiB-guest blob map.** The
    2026-06-06 "venus BROKEN at CtxCreate" conclusion was a **misread, now disproven**:
@@ -800,7 +804,8 @@ surface until a CLI/UI consumes it (`l1_liveness` proves silent + recovery on a 
 harness peer while the healthy seed agent stays unreported). **With that, every
 core M5 capability is DONE** (control plane + agents, clipboard, virtiofs sharing,
 liveness); what remains is the productization track (sysext guest-tools delivery +
-kernel RPM, below — gated on the GOP+venus singleton) and follow-ups: a `liminactl
+kernel RPM, below — the GOP+venus singleton blocker is now cleared, libkrun 0022) and
+follow-ups: a `liminactl
 status`-style consumer, images/files on the clipboard, DAX, uid mapping for shares,
 the clipboard test-gap ledger.
 
@@ -847,9 +852,10 @@ the clipboard test-gap ledger.
        volume): graceful degradation is exactly what makes this acceptable — the stock guest
        has a working (software-GL) desktop before enrollment; the installer drops the sysext +
        kernel package, and from then on the agent owns updates.
-     - **Consequence (priority change):** EFI-booting the enhanced tier makes the
-       **GOP-firmware + venus singleton fix a hard prerequisite** (M4 open item 2) — today the
-       EFI→kernel reset degrades the desktop to software-2D.
+     - **Consequence (priority change):** EFI-booting the enhanced tier needs venus to survive the
+       EFI→kernel reset — **that singleton prerequisite is now ✅ DONE** (M4 open item 2; libkrun
+       0022, 2026-06-13: the renderer persists across a device reset). What remains for the EFI path
+       is making the 16 KiB kernel BLS-bootable (this delivery work) so GRUB selects it.
    - Reuse libkrun's existing macOS host->guest time sync (DGRAM vsock port 123, `timesync.rs`)
      instead of a custom TIME_SET — just confirm a guest-side consumer exists.
 2. ~~**virtiofs file sharing.**~~ **DONE (2026-06-12, shm-less).** `limina --share` →

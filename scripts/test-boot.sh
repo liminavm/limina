@@ -41,5 +41,5 @@ echo "==> running boot tests (LIMINA_HVF_TESTS=1)"
 # venus vs llvmpipe pixel compare); it SKIPs without the dev-enh golden, the KK ICD, or
 # the trace fixture (fixtures/traces/ — regenerate via spikes/trace-replay/).
 LIMINA_HVF_TESTS=1 cargo test ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina-test \
-    --test l1_boot --test l1_agent --test l1_shutdown --test l1_real_agent --test l1_multi_agent --test l1_clipboard --test l1_session_helper --test l1_share --test l1_liveness --test l1_display --test l1_console --test l1_serial --test boot --test net --test venus --test venus_replay \
+    --test l1_boot --test l1_agent --test l1_shutdown --test l1_real_agent --test l1_multi_agent --test l1_clipboard --test l1_session_helper --test l1_share --test l1_liveness --test l1_display --test l1_console --test l1_serial --test boot --test net --test venus --test venus_reset --test venus_replay \
     -- --nocapture --test-threads=1 "$@"
