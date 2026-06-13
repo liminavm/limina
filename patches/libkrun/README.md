@@ -86,3 +86,12 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
   the session bookkeeping (resources/sw2d/scanouts + fence descriptors indexing the freed
   queue) but keeps rutabaga + the display backend; `Gpu::drop` joins the worker. Verified:
   limina `venus_reset` (unbind/rebind → venus still enumerates) + the full boot suite green.
+- **0023 — distinguish guest reboot (PSCI SYSTEM_RESET) from power-off.** HVF collapsed
+  `SYSTEM_OFF` and `SYSTEM_RESET` into one `VcpuExit::Shutdown`, so a guest reboot exited the
+  worker with `FC_EXIT_CODE_OK` — indistinguishable from a clean power-off, so limina's supervisor
+  tore the VM down on reboot. Decode `SYSTEM_RESET` into a distinct `VcpuExit::Reset` →
+  `VcpuEmulation::Rebooted` → exit with a new `FC_EXIT_CODE_REBOOT` (125). libkrun stays
+  single-shot (a reboot still exits the process); the distinct code lets the supervisor relaunch
+  the worker for a fresh boot while keeping the VM's host-side resources (gvproxy, control plane)
+  alive. Verified: limina `reboot::guest_reboot_relaunches_the_worker` (a guest `systemctl reboot`
+  comes back with a fresh boot id over the same NAT) + the full boot suite green.

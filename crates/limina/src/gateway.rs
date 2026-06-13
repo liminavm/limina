@@ -35,12 +35,23 @@ static GVPROXY_SOCK: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// A running gvproxy gateway. Drop tears it down (kill + reap + remove the socket).
 pub struct Gateway {
     socket_path: PathBuf,
+    debug_log: Option<PathBuf>,
 }
 
 impl Gateway {
     /// The vfkit unixgram socket path to hand the worker via `--net-gvproxy`.
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
+    }
+
+    /// Recycle gvproxy at the **same** socket path, so the worker's already-baked
+    /// `--net-gvproxy` arg stays valid. Needed when the supervisor relaunches the worker after a
+    /// guest reboot: gvproxy's vfkit socket is single-connection (it unlinks the socket once a VM
+    /// connects — see libkrun `net/unixgram.rs`), so a fresh worker cannot reconnect to the old
+    /// gvproxy. The socket path is keyed on the supervisor pid, so a restart reuses it.
+    pub fn restart(&self) -> Result<()> {
+        cleanup();
+        spawn_gvproxy(&self.socket_path, self.debug_log.as_deref())
     }
 }
 
@@ -71,11 +82,22 @@ fn gvproxy_bin() -> PathBuf {
 pub fn start(debug_log: Option<&Path>) -> Result<Gateway> {
     // A unique, ABSOLUTE socket path. Absolute is required: gvproxy parses
     // `unixgram://host/path`, so a relative path's first component is mistaken for the
-    // URL host (`bind: no such file or directory`). See spikes/m3-gvproxy/RESULTS.md.
+    // URL host (`bind: no such file or directory`). See spikes/m3-gvproxy/RESULTS.md. Keyed on
+    // the supervisor pid so it's stable across a gvproxy restart (see Gateway::restart).
     let socket_path =
         std::env::temp_dir().join(format!("limina-gvproxy-{}.sock", std::process::id()));
-    let _ = std::fs::remove_file(&socket_path);
-    let _ = std::fs::remove_file(local_bind_path(&socket_path));
+    spawn_gvproxy(&socket_path, debug_log)?;
+    Ok(Gateway {
+        socket_path,
+        debug_log: debug_log.map(Path::to_path_buf),
+    })
+}
+
+/// Spawn (or respawn) gvproxy listening on `socket_path`, recording its pid/socket in the
+/// statics used by [`cleanup`]. Shared by [`start`] and [`Gateway::restart`].
+fn spawn_gvproxy(socket_path: &Path, debug_log: Option<&Path>) -> Result<()> {
+    let _ = std::fs::remove_file(socket_path);
+    let _ = std::fs::remove_file(local_bind_path(socket_path));
 
     let bin = gvproxy_bin();
     let mut cmd = Command::new(&bin);
@@ -96,14 +118,14 @@ pub fn start(debug_log: Option<&Path>) -> Result<Gateway> {
     })?;
     let pid = child.id() as i32;
     GVPROXY_PID.store(pid, Ordering::SeqCst);
-    *GVPROXY_SOCK.lock().unwrap() = Some(socket_path.clone());
+    *GVPROXY_SOCK.lock().unwrap() = Some(socket_path.to_path_buf());
     // We track the gateway via the pid (for the global cleanup path); reaping is handled by
     // cleanup()'s waitpid, so we deliberately drop the Child handle here.
     drop_child_keep_pid(child);
 
-    wait_for_socket(&socket_path, pid, Duration::from_secs(5))?;
+    wait_for_socket(socket_path, pid, Duration::from_secs(5))?;
     log::info!("gvproxy gateway up (pid {pid}, socket {socket_path:?})");
-    Ok(Gateway { socket_path })
+    Ok(())
 }
 
 /// Kill and reap the gateway and remove its socket. Idempotent and safe to call from any

@@ -31,6 +31,13 @@ These are settled by the research and constrain every milestone:
   run-loop `self.exit()` -> exit_evt eventfd). The limina GUI must run the VMM in a child process and
   drive it via vsock + the shutdown eventfd. (Optional far-future patch: replace the exit path with
   an `EventManager` break for in-process control — not on the critical path.)
+  - **Reboot = relaunch the child (done 2026-06-13).** Since the VMM is single-shot, a guest
+    *reboot* and *power-off* both exit the worker. libkrun patch 0023 makes `SYSTEM_RESET` exit
+    with a distinct `FC_EXIT_CODE_REBOOT` (125), and `supervisor::run` relaunches the worker on it
+    (recycling gvproxy, whose vfkit socket is single-connection) instead of treating it as a
+    power-off — so a guest reboot restarts the VM in place while the supervisor + its host-side
+    resources survive, with a boot-loop cap. Guard: `reboot::guest_reboot_relaunches_the_worker`.
+    (Headless path only; the windowed path's worker↔window socketpair re-wiring is a follow-up.)
 - **Codesigning is a hard gate from M1 on.** The limina host executable (NOT libkrun.dylib) must be
   signed with `com.apple.security.hypervisor` (use `hvf-entitlements.plist`; ad-hoc signing
   suffices, notarization-compatible). Without it `hv_vm_create` returns `Error::VmCreate`.

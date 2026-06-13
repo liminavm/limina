@@ -33,10 +33,10 @@
 # productized image will match the distro's enforcing config when we get there).
 #
 # This script orchestrates both end to end via the shipped `limina` binary:
-#   1. prep  — custom-kernel boot (selinux=0): set permissive + /.autorelabel + the console
-#              GRUB args, then poweroff
-#   2. relabel — EFI boot (stock kernel, permissive): fixfiles relabels, reboots (limina exits)
-#   3. verify  — EFI boot again: must reach sshd with /.autorelabel gone (converged)
+#   1. prep    — custom-kernel boot (selinux=0): set permissive + /.autorelabel + the console
+#                GRUB args, then poweroff
+#   2. relabel — one EFI boot: fixfiles relabels, the guest reboots, and the supervisor relaunches
+#                the worker (a guest reboot no longer tears the VM down) until it converges to sshd
 #
 # Usage: scripts/prepare-efi-image.sh [IMAGE]   (default: Fedora-Workstation-43.dev-enh.raw)
 set -euo pipefail
@@ -75,7 +75,7 @@ wait_down() {  # wait for limina-vmm to exit (guest rebooted → VMM tears down)
   return 1
 }
 
-echo "==> [1/3] prep: set SELINUX=permissive + /.autorelabel + serial console on $IMAGE"
+echo "==> [1/2] prep: set SELINUX=permissive + /.autorelabel + serial console on $IMAGE"
 kill_vm
 "$LIMINA" --vmm-bin "$VMM" --kernel "$KERNEL" \
   --cmdline "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 console=ttyAMA0" \
@@ -88,21 +88,16 @@ wait_ssh 90 || { echo "prep boot: no SSH" >&2; exit 1; }
 "${SSH[@]}" 'sudo systemctl poweroff' 2>/dev/null || true
 wait_down 30 || kill_vm
 
-echo "==> [2/3] relabel: EFI boot — fixfiles relabels the tree, then reboots"
+echo "==> [2/2] relabel + converge: one EFI boot — fixfiles relabels, the guest reboots, and"
+echo "         the supervisor relaunches the worker until it converges to sshd (/.autorelabel gone)"
 kill_vm
 "$LIMINA" --vmm-bin "$VMM" --firmware "$FIRMWARE" \
   --disk "$IMAGE" --cpus 4 --ram-mib 4096 --net --gpu-software-2d \
   --console "$WORK/relabel.log" >"$WORK/relabel-worker.log" 2>&1 &
-wait_down 180 || { echo "relabel boot did not reboot within 180s" >&2; exit 1; }
+# The relabel reboot no longer tears the VM down — limina relaunches the worker on a guest reboot
+# (PSCI SYSTEM_RESET), so a single boot relabels, reboots, and comes back converged.
+wait_ssh 300 || { echo "did not converge to sshd within 300s (relabel loop?)" >&2; exit 1; }
 grep -q "Relabeling / " "$WORK/relabel.log" || { echo "relabel did not run (see $WORK/relabel.log)" >&2; exit 1; }
-echo "    relabel pass completed and rebooted"
-
-echo "==> [3/3] verify: EFI boot again — must converge to sshd, /.autorelabel gone"
-kill_vm
-"$LIMINA" --vmm-bin "$VMM" --firmware "$FIRMWARE" \
-  --disk "$IMAGE" --cpus 4 --ram-mib 4096 --net --gpu-software-2d \
-  --console "$WORK/verify.log" >"$WORK/verify-worker.log" 2>&1 &
-wait_ssh 240 || { echo "verify boot: no SSH (did it relabel-loop again?)" >&2; exit 1; }
 if [[ -n "$("${SSH[@]}" 'test -e /.autorelabel && echo yes' 2>/dev/null)" ]]; then
   echo "/.autorelabel still present after relabel — NOT converged" >&2; exit 1
 fi

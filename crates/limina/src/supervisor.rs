@@ -14,6 +14,12 @@
 //! - on SIGINT/SIGTERM: ask the guest to power off (SIGTERM → worker → shutdown eventfd).
 //! - if the guest doesn't power off within the grace period, escalate to SIGKILL.
 //! - map the worker's exit to a VM-stopped outcome and report it.
+//!
+//! Reboot: libkrun is single-shot — a guest reboot (PSCI `SYSTEM_RESET`) tears the worker
+//! process down just like a power-off. Our libkrun patch makes it exit with a *distinct* code
+//! ([`WORKER_EXIT_REBOOT`]) so [`run`] can tell the two apart and **relaunch the worker** (a
+//! fresh boot) on reboot, while the supervisor — and the resources it owns (gvproxy, the
+//! control plane) — survive. A boot-loop guard stops endless relaunches.
 
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
@@ -22,6 +28,18 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
+
+/// Worker process exit code meaning "the guest rebooted" (PSCI `SYSTEM_RESET`) — mirrors
+/// libkrun's `FC_EXIT_CODE_REBOOT` (a clean power-off exits 0). Kept in sync by hand: limina
+/// spawns the worker as a subprocess and reads only its exit status, so it can't import the
+/// constant from `krun-vmm`.
+pub const WORKER_EXIT_REBOOT: i32 = 125;
+
+/// A worker that exits with [`WORKER_EXIT_REBOOT`] after running less than this is treated as a
+/// boot loop, not a healthy reboot.
+const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(5);
+/// Give up relaunching after this many back-to-back rapid reboots (boot-loop backstop).
+const MAX_RAPID_REBOOTS: u32 = 5;
 
 /// Set by the SIGINT/SIGTERM handler; observed by the monitor loop.
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -154,16 +172,63 @@ pub fn stop_requested() -> bool {
     STOP.load(Ordering::SeqCst)
 }
 
-/// Spawn and supervise the worker until it exits (headless/non-windowed path).
-pub fn run(spec: &WorkerSpec, control: Option<&crate::control::ControlPlane>) -> Result<i32> {
-    let child = spawn_worker(spec, &[])?;
-    monitor(child, spec.shutdown_grace, control)
+/// Spawn and supervise the worker until the VM stops (headless/non-windowed path).
+///
+/// A guest **power-off** (or signal-driven stop) returns the worker's exit code. A guest
+/// **reboot** ([`WORKER_EXIT_REBOOT`]) instead **relaunches** the worker — a fresh boot of the
+/// same VM — so the supervisor and its gvproxy/control-plane resources survive a guest reboot
+/// the way real hardware would. A runaway boot loop (repeated reboots each under
+/// [`MIN_HEALTHY_UPTIME`]) is capped at [`MAX_RAPID_REBOOTS`] so we don't spin forever.
+pub fn run(
+    spec: &WorkerSpec,
+    control: Option<&crate::control::ControlPlane>,
+    gateway: Option<&crate::gateway::Gateway>,
+) -> Result<i32> {
+    let mut rapid_reboots = 0u32;
+    loop {
+        let started = Instant::now();
+        let child = spawn_worker(spec, &[])?;
+        let code = monitor(child, spec.shutdown_grace, control)?;
+
+        // Anything other than a guest-initiated reboot (power-off, error, or a stop we asked
+        // for) ends the VM and propagates the code.
+        if code != WORKER_EXIT_REBOOT || stop_requested() {
+            return Ok(code);
+        }
+
+        // Guest rebooted. Guard against a boot loop: count reboots that happen too fast to be
+        // a healthy boot, and bail if they pile up.
+        if started.elapsed() < MIN_HEALTHY_UPTIME {
+            rapid_reboots += 1;
+            if rapid_reboots >= MAX_RAPID_REBOOTS {
+                log::error!(
+                    "guest rebooted {rapid_reboots} times in under {MIN_HEALTHY_UPTIME:?} each \
+                     — stopping the VM (boot loop?)"
+                );
+                return Ok(code);
+            }
+        } else {
+            rapid_reboots = 0;
+        }
+
+        // Recycle the NAT gateway: gvproxy's vfkit socket is single-connection, so the fresh
+        // worker can't reconnect to the old one. Restart it at the same path before re-spawning.
+        if let Some(gw) = gateway {
+            if let Err(e) = gw.restart() {
+                log::error!("could not restart the NAT gateway for the reboot: {e:#}; stopping");
+                return Ok(code);
+            }
+        }
+        log::info!("guest rebooted (PSCI SYSTEM_RESET) → relaunching the VM worker");
+    }
 }
 
 fn report_exit(status: ExitStatus) -> i32 {
     if let Some(code) = status.code() {
         if code == 0 {
             log::info!("VM powered off cleanly (worker exit 0)");
+        } else if code == WORKER_EXIT_REBOOT {
+            log::info!("guest rebooted (worker exit {WORKER_EXIT_REBOOT})");
         } else {
             log::warn!("VM stopped — worker exited with code {code}");
         }

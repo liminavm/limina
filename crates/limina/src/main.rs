@@ -301,7 +301,7 @@ fn main() -> Result<()> {
         shutdown_grace: grace,
     };
 
-    let code = supervisor::run(&spec, control.as_ref())?;
+    let code = supervisor::run(&spec, control.as_ref(), gateway.as_ref())?;
     // Explicit: process::exit skips destructors, so tear the gateway + control socket
     // down before exiting.
     drop(gateway);
