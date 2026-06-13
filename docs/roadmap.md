@@ -420,19 +420,28 @@ boot, not a black screen until DRM takes over.
 - **EDK2 rebuild friction** (Track B): ArmVirtKrun is built via Fedora rpmbuild; adding VirtioGpuDxe
   + wiring its GOP to libkrun's virtio-gpu may need firmware-side surface plumbing. Spike a minimal
   GOP-renders-to-window proof before committing.
-- Keep the **compatibility floor** green throughout (stock Fedora EFI boot). ✅ Added
-  `boot::fedora_stock_image_efi_boots_to_userspace` (2026-06-13): boots `.test` via EFI firmware →
-  GRUB → stock kernel → **sshd** on a writable COW clone, so enhanced-tier work can't silently
-  regress the baseline EFI boot. It also guards the **SELinux relabel loop** below.
-- **SELinux relabel (resolved 2026-06-13).** EFI-booting a dev image wedged in a reboot loop, which
-  looked like a GOP/code regression but was a *guest-image* artifact: our custom 16k kernel is built
-  from `arm64 defconfig`, which has **no `CONFIG_SECURITY_SELINUX`**, so nothing installed through it
-  ever gets labeled. The stock Fedora kernel (EFI path) comes up `enforcing`, sees the unlabeled tree
-  + a stale `/.autorelabel`, tries to relabel under enforcing, gets denied mid-relabel, and reboots
-  forever. Fix = a one-time **permissive relabel** (`scripts/relabel-image.sh`): set
-  `SELINUX=permissive`, boot the stock kernel once so `fixfiles` labels the tree, converge. The dev +
-  `.test` images are now relabeled and EFI-boot clean to userspace. (Productization will instead build
-  the kernel the distro's way — SELinux-enabled, enforcing — and use the distro config as reference.)
+- Keep the **compatibility floor** green throughout (stock Fedora EFI boot). ✅ The EFI boot is now
+  checked on **both** channels (2026-06-13):
+  - `boot::fedora_stock_image_efi_boots_to_userspace` — silent firmware; asserts the whole chain on
+    **serial** (firmware → GRUB → kernel → getty `login:`) plus **sshd**, on a writable COW clone.
+  - `boot::fedora_stock_image_efi_renders_to_gop` — our **GOP firmware**; asserts the boot is
+    **visually** present in the captured window (richest frame ~70k distinct colors, no dominant —
+    firmware/GRUB/kernel/gdm all render; this path used to freeze on the firmware logo behind the
+    reboot loop).
+- **SELinux relabel + custom-kernel SELinux (resolved 2026-06-13).** EFI-booting a dev image wedged in
+  a reboot loop, which looked like a GOP/code regression but was a *guest-image* artifact: our custom
+  16k kernel was built from `arm64 defconfig`, which has **no `CONFIG_SECURITY_SELINUX`**, so nothing
+  installed through it ever got labeled. The stock Fedora kernel (EFI path) comes up `enforcing`, sees
+  the unlabeled tree + a stale `/.autorelabel`, tries to relabel under enforcing, gets denied
+  mid-relabel, and reboots forever. Two-part fix:
+  1. **Kernel** — `scripts/build-test-kernel.sh` now compiles SELinux in (`CONFIG_SECURITY_SELINUX`
+     + `_BOOTPARAM` + Fedora's `CONFIG_LSM`), so the enhanced tier no longer diverges from the distro;
+     `selinux=0` still works as the kill switch for the existing direct-kernel test boots.
+  2. **Images** — a one-time `scripts/prepare-efi-image.sh` per image: permissive relabel
+     (`fixfiles` labels the tree, converges) **+** `console=ttyAMA0` on the GRUB args (serial console
+     + getty on the EFI path). The dev + `.test` images are prepared and EFI-boot clean to userspace.
+  (Productization will instead build the kernel the distro's way — enforcing — and use the distro
+  config as reference.)
 
 ---
 

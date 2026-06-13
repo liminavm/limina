@@ -81,6 +81,18 @@ CONFIG_VIRTIO_INPUT=y
 # on vda3); virtio-net carries gvproxy NAT/SSH. (Harmless for the minimal L1 guest.)
 CONFIG_BTRFS_FS=y
 CONFIG_VIRTIO_NET=y
+# SELinux — match the stock distro's LSM stack. arm64 defconfig has NO SELinux, so a kernel
+# built without these labels nothing: every file installed through it stays unlabeled, and the
+# stock Fedora kernel on the EFI path (which comes up enforcing) then reboot-loops trying to
+# relabel the whole tree. Compiling SELinux in keeps the enhanced tier from diverging from the
+# distro on this axis. CONFIG_SECURITY_SELINUX_BOOTPARAM preserves `selinux=0` as a kill switch,
+# so the existing direct-kernel test boots are unchanged. See memory limina-fedora-access.
+CONFIG_AUDIT=y
+CONFIG_SECURITY=y
+CONFIG_SECURITY_NETWORK=y
+CONFIG_SECURITY_SELINUX=y
+CONFIG_SECURITY_SELINUX_BOOTPARAM=y
+CONFIG_LSM="landlock,lockdown,yama,integrity,selinux,bpf"
 FRAG
 echo "$PAGE_CONFIG" >> "$OUT/limina.fragment"   # page-size choice (4k default / 16k)
 
@@ -134,7 +146,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         ./scripts/kconfig/merge_config.sh -m .config /out/limina.fragment
         make ARCH=arm64 olddefconfig
         echo '--- verifying key options survived'
-        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS CONFIG_DRM_VIRTIO_GPU CONFIG_FRAMEBUFFER_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_INPUT_EVDEV CONFIG_BTRFS_FS CONFIG_VIRTIO_NET; do
+        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS CONFIG_DRM_VIRTIO_GPU CONFIG_FRAMEBUFFER_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_INPUT_EVDEV CONFIG_BTRFS_FS CONFIG_VIRTIO_NET CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
             grep -q \"^\$opt=y\" .config || { echo \"MISSING \$opt\" >&2; exit 1; }
         done
         grep -q '^$PAGE_CONFIG' .config || { echo 'MISSING $PAGE_CONFIG' >&2; exit 1; }

@@ -35,8 +35,14 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 
 /// Stable location of the krunkit EFI firmware blob (an EDK2 `.fd`). Overridable with
-/// `LIMINA_FIRMWARE`. This is the same firmware the M1 boot spikes used.
+/// `LIMINA_FIRMWARE`. This is the same firmware the M1 boot spikes used. It is "silent" — no
+/// GOP-*producing* video driver — so firmware/GRUB render only to the serial console.
 const DEFAULT_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
+
+/// Stable location of OUR GOP-capable EDK2 firmware (built by `scripts/build-krun-efi.sh`,
+/// carries VirtioGpuDxe). Overridable with `LIMINA_GOP_FIRMWARE`. Unlike the silent firmware,
+/// firmware → GRUB → kernel all render to the virtio-gpu scanout — the windowed boot console.
+const DEFAULT_GOP_FIRMWARE: &str = "target/krun-efi/KRUN_EFI.gop.fd";
 
 /// The guest image the tests boot from, by default — a **frozen CoW snapshot** of the dev
 /// image, NOT the live `Fedora-Workstation-43.raw` (which evolves as we provision/develop the
@@ -272,6 +278,31 @@ impl GuestConfig {
             envs: Vec::new(),
             shares: Vec::new(),
         })
+    }
+
+    /// L2 config that EFI-boots the Fedora image on **our GOP firmware** with a captured
+    /// software-2D display + NAT — the vehicle for the *visual* boot test (firmware → GRUB →
+    /// kernel rendered into the window, read via [`Guest::wait_for_capture`]). `with_net` forces
+    /// a writable COW clone, so the shared image is never mutated and the guest can complete boot.
+    ///
+    /// Overrides: `LIMINA_GOP_FIRMWARE` (default `target/krun-efi/KRUN_EFI.gop.fd`), plus the usual
+    /// `LIMINA_TEST_DISK`/`LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the
+    /// GOP firmware is missing — build it with `scripts/build-krun-efi.sh`.
+    pub fn fedora_gop_from_env() -> Result<GuestConfig> {
+        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
+        anyhow::ensure!(
+            firmware.exists(),
+            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
+             (or set LIMINA_GOP_FIRMWARE)"
+        );
+        let mut cfg = GuestConfig::fedora_from_env()?;
+        if let Boot::Firmware { firmware: f, .. } = &mut cfg.boot {
+            *f = firmware;
+        }
+        // software-2D display capture (the GOP scanout oracle) + NAT (writable clone + sshd).
+        Ok(cfg.with_display(1280, 800).with_net())
     }
 
     /// L1 config: our tiny direct-boot guest (kernel Image + virtio-fs rootfs).

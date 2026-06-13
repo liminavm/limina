@@ -3,15 +3,19 @@
 
 //! L2 stock-baseline boot tests: the Fedora image must boot through limina via EFI.
 //!
-//! These drive the real `limina` supervisor → `limina-vmm` worker → libkrun/HVF chain. Two tiers:
+//! These drive the real `limina` supervisor → `limina-vmm` worker → libkrun/HVF chain. Three tiers:
 //!
 //! - [`fedora_stock_image_boots_to_bootloader`] — disk **read-only** (never mutated), asserts
-//!   the guest reaches its **bootloader** (EDK2 firmware banner + GRUB). On a pristine image
-//!   the kernel has no `console=`, so it goes silent on serial after GRUB; reaching GRUB proves
-//!   limina boots the firmware, the firmware reads the virtio-blk disk, finds the ESP, and runs
-//!   the distro bootloader.
-//! - [`fedora_stock_image_efi_boots_to_userspace`] — boots a writable COW clone all the way to
-//!   a running **sshd**, guarding against the SELinux autorelabel reboot loop (see that test).
+//!   the guest reaches its **bootloader** (EDK2 firmware banner + GRUB) on the silent firmware's
+//!   serial console: limina boots the firmware, the firmware reads the virtio-blk disk, finds the
+//!   ESP, and runs the distro bootloader.
+//! - [`fedora_stock_image_efi_boots_to_userspace`] — silent firmware, writable COW clone; asserts
+//!   the full chain on **serial** (firmware → GRUB → kernel → getty `login:`) plus **sshd**,
+//!   guarding against the SELinux autorelabel reboot loop. Needs an image prepared by
+//!   `scripts/prepare-efi-image.sh` (relabel + `console=ttyAMA0` on the GRUB args).
+//! - [`fedora_stock_image_efi_renders_to_gop`] — our **GOP firmware**; asserts the boot is
+//!   **visually** present in the captured window (firmware/GRUB/kernel render to the scanout),
+//!   the complement to the serial check above.
 //!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
@@ -68,15 +72,17 @@ fn fedora_stock_image_boots_to_bootloader() {
 /// through the SELinux-less custom kernel was unlabeled. Booting the stock Fedora kernel
 /// (which *does* enforce) tried to relabel the whole tree under enforcing, got denied
 /// mid-relabel, and rebooted — forever — so the VM never reached sshd and the desktop never
-/// came up. The fix is a one-time **permissive relabel** of the image (`scripts/relabel-image.sh`);
+/// came up. The fix is a one-time **permissive relabel** of the image (`scripts/prepare-efi-image.sh`);
 /// this test fails the moment an image relapses into that loop, because sshd never answers and
 /// limina tears down on the reboot before the banner arrives.
 ///
 /// Unlike [`fedora_stock_image_boots_to_bootloader`] (read-only, stops at GRUB), this boots a
 /// writable COW clone (forced by `with_net`) so the shared `.test` fixture is never mutated,
-/// and asserts the full chain: firmware → GRUB → stock kernel → systemd → sshd. The cmdline is
-/// GRUB-owned on this path (no `console=`), so the kernel goes silent on serial after GRUB —
-/// sshd answering is the oracle that userspace was actually reached.
+/// and asserts the full chain on serial: firmware → GRUB → stock kernel → getty `login:`. The
+/// cmdline is GRUB-owned on this path, so the kernel only reaches serial because the image was
+/// prepared with `console=ttyAMA0` on the GRUB args (`scripts/prepare-efi-image.sh`); the getty
+/// `login:` prompt that follows is also what proves a serial console is usable on the EFI path.
+/// sshd answering is the independent oracle that userspace genuinely settled.
 #[test]
 fn fedora_stock_image_efi_boots_to_userspace() {
     if !limina_test::require_hvf_or_skip("fedora_stock_image_efi_boots_to_userspace") {
@@ -124,7 +130,7 @@ fn fedora_stock_image_efi_boots_to_userspace() {
         relabel.trim(),
         "clean",
         "/.autorelabel still present — the image needs a one-time permissive relabel \
-         (scripts/relabel-image.sh); enforcing boots will reboot-loop"
+         (scripts/prepare-efi-image.sh); enforcing boots will reboot-loop"
     );
     let target = guest
         .ssh_poll(
@@ -139,6 +145,77 @@ fn fedora_stock_image_efi_boots_to_userspace() {
             .ssh_exec("getenforce")
             .unwrap_or_else(|_| "unknown".into())
             .trim()
+    );
+
+    // Serial console works on the EFI path: the kernel printed to ttyAMA0 (only possible
+    // because the image carries `console=ttyAMA0`) and systemd spawned a getty whose `login:`
+    // prompt reached the same serial we capture. This is the getty-on-serial guarantee.
+    guest
+        .wait_for("login:", Duration::from_secs(30))
+        .expect("no getty `login:` on serial — console=ttyAMA0 missing from the GRUB args?");
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(20))
+        .expect("supervisor did not stop");
+    eprintln!("teardown outcome: {outcome:?}");
+}
+
+/// The stock-baseline EFI boot must be **visually** present in the window, not just on serial.
+///
+/// Complements [`fedora_stock_image_efi_boots_to_userspace`] (which proves the *serial* chain):
+/// this boots our **GOP firmware** (VirtioGpuDxe), which drives firmware → GRUB → kernel onto the
+/// virtio-gpu scanout, and asserts the captured window actually shows rendered boot content. The
+/// oracle is robust against transient blanks: we poll the captured scanout across the boot and
+/// require a frame with substantial non-uniform content (many distinct colors / no single color
+/// dominating) — a blank or single-color screen never crosses that bar, but a firmware splash,
+/// GRUB menu, or kernel fbcon all do. This is the guard for the GOP windowed-boot path that was
+/// historically wedged (it used to freeze on the firmware logo behind the SELinux reboot loop).
+#[test]
+fn fedora_stock_image_efi_renders_to_gop() {
+    if !limina_test::require_hvf_or_skip("fedora_stock_image_efi_renders_to_gop") {
+        return;
+    }
+
+    let cfg = match GuestConfig::fedora_gop_from_env() {
+        Ok(cfg) => cfg,
+        // No GOP firmware on this machine — skip rather than fail (it's a built artifact).
+        Err(e) => {
+            eprintln!("SKIP fedora_stock_image_efi_renders_to_gop: {e:#}");
+            return;
+        }
+    };
+    eprintln!("booting Fedora via the GOP firmware: {:?}", cfg.boot);
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+
+    // Wait for the guest to actually be running and drawing: sshd up means we're well past
+    // firmware/GRUB and into the kernel/userspace, so the scanout has had content on it.
+    guest
+        .wait_for_ssh_banner(Duration::from_secs(240))
+        .expect("GOP boot did not reach sshd");
+
+    // Poll the captured scanout for ~60s and keep the richest frame we see. Real boot content
+    // (firmware splash, GRUB, fbcon text, gdm) yields many colors and no single dominant color;
+    // a blank/uniform screen yields 1 color at ~100% dominance.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let mut best_colors = 0usize;
+    let mut best_dominance = 1.0f64;
+    while std::time::Instant::now() < deadline {
+        if let Ok(frame) = guest.read_capture() {
+            let colors = frame.distinct_colors();
+            let (_, dominance) = frame.dominant_color();
+            if colors > best_colors {
+                best_colors = colors;
+                best_dominance = dominance;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    eprintln!("richest GOP frame: {best_colors} distinct colors, dominant {best_dominance:.2}");
+    assert!(
+        best_colors >= 8 && best_dominance < 0.99,
+        "GOP window never showed real boot content (best: {best_colors} colors, \
+         {best_dominance:.2} dominant) — did firmware/GRUB/kernel render to the scanout?"
     );
 
     let outcome = guest

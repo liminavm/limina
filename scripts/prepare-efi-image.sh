@@ -3,10 +3,17 @@
 # Copyright © 2026 Gustavo Noronha Silva
 
 #
-# relabel-image.sh — one-time SELinux repair for a limina guest image.
+# prepare-efi-image.sh — make a limina guest image boot cleanly + observably via EFI.
 #
-# Why this exists
-# ---------------
+# Two one-time prep steps the EFI/stock-kernel boot path needs:
+#   (A) a SELinux relabel (see below) so the enforcing stock kernel doesn't reboot-loop, and
+#   (B) `console=tty0 console=ttyAMA0` on the stock-kernel GRUB args, so the EFI boot surfaces
+#       the kernel log + a getty login on the PL011 serial (ttyAMA0) and keeps the framebuffer
+#       console (tty0) live for the GOP window. Without it the stock kernel goes silent on
+#       serial after GRUB (the cmdline is GRUB-owned on this path).
+#
+# (A) Why the relabel
+# -------------------
 # Our enhanced-tier development boots a *custom* kernel built from `arm64 defconfig`, which
 # has **no CONFIG_SECURITY_SELINUX** (see scripts/build-test-kernel.sh). With no SELinux in
 # the kernel, the guest never assigns `security.selinux` labels to anything we install — so
@@ -25,12 +32,13 @@
 # userspace on every subsequent boot. We keep the image permissive (dev-friendly; the
 # productized image will match the distro's enforcing config when we get there).
 #
-# This script orchestrates that repair end to end via the shipped `limina` binary:
-#   1. prep  — custom-kernel boot (selinux=0), set permissive + touch /.autorelabel, poweroff
+# This script orchestrates both end to end via the shipped `limina` binary:
+#   1. prep  — custom-kernel boot (selinux=0): set permissive + /.autorelabel + the console
+#              GRUB args, then poweroff
 #   2. relabel — EFI boot (stock kernel, permissive): fixfiles relabels, reboots (limina exits)
 #   3. verify  — EFI boot again: must reach sshd with /.autorelabel gone (converged)
 #
-# Usage: scripts/relabel-image.sh [IMAGE]   (default: Fedora-Workstation-43.dev-enh.raw)
+# Usage: scripts/prepare-efi-image.sh [IMAGE]   (default: Fedora-Workstation-43.dev-enh.raw)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -67,13 +75,16 @@ wait_down() {  # wait for limina-vmm to exit (guest rebooted → VMM tears down)
   return 1
 }
 
-echo "==> [1/3] prep: set SELINUX=permissive + /.autorelabel on $IMAGE"
+echo "==> [1/3] prep: set SELINUX=permissive + /.autorelabel + serial console on $IMAGE"
 kill_vm
 "$LIMINA" --vmm-bin "$VMM" --kernel "$KERNEL" \
   --cmdline "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 console=ttyAMA0" \
   --disk "$IMAGE" --cpus 4 --ram-mib 4096 --net --gpu-software-2d >"$WORK/prep.log" 2>&1 &
 wait_ssh 90 || { echo "prep boot: no SSH" >&2; exit 1; }
-"${SSH[@]}" 'sudo sed -i "s/^SELINUX=.*/SELINUX=permissive/" /etc/selinux/config && sudo touch /.autorelabel && sudo sync'
+"${SSH[@]}" 'sudo sed -i "s/^SELINUX=.*/SELINUX=permissive/" /etc/selinux/config \
+   && sudo touch /.autorelabel \
+   && sudo grubby --update-kernel=ALL --args="console=tty0 console=ttyAMA0" \
+   && sudo sync'
 "${SSH[@]}" 'sudo systemctl poweroff' 2>/dev/null || true
 wait_down 30 || kill_vm
 
