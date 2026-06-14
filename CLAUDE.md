@@ -70,6 +70,24 @@ are the *upgrade*, never the *entry fee*. (Example: dynamic memory uses
 `MADV_FREE_REUSABLE` + host-side coalescing so it does *something* on a stock 4 KiB
 Fedora kernel; a 16 KiB / host-page-aware-reporting custom kernel makes it optimal.)
 
+Two refinements that are easy to forget:
+
+- **Detect capabilities granularly and additively, not as one tier switch.** A guest may
+  have *some*, *all*, or *none* of the enhanced pieces (16k kernel, venus mesa, limina-agent,
+  virtiofs, clipboard backend, …), and **partial states are normal** (a guest mid-upgrade,
+  or one that only installed part). Take advantage of whatever is present — light up each
+  feature when *its own* prerequisite is there — rather than gating everything on a monolithic
+  "enhanced vs stock" flag. The host/control-plane must tolerate any mix.
+- **The basic tier is the bootstrap substrate — required, not merely valid.** A fresh install
+  *starts* as a basic guest, and the enhanced components are delivered *into* it from there. So
+  "basic must just work" is the prerequisite the whole upgrade path stands on: the installer /
+  delivery mechanism runs **in the basic guest, before any enhanced components exist**, and so
+  **must not depend on the very things it installs** (it can't require the 16k kernel, venus, or
+  a custom driver to deliver them). There is a minimal bootstrap floor — enough to *receive and
+  apply* enhancements (plain networking or virtiofs + a way to run the installer) — that lives in,
+  or is trivially installable onto, the stock tier; everything richer layers on per-feature, in
+  whatever order the components land.
+
 ## High-level architecture decisions (the load-bearing ones)
 
 - **Raw HVF via libkrun, NOT Apple Virtualization.framework.** Vz is a black box
