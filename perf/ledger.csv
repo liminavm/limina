@@ -1,5 +1,9 @@
 date,commit,workload,metric,value,notes
-2026-06-12,ca44986,gl-replay-venus,fps,49.7313,first ledger run (clone of dev-enh golden)
-2026-06-12,ca44986,gl-replay-llvmpipe,fps,829.298,first ledger run (clone of dev-enh golden)
-2026-06-12,ca44986,vk-replay-venus-headless,fps,1425.733963,first ledger run (clone of dev-enh golden)
-2026-06-12,ca44986,glmark2-wayland-venus,score,1968,first ledger run (clone of dev-enh golden)
+2026-06-12,05c3a28,gl-replay-venus,fps,49.7313,first ledger run (clone of dev-enh golden)
+2026-06-12,05c3a28,gl-replay-llvmpipe,fps,829.298,first ledger run (clone of dev-enh golden)
+2026-06-12,05c3a28,vk-replay-venus-headless,fps,1425.733963,first ledger run (clone of dev-enh golden)
+2026-06-12,05c3a28,glmark2-wayland-venus,score,1968,first ledger run (clone of dev-enh golden)
+2026-06-14,703943d,gl-replay-venus,fps,50.7274,post-rename: limina libkrun+KK rebuild (LIMINA_* envs)
+2026-06-14,703943d,gl-replay-llvmpipe,fps,818.068,post-rename: limina libkrun+KK rebuild (LIMINA_* envs)
+2026-06-14,703943d,vk-replay-venus-headless,fps,1423.409029,post-rename: limina libkrun+KK rebuild (LIMINA_* envs)
+2026-06-14,703943d,glmark2-wayland-venus,score,1962,post-rename: limina libkrun+KK rebuild (LIMINA_* envs)
