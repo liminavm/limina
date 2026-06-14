@@ -155,7 +155,7 @@ fn info_plist() -> String {
 <dict>
     <key>CFBundleName</key><string>limina</string>
     <key>CFBundleDisplayName</key><string>limina</string>
-    <key>CFBundleIdentifier</key><string>eti.noronha.limina</string>
+    <key>CFBundleIdentifier</key><string>br.dev.kov.limina</string>
     <key>CFBundleVersion</key><string>0.1.0</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>

@@ -33,7 +33,8 @@ fn rootfs_of(cfg: &GuestConfig) -> PathBuf {
 
 #[test]
 fn l1_real_session_helper_bridges_clipboard_via_mock_mutter() {
-    if !limina_test::require_hvf_or_skip("l1_real_session_helper_bridges_clipboard_via_mock_mutter") {
+    if !limina_test::require_hvf_or_skip("l1_real_session_helper_bridges_clipboard_via_mock_mutter")
+    {
         return;
     }
 

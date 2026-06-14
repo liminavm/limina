@@ -38,7 +38,10 @@ fn l1_control_plane_serves_two_agents_concurrently() {
     // for the guest's lifetime, so the only way both lines appear is two live
     // connections served in parallel.
     guest
-        .wait_for_supervisor_log("guest agent connected: limina-init/", Duration::from_secs(15))
+        .wait_for_supervisor_log(
+            "guest agent connected: limina-init/",
+            Duration::from_secs(15),
+        )
         .expect("supervisor never logged the seed agent handshake");
     guest
         .wait_for_supervisor_log(

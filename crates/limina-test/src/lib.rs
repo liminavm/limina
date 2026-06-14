@@ -525,7 +525,10 @@ impl GuestConfig {
     pub fn with_control_agent(mut self) -> GuestConfig {
         match &mut self.boot {
             Boot::Kernel { cmdline, .. } | Boot::KernelDisk { cmdline, .. } => {
-                cmdline.push_str(&format!(" limina.agent_port={}", limina_proto::CONTROL_PORT));
+                cmdline.push_str(&format!(
+                    " limina.agent_port={}",
+                    limina_proto::CONTROL_PORT
+                ));
             }
             Boot::Firmware { .. } => {}
         }

@@ -385,89 +385,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "limina"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "block2",
- "clap",
- "env_logger",
- "limina-input",
- "limina-proto",
- "libc",
- "log",
- "objc2",
- "objc2-app-kit",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-foundation",
- "objc2-io-surface",
- "objc2-quartz-core",
- "png",
-]
-
-[[package]]
-name = "limina-display"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "krun-display",
- "libc",
- "log",
- "objc2-core-foundation",
- "objc2-io-surface",
- "png",
-]
-
-[[package]]
-name = "limina-input"
-version = "0.1.0"
-dependencies = [
- "krun-input",
- "libc",
- "log",
-]
-
-[[package]]
-name = "limina-proto"
-version = "0.1.0"
-dependencies = [
- "minicbor",
-]
-
-[[package]]
-name = "limina-test"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "limina-proto",
- "libc",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "png",
-]
-
-[[package]]
-name = "limina-vmm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "crossbeam-channel",
- "env_logger",
- "limina-display",
- "limina-input",
- "krun-devices",
- "krun-polly",
- "krun-utils",
- "krun-vmm",
- "libc",
- "log",
- "pkg-config",
-]
-
-[[package]]
 name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -767,6 +684,89 @@ checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
 dependencies = [
  "cfg-if",
  "windows-link",
+]
+
+[[package]]
+name = "limina"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "block2",
+ "clap",
+ "env_logger",
+ "libc",
+ "limina-input",
+ "limina-proto",
+ "log",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "objc2-io-surface",
+ "objc2-quartz-core",
+ "png",
+]
+
+[[package]]
+name = "limina-display"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "krun-display",
+ "libc",
+ "log",
+ "objc2-core-foundation",
+ "objc2-io-surface",
+ "png",
+]
+
+[[package]]
+name = "limina-input"
+version = "0.1.0"
+dependencies = [
+ "krun-input",
+ "libc",
+ "log",
+]
+
+[[package]]
+name = "limina-proto"
+version = "0.1.0"
+dependencies = [
+ "minicbor",
+]
+
+[[package]]
+name = "limina-test"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "limina-proto",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "png",
+]
+
+[[package]]
+name = "limina-vmm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossbeam-channel",
+ "env_logger",
+ "krun-devices",
+ "krun-polly",
+ "krun-utils",
+ "krun-vmm",
+ "libc",
+ "limina-display",
+ "limina-input",
+ "log",
+ "pkg-config",
 ]
 
 [[package]]

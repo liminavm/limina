@@ -28,7 +28,10 @@ fn l1_real_agent_binary_handshakes_and_powers_off() {
         .with_cmdline_token("limina.real_agent")
         .with_cmdline_token("limina.hold")
         .with_supervisor_log();
-    eprintln!("booting L1 guest with the real limina-agent: {:?}", cfg.boot);
+    eprintln!(
+        "booting L1 guest with the real limina-agent: {:?}",
+        cfg.boot
+    );
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 

@@ -150,7 +150,9 @@ fn open_pty() -> Result<(RawFd, RawFd)> {
 
     // Printed (not logged) so it's visible regardless of RUST_LOG; this is how the human
     // finds the console to attach to.
-    println!("limina: interactive serial console at {slave_path} — attach with: screen {slave_path}");
+    println!(
+        "limina: interactive serial console at {slave_path} — attach with: screen {slave_path}"
+    );
 
     Ok((master, output_fd))
 }

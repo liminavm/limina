@@ -37,7 +37,10 @@ fn boot_with_clipboard_peer(pb_name: &str) -> (Guest, limina_test::AgentConn) {
     // The guest's own seed agent must be up (it keeps the VM alive and is the
     // shutdown-capable peer orderly teardown relies on).
     guest
-        .wait_for_supervisor_log("guest agent connected: limina-init/", Duration::from_secs(15))
+        .wait_for_supervisor_log(
+            "guest agent connected: limina-init/",
+            Duration::from_secs(15),
+        )
         .expect("supervisor never logged the seed agent handshake");
     let mut conn = guest
         .connect_control(Duration::from_secs(10))

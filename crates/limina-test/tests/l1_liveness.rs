@@ -32,7 +32,10 @@ fn l1_silent_agent_is_reported_and_recovers() {
 
     // The guest's seed agent is up and heartbeating (it also keeps the VM alive).
     guest
-        .wait_for_supervisor_log("guest agent connected: limina-init/", Duration::from_secs(15))
+        .wait_for_supervisor_log(
+            "guest agent connected: limina-init/",
+            Duration::from_secs(15),
+        )
         .expect("supervisor never logged the seed agent handshake");
 
     // Join as a peer that goes mute right after the handshake.

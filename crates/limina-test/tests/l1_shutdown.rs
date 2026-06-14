@@ -40,7 +40,10 @@ fn l1_sigterm_powers_guest_off_via_agent() {
     // The supervisor's control plane must complete the HELLO/WELCOME handshake (this also
     // asserts the structured facts made it across — pagesize is in the log line).
     guest
-        .wait_for_supervisor_log("guest agent connected: limina-init/", Duration::from_secs(15))
+        .wait_for_supervisor_log(
+            "guest agent connected: limina-init/",
+            Duration::from_secs(15),
+        )
         .expect("supervisor never logged the agent handshake");
     assert!(
         guest.supervisor_log().contains("pagesize="),

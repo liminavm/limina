@@ -352,48 +352,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "limina-agent"
-version = "0.1.0"
-dependencies = [
- "limina-proto",
- "libc",
-]
-
-[[package]]
-name = "limina-agent-session"
-version = "0.1.0"
-dependencies = [
- "limina-proto",
- "libc",
- "wayland-client",
- "wayland-protocols",
- "zbus",
-]
-
-[[package]]
-name = "limina-init"
-version = "0.1.0"
-dependencies = [
- "limina-proto",
- "libc",
-]
-
-[[package]]
-name = "limina-mock-mutter"
-version = "0.1.0"
-dependencies = [
- "libc",
- "zbus",
-]
-
-[[package]]
-name = "limina-proto"
-version = "0.1.0"
-dependencies = [
- "minicbor",
-]
-
-[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -472,6 +430,48 @@ name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+
+[[package]]
+name = "limina-agent"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "limina-proto",
+]
+
+[[package]]
+name = "limina-agent-session"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "limina-proto",
+ "wayland-client",
+ "wayland-protocols",
+ "zbus",
+]
+
+[[package]]
+name = "limina-init"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "limina-proto",
+]
+
+[[package]]
+name = "limina-mock-mutter"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "zbus",
+]
+
+[[package]]
+name = "limina-proto"
+version = "0.1.0"
+dependencies = [
+ "minicbor",
+]
 
 [[package]]
 name = "linux-raw-sys"
