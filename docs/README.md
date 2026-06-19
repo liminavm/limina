@@ -32,6 +32,11 @@ into the local `third_party/` checkouts).
 - [Architecture](design/architecture.md) — process model, libkrun patch strategy,
   crate/module layout, FFI boundary, feature→component mapping.
 
+## Guest images
+
+- [images.md](images.md) — the source of truth for the Fedora guest disk images we develop and
+  test against: what each is, which tier it exercises, pristine-vs-modified, and how it's produced.
+
 ## Roadmap
 
 - [roadmap.md](roadmap.md) — milestone-based plan. **M1: boot

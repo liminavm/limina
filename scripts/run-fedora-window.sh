@@ -23,7 +23,22 @@ PROFILE="${1:-debug}"
 CARGO_FLAGS=()
 [ "$PROFILE" = "release" ] && CARGO_FLAGS=(--release)
 
-IMAGE="${LIMINA_FEDORA_IMAGE:-Fedora-Workstation-43.raw}"
+# Default to a *labeled* image so the daily-driver windowed boot comes up clean. The plain
+# `Fedora-Workstation-43.raw` is built/modified under selinux=0, so a stock (enforcing) EFI
+# boot relabels (~20-30s) and reboots once before reaching GDM. The dev-enh image has been
+# run through `scripts/prepare-efi-image.sh` (permissive relabel + console=ttyAMA0), so it
+# EFI-boots straight to userspace. Prefer it when present; otherwise use the plain image and
+# warn (run prepare-efi-image.sh on it to avoid the one-time relabel+reboot).
+if [ -n "${LIMINA_FEDORA_IMAGE:-}" ]; then
+    IMAGE="$LIMINA_FEDORA_IMAGE"
+elif [ -f "Fedora-Workstation-43.dev-enh.raw" ]; then
+    IMAGE="Fedora-Workstation-43.dev-enh.raw"
+    echo "==> using labeled image ($IMAGE) — clean one-boot to the desktop"
+else
+    IMAGE="Fedora-Workstation-43.raw"
+    echo "==> using $IMAGE (unlabeled): first EFI boot will relabel + reboot once before GDM." >&2
+    echo "    Run scripts/prepare-efi-image.sh on a copy to make it boot clean." >&2
+fi
 # Prefer our GOP firmware (VirtioGpuDxe + ConOut patch) so EFI/GRUB render in the window too;
 # fall back to krunkit's silent .fd (serial-only firmware) if it hasn't been built yet.
 GOP_FIRMWARE="target/krun-efi/KRUN_EFI.gop.fd"

@@ -164,11 +164,14 @@ fn fedora_stock_image_efi_boots_to_userspace() {
 ///
 /// Complements [`fedora_stock_image_efi_boots_to_userspace`] (which proves the *serial* chain):
 /// this boots our **GOP firmware** (VirtioGpuDxe), which drives firmware → GRUB → kernel onto the
-/// virtio-gpu scanout, and asserts the captured window actually shows rendered boot content. The
-/// oracle is robust against transient blanks: we poll the captured scanout across the boot and
-/// require a frame with substantial non-uniform content (many distinct colors / no single color
-/// dominating) — a blank or single-color screen never crosses that bar, but a firmware splash,
-/// GRUB menu, or kernel fbcon all do. This is the guard for the GOP windowed-boot path that was
+/// virtio-gpu scanout, and asserts the captured window actually shows rendered **boot-console**
+/// content — specifically *before* userspace settles. We sample the captured scanout throughout
+/// boot and keep the richest frame seen before the serial getty `login:` prompt; a rich frame in
+/// that window can only be the firmware splash / GRUB menu / kernel fbcon, not the steady-state
+/// GDM greeter (which comes up with or after the getty). That's the tightening over the old
+/// "rich content *eventually*" check, which GDM alone satisfied. The oracle is robust against
+/// transient blanks (we keep the best frame), and a blank/single-color screen never crosses the
+/// many-distinct-colors / no-dominant-color bar. This guards the GOP windowed-boot path that was
 /// historically wedged (it used to freeze on the firmware logo behind the SELinux reboot loop).
 #[test]
 fn fedora_stock_image_efi_renders_to_gop() {
@@ -186,20 +189,19 @@ fn fedora_stock_image_efi_renders_to_gop() {
     };
     eprintln!("booting Fedora via the GOP firmware: {:?}", cfg.boot);
 
-    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    let guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
-    // Wait for the guest to actually be running and drawing: sshd up means we're well past
-    // firmware/GRUB and into the kernel/userspace, so the scanout has had content on it.
-    guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
-        .expect("GOP boot did not reach sshd");
-
-    // Poll the captured scanout for ~60s and keep the richest frame we see. Real boot content
-    // (firmware splash, GRUB, fbcon text, gdm) yields many colors and no single dominant color;
-    // a blank/uniform screen yields 1 color at ~100% dominance.
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    // Sample the captured scanout throughout boot and keep the richest frame seen BEFORE
+    // userspace settles — the serial getty `login:` prompt (the image carries console=ttyAMA0,
+    // so the kernel + getty reach the same serial we capture via --console). A rich frame in
+    // that window can only be the boot console itself (firmware splash / GRUB menu / kernel
+    // fbcon), not the GDM greeter that comes up with or after the getty. Real boot content
+    // yields many distinct colors and no single dominant color; a blank/uniform screen yields
+    // 1 color at ~100% dominance.
+    let deadline = std::time::Instant::now() + Duration::from_secs(240);
     let mut best_colors = 0usize;
     let mut best_dominance = 1.0f64;
+    let mut reached_userspace = false;
     while std::time::Instant::now() < deadline {
         if let Ok(frame) = guest.read_capture() {
             let colors = frame.distinct_colors();
@@ -209,13 +211,27 @@ fn fedora_stock_image_efi_renders_to_gop() {
                 best_dominance = dominance;
             }
         }
-        std::thread::sleep(Duration::from_millis(500));
+        // Stop the moment userspace's getty prints `login:` — everything sampled so far is
+        // strictly the pre-userspace boot console.
+        if guest.console().contains("login:") {
+            reached_userspace = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
     }
-    eprintln!("richest GOP frame: {best_colors} distinct colors, dominant {best_dominance:.2}");
+    eprintln!(
+        "richest pre-userspace GOP frame: {best_colors} distinct colors, dominant {best_dominance:.2}"
+    );
+    assert!(
+        reached_userspace,
+        "guest never reached the serial getty `login:` within 240s — boot stalled, or \
+         console=ttyAMA0 missing from the GRUB args (scripts/prepare-efi-image.sh)?"
+    );
     assert!(
         best_colors >= 8 && best_dominance < 0.99,
-        "GOP window never showed real boot content (best: {best_colors} colors, \
-         {best_dominance:.2} dominant) — did firmware/GRUB/kernel render to the scanout?"
+        "the GOP boot console never rendered before userspace (richest pre-login frame: \
+         {best_colors} colors, {best_dominance:.2} dominant) — did firmware/GRUB/kernel \
+         paint the scanout?"
     );
 
     let outcome = guest

@@ -80,7 +80,16 @@ kill_vm
 "$LIMINA" --vmm-bin "$VMM" --kernel "$KERNEL" \
   --cmdline "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 console=ttyAMA0" \
   --disk "$IMAGE" --cpus 4 --ram-mib 4096 --net --gpu-software-2d >"$WORK/prep.log" 2>&1 &
-wait_ssh 90 || { echo "prep boot: no SSH" >&2; exit 1; }
+LIMINA_PID=$!
+if ! wait_ssh 90; then
+  if ! kill -0 "$LIMINA_PID" 2>/dev/null; then
+    echo "prep boot: limina exited before sshd — see log below:" >&2
+    tail -20 "$WORK/prep.log" >&2
+  else
+    echo "prep boot: no SSH within 90s" >&2
+  fi
+  exit 1
+fi
 "${SSH[@]}" 'sudo sed -i "s/^SELINUX=.*/SELINUX=permissive/" /etc/selinux/config \
    && sudo touch /.autorelabel \
    && sudo grubby --update-kernel=ALL --args="console=tty0 console=ttyAMA0" \
@@ -94,10 +103,25 @@ kill_vm
 "$LIMINA" --vmm-bin "$VMM" --firmware "$FIRMWARE" \
   --disk "$IMAGE" --cpus 4 --ram-mib 4096 --net --gpu-software-2d \
   --console "$WORK/relabel.log" >"$WORK/relabel-worker.log" 2>&1 &
+LIMINA_PID=$!
 # The relabel reboot no longer tears the VM down — limina relaunches the worker on a guest reboot
 # (PSCI SYSTEM_RESET), so a single boot relabels, reboots, and comes back converged.
-wait_ssh 300 || { echo "did not converge to sshd within 300s (relabel loop?)" >&2; exit 1; }
-grep -q "Relabeling / " "$WORK/relabel.log" || { echo "relabel did not run (see $WORK/relabel.log)" >&2; exit 1; }
+if ! wait_ssh 300; then
+  # Distinguish "limina died early" (its exit code was masked by backgrounding) from a genuine
+  # relabel loop — otherwise a crashed firmware/worker just reads as a 300s timeout.
+  if ! kill -0 "$LIMINA_PID" 2>/dev/null; then
+    echo "limina exited before sshd came up — see worker log below:" >&2
+    tail -20 "$WORK/relabel-worker.log" >&2
+  else
+    echo "did not converge to sshd within 300s (relabel loop?)" >&2
+  fi
+  exit 1
+fi
+# The /.autorelabel-gone check below is the authoritative convergence test, so a missing
+# "Relabeling /" line is only a warning: on a re-run of an already-labeled image fixfiles
+# finds nothing to relabel and prints nothing, which is success, not failure.
+grep -q "Relabeling / " "$WORK/relabel.log" \
+  || echo "note: no 'Relabeling /' line in relabel.log (already labeled? see $WORK/relabel.log)" >&2
 if [[ -n "$("${SSH[@]}" 'test -e /.autorelabel && echo yes' 2>/dev/null)" ]]; then
   echo "/.autorelabel still present after relabel — NOT converged" >&2; exit 1
 fi
