@@ -61,6 +61,12 @@ fn main() {
     if cmdline_has("limina.console_echo") {
         run_console_echo();
     }
+    // `limina.console_shell`: the next step up from echo — a tiny in-process command
+    // interpreter so the host harness can "type a command, assert its output" over the
+    // serial console (closes M2.5 Track A for the L1 guest; stock Fedora uses a real getty).
+    if cmdline_has("limina.console_shell") {
+        run_console_shell();
+    }
     // `limina.hold`: keep the guest alive animating the framebuffer (for the interactive
     // window). Otherwise draw the one-shot test pattern (the capture oracle) and power off.
     if cmdline_has("limina.hold") {
@@ -307,6 +313,128 @@ fn run_console_echo() {
         }
         libc::close(fd);
     }
+}
+
+/// Marker the host harness waits for before sending commands (proves guest→host output works).
+const SHELL_READY: &[u8] = b"LIMINA_SHELL_READY\n";
+
+/// Interactive **command mode** over `/dev/console` — the step up from `run_console_echo`.
+/// Reads a line, runs one of a small set of built-in commands ([`run_builtin`]), writes its
+/// output, then a `LIMINA_SHELL_DONE rc=<n>` frame terminator the host keys on to slice out
+/// exactly this command's output (see `Guest::console_command`). `exit`/`QUIT` leaves the loop
+/// and falls through to power-off. The L1 rootfs holds only `/init`, so the commands are
+/// interpreted in-process — the init *is* the shell. This is the "type a command at the guest,
+/// assert its output" capability that closes M2.5 Track A for the L1 guest. Best-effort: any
+/// failure just returns (we still power off).
+fn run_console_shell() {
+    unsafe {
+        let fd = libc::open(c"/dev/console".as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+        if fd < 0 {
+            klog(b"[limina-init] console_shell: cannot open /dev/console");
+            return;
+        }
+        let mut tio: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(fd, &mut tio) == 0 {
+            libc::cfmakeraw(&mut tio);
+            libc::tcsetattr(fd, libc::TCSANOW, &tio);
+        }
+        write_all(fd, SHELL_READY);
+
+        let mut line: Vec<u8> = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            let n = libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1);
+            if n <= 0 {
+                sleep_ms(5); // EOF/EAGAIN shouldn't happen on a raw tty; don't spin hard
+                continue;
+            }
+            match byte[0] {
+                b'\r' | b'\n' => {
+                    let cmd = String::from_utf8_lossy(&line).trim().to_string();
+                    line.clear();
+                    if cmd.is_empty() {
+                        continue;
+                    }
+                    if cmd == "exit" || cmd == "QUIT" {
+                        break;
+                    }
+                    let rc = run_builtin(fd, &cmd);
+                    write_all(fd, format!("LIMINA_SHELL_DONE rc={rc}\n").as_bytes());
+                }
+                b => {
+                    line.push(b);
+                    if line.len() > 4096 {
+                        line.clear(); // guard against an unbounded line
+                    }
+                }
+            }
+        }
+        libc::close(fd);
+    }
+}
+
+/// Execute one built-in command, writing its output to `fd`; returns a shell-style rc
+/// (0 = ok, 127 = unknown). Deliberately tiny — enough to read real guest state (files,
+/// kernel identity) over the console so tests can assert on it without a real shell binary.
+unsafe fn run_builtin(fd: libc::c_int, cmd: &str) -> i32 {
+    let mut parts = cmd.split_whitespace();
+    let Some(prog) = parts.next() else {
+        return 0;
+    };
+    match prog {
+        // echo the rest of the line back verbatim (the simplest round-trip).
+        "echo" => {
+            let rest = cmd.strip_prefix("echo").unwrap_or("").trim_start();
+            write_all(fd, rest.as_bytes());
+            write_all(fd, b"\n");
+            0
+        }
+        // cat a guest file (e.g. /proc/cmdline, /proc/meminfo) — reads real guest state.
+        "cat" => match parts.next() {
+            Some(path) => match std::fs::read(path) {
+                Ok(bytes) => {
+                    write_all(fd, &bytes);
+                    if !bytes.ends_with(b"\n") {
+                        write_all(fd, b"\n");
+                    }
+                    0
+                }
+                Err(_) => {
+                    write_all(fd, format!("cat: {path}: cannot read\n").as_bytes());
+                    1
+                }
+            },
+            None => {
+                write_all(fd, b"cat: missing path\n");
+                1
+            }
+        },
+        // uname(2): a syscall, not a file — proves the guest acts on the command.
+        "uname" => {
+            let mut u: libc::utsname = std::mem::zeroed();
+            if libc::uname(&mut u) == 0 {
+                let sys = cstr_to_string(u.sysname.as_ptr());
+                let rel = cstr_to_string(u.release.as_ptr());
+                write_all(fd, format!("{sys} {rel}\n").as_bytes());
+                0
+            } else {
+                write_all(fd, b"uname: failed\n");
+                1
+            }
+        }
+        other => {
+            write_all(
+                fd,
+                format!("limina-shell: unknown command: {other}\n").as_bytes(),
+            );
+            127
+        }
+    }
+}
+
+/// Render a NUL-terminated C char array (e.g. a `utsname` field) as a String.
+unsafe fn cstr_to_string(ptr: *const libc::c_char) -> String {
+    CStr::from_ptr(ptr).to_string_lossy().into_owned()
 }
 
 // --- framebuffer test pattern (M2 display oracle) ---------------------------------

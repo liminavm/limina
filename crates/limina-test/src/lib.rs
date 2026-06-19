@@ -1349,6 +1349,59 @@ impl Guest {
         Ok(())
     }
 
+    /// Send `cmd` to the guest's console **command mode** (the L1 init's `limina.console_shell`)
+    /// and return that command's output — everything the guest wrote between this command and its
+    /// `LIMINA_SHELL_DONE` frame terminator. Requires an interactive console
+    /// ([`GuestConfig::with_serial_input`]/[`with_console_input`]) and a guest in shell mode
+    /// (await `LIMINA_SHELL_READY` first). This is the "type a command, assert its output"
+    /// primitive that closes M2.5 Track A; tests typically `.contains()` on the result.
+    ///
+    /// Robust against interleaved kernel log: we slice between the previous frame boundary
+    /// (the ready marker or the prior `DONE` line) and *this* command's `DONE`, keyed off the
+    /// running count of terminators rather than fragile offsets.
+    pub fn console_command(&mut self, cmd: &str, timeout: Duration) -> Result<String> {
+        const DONE: &str = "LIMINA_SHELL_DONE";
+        const READY: &str = "LIMINA_SHELL_READY";
+        let done_before = self.console().matches(DONE).count();
+        self.console_send(cmd)?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            let console = self.console();
+            let dones: Vec<usize> = console.match_indices(DONE).map(|(i, _)| i).collect();
+            if dones.len() > done_before {
+                let this = dones[done_before];
+                // Output starts after the previous frame boundary: the ready marker for the
+                // first command, otherwise the end of the prior DONE line. Both boundaries are
+                // ASCII, so these byte offsets are valid UTF-8 slice points.
+                let start = if done_before == 0 {
+                    console.find(READY).map(|i| i + READY.len()).unwrap_or(0)
+                } else {
+                    let prev = dones[done_before - 1];
+                    console[prev..]
+                        .find('\n')
+                        .map(|nl| prev + nl + 1)
+                        .unwrap_or(prev)
+                };
+                return Ok(console[start..this].trim().to_string());
+            }
+            if let Some(status) = self.child.try_wait().context("polling supervisor")? {
+                bail!(
+                    "supervisor exited ({status}) before console command {cmd:?} completed.\n\
+                     --- console tail ---\n{}",
+                    tail(&console, 40)
+                );
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "timed out after {timeout:?} waiting for {cmd:?} to complete (no {DONE}).\n\
+                     --- console tail ---\n{}",
+                    tail(&console, 40)
+                );
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     /// Request a clean shutdown (SIGTERM to the supervisor, which asks the guest to
     /// power off and force-kills the worker after its own grace), then wait up to
     /// `timeout` for the supervisor to exit. Escalates to SIGKILL if it overruns.
