@@ -95,3 +95,16 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
   the worker for a fresh boot while keeping the VM's host-side resources (gvproxy, control plane)
   alive. Verified: limina `reboot::guest_reboot_relaunches_the_worker` (a guest `systemctl reboot`
   comes back with a fresh boot id over the same NAT) + the full boot suite green.
+- **0024 — implement virtio-gpu `transfer_read` (`TRANSFER_FROM_HOST_3D`).** The readback path
+  was a `panic!("unimplemented")` stub: venus (zero-copy host-visible blobs) never reads back, so
+  upstream never needed it. But the coexist device drives virgl/vrend for stock 4 KiB guests, and
+  vrend's copy model **does** read back — any `glReadPixels` / `glxinfo` / WebGL readback issues
+  `TRANSFER_FROM_HOST_3D`. The panic killed the GPU worker thread, after which every later
+  virtio-gpu command blocked on a fence that never completed and the whole guest appeared to hang.
+  Delegate to rutabaga's `transfer_read` exactly as `transfer_write` does (the scanout 2D readback
+  path already calls it); `buf` is `None` on the common path (rutabaga copies the host resource
+  into the resource's attached guest iovecs), a provided `VolatileSlice` becomes an `IoSliceMut`;
+  software-2D resources already mirror the guest backing so readback is a no-op. Never panic.
+  Sibling to 0014 (the same fix for the scanout readback path). Verified: a stock F44 guest runs
+  `glxinfo` (renderer `virgl (zink … KosmicKrisp)`) with zero GPU-worker panics — pre-fix it
+  wedged the GPU on the first readback.
