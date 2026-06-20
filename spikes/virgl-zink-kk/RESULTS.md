@@ -2,7 +2,13 @@
 
 **Date:** 2026-06-20 · M1 Max, macOS 26.5 · Mesa 26.2.0-devel (git-178a3d7396, the KK tree)
 
-## Verdict: PASS — host GL on zink-on-KK works via surfaceless EGL on macOS. No ANGLE needed.
+## Verdict: SHIPPED — virgl works end-to-end on a stock 4 KiB guest via zink-on-KK. No ANGLE needed.
+
+The coexist GPU now does what the goal asked: a fully-capable guest picks **venus** (16 KiB
+enhanced tier), a stock 4 KiB guest picks **virgl** (accelerated baseline, copy model → immune to
+the 16k/4k `hv_vm_map` wall), and **software-2D** remains the final floor. Host GL for virgl's
+`vrend` comes from zink-on-KosmicKrisp via surfaceless EGL — the same Mesa tree we build for venus.
+Details below; the end-to-end guest result is in "Step 2 VERIFIED" further down.
 
 The load-bearing unknown (can Mesa's headless EGL bring up a GL context on zink → KosmicKrisp →
 Metal on Darwin?) is **resolved, pixel-verified**:
@@ -106,6 +112,47 @@ Two issues fixed to get here:
 Next: wire it into the worker (step 2) — drop the hard `NO_VIRGL`, init vrend on the coexist device
 (GLES + surfaceless), advertise the VIRGL2 capset, keep software-2D fallback.
 
+## Step 2 (2026-06-20): worker integration done; host vrend proven in the REAL worker
+
+Committed `feat(gpu): enable virgl/vrend (zink-on-KK) on the coexist device`. The worker
+(`limina-vmm`) now links the EGL virglrenderer + our epoxy-egl, is signed with
+`allow-dyld-environment-variables`, and on a real boot its log shows **48 ASTC `GL_INVALID_ENUM`
+cap-probe lines** — i.e. vrend's zink-on-KK GL init ran *inside the production worker* (same
+signature as `vrendprobe`), not just the standalone probe. venus path intact, no crash.
+
+**(Superseded — see Step 2 VERIFIED below.)** An earlier note here claimed guest-side
+verification was "BLOCKED by a GOP firmware-splash boot hang." **That was a misdiagnosis**: the
+boots were never hung — a frozen `--display-capture` PNG and a too-short SSH wait were read as a
+hang. Serial capture (`--console`) showed every guest reaching `gdm.service` + `fedora login:`;
+big CoW first-boots under software render simply take ~5–8 min to reach SSH. Wait longer and the
+guest comes up. (Retraction recorded in memory `limina-windowed-reboot-present-race`.)
+
+## Step 2 VERIFIED END-TO-END (2026-06-20): stock 4 KiB guest renders through virgl→zink→KK→Metal
+
+A **stock Fedora 43 (4 KiB) guest** booted on the coexist GPU device and bound the virgl gallium
+driver, with the host GL provider resolving to zink-on-KK. Decisive, pixel-verified:
+
+```
+guest dmesg : [drm] features: +virgl +edid +resource_blob +host_visible
+              [drm] number of cap sets: 5
+guest eglinfo:
+  OpenGL compatibility profile renderer: virgl (zink Vulkan 1.3(Apple M1 Max (MESA_KOSMICKRISP)))
+  OpenGL ES profile renderer:            virgl (zink Vulkan 1.3(Apple M1 Max (MESA_KOSMICKRISP)))
+worker log  : virtio-gpu virgl_flags = 0x35b, software_2d = false (coexist = true)
+capture PNG : /tmp/f43c-cap.png (704 KB) — fully rendered GNOME desktop (wallpaper, dock, notification)
+```
+
+So the full chain is live in the real worker: **guest GL → guest virgl driver → virtio-gpu → host
+virglrenderer/vrend → zink → KosmicKrisp → Metal.** The renderer string literally names virgl AND
+KosmicKrisp, and the desktop composites through it (pixel proof, not a proxy). venus path intact,
+no crash, software-2D still the floor.
+
+**Follow-up (non-fatal, deferred per user):** a small bounded count of guest-side
+`virtio_gpu` `ERR_UNSPEC` (0x1200) responses on some SUBMIT_3D/CTX_DETACH commands — GL still works
+and the desktop renders. Likely GL-3.1-cap / missing-feature mismatches; root-cause alongside the
+KK feature work that lifts the GL ceiling (see `limina-kk-feature-gaps`). Boot the test path with
+`spikes/virgl-zink-kk/boot-virgl-guest.sh`.
+
 ## Caveats / known gaps (for productization, not blockers)
 
 - **KK is missing `VK_EXT_custom_border_color`** (and likely more), which zink lists as a base
@@ -116,14 +163,21 @@ Next: wire it into the worker (step 2) — drop the hard `NO_VIRGL`, init vrend 
 - **driconf `options_info` wiring** — the proper fix (vs. the tolerate-empty patch) is feeding
   zink's option descriptions into the drisw/kopper loader path so driconf works normally.
 
-## Next steps (the wiring, now that the unknown is dead)
+## Next steps (the core path is done — these are upgrades / productization)
 
-1. ~~Confirm a **desktop-GL** context + a textured/triangle draw on zink-on-KK.~~ **DONE** (GL 3.1,
-   `glprobe.c` PASS). Optional follow-up: add `VK_EXT_custom_border_color` (+ whatever else zink
-   gates on) to KK to lift the GL ceiling to 3.3/4.x core.
-2. Build **virglrenderer's `vrend`** against this Mesa (its `USE_EGL`+GLES path → surfaceless EGL →
-   zink → KK), drop `NO_VIRGL`, init with `USE_EGL`.
-3. Advertise a real **VIRGL2 capset** in the coexist virtio-gpu; let the 4 KiB guest's virgl driver
-   bind it (copy model → immune to the 16k/4k `hv_vm_map` wall).
-4. Guest validation: stock 4 KiB Fedora renders GNOME/glmark **accelerated** via virgl; characterize
-   the venus→virgl→sw selection. venus stays the 16k enhanced fast path.
+1. ~~Confirm a **desktop-GL** context + a textured/triangle draw on zink-on-KK.~~ **DONE** (GL 3.1).
+2. ~~Build **virglrenderer's `vrend`** against this Mesa, drop `NO_VIRGL`, init with `USE_EGL`.~~ **DONE.**
+3. ~~Advertise a real **VIRGL2 capset** in the coexist virtio-gpu; let the 4 KiB guest bind it.~~
+   **DONE** (5 capsets; guest dmesg `+virgl`).
+4. ~~Guest validation: stock 4 KiB Fedora renders GNOME **accelerated** via virgl.~~ **DONE**
+   (eglinfo renderer = `virgl (zink … KosmicKrisp)`; rendered-desktop capture).
+
+Remaining (deferred per user — "first make it work, then add features to KK"):
+
+- **Lift the GL ceiling above 3.1** — add `VK_EXT_custom_border_color` (+ enumerate the full
+  zink-required-extension gap) to KK. Tracked in `limina-kk-feature-gaps`.
+- **Root-cause the bounded `0x1200` (ERR_UNSPEC)** SUBMIT_3D/CTX_DETACH responses — non-fatal.
+- **Production `.app` bundling** of zink-kk Mesa + epoxy-egl + KK ICD via `@rpath` (no `DYLD_*` /
+  no `VK_ICD_FILENAMES` at runtime) — the dev path uses `boot-virgl-guest.sh`'s env exports.
+- **Characterize the venus→virgl→sw selection** more fully (host advertises all capsets; guest Mesa
+  picks per its kernel page size / driver support).
