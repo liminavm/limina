@@ -154,6 +154,24 @@ pub fn kosmickrisp_icd() -> Option<PathBuf> {
         })
 }
 
+/// Resolve the **zink-on-KosmicKrisp** host GL Mesa prefix — the GL provider for
+/// virglrenderer's `vrend` (the baseline-tier virgl path; see memory `limina-baseline-3d-plan`
+/// and `spikes/virgl-zink-kk`). A stock 4 KiB guest can't map venus's host-visible blobs, so it
+/// drives virgl/vrend, whose host GL is zink-on-KK from this machine-local Mesa build (default
+/// `/Volumes/mesa-cs/zink-kk-prefix`, override `MESA_PREFIX`). Returns `None` when it isn't
+/// built/mounted; a virgl-requiring test should SKIP. Same prefix as
+/// `spikes/virgl-zink-kk/boot-virgl-guest.sh` and the worker `build.rs`.
+pub fn zink_kk_mesa_prefix() -> Option<PathBuf> {
+    let prefix = std::env::var("MESA_PREFIX")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/Volumes/mesa-cs/zink-kk-prefix"));
+    // egl.pc is the load-bearing artifact (vrend dlopens libEGL/libGLESv2 from here at runtime).
+    prefix
+        .join("lib/pkgconfig/egl.pc")
+        .exists()
+        .then_some(prefix)
+}
+
 /// What the guest boots from.
 #[derive(Debug, Clone)]
 pub enum Boot {
@@ -327,6 +345,44 @@ impl GuestConfig {
         Ok(cfg.with_display(1280, 800).with_net())
     }
 
+    /// L2 baseline-tier config: a **stock 4 KiB** Fedora that **autologins to a seated GNOME
+    /// session**, EFI-booted on the GOP firmware. The vehicle for baseline-3D (virgl) tests that
+    /// need a real GL session over SSH — `Fedora-Workstation-44.boot.raw` (vanilla F44 + autologin
+    /// `claude`, no enhancements; see memory `limina-fedora-access` / `docs/images.md`). Pair with
+    /// [`with_coexist_display`](GuestConfig::with_coexist_display) +
+    /// [`with_virgl_host_gl`](GuestConfig::with_virgl_host_gl) + [`with_net`](GuestConfig::with_net).
+    ///
+    /// Overrides: `LIMINA_TEST_DISK_BASELINE` (default `Fedora-Workstation-44.boot.raw`),
+    /// `LIMINA_GOP_FIRMWARE` (default `target/krun-efi/KRUN_EFI.gop.fd`), plus the usual
+    /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the GOP firmware
+    /// or the baseline disk is missing.
+    pub fn baseline_fedora_from_env() -> Result<GuestConfig> {
+        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
+        anyhow::ensure!(
+            firmware.exists(),
+            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
+             (or set LIMINA_GOP_FIRMWARE)"
+        );
+        let disk = match std::env::var("LIMINA_TEST_DISK_BASELINE") {
+            Ok(p) => PathBuf::from(p),
+            Err(_) => repo_root().join("Fedora-Workstation-44.boot.raw"),
+        };
+        anyhow::ensure!(
+            disk.exists(),
+            "baseline (4 KiB autologin) disk not found at {disk:?} (set LIMINA_TEST_DISK_BASELINE); \
+             this is the machine-local seated baseline, see memory `limina-fedora-access`"
+        );
+        let mut cfg = GuestConfig::fedora_from_env()?;
+        cfg.boot = Boot::Firmware {
+            firmware,
+            disk,
+            read_only: true, // with_net cow-clones to a writable disk; the source stays pristine
+        };
+        Ok(cfg)
+    }
+
     /// L1 config: our tiny direct-boot guest (kernel Image + virtio-fs rootfs).
     ///
     /// Build it first with `scripts/build-test-guest.sh`. Overrides: `LIMINA_BIN`,
@@ -483,6 +539,40 @@ impl GuestConfig {
             height,
             software_2d: false,
         });
+        self
+    }
+
+    /// Wire the **zink-on-KosmicKrisp host GL** worker environment so virglrenderer's `vrend`
+    /// resolves its host GL to our Mesa build (the baseline-tier virgl path). Mirrors
+    /// `spikes/virgl-zink-kk/boot-virgl-guest.sh`: point the dynamic loader and Mesa at the
+    /// zink-on-KK prefix + our EGL-enabled epoxy, force the zink gallium driver, and pick the
+    /// surfaceless EGL platform. These are HOST env vars on the worker (codesigned with
+    /// `allow-dyld-environment-variables`, so `DYLD_*` survives); the worker propagates them from
+    /// the supervisor it is spawned from. The KK Vulkan ICD itself is wired automatically by
+    /// [`Guest::boot`] for any coexist display. No-op-safe: a test should still SKIP up front when
+    /// [`zink_kk_mesa_prefix`] / [`kosmickrisp_icd`] are absent (else vrend can't bring up host GL).
+    ///
+    /// Production will instead bundle these dylibs in the `.app` via `@rpath` (no `DYLD_*`); this
+    /// is the dev/test path. Pair with [`with_coexist_display`](GuestConfig::with_coexist_display).
+    pub fn with_virgl_host_gl(mut self) -> GuestConfig {
+        let prefix = zink_kk_mesa_prefix()
+            .unwrap_or_else(|| PathBuf::from("/Volumes/mesa-cs/zink-kk-prefix"));
+        let epoxy = repo_root().join("third_party/epoxy-egl-prefix");
+        let dyld = format!(
+            "{}/lib:{}/lib:/opt/homebrew/lib",
+            prefix.display(),
+            epoxy.display()
+        );
+        let drivers = format!("{}/lib", prefix.display());
+        for (k, v) in [
+            ("DYLD_FALLBACK_LIBRARY_PATH", dyld.as_str()),
+            ("MESA_LOADER_DRIVER_OVERRIDE", "zink"),
+            ("GALLIUM_DRIVER", "zink"),
+            ("LIBGL_DRIVERS_PATH", drivers.as_str()),
+            ("EGL_PLATFORM", "surfaceless"),
+        ] {
+            self.envs.push((k.to_string(), v.to_string()));
+        }
         self
     }
 
