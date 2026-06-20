@@ -16,10 +16,14 @@
 //! - [`fedora_stock_image_efi_renders_to_gop`] — our **GOP firmware**; asserts the boot is
 //!   **visually** present in the captured window (firmware/GRUB/kernel render to the scanout),
 //!   the complement to the serial check above.
+//! - [`fedora_stock_image_renders_graphical_desktop`] — the two-tier *floor*: the stock GNOME
+//!   **desktop session** must actually come up and paint, not just serial+sshd. Boots the default
+//!   GPU (venus advertised → graceful software fallback) and asserts gnome-shell started + rendered
+//!   a rich frame.
 //!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use limina_test::{assert_console_has, Guest, GuestConfig};
 
@@ -232,6 +236,102 @@ fn fedora_stock_image_efi_renders_to_gop() {
         "the GOP boot console never rendered before userspace (richest pre-login frame: \
          {best_colors} colors, {best_dominance:.2} dominant) — did firmware/GRUB/kernel \
          paint the scanout?"
+    );
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(20))
+        .expect("supervisor did not stop");
+    eprintln!("teardown outcome: {outcome:?}");
+}
+
+/// The stock-baseline **GNOME desktop session** must come up and render — the two-tier "stock
+/// baseline usable" floor that the serial/sshd tests don't cover.
+///
+/// Closes the gap behind the 2026-06-19/20 venus investigation: the other boot tests prove serial
+/// getty + sshd ([`fedora_stock_image_efi_boots_to_userspace`]) and that the *boot console* paints
+/// ([`fedora_stock_image_efi_renders_to_gop`]) — but neither proves the *graphical session*
+/// initializes and renders. This boots the **default GPU** (the coexist device, i.e. venus
+/// advertised — exactly what a stock user gets): a stock 4 KiB guest can't map venus host-visible
+/// blobs (the `hv_vm_map` 16k/4k wall), so Mesa degrades to `kms_swrast`/llvmpipe on its own and
+/// the desktop renders in software. So this also guards that graceful fallback end-to-end.
+///
+/// Two oracles, both required: (1) gnome-shell logged `GNOME Shell started` (deterministic, over
+/// SSH — true for the autologin session or a GDM greeter), and (2) the captured scanout shows a
+/// rich frame *after* that point (so it's the desktop, not the boot console). A software-GL or
+/// scanout regression that left the session black would start but never paint → (2) fails; a
+/// session that never initialized → (1) fails.
+#[test]
+fn fedora_stock_image_renders_graphical_desktop() {
+    if !limina_test::require_hvf_or_skip("fedora_stock_image_renders_graphical_desktop") {
+        return;
+    }
+
+    // Default GPU (coexist / venus advertised) + GOP firmware + captured display + NAT. We override
+    // the GOP config's software-2D capture device with the coexist one so this exercises the real
+    // stock default (venus→kms_swrast graceful fallback), not the forced-software path.
+    let cfg = match GuestConfig::fedora_gop_from_env() {
+        Ok(cfg) => cfg.with_coexist_display(1280, 800),
+        Err(e) => {
+            eprintln!("SKIP fedora_stock_image_renders_graphical_desktop: {e:#}");
+            return;
+        }
+    };
+    eprintln!(
+        "booting the Fedora desktop via GOP, default coexist GPU: {:?}",
+        cfg.boot
+    );
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+
+    // sshd comes up first; the autologin graphical session follows.
+    let banner = guest
+        .wait_for_ssh_banner(Duration::from_secs(240))
+        .expect("guest never reached sshd over the EFI path");
+    assert!(
+        banner.starts_with("SSH-"),
+        "unexpected SSH banner: {banner}"
+    );
+
+    // Oracle 1 — the graphical session initialized. gnome-shell logs this line once it is up
+    // (autologin user session or GDM greeter alike); `grep -q` exits 0 only once it appears, so
+    // ssh_poll returns as soon as the session starts and fails if it never does.
+    guest
+        .ssh_poll(
+            "sudo journalctl -b _COMM=gnome-shell --no-pager 2>/dev/null \
+             | grep -q 'GNOME Shell started'",
+            Duration::from_secs(180),
+        )
+        .expect(
+            "gnome-shell never logged 'GNOME Shell started' — the stock graphical session failed \
+             to initialize (venus→kms_swrast fallback broken, or no software GL?)",
+        );
+
+    // Oracle 2 — it actually painted. Sample the scanout AFTER the session started and keep the
+    // richest frame. A real desktop (wallpaper) yields thousands of distinct colors with no single
+    // dominant color; a black/stuck session yields ~1 color at ~100% dominance. The capture is
+    // sparse for a static screen, so poll with a generous window and keep the best frame seen.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut best_colors = 0usize;
+    let mut best_dominance = 1.0f64;
+    while Instant::now() < deadline {
+        if let Ok(frame) = guest.read_capture() {
+            let colors = frame.distinct_colors();
+            let (_, dominance) = frame.dominant_color();
+            if colors > best_colors {
+                best_colors = colors;
+                best_dominance = dominance;
+            }
+            if best_colors >= 1000 && best_dominance < 0.90 {
+                break; // unambiguously a rendered desktop — stop early
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    eprintln!("richest desktop frame: {best_colors} distinct colors, dominant {best_dominance:.2}");
+    assert!(
+        best_colors >= 1000 && best_dominance < 0.90,
+        "the GNOME desktop never rendered a rich frame after the session started (richest: \
+         {best_colors} colors, {best_dominance:.2} dominant) — software GL / scanout regression?"
     );
 
     let outcome = guest
