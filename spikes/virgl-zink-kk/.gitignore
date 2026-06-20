@@ -1,0 +1,4 @@
+# build artifacts — source + RESULTS/probe-output kept, binaries/logs not
+eglprobe
+eglprobe.dSYM/
+build.log

@@ -1,0 +1,27 @@
+diff --git a/src/gallium/drivers/zink/zink_screen.c b/src/gallium/drivers/zink/zink_screen.c
+index 7aea90f95bd..f22a88398cd 100644
+--- a/src/gallium/drivers/zink/zink_screen.c
++++ b/src/gallium/drivers/zink/zink_screen.c
+@@ -3423,10 +3423,19 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
+    if (config) {
+       driParseConfigFiles(config->options, config->options_info,
+                           &(driConfigFileParseParams) { .driverName = "zink" });
+-      screen->driconf.dual_color_blend_by_location = driQueryOptionb(config->options, "dual_color_blend_by_location");
++      /* limina spike: on the surfaceless->sw-vk->zink loader path, config->options_info is not
++       * populated with zink's driconf option descriptions, so the cache is empty and an
++       * unconditional driQueryOptionb() trips assert(info[i].name != NULL). Guard each query with
++       * driCheckOption (safe on an empty cache) and fall back to the option default. The real fix
++       * is wiring zink's options_info into the drisw/kopper loader path. See spikes/virgl-zink-kk. */
++#define ZINK_OPTB(field, name, dflt) \
++      screen->driconf.field = driCheckOption(config->options, (name), DRI_BOOL) \
++                              ? driQueryOptionb(config->options, (name)) : (dflt)
++      ZINK_OPTB(dual_color_blend_by_location, "dual_color_blend_by_location", false);
+       //screen->driconf.inline_uniforms = driQueryOptionb(config->options, "radeonsi_inline_uniforms");
+-      screen->driconf.emulate_point_smooth = driQueryOptionb(config->options, "zink_emulate_point_smooth");
+-      screen->driconf.zink_shader_object_enable = driQueryOptionb(config->options, "zink_shader_object_enable");
++      ZINK_OPTB(emulate_point_smooth, "zink_emulate_point_smooth", false);
++      ZINK_OPTB(zink_shader_object_enable, "zink_shader_object_enable", false);
++#undef ZINK_OPTB
+    }
+ 
+    simple_mtx_lock(&instance_lock);

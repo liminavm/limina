@@ -1,0 +1,13 @@
+VK_DRIVER_FILES = /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/kosmickrisp_mesa_devenv_icd.aarch64.json
+libEGL          = /Volumes/mesa-cs/zink-kk-prefix/lib
+EGL 1.5
+EGL_VENDOR     : Mesa Project
+EGL_VERSION    : 1.5
+GL_VENDOR      : Mesa
+GL_RENDERER    : zink Vulkan 1.3(Apple M1 Max (MESA_KOSMICKRISP))
+GL_VERSION     : OpenGL ES 3.1 Mesa 26.2.0-devel (git-178a3d7396)
+readback pixel : (0, 128, 255, 255)
+RESULT         : PASS — accelerated host GL clear on zink-on-KK
+~/Projects/limina/spikes/virgl-zink-kk/eglprobe.c:27:65: warning: expression which evaluates to zero treated as a null pointer constant of type 'void *' [-Wnon-literal-null-conversion]
+1 warning generated.
+WARNING: Some incorrect rendering might occur because the selected Vulkan device (Apple M1 Max) doesn't support base Zink requirements: have_EXT_custom_border_color 
