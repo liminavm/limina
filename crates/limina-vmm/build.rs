@@ -24,16 +24,33 @@ use std::path::Path;
 fn main() {
     // Prepend our virgl-prefix pkgconfig dir so OUR virglrenderer.pc wins. An explicitly
     // exported PKG_CONFIG_PATH (e.g. from a build script) still takes precedence after it.
-    let prefix_pc =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../third_party/virgl-prefix/lib/pkgconfig");
+    //
+    // Our virglrenderer is now built with the EGL platform (vrend GL via zink-on-KK), so its
+    // virglrenderer.pc has `Requires.private: epoxy` and our epoxy.pc has `Requires.private: egl`.
+    // pkg-config --cflags traverses those, so the worker build also needs our epoxy-with-EGL and
+    // the zink-on-KK Mesa (which provides egl.pc) on PKG_CONFIG_PATH — else "could not generate
+    // cflags for epoxy/egl". MESA_PREFIX overrides the zink-on-KK Mesa location (see
+    // docs/drivers/kosmickrisp.rst); default matches build-mesa-zink-kk.sh.
+    let tp = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../third_party");
+    let prefix_pc = tp.join("virgl-prefix/lib/pkgconfig");
+    let mesa_prefix = std::env::var("MESA_PREFIX")
+        .unwrap_or_else(|_| "/Volumes/mesa-cs/zink-kk-prefix".to_string());
+    let extra_pc = [
+        prefix_pc.clone(),
+        tp.join("epoxy-egl-prefix/lib/pkgconfig"),
+        Path::new(&mesa_prefix).join("lib/pkgconfig"),
+    ];
     if prefix_pc.is_dir() {
+        let mut parts: Vec<String> = extra_pc
+            .iter()
+            .filter(|p| p.is_dir())
+            .map(|p| p.display().to_string())
+            .collect();
         let existing = std::env::var("PKG_CONFIG_PATH").unwrap_or_default();
-        let combined = if existing.is_empty() {
-            prefix_pc.display().to_string()
-        } else {
-            format!("{}:{}", prefix_pc.display(), existing)
-        };
-        std::env::set_var("PKG_CONFIG_PATH", combined);
+        if !existing.is_empty() {
+            parts.push(existing);
+        }
+        std::env::set_var("PKG_CONFIG_PATH", parts.join(":"));
     } else {
         println!(
             "cargo:warning=third_party/virgl-prefix not found ({}); the worker will link \

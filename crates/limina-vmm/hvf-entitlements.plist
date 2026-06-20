@@ -4,5 +4,14 @@
 <dict>
 	<key>com.apple.security.hypervisor</key>
 	<true/>
+	<!-- virgl/vrend on zink-on-KK: epoxy and zink dlopen libEGL/libGLESv2/libvulkan by bare
+	     soname, and Mesa's dri loader is a third-party dylib. Hardened runtime strips DYLD_*
+	     and enforces library validation, which breaks both. These let the dev/test worker
+	     resolve our zink-on-KK Mesa via DYLD_FALLBACK_LIBRARY_PATH. (Production bundles these
+	     dylibs in the .app via @rpath and won't need DYLD_* — see docs/drivers/kosmickrisp.rst.) -->
+	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
 </dict>
 </plist>

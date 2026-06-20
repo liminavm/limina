@@ -65,42 +65,46 @@ const NET_COMPAT_FEATURES: u32 = NET_FEATURE_CSUM
 const NET_GUEST_MAC: [u8; 6] = [0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee];
 
 // virglrenderer init flag bits (see docs/research/03 §1.3).
-#[allow(dead_code)]
 const VIRGLRENDERER_USE_EGL: u32 = 1 << 0;
 #[allow(dead_code)]
 const VIRGLRENDERER_THREAD_SYNC: u32 = 1 << 1;
+const VIRGLRENDERER_USE_SURFACELESS: u32 = 1 << 3;
+const VIRGLRENDERER_USE_GLES: u32 = 1 << 4;
 const VIRGLRENDERER_VENUS: u32 = 1 << 6;
+#[allow(dead_code)]
 const VIRGLRENDERER_NO_VIRGL: u32 = 1 << 7;
 #[allow(dead_code)]
 const VIRGLRENDERER_USE_ASYNC_FENCE_CB: u32 = 1 << 8;
 const VIRGLRENDERER_RENDER_SERVER: u32 = 1 << 9;
 
-/// virgl_flags for the **coexist** virtio-gpu (tier-2, the default): the macOS Venus mask.
+/// virgl_flags for the **coexist** virtio-gpu (tier-2, the default): venus (Vulkan) **and** vrend
+/// (GL via zink-on-KosmicKrisp) on top of the unconditional software-2D scanout.
 ///
-/// `VENUS | NO_VIRGL | RENDER_SERVER` per `spikes/venus-viability` + the virglrenderer-1.3.0
-/// relink (M4; M1 Max / macOS 26.5):
-/// - `USE_EGL` (0x1) must be OFF: there is no EGL on macOS, so `virgl_renderer_init` returns -1.
-/// - `NO_VIRGL` (0x80) must be ON: otherwise virglrenderer runs the GL path
-///   (`vrend_renderer_init → create_gl_context`) which SIGSEGVs — no GL context on Apple Silicon.
-/// - `RENDER_SERVER` (0x200) is now REQUIRED. Our virglrenderer is upstream 1.3.0 built with
-///   `render-server-mode=thread` (in-process render-server thread), and 1.3.0 only initializes
-///   Venus when this flag is set (`virglrenderer.c`: `proxy_renderer_init` is gated on it; the
-///   inline-Venus path the old slp `0.10.4e-krunkit` bottle used was upstream-dropped). Without
-///   it the guest sees the static Venus capset but `vkEnumeratePhysicalDevices` finds no GPU.
+/// `VENUS | USE_EGL | USE_GLES | USE_SURFACELESS | THREAD_SYNC | ASYNC_FENCE_CB | RENDER_SERVER`:
+/// - `VENUS` (0x40): Vulkan passthrough (enhanced/16k tier) → KosmicKrisp → Metal.
+/// - `USE_EGL` (0x1) + `USE_SURFACELESS` (0x8) + `USE_GLES` (0x10): bring up vrend's own surfaceless
+///   EGL winsys → **zink-on-KK** → Metal, giving accelerated **GL** for the stock-4k baseline via
+///   virgl's copy model (no `hv_vm_map`, so immune to the 16k/4k page wall). GLES (not desktop GL):
+///   on macOS epoxy routes desktop-GL calls to Apple's system OpenGL framework (→ glFlush crash with
+///   no CGL context); GLES dlopens `libGLESv2` → resolves to our zink-on-KK Mesa. Guest GL is
+///   unaffected — virglrenderer translates guest GL → host GLES. (Proven: `spikes/virgl-zink-kk`.)
+///   This needs a virglrenderer built with `-Dplatforms=egl` (our `third_party/virgl-prefix`) and a
+///   small patch wiring the no-GBM EGL path on macOS (`patches/virglrenderer-vrend-egl-no-gbm-macos`).
+///   `NO_VIRGL` (0x80) was historically forced ON because Apple Silicon has no host GL; zink-on-KK
+///   removes that constraint, so it's now OFF and vrend is enabled.
+/// - `RENDER_SERVER` (0x200): our virglrenderer is built with `render-server-mode=thread`; 1.3.0
+///   only initializes Venus when this is set (`proxy_renderer_init` is gated on it).
+/// - `THREAD_SYNC` (0x2) + `ASYNC_FENCE_CB` (0x100): the render-server model retires venus fences
+///   ASYNCHRONOUSLY (fence eventfd + sync thread → `write_context_fence` → rutabaga → guest IRQ);
+///   without them the guest hangs forever in `glFinish`/`vkQueueWaitIdle`.
 ///
-/// - `THREAD_SYNC` (0x2) + `ASYNC_FENCE_CB` (0x100) are REQUIRED with the 1.3.0 render-server
-///   model. Venus now runs in a separate render-server thread, so per-context fences complete
-///   ASYNCHRONOUSLY: the proxy sets up a fence eventfd (`THREAD_SYNC`) and a sync thread that
-///   calls our `write_context_fence` callback (`ASYNC_FENCE_CB`) → rutabaga `fence_handler` →
-///   guest IRQ. Without them the proxy never retires venus fences, so the guest hangs forever in
-///   `glFinish`/`vkQueueWaitIdle` (the slp `0.10.4e` inline model retired fences synchronously on
-///   the caller thread, so it did not need these).
-///
-/// This is NOT libkrun's Linux `gui_vm` mask (`0x343`). With these flags the software-2D path
-/// still serves all 2D/scanout commands (it is unconditional); Venus adds 3D contexts on top.
+/// The software-2D path still serves all 2D/scanout commands (unconditional); venus + vrend add 3D
+/// contexts on top. Two-tier safety: if renderer init fails, libkrun degrades to software-2D.
 /// Override at runtime with `LIMINA_VIRGL_FLAGS` (e.g. for experiments).
-const GPU_VENUS_FLAGS: u32 = VIRGLRENDERER_VENUS
-    | VIRGLRENDERER_NO_VIRGL
+const GPU_COEXIST_FLAGS: u32 = VIRGLRENDERER_VENUS
+    | VIRGLRENDERER_USE_EGL
+    | VIRGLRENDERER_USE_GLES
+    | VIRGLRENDERER_USE_SURFACELESS
     | VIRGLRENDERER_THREAD_SYNC
     | VIRGLRENDERER_USE_ASYNC_FENCE_CB
     | VIRGLRENDERER_RENDER_SERVER;
@@ -184,8 +188,8 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
     //    GPU-init hang, which graceful degradation can't catch because it's a block not an error).
     let (software_2d, flags) = match (virgl_override, display.software_2d) {
         (Some(f), _) => (false, f),
-        (None, true) => (true, GPU_VENUS_FLAGS), // flags unused when software_2d (no rutabaga)
-        (None, false) => (false, GPU_VENUS_FLAGS),
+        (None, true) => (true, GPU_COEXIST_FLAGS), // flags unused when software_2d (no rutabaga)
+        (None, false) => (false, GPU_COEXIST_FLAGS),
     };
     log::info!(
         "virtio-gpu virgl_flags = {flags:#x}, software_2d = {software_2d} (coexist = {})",

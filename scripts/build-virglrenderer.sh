@@ -23,12 +23,30 @@ PREFIX="${VIRGL_PREFIX:-$ROOT/third_party/virgl-prefix}"
 
 [ -f "$SRC/meson.build" ] || { echo "virglrenderer source missing at $SRC" >&2; exit 1; }
 
+# EGL platform needs an epoxy WITH egl support (Homebrew's is CGL-only). Build it first.
+EPOXY_PREFIX="$ROOT/third_party/epoxy-egl-prefix"
+grep -qi epoxy_has_egl=1 "$EPOXY_PREFIX/lib/pkgconfig/epoxy.pc" 2>/dev/null || {
+  echo "epoxy-with-EGL missing at $EPOXY_PREFIX — run spikes/virgl-zink-kk/build-epoxy-egl.sh first" >&2
+  exit 1
+}
+# epoxy.pc has `Requires.private: egl` → pkg-config must also see the zink-on-KK Mesa's egl.pc,
+# else "Could not generate cflags for epoxy". (This is the host GL provider for vrend — see
+# docs/drivers/kosmickrisp.rst / spikes/virgl-zink-kk.)
+MESA_PREFIX="${MESA_PREFIX:-/Volumes/mesa-cs/zink-kk-prefix}"
+[ -f "$MESA_PREFIX/lib/pkgconfig/egl.pc" ] || {
+  echo "zink-on-KK Mesa egl.pc missing at $MESA_PREFIX — build it (spikes/virgl-zink-kk/build-mesa-zink-kk.sh)" >&2
+  exit 1
+}
+
 # venus on darwin pulls in Metal/Foundation frameworks + dynamic Vulkan load (vulkan-dload);
 # molten-vk on PKG_CONFIG_PATH is harmless and lets the loader find the ICD at runtime.
-export PKG_CONFIG_PATH="$(brew --prefix)/opt/molten-vk/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+# Our epoxy-egl + zink-kk Mesa go FIRST so virglrenderer's EGL platform sees epoxy_has_egl=1.
+export PKG_CONFIG_PATH="$EPOXY_PREFIX/lib/pkgconfig:$MESA_PREFIX/lib/pkgconfig:$(brew --prefix)/opt/molten-vk/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
-# thread render-server mode = the krunkit in-process model (ENABLE_SAME_PROCESS_RENDER_SERVER);
-# platforms=[] = venus-only, no GL (there is no EGL/GLX on macOS).
+# thread render-server mode = the krunkit in-process model (ENABLE_SAME_PROCESS_RENDER_SERVER).
+# platforms=egl = venus (Vulkan→KK) AND vrend (GL via zink-on-KK) — the coexist device. On Darwin
+# virglrenderer enables EGL without GBM and uses the surfaceless virgl_egl_init path (needs the
+# patch wiring it: spikes/virgl-zink-kk/patches/virglrenderer-vrend-egl-no-gbm-macos.patch).
 # vulkan-dload=false: LINK the Vulkan lib at build time (absolute install_name) instead of
 # bare-name dlopen("libvulkan.dylib") at runtime. The worker is codesigned (hardened runtime
 # strips DYLD_*), and /opt/homebrew/lib isn't on the default dyld search path, so a runtime
@@ -39,7 +57,7 @@ MESON_ARGS=(
   -Dvulkan-dload=false
   -Drender-server-mode=thread
   -Drender-server-worker=thread
-  "-Dplatforms=[]"
+  -Dplatforms=egl
   --prefix "$PREFIX"
   --buildtype release
 )
@@ -52,6 +70,6 @@ fi
 ninja -C "$BUILD"
 meson install -C "$BUILD"
 
-echo "==> installed virglrenderer 1.3.0 (venus, in-process) to $PREFIX"
+echo "==> installed virglrenderer 1.3.0 (venus + vrend/EGL, in-process) to $PREFIX"
 echo "    pkg-config: $PREFIX/lib/pkgconfig/virglrenderer.pc"
 ls -la "$PREFIX"/lib/libvirglrenderer*.dylib 2>/dev/null || true
