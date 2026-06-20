@@ -2,3 +2,9 @@
 eglprobe
 eglprobe.dSYM/
 build.log
+glprobe
+glprobe.dSYM/
+vrendprobe
+vrendprobe.dSYM/
+epoxy-build.log
+virgl-gl-build.log

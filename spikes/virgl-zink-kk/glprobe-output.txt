@@ -1,0 +1,10 @@
+VK_DRIVER_FILES = /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/kosmickrisp_mesa_devenv_icd.aarch64.json
+libEGL          = /Volumes/mesa-cs/zink-kk-prefix/lib  (probe=glprobe)
+ctx granted : 3.0
+GL_RENDERER : zink Vulkan 1.3(Apple M1 Max (MESA_KOSMICKRISP))
+GL_VERSION  : 3.1 Mesa 26.2.0-devel (git-178a3d7396)
+desktop GL  : YES
+inside  px  : (255,0,255,255)  expect ~magenta (255,0,255)
+outside px  : (0,0,0,255)  expect black (0,0,0)
+RESULT      : PASS — desktop GL textured-triangle render on zink-on-KK
+WARNING: Some incorrect rendering might occur because the selected Vulkan device (Apple M1 Max) doesn't support base Zink requirements: have_EXT_custom_border_color 

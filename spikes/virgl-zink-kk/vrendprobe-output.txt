@@ -1,0 +1,3 @@
+virgl_renderer_init(USE_EGL|SURFACELESS) = 0
+VIRGL2 capset: version=2 size=1408
+RESULT: PASS — vrend initialized on zink-on-KK, VIRGL2 caps present

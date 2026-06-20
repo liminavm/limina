@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 # Copyright © 2026 Gustavo Noronha Silva
 
-# Compile + run eglprobe.c against the spike's zink-on-KK Mesa, forcing the zink gallium
-# driver onto the KosmicKrisp Vulkan ICD via SURFACELESS EGL. See README.md.
+# Compile + run a probe against the spike's zink-on-KK Mesa, forcing the zink gallium driver
+# onto the KosmicKrisp Vulkan ICD via SURFACELESS EGL. See README.md.
+#   run-probe.sh [probe]   probe = eglprobe (default, GLES clear) | glprobe (desktop-GL tex draw)
 set -euo pipefail
 
+PROBE="${1:-eglprobe}"
 PREFIX="${MESA_PREFIX:-/Volumes/mesa-cs/zink-kk-prefix}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -20,8 +22,12 @@ export VK_DRIVER_FILES
 LIBDIR="$(find "$PREFIX" -name 'libEGL*.dylib' -maxdepth 3 2>/dev/null | head -1 | xargs dirname)"
 [ -n "$LIBDIR" ] || { echo "libEGL not found under $PREFIX — run build-mesa-zink-kk.sh" >&2; exit 1; }
 
-cc -o "$HERE/eglprobe" "$HERE/eglprobe.c" \
-  -I"$PREFIX/include" -L"$LIBDIR" -lEGL -lGLESv2 \
+# GL entry points are loaded via eglGetProcAddress (glprobe) so we only ever link libEGL
+# (+ libGLESv2 for eglprobe's direct ES calls). No libGL — glx/glvnd are disabled in the build.
+EXTRA_LIBS="-lGLESv2"
+[ "$PROBE" = glprobe ] && EXTRA_LIBS=""
+cc -o "$HERE/$PROBE" "$HERE/$PROBE.c" \
+  -I"$PREFIX/include" -L"$LIBDIR" -lEGL $EXTRA_LIBS \
   -Wl,-rpath,"$LIBDIR"
 
 # zink dlopen()s the bare soname "libvulkan.1.dylib" (zink_screen.c). The Homebrew loader
@@ -39,5 +45,5 @@ export EGL_PLATFORM=surfaceless
 export __EGL_VENDOR_LIBRARY_DIRS="$PREFIX/share/glvnd/egl_vendor.d"
 
 echo "VK_DRIVER_FILES = $VK_DRIVER_FILES"
-echo "libEGL          = $LIBDIR"
-"$HERE/eglprobe"
+echo "libEGL          = $LIBDIR  (probe=$PROBE)"
+"$HERE/$PROBE"

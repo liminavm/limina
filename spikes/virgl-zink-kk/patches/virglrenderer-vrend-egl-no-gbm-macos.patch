@@ -1,0 +1,22 @@
+diff --git a/src/vrend/vrend_winsys.c b/src/vrend/vrend_winsys.c
+index d4c9b9e..6770bad 100644
+--- a/src/vrend/vrend_winsys.c
++++ b/src/vrend/vrend_winsys.c
+@@ -76,6 +76,17 @@ int vrend_winsys_init(uint32_t flags, int preferred_fd)
+       }
+ 
+       use_context = CONTEXT_EGL;
++#elif defined(HAVE_EPOXY_EGL_H)
++      /* limina: no-GBM EGL (macOS). virgl_egl_init has a display_id/surfaceless variant (see
++       * vrend_winsys_egl.c #else branch), but the dispatcher only ever wired the GBM path —
++       * connect it so vrend's own surfaceless EGL winsys comes up on GBM-less hosts (zink-on-KK). */
++      (void)preferred_fd;
++      egl = virgl_egl_init((EGLNativeDisplayType)EGL_DEFAULT_DISPLAY,
++                           flags & VIRGL_RENDERER_USE_SURFACELESS,
++                           flags & VIRGL_RENDERER_USE_GLES);
++      if (!egl)
++         return -1;
++      use_context = CONTEXT_EGL;
+ #else
+       (void)preferred_fd;
+       virgl_error("EGL is not supported on this platform\n");
