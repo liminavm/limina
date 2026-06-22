@@ -29,15 +29,14 @@ cd "$(dirname "$0")/.."
 
 EDK2_REPO="${EDK2_REPO:-https://github.com/slp/edk2}"
 EDK2_BRANCH="${EDK2_BRANCH:-krun-support}"
-# RELEASE is the default: the windowed GOP firmware MUST be RELEASE to boot. A DEBUG_GCC5 build
-# dead-loops in EDK2 DxeCore on a failed ASSERT (CoreRaiseTpl OldTpl 0x10 > NewTpl 0x8, Tpl.c:66)
-# triggered by the windowed present timing — fatal only because DEBUG enables ASSERT_DEADLOOP.
-# RELEASE compiles ASSERT to a no-op (the latent EDK2 TPL race is tolerated, as in all production
-# EDK2/QEMU firmware) and boots to the desktop. Build TARGET=DEBUG only for verbose boot-serial
-# debugging, and then boot it with `--console` (the per-byte PL011 flush slows the firmware past
-# the race) — it produces a separate KRUN_EFI.gop.debug.fd so it never clobbers the bootable
-# default. See memory limina-windowed-reboot-present-race.
-TARGET="${TARGET:-RELEASE}"               # RELEASE (bootable windowed default) or DEBUG (dev serial)
+# RELEASE is the default for production (smaller, no DEBUG overhead). Both DEBUG and RELEASE now
+# boot windowed-GOP: the windowed "BDS hang" was an EDK2 DxeCore ASSERT (CoreRaiseTpl OldTpl 0x10 >
+# NewTpl 0x8, Tpl.c:66) — VirtioSerialDxe's SerialIo Read/Write raised to TPL_CALLBACK while
+# entered at TPL_NOTIFY from TerminalDxe's serial-poll timer. It is FIXED at the source by step
+# (1b) below (RaiseTPL TPL_CALLBACK -> TPL_NOTIFY), so DEBUG_GCC5 (ASSERT_DEADLOOP on) no longer
+# dead-loops. Build TARGET=DEBUG for verbose boot-serial; it writes a separate KRUN_EFI.gop.debug.fd
+# so it never clobbers the production default. See memory limina-windowed-reboot-present-race.
+TARGET="${TARGET:-RELEASE}"               # RELEASE (production default) or DEBUG (dev serial; also boots)
 GOP="${GOP:-1}"                           # 1 = add VirtioGpuDxe (graphical console)
 JOBS="${JOBS:-8}"
 MEM="${MEM:-8g}"
@@ -77,7 +76,8 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         cd edk2
         # Restore pristine platform files (we patch them in-place below).
         git checkout -- ArmVirtPkg/ArmVirtKrun.dsc ArmVirtPkg/ArmVirtKrun.fdf \
-            ArmVirtPkg/Library/PlatformBootManagerLib/PlatformBm.c 2>/dev/null || true
+            ArmVirtPkg/Library/PlatformBootManagerLib/PlatformBm.c \
+            OvmfPkg/VirtioSerialDxe/VirtioSerialPort.c 2>/dev/null || true
         # Init ONLY the submodules ArmVirtKrun actually needs (idempotent — already-init'd
         # ones are skipped). Avoids the UnitTestFrameworkPkg submodules (subhook/googletest/
         # cmocka) we never build, one of which failed to clone. libfdt = FDT parsing (ArmVirt),
@@ -124,6 +124,28 @@ elif 'TerminalPcdProducerLib' in s:
 # PCD is orphaned (edk2 removed both together, as did ArmVirtQemu.dsc). Drop its line.
 s = s.replace('  gEfiMdeModulePkgTokenSpaceGuid.PcdResizeXterm|FALSE\n', '', 1)
 open(dsc, 'w').write(s)
+
+# (1b) VirtioSerial SerialIo Read/Write: raise to TPL_NOTIFY, not TPL_CALLBACK.
+# TerminalDxe registers its serial-poll TimerEvent at TPL_NOTIFY (Terminal.c). When that timer
+# polls an open virtio-serial port, VirtioSerialIoRead/Write run at TPL_NOTIFY (0x10) and call
+# gBS->RaiseTPL(TPL_CALLBACK=0x8) — raising to a *lower* TPL, which is illegal. In a DEBUG build
+# CoreRaiseTpl ASSERTs (OldTpl>NewTpl) -> CpuDeadLoop -> the windowed-GOP boot hangs; in RELEASE
+# the assert is a no-op but CoreRaiseTpl still sets gEfiCurrentTpl=0x8, silently LOWERING the TPL
+# (state corruption masked, not fixed). TPL_NOTIFY is the correct level for shared-virtqueue
+# access anyway (CALLBACK was too low to even serialize against that NOTIFY poll timer), and
+# RaiseTPL(NOTIFY) is legal whether entered at CALLBACK or NOTIFY. Minimal + upstreamable.
+vsp = 'OvmfPkg/VirtioSerialDxe/VirtioSerialPort.c'
+v = open(vsp).read()
+old = 'OldTpl = gBS->RaiseTPL (TPL_CALLBACK);'
+new = 'OldTpl = gBS->RaiseTPL (TPL_NOTIFY); // limina: was TPL_CALLBACK; reachable at TPL_NOTIFY from TerminalDxe poll timer'
+n = v.count(old)
+if n:
+    if n != 2:
+        raise SystemExit(f'VirtioSerialPort.c: expected 2 RaiseTPL(TPL_CALLBACK), found {n} — update patch')
+    open(vsp, 'w').write(v.replace(old, new))
+    print(f'  VirtioSerial: raised {n} SerialIo RaiseTPL site(s) TPL_CALLBACK -> TPL_NOTIFY')
+elif 'RaiseTPL (TPL_NOTIFY)' not in v:
+    raise SystemExit('VirtioSerialPort.c: no RaiseTPL(TPL_CALLBACK) and no TPL_NOTIFY — shape changed, update patch')
 
 # (2) GOP: insert VirtioGpuDxe after VirtioSerial (same binding family) in .dsc + .fdf.
 if os.environ.get('GOP_ENABLED') == '1':

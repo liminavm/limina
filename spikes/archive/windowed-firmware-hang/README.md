@@ -1,49 +1,68 @@
-# Windowed GOP-firmware "BDS hang" — ROOT-CAUSED & FIXED (2026-06-22)
+# Windowed GOP-firmware "BDS hang" — ROOT-CAUSED & FIXED AT SOURCE (2026-06-22)
 
-`limina --window` with the **DEBUG GOP firmware** (the `cf147ed` windowed default) hangs on the TianoCore
-splash. **Root cause: a firmware ASSERT, not a libkrun/virtio/timer bug.** EDK2's DxeCore hits a failed
-`ASSERT` and `CpuDeadLoop()`s:
+`limina --window` with the **DEBUG GOP firmware** hangs on the TianoCore splash. **Root cause: a
+firmware ASSERT, not a libkrun/virtio/timer/present bug.** EDK2's DxeCore hits a failed `ASSERT` and
+`CpuDeadLoop()`s:
 
 ```
 FATAL ERROR - RaiseTpl with OldTpl(0x10) > NewTpl(0x8)
-ASSERT [DxeCore] /build/edk2/MdeModulePkg/Core/Dxe/Event/Tpl.c(66): ((BOOLEAN)(0==1))
+ASSERT [DxeCore] .../MdeModulePkg/Core/Dxe/Event/Tpl.c(66): ((BOOLEAN)(0==1))
 ```
 
-`CoreRaiseTpl(NewTpl)` asserts `OldTpl <= NewTpl`; something raises to **TPL_CALLBACK (0x8)** while already
-at **TPL_NOTIFY (0x10)** — a latent EDK2 TPL re-entrancy (timer/event interleaving) exposed by the windowed
-present timing. It is **fatal only in DEBUG** (`DEBUG_PROPERTY_ASSERT_DEADLOOP`); RELEASE compiles `ASSERT`
-to a no-op and tolerates it, like all production EDK2/QEMU firmware. (That is also why the silent firmware
-"worked": it is RELEASE — not because "no GOP avoids early virtio-gpu".)
+`CoreRaiseTpl(NewTpl)` requires `OldTpl <= NewTpl`; something raises to **TPL_CALLBACK (0x8)** while
+already at **TPL_NOTIFY (0x10)**. Fatal only in DEBUG (`DEBUG_PROPERTY_ASSERT_DEADLOOP`); in RELEASE
+`ASSERT` is a no-op — but `CoreRaiseTpl` then still sets `gEfiCurrentTpl = 0x8`, **silently lowering
+the TPL** (state corruption masked, not fixed). So shipping RELEASE only *tolerated* the bug.
 
-## The fix (verified 3/3 boots, was 0/5 hangs)
-Ship a **RELEASE GOP firmware** — keeps the graphical boot console AND boots windowed-no-console to a
-seated GNOME desktop:
+## The exact culprit (caller-print + addr2line, on the f44-edk2-build VM)
+A one-line DEBUG print of `RETURN_ADDRESS(0)` at the failing `RaiseTpl` (see `pl011-capture-ring.patch`
+to capture it without `--console` masking the race) gave:
+
 ```
-TARGET=RELEASE GOP=1 scripts/build-krun-efi.sh        # -> target/krun-efi/KRUN_EFI.gop.fd (bootable)
-spikes/virgl-zink-kk/firmware-hang-probe.sh 5 120     # RED on DEBUG (5/5 hang), GREEN on RELEASE (5/5 boot)
+LIMINA_RAISETPL_CALLER ra0=23FC8EB84 ra1=0 ra2=0
 ```
-`scripts/build-krun-efi.sh` now defaults to RELEASE; `TARGET=DEBUG` builds a separate
-`KRUN_EFI.gop.debug.fd` (still hangs windowed unless booted with `--console`, whose per-byte PL011 flush
-slows the firmware past the race).
 
-## Evidence in this dir — note the corrected interpretation
-- `tianocore-splash-1280x800-hang.png` — `iosdump.swift` of the live scanout: the TianoCore logo frozen on
-  black at 1280x800. Valid: the firmware never reaches the kernel mode-set because it dead-looped.
-- `worker-sample.txt` — `sample` of `limina-vmm`: one vCPU pegged ~99% in `hv_trap`, other vCPUs parked,
-  all host workers idle. **Originally mis-read as "the firmware busy-polls a virtio used-ring".** It is
-  actually **`CpuDeadLoop()`** (an infinite `for(;;) CpuPause()` after the failed ASSERT) — confirmed by
-  `addr2line` on `DxeCore.dll` (gdb base 0x47B0A000 from the serial `add-symbol-file` line): the stuck PC
-  (0x47b14d94 / 0x47b26778) → `CpuDeadLoop` / `CpuPause`.
+`0x23FC8EB84` lands in **VirtioSerialDxe.efi** (load base `0x23FC8C000`), offset `0x2B84`. `addr2line`
+(slide = runtime_EP − elf_EP = the load base exactly):
 
-## How it was found (oracles that worked)
-- **In-memory PL011 capture ring** in serial.rs: records every UARTDR byte regardless of `out` and dumps
-  to `/tmp/pl011-ring.log` from a bg thread — no per-byte syscall, so it does NOT alter timing the way
-  `--console`'s write+flush does (`--console` masks the race by slowing the firmware). This caught the
-  ASSERT text. Re-add it if this recurs.
-- **Forced-exit watchdog** let `run()` read the stuck guest PC; `addr2line` mapped it to `CpuDeadLoop`.
-- **`hv_gic_set_spi` log**: the macos IrqChip is the in-kernel **HvfGicV3**, not software `GicV3`.
+```
+VirtioSerialIoRead  →  OvmfPkg/VirtioSerialDxe/VirtioSerialPort.c:204
+    204:  OldTpl = gBS->RaiseTPL (TPL_CALLBACK);   // disasm: mov x0,#0x8 ; blr x1 ; (ret=0x2B84)
+```
 
-Two earlier theories — a virtio kick race (0006 territory; the *previous* content of this README) and an
-HVF vtimer-mask bug — were both **falsified**. The PlatformBm GOP→ConOut patch our GOP firmware carries is
-a prime suspect for the exact TPL violation (open follow-up: identify the `CoreRaiseTpl` caller in a Linux
-build VM). See memory `limina-windowed-reboot-present-race`, `limina-krun-efi-build` (0006/0007).
+**Causal chain:** VirtioSerial produces `SerialIo` → **TerminalDxe** wraps it as a console and creates
+its serial-poll `TimerEvent` at **TPL_NOTIFY** (`MdeModulePkg/.../TerminalDxe/Terminal.c:381`) → when
+that timer polls an *open* virtio-serial port, `VirtioSerialIoRead` (and its sibling `VirtioSerialIoWrite`,
+line 161) run **at TPL_NOTIFY** and call `RaiseTPL(TPL_CALLBACK=8)` — raising to a *lower* TPL → ASSERT
+→ `CpuDeadLoop`. (Generic to VirtioSerial+TerminalDxe; the windowed-GOP DEBUG firmware is just where it
+became fatal-and-visible. `--console` masks it: per-byte PL011 write+flush slows the firmware past the
+race window.)
+
+## The fix (verified — both DEBUG & RELEASE now boot windowed to GNOME)
+`VirtioSerialPort.c`: `RaiseTPL(TPL_CALLBACK)` → `RaiseTPL(TPL_NOTIFY)` at **both** SerialIo sites
+(161 write, 204 read). TPL_NOTIFY is the correct level for shared-virtqueue access anyway (CALLBACK was
+too low to even serialize against that NOTIFY poll timer), and `RaiseTPL(NOTIFY)` is legal whether
+entered at CALLBACK or NOTIFY. Minimal + upstreamable. Lives in `scripts/build-krun-efi.sh` step **(1b)**.
+
+Verified 2026-06-22 on stock F44 4 KiB, `boot-virgl-windowed.sh`:
+- DEBUG-GOP + caller-print: **RED** → `LIMINA_RAISETPL_CALLER` + `CpuDeadLoop`, frozen splash (was 5/5 hang).
+- DEBUG-GOP + the fix: **GREEN** → boots to GNOME, canary 0 asserts, serial reaches `fedora login:`.
+- RELEASE-GOP + the fix (the shipped `KRUN_EFI.gop.fd`): **GREEN** → boots windowed to the GNOME desktop
+  (IOSurface scanout pixel-verified).
+
+## Files here
+- `pl011-capture-ring.patch` — the in-memory PL011 capture ring for `third_party/libkrun` serial.rs
+  (dumps `/tmp/pl011-ring.log` from a side thread; no per-byte syscall, so it does NOT alter timing the
+  way `--console` does). Re-apply with `git apply` inside `third_party/libkrun` if this recurs.
+- `caller-print-ring.log` — the captured boot serial showing the assert + `LIMINA_RAISETPL_CALLER`.
+- `tianocore-splash-1280x800-hang.png` — `iosdump.swift` of the frozen splash (the DEBUG-no-fix RED).
+- `worker-sample.txt` — `sample` of the hung `limina-vmm`: one vCPU ~99% in `hv_trap`. **NOT** a
+  virtio used-ring busy-poll (the original mis-read); it is `CpuDeadLoop()`'s `for(;;) CpuPause()`.
+
+## Falsified theories (kept as warnings)
+1. virtio-gpu kick / used-ring busy-poll (the original README's diagnosis) — wrong; it was `CpuDeadLoop`.
+2. HVF vtimer-mask staleness — wrong; pixel-verify showed the splash still froze, timer was healthy.
+3. "the PlatformBm GOP→ConOut patch is the TPL violator" — wrong; the caller is stock VirtioSerialDxe,
+   not our patch (though our GOP path is what makes the virtio-serial port open + the timer fire here).
+
+See memory `limina-windowed-reboot-present-race`, `limina-krun-efi-build`.

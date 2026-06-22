@@ -1,0 +1,42 @@
+diff --git a/src/devices/src/legacy/aarch64/serial.rs b/src/devices/src/legacy/aarch64/serial.rs
+index 94b6dc8..dbd3c03 100644
+--- a/src/devices/src/legacy/aarch64/serial.rs
++++ b/src/devices/src/legacy/aarch64/serial.rs
+@@ -19,6 +19,29 @@ use crate::bus::BusDevice;
+ use crate::legacy::{IrqChip, ReadableFd};
+ use crate::Error as DeviceError;
+ 
++// limina TEMP firmware-assert diag: capture every PL011 data-register byte into an in-memory ring,
++// flushed to /tmp/pl011-ring.log by a side thread (NOT on the vCPU path). Unlike `--console` (which
++// write+flushes per byte on the vCPU thread and slows the firmware past the timing-sensitive
++// windowed-GOP race window, masking the hang), this adds no syscall to the hot path, so the race
++// still fires and we can read the EDK2 ASSERT + LIMINA_RAISETPL_CALLER print after the guest dead-loops.
++static PL011_RING: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
++static PL011_RING_DUMP: std::sync::Once = std::sync::Once::new();
++fn pl011_capture(b: u8) {
++    PL011_RING_DUMP.call_once(|| {
++        std::thread::Builder::new()
++            .name("pl011-ringdump".into())
++            .spawn(|| loop {
++                std::thread::sleep(std::time::Duration::from_millis(150));
++                let snapshot = PL011_RING.lock().map(|b| b.clone()).unwrap_or_default();
++                let _ = std::fs::write("/tmp/pl011-ring.log", &snapshot);
++            })
++            .ok();
++    });
++    if let Ok(mut buf) = PL011_RING.lock() {
++        buf.push(b);
++    }
++}
++
+ /* Registers */
+ const UARTDR: u64 = 0;
+ const UARTRSR_UARTECR: u64 = 1;
+@@ -243,6 +266,7 @@ impl Serial {
+     fn handle_write(&mut self, offset: u64, val: u32) -> Result<()> {
+         match offset >> 2 {
+             UARTDR => {
++                pl011_capture(val.to_le_bytes()[0]); // limina TEMP firmware-assert diag
+                 self.int_level |= PL011_INT_TX;
+                 if let Some(out) = self.out.as_mut() {
+                     // This runs on the vCPU thread, so `out` may be non-blocking (e.g. a pty
