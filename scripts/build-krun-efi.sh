@@ -29,7 +29,15 @@ cd "$(dirname "$0")/.."
 
 EDK2_REPO="${EDK2_REPO:-https://github.com/slp/edk2}"
 EDK2_BRANCH="${EDK2_BRANCH:-krun-support}"
-TARGET="${TARGET:-DEBUG}"                 # DEBUG (matches the shipped blob) or RELEASE
+# RELEASE is the default: the windowed GOP firmware MUST be RELEASE to boot. A DEBUG_GCC5 build
+# dead-loops in EDK2 DxeCore on a failed ASSERT (CoreRaiseTpl OldTpl 0x10 > NewTpl 0x8, Tpl.c:66)
+# triggered by the windowed present timing — fatal only because DEBUG enables ASSERT_DEADLOOP.
+# RELEASE compiles ASSERT to a no-op (the latent EDK2 TPL race is tolerated, as in all production
+# EDK2/QEMU firmware) and boots to the desktop. Build TARGET=DEBUG only for verbose boot-serial
+# debugging, and then boot it with `--console` (the per-byte PL011 flush slows the firmware past
+# the race) — it produces a separate KRUN_EFI.gop.debug.fd so it never clobbers the bootable
+# default. See memory limina-windowed-reboot-present-race.
+TARGET="${TARGET:-RELEASE}"               # RELEASE (bootable windowed default) or DEBUG (dev serial)
 GOP="${GOP:-1}"                           # 1 = add VirtioGpuDxe (graphical console)
 JOBS="${JOBS:-8}"
 MEM="${MEM:-8g}"
@@ -37,7 +45,7 @@ OUT="target/krun-efi"                     # gitignored (under target/)
 mkdir -p "$OUT"
 
 case "$GOP" in
-    1) OUT_NAME="KRUN_EFI.gop.fd" ;;
+    1) if [ "$TARGET" = "DEBUG" ]; then OUT_NAME="KRUN_EFI.gop.debug.fd"; else OUT_NAME="KRUN_EFI.gop.fd"; fi ;;
     0) OUT_NAME="KRUN_EFI.silent-rebuilt.fd" ;;
     *) echo "GOP must be 0 or 1 (got '$GOP')" >&2; exit 1 ;;
 esac
