@@ -1117,3 +1117,29 @@ fn set_layer_surface(
         CATransaction::commit();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_conn_swap_retargets_every_field() {
+        // The windowed-reboot re-wiring contract: relaunching the worker must retarget the pid AND
+        // all three supervisor-side fds in one swap, or the still-open NSWindow keeps talking to the
+        // dead worker (input written to a closed fd, shutdown signal to a stale pid). Guards against
+        // a swap() that forgets a field. (The fds here are plain ints — WorkerConn never touches
+        // them, it only publishes the numbers for the main thread to load.)
+        let conn = WorkerConn::new(100, 3, 4, 5);
+        assert_eq!(
+            (conn.pid(), conn.kbd_fd(), conn.ptr_fd(), conn.ack_fd()),
+            (100, 3, 4, 5)
+        );
+
+        conn.swap(200, 6, 7, 8);
+        assert_eq!(
+            (conn.pid(), conn.kbd_fd(), conn.ptr_fd(), conn.ack_fd()),
+            (200, 6, 7, 8),
+            "relaunch must retarget pid + all input/ack fds to the new worker"
+        );
+    }
+}

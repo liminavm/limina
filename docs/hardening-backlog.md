@@ -34,9 +34,13 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   Roadmap M8.
 
 ## Lifecycle robustness
-- **Windowed guest reboot** — reboot-relaunch is shipped but **headless-only**; the windowed
-  worker↔window socketpair re-wiring on relaunch is an explicit follow-up. A guest reboot in a window
-  should Just Work. Roadmap cross-cutting decisions (~line 34).
+- **Windowed guest reboot** — ✅ **DONE (shipped `efa285f` 2026-06-13, verified live 2026-06-23).**
+  A guest reboot in a window keeps the same NSWindow and relaunches the worker, re-wiring everything:
+  input/ack fds (`WorkerConn::swap`), a fresh scanout/control reader (`spawn_reader`), gvproxy recycle,
+  the resize listener (unlink+rebind), and the surface-port receiver (persists across relaunch; the new
+  worker re-publishes its non-global scanouts). Verified: `systemctl reboot` over SSH → worker exit 125
+  → relaunch → guest SSH back + window re-displays the desktop and stays interactible, 0 "unresolved"
+  present skips, surface-port re-scoped. Regression guard: `worker_conn_swap_retargets_every_field`.
 - **libkrun panic→graceful exit paths** — a real boot hitting an unknown PSCI / ESR_EL2 EC / exit
   reason still `panic!`s the worker (`hvf/lib.rs:549/595-602/728`); convert to logged graceful stops.
   Roadmap M1 stretch (~line 133).
