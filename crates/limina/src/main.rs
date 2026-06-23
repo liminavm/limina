@@ -122,6 +122,11 @@ struct Cli {
     #[arg(long, default_value = "1280x800")]
     display_size: String,
 
+    /// UNIX-socket path for runtime display-resize requests, forwarded to the worker. The
+    /// window-resize gesture and the test harness connect here to reflow the guest resolution.
+    #[arg(long)]
+    display_control_socket: Option<PathBuf>,
+
     /// Force the software-2D-only GPU (no virglrenderer/venus). Default is the coexist device
     /// (software-2D 2D + Venus 3D). Use for the capture oracle or the local-Terminal GPU-init hang.
     #[arg(long)]
@@ -305,6 +310,13 @@ fn main() -> Result<()> {
     // coexist device; this forwards the software-2D-only override).
     if cli.gpu_software_2d {
         args.push("--gpu-software-2d".into());
+    }
+
+    // Runtime display-resize control socket: forwarded to the worker (which binds it). Applies
+    // to both the windowed and capture paths (it's part of `args`, the windowed base args too).
+    if let Some(path) = &cli.display_control_socket {
+        args.push("--display-control-socket".into());
+        args.push(path_arg(path)?);
     }
 
     // User-mode NAT: spawn + supervise a gvproxy gateway and connect the guest NIC to it.

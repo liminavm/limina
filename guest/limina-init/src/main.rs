@@ -409,6 +409,27 @@ unsafe fn run_builtin(fd: libc::c_int, cmd: &str) -> i32 {
                 1
             }
         },
+        // ls a directory (names only, newline-separated) — lets tests discover dynamic sysfs
+        // paths (e.g. the virtio-gpu DRM connector under /sys/class/drm) without a shell binary.
+        "ls" => match parts.next() {
+            Some(path) => match std::fs::read_dir(path) {
+                Ok(entries) => {
+                    for entry in entries.flatten() {
+                        write_all(fd, entry.file_name().as_encoded_bytes());
+                        write_all(fd, b"\n");
+                    }
+                    0
+                }
+                Err(_) => {
+                    write_all(fd, format!("ls: {path}: cannot read\n").as_bytes());
+                    1
+                }
+            },
+            None => {
+                write_all(fd, b"ls: missing path\n");
+                1
+            }
+        },
         // uname(2): a syscall, not a file — proves the guest acts on the command.
         "uname" => {
             let mut u: libc::utsname = std::mem::zeroed();

@@ -754,6 +754,9 @@ pub struct Guest {
     vsock_socket: Option<PathBuf>,
     /// Captured-scanout PNG path (inside `scratch`), if a display was configured.
     capture_png: Option<PathBuf>,
+    /// Runtime display-resize control socket (inside `scratch`), bound by the worker when a
+    /// display is attached. See [`Guest::resize_display`].
+    resize_socket: Option<PathBuf>,
     /// Write handle to the guest console input FIFO, if an interactive console was enabled.
     console_in: Option<fs::File>,
     /// Path to the gvproxy gateway's `-debug` log (inside `scratch`), if net was enabled.
@@ -944,14 +947,23 @@ impl Guest {
             None
         };
 
-        // Display: capture the scanout into the scratch dir (auto-cleaned on Drop).
+        // Display: capture the scanout into the scratch dir (auto-cleaned on Drop). Whenever a
+        // display is attached we also wire a runtime resize control socket so tests can drive
+        // window-resize via [`Guest::resize_display`] (the worker binds it; we connect per call).
+        let resize_socket = cfg.display.as_ref().map(|_| scratch.join("resize.sock"));
         let capture_png = match &cfg.display {
             Some(d) => {
                 let png = scratch.join("scanout.png");
                 cmd.arg("--display-capture")
                     .arg(&png)
                     .arg("--display-size")
-                    .arg(format!("{}x{}", d.width, d.height));
+                    .arg(format!("{}x{}", d.width, d.height))
+                    .arg("--display-control-socket")
+                    .arg(
+                        resize_socket
+                            .as_ref()
+                            .expect("resize_socket set with a display"),
+                    );
                 // The 2D capture oracle forces the software-2D GPU so it's deterministic and
                 // independent of venus/Metal (the worker default is the coexist device). A
                 // coexist/3D test (`with_coexist_display`) leaves venus on.
@@ -1053,6 +1065,7 @@ impl Guest {
             vsock_listener,
             vsock_socket,
             capture_png,
+            resize_socket,
             console_in,
             gateway_log,
             supervisor_log,
@@ -1093,6 +1106,39 @@ impl Guest {
     /// overwritten with each subsequent frame (latest wins). Removed on Drop.
     pub fn display_capture_path(&self) -> Option<&Path> {
         self.capture_png.as_deref()
+    }
+
+    /// Request a runtime display resize: connect to the worker's display-control socket and
+    /// send `resize <width> <height>`. The worker applies it to the live virtio-gpu (raising a
+    /// config-change), so the guest re-modesets to the new resolution. Retries the connect for
+    /// a few seconds because the worker binds the socket partway through boot. Requires a
+    /// display in the [`GuestConfig`]. See `docs/design/runtime-display-resize.md`.
+    pub fn resize_display(&self, width: u32, height: u32) -> Result<()> {
+        use std::io::Write;
+        let path = self
+            .resize_socket
+            .as_ref()
+            .context("resize_display requires a display in the GuestConfig")?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut stream = loop {
+            match UnixStream::connect(path) {
+                Ok(s) => break s,
+                Err(e) if Instant::now() < deadline => {
+                    // The worker hasn't bound the socket yet (early boot); back off and retry.
+                    std::thread::sleep(Duration::from_millis(100));
+                    let _ = e;
+                }
+                Err(e) => {
+                    return Err(e).with_context(|| {
+                        format!("connecting to the display-control socket {path:?}")
+                    })
+                }
+            }
+        };
+        writeln!(stream, "resize {width} {height}")
+            .with_context(|| format!("sending resize to {path:?}"))?;
+        stream.flush().ok();
+        Ok(())
     }
 
     /// Decode the current captured scanout PNG. Errors if no display was configured or no
