@@ -3,6 +3,35 @@
 **Goal:** dragging the limina window edge reflows the guest desktop to the new resolution, no
 reboot. Resizing the NSWindow updates the guest's preferred mode and the guest re-modesets.
 
+## STATUS: SHIPPED ✅ (2026-06-23) — as-built notes
+
+All four layers landed and the L1 sysfs test is GREEN (host resize → guest connector modes update,
+verified with a non-standard 900×650). Windowed human-verification: pending. As-built deltas from the
+original plan below (the plan's *flow* held; the *transport* got simpler):
+
+- **Transport = a dedicated UNIX socket, NOT the display socketpair.** The worker binds
+  `--display-control-socket <path>` and reads newline `resize <w> <h>` (libkrun-vmm
+  `install_resize_listener`). Decoupled from the present/ack channel (whose reader is renderer-gated
+  and present-path-coupled — wrong seam). The supervisor forwards/auto-allocates the path; both the
+  NSWindow gesture and the test harness connect to it.
+- **Host reaches the handle via a Vmm accessor, NOT a bus-device downcast.** `attach_gpu_device`
+  captures the handle onto `Vmm` (`Vmm::gpu_resize_handle()`); limina-vmm just calls it. (The
+  `AsAny` downcast fought a `'static` bound and had no precedent — see commit history.) libkrun's only
+  new public surface is `DisplayResizeHandle` + the accessor.
+- **Window trigger = debounce in the 60 Hz timer, NOT an NSWindowDelegate subclass.** Avoids objc2
+  subclassing. `geom` (the guest's current resolution) is the feedback guard — a window already
+  matching the guest sends nothing, so the guest-driven `setContentSize` echo is naturally ignored.
+  Fires after ~8 stable ticks (~130 ms). Sends content **points** (matches the boot
+  `--display-size`→guest-pixels 1:1 convention; native-pixel/HiDPI rendering is separate future work).
+- **Test discovery:** added an `ls <dir>` console-shell built-in to the L1 init; the connector is
+  `card0-Virtual-1` (not `card0-Virtio-0`), so the test enumerates rather than hardcodes.
+- **libkrun patches:** `0025` (config-change mechanism) + `0026` (expose handle).
+
+Commits: limina `a923dda` `2e0afd6` `130a6cc` `0775bd9`; libkrun `75e9b37` `9b8a640`.
+Original plan (still accurate for the flow + citations) follows.
+
+---
+
 **Decisions (2026-06-23, with user):**
 - **Modeset fires at the END of a live resize** (`windowDidEndLiveResize`), one per gesture — a guest
   modeset is expensive (mutter reconfigures everything); the window shows the old surface scaled

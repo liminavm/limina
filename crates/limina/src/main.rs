@@ -312,9 +312,15 @@ fn main() -> Result<()> {
         args.push("--gpu-software-2d".into());
     }
 
-    // Runtime display-resize control socket: forwarded to the worker (which binds it). Applies
-    // to both the windowed and capture paths (it's part of `args`, the windowed base args too).
-    if let Some(path) = &cli.display_control_socket {
+    // Runtime display-resize control socket: forwarded to the worker (which binds it). Used by
+    // the windowed resize gesture and any external controller (e.g. the test harness). For a
+    // windowed boot we auto-allocate one if not given, so dragging the window Just Works.
+    let resize_socket = cli.display_control_socket.clone().or_else(|| {
+        cli.window.then(|| {
+            std::env::temp_dir().join(format!("limina-resize-{}.sock", std::process::id()))
+        })
+    });
+    if let Some(path) = &resize_socket {
         args.push("--display-control-socket".into());
         args.push(path_arg(path)?);
     }
@@ -336,7 +342,16 @@ fn main() -> Result<()> {
     // from the worker over a control socketpair (the worker publishes shared IOSurfaces).
     if cli.window {
         let (width, height) = parse_display_size(&cli.display_size)?;
-        return run_windowed(vmm_bin, args, grace, width, height, gateway, control);
+        return run_windowed(
+            vmm_bin,
+            args,
+            grace,
+            width,
+            height,
+            gateway,
+            control,
+            resize_socket,
+        );
     }
 
     if let Some(display_capture) = &cli.display_capture {
@@ -446,6 +461,7 @@ fn spawn_windowed_worker(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_windowed(
     vmm_bin: PathBuf,
     base_args: Vec<String>,
@@ -454,6 +470,7 @@ fn run_windowed(
     height: u32,
     gateway: Option<gateway::Gateway>,
     control: Option<control::ControlPlane>,
+    resize_socket: Option<PathBuf>,
 ) -> Result<()> {
     use objc2::MainThreadMarker;
 
@@ -524,8 +541,9 @@ fn run_windowed(
     // Runs the AppKit window on this (main) thread; never returns — on quit it asks the guest
     // agent to power off (orderly), falling back to killing the current worker's process group
     // (`conn.pid()`). The window captures NSEvents and writes evdev events to the current
-    // worker's input fds (read from `conn`).
-    window::run(shared, mtm, conn, control);
+    // worker's input fds (read from `conn`). `resize_socket` lets the resize gesture push the
+    // new window size to the worker (which forwards it to the live virtio-gpu).
+    window::run(shared, mtm, conn, control, resize_socket);
 }
 
 /// Create a socketpair of the given type; set CLOEXEC on the supervisor end (fd.0) so the

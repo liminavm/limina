@@ -14,6 +14,7 @@ use std::cell::{Cell, RefCell};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::os::fd::{FromRawFd, RawFd};
+use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -247,11 +248,32 @@ pub fn spawn_reader(fd: RawFd, shared: Arc<Mutex<Shared>>) {
 /// window contents, and — when the worker exits, the window is closed, or Ctrl-C is hit —
 /// kills the worker's process group (`worker_pid`) and exits the process. (We exit from
 /// the timer rather than `NSApplication::stop`, which doesn't return without a UI event.)
+/// Push a window-resize to the worker over its display-control socket (off the AppKit main
+/// thread — a brief connect/write must never beachball the UI). Best-effort: a failure just
+/// means this gesture's resize is dropped; the next one retries.
+fn send_resize(path: &Path, width: u32, height: u32) {
+    let path = path.to_path_buf();
+    std::thread::spawn(move || {
+        use std::io::Write;
+        match std::os::unix::net::UnixStream::connect(&path) {
+            Ok(mut stream) => {
+                if let Err(e) = writeln!(stream, "resize {width} {height}") {
+                    log::warn!("window resize: send {width}x{height} failed: {e}");
+                } else {
+                    log::info!("window resize: pushed {width}x{height} to the guest");
+                }
+            }
+            Err(e) => log::warn!("window resize: connect {path:?} failed: {e}"),
+        }
+    });
+}
+
 pub fn run(
     shared: Arc<Mutex<Shared>>,
     mtm: MainThreadMarker,
     conn: Arc<WorkerConn>,
     control: Option<crate::control::ControlPlane>,
+    resize_socket: Option<PathBuf>,
 ) -> ! {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
@@ -315,6 +337,14 @@ pub fn run(
         })
         .unwrap_or_default();
     let applies = Cell::new(0u64);
+    // Runtime window-resize → guest. The 60 Hz timer debounces the window's content size and,
+    // once a drag settles, pushes the new size to the worker over `resize_socket` (which forwards
+    // it to the live virtio-gpu → the guest re-modesets). `geom` (the guest's current resolution)
+    // is the feedback guard: a window that already matches it — including the guest-driven
+    // setContentSize echo — sends nothing. See docs/design/runtime-display-resize.md.
+    let resize_seen: Cell<(u32, u32)> = Cell::new((0, 0));
+    let resize_stable: Cell<u8> = Cell::new(0);
+    let resize_sent: Cell<(u32, u32)> = Cell::new((0, 0));
     // Diagnostic (LIMINA_PRESENT_COPY=1): never hand the GUEST's scanout surface to Core
     // Animation — copy it into a private 3-deep ring and show the copy. The zero-copy venus
     // path shares mutter's own double-buffered swapchain with the window server; with no
@@ -388,6 +418,38 @@ pub fn run(
         let layer = layer.clone();
         let ack_tx = ack_tx.clone();
         move || {
+            // Runtime resize detection runs every tick (independent of new guest frames): a
+            // resize gesture produces no scanout updates. Only active once the guest has
+            // presented at least one frame (so `geom` holds a real baseline, not 0×0).
+            if let Some(sock) = &resize_socket {
+                let base = geom.get();
+                if base != (0, 0) {
+                    let size = window
+                        .contentView()
+                        .map(|v| v.frame().size)
+                        .unwrap_or(NSSize::new(0.0, 0.0));
+                    let want = (size.width.round() as u32, size.height.round() as u32);
+                    // Ignore tiny/degenerate sizes and anything that already matches the guest
+                    // (the feedback guard: guest-driven setContentSize echoes back here).
+                    if want.0 >= 64 && want.1 >= 64 && want != base {
+                        if want == resize_seen.get() {
+                            let n = resize_stable.get().saturating_add(1);
+                            resize_stable.set(n);
+                            // ~8 stable ticks (~130 ms at 60 Hz) ⇒ the drag has settled.
+                            if n == 8 && want != resize_sent.get() {
+                                resize_sent.set(want);
+                                send_resize(sock, want.0, want.1);
+                            }
+                        } else {
+                            resize_seen.set(want);
+                            resize_stable.set(0);
+                        }
+                    } else {
+                        resize_stable.set(0);
+                    }
+                }
+            }
+
             let (gen, show_id, width, height) = {
                 let s = shared.lock().unwrap();
                 (s.gen, s.show_id, s.width, s.height)
