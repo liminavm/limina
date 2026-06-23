@@ -697,6 +697,7 @@ dependencies = [
  "libc",
  "limina-input",
  "limina-proto",
+ "limina-surfaceport",
  "log",
  "objc2",
  "objc2-app-kit",
@@ -715,6 +716,7 @@ dependencies = [
  "anyhow",
  "krun-display",
  "libc",
+ "limina-surfaceport",
  "log",
  "objc2-core-foundation",
  "objc2-io-surface",
@@ -735,6 +737,15 @@ name = "limina-proto"
 version = "0.1.0"
 dependencies = [
  "minicbor",
+]
+
+[[package]]
+name = "limina-surfaceport"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "objc2-core-foundation",
+ "objc2-io-surface",
 ]
 
 [[package]]
