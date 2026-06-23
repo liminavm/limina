@@ -484,7 +484,14 @@ fn to_bgra(format: ResourceFormat, p: &[u8]) -> [u8; 4] {
 /// Create a `width`×`height` BGRA IOSurface that other processes can `IOSurfaceLookup`.
 fn create_global_iosurface(width: u32, height: u32) -> Option<CFRetained<IOSurfaceRef>> {
     let pixel_format = i32::from_be_bytes(*b"BGRA");
-    let bytes_per_row = (width * 4) as i32;
+    // Align the row stride to 256 bytes. A tight `width*4` stride is accepted by IOSurfaceCreate,
+    // but CoreAnimation cannot sample the surface as a layer's contents unless the stride meets the
+    // GPU's row alignment (64 B on Apple Silicon) — an unaligned surface composites BLANK. With the
+    // fixed boot widths (1280/1024/640, all multiples of 16 → width*4 64-aligned) this never showed;
+    // runtime resize to an arbitrary width (e.g. 1068 → 1068*4=4272, not 64-aligned) blanked the
+    // window. Over-align to 256 (a safe superset of the requirement). `copy_canvas_to_surface`
+    // honors the surface's real `bytesPerRow`, so the padded tail of each row is handled correctly.
+    let bytes_per_row = (((width * 4) + 255) & !255) as i32;
     unsafe {
         let vw = cfnum(width as i32)?;
         let vh = cfnum(height as i32)?;
@@ -552,6 +559,21 @@ mod tests {
     fn creates_a_lookup_able_surface() {
         let s = create_global_iosurface(16, 8).expect("create");
         assert_ne!(IOSurfaceGetID(&s), 0);
+    }
+
+    #[test]
+    fn scanout_surface_row_stride_is_gpu_aligned() {
+        // CoreAnimation cannot sample a scanout surface whose row stride isn't GPU-aligned (64 B on
+        // Apple Silicon); a tight `width*4` stride composites BLANK for any width that isn't a
+        // multiple of 16. The fixed boot widths (1280/1024/640) are all multiples of 16 and hid
+        // this; runtime resize to an arbitrary width exposed it (e.g. 1066 → 1066*4 = 4264, not
+        // 64-aligned). Every created surface must carry an aligned stride no smaller than width*4.
+        for w in [1066u32, 1068, 793, 917, 1, 17, 1280, 640] {
+            let s = create_global_iosurface(w, 4).expect("create");
+            let bpr = IOSurfaceGetBytesPerRow(&s);
+            assert!(bpr >= (w * 4) as usize, "w={w}: bpr {bpr} < width*4");
+            assert_eq!(bpr % 64, 0, "w={w}: bpr {bpr} not 64-byte aligned");
+        }
     }
 
     // Read one BGRA pixel back out of a (locked) IOSurface.

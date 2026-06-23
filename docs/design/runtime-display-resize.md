@@ -38,8 +38,33 @@ original plan below (the plan's *flow* held; the *transport* got simpler):
   (XRGB alpha=0 → PNG reads all-black); use `spikes/venus-draw-probe/iosdump.swift <id>` (forces
   opaque, honors `bytesPerRow`).
 
-Commits: limina `a923dda` `2e0afd6` `130a6cc` `0775bd9`; libkrun `75e9b37` `9b8a640`.
-Original plan (still accurate for the flow + citations) follows.
+- **Bug found in windowed verify #2 (fixed, `fc2b91d`): aspect-ratio-dependent BLANK on resize.**
+  Dragging to a width that wasn't a multiple of 16 blanked the desktop (the user spotted it as "bad
+  aspect ratios go blank"); aligned widths (1280/1024/640/1168…) worked. Root cause: the scanout
+  IOSurface was created with a **tight `width*4` row stride**. `IOSurfaceCreate` accepts it, but
+  **CoreAnimation can't sample a surface as layer contents unless the stride is GPU-row-aligned**
+  (64 B on Apple Silicon) → unaligned widths composite BLANK. The fixed boot widths are all ×16
+  (`width*4` 64-aligned), hiding it until arbitrary-width resize (1066 → 4264, not 64-aligned). Fix:
+  **align the IOSurface row stride to 256 B** in both creators (`create_global_iosurface` worker +
+  `create_local_iosurface` supervisor copy path); `copy_canvas_to_surface`/`copy_surface` already
+  honor the real `bytesPerRow`. Unit test `scanout_surface_row_stride_is_gpu_aligned`. **This wall
+  along was the "resizing went blank" the user first reported — NOT an AppKit present bug.** Hours
+  were burned on wrong theories (timer frozen in `NSEventTrackingRunLoopMode`, `layerContentsRedraw‐
+  Policy`, force-re-present after settle) before the user's aspect-ratio observation + reading the
+  live surfaces' `bytesPerRow` (tight 4272 @ w=1068, `align64=false`) nailed it. Lesson: the
+  iosdump showed a CLEAN buffer every time — the blank was downstream of the buffer, in how CA
+  sampled it; checking the surface's *stride*, not just its pixels, was the missing observation.
+- **Live-resize UX (same commit, genuinely-good byproducts of the hunt):** present timer in
+  `NSRunLoopCommonModes` (keeps firing during a live drag — `scheduledTimer…` is default-mode-only
+  and freezes under event-tracking); push the guest resize only on `inLiveResize()` **end** (one
+  re-modeset per gesture — the old 8-stable-tick debounce fired dozens of churning modesets
+  mid-drag); track the layer frame to the window each tick (desktop scales smoothly to fill during
+  the drag, no black margins); `layerContentsRedrawPolicy = Never` (we own the IOSurface contents).
+  The original plan's "modeset fires at END of live resize, window shows the old surface scaled
+  during the drag" is now literally true — via `inLiveResize()` polling, not an `NSWindowDelegate`.
+
+Commits: limina `a923dda` `2e0afd6` `130a6cc` `0775bd9` `f68812e` `fc2b91d`; libkrun `75e9b37`
+`9b8a640` (+de-shear `0027`). Original plan (still accurate for the flow + citations) follows.
 
 ---
 

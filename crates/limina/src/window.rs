@@ -25,7 +25,7 @@ use objc2::runtime::AnyObject;
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor, NSEvent,
-    NSEventMask, NSImage, NSWindow, NSWindowStyleMask,
+    NSEventMask, NSImage, NSViewLayerContentsRedrawPolicy, NSWindow, NSWindowStyleMask,
 };
 use objc2_core_foundation::{
     kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber,
@@ -35,7 +35,9 @@ use objc2_core_graphics::{
     CGBitmapContextCreate, CGBitmapContextCreateImage, CGBitmapContextGetBytesPerRow,
     CGBitmapContextGetData, CGBitmapInfo, CGColorSpace, CGContext, CGImageAlphaInfo,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSTimer};
+use objc2_foundation::{
+    NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer,
+};
 use objc2_io_surface::{
     kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight, kIOSurfacePixelFormat,
     kIOSurfaceWidth, IOSurfaceCreate, IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow,
@@ -304,6 +306,12 @@ pub fn run(
     layer.setOpaque(true);
     view.setLayer(Some(&layer));
     view.setWantsLayer(true);
+    // We OWN the layer's contents (the guest IOSurface) — AppKit must never invalidate or redraw
+    // them. Without `Never`, the default policy lets AppKit manage the layer across a live window
+    // resize, and at the end of the drag it leaves the layer blank (the IOSurface contents are
+    // dropped) until a large enough frame change reallocates the backing. `Never` tells AppKit to
+    // keep its hands off so our present is the sole authority on what the layer shows.
+    view.setLayerContentsRedrawPolicy(NSViewLayerContentsRedrawPolicy::Never);
     window.center();
     // Required for hover (non-dragging) motion to be delivered as MouseMoved events.
     window.setAcceptsMouseMovedEvents(true);
@@ -342,9 +350,12 @@ pub fn run(
     // it to the live virtio-gpu → the guest re-modesets). `geom` (the guest's current resolution)
     // is the feedback guard: a window that already matches it — including the guest-driven
     // setContentSize echo — sends nothing. See docs/design/runtime-display-resize.md.
-    let resize_seen: Cell<(u32, u32)> = Cell::new((0, 0));
-    let resize_stable: Cell<u8> = Cell::new(0);
     let resize_sent: Cell<(u32, u32)> = Cell::new((0, 0));
+    // The layer frame currently applied (window content size in points). Tracked every tick so the
+    // scanout layer keeps filling the window DURING a live resize — the guest hasn't re-modeset
+    // yet, so CA scales the current surface to the new frame (smooth stretch) instead of leaving
+    // the grown window painting black around a stale layer.
+    let layer_geom: Cell<(u32, u32)> = Cell::new((0, 0));
     // Diagnostic (LIMINA_PRESENT_COPY=1): never hand the GUEST's scanout surface to Core
     // Animation — copy it into a private 3-deep ring and show the copy. The zero-copy venus
     // path shares mutter's own double-buffered swapchain with the window server; with no
@@ -418,35 +429,49 @@ pub fn run(
         let layer = layer.clone();
         let ack_tx = ack_tx.clone();
         move || {
-            // Runtime resize detection runs every tick (independent of new guest frames): a
-            // resize gesture produces no scanout updates. Only active once the guest has
-            // presented at least one frame (so `geom` holds a real baseline, not 0×0).
+            // Keep the scanout layer filling the window every tick — INCLUDING mid live-resize
+            // (the timer now fires in common modes, so this runs during the drag). The window
+            // grows/shrinks before the guest re-modesets; without this the layer keeps its old
+            // frame and the surrounding window paints black. CA scales the current surface to the
+            // new frame, so the desktop stretches smoothly during the drag and snaps crisp once
+            // the guest re-modesets to the settled size.
+            if let Some(v) = window.contentView() {
+                let sz = v.frame().size;
+                let wh = (sz.width.round() as u32, sz.height.round() as u32);
+                if wh != layer_geom.get() && wh.0 > 0 && wh.1 > 0 {
+                    layer_geom.set(wh);
+                    CATransaction::begin();
+                    CATransaction::setDisableActions(true);
+                    layer.setFrame(NSRect::new(NSPoint::new(0.0, 0.0), sz));
+                    CATransaction::commit();
+                }
+            }
+
+            // Push the new window size to the guest ONCE the resize gesture ENDS — never during
+            // the drag. `inLiveResize()` is true for the whole drag; firing while it's true would
+            // re-modeset the guest dozens of times mid-gesture (surface churn + cache clears →
+            // the window blanks). So we wait for the drag to finish, then send the settled size.
+            // The layer-tracking above keeps the desktop filling the window (scaled) during the
+            // drag. Only active once the guest has presented a frame (so `geom` is a real
+            // baseline, not 0×0), and skipped when the window already matches the guest (the
+            // feedback guard against the guest-driven setContentSize echo).
             if let Some(sock) = &resize_socket {
                 let base = geom.get();
-                if base != (0, 0) {
-                    let size = window
-                        .contentView()
-                        .map(|v| v.frame().size)
-                        .unwrap_or(NSSize::new(0.0, 0.0));
-                    let want = (size.width.round() as u32, size.height.round() as u32);
-                    // Ignore tiny/degenerate sizes and anything that already matches the guest
-                    // (the feedback guard: guest-driven setContentSize echoes back here).
-                    if want.0 >= 64 && want.1 >= 64 && want != base {
-                        if want == resize_seen.get() {
-                            let n = resize_stable.get().saturating_add(1);
-                            resize_stable.set(n);
-                            // ~8 stable ticks (~130 ms at 60 Hz) ⇒ the drag has settled.
-                            if n == 8 && want != resize_sent.get() {
-                                resize_sent.set(want);
-                                send_resize(sock, want.0, want.1);
-                            }
-                        } else {
-                            resize_seen.set(want);
-                            resize_stable.set(0);
-                        }
-                    } else {
-                        resize_stable.set(0);
-                    }
+                let view = window.contentView();
+                let in_live = view.as_ref().map(|v| v.inLiveResize()).unwrap_or(false);
+                let size = view
+                    .map(|v| v.frame().size)
+                    .unwrap_or(NSSize::new(0.0, 0.0));
+                let want = (size.width.round() as u32, size.height.round() as u32);
+                if base != (0, 0)
+                    && !in_live
+                    && want.0 >= 64
+                    && want.1 >= 64
+                    && want != base
+                    && want != resize_sent.get()
+                {
+                    resize_sent.set(want);
+                    send_resize(sock, want.0, want.1);
                 }
             }
 
@@ -631,9 +656,17 @@ pub fn run(
         apply();
     });
 
-    // ~60 Hz poll. Keep the timer alive for the app's lifetime.
-    let _timer =
-        unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(1.0 / 60.0, true, &block) };
+    // ~60 Hz poll. Keep the timer alive for the app's lifetime. Schedule it in COMMON modes (not
+    // just the default mode): `scheduledTimer...` adds it to NSDefaultRunLoopMode only, so it
+    // FREEZES during a live window resize (the run loop runs in NSEventTrackingRunLoopMode while
+    // the user drags). A frozen present timer leaves the layer stale → the window goes black mid/
+    // post-drag and only recovers on the next forced repaint. Common modes keeps it firing through
+    // the drag, so the present + resize-detection stay live the whole time.
+    let timer = unsafe { NSTimer::timerWithTimeInterval_repeats_block(1.0 / 60.0, true, &block) };
+    unsafe {
+        NSRunLoop::currentRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes);
+    }
+    let _timer = timer;
 
     // Capture keyboard + mouse via a local event monitor and forward them to the worker as
     // evdev events. Swallowed key events return null; pass-through events return themselves.
@@ -875,7 +908,10 @@ fn nscursor_from_context(
 fn create_local_iosurface(width: u32, height: u32) -> Option<CFRetained<IOSurfaceRef>> {
     use std::ffi::c_void;
     let pixel_format = i32::from_be_bytes(*b"BGRA");
-    let bytes_per_row = (width * 4) as i32;
+    // Align the row stride to 256 bytes — a tight `width*4` stride composites BLANK in CoreAnimation
+    // for widths that aren't 64-aligned (see the matching note in limina-display's
+    // create_global_iosurface). `copy_surface` honors both surfaces' real `bytesPerRow`.
+    let bytes_per_row = (((width * 4) + 255) & !255) as i32;
     unsafe fn cfnum(v: i32) -> Option<CFRetained<CFNumber>> {
         unsafe {
             CFNumber::new(
