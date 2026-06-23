@@ -6,12 +6,13 @@ polish wins — closing them rather than opening a new milestone. Each entry poi
 section / file where it's detailed. Prioritized roughly by user-visible value; pick top-down or by
 appetite.
 
-Chosen first (2026-06-23, with user): **runtime window resize** — IN PROGRESS, see below.
+Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, see below.
 
 ## Display / window
-- **Runtime window resize / EDID hotplug** — 🔵 IN PROGRESS (design done, not yet implemented).
-  Resizing the limina window reflows the guest resolution, no reboot. Roadmap's "#1 display gap".
-  Design + map: `docs/design/runtime-display-resize.md`; resume memory `limina-display-resize`.
+- **Runtime window resize / EDID hotplug** — ✅ SHIPPED 2026-06-23 (all 4 layers; L1 sysfs test GREEN
+  + windowed-VM log-verified, guest re-modesets with no oscillation). Resizing the limina window
+  reflows the guest resolution, no reboot. Design + as-built notes:
+  `docs/design/runtime-display-resize.md`; memory `limina-display-resize`. libkrun patches 0025/0026.
 - **Capability-scope the scanout IOSurfaces** (security) — the worker exports each guest scanout by
   its machine-global `IOSurfaceID`; any same-user process can brute-force-read the guest screen
   (`spikes/.../iosdump.swift` is a PoC). Bounded severity (local, same-user). Fix = export via
