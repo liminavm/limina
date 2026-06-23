@@ -51,11 +51,34 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   Image) + `crates/limina-test/tests/hvf_graceful.rs` — verified RED (SIGABRT) before, GREEN after.
 
 ## M4 venus residue
-- **virtio-gpu flip-completion gap** — no page-flip-complete event, so event-driven KMS clients
-  (kmscube, SDL/DRM, plymouth) hang after ~2 frames; mutter uses fallback timing (most desktop apps
-  fine). Roadmap M4 (~line 410); memory `limina-tier2-venus` open thread 2.
-- **#28 coherency residue policy** — `VN_PERF=no_*_feedback` is the canonical workaround; decide
-  policy (limina-agent sets it) vs a real host-clean-to-PoC coherency fix. Roadmap M4 (~line 412).
+- **virtio-gpu flip-completion gap** — ✅ **RESOLVED (verified 2026-06-23); item was stale.** Already
+  fixed by `patches/linux/0001` (drm/virtio fence blob-scanout flushes, 2026-06-11): host3d_blob
+  (venus) scanout FBs now carry the same fence the dumb path has, so `virtio_gpu_resource_flush`
+  `dma_fence_wait`s (50 ms cap) before commit-tail, which gates `drm_atomic_helper_fake_vblank` →
+  the (fake) page-flip-complete event fires. Verified on the enhanced tier with `kmscube -A`
+  (atomic + fencing): two clean runs rendered 299 and 359 frames at a steady **30 fps**, rc=0, no
+  dmesg errors — event-driven atomic clients render, they do not hang. Legacy `drmModePageFlip`
+  events also work. GOTCHA that masked this: kmscube polls **stdin** alongside the DRM fd, so over a
+  non-interactive SSH session it sees EOF→POLLIN, prints "user interrupted!", and bails after ~1
+  frame — run it as `sleep N | kmscube …` to give it a quiet stdin. (30 fps, not 60, is the
+  fence-present pacing, not a hang — a separate perf matter, not this item.)
+- **#28 coherency residue policy** — ✅ **CLOSED (2026-06-23): no action needed; keep venus feedback
+  disabled.** Re-framed after a design panel over-stated it. `VN_PERF=no_*_feedback` turns off venus's
+  host-visible *feedback* buffers (host writes fence/semaphore/event/query completion into a
+  guest-pollable buffer so waits resolve locally with no guest→host round-trip); off, sync rides the
+  virtio-gpu per-context ring fence our stack already retires. **We never want feedback on:** the
+  round-trip elimination it buys only matters for fine-grained-sync-heavy GPU **compute/ML** (krunkit's
+  domain), not a vsync-paced GNOME+WebGL desktop (a handful of syncs per 16 ms frame, blocked on the
+  frame fence anyway — the saving is invisible under 60 Hz). And enabling feedback would *exercise* the
+  #28 SLC-beyond-PoC host-visible-coherency fragility, i.e. trade robustness for perf we can't use.
+  Feedback-off (ring fence) is already tier-2 GREEN — more robust **and** sufficient. So nothing to fix,
+  productize, or spike. The earlier "productize or a fresh enhanced guest *hangs*" claim was an
+  unverified inference; the two-tier floor is already safe via venus's graceful llvmpipe degrade
+  (venus-init failure → software-2D, `VN_PERF` only read when venus actually renders = the enhanced
+  tier, which is our own baked image). Two of the panel's "real fix" candidates stay dead on physics
+  regardless (host-clean-to-PoC is a no-op — Shared `MTLBuffer` already host-coherent; HVF stage-2
+  attrs are not expressible — `hv_memory_flags_t` is permission-only, `hvf/src/lib.rs:289`). **Revisit
+  only if limina ever grows a venus-compute tier** (out of charter — it's a desktop VM).
 - **Cosmetics** — `num_capsets` hardcoded 5; the non-fatal `0x1200`/`0x203` (CTX_DETACH_RESOURCE →
   ERR_UNSPEC) dmesg lines; Firefox MSAA silent non-AA. Roadmap M4 (~line 413).
 
