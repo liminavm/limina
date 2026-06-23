@@ -118,6 +118,12 @@ struct Cli {
     #[arg(long, requires = "display_window")]
     control_fd: Option<i32>,
 
+    /// Bootstrap name of the supervisor's surface-port receiver. When set, scanout/cursor
+    /// IOSurfaces are NON-global and handed to the supervisor by Mach port (so strangers can't
+    /// `IOSurfaceLookup` the guest screen). Omitted ⇒ legacy global surfaces.
+    #[arg(long, requires = "display_window")]
+    surface_port_name: Option<String>,
+
     /// Display mode as WIDTHxHEIGHT (e.g. 1280x800). Used with the display flags.
     #[arg(long, default_value = "1280x800")]
     display_size: String,
@@ -239,7 +245,10 @@ fn main() -> Result<()> {
                 // The fd number is process-wide — env is just the in-process rendezvous.
                 std::env::set_var("LIMINA_SHOWN_ACK_FD", control_fd.to_string());
             }
-            Some(DisplaySink::Window { control_fd })
+            Some(DisplaySink::Window {
+                control_fd,
+                surface_port_name: cli.surface_port_name.clone(),
+            })
         } else {
             cli.display_capture.map(DisplaySink::CapturePng)
         };

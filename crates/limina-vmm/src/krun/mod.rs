@@ -205,8 +205,12 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
         DisplaySink::CapturePng(png_path) => limina_display::capture_backend(CaptureConfig {
             png_path: png_path.clone(),
         }),
-        DisplaySink::Window { control_fd } => limina_display::window_backend(WindowConfig {
+        DisplaySink::Window {
+            control_fd,
+            surface_port_name,
+        } => limina_display::window_backend(WindowConfig {
             control_fd: *control_fd,
+            surface_port_name: surface_port_name.clone(),
         }),
     });
 

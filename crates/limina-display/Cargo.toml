@@ -15,6 +15,10 @@ libc   = { workspace = true }
 log    = { workspace = true }
 png    = { workspace = true }
 
+# Hand each scanout IOSurface to the supervisor over a Mach port (no global ids → strangers
+# can't IOSurfaceLookup the guest screen).
+limina-surfaceport = { workspace = true }
+
 # IOSurface-backed display (the window present path): create a shared host scanout the
 # supervisor can look up by id and show via CALayer.contents. macOS-only (the whole app is).
 objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef"] }

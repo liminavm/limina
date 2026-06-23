@@ -126,7 +126,13 @@ pub enum DisplaySink {
     CapturePng(PathBuf),
     /// Publish frames into a shared IOSurface and report it to the supervisor over this
     /// control fd (the window present path). `-1` = create the surface but send nothing.
-    Window { control_fd: i32 },
+    Window {
+        control_fd: i32,
+        /// Bootstrap name of the supervisor's surface-port receiver. When set, scanout/cursor
+        /// IOSurfaces are NON-global and handed over by Mach port (so strangers can't
+        /// `IOSurfaceLookup` the guest screen). `None` ⇒ legacy global surfaces.
+        surface_port_name: Option<String>,
+    },
 }
 
 /// A user-mode NAT network interface (M3) backed by a **gvproxy** gateway over a

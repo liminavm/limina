@@ -14,8 +14,12 @@
 //! frame                            # a new frame was written (re-present)
 //! ```
 //!
-//! The IOSurface is created `kIOSurfaceIsGlobal` so `IOSurfaceLookup(id)` works in the
-//! supervisor (see spikes/m2-window/RESULTS.md; a Mach port is the future robust path).
+//! Each scanout/cursor IOSurface is created NON-global and handed to the supervisor over a
+//! Mach port (`limina-surfaceport`), keyed by its `IOSurfaceGetID` — so the supervisor resolves
+//! the ids in the line protocol without a global `IOSurfaceLookup`, and no stranger process can
+//! read the guest screen (`kIOSurfaceIsGlobal` is "insecure"; see spikes/iosurface-machport).
+//! Set `LIMINA_GLOBAL_SCANOUT=1` to ALSO mark them global (so `iosdump` works as a debug oracle);
+//! with no receiver configured we fall back to global so the supervisor can still look them up.
 #![allow(deprecated)] // objc2-io-surface 0.3 renamed the free fns to IOSurfaceRef methods.
 
 use std::ffi::c_void;
@@ -39,6 +43,7 @@ use krun_display::{
     DisplayBackend, DisplayBackendBasicFramebuffer, DisplayBackendError, DisplayBackendNew,
     IntoDisplayBackend, Rect, ResourceFormat,
 };
+use limina_surfaceport::SurfacePortSender;
 
 /// Configuration for [`WindowBackend`]. `Sync` (libkrun's `DisplayBackendNew` bound) and
 /// read once on the GPU worker thread.
@@ -47,6 +52,11 @@ pub struct WindowConfig {
     /// fd of the worker→supervisor control channel. `-1` disables the protocol (the
     /// surface is still created; useful for standalone testing). The backend dups it.
     pub control_fd: RawFd,
+    /// Bootstrap name of the supervisor's surface-port receiver. When set, each scanout/cursor
+    /// IOSurface is created NON-global and its Mach port is sent to the supervisor over this
+    /// channel (so strangers can't `IOSurfaceLookup` the guest screen). `None` ⇒ legacy global
+    /// surfaces (standalone testing with no supervisor receiver).
+    pub surface_port_name: Option<String>,
 }
 
 /// Depth of the surface ring. Must be ≥ 2 (we alternate ids so Core Animation re-reads). 3
@@ -64,6 +74,13 @@ pub struct WindowBackend {
     /// The current hardware-cursor IOSurface (kept retained so the supervisor can look it up
     /// before we replace it on the next shape change). `None` when the cursor is hidden.
     cursor: Option<CFRetained<IOSurfaceRef>>,
+    /// Mach-port channel to the supervisor: each scanout/cursor surface is handed over by its
+    /// (opaque, non-resolvable) `IOSurfaceGetID` so the supervisor resolves ids without
+    /// `IOSurfaceLookup`. `None` ⇒ legacy global surfaces (no receiver name configured).
+    sender: Option<SurfacePortSender>,
+    /// Also mark surfaces `kIOSurfaceIsGlobal` (debug escape hatch `LIMINA_GLOBAL_SCANOUT`, so
+    /// `iosdump` still works as an oracle). Read once at construction. Default off = secure.
+    also_global: bool,
 }
 
 struct Scanout {
@@ -110,12 +127,32 @@ impl DisplayBackendNew<WindowConfig> for WindowBackend {
         } else {
             None
         };
+        let also_global = std::env::var_os("LIMINA_GLOBAL_SCANOUT").is_some();
+        let sender = userdata
+            .and_then(|c| c.surface_port_name.as_deref())
+            .and_then(|name| match SurfacePortSender::lookup(name) {
+                Ok(s) => {
+                    log::info!("window: scanout surfaces scoped via Mach port (name {name})");
+                    Some(s)
+                }
+                Err(e) => {
+                    // Don't fail the VM over this; fall back to global surfaces (degraded security).
+                    log::error!("window: surface-port lookup failed ({e}); using GLOBAL surfaces");
+                    None
+                }
+            });
+        if sender.is_none() && !also_global {
+            log::warn!("window: no surface-port receiver — scanout IOSurfaces will be GLOBAL");
+        }
         WindowBackend {
             control,
             scanout: None,
             next_frame_id: 0,
             presents: 0,
             cursor: None,
+            // No receiver ⇒ surfaces must stay global or the supervisor can't resolve them.
+            also_global: also_global || sender.is_none(),
+            sender,
         }
     }
 }
@@ -125,6 +162,16 @@ impl WindowBackend {
         if let Some(f) = self.control.as_mut() {
             if let Err(e) = writeln!(f, "{line}") {
                 log::error!("window: control write failed: {e}");
+            }
+        }
+    }
+
+    /// Hand a freshly-created surface to the supervisor over the Mach channel, keyed by its id.
+    /// No-op when there's no receiver (legacy global path — the supervisor `IOSurfaceLookup`s it).
+    fn publish(&self, id: u32, surface: &IOSurfaceRef) {
+        if let Some(tx) = self.sender.as_ref() {
+            if let Err(e) = tx.send(id, surface) {
+                log::error!("window: surface-port send(id={id}) failed: {e}");
             }
         }
     }
@@ -164,11 +211,18 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         let mut surfaces = Vec::with_capacity(SURFACE_RING);
         for _ in 0..SURFACE_RING {
             surfaces.push(
-                create_global_iosurface(width, height).ok_or(DisplayBackendError::InternalError)?,
+                create_scanout_iosurface(width, height, self.also_global)
+                    .ok_or(DisplayBackendError::InternalError)?,
             );
         }
         let ids: Vec<u32> = surfaces.iter().map(|s| IOSurfaceGetID(s)).collect();
         log::info!("window: scanout 0 -> IOSurfaces {ids:?} ({width}x{height} {format:?})");
+        // Hand each ring surface to the supervisor over the Mach channel, keyed by its id, BEFORE
+        // the `surface` line announces them — so the supervisor can resolve the ids without a
+        // global IOSurfaceLookup.
+        for (id, surface) in ids.iter().zip(surfaces.iter()) {
+            self.publish(*id, surface);
+        }
 
         // The supervisor looks surfaces up lazily by id (one IOSurfaceLookup per `frame <id>`),
         // so the protocol still only needs to name the initial buffer; the rest are discovered
@@ -305,11 +359,13 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
             return Ok(());
         };
 
-        // Publish the cursor image as its own global IOSurface (the supervisor shows it in an
-        // overlay layer, never the scanout — so cursor motion never touches the present path).
-        let surface =
-            create_global_iosurface(width, height).ok_or(DisplayBackendError::InternalError)?;
+        // Publish the cursor image as its own IOSurface (the supervisor shows it in an overlay
+        // layer, never the scanout — so cursor motion never touches the present path). Like the
+        // scanout ring it's NON-global + Mach-handed unless the escape hatch is on.
+        let surface = create_scanout_iosurface(width, height, self.also_global)
+            .ok_or(DisplayBackendError::InternalError)?;
         let id = IOSurfaceGetID(&surface);
+        self.publish(id, &surface);
         // Swizzle the cursor pixels into BGRA, PRESERVING alpha (unlike the scanout path,
         // which forces opaque): the cursor image is mostly transparent surround.
         let mut canvas = vec![0u8; need];
@@ -481,8 +537,15 @@ fn to_bgra(format: ResourceFormat, p: &[u8]) -> [u8; 4] {
     [p[b], p[g], p[r], 255]
 }
 
-/// Create a `width`×`height` BGRA IOSurface that other processes can `IOSurfaceLookup`.
-fn create_global_iosurface(width: u32, height: u32) -> Option<CFRetained<IOSurfaceRef>> {
+/// Create a `width`×`height` BGRA scanout IOSurface. When `also_global` is set it is marked
+/// `kIOSurfaceIsGlobal` so any process can `IOSurfaceLookup` it by id (the debug escape hatch,
+/// and the fallback when there's no Mach-port receiver); otherwise it is NON-global and only the
+/// supervisor — to which we hand its Mach port — can resolve it (the secure default).
+fn create_scanout_iosurface(
+    width: u32,
+    height: u32,
+    also_global: bool,
+) -> Option<CFRetained<IOSurfaceRef>> {
     let pixel_format = i32::from_be_bytes(*b"BGRA");
     // Align the row stride to 256 bytes. A tight `width*4` stride is accepted by IOSurfaceCreate,
     // but CoreAnimation cannot sample the surface as a layer's contents unless the stride meets the
@@ -517,11 +580,13 @@ fn create_global_iosurface(width: u32, height: u32) -> Option<CFRetained<IOSurfa
             (t as *const objc2_core_foundation::CFBoolean).cast(),
         ];
 
+        // IsGlobal is the last key; drop it from the count to create a NON-global surface.
+        let count = if also_global { 6 } else { 5 };
         let dict = CFDictionary::new(
             None,
             keys.as_mut_ptr(),
             values.as_mut_ptr(),
-            keys.len() as isize,
+            count as isize,
             &kCFTypeDictionaryKeyCallBacks,
             &kCFTypeDictionaryValueCallBacks,
         )?;
@@ -557,7 +622,7 @@ mod tests {
 
     #[test]
     fn creates_a_lookup_able_surface() {
-        let s = create_global_iosurface(16, 8).expect("create");
+        let s = create_scanout_iosurface(16, 8, true).expect("create");
         assert_ne!(IOSurfaceGetID(&s), 0);
     }
 
@@ -569,7 +634,7 @@ mod tests {
         // this; runtime resize to an arbitrary width exposed it (e.g. 1066 → 1066*4 = 4264, not
         // 64-aligned). Every created surface must carry an aligned stride no smaller than width*4.
         for w in [1066u32, 1068, 793, 917, 1, 17, 1280, 640] {
-            let s = create_global_iosurface(w, 4).expect("create");
+            let s = create_scanout_iosurface(w, 4, true).expect("create");
             let bpr = IOSurfaceGetBytesPerRow(&s);
             assert!(bpr >= (w * 4) as usize, "w={w}: bpr {bpr} < width*4");
             assert_eq!(bpr % 64, 0, "w={w}: bpr {bpr} not 64-byte aligned");
@@ -736,7 +801,7 @@ mod tests {
     fn canvas_copies_whole_frame_into_surface() {
         // The full-frame memcpy must land every pixel through the surface's own row stride.
         let (w, h) = (16u32, 8u32);
-        let s = create_global_iosurface(w, h).expect("create");
+        let s = create_scanout_iosurface(w, h, true).expect("create");
         let mut canvas = vec![0u8; (w * h * 4) as usize];
         swizzle_rect_into_canvas(
             &mut canvas,
