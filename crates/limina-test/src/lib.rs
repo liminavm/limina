@@ -426,6 +426,39 @@ impl GuestConfig {
         })
     }
 
+    /// Minimal config for a bare-metal `--kernel` Image with no guest userspace — the harness
+    /// just boots it and observes how the VM ends (e.g. `spikes/hvf-trap-probe`, which probes
+    /// libkrun's HVF PSCI handling and then powers itself off). `rootfs` is a throwaway dir the
+    /// guest never mounts (libkrun still exports it over virtio-fs); we point it at the Image's
+    /// own directory so it always exists.
+    pub fn raw_kernel(kernel: PathBuf) -> Result<GuestConfig> {
+        let rootfs = kernel
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(repo_root);
+        Ok(GuestConfig {
+            limina_bin: resolve_bin("limina", "LIMINA_BIN")?,
+            vmm_bin: resolve_bin("limina-vmm", "LIMINA_VMM_BIN")?,
+            boot: Boot::Kernel {
+                kernel,
+                rootfs,
+                cmdline: "console=ttyAMA0".to_string(),
+            },
+            vsock: None,
+            display: None,
+            cpus: 1,
+            ram_mib: 512,
+            shutdown_grace: Duration::from_secs(grace_from_env()),
+            console_input: false,
+            console_channel: ConsoleChannel::Virtio,
+            net: false,
+            supervisor_log: false,
+            control_socket: false,
+            envs: Vec::new(),
+            shares: Vec::new(),
+        })
+    }
+
     /// Enhanced-tier config: our custom **16 KiB-page** kernel direct-booting the in-repo
     /// Fedora image's btrfs root (no initramfs), with the coexist (venus) GPU and NAT so a
     /// test can SSH in and confirm venus. A 16 KiB guest places host-visible virtio-gpu blobs
@@ -724,7 +757,7 @@ fn grace_from_env() -> u64 {
 
 /// Repo root, derived from this crate's compile-time manifest dir
 /// (`crates/limina-test` -> repo root).
-fn repo_root() -> PathBuf {
+pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
@@ -1544,6 +1577,27 @@ impl Guest {
     pub fn shutdown(mut self, timeout: Duration) -> Result<Outcome> {
         let outcome = self.terminate(timeout)?;
         Ok(outcome)
+    }
+
+    /// Wait for the supervisor (and thus the VM) to exit **on its own** — for guests that
+    /// self-terminate, e.g. one that powers itself off. Sends no signal while waiting, so the
+    /// returned [`Outcome`] reflects how the guest ended (clean power-off → `code: Some(0)`; a
+    /// crashed worker → non-zero / signal). On timeout it force-tears-down so no VM is left
+    /// holding HVF, and the outcome is marked `forced`.
+    pub fn wait_for_exit(mut self, timeout: Duration) -> Result<Outcome> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.child.try_wait().context("polling supervisor")? {
+                self.torn_down = true;
+                return Ok(self.outcome_from(status, false));
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // Didn't self-exit in time — force it down (no orphaned VM).
+        self.terminate(Duration::from_secs(0))
     }
 
     /// Internal teardown shared by [`Guest::shutdown`] and `Drop`.

@@ -41,9 +41,14 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   worker re-publishes its non-global scanouts). Verified: `systemctl reboot` over SSH → worker exit 125
   → relaunch → guest SSH back + window re-displays the desktop and stays interactible, 0 "unresolved"
   present skips, surface-port re-scoped. Regression guard: `worker_conn_swap_retargets_every_field`.
-- **libkrun panic→graceful exit paths** — a real boot hitting an unknown PSCI / ESR_EL2 EC / exit
-  reason still `panic!`s the worker (`hvf/lib.rs:549/595-602/728`); convert to logged graceful stops.
-  Roadmap M1 stretch (~line 133).
+- **libkrun panic→graceful exit paths** — ✅ **DONE 2026-06-23 (libkrun patch 0028).** The aarch64
+  HVF vCPU loop no longer `panic!`s on unhandled guest traps: an unknown PSCI/SMC function returns
+  `PSCI_RET_NOT_SUPPORTED` and the guest keeps running (standard PSCI semantics), while every other
+  unhandled trap (exception class, system register, exit reason, MMIO size) logs the specifics and
+  returns `Error::Unhandled`, which `vstate::run_emulation` maps to a clean VM teardown
+  (`FC_EXIT_CODE_GENERIC_ERROR`) instead of aborting the worker process. Healthy guests never hit
+  these arms (L1 boot still green). RED-first: `spikes/hvf-trap-probe` (96-byte bare-metal arm64
+  Image) + `crates/limina-test/tests/hvf_graceful.rs` — verified RED (SIGABRT) before, GREEN after.
 
 ## M4 venus residue
 - **virtio-gpu flip-completion gap** — no page-flip-complete event, so event-driven KMS clients

@@ -31,6 +31,9 @@ scripts/check-virgl-link.sh "target/$PROFILE/limina-vmm"
 echo "==> building the L1 test guest (kernel + rootfs)"
 scripts/build-test-guest.sh >/dev/null
 
+echo "==> building the hvf-trap-probe (bare-metal PSCI probe for hvf_graceful)"
+scripts/build-hvf-trap-probe.sh >/dev/null
+
 echo "==> running boot tests (LIMINA_HVF_TESTS=1)"
 # Build the test crate with the same profile; limina-test doesn't depend on the worker so
 # this won't rebuild/unsign it. --test-threads=1: one VM at a time.
