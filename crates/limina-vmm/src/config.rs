@@ -111,6 +111,12 @@ pub struct DisplaySpec {
     /// fails). Set this for the headless 2D capture oracle and to dodge the local-Terminal
     /// GPU-init hang. `LIMINA_VIRGL_FLAGS` overrides both (forces a specific renderer flag set).
     pub software_2d: bool,
+    /// Optional UNIX-socket path for runtime display-resize requests. When set, the worker
+    /// binds a listener there and applies `resize <w> <h>` lines (newline-delimited) to the
+    /// live virtio-gpu via the libkrun [`DisplayResizeHandle`] — the guest then re-modesets.
+    /// The supervisor's window-resize gesture and the test harness both connect here. This is
+    /// decoupled from the present/ack channel on purpose. See docs/design/runtime-display-resize.md.
+    pub control_socket: Option<PathBuf>,
 }
 
 /// Where the host sends presented guest frames.

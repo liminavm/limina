@@ -16,6 +16,7 @@ use anyhow::{anyhow, Context, Result};
 use crossbeam_channel::unbounded;
 use devices::virtio::block::{CacheType, ImageType, SyncMode};
 use devices::virtio::display::DisplayInfo;
+use devices::virtio::DisplayResizeHandle;
 use limina_display::{CaptureConfig, WindowConfig};
 use polly::event_manager::EventManager;
 use vmm::resources::VmResources;
@@ -369,6 +370,24 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     let vmm = vmm::builder::build_microvm(&vmr, &mut event_manager, Some(shutdown_efd), worker_tx)
         .map_err(|e| anyhow!("build_microvm: {e:?}"))?;
 
+    // Runtime display resize: if a control socket was requested, wire it to the live virtio-gpu
+    // device's resize handle. This is a dedicated UNIX socket, decoupled from the present/ack
+    // control channel on purpose (see docs/design/runtime-display-resize.md).
+    if let Some(path) = spec
+        .display
+        .as_ref()
+        .and_then(|d| d.control_socket.as_ref())
+    {
+        match vmm.lock().unwrap().gpu_resize_handle() {
+            Some(handle) => install_resize_listener(path.clone(), handle)
+                .context("installing the display-resize listener")?,
+            None => log::error!(
+                "--display-control-socket set but the GPU resize handle is unavailable; \
+                 runtime display resize is disabled"
+            ),
+        }
+    }
+
     // Start the GPU worker-message servicer when a display is attached (mirrors
     // krun_start_enter's `if gpu_virgl_flags.is_some()`). Without it, a guest blob map
     // would block the GPU worker forever waiting on a reply.
@@ -385,4 +404,55 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
             .run()
             .map_err(|e| anyhow!("event loop: {e:?}"))?;
     }
+}
+
+/// Bind a UNIX-socket listener that applies newline-delimited `resize <w> <h>` commands to the
+/// live GPU via `handle` (display 0). Each accepted connection is read to EOF — the supervisor
+/// keeps one long-lived connection; the test harness connects per call. Runs on a detached
+/// thread for the VMM's lifetime. See docs/design/runtime-display-resize.md.
+fn install_resize_listener(path: std::path::PathBuf, handle: DisplayResizeHandle) -> Result<()> {
+    use std::io::BufRead;
+    use std::os::unix::net::UnixListener;
+
+    // A stale socket from a previous run (or a relaunched worker) blocks bind(); clear it first.
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)
+        .with_context(|| format!("bind display-control socket {path:?}"))?;
+    log::info!("display-resize: listening on {path:?}");
+    std::thread::Builder::new()
+        .name("display-resize".into())
+        .spawn(move || {
+            for stream in listener.incoming() {
+                let stream = match stream {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::error!("display-resize: accept failed: {e}");
+                        continue;
+                    }
+                };
+                for line in std::io::BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    match parse_resize(&line) {
+                        Some((w, h)) => {
+                            log::info!("display-resize: request {w}x{h}");
+                            handle.request(0, w, h);
+                        }
+                        None => log::warn!("display-resize: ignoring control line {line:?}"),
+                    }
+                }
+            }
+        })
+        .context("spawning the display-resize listener thread")?;
+    Ok(())
+}
+
+/// Parse a `resize <w> <h>` control line into `(width, height)`.
+fn parse_resize(line: &str) -> Option<(u32, u32)> {
+    let mut parts = line.split_whitespace();
+    if parts.next()? != "resize" {
+        return None;
+    }
+    let w = parts.next()?.parse::<u32>().ok()?;
+    let h = parts.next()?.parse::<u32>().ok()?;
+    Some((w, h))
 }

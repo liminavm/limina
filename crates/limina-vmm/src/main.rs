@@ -122,6 +122,12 @@ struct Cli {
     #[arg(long, default_value = "1280x800")]
     display_size: String,
 
+    /// UNIX-socket path for runtime display-resize requests. The worker binds a listener
+    /// here and applies newline-delimited `resize <w> <h>` commands to the live virtio-gpu
+    /// (the guest re-modesets). The supervisor window and the test harness connect to it.
+    #[arg(long)]
+    display_control_socket: Option<PathBuf>,
+
     /// Force the software-2D-only GPU (no virglrenderer/venus). Default is the coexist
     /// device (software-2D 2D + Venus 3D). Use for the capture oracle or the local-Terminal
     /// GPU-init hang.
@@ -245,6 +251,7 @@ fn main() -> Result<()> {
                     height,
                     sink,
                     software_2d: cli.gpu_software_2d,
+                    control_socket: cli.display_control_socket,
                 })
             }
             None => None,
