@@ -12,6 +12,7 @@ mod clipboard;
 mod control;
 mod gateway;
 mod supervisor;
+mod venus_env;
 mod window;
 
 use std::path::{Path, PathBuf};

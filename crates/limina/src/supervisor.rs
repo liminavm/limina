@@ -120,6 +120,23 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<std::proce
     install_signal_handlers()?;
     let mut cmd = Command::new(&spec.vmm_bin);
     cmd.args(&spec.args).process_group(0);
+
+    // When running from an assembled limina.app, hand the worker the bundle-relative venus
+    // env (KK ICD + zink-on-KK Mesa selectors). In a dev/cargo run no bundle is present, so
+    // this is a no-op and the inherited env (boot-seated-kk.sh) stands.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if let Some(envs) = crate::venus_env::bundle_venus_env(dir, |p| p.exists()) {
+                log::info!(
+                    "limina.app: using bundled venus stack ({} vars)",
+                    envs.len()
+                );
+                for (k, v) in envs {
+                    cmd.env(k, v);
+                }
+            }
+        }
+    }
     if !inherit_fds.is_empty() {
         let fds = inherit_fds.to_vec();
         // SAFETY: only async-signal-safe fcntl calls between fork and exec.

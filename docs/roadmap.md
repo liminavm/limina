@@ -392,14 +392,21 @@ flip straight to the primary plane). Converged truth + open-threads ledger live 
 ### Open M4 items (the remaining ledger)
 
 1. **Productize the enhanced tier.** Deliver what's baked into the dev image (16 KiB kernel, mesa
-   zink + venus ICD, patched mutter, `environment.d` policy) via the M5 agent/installer; and
-   **bundle KK inside `limina.app`** (loader + `libvulkan_kosmickrisp.dylib` + a relative-path ICD
-   JSON under `Contents/`, worker resolves it relative to its own path) and point the loader at only
-   that ICD so MoltenVK isn't on the search path. Same-Team-ID codesigning satisfies hardened
-   runtime (no `disable-library-validation`). Note: bundling only removes *host-driver absence* as a
+   zink + venus ICD, patched mutter, `environment.d` policy) via the M5 agent/installer **(still
+   TODO — the guest side)**; the **host side is ✅ DONE (2026-06-23):** `scripts/build-app.sh`
+   assembles a self-contained `limina.app` — the whole host venus/GL closure (virglrenderer fork,
+   epoxy, Vulkan loader, `libvulkan_kosmickrisp.dylib`, the zink-on-KK Mesa stack + LLVM) is vendored
+   into `Contents/Frameworks`, relocated to `@rpath`, with a relative-path KK ICD under
+   `Contents/Resources/vulkan`; the supervisor sets the bundle-relative venus env (`VK_ICD_FILENAMES`
+   + zink-on-KK selectors) when it detects the bundle (`crates/limina/src/venus_env.rs`), so the
+   loader sees only our KK ICD (no MoltenVK on the path). Ad-hoc signed for local dev (Developer-ID +
+   notarization is the later distribution step). Verified: boots the seated venus desktop from a
+   clean environment — the worker loads 11 dylibs from `Contents/Frameworks`, **zero** from
+   `/Volumes/mesa-cs` or `third_party/`. Note: bundling only removes *host-driver absence* as a
    fallback trigger — software-2D + in-guest llvmpipe stays a shipping path for guests that can't
    drive venus out of the box (stock 4 KiB kernel / no venus mesa = the floor); the fallback is
-   guest-capability-driven, not host-driver-driven.
+   guest-capability-driven, not host-driver-driven. (~266 MB, dominated by the zink→LLVM host-GL
+   stack, which the worker genuinely loads — confirmed via `lsof`.)
 2. **Upstream patch queue:** mesa zink+venus / KosmicKrisp / virglrenderer / SPIRV-Cross /
    mutter ×2 / kernel 0002+0003 / Fedora-zink backport ask.
 3. **Run the desktop through the GOP console end-to-end.** The GOP+venus singleton is FIXED
