@@ -26,6 +26,21 @@ else
 fi
 rm -f "$LOG"
 export VK_ICD_FILENAMES="$ICD"
+# The coexist device's vrend half provides host GL via zink-on-KK; it needs the zink-on-KK Mesa's
+# libEGL (epoxy dlopens it by BARE name → DYLD path) AND the Mesa loader/gallium env that selects
+# zink + surfaceless EGL. Without the latter the EGL DRI2 screen fails to create and
+# virgl_renderer_init degrades the whole coexist device to software-2D (so venus never enumerates).
+# /bin/bash is SIP-restricted and strips DYLD_* at startup, so a DYLD export from the calling shell
+# never survives to here — set it now; the limina worker is codesigned with
+# com.apple.security.cs.allow-dyld-environment-variables (non-restricted supervisor in between) so
+# it honors it. Matches spikes/virgl-zink-kk/boot-virgl-windowed.sh + scripts/build-virglrenderer.sh.
+MESA_PREFIX="${MESA_PREFIX:-/Volumes/mesa-cs/zink-kk-prefix}"
+export DYLD_FALLBACK_LIBRARY_PATH="$MESA_PREFIX/lib:$ROOT/third_party/epoxy-egl-prefix/lib:/opt/homebrew/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+export VK_DRIVER_FILES="$ICD"
+export MESA_LOADER_DRIVER_OVERRIDE=zink
+export GALLIUM_DRIVER=zink
+export LIBGL_DRIVERS_PATH="$MESA_PREFIX/lib"
+export EGL_PLATFORM=surfaceless
 # vkr_log emits at virgl INFO; the default logger level is WARNING, which silently
 # swallows every limina: line in vkr_*.c — keep INFO on for this A/B vehicle.
 export VIRGL_LOG_LEVEL=info

@@ -245,6 +245,13 @@ fn main() -> Result<()> {
                 // The fd number is process-wide — env is just the in-process rendezvous.
                 std::env::set_var("LIMINA_SHOWN_ACK_FD", control_fd.to_string());
             }
+            // The venus zero-copy scanouts are created deep inside virglrenderer (in-process),
+            // which can't see our CLI args — hand it the receiver name via the environment so it
+            // creates its IOSurfaces non-global and publishes their Mach ports too (the sw2d path
+            // uses the WindowConfig below). Set before any GPU/renderer init.
+            if let Some(name) = cli.surface_port_name.as_deref() {
+                std::env::set_var("LIMINA_SURFACE_PORT_NAME", name);
+            }
             Some(DisplaySink::Window {
                 control_fd,
                 surface_port_name: cli.surface_port_name.clone(),

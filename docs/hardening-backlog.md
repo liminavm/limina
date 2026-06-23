@@ -13,22 +13,23 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   + windowed-VM log-verified, guest re-modesets with no oscillation). Resizing the limina window
   reflows the guest resolution, no reboot. Design + as-built notes:
   `docs/design/runtime-display-resize.md`; memory `limina-display-resize`. libkrun patches 0025/0026.
-- **Capability-scope the scanout IOSurfaces** (security) — ✅ **sw2d/baseline path DONE** 2026-06-23.
+- **Capability-scope the scanout IOSurfaces** (security) — ✅ **DONE 2026-06-23 (sw2d + venus)**.
   The worker used to export each scanout as a machine-global `IOSurfaceID` any same-user process
-  could brute-force-read (`spikes/venus-draw-probe/iosdump.swift` PoC). Now the sw2d display backend
-  creates each scanout/cursor IOSurface **non-global** and hands its Mach port to the supervisor
-  (`limina-surfaceport`: `SurfacePortSender`/`Receiver`, bootstrap rendezvous), keyed by id; the
-  supervisor resolves ids from the Mach map. Verified: a stranger `iosdump` on the live scanout ids
-  returns "not alive". `LIMINA_GLOBAL_SCANOUT=1` re-enables global for the debug oracle. Spike
-  `spikes/iosurface-machport`; commits `5980de2 8cafa44 13c6428 383460e`; RED-first test
-  `non_global_scanout_is_hidden_from_strangers`.
-  **FOLLOW-UP (venus zero-copy path):** venus-rendered scanouts are created GLOBAL deep in
-  `third_party/virglrenderer/src/venus/vkr_metal_helpers.m` and the worker only forwards their id
-  (`present_surface`), so the supervisor still resolves them via the global `IOSurfaceLookup`
-  fallback — accelerated guests still leak the screen. Closing it needs the Metal helper to create
-  the IOSurface non-global and surface its Mach port up through `set_scanout_blob`/`present_surface`
-  (a libkrun patch + a virglrenderer change). The cursor surface on the venus path rides the same
-  fallback. Until then, the scoping protects the baseline/sw2d tier (the two-tier compatibility floor).
+  could brute-force-read (`spikes/venus-draw-probe/iosdump.swift` PoC). Now **both** display paths
+  create their scanout/cursor IOSurfaces **non-global** and hand each one's Mach port to the
+  supervisor (`limina-surfaceport`: `SurfacePortSender`/`Receiver`, bootstrap rendezvous), keyed by
+  id; the supervisor resolves ids from the Mach map. `LIMINA_GLOBAL_SCANOUT=1` re-enables global for
+  the debug oracle.
+  - **sw2d/baseline path** — the `limina-display` `WindowBackend` publishes its ring. Spike
+    `spikes/iosurface-machport`; commits `5980de2 8cafa44 13c6428 383460e`; RED-first test
+    `non_global_scanout_is_hidden_from_strangers`.
+  - **venus zero-copy path** — the renderer runs in the worker process, so `vkr_mtl_iosurface_alloc`
+    publishes directly to the same receiver (no rutabaga/krun_display/virtio_gpu FFI). Patch
+    `spikes/virgl-zink-kk/patches/virglrenderer-venus-iosurface-scoping.patch`;
+    `LIMINA_SURFACE_PORT_NAME` env from `--surface-port-name`; commit `138d7f6`. Verified live
+    (dev-enh + KosmicKrisp): the exact venus-allocated scanout ids (from `SET_SCANOUT_BLOB`) return
+    "not alive" to a stranger while a `LIMINA_GLOBAL_SCANOUT=1` contrast dumps the screen; pure
+    zero-copy (`LIMINA_PRESENT_COPY=0`) presents them via the Mach map with 0 "unresolved" skips.
 - **CapsLock/NumLock LED parity** — surface the statusq LED feedback (libkrun `worker.rs` no-op).
   Roadmap M8.
 
