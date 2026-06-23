@@ -11,6 +11,7 @@
 #![allow(deprecated)] // objc2-io-surface 0.3 renamed some free fns to methods.
 
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::os::fd::{FromRawFd, RawFd};
@@ -46,7 +47,85 @@ use objc2_io_surface::{
 };
 use objc2_quartz_core::{CALayer, CATransaction};
 
+use limina_surfaceport::SurfacePortReceiver;
+
 mod input;
+
+/// Scanout/cursor IOSurfaces the worker handed us by Mach port, keyed by `IOSurfaceGetID`. The
+/// present + cursor paths resolve ids here first (the non-global, capability-scoped surfaces),
+/// falling back to `IOSurfaceLookup` only for the venus zero-copy path (still global) and the
+/// legacy no-receiver mode. Bounded and oldest-evicted: the worker only ever shows the current
+/// ring and cursor, so superseded ids are safe to drop (a stale id falls back to lookup, which
+/// fails for a freed non-global surface, so that frame is skipped rather than shown wrong).
+/// A retained IOSurface that can cross threads. IOSurface is thread-safe — the kernel object is
+/// atomically refcounted and designed for cross-process/-thread scanout sharing — but objc2
+/// conservatively leaves `CFRetained<IOSurfaceRef>` `!Send`/`!Sync`. The recv thread stores
+/// surfaces here and the main thread reads them, so we assert the safety explicitly.
+struct SendSurface(CFRetained<IOSurfaceRef>);
+// SAFETY: IOSurface refcounting + access is thread-safe (Apple's cross-process scanout primitive).
+unsafe impl Send for SendSurface {}
+unsafe impl Sync for SendSurface {}
+
+#[derive(Default)]
+pub struct SurfaceStore {
+    map: std::collections::HashMap<u32, SendSurface>,
+    order: VecDeque<u32>,
+}
+
+const SURFACE_STORE_CAP: usize = 32;
+
+impl SurfaceStore {
+    fn insert(&mut self, id: u32, surface: CFRetained<IOSurfaceRef>) {
+        if self.map.insert(id, SendSurface(surface)).is_none() {
+            self.order.push_back(id);
+            while self.order.len() > SURFACE_STORE_CAP {
+                if let Some(old) = self.order.pop_front() {
+                    self.map.remove(&old);
+                }
+            }
+        }
+    }
+    fn get(&self, id: u32) -> Option<CFRetained<IOSurfaceRef>> {
+        self.map.get(&id).map(|s| s.0.clone())
+    }
+}
+
+/// Shared handle to the [`SurfaceStore`] (worker recv thread writes, main-thread present reads).
+pub type SurfaceMap = Arc<Mutex<SurfaceStore>>;
+
+/// Run the surface-port receive loop on a background thread for the supervisor's whole life.
+/// Survives worker relaunches: a relaunched worker re-looks-up the same bootstrap name and
+/// re-sends its surfaces, which land in the same store.
+fn spawn_surface_receiver(receiver: SurfacePortReceiver, map: SurfaceMap) {
+    std::thread::spawn(move || loop {
+        match receiver.recv(None) {
+            Ok((id, surface)) => map.lock().unwrap().insert(id, surface),
+            Err(e) => {
+                log::warn!("window: surface-port recv failed: {e}");
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    });
+}
+
+/// Set up the surface-port rendezvous: register a receiver under a per-process bootstrap name,
+/// start its receive loop, and return the `(name, map)`. Pass `name` to the worker via
+/// `--surface-port-name` (so it hands scanouts here instead of making them global) and `map` to
+/// [`run`]. The receiver outlives worker relaunches. Falls back gracefully: on error the caller
+/// runs without scoping (worker stays global), so this never blocks the VM.
+pub fn surface_rendezvous() -> std::io::Result<(String, SurfaceMap)> {
+    let name = format!("eti.noronha.limina.{}", std::process::id());
+    let receiver = SurfacePortReceiver::register(&name)?;
+    let map = empty_surface_map();
+    spawn_surface_receiver(receiver, map.clone());
+    Ok((name, map))
+}
+
+/// An empty surface store. Used as the fallback when the rendezvous fails: the present path then
+/// resolves every id via the global `IOSurfaceLookup` fallback (legacy behavior).
+pub fn empty_surface_map() -> SurfaceMap {
+    Arc::new(Mutex::new(SurfaceStore::default()))
+}
 
 /// The supervisor's live connection to the *current* worker: its pid (for shutdown signaling)
 /// and the supervisor-side fds the window talks to it through (input sinks + the shown-ack fd).
@@ -276,6 +355,7 @@ pub fn run(
     conn: Arc<WorkerConn>,
     control: Option<crate::control::ControlPlane>,
     resize_socket: Option<PathBuf>,
+    surface_map: SurfaceMap,
 ) -> ! {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
@@ -428,6 +508,7 @@ pub fn run(
         let window = window.clone();
         let layer = layer.clone();
         let ack_tx = ack_tx.clone();
+        let surface_map = surface_map.clone();
         move || {
             // Keep the scanout layer filling the window every tick — INCLUDING mid live-resize
             // (the timer now fires in common modes, so this runs during the drag). The window
@@ -505,19 +586,28 @@ pub fn run(
             }
 
             let mut cache = cache.borrow_mut();
-            // Look the surface up by id once and keep our own retained reference. A failed
-            // lookup (the worker freed it during a rapid remodeset before we caught up) is not
-            // fatal — skip this frame rather than panic the UI; the next frame recovers.
+            // Resolve the id to a surface once and keep our own retained reference. Prefer the
+            // Mach-delivered store (the capability-scoped, non-global scanouts); fall back to a
+            // global `IOSurfaceLookup` for the venus zero-copy path (still global) and the legacy
+            // no-receiver mode. A failed resolve (the worker freed it during a rapid remodeset
+            // before we caught up) is not fatal — skip this frame rather than panic the UI.
             use std::collections::hash_map::Entry;
             let surface = match cache.entry(id) {
                 Entry::Occupied(e) => e.into_mut(),
-                Entry::Vacant(e) => match IOSurfaceLookup(id) {
-                    Some(s) => e.insert(s),
-                    None => {
-                        log::warn!("window: IOSurfaceLookup({id}) failed; skipping frame");
-                        return;
+                Entry::Vacant(e) => {
+                    let resolved = surface_map
+                        .lock()
+                        .unwrap()
+                        .get(id)
+                        .or_else(|| IOSurfaceLookup(id));
+                    match resolved {
+                        Some(s) => e.insert(s),
+                        None => {
+                            log::warn!("window: surface {id} unresolved; skipping frame");
+                            return;
+                        }
                     }
-                },
+                }
             };
             // Shown-ack channel (#8 leg 2): after Core Animation processes this frame's
             // transaction, hand the id to the dedicated ack-sender thread (a bounded, non-blocking
@@ -648,7 +738,7 @@ pub fn run(
         };
         if cur.0 != last_cursor_gen.get() {
             last_cursor_gen.set(cur.0);
-            apply_cursor(&timer_cursor, &built_cursor, &cur);
+            apply_cursor(&timer_cursor, &built_cursor, &cur, &surface_map);
         }
 
         // Frame apply: normally event-driven (dispatch from the reader thread); this is
@@ -776,6 +866,7 @@ fn apply_cursor(
     host: &input::HostCursor,
     built: &Cell<Option<u32>>,
     cur: &(u64, bool, Option<u32>, u32, u32, u32, u32),
+    surface_map: &SurfaceMap,
 ) {
     let (_gen, visible, id, w, h, hot_x, hot_y) = *cur;
     match id {
@@ -783,7 +874,7 @@ fn apply_cursor(
             if built.get() == Some(id) {
                 return;
             }
-            match build_guest_cursor(id, w, h, hot_x, hot_y) {
+            match build_guest_cursor(id, w, h, hot_x, hot_y, surface_map) {
                 Some(c) => {
                     host.update(c);
                     built.set(Some(id));
@@ -813,8 +904,14 @@ fn build_guest_cursor(
     h: u32,
     hot_x: u32,
     hot_y: u32,
+    surface_map: &SurfaceMap,
 ) -> Option<Retained<NSCursor>> {
-    let surface = IOSurfaceLookup(id)?;
+    // Mach-delivered (non-global) cursor surface first; legacy/global fallback.
+    let surface = surface_map
+        .lock()
+        .unwrap()
+        .get(id)
+        .or_else(|| IOSurfaceLookup(id))?;
     let ctx = bgra_bitmap_context(w, h)?;
     unsafe {
         let dst = CGBitmapContextGetData(Some(&ctx)) as *mut u8;

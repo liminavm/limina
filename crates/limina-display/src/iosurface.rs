@@ -10,8 +10,9 @@
 //! plain fd carrying a tiny line protocol:
 //!
 //! ```text
-//! surface <id> <width> <height>   # a new scanout surface is available (look it up)
-//! frame                            # a new frame was written (re-present)
+//! surface <id> <id1> <width> <height>   # a new scanout ring is available (id resolved via Mach)
+//! frame <id>                            # the surface id to show now
+//! cursor <id> <w> <h> <hot_x> <hot_y>   # a new cursor image
 //! ```
 //!
 //! Each scanout/cursor IOSurface is created NON-global and handed to the supervisor over a
@@ -624,6 +625,51 @@ mod tests {
     fn creates_a_lookup_able_surface() {
         let s = create_scanout_iosurface(16, 8, true).expect("create");
         assert_ne!(IOSurfaceGetID(&s), 0);
+    }
+
+    /// Stranger role: when `LIMINA_LOOKUP_ID` is set, this process exists only to probe whether
+    /// that IOSurface id is `IOSurfaceLookup`-able, exiting 0 (found/exposed) or 1 (hidden). The
+    /// sibling test below re-execs the test binary in this role so the probe is a genuinely
+    /// unrelated process (a non-global surface is resolvable by its *holder*, so an in-process
+    /// check would be meaningless).
+    #[test]
+    fn stranger_lookup_role() {
+        let Ok(id) = std::env::var("LIMINA_LOOKUP_ID") else {
+            return; // normal run: this role is a no-op
+        };
+        let id: u32 = id.parse().expect("LIMINA_LOOKUP_ID");
+        let found = IOSurfaceLookup(id).is_some();
+        std::process::exit(i32::from(!found));
+    }
+
+    #[test]
+    fn non_global_scanout_is_hidden_from_strangers() {
+        // The capability-scoping guarantee: a scanout surface created the secure way (non-global)
+        // cannot be read by an unrelated process via IOSurfaceLookup, while a global one can.
+        let ng = create_scanout_iosurface(64, 8, false).expect("create non-global");
+        let g = create_scanout_iosurface(64, 8, true).expect("create global");
+        let ng_id = IOSurfaceGetID(&ng);
+        let g_id = IOSurfaceGetID(&g);
+
+        let exe = std::env::current_exe().expect("test exe");
+        let probe = |id: u32| -> bool {
+            std::process::Command::new(&exe)
+                .args(["--exact", "iosurface::tests::stranger_lookup_role"])
+                .env("LIMINA_LOOKUP_ID", id.to_string())
+                .status()
+                .expect("spawn stranger")
+                .success()
+        };
+        // `ng`/`g` stay alive in THIS process for the duration of both probes.
+        assert!(
+            probe(g_id),
+            "a global surface should be readable by a stranger (control)"
+        );
+        assert!(
+            !probe(ng_id),
+            "a NON-global scanout must be hidden from a stranger process"
+        );
+        drop((ng, g));
     }
 
     #[test]

@@ -403,6 +403,7 @@ fn spawn_windowed_worker(
     grace: Duration,
     width: u32,
     height: u32,
+    surface_port_name: Option<&str>,
 ) -> Result<WindowedWorker> {
     // Control channel (worker→supervisor scanout): sup_fd stays here (CLOEXEC so the worker
     // can't inherit it); worker_fd is inherited and referenced by --control-fd. Stream type
@@ -433,6 +434,12 @@ fn spawn_windowed_worker(
     args.push(kbd_worker_fd.to_string());
     args.push("--input-ptr-fd".into());
     args.push(ptr_worker_fd.to_string());
+    if let Some(name) = surface_port_name {
+        // Scoped scanouts: the worker hands its (non-global) IOSurfaces to our surface-port
+        // receiver by Mach port instead of making them globally lookup-able.
+        args.push("--surface-port-name".into());
+        args.push(name.to_string());
+    }
 
     let spec = WorkerSpec {
         vmm_bin: vmm_bin.to_path_buf(),
@@ -476,8 +483,26 @@ fn run_windowed(
 
     let mtm = MainThreadMarker::new().context("the window must run on the main thread")?;
 
+    // Capability-scope the scanout IOSurfaces: register a Mach surface-port receiver the worker
+    // hands its NON-global scanouts to (so strangers can't IOSurfaceLookup the guest screen). On
+    // failure, fall back to global surfaces (worker detects no receiver) so the VM still runs.
+    let (surface_port_name, surface_map) = match window::surface_rendezvous() {
+        Ok((name, map)) => (Some(name), map),
+        Err(e) => {
+            log::error!("surface-port rendezvous failed ({e}); scanout IOSurfaces will be GLOBAL");
+            (None, window::empty_surface_map())
+        }
+    };
+
     // Spawn the first worker and wire its scanout/input/ack channels into a swappable conn.
-    let w = spawn_windowed_worker(&vmm_bin, &base_args, grace, width, height)?;
+    let w = spawn_windowed_worker(
+        &vmm_bin,
+        &base_args,
+        grace,
+        width,
+        height,
+        surface_port_name.as_deref(),
+    )?;
     let conn = window::WorkerConn::new(w.pid, w.kbd_sup_fd, w.ptr_sup_fd, w.ack_fd);
     let shared = window::Shared::new();
     window::spawn_reader(w.sup_fd, shared.clone());
@@ -490,6 +515,7 @@ fn run_windowed(
     let monitor_shared = shared.clone();
     let monitor_conn = conn.clone();
     let monitor_control = control.clone();
+    let monitor_port_name = surface_port_name.clone();
     std::thread::spawn(move || {
         let mut child = w.child;
         // Supervisor-side fds of the CURRENT worker to retire when it's replaced. NOT sup_fd:
@@ -513,7 +539,14 @@ fn run_windowed(
                     break;
                 }
             }
-            let next = match spawn_windowed_worker(&vmm_bin, &base_args, grace, width, height) {
+            let next = match spawn_windowed_worker(
+                &vmm_bin,
+                &base_args,
+                grace,
+                width,
+                height,
+                monitor_port_name.as_deref(),
+            ) {
                 Ok(n) => n,
                 Err(e) => {
                     log::error!("relaunch after guest reboot failed: {e:#}; stopping");
@@ -543,7 +576,7 @@ fn run_windowed(
     // (`conn.pid()`). The window captures NSEvents and writes evdev events to the current
     // worker's input fds (read from `conn`). `resize_socket` lets the resize gesture push the
     // new window size to the worker (which forwards it to the live virtio-gpu).
-    window::run(shared, mtm, conn, control, resize_socket);
+    window::run(shared, mtm, conn, control, resize_socket, surface_map);
 }
 
 /// Create a socketpair of the given type; set CLOEXEC on the supervisor end (fd.0) so the

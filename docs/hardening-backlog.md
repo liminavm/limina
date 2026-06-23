@@ -13,11 +13,22 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   + windowed-VM log-verified, guest re-modesets with no oscillation). Resizing the limina window
   reflows the guest resolution, no reboot. Design + as-built notes:
   `docs/design/runtime-display-resize.md`; memory `limina-display-resize`. libkrun patches 0025/0026.
-- **Capability-scope the scanout IOSurfaces** (security) — the worker exports each guest scanout by
-  its machine-global `IOSurfaceID`; any same-user process can brute-force-read the guest screen
-  (`spikes/.../iosdump.swift` is a PoC). Bounded severity (local, same-user). Fix = export via
-  `IOSurfaceCreateMachPort` + hand the port right to the window process (mach rendezvous). Roadmap M8
-  (~line 664).
+- **Capability-scope the scanout IOSurfaces** (security) — ✅ **sw2d/baseline path DONE** 2026-06-23.
+  The worker used to export each scanout as a machine-global `IOSurfaceID` any same-user process
+  could brute-force-read (`spikes/venus-draw-probe/iosdump.swift` PoC). Now the sw2d display backend
+  creates each scanout/cursor IOSurface **non-global** and hands its Mach port to the supervisor
+  (`limina-surfaceport`: `SurfacePortSender`/`Receiver`, bootstrap rendezvous), keyed by id; the
+  supervisor resolves ids from the Mach map. Verified: a stranger `iosdump` on the live scanout ids
+  returns "not alive". `LIMINA_GLOBAL_SCANOUT=1` re-enables global for the debug oracle. Spike
+  `spikes/iosurface-machport`; commits `5980de2 8cafa44 13c6428 383460e`; RED-first test
+  `non_global_scanout_is_hidden_from_strangers`.
+  **FOLLOW-UP (venus zero-copy path):** venus-rendered scanouts are created GLOBAL deep in
+  `third_party/virglrenderer/src/venus/vkr_metal_helpers.m` and the worker only forwards their id
+  (`present_surface`), so the supervisor still resolves them via the global `IOSurfaceLookup`
+  fallback — accelerated guests still leak the screen. Closing it needs the Metal helper to create
+  the IOSurface non-global and surface its Mach port up through `set_scanout_blob`/`present_surface`
+  (a libkrun patch + a virglrenderer change). The cursor surface on the venus path rides the same
+  fallback. Until then, the scoping protects the baseline/sw2d tier (the two-tier compatibility floor).
 - **CapsLock/NumLock LED parity** — surface the statusq LED feedback (libkrun `worker.rs` no-op).
   Roadmap M8.
 
