@@ -1,0 +1,31 @@
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index 94c75b1..ecd97e4 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -9304,8 +9304,24 @@ static int vrend_renderer_transfer_write_iov(struct vrend_context *ctx,
+       d.box = info->box;
+       d.target = res->target;
+ 
+-      if (!info->synchronized)
+-         map_flags |= GL_MAP_UNSYNCHRONIZED_BIT;
++      /* LIMINA fix for the WebRender tile-displacement tear (host-side GPU race):
++       * The guest marks a transfer unsynchronized (!info->synchronized) when it has ORPHANED its
++       * buffer guest-side -- it got fresh guest storage, so writing without waiting is safe. But
++       * virgl reuses ONE host GL buffer object (res->gl_id) for ALL of the guest's orphan
++       * generations, so applying that update as an UNSYNCHRONIZED in-place map-write here RACES any
++       * in-flight host draw still reading the same buffer: the draw fetches mixed old/new contents
++       * and a tile lands at the wrong offset (WebRender quads via a re-specified instance buffer).
++       * Reproduced 100% through guest->virgl->zink->KK; clean host-direct (where each orphan gets a
++       * fresh bo). When the transfer covers the WHOLE buffer (the guest's orphan), honor it on the
++       * host with GL_MAP_INVALIDATE_BUFFER_BIT: the driver hands out fresh storage and keeps the old
++       * storage alive for in-flight readers -- correct AND still wait-free, no GPU stall. A partial
++       * unsynchronized write targets a sub-range the guest guarantees is idle, so leave it as-is. */
++      if (!info->synchronized) {
++         if (info->box->x == 0 && (uint32_t)info->box->width >= res->base.width0)
++            map_flags = GL_MAP_INVALIDATE_BUFFER_BIT | GL_MAP_WRITE_BIT;
++         else
++            map_flags |= GL_MAP_UNSYNCHRONIZED_BIT;
++      }
+ 
+       glBindBufferARB(res->target, res->gl_id);
+       data = glMapBufferRange(res->target, info->box->x, info->box->width, map_flags);
