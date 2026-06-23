@@ -25,7 +25,18 @@ original plan below (the plan's *flow* held; the *transport* got simpler):
   `--display-size`→guest-pixels 1:1 convention; native-pixel/HiDPI rendering is separate future work).
 - **Test discovery:** added an `ls <dir>` console-shell built-in to the L1 init; the connector is
   `card0-Virtual-1` (not `card0-Virtio-0`), so the test enumerates rather than hardcodes.
-- **libkrun patches:** `0025` (config-change mechanism) + `0026` (expose handle).
+- **libkrun patches:** `0025` (config-change mechanism) + `0026` (expose handle) + `0027` (de-shear).
+- **Bug found in windowed verify (fixed, patch `0027`):** resizing to a non-stride-aligned width
+  (e.g. 1000) rendered the desktop as diagonal **stride-shear**. Root cause: mutter pads its
+  framebuffer **resource** wider than the visible scanout rect (1000×708 mode → 1024×768 resource),
+  but the software-2D `flush_resource` copied it into the host staging buffer as a **flat blob** →
+  every row drifts by `resource.width − scanout.width`. Latent pre-existing bug; the common boot
+  modes (1280/1024/640) never hit it because their width *was* the allocation width. Fix: record the
+  SET_SCANOUT rect on the scanout and extract just that rect at the resource's own stride
+  (`blit_scanout_rect`; boxed `transfer_read` for the rutabaga path). Pixel-confirmed via
+  `iosdump.swift` before/after; unit-tested. **`LIMINA_WINDOW_CAPTURE` is the WRONG oracle here**
+  (XRGB alpha=0 → PNG reads all-black); use `spikes/venus-draw-probe/iosdump.swift <id>` (forces
+  opaque, honors `bytesPerRow`).
 
 Commits: limina `a923dda` `2e0afd6` `130a6cc` `0775bd9`; libkrun `75e9b37` `9b8a640`.
 Original plan (still accurate for the flow + citations) follows.
