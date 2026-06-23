@@ -1,0 +1,19 @@
+[package]
+name = "limina-surfaceport"
+description = "Mach-port handoff of guest scanout IOSurfaces from the worker to the supervisor (no global ids)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc = { workspace = true }
+
+# IOSurface <-> Mach port (IOSurfaceCreateMachPort / IOSurfaceLookupFromMachPort) and the
+# CFRetained handle the receiver hands back. macOS-only (the whole app is).
+objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef", "IOSurfaceTypes", "libc"] }
+objc2-core-foundation = { version = "0.3", features = [
+    "CFBase",
+    "CFDictionary",
+    "CFNumber",
+    "CFString",
+] }

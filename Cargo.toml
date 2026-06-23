@@ -33,9 +33,10 @@ krun_display = { package = "krun-display", path = "third_party/libkrun/src/displ
 krun_input   = { package = "krun-input",   path = "third_party/libkrun/src/input", features = ["bindgen_clang_runtime"] }
 
 # --- our crates ---
-limina-display = { path = "crates/limina-display" }
-limina-input   = { path = "crates/limina-input" }
-limina-proto   = { path = "crates/limina-proto" }
+limina-display     = { path = "crates/limina-display" }
+limina-input       = { path = "crates/limina-input" }
+limina-proto       = { path = "crates/limina-proto" }
+limina-surfaceport = { path = "crates/limina-surfaceport" }
 
 # --- shared third-party ---
 anyhow            = "1"
