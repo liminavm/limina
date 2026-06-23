@@ -60,8 +60,20 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   dmesg errors — event-driven atomic clients render, they do not hang. Legacy `drmModePageFlip`
   events also work. GOTCHA that masked this: kmscube polls **stdin** alongside the DRM fd, so over a
   non-interactive SSH session it sees EOF→POLLIN, prints "user interrupted!", and bails after ~1
-  frame — run it as `sleep N | kmscube …` to give it a quiet stdin. (30 fps, not 60, is the
-  fence-present pacing, not a hang — a separate perf matter, not this item.)
+  frame — run it as `sleep N | kmscube …` to give it a quiet stdin.
+- **Direct-KMS double-buffered clients cap at 30 fps** (investigated 2026-06-23) — understood, narrow,
+  NOT fixing now. kmscube `-A` runs 31 fps regardless of `LIMINA_FENCE_LATCH_MS` (8 vs 35 ms both
+  31 fps), so it is *not* the open-loop latch fallback — the present fences complete via the truthful
+  CA-latch ack. Host is 60 Hz, so 31 fps ≈ 2 vsyncs/frame: a strictly double-buffered client that
+  blocks on flip-complete misses every other vsync because the #8 fence-accurate present does two
+  sequential waits (GPU-render-complete, then CA-latch) and that round-trip exceeds one vsync. The
+  Wayland desktop + Wayland fullscreen apps hit 60 fps (mutter triple-buffers and pipelines the next
+  frame while the current one latches). So only strictly-double-buffered, blocking, *direct-KMS*
+  clients (kmscube, bare SDL-KMS demos) are affected — not the real workload. Fix directions if ever
+  pursued: (1) decouple the atomic-KMS fake-vblank from the full CA-latch (fire at render-complete /
+  on a vsync-cadence timer — mirrors real hardware, but a #8 design change that must not reintroduce
+  tearing), or (2) shave the present round-trip below one vsync (needs worker instrumentation to
+  quantify it first). Revisit only if direct-KMS double-buffered fullscreen clients become a target.
 - **#28 coherency residue policy** — ✅ **CLOSED (2026-06-23): no action needed; keep venus feedback
   disabled.** Re-framed after a design panel over-stated it. `VN_PERF=no_*_feedback` turns off venus's
   host-visible *feedback* buffers (host writes fence/semaphore/event/query completion into a
@@ -79,8 +91,25 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   regardless (host-clean-to-PoC is a no-op — Shared `MTLBuffer` already host-coherent; HVF stage-2
   attrs are not expressible — `hv_memory_flags_t` is permission-only, `hvf/src/lib.rs:289`). **Revisit
   only if limina ever grows a venus-compute tier** (out of charter — it's a desktop VM).
-- **Cosmetics** — `num_capsets` hardcoded 5; the non-fatal `0x1200`/`0x203` (CTX_DETACH_RESOURCE →
-  ERR_UNSPEC) dmesg lines; Firefox MSAA silent non-AA. Roadmap M4 (~line 413).
+- **Cosmetics** — ✅ **mostly DONE 2026-06-23 (libkrun 0029/0030).** Verified on the seated venus
+  tier: the desktop now boots with **zero** `virtio_gpu` dmesg errors (was: a `capset_id=2` GL-probe
+  EINVAL + `0x1200` responses for `CTX_ATTACH/DETACH_RESOURCE` 0x202/0x203), venus rendering
+  unchanged (gnome-shell `init=0x4` contexts, tier-2 GREEN).
+  - `num_capsets` hardcoded 5 → **fixed (0029):** the device hardcoded 5 while `create_rutabaga`
+    passed `capset_mask=0` (registers all 9); now both derive from `virgl_flags` via one helper, so
+    a `VENUS|NO_VIRGL` guest enumerates exactly the venus capset and never probes ones we can't serve.
+  - `0x1200`/`0x202`/`0x203` `CTX_ATTACH/DETACH_RESOURCE`→ErrUnspec → **fixed (0030):** in coexist
+    mode the 2D scanout resources (boot fb / fbcon) aren't in the 3D renderer's map, so the kernel's
+    attach/detach of them to a 3D context is now an idempotent no-op (also covers the detach/teardown
+    race). Real 3D resources (de)attach normally.
+  - **Firefox MSAA silent non-AA** → **documented, NOT chasing (known cosmetic).** Core MSAA works on
+    zink/venus (`spikes/venus-draw-probe/msaa-test.c` passes); the gap is Firefox-specific — its
+    `MozFramebuffer::CreateImpl` combo (color RENDERBUFFER + DEPTH24_STENCIL8 @ samples=4) reports the
+    backbuffer incomplete, so it silently falls back to non-AA. One app's AA quality, with the general
+    path working — not worth a venus/zink/KK FBO-completeness rabbit-hole. Reopen only if MSAA breaks
+    broadly. (`msaa-test.c` is the standing oracle; memory `limina-tier2-venus` thread 7.)
+  - Remaining (untouched, genuinely low-value): KK GPU-side per-draw root re-fetch (only if GPU-bound
+    workloads reappear). Roadmap M4 (~line 413).
 
 ## M5 hardening
 - **Clipboard test-coverage gaps** — the ext-data-control (enhanced) backend is live-verified only,
