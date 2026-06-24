@@ -33,6 +33,20 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
     (`zink_screen.c`); see `spikes/virgl-zink-kk`.
   - **venus** — `vn_wsi.c` present-region (mirror of `patches/mesa/0005`; incidental in this
     host tree, which builds KK not venus).
+- **`0002-kk-lay-out-DRM-format-modifier-attachment-images-as-.patch`** — render a
+  DRM-format-modifier image used as a color/depth **attachment** as *tiled* (heap-backed)
+  instead of *linear* (buffer-backed). venus (`patches/mesa/0008`) force-advertises
+  `EXT_image_drm_format_modifier`, so mutter allocates its render targets with
+  `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`; KK forced every non-OPTIMAL image linear →
+  `newTextureWithDescriptor:offset:bytesPerRow:` buffer-backed texture, which **Metal won't
+  accept as a render-pass attachment** → `mtl_new_render_command_encoder_with_descriptor`
+  returns nil → `kk_render_encoder` asserts (`kk_encoder.c:299`) before the desktop renders.
+  In a VM the DRM modifier is host-meaningless (backing is a host Metal heap), so an
+  attachment modifier image is laid out tiled/renderable. Plain `VK_IMAGE_TILING_LINEAR`
+  images stay linear — that path is vkr's IOSurface-backed scanout (renderable via
+  `newBufferWithBytesNoCopy`). One conditional in `kk_image_layout_init`; with it the
+  accelerated GNOME desktop renders through venus→KK→Metal. (A separate `gst-plugin-scan`
+  encoder-state crash, previously masked by this one, remains.)
 
 ## Apply / rebuild
 The `/Volumes/mesa-cs/mesa` tree is on the `limina/kosmickrisp` branch with these committed.
