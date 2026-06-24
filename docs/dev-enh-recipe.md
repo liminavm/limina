@@ -215,12 +215,27 @@ dev-enh↔release diff is pure upstream drift, functionally irrelevant — confi
 build (pixel-confirmed). dev-enh's exact venus+WSI sources preserved under
 `spikes/venus-261-source/`.
 
-**Remaining polish (not blocking):** `0010` carries dev-enh's `26.1.0-devel` versions of its 3
-files (limina edits + incidental upstream drift) because the exact dev-enh base commit wasn't
-pinned (its blobs match multiple branches). A follow-up can pin that base and distil `0010` to a
-minimal upstream-clean diff, and port `0009`/`0010` onto current mesa (26.2) so venus rides the
-same tree as zink. The build is **pinned to `mesa-26.1.0`** for now, which is faithful to dev-enh
-(it ran venus 26.1 + zink 26.2 mixed).
+### NO upstream drift — base pinned, patch is pure limina (2026-06-24 follow-up)
+The earlier worry that `0010` "carries incidental upstream drift" was **wrong, a miscount**. Pinned
+dev-enh's base by multi-file blob fingerprint against full mesa history: dev-enh's *unedited* venus
+files (`vn_command_buffer.c`, `vn_descriptor_heap.c`, …) match **`mesa-26.1.0`** (`1d7b6318`); its
+base is the **26.1 release branch** (main had already bumped to `26.2.0-devel` at the ~April 26.1
+branch-point — that's why the "26.1.0-devel" VERSION string and the `vn_query_pool` 26.0.3-era blob
+were red herrings). The 3 files in `0010` are **byte-identical to `mesa-26.1.0` except our edits**, so
+`diff(26.1.0 → dev-enh)` for them is **100% limina** — the "149 drift lines" were unmarked limina
+impl-body (the modifier-properties fill, the LINEAR layout computation), not upstream noise. Confirmed
+by `git apply` landing cleanly on the 26.1.0 context.
+
+Reading the patch end-to-end then surfaced the *real* wart: inert `if (0) fprintf(...)` debug traces
+and a dead `tiling_translated_to_optimal` flag (set, never read — translation no longer happens). Both
+violate the `patches/mesa/README.md` DIAG-hygiene rule, so they were stripped: `0010` went **390 → 282
+lines**, the `vn_image.h` hunk disappeared entirely (dead field gone), and the cleaned patch rebuilds +
+presents (0 gbm, pixel-confirmed). dev-enh's *pristine* sources (debug and all) stay under
+`spikes/venus-261-source/` as the forensic record; `patches/mesa/0010` is the clean distillation.
+
+Build stays **pinned to `mesa-26.1.0`** (faithful to dev-enh, which ran venus 26.1 + zink 26.2 mixed).
+Porting `0009`/`0010` onto current mesa (26.2) so venus rides zink's tree remains optional future work,
+not a correctness gap.
 
 ---
 

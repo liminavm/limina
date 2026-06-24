@@ -3,15 +3,17 @@
 # Copyright © 2026 Gustavo Noronha Silva
 
 # Build ONLY venus (libvulkan_virtio.so) at a chosen mesa version + our venus patches,
-# in a Fedora `container` matched to the guest. This exists because the enhanced tier's
-# WORKING venus is mesa 26.1.0-devel (dev-enh), while 26.2.0-devel/3515c52 regresses the
-# guest present path (gbm_surface_lock_front_buffer fails — proven by A/B 2026-06-24, see
-# docs/dev-enh-recipe.md). zink stays at whatever the guest already ships; only venus is
-# pinned back. dev-enh itself runs zink 26.2 + venus 26.1 mixed, so this is faithful.
+# in a Fedora `container` matched to the guest. The enhanced tier's WORKING venus is the
+# dev-enh golden image's, whose base was pinned (blob fingerprint, 2026-06-24) to the
+# mesa-26.1.0 release; the present fix was NOT a version regression but a LOST limina patch
+# (0009+0010) that only ever lived in dev-enh's ~/mesa-venus tree — see docs/dev-enh-recipe.md.
+# We pin to mesa-26.1.0 because that's dev-enh's exact base (the patches are pure-limina diffs
+# against it); zink stays at whatever the guest ships. dev-enh ran zink 26.2 + venus 26.1 mixed,
+# so this is faithful. Porting 0009/0010 forward to 26.2 is optional future work.
 #
-# Applies ONLY the venus patches (present-region deep-copy + dma_buf-on-opaque-fd/KK +
-# force LINEAR DRM-format-modifier) — NOT the zink guard series, which is irrelevant to a
-# venus-only build and may not apply on an older tag.
+# Applies ONLY the venus patches (0009 WSI present fix + 0010 image/physdev native modifier)
+# — NOT the zink guard series, which is irrelevant to a venus-only build and may not apply
+# on an older tag.
 #
 #   MESA_TAG=mesa-26.1.0 FEDORA_REL=43 scripts/build-venus.sh
 # Output: target/test-guest/venus-<tag>/libvulkan_virtio.so (+ the ICD json). gitignored.

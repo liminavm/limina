@@ -49,9 +49,11 @@ the present fix was a **lost limina patch set that had only ever lived in dev-en
 at *any* mesa version (26.1.0 release, 26.2) failed identically at `gbm_surface_lock_front_buffer`
 until these were recovered; it was **never a version regression**. They supersede the old
 `0005` (present-region; now folded into `0009`) and `0008` (dma-buf; now folded into `0010`),
-both retired. Built against the dev-enh-era base **`mesa-26.1.0`**; the diffs carry dev-enh's
-`26.1.0-devel` versions of these files (limina edits + incidental upstream drift — distilling to
-a minimal base-pinned diff is a follow-up that needs the exact dev-enh base commit).
+both retired. dev-enh's base was pinned by multi-file blob fingerprint to **`mesa-26.1.0`** (the
+26.1 release branch; the "26.1.0-devel" VERSION string was a red herring — main had bumped to
+26.2.0-devel at the April branch-point). The patched files are **byte-identical to `mesa-26.1.0`
+except our edits**, so these diffs are **pure limina, no upstream drift**. Inert `if (0) fprintf`
+debug traces and a dead `tiling_translated_to_optimal` flag were stripped (DIAG hygiene, below).
 
 - **`0009-venus-wsi-present-fix.diff`** (`vn_wsi.c`, `src/vulkan/wsi/wsi_common.h`,
   `wsi_common_wayland.c`) — the WSI half:
