@@ -44,9 +44,10 @@ This replaces the old ad-hoc in-guest `~/mesa` build (task #26).
   directly into `Fedora-Workstation-43.dev-enh.raw`'s `~/mesa-venus` + installed lib.)
 - **`0006-zink-kopper-guard-missing-surface-extensions.diff`** — kopper guards for the
   surfaceless/no-WSI path on KK.
-- **`0007-backport-zink-query-external-memory-handle-type-compat.diff`** — a session-era
-  backport that does **not** apply on `3515c52` (already upstream / conflicts); the build
-  loop skips it gracefully. Kept for provenance; a cleanup may drop it.
+- **`0007`** — *removed 2026-06-24.* It was a backport already upstream in 26.x; on the
+  newer tree the fuzzy `patch -F5` fallback silently re-applied it at +347 lines, **duplicating**
+  `get_external_image_handle_type_props` → `zink_resource.c` "redefinition" build failure. It is
+  obsolete (upstream) so it was dropped rather than rebased.
 - **`0008-venus-expose-dmabuf-on-opaque-fd-renderer.diff`** — **the load-bearing venus
   patch** (recovered 2026-06-24 from June-11 session `1af547e7`; it had only ever lived in
   dev-enh's in-guest `~/mesa-venus` checkout — never exported, the enhanced-tier discipline

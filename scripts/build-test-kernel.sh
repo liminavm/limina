@@ -81,6 +81,13 @@ CONFIG_VIRTIO_INPUT=y
 # on vda3); virtio-net carries gvproxy NAT/SSH. (Harmless for the minimal L1 guest.)
 CONFIG_BTRFS_FS=y
 CONFIG_VIRTIO_NET=y
+# systemd-sysext (enhanced-tier mesa delivery): a directory extension under
+# /var/lib/extensions is merged into /usr via an overlayfs mount. arm64 defconfig does NOT
+# enable OverlayFS, so without this systemd-sysext fails with "Failed to mount sysext (type
+# overlay) ... No such device" and our patched zink/venus never shadow the stock libs (the
+# guest then crash-loops on stock venus). Mainline F43 ships no kernel-16k, so the enhanced
+# tier rides our custom kernel — which must therefore carry OverlayFS itself.
+CONFIG_OVERLAY_FS=y
 # SELinux — match the stock distro's LSM stack. arm64 defconfig has NO SELinux, so a kernel
 # built without these labels nothing: every file installed through it stays unlabeled, and the
 # stock Fedora kernel on the EFI path (which comes up enforcing) then reboot-loops trying to
@@ -146,7 +153,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         ./scripts/kconfig/merge_config.sh -m .config /out/limina.fragment
         make ARCH=arm64 olddefconfig
         echo '--- verifying key options survived'
-        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS CONFIG_DRM_VIRTIO_GPU CONFIG_FRAMEBUFFER_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_INPUT_EVDEV CONFIG_BTRFS_FS CONFIG_VIRTIO_NET CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
+        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS CONFIG_DRM_VIRTIO_GPU CONFIG_FRAMEBUFFER_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_INPUT_EVDEV CONFIG_BTRFS_FS CONFIG_VIRTIO_NET CONFIG_OVERLAY_FS CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
             grep -q \"^\$opt=y\" .config || { echo \"MISSING \$opt\" >&2; exit 1; }
         done
         grep -q '^$PAGE_CONFIG' .config || { echo 'MISSING $PAGE_CONFIG' >&2; exit 1; }
