@@ -42,13 +42,33 @@ This replaces the old ad-hoc in-guest `~/mesa` build (task #26).
   first damage-rect present), garbage wl damage on release. Deep-copy the rectangles too.
   Upstream MR candidate. (Found 2026-06-10 chasing WebGL2-aquarium-on-KK; also baked
   directly into `Fedora-Workstation-43.dev-enh.raw`'s `~/mesa-venus` + installed lib.)
+- **`0006-zink-kopper-guard-missing-surface-extensions.diff`** — kopper guards for the
+  surfaceless/no-WSI path on KK.
+- **`0007-backport-zink-query-external-memory-handle-type-compat.diff`** — a session-era
+  backport that does **not** apply on `3515c52` (already upstream / conflicts); the build
+  loop skips it gracefully. Kept for provenance; a cleanup may drop it.
+- **`0008-venus-expose-dmabuf-on-opaque-fd-renderer.diff`** — **the load-bearing venus
+  patch** (recovered 2026-06-24 from June-11 session `1af547e7`; it had only ever lived in
+  dev-enh's in-guest `~/mesa-venus` checkout — never exported, the enhanced-tier discipline
+  gap). venus only advertises `VK_EXT_external_memory_dma_buf` / `_image_drm_format_modifier`
+  when the **renderer** (host) advertises dma-buf. KK on Metal has no real dma-buf — it
+  advertises `KHR_external_memory_fd` (opaque fd). In a VM the guest's "dma-buf" fds are
+  virtio-gpu GEM/blob resources anyway, so this patch adds an `else if` in
+  `vn_physical_device_init_external_memory` keying off `KHR_external_memory_fd` →
+  `renderer_handle_type = OPAQUE_FD` (host handle translated in
+  `vn_device_memory_fix_alloc_info`), and force-enables `EXT_image_drm_format_modifier` +
+  `EXT_queue_family_foreign` (guest-handled in a VM). **Without it**, stock distro venus
+  reports `caps.dmabuf=0` → gbm `create_dumb` fallback → NULL `bo->image` →
+  `dri2_allocate_textures` NULL-deref → mutter/gnome-shell SIGSEGV on F44. Requires building
+  venus (below). Upstreamable.
 
-## What we DON'T build here
-Venus (`libvulkan_virtio`) is the guest's **stock** Mesa Vulkan driver (`-Dvulkan-drivers=`
-is empty). zink is pointed at venus at runtime via
-`VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json`. (If we ever need to patch
-venus itself — e.g. for the #28 zero-copy coherency work — add `-Dvulkan-drivers=virtio` and
-a venus patch here.)
+## Venus (now built here)
+`scripts/build-mesa-zink.sh` now builds venus too (`-Dvulkan-drivers=virtio`, default),
+producing `lib64/libvulkan_virtio.so` + the venus ICD in the `/opt/mesa-zink` prefix, with
+patch **0008** applied. This is required for the accelerated desktop on a stock distro guest
+whose own venus lacks dma-buf (see 0008). Override `VULKAN_DRIVERS=` (empty) to build zink
+only. Note the host KosmicKrisp + host-zink patch series lives separately in
+`patches/kosmickrisp/` (the `/Volumes/mesa-cs/mesa` tree).
 
 ## Re-export / DIAG hygiene
 The in-guest working tree carried temporary `LIMINA-DIAG` debug hacks (force

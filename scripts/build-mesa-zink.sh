@@ -9,12 +9,17 @@
 # and only the finished install tree is bind-mounted out.
 #
 # What it builds: the patched **zink** gallium driver (GL→Vulkan) carrying MR !37115
-# (nullDescriptor emulation for MoltenVK). Venus (libvulkan_virtio) is the guest's STOCK
-# Mesa Vulkan driver — we do NOT build it here (-Dvulkan-drivers= empty). zink is pointed
-# at venus at runtime via VK_DRIVER_FILES (see scripts/venus-gl-test.sh).
+# (nullDescriptor emulation), AND our **venus** (libvulkan_virtio, -Dvulkan-drivers=virtio)
+# carrying patch 0008 — which makes venus advertise VK_EXT_external_memory_dma_buf /
+# _image_drm_format_modifier even when the host renderer (KosmicKrisp on Metal) only offers
+# opaque-fd, not real dma-buf. Stock distro venus does NOT advertise dma-buf on this host,
+# so gbm falls back to a dumb buffer with a NULL dri_image and mutter/gnome-shell SIGSEGVs
+# (see patches/mesa/0008). zink is pointed at venus at runtime via VK_DRIVER_FILES.
+# Override VULKAN_DRIVERS= (empty) to skip building venus.
 #
 # Output: target/test-guest/mesa-zink/  (an install prefix = the /opt/mesa-zink we ship
-# into the guest) + mesa-zink.tar.zst for delivery. Both gitignored.
+# into the guest; includes lib64/libvulkan_virtio.so + the venus ICD) + mesa-zink.tar.zst
+# for delivery. Both gitignored.
 #
 # IMPORTANT: this carries our patch series `patches/mesa/*.diff` (clean — NO LIMINA-DIAG
 # debug hacks; strip any before re-exporting). Base is pinned to MESA_COMMIT below.
@@ -46,8 +51,8 @@ container run --rm \
   -v "$OUT:/out" \
   -v "$OUTROOT:/outroot" \
   -v "$VOL:/build" \
-  fedora:43 bash -euxo pipefail -c '
-    dnf -y install git meson ninja-build gcc gcc-c++ python3-mako bison flex glslang-devel zstd >/dev/null
+  "fedora:${FEDORA_REL:-43}" bash -euxo pipefail -c '
+    dnf -y install git meson ninja-build gcc gcc-c++ python3-mako bison flex glslang-devel zstd patch >/dev/null
     dnf -y builddep mesa >/dev/null
 
     cd /build
@@ -62,14 +67,16 @@ container run --rm \
     # Apply our clean patch series (order by filename).
     for p in $(ls /patches/*.diff 2>/dev/null | sort); do
       echo "=== applying $p ==="
-      git apply --verbose "$p" || patch -p1 -F3 < "$p"
+      if git apply --verbose "$p"; then echo "OK: $p";
+      elif patch -p1 -F5 --dry-run < "$p" >/dev/null 2>&1 && patch -p1 -F5 < "$p"; then echo "OK(fuzz): $p";
+      else echo "SKIP (does not apply; already upstream or needs rebase): $p"; fi
     done
 
     rm -rf build-zink
     meson setup build-zink \
       --prefix=/opt/mesa-zink \
-      -Dgallium-drivers=zink,llvmpipe,softpipe \
-      -Dvulkan-drivers= \
+      -Dgallium-drivers='"${GALLIUM_DRIVERS:-zink,llvmpipe,softpipe}"' \
+      -Dvulkan-drivers='"${VULKAN_DRIVERS:-virtio}"' \
       -Dplatforms=x11,wayland \
       -Dglx=dri -Degl=enabled -Dgbm=enabled -Dgles2=enabled \
       -Dllvm=enabled -Dbuildtype=release
