@@ -165,6 +165,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
     rpmbuild -bb "$SPEC" 2>&1 | tail -40
     mkdir -p /out/rpm
     cp -f "$HOME"/rpmbuild/RPMS/aarch64/*.rpm /out/rpm/ 2>/dev/null || true
+    cp -f "$HOME"/rpmbuild/RPMS/noarch/*.rpm  /out/rpm/ 2>/dev/null || true   # any noarch subpackages
     echo "=== built RPMs ==="; ls -1 /out/rpm/*.rpm 2>/dev/null | sed "s#/out/#target/test-guest/mesa/#"
   '
 echo "==> mesa RPMs in: $RPMOUT/"
