@@ -22,7 +22,7 @@ cd "$(dirname "$0")/.."
 
 PROFILE="${PROFILE:-debug}"
 KERNEL="${LIMINA_TEST_KERNEL_16K:-target/test-guest/kernel/Image-16k}"
-DISK_SRC="${LIMINA_DISK:-Fedora-Workstation-43.raw}"
+DISK_SRC="${LIMINA_DISK:-Fedora-Workstation-43.enhanced.raw}"
 SINK=(--window)
 case "${1:-}" in
     --capture) SINK=(--display-capture "${2:?--capture needs a PNG path}" --display-size 1280x800) ;;

@@ -31,14 +31,14 @@ use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
 
-/// The session GL environment (zink→venus). SSH shells do NOT inherit the session's
-/// environment.d, and without this the GL stack silently falls back to llvmpipe — the
-/// classic ENV TRAP (spikes/trace-replay/RESULTS.md). The GL_RENDERER probe below is the
-/// guard that proves the env actually took.
-const ZINK_ENV: &str = "LD_LIBRARY_PATH=/opt/mesa-zink/lib64 \
-     LIBGL_DRIVERS_PATH=/opt/mesa-zink/lib64/dri \
-     __EGL_VENDOR_LIBRARY_DIRS=/opt/mesa-zink/share/glvnd/egl_vendor.d \
-     MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink \
+/// The session GL environment (zink→venus) for the RPM-enhanced image
+/// (`Fedora-Workstation-43.enhanced.test.raw`): mesa lives at `/usr` and zink is selected via
+/// `/etc/environment.d`. SSH shells do NOT inherit environment.d, so without this the GL stack
+/// silently falls back to llvmpipe — the classic ENV TRAP (spikes/trace-replay/RESULTS.md). The
+/// GL_RENDERER probe below is the guard that proves the env actually took. (The retired source-built
+/// dev-enh golden instead kept mesa under `/opt/mesa-zink` + its loader paths; see
+/// `images-staging-delete/README.md`.)
+const ZINK_ENV: &str = "MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink \
      VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
      VN_PERF=no_semaphore_feedback,no_fence_feedback,no_event_feedback,no_query_feedback \
      VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1";

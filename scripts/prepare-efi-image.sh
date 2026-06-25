@@ -38,11 +38,11 @@
 #   2. relabel — one EFI boot: fixfiles relabels, the guest reboots, and the supervisor relaunches
 #                the worker (a guest reboot no longer tears the VM down) until it converges to sshd
 #
-# Usage: scripts/prepare-efi-image.sh [IMAGE]   (default: Fedora-Workstation-43.dev-enh.raw)
+# Usage: scripts/prepare-efi-image.sh [IMAGE]   (default: Fedora-Workstation-43.vanilla.raw)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-IMAGE="${1:-Fedora-Workstation-43.dev-enh.raw}"
+IMAGE="${1:-Fedora-Workstation-43.vanilla.raw}"
 KERNEL="${LIMINA_TEST_KERNEL_16K:-target/test-guest/kernel/Image-16k}"
 FIRMWARE="${LIMINA_FIRMWARE:-/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd}"
 LIMINA="${LIMINA_BIN:-target/debug/limina}"

@@ -44,15 +44,18 @@ const DEFAULT_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
 /// firmware → GRUB → kernel all render to the virtio-gpu scanout — the windowed boot console.
 const DEFAULT_GOP_FIRMWARE: &str = "target/krun-efi/KRUN_EFI.gop.fd";
 
-/// The guest image the tests boot from, by default — a **frozen CoW snapshot** of the dev
-/// image, NOT the live `Fedora-Workstation-43.raw` (which evolves as we provision/develop the
-/// guest). Created once with `cp -c Fedora-Workstation-43.raw Fedora-Workstation-43.test.raw`
-/// (APFS clone: instant, shares blocks; each side copies only what it writes, so the dev image
-/// can change without perturbing tests). Refresh the fixture by re-cloning. Per-run the harness
-/// still makes its own writable clone of this for net/disk-root boots. Override: `LIMINA_TEST_DISK`.
-/// NOTE: this image carries a baked-in `claude` test user + SSH key (see memory
-/// `limina-fedora-access`); making that provisioning reproducible is a tracked follow-up.
-const DEFAULT_TEST_DISK: &str = "Fedora-Workstation-43.test.raw";
+/// The **stock-tier** guest image the tests boot from, by default — a **frozen CoW snapshot** of
+/// the clean pristine-stock base `Fedora-Workstation-43.accessible.raw` (stock 4 KiB kernel, stock
+/// mesa 25.2.4, `claude` user + SSH key + autologin baked, no limina enhancements). It MUST stay
+/// stock: the EFI boot tests (`fedora_from_env`) boot its own **stock Fedora kernel** to prove the
+/// compatibility floor, and the venus tests (`enhanced_fedora_from_env`) boot it with an external
+/// 16 KiB kernel to prove **stock mesa's venus works on 16 KiB pages** — both lose meaning on an
+/// enhanced image. Created once with
+/// `cp -c Fedora-Workstation-43.accessible.raw Fedora-Workstation-43.stock.test.raw` (APFS clone:
+/// instant, shares blocks). Refresh by re-cloning. Per-run the harness still makes its own writable
+/// clone for net/disk-root boots. Override: `LIMINA_TEST_DISK`. The ENHANCED-tier counterpart is
+/// `Fedora-Workstation-43.enhanced.test.raw` (see [`GuestConfig::seated_fedora_from_env`]).
+const DEFAULT_TEST_DISK: &str = "Fedora-Workstation-43.stock.test.raw";
 
 /// gvproxy's default inbound port-forward: `127.0.0.1:2222 → 192.168.127.2:22`. With the
 /// well-known vfkit MAC the guest gets the static `.2` lease, so this reaches its sshd.
@@ -514,27 +517,30 @@ impl GuestConfig {
         })
     }
 
-    /// Like [`GuestConfig::enhanced_fedora_from_env`], but booting the **seated dev-enh
-    /// golden** (`Fedora-Workstation-43.dev-enh.raw`, override `LIMINA_TEST_DISK_ENH`): gdm
-    /// autologin to a gnome-shell-on-venus session with `/opt/mesa-zink`, the x11-enabled
-    /// venus ICD, and `apitrace` baked in (see memory `limina-fedora-access` for the bake
-    /// inventory). This is the vehicle for tests that need a *running graphical session*
-    /// (Xwayland, the zink→venus GL stack) rather than just venus enumeration.
+    /// Like [`GuestConfig::enhanced_fedora_from_env`], but booting the **seated ENHANCED test
+    /// golden** (`Fedora-Workstation-43.enhanced.test.raw`, override `LIMINA_TEST_DISK_ENH`): the
+    /// RPM-delivered enhanced image (16k kernel + mesa 26.2 venus at `/usr` + patched mutter) with
+    /// gdm autologin to a gnome-shell-on-venus session, plus the test tooling baked in —
+    /// `apitrace`/`eglretrace` and `/opt/gfxreconstruct/bin/gfxrecon-replay` (see
+    /// `docs/images.md`). This is the vehicle for tests that need a *running graphical session*
+    /// (Xwayland, the zink→venus GL stack) rather than just venus enumeration. (Replaces the retired
+    /// source-built `dev-enh.raw`; mesa moved `/opt/mesa-zink` → `/usr`, so `ZINK_ENV` in the tests
+    /// drops the loader-path vars but keeps the driver-selection knobs — env-trap still applies.)
     ///
     /// The host Vulkan backend (KosmicKrisp) is wired automatically by [`Guest::boot`] for any
     /// coexist/venus display — see [`kosmickrisp_icd`]; a venus-requiring test should still SKIP
     /// up front when KK is absent (so it doesn't silently run on the software-2D fallback).
-    /// Returns an error (the test should SKIP) if the 16 KiB kernel or the dev-enh disk is missing.
+    /// Returns an error (the test should SKIP) if the 16 KiB kernel or the enhanced disk is missing.
     pub fn seated_fedora_from_env() -> Result<GuestConfig> {
         let mut cfg = GuestConfig::enhanced_fedora_from_env()?;
         let disk = match std::env::var("LIMINA_TEST_DISK_ENH") {
             Ok(p) => PathBuf::from(p),
-            Err(_) => repo_root().join("Fedora-Workstation-43.dev-enh.raw"),
+            Err(_) => repo_root().join("Fedora-Workstation-43.enhanced.test.raw"),
         };
         anyhow::ensure!(
             disk.exists(),
-            "seated dev-enh disk not found at {disk:?} (set LIMINA_TEST_DISK_ENH); this is the \
-             machine-local seated golden, see memory `limina-fedora-access`"
+            "seated enhanced disk not found at {disk:?} (set LIMINA_TEST_DISK_ENH); this is the \
+             machine-local enhanced test golden, see docs/images.md"
         );
         if let Boot::KernelDisk { disk: d, .. } = &mut cfg.boot {
             *d = disk;

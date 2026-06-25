@@ -95,9 +95,17 @@ NET_FLAG=--net
 # the baked limina-agent auto-mounts it at /media/<NAME> in the guest).
 SHARE_FLAGS=()
 [ -n "${LIMINA_SHARE:-}" ] && SHARE_FLAGS=(--share "$LIMINA_SHARE")
+# LIMINA_SW2D=1 forces the software-2D floor (tier 1) — no venus/vrend 3D, guest GL → llvmpipe.
+SW2D_FLAG=()
+[ "${LIMINA_SW2D:-0}" = 1 ] && SW2D_FLAG=(--gpu-software-2d)
+# LIMINA_RAM_MIB / LIMINA_CPUS override the guest size (default 4 GiB / 4 vCPUs). Bump these for
+# in-guest builds (e.g. gfxreconstruct OOMs heavy C++ at 4 GiB — boot with LIMINA_RAM_MIB=12288).
+RAM_MIB="${LIMINA_RAM_MIB:-4096}"
+CPUS="${LIMINA_CPUS:-4}"
 target/debug/limina --vmm-bin target/debug/limina-vmm \
-  --disk "$WORK" --cpus 4 --ram-mib 4096 $NET_FLAG --window \
+  --disk "$WORK" --cpus "$CPUS" --ram-mib "$RAM_MIB" $NET_FLAG --window \
   ${SHARE_FLAGS[@]+"${SHARE_FLAGS[@]}"} \
+  ${SW2D_FLAG[@]+"${SW2D_FLAG[@]}"} \
   >"$LOG" 2>&1 &
 echo "limina pid=$! (worker log $LOG, ICD $ICD)"
 wait
