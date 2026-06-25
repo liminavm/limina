@@ -342,3 +342,81 @@ fn fedora_stock_image_renders_graphical_desktop() {
         .expect("supervisor did not stop");
     eprintln!("teardown outcome: {outcome:?}");
 }
+
+/// The two-tier **compatibility floor**: a stock guest on the **forced software-2D** GPU
+/// (`fedora_gop_from_env`'s default capture device — no venus/virgl 3D advertised at all) must still
+/// bring up a usable GNOME desktop in llvmpipe. This is strictly stronger than
+/// [`fedora_stock_image_renders_graphical_desktop`], which uses the coexist device and relies on the
+/// venus→`kms_swrast` *fallback*: here there is no 3D device to fall back from, so it exercises the
+/// pure-CPU path that must work even on a GL-less host. No KosmicKrisp / host GL needed. This is the
+/// guarantee that "missing limina enhancements degrade gracefully; they don't break the VM" — if it
+/// regresses, the baseline tier itself is broken.
+#[test]
+fn fedora_stock_image_software_2d_floor_renders_desktop() {
+    if !limina_test::require_hvf_or_skip("fedora_stock_image_software_2d_floor_renders_desktop") {
+        return;
+    }
+
+    // fedora_gop_from_env() already gives the software-2D capture device + GOP firmware + NAT —
+    // exactly the floor. Do NOT add a coexist/venus device (that would be the other test's path).
+    let cfg = match GuestConfig::fedora_gop_from_env() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("SKIP fedora_stock_image_software_2d_floor_renders_desktop: {e:#}");
+            return;
+        }
+    };
+    eprintln!(
+        "booting the stock Fedora desktop on the SOFTWARE-2D floor (no 3D device): {:?}",
+        cfg.boot
+    );
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    guest
+        .wait_for_ssh_banner(Duration::from_secs(240))
+        .expect("guest never reached sshd over the EFI path");
+
+    // Oracle 1 — the graphical session initialized (autologin session or GDM greeter).
+    guest
+        .ssh_poll(
+            "sudo journalctl -b _COMM=gnome-shell --no-pager 2>/dev/null \
+             | grep -q 'GNOME Shell started'",
+            Duration::from_secs(180),
+        )
+        .expect(
+            "gnome-shell never started on the software-2D floor — software GL (llvmpipe) is broken, \
+             which breaks the two-tier baseline guarantee",
+        );
+
+    // Oracle 2 — it actually painted a rich desktop frame (same oracle as the coexist render test).
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut best_colors = 0usize;
+    let mut best_dominance = 1.0f64;
+    while Instant::now() < deadline {
+        if let Ok(frame) = guest.read_capture() {
+            let colors = frame.distinct_colors();
+            let (_, dominance) = frame.dominant_color();
+            if colors > best_colors {
+                best_colors = colors;
+                best_dominance = dominance;
+            }
+            if best_colors >= 1000 && best_dominance < 0.90 {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    eprintln!(
+        "richest software-2D desktop frame: {best_colors} distinct colors, dominant {best_dominance:.2}"
+    );
+    assert!(
+        best_colors >= 1000 && best_dominance < 0.90,
+        "the GNOME desktop never rendered on the software-2D floor (richest: {best_colors} colors, \
+         {best_dominance:.2} dominant) — an llvmpipe/scanout regression breaks the baseline tier"
+    );
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(20))
+        .expect("supervisor did not stop");
+    eprintln!("teardown outcome: {outcome:?}");
+}

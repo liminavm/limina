@@ -224,16 +224,21 @@ fn venus_replay_matches_llvmpipe_reference() {
 
     // Replay on both backends, snapshotting every 100th frame. eglretrace exits non-zero
     // on a crashed replay, which ssh_exec turns into a failure.
-    for (name, env) in [
-        ("venus", ZINK_ENV),
+    // The enhanced image's environment.d FORCES the zink selectors (MESA_LOADER_DRIVER_OVERRIDE=zink,
+    // VK_DRIVER_FILES=venus) into every shell, so the llvmpipe REFERENCE leg must `-u` them or
+    // eglretrace tries zink-on-venus and dies "unable to initialize EGL display" (the same env trap
+    // perf-ledger.sh dodges; only surfaced once the test actually ran on the RPM image).
+    for (name, unset, env) in [
+        ("venus", "", ZINK_ENV),
         (
             "llvmpipe",
+            "-u MESA_LOADER_DRIVER_OVERRIDE -u VK_DRIVER_FILES",
             "GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1",
         ),
     ] {
         let out = guest
             .ssh_exec(&format!(
-                "mkdir -p /tmp/snap-{name} && env {x11} {env} eglretrace --headless \
+                "mkdir -p /tmp/snap-{name} && env {unset} {x11} {env} eglretrace --headless \
                  --snapshot-interval=100 -s /tmp/snap-{name}/ /tmp/replay.trace 2>&1 \
                  | tail -2"
             ))

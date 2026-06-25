@@ -578,7 +578,14 @@ impl GuestConfig {
             height,
             software_2d: false,
         });
-        self
+        // A coexist display runs virglrenderer's `vrend` half (host GL via zink-on-KK), whose
+        // `virgl_renderer_init` dlopens libEGL at startup — so a coexist boot ALWAYS needs the
+        // host-GL worker env, or the worker aborts with "Couldn't open libEGL.dylib" before the
+        // guest even comes up. Wire it here so every coexist test (venus, venus_replay, the stock
+        // render test) gets it automatically; `with_virgl_host_gl` is idempotent, so an explicit
+        // call afterwards is a harmless no-op. (KK absent → `Guest::boot` degrades to software-2D,
+        // which doesn't touch libEGL, so the env is set-but-unused and still harmless.)
+        self.with_virgl_host_gl()
     }
 
     /// Wire the **zink-on-KosmicKrisp host GL** worker environment so virglrenderer's `vrend`
@@ -610,7 +617,11 @@ impl GuestConfig {
             ("LIBGL_DRIVERS_PATH", drivers.as_str()),
             ("EGL_PLATFORM", "surfaceless"),
         ] {
-            self.envs.push((k.to_string(), v.to_string()));
+            // Idempotent: `with_coexist_display` already applies these, and a test may also call
+            // this explicitly — don't double-push (a caller's own override of a key also wins).
+            if !self.envs.iter().any(|(ek, _)| ek == k) {
+                self.envs.push((k.to_string(), v.to_string()));
+            }
         }
         self
     }
