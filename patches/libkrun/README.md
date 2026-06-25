@@ -108,3 +108,19 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
   Sibling to 0014 (the same fix for the scanout readback path). Verified: a stock F44 guest runs
   `glxinfo` (renderer `virgl (zink … KosmicKrisp)`) with zero GPU-worker panics — pre-fix it
   wedged the GPU on the first readback.
+- **0031 — map `KRUN_DISPLAY_ERR_METHOD_UNSUPPORTED` (-2) in `into_rust_result!`.** The macro
+  mapped -1/-3/-4 but let -2 fall through to the catch-all, so a backend returning
+  `MethodNotSupported` was misreported as `InternalError`. Callers that branch on
+  `MethodNotSupported` to take a fallback (virtio-gpu `present_surface` → readback, for a
+  display sink with no zero-copy present such as the headless capture sink) never took it.
+- **0032 — virtio-gpu read the venus scanout IOSurface for the headless capture sink.** A venus
+  `SET_SCANOUT_BLOB` scanout presents zero-copy via `present_surface`; a sink with no zero-copy
+  path falls back to readback. But venus blobs are host-visible zero-copy — rutabaga's
+  `transfer_read` EINVALs on them — so `read_2d_resource` yielded a blank frame. Read the
+  presented IOSurface's shared storage directly: a new `Rutabaga::read_iosurface`
+  (`RutabagaComponent` trait method, default `Unsupported`, implemented by the virgl/venus
+  component over virglrenderer's new `virgl_renderer_resource_read_iosurface` export) feeds the
+  readback path for an IOSurface-backed scanout. The zero-copy window present path and the
+  sw-2D / non-venus 3D readback paths are unchanged. Needs 0031 (so the -2 fall-through fires)
+  and virglrenderer patch 0002 (the export). Verified: `venus_desktop_pixel_verifies_through_host_capture`
+  flipped 187 colors/0.99-dominant (blank) → 17369 colors/0.39-dominant (real desktop).

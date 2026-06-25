@@ -14,7 +14,7 @@
 //! image. The test SKIPs cleanly if either is missing. Gated behind LIMINA_HVF_TESTS; run via
 //! `scripts/test-boot.sh`. This is a heavy test (full Fedora desktop boot on a custom kernel).
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use limina_test::{Guest, GuestConfig};
 
@@ -191,6 +191,83 @@ fn our_mesa_venus_renders_seated_desktop() {
         .expect(
             "gnome-shell process never appeared — the productized seated session didn't come up",
         );
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(10))
+        .expect("shutting down the guest");
+    eprintln!("teardown outcome: {outcome:?}");
+}
+
+/// RED reproducer for the **`present_surface -2` host-present gap**. Pixel-verify a VENUS desktop
+/// through the HOST capture sink: boot the seated venus desktop and read the *presented* frame back
+/// via [`Guest::read_capture`].
+///
+/// This currently FAILS by design. Presenting a venus (Metal-backed IOSurface) scanout into the
+/// harness's `--display-capture` sink returns `present_surface … -2 ("Backend implementation
+/// error")`, so no frame reaches the capture PNG and the read-back stays blank/stale. A software-2D
+/// scanout (`fedora_stock_image_..._renders_desktop`) and the windowed app both present fine — the
+/// gap is specifically (venus blob × capture sink). When the host present path is fixed this asserts
+/// a real rendered venus desktop and becomes the regression guard; [`our_mesa_venus_renders_seated_desktop`]
+/// covers the same boot but deliberately stops at session-up because of this gap.
+#[test]
+fn venus_desktop_pixel_verifies_through_host_capture() {
+    if !limina_test::require_hvf_or_skip("venus_desktop_pixel_verifies_through_host_capture") {
+        return;
+    }
+    if limina_test::kosmickrisp_icd().is_none() {
+        eprintln!(
+            "SKIPPED venus_desktop_pixel_verifies_through_host_capture: no KosmicKrisp ICD under \
+             /Volumes/mesa-cs/build-kk (mount third_party/mesa-cs.sparseimage and ninja)"
+        );
+        return;
+    }
+
+    let cfg = match GuestConfig::seated_fedora_from_env() {
+        Ok(cfg) => cfg
+            .with_coexist_display(1280, 800)
+            .with_net()
+            .with_env("LIMINA_PRESENT_COPY", "1"),
+        Err(e) => {
+            eprintln!("SKIPPED venus_desktop_pixel_verifies_through_host_capture: {e}");
+            return;
+        }
+    };
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    guest
+        .wait_for_ssh_banner(Duration::from_secs(240))
+        .expect("guest sshd never became reachable through gvproxy");
+    // The seated session must be up and actively presenting before we read the host capture.
+    guest
+        .ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
+        .expect("gnome-shell process never appeared — the seated session didn't come up");
+
+    // Read the presented venus frame back through the host `--display-capture` sink.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut best_colors = 0usize;
+    let mut best_dominance = 1.0f64;
+    while Instant::now() < deadline {
+        if let Ok(frame) = guest.read_capture() {
+            let colors = frame.distinct_colors();
+            let (_, dominance) = frame.dominant_color();
+            if colors > best_colors {
+                best_colors = colors;
+                best_dominance = dominance;
+            }
+            if best_colors >= 1000 && best_dominance < 0.90 {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    eprintln!(
+        "richest venus frame via host capture: {best_colors} distinct colors, dominant {best_dominance:.2}"
+    );
+    assert!(
+        best_colors >= 1000 && best_dominance < 0.90,
+        "the venus desktop never presented a rich frame through the host capture sink (richest: \
+         {best_colors} colors, {best_dominance:.2} dominant) — the present_surface -2 gap"
+    );
 
     let outcome = guest
         .shutdown(Duration::from_secs(10))
