@@ -17,7 +17,7 @@
 # Builds inside an aarch64 Fedora `container` (host is macOS, can't build Linux); reuses the
 # same per-(version,page) build volume as build-test-kernel.sh for incremental rebuilds.
 #
-# Usage: scripts/build-kernel-rpm.sh         # KVER=v6.12, fedora:43, 16k
+# Usage: scripts/build-kernel-rpm.sh         # KVER=v6.12, limina-build:fc43, 16k
 #        KVER=v6.12 FEDORA_REL=43 scripts/build-kernel-rpm.sh
 # Output: target/test-guest/kernel/rpm/limina-kernel-16k-<ver>-1.*.aarch64.rpm  (gitignored)
 set -euo pipefail
@@ -79,15 +79,13 @@ echo "CONFIG_LOCALVERSION=\"$LOCALVERSION\"" >> "$OUT/limina-rpm.fragment"
 VOL="limina-kbuild-${KVER}-16k"
 container volume create -s 24g "$VOL" >/dev/null 2>&1 || true
 
-DEPS="gcc make flex bison bc elfutils-libelf-devel openssl-devel perl findutils diffutils gzip xz cpio git rsync kmod python3 rpm-build"
-
-echo "==> building limina-kernel-16k RPM ($KVER, 16k, fedora:$FEDORA_REL, -j$JOBS)"
+echo "==> building limina-kernel-16k RPM ($KVER, 16k, limina-build:fc43, -j$JOBS)"
+scripts/build-image.sh   # ensure the unified limina-build image (kernel build deps baked)
 container run --rm --cpus "$JOBS" --memory "$MEM" \
   -v "$(pwd)/$OUT:/out" \
   -v "$(pwd)/patches/linux:/patches" \
   -v "$VOL:/build" \
-  "docker.io/library/fedora:$FEDORA_REL" bash -euo pipefail -c "
-    echo '--- deps'; dnf -y install $DEPS >/dev/null
+  limina-build:fc43 bash -euo pipefail -c "
     CACHE=/out/cache/linux-$KVER.git
     if [ ! -d \"\$CACHE\" ]; then
       echo '--- shallow-cloning $KVER into cache'; mkdir -p /out/cache

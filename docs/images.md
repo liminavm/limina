@@ -38,18 +38,22 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 | `Fedora-Workstation-44.raw` | **Pristine** Fedora 44 Workstation aarch64, decompressed from the official download (`Fedora-Workstation-Disk-44-1.7.aarch64.raw.xz`). Fedora-built → SELinux labels intact, so it EFI-boots *enforcing* with **no relabel loop** (unlike the F43 dev images). **Clone source only — never boot directly.** |
 | `Fedora-Workstation-44.raw.xz` | Compressed pristine source. Re-decompress (`xz -dk`) to reset `…44.raw` to factory. Re-downloadable, kept as the cheap reset point. |
 | `Fedora-Workstation-44.boot.raw` | CoW clone used to **validate the software-2D floor** (the vanilla GNOME desktop renders in llvmpipe with zero guest edits — pixel-verified 2026-06-20). User then ran gnome-initial-setup and enabled **autologin for `claude`**. This is the documented **vanilla-baseline-with-user** image: stock F44 kernel (4 KiB), software-2D, *no* limina enhancements. |
-| `f44-edk2-build.raw` | **EDK2 firmware build VM** (CoW clone of `…44.boot.raw`, added 2026-06-22). Has a warm `~/edk2` checkout (slp/edk2 @ `krun-support`, submodules initialized) and the build deps installed (`gcc gcc-c++ make python3 git nasm acpica-tools libuuid-devel`). **Prefer this over the Apple `container` for firmware work** — a normal Linux filesystem gives a clean edit→build→repeat loop, whereas the container loses cross-`run` source edits to its build reset and silently skips recompiles on cross-`run` mtime skew (which cost real time during the windowed-hang root-cause). Build helpers on the VM: `~/guest-build-edk2.sh` (repo source: `scripts/build-krun-efi-vm.sh`) + `~/edk2-patch.py` (the verbatim limina platform patches from `scripts/build-krun-efi.sh`). **GCC 16 note:** BaseTools isn't actually prebuilt, and F44's GCC 16 turns slp/edk2's bundled Pccts K&R C into errors (C23 makes `()` mean `(void)`); the build script installs a `~/ccwrap` wrapper that appends `-std=gnu17 -Wno-error` to host C compiles so the build tools compile (firmware binary unaffected). |
+| `f44-edk2-build.raw` | ⚠️ **RETIRED 2026-06-25** (staged in `images-staging-delete/`, expires 2026-07-02). Was the EDK2 firmware build VM. Superseded by the **unified `limina-build` container image** (see below): the EDK2 build (`scripts/build-krun-efi.sh`) now runs there like every other Linux build, so there's no longer a separate firmware VM to keep warm. The container's old edit→build mtime-skew problem (the original reason a VM was preferred) is moot now the windowed-hang root-cause work is done — production firmware builds are clean from-scratch, which the image + its persistent `limina-edk2-build` source volume handle. |
 
-Boot the **EDK2 build VM** headless. A build box needs no 3D, so `--gpu-software-2d` is the lightest
-path — it skips host-GL/virgl setup a compile-only VM has no use for (it is *not* a workaround for any
-boot failure; a plain coexist boot is fine, just heavier). Then SSH in and build:
-```bash
-target/debug/limina --firmware /opt/homebrew/share/krunkit/KRUN_EFI.silent.fd \
-  --disk f44-edk2-build.raw --gpu-software-2d --display-capture /tmp/buildvm-cap.png \
-  --net --cpus 8 --ram-mib 12288 &
-ssh -p 2222 … claude@127.0.0.1 './guest-build-edk2.sh'   # -> ~/KRUN_EFI.gop.debug.caller.fd
-scp -P 2222 … claude@127.0.0.1:KRUN_EFI.*.fd target/krun-efi/   # pull the blob back
-```
+## The unified build image (`limina-build:fc43`)
+
+Every **Linux** build runs in one container image — `scripts/build-image/Containerfile`, built on first
+use by `scripts/build-image.sh` (rebuild with `FORCE=1`). It bakes the union of all build deps
+(rpmbuild, kernel toolchain, meson/ninja + `builddep mesa`/`builddep mutter`, edk2 + nasm/acpica + a
+`-std=gnu17` ccwrap for edk2's K&R BaseTools, gfxreconstruct's cmake/xcb/X11/wayland set), so the
+per-script `dnf install` is gone and builds start instantly. Consumers: `build-krun-efi`, `build-mesa-rpm`,
+`build-mutter-rpm`, `build-kernel-rpm`, `build-test-kernel`, `build-mesa-zink`, `build-venus`,
+`build-gfxreconstruct`. Each still mounts its own persistent source/cache `container volume` (the image
+carries the toolchain; the volume carries source + incremental state). **Exceptions** (correctly NOT on
+this image): the macOS-native builds (`build-app`, `build-virglrenderer`, `build-hvf-trap-probe`,
+`build-test-guest`) emit Mach-O, not Linux; and `build-dbus-guest` stays on Alpine — it extracts a *musl*
+dbus for the musl L1 guest, which a glibc image can't produce. Requires Rosetta (Apple `container`'s
+BuildKit needs it); install once with `softwareupdate --install-rosetta --agree-to-license`.
 
 Boot the baseline (bare `limina` — the default coexist device advertises venus, which a stock
 4 KiB guest can't use and Mesa **degrades gracefully to `kms_swrast`/llvmpipe**, so the desktop

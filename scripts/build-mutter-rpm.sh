@@ -44,14 +44,13 @@ container volume create -s 16g "$VOL" >/dev/null 2>&1 || true
 
 echo "==> building limina patched-mutter RPM (target distro version, fedora:$FEDORA_REL, -j$JOBS)"
 
+scripts/build-image.sh   # ensure the unified limina-build image (rpm tooling + builddep mutter baked)
 container run --rm --cpus "$JOBS" --memory "$MEM" \
   -v "$(pwd)/$OUT:/out" \
   -v "$(pwd)/patches/mutter:/patches:ro" \
   -v "$VOL:/build" \
-  "docker.io/library/fedora:$FEDORA_REL" bash -euo pipefail -c '
+  limina-build:fc43 bash -euo pipefail -c '
     export HOME=/build
-    echo "--- [1/5] rpm tooling"
-    dnf -y install rpm-build dnf-plugins-core rpmdevtools cpio >/dev/null
     rpmdev-setuptree
 
     echo "--- [2/5] fetch this Fedora release mutter SRPM (the version we MATCH)"

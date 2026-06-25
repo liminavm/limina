@@ -45,16 +45,14 @@ mkdir -p "$OUT"
 VOL="limina-mesa-build"
 container volume inspect "$VOL" >/dev/null 2>&1 || container volume create "$VOL" >/dev/null
 
+scripts/build-image.sh   # ensure the unified limina-build image (meson/ninja + builddep mesa baked)
 container run --rm \
   --cpus 8 --memory 8g \
   -v "$REPO/patches/mesa:/patches:ro" \
   -v "$OUT:/out" \
   -v "$OUTROOT:/outroot" \
   -v "$VOL:/build" \
-  "fedora:${FEDORA_REL:-43}" bash -euxo pipefail -c '
-    dnf -y install git meson ninja-build gcc gcc-c++ python3-mako bison flex glslang-devel zstd patch >/dev/null
-    dnf -y builddep mesa >/dev/null
-
+  limina-build:fc43 bash -euxo pipefail -c '
     cd /build
     if [ ! -d mesa/.git ]; then
       git clone "'"$MESA_GIT"'" mesa || git clone https://github.com/Igalia/mesa.git mesa

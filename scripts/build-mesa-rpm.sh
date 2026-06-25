@@ -65,17 +65,16 @@ container volume create -s 40g "$VOL" >/dev/null 2>&1 || true
 
 echo "==> building limina mesa RPM set ($MESA_VER @ ${MESA_COMMIT:0:12}; spec=$SPEC_REL; target=fedora:$FEDORA_REL; -j$JOBS)"
 
+scripts/build-image.sh   # ensure the unified limina-build image (rpm tooling + builddep mesa baked)
 container run --rm --cpus "$JOBS" --memory "$MEM" \
   -v "$(pwd)/$OUT:/out" \
   -v "$(pwd)/patches/mesa:/patches" \
   -v "$VOL:/build" \
-  "docker.io/library/fedora:$FEDORA_REL" bash -euo pipefail -c '
+  limina-build:fc43 bash -euo pipefail -c '
     MESA_VER="'"$MESA_VER"'"; MESA_COMMIT="'"$MESA_COMMIT"'"; SPEC_REL="'"$SPEC_REL"'"
     DISABLE_DRIVERS="'"$DISABLE_DRIVERS"'"
     export HOME=/build
 
-    echo "--- [1/6] toolchain + rpm tooling"
-    dnf -y install rpm-build dnf-plugins-core git xz cpio rpmdevtools >/dev/null
     git config --global user.email limina@local
     git config --global user.name limina
     git config --global --add safe.directory "*"

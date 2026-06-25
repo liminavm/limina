@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 # Copyright © 2026 Gustavo Noronha Silva
 
-# Build the KRUN_EFI ArmVirtKrun firmware (EDK2) for limina's EFI boot path, using Apple
-# `container` as the (host-native aarch64) Linux build environment.
+# Build the KRUN_EFI ArmVirtKrun firmware (EDK2) for limina's EFI boot path, in the unified
+# `limina-build:fc43` container image (scripts/build-image.sh) — the same host-native aarch64
+# Linux build env every limina Linux build now uses. (Replaced the standalone f44-edk2-build VM,
+# retired 2026-06-25; the image bakes edk2's deps + a -std=gnu17 ccwrap for its K&R BaseTools.)
 #
 # Why our own build (M2.5 Track B): krunkit ships only KRUN_EFI.silent.fd — serial-only,
 # no GOP — so EFI/GRUB/early-kernel are invisible in the limina window. The ArmVirtKrun
@@ -57,14 +59,17 @@ container volume create -s 24g "$VOL" >/dev/null 2>&1 || true
 echo "==> building KRUN_EFI ($TARGET, GOP=$GOP) from $EDK2_REPO@$EDK2_BRANCH in an Apple container"
 echo "    build volume: $VOL (incremental across runs); output: $OUT/$OUT_NAME"
 
+scripts/build-image.sh   # ensure the unified limina-build image (edk2 deps + gnu17 ccwrap baked)
 container run --rm --cpus "$JOBS" --memory "$MEM" \
     -v "$(pwd)/$OUT:/out" \
     -v "$VOL:/build" \
-    docker.io/library/fedora:41 bash -euo pipefail -c "
+    limina-build:fc43 bash -euo pipefail -c "
         TARGET='$TARGET'; GOP='$GOP'; OUT_NAME='$OUT_NAME'; JOBS='$JOBS'
-        echo '--- installing edk2 build deps'
-        dnf -y install gcc gcc-c++ make python3 git nasm acpica-tools libuuid-devel \
-            which findutils diffutils >/dev/null
+        # The unified image is F43, whose gcc defaults to gnu23 and miscompiles edk2's K&R
+        # BaseTools ('()' becomes '(void)'). The image ships a -std=gnu17 wrapper OUT of PATH so it
+        # can't taint the kernel/mesa builds; opt into it here only (build tools only — the
+        # firmware itself is cross-compiled by edk2's own GCC5 toolchain, unaffected).
+        export PATH=/opt/limina-ccwrap:\$PATH
 
         cd /build
         if [ ! -d edk2/.git ]; then

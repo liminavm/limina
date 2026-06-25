@@ -1,0 +1,42 @@
+# limina-build — the single Linux build environment for ALL of limina's guest/firmware builds.
+#
+# One image, deps baked, used by every Linux build-*.sh via `scripts/build-image.sh` (which builds
+# it on first use). Replaces the previous per-script `container run fedora:NN … dnf install …` (slow,
+# repeated every run) AND the standalone f44-edk2-build VM (retired 2026-06-25 — see docs/images.md).
+# The per-build SOURCE/cache `container volume`s (edk2 checkout, kernel tree, mesa tree, …) are
+# unchanged and orthogonal: this image carries the toolchain, the volumes carry source + incremental
+# state. macOS-native builds (the app, virglrenderer, the hvf-trap-probe, the L1 test-guest rootfs)
+# stay on the host — they emit Mach-O, not Linux. build-dbus-guest stays on Alpine — it extracts a
+# *musl* dbus for the musl L1 guest, which a glibc image can't produce.
+#
+# Base = fedora:43 to match the enhanced-tier RPM target (mesa-*.fc43, mutter-*.fc43, kernel .fc43).
+# Rebuild after editing: `FORCE=1 scripts/build-image.sh`.
+FROM fedora:43
+
+# Union of every Linux build's explicit deps (dedup'd from the build-*.sh scripts):
+#   RPM tooling (mesa/mutter/kernel RPMs) … rpm-build dnf-plugins-core rpmdevtools cpio xz
+#   kernel (kernel-rpm, test-kernel) ……… gcc make flex bison bc elfutils-libelf-devel openssl-devel
+#                                          perl rsync kmod gzip diffutils findutils
+#   EDK2 firmware (krun-efi) …………………… gcc-c++ nasm acpica-tools libuuid-devel which
+#   mesa / venus / zink (source builds) … meson ninja-build python3-mako glslang-devel patch zstd
+#   gfxreconstruct ……………………………………… cmake lz4-devel libzstd-devel zlib-ng-compat-devel
+#                                          libxcb-devel libX11-devel libXrandr-devel wayland-devel
+#                                          libwayland-client xcb-util-keysyms-devel xcb-util-wm-devel
+RUN dnf -y install \
+        acpica-tools bc bison cmake cpio diffutils dnf-plugins-core elfutils-libelf-devel \
+        findutils flex gcc gcc-c++ git glslang-devel gzip kmod libuuid-devel libwayland-client \
+        libX11-devel libXrandr-devel libxcb-devel libzstd-devel lz4-devel make meson nasm \
+        ninja-build openssl-devel patch perl python3 python3-mako rpm-build rpmdevtools rsync \
+        wayland-devel which xcb-util-keysyms-devel xcb-util-wm-devel xz zlib-ng-compat-devel zstd \
+ && dnf -y builddep mesa mutter \
+ && dnf clean all
+
+# EDK2's bundled BaseTools (Pccts K&R C) miscompiles under gcc's default gnu23 (`()` → `(void)`).
+# A global override would wrongly affect the kernel/mesa builds, so we ship the wrapper OUT of PATH;
+# the EDK2 build step (scripts/build-krun-efi.sh) prepends /opt/limina-ccwrap to PATH for itself only.
+RUN mkdir -p /opt/limina-ccwrap \
+ && for c in gcc cc; do printf '#!/bin/sh\nexec /usr/bin/%s "$@" -std=gnu17 -Wno-error\n' "$c" > /opt/limina-ccwrap/"$c"; done \
+ && for c in g++ c++; do printf '#!/bin/sh\nexec /usr/bin/%s "$@" -Wno-error\n' "$c" > /opt/limina-ccwrap/"$c"; done \
+ && chmod +x /opt/limina-ccwrap/*
+
+LABEL org.limina.build="fedora:43 unified build image; rebuild via scripts/build-image.sh"

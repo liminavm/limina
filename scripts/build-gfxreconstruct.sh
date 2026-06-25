@@ -32,17 +32,13 @@ mkdir -p "$OUT"
 VOL="limina-gfxr-build"
 container volume inspect "$VOL" >/dev/null 2>&1 || container volume create "$VOL" >/dev/null
 
+scripts/build-image.sh   # ensure the unified limina-build image (cmake/xcb/X11/wayland deps baked)
 container run --rm \
   --cpus 8 --memory 8g \
   -v "$OUT:/out" \
   -v "$OUTROOT:/outroot" \
   -v "$VOL:/build" \
-  fedora:43 bash -euxo pipefail -c '
-    dnf -y install git cmake ninja-build gcc gcc-c++ python3 zstd \
-      lz4-devel libzstd-devel zlib-ng-compat-devel \
-      libxcb-devel libX11-devel libXrandr-devel wayland-devel libwayland-client \
-      xcb-util-keysyms-devel xcb-util-wm-devel >/dev/null
-
+  limina-build:fc43 bash -euxo pipefail -c '
     cd /build
     if [ ! -d gfxreconstruct/.git ]; then
       git clone "'"$GFXR_GIT"'" gfxreconstruct

@@ -103,8 +103,6 @@ CONFIG_LSM="landlock,lockdown,yama,integrity,selinux,bpf"
 FRAG
 echo "$PAGE_CONFIG" >> "$OUT/limina.fragment"   # page-size choice (4k default / 16k)
 
-DEPS="gcc make flex bison bc elfutils-libelf-devel openssl-devel perl findutils diffutils gzip xz cpio git rsync kmod python3"
-
 # Persistent, case-sensitive (ext4) build volume per (version, page size): it holds the
 # worktree AND build artifacts, so re-runs are incremental (`make` reuses .o files).
 # Source is downloaded once into a bare repo on the host bind mount (survives volume
@@ -114,14 +112,13 @@ container volume create -s 24g "$VOL" >/dev/null 2>&1 || true
 
 echo "==> building Linux $KVER (arm64, $PAGESIZE pages, -j$JOBS) in an Apple container"
 echo "    build volume: $VOL (incremental across runs)"
+scripts/build-image.sh   # ensure the unified limina-build image (kernel build deps baked)
 container run --rm --cpus "$JOBS" --memory "$MEM" \
     -v "$(pwd)/$OUT:/out" \
     -v "$(pwd)/patches/linux:/patches" \
     -v "$VOL:/build" \
-    docker.io/library/fedora:43 bash -euo pipefail -c "
+    limina-build:fc43 bash -euo pipefail -c "
         OUT_NAME='$OUT_NAME'
-        echo '--- installing build deps'
-        dnf -y install $DEPS >/dev/null
         # Source download cache: a BARE repo on the host bind mount (bare = no worktree →
         # safe on the case-insensitive host FS). Downloaded once per \$KVER.
         CACHE=/out/cache/linux-$KVER.git
