@@ -344,12 +344,15 @@ flip straight to the primary plane). Converged truth + open-threads ledger live 
 
 ### Load-bearing architecture decisions
 
-- **macOS venus flag set is `VENUS | NO_VIRGL` (0xC0)** (optionally `| THREAD_SYNC | ASYNC_FENCE_CB`),
-  **NOT** the in-tree Linux `0x343`. `USE_EGL` (0x1) must be **off** (no EGL on macOS → init -1);
-  `NO_VIRGL` (0x80) must be **on** (else the GL path SIGSEGVs — no GL context on Apple Silicon).
-  Confirmed in `spikes/venus-viability`.
-- **Tier-2 is a "coexist" device, not a flag flip.** A `VENUS|NO_VIRGL` rutabaga serves only Vulkan
-  3D; it does NOT implement the 2D commands the firmware GOP / efifb / fbcon / scanout-present use.
+- **The GPU flag set is the `GPU_COEXIST_FLAGS` in `crates/limina-vmm/src/krun/mod.rs:102-108`.**
+  **⚠️ SUPERSEDED HISTORY:** an earlier note here said `VENUS | NO_VIRGL` (0xC0) with `USE_EGL` off
+  and `NO_VIRGL` **on** ("no GL context on Apple Silicon"). That was true *before* zink-on-KK. It is
+  now reversed: `NO_VIRGL` is **OFF** and `USE_EGL | USE_GLES | USE_SURFACELESS` are **ON**, because
+  zink-on-KK gives virglrenderer a host GL context — so **vrend GL (the virgl tier) is enabled
+  alongside venus**. **See `docs/tiers.md` for the authoritative, current tier model** (this bullet
+  is kept only to flag the reversal that confused past readers).
+- **Tier-2/3 is a "coexist" device, not a flag flip.** The rutabaga serves Vulkan (venus) **and** GL
+  (vrend); it does NOT implement the 2D commands the firmware GOP / efifb / fbcon / scanout-present use.
   Our software-2D patch (0001) serves exactly those. **libkrun patch 0010** makes both live in one
   virtio-gpu, routed by ring/command type (2D → software-2D CPU path; 3D ctx/submit/capset →
   rutabaga/venus), and **degrades gracefully to software-2D on renderer-init failure** (no panic).
@@ -421,10 +424,11 @@ flip straight to the primary plane). Converged truth + open-threads ledger live 
    (0x203 → ERR_UNSPEC) dmesg line; KK GPU-side per-draw root re-fetch (only if GPU-bound workloads
    reappear); Firefox MSAA cosmetic thread.
 
-**Parked (not on the critical path):** GL via virgl + **ANGLE** (GL→VK→Metal) for the stock-4k
-degraded tier — virgl's copy/transfer memory model is immune to the 16k/4k blob problem and works on
-a stock guest, but it's a heavy translation stack and GL-only; a real "own the stack" project.
-Native-context (vdrm) backed by Metal is recorded only as a curiosity — venus is our path.
+**The virgl tier IS shipped (not parked).** GL via virgl → host **vrend** → zink-on-KK runs on a
+stock 4k guest (its copy/transfer model is immune to the 16k/4k blob problem) and is **enabled by
+default** in the coexist flags — see `docs/tiers.md` (tier 2). What *was* parked is the unrelated
+**virgl-over-ANGLE** variant (a separate GL→VK→Metal translation stack); zink-on-KK replaced the need
+for it. Native-context (vdrm) backed by Metal is recorded only as a curiosity — venus is the top tier.
 
 **libkrun patches (shipped):** coexist (0010), fence-present series (0017–0022), virglrenderer fork,
 KK perf/XFB patches, kernel `patches/linux/0001–0003`, mutter ×2. Remaining: the upstream queue.
