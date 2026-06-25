@@ -268,9 +268,12 @@ fn fedora_stock_image_renders_graphical_desktop() {
 
     // Default GPU (coexist / venus advertised) + GOP firmware + captured display + NAT. We override
     // the GOP config's software-2D capture device with the coexist one so this exercises the real
-    // stock default (venus→kms_swrast graceful fallback), not the forced-software path.
+    // stock default (venus→kms_swrast graceful fallback), not the forced-software path. The coexist
+    // device's vrend half brings up host GL via zink-on-KK, so it needs the Mesa/KK `DYLD_*` env —
+    // wire it explicitly (`with_virgl_host_gl`) rather than depending on an ambient export, so the
+    // test passes under the bare `test-boot.sh` runner too. It SKIPs if the KK prefix is absent.
     let cfg = match GuestConfig::fedora_gop_from_env() {
-        Ok(cfg) => cfg.with_coexist_display(1280, 800),
+        Ok(cfg) => cfg.with_coexist_display(1280, 800).with_virgl_host_gl(),
         Err(e) => {
             eprintln!("SKIP fedora_stock_image_renders_graphical_desktop: {e:#}");
             return;
