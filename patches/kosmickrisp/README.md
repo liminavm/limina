@@ -45,8 +45,17 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
   attachment modifier image is laid out tiled/renderable. Plain `VK_IMAGE_TILING_LINEAR`
   images stay linear — that path is vkr's IOSurface-backed scanout (renderable via
   `newBufferWithBytesNoCopy`). One conditional in `kk_image_layout_init`; with it the
-  accelerated GNOME desktop renders through venus→KK→Metal. (A separate `gst-plugin-scan`
-  encoder-state crash, previously masked by this one, remains.)
+  accelerated GNOME desktop renders through venus→KK→Metal. (It then surfaced a separate
+  attachment-less render-pass crash, fixed in `0003`.)
+- **`0003-kk-clamp-attachment-less-render-pass-target-size-sam.patch`** — clamp an
+  **attachment-less** render pass's Metal render-target size and sample count to **≥ 1**.
+  A `vkCmdBeginRendering` with zero color/depth attachments has nothing to derive the target
+  size/sample count from; KK took `renderTargetWidth/Height` from the guest `renderArea`
+  (which can be **0×0** — seen from `gst-plugin-scan`'s zink GL probes) and
+  `defaultRasterSampleCount` from the pipeline (which can be 0). Metal returns nil for a
+  0-sized / 0-sample attachment-less descriptor → `kk_render_encoder` asserts and kills the
+  worker. Clamp both to ≥ 1 (a 0-area pass renders nothing anyway). Was masked by the `0002`
+  crash; with both, the accelerated desktop boots and **stays up** through session startup.
 
 ## Apply / rebuild
 The `/Volumes/mesa-cs/mesa` tree is on the `limina/kosmickrisp` branch with these committed.
