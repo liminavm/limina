@@ -311,17 +311,20 @@ fn venus_shell_replay_matches_llvmpipe_reference() {
         .scp_to_guest(&trace, "/tmp/shell.trace")
         .expect("pushing the shell trace fixture into the guest");
 
-    // The idle-overview capture is short (~74 frames), so snapshot densely.
-    for (name, env) in [
-        ("venus", ZINK_ENV),
+    // The idle-overview capture is short (~74 frames), so snapshot densely. As in the GL replay,
+    // the llvmpipe REFERENCE leg must `-u` the zink selectors environment.d forces into every shell,
+    // or eglretrace tries zink-on-venus and dies "unable to initialize EGL display".
+    for (name, unset, env) in [
+        ("venus", "", ZINK_ENV),
         (
             "llvmpipe",
+            "-u MESA_LOADER_DRIVER_OVERRIDE -u VK_DRIVER_FILES",
             "GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1",
         ),
     ] {
         let out = guest
             .ssh_exec(&format!(
-                "mkdir -p /tmp/shellsnap-{name} && env {x11} {env} eglretrace --headless \
+                "mkdir -p /tmp/shellsnap-{name} && env {unset} {x11} {env} eglretrace --headless \
                  --snapshot-interval=10 -s /tmp/shellsnap-{name}/ /tmp/shell.trace 2>&1 \
                  | grep Rendered"
             ))
@@ -408,6 +411,12 @@ fn venus_vk_replay_matches_lavapipe_reference() {
         ("venus", "virtio_icd.aarch64.json", ""),
         ("lavapipe", "lvp_icd.aarch64.json", "--remove-unsupported"),
     ] {
+        // gfxrecon-replay runs surfaceless over SSH (no reachable Wayland surface, so it auto-selects
+        // VK_EXT_headless_surface) and never presents — the `present_surface -2` noise during this is
+        // the seated DESKTOP compositor, unrelated. We grep its summary for the FPS line — gfxrecon
+        // prints "Measured FPS", NOT "Replay FPS" (the old string was version-skewed and silently
+        // failed the test, masked until --no-fail-fast actually ran it) — plus the device-mismatch
+        // banner used just below.
         let out = guest
             .ssh_exec(&format!(
                 "mkdir -p /tmp/vksnap-{name} && env {base} \
@@ -415,12 +424,12 @@ fn venus_vk_replay_matches_lavapipe_reference() {
                  /opt/gfxreconstruct/bin/gfxrecon-replay {extra} \
                  --screenshots 10,50,100,150,190 --screenshot-format png \
                  --screenshot-dir /tmp/vksnap-{name} /tmp/replay.gfxr 2>&1 \
-                 | grep -E 'Replay FPS|Replay device info'"
+                 | grep -E 'Measured FPS|Replay device info'"
             ))
             .unwrap_or_else(|e| panic!("{name} vk replay failed: {e}"));
         eprintln!("{name} vk replay: {}", out.trim());
         assert!(
-            out.contains("Replay FPS"),
+            out.contains("Measured FPS"),
             "{name} vk replay did not complete:\n{out}"
         );
         // The capture is from venus, so gfxrecon warns with the replay device info iff
