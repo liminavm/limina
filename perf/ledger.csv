@@ -17,3 +17,7 @@ date,commit,workload,metric,value,notes
 2026-06-25,7727724,aquarium-venus-5000,fps,60,enhanced 16k guest (RPM image); zink->venus->KK->M1Max; firefox kiosk WebGL on-display; vsync-capped
 2026-06-25,7727724,aquarium-venus-10000,fps,57,enhanced 16k guest; venus WebGL on-display
 2026-06-25,7727724,aquarium-venus-15000,fps,45,enhanced 16k guest; venus WebGL on-display
+2026-06-25,6183e74,gl-replay-venus,fps,57.6349,RPM-enhanced image (mesa 26.2.0-1.limina /usr); apitrace eglretrace glmark2-build.trace headless; NEW baseline on shipped product image (was dev-enh /opt/mesa-zink)
+2026-06-25,6183e74,gl-replay-llvmpipe,fps,537.271,RPM-enhanced image; llvmpipe CPU control (MESA_LOADER_DRIVER_OVERRIDE unset to escape global zink env); NEW baseline on RPM image
+2026-06-25,6183e74,glmark2-wayland-venus,score,1306,RPM-enhanced image; glmark2-es2-wayland -b build:duration=3 --size 512x512 on venus; NEW baseline on RPM image
+2026-06-25,4792178,vk-replay-venus-headless,fps,1601.063106,RPM-enhanced image; gfxrecon-replay vkcube.gfxr --wsi headless on venus; gfxreconstruct built in-guest; NEW baseline (was dev-enh /opt 1425)
