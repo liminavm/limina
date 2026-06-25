@@ -15,7 +15,7 @@ kernel page size allows. Tiers degrade into one another automatically and additi
 | Tier | Renders via | Guest needs | Host needs | Page size | Status |
 |---|---|---|---|---|---|
 | **1 · software-2D** | llvmpipe (guest CPU) → CPU scanout | nothing (any stock guest) | libkrun (patch 0001) | any | ✅ shipped |
-| **2 · virgl** | guest virgl Gallium → host **vrend** GL → zink-on-KK → Metal | stock mesa virgl driver (the default for virtio-gpu GL) | virglrenderer **vrend** + KosmicKrisp + EGL-no-GBM patch | 4k or 16k | ⚠️ wired + default-on; **end-to-end perf unverified** |
+| **2 · virgl** | guest virgl Gallium → host **vrend** GL → zink-on-KK → Metal | stock mesa virgl driver (the default for virtio-gpu GL) | virglrenderer **vrend** + KosmicKrisp + EGL-no-GBM patch | 4k or 16k | ✅ validated: accelerated on stock 4k (reaches the GPU); perf is **workload-dependent** — beats llvmpipe on draw-heavy WebGL, loses on upload-heavy glmark2 (see Performance) |
 | **3 · venus** | guest **zink** → **venus** Vulkan → host KosmicKrisp → Metal | 16k kernel + venus mesa RPM + zink env | virglrenderer **venus** + KosmicKrisp | **16k only** | ✅ shipped (RPM-delivered, pixel-verified) |
 
 - **GL-only vs Vulkan:** tier 2 (virgl) is **GL-only**. Tier 3 (venus) does **both** GL (via
@@ -104,9 +104,11 @@ tier's "fast GL" path and the reason `NO_VIRGL` is off.
 - **Degradation:** if the host GL init fails (e.g. the worker linked Homebrew's virglrenderer,
   which has no render-server — the link trap below), vrend is unavailable and GL falls back to
   llvmpipe (tier 1).
-- **Status — the one open question:** the flags enable vrend and the design is sound, but a
-  stock guest getting *accelerated* GL through vrend→zink-on-KK has **not been verified
-  end-to-end** (vs. silently falling back to llvmpipe). Phase C (perf) nails this down.
+- **Status — validated (2026-06-25).** A bone-stock 4k guest *does* get GL through
+  vrend→zink-on-KK on the real M1 Max (`GL_RENDERER: virgl (zink ... Apple M1 Max
+  (MESA_KOSMICKRISP))`), pixel-verified on-display. **But** it benchmarks *slower than llvmpipe*
+  (56 vs 454) — the copy/transfer model is the bottleneck (see Performance). So virgl is a
+  zero-install *compatibility* GL path, not a performance tier as-is.
 - **Debug:** in the guest, `glxinfo -B` / `GL_RENDERER` must NOT say `llvmpipe`; worker log
   should show vrend GL context creation, not a venus-only init. Beware the `GL_RENDERER` env
   trap (below).
@@ -234,6 +236,70 @@ policy can branch on these (today mostly informational).
 
 ## Performance
 
-Tier-2 (venus) numbers trend in `perf/ledger.csv` (`scripts/perf-ledger.sh`). A three-tier
-head-to-head (software-2D vs virgl vs venus) — including the end-to-end virgl validation — is
-tracked as Phase C of the consolidation; results land here once measured.
+Three-tier head-to-head, measured 2026-06-25 (commit `284b758`). Workload: `glmark2-es2-wayland
+-b build -b shading -b texture`, run **on-display** (seated wayland window through the full
+compositor → scanout → host Metal present path, *not* offscreen/headless — verified by capturing
+the scanout mid-run). Each tier on its as-deployed config. Trend rows in `perf/ledger.csv`
+(`glmark2-display-*`).
+
+| Tier | Guest | `GL_RENDERER` | glmark2 score |
+|---|---|---|---|
+| **venus** | enhanced 16k | `zink Vulkan 1.3(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))` | **2784** |
+| **software-2D** | stock 4k | `llvmpipe (LLVM 21.1.2, 128 bits)` | **454** |
+| **virgl** | stock 4k | `virgl (zink Vulkan 1.3(Apple M1 Max (MESA_KOSMICKRISP)))` | **56** |
+
+**venus ≫ llvmpipe ≫ virgl** — two findings worth carrying:
+
+1. **venus is ~6× the software floor and the clear winner** — zink→venus reaches the M1 Max with
+   zero-copy blob scanout. This is the tier to be on.
+2. **virgl reaches the GPU but underperforms the CPU floor (~8× slower than llvmpipe) on this
+   workload.** The renderer string proves it runs on the M1 Max (not a fallback), so it is
+   *functional*; but its per-frame **copy/transfer** model (vrend reads back the rendered buffer
+   and transfers it through the virgl protocol each frame) dominates a geometry-uploading scene
+   like glmark2-build, where venus's blob scanout does not. So virgl is a *compatibility* path
+   (accelerated GL on a bone-stock guest, no install), **not** a performance middle-tier as-is.
+   Whether a transfer/present optimization can lift it is an open question — see the open items.
+
+### WebGL aquarium (a second workload — and it inverts the virgl story)
+
+`webglsamples.org/aquarium` in fullscreen Firefox kiosk, **on-display**, fps read off the page's
+own counter from the captured scanout. Static scene geometry, draw/fill-bound (the opposite shape
+to glmark2-build's per-frame geometry upload). Trend rows in `perf/ledger.csv` (`aquarium-*`).
+
+| numFish | software-2D (llvmpipe) | virgl | venus |
+|---|---|---|---|
+| 5 000 | 17 | 37 | **60** (vsync-capped) |
+| 10 000 | — | 28 | 57 |
+| 15 000 | — | 22 | 45 |
+
+**The ranking flips for virgl: here virgl (37) *beats* the llvmpipe floor (17), ~2.2×.** Because the
+scene's geometry is static, virgl isn't re-uploading/transferring vertex data every frame the way
+glmark2-build forces it to — so its GPU acceleration shows through instead of being eaten by the
+copy/transfer model. **Takeaway: tier ordering is workload-dependent** — virgl < software on
+upload-heavy GL (glmark2-build) but virgl > software on draw-heavy WebGL (aquarium). venus wins
+both decisively and is the only tier that holds ~vsync (60→57→45 as fish scale 5k→15k).
+
+**Exact launch command (over ssh) — this is the proven, non-flailing recipe (see
+[[limina-profiling-playbook]] for the why):**
+```bash
+ssh -p 2222 claude@127.0.0.1
+export XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+systemctl --user stop ff-bench 2>/dev/null; sleep 3      # clear any prior workload (NOT mid-capture)
+busctl --user set-property org.gnome.Shell /org/gnome/Shell org.gnome.Shell OverviewActive b false
+systemd-run --user --unit=ff-bench \
+  --setenv=WAYLAND_DISPLAY=wayland-0 --setenv=MOZ_ENABLE_WAYLAND=1 \
+  --setenv=MOZ_DISABLE_GPU_SANDBOX=1 --setenv=XDG_RUNTIME_DIR=/run/user/1000 \
+  /usr/bin/firefox --kiosk "https://webglsamples.org/aquarium/aquarium.html?numFish=5000"
+# wait ~25s, then: swift spikes/venus-draw-probe/iosdump.swift $(seq 1 200)  (with LIMINA_GLOBAL_SCANOUT=1)
+# the aquarium-fullscreen scanout is the nonzero=1024000 one; Read the PNG — fps is top-left.
+```
+`MOZ_DISABLE_GPU_SANDBOX=1` is **mandatory** on the GPU tiers — without it Firefox's GPU process
+can't reach the virtio-gpu device and **no window ever maps** (it cost a long debugging session;
+on the software tier it isn't needed, which is exactly what masked the cause). `procs=1` is normal
+with it. Change fish count = `systemctl --user stop ff-bench` then relaunch a new `numFish`.
+
+**Caveats:** one workload (glmark2), one host (M1 Max, 32 GB), dev-machine variance applies —
+these are directional, not gospel (`perf/README.md`: the ledger is a trend, not a gate). The
+software floor here is a *GL client* forced to `LIBGL_ALWAYS_SOFTWARE`; in pure software-2D mode a
+GL client otherwise fails to acquire a context (it tries the absent virtio-gpu native-context/vdrm
+path rather than falling back to llvmpipe) — the desktop compositor itself runs on `swrast`.

@@ -7,3 +7,13 @@ date,commit,workload,metric,value,notes
 2026-06-14,703943d,gl-replay-llvmpipe,fps,818.068,post-rename: limina libkrun+KK rebuild (LIMINA_* envs)
 2026-06-14,703943d,vk-replay-venus-headless,fps,1423.409029,post-rename: limina libkrun+KK rebuild (LIMINA_* envs)
 2026-06-14,703943d,glmark2-wayland-venus,score,1962,post-rename: limina libkrun+KK rebuild (LIMINA_* envs)
+2026-06-25,284b758,glmark2-display-venus,score,2784,3-tier compare; enhanced 16k guest; zink->venus->KK->M1Max; on-display seated wayland; scenes build+shading+texture
+2026-06-25,284b758,glmark2-display-software,score,454,3-tier compare; stock 4k guest --gpu-software-2d + LIBGL_ALWAYS_SOFTWARE; llvmpipe CPU; on-display seated wayland; same scenes
+2026-06-25,284b758,glmark2-display-virgl,score,56,3-tier compare; stock 4k guest coexist; virgl->vrend->zink->KK->M1Max; on-display seated wayland; same scenes. NOTE slower than llvmpipe: copy/transfer overhead dominates this workload
+2026-06-25,284b758,aquarium-virgl-5000,fps,37,stock 4k guest coexist; virgl->vrend->zink->KK->M1Max; firefox kiosk WebGL on-display; MOZ_DISABLE_GPU_SANDBOX=1
+2026-06-25,284b758,aquarium-virgl-10000,fps,28,stock 4k guest coexist; virgl WebGL on-display
+2026-06-25,284b758,aquarium-virgl-15000,fps,22,stock 4k guest coexist; virgl WebGL on-display
+2026-06-25,284b758,aquarium-software-5000,fps,17,stock 4k guest --gpu-software-2d + LIBGL_ALWAYS_SOFTWARE; llvmpipe CPU; firefox kiosk WebGL on-display
+2026-06-25,7727724,aquarium-venus-5000,fps,60,enhanced 16k guest (RPM image); zink->venus->KK->M1Max; firefox kiosk WebGL on-display; vsync-capped
+2026-06-25,7727724,aquarium-venus-10000,fps,57,enhanced 16k guest; venus WebGL on-display
+2026-06-25,7727724,aquarium-venus-15000,fps,45,enhanced 16k guest; venus WebGL on-display
