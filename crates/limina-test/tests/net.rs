@@ -70,3 +70,67 @@ fn fedora_gets_nat_dhcp_and_outbound() {
         "harness had to force the supervisor down — supervisor teardown is broken"
     );
 }
+
+/// Per-VM network config → run two VMs in parallel (the multi-VM goal: design doc Phase 2).
+///
+/// Two stock Fedora guests boot AT ONCE, each its own gvproxy NAT island, each on a DISTINCT
+/// host SSH-forward port (`--ssh-port`). gvproxy's built-in `127.0.0.1:<port> → guest:22` forward
+/// used to be hard-wired to 2222, so a second VM collided on it; giving each VM its own port is
+/// what lets more than one run side by side. The proof is end-to-end and concurrent: both gateways
+/// must independently lease (two separate NAT islands) AND both guests must answer SSH on their own
+/// host port at the same time — if only one VM were really up, only one port would answer.
+#[test]
+fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
+    if !limina_test::require_hvf_or_skip("two_vms_run_in_parallel_on_distinct_ssh_ports") {
+        return;
+    }
+
+    // Distinct host ports are the only per-VM resource that used to collide (the gvproxy socket is
+    // already pid-keyed). Each VM cow-clones its own writable disk via with_net, so the two share
+    // nothing on disk either.
+    let cfg_a = GuestConfig::fedora_from_env()
+        .expect("resolving guest config A")
+        .with_ssh_port(2222);
+    let cfg_b = GuestConfig::fedora_from_env()
+        .expect("resolving guest config B")
+        .with_ssh_port(2223);
+
+    // Boot BOTH before waiting on either, so they come up concurrently (wall-clock ~= one boot).
+    eprintln!("booting two Fedora VMs in parallel: A on ssh-port 2222, B on ssh-port 2223");
+    let mut a = Guest::boot(&cfg_a).expect("spawning supervisor A");
+    let mut b = Guest::boot(&cfg_b).expect("spawning supervisor B");
+
+    // Both gateways lease independently — two live NAT islands, not one shared (and proves B's
+    // gvproxy didn't fail to start behind A's).
+    a.wait_for_gateway_log("MessageType:Ack", Duration::from_secs(180))
+        .expect("VM A never obtained a DHCP lease");
+    b.wait_for_gateway_log("MessageType:Ack", Duration::from_secs(180))
+        .expect("VM B never obtained a DHCP lease (second VM did not come up in parallel)");
+
+    // The headline: both guests answer SSH on their OWN forward port, simultaneously.
+    let banner_a = a
+        .wait_for_ssh_banner(Duration::from_secs(60))
+        .expect("VM A SSH not reachable on 127.0.0.1:2222");
+    let banner_b = b
+        .wait_for_ssh_banner(Duration::from_secs(60))
+        .expect("VM B SSH not reachable on 127.0.0.1:2223");
+    eprintln!("VM A SSH (port 2222): {banner_a}");
+    eprintln!("VM B SSH (port 2223): {banner_b}");
+    assert!(
+        banner_a.starts_with("SSH-") && banner_b.starts_with("SSH-"),
+        "both VMs must answer SSH on their distinct ports at once (A={banner_a:?}, B={banner_b:?})"
+    );
+
+    // Tear both down cleanly; neither teardown may need forcing (gateway killed with each).
+    let oa = a
+        .shutdown(Duration::from_secs(20))
+        .expect("supervisor A did not stop");
+    let ob = b
+        .shutdown(Duration::from_secs(20))
+        .expect("supervisor B did not stop");
+    eprintln!("teardown A: {oa:?}, B: {ob:?}");
+    assert!(
+        !oa.forced && !ob.forced,
+        "a supervisor had to be forced down — multi-VM teardown is broken"
+    );
+}

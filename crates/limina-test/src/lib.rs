@@ -57,24 +57,12 @@ const DEFAULT_GOP_FIRMWARE: &str = "target/krun-efi/KRUN_EFI.gop.fd";
 /// `Fedora-Workstation-43.enhanced.test.raw` (see [`GuestConfig::seated_fedora_from_env`]).
 const DEFAULT_TEST_DISK: &str = "Fedora-Workstation-43.stock.test.raw";
 
-/// gvproxy's default inbound port-forward: `127.0.0.1:2222 → 192.168.127.2:22`. With the
-/// well-known vfkit MAC the guest gets the static `.2` lease, so this reaches its sshd.
-const FORWARDED_SSH_ADDR: &str = "127.0.0.1:2222";
-
-/// Shared scp options matching [`Guest::ssh_exec`]'s ssh invocation.
-const SCP_OPTS: [&str; 11] = [
-    "-P",
-    "2222",
-    "-o",
-    "StrictHostKeyChecking=no",
-    "-o",
-    "UserKnownHostsFile=/dev/null",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "LogLevel=ERROR",
-    "-q",
-];
+/// Loopback host gvproxy binds its inbound SSH forward on (`<host>:<ssh_port> → 192.168.127.2:22`;
+/// with the well-known vfkit MAC the guest gets the static `.2` lease, so this reaches its sshd).
+const FORWARDED_SSH_HOST: &str = "127.0.0.1";
+/// gvproxy's default inbound SSH-forward host port; per-VM overridable via `--ssh-port` so several
+/// VMs can run in parallel without colliding (see [`GuestConfig::with_ssh_port`]).
+const DEFAULT_SSH_PORT: u16 = 2222;
 
 /// Is HVF-backed boot testing enabled for this run?
 ///
@@ -262,6 +250,11 @@ pub struct GuestConfig {
     /// Attach a user-mode NAT NIC (the supervisor spawns + supervises a gvproxy gateway and
     /// captures its `-debug` packet log — the host-side network oracle). See [`Guest::wait_for_gateway_log`].
     pub net: bool,
+    /// Per-VM host port for gvproxy's inbound SSH forward (`--ssh-port`). `None` → the supervisor
+    /// default ([`DEFAULT_SSH_PORT`], 2222). Give two concurrent VMs distinct ports so they don't
+    /// collide on the host port — what lets more than one run in parallel. Set via
+    /// [`with_ssh_port`](GuestConfig::with_ssh_port) (which also implies `net`).
+    pub ssh_port: Option<u16>,
     /// Capture the supervisor's own stderr (its log) to a scratch file instead of letting
     /// it flow to the test's stderr — for asserting on supervisor-side events (e.g. the
     /// control plane's "guest agent connected"). See [`Guest::wait_for_supervisor_log`].
@@ -316,6 +309,7 @@ impl GuestConfig {
             console_input: false,
             console_channel: ConsoleChannel::Virtio,
             net: false,
+            ssh_port: None,
             supervisor_log: false,
             control_socket: false,
             envs: Vec::new(),
@@ -422,6 +416,7 @@ impl GuestConfig {
             console_input: false,
             console_channel: ConsoleChannel::Virtio,
             net: false,
+            ssh_port: None,
             supervisor_log: false,
             control_socket: false,
             envs: Vec::new(),
@@ -455,6 +450,7 @@ impl GuestConfig {
             console_input: false,
             console_channel: ConsoleChannel::Virtio,
             net: false,
+            ssh_port: None,
             supervisor_log: false,
             control_socket: false,
             envs: Vec::new(),
@@ -510,6 +506,7 @@ impl GuestConfig {
             console_input: false,
             console_channel: ConsoleChannel::Virtio,
             net: false,
+            ssh_port: None,
             supervisor_log: false,
             control_socket: false,
             envs: Vec::new(),
@@ -552,6 +549,16 @@ impl GuestConfig {
     /// `-debug` log; assert on it via [`Guest::wait_for_gateway_log`] (DHCP lease, outbound).
     pub fn with_net(mut self) -> GuestConfig {
         self.net = true;
+        self
+    }
+
+    /// Like [`with_net`](GuestConfig::with_net) but pin gvproxy's inbound SSH forward to a specific
+    /// host `port` (`--ssh-port`) instead of the default 2222. Give two concurrent VMs distinct
+    /// ports so they can run in parallel without colliding on the host port;
+    /// [`Guest::wait_for_ssh_banner`]/[`Guest::ssh_exec`] then target that VM's own port.
+    pub fn with_ssh_port(mut self, port: u16) -> GuestConfig {
+        self.net = true;
+        self.ssh_port = Some(port);
         self
     }
 
@@ -811,6 +818,10 @@ pub struct Guest {
     console_in: Option<fs::File>,
     /// Path to the gvproxy gateway's `-debug` log (inside `scratch`), if net was enabled.
     gateway_log: Option<PathBuf>,
+    /// Host port of gvproxy's inbound `127.0.0.1:<port> → guest:22` forward (the `--ssh-port`
+    /// the supervisor was launched with; default [`DEFAULT_SSH_PORT`]). Distinct per VM lets
+    /// several run in parallel; [`Guest::wait_for_ssh_banner`]/[`Guest::ssh_exec`] target it.
+    ssh_port: u16,
     /// Path to the captured supervisor stderr (inside `scratch`), if enabled.
     supervisor_log: Option<PathBuf>,
     /// Path to the pinned supervisor-owned control socket (inside `scratch`), if enabled.
@@ -1069,6 +1080,11 @@ impl Guest {
         let gateway_log = if cfg.net {
             let log = scratch.join("gvproxy.log");
             cmd.arg("--net").arg("--net-log").arg(&log);
+            // Per-VM SSH-forward port (defaults to 2222 in the supervisor when unset) — distinct
+            // ports let several VMs run in parallel.
+            if let Some(port) = cfg.ssh_port {
+                cmd.arg("--ssh-port").arg(port.to_string());
+            }
             Some(log)
         } else {
             None
@@ -1118,6 +1134,7 @@ impl Guest {
             resize_socket,
             console_in,
             gateway_log,
+            ssh_port: cfg.ssh_port.unwrap_or(DEFAULT_SSH_PORT),
             supervisor_log,
             control_socket,
             torn_down: false,
@@ -1394,14 +1411,16 @@ impl Guest {
     }
 
     /// Block until the guest's SSH server answers through gvproxy's inbound port-forward
-    /// (`127.0.0.1:2222 → guest:22`), returning its banner (e.g. `SSH-2.0-OpenSSH_10.0`).
+    /// (`127.0.0.1:<ssh_port> → guest:22`, where `ssh_port` is this VM's [`GuestConfig::with_ssh_port`]
+    /// or 2222), returning its banner (e.g. `SSH-2.0-OpenSSH_10.0`).
     /// Proves the inbound NAT path end-to-end (host → gvproxy forward → guest sshd) — what
     /// makes `ssh -p 2222 user@127.0.0.1` work. Requires [`GuestConfig::with_net`] and a guest
     /// running sshd. gvproxy listens on 2222 immediately but only yields a banner once it can
     /// dial the guest, so an empty/short read just means "not ready yet" — keep polling.
     pub fn wait_for_ssh_banner(&mut self, timeout: Duration) -> Result<String> {
         let deadline = Instant::now() + timeout;
-        let addr: std::net::SocketAddr = FORWARDED_SSH_ADDR.parse().expect("valid forward addr");
+        let forward = format!("{FORWARDED_SSH_HOST}:{}", self.ssh_port);
+        let addr: std::net::SocketAddr = forward.parse().expect("valid forward addr");
         loop {
             if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
                 stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
@@ -1417,23 +1436,26 @@ impl Guest {
                 bail!("supervisor exited ({status}) before SSH was reachable");
             }
             if Instant::now() >= deadline {
-                bail!("no SSH banner from {FORWARDED_SSH_ADDR} within {timeout:?}");
+                bail!("no SSH banner from {forward} within {timeout:?}");
             }
             std::thread::sleep(Duration::from_millis(500));
         }
     }
 
-    /// Run `remote_cmd` in the guest over SSH (through gvproxy's `127.0.0.1:2222 → guest:22`
-    /// forward) and return its stdout. Logs in as the in-image `claude` user via the host's
-    /// default key (passwordless — see memory `limina-fedora-access`); host-key checks are
-    /// disabled (the forward reuses 127.0.0.1:2222 across boots). Requires [`GuestConfig::with_net`]
-    /// and a booted guest running sshd — call [`Guest::wait_for_ssh_banner`] first. Errors if
-    /// ssh exits non-zero (stderr is included in the message).
+    /// Run `remote_cmd` in the guest over SSH (through gvproxy's `127.0.0.1:<ssh_port> → guest:22`
+    /// forward, this VM's [`GuestConfig::with_ssh_port`] or 2222) and return its stdout. Logs in as
+    /// the in-image `claude` user via the host's default key (passwordless — see memory
+    /// `limina-fedora-access`); host-key checks are disabled (the per-VM forward reuses
+    /// `127.0.0.1:<ssh_port>` across boots). Requires [`GuestConfig::with_net`] and a booted guest
+    /// running sshd — call [`Guest::wait_for_ssh_banner`] first. Errors if ssh exits non-zero
+    /// (stderr is included in the message).
     pub fn ssh_exec(&self, remote_cmd: &str) -> Result<String> {
+        let port = self.ssh_port.to_string();
+        let login = format!("claude@{FORWARDED_SSH_HOST}");
         let out = Command::new("ssh")
             .args([
                 "-p",
-                "2222",
+                &port,
                 "-o",
                 "StrictHostKeyChecking=no",
                 "-o",
@@ -1444,11 +1466,11 @@ impl Guest {
                 "ConnectTimeout=10",
                 "-o",
                 "LogLevel=ERROR",
-                "claude@127.0.0.1",
+                &login,
                 remote_cmd,
             ])
             .output()
-            .context("spawning ssh to the guest (127.0.0.1:2222)")?;
+            .with_context(|| format!("spawning ssh to the guest ({FORWARDED_SSH_HOST}:{port})"))?;
         if !out.status.success() {
             bail!(
                 "ssh `{remote_cmd}` failed ({}):\n{}",
@@ -1476,13 +1498,34 @@ impl Guest {
         }
     }
 
+    /// scp options matching [`Guest::ssh_exec`]'s ssh invocation, targeting THIS VM's forward port
+    /// (scp's port flag is `-P`, capitalized). Built per-guest so a multi-VM test copies to the
+    /// right VM instead of always 2222.
+    fn scp_opts(&self) -> Vec<String> {
+        [
+            "-P",
+            &self.ssh_port.to_string(),
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "LogLevel=ERROR",
+            "-q",
+        ]
+        .map(String::from)
+        .to_vec()
+    }
+
     /// Copy a local file into the guest at `remote_path` via scp (same forward and login
     /// as [`Guest::ssh_exec`]).
     pub fn scp_to_guest(&self, local: &Path, remote_path: &str) -> Result<()> {
         let out = Command::new("scp")
-            .args(SCP_OPTS)
+            .args(self.scp_opts())
             .arg(local)
-            .arg(format!("claude@127.0.0.1:{remote_path}"))
+            .arg(format!("claude@{FORWARDED_SSH_HOST}:{remote_path}"))
             .output()
             .context("spawning scp to the guest")?;
         anyhow::ensure!(
@@ -1500,8 +1543,8 @@ impl Guest {
         fs::create_dir_all(local_dir)
             .with_context(|| format!("creating {local_dir:?} for scp output"))?;
         let out = Command::new("scp")
-            .args(SCP_OPTS)
-            .arg(format!("claude@127.0.0.1:{remote_glob}"))
+            .args(self.scp_opts())
+            .arg(format!("claude@{FORWARDED_SSH_HOST}:{remote_glob}"))
             .arg(local_dir)
             .output()
             .context("spawning scp from the guest")?;
