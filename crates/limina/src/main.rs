@@ -144,6 +144,12 @@ struct Cli {
     #[arg(long, requires = "net")]
     net_log: Option<PathBuf>,
 
+    /// Host port for inbound SSH to the guest (gvproxy's built-in `127.0.0.1:<port> → guest:22`
+    /// forward; default 2222). Give each concurrent VM a distinct port so two or more can run
+    /// at once without colliding on the host port. Requires --net; must be 1024–65535.
+    #[arg(long, requires = "net")]
+    ssh_port: Option<u16>,
+
     /// Seconds to wait for an orderly guest power-off before force-killing.
     #[arg(long, default_value_t = 20)]
     shutdown_grace_secs: u64,
@@ -155,6 +161,13 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
+    // Death-pact reaper mode (hidden, spawned by the gateway alongside gvproxy). Handled BEFORE
+    // clap/logging/AppKit so it stays a tiny process that only watches a pipe and reaps gvproxy
+    // when this supervisor dies. See gateway::spawn_death_pact_watcher / run_reaper.
+    if std::env::args().nth(1).as_deref() == Some(gateway::REAP_GATEWAY_ARG) {
+        gateway::run_reaper();
+    }
+
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Info)
         .init();
@@ -330,8 +343,14 @@ fn main() -> Result<()> {
     // Kept alive for the VM's lifetime; cleaned up on both exit paths (Drop here, the global
     // gateway::cleanup() in the windowed timer's process::exit).
     let gateway = if cli.net {
-        let gw =
-            gateway::start(cli.net_log.as_deref()).context("starting the gvproxy NAT gateway")?;
+        let ssh_port = cli.ssh_port.unwrap_or(gateway::DEFAULT_SSH_PORT);
+        anyhow::ensure!(
+            ssh_port >= gateway::SSH_PORT_MIN,
+            "--ssh-port must be between {} and 65535 (gvproxy's range), got {ssh_port}",
+            gateway::SSH_PORT_MIN
+        );
+        let gw = gateway::start(cli.net_log.as_deref(), ssh_port)
+            .context("starting the gvproxy NAT gateway")?;
         args.push("--net-gvproxy".into());
         args.push(path_arg(gw.socket_path())?);
         Some(gw)

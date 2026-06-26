@@ -1655,6 +1655,7 @@ impl Guest {
             libc::kill(self.pid, libc::SIGKILL);
         }
         self.kill_stray_workers();
+        self.kill_stray_gateway();
         let status = self
             .child
             .wait()
@@ -1682,6 +1683,19 @@ impl Guest {
                 .stderr(Stdio::null())
                 .status();
         }
+    }
+
+    /// Best-effort: SIGKILL this supervisor's gvproxy on the forced path. After we SIGKILL the
+    /// supervisor it can't run its own gateway teardown, so its gvproxy would be orphaned (the
+    /// next `limina --net` would sweep it, but don't leave a stray after a test run). Targeted by
+    /// the supervisor pid embedded in gvproxy's socket name (`limina-gvproxy-<pid>.sock`, see
+    /// limina/src/gateway.rs), so it can't touch a concurrently-running VM's gateway.
+    fn kill_stray_gateway(&self) {
+        let _ = Command::new("pkill")
+            .args(["-9", "-f", &format!("limina-gvproxy-{}.sock", self.pid)])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 
