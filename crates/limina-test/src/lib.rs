@@ -1498,6 +1498,78 @@ impl Guest {
         }
     }
 
+    /// The pid of the `limina-vmm` worker — the supervisor's child whose executable is
+    /// [`vmm_bin`](GuestConfig::vmm_bin). With `--net` the supervisor also has gvproxy + a reaper
+    /// child, so we match on the executable path rather than taking the first child.
+    pub fn worker_pid(&self) -> Result<libc::pid_t> {
+        // Size the buffer, then enumerate the supervisor's direct children.
+        let cap = unsafe { libc::proc_listchildpids(self.pid, std::ptr::null_mut(), 0) };
+        anyhow::ensure!(
+            cap > 0,
+            "supervisor {} reports no children yet (worker not up?)",
+            self.pid
+        );
+        let mut pids = vec![0i32; cap as usize];
+        let n = unsafe {
+            libc::proc_listchildpids(
+                self.pid,
+                pids.as_mut_ptr() as *mut libc::c_void,
+                std::mem::size_of_val(pids.as_slice()) as libc::c_int,
+            )
+        };
+        anyhow::ensure!(
+            n > 0,
+            "proc_listchildpids(supervisor={}) returned {n}",
+            self.pid
+        );
+        pids.truncate(n as usize);
+
+        let want = self
+            .vmm_bin
+            .canonicalize()
+            .unwrap_or_else(|_| self.vmm_bin.clone());
+        for &pid in pids.iter().filter(|&&p| p > 0) {
+            let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+            let len = unsafe {
+                libc::proc_pidpath(pid, buf.as_mut_ptr() as *mut libc::c_void, buf.len() as u32)
+            };
+            if len <= 0 {
+                continue; // process already gone, or path unreadable
+            }
+            buf.truncate(len as usize);
+            let path = PathBuf::from(String::from_utf8_lossy(&buf).into_owned());
+            let path = path.canonicalize().unwrap_or(path);
+            if path == want {
+                return Ok(pid);
+            }
+        }
+        bail!(
+            "no child of supervisor {} has path {want:?} (children: {pids:?})",
+            self.pid
+        )
+    }
+
+    /// The `limina-vmm` worker's `phys_footprint` in bytes — the page count macOS bills the process
+    /// (Activity Monitor's "Memory", `proc_pid_rusage`'s `ri_phys_footprint`). The **worker** owns
+    /// the guest-RAM `MAP_ANON` (the supervisor doesn't), so this is the number that must DROP when
+    /// the guest returns memory through the balloon's free-page reporting / inflate. The go-to
+    /// signal for M6 dynamic-memory tests.
+    pub fn worker_phys_footprint(&self) -> Result<u64> {
+        let worker = self.worker_pid()?;
+        // SAFETY: zeroed POD; proc_pid_rusage fills it. The buffer arg is `rusage_info_t`
+        // (`*mut c_void`) per Apple's API — we pass a pointer to our v2 struct.
+        let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            libc::proc_pid_rusage(
+                worker,
+                libc::RUSAGE_INFO_V2,
+                &mut info as *mut libc::rusage_info_v2 as *mut libc::rusage_info_t,
+            )
+        };
+        anyhow::ensure!(rc == 0, "proc_pid_rusage(worker={worker}) failed: rc={rc}");
+        Ok(info.ri_phys_footprint)
+    }
+
     /// scp options matching [`Guest::ssh_exec`]'s ssh invocation, targeting THIS VM's forward port
     /// (scp's port flag is `-P`, capitalized). Built per-guest so a multi-VM test copies to the
     /// right VM instead of always 2222.
