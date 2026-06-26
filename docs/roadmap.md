@@ -307,11 +307,14 @@ asserts their output — `l1_command` (L1 in-process shell) and the stock-Fedora
   gateway down on both exit paths (headless Drop; windowed `gateway::cleanup()` before
   `process::exit`).
 - **Inbound SSH (no REST forwarding needed):** gvproxy ships a built-in default forward
-  `127.0.0.1:2222 → 192.168.127.2:22`, and the guest gets static `.2` when the NIC uses the
+  `127.0.0.1:<port> → 192.168.127.2:22`, and the guest gets static `.2` when the NIC uses the
   **well-known vfkit MAC `5a:94:ef:e4:0c:ee`** (`crates/limina-vmm/src/krun/mod.rs`). So
-  `ssh -p 2222 user@127.0.0.1` works with zero forwarding config. This is the daily-driver
-  guest-access path — see the `limina-fedora-access` note. (`krun_set_port_map` stays TSI-only —
-  EINVALs once a net device exists.)
+  `ssh -p <port> user@127.0.0.1` works with zero forwarding config. The host port **auto-allocates
+  from 2222 up** when `--ssh-port` is omitted (so 2+ VMs run concurrently without colliding) or is
+  pinned with `--ssh-port <1024-65535>`; either way the supervisor logs the resolved command,
+  `guest SSH forward ready: ssh -p N <user>@127.0.0.1`. This is the daily-driver guest-access path —
+  runbook in `docs/images.md` (§SSH access) and the `limina-fedora-access` note. (`krun_set_port_map`
+  stays TSI-only — EINVALs once a net device exists.)
 
 **Remaining:**
 - **Bridged (opt-in):** virtio-net + Apple `vmnet.framework` BRIDGED via a privileged helper

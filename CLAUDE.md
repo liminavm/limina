@@ -217,3 +217,9 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   touching `hv_vm_*` must be codesigned with `com.apple.security.hypervisor` (see
   `spikes/balloon-madvise/hv.entitlements`).
 - The big disk images (`*.raw`, `*.raw.xz`) and `third_party/` are gitignored.
+- **Run a VM with networking + SSH:** `limina --net` spawns a supervised gvproxy user-mode NAT (no
+  root) and the supervisor logs the exact SSH command — `guest SSH forward ready: ssh -p N <user>@127.0.0.1`.
+  The host port **auto-allocates from 2222 up** (so 2+ VMs run concurrently without colliding); pin it
+  with `--ssh-port <1024-65535>`, and capture gvproxy's packet log (the host-side net oracle) with
+  `--net-log <file>`. Read N from the log — don't assume 2222. Full recipe + creds in the
+  `limina-fedora-access` memory; design in `limina-m3-networking` / `crates/limina/src/gateway.rs`.

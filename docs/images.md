@@ -99,8 +99,25 @@ the seated-venus flow reuse the base without re-cloning:
 
 ## SSH access
 
-With `--net`, gvproxy forwards `127.0.0.1:2222 → guest:22` (the well-known MAC gives the guest the
-static `.2` lease — see `docs/research/07-networking.md`). Wait for the SSH banner before logging in:
-```bash
-ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null claude@127.0.0.1
+Boot with `--net` (a supervised gvproxy user-mode NAT, no root) and SSH into the guest. The
+supervisor logs the **exact command** at startup — read the port from it, don't assume 2222:
+
 ```
+guest SSH forward ready: ssh -p N <user>@127.0.0.1
+```
+
+gvproxy forwards `127.0.0.1:<PORT> → guest:22` (the well-known MAC gives the guest the static `.2`
+lease — see `docs/research/07-networking.md`). The host `<PORT>` **auto-allocates from 2222 upward**
+(the first free loopback port), so it's 2222 for a lone VM but 2223+ when 2222 is already taken. Pin
+it with `--ssh-port <1024-65535>` (requires `--net`; errors if the port is busy). Run **two or more
+VMs at once** by leaving `--ssh-port` off on each (each grabs the next free port — read each VM's own
+startup log) or by pinning distinct ports. `--net-log <file>` captures gvproxy's `-debug` packet log
+(the host-side network oracle: DHCP/DNS/NAT).
+
+Wait for the SSH banner (~10–15s post-boot), then (substitute the logged port for `<PORT>`):
+```bash
+ssh -p <PORT> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null claude@127.0.0.1
+```
+user `claude` / password `claudiusrobotus`, passwordless sudo. The full operational SSH recipe +
+harness builders (`GuestConfig::with_net` / `with_ssh_port`) live in the `limina-fedora-access`
+agent memory.

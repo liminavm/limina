@@ -282,7 +282,7 @@ both decisively and is the only tier that holds ~vsync (60→57→45 as fish sca
 **Exact launch command (over ssh) — this is the proven, non-flailing recipe (see
 [[limina-profiling-playbook]] for the why):**
 ```bash
-ssh -p 2222 claude@127.0.0.1
+ssh -p 2222 claude@127.0.0.1   # 2222 = the common single-VM port; use the one the supervisor logged ("ssh -p N …")
 export XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 systemctl --user stop ff-bench 2>/dev/null; sleep 3      # clear any prior workload (NOT mid-capture)
 busctl --user set-property org.gnome.Shell /org/gnome/Shell org.gnome.Shell OverviewActive b false
