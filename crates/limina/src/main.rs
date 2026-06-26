@@ -145,8 +145,9 @@ struct Cli {
     net_log: Option<PathBuf>,
 
     /// Host port for inbound SSH to the guest (gvproxy's built-in `127.0.0.1:<port> → guest:22`
-    /// forward; default 2222). Give each concurrent VM a distinct port so two or more can run
-    /// at once without colliding on the host port. Requires --net; must be 1024–65535.
+    /// forward). When omitted, the first free port from 2222 up is auto-allocated, so two or more
+    /// VMs run in parallel without colliding — the resolved port is logged at startup. Pass an
+    /// explicit value to pin it (errors if that port is busy). Requires --net; must be 1024–65535.
     #[arg(long, requires = "net")]
     ssh_port: Option<u16>,
 
@@ -343,14 +344,22 @@ fn main() -> Result<()> {
     // Kept alive for the VM's lifetime; cleaned up on both exit paths (Drop here, the global
     // gateway::cleanup() in the windowed timer's process::exit).
     let gateway = if cli.net {
-        let ssh_port = cli.ssh_port.unwrap_or(gateway::DEFAULT_SSH_PORT);
-        anyhow::ensure!(
-            ssh_port >= gateway::SSH_PORT_MIN,
-            "--ssh-port must be between {} and 65535 (gvproxy's range), got {ssh_port}",
-            gateway::SSH_PORT_MIN
-        );
-        let gw = gateway::start(cli.net_log.as_deref(), ssh_port)
+        // Validate only an *explicit* port; omitting --ssh-port auto-allocates a free one (so two
+        // VMs can run in parallel without the user hand-picking non-colliding ports).
+        if let Some(p) = cli.ssh_port {
+            anyhow::ensure!(
+                p >= gateway::SSH_PORT_MIN,
+                "--ssh-port must be between {} and 65535 (gvproxy's range), got {p}",
+                gateway::SSH_PORT_MIN
+            );
+        }
+        let gw = gateway::start(cli.net_log.as_deref(), cli.ssh_port)
             .context("starting the gvproxy NAT gateway")?;
+        // Surface the resolved port — with auto-allocation the user can't know it in advance.
+        log::info!(
+            "guest SSH forward ready: ssh -p {} <user>@127.0.0.1",
+            gw.ssh_port()
+        );
         args.push("--net-gvproxy".into());
         args.push(path_arg(gw.socket_path())?);
         Some(gw)

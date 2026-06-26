@@ -30,8 +30,10 @@
 //!
 //! Multiple concurrent VMs: the socket path is keyed on the supervisor pid (unique per
 //! `limina` process), so two VMs never collide on it. The one remaining shared host resource —
-//! gvproxy's built-in SSH-forward port (default 2222) — is made distinct per VM via the
-//! `-ssh-port` flag (the supervisor's `--ssh-port`).
+//! gvproxy's built-in SSH-forward port — is made distinct per VM either explicitly (the
+//! supervisor's `--ssh-port`) or, when that is omitted, by auto-allocating the first free port
+//! from [`DEFAULT_SSH_PORT`] upward (see [`allocate_ssh_port`]) so two VMs that both leave it
+//! unset still don't fight over 2222.
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -84,6 +86,13 @@ impl Gateway {
         &self.socket_path
     }
 
+    /// The resolved host port of gvproxy's inbound `127.0.0.1:<port> → guest:22` forward — the
+    /// one the caller requested, or the auto-allocated one when `--ssh-port` was omitted. The
+    /// supervisor surfaces it so the user knows where to `ssh`.
+    pub fn ssh_port(&self) -> u16 {
+        self.ssh_port
+    }
+
     /// Recycle gvproxy at the **same** socket path, so the worker's already-baked
     /// `--net-gvproxy` arg stays valid. Needed when the supervisor relaunches the worker after a
     /// guest reboot: gvproxy's vfkit socket is single-connection (it unlinks the socket once a VM
@@ -127,13 +136,18 @@ fn default_socket_path() -> PathBuf {
 /// host-side network oracle — DHCP/DNS/NAT packets — used by tests and diagnostics).
 /// Without it, gvproxy logs at info to the supervisor's inherited stderr.
 ///
+/// `ssh_port`: an explicit host port for gvproxy's inbound SSH forward, or `None` to
+/// auto-allocate the first free port from [`DEFAULT_SSH_PORT`] upward (so two VMs that both omit
+/// `--ssh-port` don't collide). The resolved port is readable via [`Gateway::ssh_port`].
+///
 /// First reaps any gvproxy orphaned by a previously-crashed supervisor (see [`sweep_orphans`]).
-pub fn start(debug_log: Option<&Path>, ssh_port: u16) -> Result<Gateway> {
+pub fn start(debug_log: Option<&Path>, ssh_port: Option<u16>) -> Result<Gateway> {
     // Reap leftovers from a supervisor that died un-cleanly before it could run its own
     // teardown. Only strays whose owning supervisor is GONE are killed, so a concurrent VM's
     // gvproxy is untouched.
     sweep_orphans(&registry_dir());
 
+    let ssh_port = allocate_ssh_port(ssh_port)?;
     let socket_path = default_socket_path();
     spawn_gvproxy(&socket_path, debug_log, ssh_port)?;
     Ok(Gateway {
@@ -214,6 +228,40 @@ fn gvproxy_args(socket_path: &Path, ssh_port: u16, debug: bool) -> Vec<OsString>
     v.push("-ssh-port".into());
     v.push(OsString::from(ssh_port.to_string()));
     v
+}
+
+// ---------------------------------------------------------------------------
+// Host SSH-forward port allocation — pick a free port when the VM didn't request one, so several
+// VMs can run in parallel without the caller hand-picking non-colliding ports.
+// ---------------------------------------------------------------------------
+
+/// True if `port` can be bound on loopback right now (nothing else holds it). A transient probe:
+/// we bind then immediately drop the listener so gvproxy can take the port. Inherently TOCTOU,
+/// but VMs start seconds apart and gvproxy binds its forward within ms, so in practice the next
+/// VM's scan already sees this one's port held.
+fn port_is_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// First free port at or above `base` (scanning up to 65535) per the injected `is_free` probe.
+/// Pure (probe injected) so the scan policy is unit-tested without binding real sockets.
+fn first_free_port(base: u16, is_free: impl Fn(u16) -> bool) -> Option<u16> {
+    (base..=u16::MAX).find(|&p| is_free(p))
+}
+
+/// Resolve a gateway's host SSH-forward port: honor an explicit `requested` port (erroring early
+/// if it is already in use, so the user gets a clear message instead of a silently-dead forward),
+/// or auto-allocate the first free port from [`DEFAULT_SSH_PORT`] upward when `None` — what lets
+/// two VMs that both omit `--ssh-port` run in parallel without colliding on 2222.
+fn allocate_ssh_port(requested: Option<u16>) -> Result<u16> {
+    match requested {
+        Some(p) if port_is_free(p) => Ok(p),
+        Some(p) => bail!(
+            "host port {p} is already in use; pick another --ssh-port or omit it to auto-allocate"
+        ),
+        None => first_free_port(DEFAULT_SSH_PORT, port_is_free)
+            .with_context(|| format!("no free host port at or above {DEFAULT_SSH_PORT}")),
+    }
 }
 
 /// Kill and reap the death-pact watcher + the gateway, and remove its socket + registry
@@ -631,6 +679,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn first_free_port_returns_the_first_unused_from_the_base() {
+        // Auto-allocation scans UP from the base, taking the first free port — so the first VM
+        // gets the familiar 2222 and each later VM the next slot, with no manual port-picking.
+        assert_eq!(
+            first_free_port(2222, |_| true),
+            Some(2222),
+            "all free → base"
+        );
+        assert_eq!(
+            first_free_port(2222, |p| p != 2222),
+            Some(2223),
+            "base taken → next"
+        );
+        assert_eq!(
+            first_free_port(2222, |p| p >= 2224),
+            Some(2224),
+            "base + next taken → skip both"
+        );
+        assert_eq!(
+            first_free_port(65535, |_| false),
+            None,
+            "nothing free in range → None"
+        );
+    }
+
     // --- Real-process, gated on LIMINA_HVF_TESTS (run via scripts/test-boot.sh) ----------
 
     fn gated() -> bool {
@@ -756,5 +830,44 @@ mod tests {
             both,
             "two VMs' gateways must run at once on distinct ssh-ports"
         );
+    }
+
+    #[test]
+    fn two_auto_allocated_gateways_get_distinct_ports() {
+        if !gated() {
+            eprintln!(
+                "skipping two_auto_allocated_gateways_get_distinct_ports (set LIMINA_HVF_TESTS=1)"
+            );
+            return;
+        }
+        let dir = unique_tmp_dir("limina-gw-autoport");
+        // VM A: no `--ssh-port` → auto-allocate the first free port from the base.
+        let pa = allocate_ssh_port(None).expect("allocate port for A");
+        let a = spawn_gvproxy_process(&dir.join("a.sock"), None, pa).expect("gateway A");
+        // gvproxy binds its TCP ssh-port at startup; wait until A actually holds `pa` so B's scan
+        // is forced to skip it (in real use VMs start seconds apart, but the test serializes).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while port_is_free(pa) {
+            assert!(
+                Instant::now() < deadline,
+                "gvproxy A never bound its ssh-port {pa}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // VM B: auto-allocate again → must NOT reuse the port A is holding.
+        let pb = allocate_ssh_port(None).expect("allocate port for B");
+        let b = spawn_gvproxy_process(&dir.join("b.sock"), None, pb).expect("gateway B");
+        let (pida, pidb) = (a.id() as i32, b.id() as i32);
+        let both = pid_is_alive(pida) && pid_is_alive(pidb);
+        for mut c in [a, b] {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        let _ = fs::remove_dir_all(&dir);
+        assert_ne!(
+            pa, pb,
+            "auto-allocation must give the second VM a different port (got {pa} then {pb})"
+        );
+        assert!(both, "both auto-allocated gateways must run at once");
     }
 }
