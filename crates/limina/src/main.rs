@@ -8,6 +8,7 @@
 //! power-off on Ctrl-C, force-kill on timeout, report when the VM stops). The
 //! AppKit UI grows on top of this supervisor later.
 
+mod balloon_policy;
 mod clipboard;
 mod control;
 mod gateway;
@@ -193,9 +194,27 @@ fn main() -> Result<()> {
     // and keeps MIN for the balloon policy. The balloon control socket is auto-allocated below.
     let mem_range = cli.memory.as_deref().map(parse_memory_range).transpose()?;
     let ram_mib = mem_range.map(|(_, max)| max).unwrap_or(cli.ram_mib);
-    if let Some((min, max)) = mem_range {
-        log::info!("dynamic memory: {min}..{max} MiB (balloon policy shrinks toward {min})");
-    }
+
+    // Balloon control socket (M6): explicit flag wins; else auto-allocate when --memory is given.
+    let balloon_socket = cli.balloon_control_socket.clone().or_else(|| {
+        mem_range.is_some().then(|| {
+            std::env::temp_dir().join(format!("limina-balloon-{}.sock", std::process::id()))
+        })
+    });
+
+    // The PSI autoballoon policy runs in the supervisor when a range + socket both exist: it
+    // consumes guest MemPressure over the control plane and drives the balloon target.
+    let balloon_policy = match (mem_range, balloon_socket.clone()) {
+        (Some((min, max)), Some(sock)) => {
+            log::info!("dynamic memory: {min}..{max} MiB (balloon policy shrinks toward {min})");
+            Some(balloon_policy::BalloonPolicy::new(
+                min as u32 * balloon_policy::PAGES_PER_MIB,
+                max as u32 * balloon_policy::PAGES_PER_MIB,
+                sock,
+            ))
+        }
+        _ => None,
+    };
 
     // Forward the VM options to the worker's CLI.
     let mut args: Vec<String> = vec![
@@ -306,7 +325,7 @@ fn main() -> Result<()> {
         let socket = cli.control_socket.clone().unwrap_or_else(|| {
             std::env::temp_dir().join(format!("limina-ctrl-{}.sock", std::process::id()))
         });
-        match control::ControlPlane::start(&socket) {
+        match control::ControlPlane::start(&socket, balloon_policy) {
             Ok(cp) => {
                 args.push("--vsock-port".into());
                 args.push(limina_proto::CONTROL_PORT.to_string());
@@ -361,14 +380,8 @@ fn main() -> Result<()> {
         args.push(path_arg(path)?);
     }
 
-    // Runtime balloon control socket (M6): forwarded to the worker (which binds it). Auto-allocated
-    // when --memory is given so dynamic memory Just Works; an explicit --balloon-control-socket
-    // (e.g. from the test harness) takes precedence.
-    let balloon_socket = cli.balloon_control_socket.clone().or_else(|| {
-        mem_range.is_some().then(|| {
-            std::env::temp_dir().join(format!("limina-balloon-{}.sock", std::process::id()))
-        })
-    });
+    // Runtime balloon control socket (M6): forwarded to the worker (which binds it). The path was
+    // resolved above (explicit flag, else auto-allocated under --memory) and shared with the policy.
     if let Some(path) = &balloon_socket {
         args.push("--balloon-control-socket".into());
         args.push(path_arg(path)?);

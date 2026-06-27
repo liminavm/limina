@@ -266,6 +266,10 @@ pub struct GuestConfig {
     /// known scratch path so the harness can drive the target / read `stats`. See
     /// [`Guest::set_balloon_target`] / [`Guest::balloon_stats`].
     pub balloon_control: bool,
+    /// Dynamic-memory range `(min_mib, max_mib)` passed as `--memory MIN..MAX` (M6). `MAX` becomes
+    /// the guest RAM; setting this starts the supervisor's PSI autoballoon policy. See
+    /// [`with_memory`](GuestConfig::with_memory).
+    pub memory: Option<(usize, usize)>,
     /// Extra environment variables for the supervisor process (e.g. `LIMINA_PASTEBOARD`).
     pub envs: Vec<(String, String)>,
     /// Host directories shared into the guest (`--share name=path[:ro]` → virtiofs tag
@@ -317,6 +321,7 @@ impl GuestConfig {
             supervisor_log: false,
             control_socket: false,
             balloon_control: false,
+            memory: None,
             envs: Vec::new(),
             shares: Vec::new(),
         })
@@ -425,6 +430,7 @@ impl GuestConfig {
             supervisor_log: false,
             control_socket: false,
             balloon_control: false,
+            memory: None,
             envs: Vec::new(),
             shares: Vec::new(),
         })
@@ -460,6 +466,7 @@ impl GuestConfig {
             supervisor_log: false,
             control_socket: false,
             balloon_control: false,
+            memory: None,
             envs: Vec::new(),
             shares: Vec::new(),
         })
@@ -517,6 +524,7 @@ impl GuestConfig {
             supervisor_log: false,
             control_socket: false,
             balloon_control: false,
+            memory: None,
             envs: Vec::new(),
             shares: Vec::new(),
         })
@@ -709,6 +717,16 @@ impl GuestConfig {
     /// harness can drive the target with [`Guest::set_balloon_target`] and read [`Guest::balloon_stats`].
     pub fn with_balloon_control(mut self) -> GuestConfig {
         self.balloon_control = true;
+        self
+    }
+
+    /// Set the dynamic-memory range `MIN..MAX` MiB (M6): the supervisor allocates `MAX` RAM and runs
+    /// the PSI autoballoon policy. Pair with [`with_control_socket`](GuestConfig::with_control_socket)
+    /// (to inject `MemPressure` as a peer) and [`with_balloon_control`](GuestConfig::with_balloon_control)
+    /// (to read back the target the policy commands).
+    pub fn with_memory(mut self, min_mib: usize, max_mib: usize) -> GuestConfig {
+        self.memory = Some((min_mib, max_mib));
+        self.ram_mib = max_mib;
         self
     }
 
@@ -1036,6 +1054,10 @@ impl Guest {
         let balloon_socket = cfg.balloon_control.then(|| scratch.join("balloon.sock"));
         if let Some(path) = &balloon_socket {
             cmd.arg("--balloon-control-socket").arg(path);
+        }
+        // Dynamic-memory range (M6): starts the supervisor's PSI autoballoon policy.
+        if let Some((min, max)) = cfg.memory {
+            cmd.arg("--memory").arg(format!("{min}..{max}"));
         }
         let capture_png = match &cfg.display {
             Some(d) => {

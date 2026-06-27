@@ -118,9 +118,11 @@ fn serve(stream: &mut File) -> std::io::Result<AgentEnd> {
                 // Never fatal: report and keep serving.
                 write_message(stream, CHANNEL_CONTROL, &Message::unsupported(msg_type))?;
             }
-            // WELCOME (cap sets unused yet), host heartbeats/errors: noted, no action.
+            // WELCOME (cap sets unused yet), host heartbeats/errors, stray pressure reports
+            // (a guest→host message this agent never receives): noted, no action.
             Ok((_, Message::Welcome(_)))
             | Ok((_, Message::Heartbeat(_)))
+            | Ok((_, Message::MemPressure(_)))
             | Ok((_, Message::Error(_))) => {}
             // Clipboard frames (this agent never advertises the cap), HELLO from a
             // host, stray acks: ignore rather than die.

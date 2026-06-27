@@ -1,6 +1,6 @@
 # M6 — Dynamic memory (virtio-balloon, `min..max`)
 
-**Status: Steps 1–3 LANDED & verified; Step 4 (PSI policy) is the build-ready plan.** This
+**Status: M6 COMPLETE — Steps 1–4 LANDED & verified.** This
 document is the authoritative, edit-by-edit implementation plan synthesized for Milestone 6.
 The actual edit → `scripts/apply-libkrun-patches.sh` → build → codesign → `scripts/test-boot.sh`
 loop is driven **serially in the main loop**, not here. Every non-obvious claim below
@@ -25,8 +25,17 @@ before editing (point-in-time anchors).
 >   `Guest::set_balloon_target`/`balloon_stats`. Verified end-to-end on stock F44
 >   (`crates/limina-test/tests/balloon_inflate.rs`): 1 GiB target → `actual` 1 GiB, guest
 >   MemAvailable −1 GiB; target 0 → `actual` 0, memory returns. `parse_memory_range` unit-tested.
-> - **Step 4 — PLANNED** (below): PSI autoballoon (guest agent reports pressure, supervisor
->   drives the target with hysteresis).
+> - **Step 4 — DONE (2026-06-26, no libkrun patch).** PSI autoballoon: `limina_proto::MemPressure`
+>   (msg-type 7, round-trip + `from_proc` parser host-tested); the `limina-agent` reporter reads
+>   `/proc/pressure/memory` + `/proc/meminfo` on its idle tick and sends it (`mempressure` cap;
+>   `psi=0` → MemAvailable-only fallback); the supervisor `BalloonPolicy` (`crates/limina/src/balloon_policy.rs`)
+>   turns reports into balloon targets with hysteresis + an 800 ms inflate dwell (release-fast,
+>   reclaim-gradual; 5 `decide()` unit tests); wired through the control plane (`control.rs`
+>   `Message::MemPressure` arm) and a `--memory`-gated policy in `main.rs`. The worker's balloon
+>   listener now serves **one thread per connection** (the policy holds a long-lived connection,
+>   so a stats query must not block behind it). Verified end-to-end on stock F44
+>   (`crates/limina-test/tests/balloon_psi.rs`, harness-as-agent peer): injected idle pressure →
+>   policy inflated the guest balloon to 2 GiB; injected high pressure → policy released it to 0.
 
 > Cross-refs: `docs/roadmap.md` "Milestone 6"; the resolved reclaim spike
 > `spikes/balloon-madvise/RESULTS.md`; the shipped runtime-resize precedent this plan

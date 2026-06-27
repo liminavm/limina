@@ -74,6 +74,8 @@ pub mod msg_type {
     pub const SHUTDOWN: u8 = 4;
     pub const SHUTDOWN_ACK: u8 = 5;
     pub const ERROR: u8 = 6;
+    /// Guest → host memory-pressure report (M6 dynamic memory / PSI autoballoon).
+    pub const MEM_PRESSURE: u8 = 7;
     pub const CLIP_OFFER: u8 = 16;
     pub const CLIP_REQUEST: u8 = 17;
     pub const CLIP_DATA: u8 = 18;
@@ -107,6 +109,72 @@ pub struct Heartbeat {
     /// Monotonic per-connection sequence number.
     #[n(0)]
     pub seq: u64,
+}
+
+/// Guest → host memory-pressure report for the M6 PSI autoballoon policy. Sent on an interval over
+/// [`CHANNEL_CONTROL`]; the host moves the balloon target between min and max with hysteresis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub struct MemPressure {
+    /// PSI `some` memory pressure over the 10s/60s windows, in hundredths of a percent (`avg*100`,
+    /// so 0..=10000). Both `some_*` and `full_*` are 0 when `/proc/pressure/memory` is unavailable
+    /// (kernel `psi=0`); the host then falls back to the `mem_available_kib` watermark.
+    #[n(0)]
+    pub some_avg10: u32,
+    #[n(1)]
+    pub some_avg60: u32,
+    /// PSI `full` memory pressure (10s/60s windows), in hundredths of a percent.
+    #[n(2)]
+    pub full_avg10: u32,
+    #[n(3)]
+    pub full_avg60: u32,
+    /// `/proc/meminfo` `MemAvailable` in KiB (the always-available fallback signal).
+    #[n(4)]
+    pub mem_available_kib: u64,
+    /// `/proc/meminfo` `MemTotal` in KiB.
+    #[n(5)]
+    pub mem_total_kib: u64,
+}
+
+impl MemPressure {
+    /// Parse a snapshot from the raw `/proc/pressure/memory` and `/proc/meminfo` contents (the
+    /// guest agent reads the files; this is the pure, host-testable parser). PSI fields are 0 when
+    /// `pressure` is empty (kernel `psi=0`); MemAvailable/MemTotal come from `meminfo`. Tolerant of
+    /// missing fields (default 0).
+    pub fn from_proc(pressure: &str, meminfo: &str) -> MemPressure {
+        // A PSI line: "some avg10=1.23 avg60=4.56 avg300=0.00 total=12345"; value is a percent.
+        fn avg(line: &str, key: &str) -> u32 {
+            line.split_whitespace()
+                .find_map(|tok| tok.strip_prefix(key)?.strip_prefix('='))
+                .and_then(|v| v.parse::<f64>().ok())
+                .map(|f| (f * 100.0).round() as u32)
+                .unwrap_or(0)
+        }
+        // A meminfo line: "MemTotal:       6029312 kB".
+        fn kib(meminfo: &str, key: &str) -> u64 {
+            meminfo
+                .lines()
+                .find(|l| l.starts_with(key))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0)
+        }
+        let some = pressure
+            .lines()
+            .find(|l| l.starts_with("some"))
+            .unwrap_or("");
+        let full = pressure
+            .lines()
+            .find(|l| l.starts_with("full"))
+            .unwrap_or("");
+        MemPressure {
+            some_avg10: avg(some, "avg10"),
+            some_avg60: avg(some, "avg60"),
+            full_avg10: avg(full, "avg10"),
+            full_avg60: avg(full, "avg60"),
+            mem_available_kib: kib(meminfo, "MemAvailable:"),
+            mem_total_kib: kib(meminfo, "MemTotal:"),
+        }
+    }
 }
 
 /// Host → guest: please power off cleanly (the orderly window-close path).
@@ -176,6 +244,7 @@ pub enum Message {
     Hello(Hello),
     Welcome(Welcome),
     Heartbeat(Heartbeat),
+    MemPressure(MemPressure),
     Shutdown(Shutdown),
     /// Empty payload: acknowledges a [`Shutdown`]; the guest powers off right after.
     ShutdownAck,
@@ -196,6 +265,7 @@ impl Message {
             Message::Hello(_) => msg_type::HELLO,
             Message::Welcome(_) => msg_type::WELCOME,
             Message::Heartbeat(_) => msg_type::HEARTBEAT,
+            Message::MemPressure(_) => msg_type::MEM_PRESSURE,
             Message::Shutdown(_) => msg_type::SHUTDOWN,
             Message::ShutdownAck => msg_type::SHUTDOWN_ACK,
             Message::ClipOffer(_) => msg_type::CLIP_OFFER,
@@ -223,6 +293,7 @@ impl Message {
             Message::Hello(m) => cbor(m),
             Message::Welcome(m) => cbor(m),
             Message::Heartbeat(m) => cbor(m),
+            Message::MemPressure(m) => cbor(m),
             Message::Shutdown(m) => cbor(m),
             Message::ShutdownAck => Ok(Vec::new()),
             Message::ClipOffer(m) => cbor(m),
@@ -241,6 +312,7 @@ impl Message {
             msg_type::HELLO => Message::Hello(cbor(&payload)?),
             msg_type::WELCOME => Message::Welcome(cbor(&payload)?),
             msg_type::HEARTBEAT => Message::Heartbeat(cbor(&payload)?),
+            msg_type::MEM_PRESSURE => Message::MemPressure(cbor(&payload)?),
             msg_type::SHUTDOWN => Message::Shutdown(cbor(&payload)?),
             msg_type::SHUTDOWN_ACK => Message::ShutdownAck,
             msg_type::CLIP_OFFER => Message::ClipOffer(cbor(&payload)?),
@@ -346,6 +418,45 @@ mod tests {
         let mut buf = Vec::new();
         write_message(&mut buf, CHANNEL_CONTROL, &msg).expect("encode");
         read_message(&mut Cursor::new(buf)).expect("decode")
+    }
+
+    #[test]
+    fn mem_pressure_round_trips() {
+        let mp = MemPressure {
+            some_avg10: 123,
+            some_avg60: 456,
+            full_avg10: 50,
+            full_avg60: 0,
+            mem_available_kib: 5151232,
+            mem_total_kib: 6029312,
+        };
+        let (_, decoded) = round_trip(Message::MemPressure(mp));
+        assert_eq!(decoded, Message::MemPressure(mp));
+    }
+
+    #[test]
+    fn mem_pressure_parses_psi_and_meminfo() {
+        let pressure = "some avg10=1.23 avg60=4.56 avg300=0.00 total=999\n\
+                        full avg10=0.50 avg60=0.00 avg300=0.00 total=10\n";
+        let meminfo = "MemTotal:       6029312 kB\nMemFree:         123 kB\n\
+                       MemAvailable:    5151232 kB\n";
+        let mp = MemPressure::from_proc(pressure, meminfo);
+        assert_eq!(mp.some_avg10, 123); // 1.23% -> 123 hundredths
+        assert_eq!(mp.some_avg60, 456);
+        assert_eq!(mp.full_avg10, 50);
+        assert_eq!(mp.full_avg60, 0);
+        assert_eq!(mp.mem_available_kib, 5151232);
+        assert_eq!(mp.mem_total_kib, 6029312);
+    }
+
+    #[test]
+    fn mem_pressure_psi_absent_keeps_meminfo() {
+        // psi=0 kernel: /proc/pressure/memory missing -> empty; meminfo still parsed.
+        let mp = MemPressure::from_proc("", "MemTotal: 100 kB\nMemAvailable: 80 kB\n");
+        assert_eq!(mp.some_avg10, 0);
+        assert_eq!(mp.full_avg60, 0);
+        assert_eq!(mp.mem_available_kib, 80);
+        assert_eq!(mp.mem_total_kib, 100);
     }
 
     #[test]

@@ -484,7 +484,6 @@ fn parse_resize(line: &str) -> Option<(u32, u32)> {
 /// Runs on a detached thread for the VMM's lifetime; the supervisor policy and the test harness
 /// connect to it. Mirrors [`install_resize_listener`].
 fn install_balloon_listener(path: std::path::PathBuf, handle: BalloonControlHandle) -> Result<()> {
-    use std::io::{BufRead, Write};
     use std::os::unix::net::UnixListener;
 
     // A stale socket from a previous run (or a relaunched worker) blocks bind(); clear it first.
@@ -503,44 +502,60 @@ fn install_balloon_listener(path: std::path::PathBuf, handle: BalloonControlHand
                         continue;
                     }
                 };
-                let mut writer = match stream.try_clone() {
-                    Ok(w) => w,
-                    Err(e) => {
-                        log::error!("balloon: failed to clone control stream: {e}");
-                        continue;
-                    }
-                };
-                for line in std::io::BufReader::new(stream).lines() {
-                    let Ok(line) = line else { break };
-                    let mut parts = line.split_whitespace();
-                    match parts.next() {
-                        Some("target") => match parts.next().and_then(|s| s.parse::<u64>().ok()) {
-                            Some(bytes) => {
-                                let pages = (bytes >> 12).min(u32::MAX as u64) as u32;
-                                log::info!("balloon: target {bytes} bytes ({pages} pages)");
-                                handle.set_target_pages(pages);
-                            }
-                            None => log::warn!("balloon: ignoring malformed target line {line:?}"),
-                        },
-                        Some("stats") => {
-                            let stats = handle.get_stats();
-                            let actual_bytes = (stats.actual_pages as u64) << 12;
-                            if let Err(e) = writeln!(
-                                writer,
-                                "actual={actual_bytes} reclaimed={}",
-                                stats.reclaimed_bytes
-                            )
-                            .and_then(|()| writer.flush())
-                            {
-                                log::warn!("balloon: failed to reply to stats: {e}");
-                                break;
-                            }
-                        }
-                        _ => log::warn!("balloon: ignoring control line {line:?}"),
-                    }
+                // One thread per connection: the supervisor's policy holds a long-lived connection,
+                // so a single-threaded accept loop would block all other clients (e.g. a `stats`
+                // query) behind it. Each connection is independent and cheap.
+                let handle = handle.clone();
+                if let Err(e) = std::thread::Builder::new()
+                    .name("balloon-conn".into())
+                    .spawn(move || serve_balloon_conn(stream, handle))
+                {
+                    log::error!("balloon: cannot spawn connection thread: {e}");
                 }
             }
         })
         .context("spawning the balloon control listener thread")?;
     Ok(())
+}
+
+/// Serve one balloon control connection: `target <bytes>` drives the live balloon, `stats` replies
+/// with `actual=<bytes> reclaimed=<bytes>`. Reads until EOF.
+fn serve_balloon_conn(stream: std::os::unix::net::UnixStream, handle: BalloonControlHandle) {
+    use std::io::{BufRead, Write};
+    let mut writer = match stream.try_clone() {
+        Ok(w) => w,
+        Err(e) => {
+            log::error!("balloon: failed to clone control stream: {e}");
+            return;
+        }
+    };
+    for line in std::io::BufReader::new(stream).lines() {
+        let Ok(line) = line else { break };
+        let mut parts = line.split_whitespace();
+        match parts.next() {
+            Some("target") => match parts.next().and_then(|s| s.parse::<u64>().ok()) {
+                Some(bytes) => {
+                    let pages = (bytes >> 12).min(u32::MAX as u64) as u32;
+                    log::info!("balloon: target {bytes} bytes ({pages} pages)");
+                    handle.set_target_pages(pages);
+                }
+                None => log::warn!("balloon: ignoring malformed target line {line:?}"),
+            },
+            Some("stats") => {
+                let stats = handle.get_stats();
+                let actual_bytes = (stats.actual_pages as u64) << 12;
+                if let Err(e) = writeln!(
+                    writer,
+                    "actual={actual_bytes} reclaimed={}",
+                    stats.reclaimed_bytes
+                )
+                .and_then(|()| writer.flush())
+                {
+                    log::warn!("balloon: failed to reply to stats: {e}");
+                    break;
+                }
+            }
+            _ => log::warn!("balloon: ignoring control line {line:?}"),
+        }
+    }
 }

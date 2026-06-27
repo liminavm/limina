@@ -544,6 +544,15 @@ in the L1 guest).
 
 ## Milestone 6 — Dynamic memory (balloon, min..max)
 
+**Status: DONE (2026-06-26).** All four tasks landed and are verified end-to-end on stock F44; the
+build-by-build plan + as-built log is `docs/design/m6-dynamic-memory.md`. One deliberate deviation
+from the task list below: task 3's "public balloon **C API**" was built as the project-standard
+**internal Rust API** (`BalloonControlHandle`, mirroring `DisplayResizeHandle`) plus a
+`--balloon-control-socket`, not a `krun_*balloon*` C ABI — consistent with the no-C-ABI decision.
+Tests: `crates/limina-test/tests/balloon.rs` (FRQ reclaim drops `phys_footprint`),
+`balloon_inflate.rs` (target→`actual`→guest), `balloon_psi.rs` (PSI policy inflate/deflate), plus
+coalescer + policy + proto unit tests.
+
 **Goal:** the VM is given a `min..max` RAM range; it takes memory under guest pressure and returns
 it to macOS when idle, with `phys_footprint` actually dropping.
 

@@ -25,7 +25,8 @@ use std::os::fd::FromRawFd;
 use std::time::Duration;
 
 use limina_proto::{
-    read_message, write_message, Heartbeat, Hello, Message, CHANNEL_CONTROL, CONTROL_PORT,
+    read_message, write_message, Heartbeat, Hello, MemPressure, Message, CHANNEL_CONTROL,
+    CONTROL_PORT,
 };
 
 /// How often the agent emits a HEARTBEAT while the channel is idle.
@@ -173,7 +174,11 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
         CHANNEL_CONTROL,
         &Message::Hello(Hello {
             agent: format!("limina-agent/{}", version()),
-            caps: vec!["heartbeat".to_string(), "shutdown".to_string()],
+            caps: vec![
+                "heartbeat".to_string(),
+                "shutdown".to_string(),
+                "mempressure".to_string(),
+            ],
             pagesize,
         }),
     )?;
@@ -187,6 +192,11 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
                 CHANNEL_CONTROL,
                 &Message::Heartbeat(Heartbeat { seq }),
             )?;
+            // Piggyback an M6 memory-pressure report on the idle tick (same poll cadence, so a
+            // timer can never tear a frame). The host's PSI autoballoon policy consumes it.
+            if let Some(mp) = read_mem_pressure() {
+                write_message(stream, CHANNEL_CONTROL, &Message::MemPressure(mp))?;
+            }
             continue;
         }
         match read_message(stream) {
@@ -199,6 +209,7 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
             }
             Ok((_, Message::Welcome(_)))
             | Ok((_, Message::Heartbeat(_)))
+            | Ok((_, Message::MemPressure(_)))
             | Ok((_, Message::Error(_))) => {}
             // Clipboard frames belong to the session helper (this daemon never
             // advertises the cap); HELLO from a host / stray acks: ignore, don't die.
@@ -211,6 +222,16 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
             Err(e) => return Err(e),
         }
     }
+}
+
+/// Read a one-shot memory-pressure snapshot for the host's M6 autoballoon policy. PSI fields are 0
+/// when `/proc/pressure/memory` is absent (kernel `psi=0`); MemAvailable/MemTotal from
+/// `/proc/meminfo` are the always-present fallback. Returns `None` if meminfo is unreadable. The
+/// parsing lives in `limina_proto::MemPressure::from_proc` (host-testable).
+fn read_mem_pressure() -> Option<MemPressure> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let pressure = std::fs::read_to_string("/proc/pressure/memory").unwrap_or_default();
+    Some(MemPressure::from_proc(&pressure, &meminfo))
 }
 
 /// `poll(2)` the socket for readability, up to `timeout`. `Ok(false)` = idle tick.

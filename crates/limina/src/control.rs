@@ -97,13 +97,19 @@ struct Inner {
     peers: Mutex<Vec<Peer>>,
     next_id: AtomicU64,
     clipboard: crate::clipboard::Clipboard,
+    /// M6 PSI autoballoon policy, driven by guest `MemPressure` reports. `None` unless `--memory`
+    /// configured a dynamic range.
+    balloon_policy: Option<crate::balloon_policy::BalloonPolicy>,
 }
 
 impl ControlPlane {
     /// Bind `socket_path` and start the accept thread (which spawns a serve thread per
     /// connection). The returned handle is what shutdown paths use; the threads run for
     /// the process's lifetime.
-    pub fn start(socket_path: &Path) -> Result<ControlPlane> {
+    pub fn start(
+        socket_path: &Path,
+        balloon_policy: Option<crate::balloon_policy::BalloonPolicy>,
+    ) -> Result<ControlPlane> {
         let _ = std::fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path)
             .with_context(|| format!("binding control socket {socket_path:?}"))?;
@@ -113,6 +119,7 @@ impl ControlPlane {
             peers: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
             clipboard: crate::clipboard::Clipboard::new(),
+            balloon_policy,
         });
         let serve_inner = inner.clone();
         std::thread::Builder::new()
@@ -329,6 +336,12 @@ fn serve_loop(
                 }
             }
             Ok((_, Message::ClipData(d))) => inner.clipboard.on_data(d),
+            // M6: feed guest memory-pressure reports to the autoballoon policy (if configured).
+            Ok((_, Message::MemPressure(p))) => {
+                if let Some(policy) = &inner.balloon_policy {
+                    policy.on_pressure(&p);
+                }
+            }
             Ok((_, Message::Error(e))) => {
                 log::warn!("control: agent reported error: {e:?}");
             }
