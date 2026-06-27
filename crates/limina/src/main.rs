@@ -173,6 +173,12 @@ struct Cli {
     /// override with $LIMINA_VMM_BIN).
     #[arg(long)]
     vmm_bin: Option<PathBuf>,
+
+    /// Swap the Command and Option keys for the guest: Command acts as Alt, Option acts as
+    /// Meta/Super (the common ask for PC-style muscle memory). Host-side keymap policy; the
+    /// guest still owns the keyboard layout. Only meaningful with --window.
+    #[arg(long)]
+    swap_cmd_opt: bool,
 }
 
 fn main() -> Result<()> {
@@ -427,6 +433,9 @@ fn main() -> Result<()> {
             gateway,
             control,
             resize_socket,
+            limina_input::keymap::KeyRemap {
+                swap_cmd_opt: cli.swap_cmd_opt,
+            },
         );
     }
 
@@ -545,6 +554,7 @@ fn spawn_windowed_worker(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn run_windowed(
     vmm_bin: PathBuf,
     base_args: Vec<String>,
@@ -554,6 +564,7 @@ fn run_windowed(
     gateway: Option<gateway::Gateway>,
     control: Option<control::ControlPlane>,
     resize_socket: Option<PathBuf>,
+    remap: limina_input::keymap::KeyRemap,
 ) -> Result<()> {
     use objc2::MainThreadMarker;
 
@@ -652,7 +663,15 @@ fn run_windowed(
     // (`conn.pid()`). The window captures NSEvents and writes evdev events to the current
     // worker's input fds (read from `conn`). `resize_socket` lets the resize gesture push the
     // new window size to the worker (which forwards it to the live virtio-gpu).
-    window::run(shared, mtm, conn, control, resize_socket, surface_map);
+    window::run(
+        shared,
+        mtm,
+        conn,
+        control,
+        resize_socket,
+        surface_map,
+        remap,
+    );
 }
 
 /// Create a socketpair of the given type; set CLOEXEC on the supervisor end (fd.0) so the

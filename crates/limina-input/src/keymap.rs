@@ -6,10 +6,49 @@
 //! is a layout-position map — exactly what evdev wants (the guest applies its own layout).
 //!
 //! Modifiers keep their left/right distinction (macOS has separate keycodes for each).
-//! Command → META and Option → ALT for now; the Command/Option *swap* and custom remaps
-//! are a planned policy layer that will sit on top of this raw positional map.
+//! Command → META and Option → ALT in the raw map; the Command/Option *swap* and custom
+//! remaps are a policy layer ([`KeyRemap`]) that sits on top of this raw positional map —
+//! call [`macos_keycode_to_linux_remapped`] from the input path, never the raw map directly.
 
 use crate::constants::*;
+
+/// Keyboard remap **policy**, applied on top of the raw positional map. Host-side and
+/// per-config (a libkrun-free limina feature). Extensible; for now it carries the headline
+/// macOS-ergonomics knob, the Command/Option swap. `Default` = identity (no remap).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeyRemap {
+    /// Swap the Command and Option keys: Command then acts as Alt and Option acts as
+    /// Meta/Super (both left and right). The common ask from users coming off a PC layout —
+    /// it puts Alt under the thumb where Command sits. The guest still owns the keyboard
+    /// *layout* (dead keys/IME), so this only swaps the two modifiers' evdev identities.
+    pub swap_cmd_opt: bool,
+}
+
+impl KeyRemap {
+    /// Apply the remap policy to a raw Linux `KEY_*` code.
+    fn apply(&self, code: u16) -> u16 {
+        if self.swap_cmd_opt {
+            // Swap on the *output* modifier identity, so Command↔Alt and Option↔Meta hold
+            // regardless of which physical key produced META/ALT.
+            return match code {
+                KEY_LEFTMETA => KEY_LEFTALT,
+                KEY_LEFTALT => KEY_LEFTMETA,
+                KEY_RIGHTMETA => KEY_RIGHTALT,
+                KEY_RIGHTALT => KEY_RIGHTMETA,
+                other => other,
+            };
+        }
+        code
+    }
+}
+
+/// Map a macOS keycode to a Linux `KEY_*`, applying the [`KeyRemap`] policy. **This is the
+/// function the input path calls**; [`macos_keycode_to_linux`] is the raw layer underneath.
+/// `modifier_is_down` stays keyed on the *physical* keycode (the swap changes only which
+/// evdev code we emit, not how we read the macOS modifier state).
+pub fn macos_keycode_to_linux_remapped(keycode: u16, remap: &KeyRemap) -> Option<u16> {
+    macos_keycode_to_linux(keycode).map(|code| remap.apply(code))
+}
 
 /// Map a macOS virtual keycode to a Linux `KEY_*`, or `None` if limina doesn't handle it.
 pub fn macos_keycode_to_linux(keycode: u16) -> Option<u16> {
@@ -186,5 +225,79 @@ pub fn modifier_is_down(keycode: u16, flags: u64) -> Option<bool> {
         Some(flags & dev != 0)
     } else {
         Some(flags & class != 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // macOS keycodes for the four modifier keys involved in the swap.
+    const L_CMD: u16 = 0x37;
+    const R_CMD: u16 = 0x36;
+    const L_OPT: u16 = 0x3A;
+    const R_OPT: u16 = 0x3D;
+
+    #[test]
+    fn identity_remap_matches_the_raw_map() {
+        let id = KeyRemap::default();
+        assert!(!id.swap_cmd_opt);
+        for kc in 0u16..=0x7f {
+            assert_eq!(
+                macos_keycode_to_linux_remapped(kc, &id),
+                macos_keycode_to_linux(kc),
+                "default remap must be identity for keycode {kc:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn swap_cmd_opt_exchanges_meta_and_alt_both_sides() {
+        let swap = KeyRemap { swap_cmd_opt: true };
+        // Command keys now act as Alt.
+        assert_eq!(
+            macos_keycode_to_linux_remapped(L_CMD, &swap),
+            Some(KEY_LEFTALT)
+        );
+        assert_eq!(
+            macos_keycode_to_linux_remapped(R_CMD, &swap),
+            Some(KEY_RIGHTALT)
+        );
+        // Option keys now act as Meta/Super.
+        assert_eq!(
+            macos_keycode_to_linux_remapped(L_OPT, &swap),
+            Some(KEY_LEFTMETA)
+        );
+        assert_eq!(
+            macos_keycode_to_linux_remapped(R_OPT, &swap),
+            Some(KEY_RIGHTMETA)
+        );
+    }
+
+    #[test]
+    fn swap_leaves_non_cmd_opt_keys_untouched() {
+        let swap = KeyRemap { swap_cmd_opt: true };
+        // A letter, a digit, Shift, and Control are unaffected by the Command/Option swap.
+        for kc in [
+            0x00u16, /*A*/
+            0x12,    /*1*/
+            0x38,    /*L Shift*/
+            0x3B,    /*L Ctrl*/
+        ] {
+            assert_eq!(
+                macos_keycode_to_linux_remapped(kc, &swap),
+                macos_keycode_to_linux(kc),
+                "swap must not touch keycode {kc:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn swap_is_an_involution() {
+        // Swapping the swapped output returns the original — sanity on the mapping pairs.
+        let swap = KeyRemap { swap_cmd_opt: true };
+        for code in [KEY_LEFTMETA, KEY_RIGHTMETA, KEY_LEFTALT, KEY_RIGHTALT] {
+            assert_eq!(swap.apply(swap.apply(code)), code);
+        }
     }
 }

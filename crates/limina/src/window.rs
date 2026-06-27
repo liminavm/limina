@@ -349,6 +349,7 @@ fn send_resize(path: &Path, width: u32, height: u32) {
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     shared: Arc<Mutex<Shared>>,
     mtm: MainThreadMarker,
@@ -356,6 +357,7 @@ pub fn run(
     control: Option<crate::control::ControlPlane>,
     resize_socket: Option<PathBuf>,
     surface_map: SurfaceMap,
+    remap: limina_input::keymap::KeyRemap,
 ) -> ! {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
@@ -760,7 +762,7 @@ pub fn run(
 
     // Capture keyboard + mouse via a local event monitor and forward them to the worker as
     // evdev events. Swallowed key events return null; pass-through events return themselves.
-    let input_state = input::InputState::new(conn.clone(), host_cursor.clone());
+    let input_state = input::InputState::new(conn.clone(), host_cursor.clone(), remap);
     let monitor_view = view.clone();
     let input_block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
         // SAFETY: the monitor hands us a valid, live event for the call's duration.

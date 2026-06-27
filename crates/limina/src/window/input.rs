@@ -31,7 +31,7 @@ use limina_input::constants::{
     ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
     REL_WHEEL,
 };
-use limina_input::keymap::{macos_keycode_to_linux, modifier_is_down};
+use limina_input::keymap::{macos_keycode_to_linux_remapped, modifier_is_down, KeyRemap};
 use limina_input::InputEvent;
 
 /// The host pointer's adoption of the guest cursor (main thread only). `cursor` is what
@@ -85,15 +85,18 @@ pub struct InputState {
     /// outside the window) never reaches the guest in any form.
     guest_buttons: Cell<u8>,
     host_cursor: Rc<HostCursor>,
+    /// Keyboard remap policy (e.g. the Command/Option swap), applied to every key/modifier.
+    remap: KeyRemap,
 }
 
 impl InputState {
-    pub fn new(conn: Arc<WorkerConn>, host_cursor: Rc<HostCursor>) -> Self {
+    pub fn new(conn: Arc<WorkerConn>, host_cursor: Rc<HostCursor>, remap: KeyRemap) -> Self {
         Self {
             conn,
             pressed_mods: RefCell::new(HashSet::new()),
             guest_buttons: Cell::new(0),
             host_cursor,
+            remap,
         }
     }
 
@@ -167,7 +170,7 @@ impl InputState {
     }
 
     fn emit_key(&self, macos_keycode: u16, down: bool) {
-        if let Some(code) = macos_keycode_to_linux(macos_keycode) {
+        if let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap) {
             self.send_kbd(InputEvent::new(EV_KEY, code, down as i32));
             self.send_kbd(InputEvent::syn());
         }
@@ -180,7 +183,9 @@ impl InputState {
     /// "down" in the guest, which would make the compositor eat every later key. We still
     /// keep a pressed-set, but only to de-duplicate (emit one press/one release per change).
     fn emit_modifier(&self, macos_keycode: u16, raw_flags: u64) {
-        let Some(code) = macos_keycode_to_linux(macos_keycode) else {
+        // The remap changes which evdev code we emit; `modifier_is_down` below stays keyed on
+        // the *physical* keycode (the macOS modifier-flag state is the physical key's).
+        let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap) else {
             return;
         };
         let Some(down) = modifier_is_down(macos_keycode, raw_flags) else {
