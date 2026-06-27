@@ -767,6 +767,7 @@ dependencies = [
  "anyhow",
  "libc",
  "limina-proto",
+ "limina-usbip",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
