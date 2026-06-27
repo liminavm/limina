@@ -29,6 +29,25 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
   clipboard bridge). Unlocks accelerated 3D, zero-copy scanout, clipboard, etc. **Additive** — layered
   onto a basic guest, never a precondition for it.
 
+## Component versions (canonical — link here, don't restate)
+
+**The single source of truth for guest component versions.** Memory files and other docs should
+*link to this table* rather than restate numbers — a stale "mesa 25.3.6" once propagated into three
+memories before anyone noticed. Verified 2026-06-27 by reading each image's rpmdb directly
+(loop-mount the btrfs root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`).
+
+| Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
+|---|---|---|---|---|---|
+| **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
+| **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
+| **F44 stock** (`*.raw`, `*.boot.raw`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
+
+Notes: enhanced **mesa + kernel** are pinned to *our* version and `dnf versionlock`ed; enhanced
+**mutter** is rebuilt from a newer upstream 49.x point release (`49.6`) carrying our patches and runs
+over the **stock GNOME Shell `49.1`** (same `libmutter-49` ABI). F44 is currently *blocked* as an
+enhanced target by the GNOME 49→50 mutter/cogl scanout regression (see the `limina-enh-delivery`
+memory). The enhanced 16 KiB kernel ships as RPM `limina-kernel-16k` (BLS entry beside stock).
+
 ## Images
 
 ### Fedora 44 — the clean baseline (added 2026-06-20)
