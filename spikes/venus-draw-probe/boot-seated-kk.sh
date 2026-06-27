@@ -93,11 +93,16 @@ NET_FLAG=--net
 # the baked limina-agent auto-mounts it at /media/<NAME> in the guest).
 SHARE_FLAGS=()
 [ -n "${LIMINA_SHARE:-}" ] && SHARE_FLAGS=(--share "$LIMINA_SHARE")
+# LIMINA_EXTRA_ARGS=<flags> passes arbitrary extra limina flags through (e.g.
+# --swap-cmd-opt for the M8 keymap test). Word-split intentionally.
+EXTRA_ARGS=()
+[ -n "${LIMINA_EXTRA_ARGS:-}" ] && read -ra EXTRA_ARGS <<<"$LIMINA_EXTRA_ARGS"
 target/debug/limina --vmm-bin target/debug/limina-vmm \
   --kernel target/test-guest/kernel/Image-16k \
   --cmdline "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 console=ttyAMA0" \
   --disk "$WORK" --cpus 4 --ram-mib 4096 $NET_FLAG --window \
   ${SHARE_FLAGS[@]+"${SHARE_FLAGS[@]}"} \
+  ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
   >"$LOG" 2>&1 &
 echo "limina pid=$! (worker log $LOG, ICD $ICD)"
 wait

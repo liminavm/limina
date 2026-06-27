@@ -26,7 +26,8 @@ use objc2::runtime::AnyObject;
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor, NSEvent,
-    NSEventMask, NSImage, NSViewLayerContentsRedrawPolicy, NSWindow, NSWindowStyleMask,
+    NSEventMask, NSEventType, NSImage, NSViewLayerContentsRedrawPolicy, NSWindow,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_core_foundation::{
     kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber,
@@ -377,6 +378,10 @@ pub fn run(
         )
     };
     window.setTitle(&NSString::from_str("limina"));
+    // Allow native (Spaces) full screen: the green title-bar button becomes Enter Full Screen
+    // and `toggleFullScreen:` (our Cmd-Ctrl-F host shortcut, below) works. Going fullscreen
+    // resizes the window, which the existing resize path reflows into the guest resolution.
+    window.setCollectionBehavior(NSWindowCollectionBehavior::FullScreenPrimary);
     let view = window.contentView().expect("content view");
     // Layer-HOSTING (not layer-backed): we own the layer, so AppKit never draws over the
     // IOSurface we set as its contents. Order matters: setLayer before setWantsLayer.
@@ -680,6 +685,10 @@ pub fn run(
     // the guest agent to power off; reaching the deadline falls back to SIGKILL.
     let quit_deadline: Cell<Option<std::time::Instant>> = Cell::new(None);
 
+    // Clone a window handle for the input monitor's fullscreen shortcut BEFORE the timer block
+    // below moves `window` in.
+    let shortcut_window = window.clone();
+
     let timer_cursor = host_cursor.clone();
     let timer_conn = conn.clone();
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
@@ -767,6 +776,20 @@ pub fn run(
     let input_block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
         // SAFETY: the monitor hands us a valid, live event for the call's duration.
         let ev = unsafe { event.as_ref() };
+        // Host shortcuts are intercepted BEFORE the guest sees them. We match on key-down; the
+        // orphan key-up that leaks to the guest is dropped by the guest input core (a release of
+        // an un-pressed key). Modifier flagsChanged still flow through, which is fine.
+        if ev.r#type() == NSEventType::KeyDown {
+            if let Some(sc) = input::match_host_shortcut(ev.keyCode(), ev.modifierFlags().0 as u64)
+            {
+                match sc {
+                    input::HostShortcut::ToggleFullScreen => {
+                        shortcut_window.toggleFullScreen(None);
+                    }
+                }
+                return std::ptr::null_mut(); // swallow — don't forward to the guest
+            }
+        }
         let swallow = input_state.handle(ev, &monitor_view);
         if swallow {
             std::ptr::null_mut()

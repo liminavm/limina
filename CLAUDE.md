@@ -217,6 +217,19 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   touching `hv_vm_*` must be codesigned with `com.apple.security.hypervisor` (see
   `spikes/balloon-madvise/hv.entitlements`).
 - The big disk images (`*.raw`, `*.raw.xz`) and `third_party/` are gitignored.
+- **Boot a WINDOWED dev VM with `spikes/venus-draw-probe/boot-seated-kk.sh` — coexist venus WORKS;
+  don't reach for `--gpu-software-2d` to "avoid" it.** The coexist GPU (venus 3D + software-2D)
+  needs the host KK/zink env (VK_ICD_FILENAMES → KosmicKrisp, the zink-on-KK DYLD/Mesa selectors);
+  the script sets all of it and boots `--window` to the seated GNOME desktop on the 16 KiB kernel.
+  A *bare* `target/debug/limina --window` with NONE of that env **aborts on GPU init**
+  (`Couldn't open libEGL.dylib` → SIGABRT) — that's the missing env, **not** a coexist problem, and
+  **not** a reason to fall back to software-2D. `LIMINA_DISK=<writable clone>` reuses a disk (the
+  script's hard-coded `dev-enh.raw` is retired — clone `Fedora-Workstation-43.enhanced.raw`);
+  `LIMINA_EXTRA_ARGS="--swap-cmd-opt …"` passes extra limina flags through. `--gpu-software-2d` is
+  ONLY for when software-2D is the explicit subject (the capture oracle / a GPU-less host), per the
+  coexist-default rule in `limina-tier2-venus`. Driving the window: osascript UI scripting works for
+  key+modifier combos (e.g. Cmd-Ctrl-F), but synthetic *lone-modifier* keystrokes may not reach the
+  guest — the human is the oracle for those (see `limina-window-control`).
 - **Run a VM with networking + SSH:** `limina --net` spawns a supervised gvproxy user-mode NAT (no
   root) and the supervisor logs the exact SSH command — `guest SSH forward ready: ssh -p N <user>@127.0.0.1`.
   The host port **auto-allocates from 2222 up** (so 2+ VMs run concurrently without colliding); pin it

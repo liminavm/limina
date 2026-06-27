@@ -34,6 +34,33 @@ use limina_input::constants::{
 use limina_input::keymap::{macos_keycode_to_linux_remapped, modifier_is_down, KeyRemap};
 use limina_input::InputEvent;
 
+/// A host-intercepted shortcut: recognized BEFORE the key reaches the guest, so the combo
+/// drives limina itself. The seed of the configurable-keybinding system (M8); for now just
+/// the fullscreen toggle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostShortcut {
+    ToggleFullScreen,
+}
+
+/// Recognize a host shortcut from a key-down's macOS keycode + raw `modifierFlags` bitmask,
+/// or `None` if the key should go to the guest. Uses the **device-independent class** flag
+/// bits, so it's independent of left/right *and* of `--swap-cmd-opt` (the swap changes only
+/// which evdev code we emit to the guest, never the macOS modifier state read here).
+pub fn match_host_shortcut(keycode: u16, flags: u64) -> Option<HostShortcut> {
+    const SHIFT: u64 = 1 << 17;
+    const CONTROL: u64 = 1 << 18;
+    const OPTION: u64 = 1 << 19;
+    const COMMAND: u64 = 1 << 20;
+    let held = |m: u64| flags & m != 0;
+    // Cmd-Ctrl-F — the macOS-standard Enter/Exit-Full-Screen combo. Require EXACTLY Command+
+    // Control (no Option/Shift) so richer combos still pass through to the guest.
+    const KC_F: u16 = 0x03;
+    if keycode == KC_F && held(COMMAND) && held(CONTROL) && !held(OPTION) && !held(SHIFT) {
+        return Some(HostShortcut::ToggleFullScreen);
+    }
+    None
+}
+
 /// The host pointer's adoption of the guest cursor (main thread only). `cursor` is what
 /// the macOS pointer should look like over the guest view (the guest's current cursor
 /// image, or a blank cursor while the guest hides it); `inside` tracks whether the pointer
@@ -325,5 +352,46 @@ fn send_event(fd: RawFd, ev: InputEvent) {
             }
             _ => log::trace!("input send failed: {err}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CONTROL: u64 = 1 << 18;
+    const OPTION: u64 = 1 << 19;
+    const COMMAND: u64 = 1 << 20;
+    const SHIFT: u64 = 1 << 17;
+    const KC_F: u16 = 0x03;
+    const KC_A: u16 = 0x00;
+
+    #[test]
+    fn cmd_ctrl_f_is_the_fullscreen_toggle() {
+        assert_eq!(
+            match_host_shortcut(KC_F, COMMAND | CONTROL),
+            Some(HostShortcut::ToggleFullScreen)
+        );
+    }
+
+    #[test]
+    fn fullscreen_combo_requires_exactly_cmd_and_ctrl() {
+        // Missing either modifier → not a host shortcut (goes to the guest).
+        assert_eq!(match_host_shortcut(KC_F, COMMAND), None);
+        assert_eq!(match_host_shortcut(KC_F, CONTROL), None);
+        // Extra modifiers → pass through (so Cmd-Ctrl-Opt-F etc. reach the guest).
+        assert_eq!(match_host_shortcut(KC_F, COMMAND | CONTROL | OPTION), None);
+        assert_eq!(match_host_shortcut(KC_F, COMMAND | CONTROL | SHIFT), None);
+    }
+
+    #[test]
+    fn other_keys_with_cmd_ctrl_are_not_intercepted() {
+        // Cmd-Ctrl-A must still reach the guest.
+        assert_eq!(match_host_shortcut(KC_A, COMMAND | CONTROL), None);
+    }
+
+    #[test]
+    fn bare_f_goes_to_the_guest() {
+        assert_eq!(match_host_shortcut(KC_F, 0), None);
     }
 }
