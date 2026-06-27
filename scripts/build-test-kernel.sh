@@ -100,6 +100,27 @@ CONFIG_SECURITY_NETWORK=y
 CONFIG_SECURITY_SELINUX=y
 CONFIG_SECURITY_SELINUX_BOOTPARAM=y
 CONFIG_LSM="landlock,lockdown,yama,integrity,selinux,bpf"
+# USB passthrough (M7): the USB/IP guest side is 100% upstream. vhci_hcd is a VIRTUAL host
+# controller (needs NO real EHCI/XHCI) that makes a host/remote USB device appear as a local
+# USB bus; usbcore + class drivers let the guest actually USE the attached device. All =y
+# because the L1 test kernel is all-builtin (make Image, no modules). CONFIG_INPUT_UINPUT is
+# here too — its absence has bitten guest UI scripting (ydotool). The host-side libusb USB/IP
+# server is net-new limina code; see docs/research/06-usb-passthrough.md + docs/design/m7-usb-passthrough.md.
+CONFIG_USB_SUPPORT=y
+CONFIG_USB=y
+CONFIG_USB_COMMON=y
+CONFIG_USBIP_CORE=y
+CONFIG_USBIP_VHCI_HCD=y
+CONFIG_USB_ACM=y
+CONFIG_USB_SERIAL=y
+CONFIG_USB_SERIAL_FTDI_SIO=y
+CONFIG_USB_SERIAL_CP210X=y
+CONFIG_HID=y
+CONFIG_USB_HID=y
+CONFIG_SCSI=y
+CONFIG_BLK_DEV_SD=y
+CONFIG_USB_STORAGE=y
+CONFIG_INPUT_UINPUT=y
 FRAG
 echo "$PAGE_CONFIG" >> "$OUT/limina.fragment"   # page-size choice (4k default / 16k)
 
@@ -150,7 +171,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         ./scripts/kconfig/merge_config.sh -m .config /out/limina.fragment
         make ARCH=arm64 olddefconfig
         echo '--- verifying key options survived'
-        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS CONFIG_DRM_VIRTIO_GPU CONFIG_FRAMEBUFFER_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_INPUT_EVDEV CONFIG_BTRFS_FS CONFIG_VIRTIO_NET CONFIG_OVERLAY_FS CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
+        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS CONFIG_DRM_VIRTIO_GPU CONFIG_FRAMEBUFFER_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_INPUT_EVDEV CONFIG_BTRFS_FS CONFIG_VIRTIO_NET CONFIG_OVERLAY_FS CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM CONFIG_USB CONFIG_USBIP_VHCI_HCD CONFIG_USB_ACM CONFIG_USB_HID CONFIG_USB_STORAGE CONFIG_INPUT_UINPUT; do
             grep -q \"^\$opt=y\" .config || { echo \"MISSING \$opt\" >&2; exit 1; }
         done
         grep -q '^$PAGE_CONFIG' .config || { echo 'MISSING $PAGE_CONFIG' >&2; exit 1; }

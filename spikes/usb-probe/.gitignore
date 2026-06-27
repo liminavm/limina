@@ -1,0 +1,3 @@
+# build artifacts (source is kept; binaries are reproducible via run.sh)
+probe
+probe.dSYM/

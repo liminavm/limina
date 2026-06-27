@@ -1,0 +1,22 @@
+# limina-usbip — a USB/IP server (exporter) for handing host USB devices to the guest.
+#
+# The guest side is 100% upstream: stock `vhci_hcd` + `usbip attach` (M7, research doc 06).
+# This crate is the HOST side: the USB/IP wire protocol (pure, no_std-friendly logic), a
+# transport-agnostic server loop, and a `UsbBackend` trait with two impls — a hardware-free
+# `MockBackend` (so the whole pipeline is testable with no physical device) and a libusb-backed
+# `LibusbBackend` (rusb) gated behind the `libusb` feature.
+[package]
+name = "limina-usbip"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["libusb"]
+# The real host backend. Off by default in pure-protocol contexts (CI without libusb);
+# the protocol + mock + server build and test with --no-default-features.
+libusb = ["dep:rusb"]
+
+[dependencies]
+log = { workspace = true }
+rusb = { version = "0.9", optional = true }
