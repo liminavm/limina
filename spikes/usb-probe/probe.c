@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>  // geteuid
 
 static const char *cls_name(uint8_t c) {
     switch (c) {
@@ -117,24 +118,66 @@ int main(int argc, char **argv) {
             }
         }
 
-        // The real test: can we CLAIM each interface from userspace?
-        printf("\n== claim test (the macOS gate) ==\n");
+        // The real test: can we CLAIM each interface? On macOS an Apple-bound interface needs the
+        // driver DETACHED first — which requires either the (Apple-managed) com.apple.vm.device-access
+        // entitlement OR **root**. So we try detach-then-claim and report both: run this plain to see
+        // the userspace gate, and `sudo ./probe` to test the root-escalation path (the path a
+        // Developer-ID app actually uses — no entitlement). NOTE macOS capture is DEVICE-level: a
+        // detach on one interface seizes the whole device (all interfaces) at once.
+        int running_as_root = (geteuid() == 0);
+        printf("\n== claim test (the macOS gate)%s ==\n", running_as_root ? "  [running as ROOT]" : "");
+        int any_apple_bound = 0, all_claimed = 1, needed_detach = 0;
         for (int i = 0; i < cfg->bNumInterfaces; i++) {
-            int knl = libusb_kernel_driver_active(h, i);  // macOS: usually 0 or LIBUSB_ERROR_NOT_SUPPORTED
+            int knl = libusb_kernel_driver_active(h, i);  // 1=bound, 0=free, <0=err/unsupported
+            int det = 0;
+            if (knl == 1) {
+                needed_detach = 1;
+                det = libusb_detach_kernel_driver(h, i);  // root or entitlement required on macOS
+            }
             r = libusb_claim_interface(h, i);
-            printf("  interface %d: kernel_driver_active=%s  claim=%s\n", i,
+            printf("  interface %d: kernel_driver_active=%s  detach=%s  claim=%s\n", i,
                    knl == 1 ? "YES(bound)" : knl == 0 ? "no" : libusb_error_name(knl),
+                   knl == 1 ? (det == 0 ? "OK" : libusb_error_name(det)) : "n/a",
                    r == 0 ? "OK ✅" : libusb_error_name(r));
             if (r == 0) libusb_release_interface(h, i);
+            else { all_claimed = 0; if (knl == 1) any_apple_bound = 1; }
         }
         libusb_free_config_descriptor(cfg);
+
+        // Diagnose the M7 passthrough story for this device (the real cases).
+        printf("\n== verdict ==\n");
+        if (all_claimed && !needed_detach) {
+            printf("  ✅ FREE-TO-CLAIM (unprivileged). open + every interface claim succeeded with no\n");
+            printf("     driver detach. A confirmed M7 v1 target needing ONLY the USB TCC permission\n");
+            printf("     (com.apple.security.device.usb) — no root, no Apple-granted entitlement.\n");
+        } else if (all_claimed && needed_detach) {
+            printf("  ✅ ROOT-CLAIMABLE. An Apple class driver held %s, but detach+claim SUCCEEDED%s —\n",
+                   "interface(s)", running_as_root ? " (running as root)" : "");
+            printf("     so real passthrough works via a small PRIVILEGED (root) USB-capture helper,\n");
+            printf("     NO Apple entitlement. (macOS capture is DEVICE-level: seizing one interface\n");
+            printf("     freed the others — the whole composite device is captured together, so the\n");
+            printf("     host loses it while the guest holds it.) This is the M7 real-device path.\n");
+        } else if (any_apple_bound) {
+            printf("  ⚠️  APPLE-CLAIMED INTERFACES. open + descriptors work (the USB TCC permission is\n");
+            printf("     granted), but a macOS class driver holds one or more interfaces, so claim →\n");
+            printf("     EACCES. To seize it you must DETACH the Apple driver, which on macOS needs\n");
+            printf("     either ROOT or the Apple-managed `com.apple.vm.device-access` entitlement.\n");
+            if (running_as_root) {
+                printf("     You ARE root but detach/claim still failed — investigate (SIP? device busy?).\n");
+            } else {
+                printf("     THE PRACTICAL PATH for a Developer-ID app: run the capture as ROOT (a small\n");
+                printf("     privileged helper) — NO entitlement needed (Apple's documented fallback).\n");
+                printf("     >>> Re-run `sudo %s` to confirm root claims it. <<<\n", "spikes/usb-probe/run.sh");
+                printf("     (The entitlement itself is App-Store-only + Apple-approval-gated, and is\n");
+                printf("     SIGKILLed at launch under ad-hoc signing — not a path for this app.)\n");
+            }
+        } else {
+            printf("  ❓ open OK but claim failed for a non-driver reason (%s). Investigate.\n",
+                   libusb_error_name(r));
+        }
     } else {
         printf("  (could not read config descriptor: %s)\n", libusb_error_name(r));
     }
-
-    printf("\n== verdict ==\n");
-    printf("  If libusb_open=OK and the interface claims are OK, this device is passthrough-able\n");
-    printf("  from plain userspace with NO DriverKit entitlement — a confirmed M7 v1 target.\n");
 
     libusb_close(h);
     libusb_free_device_list(list, 1);

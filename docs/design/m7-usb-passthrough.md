@@ -88,21 +88,80 @@ usb 1-1: new full-speed USB device number 2 using vhci_hcd
 cdc_acm 1-1:1.0: ttyACM0: USB ACM device
 ```
 
-## Phase 4 — real-device passthrough (hardware-gated)
+## Phase 4 — real-device passthrough (hardware-gated; the macOS claiming gate, characterized)
 
-Swap `MockBackend` → `LibusbBackend` and select a host device by busid. The gating question is the
-**macOS claiming gate**:
+Swap `MockBackend` → `LibusbBackend` (already written; builds + links host libusb 1.0.29) and select
+a host device by busid. The remaining work is purely the **macOS claiming gate**, now characterized
+empirically with `spikes/usb-probe` against a real **SoloKeys Solo 2** (VID:PID `1209:BEEE`):
 
-- libusb claims devices with **no matching Apple driver** freely (FTDI/CP210x serial w/o the Apple
-  CDC match, FIDO security keys, custom hardware). Apple-bound classes (standard HID, mass storage,
-  audio) need the **Apple-managed, restricted `com.apple.vm.device-access`** entitlement (or a
-  DriverKit dext) — no self-serve grant; UTM/QEMU hit the same wall.
-- **Empirical probe:** `spikes/usb-probe` opens + claims a target via libusb and reports per-step.
-  A **SoloKeys Solo 2** FIDO key is present and shows `!matched` in IORegistry (no Apple driver
-  bound) — the ideal free-to-claim v1 target. **Open:** the probe saw **0 devices** when run inside
-  Claude's tool process (likely that process lacks the IOKit/Mach bootstrap a login session has);
-  re-run in a normal shell (`spikes/usb-probe/run.sh`) to confirm a login-context process claims it
-  cleanly with no entitlement. If yes → real passthrough needs no Apple grant for this device class.
+**Three layers, in order:**
+1. **USB TCC permission** (`com.apple.security.device.usb`) gates **enumeration**. Before the user
+   grants the one-time dialog, `libusb` sees **0 devices**; after, it sees + `libusb_open`s the device
+   and reads all descriptors/strings (control transfers to EP0 work). *(This resolved the earlier
+   "0 devices" mystery — it was the unanswered dialog, not a sandbox.)*
+2. **Interface claiming** is the real gate. `libusb_claim_interface` succeeds **only for interfaces no
+   macOS class driver holds**. The Solo 2 is *composite* and macOS binds **both** its interfaces —
+   interface 0 = **CCID** (smartcard), interface 1 = **HID** (the FIDO/U2F interface) — so both claims
+   return `LIBUSB_ERROR_ACCESS` with `kernel_driver_active=YES`. (The device showed `!matched` at the
+   *device* level but Apple owns it at the *interface* level — the composite reality of §1.5.)
+3. **Seizing an Apple-claimed device** requires the **restricted, Apple-managed
+   `com.apple.vm.device-access`** entitlement (libusb uses `IOUSBHostObjectInitOptionsDeviceCapture`).
+   **Empirically: this entitlement CANNOT be ad-hoc signed** — adding it SIGKILLs the process at launch
+   (AMFI, exit 137), while removing it (keeping only the USB-TCC entitlement) runs fine. It needs an
+   **Apple-granted provisioning profile** (request via Apple; UTM/QEMU hit exactly this wall).
+
+**How to seize an Apple-claimed device — the entitlement is the WRONG path; root is the right one,
+and it's now EMPIRICALLY PROVEN.** Researched against Apple docs + forums (2026):
+`com.apple.vm.device-access` is **Apple-managed / approval-gated** (not self-service even with a paid
+Developer account; request via your Apple rep, no SLA) **and oriented at Mac App Store hypervisor
+apps**. A **dev key does NOT unlock it.** But — **Apple's own documented position is that a
+directly-distributed (Developer-ID) app does *not* need the entitlement at all**: it does the capture
+by **running that code as root** (`libusb_detach_kernel_driver` /
+`IOUSBHostObjectInitOptionsDeviceCapture` work with root, no entitlement — the path
+Parallels/UTM-Developer-ID use).
+
+**Proven on the real Solo 2 via `sudo spikes/usb-probe/run.sh` (2026-06-27):**
+```
+== claim test (the macOS gate)  [running as ROOT] ==
+  interface 0: kernel_driver_active=YES(bound)  detach=OK  claim=OK ✅
+  interface 1: kernel_driver_active=no          detach=n/a  claim=OK ✅
+```
+Interface 0 (CCID) detached + claimed cleanly with no entitlement; detaching it **also freed
+interface 1** (HID) — a live confirmation of the device-level (whole-device) capture semantics. The
+composite FIDO key is fully claimable as root. So:
+
+| Path | Obtainable? | Fit for limina |
+|---|---|---|
+| `com.apple.vm.device-access` entitlement | Apple-managed, App-Store-only; ad-hoc → AMFI SIGKILL | ✗ wrong distribution model |
+| **Root privilege escalation** (small privileged USB-capture helper) | **yes today, no Apple grant** | ✓ **the path** — opt-in, mirrors the M3 `vmnet-helper` shape |
+| DriverKit `.dext` (`com.apple.developer.driverkit.transport.usb`) | also managed + weeks of dext work | ✗ far more effort, no benefit here |
+| Codeless kext / SIP-off / nvram | dead on modern macOS (or dev-only) | ✗ |
+
+**Consequences for v1:**
+- **Free-to-claim devices work TODAY, unprivileged** — only the USB TCC grant — for any device whose
+  interfaces macOS does *not* bind (many vendor-specific dev boards / generic devices). The probe
+  auto-classifies free-to-claim / Apple-claimed / other.
+- **Apple-claimed classes** (HID, CCID, mass storage, audio — incl. the FIDO key) need the USB
+  capture done **as root**. The natural shape: a tiny privileged helper that opens+detaches+captures
+  the device and passes the open fd (or runs the `LibusbBackend` USB/IP server) — opt-in per the
+  unprivileged-first tenet, exactly like bridged networking's helper. **Caveat:** macOS capture is
+  **device-level, not interface-level** — capturing a composite device detaches *all* its drivers at
+  once, so while the guest holds e.g. the FIDO key the host loses it entirely (correct passthrough
+  semantics, but the host can't use it concurrently).
+- The **wire pipeline is fully proven** by the mock (3b): once a device is claimable (free, or root),
+  `LibusbBackend` drops into the same `serve()`. Remaining code = device selection + the privileged
+  capture helper.
+
+**Empirical oracle:** `spikes/usb-probe/run.sh [VID PID]` opens+detaches+claims and classifies the
+device (free-to-claim / root-claimable / Apple-claimed / other); run it plain for the userspace gate
+and `sudo …` for the root path. Both gates are now characterized against the Solo 2.
+
+**Remaining build (the only M7 code left): the privileged USB-capture helper.** A tiny root binary
+that, given a device id, opens + detaches + claims it via `LibusbBackend` and runs `serve()` on a
+socket the supervisor bridges to the guest's `vhci_hcd` (the exact pipeline 3b proved with the mock,
+now with a real backend behind a privilege boundary). Opt-in (`--usb VID:PID`), unprivileged-first
+default, mirroring the M3 `vmnet-helper` shape. Not CI-testable (needs root + the physical device) —
+validated via a manual spike against the Solo 2.
 
 ## Files
 
