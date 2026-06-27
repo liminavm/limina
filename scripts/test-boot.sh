@@ -47,5 +47,5 @@ echo "==> running boot tests (LIMINA_HVF_TESTS=1)"
 # first failing binary (e.g. boot) silently stops the run and every later binary (net, venus,
 # venus_replay, …) never executes — masking their status. With it, every binary runs and reports.
 LIMINA_HVF_TESTS=1 cargo test --no-fail-fast ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina-test \
-    --test l1_boot --test l1_agent --test l1_shutdown --test l1_real_agent --test l1_multi_agent --test l1_clipboard --test l1_session_helper --test l1_share --test l1_liveness --test l1_display --test l1_console --test l1_serial --test l1_command --test l1_resize --test boot --test net --test reboot --test venus --test venus_reset --test venus_replay --test balloon --test balloon_inflate --test balloon_psi \
+    --test l1_boot --test l1_agent --test l1_shutdown --test l1_real_agent --test l1_multi_agent --test l1_clipboard --test l1_session_helper --test l1_share --test l1_liveness --test l1_display --test l1_console --test l1_serial --test l1_command --test l1_resize --test boot --test net --test reboot --test venus --test venus_reset --test venus_replay --test balloon --test balloon_inflate --test balloon_psi --test usb \
     -- --nocapture --test-threads=1 "$@"

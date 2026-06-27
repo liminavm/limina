@@ -28,6 +28,14 @@ fn main() {
     if let Some(name) = cmdline_value("limina.sharecheck_ro") {
         run_sharecheck_ro(&name);
     }
+    // `limina.usb_probe`: assert the guest-side USB/IP prerequisites are present (M7). The
+    // USB/IP guest stack is 100% upstream — this proves our kernel carries it: the vhci_hcd
+    // VIRTUAL host controller (no real EHCI/XHCI), the usbip_core/vhci modules, the usb bus,
+    // and uinput. Emits one RESULT line per check for the harness to assert, then powers off.
+    if cmdline_has("limina.usb_probe") {
+        run_usb_probe();
+        power_off();
+    }
     // `limina.real_agent`: spawn the PRODUCT agent binary (staged at /limina-agent by
     // build-test-guest.sh) — the L1 vehicle for testing the real limina-agent end-to-end.
     // It connects to the control plane on its own and powers the guest off itself on
@@ -665,6 +673,35 @@ fn animate_forever() -> ! {
         frame += 3;
         unsafe { sleep_ms(33) };
     }
+}
+
+/// Probe the guest-side USB/IP prerequisites (M7) and emit a `RESULT: <name> <PRESENT|MISSING>`
+/// line per check. The host harness asserts each is PRESENT. These are all upstream kernel
+/// facilities our config (`build-test-kernel.sh` FRAG) turns on; the test proves they survived.
+fn run_usb_probe() {
+    // (marker, path that exists iff the facility is compiled in & initialised)
+    let checks: &[(&str, &str)] = &[
+        // The virtual host controller usbip attaches remote devices to (no real HCD needed).
+        ("vhci_hcd", "/sys/devices/platform/vhci_hcd.0"),
+        // usbip core + the vhci driver register under the platform bus / driver tree.
+        ("usbip_vhci_driver", "/sys/bus/platform/drivers/vhci_hcd"),
+        // The USB bus type itself (usbcore) — devices enumerate here once attached.
+        ("usb_bus", "/sys/bus/usb"),
+        // uinput — its absence has bitten guest UI scripting; folded into the same config.
+        ("uinput", "/dev/uinput"),
+    ];
+    klog(b"[limina-init] usb_probe: begin");
+    for (name, path) in checks {
+        // A `vhci_hcd.0` platform device only appears once the driver's probe ran; for /dev
+        // nodes devtmpfs must have created them. Both are simple existence checks.
+        let present = std::path::Path::new(path).exists();
+        let mut line = Vec::new();
+        line.extend_from_slice(b"[limina-init] RESULT: ");
+        line.extend_from_slice(name.as_bytes());
+        line.extend_from_slice(if present { b" PRESENT" } else { b" MISSING" });
+        klog(&line);
+    }
+    klog(b"[limina-init] usb_probe: done");
 }
 
 /// Write a line to /dev/kmsg (printk -> serial), best-effort.
