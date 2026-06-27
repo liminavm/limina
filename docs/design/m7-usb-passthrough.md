@@ -16,7 +16,7 @@ still boots/runs fine; the custom kernel is the entry fee for *USB*, never for t
 | 1 | Guest kernel: enable USB + `USBIP_VHCI_HCD` + class drivers + `uinput` | ✅ shipped, verified |
 | 2 | Host `limina-usbip` crate: USB/IP wire protocol + backend trait + CDC-ACM mock + libusb backend | ✅ shipped, 17 unit tests |
 | 3a | L1 test: the guest-side USB/IP stack is present (`vhci_hcd`/usbip/uinput) | ✅ shipped, GREEN on HVF |
-| 3b | Full **mock-attach** end-to-end over vsock — a device enumerates in the guest, no hardware | ◻ designed (below); next autonomous phase |
+| 3b | Full **mock-attach** end-to-end over vsock — a device enumerates in the guest, no hardware | ✅ shipped, GREEN on HVF |
 | 4 | **Real-device** passthrough (libusb claim + the macOS device-access gate) | ◻ hardware-gated (below) |
 
 ## Phase 1 — kernel (as built)
@@ -60,28 +60,33 @@ with that flag and asserts all four PRESENT + a clean power-off — GREEN on HVF
 `CONFIG_USB*` symbol flips a marker to MISSING (the RED guard for config drift). In the
 `test-boot.sh` suite.
 
-## Phase 3b — full mock-attach end-to-end (designed; next autonomous phase)
+## Phase 3b — full mock-attach end-to-end (as built)
 
-Prove a device **actually enumerates** in the guest with no hardware and no networking, via vsock.
+A device **actually enumerates** in the guest with no hardware and no networking, over vsock.
 The key enabler (verified against `drivers/usb/usbip/vhci_sysfs.c`): **`vhci_hcd`'s attach store
-only checks `SOCK_STREAM` — no address-family restriction — so it accepts an `AF_VSOCK` fd**. So we
-skip the stock `usbip` userspace tool entirely and drive the kernel directly:
+parses `sscanf(buf, "%u %u %u %u", &port, &sockfd, &devid, &speed)` (all decimal) and checks only
+`SOCK_STREAM` — no address-family restriction — so it accepts an `AF_VSOCK` fd**. So we skip the
+stock `usbip` userspace tool entirely and drive the kernel directly:
 
-1. **Host** (harness, reusing the control-plane vsock bridge — `unix_ipc_port_map` already maps a
-   guest `AF_VSOCK(CID_HOST:port)` to a host unix socket): listen on a USB/IP socket and run
-   `limina_usbip::serve(stream, &MockBackend)` per connection. Needs a *second* vsock port wired
-   alongside the control plane (the worker's `unix_ipc_port_map` is a HashMap — extend `add_vsock`
-   to take an extra `(port, socket)` and thread `--usbip-vsock-*` through the supervisor + harness).
-2. **Guest** (`limina-init`, new `limina.usb_attach=<port>`): `socket(AF_VSOCK)` → connect
-   `CID_HOST:port`; send `OP_REQ_IMPORT(busid="1-1")`; read `OP_REP_IMPORT` → parse `busnum/devnum/
-   speed`; write `"0 <sockfd> <devid> <speed>\n"` to `/sys/devices/platform/vhci_hcd.0/attach`
-   (`devid = (busnum<<16)|devnum`). The kernel's `vhci_hcd` then runs URB traffic against our
-   server; usbcore enumerates the device and `cdc-acm` binds it.
-3. **Assert**: `/dev/ttyACM0` appears; optionally write→read it to confirm the mock's bulk loopback.
-   Emit a RESULT marker; the harness asserts it.
+1. **Host** (harness): `with_usbip_vsock(port)` reuses the *existing* single vsock bridge (no
+   worker/supervisor change — it just points the init at `limina.usb_attach` instead of the control
+   agent). `Guest::accept_usbip_mock` accepts the guest's connection and runs
+   `limina_usbip::serve(stream, &MockBackend)` in a background thread.
+2. **Guest** (`limina-init`, `limina.usb_attach=<port>`): `socket(AF_VSOCK)` → connect
+   `CID_HOST:port`; send the 40-byte `OP_REQ_IMPORT(busid="1-1")`; read the 320-byte `OP_REP_IMPORT`
+   → parse `busnum/devnum/speed`; write `"0 <sockfd> <devid> <speed>\n"` (decimal) to
+   `/sys/devices/platform/vhci_hcd.0/attach` (`devid = (busnum<<16)|devnum`). The kernel's
+   `vhci_hcd` then runs URB traffic against our server; usbcore enumerates the device and `cdc-acm`
+   binds it. The hand-rolled client mirrors `limina-usbip/src/proto.rs` (no crate pulled into the guest).
+3. **Assert**: `/dev/ttyACM0` appears → RESULT marker → the harness asserts it.
 
-Risk to retire when built: that `cdc-acm` actually binds the mock descriptors, and the
-devid/speed encoding the kernel expects. All other unknowns are settled.
+**Verified live** (`tests/usb.rs::mock_cdc_acm_device_enumerates_in_guest_via_usbip`, GREEN on HVF) —
+the guest console shows the real chain:
+```
+vhci_hcd.0: devid(65538) speed(2) speed_str(full-speed)
+usb 1-1: new full-speed USB device number 2 using vhci_hcd
+cdc_acm 1-1:1.0: ttyACM0: USB ACM device
+```
 
 ## Phase 4 — real-device passthrough (hardware-gated)
 

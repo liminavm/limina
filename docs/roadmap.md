@@ -609,16 +609,18 @@ drop back toward 2G as pages are madvised back to macOS.
 
 ## Milestone 7 — USB passthrough
 
-**Status: 🟡 IN PROGRESS.** Build-by-build plan + as-built log: `docs/design/m7-usb-passthrough.md`.
-Shipped & verified: **(1) kernel** — `build-test-kernel.sh` enables USB + `USBIP_VHCI_HCD` + class
-drivers + `uinput`; **(2) host `limina-usbip` crate** — the full USB/IP wire protocol (byte-exact to
-the kernel source) + a `UsbBackend` trait + a hardware-free **CDC-ACM mock** + a libusb (`rusb`)
-backend, 17 unit tests; **(3a) L1 test** (`tests/usb.rs`) — the guest-side USB/IP stack is present on
-HVF (GREEN). Remaining: **(3b)** the full mock-attach end-to-end over vsock (a device enumerates in
-the guest, no hardware — designed, `vhci_hcd` accepts an `AF_VSOCK` fd so no `usbip` userspace tool
-or kernel patch is needed); **(4)** real-device passthrough (libusb claim + the Apple-managed,
-restricted `com.apple.vm.device-access` gate — `spikes/usb-probe` is the empirical oracle; a
-SoloKeys Solo 2 is the candidate free-to-claim target).
+**Status: 🟡 IN PROGRESS — mock passthrough works end-to-end; only real-device hardware remains.**
+Build-by-build plan + as-built log: `docs/design/m7-usb-passthrough.md`. Shipped & verified on HVF:
+**(1) kernel** — `build-test-kernel.sh` enables USB + `USBIP_VHCI_HCD` + class drivers + `uinput`;
+**(2) host `limina-usbip` crate** — the full USB/IP wire protocol (byte-exact to the kernel source) +
+a `UsbBackend` trait + a hardware-free **CDC-ACM mock** + a libusb (`rusb`) backend, 17 unit tests;
+**(3a)** the guest-side USB/IP stack is present (`tests/usb.rs`, GREEN); **(3b)** the full
+**mock-attach end-to-end** — a CDC-ACM device enumerates in the guest as `/dev/ttyACM0` over vsock
+with NO hardware (`vhci_hcd` accepts the `AF_VSOCK` fd directly — no `usbip` userspace tool or kernel
+patch), GREEN. Remaining: **(4)** real-device passthrough (swap `MockBackend`→`LibusbBackend`; gated
+by the Apple-managed, restricted `com.apple.vm.device-access` claiming entitlement — `spikes/usb-probe`
+is the empirical oracle; a SoloKeys Solo 2, which shows `!matched` in IORegistry, is the candidate
+free-to-claim target).
 
 **Goal:** pass a host USB device (initially libusb-claimable: FTDI/CP210x, YubiKey-class) into the
 guest.

@@ -20,6 +20,10 @@ png    = { workspace = true }
 # The control-plane wire protocol (M5): tests speak typed frames to the guest agent over
 # the vsock-bridged unix stream. Still black-box — the same bytes a product host sends.
 limina-proto = { workspace = true }
+# The USB/IP server (M7): the mock-attach test runs `limina_usbip::serve` with the hardware-free
+# MockBackend on the vsock-bridged stream the guest connects to. default-features off = no libusb
+# (the mock needs none); we're exercising the wire protocol the guest's vhci_hcd speaks.
+limina-usbip = { path = "../limina-usbip", default-features = false }
 # Clipboard assertions (M5): tests read/write the NAMED test pasteboard (LIMINA_PASTEBOARD)
 # the supervisor is pointed at — observing the bridge's output the way a macOS app would,
 # without ever touching the user's real clipboard.

@@ -681,6 +681,24 @@ impl GuestConfig {
         self
     }
 
+    /// Wire the vsock bridge for the **M7 USB/IP mock-attach** test: same plumbing as
+    /// [`with_vsock`](GuestConfig::with_vsock) (host listens on a unix socket, guest connects to
+    /// `CID_HOST:port`), but the init runs the USB/IP *client* (`limina.usb_attach=<port>`) instead
+    /// of the control agent. The test then [`accept_usbip_mock`](Guest::accept_usbip_mock)s the
+    /// connection and serves the hardware-free CDC-ACM mock on it. Kernel boot only.
+    pub fn with_usbip_vsock(mut self, port: u32) -> GuestConfig {
+        let socket_path = std::env::temp_dir().join(format!(
+            "limina-usbip-{}-{}.sock",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        if let Boot::Kernel { cmdline, .. } = &mut self.boot {
+            cmdline.push_str(&format!(" limina.usb_attach={port}"));
+        }
+        self.vsock = Some(VsockCfg { port, socket_path });
+        self
+    }
+
     /// Run the guest agent against the **supervisor-owned** control plane (the product
     /// path): append the `limina.agent_port=` cmdline token at the well-known
     /// [`limina_proto::CONTROL_PORT`] WITHOUT binding a harness-side socket — limina itself
@@ -1397,6 +1415,53 @@ impl Guest {
                 Err(e) => return Err(e).context("accepting guest agent connection"),
             }
         }
+    }
+
+    /// Accept the guest's USB/IP connection (M7) and serve the hardware-free **CDC-ACM mock** on it
+    /// in a background thread. The guest (`limina.usb_attach`) connects, imports the mock, and hands
+    /// the fd to `vhci_hcd`; `limina_usbip::serve` answers the import + every URB the kernel submits,
+    /// so the mock device enumerates as `/dev/ttyACM0`. The serve thread runs until the guest detaches
+    /// (the test asserts the guest's `RESULT: ttyACM0 …` marker, then powers off). Returns once the
+    /// connection is accepted and the server thread is running.
+    pub fn accept_usbip_mock(&mut self, timeout: Duration) -> Result<()> {
+        let listener = self
+            .vsock_listener
+            .as_ref()
+            .context("no vsock configured (use GuestConfig::with_usbip_vsock)")?;
+        listener
+            .set_nonblocking(true)
+            .context("set_nonblocking on vsock listener")?;
+
+        let deadline = Instant::now() + timeout;
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).ok();
+                    break stream;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if let Some(status) = self.child.try_wait().context("polling supervisor")? {
+                        bail!(
+                            "supervisor exited ({status}) before the guest USB/IP client connected"
+                        );
+                    }
+                    if Instant::now() >= deadline {
+                        bail!("timed out after {timeout:?} waiting for the guest USB/IP client");
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => return Err(e).context("accepting guest USB/IP connection"),
+            }
+        };
+
+        // serve() blocks in the URB loop until the guest detaches; run it off the test thread.
+        std::thread::spawn(move || {
+            let backend = limina_usbip::MockBackend::new();
+            if let Err(e) = limina_usbip::serve(stream, &backend) {
+                eprintln!("usbip mock server ended: {e}");
+            }
+        });
+        Ok(())
     }
 
     /// Current captured console text (lossy UTF-8; empty if nothing yet).

@@ -36,6 +36,17 @@ fn main() {
         run_usb_probe();
         power_off();
     }
+    // `limina.usb_attach=<port>`: the M7 mock-attach end-to-end. Connect a vsock to the host
+    // USB/IP server (CID_HOST:<port>), do the import handshake, and hand the socket fd to the
+    // kernel's vhci_hcd — which then runs URB traffic against the host server. The host's mock
+    // CDC-ACM device enumerates and `cdc-acm` binds it as /dev/ttyACM0. Proves passthrough with
+    // no physical USB. Emits RESULT markers; powers off.
+    if let Some(port) = cmdline_value("limina.usb_attach") {
+        if let Ok(p) = port.parse::<u32>() {
+            run_usb_attach(p);
+        }
+        power_off();
+    }
     // `limina.real_agent`: spawn the PRODUCT agent binary (staged at /limina-agent by
     // build-test-guest.sh) — the L1 vehicle for testing the real limina-agent end-to-end.
     // It connects to the control plane on its own and powers the guest off itself on
@@ -702,6 +713,136 @@ fn run_usb_probe() {
         klog(&line);
     }
     klog(b"[limina-init] usb_probe: done");
+}
+
+/// Drive the USB/IP **client** side directly (no `usbip` userspace tool): import the host's mock
+/// device over vsock and hand the fd to `vhci_hcd`. The USB/IP op_ protocol here is hand-rolled
+/// (a fixed 40-byte request, a 320-byte reply) to avoid pulling a crate into the guest; it mirrors
+/// `crates/limina-usbip/src/proto.rs` exactly. `vhci_hcd`'s attach accepts any SOCK_STREAM fd
+/// (verified in the kernel: `vhci_sysfs.c` checks only `SOCK_STREAM`, not the address family), so
+/// an `AF_VSOCK` socket works with no kernel patch.
+fn run_usb_attach(port: u32) {
+    const BUSID: &str = "1-1"; // the host MockBackend's single device
+    klog(b"[limina-init] usb_attach: begin");
+
+    // --- connect a vsock to the host USB/IP server (with a brief retry, like the agent) ---
+    let fd = unsafe { libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        klog(b"[limina-init] usb_attach: socket() failed");
+        return;
+    }
+    let mut addr: libc::sockaddr_vm = unsafe { std::mem::zeroed() };
+    addr.svm_family = libc::AF_VSOCK as libc::sa_family_t;
+    addr.svm_port = port;
+    addr.svm_cid = libc::VMADDR_CID_HOST;
+    let mut connected = false;
+    for _ in 0..100 {
+        let r = unsafe {
+            libc::connect(
+                fd,
+                &addr as *const _ as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_vm>() as libc::socklen_t,
+            )
+        };
+        if r == 0 {
+            connected = true;
+            break;
+        }
+        unsafe { sleep_ms(20) };
+    }
+    if !connected {
+        klog(b"[limina-init] usb_attach: vsock connect failed");
+        unsafe { libc::close(fd) };
+        return;
+    }
+
+    // --- OP_REQ_IMPORT: version 0x0111, code 0x8003, status 0, busid[32] (big-endian header) ---
+    let mut req = Vec::with_capacity(40);
+    req.extend_from_slice(&0x0111u16.to_be_bytes());
+    req.extend_from_slice(&0x8003u16.to_be_bytes());
+    req.extend_from_slice(&0u32.to_be_bytes());
+    let mut busid = [0u8; 32];
+    busid[..BUSID.len()].copy_from_slice(BUSID.as_bytes());
+    req.extend_from_slice(&busid);
+    if !fd_write_all(fd, &req) {
+        klog(b"[limina-init] usb_attach: sending OP_REQ_IMPORT failed");
+        unsafe { libc::close(fd) };
+        return;
+    }
+
+    // --- OP_REP_IMPORT: 8-byte header + 0x138 device body = 320 bytes ---
+    let mut rep = [0u8; 8 + 0x138];
+    if !fd_read_exact(fd, &mut rep) {
+        klog(b"[limina-init] usb_attach: short OP_REP_IMPORT");
+        unsafe { libc::close(fd) };
+        return;
+    }
+    let status = u32::from_be_bytes([rep[4], rep[5], rep[6], rep[7]]);
+    if status != 0 {
+        klog(b"[limina-init] usb_attach: server refused import");
+        unsafe { libc::close(fd) };
+        return;
+    }
+    // busnum/devnum/speed sit after header(8) + path[256] + busid[32] = offset 296.
+    let be32 = |o: usize| u32::from_be_bytes([rep[o], rep[o + 1], rep[o + 2], rep[o + 3]]);
+    let busnum = be32(296);
+    let devnum = be32(300);
+    let speed = be32(304);
+    let devid = (busnum << 16) | (devnum & 0xffff);
+
+    // --- hand the connected fd to vhci_hcd: "port sockfd devid speed" (all DECIMAL, per the
+    // kernel's `sscanf(buf, "%u %u %u %u", ...)` in vhci_sysfs.c). Port 0 = first virtual port. ---
+    let attach = format!("0 {fd} {devid} {speed}\n");
+    unsafe {
+        write_to(
+            c"/sys/devices/platform/vhci_hcd.0/attach",
+            attach.as_bytes(),
+        )
+    };
+    klog(format!("[limina-init] usb_attach: attached devid={devid} speed={speed}").as_bytes());
+
+    // --- the kernel now enumerates the device against the host; cdc-acm should create
+    // /dev/ttyACM0. Poll for it (the import + enumeration take a beat). ---
+    let mut appeared = false;
+    for _ in 0..150 {
+        if std::path::Path::new("/dev/ttyACM0").exists() {
+            appeared = true;
+            break;
+        }
+        unsafe { sleep_ms(20) };
+    }
+    if appeared {
+        klog(b"[limina-init] RESULT: ttyACM0 PRESENT");
+    } else {
+        klog(b"[limina-init] RESULT: ttyACM0 MISSING");
+    }
+    klog(b"[limina-init] usb_attach: done");
+    // Leave `fd` open: the kernel holds its own reference, but PID 1 closing it early is needless.
+}
+
+/// Write the whole buffer to a raw fd, returning false on any error. Used by the USB/IP client
+/// before the fd is handed to the kernel.
+fn fd_write_all(fd: libc::c_int, mut buf: &[u8]) -> bool {
+    while !buf.is_empty() {
+        let n = unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
+        if n <= 0 {
+            return false;
+        }
+        buf = &buf[n as usize..];
+    }
+    true
+}
+
+/// Read exactly `buf.len()` bytes from a raw fd, returning false on EOF/error.
+fn fd_read_exact(fd: libc::c_int, mut buf: &mut [u8]) -> bool {
+    while !buf.is_empty() {
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        if n <= 0 {
+            return false;
+        }
+        buf = &mut buf[n as usize..];
+    }
+    true
 }
 
 /// Write a line to /dev/kmsg (printk -> serial), best-effort.
