@@ -140,6 +140,13 @@ struct Cli {
     #[arg(long)]
     gpu_software_2d: bool,
 
+    /// UNIX-socket path for runtime balloon control (M6). The worker binds a listener here and
+    /// applies newline-delimited `target <bytes>` commands to the live virtio-balloon (replying to
+    /// `stats` with `actual=<bytes> reclaimed=<bytes>`). The supervisor policy and the test harness
+    /// connect to it.
+    #[arg(long)]
+    balloon_control_socket: Option<PathBuf>,
+
     /// Attach a user-mode NAT NIC (`eth0`) connected to a gvproxy gateway listening on
     /// this vfkit unixgram socket. The supervisor spawns gvproxy and guarantees it is up
     /// before the guest activates the device.
@@ -286,6 +293,7 @@ fn main() -> Result<()> {
     let spec = VmSpec {
         cpus: cli.cpus,
         ram_mib: cli.ram_mib,
+        balloon_control_socket: cli.balloon_control_socket,
         boot,
         disks,
         shares,

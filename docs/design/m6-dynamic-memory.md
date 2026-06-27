@@ -1,8 +1,8 @@
 # M6 — Dynamic memory (virtio-balloon, `min..max`)
 
-**Status: Step 1 LANDED & verified; Steps 2–4 are the build-ready plan.** This document is
-the authoritative, edit-by-edit implementation plan synthesized for Milestone 6. The actual
-edit → `scripts/apply-libkrun-patches.sh` → build → codesign → `scripts/test-boot.sh`
+**Status: Steps 1–3 LANDED & verified; Step 4 (PSI policy) is the build-ready plan.** This
+document is the authoritative, edit-by-edit implementation plan synthesized for Milestone 6.
+The actual edit → `scripts/apply-libkrun-patches.sh` → build → codesign → `scripts/test-boot.sh`
 loop is driven **serially in the main loop**, not here. Every non-obvious claim below
 carries a `path:line` citation into `third_party/libkrun/` or `crates/`; re-verify
 before editing (point-in-time anchors).
@@ -15,7 +15,18 @@ before editing (point-in-time anchors).
 >   `crates/limina-test/tests/balloon.rs` on stock F44 — worker `phys_footprint` rose +1.7 GiB
 >   on a 2 GiB guest allocation, then fell ~1 GiB after the guest freed it. Harness hook
 >   `Guest::worker_phys_footprint()` added.
-> - **Steps 2–4 — PLANNED** (below).
+> - **Step 2 — DONE (2026-06-26, patch `0034`).** Inflate/deflate handlers (PFN-array parse),
+>   `BalloonControlHandle` (mirrors `DisplayResizeHandle`), `num_pages` target + config-change
+>   interrupt (`DeviceState::signal_config_change`), guest `actual` via `write_config`,
+>   `DEFLATE_ON_OOM` advertised. Captured on `Vmm::balloon_control_handle`.
+> - **Step 3 — DONE (2026-06-26, no libkrun patch).** Worker `--balloon-control-socket`
+>   (`install_balloon_listener`: `target <bytes>` / `stats`), supervisor `--memory MIN..MAX`
+>   (parsed, MAX→RAM, auto-allocates the socket), harness `with_balloon_control()` +
+>   `Guest::set_balloon_target`/`balloon_stats`. Verified end-to-end on stock F44
+>   (`crates/limina-test/tests/balloon_inflate.rs`): 1 GiB target → `actual` 1 GiB, guest
+>   MemAvailable −1 GiB; target 0 → `actual` 0, memory returns. `parse_memory_range` unit-tested.
+> - **Step 4 — PLANNED** (below): PSI autoballoon (guest agent reports pressure, supervisor
+>   drives the target with hysteresis).
 
 > Cross-refs: `docs/roadmap.md` "Milestone 6"; the resolved reclaim spike
 > `spikes/balloon-madvise/RESULTS.md`; the shipped runtime-resize precedent this plan

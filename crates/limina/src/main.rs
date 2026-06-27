@@ -128,6 +128,19 @@ struct Cli {
     #[arg(long)]
     display_control_socket: Option<PathBuf>,
 
+    /// Dynamic memory range as `MIN..MAX` (M6), e.g. `2G..12G` or `2048..12288` (bare = MiB).
+    /// `MAX` is the RAM libkrun allocates (overrides --ram-mib); the balloon policy shrinks
+    /// effective guest RAM toward `MIN` under low pressure and grows it back toward `MAX` under
+    /// load. Implies a balloon control socket. Omitted ⇒ static `--ram-mib`.
+    #[arg(long)]
+    memory: Option<String>,
+
+    /// UNIX-socket path for runtime balloon control (M6), forwarded to the worker. The
+    /// dynamic-memory policy and the test harness connect here to drive the target / read `stats`.
+    /// Auto-allocated when `--memory` is given.
+    #[arg(long)]
+    balloon_control_socket: Option<PathBuf>,
+
     /// Force the software-2D-only GPU (no virglrenderer/venus). Default is the coexist device
     /// (software-2D 2D + Venus 3D). Use for the capture oracle or the local-Terminal GPU-init hang.
     #[arg(long)]
@@ -176,12 +189,20 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let vmm_bin = resolve_vmm_bin(cli.vmm_bin).context("locating the limina-vmm worker binary")?;
 
+    // Dynamic memory (M6): --memory MIN..MAX overrides --ram-mib with MAX (what libkrun allocates)
+    // and keeps MIN for the balloon policy. The balloon control socket is auto-allocated below.
+    let mem_range = cli.memory.as_deref().map(parse_memory_range).transpose()?;
+    let ram_mib = mem_range.map(|(_, max)| max).unwrap_or(cli.ram_mib);
+    if let Some((min, max)) = mem_range {
+        log::info!("dynamic memory: {min}..{max} MiB (balloon policy shrinks toward {min})");
+    }
+
     // Forward the VM options to the worker's CLI.
     let mut args: Vec<String> = vec![
         "--cpus".into(),
         cli.cpus.to_string(),
         "--ram-mib".into(),
-        cli.ram_mib.to_string(),
+        ram_mib.to_string(),
     ];
     // Boot source. clap guarantees firmware and kernel don't both appear; we resolve the
     // rest: an explicit --firmware is honored, and a windowed boot with neither given
@@ -337,6 +358,19 @@ fn main() -> Result<()> {
     });
     if let Some(path) = &resize_socket {
         args.push("--display-control-socket".into());
+        args.push(path_arg(path)?);
+    }
+
+    // Runtime balloon control socket (M6): forwarded to the worker (which binds it). Auto-allocated
+    // when --memory is given so dynamic memory Just Works; an explicit --balloon-control-socket
+    // (e.g. from the test harness) takes precedence.
+    let balloon_socket = cli.balloon_control_socket.clone().or_else(|| {
+        mem_range.is_some().then(|| {
+            std::env::temp_dir().join(format!("limina-balloon-{}.sock", std::process::id()))
+        })
+    });
+    if let Some(path) = &balloon_socket {
+        args.push("--balloon-control-socket".into());
         args.push(path_arg(path)?);
     }
 
@@ -738,6 +772,38 @@ fn path_arg(p: &std::path::Path) -> Result<String> {
         .with_context(|| format!("path is not valid UTF-8: {p:?}"))
 }
 
+/// Parse a `MIN..MAX` dynamic-memory range (M6) into `(min_mib, max_mib)`. Each bound is a size with
+/// an optional `G`/`M` suffix (case-insensitive); a bare number is MiB. e.g. `2G..12G`, `2048..12288`.
+fn parse_memory_range(s: &str) -> Result<(usize, usize)> {
+    let (min_s, max_s) = s
+        .split_once("..")
+        .with_context(|| format!("--memory must be MIN..MAX (e.g. 2G..12G), got {s:?}"))?;
+    let min = parse_size_mib(min_s)?;
+    let max = parse_size_mib(max_s)?;
+    anyhow::ensure!(
+        min > 0 && min <= max,
+        "--memory MIN ({min} MiB) must be > 0 and <= MAX ({max} MiB)"
+    );
+    Ok((min, max))
+}
+
+/// Parse a memory size into MiB. Optional `G`/`M` suffix (case-insensitive); a bare number is MiB.
+fn parse_size_mib(s: &str) -> Result<usize> {
+    let s = s.trim();
+    let (num, mult) = if let Some(n) = s.strip_suffix(['G', 'g']) {
+        (n, 1024)
+    } else if let Some(n) = s.strip_suffix(['M', 'm']) {
+        (n, 1)
+    } else {
+        (s, 1)
+    };
+    let v: usize = num
+        .trim()
+        .parse()
+        .with_context(|| format!("invalid memory size {s:?}"))?;
+    Ok(v * mult)
+}
+
 /// A parsed `--share [NAME=]PATH[:ro]` spec, normalized to the worker's `tag=path` form.
 struct ShareSpec {
     tag: String,
@@ -802,6 +868,20 @@ fn parse_share(spec: &str) -> Result<ShareSpec> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn memory_range_parses_suffixes_and_bare_mib() {
+        assert_eq!(parse_memory_range("2G..12G").unwrap(), (2048, 12288));
+        assert_eq!(parse_memory_range("512M..4096").unwrap(), (512, 4096));
+        assert_eq!(parse_memory_range("2048..12288").unwrap(), (2048, 12288));
+        assert_eq!(parse_memory_range(" 1g .. 2g ").unwrap(), (1024, 2048));
+        // min must be > 0 and <= max
+        assert!(parse_memory_range("0..4G").is_err());
+        assert!(parse_memory_range("8G..2G").is_err());
+        // malformed
+        assert!(parse_memory_range("4G").is_err());
+        assert!(parse_memory_range("xx..2G").is_err());
+    }
 
     #[test]
     fn firmware_candidates_are_env_then_bundle_then_dev() {

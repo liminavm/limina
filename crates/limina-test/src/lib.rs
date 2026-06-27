@@ -262,6 +262,10 @@ pub struct GuestConfig {
     /// Pin the supervisor-owned control socket to a known scratch path (`--control-socket`)
     /// so the harness can join the plane as a peer itself. See [`Guest::connect_control`].
     pub control_socket: bool,
+    /// Bind a runtime balloon control socket (`--balloon-control-socket`, M6 dynamic memory) at a
+    /// known scratch path so the harness can drive the target / read `stats`. See
+    /// [`Guest::set_balloon_target`] / [`Guest::balloon_stats`].
+    pub balloon_control: bool,
     /// Extra environment variables for the supervisor process (e.g. `LIMINA_PASTEBOARD`).
     pub envs: Vec<(String, String)>,
     /// Host directories shared into the guest (`--share name=path[:ro]` → virtiofs tag
@@ -312,6 +316,7 @@ impl GuestConfig {
             ssh_port: None,
             supervisor_log: false,
             control_socket: false,
+            balloon_control: false,
             envs: Vec::new(),
             shares: Vec::new(),
         })
@@ -419,6 +424,7 @@ impl GuestConfig {
             ssh_port: None,
             supervisor_log: false,
             control_socket: false,
+            balloon_control: false,
             envs: Vec::new(),
             shares: Vec::new(),
         })
@@ -453,6 +459,7 @@ impl GuestConfig {
             ssh_port: None,
             supervisor_log: false,
             control_socket: false,
+            balloon_control: false,
             envs: Vec::new(),
             shares: Vec::new(),
         })
@@ -509,6 +516,7 @@ impl GuestConfig {
             ssh_port: None,
             supervisor_log: false,
             control_socket: false,
+            balloon_control: false,
             envs: Vec::new(),
             shares: Vec::new(),
         })
@@ -697,6 +705,13 @@ impl GuestConfig {
         self
     }
 
+    /// Bind a runtime balloon control socket (M6 dynamic memory) at a known scratch path, so the
+    /// harness can drive the target with [`Guest::set_balloon_target`] and read [`Guest::balloon_stats`].
+    pub fn with_balloon_control(mut self) -> GuestConfig {
+        self.balloon_control = true;
+        self
+    }
+
     /// Set an environment variable on the spawned supervisor (e.g. `LIMINA_PASTEBOARD` to
     /// point the clipboard bridge at a private named pasteboard).
     pub fn with_env(mut self, key: &str, value: &str) -> GuestConfig {
@@ -814,6 +829,9 @@ pub struct Guest {
     /// Runtime display-resize control socket (inside `scratch`), bound by the worker when a
     /// display is attached. See [`Guest::resize_display`].
     resize_socket: Option<PathBuf>,
+    /// Runtime balloon control socket (inside `scratch`), bound by the worker when
+    /// [`GuestConfig::balloon_control`] is set. See [`Guest::set_balloon_target`].
+    balloon_socket: Option<PathBuf>,
     /// Write handle to the guest console input FIFO, if an interactive console was enabled.
     console_in: Option<fs::File>,
     /// Path to the gvproxy gateway's `-debug` log (inside `scratch`), if net was enabled.
@@ -1012,6 +1030,13 @@ impl Guest {
         // display is attached we also wire a runtime resize control socket so tests can drive
         // window-resize via [`Guest::resize_display`] (the worker binds it; we connect per call).
         let resize_socket = cfg.display.as_ref().map(|_| scratch.join("resize.sock"));
+
+        // Balloon control socket (M6 dynamic memory): bound by the worker when requested, driven by
+        // the harness via [`Guest::set_balloon_target`] / [`Guest::balloon_stats`].
+        let balloon_socket = cfg.balloon_control.then(|| scratch.join("balloon.sock"));
+        if let Some(path) = &balloon_socket {
+            cmd.arg("--balloon-control-socket").arg(path);
+        }
         let capture_png = match &cfg.display {
             Some(d) => {
                 let png = scratch.join("scanout.png");
@@ -1132,6 +1157,7 @@ impl Guest {
             vsock_socket,
             capture_png,
             resize_socket,
+            balloon_socket,
             console_in,
             gateway_log,
             ssh_port: cfg.ssh_port.unwrap_or(DEFAULT_SSH_PORT),
@@ -1206,6 +1232,63 @@ impl Guest {
             .with_context(|| format!("sending resize to {path:?}"))?;
         stream.flush().ok();
         Ok(())
+    }
+
+    /// Connect to the worker's balloon control socket (M6), retrying for a few seconds because the
+    /// worker binds it partway through boot. Requires [`GuestConfig::with_balloon_control`].
+    fn connect_balloon(&self) -> Result<UnixStream> {
+        let path = self
+            .balloon_socket
+            .as_ref()
+            .context("balloon control requires GuestConfig::with_balloon_control")?;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            match UnixStream::connect(path) {
+                Ok(s) => return Ok(s),
+                Err(_) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => {
+                    return Err(e).with_context(|| {
+                        format!("connecting to the balloon-control socket {path:?}")
+                    })
+                }
+            }
+        }
+    }
+
+    /// Set the balloon target in bytes: the worker forwards it to the live virtio-balloon (which
+    /// inflates/deflates toward it). M6 dynamic memory.
+    pub fn set_balloon_target(&self, bytes: u64) -> Result<()> {
+        use std::io::Write;
+        let mut stream = self.connect_balloon()?;
+        writeln!(stream, "target {bytes}").context("sending balloon target")?;
+        stream.flush().ok();
+        Ok(())
+    }
+
+    /// Read balloon stats from the worker: `(actual_bytes, reclaimed_bytes)` — the guest's current
+    /// balloon size and the total host memory returned via `MADV_FREE_REUSABLE`. M6 dynamic memory.
+    pub fn balloon_stats(&self) -> Result<(u64, u64)> {
+        use std::io::{BufRead, BufReader, Write};
+        let mut stream = self.connect_balloon()?;
+        writeln!(stream, "stats").context("requesting balloon stats")?;
+        stream.flush().ok();
+        let mut line = String::new();
+        BufReader::new(&stream)
+            .read_line(&mut line)
+            .context("reading balloon stats reply")?;
+        // Reply: `actual=<bytes> reclaimed=<bytes>`.
+        let mut actual = 0u64;
+        let mut reclaimed = 0u64;
+        for tok in line.split_whitespace() {
+            if let Some(v) = tok.strip_prefix("actual=") {
+                actual = v.parse().unwrap_or(0);
+            } else if let Some(v) = tok.strip_prefix("reclaimed=") {
+                reclaimed = v.parse().unwrap_or(0);
+            }
+        }
+        Ok((actual, reclaimed))
     }
 
     /// Decode the current captured scanout PNG. Errors if no display was configured or no

@@ -175,8 +175,13 @@ pub enum BootSource {
 pub struct VmSpec {
     /// Number of vCPUs.
     pub cpus: u8,
-    /// Guest RAM in MiB (static; dynamic memory is a later milestone).
+    /// Guest RAM in MiB. With dynamic memory (M6) this is the **max** — what libkrun allocates and
+    /// the guest sees; the supervisor's balloon policy shrinks effective RAM toward its min via the
+    /// control socket (the worker is mechanism-only and doesn't know the min).
     pub ram_mib: usize,
+    /// Where the worker binds the balloon control socket (newline `target <bytes>` / `stats`),
+    /// driven by the supervisor's dynamic-memory policy (M6). `None` = no runtime balloon control.
+    pub balloon_control_socket: Option<PathBuf>,
     /// How the guest boots (EFI firmware or a direct kernel).
     pub boot: BootSource,
     /// Disks to attach, in order.

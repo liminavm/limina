@@ -16,7 +16,7 @@ use anyhow::{anyhow, Context, Result};
 use crossbeam_channel::unbounded;
 use devices::virtio::block::{CacheType, ImageType, SyncMode};
 use devices::virtio::display::DisplayInfo;
-use devices::virtio::DisplayResizeHandle;
+use devices::virtio::{BalloonControlHandle, DisplayResizeHandle};
 use limina_display::{CaptureConfig, WindowConfig};
 use polly::event_manager::EventManager;
 use vmm::resources::VmResources;
@@ -392,6 +392,20 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         }
     }
 
+    // Runtime balloon control (M6 dynamic memory): if a control socket was requested, wire it to
+    // the live virtio-balloon's control handle. A dedicated UNIX socket, mirroring the display
+    // resize one. libkrun stays mechanism-only; the target policy lives in the supervisor.
+    if let Some(path) = spec.balloon_control_socket.as_ref() {
+        match vmm.lock().unwrap().balloon_control_handle() {
+            Some(handle) => install_balloon_listener(path.clone(), handle)
+                .context("installing the balloon control listener")?,
+            None => log::error!(
+                "--balloon-control-socket set but the balloon control handle is unavailable; \
+                 dynamic memory is disabled"
+            ),
+        }
+    }
+
     // Start the GPU worker-message servicer when a display is attached (mirrors
     // krun_start_enter's `if gpu_virgl_flags.is_some()`). Without it, a guest blob map
     // would block the GPU worker forever waiting on a reply.
@@ -459,4 +473,74 @@ fn parse_resize(line: &str) -> Option<(u32, u32)> {
     let w = parts.next()?.parse::<u32>().ok()?;
     let h = parts.next()?.parse::<u32>().ok()?;
     Some((w, h))
+}
+
+/// Bind a UNIX-socket listener that drives the live virtio-balloon via `handle` (M6 dynamic
+/// memory). Newline-delimited commands:
+/// - `target <bytes>` → set the balloon target (rounded to 4 KiB pages); the guest inflates/deflates.
+/// - `stats`          → reply `actual=<bytes> reclaimed=<bytes>` (the guest's balloon size + total
+///   reclaimed) on the same connection.
+///
+/// Runs on a detached thread for the VMM's lifetime; the supervisor policy and the test harness
+/// connect to it. Mirrors [`install_resize_listener`].
+fn install_balloon_listener(path: std::path::PathBuf, handle: BalloonControlHandle) -> Result<()> {
+    use std::io::{BufRead, Write};
+    use std::os::unix::net::UnixListener;
+
+    // A stale socket from a previous run (or a relaunched worker) blocks bind(); clear it first.
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)
+        .with_context(|| format!("bind balloon-control socket {path:?}"))?;
+    log::info!("balloon: control socket listening on {path:?}");
+    std::thread::Builder::new()
+        .name("balloon-control".into())
+        .spawn(move || {
+            for stream in listener.incoming() {
+                let stream = match stream {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::error!("balloon: accept failed: {e}");
+                        continue;
+                    }
+                };
+                let mut writer = match stream.try_clone() {
+                    Ok(w) => w,
+                    Err(e) => {
+                        log::error!("balloon: failed to clone control stream: {e}");
+                        continue;
+                    }
+                };
+                for line in std::io::BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    let mut parts = line.split_whitespace();
+                    match parts.next() {
+                        Some("target") => match parts.next().and_then(|s| s.parse::<u64>().ok()) {
+                            Some(bytes) => {
+                                let pages = (bytes >> 12).min(u32::MAX as u64) as u32;
+                                log::info!("balloon: target {bytes} bytes ({pages} pages)");
+                                handle.set_target_pages(pages);
+                            }
+                            None => log::warn!("balloon: ignoring malformed target line {line:?}"),
+                        },
+                        Some("stats") => {
+                            let stats = handle.get_stats();
+                            let actual_bytes = (stats.actual_pages as u64) << 12;
+                            if let Err(e) = writeln!(
+                                writer,
+                                "actual={actual_bytes} reclaimed={}",
+                                stats.reclaimed_bytes
+                            )
+                            .and_then(|()| writer.flush())
+                            {
+                                log::warn!("balloon: failed to reply to stats: {e}");
+                                break;
+                            }
+                        }
+                        _ => log::warn!("balloon: ignoring control line {line:?}"),
+                    }
+                }
+            }
+        })
+        .context("spawning the balloon control listener thread")?;
+    Ok(())
 }
