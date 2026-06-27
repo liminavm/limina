@@ -609,7 +609,7 @@ drop back toward 2G as pages are madvised back to macOS.
 
 ## Milestone 7 — USB passthrough
 
-**Status: 🟡 IN PROGRESS — mock passthrough works end-to-end; only real-device hardware remains.**
+**Status: 🟡 mock passthrough works end-to-end; real-device capture proven; the helper is DEFERRED.**
 Build-by-build plan + as-built log: `docs/design/m7-usb-passthrough.md`. Shipped & verified on HVF:
 **(1) kernel** — `build-test-kernel.sh` enables USB + `USBIP_VHCI_HCD` + class drivers + `uinput`;
 **(2) host `limina-usbip` crate** — the full USB/IP wire protocol (byte-exact to the kernel source) +
@@ -617,10 +617,13 @@ a `UsbBackend` trait + a hardware-free **CDC-ACM mock** + a libusb (`rusb`) back
 **(3a)** the guest-side USB/IP stack is present (`tests/usb.rs`, GREEN); **(3b)** the full
 **mock-attach end-to-end** — a CDC-ACM device enumerates in the guest as `/dev/ttyACM0` over vsock
 with NO hardware (`vhci_hcd` accepts the `AF_VSOCK` fd directly — no `usbip` userspace tool or kernel
-patch), GREEN. Remaining: **(4)** real-device passthrough (swap `MockBackend`→`LibusbBackend`; gated
-by the Apple-managed, restricted `com.apple.vm.device-access` claiming entitlement — `spikes/usb-probe`
-is the empirical oracle; a SoloKeys Solo 2, which shows `!matched` in IORegistry, is the candidate
-free-to-claim target).
+patch), GREEN. **(4) real-device — DEFERRED:** claiming an Apple-bound USB device works **as root with
+NO entitlement** (proven on a Solo 2 via `sudo spikes/usb-probe/run.sh`; the
+`com.apple.vm.device-access` entitlement is App-Store-only + un-ad-hoc-signable, so a dev key can't
+unlock it — root is Apple's documented Developer-ID fallback). The remaining code is the **root USB
+capture path, built as the first client of a single shared privileged helper** (`limina-privhelperd`,
+which will also broker vmnet networking + future root ops) — see `docs/design/privileged-helper.md`.
+Not CI-testable (needs root + the physical device).
 
 **Goal:** pass a host USB device (initially libusb-claimable: FTDI/CP210x, YubiKey-class) into the
 guest.

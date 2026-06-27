@@ -17,7 +17,7 @@ still boots/runs fine; the custom kernel is the entry fee for *USB*, never for t
 | 2 | Host `limina-usbip` crate: USB/IP wire protocol + backend trait + CDC-ACM mock + libusb backend | ✅ shipped, 17 unit tests |
 | 3a | L1 test: the guest-side USB/IP stack is present (`vhci_hcd`/usbip/uinput) | ✅ shipped, GREEN on HVF |
 | 3b | Full **mock-attach** end-to-end over vsock — a device enumerates in the guest, no hardware | ✅ shipped, GREEN on HVF |
-| 4 | **Real-device** passthrough (libusb claim + the macOS device-access gate) | ◻ hardware-gated (below) |
+| 4 | **Real-device** passthrough — root USB capture (proven) via the shared privileged helper | ◻ DEFERRED — `privileged-helper.md` |
 
 ## Phase 1 — kernel (as built)
 
@@ -156,12 +156,14 @@ composite FIDO key is fully claimable as root. So:
 device (free-to-claim / root-claimable / Apple-claimed / other); run it plain for the userspace gate
 and `sudo …` for the root path. Both gates are now characterized against the Solo 2.
 
-**Remaining build (the only M7 code left): the privileged USB-capture helper.** A tiny root binary
-that, given a device id, opens + detaches + claims it via `LibusbBackend` and runs `serve()` on a
-socket the supervisor bridges to the guest's `vhci_hcd` (the exact pipeline 3b proved with the mock,
-now with a real backend behind a privilege boundary). Opt-in (`--usb VID:PID`), unprivileged-first
-default, mirroring the M3 `vmnet-helper` shape. Not CI-testable (needs root + the physical device) —
-validated via a manual spike against the Solo 2.
+**Remaining build (the only M7 code left): USB capture via the privileged helper — DEFERRED.** Given
+a device id, open + detach + claim it via `LibusbBackend` and run `serve()` on a socket the supervisor
+bridges to the guest's `vhci_hcd` (the exact pipeline 3b proved with the mock, now with a real backend
+behind a privilege boundary). Opt-in (`--usb VID:PID`), unprivileged-first default. **Architecture
+decision (2026-06-27): this does NOT get its own helper binary — it is the first client of a single
+shared `limina-privhelperd` that brokers all root operations (USB capture, vmnet networking, future
+needs). See `docs/design/privileged-helper.md`.** Not CI-testable (needs root + the physical device) —
+validated via a manual `sudo` spike against the Solo 2.
 
 ## Files
 

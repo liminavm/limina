@@ -19,6 +19,11 @@ Status: **proposal** · Target host: macOS 26.x (Apple Silicon) · Audience: lim
 > all of vmnet — SHARED/HOST (root on macOS ≤15) and BRIDGED (the restricted
 > `com.apple.vm.networking` entitlement) — i.e. §3.3 and Phases 4–6. The vmnet material is kept below
 > as the documented enhanced-tier upgrade path, not current work.
+>
+> **When the deferred vmnet (root) work is picked up, the privileged piece is NOT a net-specific
+> helper** — it is a client of the single shared **`limina-privhelperd`** that also handles USB
+> capture (M7) and any future root operation. See `docs/design/privileged-helper.md`. (The
+> unprivileged `limina-networkd` NAT daemon is its non-privileged sibling and stays separate.)
 
 ## 1. Problem & goals
 
