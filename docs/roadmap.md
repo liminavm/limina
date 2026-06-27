@@ -724,15 +724,15 @@ attaches at runtime, and resizing the window reflows the guest resolution.
 | M3 networking ✅ (NAT+SSH; bridged deferred) | gvproxy supervision + gateway cleanup; well-known-MAC static lease | none needed (reconnect-on-HANG_UP still optional) |
 | M4 3D 🟢 | coexist routing, zero-copy + fence-accurate present path, KK as host driver | coexist (0010), fence-present series (0017–0022), virglrenderer fork, KK perf/XFB, kernel `patches/linux/0001–0003`, mutter ×2; remaining: upstream queue |
 | M5 clipboard/fs/agent 🟢 core | guest agent (from L1 vsock seed), NSPasteboard bridge, ext-data-control + RemoteDesktop clipboard clients, virtiofs share + auto-mount, enhanced-tier installer (remaining) | mutter 0003 (ext-data-control); none for transport (vsock+virtiofs exist) |
-| M6 dynamic memory | PSI autoballoon policy | reclaim fix (MADV_FREE_REUSABLE) + 16KiB align + inflate/deflate + krun_*balloon* API + DEFLATE_ON_OOM |
+| M6 dynamic memory ✅ | PSI autoballoon policy + `BalloonControlHandle` / `--memory` / control socket (internal Rust API, not a C ABI) | reclaim fix (MADV_FREE_REUSABLE) + 16 KiB align/coalesce + inflate/deflate handlers + DEFLATE_ON_OOM (0033/0034) |
 | M7 USB | host claim/attach, usbip plumbing | our-kernel config edit (USB+uinput); later native virtio-usb + krun_add_usb* |
 | M8 audio/x86/polish | fullscreen, keymap, multi-display, pointer capture, IOSurface mach-port scoping, FEX wiring | native virtio-snd; runtime resize/EDID; LED parity |
 
 ## First three things to spike
 
-All three founding spikes are **RESOLVED**: M1 boot path (EFI+disk, no remount —
-`spikes/m1-boot`); M2 input worker on Darwin arm64 (builds + wakes); M6 reclaim
-(`MADV_FREE_REUSABLE` drops `phys_footprint` on an `hv_vm_map`'d region —
-`spikes/balloon-madvise`, re-confirm on the shipping macOS release).
+All three founding spikes are **RESOLVED** (M6 reclaim now shipped, 2026-06-26): M1 boot path
+(EFI+disk, no remount — `spikes/m1-boot`); M2 input worker on Darwin arm64 (builds + wakes); M6
+reclaim (`MADV_FREE_REUSABLE` drops `phys_footprint` on an `hv_vm_map`'d region —
+`spikes/balloon-madvise`, re-confirmed on the shipping macOS release).
 
 The standing rule remains: spike the gating unknown before building on it.

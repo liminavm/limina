@@ -136,4 +136,5 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
 ---
 
 When a milestone's loose ends are all closed, fold the remainder back into the roadmap milestone
-status. Greenfield milestones still ahead: **M6 dynamic memory**, **M7 USB**, **M8 audio + x86**.
+status. Greenfield milestones still ahead: **M7 USB**, **M8 audio + x86**. (**M6 dynamic memory** shipped
+2026-06-26 — see `docs/design/m6-dynamic-memory.md` + memory `limina-m6-dynamic-memory`.)
