@@ -26,6 +26,7 @@ use super::WorkerConn;
 
 use objc2::rc::Retained;
 use objc2_app_kit::{NSCursor, NSEvent, NSEventType, NSView};
+use objc2_foundation::{NSPoint, NSRect};
 
 use limina_input::constants::{
     ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
@@ -34,11 +35,29 @@ use limina_input::constants::{
 use limina_input::keymap::{macos_keycode_to_linux_remapped, modifier_is_down, KeyRemap};
 use limina_input::InputEvent;
 
-// CoreGraphics (already linked): decouple the hardware mouse from the on-screen cursor so we get
-// raw relative deltas with the cursor frozen — the standard mouselook/pointer-capture mechanism.
+// CoreGraphics (already linked): pointer-capture / mouselook primitives.
+//   - `CGAssociateMouseAndMouseCursorPosition(0)` asks the HID layer to stop driving the cursor
+//     from the mouse. It's unreliable on its own (the cursor still drifted onto windows behind us
+//     on macOS 26), so we ALSO re-pin the cursor to the display centre on every captured move.
+//   - `CGWarpMouseCursorPosition` does the re-pin; crucially `NSEvent.deltaX/deltaY` are *hardware*
+//     deltas, unaffected by warping, so re-centring never corrupts the motion we send the guest.
 // `connected` is a `boolean_t` (C `int`); 0 = decoupled (captured), 1 = normal.
 extern "C" {
     fn CGAssociateMouseAndMouseCursorPosition(connected: i32) -> i32;
+    fn CGWarpMouseCursorPosition(point: NSPoint) -> i32;
+    fn CGMainDisplayID() -> u32;
+    fn CGDisplayBounds(display: u32) -> NSRect;
+}
+
+/// Centre of the main display in global (points, top-left origin) coordinates — the fixed point
+/// we keep the host cursor pinned to while captured.
+fn main_display_center() -> NSPoint {
+    // SAFETY: plain CoreGraphics queries, no preconditions.
+    let b = unsafe { CGDisplayBounds(CGMainDisplayID()) };
+    NSPoint::new(
+        b.origin.x + b.size.width / 2.0,
+        b.origin.y + b.size.height / 2.0,
+    )
 }
 
 /// A host-intercepted shortcut: recognized BEFORE the key reaches the guest, so the combo
@@ -163,7 +182,10 @@ impl InputState {
         self.captured.set(now);
         // Main-thread only (the event monitor's thread); NSCursor hide/unhide must balance.
         if now {
-            unsafe { CGAssociateMouseAndMouseCursorPosition(0) };
+            unsafe {
+                CGAssociateMouseAndMouseCursorPosition(0);
+                CGWarpMouseCursorPosition(main_display_center());
+            }
             NSCursor::hide();
             log::info!("pointer capture: ON (Cmd-Ctrl-G to release)");
         } else {
@@ -358,6 +380,10 @@ impl InputState {
     fn emit_rel_motion(&self, event: &NSEvent) {
         let dx = event.deltaX().round() as i32;
         let dy = event.deltaY().round() as i32;
+        // Re-pin the (hidden) host cursor to the display centre so it can't drift onto windows
+        // behind us — CGAssociate(false) alone doesn't reliably freeze it. The warp doesn't
+        // affect `deltaX/deltaY` (hardware deltas), so the guest still gets clean motion.
+        unsafe { CGWarpMouseCursorPosition(main_display_center()) };
         if dx == 0 && dy == 0 {
             return;
         }

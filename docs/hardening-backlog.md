@@ -127,11 +127,13 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   `limina-m3-networking`.
 
 ## M2 / M8 polish wins (cheap, host-side)
-- **Pointer warps** — guest-initiated pointer warps (guest `cursormove` positions) are ignored
-  host-side; reconcile with **pointer capture** (relative mode). Roadmap M2 (~line 167) / M8.
-- **Fullscreen** (NSWindow `toggleFullScreen:`), **keymap remap / Command-Option swap** (host-side
-  kVK→KEY table edit), **system-combo capture** (CGEventTap behind a TCC toggle), **multi-display**
-  (multiplex scanouts by `scanout_id`). Roadmap M8 (~line 648).
+- ~~**Pointer warps / pointer capture**~~ — **DONE** (2026-06-27). `Cmd-Ctrl-G` capture mode feeds
+  the guest a separate relative-mouse virtio-input device; closes the guest-warp gap. Host cursor
+  pinned by warp-to-centre (CGAssociate-false alone insufficient on macOS 26).
+- ~~**Fullscreen**~~ (`Cmd-Ctrl-F`) and ~~**keymap remap / Command-Option swap**~~ (`--swap-cmd-opt`)
+  — **DONE** (2026-06-27). Remaining M8 polish: **system-combo capture** (CGEventTap behind a TCC
+  toggle — extends the existing `match_host_shortcut` framework to system combos), **multi-display**
+  (multiplex scanouts by `scanout_id`). Roadmap M8.
 
 ---
 

@@ -685,14 +685,22 @@ Parallels replacement: fullscreen, keymap remap, multi-display, system-combo cap
    HVF VMM. Use **FEX-Emu** in the guest (primary) + `qemu-user-static` (fallback) via `binfmt_misc`
    (`CONFIG_BINFMT_MISC=y` — no libkrun patch; wire via the guest agent / virtiofs overlay).
 3. **Polish (each largely a host-side limina feature unless noted):**
-   - **Fullscreen:** NSWindow `toggleFullScreen:` default; `CGDisplayCapture` exclusive optional.
-   - **Keymap remap + customizable keybindings:** host-side kVK_* → KEY_* table; Command/Option swap
-     is a table edit (guest owns the layout so dead keys/IME work natively).
+   - ~~**Fullscreen:**~~ **DONE** — NSWindow `FullScreenPrimary` collection behaviour +
+     `toggleFullScreen:`, triggered host-side by `Cmd-Ctrl-F` (the macOS-standard combo).
+     `CGDisplayCapture` exclusive mode still optional/deferred.
+   - ~~**Keymap remap (Command/Option swap):**~~ **DONE** — host-side `KeyRemap` policy over the
+     positional kVK_* → KEY_* table (`--swap-cmd-opt`; guest owns the layout so dead keys/IME work
+     natively). Fully customizable keybindings beyond the swap still ahead.
    - **System-combo capture (Cmd-Tab/Cmd-Space/Super):** CGEventTap behind an Accessibility/TCC
-     toggle; handle `kCGEventTapDisabledByTimeout` + Secure Input gracefully.
-   - **Pointer capture (relative mode):** switch the absolute tablet to the relative mouse on
-     capture. **Closes the M2 gap:** the host pointer ignores guest `cursormove` positions, so
-     guest-initiated warps aren't reflected host-side — capture mode is where that gets reconciled.
+     toggle; handle `kCGEventTapDisabledByTimeout` + Secure Input gracefully. (The in-window
+     host-shortcut framework — `match_host_shortcut` — already exists from the fullscreen/capture
+     work; this extends it to *system* combos that need an event tap.)
+   - ~~**Pointer capture (relative mode):**~~ **DONE** — `Cmd-Ctrl-G` grabs the host cursor (hidden +
+     re-warped to display centre each move) and feeds the guest a **separate** relative-mouse
+     virtio-input device (`REL_X/REL_Y`), distinct from the absolute tablet so capture never
+     reclassifies it in the guest's libinput. **Closes the M2 gap** (guest-initiated warps). The
+     `CGAssociateMouseAndMouseCursorPosition(false)`-alone freeze was insufficient on macOS 26 — the
+     warp-to-centre is the load-bearing pin.
    - **Multi-display:** multiplex all displays through the single `krun_set_display_backend` by
      `scanout_id` (up to 16), each to its own NSWindow/CAMetalLayer.
    - **Runtime window-follow resize / EDID hotplug (libkrun patch):** no post-`krun_start_enter`
