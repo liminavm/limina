@@ -476,6 +476,8 @@ struct WindowedWorker {
     /// of `sup_fd`). These are the supervisor's to close when the worker is replaced.
     kbd_sup_fd: libc::c_int,
     ptr_sup_fd: libc::c_int,
+    /// Supervisor→worker relative-pointer (capture-mode mouse) end.
+    rel_ptr_sup_fd: libc::c_int,
     ack_fd: libc::c_int,
 }
 
@@ -498,16 +500,26 @@ fn spawn_windowed_worker(
     // preserves the 8-byte record boundaries the worker's backends rely on.
     let (kbd_sup_fd, kbd_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
     let (ptr_sup_fd, ptr_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
+    // The relative-pointer (mouse) device for pointer-capture mode (M8) — same datagram model.
+    let (rel_ptr_sup_fd, rel_ptr_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
     // Input events are tiny (8 bytes) but bursty (a key chord, a fast drag). Give the
     // datagram pipes a deep buffer (~32k events) so a momentary worker lag never drops
     // input, and make the supervisor *send* ends non-blocking so a pathological full
     // socket (a stalled/dead worker input thread) can never block the AppKit main thread
     // and freeze the whole UI — send() returns EAGAIN and we drop instead (see input.rs).
-    for fd in [kbd_sup_fd, kbd_worker_fd, ptr_sup_fd, ptr_worker_fd] {
+    for fd in [
+        kbd_sup_fd,
+        kbd_worker_fd,
+        ptr_sup_fd,
+        ptr_worker_fd,
+        rel_ptr_sup_fd,
+        rel_ptr_worker_fd,
+    ] {
         set_socket_buffer(fd, 256 * 1024);
     }
     set_nonblocking(kbd_sup_fd);
     set_nonblocking(ptr_sup_fd);
+    set_nonblocking(rel_ptr_sup_fd);
 
     let mut args = base_args.to_vec();
     args.push("--display-window".into());
@@ -519,6 +531,8 @@ fn spawn_windowed_worker(
     args.push(kbd_worker_fd.to_string());
     args.push("--input-ptr-fd".into());
     args.push(ptr_worker_fd.to_string());
+    args.push("--input-rel-ptr-fd".into());
+    args.push(rel_ptr_worker_fd.to_string());
     if let Some(name) = surface_port_name {
         // Scoped scanouts: the worker hands its (non-global) IOSurfaces to our surface-port
         // receiver by Mach port instead of making them globally lookup-able.
@@ -531,13 +545,17 @@ fn spawn_windowed_worker(
         args,
         shutdown_grace: grace,
     };
-    let child = supervisor::spawn_worker(&spec, &[worker_fd, kbd_worker_fd, ptr_worker_fd])?;
+    let child = supervisor::spawn_worker(
+        &spec,
+        &[worker_fd, kbd_worker_fd, ptr_worker_fd, rel_ptr_worker_fd],
+    )?;
     let pid = child.id() as i32;
     // The worker holds its own copies now; drop ours so it sees EOF / owns the read ends.
     unsafe {
         libc::close(worker_fd);
         libc::close(kbd_worker_fd);
         libc::close(ptr_worker_fd);
+        libc::close(rel_ptr_worker_fd);
     }
     // Shown-ack write half (#8 leg 2): a dup of the control socketpair end. NOTE: a dup
     // shares the open file description — setting O_NONBLOCK here would make the reader
@@ -549,6 +567,7 @@ fn spawn_windowed_worker(
         sup_fd,
         kbd_sup_fd,
         ptr_sup_fd,
+        rel_ptr_sup_fd,
         ack_fd,
     })
 }
@@ -590,7 +609,13 @@ fn run_windowed(
         height,
         surface_port_name.as_deref(),
     )?;
-    let conn = window::WorkerConn::new(w.pid, w.kbd_sup_fd, w.ptr_sup_fd, w.ack_fd);
+    let conn = window::WorkerConn::new(
+        w.pid,
+        w.kbd_sup_fd,
+        w.ptr_sup_fd,
+        w.rel_ptr_sup_fd,
+        w.ack_fd,
+    );
     let shared = window::Shared::new();
     window::spawn_reader(w.sup_fd, shared.clone());
 
@@ -607,7 +632,7 @@ fn run_windowed(
         let mut child = w.child;
         // Supervisor-side fds of the CURRENT worker to retire when it's replaced. NOT sup_fd:
         // its reader thread owns it and closes it on EOF.
-        let mut old_io = [w.kbd_sup_fd, w.ptr_sup_fd, w.ack_fd];
+        let mut old_io = [w.kbd_sup_fd, w.ptr_sup_fd, w.rel_ptr_sup_fd, w.ack_fd];
         let mut guard = supervisor::RebootGuard::new();
         loop {
             let started = std::time::Instant::now();
@@ -644,7 +669,13 @@ fn run_windowed(
             // Publish the new worker BEFORE closing the old fds (so a concurrent input send on
             // the main thread can't race a reused fd number), then start its reader and retire
             // the previous worker's input/ack fds.
-            monitor_conn.swap(next.pid, next.kbd_sup_fd, next.ptr_sup_fd, next.ack_fd);
+            monitor_conn.swap(
+                next.pid,
+                next.kbd_sup_fd,
+                next.ptr_sup_fd,
+                next.rel_ptr_sup_fd,
+                next.ack_fd,
+            );
             window::spawn_reader(next.sup_fd, monitor_shared.clone());
             for fd in old_io {
                 unsafe { libc::close(fd) };
@@ -654,7 +685,12 @@ fn run_windowed(
                 next.pid
             );
             child = next.child;
-            old_io = [next.kbd_sup_fd, next.ptr_sup_fd, next.ack_fd];
+            old_io = [
+                next.kbd_sup_fd,
+                next.ptr_sup_fd,
+                next.rel_ptr_sup_fd,
+                next.ack_fd,
+            ];
         }
     });
 

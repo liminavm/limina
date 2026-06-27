@@ -194,6 +194,64 @@ impl InputQueryConfig for PointerConfig {
     }
 }
 
+/// Relative-pointer config: a plain mouse — `REL_X`/`REL_Y` motion + wheels + the three
+/// buttons, **no** `ABS`/`INPUT_PROP_POINTER`. A SEPARATE device from the absolute pointer
+/// (matching the QEMU virtio-tablet + virtio-mouse split) so adding relative capture never
+/// reclassifies the shipped absolute device in the guest's libinput. Used only in pointer
+/// *capture* mode (mouselook / guest-warped cursors); the supervisor routes events here while
+/// captured and to the absolute device otherwise.
+pub struct RelPointerConfig;
+
+impl ObjectNew<()> for RelPointerConfig {
+    fn new(_userdata: Option<&()>) -> Self {
+        Self
+    }
+}
+
+impl InputQueryConfig for RelPointerConfig {
+    fn query_device_name(&self, name_buf: &mut [u8]) -> Result<u8, InputBackendError> {
+        Ok(copy_name(REL_POINTER_DEVICE_NAME, name_buf))
+    }
+
+    fn query_serial_name(&self, name_buf: &mut [u8]) -> Result<u8, InputBackendError> {
+        Ok(copy_name(REL_POINTER_SERIAL_NAME, name_buf))
+    }
+
+    fn query_device_ids(&self, ids: &mut InputDeviceIds) -> Result<(), InputBackendError> {
+        *ids = InputDeviceIds {
+            bustype: BUS_VIRTUAL,
+            vendor: LIMINA_VENDOR_ID,
+            product: REL_POINTER_PRODUCT_ID,
+            version: 1,
+        };
+        Ok(())
+    }
+
+    fn query_event_capabilities(
+        &self,
+        event_type: u8,
+        bitmap_buf: &mut [u8],
+    ) -> Result<u8, InputBackendError> {
+        Ok(match event_type as u16 {
+            EV_KEY => write_bitmap(bitmap_buf, &[BTN_LEFT, BTN_RIGHT, BTN_MIDDLE]),
+            EV_REL => write_bitmap(bitmap_buf, &[REL_X, REL_Y, REL_WHEEL, REL_HWHEEL]),
+            _ => 0,
+        })
+    }
+
+    fn query_abs_info(
+        &self,
+        _abs_axis: u8,
+        _abs_info: &mut InputAbsInfo,
+    ) -> Result<(), InputBackendError> {
+        Ok(())
+    }
+
+    fn query_properties(&self, _bitmap: &mut [u8]) -> Result<u8, InputBackendError> {
+        Ok(0) // a plain relative mouse has no INPUT_PROP_*
+    }
+}
+
 fn copy_name(name: &[u8], buf: &mut [u8]) -> u8 {
     let n = name.len().min(buf.len());
     buf[..n].copy_from_slice(&name[..n]);
@@ -226,6 +284,21 @@ pub fn pointer_backends(
     let cfg: &'static FdConfig = Box::leak(Box::new(FdConfig { fd }));
     (
         PointerConfig::into_input_config(None),
+        FdEvents::into_input_events(Some(cfg)),
+    )
+}
+
+/// Build the relative-pointer (mouse) backend pair for pointer-capture mode. `fd` is the
+/// worker's read end of the relative-pointer event socket (inherited from the supervisor).
+pub fn rel_pointer_backends(
+    fd: RawFd,
+) -> (
+    InputConfigBackend<'static>,
+    InputEventProviderBackend<'static>,
+) {
+    let cfg: &'static FdConfig = Box::leak(Box::new(FdConfig { fd }));
+    (
+        RelPointerConfig::into_input_config(None),
         FdEvents::into_input_events(Some(cfg)),
     )
 }

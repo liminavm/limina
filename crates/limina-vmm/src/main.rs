@@ -161,6 +161,11 @@ struct Cli {
     /// fd of the pointer event socket (supervisor→worker). Enables the virtio-pointer.
     #[arg(long, requires = "input_kbd_fd")]
     input_ptr_fd: Option<i32>,
+
+    /// fd of the relative-pointer (mouse) event socket (supervisor→worker). Enables the
+    /// virtio-mouse used in pointer-capture mode (M8). Optional; requires the pointer pair.
+    #[arg(long, requires = "input_ptr_fd")]
+    input_rel_ptr_fd: Option<i32>,
 }
 
 /// Parse a `WIDTHxHEIGHT` display mode string into `(width, height)`.
@@ -282,7 +287,11 @@ fn main() -> Result<()> {
     };
 
     let input = match (cli.input_kbd_fd, cli.input_ptr_fd) {
-        (Some(kbd_fd), Some(ptr_fd)) => Some(InputSpec { kbd_fd, ptr_fd }),
+        (Some(kbd_fd), Some(ptr_fd)) => Some(InputSpec {
+            kbd_fd,
+            ptr_fd,
+            rel_ptr_fd: cli.input_rel_ptr_fd.unwrap_or(-1),
+        }),
         _ => None,
     };
 

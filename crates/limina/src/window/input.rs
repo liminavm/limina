@@ -29,10 +29,17 @@ use objc2_app_kit::{NSCursor, NSEvent, NSEventType, NSView};
 
 use limina_input::constants::{
     ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
-    REL_WHEEL,
+    REL_WHEEL, REL_X, REL_Y,
 };
 use limina_input::keymap::{macos_keycode_to_linux_remapped, modifier_is_down, KeyRemap};
 use limina_input::InputEvent;
+
+// CoreGraphics (already linked): decouple the hardware mouse from the on-screen cursor so we get
+// raw relative deltas with the cursor frozen — the standard mouselook/pointer-capture mechanism.
+// `connected` is a `boolean_t` (C `int`); 0 = decoupled (captured), 1 = normal.
+extern "C" {
+    fn CGAssociateMouseAndMouseCursorPosition(connected: i32) -> i32;
+}
 
 /// A host-intercepted shortcut: recognized BEFORE the key reaches the guest, so the combo
 /// drives limina itself. The seed of the configurable-keybinding system (M8); for now just
@@ -40,25 +47,33 @@ use limina_input::InputEvent;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostShortcut {
     ToggleFullScreen,
+    /// Toggle pointer capture (relative/mouselook mode): grab the host cursor and feed the
+    /// guest relative motion, or release it.
+    ToggleCapture,
 }
 
 /// Recognize a host shortcut from a key-down's macOS keycode + raw `modifierFlags` bitmask,
 /// or `None` if the key should go to the guest. Uses the **device-independent class** flag
 /// bits, so it's independent of left/right *and* of `--swap-cmd-opt` (the swap changes only
-/// which evdev code we emit to the guest, never the macOS modifier state read here).
+/// which evdev code we emit to the guest, never the macOS modifier state read here). All
+/// shortcuts require EXACTLY Command+Control (no Option/Shift) so richer combos still reach
+/// the guest.
 pub fn match_host_shortcut(keycode: u16, flags: u64) -> Option<HostShortcut> {
     const SHIFT: u64 = 1 << 17;
     const CONTROL: u64 = 1 << 18;
     const OPTION: u64 = 1 << 19;
     const COMMAND: u64 = 1 << 20;
+    const KC_F: u16 = 0x03; // Cmd-Ctrl-F — macOS-standard Enter/Exit-Full-Screen
+    const KC_G: u16 = 0x05; // Cmd-Ctrl-G — grab/release the pointer (capture mode)
     let held = |m: u64| flags & m != 0;
-    // Cmd-Ctrl-F — the macOS-standard Enter/Exit-Full-Screen combo. Require EXACTLY Command+
-    // Control (no Option/Shift) so richer combos still pass through to the guest.
-    const KC_F: u16 = 0x03;
-    if keycode == KC_F && held(COMMAND) && held(CONTROL) && !held(OPTION) && !held(SHIFT) {
-        return Some(HostShortcut::ToggleFullScreen);
+    if !(held(COMMAND) && held(CONTROL)) || held(OPTION) || held(SHIFT) {
+        return None;
     }
-    None
+    match keycode {
+        KC_F => Some(HostShortcut::ToggleFullScreen),
+        KC_G => Some(HostShortcut::ToggleCapture),
+        _ => None,
+    }
 }
 
 /// The host pointer's adoption of the guest cursor (main thread only). `cursor` is what
@@ -85,6 +100,14 @@ impl HostCursor {
             cursor.set();
         }
         *self.cursor.borrow_mut() = cursor;
+    }
+
+    /// Re-assert the guest cursor shape if the pointer is currently over the view (used when
+    /// leaving pointer-capture mode, where we hid the cursor).
+    fn reassert(&self) {
+        if self.inside.get() {
+            self.cursor.borrow().set();
+        }
     }
 
     /// Track the pointer crossing the view boundary. Re-asserts the guest cursor on every
@@ -114,6 +137,10 @@ pub struct InputState {
     host_cursor: Rc<HostCursor>,
     /// Keyboard remap policy (e.g. the Command/Option swap), applied to every key/modifier.
     remap: KeyRemap,
+    /// Pointer-capture (relative/mouselook) mode: when set, the host cursor is grabbed (frozen
+    /// and hidden) and pointer events go to the guest's relative-mouse device as `REL_X`/`REL_Y`
+    /// deltas instead of the absolute tablet. Toggled by `Cmd-Ctrl-G`.
+    captured: Cell<bool>,
 }
 
 impl InputState {
@@ -124,6 +151,38 @@ impl InputState {
             guest_buttons: Cell::new(0),
             host_cursor,
             remap,
+            captured: Cell::new(false),
+        }
+    }
+
+    /// Toggle pointer capture. On grab: decouple the hardware mouse from the cursor (so deltas
+    /// flow while the cursor stays frozen — mouselook) and hide the cursor. On release: restore
+    /// both. Returns the new captured state. Main thread only.
+    pub fn toggle_capture(&self) -> bool {
+        let now = !self.captured.get();
+        self.captured.set(now);
+        // Main-thread only (the event monitor's thread); NSCursor hide/unhide must balance.
+        if now {
+            unsafe { CGAssociateMouseAndMouseCursorPosition(0) };
+            NSCursor::hide();
+            log::info!("pointer capture: ON (Cmd-Ctrl-G to release)");
+        } else {
+            unsafe { CGAssociateMouseAndMouseCursorPosition(1) };
+            NSCursor::unhide();
+            // Re-assert the guest cursor shape if the pointer is over the view.
+            self.host_cursor.reassert();
+            log::info!("pointer capture: OFF");
+        }
+        now
+    }
+
+    /// The pointer event sink for the current mode: the relative-mouse device while captured,
+    /// the absolute pointer otherwise.
+    fn ptr_sink(&self) -> RawFd {
+        if self.captured.get() {
+            self.conn.rel_ptr_fd()
+        } else {
+            self.conn.ptr_fd()
         }
     }
 
@@ -148,6 +207,10 @@ impl InputState {
                 true
             }
             NSEventType::MouseMoved => {
+                if self.captured.get() {
+                    self.emit_rel_motion(event);
+                    return false;
+                }
                 let inside = self.pointer_inside(event, view);
                 self.host_cursor.on_motion(inside);
                 if inside {
@@ -158,6 +221,10 @@ impl InputState {
             NSEventType::LeftMouseDragged
             | NSEventType::RightMouseDragged
             | NSEventType::OtherMouseDragged => {
+                if self.captured.get() {
+                    self.emit_rel_motion(event);
+                    return false;
+                }
                 let inside = self.pointer_inside(event, view);
                 self.host_cursor.on_motion(inside);
                 // A drag continues a press: forward it (clamped) even outside the view,
@@ -174,7 +241,7 @@ impl InputState {
             NSEventType::OtherMouseDown => self.emit_other_button(event, view, true),
             NSEventType::OtherMouseUp => self.emit_other_button(event, view, false),
             NSEventType::ScrollWheel => {
-                if self.pointer_inside(event, view) {
+                if self.captured.get() || self.pointer_inside(event, view) {
                     self.emit_scroll(event);
                 }
                 false
@@ -237,7 +304,13 @@ impl InputState {
     /// Forward a button press if it lands inside the guest view; remember it so the
     /// matching release (and intervening drags) follow even if the pointer has left.
     fn emit_press(&self, event: &NSEvent, view: &NSView, btn: u16) -> bool {
-        if self.pointer_inside(event, view) {
+        if self.captured.get() {
+            // Captured: no view gate, no absolute position — the relative mouse just clicks.
+            self.guest_buttons
+                .set(self.guest_buttons.get() | btn_bit(btn));
+            self.send_ptr(InputEvent::new(EV_KEY, btn, 1));
+            self.send_ptr(InputEvent::syn());
+        } else if self.pointer_inside(event, view) {
             self.guest_buttons
                 .set(self.guest_buttons.get() | btn_bit(btn));
             // Send the position with the press so the guest clicks where the host did,
@@ -279,6 +352,24 @@ impl InputState {
         self.send_ptr(InputEvent::syn());
     }
 
+    /// Capture mode: forward the event's relative delta to the guest's relative-mouse device.
+    /// `deltaX/deltaY` are raw movement (present even with the cursor frozen), and evdev `REL_Y`
+    /// is positive-down like AppKit's mouse `deltaY`, so they pass through directly.
+    fn emit_rel_motion(&self, event: &NSEvent) {
+        let dx = event.deltaX().round() as i32;
+        let dy = event.deltaY().round() as i32;
+        if dx == 0 && dy == 0 {
+            return;
+        }
+        if dx != 0 {
+            self.send_ptr(InputEvent::new(EV_REL, REL_X, dx));
+        }
+        if dy != 0 {
+            self.send_ptr(InputEvent::new(EV_REL, REL_Y, dy));
+        }
+        self.send_ptr(InputEvent::syn());
+    }
+
     fn emit_scroll(&self, event: &NSEvent) {
         // macOS deltas are continuous; emit one wheel notch per event in the delta's
         // direction (crude but usable; precise pixel scrolling is a later refinement).
@@ -304,7 +395,7 @@ impl InputState {
     }
 
     fn send_ptr(&self, ev: InputEvent) {
-        send_event(self.conn.ptr_fd(), ev);
+        send_event(self.ptr_sink(), ev);
     }
 }
 
@@ -382,6 +473,14 @@ mod tests {
         // Extra modifiers → pass through (so Cmd-Ctrl-Opt-F etc. reach the guest).
         assert_eq!(match_host_shortcut(KC_F, COMMAND | CONTROL | OPTION), None);
         assert_eq!(match_host_shortcut(KC_F, COMMAND | CONTROL | SHIFT), None);
+    }
+
+    #[test]
+    fn cmd_ctrl_g_is_the_capture_toggle() {
+        assert_eq!(
+            match_host_shortcut(0x05, COMMAND | CONTROL), // G
+            Some(HostShortcut::ToggleCapture)
+        );
     }
 
     #[test]

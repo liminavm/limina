@@ -13,7 +13,10 @@ pub const EV_ABS: u16 = 0x03;
 // EV_SYN codes.
 pub const SYN_REPORT: u16 = 0x00;
 
-// EV_REL codes (scroll wheels; one detent = value ±1).
+// EV_REL codes. REL_X/REL_Y are relative pointer motion (capture/relative mode — mouselook
+// in games, guest-warped cursors); REL_*WHEEL are scroll detents (one notch = value ±1).
+pub const REL_X: u16 = 0x00;
+pub const REL_Y: u16 = 0x01;
 pub const REL_HWHEEL: u16 = 0x06;
 pub const REL_WHEEL: u16 = 0x08;
 
@@ -42,11 +45,14 @@ pub const BUS_VIRTUAL: u16 = 0x06;
 pub const LIMINA_VENDOR_ID: u16 = u16::from_le_bytes(*b"GK");
 pub const KEYBOARD_PRODUCT_ID: u16 = 0x0001;
 pub const POINTER_PRODUCT_ID: u16 = 0x0002;
+pub const REL_POINTER_PRODUCT_ID: u16 = 0x0003;
 
 pub const KEYBOARD_DEVICE_NAME: &[u8] = b"limina Virtual Keyboard";
 pub const KEYBOARD_SERIAL_NAME: &[u8] = b"LIMINA-KBD";
 pub const POINTER_DEVICE_NAME: &[u8] = b"limina Virtual Pointer";
 pub const POINTER_SERIAL_NAME: &[u8] = b"LIMINA-PTR";
+pub const REL_POINTER_DEVICE_NAME: &[u8] = b"limina Virtual Mouse";
+pub const REL_POINTER_SERIAL_NAME: &[u8] = b"LIMINA-REL";
 
 // Keyboard keys (KEY_*). Numbering matches the kernel; see SUPPORTED_KEYBOARD_KEYS.
 pub const KEY_ESC: u16 = 1;

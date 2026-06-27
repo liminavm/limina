@@ -149,15 +149,19 @@ pub struct NetSpec {
     pub gvproxy_socket: PathBuf,
 }
 
-/// virtio-input devices attached to the guest (M2). A keyboard and an absolute pointer,
-/// each fed from an inherited socket the supervisor writes evdev events to. The supervisor
-/// sets these up; the worker just registers the backends on the given fds.
+/// virtio-input devices attached to the guest (M2). A keyboard, an absolute pointer, and —
+/// optionally — a relative pointer (mouse) for capture mode (M8). Each is fed from an inherited
+/// socket the supervisor writes evdev events to. The supervisor sets these up; the worker just
+/// registers the backends on the given fds.
 #[derive(Debug, Clone)]
 pub struct InputSpec {
     /// Read end of the keyboard event socket (worker inherits it).
     pub kbd_fd: i32,
-    /// Read end of the pointer event socket (worker inherits it).
+    /// Read end of the absolute-pointer event socket (worker inherits it).
     pub ptr_fd: i32,
+    /// Read end of the relative-pointer (mouse) event socket for capture mode, or `-1` if no
+    /// relative device is attached (e.g. headless display-capture runs).
+    pub rel_ptr_fd: i32,
 }
 
 /// How the guest boots.

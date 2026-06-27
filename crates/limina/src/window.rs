@@ -140,15 +140,23 @@ pub struct WorkerConn {
     pid: AtomicI32,
     kbd_fd: AtomicI32,
     ptr_fd: AtomicI32,
+    rel_ptr_fd: AtomicI32,
     ack_fd: AtomicI32,
 }
 
 impl WorkerConn {
-    pub fn new(pid: i32, kbd_fd: RawFd, ptr_fd: RawFd, ack_fd: RawFd) -> Arc<Self> {
+    pub fn new(
+        pid: i32,
+        kbd_fd: RawFd,
+        ptr_fd: RawFd,
+        rel_ptr_fd: RawFd,
+        ack_fd: RawFd,
+    ) -> Arc<Self> {
         Arc::new(Self {
             pid: AtomicI32::new(pid),
             kbd_fd: AtomicI32::new(kbd_fd),
             ptr_fd: AtomicI32::new(ptr_fd),
+            rel_ptr_fd: AtomicI32::new(rel_ptr_fd),
             ack_fd: AtomicI32::new(ack_fd),
         })
     }
@@ -162,14 +170,19 @@ impl WorkerConn {
     pub fn ptr_fd(&self) -> RawFd {
         self.ptr_fd.load(Ordering::Acquire)
     }
+    /// The relative-pointer (capture-mode mouse) sink fd.
+    pub fn rel_ptr_fd(&self) -> RawFd {
+        self.rel_ptr_fd.load(Ordering::Acquire)
+    }
     pub fn ack_fd(&self) -> RawFd {
         self.ack_fd.load(Ordering::Acquire)
     }
 
     /// Publish a freshly-spawned worker's pid + supervisor-side fds (called on relaunch).
-    pub fn swap(&self, pid: i32, kbd_fd: RawFd, ptr_fd: RawFd, ack_fd: RawFd) {
+    pub fn swap(&self, pid: i32, kbd_fd: RawFd, ptr_fd: RawFd, rel_ptr_fd: RawFd, ack_fd: RawFd) {
         self.kbd_fd.store(kbd_fd, Ordering::Release);
         self.ptr_fd.store(ptr_fd, Ordering::Release);
+        self.rel_ptr_fd.store(rel_ptr_fd, Ordering::Release);
         self.ack_fd.store(ack_fd, Ordering::Release);
         self.pid.store(pid, Ordering::Release);
     }
@@ -786,6 +799,9 @@ pub fn run(
                     input::HostShortcut::ToggleFullScreen => {
                         shortcut_window.toggleFullScreen(None);
                     }
+                    input::HostShortcut::ToggleCapture => {
+                        input_state.toggle_capture();
+                    }
                 }
                 return std::ptr::null_mut(); // swallow — don't forward to the guest
             }
@@ -1154,16 +1170,28 @@ mod tests {
         // dead worker (input written to a closed fd, shutdown signal to a stale pid). Guards against
         // a swap() that forgets a field. (The fds here are plain ints — WorkerConn never touches
         // them, it only publishes the numbers for the main thread to load.)
-        let conn = WorkerConn::new(100, 3, 4, 5);
+        let conn = WorkerConn::new(100, 3, 4, 5, 6);
         assert_eq!(
-            (conn.pid(), conn.kbd_fd(), conn.ptr_fd(), conn.ack_fd()),
-            (100, 3, 4, 5)
+            (
+                conn.pid(),
+                conn.kbd_fd(),
+                conn.ptr_fd(),
+                conn.rel_ptr_fd(),
+                conn.ack_fd()
+            ),
+            (100, 3, 4, 5, 6)
         );
 
-        conn.swap(200, 6, 7, 8);
+        conn.swap(200, 7, 8, 9, 10);
         assert_eq!(
-            (conn.pid(), conn.kbd_fd(), conn.ptr_fd(), conn.ack_fd()),
-            (200, 6, 7, 8),
+            (
+                conn.pid(),
+                conn.kbd_fd(),
+                conn.ptr_fd(),
+                conn.rel_ptr_fd(),
+                conn.ack_fd()
+            ),
+            (200, 7, 8, 9, 10),
             "relaunch must retarget pid + all input/ack fds to the new worker"
         );
     }

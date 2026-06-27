@@ -223,14 +223,22 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
 /// `input_backends` is non-empty.
 fn add_input(vmr: &mut VmResources, input: &InputSpec) {
     log::info!(
-        "virtio-input: keyboard fd={}, pointer fd={}",
+        "virtio-input: keyboard fd={}, pointer fd={}, rel-pointer fd={}",
         input.kbd_fd,
-        input.ptr_fd
+        input.ptr_fd,
+        input.rel_ptr_fd
     );
     vmr.input_backends
         .push(limina_input::backends::keyboard_backends(input.kbd_fd));
     vmr.input_backends
         .push(limina_input::backends::pointer_backends(input.ptr_fd));
+    // The relative-pointer (mouse) device for capture mode is optional (M8).
+    if input.rel_ptr_fd >= 0 {
+        vmr.input_backends
+            .push(limina_input::backends::rel_pointer_backends(
+                input.rel_ptr_fd,
+            ));
+    }
 }
 
 /// Configure a direct kernel boot (raw aarch64 `Image` + optional cpio initramfs).
