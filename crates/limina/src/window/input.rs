@@ -71,15 +71,26 @@ pub(crate) fn apply_capture_cursor(on: bool, host_cursor: &HostCursor) {
             CGAssociateMouseAndMouseCursorPosition(0);
             CGWarpMouseCursorPosition(main_display_center());
         }
-        NSCursor::hide();
+        // Idempotent: NSCursor hide/unhide is a counter — a double-hide (e.g. a stray double
+        // toggle) would need a matching double-unhide or the cursor stays gone forever. Only
+        // hide if we haven't already, so the count never drifts.
+        if !CURSOR_HIDDEN.swap(true, Ordering::AcqRel) {
+            NSCursor::hide();
+        }
         log::info!("pointer capture: ON (Cmd-Ctrl-G to release)");
     } else {
         unsafe { CGAssociateMouseAndMouseCursorPosition(1) };
-        NSCursor::unhide();
+        if CURSOR_HIDDEN.swap(false, Ordering::AcqRel) {
+            NSCursor::unhide();
+        }
         host_cursor.reassert();
         log::info!("pointer capture: OFF");
     }
 }
+
+/// Whether we currently have the host cursor hidden for capture — keeps `NSCursor::hide`/`unhide`
+/// (a reference count) balanced no matter how the toggle is driven.
+static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
 
 /// A host-intercepted shortcut: recognized BEFORE the key reaches the guest, so the combo
 /// drives limina itself. The seed of the configurable-keybinding system (M8); for now just
@@ -128,7 +139,13 @@ pub struct HostCursor {
 impl HostCursor {
     pub fn new() -> Rc<Self> {
         Rc::new(Self {
-            cursor: RefCell::new(NSCursor::arrowCursor()),
+            // Default to a BLANK cursor over the view, not the arrow. Many guests (e.g. mutter on
+            // our virtio-gpu) software-render their cursor into the framebuffer and never send a
+            // hardware cursor; showing the macOS arrow on top then gives TWO cursors. Staying blank
+            // until/unless the guest sends a real hardware-cursor shape (`update`) means the guest's
+            // own cursor is the only one visible. Guests that DO use a hardware cursor replace this
+            // with their shape on first hover.
+            cursor: RefCell::new(super::blank_cursor().unwrap_or_else(NSCursor::arrowCursor)),
             inside: Cell::new(false),
         })
     }

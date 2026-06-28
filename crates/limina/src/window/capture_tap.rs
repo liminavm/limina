@@ -243,6 +243,10 @@ extern "C" fn tap_callback(
                 send(InputEvent::syn());
             }
             // Park the hidden cursor at centre so it can't reach a hot corner / screen edge.
+            // NOTE: re-pinning every event fights any OTHER agent that also moves the macOS cursor
+            // — notably a remote-desktop client driving this Mac — which reads as jitter under RD.
+            // It works well locally. A cleaner containment scheme (how do VNC/RDP servers solve the
+            // same capture problem?) is parked in docs/hardening-backlog.md.
             unsafe { CGWarpMouseCursorPosition(main_display_center()) };
         }
         LMB_DOWN => {

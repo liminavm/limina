@@ -130,6 +130,19 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
 - ~~**Pointer warps / pointer capture**~~ — **DONE** (2026-06-27). `Cmd-Ctrl-G` capture mode feeds
   the guest a separate relative-mouse virtio-input device; closes the guest-warp gap. Host cursor
   pinned by warp-to-centre (CGAssociate-false alone insufficient on macOS 26).
+- **Pointer-capture containment — revisit fresh** (parked 2026-06-27). The current scheme re-pins the
+  (hidden) host cursor to display-centre on *every* captured motion event. Verified facts: macOS 26
+  `CGAssociateMouseAndMouseCursorPosition(false)` does NOT freeze the cursor (its `CGEventGetLocation`
+  tracks the mouse 1:1), the session `CGEventTap` never disables under load, and with the per-event
+  warp removed the relative deltas fed to the guest are perfectly clean. **Works well locally.** The
+  warp's weakness shows only when *another* agent also drives the macOS cursor — a **remote-desktop
+  client** used to operate this Mac — where the constant re-pin fights the RD cursor and reads as
+  jitter/snapping (an edge-only-warp variant was tried and reverted; it didn't clearly help under RD).
+  **Plan when we return:** research how VNC/RDP **servers** solve the same capture problem (they have
+  this exact problem space and are far more numerous) before redesigning. Candidate angles: a real
+  cursor-freeze API instead of warp, `CGDisplayHideCursor`+associate semantics, an `IOHIDEventSystem`
+  relative-tap, or detecting/co-existing with an upstream RD capture. Flat guest pointer profile
+  (enhanced tier, `accel-profile='flat'`) is the other half and works.
 - ~~**Fullscreen**~~ (`Cmd-Ctrl-F`) and ~~**keymap remap / Command-Option swap**~~ (`--swap-cmd-opt`)
   — **DONE** (2026-06-27). Remaining M8 polish: **system-combo capture** (CGEventTap behind a TCC
   toggle — extends the existing `match_host_shortcut` framework to system combos), **multi-display**
