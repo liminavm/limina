@@ -50,6 +50,7 @@ use objc2_quartz_core::{CALayer, CATransaction};
 
 use limina_surfaceport::SurfacePortReceiver;
 
+mod capture_tap;
 mod input;
 
 /// Scanout/cursor IOSurfaces the worker handed us by Mach port, keyed by `IOSurfaceGetID`. The
@@ -238,15 +239,21 @@ pub struct Shared {
     worker_exited: bool,
 
     /// Guest hardware-cursor state (decoupled from the scanout above; the worker publishes
-    /// the cursor image as its own IOSurface). The host pointer *adopts* this shape over
-    /// the guest view (see `HostCursor`); guest-reported positions are ignored — the
-    /// pointer the user sees is the host one, which the guest tracks via absolute input.
+    /// the cursor image as its own IOSurface). In the normal (absolute) path the host pointer
+    /// *adopts* this shape over the guest view (see `HostCursor`) and guest-reported positions
+    /// are ignored — the pointer the user sees is the host one, which the guest tracks via
+    /// absolute input. In **pointer-capture** mode that no longer holds (the host cursor is
+    /// grabbed away from the guest position), so we composite this image at `cursor_pos_*`.
     cursor_id: Option<u32>,
     cursor_w: u32,
     cursor_h: u32,
     hot_x: u32,
     hot_y: u32,
     cursor_visible: bool,
+    /// Guest-reported cursor position (virtio-gpu `MoveCursor`), in guest scanout pixels. Used
+    /// only while captured — see `cursormove` handling and `update_capture_cursor`.
+    cursor_pos_x: i32,
+    cursor_pos_y: i32,
     /// Bumped on any cursor shape/visibility change — the timer re-applies.
     cursor_gen: u64,
 }
@@ -317,11 +324,19 @@ pub fn spawn_reader(fd: RawFd, shared: Arc<Mutex<Shared>>) {
                     }
                 }
                 Some("cursormove") => {
-                    // cursormove <x> <y> — the guest's cursor position. Deliberately
-                    // ignored: the visible pointer is the HOST cursor (wearing the guest
-                    // shape), and the guest position only echoes our own absolute input
-                    // back with a round-trip of lag. (A guest-initiated warp is the one
-                    // thing this loses; revisit with pointer capture.)
+                    // cursormove <x> <y> — the guest's cursor position (guest scanout pixels).
+                    // In the absolute path this only echoes our own input back with a round-trip
+                    // of lag, so the present path ignores it. But in pointer-CAPTURE mode the
+                    // guest drives its own cursor (mouselook / warps) and the host cursor is
+                    // grabbed away, so this *is* the only source of truth for where to draw the
+                    // guest cursor — store it for `update_capture_cursor`.
+                    let x = parts.next().and_then(|s| s.parse::<i32>().ok());
+                    let y = parts.next().and_then(|s| s.parse::<i32>().ok());
+                    if let (Some(x), Some(y)) = (x, y) {
+                        let mut s = shared.lock().unwrap();
+                        s.cursor_pos_x = x;
+                        s.cursor_pos_y = y;
+                    }
                 }
                 Some("cursorhide") => {
                     let mut s = shared.lock().unwrap();
@@ -404,6 +419,12 @@ pub fn run(
     // surface and a 0 alpha makes the whole desktop composite transparent (reads as black/
     // white depending on the backdrop). Mark the scanout layer opaque so CA ignores alpha.
     layer.setOpaque(true);
+    // Pointer-capture cursor overlay: a sublayer we composite the guest cursor into at its
+    // guest-reported position while captured (the host NSCursor is hidden then, so without this
+    // the cursor would vanish). Hidden by default; positioned/shown by `update_capture_cursor`.
+    let cursor_layer = CALayer::new();
+    cursor_layer.setHidden(true);
+    layer.addSublayer(&cursor_layer);
     view.setLayer(Some(&layer));
     view.setWantsLayer(true);
     // We OWN the layer's contents (the guest IOSurface) — AppKit must never invalidate or redraw
@@ -492,6 +513,14 @@ pub fn run(
     // The host pointer's guest-shape adoption, shared with the input monitor (which
     // tracks the pointer crossing the view boundary and asserts/clears the shape).
     let host_cursor = input::HostCursor::new();
+    // Pointer-capture flag, shared between the input monitor (which toggles it on Cmd-Ctrl-G),
+    // the render timer (which composites the guest cursor while it's set), and the capture tap.
+    let captured = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Reliable capture container: a session-level CGEventTap that *consumes* mouse events while
+    // captured (so clicks/motion can't escape to host windows) and forwards them to the guest's
+    // relative device. Needs Accessibility permission; if absent, capture falls back to the local
+    // monitor's warp path (see input.rs). Installed once, on the main thread, before `app.run()`.
+    let _capture_tap = capture_tap::install(conn.clone(), captured.clone());
 
     // Shown-ack channel (#8 leg 2): after Core Animation latches a frame, tell the worker
     // "shown <id>" so it can complete the guest's held flush fence. The blocking send is done on
@@ -704,6 +733,9 @@ pub fn run(
 
     let timer_cursor = host_cursor.clone();
     let timer_conn = conn.clone();
+    let timer_captured = captured.clone();
+    let timer_cursor_layer = cursor_layer.clone();
+    let timer_surface_map = surface_map.clone();
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         let exited = shared.lock().unwrap().worker_exited;
 
@@ -764,6 +796,15 @@ pub fn run(
             last_cursor_gen.set(cur.0);
             apply_cursor(&timer_cursor, &built_cursor, &cur, &surface_map);
         }
+        // Pointer-capture cursor: while captured, composite the guest cursor at its reported
+        // position (the host NSCursor is hidden then). Position moves every frame, so unlike the
+        // shape this runs every tick, not gated on `cursor_gen`.
+        update_capture_cursor(
+            &timer_cursor_layer,
+            &timer_captured,
+            &shared,
+            &timer_surface_map,
+        );
 
         // Frame apply: normally event-driven (dispatch from the reader thread); this is
         // the fallback so a lost wake-up costs one tick, not a stuck frame.
@@ -784,7 +825,7 @@ pub fn run(
 
     // Capture keyboard + mouse via a local event monitor and forward them to the worker as
     // evdev events. Swallowed key events return null; pass-through events return themselves.
-    let input_state = input::InputState::new(conn.clone(), host_cursor.clone(), remap);
+    let input_state = input::InputState::new(conn.clone(), host_cursor.clone(), remap, captured);
     let monitor_view = view.clone();
     let input_block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
         // SAFETY: the monitor hands us a valid, live event for the call's duration.
@@ -896,6 +937,85 @@ fn capture_iosurface(surface: &IOSurfaceRef, id: u32, path: &str) {
             }
             Err(e) => log::error!("capture: create {path} failed: {e}"),
         }
+    }
+}
+
+/// While the pointer is captured, composite the guest cursor at its guest-reported position into
+/// `cursor_layer` (the host NSCursor is hidden in capture mode, so the guest cursor must be drawn
+/// or it vanishes). Hidden when not captured, when the guest has hidden its own cursor (pointer-lock
+/// games), or before any geometry is known. Runs every timer tick — the position moves continuously,
+/// unlike the cursor *shape*. Cheap when idle: it only touches the layer on an actual state change.
+fn update_capture_cursor(
+    cursor_layer: &CALayer,
+    captured: &std::sync::atomic::AtomicBool,
+    shared: &Arc<Mutex<Shared>>,
+    surface_map: &SurfaceMap,
+) {
+    use std::sync::atomic::Ordering;
+    let hide = || {
+        if !cursor_layer.isHidden() {
+            CATransaction::begin();
+            CATransaction::setDisableActions(true);
+            cursor_layer.setHidden(true);
+            CATransaction::commit();
+        }
+    };
+    if !captured.load(Ordering::Acquire) {
+        hide();
+        return;
+    }
+    let (visible, cid, cw, ch, hx, hy, px, py, sw, sh) = {
+        let s = shared.lock().unwrap();
+        (
+            s.cursor_visible,
+            s.cursor_id,
+            s.cursor_w,
+            s.cursor_h,
+            s.hot_x,
+            s.hot_y,
+            s.cursor_pos_x,
+            s.cursor_pos_y,
+            s.width,
+            s.height,
+        )
+    };
+    let geom_ok = visible && sw > 0 && sh > 0 && cw > 0 && ch > 0;
+    let Some(cid) = cid.filter(|_| geom_ok) else {
+        hide();
+        return;
+    };
+    let Some(surface) = surface_map
+        .lock()
+        .unwrap()
+        .get(cid)
+        .or_else(|| IOSurfaceLookup(cid))
+    else {
+        hide();
+        return;
+    };
+    // Parent (scanout) layer size in points; guest pixels scale into it — 1:1 in the steady state
+    // (the window is sized to the guest resolution), stretched during a live resize.
+    let bounds = cursor_layer
+        .superlayer()
+        .map(|l| l.bounds().size)
+        .unwrap_or(NSSize::new(sw as f64, sh as f64));
+    let scale_x = bounds.width / sw as f64;
+    let scale_y = bounds.height / sh as f64;
+    let w = cw as f64 * scale_x;
+    let h = ch as f64 * scale_y;
+    // Image top-left in guest pixels = reported position minus the hotspot.
+    let left = (px - hx as i32) as f64 * scale_x;
+    let top = (py - hy as i32) as f64 * scale_y;
+    // CALayer sublayers use a bottom-left origin; the guest reports a top-down y, so flip.
+    let y = bounds.height - top - h;
+    let obj: &AnyObject = unsafe { &*(&*surface as *const IOSurfaceRef as *const AnyObject) };
+    unsafe {
+        CATransaction::begin();
+        CATransaction::setDisableActions(true);
+        cursor_layer.setContents(Some(obj));
+        cursor_layer.setFrame(NSRect::new(NSPoint::new(left, y), NSSize::new(w, h)));
+        cursor_layer.setHidden(false);
+        CATransaction::commit();
     }
 }
 

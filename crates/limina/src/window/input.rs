@@ -20,6 +20,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::os::fd::RawFd;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use super::WorkerConn;
@@ -158,28 +159,39 @@ pub struct InputState {
     remap: KeyRemap,
     /// Pointer-capture (relative/mouselook) mode: when set, the host cursor is grabbed (frozen
     /// and hidden) and pointer events go to the guest's relative-mouse device as `REL_X`/`REL_Y`
-    /// deltas instead of the absolute tablet. Toggled by `Cmd-Ctrl-G`.
-    captured: Cell<bool>,
+    /// deltas instead of the absolute tablet. Toggled by `Cmd-Ctrl-G`. Shared with the render
+    /// timer (an `Arc<AtomicBool>`), which composites the guest cursor at its reported position
+    /// while this is set (the host cursor is hidden, so the guest cursor has to be drawn).
+    captured: Arc<AtomicBool>,
 }
 
 impl InputState {
-    pub fn new(conn: Arc<WorkerConn>, host_cursor: Rc<HostCursor>, remap: KeyRemap) -> Self {
+    pub fn new(
+        conn: Arc<WorkerConn>,
+        host_cursor: Rc<HostCursor>,
+        remap: KeyRemap,
+        captured: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             conn,
             pressed_mods: RefCell::new(HashSet::new()),
             guest_buttons: Cell::new(0),
             host_cursor,
             remap,
-            captured: Cell::new(false),
+            captured,
         }
+    }
+
+    fn is_captured(&self) -> bool {
+        self.captured.load(Ordering::Acquire)
     }
 
     /// Toggle pointer capture. On grab: decouple the hardware mouse from the cursor (so deltas
     /// flow while the cursor stays frozen — mouselook) and hide the cursor. On release: restore
     /// both. Returns the new captured state. Main thread only.
     pub fn toggle_capture(&self) -> bool {
-        let now = !self.captured.get();
-        self.captured.set(now);
+        let now = !self.is_captured();
+        self.captured.store(now, Ordering::Release);
         // Main-thread only (the event monitor's thread); NSCursor hide/unhide must balance.
         if now {
             unsafe {
@@ -201,7 +213,7 @@ impl InputState {
     /// The pointer event sink for the current mode: the relative-mouse device while captured,
     /// the absolute pointer otherwise.
     fn ptr_sink(&self) -> RawFd {
-        if self.captured.get() {
+        if self.is_captured() {
             self.conn.rel_ptr_fd()
         } else {
             self.conn.ptr_fd()
@@ -229,7 +241,7 @@ impl InputState {
                 true
             }
             NSEventType::MouseMoved => {
-                if self.captured.get() {
+                if self.is_captured() {
                     self.emit_rel_motion(event);
                     return false;
                 }
@@ -243,7 +255,7 @@ impl InputState {
             NSEventType::LeftMouseDragged
             | NSEventType::RightMouseDragged
             | NSEventType::OtherMouseDragged => {
-                if self.captured.get() {
+                if self.is_captured() {
                     self.emit_rel_motion(event);
                     return false;
                 }
@@ -263,7 +275,7 @@ impl InputState {
             NSEventType::OtherMouseDown => self.emit_other_button(event, view, true),
             NSEventType::OtherMouseUp => self.emit_other_button(event, view, false),
             NSEventType::ScrollWheel => {
-                if self.captured.get() || self.pointer_inside(event, view) {
+                if self.is_captured() || self.pointer_inside(event, view) {
                     self.emit_scroll(event);
                 }
                 false
@@ -326,7 +338,7 @@ impl InputState {
     /// Forward a button press if it lands inside the guest view; remember it so the
     /// matching release (and intervening drags) follow even if the pointer has left.
     fn emit_press(&self, event: &NSEvent, view: &NSView, btn: u16) -> bool {
-        if self.captured.get() {
+        if self.is_captured() {
             // Captured: no view gate, no absolute position — the relative mouse just clicks.
             self.guest_buttons
                 .set(self.guest_buttons.get() | btn_bit(btn));
@@ -453,7 +465,7 @@ fn abs_coords(event: &NSEvent, view: &NSView) -> (i32, i32) {
     )
 }
 
-fn send_event(fd: RawFd, ev: InputEvent) {
+pub(crate) fn send_event(fd: RawFd, ev: InputEvent) {
     let bytes = ev.to_bytes();
     // One datagram per event. The fd is non-blocking (set in the supervisor) so a full
     // socket can never block the AppKit main thread and freeze the whole UI — we drop the
