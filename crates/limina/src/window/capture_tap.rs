@@ -26,9 +26,10 @@ use objc2_foundation::{NSPoint, NSRect};
 use limina_input::constants::{
     BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_KEY, EV_REL, REL_HWHEEL, REL_WHEEL, REL_X, REL_Y,
 };
+use limina_input::keymap::{macos_keycode_to_linux_remapped, modifier_is_down, KeyRemap};
 use limina_input::InputEvent;
 
-use super::input::send_event;
+use super::input::{match_host_shortcut, send_event};
 use super::WorkerConn;
 
 type CFMachPortRef = *mut c_void;
@@ -51,6 +52,7 @@ extern "C" {
     ) -> CFMachPortRef;
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+    fn CGEventGetFlags(event: CGEventRef) -> u64;
     fn CFMachPortCreateRunLoopSource(
         alloc: *const c_void,
         port: CFMachPortRef,
@@ -72,6 +74,9 @@ const RMB_UP: u32 = 4;
 const MOUSE_MOVED: u32 = 5;
 const LMB_DRAG: u32 = 6;
 const RMB_DRAG: u32 = 7;
+const KEY_DOWN: u32 = 10;
+const KEY_UP: u32 = 11;
+const FLAGS_CHANGED: u32 = 12;
 const SCROLL: u32 = 22;
 const OMB_DOWN: u32 = 25;
 const OMB_UP: u32 = 26;
@@ -83,6 +88,8 @@ const DISABLED_USERINPUT: u32 = 0xFFFF_FFFF;
 const FIELD_BUTTON_NUMBER: u32 = 3;
 const FIELD_DELTA_X: u32 = 4;
 const FIELD_DELTA_Y: u32 = 5;
+const FIELD_KEYBOARD_AUTOREPEAT: u32 = 8;
+const FIELD_KEYBOARD_KEYCODE: u32 = 9;
 const FIELD_SCROLL_AXIS1: u32 = 11; // vertical, in lines
 const FIELD_SCROLL_AXIS2: u32 = 12; // horizontal, in lines
 
@@ -95,6 +102,9 @@ static TAP_PORT: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 struct TapCtx {
     captured: Arc<AtomicBool>,
     conn: Arc<WorkerConn>,
+    /// Keyboard remap policy (e.g. `--swap-cmd-opt`) — same as the local monitor uses, so keys
+    /// captured here translate identically to keys handled in absolute mode.
+    remap: KeyRemap,
     /// Motion sensitivity: the macOS deltas the tap sees are already pointer-accelerated, and the
     /// guest's libinput accelerates *again*, so 1:1 feels far too fast. We scale by this factor
     /// (env `LIMINA_CAPTURE_SENS`, default 0.65) and carry the truncated remainder in `accum_*`
@@ -135,11 +145,58 @@ extern "C" fn tap_callback(
     if !ctx.captured.load(Ordering::Acquire) {
         return event; // not captured → let it through; the local monitor drives absolute mode
     }
+    let geti = |field: u32| unsafe { CGEventGetIntegerValueField(event, field) };
+
+    // Keyboard: while captured, system combos (Cmd-Tab, Cmd-Space, Ctrl-arrows, fn keys, …) go to
+    // the GUEST, not macOS — translate to evdev and consume. The exception is our own host
+    // shortcuts (Cmd-Ctrl-F/G): pass those through so the local monitor still toggles fullscreen /
+    // releases capture. Modifiers stay balanced across the capture boundary because the matching
+    // key-up always reaches the guest via whichever path is active at release time (tap or monitor).
+    if matches!(etype, KEY_DOWN | KEY_UP | FLAGS_CHANGED) {
+        let kbd: RawFd = ctx.conn.kbd_fd();
+        if kbd < 0 {
+            return std::ptr::null_mut();
+        }
+        let keycode = geti(FIELD_KEYBOARD_KEYCODE) as u16;
+        let flags = unsafe { CGEventGetFlags(event) };
+        let send_kbd = |ev: InputEvent| send_event(kbd, ev);
+        match etype {
+            KEY_DOWN => {
+                // Let our host shortcuts reach the local monitor (it toggles fullscreen/capture).
+                if match_host_shortcut(keycode, flags).is_some() {
+                    return event;
+                }
+                // Skip autorepeat: the guest compositor generates its own key repeat from one press.
+                if geti(FIELD_KEYBOARD_AUTOREPEAT) == 0 {
+                    if let Some(code) = macos_keycode_to_linux_remapped(keycode, &ctx.remap) {
+                        send_kbd(InputEvent::new(EV_KEY, code, 1));
+                        send_kbd(InputEvent::syn());
+                    }
+                }
+            }
+            KEY_UP => {
+                if let Some(code) = macos_keycode_to_linux_remapped(keycode, &ctx.remap) {
+                    send_kbd(InputEvent::new(EV_KEY, code, 0));
+                    send_kbd(InputEvent::syn());
+                }
+            }
+            _ => {
+                // flagsChanged carries no up/down — read the modifier's resulting state.
+                if let Some(down) = modifier_is_down(keycode, flags) {
+                    if let Some(code) = macos_keycode_to_linux_remapped(keycode, &ctx.remap) {
+                        send_kbd(InputEvent::new(EV_KEY, code, i32::from(down)));
+                        send_kbd(InputEvent::syn());
+                    }
+                }
+            }
+        }
+        return std::ptr::null_mut(); // consume — the combo went to the guest
+    }
+
     let fd: RawFd = ctx.conn.rel_ptr_fd();
     if fd < 0 {
         return std::ptr::null_mut();
     }
-    let geti = |field: u32| unsafe { CGEventGetIntegerValueField(event, field) };
     let send = |ev: InputEvent| send_event(fd, ev);
     match etype {
         MOUSE_MOVED | LMB_DRAG | RMB_DRAG | OMB_DRAG => {
@@ -208,7 +265,7 @@ extern "C" fn tap_callback(
 /// if Accessibility permission is missing (capture then falls back to the local-monitor warp
 /// path — leaky, but it still does *something*). Call once, on the main thread, before the app
 /// run loop starts.
-pub(crate) fn install(conn: Arc<WorkerConn>, captured: Arc<AtomicBool>) -> bool {
+pub(crate) fn install(conn: Arc<WorkerConn>, captured: Arc<AtomicBool>, remap: KeyRemap) -> bool {
     // Read sensitivity ONCE here (never on the hot callback path). Clamp to a sane band.
     let sens = std::env::var("LIMINA_CAPTURE_SENS")
         .ok()
@@ -218,6 +275,7 @@ pub(crate) fn install(conn: Arc<WorkerConn>, captured: Arc<AtomicBool>) -> bool 
     let ctx = Box::into_raw(Box::new(TapCtx {
         captured,
         conn,
+        remap,
         sens,
         accum_x: Cell::new(0.0),
         accum_y: Cell::new(0.0),
@@ -229,6 +287,9 @@ pub(crate) fn install(conn: Arc<WorkerConn>, captured: Arc<AtomicBool>) -> bool 
         | (1 << MOUSE_MOVED)
         | (1 << LMB_DRAG)
         | (1 << RMB_DRAG)
+        | (1 << KEY_DOWN)
+        | (1 << KEY_UP)
+        | (1 << FLAGS_CHANGED)
         | (1 << SCROLL)
         | (1 << OMB_DOWN)
         | (1 << OMB_UP)

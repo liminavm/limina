@@ -520,7 +520,7 @@ pub fn run(
     // captured (so clicks/motion can't escape to host windows) and forwards them to the guest's
     // relative device. Needs Accessibility permission; if absent, capture falls back to the local
     // monitor's warp path (see input.rs). Installed once, on the main thread, before `app.run()`.
-    let _capture_tap = capture_tap::install(conn.clone(), captured.clone());
+    let _capture_tap = capture_tap::install(conn.clone(), captured.clone(), remap);
 
     // Shown-ack channel (#8 leg 2): after Core Animation latches a frame, tell the worker
     // "shown <id>" so it can complete the guest's held flush fence. The blocking send is done on

@@ -691,16 +691,20 @@ Parallels replacement: fullscreen, keymap remap, multi-display, system-combo cap
    - ~~**Keymap remap (Command/Option swap):**~~ **DONE** — host-side `KeyRemap` policy over the
      positional kVK_* → KEY_* table (`--swap-cmd-opt`; guest owns the layout so dead keys/IME work
      natively). Fully customizable keybindings beyond the swap still ahead.
-   - **System-combo capture (Cmd-Tab/Cmd-Space/Super):** CGEventTap behind an Accessibility/TCC
-     toggle; handle `kCGEventTapDisabledByTimeout` + Secure Input gracefully. (The in-window
-     host-shortcut framework — `match_host_shortcut` — already exists from the fullscreen/capture
-     work; this extends it to *system* combos that need an event tap.)
-   - ~~**Pointer capture (relative mode):**~~ **DONE** — `Cmd-Ctrl-G` grabs the host cursor (hidden +
-     re-warped to display centre each move) and feeds the guest a **separate** relative-mouse
-     virtio-input device (`REL_X/REL_Y`), distinct from the absolute tablet so capture never
-     reclassifies it in the guest's libinput. **Closes the M2 gap** (guest-initiated warps). The
-     `CGAssociateMouseAndMouseCursorPosition(false)`-alone freeze was insufficient on macOS 26 — the
-     warp-to-centre is the load-bearing pin.
+   - ~~**System-combo capture (Cmd-Tab/Cmd-Space/Ctrl-arrows):**~~ **DONE (keyboard)** — the capture
+     CGEventTap consumes keyDown/keyUp/flagsChanged while captured and forwards them to the guest,
+     so system key-combos act in the guest, not the host. Re-enables on `kCGEventTapDisabledByTimeout`.
+     **Limitation:** multi-finger trackpad gestures (Mission Control / Spaces swipe) are processed by
+     the WindowServer upstream of a session tap and are NOT interceptable (two-finger scroll is).
+     Secure Input (password fields) can still suppress the tap — acceptable.
+   - ~~**Pointer capture (relative mode):**~~ **DONE** — `Cmd-Ctrl-G`. A **session-level consuming
+     CGEventTap** (needs Accessibility permission) intercepts mouse + keyboard while captured and
+     feeds the guest a **separate** relative-mouse virtio-input device (`REL_X/REL_Y`), distinct from
+     the absolute tablet so capture never reclassifies it in the guest's libinput. The guest cursor
+     is composited at its reported `cursormove` position (host NSCursor hidden); **closes the M2
+     guest-warp gap**. Sensitivity scaled host-side (`LIMINA_CAPTURE_SENS`, default 0.65) + a flat
+     guest pointer profile (enhanced tier) keep the response linear. If Accessibility is denied,
+     `CGEventTapCreate` returns NULL and it falls back to a leaky local-monitor warp path.
    - **Multi-display:** multiplex all displays through the single `krun_set_display_backend` by
      `scanout_id` (up to 16), each to its own NSWindow/CAMetalLayer.
    - **Runtime window-follow resize / EDID hotplug (libkrun patch):** no post-`krun_start_enter`
