@@ -1,0 +1,41 @@
+Warning: Permanently added '[127.0.0.1]:2222' (ED25519) to the list of known hosts.
+### the transient hibernate unit result ###
+### journal: hibernate / sleep / logind ###
+Jun 28 08:48:32 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:48:43 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:48:43 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:48:54 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:48:54 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:49:00 fedora sudo[1522]:   claude : PWD=/home/claude ; USER=root ; COMMAND=/usr/sbin/sed -i \\#/dev/vda3.*swap#d /etc/fstab
+Jun 28 08:49:00 fedora sudo[1530]:   claude : PWD=/home/claude ; USER=root ; COMMAND=/usr/sbin/swapon /swap/swapfile
+Jun 28 08:49:00 fedora kernel: Adding 3145724k swap on /swap/swapfile.  Priority:-2 extents:1 across:3145724k 
+Jun 28 08:49:05 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:49:05 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:49:16 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:49:16 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:49:27 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:49:27 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:49:36 fedora sudo[1785]:   claude : PWD=/home/claude ; USER=root ; COMMAND=/usr/sbin/bash -c 'date +%s > /run/pre-hib-marker; nohup sleep 100000 >/dev/null 2>&1 & echo $! > /run/marker-pid'
+Jun 28 08:49:36 fedora limina-s4-spike: firing hibernate now
+Jun 28 08:49:36 fedora sudo[1803]:   claude : PWD=/home/claude ; USER=root ; COMMAND=/usr/sbin/systemd-run --no-block --collect systemctl hibernate
+Jun 28 08:49:36 fedora systemd[1]: Started run-p1805-i1806.service - [systemd-run] /usr/sbin/systemctl hibernate.
+Jun 28 08:49:36 fedora audit[676]: AVC avc:  denied  { search } for  pid=676 comm="systemd-logind" name="swap" dev="vda3" ino=256 scontext=system_u:system_r:systemd_logind_t:s0 tcontext=system_u:object_r:unlabeled_t:s0 tclass=dir permissive=0
+Jun 28 08:49:36 fedora systemctl[1806]: Call to Hibernate failed: Access denied
+Jun 28 08:49:38 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:49:38 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:49:49 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:49:49 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:50:00 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:50:00 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:50:11 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:50:11 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:50:22 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+Jun 28 08:50:22 fedora abrt-dump-journal-core[698]: Failed to obtain all required information from journald
+### can we hibernate? logind says: ###
+Call to Hibernate failed: Access denied
+### exit of direct attempt: also check sleep config ###
+[shutdown] reboot suspend test_resume
+
+253:3
+resume_offset:
+1713408

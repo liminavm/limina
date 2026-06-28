@@ -415,11 +415,15 @@ flip straight to the primary plane). Converged truth + open-threads ledger live 
    stack, which the worker genuinely loads — confirmed via `lsof`.)
 2. **Upstream patch queue:** mesa zink+venus / KosmicKrisp / virglrenderer / SPIRV-Cross /
    mutter ×2 / kernel 0002+0003 / Fedora-zink backport ask.
-3. **Run the desktop through the GOP console end-to-end.** The GOP+venus singleton is FIXED
-   (libkrun 0022 — a persistent gpu worker owns the renderer across device reset; RED-verified by
-   `venus_reset`). Still needs: wire GOP firmware as the windowed-boot default (M2.5 Phase 3, done)
-   and make the 16 KiB kernel EFI/BLS-bootable so GRUB selects it (M5 productization — today the EFI
-   path boots the stock 4 KiB kernel, on which venus is moot).
+3. ~~**Run the desktop through the GOP console end-to-end.**~~ **DONE.** The GOP+venus singleton is
+   FIXED (libkrun 0022 — a persistent gpu worker owns the renderer across device reset; RED-verified
+   by `venus_reset`); GOP firmware is the windowed-boot default (M2.5 Phase 3); and the **16 KiB kernel
+   is EFI/BLS-bootable and GRUB-default** on `enhanced.raw` — the enhanced-delivery work (2026-06-27,
+   [[limina-enh-delivery]]) ships it as the `limina-kernel-16k` RPM whose `%post` runs `kernel-install
+   add` (dracut initramfs + a BLS entry with distro-standard `root=UUID=`), and `install-enhanced.sh`
+   `grubby --set-default`s it. The venus desktop is pixel-verified booting that way. (The earlier "EFI
+   boots the stock 4 KiB kernel, venus moot" note is obsolete — that was the pre-RPM L1-direct-boot
+   era.)
 4. **virtio-gpu flip-completion gap** — event-driven KMS clients hang; #8 gave mutter honest pacing
    but the generic gap remains.
 5. **#28 residue policy** — `VN_PERF=no_*_feedback` via agent vs a real fix.
@@ -510,8 +514,11 @@ The agent is the enhanced-tier configurator. Two carriers:
   enrollment; the installer drops the sysext + kernel package, and the agent owns updates thereafter.
 
 **Consequence:** EFI-booting the enhanced tier needs venus to survive the EFI→kernel reset — that
-singleton prerequisite is ✅ DONE (libkrun 0022). What remains is making the 16 KiB kernel
-BLS-bootable so GRUB selects it.
+singleton prerequisite is ✅ DONE (libkrun 0022). Making the 16 KiB kernel BLS-bootable so GRUB
+selects it is **also ✅ DONE** (2026-06-27, [[limina-enh-delivery]]): the `limina-kernel-16k` RPM's
+`%post` runs `kernel-install add` (dracut initramfs + BLS entry, distro-standard `root=UUID=`) and
+`install-enhanced.sh` `grubby --set-default`s it; `enhanced.raw` EFI-boots the 16k kernel to a
+pixel-verified venus desktop.
 
 **Follow-ups:** DAX/shm window (`VirtioShmRegion` in `fs/device.rs`; confirm shm-window alignment +
 FUSE_SETUPMAPPING/SHMCAP on 16 KiB host pages; the enhanced tier already runs a 16k guest so
@@ -755,9 +762,12 @@ Lifecycle/snapshot is the last uncovered headline Parallels feature (`GAPS-and-v
 
 **The shaping fact:** **accelerated-GPU host state cannot be serialized** — rutabaga snapshots 2D only,
 QEMU blocks virgl/blob migration, Cuttlefish snapshots software-render-only. Every VMM in the field
-works around it by making the **guest** release the GPU, not by dumping host context. limina is
-uniquely ready: the host renderer **already survives a guest-driven device reset** (libkrun 0022 /
-`venus_reset`), which is the exact event a suspend triggers.
+works around it by making the **guest** release the GPU, not by dumping host context. The re-init this
+needs on resume is just the ordinary cold-boot venus init that already runs on **every** boot: on
+resume a fresh worker (whole process tree having been killed) cold-boots venus and the guest's DRM
+driver re-attaches as on a real-hardware power cycle — **no surviving host process required**, which is
+what lets hibernate survive the entire app being quit (or a host reboot). State lives on the persistent
+disk (guest swap for S4, the snapshot file for the floor), never in a resident process.
 
 **Recommendation — a HYBRID, two tiers of one lifecycle:**
 - **Enhanced tier → guest-side Linux S4 (suspend-to-disk).** The agent runs `systemctl hibernate`; the
@@ -791,11 +801,14 @@ vCPU `save_state`/`restore_state` (accessors private, SIMD unbound), in-kernel G
 schema. Guest side: PM/HIBERNATION kernel configs (none in the fragment today) + a carried
 `patches/linux` drm/virtio freeze/restore series.
 
-**Founding spikes (M9.0 — do first):** (1) does stock arm64 Fedora S4-hibernate *inside libkrun* and
-does the 16 KiB kernel resume across a worker cold-boot (`spikes/s4-hibernate/`); (2) can HVF
+**Founding spikes (M9.0):** (1) ✅ **DONE (2026-06-28, `spikes/s4-hibernate/RESULTS.md`)** — stock
+arm64 Fedora's guest-side S4 path is correctly wired inside libkrun (swap, `resume=`, image discovery)
+and the guest reaches `hibernation_snapshot`, but hibernation is **blocked by two libkrun HVF gaps we
+own**: PSCI `CPU_OFF`/`AFFINITY_INFO` unimplemented (aborts multi-vCPU at `disable_nonboot_cpus()`) and
+an unhandled EL1 debug sysreg `OSDLR_EL1` on the CPU-suspend path (halts single-vCPU). So **M9.1 needs
+libkrun patches first** (was "none core"). Resume not yet provable (gated on those). (2) can HVF
 round-trip the **full** vCPU + GIC state (reuse `spikes/hvf-trap-probe` — does any EL1 sysreg reject
-`set_sys_reg` post-run?); (3) does venus cleanly release + re-init across a suspend-shaped GPU reset,
-pixel-verified, no parked-fence hang.
+`set_sys_reg` post-run?); (3) does venus cleanly re-init across a suspend-shaped GPU reset, pixel-verified.
 
 **Done test:** human-verified suspend→resume on **both** a stock and an enhanced image; the guest comes
 back to the same desktop, the clock is correct after a real multi-hour suspend, venus re-enumerates, and

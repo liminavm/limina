@@ -1,0 +1,28 @@
+time="2026-06-28T08:54:31-03:00" level=warning msg="bad log level \"\", falling back to \"info\""
+time="2026-06-28T08:54:31-03:00" level=info msg="gvproxy version v0.8.8"
+time="2026-06-28T08:54:31-03:00" level=info msg="waiting for clients..."
+[2026-06-28T11:54:31Z INFO  limina::gateway] death-pact watcher up (pid 97477) tying gvproxy 97476 to this supervisor
+[2026-06-28T11:54:31Z INFO  limina::gateway] gvproxy gateway up (pid 97476, socket "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-97475.sock", ssh-port 2222)
+[2026-06-28T11:54:31Z INFO  limina] guest SSH forward ready: ssh -p 2222 <user>@127.0.0.1
+[2026-06-28T11:54:31Z INFO  limina::supervisor] VM worker started (pid 97478); Ctrl-C to power off
+[2026-06-28T11:54:31Z INFO  limina_vmm::krun] building microVM: 1 vcpu(s), 2048 MiB, 1 disk(s), 0 share(s), display=false, boot=EFI firmware
+[2026-06-28T11:54:31Z INFO  limina_vmm::krun] microVM running; entering event loop (SIGTERM/SIGINT → guest power-off)
+2026/06/28 08:54:43 tcpproxy: for incoming conn 127.0.0.1:57710, error dialing "192.168.127.2:22": connect tcp 192.168.127.2:22: no route to host
+[2026-06-28T11:54:46Z WARN  krun_devices::virtio::mmio] update virtio queue in invalid state 0x8f
+[2026-06-28T11:54:46Z WARN  krun_devices::virtio::mmio] update virtio queue in invalid state 0x8f
+[2026-06-28T11:54:46Z WARN  krun_devices::virtio::mmio] update virtio queue in invalid state 0x8f
+[2026-06-28T11:54:46Z WARN  krun_devices::virtio::mmio] update virtio queue in invalid state 0x8f
+[2026-06-28T11:54:46Z WARN  krun_devices::virtio::mmio] update virtio queue in invalid state 0x8f
+[2026-06-28T11:54:46Z WARN  krun_devices::virtio::mmio] update virtio queue in invalid state 0x0
+[2026-06-28T11:54:46Z WARN  krun_devices::virtio::mmio] update virtio queue in invalid state 0x0
+[2026-06-28T11:54:46Z WARN  krun_devices::virtio::mmio] update virtio queue in invalid state 0x8f
+[2026-06-28T11:54:46Z WARN  krun_devices::virtio::mmio] update virtio queue in invalid state 0x8f
+[2026-06-28T11:54:46Z WARN  krun_devices::virtio::mmio] update virtio queue in invalid state 0x8f
+[2026-06-28T11:54:46Z WARN  krun_devices::virtio::mmio] update virtio queue in invalid state 0x8f
+[2026-06-28T11:54:46Z WARN  krun_devices::virtio::mmio] update virtio queue in invalid state 0x8f
+[2026-06-28T11:54:46Z ERROR krun_hvf] unhandled system-register read: rt=5 reg=2622470 name=unknown sysreg; stopping the VM
+[2026-06-28T11:54:46Z ERROR krun_vmm::macos::vstate] vCPU 0: unrecoverable run error: Unhandled guest vCPU state (see log); stopping the VM; stopping the VM
+[2026-06-28T11:54:46Z INFO  krun_vmm] Vmm is stopping.
+[2026-06-28T11:54:46Z WARN  limina::supervisor] VM stopped — worker exited with code 1
+time="2026-06-28T08:54:46-03:00" level=error msg="cannot receive packets from /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-97475.sock-krun.sock, disconnecting: cannot read size from socket: read unixgram /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-97475.sock: use of closed network connection"
+time="2026-06-28T08:54:46-03:00" level=error msg="gvproxy exiting: signal caught"

@@ -94,12 +94,20 @@ beyond a tiny "hibernated" flag so the supervisor knows the next launch is a res
 
 **Pros.** Cleanest on the two hard subsystems:
 
-- **GPU:** the guest virtio-gpu DRM driver tears down and re-inits the GPU *exactly as on real
-  hardware* — the host renderer is **never serialized**, and limina's host side **already survives
-  guest-driven device reset** (libkrun-0022 single-owner renderer; the `venus_reset` test). The
-  out-of-tree drm/virtio freeze/restore series (Dongwon Kim, v5 2025-10) re-submits every tracked
-  `virtio_gpu_object` on resume for *exactly* our "the VMM process was terminated" scenario
+- **GPU:** the host renderer is **never serialized** — there is none to serialize. On resume a
+  **brand-new worker process cold-boots venus exactly as on every normal boot** (a well-exercised
+  path), and the guest virtio-gpu DRM driver re-establishes the GPU *exactly as on a real-hardware
+  power cycle* via its hibernate/resume PM callbacks. **No host process needs to survive** — and that
+  is the point: the resume state lives entirely in the guest's own swap on the persistent virtio-blk
+  disk image, so hibernate survives the **entire app (supervisor + worker) being quit, and even a host
+  reboot or power loss** (the defining property of suspend-*to-disk*). The out-of-tree drm/virtio
+  freeze/restore series (Dongwon Kim, v5 2025-10) re-submits every tracked `virtio_gpu_object` on
+  resume for *exactly* our "the VMM process was terminated and a fresh one started" scenario
   ([dri-devel v5](https://www.mail-archive.com/dri-devel@lists.freedesktop.org/msg567003.html)).
+  (Note: this is **not** the libkrun-0022 / `venus_reset` property — that's an *in-process* renderer
+  singleton surviving the EFI→kernel device reset *within one worker's lifetime*, which is irrelevant
+  here because hibernate kills the whole process tree. What matters is the ordinary cold-boot venus
+  init, which already works on every boot.)
 - **Network:** ideal — link bounce, NM re-DHCP against gvproxy's static `.2` lease; the gvproxy recycle
   is the existing reboot path.
 - Reuses the **single-shot worker + relaunch** substrate verbatim; no host snapshot file, no GPU
@@ -126,7 +134,7 @@ future *fast-pause* feature, not hibernate.
 
 | Hard part | VMM-snapshot (A) | Guest-side S4 (B) |
 |---|---|---|
-| **Accelerated GPU host state** (the canonical blocker) | **Cannot serialize.** Must force the guest to release the GPU first → degenerates into a hybrid. | **Neutralized by construction** — guest DRM driver releases+re-inits; host renderer never serialized; libkrun-0022 already survives the reset. |
+| **Accelerated GPU host state** (the canonical blocker) | **Cannot serialize.** Must force the guest to release the GPU first → degenerates into a hybrid. | **Neutralized by construction** — host renderer never serialized; a fresh worker cold-boots venus (the every-boot path) and the guest DRM driver re-inits via its resume PM callbacks. No surviving host process required. |
 | **In-flight venus fences** | Parked descriptors deadlock on restore unless drained to fence-quiescent first. | Drained by the driver's own `.freeze` callback for free. |
 | **virtio device state** | Serializable POD (`Queue`/`MmioTransport`/features/config) but all net-new code — none serialized today. | Sidestepped — devices re-enumerate; guest re-negotiates features via `virtio_device_restore()`. |
 | **In-kernel GIC state** | Blob API exists (`hv_gic_state_get_data`/`set_state`) but **unused & unproven on HVF** — restore ordering uncharted (ASSUMED). | N/A — GIC re-inits on cold boot. |
@@ -138,8 +146,10 @@ future *fast-pause* feature, not hibernate.
 
 **The decisive convergence:** two independent production VMMs (QEMU blocks, Cuttlefish software-only)
 plus all three of our GPU-focused research angles reach the same verdict — **do not serialize the GPU;
-make the guest release it and re-init on resume.** limina is uniquely ready for this because the host
-renderer already survives the exact event a suspend triggers (libkrun-0022 / `venus_reset`).
+make the guest release it and re-init on resume.** The re-init it relies on is just the ordinary
+cold-boot venus init that already runs on **every** boot — no special "renderer survives" property is
+needed (and none could help, since hibernate kills the whole process tree). That cold-boot path being
+proven on every launch is what makes the guest-side approach low-risk on the GPU front.
 
 ---
 
@@ -262,29 +272,46 @@ The spine already exists — this is the strongest reason the milestone is tract
 
 ### M9.0 — Founding spikes (gate the whole milestone)
 
-**Goal:** prove the three gating unknowns before building (see §8). **Done:** all three spikes have a
-`RESULTS.md` with numbers. **No production code.**
+**Goal:** prove the three gating unknowns before building (see §8). **No production code.**
+**Spike #1 is DONE (2026-06-28, `spikes/s4-hibernate/RESULTS.md`)** — and it changed M9.1 below:
+guest-side S4 in libkrun is **blocked by two libkrun HVF gaps**, so M9.1 is no longer "no core libkrun
+patches." The guest-side setup (swap, `resume=`, image discovery) is correctly wired and the guest
+reaches `hibernation_snapshot`, but: (a) **PSCI `CPU_OFF`/`AFFINITY_INFO` are unimplemented** →
+`disable_nonboot_cpus()` aborts multi-vCPU hibernate; (b) an **unhandled EL1 debug sysreg (`OSDLR_EL1`,
+…) on the CPU-suspend path** halts the VM even single-vCPU. Both are ours to patch. (Spikes #2/#3 still
+pending.)
 
 ### M9.1 — Enhanced-tier guest-side S4 (the clean path first)
 
 **Goal:** an enhanced guest hibernates on agent command and resumes to the same desktop.
-**Key tasks (dependency order):**
-1. Image build: pre-provision swap ≥ max RAM (partition or file with a known `resume_offset`), add
+**Key tasks (dependency order — libkrun HVF gaps FIRST, per spike #1):**
+1. **libkrun: implement PSCI CPU hotplug-offline** — `CPU_OFF` (0x84000002) + `AFFINITY_INFO`
+   (0x84000004 / 0xc4000004) so the kernel can offline non-boot vCPUs for the snapshot. (RED test: a
+   `--cpus 2+` guest currently aborts hibernate at `disable_nonboot_cpus()`.)
+2. **libkrun: handle the EL1 debug/suspend sysreg set** the CPU-suspend path touches — `OSDLR_EL1` (the
+   one that crashed the spike), and almost certainly `OSLAR_EL1` / `MDSCR_EL1` / the `DBGB*`/`DBGW*`
+   breakpoint regs — read+write, modeled or safely stubbed, instead of "stop the VM."
+3. Image build: pre-provision swap ≥ RAM (file with a known `resume_offset`; **SELinux-label it
+   `swapfile_t`** — a raw btrfs subvol is `unlabeled_t` and logind is denied), add
    `resume=`/`resume_offset=` + dracut `resume` module (`scripts/build-image.sh`, `docs/images.md`).
-2. Kernel: add the PM/HIBERNATION configs to `scripts/build-test-kernel.sh`'s fragment (none today).
-3. Carry `patches/linux/00NN-drm-virtio-freeze-restore.patch` (Dongwon Kim v5) for GPU object re-submit.
-4. `limina-proto`: `Hibernate` request + ACK (update both guest binaries' matches).
-5. Agent: handle `Hibernate` → `systemctl hibernate`; ACK "entering hibernate" before `SYSTEM_OFF`.
-6. Supervisor: a `hibernate-pending` flag set on ACK so it disambiguates *hibernate-off* from *ordinary
+4. Kernel: add the PM/HIBERNATION configs to the 16k kernel build (`scripts/build-kernel-rpm.sh` /
+   `build-test-kernel.sh` fragment — none today).
+5. Carry `patches/linux/00NN-drm-virtio-freeze-restore.patch` (Dongwon Kim v5) for GPU object re-submit.
+6. `limina-proto`: `Hibernate` request + ACK (update both guest binaries' matches).
+7. Agent: handle `Hibernate` → `systemctl hibernate`; ACK "entering hibernate" before `SYSTEM_OFF`.
+8. Supervisor: a `hibernate-pending` flag set on ACK so it disambiguates *hibernate-off* from *ordinary
    power-off* (both exit 0 — the disambiguation must come from control-plane state). Record
    `state = hibernated`; reap the worker; persist the tiny flag.
-7. Resume action: deliberately invoke the relaunch path with `resume=` wired — **not** the automatic
+9. Resume action: deliberately invoke the relaunch path with `resume=` wired — **not** the automatic
    reboot trigger (resume is a user action).
-8. Agent: consume the port-123 long-nap sync → `clock_settime(CLOCK_REALTIME)` on resume.
+10. Agent: consume the port-123 long-nap sync → `clock_settime(CLOCK_REALTIME)` on resume.
 
-**libkrun patches:** none required for the core (S4 rides the existing power-off / cold-boot path).
-Optional: a **distinct exit code for "powered off after hibernation"** if the agent-ACK disambiguation
-proves fragile (mechanism in libkrun, policy in limina).
+**libkrun patches (REQUIRED, was "none" — corrected by spike #1):** PSCI `CPU_OFF`/`AFFINITY_INFO`
+(task 1); the EL1 debug-sysreg handlers (task 2); and likely **virtio-mmio freeze/restore hardening**
+(the spike saw `update virtio queue in invalid state 0x8f` + guest WARNs at `virtio_config.h:276` and a
+virtio-net that didn't recover across in-place thaw). Optional: a **distinct exit code for "powered off
+after hibernation"** if the agent-ACK disambiguation proves fragile (mechanism in libkrun, policy in
+limina).
 **Done test (RED→GREEN):** an enhanced guest, given `Hibernate` over vsock, writes its image and exits
 0; a subsequent worker launch with `resume=` brings the guest back with a marker file/process from
 before still present, venus re-enumerates, and the clock is correct within seconds. Pixel-verify the
@@ -359,7 +386,7 @@ a real multi-hour suspend; window survives.
 
 | Step | Net-new limina | libkrun patches |
 |---|---|---|
-| M9.1 S4 enhanced | image swap+`resume=`, proto `Hibernate`, agent hibernate + time-consumer, supervisor hibernate-state + resume trigger | (none core) optional distinct hibernate exit code; carry `patches/linux` drm/virtio freeze/restore |
+| M9.1 S4 enhanced | image swap+`resume=`+SELinux-label, proto `Hibernate`, agent hibernate + time-consumer, supervisor hibernate-state + resume trigger | **PSCI `CPU_OFF`/`AFFINITY_INFO`; EL1 debug-sysreg handlers (OSDLR_EL1…); virtio-mmio freeze/restore hardening** (spike #1); carry `patches/linux` drm/virtio freeze/restore; optional distinct hibernate exit code |
 | M9.2 snapshot RAM+vCPU | snapshot file format/CRC, `--restore` wiring, monotonic policy | pause/quiesce; `save_state`/`restore_state`; mem dump + GPU-window skip; `CNTVOFF` set; `--restore` mode |
 | M9.3 devices+GIC+GPU | versioned device schema, GPU-quiesce orchestration, host-resource reopen | device (de)serialize; GIC state blob; GPU-quiesce trigger |
 | M9.4 UX | menu, capability probe, VMGenID, NTP backstop | (none) |
@@ -368,13 +395,16 @@ a real multi-hour suspend; window survives.
 
 ## 8. Spikes to de-risk first (M9.0 — cheapest, do before building)
 
-1. **Does stock arm64 Fedora S4-hibernate inside libkrun at all, and does the 16 KiB enhanced kernel
-   resume across a worker cold-boot?** Manually configure swap + `resume=` in a writable clone,
-   `systemctl hibernate`, then cold-boot the worker with `resume=` and check the session restored. The
-   cheapest proof that the *whole guest-side path* is real on our stack (deterministic libkrun memory
-   layout *should* dodge the UEFI-placement fragility that bites bare metal — but verify). **Gate for
-   M9.1.** Vehicle: `spikes/s4-hibernate/` + a clone of `Fedora-Workstation-43.enhanced.raw`, boot via
-   `spikes/venus-draw-probe/boot-seated-kk.sh`.
+1. ✅ **DONE (2026-06-28) — `spikes/s4-hibernate/RESULTS.md`.** "Does stock arm64 Fedora S4-hibernate
+   inside libkrun?" → the guest-side path is correctly wired (swap, `resume=`, image discovery) and the
+   guest reaches `hibernation_snapshot`, but hibernation is **blocked by two libkrun HVF gaps**: PSCI
+   `CPU_OFF`/`AFFINITY_INFO` unimplemented (aborts multi-vCPU at `disable_nonboot_cpus()`) and an
+   unhandled EL1 debug sysreg `OSDLR_EL1` on the CPU-suspend path (halts the VM single-vCPU). Plus a
+   SELinux swap-labeling gotcha and rough in-place virtio freeze/restore (network didn't recover). The
+   **resume handshake is therefore not yet provable** — gated behind those libkrun fixes (folded into
+   M9.1 tasks 1–2). Vehicle (stock-kernel-first, to isolate env from our-kernel-configs): a clone of
+   `Fedora-Workstation-43.accessible.raw` booted headless via `limina --net`; `spikes/s4-hibernate/`
+   holds the repro + evidence.
 
 2. **Can HVF round-trip full vCPU state?** A bare-metal arm64 vehicle (reuse `spikes/hvf-trap-probe`,
    the `limina-hvf-graceful` note): run a few instructions, `get` all GP/SIMD/EL1-sysreg/PSTATE/
@@ -383,13 +413,14 @@ a real multi-hour suspend; window survives.
    vehicle: confirm `hv_gic_state_get_data` → `hv_gic_set_state` round-trips into a freshly created
    controller. **Gate for M9.2/M9.3.**
 
-3. **Does venus cleanly release + re-init across a guest-driven GPU reset/suspend?** We *believe*
-   libkrun-0022 + the `venus_reset` test already prove the host renderer survives a reset — this spike
-   confirms it end-to-end for a *suspend-shaped* event: drive a seated venus desktop, trigger a DRM
-   device suspend/resume (or the agent hibernate on the enhanced image), and pixel-verify the desktop
-   comes back via `iosdump.swift`, with **no parked-fence hang**. Test with vs. without the drm/virtio
-   freeze/restore patch to size whether we *must* carry it. **Gate for M9.1 GPU correctness and M9.3
-   quiesce.**
+3. **Does the GUEST cleanly re-init venus when resuming from its own hibernate image, against a
+   freshly-booted worker?** This is the real open question — *not* "does the host renderer survive"
+   (it doesn't, and needn't: the worker is dead and a new one cold-boots venus fresh, which already
+   works on every boot). The spike: drive a seated venus desktop, `systemctl hibernate` the enhanced
+   guest so the whole worker process exits, then cold-boot a fresh worker on the same disk and
+   pixel-verify the desktop comes back via `iosdump.swift`, with **no parked-fence hang** and the
+   guest's virtio-gpu driver re-attached. Test with vs. without the drm/virtio freeze/restore patch to
+   size whether we *must* carry it. **Gate for M9.1 GPU correctness and M9.3 quiesce.**
 
 ---
 

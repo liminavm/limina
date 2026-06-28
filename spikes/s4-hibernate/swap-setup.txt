@@ -1,0 +1,23 @@
+Warning: Permanently added '[127.0.0.1]:2222' (ED25519) to the list of known hosts.
+### create dedicated swap subvol + 3G swapfile (btrfs) ###
+Create subvolume '//swap'
+create swapfile /swap/swapfile size 3.00GiB (3221225472)
+### swaps now ###
+Filename				Type		Size		Used		Priority
+/dev/zram0                              partition	1989628		0		100
+/swap/swapfile                          file		3145724		0		-2
+### resume dev + offset ###
+underlying dev for /swap: /dev/vda3
+resume_offset (pages): 1713408
+RESUME_DEV=/dev/vda3 RESUME_OFFSET=1713408
+### wire resume= into the BLS cmdline ###
+### verify BLS args ###
+kernel="/boot/vmlinuz-6.17.1-300.fc43.aarch64"
+args="rhgb quiet rootflags=subvol=root resume=/dev/vda3 resume_offset=1713408"
+### ensure dracut resume module + regen initramfs ###
+add_dracutmodules+=" resume "
+### confirm resume module + resume_offset baked into initramfs ###
+resume
+-rwxr-xr-x   1 root     root        69472 Sep 16  2025 usr/lib/systemd/systemd-hibernate-resume
+-rwxr-xr-x   1 root     root        69536 Sep 16  2025 usr/lib/systemd/system-generators/systemd-hibernate-resume-generator
+-rw-r--r--   1 root     root          666 Sep 16  2025 usr/lib/systemd/system/systemd-hibernate-resume.service
