@@ -749,76 +749,106 @@ attaches at runtime, and resizing the window reflows the guest resolution.
 
 ---
 
-## Milestone 9 — Suspend & resume (hibernate)
+## Milestone 9 — Suspend / resume + full VM snapshots (host-side)
 
-**Status: 📐 DESIGNED — proposal, not yet started.** Full design (two approaches, hybrid
-recommendation, two-tier mapping, M9.0–M9.4 build plan, founding spikes) is
-`docs/design/m9-suspend-resume.md`. This summary is the roadmap-shaped digest.
+**Status: 📐 DESIGNED — direction chosen, not yet started.** Full design (the decision + rationale, the
+GPU prior-art section, two-tier mapping, M9.0–M9.4 build plan, founding spikes, and the demoted
+guest-side-S4 analysis) is `docs/design/m9-suspend-resume.md`. This is the roadmap-shaped digest.
 
-**Goal:** Parallels-parity "Suspend" — freeze the running guest to disk in a second or two, **tear the
-worker process down** (reclaim all host RAM, the GPU/Metal/IOSurface graph, gvproxy), and a later
-"Resume" that restores the *same* desktop (open apps, correct wall clock, working accelerated display).
+**Goal:** Parallels-parity "Suspend" — freeze the running guest to a host-side file in a second or two,
+**tear the worker process down** (reclaim all host RAM, the GPU/Metal/IOSurface graph, gvproxy), and a
+later "Resume" that restores the *same* desktop (open apps, correct wall clock, working accelerated
+display) — **plus** full VM snapshots as a feature (save / restore / clone / roll back named snapshots).
 Lifecycle/snapshot is the last uncovered headline Parallels feature (`GAPS-and-verification.md`).
 
-**The shaping fact:** **accelerated-GPU host state cannot be serialized** — rutabaga snapshots 2D only,
-QEMU blocks virgl/blob migration, Cuttlefish snapshots software-render-only. Every VMM in the field
-works around it by making the **guest** release the GPU, not by dumping host context. The re-init this
-needs on resume is just the ordinary cold-boot venus init that already runs on **every** boot: on
-resume a fresh worker (whole process tree having been killed) cold-boots venus and the guest's DRM
-driver re-attaches as on a real-hardware power cycle — **no surviving host process required**, which is
-what lets hibernate survive the entire app being quit (or a host reboot). State lives on the persistent
-disk (guest swap for S4, the snapshot file for the floor), never in a resident process.
+**Decision (pivoted 2026-06-28): host-side VMM snapshot is primary, GPU via Strategy A.** Pause the
+vCPUs, quiesce the virtio threads, serialize vCPU + device + GIC state + guest RAM to a file, kill the
+worker; restore = relaunch with `--restore`. This is Firecracker/crosVM/Parallels-shaped, it's
+**GPU-agnostic**, and it's what unlocks the full-snapshot feature category (guest-side S4 never could).
+We pivoted *away* from guest-side Linux S4 as the primary because it has too many distro-coupled failure
+points, it can't do snapshots, and spike #1 showed it's blocked by two libkrun HVF gaps anyway — the
+host-side path **sidesteps** those gaps (it pauses vCPUs externally and never runs the guest suspend
+path). S4 is demoted to Appendix A of the design doc.
 
-**Recommendation — a HYBRID, two tiers of one lifecycle:**
-- **Enhanced tier → guest-side Linux S4 (suspend-to-disk).** The agent runs `systemctl hibernate`; the
-  guest writes its own image to pre-provisioned swap on its virtio-blk disk, its DRM driver releases the
-  GPU, and it powers off. Resume cold-boots the same 16 KiB kernel with `resume=`; every virtio driver
-  re-handshakes via `virtio_device_restore()`. Cleanest on GPU + in-flight fences; **no host snapshot
-  file, no GPU serialization, no register/GIC plumbing.**
-- **Stock tier → guest-assisted-quiesce + VMM RAM/vCPU snapshot (the floor that must always work).** A
-  stock guest can't be relied on to hibernate (zram-only swap, no `resume=`), so the floor is a
-  VMM-level snapshot — but never a *pure* one (it first asks the guest to drain the GPU fence-clean).
-  Pause vCPUs, dump RAM + vCPU + virtio device state (skip the 8 GiB GPU SHM window), set `CNTVOFF_EL2`
-  to keep `CLOCK_MONOTONIC` continuous on restore, relaunch + reload. **S3 (suspend-to-RAM) is rejected
-  for this goal** — it keeps the worker + host RAM alive, and libkrun `NOT_SUPPORTED`s PSCI
-  `SYSTEM_SUSPEND` today.
+**The GPU — Strategy A (quiesce + guest re-init), NOT serialization.** This is the load-bearing call,
+backed by a prior-art research pass + the user's primary-source Parallels data:
+- **True host-side GPU-state serialization is unprecedented and infeasible for our stack.** QEMU blocks
+  it (`migrate_add_blocker("virgl is not yet migratable")` — virgl *and* venus), crosVM/rutabaga's virgl
+  `snapshot()`/`restore()` are `Err(Unsupported)` stubs, virglrenderer has zero save/restore entry
+  points, Cuttlefish snapshots software-render-only, and **even Apple's `VZVirtualMachine.saveMachineStateTo`
+  refuses the virtio GPU**. On Metal there's no vendor save/restore interface, and venus host-readback
+  isn't CPU-coherent (#28).
+- **The market leaders do A, not B.** Parallels presents **stock virtio-gpu + Mesa virgl** to Linux
+  (user-verified: `1af4:1050` + `virgl (Apple M4 Pro)`, Mesa 26.0.8); its suspend kills the host process,
+  so the GPU context is reconstructed on resume. VMware Fusion/Workstation suspend virtual-3D too via
+  **guest-backed objects** (canonical copy in guest RAM, host object a derived cache) — so **Parallels is
+  not unique**. The decisive pattern: suspend-with-3D works iff the resource graph is **guest-backed**
+  (VMware MOBs; virtio-gpu `ATTACH_BACKING`/blob = our case), and fails when host-side-only (Hyper-V
+  GPU-PV *disables* checkpoints; VirtualBox can't).
+- **So A is ours to own, but the guest-side work splits by tier** (sharpened by spike #3 — a *live* guest
+  does **not** survive abrupt GPU-device loss, so this work is required, not optional). **Foundation
+  (both):** the **kernel virtio-gpu DRM driver** — carry the **Dongwon Kim freeze/restore series** (only
+  the kernel owns the guest-id↔host-resource map, so only it can resubmit the resource/context creates).
+  **virgl (GL) tier:** that ~suffices (virglrenderer rebuilds from the resubmitted stream + guest-backed
+  contents; Mesa virgl ≈ transparent) — the Parallels/VMware-proven baseline. **venus (Vulkan) tier:** NOT
+  enough — the host render-server's VkObject graph (→ Metal) is gone on a fresh worker, so it needs a
+  **Mesa-venus object-graph replay** (`src/virtio/vulkan/`; unsolved upstream — the venus-resume spike) +
+  a **host-visible blob copy-back** (`TRANSFER_FROM_HOST` at snapshot). Restore uses a **fresh worker**
+  (empty renderer) — **no in-process renderer-reset hook needed** (that earlier framing was a
+  misdiagnosis). Record/replay B is a later optional upgrade, out of M9 scope.
+
+**Two-tier:** stock guests get suspend/snapshots transparently, but with a **GPU re-init blip** (no guest
+resubmit → the desktop flashes/recovers, not seamless 3D). Enhanced guests get seamless re-init: **virgl**
+via the kernel Dongwon-Kim resubmit; **venus** additionally via the Mesa-venus replay + blob copy-back;
+plus agent-driven wall-clock fix. **A degrades gracefully; B wouldn't even start.**
 
 **Reuse (why it's tractable):** rides the existing **reboot=relaunch** spine (`WORKER_EXIT_REBOOT` →
-supervisor relaunches a fresh worker, host resources survive) — suspend adds a third exit disposition
-("suspended", code 126); the windowed fd-swap into a live `WorkerConn`, surface-port persistence,
-reconnect-tolerant control plane, gvproxy recycle, and the **already-long-sleep-aware port-123
-timesync** are all in place. New `limina-proto` `Hibernate`/`TimeSet` messages (update both guest
-binaries).
+relaunch a fresh worker, host resources survive) — suspend adds a third exit disposition
+("snapshotted", code 126) + a `--restore` mode; the windowed fd-swap into a live `WorkerConn`,
+surface-port persistence, reconnect-tolerant control plane, gvproxy recycle, and the
+**already-long-sleep-aware port-123 timesync** are all in place. New `limina-proto`
+`Snapshot`/`Restore`/`TimeSet` messages (update both guest binaries).
 
-**Build plan (bisectable):** M9.0 founding spikes (gate everything) → M9.1 enhanced-tier S4 (the clean
-path first) → M9.2 stock VMM-snapshot floor pt.1 (pause + RAM + vCPU, no-GPU guest) → M9.3 floor pt.2
-(virtio device state + GIC + GPU quiesce) → M9.4 UX + capability detection + two-tier glue.
+**Build plan (bisectable):** M9.0 founding spikes (gate everything) → M9.1 pause + RAM + vCPU snapshot
+(no-GPU/sw-2D guest first) → M9.2 virtio device state + GIC → M9.3 GPU via Strategy A: **virgl tier first**
+(carry Dongwon-Kim kernel resubmit + snapshot-time GPU quiesce), then the **venus tier** (Mesa-venus
+object-graph replay + blob copy-back, gated on the venus-resume spike) → M9.4 full-snapshot feature (save /
+restore / clone / roll back) + suspend/resume UX + capability probe.
 
-**libkrun patches:** none for the core S4 path (rides power-off/cold-boot). The VMM-snapshot floor
-needs: real HVF pause/quiesce (the `VcpuEvent::Pause`/`Resume` + `resume_vcpus` are inert today), bulk
-vCPU `save_state`/`restore_state` (accessors private, SIMD unbound), in-kernel GIC state get/set
-(unused, highest-risk), `CNTVOFF` set on restore, a `--restore` boot mode, and a versioned device-state
-schema. Guest side: PM/HIBERNATION kernel configs (none in the fragment today) + a carried
-`patches/linux` drm/virtio freeze/restore series.
+**libkrun patches:** real HVF pause/quiesce (the `VcpuEvent::Pause`/`Resume` + `resume_vcpus` are inert
+today), bulk vCPU `save_state`/`restore_state` (accessors private, SIMD unbound), in-kernel GIC state
+get/set (unused, highest-risk), `CNTVOFF` set on restore, a `--restore` boot mode, a versioned
+device-state schema, and a snapshot-time GPU **quiesce** (drain fences before the worker dies — restore is
+a fresh worker, so **no in-process renderer reset**; side fix: `reset_session` should also drop rutabaga
+contexts so the reboot/rebind reset is clean). Guest side: carry the `patches/linux` Dongwon-Kim drm/virtio
+freeze/restore series (virgl), + Mesa-venus replay (venus). (The PSCI `CPU_OFF`/`OSDLR_EL1` gaps that
+blocked guest-side S4 are **not** on this path.)
 
-**Founding spikes (M9.0):** (1) ✅ **DONE (2026-06-28, `spikes/s4-hibernate/RESULTS.md`)** — stock
-arm64 Fedora's guest-side S4 path is correctly wired inside libkrun (swap, `resume=`, image discovery)
-and the guest reaches `hibernation_snapshot`, but hibernation is **blocked by two libkrun HVF gaps we
-own**: PSCI `CPU_OFF`/`AFFINITY_INFO` unimplemented (aborts multi-vCPU at `disable_nonboot_cpus()`) and
-an unhandled EL1 debug sysreg `OSDLR_EL1` on the CPU-suspend path (halts single-vCPU). So **M9.1 needs
-libkrun patches first** (was "none core"). Resume not yet provable (gated on those). (2) can HVF
-round-trip the **full** vCPU + GIC state (reuse `spikes/hvf-trap-probe` — does any EL1 sysreg reject
-`set_sys_reg` post-run?); (3) does venus cleanly re-init across a suspend-shaped GPU reset, pixel-verified.
+**Founding spikes (M9.0):** (1) ✅ **DONE (2026-06-28, `spikes/s4-hibernate/RESULTS.md`)** — guest-side
+S4 inside libkrun is correctly wired but blocked by two HVF gaps (PSCI `CPU_OFF`/`AFFINITY_INFO`;
+`OSDLR_EL1` debug sysreg); *bearing:* this is why we pivoted host-side (which sidesteps them) and demoted
+S4. (2) can HVF round-trip the **full** vCPU + GIC state (reuse `spikes/hvf-trap-probe` — does any EL1
+sysreg reject `set_sys_reg` post-run? does `hv_gic_state_get_data`→`hv_gic_set_state` round-trip?) —
+gates M9.1/M9.2. (3) 🟡 **PARTIAL (2026-06-28, `gpu-reset-live.md`)** — a live `virtio_gpu` unbind/rebind,
+three rounds. **Proven:** the host worker is robust (survives resets under any load); the clean path
+cold-rebuilds a correct desktop (pixel-verified). **Decisive (round 3, raw unbind, session live): a running
+guest session does NOT survive abrupt GPU-device loss** (gnome-shell + glxgears + vkcube crash) — so
+guest-side resubmit is *required*, not optional. Root cause in our source: `reset()` keeps the renderer
+alive (`device.rs:379`) + `reset_session` doesn't drop rutabaga contexts (`virtio_gpu.rs:698`) → orphaned-
+context collision on an un-quiesced reset. **Corrected:** that's a same-worker artifact (restore = fresh
+worker), so the real gate is **guest-side** (kernel Dongwon-Kim for virgl; Mesa-venus replay for venus) —
+**not a libkrun renderer-reset hook** (earlier framing was a misdiagnosis). Green light to *start* M9.3
+guest-side, not a sign-off. Gates M9.3.
 
-**Done test:** human-verified suspend→resume on **both** a stock and an enhanced image; the guest comes
-back to the same desktop, the clock is correct after a real multi-hour suspend, venus re-enumerates, and
-the host RAM was actually freed while suspended.
+**Done test:** human-verified suspend→resume *and* snapshot→restore→clone on **both** a stock and an
+enhanced image; the guest comes back to the same desktop, the clock is correct after a real multi-hour
+suspend, venus re-enumerates, and the host RAM was actually freed while suspended.
 
-**Risks / open scoping decision:** the **stock VMM-snapshot floor is the heavier lift** (pause +
-registers + GIC + device serialization). If the M9.0 spike shows it's too costly for v1, ship
-enhanced-tier S4 first and give stock a coarse "clean shutdown + best-effort session save" interim. GIC
-state round-trip on HVF and full-vCPU `set_sys_reg` acceptance are the chief **ASSUMED** items —
-spike-gated, do not build on them blind.
+**Risks / ASSUMED (spike-gated):** HVF full vCPU + GIC state round-trip (highest-risk — GIC state API is
+unused today; fallback = userspace `GicV3`); the live venus desktop recovers from a host-resource
+teardown (M9.0 #3); re-mmap+`hv_vm_map` at original IPAs behaves like first boot; the Dongwon-Kim series
+applies cleanly to our kernel (carry out-of-tree). HVF has **no dirty-page log** → a stop-the-world full
+RAM dump (multi-second stall) — fine for suspend, a UX note for snapshotting a live VM.
 
 ---
 
@@ -835,7 +865,7 @@ spike-gated, do not build on them blind.
 | M6 dynamic memory ✅ | PSI autoballoon policy + `BalloonControlHandle` / `--memory` / control socket (internal Rust API, not a C ABI) | reclaim fix (MADV_FREE_REUSABLE) + 16 KiB align/coalesce + inflate/deflate handlers + DEFLATE_ON_OOM (0033/0034) |
 | M7 USB | host claim/attach, usbip plumbing | our-kernel config edit (USB+uinput); later native virtio-usb + krun_add_usb* |
 | M8 audio/x86/polish | fullscreen, keymap, multi-display, pointer capture, IOSurface mach-port scoping, FEX wiring | native virtio-snd; runtime resize/EDID; LED parity |
-| M9 suspend/resume 📐 designed | enhanced-tier S4 orchestration (proto `Hibernate`/`TimeSet`, agent + supervisor hibernate-state, resume relaunch); stock VMM-snapshot floor (file format, `--restore` wiring, device schema, capability probe, UX) | enhanced: PM kernel configs + carried drm/virtio freeze-restore (no core libkrun). floor: HVF pause/quiesce + vCPU save/restore + GIC state + `CNTVOFF` set + `--restore` mode + device (de)serialize |
+| M9 suspend/resume + snapshots 📐 designed | host-side VMM snapshot (file format/CRC, `--restore` wiring, device schema, named-snapshot manager + clone, proto `Snapshot`/`Restore`/`TimeSet`, capability probe, UX); Mesa-venus object-graph replay + blob copy-back (venus tier) | HVF pause/quiesce + vCPU save/restore + GIC state + `CNTVOFF` set + `--restore` mode + device (de)serialize + snapshot-time GPU quiesce (restore = fresh worker, no in-process renderer reset; side fix: `reset_session` rutabaga contexts); carry `patches/linux` Dongwon-Kim drm/virtio freeze-restore (virgl) |
 
 ## First three things to spike
 
