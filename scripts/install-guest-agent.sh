@@ -27,7 +27,8 @@ echo "==> building limina-agent (aarch64-unknown-linux-musl, static)"
 BIN=guest/target/aarch64-unknown-linux-musl/release/limina-agent
 
 echo "==> copying into the guest"
-scp "${SCP_OPTS[@]}" "$BIN" guest/limina-agent/limina-agent.service "$HOST":/tmp/
+scp "${SCP_OPTS[@]}" "$BIN" guest/limina-agent/limina-agent.service \
+    guest/limina-config/90-limina-pointer.gschema.override "$HOST":/tmp/
 
 echo "==> installing + enabling the unit"
 ssh "${SSH_OPTS[@]}" "$HOST" '
@@ -39,5 +40,11 @@ ssh "${SSH_OPTS[@]}" "$HOST" '
     sleep 1
     systemctl is-active limina-agent
     journalctl -u limina-agent -n 3 --no-pager
+    # Enhanced-tier guest config: flat (linear) pointer profile so captured mouselook does not
+    # double-accelerate (host already scales sensitivity). Ships as a gschema DEFAULT override,
+    # so a user gsettings override still wins and stock guests are unaffected.
+    sudo install -m 0644 /tmp/90-limina-pointer.gschema.override /usr/share/glib-2.0/schemas/
+    sudo glib-compile-schemas /usr/share/glib-2.0/schemas/
+    echo "pointer accel-profile default -> $(gsettings get org.gnome.desktop.peripherals.mouse accel-profile 2>/dev/null || echo n/a)"
 '
 echo "==> done — check the host limina log for \"guest agent connected: limina-agent/\""

@@ -1,0 +1,8 @@
+# limina enhanced tier: make the guest pointer track linearly (flat), not with libinput's
+# adaptive acceleration. Rationale: pointer CAPTURE feeds a relative mouse whose macOS deltas
+# are already pointer-accelerated by the host; a second adaptive curve in the guest makes
+# mouselook feel swimmy/over-accelerated. Flat = 1:1, and the host applies its own sensitivity
+# scale (LIMINA_CAPTURE_SENS). No effect on the absolute tablet (libinput never accelerates an
+# absolute device). Stock guests without this override keep the distro default (adaptive).
+[org.gnome.desktop.peripherals.mouse]
+accel-profile='flat'
