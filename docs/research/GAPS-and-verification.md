@@ -160,10 +160,12 @@ real trap is the **Homebrew dylib vs header mismatch** (§1.1).
 
 ## 3. Missing topics a Parallels replacement needs that no doc covers
 
-1. **VM lifecycle: snapshot / save-restore / suspend-resume / pause.** A headline Parallels
-   feature. Doc 02 notes HVF has no dirty-log/snapshot API in passing; **no doc designs
-   save/restore.** Large gap (serialize vCPU + device + guest memory state). At minimum,
-   suspend-to-disk. Also gates "instant resume" UX.
+1. ~~**VM lifecycle: snapshot / save-restore / suspend-resume / pause.**~~ **NOW DESIGNED** as
+   **M9 — suspend & resume (hibernate)**: `docs/design/m9-suspend-resume.md` (roadmap digest under
+   Milestone 9). Hybrid — enhanced-tier guest-side Linux S4 (the guest releases the GPU + writes its
+   own image to swap; resume cold-boots with `resume=`) over a stock-tier guest-assisted VMM RAM/vCPU
+   snapshot floor. Confirms HVF has no dirty-log (stop-the-world dump only) and that accelerated-GPU
+   host state is non-serializable (the floor quiesces the guest GPU instead). Not yet built.
 2. **Disk image management:** create/resize/snapshot of the guest disk, raw vs qcow2,
    discard/TRIM passthrough, sparse reclaim. Doc 01 only boots one fixed raw.
 3. **Shared-folder product surface** beyond raw virtiofs: uid/gid mapping, case
@@ -176,7 +178,10 @@ real trap is the **Homebrew dylib vs header mismatch** (§1.1).
    limina owns all of this; no doc scopes it.
 6. **Guest clock across host sleep for a desktop VM** (not just NTP): doc 10 found libkrun
    has host→guest timesync on vsock port 123, but the resume-correctness story for a
-   long-suspended desktop VM needs an explicit design.
+   long-suspended desktop VM needs an explicit design. **Now designed as part of M9**
+   (`docs/design/m9-suspend-resume.md` §3, §6): the port-123 timesync already fires on long-sleep
+   detection, but no guest consumer exists yet — the enhanced agent must consume it and
+   `clock_settime(CLOCK_REALTIME)`; monotonic continuity is held host-side via `CNTVOFF_EL2`.
 7. **Camera passthrough, printing, drag-and-drop files, open-in-host/open-in-guest,
    coherence-style window integration, shared-folder "Desktop/Downloads" niceties** —
    Parallels differentiators. Mic is listed open in doc 11; the rest are uncovered.
@@ -233,7 +238,10 @@ real trap is the **Homebrew dylib vs header mismatch** (§1.1).
 
 8. **Snapshot/save-restore feasibility** (§3.1): spike whether HVF vCPU + virtio device +
    guest memory state can be serialized at all, since it gates a top Parallels-parity
-   feature and there is no API for it today.
+   feature and there is no API for it today. **Now scoped as the M9.0 founding spikes**
+   (`docs/design/m9-suspend-resume.md` §8): (1) stock arm64 S4-hibernate inside libkrun + 16 KiB
+   resume across a worker cold-boot, (2) HVF full vCPU + GIC state round-trip (does any EL1 sysreg
+   reject `set_sys_reg` post-run?), (3) venus clean release/re-init across a suspend-shaped reset.
 
 ---
 

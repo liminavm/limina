@@ -742,6 +742,73 @@ attaches at runtime, and resizing the window reflows the guest resolution.
 
 ---
 
+## Milestone 9 — Suspend & resume (hibernate)
+
+**Status: 📐 DESIGNED — proposal, not yet started.** Full design (two approaches, hybrid
+recommendation, two-tier mapping, M9.0–M9.4 build plan, founding spikes) is
+`docs/design/m9-suspend-resume.md`. This summary is the roadmap-shaped digest.
+
+**Goal:** Parallels-parity "Suspend" — freeze the running guest to disk in a second or two, **tear the
+worker process down** (reclaim all host RAM, the GPU/Metal/IOSurface graph, gvproxy), and a later
+"Resume" that restores the *same* desktop (open apps, correct wall clock, working accelerated display).
+Lifecycle/snapshot is the last uncovered headline Parallels feature (`GAPS-and-verification.md`).
+
+**The shaping fact:** **accelerated-GPU host state cannot be serialized** — rutabaga snapshots 2D only,
+QEMU blocks virgl/blob migration, Cuttlefish snapshots software-render-only. Every VMM in the field
+works around it by making the **guest** release the GPU, not by dumping host context. limina is
+uniquely ready: the host renderer **already survives a guest-driven device reset** (libkrun 0022 /
+`venus_reset`), which is the exact event a suspend triggers.
+
+**Recommendation — a HYBRID, two tiers of one lifecycle:**
+- **Enhanced tier → guest-side Linux S4 (suspend-to-disk).** The agent runs `systemctl hibernate`; the
+  guest writes its own image to pre-provisioned swap on its virtio-blk disk, its DRM driver releases the
+  GPU, and it powers off. Resume cold-boots the same 16 KiB kernel with `resume=`; every virtio driver
+  re-handshakes via `virtio_device_restore()`. Cleanest on GPU + in-flight fences; **no host snapshot
+  file, no GPU serialization, no register/GIC plumbing.**
+- **Stock tier → guest-assisted-quiesce + VMM RAM/vCPU snapshot (the floor that must always work).** A
+  stock guest can't be relied on to hibernate (zram-only swap, no `resume=`), so the floor is a
+  VMM-level snapshot — but never a *pure* one (it first asks the guest to drain the GPU fence-clean).
+  Pause vCPUs, dump RAM + vCPU + virtio device state (skip the 8 GiB GPU SHM window), set `CNTVOFF_EL2`
+  to keep `CLOCK_MONOTONIC` continuous on restore, relaunch + reload. **S3 (suspend-to-RAM) is rejected
+  for this goal** — it keeps the worker + host RAM alive, and libkrun `NOT_SUPPORTED`s PSCI
+  `SYSTEM_SUSPEND` today.
+
+**Reuse (why it's tractable):** rides the existing **reboot=relaunch** spine (`WORKER_EXIT_REBOOT` →
+supervisor relaunches a fresh worker, host resources survive) — suspend adds a third exit disposition
+("suspended", code 126); the windowed fd-swap into a live `WorkerConn`, surface-port persistence,
+reconnect-tolerant control plane, gvproxy recycle, and the **already-long-sleep-aware port-123
+timesync** are all in place. New `limina-proto` `Hibernate`/`TimeSet` messages (update both guest
+binaries).
+
+**Build plan (bisectable):** M9.0 founding spikes (gate everything) → M9.1 enhanced-tier S4 (the clean
+path first) → M9.2 stock VMM-snapshot floor pt.1 (pause + RAM + vCPU, no-GPU guest) → M9.3 floor pt.2
+(virtio device state + GIC + GPU quiesce) → M9.4 UX + capability detection + two-tier glue.
+
+**libkrun patches:** none for the core S4 path (rides power-off/cold-boot). The VMM-snapshot floor
+needs: real HVF pause/quiesce (the `VcpuEvent::Pause`/`Resume` + `resume_vcpus` are inert today), bulk
+vCPU `save_state`/`restore_state` (accessors private, SIMD unbound), in-kernel GIC state get/set
+(unused, highest-risk), `CNTVOFF` set on restore, a `--restore` boot mode, and a versioned device-state
+schema. Guest side: PM/HIBERNATION kernel configs (none in the fragment today) + a carried
+`patches/linux` drm/virtio freeze/restore series.
+
+**Founding spikes (M9.0 — do first):** (1) does stock arm64 Fedora S4-hibernate *inside libkrun* and
+does the 16 KiB kernel resume across a worker cold-boot (`spikes/s4-hibernate/`); (2) can HVF
+round-trip the **full** vCPU + GIC state (reuse `spikes/hvf-trap-probe` — does any EL1 sysreg reject
+`set_sys_reg` post-run?); (3) does venus cleanly release + re-init across a suspend-shaped GPU reset,
+pixel-verified, no parked-fence hang.
+
+**Done test:** human-verified suspend→resume on **both** a stock and an enhanced image; the guest comes
+back to the same desktop, the clock is correct after a real multi-hour suspend, venus re-enumerates, and
+the host RAM was actually freed while suspended.
+
+**Risks / open scoping decision:** the **stock VMM-snapshot floor is the heavier lift** (pause +
+registers + GIC + device serialization). If the M9.0 spike shows it's too costly for v1, ship
+enhanced-tier S4 first and give stock a coarse "clean shutdown + best-effort session save" interim. GIC
+state round-trip on HVF and full-vCPU `set_sys_reg` acceptance are the chief **ASSUMED** items —
+spike-gated, do not build on them blind.
+
+---
+
 ## Summary of net-new code vs libkrun patches
 
 | Milestone | Net-new limina code | libkrun (or fw/virgl) patches |
@@ -755,6 +822,7 @@ attaches at runtime, and resizing the window reflows the guest resolution.
 | M6 dynamic memory ✅ | PSI autoballoon policy + `BalloonControlHandle` / `--memory` / control socket (internal Rust API, not a C ABI) | reclaim fix (MADV_FREE_REUSABLE) + 16 KiB align/coalesce + inflate/deflate handlers + DEFLATE_ON_OOM (0033/0034) |
 | M7 USB | host claim/attach, usbip plumbing | our-kernel config edit (USB+uinput); later native virtio-usb + krun_add_usb* |
 | M8 audio/x86/polish | fullscreen, keymap, multi-display, pointer capture, IOSurface mach-port scoping, FEX wiring | native virtio-snd; runtime resize/EDID; LED parity |
+| M9 suspend/resume 📐 designed | enhanced-tier S4 orchestration (proto `Hibernate`/`TimeSet`, agent + supervisor hibernate-state, resume relaunch); stock VMM-snapshot floor (file format, `--restore` wiring, device schema, capability probe, UX) | enhanced: PM kernel configs + carried drm/virtio freeze-restore (no core libkrun). floor: HVF pause/quiesce + vCPU save/restore + GIC state + `CNTVOFF` set + `--restore` mode + device (de)serialize |
 
 ## First three things to spike
 
