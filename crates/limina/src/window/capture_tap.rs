@@ -18,6 +18,7 @@
 use std::cell::Cell;
 use std::os::fd::RawFd;
 use std::os::raw::c_void;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Arc;
 
@@ -29,7 +30,9 @@ use limina_input::constants::{
 use limina_input::keymap::{macos_keycode_to_linux_remapped, modifier_is_down, KeyRemap};
 use limina_input::InputEvent;
 
-use super::input::{match_host_shortcut, send_event};
+use super::input::{
+    apply_capture_cursor, match_host_shortcut, send_event, HostCursor, HostShortcut,
+};
 use super::WorkerConn;
 
 type CFMachPortRef = *mut c_void;
@@ -102,6 +105,8 @@ static TAP_PORT: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 struct TapCtx {
     captured: Arc<AtomicBool>,
     conn: Arc<WorkerConn>,
+    /// Guest-cursor adoption, for the host-cursor side of a capture toggle (hide/show/re-assert).
+    host_cursor: Rc<HostCursor>,
     /// Keyboard remap policy (e.g. `--swap-cmd-opt`) — same as the local monitor uses, so keys
     /// captured here translate identically to keys handled in absolute mode.
     remap: KeyRemap,
@@ -142,16 +147,37 @@ extern "C" fn tap_callback(
     // SAFETY: `user` is the leaked `TapCtx` from `install`; the callback only runs on the main
     // run loop while that allocation is alive (the app's lifetime).
     let ctx = unsafe { &*(user as *const TapCtx) };
+    let geti = |field: u32| unsafe { CGEventGetIntegerValueField(event, field) };
+
+    // Capture toggle (Cmd-Ctrl-G) is recognized HERE, in any state, and acted on directly — never
+    // delegated to the local monitor. Reason: while captured we consume the Cmd/Ctrl flagsChanged,
+    // so the window server loses the modifier state and the passed-through G keyDown reaches the
+    // local monitor flag-stripped (its match_host_shortcut sees a bare G → no release → stuck).
+    // CGEventGetFlags here is reliable (it's read off the event, the standard tap approach).
+    if etype == KEY_DOWN {
+        let keycode = geti(FIELD_KEYBOARD_KEYCODE) as u16;
+        let flags = unsafe { CGEventGetFlags(event) };
+        if matches!(
+            match_host_shortcut(keycode, flags),
+            Some(HostShortcut::ToggleCapture)
+        ) {
+            let now = !ctx.captured.load(Ordering::Acquire);
+            ctx.captured.store(now, Ordering::Release);
+            apply_capture_cursor(now, &ctx.host_cursor);
+            return std::ptr::null_mut(); // consume — the toggle never reaches macOS or the guest
+        }
+    }
+
     if !ctx.captured.load(Ordering::Acquire) {
         return event; // not captured → let it through; the local monitor drives absolute mode
     }
-    let geti = |field: u32| unsafe { CGEventGetIntegerValueField(event, field) };
 
     // Keyboard: while captured, system combos (Cmd-Tab, Cmd-Space, Ctrl-arrows, fn keys, …) go to
-    // the GUEST, not macOS — translate to evdev and consume. The exception is our own host
-    // shortcuts (Cmd-Ctrl-F/G): pass those through so the local monitor still toggles fullscreen /
-    // releases capture. Modifiers stay balanced across the capture boundary because the matching
-    // key-up always reaches the guest via whichever path is active at release time (tap or monitor).
+    // the GUEST, not macOS — translate to evdev and consume. Capture-release (Cmd-Ctrl-G) was
+    // already handled above. The other host shortcut (Cmd-Ctrl-F fullscreen) is passed through
+    // best-effort so the local monitor still toggles it. Modifiers stay balanced across the capture
+    // boundary because the matching key-up always reaches the guest via whichever path (tap or
+    // monitor) is active at release time.
     if matches!(etype, KEY_DOWN | KEY_UP | FLAGS_CHANGED) {
         let kbd: RawFd = ctx.conn.kbd_fd();
         if kbd < 0 {
@@ -265,7 +291,12 @@ extern "C" fn tap_callback(
 /// if Accessibility permission is missing (capture then falls back to the local-monitor warp
 /// path — leaky, but it still does *something*). Call once, on the main thread, before the app
 /// run loop starts.
-pub(crate) fn install(conn: Arc<WorkerConn>, captured: Arc<AtomicBool>, remap: KeyRemap) -> bool {
+pub(crate) fn install(
+    conn: Arc<WorkerConn>,
+    captured: Arc<AtomicBool>,
+    remap: KeyRemap,
+    host_cursor: Rc<HostCursor>,
+) -> bool {
     // Read sensitivity ONCE here (never on the hot callback path). Clamp to a sane band.
     let sens = std::env::var("LIMINA_CAPTURE_SENS")
         .ok()
@@ -275,6 +306,7 @@ pub(crate) fn install(conn: Arc<WorkerConn>, captured: Arc<AtomicBool>, remap: K
     let ctx = Box::into_raw(Box::new(TapCtx {
         captured,
         conn,
+        host_cursor,
         remap,
         sens,
         accum_x: Cell::new(0.0),

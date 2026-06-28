@@ -61,6 +61,26 @@ fn main_display_center() -> NSPoint {
     )
 }
 
+/// Apply the host-cursor side of a capture transition: on grab, decouple the HW mouse, park the
+/// cursor at centre, and hide it; on release, re-couple, show it, and re-assert the guest shape.
+/// Shared by the local-monitor toggle ([`InputState::toggle_capture`]) and the capture tap, so the
+/// two stay byte-identical. Main thread only (NSCursor hide/unhide must balance).
+pub(crate) fn apply_capture_cursor(on: bool, host_cursor: &HostCursor) {
+    if on {
+        unsafe {
+            CGAssociateMouseAndMouseCursorPosition(0);
+            CGWarpMouseCursorPosition(main_display_center());
+        }
+        NSCursor::hide();
+        log::info!("pointer capture: ON (Cmd-Ctrl-G to release)");
+    } else {
+        unsafe { CGAssociateMouseAndMouseCursorPosition(1) };
+        NSCursor::unhide();
+        host_cursor.reassert();
+        log::info!("pointer capture: OFF");
+    }
+}
+
 /// A host-intercepted shortcut: recognized BEFORE the key reaches the guest, so the combo
 /// drives limina itself. The seed of the configurable-keybinding system (M8); for now just
 /// the fullscreen toggle.
@@ -192,21 +212,7 @@ impl InputState {
     pub fn toggle_capture(&self) -> bool {
         let now = !self.is_captured();
         self.captured.store(now, Ordering::Release);
-        // Main-thread only (the event monitor's thread); NSCursor hide/unhide must balance.
-        if now {
-            unsafe {
-                CGAssociateMouseAndMouseCursorPosition(0);
-                CGWarpMouseCursorPosition(main_display_center());
-            }
-            NSCursor::hide();
-            log::info!("pointer capture: ON (Cmd-Ctrl-G to release)");
-        } else {
-            unsafe { CGAssociateMouseAndMouseCursorPosition(1) };
-            NSCursor::unhide();
-            // Re-assert the guest cursor shape if the pointer is over the view.
-            self.host_cursor.reassert();
-            log::info!("pointer capture: OFF");
-        }
+        apply_capture_cursor(now, &self.host_cursor);
         now
     }
 
