@@ -49,12 +49,15 @@ memories before anyone noticed. Verified 2026-06-27 by reading each image's rpmd
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
 | **F44 stock** (`*.raw`, `*.boot.raw`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
+| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.19.10` *(co-installed beside stock `6.19.10-300`)* | 16 KiB | `26.1.3-1.limina.fc44` *(F44 SRPM + venus patches, same major → no soname dance)* | `50.1-1.limina.fc44` *(0001+0002; 0003 clipboard deferred)* | `50.0` *(stock)* |
 
 Notes: enhanced **mesa + kernel** are pinned to *our* version and `dnf versionlock`ed; enhanced
-**mutter** is rebuilt from a newer upstream 49.x point release (`49.6`) carrying our patches and runs
-over the **stock GNOME Shell `49.1`** (same `libmutter-49` ABI). F44 is currently *blocked* as an
-enhanced target by the GNOME 49→50 mutter/cogl scanout regression (see the `limina-enh-delivery`
-memory). The enhanced 16 KiB kernel ships as RPM `limina-kernel-16k` (BLS entry beside stock).
+**mutter** is rebuilt from the target distro's mutter SRPM carrying our patches over the stock GNOME
+Shell of that release (same `libmutter-NN` ABI) — F43 `49.6` over shell `49.1`, F44 `50.1` over shell
+`50.0`. **F44 enhanced is VALIDATED working (2026-06-29):** the old GNOME 49→50 mutter/cogl "scanout
+regression" / `kk_encoder.c:299` block did NOT reproduce on the clean stack — F44 16k+venus+mutter-50.1
+boots the seated desktop and runs WebGL at ~60fps on venus→KK→Metal (see `limina-enh-delivery` memory).
+The enhanced 16 KiB kernel ships as RPM `limina-kernel-16k` (BLS entry beside stock).
 
 ## Images
 
@@ -69,8 +72,8 @@ delta (`scripts/provision/f44/`, `scripts/provision/make-accessible.sh`).
 | `Fedora-Workstation-44.vanilla.raw` (+ `.xz`) | **Pristine** F44 Workstation aarch64 (official `…44-1.7.aarch64.raw.xz`; Fedora-built → SELinux labels intact, EFI-boots *enforcing* with no relabel loop). Clone source only. | ✅ renamed from `…44.raw` |
 | `Fedora-Workstation-44.accessible.raw` | **Stock base**: vanilla + gnome-initial-setup (`claude`) + pubkey + autologin + NOPASSWD sudo + `vulkan-tools` + no-idle-lock gschema + console args + relabel-clear (`make-accessible.sh`). Promoted from the existing `44.boot.raw` (already had user/ssh/autologin/sudo). | ✅ built 2026-06-29 |
 | `Fedora-Workstation-44.stock.test.raw` | **Stock-tier L2 image** — frozen CoW snapshot of `accessible` (`DEFAULT` for `LIMINA_FEDORA_REL=44`; also the seated baseline-3D vehicle). | ✅ built; `efi_boots_to_userspace` GREEN 2026-06-29 |
-| `Fedora-Workstation-44.enhanced.raw` | **Enhanced base** — `accessible` + `scripts/provision/f44/build-all.sh` → `install-enhanced.sh` (F44 SRPMs + minimal delta: 16k kernel, venus mesa 26.0.x, patched mutter 50.x). Building it is the experiment that grounds the mutter-50/KK question. | pending (patch rebases + desktop validation) |
-| `Fedora-Workstation-44.enhanced.test.raw` | **Enhanced-tier L2 image** — frozen CoW snapshot of `enhanced`. | pending |
+| `Fedora-Workstation-44.enhanced.raw` | **Enhanced base** — `accessible` + `scripts/provision/f44/` builds (16k kernel `6.19.10-limina16k`, venus mesa `26.1.3-1.limina`, patched mutter `50.1-1.limina` w/ **all 3 patches** incl 0003 clipboard, + `limina-agent`) → `install-enhanced.sh`. **✅ FINALIZED 2026-06-29**: seated GNOME, WebGL 5000-fish ~60fps on venus→KK→Metal (5-signal+pixel verified); mutter 0003 rebased to 50.1 (`ext_data_control_manager` live in `libmutter-18`); limina-agent (native gnu) active+connected; relabel-clean; build cruft removed. Kernel kept Fedora-config **with debug symbols** (no strip — ~7 GiB modules, slower boot, by choice). | ✅ finalized 2026-06-29 |
+| `Fedora-Workstation-44.enhanced.test.raw` | **Enhanced-tier L2 image** — frozen CoW snapshot of `enhanced` (`seated_fedora_from_env` for `LIMINA_FEDORA_REL=44`). Refresh: `cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw`. | ✅ snapshotted 2026-06-29 (L2 run pending) |
 
 `Fedora-Workstation-44.boot.raw` is the **pre-accessible** image (stock F44 + `claude`/autologin,
 software-2D floor pixel-verified 2026-06-20); running `make-accessible.sh` on it produces

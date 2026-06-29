@@ -64,6 +64,18 @@ grep -nE "^Version:|^Release:|^Patch9|^%autosetup|^%setup" "$SPEC" | head
 
 echo "==> [3/5] builddep (live, against this guest's repos)"
 sudo dnf -y builddep "$SPEC"
+# mesa 26.x ships Rust components whose BuildRequires are DYNAMIC (cargo2rpm via
+# %generate_buildrequires); `dnf builddep <spec>` can't see those, so rpmbuild -bb would fail on
+# crate(...) deps (paste, rustc-hash, syn, …). Generate the dynamic buildreqs (rpmbuild -br emits a
+# *.buildreqs.nosrc.rpm) and dnf-builddep that too. Loop a couple times in case resolving one tier
+# reveals another.
+for _ in 1 2 3; do
+  rpmbuild -br "$SPEC" >/dev/null 2>&1 || true
+  BR=$(ls -t "$HOME"/rpmbuild/SRPMS/mesa-*.buildreqs.nosrc.rpm 2>/dev/null | head -1)
+  [ -n "$BR" ] || break
+  sudo dnf -y builddep "$BR" 2>&1 | tail -2
+  rpmbuild -br "$SPEC" >/dev/null 2>&1 && break || true
+done
 
 echo "==> [4/5] rpmbuild"
 # If %prep fails on Patch9009/9010, the venus present-fix needs rebasing onto mesa $MESA_VER —

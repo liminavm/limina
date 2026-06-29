@@ -2,23 +2,23 @@ diff --git a/src/meson.build b/src/meson.build
 index 508c341..edc6be4 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -619,6 +619,8 @@ if have_wayland
-     'wayland/meta-wayland-cursor-surface.h',
-     'wayland/meta-wayland-data-device.c',
-     'wayland/meta-wayland-data-device.h',
-+    'wayland/meta-wayland-data-control.c',
-+    'wayland/meta-wayland-data-control.h',
-     'wayland/meta-wayland-data-device-primary.c',
-     'wayland/meta-wayland-data-device-primary.h',
-     'wayland/meta-wayland-data-offer.c',
-@@ -1163,6 +1165,7 @@ if have_wayland
-     ['commit-timing', 'staging', 1, ],
-     ['cursor-shape', 'staging', 1, ],
-     ['drm-lease', 'staging', 1, ],
-+    ['ext-data-control-v1', 'private', ],
-     ['fractional-scale', 'staging', 1, ],
-     ['fifo', 'staging', 1, ],
-     ['gtk-shell', 'private', ],
+@@ -544,6 +544,8 @@ mutter_sources = [
+   'wayland/meta-wayland-cursor-surface.h',
+   'wayland/meta-wayland-data-device.c',
+   'wayland/meta-wayland-data-device.h',
++  'wayland/meta-wayland-data-control.c',
++  'wayland/meta-wayland-data-control.h',
+   'wayland/meta-wayland-data-device-primary.c',
+   'wayland/meta-wayland-data-device-primary.h',
+   'wayland/meta-wayland-data-offer.c',
+@@ -1059,6 +1059,7 @@ wayland_protocols = [
+   ['commit-timing', 'staging', 1, ],
+   ['cursor-shape', 'staging', 1, ],
+   ['drm-lease', 'staging', 1, ],
++  ['ext-data-control-v1', 'private', ],
+   ['fractional-scale', 'staging', 1, ],
+   ['fifo', 'staging', 1, ],
+   ['gtk-shell', 'private', ],
 diff --git a/src/wayland/meta-wayland-data-control.c b/src/wayland/meta-wayland-data-control.c
 new file mode 100644
 index 0000000..bd910de

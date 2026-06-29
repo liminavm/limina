@@ -45,13 +45,21 @@ SPEC="$HOME/rpmbuild/SPECS/mutter.spec"
 # %autosetup applies all declared PatchN in order, so ours apply last (on top of Fedora patches).
 LAST_PATCH_LINE=$( { grep -nE "^Patch[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
 [ -n "$LAST_PATCH_LINE" ] || LAST_PATCH_LINE=$( { grep -nE "^Source[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
-ins="Patch9001: 0001-32-stencil-clip-degrade-fix.patch\nPatch9002: 0002-x11-survive-frames-client-launch-failure.patch\nPatch9003: 0003-ext-data-control-v1.patch"
-sed -i "${LAST_PATCH_LINE}a ${ins}" "$SPEC"
+# Declare a PatchNNNN line for EACH patches/mutter/*.patch present (numbered 9000 + the file's
+# numeric prefix), built dynamically so adding/removing/skipping a patch is just adding/removing
+# its file — no hardcoded list to keep in sync. %autosetup applies them in number order, last.
+ins=""; nums=""
+for p in $(ls "$PATCHES"/*.patch | sort); do
+  bn=$(basename "$p"); pfx=$(echo "$bn" | grep -oE "^[0-9]+" || echo "000"); num=$((9000 + 10#$pfx))
+  ins="${ins}Patch${num}: ${bn}\n"; nums="$nums $num"
+done
+sed -i "${LAST_PATCH_LINE}a ${ins%\\n}" "$SPEC"
 # Fedora mutter uses `%autosetup -S git` (git am, needs mailbox patches); OUR patches are plain
 # `git diff` output -> switch to `%autosetup -p1` (GNU patch) so both apply by context.
 sed -i -E "s/^%autosetup -S git/%autosetup -p1/" "$SPEC"
 if ! grep -qE "^%autosetup" "$SPEC"; then
-  sed -i "/^%setup/a %patch -P 9001 -p1\n%patch -P 9002 -p1\n%patch -P 9003 -p1" "$SPEC"
+  fb=""; for num in $nums; do fb="${fb}%patch -P ${num} -p1\n"; done
+  sed -i "/^%setup/a ${fb%\\n}" "$SPEC"
 fi
 # Bump Release with a .limina tag so our same-version build outranks stock (l > f in rpm compare).
 sed -i -E "s/^(Release:[[:space:]]*)([^%[:space:]]+)/\1\2.limina/" "$SPEC"

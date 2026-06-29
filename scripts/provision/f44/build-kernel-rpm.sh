@@ -59,6 +59,13 @@ for p in "$PATCHES"/*.patch; do
   else echo "    SKIP $(basename "$p") (does not apply — likely already upstream)"; fi
 done
 shopt -u nullglob
+# We git-apply patches WITHOUT committing, so the tree is "dirty" and scripts/setlocalversion (which
+# in current kernels IGNORES an empty .scmversion) appends `-dirty` to the release even with
+# LOCALVERSION_AUTO=n — e.g. 6.19.10-limina16k-dirty, whose second dash is an INVALID rpm EVR for
+# `Provides: kernel-uname-r`, so packaging fails. Remove the git metadata so setlocalversion finds
+# no SCM and emits NO suffix → clean 6.19.10-limina16k. (Re-runs re-clone via the step-2 guard;
+# a shallow clone is cheap.)
+rm -rf "$BUILD/.git"
 
 echo "==> [4/6] Fedora config + the 16k delta"
 cp -f "$CONFIG_BASE" .config
