@@ -42,7 +42,7 @@ cd "$(dirname "$0")/.."
 
 PROFILE="${1:-debug}"
 KERNEL="${LIMINA_TEST_KERNEL_16K:-target/test-guest/kernel/Image-16k}"
-DISK_SRC="${LIMINA_DISK:-Fedora-Workstation-43.enhanced.raw}"
+DISK_SRC="${LIMINA_DISK:-Fedora-Workstation-${LIMINA_FEDORA_REL:-43}.enhanced.raw}"
 RAM="${LIMINA_FEDORA_RAM_MIB:-4096}"
 CPUS="${LIMINA_FEDORA_CPUS:-4}"
 SIZE="${LIMINA_DISPLAY_SIZE:-1280x800}"

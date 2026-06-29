@@ -44,18 +44,29 @@ const DEFAULT_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
 /// firmware → GRUB → kernel all render to the virtio-gpu scanout — the windowed boot console.
 const DEFAULT_GOP_FIRMWARE: &str = "target/krun-efi/KRUN_EFI.gop.fd";
 
-/// The **stock-tier** guest image the tests boot from, by default — a **frozen CoW snapshot** of
-/// the clean pristine-stock base `Fedora-Workstation-43.accessible.raw` (stock 4 KiB kernel, stock
-/// mesa 25.2.4, `claude` user + SSH key + autologin baked, no limina enhancements). It MUST stay
-/// stock: the EFI boot tests (`fedora_from_env`) boot its own **stock Fedora kernel** to prove the
-/// compatibility floor, and the venus tests (`enhanced_fedora_from_env`) boot it with an external
-/// 16 KiB kernel to prove **stock mesa's venus works on 16 KiB pages** — both lose meaning on an
-/// enhanced image. Created once with
-/// `cp -c Fedora-Workstation-43.accessible.raw Fedora-Workstation-43.stock.test.raw` (APFS clone:
-/// instant, shares blocks). Refresh by re-cloning. Per-run the harness still makes its own writable
-/// clone for net/disk-root boots. Override: `LIMINA_TEST_DISK`. The ENHANCED-tier counterpart is
-/// `Fedora-Workstation-43.enhanced.test.raw` (see [`GuestConfig::seated_fedora_from_env`]).
-const DEFAULT_TEST_DISK: &str = "Fedora-Workstation-43.stock.test.raw";
+/// The Fedora release the L2 image set targets — `LIMINA_FEDORA_REL` (default `"43"`). The image
+/// set is mirrored per release (`vanilla`/`accessible`/`stock.test`/`enhanced`/`enhanced.test`), so
+/// the suite runs against either F43 or F44 by flipping this one var. Per-image overrides
+/// (`LIMINA_TEST_DISK`, `LIMINA_TEST_DISK_ENH`, …) still win when set.
+fn fedora_rel() -> String {
+    std::env::var("LIMINA_FEDORA_REL").unwrap_or_else(|_| "43".to_string())
+}
+
+/// Resolve a release-specific guest image by ROLE → `Fedora-Workstation-<REL>.<role>.raw` in the
+/// repo root. Key roles:
+/// - `stock.test` — the **stock-tier** frozen CoW snapshot of `accessible` (stock kernel/mesa,
+///   `claude` + SSH key + autologin, no enhancements). MUST stay stock: the EFI boot tests
+///   (`fedora_from_env`) boot its own stock Fedora kernel to prove the compatibility floor, and the
+///   venus tests (`enhanced_fedora_from_env`) boot it with an external 16 KiB kernel to prove stock
+///   mesa's venus works on 16 KiB pages.
+/// - `enhanced.test` — the venus golden ([`GuestConfig::seated_fedora_from_env`]).
+///
+/// Created once with `cp -c Fedora-Workstation-<REL>.accessible.raw Fedora-Workstation-<REL>.<role>.raw`
+/// (APFS clone: instant, shares blocks); refresh by re-cloning. Per-run the harness still makes its
+/// own writable clone for net/disk-root boots.
+fn fedora_image(role: &str) -> PathBuf {
+    repo_root().join(format!("Fedora-Workstation-{}.{role}.raw", fedora_rel()))
+}
 
 /// Loopback host gvproxy binds its inbound SSH forward on (`<host>:<ssh_port> → 192.168.127.2:22`;
 /// with the well-known vfkit MAC the guest gets the static `.2` lease, so this reaches its sshd).
@@ -294,7 +305,7 @@ impl GuestConfig {
 
         let disk = match std::env::var("LIMINA_TEST_DISK") {
             Ok(p) => PathBuf::from(p),
-            Err(_) => repo_root().join(DEFAULT_TEST_DISK),
+            Err(_) => fedora_image("stock.test"),
         };
         anyhow::ensure!(
             disk.exists(),
@@ -354,12 +365,13 @@ impl GuestConfig {
 
     /// L2 baseline-tier config: a **stock 4 KiB** Fedora that **autologins to a seated GNOME
     /// session**, EFI-booted on the GOP firmware. The vehicle for baseline-3D (virgl) tests that
-    /// need a real GL session over SSH — `Fedora-Workstation-44.boot.raw` (vanilla F44 + autologin
-    /// `claude`, no enhancements; see memory `limina-fedora-access` / `docs/images.md`). Pair with
+    /// need a real GL session over SSH — this release's seated stock desktop, the same
+    /// `Fedora-Workstation-<REL>.stock.test.raw` the other stock tests use (`accessible` autologins,
+    /// so its `stock.test` snapshot is a seated session; see `docs/images.md`). Pair with
     /// [`with_coexist_display`](GuestConfig::with_coexist_display) +
     /// [`with_virgl_host_gl`](GuestConfig::with_virgl_host_gl) + [`with_net`](GuestConfig::with_net).
     ///
-    /// Overrides: `LIMINA_TEST_DISK_BASELINE` (default `Fedora-Workstation-44.boot.raw`),
+    /// Overrides: `LIMINA_TEST_DISK_BASELINE` (default = this release's `stock.test`),
     /// `LIMINA_GOP_FIRMWARE` (default `target/krun-efi/KRUN_EFI.gop.fd`), plus the usual
     /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the GOP firmware
     /// or the baseline disk is missing.
@@ -374,7 +386,7 @@ impl GuestConfig {
         );
         let disk = match std::env::var("LIMINA_TEST_DISK_BASELINE") {
             Ok(p) => PathBuf::from(p),
-            Err(_) => repo_root().join("Fedora-Workstation-44.boot.raw"),
+            Err(_) => fedora_image("stock.test"),
         };
         anyhow::ensure!(
             disk.exists(),
@@ -493,7 +505,7 @@ impl GuestConfig {
         );
         let disk = match std::env::var("LIMINA_TEST_DISK") {
             Ok(p) => PathBuf::from(p),
-            Err(_) => repo_root().join(DEFAULT_TEST_DISK),
+            Err(_) => fedora_image("stock.test"),
         };
         anyhow::ensure!(
             disk.exists(),
@@ -531,7 +543,7 @@ impl GuestConfig {
     }
 
     /// Like [`GuestConfig::enhanced_fedora_from_env`], but booting the **seated ENHANCED test
-    /// golden** (`Fedora-Workstation-43.enhanced.test.raw`, override `LIMINA_TEST_DISK_ENH`): the
+    /// golden** (`Fedora-Workstation-<REL>.enhanced.test.raw`, override `LIMINA_TEST_DISK_ENH`): the
     /// RPM-delivered enhanced image (16k kernel + mesa 26.2 venus at `/usr` + patched mutter) with
     /// gdm autologin to a gnome-shell-on-venus session, plus the test tooling baked in —
     /// `apitrace`/`eglretrace` and `/opt/gfxreconstruct/bin/gfxrecon-replay` (see
@@ -548,7 +560,7 @@ impl GuestConfig {
         let mut cfg = GuestConfig::enhanced_fedora_from_env()?;
         let disk = match std::env::var("LIMINA_TEST_DISK_ENH") {
             Ok(p) => PathBuf::from(p),
-            Err(_) => repo_root().join("Fedora-Workstation-43.enhanced.test.raw"),
+            Err(_) => fedora_image("enhanced.test"),
         };
         anyhow::ensure!(
             disk.exists(),

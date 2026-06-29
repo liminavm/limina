@@ -11,7 +11,7 @@
 # run, so every launch starts from the same clean state and the original is never written.
 #
 # Usage: scripts/run-fedora-window.sh [debug|release]
-#   Env: LIMINA_FEDORA_IMAGE (default ./Fedora-Workstation-43.raw),
+#   Env: LIMINA_FEDORA_REL (43|44, default 43), LIMINA_FEDORA_IMAGE (default Fedora-Workstation-<REL>.accessible.raw),
 #        LIMINA_FIRMWARE (default: our GOP firmware target/krun-efi/KRUN_EFI.gop.fd if built —
 #                       so EFI/GRUB also render in the window — else krunkit's silent .fd),
 #        LIMINA_FEDORA_RAM_MIB (default 6144), LIMINA_FEDORA_CPUS (default 4),
@@ -29,7 +29,7 @@ CARGO_FLAGS=()
 if [ -n "${LIMINA_FEDORA_IMAGE:-}" ]; then
     IMAGE="$LIMINA_FEDORA_IMAGE"
 else
-    IMAGE="Fedora-Workstation-43.accessible.raw"
+    IMAGE="Fedora-Workstation-${LIMINA_FEDORA_REL:-43}.accessible.raw"
     echo "==> using $IMAGE (clean pristine-stock base + user/autologin) — one clean boot to GDM"
 fi
 # Prefer our GOP firmware (VirtioGpuDxe + ConOut patch) so EFI/GRUB render in the window too;
@@ -45,7 +45,7 @@ else
     echo "==> using silent firmware (no GOP); build it for a graphical boot console:" >&2
     echo "    GOP=1 scripts/build-krun-efi.sh   (then re-run; or set LIMINA_FIRMWARE)" >&2
 fi
-SCRATCH="Fedora-Workstation-43.scratch.raw"   # *.raw is gitignored
+SCRATCH="Fedora-Workstation-${LIMINA_FEDORA_REL:-43}.scratch.raw"   # *.raw is gitignored
 RAM="${LIMINA_FEDORA_RAM_MIB:-6144}"
 CPUS="${LIMINA_FEDORA_CPUS:-4}"
 SIZE="${LIMINA_DISPLAY_SIZE:-1280x800}"

@@ -19,6 +19,14 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
   double-count shared data; deleting a clone only frees the blocks it *uniquely* owns. Don't expect
   freed space to equal the listed size.
 - The worker (`limina-vmm`) must be codesigned for HVF before any boot: `crates/limina-vmm/sign.sh debug`.
+- **Release selector + naming.** The set is mirrored per Fedora release under a uniform scheme
+  `Fedora-Workstation-<REL>.<role>.raw`, roles: `vanilla` (pristine), `accessible` (stock base +
+  user/autologin), `stock.test` (frozen stock-tier L2 snapshot), `enhanced` (venus base),
+  `enhanced.test` (frozen enhanced-tier L2 snapshot). **`LIMINA_FEDORA_REL=43|44` (default `43`)**
+  picks the release for the run scripts (`run-fedora-window.sh`, `run-enhanced.sh`,
+  `run-venus-window.sh`) and the L2 harness (`crates/limina-test`); per-image overrides
+  (`LIMINA_TEST_DISK`, `LIMINA_TEST_DISK_ENH`, `LIMINA_TEST_DISK_BASELINE`) still win. This is the
+  template for future releases (F45): produce the five roles, flip the selector.
 
 ## The two tiers (see `CLAUDE.md`)
 
@@ -50,14 +58,24 @@ memory). The enhanced 16 KiB kernel ships as RPM `limina-kernel-16k` (BLS entry 
 
 ## Images
 
-### Fedora 44 — the clean baseline (added 2026-06-20)
+### Fedora 44 — mirrored image set (in progress, started 2026-06-29)
 
-| Image | Role |
-|---|---|
-| `Fedora-Workstation-44.raw` | **Pristine** Fedora 44 Workstation aarch64, decompressed from the official download (`Fedora-Workstation-Disk-44-1.7.aarch64.raw.xz`). Fedora-built → SELinux labels intact, so it EFI-boots *enforcing* with **no relabel loop** (unlike the F43 dev images). **Clone source only — never boot directly.** |
-| `Fedora-Workstation-44.raw.xz` | Compressed pristine source. Re-decompress (`xz -dk`) to reset `…44.raw` to factory. Re-downloadable, kept as the cheap reset point. |
-| `Fedora-Workstation-44.boot.raw` | CoW clone used to **validate the software-2D floor** (the vanilla GNOME desktop renders in llvmpipe with zero guest edits — pixel-verified 2026-06-20). User then ran gnome-initial-setup and enabled **autologin for `claude`**. This is the documented **vanilla-baseline-with-user** image: stock F44 kernel (4 KiB), software-2D, *no* limina enhancements. |
-| `f44-edk2-build.raw` | ⚠️ **RETIRED 2026-06-25** (staged in `images-staging-delete/`, expires 2026-07-02). Was the EDK2 firmware build VM. Superseded by the **unified `limina-build` container image** (see below): the EDK2 build (`scripts/build-krun-efi.sh`) now runs there like every other Linux build, so there's no longer a separate firmware VM to keep warm. The container's old edit→build mtime-skew problem (the original reason a VM was preferred) is moot now the windowed-hang root-cause work is done — production firmware builds are clean from-scratch, which the image + its persistent `limina-edk2-build` source volume handle. |
+Mirrors the F43 five-role layout (see the release selector in Conventions); select with
+`LIMINA_FEDORA_REL=44`. Built natively in-guest from Fedora's own F44 SRPMs + a minimal limina
+delta (`scripts/provision/f44/`, `scripts/provision/make-accessible.sh`).
+
+| Image | Role | Status |
+|---|---|---|
+| `Fedora-Workstation-44.vanilla.raw` (+ `.xz`) | **Pristine** F44 Workstation aarch64 (official `…44-1.7.aarch64.raw.xz`; Fedora-built → SELinux labels intact, EFI-boots *enforcing* with no relabel loop). Clone source only. | rename of `Fedora-Workstation-44.raw` (pending) |
+| `Fedora-Workstation-44.accessible.raw` | **Stock base**: vanilla + gnome-initial-setup (`claude`) + pubkey + autologin + NOPASSWD sudo + `vulkan-tools` + no-idle-lock gschema + console args (`make-accessible.sh`). Promoted from the existing `44.boot.raw` (already had user/ssh/autologin/sudo). | pending |
+| `Fedora-Workstation-44.stock.test.raw` | **Stock-tier L2 image** — frozen CoW snapshot of `accessible` (`DEFAULT` for `LIMINA_FEDORA_REL=44`; also the seated baseline-3D vehicle). | pending |
+| `Fedora-Workstation-44.enhanced.raw` | **Enhanced base** — `accessible` + `scripts/provision/f44/build-all.sh` → `install-enhanced.sh` (F44 SRPMs + minimal delta: 16k kernel, venus mesa 26.0.x, patched mutter 50.x). Building it is the experiment that grounds the mutter-50/KK question. | pending (patch rebases + desktop validation) |
+| `Fedora-Workstation-44.enhanced.test.raw` | **Enhanced-tier L2 image** — frozen CoW snapshot of `enhanced`. | pending |
+
+`Fedora-Workstation-44.boot.raw` is the **pre-accessible** image (stock F44 + `claude`/autologin,
+software-2D floor pixel-verified 2026-06-20); running `make-accessible.sh` on it produces
+`accessible.raw`. `f44-edk2-build.raw` — **RETIRED 2026-06-25** (`images-staging-delete/`, expires
+2026-07-02): the EDK2 firmware build moved to the unified `limina-build` container image (below).
 
 ## The unified build image (`limina-build:fc43`)
 
