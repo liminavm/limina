@@ -108,10 +108,15 @@ fn venus_survives_virtio_gpu_reset() {
         .expect("rebinding virtio-gpu");
 
     // Wait for the render node to come back (in the degraded case the kernel spends ~6s timing
-    // out on cap set 0 before it reappears, so poll rather than a fixed sleep).
+    // out on cap set 0 before it reappears, so poll rather than a fixed sleep). NB: a rebind gets
+    // a *fresh* DRM minor — the node returns as renderD129, renderD130, … not renderD128 — so
+    // match any renderD12* rather than the original number (else this never matches post-reset).
     guest
-        .ssh_poll("test -e /dev/dri/renderD128", Duration::from_secs(30))
-        .expect("renderD128 never reappeared after rebind");
+        .ssh_poll(
+            "ls /dev/dri/renderD* >/dev/null 2>&1",
+            Duration::from_secs(30),
+        )
+        .expect("no render node (renderD12*) reappeared after rebind");
 
     // The decisive check: venus is STILL the renderer after the reset (not degraded to llvmpipe).
     let vk_after = guest.ssh_exec(VK_PROBE).expect("vulkaninfo (after reset)");

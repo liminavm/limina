@@ -51,6 +51,13 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   Image) + `crates/limina-test/tests/hvf_graceful.rs` — verified RED (SIGABRT) before, GREEN after.
 
 ## M4 venus residue
+- **GLX / Xwayland apps render black on venus** (open, low priority — reported 2026-06-29) — on the F44
+  enhanced tier, `glmark2` (no args → GLX) and `glxgears` show a **black window**; native-Wayland GL
+  (Firefox WebGL, glmark2-wayland) is fine. Smells like the known X11/Xwayland-on-venus weakness the
+  `venus_replay` X11 EGL probe already trips over ("the kopper X11 regression", `venus_replay.rs:211`):
+  GLX contexts over Xwayland either fail to create or render to a buffer that never reaches the
+  screen. User doesn't rely on GLX apps, so deferred — but worth a quick look (start: does the GLX
+  context create? is it the Xwayland kopper/zink present path vs the native venus path?).
 - **virtio-gpu flip-completion gap** — ✅ **RESOLVED (verified 2026-06-23); item was stale.** Already
   fixed by `patches/linux/0001` (drm/virtio fence blob-scanout flushes, 2026-06-11): host3d_blob
   (venus) scanout FBs now carry the same fence the dumb path has, so `virtio_gpu_resource_flush`
