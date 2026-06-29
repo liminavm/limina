@@ -71,7 +71,11 @@ sudo dnf -y builddep "$SPEC"
 # reveals another.
 for _ in 1 2 3; do
   rpmbuild -br "$SPEC" >/dev/null 2>&1 || true
-  BR=$(ls -t "$HOME"/rpmbuild/SRPMS/mesa-*.buildreqs.nosrc.rpm 2>/dev/null | head -1)
+  # `|| true`: when the dynamic crate buildreqs are already satisfied, rpmbuild -br emits NO
+  # buildreqs.nosrc.rpm, so the glob matches nothing and `ls` exits non-zero — which under
+  # set -e/pipefail would kill the script at this assignment (before [4/5]). Empty BR is fine:
+  # the next line breaks the loop and proceeds straight to the build.
+  BR=$(ls -t "$HOME"/rpmbuild/SRPMS/mesa-*.buildreqs.nosrc.rpm 2>/dev/null | head -1) || true
   [ -n "$BR" ] || break
   sudo dnf -y builddep "$BR" 2>&1 | tail -2
   rpmbuild -br "$SPEC" >/dev/null 2>&1 && break || true
