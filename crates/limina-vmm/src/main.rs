@@ -204,9 +204,10 @@ fn parse_share(spec: &str) -> Result<FsShare> {
 }
 
 fn main() -> Result<()> {
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Info)
-        .init();
+    // Default to warn-and-up so a production run is quiet (the per-frame GPU device chatter
+    // lives at trace/debug). RUST_LOG overrides it — e.g. RUST_LOG=debug for venus host-init,
+    // RUST_LOG=trace for the present-path DIAGs ([FLUSH2]/[FENCEPRESENT]).
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     let cli = Cli::parse();
 

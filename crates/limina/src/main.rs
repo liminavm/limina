@@ -189,9 +189,10 @@ fn main() -> Result<()> {
         gateway::run_reaper();
     }
 
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Info)
-        .init();
+    // Default to warn-and-up so a production run is quiet; RUST_LOG overrides it (RUST_LOG=info
+    // restores the lifecycle log). User-facing output (e.g. the SSH-forward hint below) is
+    // printed directly, not via the logger, so it survives the default level.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     let cli = Cli::parse();
     let vmm_bin = resolve_vmm_bin(cli.vmm_bin).context("locating the limina-vmm worker binary")?;
@@ -409,7 +410,8 @@ fn main() -> Result<()> {
         let gw = gateway::start(cli.net_log.as_deref(), cli.ssh_port)
             .context("starting the gvproxy NAT gateway")?;
         // Surface the resolved port — with auto-allocation the user can't know it in advance.
-        log::info!(
+        // User-facing output: print directly so it shows at the default warn level.
+        println!(
             "guest SSH forward ready: ssh -p {} <user>@127.0.0.1",
             gw.ssh_port()
         );

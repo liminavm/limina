@@ -63,6 +63,19 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   use GLX apps → deferred. Investigation start: the kopper DRI3 pixmap sharing / X Present on a
   venus-backed Xwayland (is the present-buffer a virtio-gpu blob that isn't flushed/attached to the
   Xwayland Wayland surface?); compare client-direct DRI3 present vs Xwayland glamor.
+- **Stock/basic tier: guest Vulkan doesn't degrade to lavapipe** (open, to investigate — reported
+  2026-06-29 while dogfooding) — on the basic tier (stock F44, 4 KiB pages, virgl GL works, no venus),
+  guest Vulkan apps **fail** instead of falling back to **lavapipe** (Mesa's CPU/llvmpipe Vulkan). This
+  breaks the two-tier graceful-degradation guarantee: the stock baseline should still offer *working* (if
+  slow) Vulkan via lavapipe when hardware/venus Vulkan is unavailable. Likely cause: stock Fedora ships the
+  **venus ICD** (`libvulkan_virtio.so`), which on a 4 KiB-page guest under the 16 KiB host fails init
+  (`vkEnumeratePhysicalDevices → ERROR_INITIALIZATION_FAILED`), and the Vulkan loader doesn't fall through
+  to lavapipe — either lavapipe (`libvulkan_lvp.so`) isn't installed, or the loader picks the failing venus
+  ICD and stops. Investigation start: in a basic guest, `ls /usr/share/vulkan/icd.d/` + `vulkaninfo` ICD
+  enumeration (is lavapipe present? does `VK_ICD_FILENAMES`→lvp work?), then decide the fix (ensure
+  lavapipe + loader fall-through, or a venus ICD that declines cleanly so the loader tries the next). The
+  enhanced tier (16k + venus) is unaffected — venus enumerates the real GPU there; this is a *basic-tier*
+  usability gap.
 - **virtio-gpu flip-completion gap** — ✅ **RESOLVED (verified 2026-06-23); item was stale.** Already
   fixed by `patches/linux/0001` (drm/virtio fence blob-scanout flushes, 2026-06-11): host3d_blob
   (venus) scanout FBs now carry the same fence the dumb path has, so `virtio_gpu_resource_flush`

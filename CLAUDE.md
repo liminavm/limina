@@ -131,8 +131,9 @@ tracks claims still needing verification.
   Still: **verify with `otool -L target/debug/limina-vmm | grep virgl`** (must show
   `third_party/virgl-prefix/…`); if the worker log shows `degrading to software-2D` /
   `ComponentError(-1)` after `virgl_flags`, check the link before suspecting venus. To debug
-  venus host init, bump `crates/limina-vmm/src/main.rs` `filter_level(Info)` → `Debug` (it
-  overrides `RUST_LOG`).
+  venus host init, run with `RUST_LOG=debug` (the worker + supervisor default to `warn` and now
+  honor `RUST_LOG` — `RUST_LOG=limina_vmm=debug` for just the worker, `RUST_LOG=trace` adds the
+  per-frame GPU present DIAGs `[FLUSH2]`/`[FENCEPRESENT]`).
 - **fmt + clippy stay clean.** A pre-commit hook (`.githooks/pre-commit`, enabled via
   `scripts/setup-hooks.sh` → `core.hooksPath`) runs `cargo fmt --check` on every workspace
   we own and `cargo clippy --workspace -- -D warnings` on the shipped code (+ the guest at
