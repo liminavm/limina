@@ -22,8 +22,11 @@
 #   2. mesa RPMs (26.2)  -> replace stock mesa at /usr (zink GL + venus Vulkan);            LOCKED
 #   3. mutter RPMs       -> replace stock mutter at /usr (patched compositor);          NOT locked
 #                          (mutter tracks the distro/gnome-shell version; see limina-enh-delivery)
-#   4. driver-select env -> /etc/environment.d (route GL through zink->venus, force the venus ICD)
-#   5. GRUB              -> default to the 16k kernel + auto-boot (unattended)
+#   4. limina-agent      -> /usr/local/bin + unit (clipboard, dynamic resize, PSI autoballoon).
+#                          OPTIONAL: installed only if staged into the payload, and SELinux-
+#                          relabeled so it starts on a stock (Enforcing) guest.
+#   5. driver-select env -> /etc/environment.d (route GL through zink->venus, force the venus ICD)
+#   6. GRUB              -> default to the 16k kernel + auto-boot (unattended)
 #
 # Usage (in guest):  sudo /path/to/install-enhanced.sh [PAYLOAD_DIR]
 #   PAYLOAD_DIR defaults to the script's own directory (the mounted share).
@@ -75,7 +78,40 @@ echo "$MUTTER_RPMS" | sed 's#.*/#     #'
 dnf install -y --allowerasing $MUTTER_RPMS
 echo "   patched mutter installed"
 
-### 4. driver selection: GL via zink -> venus (force the venus ICD over lavapipe) #
+### 4. limina-agent -> /usr/local/bin + unit (OPTIONAL; present iff staged into the payload) ##
+# Folds in what scripts/install-guest-agent.sh used to do over SSH, so the whole enhanced upgrade
+# rides the one offline virtiofs channel. Without the agent, clipboard / dynamic display resize /
+# PSI autoballoon / share auto-mount stay inactive — so a payload that ships it is preferred, but
+# its absence is non-fatal (two-tier: each feature lights up on its own prerequisite).
+AGENT_BIN="$PAYLOAD/limina-agent"
+if [ -f "$AGENT_BIN" ]; then
+  echo "-- installing limina-agent + unit"
+  install -m 0755 "$AGENT_BIN" /usr/local/bin/limina-agent
+  UNIT="$PAYLOAD/limina-agent.service"
+  [ -f "$UNIT" ] && install -m 0644 "$UNIT" /etc/systemd/system/limina-agent.service
+  # Flat (linear) pointer profile so captured mouselook doesn't double-accelerate; ships as a
+  # gschema DEFAULT override (a user gsettings override still wins; stock guests are unaffected).
+  GSCHEMA="$PAYLOAD/90-limina-pointer.gschema.override"
+  if [ -f "$GSCHEMA" ]; then
+    install -m 0644 "$GSCHEMA" /usr/share/glib-2.0/schemas/
+    glib-compile-schemas /usr/share/glib-2.0/schemas/ >/dev/null 2>&1 || true
+  fi
+  # SELinux: a freshly-converted stock guest runs Enforcing, so relabel what we just dropped (the
+  # dev guest dodges this with selinux=0). A no-op on a permissive/disabled guest.
+  if command -v restorecon >/dev/null 2>&1; then
+    restorecon -v /usr/local/bin/limina-agent /etc/systemd/system/limina-agent.service 2>/dev/null || true
+  fi
+  systemctl daemon-reload
+  if systemctl enable --now limina-agent 2>/dev/null; then
+    echo "   limina-agent enabled (active: $(systemctl is-active limina-agent 2>/dev/null || echo unknown))"
+  else
+    echo "   WARN limina-agent failed to start (check: journalctl -u limina-agent)"
+  fi
+else
+  echo "-- no limina-agent in payload; skipping (clipboard / dynamic resize / PSI stay inactive)"
+fi
+
+### 5. driver selection: GL via zink -> venus (force the venus ICD over lavapipe) #
 # mesa now lives at /usr, so this is plain driver-selection env (no LD_LIBRARY_PATH/prefix). Our
 # mesa-vulkan-drivers ships BOTH lavapipe (lvp) and venus (virtio) ICDs, so pin venus for zink;
 # otherwise zink may enumerate lavapipe first and run GL on the CPU. On a stock-4k fallback boot
@@ -92,7 +128,7 @@ mkdir -p /etc/environment.d
 } > /etc/environment.d/90-limina-zink.conf
 sed 's/^/   /' /etc/environment.d/90-limina-zink.conf
 
-### 5. GRUB: default to the 16k kernel + unattended auto-boot ####################
+### 6. GRUB: default to the 16k kernel + unattended auto-boot ####################
 echo "-- GRUB default -> $KREL, auto-boot"
 grubby --set-default="/boot/vmlinuz-$KREL"
 grub2-editenv - unset boot_indeterminate menu_auto_hide 2>/dev/null || true

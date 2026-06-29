@@ -7,7 +7,8 @@
 # Bundles the entire host venus/GL dylib closure into Contents/Frameworks, relocated
 # to @rpath so it resolves relative to the app (no /Volumes/mesa-cs, no third_party
 # prefixes, no Homebrew). Generates a relative-path KosmicKrisp ICD, copies the GOP
-# firmware, writes Info.plist, and ad-hoc codesigns inside-out. The supervisor sets the
+# firmware and the gvproxy NAT helper (so `--net` works on a Mac without Homebrew),
+# writes Info.plist, and ad-hoc codesigns inside-out. The supervisor sets the
 # remaining bundle-relative venus env (VK_ICD_FILENAMES + the zink-on-KK Mesa selectors)
 # when it detects it's running from the bundle — see crates/limina/src/venus_env.rs.
 #
@@ -39,9 +40,12 @@ DLOPEN_ROOTS=(
   "$ZINK/libgallium-26.2.0-devel.dylib"
 )
 GOP_FD="$ROOT/target/krun-efi/KRUN_EFI.gop.fd"
+# gvproxy (user-mode NAT for `--net`); vendored into the bundle so networking works on a
+# Homebrew-less Mac. Override the source with LIMINA_GVPROXY_BIN; defaults to Homebrew's.
+GVPROXY="${LIMINA_GVPROXY_BIN:-/opt/homebrew/bin/gvproxy}"
 
-for f in "$VIRGL" "$EPOXY" "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$GOP_FD"; do
-  [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(mount third_party/mesa-cs.sparseimage and build KK/zink, or build the GOP firmware first)" >&2; exit 1; }
+for f in "$VIRGL" "$EPOXY" "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$GOP_FD" "$GVPROXY"; do
+  [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(mount third_party/mesa-cs.sparseimage and build KK/zink, build the GOP firmware, or 'brew install gvproxy' / set LIMINA_GVPROXY_BIN)" >&2; exit 1; }
 done
 
 echo "==> building limina + limina-vmm ($PROFILE)"
@@ -52,6 +56,9 @@ rm -rf "$APP"
 mkdir -p "$MACOS" "$FW" "$RES/vulkan"
 cp "$ROOT/target/$PROFILE/limina" "$MACOS/limina"
 cp "$ROOT/target/$PROFILE/limina-vmm" "$MACOS/limina-vmm"
+# gvproxy alongside the binaries (Contents/MacOS/gvproxy); gateway.rs resolves it bundle-relative.
+cp "$GVPROXY" "$MACOS/gvproxy"
+chmod u+w "$MACOS/gvproxy"
 
 # ---- recursive dylib bundler -----------------------------------------------------
 # Copy a dylib into Frameworks, set its id to @rpath/<leaf>, then for every non-system
@@ -140,6 +147,7 @@ PLIST
 echo "==> ad-hoc codesigning (dylibs → worker → supervisor → app)"
 find "$FW" -type f -name '*.dylib' -exec codesign -s - --force {} \;
 codesign -s - --force --entitlements "$ROOT/crates/limina-vmm/hvf-entitlements.plist" "$MACOS/limina-vmm"
+codesign -s - --force "$MACOS/gvproxy"
 codesign -s - --force "$MACOS/limina"
 codesign -s - --force "$APP"
 

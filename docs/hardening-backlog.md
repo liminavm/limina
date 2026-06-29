@@ -148,6 +148,36 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   toggle — extends the existing `match_host_shortcut` framework to system combos), **multi-display**
   (multiplex scanouts by `scanout_id`). Roadmap M8.
 
+## Dogfooding / Parallels migration
+Surfaced 2026-06-29 while planning the migration of a stock Fedora 44 Parallels VM onto limina on a
+second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`).
+- **`gvproxy` not bundled** — ✅ **DONE 2026-06-29** (`458664b`). `limina --net` resolved gvproxy only
+  from `$LIMINA_GVPROXY_BIN`/Homebrew/`PATH`, so networking was dead on a Mac without Homebrew. Now
+  vendored into the app (`Contents/MacOS/gvproxy`, copied + ad-hoc signed by `build-app.sh`) and
+  resolved bundle-relative; priority `override > bundled > Homebrew > PATH` is a pure, unit-tested
+  policy (`gateway.rs::resolve_gvproxy_bin`, RED-first test).
+- **Agent install was a separate SSH flow** — ✅ **DONE 2026-06-29** (`458664b`). `install-enhanced.sh`
+  now also installs `limina-agent` (+ unit + flat-pointer gschema override) when staged into the
+  payload, and runs `restorecon` so it starts on a stock SELinux-**Enforcing** guest (the dev guest
+  dodged this with `selinux=0`). The whole enhanced upgrade now rides the one offline virtiofs channel
+  instead of also needing network + gvproxy. (`install-guest-agent.sh` remains the dev-loop SSH path.)
+- **No Parallels-import tooling** (open) — converting an existing Parallels disk (merge snapshots →
+  `qemu-img -f parallels` → raw, the `virtio_mmio` initramfs regen, `console=` GRUB args, Tools
+  removal) is documented in the runbook but not scripted. A guided `import` helper would de-risk the
+  footgun (`virtio_mmio`, not `virtio_pci`).
+- **No guest-tools distribution path** (open, architectural) — the enhanced tier can't be built or
+  installed from `limina.app` alone (no RPMs, no toolchain on a second Mac). Recommended: a versioned
+  out-of-band payload + a `limina install-guest-tools` subcommand that stages it into a `--share`. The
+  F44 in-guest build prep addresses the *build* half; host orchestration is still open.
+- **No payload↔guest version manifest check** (open) — `install-enhanced.sh` doesn't verify the
+  payload's Fedora release matches the booted guest; a mismatch (esp. mutter↔gnome-shell ABI) breaks
+  the desktop silently. Add a manifest + `/etc/os-release` guard.
+- **KK/Metal never tested cross-machine** (open/unknown) — the host Vulkan-on-Metal stack was only
+  exercised on the M1 Max / macOS 26.5 dev Mac. `--gpu-software-2d` is the degraded fallback if venus
+  init aborts on different silicon/macOS.
+- **F44 enhanced tier blocked** (open) — GNOME 49→50 mutter/cogl scanout regression; tracked with the
+  F44 enhanced build prep. Basic-tier F44 is unaffected.
+
 ---
 
 When a milestone's loose ends are all closed, fold the remainder back into the roadmap milestone

@@ -110,17 +110,39 @@ impl Drop for Gateway {
     }
 }
 
-/// Resolve the gvproxy binary: `$LIMINA_GVPROXY_BIN`, else the Homebrew path if present,
-/// else `gvproxy` from `PATH`.
+/// Resolve the gvproxy binary, in priority order: `$LIMINA_GVPROXY_BIN`, then a copy vendored
+/// next to the supervisor in the app bundle (`Contents/MacOS/gvproxy` — what makes `--net` work
+/// on a Mac with no Homebrew), then the Homebrew path if present, else bare `gvproxy` from `PATH`.
 fn gvproxy_bin() -> PathBuf {
-    if let Ok(p) = std::env::var("LIMINA_GVPROXY_BIN") {
-        return PathBuf::from(p);
-    }
-    let brew = PathBuf::from(DEFAULT_GVPROXY);
-    if brew.exists() {
-        return brew;
-    }
-    PathBuf::from("gvproxy")
+    let env_override = std::env::var_os("LIMINA_GVPROXY_BIN").map(PathBuf::from);
+    let brew = {
+        let p = PathBuf::from(DEFAULT_GVPROXY);
+        p.exists().then_some(p)
+    };
+    resolve_gvproxy_bin(env_override, bundled_gvproxy(), brew)
+}
+
+/// gvproxy vendored alongside the supervisor binary (`Contents/MacOS/gvproxy` in the app
+/// bundle), if it exists. This is what lets `limina --net` run on a Mac without Homebrew —
+/// `scripts/build-app.sh` copies gvproxy in next to `limina`.
+fn bundled_gvproxy() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let cand = exe.parent()?.join("gvproxy");
+    cand.exists().then_some(cand)
+}
+
+/// Pure gvproxy-resolution policy (unit-tested): explicit override > bundled-in-app > Homebrew >
+/// bare `gvproxy` on `PATH`. Bundled beats Homebrew so a self-contained app prefers its own
+/// vendored copy over whatever a dev machine happens to have on `PATH`/in `/opt/homebrew`.
+fn resolve_gvproxy_bin(
+    env_override: Option<PathBuf>,
+    bundled: Option<PathBuf>,
+    brew: Option<PathBuf>,
+) -> PathBuf {
+    env_override
+        .or(bundled)
+        .or(brew)
+        .unwrap_or_else(|| PathBuf::from("gvproxy"))
 }
 
 /// This supervisor's gvproxy socket path. Keyed on the supervisor pid: unique per `limina`
@@ -676,6 +698,31 @@ mod tests {
         assert!(
             !is_orphan(111, alive),
             "a live owner's gvproxy must never be swept (would kill a running VM)"
+        );
+    }
+
+    #[test]
+    fn gvproxy_resolution_order_is_override_then_bundled_then_brew() {
+        let ovr = PathBuf::from("/env/gvproxy");
+        let bundled = PathBuf::from("/app/Contents/MacOS/gvproxy");
+        let brew = PathBuf::from(DEFAULT_GVPROXY);
+        // An explicit override beats everything.
+        assert_eq!(
+            resolve_gvproxy_bin(Some(ovr.clone()), Some(bundled.clone()), Some(brew.clone())),
+            ovr
+        );
+        // No override: the bundled copy wins over Homebrew, so a self-contained app on a
+        // Homebrew-less Mac runs its own vendored gvproxy.
+        assert_eq!(
+            resolve_gvproxy_bin(None, Some(bundled.clone()), Some(brew.clone())),
+            bundled
+        );
+        // No override, nothing bundled (a bare dev build): fall back to Homebrew.
+        assert_eq!(resolve_gvproxy_bin(None, None, Some(brew.clone())), brew);
+        // Nothing resolvable anywhere: bare name, left for PATH lookup at spawn time.
+        assert_eq!(
+            resolve_gvproxy_bin(None, None, None),
+            PathBuf::from("gvproxy")
         );
     }
 
