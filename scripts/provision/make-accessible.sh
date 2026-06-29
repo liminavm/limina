@@ -48,6 +48,33 @@ sudo chmod 0440 /etc/sudoers.d/91-limina-nopasswd
 echo "-- vulkan-tools (vulkaninfo)"
 command -v vulkaninfo >/dev/null || sudo dnf install -y vulkan-tools
 
+echo "-- L2 replay test tooling (glmark2 GL probe, apitrace GL replay, gfxreconstruct VK replay)"
+# These back the venus_replay L2 trace-replay tests (the GL/VK rendering regression guards).
+# glmark2 (its glmark2-es2 is the X11 GL_RENDERER probe) + apitrace (eglretrace, GL trace replay)
+# are stock Fedora packages; gfxreconstruct (gfxrecon-replay, VK trace replay) isn't packaged, so
+# build it in-guest once and install to /opt/gfxreconstruct (the path
+# crates/limina-test/tests/venus_replay.rs hardcodes). This bloats the base — acceptable: it's the
+# stock/enhanced *test* base (stock.test / enhanced.test snapshot from it), never a daily-driver
+# image, and the enhanced *delivery* (install-enhanced.sh: kernel+mesa+mutter+agent) does NOT ship
+# these, so a migrated guest stays clean.
+command -v glmark2-es2 >/dev/null && command -v eglretrace >/dev/null \
+  || sudo dnf install -y glmark2 glmark2-wayland apitrace
+if [ ! -x /opt/gfxreconstruct/bin/gfxrecon-replay ]; then
+  sudo dnf install -y gcc-c++ cmake ninja-build git lz4-devel libzstd-devel zlib-devel \
+                      xcb-util-keysyms-devel xcb-util-devel vulkan-headers vulkan-loader-devel
+  rm -rf "$HOME/gfxreconstruct"
+  git clone --depth 1 --recurse-submodules https://github.com/LunarG/gfxreconstruct "$HOME/gfxreconstruct"
+  cmake -B "$HOME/gfxreconstruct/build" -G Ninja -S "$HOME/gfxreconstruct" \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/gfxreconstruct \
+    -DCMAKE_INSTALL_LIBDIR=lib64 -DGFXRECON_AGENT_BUILD=OFF -DBUILD_WERROR=OFF \
+    -DLZ4_OPTIONAL=ON -DZSTD_OPTIONAL=ON
+  cmake --build "$HOME/gfxreconstruct/build" -j2   # -j2: -j4 OOMs a 4 GiB guest (perf-ledger.sh)
+  sudo cmake --install "$HOME/gfxreconstruct/build"
+  # the layer manifest ships a relative library_path; point it at the installed absolute .so
+  sudo sed -i 's|"library_path": "[^"]*"|"library_path": "/opt/gfxreconstruct/lib64/libVkLayer_gfxreconstruct.so"|' \
+    /opt/gfxreconstruct/share/vulkan/explicit_layer.d/*.json 2>/dev/null || true
+fi
+
 echo "-- no-idle-lock gschema override"
 sudo tee /usr/share/glib-2.0/schemas/90-limina-no-idle-lock.gschema.override >/dev/null <<'OVR'
 [org.gnome.desktop.session]

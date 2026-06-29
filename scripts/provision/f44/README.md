@@ -64,19 +64,22 @@ sudo reboot
   mesa 26.1.0; F44 ships 26.0.x. The build adds them via the spec so a non-applying patch
   **fails the build loudly** (rather than silently skipping → black screen). If it fails,
   rebase the patch onto F44's mesa and re-run.
-- **mutter `0001`** (cogl #32 stencil-clip degrade) touches `cogl-framebuffer.c` / clutter,
-  which churns across GNOME 49→50 — most likely to need a rebase onto mutter 50.x.
+- **mutter `0001`+`0002`+`0003`** applied **clean to mutter 50.1** (validated 2026-06-29): `0001`
+  cogl #32 stencil-clip degrade, `0002` x11-survive-frames, `0003` ext-data-control clipboard. No
+  rebase was needed across the GNOME 49→50 bump (only `0003`'s `src/meson.build` hunks were rebased
+  to 50.1's layout).
 - **kernel `patches/linux/0001-0003`** (drm/virtio scanout) may already be upstream in F44's
   kernel; they're applied tolerantly (skipped if they don't apply).
 
-## ⚠️ The venus *desktop* on F44 also needs the host side
+## ✅ The venus *desktop* on F44 — VALIDATED end-to-end (2026-06-29)
 
-These in-guest builds produce correct guest RPMs, but a *working accelerated GNOME desktop* on
-F44 additionally depends on **KosmicKrisp** (the host Vulkan-on-Metal driver, built on macOS —
-`patches/kosmickrisp/`, `docs/drivers/kosmickrisp.rst`). As of the committed tree, KK patches
-`0002`/`0003` make the **F43 (mutter-49.5)** desktop render and stay up, but the README's TODO
-lists an open `kk_encoder.c:299` render-pass-restart assert that **mutter-50 (F44)** triggers.
-So: with these RPMs the guest boots the 16k kernel and venus enumerates, but the F44 desktop is
-only as healthy as the host KK side. Confirm the current state of that KK tree before expecting
-a clean F44 venus desktop. The 16k kernel + venus mesa are useful regardless; mutter is staged
-and lights up when the host side is resolved.
+These in-guest builds produce the guest RPMs; a *working accelerated GNOME desktop* on F44 also
+depends on **KosmicKrisp** (the host Vulkan-on-Metal driver, built on macOS —
+`patches/kosmickrisp/`, `docs/drivers/kosmickrisp.rst`). The full F44 enhanced stack is **validated
+working**: the 16k kernel + venus mesa + patched mutter 50.1 render the seated GNOME desktop at
+~60fps (venus→KK→Metal), and the venus L2 suite is **GREEN 7/7** (venus×3 + replay×3 + reset). The
+feared `kk_encoder.c:299` render-pass-restart assert that mutter-50 was thought to trigger **never
+fired** — it was a mess-era myth: **no KK fix was needed**, and KK patches `0002`/`0003` (the F43
+set) suffice for F44 too. The 16k kernel + venus mesa + patched mutter all light up together.
+Known limitation: GLX/Xwayland apps present black on venus (the X11 kopper present path);
+Wayland-native GL is fine.

@@ -51,13 +51,18 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   Image) + `crates/limina-test/tests/hvf_graceful.rs` — verified RED (SIGABRT) before, GREEN after.
 
 ## M4 venus residue
-- **GLX / Xwayland apps render black on venus** (open, low priority — reported 2026-06-29) — on the F44
-  enhanced tier, `glmark2` (no args → GLX) and `glxgears` show a **black window**; native-Wayland GL
-  (Firefox WebGL, glmark2-wayland) is fine. Smells like the known X11/Xwayland-on-venus weakness the
-  `venus_replay` X11 EGL probe already trips over ("the kopper X11 regression", `venus_replay.rs:211`):
-  GLX contexts over Xwayland either fail to create or render to a buffer that never reaches the
-  screen. User doesn't rely on GLX apps, so deferred — but worth a quick look (start: does the GLX
-  context create? is it the Xwayland kopper/zink present path vs the native venus path?).
+- **GLX / Xwayland apps present black on venus** (open, low priority — diagnosed 2026-06-29) — on the
+  F44 enhanced tier, `glmark2` (no args → GLX) and `glxgears` show a **black window**; native-Wayland
+  GL (Firefox WebGL) is fine. **Root-caused to the PRESENT path, not render/context** (verified on the
+  live enhanced VM): `glxinfo -B` shows the GLX context creates and is accelerated — `direct rendering:
+  Yes`, renderer `zink Vulkan 1.3(Virtio-GPU Venus … MESA_KOSMICKRISP)`, GL 3.1 (the KK
+  custom_border_color cap, [[limina-kk-feature-gaps]]) — and `glxgears` renders **395 FPS** while the
+  window stays black. So GL renders fine; the X11 present (zink's **kopper** DRI3/Present WSI on the
+  Xwayland-backed-by-venus surface) never gets the rendered pixmaps to the window. This is the known
+  "kopper X11 regression" the `venus_replay` X11 probe trips over (`venus_replay.rs:211`). User doesn't
+  use GLX apps → deferred. Investigation start: the kopper DRI3 pixmap sharing / X Present on a
+  venus-backed Xwayland (is the present-buffer a virtio-gpu blob that isn't flushed/attached to the
+  Xwayland Wayland surface?); compare client-direct DRI3 present vs Xwayland glamor.
 - **virtio-gpu flip-completion gap** — ✅ **RESOLVED (verified 2026-06-23); item was stale.** Already
   fixed by `patches/linux/0001` (drm/virtio fence blob-scanout flushes, 2026-06-11): host3d_blob
   (venus) scanout FBs now carry the same fence the dumb path has, so `virtio_gpu_resource_flush`

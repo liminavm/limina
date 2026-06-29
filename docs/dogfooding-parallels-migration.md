@@ -27,7 +27,7 @@ the `virtio_pci` that every generic Parallels→KVM guide tells you to add.
 | Decision | Choice | Why |
 |---|---|---|
 | Migrate the real disk vs. fresh install + rsync `/home` | **Migrate the real disk** | Highest-fidelity dogfooding; forces us to live the (currently undocumented) import story. Fall back to fresh-install only if `gdisk` shows the disk is MBR/BIOS (won't EFI-boot). |
-| Fedora 44 now vs. switch to F43 | **F44, basic tier now** | Stock F44 is a verified limina baseline (`docs/images.md`). Enhanced (16k/venus) on F44 is **blocked** by the GNOME 49→50 mutter/cogl regression — so basic-tier is the daily driver, and enhanced-tier work proceeds separately (§4 + the F44 enhanced build prep). |
+| Fedora 44 now vs. switch to F43 | **F44, basic tier first** | Stock F44 is a verified limina baseline (`docs/images.md`). The basic tier is the bootstrap substrate, so we start there and layer enhanced on top. F44 enhanced (16k kernel + venus mesa + patched mutter 50.1) is now **validated end-to-end** (2026-06-29, `docs/images.md`) — the feared GNOME 49→50 mutter/cogl regression did **not** reproduce — so the enhanced upgrade (§4) is available, not a blocker. |
 | First-boot observability | **Windowed GOP + `--console` serial** | A migration boot is exactly when you want eyes on GRUB + early KMS, and the serial log catches a dracut-shell drop. |
 | SELinux relabel | **Migrate as-is (Enforcing); relabel only if it loops** | A Parallels Fedora install is a real Fedora install with labels intact; preemptive permissive needlessly weakens a daily driver. |
 
@@ -50,7 +50,7 @@ blkid                                                            # record the ro
 
 ### 1.1 Verify `virtio_mmio` is in the initramfs (it almost certainly already is)
 limina presents **all** virtio over **virtio-MMIO** (device-tree), with **no virtio-PCI
-transport at all** (`third_party/libkrun/src/devices/src/fdt/aarch64.rs:321`,
+transport at all** (`third_party/libkrun/src/devices/src/fdt/aarch64.rs:322`,
 `compatible="virtio,mmio"`). The reflex from generic Parallels→KVM guides is to "add
 `virtio_pci`" — that is the **wrong** module here.
 
@@ -92,8 +92,11 @@ sudo dracut --regenerate-all --force --no-hostonly
 ### 1.4 Fix any literal device-node references (only if §1.0 found them)
 limina exposes the disk as `/dev/vda`, so any `/dev/sdaX` in `/etc/fstab`,
 `GRUB_CMDLINE_LINUX`, or the BLS entries won't resolve — replace with `UUID=` from `blkid`.
-Stock Fedora is UUID-based and usually needs no edit. If you touched `/etc/default/grub`,
-`sudo grub2-mkconfig -o /boot/grub2/grub.cfg`.
+Stock Fedora is UUID-based and usually needs no edit. On Fedora/BLS the *running* kernel
+cmdline lives in `/boot/loader/entries/*.conf`, so fix per-entry kernel args with
+`sudo grubby --update-kernel=ALL --args=…` / `--remove-args=…` (or edit the BLS `.conf`
+directly); `grub2-mkconfig -o /boot/grub2/grub.cfg` alone may not propagate a
+`GRUB_CMDLINE_LINUX` change to the actual boot entries. (`/etc/fstab` is unaffected by this.)
 
 ### 1.5 Full power-off (not suspend)
 ```bash
@@ -105,14 +108,27 @@ A suspended VM leaves the `.hds` non-quiescent and keeps memory-state files.
 
 ## 2. Convert + transfer (Mac A → Mac B)
 
+> **Prereqs on Mac A:** `brew install qemu gptfdisk` — `qemu-img` (qemu) and `gdisk` (gptfdisk)
+> are **not** part of base macOS. `prl_disk_tool` ships with Parallels Desktop. Also keep disk
+> headroom: the converted raw is sparse but its *logical* size equals the full virtual disk
+> (`ls -l` shows the scary full size; `du -h` shows real allocation), and it coexists with the
+> still-present `.hdd` bundle until you clean up.
+
 ```bash
-# Merge snapshots into the base — qemu-img reads only the single top .hds and ignores
-# DiskDescriptor.xml + the snapshot chain.
+# Merge the snapshot chain into the base FIRST. Merge is destructive (it deletes all snapshots)
+# and needs the VM fully powered off (§1.5). Merging is what guarantees a SINGLE data .hds —
+# qemu-img reads exactly the .hds you name and ignores DiskDescriptor.xml + the chain (it has no
+# concept of the 'top' of a chain, so a stale delta .hds left behind would convert silently).
 prl_disk_tool merge --hdd '/Users/<you>/Parallels/<Name>.pvm/<Name>-0.hdd'
+
+# Discover the post-merge data .hds (the filename pattern is Parallels-version-dependent), then
+# sanity-check it BEFORE the full convert:
+ls -lS '/Users/<you>/Parallels/<Name>.pvm/<Name>-0.hdd/'*.hds       # convert the single/largest
+qemu-img info -f parallels '/Users/<you>/Parallels/<Name>.pvm/<Name>-0.hdd/<the>.hds'
 
 # Convert the .hds DATA file (NOT the .hdd bundle / DiskDescriptor.xml) → raw.
 qemu-img convert -f parallels \
-  '/Users/<you>/Parallels/<Name>.pvm/<Name>-0.hdd/<Name>-0.hdd.0.{GUID}.hds' \
+  '/Users/<you>/Parallels/<Name>.pvm/<Name>-0.hdd/<the>.hds' \
   -O raw Fedora-Workstation-44.migrated.raw
 
 # Verify GPT + an EF00 ESP (Apple-Silicon Parallels Linux is UEFI/GPT). "MBR only" ⇒ legacy
@@ -137,9 +153,13 @@ to pick up the bundled gvproxy, then copy `target/limina.app` to Mac B.
 # Transfer the .app with a tool that does NOT set quarantine (scp/rsync/USB/zip). If it ever
 # gets AirDropped/downloaded instead, clear it once — sufficient for an ad-hoc-signed app:
 xattr -dr com.apple.quarantine /path/to/limina.app
+# Ad-hoc-signed: if macOS still refuses the first launch, right-click the app → Open once (or
+# approve it in System Settings → Privacy & Security) to whitelist it.
 
 # De-risk first: prove the app launches on THIS Mac with a known-good disk, separating
-# "app works here" from "my migrated disk works". (Grab the official Fedora aarch64 raw.xz.)
+# "app works here" from "my migrated disk works". Grab the official Fedora aarch64 raw.xz and
+# decompress it first — a .raw.xz can't be booted as-is:
+#   xz -d Fedora-Workstation-44.raw.xz
 #   .../limina.app/Contents/MacOS/limina --window --disk Fedora-Workstation-44.raw
 
 # First boot of the migrated disk — windowed (see GRUB/kernel), serial captured, no --net yet.
@@ -155,7 +175,11 @@ cp -c Fedora-Workstation-44.migrated.raw migrated-clone.raw
   exercised on the M1 Max / macOS 26.5 dev Mac): relaunch with `--gpu-software-2d` for a
   degraded-but-usable 2D desktop, then investigate KK separately.
 - Add networking once it's known-good: `--net` (reads the SSH port from the log:
-  `guest SSH forward ready: ssh -p N claude@127.0.0.1` — don't assume 2222).
+  `guest SSH forward ready: ssh -p N <user>@127.0.0.1` — substitute your guest's username for
+  `<user>`, and don't assume 2222).
+- macOS permissions on Mac B: pointer capture / mouselook (`Cmd-Ctrl-G`) needs **Accessibility**
+  permission (System Settings → Privacy & Security → Accessibility); until granted, the first
+  mouselook attempt silently does nothing.
 
 ### Boot triage
 - **GRUB + kernel, then hangs / dracut emergency shell** → initramfs still lacks
@@ -167,7 +191,9 @@ cp -c Fedora-Workstation-44.migrated.raw migrated-clone.raw
   `/etc/selinux/config` + `touch /.autorelabel`, boot once to relabel, confirm
   `/.autorelabel` is gone.
 - Sanity: `otool -L .../limina.app/Contents/MacOS/limina-vmm | grep virgl` must show
-  `third_party/virgl-prefix` (the silent software-2D degrade trap).
+  `@rpath/libvirglrenderer.1.dylib`, and `Contents/Frameworks/libvirglrenderer.1.dylib` must
+  exist (the silent software-2D degrade trap). The `third_party/virgl-prefix` absolute path is
+  the *dev* worker (`target/debug/limina-vmm`) form — never present in a bundle.
 
 ---
 
@@ -177,10 +203,20 @@ Once the basic tier is a stable daily driver, the enhanced components (16k kerne
 mesa, patched mutter, limina-agent) layer in. Delivery is an **out-of-band, versioned
 `limina-guest-tools` payload** (the RPM sets + `install-enhanced.sh` + the prebuilt
 `limina-agent` + a manifest) pushed into the guest over **virtiofs `--share`** — which needs
-no network and no gvproxy and works on a stock guest with no agent yet:
+no network and no gvproxy and works on a stock guest with no agent yet.
+
+**Build the payload once** in a **separate, disposable F44 guest** — *not* the daily driver, since
+the build leaves multi-GB of RPMs, sources and (debug-symbol) artifacts behind. Get the limina repo
+into that guest (git clone over `--net`, or `--share` it from the host), then run
+`scripts/provision/f44/build-all.sh` — it self-installs its build deps (`dnf builddep` + `cargo`)
+and assembles `~/limina-guest-tools`: the kernel/mesa/mutter RPMs + the prebuilt `limina-agent` + its
+unit + the flat-pointer gschema override + `install-enhanced.sh` + a manifest. Building in an F44
+guest from F44's **own** SRPMs is what keeps the mesa/mutter RPM versions matched to your
+daily-driver guest (no soname mismatch). Then ship `~/limina-guest-tools` to the daily-driver guest
+over `--share`:
 
 ```bash
-limina --window --disk <persistent-guest>.raw --share guest-tools=~/limina-guest-tools:ro
+limina --window --disk <persistent-guest>.raw --share guest-tools=$HOME/limina-guest-tools:ro
 # in the guest, as root:
 mkdir -p /media/guest-tools && mount -t virtiofs limina-guest-tools /media/guest-tools
 sudo /media/guest-tools/install-enhanced.sh /media/guest-tools   # kernel+mesa+mutter+agent, then reboot
@@ -190,11 +226,15 @@ sudo /media/guest-tools/install-enhanced.sh /media/guest-tools   # kernel+mesa+m
 override) and runs `restorecon`, so the whole upgrade rides the one offline channel — stage
 those three files into the payload alongside the RPMs.
 
-> **F44 caveat:** enhanced mesa+kernel are fine for F44, but the patched **mutter** for F44
-> (GNOME 50) hits the unresolved GNOME 49→50 cogl/scanout regression. Building the F44
-> enhanced components in-guest is tracked separately (see the F44 enhanced build prep work).
-> Until that's resolved, enhanced-tier dogfooding of venus on F44 is degraded; an F43 guest is
-> the fallback for exercising the full enhanced experience.
+> **F44 enhanced tier — VALIDATED (2026-06-29).** The full stack works on F44: the 16k kernel,
+> venus mesa (`26.1.3-1.limina`, F44 SRPM + venus patches), and patched mutter (`50.1-1.limina`,
+> `patches/mutter/0001`+`0002`+`0003`). venus renders the seated GNOME desktop at ~60fps
+> (venus→KK→Metal) and the venus L2 suite is **GREEN 7/7**; the feared GNOME 49→50 cogl/scanout
+> "regression" / `kk_encoder.c:299` assert did **not** reproduce on the clean stack — no F43
+> fallback needed.
+>
+> **Known limitation:** GLX/Xwayland apps present **black** on venus (the X11 kopper present
+> path — rendering works, presentation doesn't); Wayland-native GL (Firefox WebGL, etc.) is fine.
 
 ---
 
@@ -203,8 +243,8 @@ those three files into the payload alongside the RPMs.
 Tracked in `docs/hardening-backlog.md` → "Dogfooding / Parallels migration". Highlights:
 1. No Parallels-import tooling — the `virtio_mmio` prep is undocumented and a footgun. *(this doc is step one)*
 2. ✅ `gvproxy` now bundled (`--net` worked only with Homebrew before).
-3. No guest-tools distribution path — enhanced tier can't be built/installed from the app alone (the F44 in-guest build prep addresses the build half).
+3. No guest-tools distribution path — `scripts/provision/f44/` now builds AND validates the full enhanced payload in-guest end-to-end (2026-06-29); the remaining gap is that `limina.app` still has no built-in channel to deliver or build it, so you assemble the payload out-of-band.
 4. ✅ Agent install folded into `install-enhanced.sh` (+ `restorecon`) — was a separate SSH flow.
 5. No payload↔guest version manifest check → ABI-mismatch risk.
 6. KK/Metal never tested cross-machine (`--gpu-software-2d` is the fallback).
-7. F44 enhanced tier blocked (mutter 49→50).
+7. ✅ F44 enhanced tier validated end-to-end (2026-06-29) — was thought blocked by a GNOME 49→50 mutter/cogl regression; it did **not** reproduce on the clean stack (16k + venus + patched mutter 50.1, L2 7/7). Open limitation: GLX/Xwayland apps present black on venus (Wayland-native GL works).
