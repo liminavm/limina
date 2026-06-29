@@ -60,9 +60,17 @@ OVR
 sudo glib-compile-schemas /usr/share/glib-2.0/schemas/
 
 echo "-- console args (GOP framebuffer + PL011 serial)"
-# (Fedora-built images boot enforcing with intact SELinux labels, so no relabel needed here —
-# unlike a dev/custom-kernel image, which would also need scripts/prepare-efi-image.sh's relabel.)
 sudo grubby --update-kernel=ALL --args="console=tty0 console=ttyAMA0"
+
+echo "-- SELinux: relabel what we created + clear any stale full-relabel flag"
+# Fedora-built images boot enforcing with intact labels (no relabel LOOP like the F43 dev images),
+# but the base can still ship /.autorelabel — a request for a one-time first-boot relabel. A
+# read-only L2 boot can't consume that flag (root is RO), so it would trip the boot test's guard.
+# We restorecon the files we just created (tee/install can mislabel) and clear the stale flag; the
+# image already boots enforcing, so its labels are correct.
+sudo restorecon -F /etc/sudoers.d/91-limina-nopasswd /etc/gdm/custom.conf \
+    /usr/share/glib-2.0/schemas/90-limina-no-idle-lock.gschema.override 2>/dev/null || true
+sudo rm -f /.autorelabel
 
 cat <<DONE
 
