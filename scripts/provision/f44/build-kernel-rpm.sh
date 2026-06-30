@@ -77,6 +77,11 @@ CONFIG_ARM64_16K_PAGES=y
 CONFIG_SYSTEM_TRUSTED_KEYS=""
 CONFIG_SYSTEM_REVOCATION_KEYS=""
 CONFIG_DEBUG_INFO_BTF=n
+# Strip debug info to a Fedora-runtime-like size: a Fedora config selects CONFIG_DEBUG_INFO_DWARF5,
+# which bloats vmlinux + every module with DWARF (the RPM balloons to GBs; modules_install copies
+# hundreds of MB of .debug). DEBUG_INFO_NONE deselects the DWARF choice -> a lean kernel + modules
+# matching the shipped Fedora kernel's on-disk size (Fedora keeps DWARF in -debuginfo subpackages).
+CONFIG_DEBUG_INFO_NONE=y
 # VM-critical drivers stay =y so boot never depends on initramfs contents (robustness; small delta
 # over Fedora's =m). dracut still builds an initramfs for the BLS root=UUID resolution.
 CONFIG_VIRTIO=y
