@@ -18,8 +18,11 @@
 # stock version.
 #
 # Installs, each additive (a guest may already have some — partial states are normal):
-#   1. 16k kernel RPM   -> kernel-install/dracut writes a BLS entry (co-exists with stock); LOCKED
-#   2. mesa RPMs (26.2)  -> replace stock mesa at /usr (zink GL + venus Vulkan);            LOCKED
+#   1. 16k kernel RPM   -> kernel-install/dracut writes a BLS entry; INSTALLONLY (co-exists with
+#                          stock AND keeps the prior enhanced kernel as a fallback). The STOCK
+#                          kernel is locked (not ours) so a stock update can't steal the default.
+#   2. mesa RPMs        -> replace stock mesa at /usr (zink GL + venus Vulkan); LOCKED, but the
+#                          installer lifts the lock to UPDATE it, then re-locks (re-runnable).
 #   3. mutter RPMs       -> replace stock mutter at /usr (patched compositor);          NOT locked
 #                          (mutter tracks the distro/gnome-shell version; see limina-enh-delivery)
 #   4. limina-agent      -> /usr/local/bin + unit (clipboard, dynamic resize, PSI autoballoon).
@@ -190,6 +193,11 @@ filesystems+=" btrfs ext4 xfs vfat "
 DRACUT
 
 echo "-- installing kernel: $(basename "$RPM")"
+# limina-kernel-16k is now installonly (Provides: installonlypkg(kernel)) and is NOT versionlocked:
+# locking our OWN kernel did nothing to stop stock from grabbing the default, and it "filtered out"
+# our own newer kernel ("Error: ... filtered out by exclude filtering"). Clear any STALE lock a
+# previous installer left so this (possibly newer) kernel installs and co-exists with the old one.
+dnf versionlock delete limina-kernel-16k >/dev/null 2>&1 || true
 dnf install -y "$RPM"
 KREL=$(ls -d /lib/modules/*limina16k* 2>/dev/null | xargs -n1 basename | head -1)
 [ -n "$KREL" ] || { echo "kernel modules dir not found after install"; exit 1; }
@@ -211,20 +219,35 @@ if [ -n "$miss" ]; then
 fi
 lsinitrd "$IMG" 2>/dev/null | grep -q 'virtio_input' \
   || echo "   WARN: no virtio_input in the initramfs — the emergency shell will have no keyboard"
-dnf versionlock add limina-kernel-16k >/dev/null 2>&1 || true
-echo "   kernel $KREL: initramfs verified (virtio_blk + $ROOT_FS) + BLS entry present (versionlocked)"
+# Pin the STOCK kernel (the names must match what you're actually pinning). dnf auto-promotes the
+# newest installed kernel to the default; a stock kernel-core UPDATE would otherwise grab the
+# default away from our 16k. Lock the stock kernel packages at their current version so stock stays
+# the (working, unchanging) fallback and the 16k keeps the default. limina-kernel-16k is a DIFFERENT
+# name, so it stays freely updatable (and installonly preserves the prior enhanced kernel).
+for p in kernel kernel-core kernel-modules kernel-modules-core; do
+  rpm -q "$p" >/dev/null 2>&1 && dnf versionlock add "$p" >/dev/null 2>&1 || true
+done
+echo "   kernel $KREL: initramfs verified (virtio_blk + $ROOT_FS) + BLS entry present"
+echo "   (installonly: co-installed beside stock + prior enhanced; stock kernel pinned)"
 
 ### 2. mesa RPMs (26.2 zink+venus) -> REPLACE stock at /usr; versionlock #########
 MESA_RPMS=$(runtime_rpms "$PAYLOAD/mesa-*.rpm")
 [ -n "$MESA_RPMS" ] || { echo "no mesa RPMs in payload"; exit 1; }
-echo "-- installing mesa (replaces stock 25.3.6 -> our 26.2):"; echo "$MESA_RPMS" | sed 's#.*/#     #'
-# `dnf install` of the higher-versioned local RPMs upgrades/replaces the matching stock packages.
+echo "-- installing mesa (replaces stock -> our venus/zink build):"; echo "$MESA_RPMS" | sed 's#.*/#     #'
+# Lift any EXISTING mesa versionlock FIRST. On a re-run / update the lock pins the currently
+# installed enhanced mesa, so a newer build would be "filtered out by exclude filtering" and never
+# install — lifting before install is what lets the installer UPDATE a versionlocked package. On a
+# fresh guest there is no lock yet (no-op). We re-lock immediately after. (This needs the payload's
+# mesa to be a STRICTLY NEWER NEVRA than what's installed; the build bumps LIMINA_REL for that.)
+dnf versionlock delete 'mesa-*' >/dev/null 2>&1 \
+  || for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do dnf versionlock delete "$p" >/dev/null 2>&1 || true; done
+# `dnf install` of the higher-versioned local RPMs upgrades/replaces the matching packages.
 dnf install -y --allowerasing $MESA_RPMS
-# Lock the mesa stack so a later `dnf update` cannot revert it to a venus-breaking stock version.
+# Re-lock the mesa stack so a later `dnf update` cannot revert it to a venus-breaking stock version.
 for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do
   dnf versionlock add "$p" >/dev/null 2>&1 || true
 done
-echo "   mesa 26.2 installed + versionlocked"
+echo "   mesa installed + (re-)versionlocked"
 rpm -q mesa-vulkan-drivers --qf '   venus ICD pkg: %{NVRA}\n' 2>/dev/null || true
 
 ### 3. mutter RPMs (patched, target-matched) -> REPLACE stock at /usr; NOT locked #

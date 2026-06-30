@@ -61,10 +61,14 @@ sed -i -E "s/^%autosetup -S git/%autosetup -p1/" "$SPEC"
 if ! grep -qE "^%autosetup" "$SPEC"; then
   sed -i "/^%setup/a %patch -P 9001 -p1\n%patch -P 9009 -p1\n%patch -P 9010 -p1\n%patch -P 9011 -p1" "$SPEC"
 fi
-# Release bump so our same-version build outranks stock; drop rpmautospec macros (no package git).
-sed -i -E "s/^(Release:[[:space:]]*)([^%[:space:]]+)/\1\2.limina/" "$SPEC"
+# Release: pin to a deterministic "<N>.limina" (N = LIMINA_REL, default 1) so (a) our build outranks
+# stock, and (b) bumping LIMINA_REL yields a STRICTLY NEWER NEVRA than a prior enhanced build —
+# required so `dnf` UPGRADES an already-installed enhanced mesa (a same-NEVRA rebuild would NOT
+# upgrade, and install-enhanced.sh would have nothing to do). Drop rpmautospec macros (no package
+# git here). The catch-all replaces whatever Release form the SRPM uses (%autorelease or literal).
+LIMINA_REL="${LIMINA_REL:-1}"
 sed -i -E "/^%autochangelog/d" "$SPEC"
-sed -i -E "s/^Release:.*%\{?\??autorelease\}?.*/Release:        1.limina%{?dist}/" "$SPEC"
+sed -i -E "s/^Release:.*/Release:        ${LIMINA_REL}.limina%{?dist}/" "$SPEC"
 grep -nE "^Version:|^Release:|^Patch9|^%autosetup|^%setup" "$SPEC" | head
 
 echo "==> [3/5] builddep (live, against this guest's repos)"

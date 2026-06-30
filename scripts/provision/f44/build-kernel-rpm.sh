@@ -135,6 +135,11 @@ Summary:        limina enhanced-tier 16 KiB-page Linux kernel ($KVER, Fedora con
 License:        GPL-2.0-only
 BuildArch:      aarch64
 Provides:       kernel-uname-r = %{krel}
+# installonlypkg(kernel): make dnf treat this like kernel-core — INSTALL a new version BESIDE the
+# old one instead of replacing it, so the previously-installed enhanced kernel stays as a fallback.
+# Without it, installing a newer limina-kernel-16k erased the prior one (no fallback if the new one
+# failed to boot). dnf keeps up to installonly_limit (default 3) versions.
+Provides:       installonlypkg(kernel)
 Requires(posttrans): systemd-udev
 Requires(posttrans): dracut
 Requires(preun): systemd-udev
