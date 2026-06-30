@@ -876,6 +876,18 @@ Neither is urgent: the btrfs case that motivated them is fixed more simply by ad
 `space_cache=v2` to the root cmdline (no rescue needed). These are general capability gaps to close
 when convenient.
 
+**Full design: `docs/design/m10-multiple-disks.md`** (2026-06-30). It confirms the whole stack
+below the CLI is already multi-disk capable, and that the order of `--disk` options controls disk
+order: first `--disk` → `vda`, second → `vdb` (host-side deterministic in source; guest naming
+follows under the default synchronous probe). Both shipping tiers (stock + enhanced) boot
+BLS `root=UUID=` with a dracut initramfs, so attaching data disks can't shift root; only the
+dev/test direct-kernel path uses positional `root=/dev/vda3` (should move to PARTUUID). The two
+genuinely-hard parts: *which* disk boots is a firmware BDS decision that attach order does **not**
+control (matters once two disks are bootable), and a multi-disk VM needs disk-set identity for M9
+snapshots because adding a disk renumbers the trailing vsock+net devices. It also scopes in image
+*creation* (`--disk PATH:create=SIZE`) and a concurrent-attach lock, both of which a daily driver
+needs.
+
 ---
 
 ## Summary of net-new code vs libkrun patches

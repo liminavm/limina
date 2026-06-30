@@ -33,7 +33,10 @@ use limina_input::constants::{
     ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
     REL_WHEEL, REL_X, REL_Y,
 };
-use limina_input::keymap::{macos_keycode_to_linux_remapped, modifier_is_down, KeyRemap};
+use limina_input::keymap::{
+    capslock_on, macos_keycode_to_linux_remapped, modifier_emit, CapsLockSync, KeyRemap, ModEmit,
+    MACOS_KC_CAPSLOCK,
+};
 use limina_input::InputEvent;
 
 // CoreGraphics (already linked): pointer-capture / mouselook primitives.
@@ -185,8 +188,11 @@ impl HostCursor {
 pub struct InputState {
     /// The current worker's input sink fds (swapped on a reboot relaunch). Read fresh per event.
     conn: Arc<WorkerConn>,
-    /// macOS keycodes of modifiers believed to be down (toggled on each flagsChanged).
+    /// macOS keycodes of *held* modifiers believed to be down (toggled on each flagsChanged).
     pressed_mods: RefCell<HashSet<u16>>,
+    /// Caps Lock is a *lock* key, not a held modifier: kept in sync with the host LED on every
+    /// event (see [`InputState::sync_capslock`]), separate from `pressed_mods`.
+    caps: RefCell<CapsLockSync>,
     /// Bitmask of mouse buttons whose *press* we forwarded to the guest. Releases and
     /// drags are forwarded only while set, so a click that started on the title bar (or
     /// outside the window) never reaches the guest in any form.
@@ -212,6 +218,7 @@ impl InputState {
         Self {
             conn,
             pressed_mods: RefCell::new(HashSet::new()),
+            caps: RefCell::new(CapsLockSync::new()),
             guest_buttons: Cell::new(0),
             host_cursor,
             remap,
@@ -247,6 +254,12 @@ impl InputState {
     /// to AppKit) — we swallow keys so unhandled keystrokes don't beep, but let mouse
     /// events through so the title bar / close button keep working.
     pub fn handle(&self, event: &NSEvent, view: &NSView) -> bool {
+        // Caps Lock is a lock key kept aligned with the host LED on every event (each carries
+        // the live caps bit). This applies deliberate toggles and, crucially, heals drift from
+        // a caps toggle done while the VM was unfocused — the monitor sees no event for that and
+        // macOS sends no reconciling flagsChanged on refocus, so the next key/pointer event here
+        // is what re-syncs the guest. See [`InputState::sync_capslock`].
+        self.sync_capslock(event.modifierFlags().0 as u64);
         match event.r#type() {
             NSEventType::KeyDown => {
                 // The guest kernel autorepeats from key-down state; drop macOS repeats.
@@ -327,35 +340,53 @@ impl InputState {
         }
     }
 
-    /// `flagsChanged` reports which modifier key changed but not the direction. We read the
-    /// modifier's *actual* state from the event's flag bitmask (see [`modifier_is_down`])
-    /// rather than toggling a guess — a single dropped `flagsChanged` (macOS suppresses
-    /// events while Command is held, and across focus changes) can't then wedge a modifier
-    /// "down" in the guest, which would make the compositor eat every later key. We still
-    /// keep a pressed-set, but only to de-duplicate (emit one press/one release per change).
+    /// `flagsChanged` reports which modifier key changed but not the direction. [`modifier_emit`]
+    /// reads the modifier's *actual* state from the event's flag bitmask rather than toggling a
+    /// guess — a single dropped `flagsChanged` (macOS suppresses events while Command is held,
+    /// and across focus changes) can't then wedge a modifier "down" in the guest, which would
+    /// make the compositor eat every later key. We keep a pressed-set to de-duplicate held
+    /// modifiers (one press/one release per change). Lock keys (Caps Lock) instead emit a full
+    /// press+release tap per toggle — the guest toggles its own lock on press, so an edge would
+    /// stick it (see [`ModEmit::Tap`]); they're not tracked in the pressed-set.
     fn emit_modifier(&self, macos_keycode: u16, raw_flags: u64) {
-        // The remap changes which evdev code we emit; `modifier_is_down` below stays keyed on
-        // the *physical* keycode (the macOS modifier-flag state is the physical key's).
+        // The remap changes which evdev code we emit; `modifier_emit` stays keyed on the
+        // *physical* keycode (the macOS modifier-flag state is the physical key's). Caps Lock
+        // returns `None` here — it's a lock key handled by `sync_capslock`, not a held modifier.
         let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap) else {
             return;
         };
-        let Some(down) = modifier_is_down(macos_keycode, raw_flags) else {
+        let was = self.pressed_mods.borrow().contains(&macos_keycode);
+        let Some(emit) = modifier_emit(macos_keycode, raw_flags, was) else {
             return;
         };
-        {
-            let mut pressed = self.pressed_mods.borrow_mut();
-            let was = pressed.contains(&macos_keycode);
-            if down == was {
-                return; // no actual change for this key; don't double-emit
-            }
-            if down {
-                pressed.insert(macos_keycode);
-            } else {
-                pressed.remove(&macos_keycode);
+        match emit {
+            ModEmit::None => {}
+            ModEmit::Edge(down) => {
+                if down {
+                    self.pressed_mods.borrow_mut().insert(macos_keycode);
+                } else {
+                    self.pressed_mods.borrow_mut().remove(&macos_keycode);
+                }
+                self.send_kbd(InputEvent::new(EV_KEY, code, down as i32));
+                self.send_kbd(InputEvent::syn());
             }
         }
-        self.send_kbd(InputEvent::new(EV_KEY, code, down as i32));
-        self.send_kbd(InputEvent::syn());
+    }
+
+    /// Align the guest's caps-lock with the host caps LED (carried by every event's modifier
+    /// flags). Emits a press+release tap only when the host LED differs from the believed guest
+    /// state ([`CapsLockSync`]), so it both applies deliberate toggles and heals drift from a
+    /// caps toggle done while the VM was unfocused — the monitor gets no event for that and
+    /// macOS sends no reconciling flagsChanged on refocus, so the next event here re-syncs.
+    fn sync_capslock(&self, raw_flags: u64) {
+        if self.caps.borrow_mut().observe(capslock_on(raw_flags)) {
+            if let Some(code) = macos_keycode_to_linux_remapped(MACOS_KC_CAPSLOCK, &self.remap) {
+                self.send_kbd(InputEvent::new(EV_KEY, code, 1));
+                self.send_kbd(InputEvent::syn());
+                self.send_kbd(InputEvent::new(EV_KEY, code, 0));
+                self.send_kbd(InputEvent::syn());
+            }
+        }
     }
 
     /// Forward a button press if it lands inside the guest view; remember it so the

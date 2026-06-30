@@ -228,6 +228,77 @@ pub fn modifier_is_down(keycode: u16, flags: u64) -> Option<bool> {
     }
 }
 
+/// The macOS virtual keycode for Caps Lock (`kVK_CapsLock`).
+pub const MACOS_KC_CAPSLOCK: u16 = 0x39;
+
+/// `NSEventModifierFlagCapsLock` — the caps-lock LED (lock) bit in a `modifierFlags` bitmask.
+const CAPSLOCK_FLAG: u64 = 1 << 16;
+
+/// The host caps-lock LED (lock) state carried by a `modifierFlags` bitmask.
+pub fn capslock_on(flags: u64) -> bool {
+    flags & CAPSLOCK_FLAG != 0
+}
+
+/// What a `flagsChanged` should emit for a **held** modifier (Shift/Ctrl/Cmd/Opt).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModEmit {
+    /// State unchanged for this key — emit nothing (dedup), keep the pressed-state as is.
+    None,
+    /// The modifier crossed an edge: press (`true`) or release (`false`). The bool is also the
+    /// key's new pressed-state.
+    Edge(bool),
+}
+
+/// Decide what a `flagsChanged` on `keycode` should emit for a **held** modifier, given the raw
+/// flag bitmask and our current belief about whether the key is held. `None` if `keycode` isn't
+/// a held modifier we track — including **Caps Lock**, a *lock* key whose macOS flag is an LED
+/// state (not a hold) and which is handled by [`CapsLockSync`], not here. Pure (keyed on the
+/// *physical* keycode, like [`modifier_is_down`]) so the input path stays a thin wrapper.
+pub fn modifier_emit(keycode: u16, flags: u64, was_pressed: bool) -> Option<ModEmit> {
+    if keycode == MACOS_KC_CAPSLOCK {
+        return None; // Caps Lock is a lock key — handled by CapsLockSync, not as a held modifier.
+    }
+    let down = modifier_is_down(keycode, flags)?;
+    Some(if down == was_pressed {
+        ModEmit::None
+    } else {
+        ModEmit::Edge(down)
+    })
+}
+
+/// Keeps the guest's caps-lock aligned with the host's caps LED. Caps Lock is a *lock* key: the
+/// macOS flag reports the LED state, and the guest toggles its own lock on each key *press*, so
+/// they stay aligned only if each host toggle becomes exactly one guest press+release tap. A
+/// blind tap-per-event breaks the moment the host LED is toggled while the VM is unfocused — the
+/// event monitor sees nothing and macOS sends no reconciling `flagsChanged` on refocus, so the
+/// guest ends up one toggle out of phase (stuck/inverted).
+///
+/// Instead we track the believed guest state and tap only when the host LED actually differs.
+/// Feeding the LED bit from *every* event's modifier flags (key, pointer, flagsChanged) makes it
+/// self-healing: the first interaction after refocus re-syncs the guest.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CapsLockSync {
+    guest_on: bool,
+}
+
+impl CapsLockSync {
+    /// A fresh sync — the guest boots with caps off.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed the current host caps LED state. Returns `true` if the guest needs a toggle tap
+    /// (and records the new state); `false` if already in sync.
+    pub fn observe(&mut self, led_on: bool) -> bool {
+        if led_on == self.guest_on {
+            false
+        } else {
+            self.guest_on = led_on;
+            true
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,5 +370,73 @@ mod tests {
         for code in [KEY_LEFTMETA, KEY_RIGHTMETA, KEY_LEFTALT, KEY_RIGHTALT] {
             assert_eq!(swap.apply(swap.apply(code)), code);
         }
+    }
+
+    // --- modifier_emit (held modifiers) + Caps Lock sync ---
+    const KC_CAPSLOCK: u16 = 0x39;
+    const KC_LSHIFT: u16 = 0x38;
+    const F_CAPSLOCK: u64 = 1 << 16; // NSEventModifierFlagCapsLock (the LED lock state)
+    const F_LSHIFT: u64 = (1 << 17) | 0x0000_0002; // class SHIFT + device-dependent left-shift
+
+    #[test]
+    fn capslock_on_reads_the_led_bit() {
+        assert!(capslock_on(F_CAPSLOCK));
+        assert!(!capslock_on(0));
+        assert!(capslock_on(F_CAPSLOCK | F_LSHIFT)); // caps + shift held
+        assert!(!capslock_on(F_LSHIFT)); // shift only
+    }
+
+    #[test]
+    fn capslock_sync_taps_only_on_a_real_change_and_dedups() {
+        let mut s = CapsLockSync::new(); // guest boots caps-off
+        assert!(s.observe(true)); // host caps turned on -> tap (guest on)
+        assert!(!s.observe(true)); // still on (e.g. a keystroke while on) -> no tap
+        assert!(s.observe(false)); // turned off -> tap (guest off)
+        assert!(!s.observe(false)); // still off -> no tap
+    }
+
+    #[test]
+    fn capslock_sync_heals_drift_from_an_unfocused_toggle() {
+        // The focus-desync: caps on while focused, then toggled OFF while the VM is unfocused —
+        // the monitor sees nothing and macOS sends no reconciling event. The first event after
+        // refocus carries led=false while we still believe on, so one heal tap re-syncs.
+        let mut s = CapsLockSync::new();
+        assert!(s.observe(true)); // caps on (guest on)
+                                  // ... unfocused: host toggled caps OFF; the VM saw no event, so the belief stays on ...
+        assert!(s.observe(false)); // first post-refocus event carries led=off -> heal tap
+        assert!(!s.observe(false)); // now back in sync
+    }
+
+    #[test]
+    fn modifier_emit_ignores_capslock() {
+        // Caps Lock is handled by CapsLockSync, not the held-modifier path.
+        assert_eq!(modifier_emit(KC_CAPSLOCK, F_CAPSLOCK, false), None);
+        assert_eq!(modifier_emit(KC_CAPSLOCK, 0, true), None);
+    }
+
+    #[test]
+    fn held_modifier_emits_one_edge_per_change_and_dedups() {
+        // A real held modifier (left Shift) presses when its bit appears, releases when it
+        // clears, and dedups against the believed state (a re-sent same-state flagsChanged
+        // emits nothing).
+        assert_eq!(
+            modifier_emit(KC_LSHIFT, F_LSHIFT, false),
+            Some(ModEmit::Edge(true))
+        );
+        assert_eq!(
+            modifier_emit(KC_LSHIFT, F_LSHIFT, true),
+            Some(ModEmit::None)
+        );
+        assert_eq!(
+            modifier_emit(KC_LSHIFT, 0, true),
+            Some(ModEmit::Edge(false))
+        );
+        assert_eq!(modifier_emit(KC_LSHIFT, 0, false), Some(ModEmit::None));
+    }
+
+    #[test]
+    fn modifier_emit_ignores_untracked_keys() {
+        // A letter key is not a modifier — the flagsChanged path must not emit for it.
+        assert_eq!(modifier_emit(0x00 /* A */, 0, false), None);
     }
 }
