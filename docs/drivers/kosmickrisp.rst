@@ -56,8 +56,23 @@ The meson line that produces the venus backend (Vulkan only, no GL frontend)::
   export PATH="$(brew --prefix llvm)/bin:$PATH"
   meson setup /Volumes/mesa-cs/build-kk /Volumes/mesa-cs/mesa \
     -Dplatforms=macos -Dvulkan-drivers=kosmickrisp -Dgallium-drivers= \
-    -Dopengl=false -Dzstd=disabled -Dprefer_static=true -Dbuildtype=debug
+    -Dopengl=false -Dzstd=disabled -Dprefer_static=true -Dbuildtype=debugoptimized
   ninja -C /Volumes/mesa-cs/build-kk
+
+.. note::
+
+   **Buildtype: ``debugoptimized`` for anything bundled into the release ``.app``; ``debug``
+   only for active KK debugging.** Mesa's ``meson.build`` sets ``MESA_DEBUG=1`` **only** when
+   ``buildtype == 'debug'`` (``with_mesa_debug = get_option('buildtype') == 'debug'``), and that
+   macro is what compiles in every ``mesa_logd`` call — e.g. the very chatty
+   ``MESA: debug: kk_GetPhysicalDeviceFormatProperties2: ignored VkStructureType
+   VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT`` you get during venus init.
+   ``debugoptimized`` (Mesa's own default, ``-O2``) compiles those out **and** keeps asserts on
+   (``b_ndebug=if-release`` only drops asserts for the ``release`` buildtype) — so KK still aborts
+   loudly on the bugs its asserts catch, while the release app is quiet and optimized. ``release``
+   additionally disables asserts (riskier while KK matures). Switch an existing build dir without a
+   full re-setup: ``meson configure /Volumes/mesa-cs/build-kk -Dbuildtype=debugoptimized && ninja
+   -C /Volumes/mesa-cs/build-kk`` (same for ``build-zink-kk`` + ``meson install`` it to its prefix).
 
 Running the worker on KK
 ------------------------

@@ -56,7 +56,10 @@ MESON_ARGS=(
   -Dshared-llvm=enabled
   -Dzstd=disabled
   -Dprefer_static=true
-  -Dbuildtype=debug
+  # debugoptimized (default): MESA_DEBUG=0 so mesa_logd is compiled out (no "MESA: debug: ..."
+  # spam in the release .app), -O2, asserts still ON. Override with BUILDTYPE=debug for active
+  # KK/zink debugging (adds mesa_logd + -O0). See docs/drivers/kosmickrisp.rst.
+  -Dbuildtype="${BUILDTYPE:-debugoptimized}"
   # zink's darwin path needs the MoltenVK headers (IOSurface/CAMetalLayer types + kopper
   # winsys) to COMPILE; at runtime zink talks to whatever ICD VK_DRIVER_FILES names (KK).
   -Dmoltenvk-dir="$(brew --prefix molten-vk)"
