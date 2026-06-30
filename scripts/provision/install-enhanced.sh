@@ -136,9 +136,12 @@ for d in $(findmnt -t btrfs -rno SOURCE | sed 's/\[.*//' | sort -u); do
 done
 k=$(ls /boot/vmlinuz-*limina16k* 2>/dev/null | head -1)
 [ -n "$k" ] || exit 0
-idx=$(grubby --info="$k" 2>/dev/null | sed -n 's/^index=//p' | head -1)
-if [ -n "$idx" ]; then
-  grub2-reboot "$idx"
+# Arm by BLS ENTRY ID, not grubby's numeric index: grub2-reboot's numeric form selects by GRUB
+# blscfg MENU POSITION (version-sorted via rpmvercmp, where stock 6.x.y-NNN outranks *-limina16k),
+# which does NOT match grubby's index — a numeric one-shot booted the wrong entry (stock).
+id=$(grubby --info="$k" 2>/dev/null | sed -n 's/^id="\(.*\)"$/\1/p' | head -1)
+if [ -n "$id" ]; then
+  grub2-reboot "$id"
   logger -t limina "btrfs free-space tree ready; armed 16k ($k) — reboot to enter the enhanced kernel"
 fi
 systemctl disable limina-arm-16k.service
@@ -383,7 +386,7 @@ PROMOTE
 systemctl daemon-reload
 systemctl enable limina-kernel-promote.service >/dev/null 2>&1 || true
 
-# one-shot next-boot = the 16k entry (by grubby index; GRUB auto-boots it, no keyboard needed) —
+# one-shot next-boot = the 16k entry (by BLS entry ID; GRUB auto-boots it, no keyboard needed) —
 # UNLESS a btrfs free-space-tree conversion is still pending (FST_DEFER): the 16k cannot mount a
 # v1 fs, so arm it only AFTER a plain stock boot builds the tree from the fstab change above.
 if [ "$FST_DEFER" = 1 ]; then
@@ -392,12 +395,19 @@ if [ "$FST_DEFER" = 1 ]; then
   echo "     1) reboot now (you stay on stock) — that boot builds the free-space tree;"
   echo "     2) it then auto-arms the 16k; reboot once more to enter the enhanced kernel."
 else
-  K_INDEX=$(grubby --info="/boot/vmlinuz-$KREL" 2>/dev/null | sed -n 's/^index=//p' | head -1)
-  if [ -n "$K_INDEX" ] && command -v grub2-reboot >/dev/null 2>&1; then
-    grub2-reboot "$K_INDEX"
-    echo "   one-shot next boot -> 16k (index $K_INDEX); auto-falls-back to stock if it fails"
+  # By BLS entry ID, NOT grubby's numeric index: grub2-reboot's numeric form selects by GRUB
+  # blscfg MENU POSITION (version-sorted via rpmvercmp, where stock 6.x.y-NNN outranks *-limina16k),
+  # which differs from grubby's index — a numeric one-shot booted STOCK instead of the 16k
+  # (root-caused + validated 2026-06-30). The id string feeds `set default=` and blscfg matches it
+  # position-independently, exactly like saved_entry. Proven: one-shot-by-id overrode the default
+  # and selected the intended 16k entry, then `next_entry` cleared (falls back if the 16k fails).
+  K_ID=$(grubby --info="/boot/vmlinuz-$KREL" 2>/dev/null | sed -n 's/^id="\(.*\)"$/\1/p' | head -1)
+  if [ -n "$K_ID" ] && command -v grub2-reboot >/dev/null 2>&1; then
+    grub2-reboot "$K_ID"
+    echo "   one-shot next boot -> 16k ($K_ID); auto-falls-back to stock if it fails"
   else
-    echo "   WARN: could not arm a one-shot 16k boot — try manually: sudo grub2-reboot '$KREL'; sudo reboot" >&2
+    echo "   WARN: could not arm a one-shot 16k boot — try manually:" >&2
+    echo "         sudo grubby --set-default=/boot/vmlinuz-$KREL; sudo reboot" >&2
   fi
 fi
 

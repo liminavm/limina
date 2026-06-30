@@ -59,6 +59,17 @@ regression" / `kk_encoder.c:299` block did NOT reproduce on the clean stack — 
 boots the seated desktop and runs WebGL at ~60fps on venus→KK→Metal (see `limina-enh-delivery` memory).
 The enhanced 16 KiB kernel ships as RPM `limina-kernel-16k` (BLS entry beside stock).
 
+**Latest F44 enhanced guest-tools DELIVERY (2026-06-30)** — newer than the baked `enhanced`/`enhanced.test`
+images above (which still carry kernel `6.19.10` + mesa `26.1.3-1.limina`): kernel
+`limina-kernel-16k-7.1.2` (built from kernel.org `stable.git@v7.1.2` + a Fedora 7.0.x config + `olddefconfig`;
+the 16k kernel is distro-independent so "latest stable" doesn't depend on Fedora packaging it), mesa
+`26.1.3-2.limina` (Release bumped from `-1` so dnf upgrades cleanly; carries venus WSI patch `0011` = drop the
+16-bit-unorm wayland swapchain format so a "first non-sRGB" wgpu client lands on a usable surface), mutter
+`50.1-1.limina`. VALIDATED booting on a fresh F44 clone (16k pages, live venus, seated GNOME); shipped to
+dogfood-guest as `~/limina-guest-tools-7.1.2-f44.tar.zst` (built by `scripts/provision/f44/` → `package-payload.sh`,
+installed by `scripts/provision/install-enhanced.sh`). See the `limina-enh-delivery` + `limina-devmac-kernel-build`
+memories.
+
 ## Images
 
 ### Fedora 44 — mirrored image set (in progress, started 2026-06-29)
