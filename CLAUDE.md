@@ -230,7 +230,10 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   ONLY for when software-2D is the explicit subject (the capture oracle / a GPU-less host), per the
   coexist-default rule in `limina-tier2-venus`. Driving the window: osascript UI scripting works for
   key+modifier combos (e.g. Cmd-Ctrl-F), but synthetic *lone-modifier* keystrokes may not reach the
-  guest — the human is the oracle for those (see `limina-window-control`).
+  guest — the human is the oracle for those (see `limina-window-control`). **When you need the
+  user to act or perceive (interact with the window, eyeball the screen, plug in hardware, run a
+  host command), request it via the AskUserQuestion tool, not in prose** — they may not be watching
+  the streaming text and will miss a buried request (see `ask-tool-for-user-actions`).
 - **Run a VM with networking + SSH:** `limina --net` spawns a supervised gvproxy user-mode NAT (no
   root) and the supervisor logs the exact SSH command — `guest SSH forward ready: ssh -p N <user>@127.0.0.1`.
   The host port **auto-allocates from 2222 up** (so 2+ VMs run concurrently without colliding); pin it
