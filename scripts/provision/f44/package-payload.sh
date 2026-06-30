@@ -35,7 +35,10 @@ KCONFIG="$HOME/limina-build/linux/.config"
 [ -f "$KCONFIG" ] && cp -f "$KCONFIG" "$kdst/config" || echo "  WARN: kernel .config not found at $KCONFIG"
 cp -rf "$REPO/patches/linux" "$kdst/patches-linux"
 cp -f "$REPO/scripts/provision/f44/build-kernel-rpm.sh" "$kdst/"
-KVER="v$(uname -r | sed -E 's/-.*$//')"
+# The kernel may be built from a DIFFERENT tag than this build guest's running kernel (e.g. a
+# 7.1.2 enhanced kernel built on a 6.19.10 build guest) — honor an explicit KVER so the source
+# reference matches what was actually built.
+KVER="${KVER:-v$(uname -r | sed -E 's/-.*$//')}"
 cat > "$kdst/SOURCE.txt" <<TXT
 limina-kernel-16k source reference
 ==================================
