@@ -56,11 +56,26 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
   0-sized / 0-sample attachment-less descriptor → `kk_render_encoder` asserts and kills the
   worker. Clamp both to ≥ 1 (a 0-area pass renders nothing anyway). Was masked by the `0002`
   crash; with both, the accelerated desktop boots and **stays up** through session startup.
+- **`0004-kk-give-heap-less-host-imported-tiled-image-planes-a.patch`** — a guest **wgpu** app
+  (ghost-ui, wgpu 29 over venus) crashed the worker: `kk_image_plane_bind` asserted
+  (`plane->layout.linear || mem->bo->mtl_handle`) on an **OPTIMAL-tiling color attachment** (a
+  wgpu render target) bound to **host-pointer-imported** memory. KK can't make a heap from a host
+  pointer (`kk_device_memory.c`), so `mem->bo->mtl_handle` is NULL and a tiled image — which
+  can't be textured from a buffer — aborts the bind. venus host-imports it because
+  wgpu/gpu-allocator **maps** the memory (KK exposes a single host-visible type, so every
+  allocation is mappable); mutter dodges it only because mesa doesn't persistently map its render
+  targets. Steering tiled images to a `DEVICE_LOCAL`-only type did **not** work — venus ignores a
+  host-side type the guest never maps. Fix host-side: a non-linear plane bound to heap-less memory
+  gets its **own** heap-backed `kk_bo` (`kk_alloc_bo`, a real Metal heap) and is textured from it
+  (freed in `kk_image_plane_finish`). Safe because an OPTIMAL image is opaque to the guest CPU
+  (touched only via GPU copies/renders). Validated with ghost-ui on the F44 enhanced guest: the
+  worker survives and the previously-fatal images take the private-heap path. NOTE: a separate
+  gap then surfaces — see TODO (`TEXTURE_FORMAT_16BIT_NORM`).
 
 ## Apply / rebuild
 The `/Volumes/mesa-cs/mesa` tree is on the `limina/kosmickrisp` branch with these committed.
 To re-create from a fresh checkout: `git checkout 178a3d73968 && git am
-patches/kosmickrisp/0001-*.patch`, then build per `docs/drivers/kosmickrisp.rst`.
+patches/kosmickrisp/0*.patch` (the full series), then build per `docs/drivers/kosmickrisp.rst`.
 
 ## TODO
 - Split `0001` into logical patches (xfb lowering, encoder/render-pass, external memory,
@@ -69,3 +84,12 @@ patches/kosmickrisp/0001-*.patch`, then build per `docs/drivers/kosmickrisp.rst`
   reaches `kk_render_encoder` with `last_used != KK_ENC_RENDER` and
   `need_to_start_render_pass` false — a render-pass-restart tracking gap. (mutter-49.5 /
   dev-enh never hits it.) Fix tracked separately.
+- **`TEXTURE_FORMAT_16BIT_NORM` not enabled on venus/KK** (found 2026-06-29 via ghost-ui,
+  wgpu 29; surfaced only after `0004` removed the crash preceding it): ghost-ui's *glyph
+  pipeline* fails wgpu validation — `Features TEXTURE_FORMAT_16BIT_NORM are required but not
+  enabled`. KK's format table DOES advertise full features for the 16-bit-norm formats
+  (`R16{,G16,G16B16A16}_UNORM/SNORM` = `FWCBMS`/`ALL_NO_ATOMIC`: filter+write+color+blend), so the
+  loss is **downstream** — either venus's `vkGetPhysicalDeviceFormatProperties` relay or the KK
+  feature→`VkFormatFeatureFlags` conversion drops what wgpu-hal requires (SAMPLED_LINEAR | STORAGE
+  | COLOR_ATTACHMENT_BLEND across all six formats). The next ghost-ui blocker; a KK-feature-gaps
+  class item (see the `limina-kk-feature-gaps` note), distinct from the `0004` crash.
