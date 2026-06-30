@@ -45,6 +45,116 @@ runtime_rpms() {  # <glob>
   ls $1 2>/dev/null | grep -vE 'debuginfo|debugsource|-devel-|-tests-' || true
 }
 
+# ---- btrfs v1 space cache -> v2 free-space tree -------------------------------------------------
+# A 16k-page kernel CANNOT mount a btrfs that still uses the v1 free-space cache: open_ctree fails
+# with -22 and the boot drops to the (keyboard-less) emergency shell — the exact 2026-06-29
+# dogfooding brick on a Parallels-migrated guest (a 2021-origin, pre-v2-default btrfs). Per the
+# two-tier rule, switch every btrfs to the v2 free-space tree. Once the FREE_SPACE_TREE compat_ro
+# flag is on the fs it is PERMANENT and BOTH the stock 4k and the 16k kernel mount it with no
+# mount-option needed — but it MUST exist before the 16k's first boot. ensure_btrfs_free_space_tree
+# sets FST_DEFER=1 if the tree could only be built by a later (stock) boot.
+FST_DEFER=0
+
+# rc 0 if $1 (a btrfs device) already carries the FREE_SPACE_TREE compat_ro bit (0x1).
+btrfs_has_fst() {
+  local f
+  f=$(btrfs inspect-internal dump-super -f "$1" 2>/dev/null | awk '/^compat_ro_flags/{print $2}')
+  [ -n "$f" ] && [ "$(( ${f:-0} & 0x1 ))" -ne 0 ]
+}
+
+# Set space_cache=v2 on every btrfs line in /etc/fstab (dropping any stale v1/bare space_cache).
+# Safe: backs up first and only swaps in the rewrite if it kept the line count and the root entry.
+fstab_set_space_cache_v2() {
+  [ -f /etc/fstab ] || return 0
+  cp -a /etc/fstab /etc/fstab.limina.bak
+  awk 'BEGIN{OFS="\t"}
+    /^[[:space:]]*#/ || NF<4 || $3!="btrfs" { print; next }
+    {
+      n=split($4,a,","); o=""
+      for(i=1;i<=n;i++){ if(a[i] ~ /^space_cache/) continue; o=(o==""?a[i]:o","a[i]) }
+      $4=(o==""?"space_cache=v2":o",space_cache=v2"); print
+    }' /etc/fstab > /etc/fstab.limina.new
+  if [ "$(wc -l </etc/fstab.limina.new)" = "$(wc -l </etc/fstab)" ] \
+     && grep -qE '[[:space:]]/[[:space:]]' /etc/fstab.limina.new; then
+    cat /etc/fstab.limina.new > /etc/fstab
+    echo "   /etc/fstab: space_cache=v2 set on all btrfs mounts (backup: /etc/fstab.limina.bak)"
+    grep -nE '[[:space:]]btrfs[[:space:]]' /etc/fstab | sed 's/^/     /'
+  else
+    echo "   WARN: fstab rewrite looked unsafe — left /etc/fstab unchanged (backup kept)" >&2
+  fi
+  rm -f /etc/fstab.limina.new
+}
+
+ensure_btrfs_free_space_tree() {
+  command -v btrfs >/dev/null 2>&1 && command -v findmnt >/dev/null 2>&1 || return 0
+  local out src tgt dev mp tok seen="" v1=""
+  out=$(findmnt -t btrfs -rno SOURCE,TARGET || true)
+  if [ -z "$out" ]; then echo "-- btrfs: no btrfs mounts found"; return 0; fi
+  while read -r src tgt; do
+    [ -n "$src" ] || continue
+    dev=${src%%\[*}                                  # strip the [subvol] suffix
+    case " $seen " in *" $dev "*) continue ;; esac   # one entry per filesystem
+    seen="$seen $dev"
+    if ! btrfs_has_fst "$dev"; then v1="$v1 $dev|$tgt"; fi
+  done <<EOF
+$out
+EOF
+  if [ -z "$v1" ]; then echo "-- btrfs: already on the v2 free-space tree"; return 0; fi
+
+  echo "-- btrfs: legacy v1 space cache detected — a 16k kernel cannot mount it (open_ctree -22)"
+  echo "   converting to the v2 free-space tree: fstab (all btrfs mounts) + build now"
+  fstab_set_space_cache_v2
+  for tok in $v1; do
+    dev=${tok%%|*}; mp=${tok##*|}
+    echo "   $dev (at $mp): building free-space tree"
+    mount -o remount,clear_cache,space_cache=v2 "$mp" 2>/dev/null \
+      || mount -o remount,space_cache=v2 "$mp" 2>/dev/null || true
+    if btrfs_has_fst "$dev"; then
+      echo "     built (compat_ro now carries FREE_SPACE_TREE)"
+    else
+      echo "     live build did not take — a plain stock boot will build it from fstab"
+      FST_DEFER=1
+    fi
+  done
+}
+
+# Install a one-shot that arms the 16k trial ONLY after a stock boot has built the btrfs free-space
+# tree (used when ensure_btrfs_free_space_tree could not build it live). Keeps the 16k from booting
+# onto a still-v1 fs (which would strand it at the emergency shell).
+install_arm_16k_after_fst_service() {
+  cat > /usr/local/sbin/limina-arm-16k.sh <<'ARMSH'
+#!/bin/sh
+# Arm the limina 16k one-shot, but only once EVERY mounted btrfs has the v2 free-space tree
+# (compat_ro bit 0x1). Until then a 16k boot would fail to mount root -> emergency shell.
+case "$(uname -r)" in *limina16k*) exit 0 ;; esac   # already on 16k: nothing to arm
+for d in $(findmnt -t btrfs -rno SOURCE | sed 's/\[.*//' | sort -u); do
+  f=$(btrfs inspect-internal dump-super -f "$d" 2>/dev/null | awk '/^compat_ro_flags/{print $2}')
+  [ -n "$f" ] && [ "$(( ${f:-0} & 0x1 ))" -ne 0 ] || exit 0
+done
+k=$(ls /boot/vmlinuz-*limina16k* 2>/dev/null | head -1)
+[ -n "$k" ] || exit 0
+idx=$(grubby --info="$k" 2>/dev/null | sed -n 's/^index=//p' | head -1)
+if [ -n "$idx" ]; then
+  grub2-reboot "$idx"
+  logger -t limina "btrfs free-space tree ready; armed 16k ($k) — reboot to enter the enhanced kernel"
+fi
+systemctl disable limina-arm-16k.service
+ARMSH
+  chmod +x /usr/local/sbin/limina-arm-16k.sh
+  cat > /etc/systemd/system/limina-arm-16k.service <<'ARMUNIT'
+[Unit]
+Description=Arm the limina 16k kernel once the btrfs free-space tree is built
+After=multi-user.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/limina-arm-16k.sh
+[Install]
+WantedBy=multi-user.target
+ARMUNIT
+  systemctl daemon-reload
+  systemctl enable limina-arm-16k.service >/dev/null 2>&1 || true
+}
+
 ### 1. 16k kernel RPM -> BLS entry via kernel-install + dracut; versionlock #######
 RPM=$(ls "$PAYLOAD"/limina-kernel-16k-*.rpm 2>/dev/null | head -1)
 [ -n "$RPM" ] || { echo "no kernel RPM in payload"; exit 1; }
@@ -182,6 +292,12 @@ sed 's/^/   /' /etc/environment.d/90-limina-zink.conf
 # 16k exactly ONCE (grub2-reboot sets next_entry, which GRUB consumes as it boots it), and let an
 # on-success service promote 16k to default only after it actually reaches multi-user. A failed
 # 16k boot just needs a power-cycle — the guest auto-returns to stock, no keyboard required.
+
+# Convert any v1-space-cache btrfs to the v2 free-space tree FIRST: a 16k kernel cannot mount v1
+# (this was the migrated-guest brick). May set FST_DEFER=1 if the tree can only be built by a
+# subsequent stock boot — the one-shot arming below honors that.
+ensure_btrfs_free_space_tree
+
 echo "-- restoring stock as the permanent default; 16k gets a one-shot trial boot"
 if [ -n "$STOCK_DEFAULT" ]; then
   grubby --set-default="$STOCK_DEFAULT" >/dev/null 2>&1 || true   # undo dnf's auto-promote of 16k
@@ -217,17 +333,32 @@ PROMOTE
 systemctl daemon-reload
 systemctl enable limina-kernel-promote.service >/dev/null 2>&1 || true
 
-# one-shot next-boot = the 16k entry (by grubby index; GRUB auto-boots it, no keyboard needed).
-K_INDEX=$(grubby --info="/boot/vmlinuz-$KREL" 2>/dev/null | sed -n 's/^index=//p' | head -1)
-if [ -n "$K_INDEX" ] && command -v grub2-reboot >/dev/null 2>&1; then
-  grub2-reboot "$K_INDEX"
-  echo "   one-shot next boot -> 16k (index $K_INDEX); auto-falls-back to stock if it fails"
+# one-shot next-boot = the 16k entry (by grubby index; GRUB auto-boots it, no keyboard needed) —
+# UNLESS a btrfs free-space-tree conversion is still pending (FST_DEFER): the 16k cannot mount a
+# v1 fs, so arm it only AFTER a plain stock boot builds the tree from the fstab change above.
+if [ "$FST_DEFER" = 1 ]; then
+  install_arm_16k_after_fst_service
+  echo "   16k trial DEFERRED — a btrfs free-space-tree conversion is staged in /etc/fstab:"
+  echo "     1) reboot now (you stay on stock) — that boot builds the free-space tree;"
+  echo "     2) it then auto-arms the 16k; reboot once more to enter the enhanced kernel."
 else
-  echo "   WARN: could not arm a one-shot 16k boot — try manually: sudo grub2-reboot '$KREL'; sudo reboot" >&2
+  K_INDEX=$(grubby --info="/boot/vmlinuz-$KREL" 2>/dev/null | sed -n 's/^index=//p' | head -1)
+  if [ -n "$K_INDEX" ] && command -v grub2-reboot >/dev/null 2>&1; then
+    grub2-reboot "$K_INDEX"
+    echo "   one-shot next boot -> 16k (index $K_INDEX); auto-falls-back to stock if it fails"
+  else
+    echo "   WARN: could not arm a one-shot 16k boot — try manually: sudo grub2-reboot '$KREL'; sudo reboot" >&2
+  fi
 fi
 
 echo "== enhanced-tier install complete. =="
-echo "   Reboot now. The 16k + venus desktop boots ONCE on trial:"
-echo "     - reaches the desktop -> auto-promoted to the default kernel;"
-echo "     - fails to boot       -> force a power-cycle; the guest auto-returns to stock."
-echo "   (limina has no keyboard at GRUB/emergency yet, so this trial-boot is the safe path.)"
+if [ "$FST_DEFER" = 1 ]; then
+  echo "   One extra step first (btrfs v1->v2): reboot now to build the free-space tree (you stay"
+  echo "   on stock); the 16k trial then auto-arms. After that it boots ONCE on trial and, once it"
+  echo "   reaches the desktop, auto-promotes to the default kernel."
+else
+  echo "   Reboot now. The 16k + venus desktop boots ONCE on trial:"
+  echo "     - reaches the desktop -> auto-promoted to the default kernel;"
+  echo "     - fails to boot       -> force a power-cycle; the guest auto-returns to stock."
+  echo "   (limina has no keyboard at GRUB/emergency yet, so this trial-boot is the safe path.)"
+fi

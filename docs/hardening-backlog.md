@@ -207,6 +207,21 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   with an on-success systemd unit that promotes 16k only after it reaches multi-user — so a failed 16k
   boot auto-returns to stock on a power-cycle, no keyboard required. Recovery for an already-bricked
   guest: revert to a pre-install disk clone. (Two-tier guarantee: stock must always stay reachable.)
+- **16k kernel can't mount a v1-space-cache btrfs (second migrated-guest brick)** — ✅ **DONE
+  2026-06-29**. A 2021-origin Parallels guest's btrfs root still used the legacy **v1 free-space
+  cache**, which a **16 KiB-page** kernel refuses to mount (`BTRFS error: open_ctree failed: -22`;
+  "v1 space cache is not supported for page size 16384 with sectorsize 4096") → `sysroot.mount`
+  fails → the (keyboard-less) dracut emergency shell. The stock 4k kernel mounts it fine and a fresh
+  accessible base already uses v2, so this only bites *migrated/old* installs. Diagnosed from a
+  verbose one-shot serial capture; confirmed fixed on the guest by setting `space_cache=v2` on every
+  btrfs fstab entry → a reboot builds the **free-space tree** (`compat_ro 0x3` =
+  `FREE_SPACE_TREE|VALID`, permanent) → the 16k then mounts (no cmdline option needed). Fix in
+  `install-enhanced.sh`: `ensure_btrfs_free_space_tree` detects any mounted btrfs still on v1 (no FST
+  compat_ro bit), sets `space_cache=v2` on all btrfs fstab lines, builds the tree live
+  (`remount,clear_cache,space_cache=v2`) and **verifies** it. The 16k one-shot is armed only once the
+  tree exists; otherwise a `limina-arm-16k.service` arms it after a plain stock boot has built it (so
+  the 16k never boots onto a still-v1 fs). **NEEDS end-to-end validation on a real v1-btrfs guest**
+  (only the awk + `bash -n` are checked so far).
 - **No keyboard at GRUB / early boot / dracut emergency shell** (open, real recovery gap — found
   2026-06-29) — limina's keyboard only comes alive once the full guest virtio-input path is up. At
   **GRUB** (the GOP firmware's EFI console almost certainly lacks a virtio-input driver) and in the
