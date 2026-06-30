@@ -184,10 +184,28 @@ struct Cli {
     vmm_bin: Option<PathBuf>,
 
     /// Swap the Command and Option keys for the guest: Command acts as Alt, Option acts as
-    /// Meta/Super (the common ask for PC-style muscle memory). Host-side keymap policy; the
-    /// guest still owns the keyboard layout. Only meaningful with --window.
-    #[arg(long)]
+    /// Meta/Super (the common ask for PC-style muscle memory). This is the **default**; the flag
+    /// is kept for back-compat / explicitness and to override an earlier --no-swap-cmd-opt.
+    /// Host-side keymap policy; the guest still owns the keyboard layout. Only meaningful with
+    /// --window.
+    #[arg(long, overrides_with = "no_swap_cmd_opt")]
     swap_cmd_opt: bool,
+
+    /// Keep the Mac-native Command/Option mapping instead of the default swap (Command stays
+    /// Meta/Super, Option stays Alt). The opt-out for --swap-cmd-opt; if both appear the last one
+    /// on the command line wins.
+    #[arg(long, overrides_with = "swap_cmd_opt")]
+    no_swap_cmd_opt: bool,
+}
+
+impl Cli {
+    /// Effective Command/Option swap policy. Swap is **on by default** (PC-style muscle memory);
+    /// `--no-swap-cmd-opt` opts out. `--swap-cmd-opt` and `--no-swap-cmd-opt` override each other
+    /// (last-wins, via clap `overrides_with`), so this OR is exact for every combination and
+    /// reads both fields (no dead-code on the back-compat flag).
+    fn swap_cmd_opt_enabled(&self) -> bool {
+        self.swap_cmd_opt || !self.no_swap_cmd_opt
+    }
 }
 
 fn main() -> Result<()> {
@@ -204,6 +222,9 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     let cli = Cli::parse();
+    // Resolve the Command/Option swap policy up front (default ON; --no-swap-cmd-opt opts out)
+    // before any field of `cli` is moved out below, so the windowed path can use it freely.
+    let swap_cmd_opt = cli.swap_cmd_opt_enabled();
     let vmm_bin = resolve_vmm_bin(cli.vmm_bin).context("locating the limina-vmm worker binary")?;
 
     // Dynamic memory (M6): --memory MIN..MAX overrides --ram-mib with MAX (what libkrun allocates)
@@ -439,9 +460,7 @@ fn main() -> Result<()> {
             gateway,
             control,
             resize_socket,
-            limina_input::keymap::KeyRemap {
-                swap_cmd_opt: cli.swap_cmd_opt,
-            },
+            limina_input::keymap::KeyRemap { swap_cmd_opt },
         );
     }
 
@@ -1308,5 +1327,39 @@ mod tests {
         assert_eq!(std::fs::metadata(&made).unwrap().len(), 8 * 1024 * 1024);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Command/Option swap is ON by default; `--no-swap-cmd-opt` opts out; the two flags
+    /// override each other last-wins. Parses real argv through clap so the `overrides_with`
+    /// wiring is exercised (not just the boolean expression). `--window` is required for the
+    /// windowed path but the swap policy is parsed regardless, so we keep argv minimal.
+    fn swap_for(extra: &[&str]) -> bool {
+        let mut argv = vec!["limina"];
+        argv.extend_from_slice(extra);
+        Cli::try_parse_from(argv)
+            .expect("parsing swap flags")
+            .swap_cmd_opt_enabled()
+    }
+
+    #[test]
+    fn cmd_opt_swap_is_default_on_with_opt_out() {
+        // Default: ON (the new behavior — PC-style muscle memory out of the box).
+        assert!(swap_for(&[]), "swap should default ON");
+        // Explicit on stays on (back-compat: the original --swap-cmd-opt still parses).
+        assert!(swap_for(&["--swap-cmd-opt"]));
+        // Opt-out turns it off.
+        assert!(
+            !swap_for(&["--no-swap-cmd-opt"]),
+            "--no-swap-cmd-opt should disable"
+        );
+        // Both given → last one on the line wins (clap overrides_with).
+        assert!(
+            !swap_for(&["--swap-cmd-opt", "--no-swap-cmd-opt"]),
+            "last flag (--no) wins"
+        );
+        assert!(
+            swap_for(&["--no-swap-cmd-opt", "--swap-cmd-opt"]),
+            "last flag (--swap) wins"
+        );
     }
 }

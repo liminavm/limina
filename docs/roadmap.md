@@ -696,8 +696,10 @@ Parallels replacement: fullscreen, keymap remap, multi-display, system-combo cap
      `toggleFullScreen:`, triggered host-side by `Cmd-Ctrl-F` (the macOS-standard combo).
      `CGDisplayCapture` exclusive mode still optional/deferred.
    - ~~**Keymap remap (Command/Option swap):**~~ **DONE** — host-side `KeyRemap` policy over the
-     positional kVK_* → KEY_* table (`--swap-cmd-opt`; guest owns the layout so dead keys/IME work
-     natively). Fully customizable keybindings beyond the swap still ahead.
+     positional kVK_* → KEY_* table; guest owns the layout so dead keys/IME work natively. **Now ON
+     by default** (PC-style muscle memory out of the box); `--no-swap-cmd-opt` opts out, the original
+     `--swap-cmd-opt` is kept (back-compat, last-wins). Fully customizable keybindings beyond the
+     swap still ahead.
    - ~~**System-combo capture (Cmd-Tab/Cmd-Space/Ctrl-arrows):**~~ **DONE (keyboard)** — the capture
      CGEventTap consumes keyDown/keyUp/flagsChanged while captured and forwards them to the guest,
      so system key-combos act in the guest, not the host. Re-enables on `kCGEventTapDisabledByTimeout`.
