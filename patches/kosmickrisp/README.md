@@ -71,6 +71,15 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
   (touched only via GPU copies/renders). Validated with ghost-ui on the F44 enhanced guest: the
   worker survives and the previously-fatal images take the private-heap path. NOTE: a separate
   gap then surfaces — see TODO (`TEXTURE_FORMAT_16BIT_NORM`).
+- **`0005-kk-advertise-VK_EXT_custom_border_color-lift-zink-on.patch`** — advertise
+  `VK_EXT_custom_border_color`. The sampler impl (`kk_sampler.c`:
+  `VK_BORDER_COLOR_{INT,FLOAT}_CUSTOM_EXT`, `sampler->custom_border`) and the
+  `maxCustomBorderColorSamplers` property were already in tree, but the extension + its feature
+  bits (`customBorderColors`, `customBorderColorWithoutFormat`) were never exposed, so the driver
+  didn't actually offer the feature. zink lists it as a **base requirement**; without it zink-on-KK
+  (and zink-on-venus) is capped at **GL 3.1** and core-profile context creation fails
+  `EGL_BAD_MATCH`. Enabling the already-implemented feature removes that prerequisite gap (the
+  first of the `limina-kk-feature-gaps` items). Built into the shipped `.app` since 2026-06-30.
 
 ## Apply / rebuild
 The `/Volumes/mesa-cs/mesa` tree is on the `limina/kosmickrisp` branch with these committed.
