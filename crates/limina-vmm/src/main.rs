@@ -17,7 +17,7 @@ mod shutdown;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 
 use crate::config::{
@@ -57,11 +57,14 @@ struct Cli {
     #[arg(long = "share", value_name = "TAG=PATH[:ro]")]
     share: Vec<String>,
 
-    /// Raw disk image to attach as virtio-blk `vda` (optional for direct kernel boot).
-    #[arg(long)]
-    disk: Option<PathBuf>,
+    /// Disk to attach as virtio-blk, `PATH[:ro]` (repeatable). Attach order is device order:
+    /// the first `--disk` is `vda`, the next `vdb`, … `:ro` opens it read-only. (The `limina`
+    /// supervisor validates/creates images and forwards them here; this worker just attaches
+    /// each in order, assigning positional block ids — `disks[0]`=`"root"`.)
+    #[arg(long, value_name = "PATH[:ro]")]
+    disk: Vec<String>,
 
-    /// Open the disk read-only (protects the image from guest writes).
+    /// Open the FIRST `--disk` read-only (back-compat alias; prefer a per-disk `:ro` suffix).
     #[arg(long)]
     read_only: bool,
 
@@ -203,6 +206,51 @@ fn parse_share(spec: &str) -> Result<FsShare> {
     })
 }
 
+/// Parse a `--disk PATH[:ro]` attach spec. The `:ro` suffix is a flag only when it's the exact
+/// trailing token; interior colons stay in the path. (`:create` is resolved by the supervisor,
+/// so the worker only ever sees `PATH[:ro]`.)
+fn parse_disk_attach(spec: &str) -> Result<(PathBuf, bool)> {
+    let (path, read_only) = match spec.strip_suffix(":ro") {
+        Some(p) => (p, true),
+        None => (spec, false),
+    };
+    anyhow::ensure!(!path.is_empty(), "--disk has an empty path: {spec:?}");
+    Ok((PathBuf::from(path), read_only))
+}
+
+/// Take a non-blocking advisory exclusive lock (`flock(LOCK_EX)`) on each writable disk's
+/// backing file and return the held fds (drop = unlock). libkrun opens its own fd to the same
+/// file for I/O; this guard fd only carries the lock, so a second VM attaching the same image
+/// read-write fails fast instead of silently corrupting it. Read-only disks aren't locked.
+fn lock_writable_disks(disks: &[DiskSpec]) -> Result<Vec<std::fs::File>> {
+    use std::os::unix::io::AsRawFd;
+    let mut guards = Vec::new();
+    for disk in disks {
+        if disk.read_only {
+            continue;
+        }
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&disk.path)
+            .with_context(|| format!("opening disk {:?} to lock it", disk.path))?;
+        // SAFETY: `f` owns a valid fd for the duration of the call.
+        let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            anyhow::ensure!(
+                err.raw_os_error() != Some(libc::EWOULDBLOCK),
+                "disk {:?} is already attached read-write to another running VM; \
+                 attach it `:ro` to share it, or stop the other VM",
+                disk.path
+            );
+            return Err(err).with_context(|| format!("flock {:?}", disk.path));
+        }
+        guards.push(f);
+    }
+    Ok(guards)
+}
+
 fn main() -> Result<()> {
     // Default to warn-and-up so a production run is quiet (the per-frame GPU device chatter
     // lives at trace/debug). RUST_LOG overrides it — e.g. RUST_LOG=debug for venus host-init,
@@ -221,15 +269,36 @@ fn main() -> Result<()> {
         None => BootSource::Firmware(cli.firmware.expect("clap requires firmware or kernel")),
     };
 
-    let disks = cli
+    // Disks attach in order: the first `--disk` is `vda` (block id "root", preserved so a
+    // pre-M10 single-disk snapshot still matches), the next `vdb` ("disk1"), … `--read-only`
+    // is a back-compat alias for `:ro` on the first disk.
+    let disks: Vec<DiskSpec> = cli
         .disk
-        .map(|path| DiskSpec {
-            id: "root".to_string(),
-            path,
-            read_only: cli.read_only,
+        .iter()
+        .enumerate()
+        .map(|(i, spec)| {
+            let (path, mut read_only) = parse_disk_attach(spec)?;
+            if i == 0 && cli.read_only {
+                read_only = true;
+            }
+            let id = if i == 0 {
+                "root".to_string()
+            } else {
+                format!("disk{i}")
+            };
+            Ok(DiskSpec {
+                id,
+                path,
+                read_only,
+            })
         })
-        .into_iter()
-        .collect();
+        .collect::<Result<_>>()?;
+
+    // Take a host-side advisory exclusive lock on every WRITABLE backing file and hold it for
+    // the VM's lifetime, so the same image can't be attached read-write to two running VMs (a
+    // silent corruption footgun). Read-only disks may be shared. Held in `main` scope across
+    // `krun::boot` (which never returns on a clean shutdown).
+    let _disk_locks = lock_writable_disks(&disks)?;
 
     let mut shares: Vec<FsShare> = cli
         .rootfs
@@ -326,4 +395,80 @@ fn main() -> Result<()> {
     };
 
     krun::boot(&spec)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::io::AsRawFd;
+
+    #[test]
+    fn parse_disk_attach_ro_suffix() {
+        let (p, ro) = parse_disk_attach("/d/a.raw").unwrap();
+        assert_eq!(p, PathBuf::from("/d/a.raw"));
+        assert!(!ro);
+        let (p, ro) = parse_disk_attach("/d/a.raw:ro").unwrap();
+        assert_eq!(p, PathBuf::from("/d/a.raw"));
+        assert!(ro);
+        // Interior colon is part of the path.
+        let (p, ro) = parse_disk_attach("/weird:dir/a.raw").unwrap();
+        assert_eq!(p, PathBuf::from("/weird:dir/a.raw"));
+        assert!(!ro);
+        assert!(parse_disk_attach(":ro").is_err());
+    }
+
+    /// The id scheme: first disk keeps the historical "root" id (so a pre-M10 single-disk
+    /// snapshot still matches), the rest are positional "disk1", "disk2", … This mirrors the
+    /// id assignment in `main`.
+    #[test]
+    fn positional_block_ids_keep_root_first() {
+        let ids: Vec<String> = (0..3)
+            .map(|i| {
+                if i == 0 {
+                    "root".to_string()
+                } else {
+                    format!("disk{i}")
+                }
+            })
+            .collect();
+        assert_eq!(ids, ["root", "disk1", "disk2"]);
+    }
+
+    #[test]
+    fn lock_writable_disks_blocks_a_second_rw_attach_but_allows_ro() {
+        let dir = std::env::temp_dir().join(format!("limina-vmm-locktest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("data.raw");
+        std::fs::write(&path, [0u8; 4096]).unwrap();
+
+        let rw = DiskSpec {
+            id: "root".into(),
+            path: path.clone(),
+            read_only: false,
+        };
+        let ro = DiskSpec {
+            id: "root".into(),
+            path: path.clone(),
+            read_only: true,
+        };
+
+        // First writable attach takes the lock.
+        let guard = lock_writable_disks(std::slice::from_ref(&rw)).unwrap();
+        assert_eq!(guard.len(), 1);
+        // A second writable attach of the SAME file is refused.
+        assert!(lock_writable_disks(std::slice::from_ref(&rw)).is_err());
+        // A read-only attach is allowed (and takes no lock).
+        assert!(lock_writable_disks(std::slice::from_ref(&ro))
+            .unwrap()
+            .is_empty());
+
+        // Dropping the guard releases the lock so it can be taken again.
+        drop(guard);
+        let again = lock_writable_disks(std::slice::from_ref(&rw)).unwrap();
+        // Sanity: the lock fd is real.
+        assert!(again[0].as_raw_fd() >= 0);
+        drop(again);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

@@ -51,11 +51,15 @@ struct Cli {
     #[arg(long)]
     rootfs: Option<PathBuf>,
 
-    /// Raw disk image to attach as virtio-blk `vda` (optional for direct kernel boot).
-    #[arg(long)]
-    disk: Option<PathBuf>,
+    /// Attach a disk to the guest as virtio-blk (repeatable): `PATH[:ro][:create=SIZE]`. The
+    /// first `--disk` is the boot disk (`vda`), the next `vdb`, and so on — attach order is
+    /// device order. `:ro` opens it read-only; `:create=SIZE` (e.g. `50G`, `512M`) creates a
+    /// blank sparse raw image at PATH if it doesn't already exist, then attaches it. Optional
+    /// for a direct kernel boot.
+    #[arg(long, value_name = "PATH[:ro][:create=SIZE]")]
+    disk: Vec<String>,
 
-    /// Open the disk read-only (protects the image from guest writes).
+    /// Open the FIRST `--disk` read-only (back-compat alias; prefer a per-disk `:ro` suffix).
     #[arg(long)]
     read_only: bool,
 
@@ -287,12 +291,42 @@ fn main() -> Result<()> {
         args.push("--rootfs".into());
         args.push(path_arg(rootfs)?);
     }
-    if let Some(disk) = &cli.disk {
-        args.push("--disk".into());
-        args.push(path_arg(disk)?);
-    }
-    if cli.read_only {
-        args.push("--read-only".into());
+    // Disks (M10): repeatable `--disk PATH[:ro][:create=SIZE]`. The first is the boot disk
+    // (`vda`), then `vdb`, … — attach order is device order (host-side deterministic; the guest
+    // names them in that order under the default synchronous probe). The supervisor does the
+    // host-side work here — `:create` makes a blank image, validation rejects a bad path, and we
+    // detect a path attached twice — then forwards plain `--disk PATH[:ro]` per disk so the
+    // worker just attaches them in order (assigning positional block ids, `disks[0]`=`"root"`).
+    // `--read-only` is a back-compat alias for `:ro` on the first disk.
+    {
+        let mut seen = std::collections::HashSet::new();
+        for (i, spec) in cli.disk.iter().enumerate() {
+            let mut disk = parse_disk(spec)?;
+            if i == 0 && cli.read_only {
+                disk.read_only = true;
+            }
+            if let Some(size) = disk.create {
+                create_disk_image(&disk.path, size)?;
+            }
+            validate_disk_path(&disk.path)?;
+            // Detect the same backing file attached twice (canonicalize so `./a` and `a` match);
+            // a writable image attached to one VM more than once corrupts it.
+            let key = disk
+                .path
+                .canonicalize()
+                .unwrap_or_else(|_| disk.path.clone());
+            anyhow::ensure!(
+                seen.insert(key),
+                "--disk path attached more than once: {:?}",
+                disk.path
+            );
+            args.push("--disk".into());
+            args.push(format!(
+                "{}{}",
+                path_arg(&disk.path)?,
+                if disk.read_only { ":ro" } else { "" }
+            ));
+        }
     }
     {
         let mut tags = std::collections::HashSet::new();
@@ -934,6 +968,118 @@ fn parse_share(spec: &str) -> Result<ShareSpec> {
     })
 }
 
+/// A parsed `--disk PATH[:ro][:create=SIZE]` option.
+#[derive(Debug, PartialEq, Eq)]
+struct DiskOpt {
+    path: PathBuf,
+    read_only: bool,
+    /// When set, create a blank sparse raw of this many bytes at `path` if it's absent.
+    create: Option<u64>,
+}
+
+/// Parse `--disk PATH[:ro][:create=SIZE]`. Recognized `:`-suffixes (`:ro`, `:create=SIZE`) are
+/// stripped from the right in any order; everything left is the path, so interior colons in a
+/// path are fine. The one un-escapable edge (shared with `--share`): a path that literally ends
+/// in `:ro` is read as the flag. `SIZE` accepts a `K`/`M`/`G`/`T` binary suffix (bare = bytes).
+fn parse_disk(spec: &str) -> Result<DiskOpt> {
+    let mut rest = spec;
+    let mut read_only = false;
+    let mut create = None;
+    loop {
+        let Some(colon) = rest.rfind(':') else { break };
+        let token = &rest[colon + 1..];
+        if token == "ro" {
+            anyhow::ensure!(!read_only, "--disk {spec:?}: ':ro' given twice");
+            read_only = true;
+        } else if let Some(size) = token.strip_prefix("create=") {
+            anyhow::ensure!(create.is_none(), "--disk {spec:?}: ':create=' given twice");
+            create =
+                Some(parse_disk_size(size).with_context(|| format!("--disk {spec:?}: bad size"))?);
+        } else {
+            break;
+        }
+        rest = &rest[..colon];
+    }
+    anyhow::ensure!(!rest.is_empty(), "--disk has an empty path: {spec:?}");
+    Ok(DiskOpt {
+        path: PathBuf::from(rest),
+        read_only,
+        create,
+    })
+}
+
+/// Parse a disk size into bytes. `50G`/`512M`/`1T`/`100K` (binary, ×1024); bare = bytes.
+fn parse_disk_size(s: &str) -> Result<u64> {
+    let s = s.trim();
+    let (num, mult): (&str, u64) = if let Some(n) = s.strip_suffix(['T', 't']) {
+        (n, 1024 * 1024 * 1024 * 1024)
+    } else if let Some(n) = s.strip_suffix(['G', 'g']) {
+        (n, 1024 * 1024 * 1024)
+    } else if let Some(n) = s.strip_suffix(['M', 'm']) {
+        (n, 1024 * 1024)
+    } else if let Some(n) = s.strip_suffix(['K', 'k']) {
+        (n, 1024)
+    } else {
+        (s, 1)
+    };
+    let v: u64 = num
+        .trim()
+        .parse()
+        .with_context(|| format!("invalid disk size {s:?}"))?;
+    anyhow::ensure!(v > 0, "disk size must be greater than zero: {s:?}");
+    v.checked_mul(mult)
+        .with_context(|| format!("disk size overflows u64: {s:?}"))
+}
+
+/// Create a blank sparse raw image of `size` bytes at `path` if it doesn't exist. Idempotent
+/// when the file is already present at exactly that size; refuses to touch a file of a
+/// different size (never resizes/clobbers an existing disk).
+fn create_disk_image(path: &Path, size: u64) -> Result<()> {
+    if let Ok(meta) = std::fs::metadata(path) {
+        anyhow::ensure!(
+            meta.is_file(),
+            "--disk :create target exists and is not a regular file: {path:?}"
+        );
+        anyhow::ensure!(
+            meta.len() == size,
+            "--disk :create target {path:?} already exists at {} bytes (requested {size}); \
+             refusing to resize — remove it or drop :create to attach it as-is",
+            meta.len()
+        );
+        return Ok(());
+    }
+    let f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("creating disk image {path:?}"))?;
+    f.set_len(size) // sparse: allocates no blocks until written
+        .with_context(|| format!("sizing new disk image {path:?} to {size} bytes"))?;
+    Ok(())
+}
+
+/// Validate a `--disk` backing path: it must exist and be a regular file or a block device.
+/// Distinguishes "not found" (likely a typo, or wanted `:create`) from "permission denied".
+fn validate_disk_path(path: &Path) -> Result<()> {
+    use std::os::unix::fs::FileTypeExt;
+    match std::fs::metadata(path) {
+        Ok(m) => {
+            anyhow::ensure!(
+                m.is_file() || m.file_type().is_block_device(),
+                "--disk path is not a regular file or block device: {path:?}"
+            );
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(anyhow::anyhow!(
+            "--disk path not found: {path:?} (pass :create=SIZE to make a new disk)"
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Err(anyhow::anyhow!(
+            "--disk path not accessible (permission denied): {path:?}"
+        )),
+        Err(e) => Err(e).with_context(|| format!("stat --disk path {path:?}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1016,5 +1162,84 @@ mod tests {
     fn none_when_no_firmware_exists_at_all() {
         let exe = Path::new("/repo/target/debug");
         assert!(resolve_windowed_firmware(exe, None, |_| false).is_none());
+    }
+
+    #[test]
+    fn parse_disk_plain_path() {
+        let d = parse_disk("/images/fedora.raw").unwrap();
+        assert_eq!(d.path, PathBuf::from("/images/fedora.raw"));
+        assert!(!d.read_only);
+        assert_eq!(d.create, None);
+    }
+
+    #[test]
+    fn parse_disk_ro_and_create_in_either_order() {
+        let a = parse_disk("/d/data.raw:ro:create=50G").unwrap();
+        let b = parse_disk("/d/data.raw:create=50G:ro").unwrap();
+        for d in [&a, &b] {
+            assert_eq!(d.path, PathBuf::from("/d/data.raw"));
+            assert!(d.read_only);
+            assert_eq!(d.create, Some(50 * 1024 * 1024 * 1024));
+        }
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn parse_disk_keeps_interior_colons_in_path() {
+        // A colon that isn't a recognized trailing option stays part of the path.
+        let d = parse_disk("/weird:dir/disk.raw").unwrap();
+        assert_eq!(d.path, PathBuf::from("/weird:dir/disk.raw"));
+        assert!(!d.read_only);
+        // …but with a recognized suffix, only that suffix is stripped.
+        let d = parse_disk("/weird:dir/disk.raw:ro").unwrap();
+        assert_eq!(d.path, PathBuf::from("/weird:dir/disk.raw"));
+        assert!(d.read_only);
+    }
+
+    #[test]
+    fn parse_disk_rejects_dupes_and_empty() {
+        assert!(parse_disk(":ro").is_err()); // empty path
+        assert!(parse_disk("/d/a.raw:ro:ro").is_err());
+        assert!(parse_disk("/d/a.raw:create=1G:create=2G").is_err());
+        assert!(parse_disk("/d/a.raw:create=notasize").is_err());
+    }
+
+    #[test]
+    fn disk_size_units() {
+        assert_eq!(parse_disk_size("512").unwrap(), 512);
+        assert_eq!(parse_disk_size("100K").unwrap(), 100 * 1024);
+        assert_eq!(parse_disk_size("512M").unwrap(), 512 * 1024 * 1024);
+        assert_eq!(parse_disk_size("50G").unwrap(), 50 * 1024 * 1024 * 1024);
+        assert_eq!(
+            parse_disk_size("2T").unwrap(),
+            2 * 1024 * 1024 * 1024 * 1024
+        );
+        assert_eq!(parse_disk_size(" 1g ").unwrap(), 1024 * 1024 * 1024);
+        assert!(parse_disk_size("0").is_err());
+        assert!(parse_disk_size("xx").is_err());
+        assert!(parse_disk_size("").is_err());
+    }
+
+    #[test]
+    fn create_disk_image_is_sparse_and_idempotent() {
+        let dir = std::env::temp_dir().join(format!("limina-disktest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("new.raw");
+        let _ = std::fs::remove_file(&p);
+
+        // Creates a file of the requested size…
+        create_disk_image(&p, 64 * 1024 * 1024).unwrap();
+        assert_eq!(std::fs::metadata(&p).unwrap().len(), 64 * 1024 * 1024);
+        // …and validates as a regular file.
+        validate_disk_path(&p).unwrap();
+        // Idempotent at the same size.
+        create_disk_image(&p, 64 * 1024 * 1024).unwrap();
+        // Refuses a different size rather than clobbering.
+        assert!(create_disk_image(&p, 32 * 1024 * 1024).is_err());
+
+        std::fs::remove_file(&p).ok();
+        // A path that doesn't exist fails validation with the create hint.
+        assert!(validate_disk_path(&p).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
