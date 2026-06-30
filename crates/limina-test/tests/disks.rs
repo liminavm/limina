@@ -19,6 +19,10 @@
 //!     make imago truncate the backing file, shrinking the capacity on relaunch so the fs no
 //!     longer fit ("bad geometry"). Fixed by patches/imago/0001 (discard punch-holes, never
 //!     truncates). See spikes/m10-disk-durability/RESULTS.md.
+//!   - **stable identity (Phase 2):** the disk resolves by `/dev/disk/by-id/virtio-<block_id>`
+//!     (boot disk `virtio-root` → vda, second disk `virtio-disk1` → vdb), and that handle is
+//!     stable across the reboot. libkrun patch 0038 exposes the positional `block_id` as the
+//!     virtio-blk serial; without it the serial is the host inode hash (not clone/move-stable).
 //!
 //! This is the empirical confirmation of the design's §4.1 ordering claim (host order is
 //! source-deterministic; this proves the guest names follow it under the real kernel).
@@ -92,6 +96,36 @@ fn second_disk_is_vdb_read_write_and_durable() {
         !root_src.contains("vdb"),
         "root landed on the data disk (vdb): {root_src:?}"
     );
+
+    // Stable identity (Phase 2): the worker assigns positional block ids (`disks[0]`=`"root"`,
+    // second disk=`"disk1"`), and libkrun patch 0038 exposes block_id as the virtio-blk serial, so
+    // the guest gets `/dev/disk/by-id/virtio-<block_id>`. Assert the data disk resolves by id to
+    // vdb (and the boot disk to vda). RED without 0038: the serial would be the host inode hash, so
+    // `virtio-disk1` wouldn't exist and the readlink returns empty. The by-id is what survives an
+    // image clone/move (the inode serial doesn't) — the M9.4 snapshot-clone handle.
+    guest
+        .ssh_poll(
+            "test -e /dev/disk/by-id/virtio-disk1 && echo ok",
+            Duration::from_secs(15),
+        )
+        .expect("/dev/disk/by-id/virtio-disk1 never appeared — serial != block_id (patch 0038?)");
+    let byid_data = guest
+        .ssh_exec("readlink -f /dev/disk/by-id/virtio-disk1")
+        .expect("resolving virtio-disk1 by-id");
+    assert_eq!(
+        byid_data.trim(),
+        "/dev/vdb",
+        "virtio-disk1 by-id does not resolve to vdb"
+    );
+    let byid_root = guest
+        .ssh_exec("readlink -f /dev/disk/by-id/virtio-root")
+        .expect("resolving virtio-root by-id");
+    assert_eq!(
+        byid_root.trim(),
+        "/dev/vda",
+        "virtio-root by-id does not resolve to the boot disk vda"
+    );
+    eprintln!("by-id: virtio-root → /dev/vda, virtio-disk1 → /dev/vdb ✓");
 
     // RW + durability round-trip: format vdb, mount it, write a marker, sync, unmount, then
     // REMOUNT (same boot) and read it back. The unmount/remount proves the write is durable to
@@ -178,6 +212,18 @@ fn second_disk_is_vdb_read_write_and_durable() {
         .ssh_exec("sudo umount /mnt/data")
         .expect("unmounting vdb after reboot");
     eprintln!("vdb data + geometry survived a reboot ✓");
+
+    // The by-id handle is stable across the reboot too (the whole point — a name that doesn't
+    // depend on probe order or the host inode).
+    let byid_data_post = guest
+        .ssh_exec("readlink -f /dev/disk/by-id/virtio-disk1")
+        .expect("resolving virtio-disk1 by-id after reboot");
+    assert_eq!(
+        byid_data_post.trim(),
+        "/dev/vdb",
+        "virtio-disk1 by-id did not survive the reboot"
+    );
+    eprintln!("by-id virtio-disk1 → /dev/vdb stable across reboot ✓");
 
     let outcome = guest
         .shutdown(Duration::from_secs(20))

@@ -63,6 +63,11 @@ struct Cli {
     #[arg(long)]
     read_only: bool,
 
+    /// Attach a read-only ISO / CD-ROM image (repeatable). Sugar for `--disk PATH:ro`, appended
+    /// after the data disks; the guest sees a read-only `/dev/vdX` (mount it with `mount -o ro`).
+    #[arg(long, value_name = "PATH")]
+    cdrom: Vec<PathBuf>,
+
     /// Share a host directory into the guest (repeatable): `[NAME=]PATH[:ro]`. NAME
     /// defaults to the directory's basename; the share is tagged `limina-NAME` over
     /// virtio-fs and the guest agent auto-mounts it at /media/NAME (a guest without
@@ -291,43 +296,8 @@ fn main() -> Result<()> {
         args.push("--rootfs".into());
         args.push(path_arg(rootfs)?);
     }
-    // Disks (M10): repeatable `--disk PATH[:ro][:create=SIZE]`. The first is the boot disk
-    // (`vda`), then `vdb`, … — attach order is device order (host-side deterministic; the guest
-    // names them in that order under the default synchronous probe). The supervisor does the
-    // host-side work here — `:create` makes a blank image, validation rejects a bad path, and we
-    // detect a path attached twice — then forwards plain `--disk PATH[:ro]` per disk so the
-    // worker just attaches them in order (assigning positional block ids, `disks[0]`=`"root"`).
-    // `--read-only` is a back-compat alias for `:ro` on the first disk.
-    {
-        let mut seen = std::collections::HashSet::new();
-        for (i, spec) in cli.disk.iter().enumerate() {
-            let mut disk = parse_disk(spec)?;
-            if i == 0 && cli.read_only {
-                disk.read_only = true;
-            }
-            if let Some(size) = disk.create {
-                create_disk_image(&disk.path, size)?;
-            }
-            validate_disk_path(&disk.path)?;
-            // Detect the same backing file attached twice (canonicalize so `./a` and `a` match);
-            // a writable image attached to one VM more than once corrupts it.
-            let key = disk
-                .path
-                .canonicalize()
-                .unwrap_or_else(|_| disk.path.clone());
-            anyhow::ensure!(
-                seen.insert(key),
-                "--disk path attached more than once: {:?}",
-                disk.path
-            );
-            args.push("--disk".into());
-            args.push(format!(
-                "{}{}",
-                path_arg(&disk.path)?,
-                if disk.read_only { ":ro" } else { "" }
-            ));
-        }
-    }
+    // Disks (M10): repeatable `--disk PATH[:ro][:create=SIZE]` + `--cdrom PATH`. See build_disk_args.
+    args.extend(build_disk_args(&cli.disk, cli.read_only, &cli.cdrom)?);
     {
         let mut tags = std::collections::HashSet::new();
         for spec in &cli.share {
@@ -1008,6 +978,51 @@ fn parse_disk(spec: &str) -> Result<DiskOpt> {
     })
 }
 
+/// Build the `--disk PATH[:ro]` args to forward to the worker, in declared order: the data disks
+/// (`--read-only` folds into the first), then each `--cdrom` as a read-only disk appended after
+/// them. The first disk becomes the boot disk (`vda`/block id `"root"`), the rest `vdb`, `vdc`, …
+/// in order. Does the host-side work: `:create=SIZE` makes a blank sparse image, every path is
+/// validated (regular file or block device), and a path attached twice — across disks *and* cdroms
+/// — is rejected (canonicalized, since a writable image attached twice to one VM corrupts it).
+fn build_disk_args(disks: &[String], read_only: bool, cdroms: &[PathBuf]) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut check_unique = |path: &Path| -> Result<()> {
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        anyhow::ensure!(
+            seen.insert(key),
+            "disk path attached more than once: {path:?}"
+        );
+        Ok(())
+    };
+    for (i, spec) in disks.iter().enumerate() {
+        let mut disk = parse_disk(spec)?;
+        if i == 0 && read_only {
+            disk.read_only = true;
+        }
+        if let Some(size) = disk.create {
+            create_disk_image(&disk.path, size)?;
+        }
+        validate_disk_path(&disk.path)?;
+        check_unique(&disk.path)?;
+        out.push("--disk".into());
+        out.push(format!(
+            "{}{}",
+            path_arg(&disk.path)?,
+            if disk.read_only { ":ro" } else { "" }
+        ));
+    }
+    // `--cdrom PATH` is sugar for a read-only `--disk`, appended after the data disks. No
+    // `:create`/`:ro` suffix parsing — it's always an existing, read-only image.
+    for iso in cdroms {
+        validate_disk_path(iso)?;
+        check_unique(iso)?;
+        out.push("--disk".into());
+        out.push(format!("{}:ro", path_arg(iso)?));
+    }
+    Ok(out)
+}
+
 /// Parse a disk size into bytes. `50G`/`512M`/`1T`/`100K` (binary, ×1024); bare = bytes.
 fn parse_disk_size(s: &str) -> Result<u64> {
     let s = s.trim();
@@ -1240,6 +1255,58 @@ mod tests {
         std::fs::remove_file(&p).ok();
         // A path that doesn't exist fails validation with the create hint.
         assert!(validate_disk_path(&p).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn build_disk_args_orders_disks_then_cdroms_folds_ro_and_dedups() {
+        let dir = std::env::temp_dir().join(format!("limina-cdromtest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let data = dir.join("data.raw");
+        let iso = dir.join("media.iso");
+        std::fs::write(&data, b"x").unwrap();
+        std::fs::write(&iso, b"y").unwrap();
+        let ds = data.to_str().unwrap().to_string();
+
+        // A data disk + a --cdrom: the cdrom is appended after, read-only.
+        let args =
+            build_disk_args(std::slice::from_ref(&ds), false, std::slice::from_ref(&iso)).unwrap();
+        assert_eq!(
+            args,
+            vec![
+                "--disk".to_string(),
+                path_arg(&data).unwrap(),
+                "--disk".to_string(),
+                format!("{}:ro", path_arg(&iso).unwrap()),
+            ]
+        );
+
+        // `--read-only` folds `:ro` into the FIRST disk only.
+        let args = build_disk_args(std::slice::from_ref(&ds), true, &[]).unwrap();
+        assert_eq!(
+            args,
+            vec![
+                "--disk".to_string(),
+                format!("{}:ro", path_arg(&data).unwrap())
+            ]
+        );
+
+        // A path given as both `--disk` and `--cdrom` (or twice) is rejected.
+        assert!(build_disk_args(
+            std::slice::from_ref(&ds),
+            false,
+            std::slice::from_ref(&data)
+        )
+        .is_err());
+
+        // `:create=SIZE` makes a missing data disk, then forwards it read-write (no `:ro`).
+        let made = dir.join("created.raw");
+        let _ = std::fs::remove_file(&made);
+        let spec = format!("{}:create=8M", made.to_str().unwrap());
+        let args = build_disk_args(std::slice::from_ref(&spec), false, &[]).unwrap();
+        assert_eq!(args, vec!["--disk".to_string(), path_arg(&made).unwrap()]);
+        assert_eq!(std::fs::metadata(&made).unwrap().len(), 8 * 1024 * 1024);
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }
