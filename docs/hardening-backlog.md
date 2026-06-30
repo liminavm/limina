@@ -85,6 +85,32 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   `spikes/venus-draw-probe/notification-green-artifact-2026-06-29.png`. Not chased yet; needs the
   venus pixel-verify discipline (reproduce a notification, capture the IOSurface, isolate the damaged
   rect). Cosmetic, single-widget — low priority.
+- **venus TSD-destructor SIGSEGV on libtest worker-thread teardown** (open, isolated + reproduced
+  2026-06-30 — fix belongs in venus/mesa) — a wgpu **Vulkan device on venus** (`libvulkan_virtio.so`),
+  created and dropped inside a libtest `#[test]`, SIGSEGVs as the test's worker thread exits. The
+  *identical* code as a plain binary (`cargo run`) is clean, and the same test under **lavapipe** is
+  clean — so it is neither an app bug nor a general venus bug; it fires only when a venus-touching
+  **non-main thread exits while the process keeps running** (exactly what a test runner does). Root
+  cause (core backtrace via `coredumpctl`): venus registers a thread-specific-storage destructor
+  `tss_create(&vn_tls_key, vn_tls_free)` (`vn_common.c`); the libtest worker `pthread_exit`s and glibc
+  `__nptl_deallocate_tsd` calls `vn_tls_free` — but `vkDestroyInstance`/`vkDestroyDevice` already tore
+  down the per-thread/instance state (and the ICD code may be unmapped) when wgpu dropped the
+  device/instance, so the destructor jumps into freed/unmapped memory (frame `#0` = `n/a + 0x0`, no
+  loaded module). A plain binary does the work on the **main** thread (no mid-process `pthread_exit`),
+  so it is clean; lavapipe registers no such fatal destructor. **Fix layer = venus mesa**
+  (`src/virtio/vulkan/vn_common.c`, the `vn_tls_key`/`vn_tls_free` lifecycle): make `vn_tls_free` safe
+  to run after the instance/device it relates to is destroyed (NULL the TSD value on teardown, or guard
+  against freed state) so a late thread-exit destructor is a no-op rather than a fault; a secondary
+  suspect is the Vulkan loader's ICD-unload ordering (whether the ICD can be unmapped while threads
+  with pending TSD destructors are alive), but the faulting destructor is venus's. **Minimal repro +
+  full analysis: `spikes/venus-teardown-repro/`** (its own cargo workspace, stock crates.io wgpu 29 /
+  winit 0.30 pinned to match ghost-ui, no ghost code) — `t0_headless_device_only` is the canonical case
+  (no window/surface/present); `t1`/`t2` add a window + present only to show those don't matter; run
+  one test at a time (a SIGSEGV takes the whole process down), then `coredumpctl info teardown` for the
+  elfutils backtrace. ghost-ui's `frontends/ghost-ui/harness/tests/windowed.rs` currently works around
+  it with `std::process::exit(0)` after its assertions (the real-frames-presented goal is verified
+  before teardown). Low urgency (test-harness-only; the workaround holds) but it is a real venus
+  lifecycle bug worth upstreaming.
 - **virtio-gpu flip-completion gap** — ✅ **RESOLVED (verified 2026-06-23); item was stale.** Already
   fixed by `patches/linux/0001` (drm/virtio fence blob-scanout flushes, 2026-06-11): host3d_blob
   (venus) scanout FBs now carry the same fence the dumb path has, so `virtio_gpu_resource_flush`

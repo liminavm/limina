@@ -1,0 +1,18 @@
+# Self-contained minimal reproduction of the venus + libtest teardown SIGSEGV.
+# Own workspace (empty [workspace]) so it builds standalone, independent of the
+# ghost-ui workspace and its vendored winit — stock crates.io winit/wgpu only.
+[package]
+name = "venus-teardown-repro"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+# Pinned to the exact versions ghost-ui uses, so this is a faithful repro of the
+# crash seen there. (winit is stock crates.io here — ghost vendors a winit patch
+# unrelated to teardown.)
+[dependencies]
+winit = "=0.30.13"
+wgpu = "=29.0.3"
+pollster = "0.4"
