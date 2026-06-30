@@ -69,7 +69,8 @@ btrfs_has_fst() {
 # Safe: backs up first and only swaps in the rewrite if it kept the line count and the root entry.
 fstab_set_space_cache_v2() {
   [ -f /etc/fstab ] || return 0
-  cp -a /etc/fstab /etc/fstab.limina.bak
+  # Don't clobber a prior backup on re-run — keep the ORIGINAL pre-limina fstab.
+  [ -e /etc/fstab.limina.bak ] || cp -a /etc/fstab /etc/fstab.limina.bak
   awk 'BEGIN{OFS="\t"}
     /^[[:space:]]*#/ || NF<4 || $3!="btrfs" { print; next }
     {
@@ -77,7 +78,11 @@ fstab_set_space_cache_v2() {
       for(i=1;i<=n;i++){ if(a[i] ~ /^space_cache/) continue; o=(o==""?a[i]:o","a[i]) }
       $4=(o==""?"space_cache=v2":o",space_cache=v2"); print
     }' /etc/fstab > /etc/fstab.limina.new
-  if [ "$(wc -l </etc/fstab.limina.new)" = "$(wc -l </etc/fstab)" ] \
+  # Count records with awk NR (not `wc -l`): awk counts the final line even with NO trailing newline,
+  # whereas wc -l counts newlines — and awk's reprint ADDS a trailing newline, so a fstab without one
+  # would make wc -l report new=orig+1 and FALSE-REJECT the rewrite (silently stranding the deferred
+  # tree-build). awk NR == awk NR is newline-robust.
+  if [ "$(awk 'END{print NR}' /etc/fstab.limina.new)" = "$(awk 'END{print NR}' /etc/fstab)" ] \
      && grep -qE '[[:space:]]/[[:space:]]' /etc/fstab.limina.new; then
     cat /etc/fstab.limina.new > /etc/fstab
     echo "   /etc/fstab: space_cache=v2 set on all btrfs mounts (backup: /etc/fstab.limina.bak)"
@@ -134,7 +139,11 @@ for d in $(findmnt -t btrfs -rno SOURCE | sed 's/\[.*//' | sort -u); do
   f=$(btrfs inspect-internal dump-super -f "$d" 2>/dev/null | awk '/^compat_ro_flags/{print $2}')
   [ -n "$f" ] && [ "$(( ${f:-0} & 0x1 ))" -ne 0 ] || exit 0
 done
-k=$(ls /boot/vmlinuz-*limina16k* 2>/dev/null | head -1)
+# Pick the NEWEST limina16k kernel (sort -V | tail -1), NOT `ls | head -1` (lexical = OLDEST): with
+# multiple co-installed enhanced kernels the newest is the one this install added — and the one the
+# promote service ($KREL, baked at install time) will promote. head -1 would TRIAL the old kernel
+# while the promote service promotes the new (never-trial-booted) one -> the unproven-default brick.
+k=$(ls /boot/vmlinuz-*limina16k* 2>/dev/null | sort -V | tail -1)
 [ -n "$k" ] || exit 0
 # Arm by BLS ENTRY ID, not grubby's numeric index: grub2-reboot's numeric form selects by GRUB
 # blscfg MENU POSITION (version-sorted via rpmvercmp, where stock 6.x.y-NNN outranks *-limina16k),
@@ -143,8 +152,10 @@ id=$(grubby --info="$k" 2>/dev/null | sed -n 's/^id="\(.*\)"$/\1/p' | head -1)
 if [ -n "$id" ]; then
   grub2-reboot "$id"
   logger -t limina "btrfs free-space tree ready; armed 16k ($k) — reboot to enter the enhanced kernel"
+  systemctl disable limina-arm-16k.service   # self-disable ONLY after a successful arm
+else
+  logger -t limina "16k arm FAILED (no BLS id for $k) — leaving the service enabled to retry next boot"
 fi
-systemctl disable limina-arm-16k.service
 ARMSH
   chmod +x /usr/local/sbin/limina-arm-16k.sh
   cat > /etc/systemd/system/limina-arm-16k.service <<'ARMUNIT'
@@ -165,22 +176,33 @@ ARMUNIT
 RPM=$(ls "$PAYLOAD"/limina-kernel-16k-*.rpm 2>/dev/null | head -1)
 [ -n "$RPM" ] || { echo "no kernel RPM in payload"; exit 1; }
 
-# Capture the CURRENT (stock) default kernel BEFORE we install the 16k — Fedora's kernel install
-# auto-promotes the newest kernel to default, and step 6 must restore stock as the permanent
-# fallback (two-tier safety; see step 6).
+# Capture the CURRENT default kernel BEFORE we install the 16k — Fedora's kernel install
+# auto-promotes the newest kernel to default, and step 6 must restore the PREVIOUS default as the
+# permanent fallback (two-tier safety; see step 6).
 STOCK_DEFAULT=$(grubby --default-kernel 2>/dev/null || true)
 
-# Pre-flight: the 16k vmlinuz + initramfs land on /boot. A FULL /boot makes dracut emit a
-# truncated/driverless initramfs that boots far enough to run systemd-in-initramfs but then
-# cannot mount root -> the dracut emergency shell (and limina has no keyboard there to recover —
-# this is exactly the dogfooding brick of 2026-06-29). Fail EARLY with a cleanup hint instead.
-BOOT_FREE_MB=$(($(df -Pk /boot | awk 'NR==2{print $4}') / 1024))
-echo "-- /boot free: ${BOOT_FREE_MB} MiB"
-if [ "${BOOT_FREE_MB:-0}" -lt 350 ]; then
-  echo "ERROR: /boot has < 350 MiB free — the 16k kernel may not fit and would produce an" >&2
-  echo "       unbootable initramfs. Free space first, e.g. prune old kernels:" >&2
-  echo "         sudo dnf remove \$(dnf repoquery --installonly --latest-limit=-1 -q)" >&2
-  exit 1
+# Is the payload kernel ALREADY installed at this exact NVR? Compute it up front so the /boot
+# pre-flight below fires ONLY when an install would actually WRITE to /boot: a no-op re-run (e.g. to
+# bump mesa) on a tight /boot must NOT abort here when the kernel section will write nothing.
+KNVR=$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}' "$RPM" 2>/dev/null)
+KERNEL_PRESENT=0
+if [ -n "$KNVR" ] && rpm -q "$KNVR" >/dev/null 2>&1; then KERNEL_PRESENT=1; fi
+
+# Pre-flight (ONLY when a kernel install will occur): the 16k vmlinuz + initramfs land on /boot. A
+# FULL /boot makes dracut emit a truncated/driverless initramfs that boots far enough to run
+# systemd-in-initramfs but then cannot mount root -> the dracut emergency shell (and limina has no
+# keyboard there to recover — the dogfooding brick of 2026-06-29). Fail EARLY with a cleanup hint.
+if [ "$KERNEL_PRESENT" != 1 ]; then
+  BOOT_FREE_MB=$(($(df -Pk /boot | awk 'NR==2{print $4}') / 1024))
+  echo "-- /boot free: ${BOOT_FREE_MB} MiB"
+  if [ "${BOOT_FREE_MB:-0}" -lt 350 ]; then
+    echo "ERROR: /boot has < 350 MiB free — the 16k kernel may not fit and would produce an" >&2
+    echo "       unbootable initramfs. Free space first — prune an OLD kernel you don't need" >&2
+    echo "       (dnf won't remove the running one; keep one enhanced kernel as a fallback):" >&2
+    echo "         sudo dnf remove \$(dnf repoquery --installonly --latest-limit=-1 -q)   # all but newest per name" >&2
+    echo "         # untracked /boot leftovers (no owning RPM): sudo kernel-install remove <uname-r>" >&2
+    exit 1
+  fi
 fi
 
 # Make the 16k initramfs ROBUST and the emergency shell USABLE: force-include the virtio
@@ -205,9 +227,9 @@ dnf versionlock delete limina-kernel-16k >/dev/null 2>&1 || true
 # kernel, so dnf aborts: "cannot install both ... conflicting requests". rpm -i adds the new
 # versioned files with no conflict (/boot/vmlinuz-<rel>, /lib/modules/<rel>); %posttrans
 # (kernel-install add) writes the BLS entry + initramfs just as dnf would. The provide keeps FUTURE
-# dnf installonly bookkeeping correct. Idempotent: skip if this exact version is already installed.
-KNVR=$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}' "$RPM" 2>/dev/null)
-if [ -n "$KNVR" ] && rpm -q "$KNVR" >/dev/null 2>&1; then
+# dnf installonly bookkeeping correct. Idempotent: skip if this exact version is already installed
+# (KNVR / KERNEL_PRESENT were computed above, before the /boot pre-flight).
+if [ "$KERNEL_PRESENT" = 1 ]; then
   echo "-- kernel $KNVR already installed; skipping kernel install (idempotent)"
 else
   echo "-- installing kernel (rpm -i, co-installs beside the running kernel): $(basename "$RPM")"
@@ -271,8 +293,16 @@ echo "-- installing mesa (replaces stock -> our venus/zink build):"; echo "$MESA
 for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do
   dnf versionlock delete "$p" >/dev/null 2>&1 || true
 done
-# `dnf install` of the higher-versioned local RPMs upgrades/replaces the matching packages.
-dnf install -y --allowerasing $MESA_RPMS
+# `dnf install` of the higher-versioned local RPMs upgrades/replaces the matching packages. GUARD it:
+# the lock is now LIFTED, and under `set -e` a failed install would abort the script BEFORE the
+# re-lock below — leaving mesa UNLOCKED so a later `dnf update` could drag it back to a venus-breaking
+# stock version (a silent, keyboard-less-to-recover regression on a daily driver). On failure, dnf is
+# transactional (the prior enhanced mesa stays installed), so re-lock THAT and abort loudly.
+if ! dnf install -y --allowerasing $MESA_RPMS; then
+  echo "ERROR: mesa install failed — restoring the mesa versionlock and aborting (mesa unchanged)" >&2
+  for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do dnf versionlock add "$p" >/dev/null 2>&1 || true; done
+  exit 1
+fi
 # Re-lock the mesa stack so a later `dnf update` cannot revert it to a venus-breaking stock version.
 for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do
   dnf versionlock add "$p" >/dev/null 2>&1 || true
@@ -351,10 +381,12 @@ sed 's/^/   /' /etc/environment.d/90-limina-zink.conf
 # subsequent stock boot — the one-shot arming below honors that.
 ensure_btrfs_free_space_tree
 
-echo "-- restoring stock as the permanent default; 16k gets a one-shot trial boot"
+echo "-- restoring the PREVIOUS default kernel as permanent; the new 16k gets a one-shot trial boot"
 if [ -n "$STOCK_DEFAULT" ]; then
-  grubby --set-default="$STOCK_DEFAULT" >/dev/null 2>&1 || true   # undo dnf's auto-promote of 16k
-  echo "   permanent default kept at stock: $(grubby --default-kernel)"
+  grubby --set-default="$STOCK_DEFAULT" >/dev/null 2>&1 || true   # undo dnf's auto-promote of the new 16k
+  # NB: on an already-enhanced guest the previous default is itself a (proven-working) 16k kernel,
+  # not bare stock — a good upgrade fallback. The word "stock" is avoided here on purpose.
+  echo "   permanent default kept at the previous default: $(grubby --default-kernel)"
 else
   # Couldn't read the pre-install default — NEVER leave the auto-promoted, unproven 16k as the
   # permanent default. Find any non-16k kernel and pin it; if none exists, abort the GRUB step.
@@ -370,15 +402,21 @@ else
 fi
 grub2-editenv - unset boot_indeterminate menu_auto_hide 2>/dev/null || true
 
-# on-success promotion: once we are actually running the 16k kernel at multi-user, make it the
-# default and self-disable. If 16k never boots, this never promotes and stock stays default.
+# on-success promotion: once we are actually running THE TRIALED kernel ($KREL) at multi-user, make
+# it the default and self-disable. Match the EXACT trialed release with `grep -qxF "$KREL"`, NOT a
+# loose `grep -q limina16k`: on a guest whose permanent fallback default is ITSELF a 16k kernel —
+# i.e. ANY already-enhanced guest, e.g. dogfood-guest's 7.0.13-limina16k — a loose match would fire on
+# the FALLBACK boot after a FAILED $KREL trial and promote the broken $KREL to the permanent default
+# → unrecoverable (no keyboard at GRUB). In the unquoted heredoc $KREL is baked at write time while
+# `uname -r` (a runtime pipe, not $(...)) is evaluated at boot, so this promotes only after the
+# trialed kernel itself reaches multi-user.
 cat > /etc/systemd/system/limina-kernel-promote.service <<PROMOTE
 [Unit]
 Description=Promote the limina 16k kernel to GRUB default after a verified boot
 After=multi-user.target
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'uname -r | grep -q limina16k && grubby --set-default=/boot/vmlinuz-$KREL && echo "promoted 16k ($KREL) to default" || true'
+ExecStart=/bin/sh -c 'uname -r | grep -qxF "$KREL" && grubby --set-default=/boot/vmlinuz-$KREL && echo "promoted 16k ($KREL) to default" || true'
 ExecStartPost=/bin/sh -c 'systemctl disable limina-kernel-promote.service'
 [Install]
 WantedBy=multi-user.target
@@ -395,6 +433,9 @@ if [ "$FST_DEFER" = 1 ]; then
   echo "     1) reboot now (you stay on stock) — that boot builds the free-space tree;"
   echo "     2) it then auto-arms the 16k; reboot once more to enter the enhanced kernel."
 else
+  # Clean up any stale arm service a PRIOR deferred run may have left enabled — we arm the one-shot
+  # directly below, so a leftover limina-arm-16k.service must not also fire later and re-arm.
+  systemctl disable limina-arm-16k.service >/dev/null 2>&1 || true
   # By BLS entry ID, NOT grubby's numeric index: grub2-reboot's numeric form selects by GRUB
   # blscfg MENU POSITION (version-sorted via rpmvercmp, where stock 6.x.y-NNN outranks *-limina16k),
   # which differs from grubby's index — a numeric one-shot booted STOCK instead of the 16k
@@ -406,8 +447,10 @@ else
     grub2-reboot "$K_ID"
     echo "   one-shot next boot -> 16k ($K_ID); auto-falls-back to stock if it fails"
   else
-    echo "   WARN: could not arm a one-shot 16k boot — try manually:" >&2
-    echo "         sudo grubby --set-default=/boot/vmlinuz-$KREL; sudo reboot" >&2
+    echo "   WARN: could not arm a one-shot 16k boot. The kernel IS installed but won't boot until" >&2
+    echo "         armed. One-shot it by entry id — 'sudo grubby --info=/boot/vmlinuz-$KREL' shows the" >&2
+    echo "         'id=' field; then: sudo grub2-reboot '<that id>'; sudo reboot" >&2
+    echo "         Do NOT 'grubby --set-default' the unproven kernel (no keyboard to recover if it fails)." >&2
   fi
 fi
 
