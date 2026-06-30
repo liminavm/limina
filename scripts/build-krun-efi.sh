@@ -62,6 +62,7 @@ echo "    build volume: $VOL (incremental across runs); output: $OUT/$OUT_NAME"
 scripts/build-image.sh   # ensure the unified limina-build image (edk2 deps + gnu17 ccwrap baked)
 container run --rm --cpus "$JOBS" --memory "$MEM" \
     -v "$(pwd)/$OUT:/out" \
+    -v "$(pwd)/patches/edk2:/edk2-vendor" \
     -v "$VOL:/build" \
     limina-build:fc43 bash -euo pipefail -c "
         TARGET='$TARGET'; GOP='$GOP'; OUT_NAME='$OUT_NAME'; JOBS='$JOBS'
@@ -82,6 +83,8 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         # Restore pristine platform files (we patch them in-place below).
         git checkout -- ArmVirtPkg/ArmVirtKrun.dsc ArmVirtPkg/ArmVirtKrun.fdf \
             ArmVirtPkg/Library/PlatformBootManagerLib/PlatformBm.c \
+            ArmVirtPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf \
+            OvmfPkg/Include/IndustryStandard/Virtio10.h \
             OvmfPkg/VirtioSerialDxe/VirtioSerialPort.c 2>/dev/null || true
         # Init ONLY the submodules ArmVirtKrun actually needs (idempotent — already-init'd
         # ones are skipped). Avoids the UnitTestFrameworkPkg submodules (subhook/googletest/
@@ -99,6 +102,15 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
             MdeModulePkg/Library/BrotliCustomDecompressLib/brotli \
             MdeModulePkg/Universal/RegularExpressionDxe/oniguruma
 
+        # Vendor OvmfPkg/VirtioKeyboardDxe (limina; pinned edk2-stable202505, carried in
+        # the repo under patches/edk2/ and mounted at /edk2-vendor) — the slp/edk2 base
+        # predates it. GOP-only: the virtio keyboard ConIn is for the windowed console.
+        if [ \"\$GOP\" = '1' ]; then
+            echo '--- vendoring OvmfPkg/VirtioKeyboardDxe'
+            rm -rf OvmfPkg/VirtioKeyboardDxe
+            cp -a /edk2-vendor/OvmfPkg/VirtioKeyboardDxe OvmfPkg/VirtioKeyboardDxe
+        fi
+
         # --- patch the ArmVirtKrun platform ---
         # (1) drop the stale TerminalPcdProducerLib ref (removed from edk2; ArmVirtKrun.dsc
         #     HEAD still references it, which is why the shipped blob is built from an older
@@ -106,6 +118,10 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         # (2) GOP=1: add OvmfPkg/VirtioGpuDxe so GraphicsConsoleDxe has a GOP to bind.
         # (3) GOP=1: patch PlatformBm.c to connect the virtio-mmio GPU into ConOut before
         #     console setup (else the non-PCI GOP never enters ConOut; blank boot console).
+        # (4) GOP=1: vendor OvmfPkg/VirtioKeyboardDxe + wire libkrun's virtio-input keyboard
+        #     into ConIn (IsVirtioInput connect + AddInput), so GRUB/firmware are typeable in
+        #     the window. Without it ConIn has only a DEAD USB path + serial, so the window's
+        #     virtio keyboard never reaches GRUB. Mirrors the (2)/(3) VirtioGpu->ConOut patch.
         echo '--- patching ArmVirtKrun platform (drop stale lib; GOP='\"\$GOP\"')'
         GOP_ENABLED=\"\$GOP\" python3 - <<'PY'
 import os
@@ -229,6 +245,14 @@ if os.environ.get('GOP_ENABLED') == '1':
         open(pbm, 'w').write(p)
         print('  patched PlatformBm.c: connect virtio-gpu into ConOut before console setup')
 PY
+
+        # (4) GOP: wire the vendored VirtioKeyboardDxe into ConIn (libkrun's virtio keyboard
+        # -> typeable GRUB/firmware in the window). Standalone .py (mounted at /edk2-vendor)
+        # because the bash -c heredoc mangles the backslashes in its C DEBUG strings.
+        if [ \"\$GOP\" = '1' ]; then
+            echo '--- wiring VirtioKeyboardDxe into ConIn (limina)'
+            python3 /edk2-vendor/apply-virtio-keyboard.py
+        fi
 
         echo '--- building BaseTools (incremental; no-op if already built)'
         # -std=gnu17: BaseTools' bundled Pccts (ANTLR/DLG) is K&R C that gcc>=15 rejects

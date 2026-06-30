@@ -233,7 +233,10 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   guest — the human is the oracle for those (see `limina-window-control`). **When you need the
   user to act or perceive (interact with the window, eyeball the screen, plug in hardware, run a
   host command), request it via the AskUserQuestion tool, not in prose** — they may not be watching
-  the streaming text and will miss a buried request (see `ask-tool-for-user-actions`).
+  the streaming text and will miss a buried request (see `ask-tool-for-user-actions`). For a
+  *time-sensitive* test (e.g. catching the ~5s GRUB countdown in a windowed boot), ask **before**
+  launching the run, not after — so they're positioned and reading the instruction when the brief
+  window arrives.
 - **Run a VM with networking + SSH:** `limina --net` spawns a supervised gvproxy user-mode NAT (no
   root) and the supervisor logs the exact SSH command — `guest SSH forward ready: ssh -p N <user>@127.0.0.1`.
   The host port **auto-allocates from 2222 up** (so 2+ VMs run concurrently without colliding); pin it
