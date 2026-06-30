@@ -84,12 +84,13 @@ patches/kosmickrisp/0*.patch` (the full series), then build per `docs/drivers/ko
   reaches `kk_render_encoder` with `last_used != KK_ENC_RENDER` and
   `need_to_start_render_pass` false — a render-pass-restart tracking gap. (mutter-49.5 /
   dev-enh never hits it.) Fix tracked separately.
-- **`TEXTURE_FORMAT_16BIT_NORM` not enabled on venus/KK** (found 2026-06-29 via ghost-ui,
-  wgpu 29; surfaced only after `0004` removed the crash preceding it): ghost-ui's *glyph
-  pipeline* fails wgpu validation — `Features TEXTURE_FORMAT_16BIT_NORM are required but not
-  enabled`. KK's format table DOES advertise full features for the 16-bit-norm formats
-  (`R16{,G16,G16B16A16}_UNORM/SNORM` = `FWCBMS`/`ALL_NO_ATOMIC`: filter+write+color+blend), so the
-  loss is **downstream** — either venus's `vkGetPhysicalDeviceFormatProperties` relay or the KK
-  feature→`VkFormatFeatureFlags` conversion drops what wgpu-hal requires (SAMPLED_LINEAR | STORAGE
-  | COLOR_ATTACHMENT_BLEND across all six formats). The next ghost-ui blocker; a KK-feature-gaps
-  class item (see the `limina-kk-feature-gaps` note), distinct from the `0004` crash.
+- **`TEXTURE_FORMAT_16BIT_NORM` — was a MISDIAGNOSIS (corrected 2026-06-30); NOT a KK/venus gap.**
+  The feature is fully advertised + available on venus (proven by `spikes/venus-draw-probe/fmtprobe.c`
+  + `wgpu-fmtprobe/`: all six 16-bit-norm formats carry SAMPLED|STORAGE|TRANSFER_SRC|TRANSFER_DST,
+  and wgpu `adapter.features()` reports `TEXTURE_FORMAT_16BIT_NORM = true`). The ghost-ui failure is
+  that venus's **wayland surface-format list** offers `Rgba16Unorm` ahead of the 8-bit formats
+  (lavapipe doesn't offer a 16-bit-unorm swapchain at all), so a conventional wgpu app ("first
+  non-sRGB") picks `Rgba16Unorm` — which wgpu can NEVER use as a swapchain (it forbids `Rgba16Unorm`
+  as a render attachment *even with the feature enabled*). Fix lives in **guest mesa**
+  (`wsi_common_wayland` format intake — drop 16-bit-unorm from the wayland surface list, like
+  lavapipe), NOT in KK. See the `limina-kk-feature-gaps` note for the full forensics + probes.

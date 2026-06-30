@@ -1,0 +1,17 @@
+[package]
+name = "wgpu-fmtprobe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Reproduces ghost-ui's wgpu setup minimally to answer two questions on a given Vulkan ICD:
+#   (1) does wgpu's adapter.features() expose TEXTURE_FORMAT_16BIT_NORM? (headless, no display)
+#   (2) what surface formats does the adapter advertise, and what does ghost-ui's
+#       "first non-sRGB else [0]" rule pick?  (windowed; needs a Wayland/X session)
+[dependencies]
+wgpu = "29"
+winit = "0.30"
+pollster = "0.3"
+
+[profile.release]
+debug = false
