@@ -852,6 +852,32 @@ RAM dump (multi-second stall) — fine for suspend, a UX note for snapshotting a
 
 ---
 
+## Milestone 10 — Additional block devices (multiple disks + ISO/CD-ROM)
+
+Two storage features, surfaced 2026-06-29 during the dogfooding migration (we wanted a rescue path
+for offline filesystem repair after a migrated guest's v1-space-cache btrfs wouldn't mount on the
+16k kernel — see `docs/hardening-backlog.md` / the migrated-guest diagnosis).
+
+- **Multiple disks (cheap — internals already there).** The worker already models disks as a
+  `Vec<DiskSpec>` and loops `add_block_device` over them (`limina-vmm/src/krun/mod.rs:132`); libkrun
+  supports several block devices. ONLY the two CLIs hardcode a single `--disk: Option<PathBuf>`.
+  Work: make `--disk` repeatable in both `limina` and `limina-vmm` (with a per-disk read-only
+  qualifier, e.g. `--disk PATH[:ro]`), give each a unique `block_id` so the guest enumerates
+  `vda, vdb, …` in order, and thread the vec through the supervisor→worker arg pass-through. Use
+  cases: data/scratch disks, multi-volume guests, and **offline fs repair / rescue** — boot a rescue
+  rootfs as `vda`, attach the target disk as `vdb`, then `btrfs check` / `btrfstune` / `fsck` it
+  while unmounted.
+- **ISO / CD-ROM boot (more work).** A read-only optical device the guest sees as a CD-ROM, plus
+  teaching the GOP firmware to boot El-Torito EFI media, so limina can run installer / live / rescue
+  ISOs directly. Heavier than multi-disk (a cdrom-class device + firmware boot-path validation);
+  multi-disk already covers the rescue use case, so it comes first.
+
+Neither is urgent: the btrfs case that motivated them is fixed more simply by adding
+`space_cache=v2` to the root cmdline (no rescue needed). These are general capability gaps to close
+when convenient.
+
+---
+
 ## Summary of net-new code vs libkrun patches
 
 | Milestone | Net-new limina code | libkrun (or fw/virgl) patches |

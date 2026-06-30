@@ -76,6 +76,15 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   lavapipe + loader fall-through, or a venus ICD that declines cleanly so the loader tries the next). The
   enhanced tier (16k + venus) is unaffected — venus enumerates the real GPU there; this is a *basic-tier*
   usability gap.
+- **GNOME notification shows a green corruption artifact** (open, low priority — reported 2026-06-29
+  while dogfooding the F44 enhanced tier) — a notification ("Disk Usage Analyzer / Low Disk Space on
+  'boot'") renders a small **green glitch** (a few stray bright-green pixels) just below the bold
+  summary line, where the body text / whitespace should be. Native-Wayland venus path; a localized
+  region of garbage/uninitialized pixels — smells like a damage-tracking, glyph-cache, or subsurface
+  compositing artifact on zink→venus→KK→Metal. Evidence:
+  `spikes/venus-draw-probe/notification-green-artifact-2026-06-29.png`. Not chased yet; needs the
+  venus pixel-verify discipline (reproduce a notification, capture the IOSurface, isolate the damaged
+  rect). Cosmetic, single-widget — low priority.
 - **virtio-gpu flip-completion gap** — ✅ **RESOLVED (verified 2026-06-23); item was stale.** Already
   fixed by `patches/linux/0001` (drm/virtio fence blob-scanout flushes, 2026-06-11): host3d_blob
   (venus) scanout FBs now carry the same fence the dumb path has, so `virtio_gpu_resource_flush`
@@ -186,6 +195,28 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   payload, and runs `restorecon` so it starts on a stock SELinux-**Enforcing** guest (the dev guest
   dodged this with `selinux=0`). The whole enhanced upgrade now rides the one offline virtiofs channel
   instead of also needing network + gvproxy. (`install-guest-agent.sh` remains the dev-loop SSH path.)
+- **Enhanced install could brick the guest (unsafe boot-default switch)** — ✅ **DONE 2026-06-29**.
+  `install-enhanced.sh` made the *unproven* 16k kernel the permanent GRUB default (Fedora's kernel
+  install also auto-promotes the newest kernel). When the 16k initramfs failed to mount root (here:
+  `/boot` ran low on space → an incomplete/driverless initramfs → the dracut emergency shell), the
+  guest was stranded — limina has no keyboard at GRUB/emergency (see next) to pick stock. **Real
+  dogfooding brick.** Fix: the installer now (1) pre-checks `/boot` free space, (2) force-includes the
+  virtio/input/FS drivers in the initramfs (so root mounts *and* the emergency shell has a keyboard),
+  (3) verifies the initramfs actually contains the root driver before trusting it, and (4) keeps
+  **stock** as the permanent default while booting 16k **once on trial** (`grub2-reboot` next_entry)
+  with an on-success systemd unit that promotes 16k only after it reaches multi-user — so a failed 16k
+  boot auto-returns to stock on a power-cycle, no keyboard required. Recovery for an already-bricked
+  guest: revert to a pre-install disk clone. (Two-tier guarantee: stock must always stay reachable.)
+- **No keyboard at GRUB / early boot / dracut emergency shell** (open, real recovery gap — found
+  2026-06-29) — limina's keyboard only comes alive once the full guest virtio-input path is up. At
+  **GRUB** (the GOP firmware's EFI console almost certainly lacks a virtio-input driver) and in the
+  **dracut emergency shell** (the stock initramfs didn't include `virtio_input`) the user can type
+  *nothing*, so a failed boot is unrecoverable from inside the VM and you can't interrupt GRUB to pick
+  another kernel. The install-safety fix above (auto-fallback + forcing `virtio_input` into the
+  enhanced initramfs) works *around* it, but the real fix is two-fold: (a) add a virtio-input EFI
+  driver to the GOP firmware (`scripts/build-krun-efi.sh`) so GRUB sees the keyboard, and (b) ensure
+  `virtio_input` is in every initramfs. Needed for any interactive GRUB use (kernel pick, cmdline
+  edit) and for self-recovery.
 - **No Parallels-import tooling** (open) — converting an existing Parallels disk (merge snapshots →
   `qemu-img -f parallels` → raw, the `virtio_mmio` initramfs regen, `console=` GRUB args, Tools
   removal) is documented in the runbook but not scripted. A guided `import` helper would de-risk the
