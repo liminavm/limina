@@ -219,20 +219,30 @@ IMG="/boot/initramfs-$KREL.img"
 [ -f "$IMG" ] || { echo "dracut did NOT build an initramfs for $KREL"; exit 1; }
 ls -1 "/boot/loader/entries/"*"$KREL"*.conf >/dev/null || { echo "no BLS entry for $KREL"; exit 1; }
 
-# Verify the initramfs can actually mount THIS guest's root — do NOT trust mere existence (that
-# was the brick: an initramfs present but missing the root driver, so it dropped to emergency).
+# Verify the kernel can actually mount THIS guest's root — do NOT trust mere existence (that was
+# the brick: an initramfs present but missing the root driver, so it dropped to emergency). A
+# driver counts as present if it is an initramfs MODULE *or* BUILT INTO the kernel (=y): the limina
+# kernel builds virtio_blk/btrfs/virtio_input =y on purpose ("boot never depends on initramfs
+# contents"), so they are NOT in the initramfs — checking only lsinitrd false-negatives and would
+# abort a perfectly bootable install. Also consult modules.builtin.
 ROOT_FS=$(findmnt -no FSTYPE / 2>/dev/null || echo btrfs)
+BUILTIN="/lib/modules/$KREL/modules.builtin"
+have_drv() {  # present as an initramfs module OR built into the kernel?
+  lsinitrd "$IMG" 2>/dev/null | grep -q "$1" && return 0
+  grep -q "$1" "$BUILTIN" 2>/dev/null && return 0
+  return 1
+}
 miss=""
-lsinitrd "$IMG" 2>/dev/null | grep -q 'virtio_blk'  || miss="$miss virtio_blk"
-lsinitrd "$IMG" 2>/dev/null | grep -q "$ROOT_FS"     || miss="$miss $ROOT_FS"
+have_drv 'virtio_blk' || miss="$miss virtio_blk"
+have_drv "$ROOT_FS"   || miss="$miss $ROOT_FS"
 if [ -n "$miss" ]; then
-  echo "ERROR: the 16k initramfs is missing root-mount driver(s):$miss" >&2
-  echo "       It would drop to the (keyboard-less) emergency shell. Rebuild with:" >&2
+  echo "ERROR: the 16k kernel cannot mount root — missing driver(s) (neither initramfs nor built-in):$miss" >&2
+  echo "       It would drop to the (keyboard-less) emergency shell. Rebuild the initramfs with:" >&2
   echo "         sudo dracut -f --add-drivers \"virtio_blk $ROOT_FS\" \"$IMG\" \"$KREL\"" >&2
   exit 1
 fi
-lsinitrd "$IMG" 2>/dev/null | grep -q 'virtio_input' \
-  || echo "   WARN: no virtio_input in the initramfs — the emergency shell will have no keyboard"
+have_drv 'virtio_input' \
+  || echo "   WARN: no virtio_input (initramfs or built-in) — the emergency shell may have no keyboard"
 # Pin the STOCK kernel (the names must match what you're actually pinning). dnf auto-promotes the
 # newest installed kernel to the default; a stock kernel-core UPDATE would otherwise grab the
 # default away from our 16k. Lock the stock kernel packages at their current version so stock stays
