@@ -15,6 +15,10 @@
 #   0001  zink nullDescriptor emulation (MR!37115) — GL correctness on zink.
 #   0009  venus WSI present-fix — THE black-screen fix; without it the venus desktop never paints.
 #   0010  venus image physdev native modifier — advertises EXT_image_drm_format_modifier.
+#   0011  venus WSI: drop the 16-bit-unorm wayland swapchain format. Rgba16Unorm is a legal
+#         Vulkan surface format but NOT a wgpu render attachment, so a conventional "first
+#         non-sRGB" wgpu client (ghost-ui) that lands on it fails pipeline creation. Matches
+#         lavapipe; loses nothing real (host scanout is 8-bit; 16-bit textures still work).
 # These were authored on mesa 26.1.0; F44 ships 26.0.x, so they may need a rebase. We add them via
 # the spec (NOT a tolerant pre-apply) ON PURPOSE: a non-applying patch FAILS %prep loudly, rather
 # than silently shipping a present-fix-less (black-screen) mesa.
@@ -45,16 +49,17 @@ echo "==> [2/5] add OUR venus/zink patches + bump Release"
 cp -f "$PATCHES"/0001-zink-nullDescriptor-emulation-MR37115.diff \
       "$PATCHES"/0009-venus-wsi-present-fix.diff \
       "$PATCHES"/0010-venus-image-physdev-native-modifier.diff \
+      "$PATCHES"/0011-venus-wsi-drop-16bit-unorm-swapchain.diff \
       "$HOME/rpmbuild/SOURCES/"
 SPEC="$HOME/rpmbuild/SPECS/mesa.spec"
 LAST_PATCH_LINE=$( { grep -nE "^Patch[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
 [ -n "$LAST_PATCH_LINE" ] || LAST_PATCH_LINE=$( { grep -nE "^Source[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
-ins="Patch9001: 0001-zink-nullDescriptor-emulation-MR37115.diff\nPatch9009: 0009-venus-wsi-present-fix.diff\nPatch9010: 0010-venus-image-physdev-native-modifier.diff"
+ins="Patch9001: 0001-zink-nullDescriptor-emulation-MR37115.diff\nPatch9009: 0009-venus-wsi-present-fix.diff\nPatch9010: 0010-venus-image-physdev-native-modifier.diff\nPatch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff"
 sed -i "${LAST_PATCH_LINE}a ${ins}" "$SPEC"
 # Our patches are plain `git diff` (no mailbox headers); ensure %autosetup uses GNU patch (-p1).
 sed -i -E "s/^%autosetup -S git/%autosetup -p1/" "$SPEC"
 if ! grep -qE "^%autosetup" "$SPEC"; then
-  sed -i "/^%setup/a %patch -P 9001 -p1\n%patch -P 9009 -p1\n%patch -P 9010 -p1" "$SPEC"
+  sed -i "/^%setup/a %patch -P 9001 -p1\n%patch -P 9009 -p1\n%patch -P 9010 -p1\n%patch -P 9011 -p1" "$SPEC"
 fi
 # Release bump so our same-version build outranks stock; drop rpmautospec macros (no package git).
 sed -i -E "s/^(Release:[[:space:]]*)([^%[:space:]]+)/\1\2.limina/" "$SPEC"
