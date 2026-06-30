@@ -299,8 +299,10 @@ libkrun." Multiple disks themselves need **no** patch.
 - **Worker contract:** the supervisor emits one `--disk PATH[:ro]` per entry, in declared order;
   the worker builds one `DiskSpec` per arg with a positional `block_id` (`disk0`=boot/`"root"`,
   `disk1`, …) — collision-free by construction.
-- **Format** (`:qcow2`) is gated to Phase 4 (libkrun supports it; just plumb `DiskSpec.format` →
-  `ImageType`).
+- **Format** is **auto-detected** (Phase 4, shipped): the worker sniffs the 4-byte magic
+  (`detect_image_type`, `krun/mod.rs`) and passes the right `ImageType` to libkrun — no `:qcow2`
+  suffix needed. This supersedes the planned explicit suffix and removes the footgun of opening a
+  qcow2 as raw. (`:create=SIZE` still makes a *raw*; qcow2 *creation* via `--disk` is out of scope.)
 - **macOS reachability:** Phase-1 CLI inherits the launching terminal's TCC grants (the worker is
   ad-hoc signed with only the hypervisor entitlement, `hvf-entitlements.plist`), so terminal-run
   works. The eventual `.app` will need TCC handling (user-selected paths / security-scoped
@@ -338,6 +340,16 @@ libkrun." Multiple disks themselves need **no** patch.
 > no consumer until M9 (not started), so it's filed as an M9 cross-dependency rather than built on
 > Phase-2 argv. The `--cdrom` runtime path (a guest read-only mount) is the same `:ro` virtio-blk
 > Phase 1 already ships; full *boot/install from* an ISO is Phase 3.
+>
+> **As-built (Phase 4 landed 2026-06-30):** `feat(m10): Phase 4 — qcow2 data disks …`. libkrun
+> already opens qcow2 via imago; the worker hardcoded `ImageType::Raw`. Now `detect_image_type`
+> (`krun/mod.rs`) sniffs the magic and passes the right `ImageType` — **auto-detect, no `:qcow2`
+> suffix** (a deviation from the plan, and an improvement: no silent-corruption footgun). L2 test
+> `qcow2_data_disk_reads_writes_and_survives_reboot` uses `/sys/block/vdb/size` as the discriminator
+> (a `qemu-img` qcow2 is 64 MiB virtual / ~200 KiB physical, so the guest sees 64 MiB only if opened
+> as qcow2) — RED→GREEN proven; + an L0 magic-detection test. Backing chains open via imago. qcow2
+> *creation* via `--disk` stays out of scope (`:create` makes a raw). **Remaining M10:** Phase 3
+> (boot/install from an ISO — the §11 firmware-BDS unknown).
 
 **Phase 0 — harness prerequisite (no user-visible feature).** The test harness was single-disk:
 the `Boot` enum carried one `disk: PathBuf` and the arg builder emitted exactly one `--disk`

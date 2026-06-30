@@ -208,6 +208,10 @@ pub enum Boot {
 pub enum DataDisk {
     /// A blank sparse raw of `size_bytes`, created in the scratch dir and attached read-write.
     Blank { size_bytes: u64 },
+    /// A blank qcow2 of `size_bytes` *virtual* size (created via `qemu-img` in the scratch dir,
+    /// attached read-write). The physical file is tiny, so the guest only sees the full size if
+    /// the worker opens it AS qcow2 — the discriminator for the format-detection test.
+    BlankQcow2 { size_bytes: u64 },
     /// An existing image: cow-cloned into scratch when read-write, attached in place when `:ro`.
     Existing { path: PathBuf, read_only: bool },
 }
@@ -809,6 +813,14 @@ impl GuestConfig {
         self
     }
 
+    /// Attach a blank, writable **qcow2** data disk of `size_bytes` *virtual* size after the boot
+    /// disk (M10 Phase 4). Created via `qemu-img` in scratch; the physical file is tiny, so the
+    /// guest sees the full size only if the worker auto-detects the qcow2 format.
+    pub fn with_qcow2_data_disk(mut self, size_bytes: u64) -> GuestConfig {
+        self.data_disks.push(DataDisk::BlankQcow2 { size_bytes });
+        self
+    }
+
     /// Attach an existing image as a data disk after the boot disk (M10). Read-write images are
     /// cow-cloned into scratch first (the shared source is never mutated); `read_only` attaches
     /// the source in place as `:ro`.
@@ -1086,6 +1098,19 @@ impl Guest {
                         .with_context(|| format!("creating blank data disk {p:?}"))?;
                     f.set_len(*size_bytes)
                         .with_context(|| format!("sizing blank data disk {p:?} to {size_bytes}"))?;
+                    p.to_str()
+                        .with_context(|| format!("data disk path not UTF-8: {p:?}"))?
+                        .to_string()
+                }
+                DataDisk::BlankQcow2 { size_bytes } => {
+                    let p = scratch.join(format!("data{i}.qcow2"));
+                    let status = std::process::Command::new("qemu-img")
+                        .args(["create", "-q", "-f", "qcow2"])
+                        .arg(&p)
+                        .arg(format!("{size_bytes}"))
+                        .status()
+                        .with_context(|| "running qemu-img create (is qemu installed?)")?;
+                    anyhow::ensure!(status.success(), "qemu-img create failed for {p:?}");
                     p.to_str()
                         .with_context(|| format!("data disk path not UTF-8: {p:?}"))?
                         .to_string()

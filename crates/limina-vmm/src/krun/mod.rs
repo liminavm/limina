@@ -327,7 +327,24 @@ fn add_net(vmr: &mut VmResources, net: &NetSpec) -> Result<()> {
     Ok(())
 }
 
+/// Detect the disk image format by its magic, so a user needn't tag `--disk foo.qcow2` (M10
+/// Phase 4). qcow2 files start with `"QFI\xfb"`; everything else we treat as raw — libkrun's only
+/// other always-present format here. A short or unreadable file → raw (the safe default; libkrun
+/// surfaces a genuine open failure later). Auto-detect supersedes the design's planned explicit
+/// `:qcow2` suffix: it removes the silent-corruption footgun of opening a qcow2 as raw, and a real
+/// qcow2 always carries the magic so detection is unambiguous.
+fn detect_image_type(path: &std::path::Path) -> ImageType {
+    use std::io::Read;
+    const QCOW_MAGIC: [u8; 4] = [0x51, 0x46, 0x49, 0xfb]; // "QFI\xfb"
+    let mut buf = [0u8; 4];
+    match std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut buf)) {
+        Ok(()) if buf == QCOW_MAGIC => ImageType::Qcow2,
+        _ => ImageType::Raw,
+    }
+}
+
 fn add_disk(vmr: &mut VmResources, disk: &DiskSpec) -> Result<()> {
+    let format = detect_image_type(&disk.path);
     let path = disk
         .path
         .to_str()
@@ -338,7 +355,7 @@ fn add_disk(vmr: &mut VmResources, disk: &DiskSpec) -> Result<()> {
         block_id: disk.id.clone(),
         cache_type: CacheType::Writeback,
         disk_image_path: path,
-        disk_image_format: ImageType::Raw,
+        disk_image_format: format,
         is_disk_read_only: disk.read_only,
         direct_io: false,
         sync_mode: SyncMode::Full,
@@ -565,5 +582,33 @@ fn serve_balloon_conn(stream: std::os::unix::net::UnixStream, handle: BalloonCon
             }
             _ => log::warn!("balloon: ignoring control line {line:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{detect_image_type, ImageType};
+
+    #[test]
+    fn detect_image_type_by_magic() {
+        let dir = std::env::temp_dir().join(format!("limina-fmttest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let qcow = dir.join("x.qcow2");
+        let raw = dir.join("x.raw");
+        let tiny = dir.join("tiny");
+        std::fs::write(&qcow, [0x51, 0x46, 0x49, 0xfb, 0, 0]).unwrap(); // "QFI\xfb" + payload
+        std::fs::write(&raw, [0u8; 16]).unwrap(); // zeros (a fresh sparse raw)
+        std::fs::write(&tiny, [0x51, 0x46]).unwrap(); // <4 bytes — short read
+
+        assert!(matches!(detect_image_type(&qcow), ImageType::Qcow2));
+        assert!(matches!(detect_image_type(&raw), ImageType::Raw));
+        assert!(matches!(detect_image_type(&tiny), ImageType::Raw));
+        // A missing file falls back to raw (libkrun surfaces the real open error).
+        assert!(matches!(
+            detect_image_type(&dir.join("nope")),
+            ImageType::Raw
+        ));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

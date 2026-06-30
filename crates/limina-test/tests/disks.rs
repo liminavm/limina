@@ -230,3 +230,114 @@ fn second_disk_is_vdb_read_write_and_durable() {
         .expect("supervisor did not stop");
     eprintln!("teardown outcome: {outcome:?}");
 }
+
+/// 64 MiB *virtual* qcow2; the physical file is ~200 KiB, so the guest only sees 64 MiB if the
+/// worker opened it AS qcow2 (the discriminator for format auto-detection).
+const QCOW2_VIRT_BYTES: u64 = 64 * 1024 * 1024;
+const QCOW2_VIRT_SECTORS: u64 = QCOW2_VIRT_BYTES / 512;
+const QCOW2_MARKER: &str = "limina-m10-qcow2-roundtrip";
+
+/// M10 Phase 4: a **qcow2** data disk is auto-detected, read-write, and survives a reboot.
+///
+/// The worker detects the image format by magic (`krun/mod.rs` `detect_image_type`) — no `:qcow2`
+/// suffix needed. The decisive check is `/sys/block/vdb/size`: a `qemu-img`-created qcow2 has a
+/// 64 MiB *virtual* size but a tiny physical file, so the guest sees 64 MiB only if it was opened
+/// as qcow2; opened as raw, vdb would be the ~200 KiB physical size (RED without detection). Then
+/// mkfs + write + reboot + read-back proves the qcow2 is genuinely read-write through imago and its
+/// capacity is stable across a worker relaunch.
+#[test]
+fn qcow2_data_disk_reads_writes_and_survives_reboot() {
+    if !limina_test::require_hvf_or_skip("qcow2_data_disk_reads_writes_and_survives_reboot") {
+        return;
+    }
+
+    let cfg = GuestConfig::fedora_from_env()
+        .expect("resolving guest config")
+        .with_net()
+        .with_qcow2_data_disk(QCOW2_VIRT_BYTES);
+    eprintln!("booting stock Fedora (EFI/BLS) with a 64 MiB-virtual qcow2 as the 2nd --disk");
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    guest
+        .wait_for_ssh_banner(Duration::from_secs(180))
+        .expect("guest did not reach sshd");
+    guest
+        .ssh_poll("test -b /dev/vdb && echo ok", Duration::from_secs(30))
+        .expect("/dev/vdb never appeared — the qcow2 did not enumerate");
+
+    // Discriminator: the guest sees the qcow2's VIRTUAL size only if it was opened as qcow2.
+    let sectors = guest
+        .ssh_exec("cat /sys/block/vdb/size")
+        .expect("reading /sys/block/vdb/size")
+        .trim()
+        .parse::<u64>()
+        .expect("vdb size not a number");
+    assert_eq!(
+        sectors, QCOW2_VIRT_SECTORS,
+        "vdb is {sectors} sectors; expected {QCOW2_VIRT_SECTORS} (64 MiB virtual) — the qcow2 was \
+         opened as raw (physical size), so format auto-detection didn't fire"
+    );
+
+    // Read-write through imago: mkfs + write a marker + sync + unmount.
+    guest
+        .ssh_exec("sudo mkfs.ext4 -q -F /dev/vdb")
+        .expect("mkfs.ext4 on the qcow2 vdb");
+    guest
+        .ssh_exec(&format!(
+            "sudo mkdir -p /mnt/data && sudo mount /dev/vdb /mnt/data && \
+             echo {QCOW2_MARKER} | sudo tee /mnt/data/marker >/dev/null && sync && sudo umount /mnt/data"
+        ))
+        .expect("mkfs + mount + write marker + unmount the qcow2");
+
+    // Reboot (worker relaunch): the qcow2 reopens, capacity is stable, data survives.
+    let boot_id_1 = guest
+        .ssh_exec("cat /proc/sys/kernel/random/boot_id")
+        .expect("reading boot id before reboot");
+    guest
+        .ssh_exec("sudo systemd-run --on-active=1 systemctl reboot")
+        .expect("scheduling guest reboot");
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let mut relaunched = false;
+    while Instant::now() < deadline {
+        if let Ok(out) = guest.ssh_exec("cat /proc/sys/kernel/random/boot_id") {
+            let id = out.trim();
+            if !id.is_empty() && id != boot_id_1.trim() {
+                relaunched = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    assert!(relaunched, "guest never came back after reboot");
+
+    guest
+        .ssh_poll("test -b /dev/vdb && echo ok", Duration::from_secs(30))
+        .expect("/dev/vdb did not reappear after reboot");
+    let sectors_post = guest
+        .ssh_exec("cat /sys/block/vdb/size")
+        .expect("reading /sys/block/vdb/size after reboot")
+        .trim()
+        .parse::<u64>()
+        .expect("post-reboot vdb size not a number");
+    assert_eq!(
+        sectors_post, QCOW2_VIRT_SECTORS,
+        "qcow2 vdb capacity changed across the reboot: {sectors_post} sectors"
+    );
+    let marker = guest
+        .ssh_exec("sudo mount /dev/vdb /mnt/data && cat /mnt/data/marker")
+        .expect("mounting the qcow2 after reboot");
+    assert_eq!(
+        marker.trim(),
+        QCOW2_MARKER,
+        "data written to the qcow2 did not survive the reboot"
+    );
+    guest
+        .ssh_exec("sudo umount /mnt/data")
+        .expect("unmounting the qcow2 after reboot");
+    eprintln!("qcow2 vdb: 64 MiB virtual, read-write, data + capacity survived a reboot ✓");
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(20))
+        .expect("supervisor did not stop");
+    eprintln!("teardown outcome: {outcome:?}");
+}
