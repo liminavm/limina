@@ -12,16 +12,20 @@
 //!     from the multi-GB root disk) → the SECOND `--disk` is `vdb`, in order;
 //!   - `/` is still backed by a `vda` partition → attaching a data disk did not shift root;
 //!   - mkfs + mount + write + sync + unmount + REMOUNT round-trips the data (durable to the
-//!     block device within a boot).
+//!     block device within a boot);
+//!   - the ext4 survives a guest **reboot** (worker relaunch) — both the data (the marker reads
+//!     back) and the device **geometry** (`vdb` is still exactly 64 MiB). This is the regression
+//!     guard for the discard-truncate bug: `mkfs.ext4` discards the device tail, which used to
+//!     make imago truncate the backing file, shrinking the capacity on relaunch so the fs no
+//!     longer fit ("bad geometry"). Fixed by patches/imago/0001 (discard punch-holes, never
+//!     truncates). See spikes/m10-disk-durability/RESULTS.md.
 //!
 //! This is the empirical confirmation of the design's §4.1 ordering claim (host order is
-//! source-deterministic; this proves the guest names follow it under the real kernel). It does
-//! NOT cover cross-reboot durability — block writeback persistence across a worker relaunch is a
-//! separate concern from the disk-attach ordering this test owns.
+//! source-deterministic; this proves the guest names follow it under the real kernel).
 //!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use limina_test::{Guest, GuestConfig};
 
@@ -114,6 +118,66 @@ fn second_disk_is_vdb_read_write_and_durable() {
         .ssh_exec("sudo umount /mnt/data")
         .expect("unmounting vdb");
     eprintln!("vdb data round-tripped through unmount/remount ✓");
+
+    // Cross-reboot durability + the discard-truncate regression guard. Reboot the guest (a
+    // worker relaunch — see reboot.rs) and re-open vdb. With the pre-fix imago, mkfs.ext4's
+    // tail discard had truncated the backing file, so on relaunch vdb came back 64 KiB short
+    // and the ext4 (sized to the original capacity) failed to mount with "bad geometry". We
+    // assert both invariants hold: the device is still exactly 64 MiB (capacity stable across
+    // relaunch) AND the filesystem mounts and the marker survives.
+    let boot_id_1 = guest
+        .ssh_exec("cat /proc/sys/kernel/random/boot_id")
+        .expect("reading boot id before reboot");
+    eprintln!("boot id before reboot: {}", boot_id_1.trim());
+    guest
+        .ssh_exec("sudo systemd-run --on-active=1 systemctl reboot")
+        .expect("scheduling guest reboot");
+
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let mut relaunched = false;
+    while Instant::now() < deadline {
+        if let Ok(out) = guest.ssh_exec("cat /proc/sys/kernel/random/boot_id") {
+            let id = out.trim();
+            if !id.is_empty() && id != boot_id_1.trim() {
+                eprintln!("boot id after reboot:  {id} (relaunch confirmed)");
+                relaunched = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    assert!(
+        relaunched,
+        "guest never came back with a fresh boot after reboot — relaunch failed"
+    );
+
+    // udev may settle a beat after sshd on the fresh boot.
+    guest
+        .ssh_poll("test -b /dev/vdb && echo ok", Duration::from_secs(30))
+        .expect("/dev/vdb did not reappear after the reboot");
+    let sectors_post = guest
+        .ssh_exec("cat /sys/block/vdb/size")
+        .expect("reading /sys/block/vdb/size after reboot")
+        .trim()
+        .parse::<u64>()
+        .expect("post-reboot vdb size not a number");
+    assert_eq!(
+        sectors_post, DATA_DISK_SECTORS,
+        "vdb capacity changed across the reboot: {sectors_post} sectors (expected \
+         {DATA_DISK_SECTORS}) — a discard truncated the backing file"
+    );
+    let marker_post = guest
+        .ssh_exec("sudo mount /dev/vdb /mnt/data && cat /mnt/data/marker")
+        .expect("mounting vdb after reboot (bad geometry would fail here)");
+    assert_eq!(
+        marker_post.trim(),
+        MARKER,
+        "data written to vdb did not survive the reboot"
+    );
+    guest
+        .ssh_exec("sudo umount /mnt/data")
+        .expect("unmounting vdb after reboot");
+    eprintln!("vdb data + geometry survived a reboot ✓");
 
     let outcome = guest
         .shutdown(Duration::from_secs(20))

@@ -46,3 +46,13 @@ env_logger        = "0.11"
 libc              = "0.2"
 log               = "0.4"
 png               = "0.17"
+
+# Override imago (libkrun's virtio-blk storage backend, a transitive crates.io dep) with our
+# vendored + patched copy. The patch stops a tail-reaching discard from truncating the backing
+# file, which otherwise shrinks a fixed-capacity virtio-blk device's advertised capacity across
+# a reboot and makes a guest filesystem unmountable ("bad geometry"). The [patch] lives here, in
+# the workspace root that actually builds the graph (third_party is excluded from the workspace,
+# so libkrun's crates are path deps in *our* build). Vendor/patch with scripts/apply-imago-patch.sh;
+# rationale in patches/imago/README.md + spikes/m10-disk-durability/RESULTS.md.
+[patch.crates-io]
+imago = { path = "third_party/imago" }

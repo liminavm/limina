@@ -70,6 +70,27 @@ Recommendation: **B** — keeps discard's space reclaim, fixes the capacity inva
 the libkrun block worker we already patch. (A if we want the absolute minimal change and don't need
 thin reclaim yet.)
 
+## Fix applied: C (imago punch-hole) — VALIDATED
+We shipped **C** (the cleanest, upstream-correct fix). imago is vendored under `third_party/imago`
+(gitignored, mirroring `third_party/libkrun`) and patched via a `git format-patch` series:
+- `patches/imago/0001` — `File::try_discard_by_truncate` never truncates; every discard falls
+  through to the punch-hole path (`F_PUNCHHOLE` on macOS), which reclaims blocks while preserving
+  the file's logical size, so the device capacity is stable across opens.
+- `patches/imago/0002` — pin imago's `vm-memory` to `^0.17` so it unifies with the libkrun stack
+  (krun-arch/devices/hvf/vmm are all on 0.17.2); the loose upstream range let the resolver pick a
+  semver-incompatible vm-memory for imago, breaking the `ImagoAsRef<VolatileSlice>` bound.
+
+limina's **root `Cargo.toml`** overrides the registry crate with `[patch.crates-io] imago =
+{ path = "third_party/imago" }` (the workspace root is what builds the graph; third_party is
+excluded). Vendor/patch with `scripts/apply-imago-patch.sh`. imago is pinned to **0.2.2** to match
+libkrun's own lock (limina's lock had drifted to 0.2.3, which is what surfaced the vm-memory
+mismatch). Rationale: `patches/imago/README.md`.
+
+Re-running `probe-ext4.sh` against the fixed worker: **`ext4 remount: OK`**, the marker reads back
+after the reboot, all four checksums identical, and the backing file stays **exactly 256 MiB**
+(delta 0; the pre-fix file was −64 KiB). The L2 test `crates/limina-test/tests/disks.rs` now also
+asserts cross-reboot durability + a stable `vdb` capacity as a permanent regression guard.
+
 ## Reusable artifacts
 - `probe.sh` — raw-block reboot-durability + ordering probe.
 - `probe-ext4.sh` — ext4 reboot probe with four-way checksums + dmesg (reproduces the bug and

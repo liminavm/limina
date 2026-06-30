@@ -1,0 +1,81 @@
+From 8c35eceaf4d7c6342571e8d959656f903f85e827 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Tue, 30 Jun 2026 16:27:46 -0300
+Subject: [PATCH 1/2] limina: discard preserves the backing file size (no
+ truncate-to-EOF)
+
+try_discard_by_truncate truncated the backing file when a discard range reached
+EOF, to reclaim the tail. That shrinks a fixed-capacity virtio-blk device's
+advertised capacity on the next open (capacity is derived from the file size),
+so a guest fs sized to the original capacity (mkfs.ext4 discards the device tail)
+becomes unmountable after a reboot: "bad geometry: block count exceeds size of
+device". Data is intact; only the geometry no longer matches.
+
+Disable the truncate path entirely; every discard now falls through to the
+punch-hole path (F_PUNCHHOLE on macOS), which reclaims blocks while preserving
+the file's logical size, keeping the capacity stable across opens.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ src/file.rs | 41 ++++++++++++++++++++---------------------
+ 1 file changed, 20 insertions(+), 21 deletions(-)
+
+diff --git a/src/file.rs b/src/file.rs
+index 7c09895..b7849e6 100644
+--- a/src/file.rs
++++ b/src/file.rs
+@@ -810,31 +810,30 @@ impl File {
+ 
+     /// Attempt to discard range by truncating the file.
+     ///
+-    /// If the given range is at the end of the file, discard it by simply truncating the file.
+-    /// Return `true` on success.
+-    ///
+-    /// If the range is not at the end of the file, i.e. another method of discarding is needed,
+-    /// return `false`.
+-    fn try_discard_by_truncate(&self, offset: u64, length: u64) -> io::Result<bool> {
+-        // Prevent modifications to the file length
+-        #[allow(clippy::readonly_write_lock)]
+-        let file = self.file.write().unwrap();
+-
++    /// limina: disabled. Upstream truncated the file when the range reached EOF; we never do.
++    /// Always returns `false` (except for a range entirely past EOF, which is a no-op), so the
++    /// caller falls through to the punch-hole path, which preserves the file's logical size.
++    fn try_discard_by_truncate(&self, offset: u64, _length: u64) -> io::Result<bool> {
++        // limina: never satisfy a discard by truncating the backing file.
++        //
++        // Upstream imago truncates the file when a discard reaches EOF (to reclaim the tail).
++        // That is wrong for a fixed-capacity virtio-blk backing file: the device capacity is
++        // derived from the file size at open, so truncation shrinks the advertised capacity on
++        // the next open. A guest filesystem sized to the original capacity — e.g. mkfs.ext4,
++        // which discards the device tail past its last block group — then becomes unmountable
++        // after a reboot ("bad geometry: block count exceeds size of device"). The data is
++        // intact; only the geometry no longer matches. See limina's
++        // spikes/m10-disk-durability/RESULTS.md.
++        //
++        // Returning false routes every discard to the punch-hole path
++        // (`discard_to_zero_os_specific`, F_PUNCHHOLE on macOS), which deallocates the blocks
++        // while preserving the file's logical size — so the capacity is stable across opens.
+         let size = self.size.load(Ordering::Relaxed);
+         if offset >= size {
+-            // Nothing to do
++            // Range is entirely at/past EOF — nothing to do, and nothing to punch.
+             return Ok(true);
+         }
+-
+-        // If `offset + length` overflows, we can just assume it ends at `size`.  (Anything past
+-        // `size is irrelevant anyway.)
+-        let end = offset.checked_add(length).unwrap_or(size);
+-        if end < size {
+-            return Ok(false);
+-        }
+-
+-        file.set_len(offset)?;
+-        Ok(true)
++        Ok(false)
+     }
+ 
+     /// Ensure the given range reads back as zeroes, or return an error.
+-- 
+2.50.1 (Apple Git-155)
+
