@@ -20,11 +20,15 @@ from the workspace), so the top-level `[patch]` is what rewrites the transitive 
 ## Apply onto a fresh checkout
 
 ```sh
+cargo xtask vendor          # applies every series (libkrun + imago); run this after a clone
+# or, just imago:
 scripts/apply-imago-patch.sh
 ```
 
-This vendors pristine `imago-0.2.2` from the cargo registry cache (run `cargo fetch` if it
-isn't there), commits it as the base, and `git am`s the series.
+This vendors pristine `imago-0.2.2` (from the cargo registry cache, or downloaded from
+crates.io if it isn't there — `cargo fetch` can't run yet because the `[patch.crates-io]`
+override below points at this not-yet-vendored path), commits it as the base, and `git am`s
+the series.
 
 ## Add / update a patch
 

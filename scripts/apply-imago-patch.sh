@@ -10,8 +10,8 @@
 # change as a git format-patch series, exactly like third_party/libkrun. limina's root
 # Cargo.toml then overrides the registry crate with this path via [patch.crates.io].
 #
-# Usage: scripts/apply-imago-patch.sh
-#   Requires the pristine imago-0.2.2 in the local cargo registry (run `cargo fetch` if absent).
+# Usage: scripts/apply-imago-patch.sh   (or `cargo xtask vendor`, which also handles libkrun)
+#   Pristine source comes from the cargo registry cache, or is downloaded from crates.io if absent.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -22,19 +22,31 @@ VER="0.2.2"
 DEST="third_party/imago"
 PATCHES="$PWD/patches/imago"
 
-# Find the pristine source in the cargo registry cache.
+# Get the pristine source. Prefer the cargo registry cache; otherwise download the .crate
+# directly from crates.io. The download path is what makes this work on a FRESH clone: limina's
+# root Cargo.toml has `[patch.crates-io] imago = { path = "third_party/imago" }`, so until this
+# vendored tree exists EVERY cargo command (including `cargo fetch`) fails to parse the manifest —
+# we can't rely on cargo having populated the registry first.
 PRISTINE=""
 for d in "$HOME"/.cargo/registry/src/*/imago-"$VER"; do
     [ -d "$d" ] && { PRISTINE="$d"; break; }
 done
-[ -n "$PRISTINE" ] || {
-    echo "pristine imago-$VER not found in the cargo registry; run 'cargo fetch' first" >&2
-    exit 1
-}
 
-echo "==> vendoring pristine imago-$VER from $PRISTINE"
 rm -rf "$DEST"
-cp -R "$PRISTINE" "$DEST"
+if [ -n "$PRISTINE" ]; then
+    echo "==> vendoring pristine imago-$VER from the cargo registry"
+    cp -R "$PRISTINE" "$DEST"
+else
+    echo "==> imago-$VER not cached; downloading the .crate from crates.io"
+    TMP="$(mktemp -d)"
+    trap 'rm -rf "$TMP"' EXIT
+    curl -fsSL -o "$TMP/imago.crate" \
+        "https://static.crates.io/crates/imago/imago-$VER.crate" \
+        || { echo "failed to download imago-$VER.crate from crates.io" >&2; exit 1; }
+    tar -xzf "$TMP/imago.crate" -C "$TMP"
+    mkdir -p "$(dirname "$DEST")"
+    mv "$TMP/imago-$VER" "$DEST"
+fi
 rm -f "$DEST/.cargo-ok" "$DEST/.cargo_vcs_info.json"
 
 git -C "$DEST" init -q

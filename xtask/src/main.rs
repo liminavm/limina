@@ -3,7 +3,10 @@
 
 //! limina dev tasks. Run via `cargo xtask <command>`.
 //!
-//! Currently: `bundle` — assemble a minimal, codesigned `Limina.app` and (optionally) launch
+//! `vendor` — materialize the gitignored `third_party/` source trees (libkrun checkout + the
+//! patched imago) from the committed patch series, so a fresh clone can build. Run it first.
+//!
+//! `bundle` — assemble a minimal, codesigned `Limina.app` and (optionally) launch
 //! it through LaunchServices. This validates the *normal* launch path early: an app started
 //! via `open`/double-click runs under launchd with a real GUI/GPU session, rather than
 //! inheriting a terminal's (or sshd's) context — which is where the worker's virtio-gpu
@@ -29,6 +32,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Materialize the gitignored `third_party/` source trees by applying the committed patch
+    /// series. Run once after a fresh clone (or a libkrun re-clone) before building.
+    Vendor,
     /// Build + assemble + codesign `target/Limina.app`.
     Bundle {
         /// Build in release mode.
@@ -43,8 +49,49 @@ enum Cmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
+        Cmd::Vendor => vendor(),
         Cmd::Bundle { release, open } => bundle(release, open),
     }
+}
+
+/// libkrun upstream — cloned into `third_party/libkrun` when absent; the apply script then resets
+/// it to `patches/libkrun/UPSTREAM_BASE` and applies our series.
+const LIBKRUN_GIT: &str = "https://github.com/containers/libkrun.git";
+
+/// Apply every patch series onto its vendored source tree, so the workspace can build.
+///
+/// We consume libkrun's internal crates and override `imago` by path, both under the gitignored
+/// `third_party/`. A fresh clone has neither tree; this recreates them from the committed patch
+/// series (`patches/libkrun`, `patches/imago`) via the per-dependency apply scripts. Idempotent —
+/// re-running just resets each tree to its base and re-applies. (The imago step is self-sufficient:
+/// it downloads the pristine crate if the cargo cache is empty, since the `[patch.crates-io]`
+/// override would otherwise block `cargo fetch`.)
+fn vendor() -> Result<()> {
+    let repo = repo_root();
+
+    // libkrun: a from-source git checkout (path deps in [workspace.dependencies]). Clone if absent.
+    let libkrun = repo.join("third_party/libkrun");
+    if !libkrun.join(".git").exists() {
+        eprintln!("==> cloning libkrun ({LIBKRUN_GIT}) — third_party/libkrun is absent");
+        run(Command::new("git").current_dir(&repo).args([
+            "clone",
+            LIBKRUN_GIT,
+            "third_party/libkrun",
+        ]))?;
+    }
+    eprintln!("==> applying the libkrun patch series");
+    run(Command::new("bash")
+        .current_dir(&repo)
+        .arg("scripts/apply-libkrun-patches.sh"))?;
+
+    // imago: vendored from crates.io + our discard/vm-memory patches ([patch.crates-io] override).
+    eprintln!("==> vendoring + patching imago");
+    run(Command::new("bash")
+        .current_dir(&repo)
+        .arg("scripts/apply-imago-patch.sh"))?;
+
+    eprintln!("==> vendor complete — `cargo build` / `scripts/test-boot.sh` are ready");
+    Ok(())
 }
 
 fn repo_root() -> PathBuf {

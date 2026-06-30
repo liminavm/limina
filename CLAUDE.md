@@ -27,6 +27,17 @@ right tool — not treat upstream as immutable:
   software 2D scanout for GL-less hosts [shipped], balloon target/inflate control, runtime
   display resize, zero-copy scanout, USB). To change libkrun: edit the checkout, commit on
   a `limina/*` branch, re-export the series (see `patches/libkrun/README.md`).
+  - **`cargo xtask vendor`** is the one-command bootstrap: it clones libkrun if absent, applies
+    the libkrun series, and vendors+patches `imago` — i.e. recreates every gitignored
+    `third_party/` source tree from the committed patch series. The **patch series themselves are
+    committed** (`patches/**`); only the from-source clones under `third_party/` are gitignored.
+    Run it once after a fresh clone, before `cargo build` / `scripts/test-boot.sh`.
+- **imago** (libkrun's virtio-blk storage backend, a crates.io dep) — vendored under
+  `third_party/imago` and overridden via `[patch.crates-io]` in the **root `Cargo.toml`** (the
+  workspace root builds the graph). Series under `patches/imago/`; apply with
+  `scripts/apply-imago-patch.sh`. We patch it so a tail-reaching discard punch-holes instead of
+  truncating the backing file (the truncate shrank a fixed-capacity virtio-blk device across a
+  reboot — see `spikes/m10-disk-durability/`).
 - **virglrenderer / rutabaga** — patchable; we already depend on the Apple-blob
   additions and will fork if Homebrew's build lacks them.
 - **The guest Linux kernel** — we control it for the *enhanced* tier. We can change
