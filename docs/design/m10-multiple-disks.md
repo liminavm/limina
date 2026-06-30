@@ -318,24 +318,36 @@ libkrun." Multiple disks themselves need **no** patch.
 
 ## 10. Phased rollout (RED-first, bisectable)
 
-**Phase 0 — harness prerequisite (no user-visible feature).** The test harness is single-disk:
-the `Boot` enum carries one `disk: PathBuf` and the arg builder emits exactly one `--disk`
-(`limina-test/src/lib.rs:176-198,999-1005`). Add a `data_disks: Vec<…>` (path + `:ro`) to `Boot`
-and emit extra `--disk` args. Switch the dev/test direct-kernel cmdlines off positional
-`root=/dev/vda3` to `root=PARTUUID=` (`lib.rs:518-522`, `run-*.sh`, `prepare-efi-image.sh:78` —
-§4.2) so the two-disk test can't race on probe order. Without this, Phase-1 RED tests can't run.
+> **As-built (Phase 0 + Phase 1 landed 2026-06-30):** commits add repeatable `--disk` to both
+> CLIs (`feat(m10): repeatable --disk …`) and the harness `data_disks` support + the L2 RED test.
+> One scope adjustment from the plan below: the **PARTUUID cmdline switch was deferred**, not
+> done — the RED test runs on the stock **Firmware/BLS** path (`root=UUID`, the shipping-tier
+> path), so it never touches the dev direct-kernel `root=/dev/vda3`; and that dev path is
+> single-disk in every current use, so its positional root can't race. The PARTUUID hardening is
+> only worth doing if/when the *dev direct-kernel* path is itself run multi-disk, and it needs
+> per-image PARTUUID resolution (a real chore — hardcoding a UUID would break boots). Tracked in
+> §11.
 
-**Phase 1 — N read-write data disks + creation + RO mount (the daily-driver need).**
+**Phase 0 — harness prerequisite (no user-visible feature).** The test harness was single-disk:
+the `Boot` enum carried one `disk: PathBuf` and the arg builder emitted exactly one `--disk`
+(`limina-test/src/lib.rs`). *Done:* a `data_disks: Vec<DataDisk>` field on `GuestConfig` (additive
+to any boot mode, not the `Boot` enum) + `with_blank_data_disk`/`with_data_disk` builders that
+emit extra `--disk` args after the boot disk (blank disks created sparse in scratch; writable
+existing images cow-cloned first). *Deferred:* the `root=/dev/vda3`→`root=PARTUUID=` switch (see
+the as-built note).
+
+**Phase 1 — N read-write data disks + creation + RO mount (the daily-driver need).** *Done:*
 - Both CLIs: repeatable `--disk PATH[:ro][:create=SIZE]`; positional `block_id` (`disks[0]`
   stays `"root"`); `--read-only` folded into `disks[0]:ro` by the supervisor; `is_file`-or-block
-  validation + dup-PATH detection; `:create=SIZE` sparse-raw creation; writable-file `flock`;
-  thread the vec through `base_args` (built once). Dev/test root-cmdline fixes (§4.2).
-- RED-first (on the **L2/enhanced** guest — `mkfs` needs a full guest, not the virtiofs-rooted
-  L1): boot with two raw disks; **confirm the guest enumerates the second `--disk` as `vdb`**
-  (validating §4.1's ordering claim empirically) and can partition/`mkfs`/mount/write/read it;
-  the data survives a guest reboot; **validate root stays put on the Firmware/BLS path** (which
-  uses `root=UUID` — both shipping tiers), not on the dev direct-kernel `root=/dev/vda3` path. L0
-  unit test for the `--disk` suffix parser + creation + dup detection.
+  validation + ENOENT/EACCES messages + dup-PATH detection; `:create=SIZE` sparse-raw creation;
+  writable-file `flock`; the vec rides `base_args` (built once) for windowed + reboot replay.
+- RED-first (on the **L2 stock Firmware/BLS** guest — `mkfs` needs a full guest, not the
+  virtiofs-rooted L1; and BLS is where `root=UUID` lives): `crates/limina-test/tests/disks.rs`
+  boots with a blank second disk, **confirms it enumerates as `vdb`** (size-matched, so the right
+  disk landed there — validating §4.1's ordering claim empirically), is read-write, that root
+  stays on `vda`, and that an mkfs+mount+write **survives a guest reboot**. Plus L0 unit tests for
+  the `--disk` suffix parser, `:create` (sparse/idempotent/refuse-resize), the positional-id
+  scheme, and a real `flock`-conflict test.
 
 **Phase 2 — `--cdrom` sugar + stable identity.**
 - `--cdrom` convenience (trivial). libkrun patch: `block_id` → virtio serial. Disk manifest for
@@ -359,11 +371,15 @@ and emit extra `--disk` args. Switch the dev/test direct-kernel cmdlines off pos
 
 - **Boot-device selection (§5.2)** is the only real unknown. Confirm a sole EFI-bootable aarch64
   installer ISO actually wins BDS before promising installs; multi-bootable determinism needs 3b.
-- **Root selection (§4.2)** — both shipping tiers boot BLS `root=UUID=` (no concern there). Only
-  the **dev/test direct-kernel** path uses positional `root=/dev/vda3`; move `lib.rs:518-522`,
-  `run-venus-window.sh:82`, `run-enhanced.sh:44`, `prepare-efi-image.sh:78` to `root=PARTUUID=`
-  before the two-disk tests. (This positional fragility — on the *dev direct-boot* path — was the
-  shape of the migrated-guest root-mount failure, task #5.)
+- **Root selection (§4.2) — PARTUUID switch DEFERRED.** Both shipping tiers boot BLS `root=UUID=`
+  (no concern). Only the **dev/test direct-kernel** path uses positional `root=/dev/vda3`
+  (`lib.rs:518-522`, `run-venus-window.sh:82`, `run-enhanced.sh:44`, `prepare-efi-image.sh:78`),
+  and it is single-disk in every current use, so its positional root can't race today; the L2 RED
+  test runs on the Firmware/BLS path and never touches it. Moving these to `root=PARTUUID=` is only
+  needed if the dev direct-kernel path is itself run multi-disk, and it requires resolving each
+  image's real PARTUUID (hardcoding one would break boots) — so it's deferred until something
+  actually needs it. (This positional fragility — on the *dev direct-boot* path — was the shape of
+  the migrated-guest root-mount failure, task #5.)
 - **Disk ordering (§4.1)** — host order is source-verified deterministic; guest `vdX` naming is a
   reliable-in-practice probe-order convention. Confirm `--disk #2 → vdb` empirically in the
   Phase-1 two-disk boot test (the one piece not provable from source alone).

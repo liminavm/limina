@@ -201,6 +201,17 @@ pub enum Boot {
     },
 }
 
+/// An extra data disk attached *after* the boot disk (so it enumerates as `vdb`, `vdc`, …) —
+/// M10 multiple-disk support. The harness never mutates a shared source image: a blank disk is
+/// created in the scratch dir, and a writable existing image is cow-cloned there first.
+#[derive(Debug, Clone)]
+pub enum DataDisk {
+    /// A blank sparse raw of `size_bytes`, created in the scratch dir and attached read-write.
+    Blank { size_bytes: u64 },
+    /// An existing image: cow-cloned into scratch when read-write, attached in place when `:ro`.
+    Existing { path: PathBuf, read_only: bool },
+}
+
 /// A vsock channel to the guest agent: the host listens on `socket_path`, the guest
 /// connects to `CID_HOST:port`.
 #[derive(Debug, Clone)]
@@ -287,6 +298,10 @@ pub struct GuestConfig {
     /// `limina-<name>`, auto-mounted at `/media/<name>` by the guest init/agent). The
     /// bool is read-only.
     pub shares: Vec<(String, PathBuf, bool)>,
+    /// Extra data disks attached after the boot disk (M10) — they enumerate as `vdb`, `vdc`, …
+    /// in this order. See [`with_blank_data_disk`](GuestConfig::with_blank_data_disk) /
+    /// [`with_data_disk`](GuestConfig::with_data_disk).
+    pub data_disks: Vec<DataDisk>,
 }
 
 impl GuestConfig {
@@ -335,6 +350,7 @@ impl GuestConfig {
             memory: None,
             envs: Vec::new(),
             shares: Vec::new(),
+            data_disks: Vec::new(),
         })
     }
 
@@ -445,6 +461,7 @@ impl GuestConfig {
             memory: None,
             envs: Vec::new(),
             shares: Vec::new(),
+            data_disks: Vec::new(),
         })
     }
 
@@ -481,6 +498,7 @@ impl GuestConfig {
             memory: None,
             envs: Vec::new(),
             shares: Vec::new(),
+            data_disks: Vec::new(),
         })
     }
 
@@ -539,6 +557,7 @@ impl GuestConfig {
             memory: None,
             envs: Vec::new(),
             shares: Vec::new(),
+            data_disks: Vec::new(),
         })
     }
 
@@ -779,6 +798,25 @@ impl GuestConfig {
     pub fn with_share_ro(mut self, name: &str, host_dir: &Path) -> GuestConfig {
         self.shares
             .push((name.to_string(), host_dir.to_path_buf(), true));
+        self
+    }
+
+    /// Attach a blank, writable data disk of `size_bytes` after the boot disk (M10). The harness
+    /// creates a sparse raw in the scratch dir; the guest sees it as the next `vdX` (e.g. `vdb`),
+    /// unformatted. Repeatable; disks attach in call order.
+    pub fn with_blank_data_disk(mut self, size_bytes: u64) -> GuestConfig {
+        self.data_disks.push(DataDisk::Blank { size_bytes });
+        self
+    }
+
+    /// Attach an existing image as a data disk after the boot disk (M10). Read-write images are
+    /// cow-cloned into scratch first (the shared source is never mutated); `read_only` attaches
+    /// the source in place as `:ro`.
+    pub fn with_data_disk(mut self, path: &Path, read_only: bool) -> GuestConfig {
+        self.data_disks.push(DataDisk::Existing {
+            path: path.to_path_buf(),
+            read_only,
+        });
         self
     }
 
@@ -1037,6 +1075,43 @@ impl Guest {
                     .arg("--disk")
                     .arg(&clone);
             }
+        }
+        // Extra data disks (M10): one --disk per data disk AFTER the boot disk, so the guest
+        // enumerates them as vdb, vdc, … in declared order (attach order = device order).
+        for (i, dd) in cfg.data_disks.iter().enumerate() {
+            let arg = match dd {
+                DataDisk::Blank { size_bytes } => {
+                    let p = scratch.join(format!("data{i}.raw"));
+                    let f = fs::File::create(&p)
+                        .with_context(|| format!("creating blank data disk {p:?}"))?;
+                    f.set_len(*size_bytes)
+                        .with_context(|| format!("sizing blank data disk {p:?} to {size_bytes}"))?;
+                    p.to_str()
+                        .with_context(|| format!("data disk path not UTF-8: {p:?}"))?
+                        .to_string()
+                }
+                DataDisk::Existing {
+                    path,
+                    read_only: true,
+                } => {
+                    let s = path
+                        .to_str()
+                        .with_context(|| format!("data disk path not UTF-8: {path:?}"))?;
+                    format!("{s}:ro")
+                }
+                DataDisk::Existing {
+                    path,
+                    read_only: false,
+                } => {
+                    let p = scratch.join(format!("data{i}.raw"));
+                    cow_clone(path, &p)
+                        .with_context(|| format!("cow-cloning data disk {path:?}"))?;
+                    p.to_str()
+                        .with_context(|| format!("data disk path not UTF-8: {p:?}"))?
+                        .to_string()
+                }
+            };
+            cmd.arg("--disk").arg(arg);
         }
         for (name, dir, read_only) in &cfg.shares {
             let dir_str = dir
