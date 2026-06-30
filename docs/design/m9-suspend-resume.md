@@ -326,6 +326,17 @@ trigger**, and dependency-ordered replay.
 snapshots, sidesteps the spike-#1 libkrun gaps); GPU via Strategy A, not serialization (infeasible for
 venus-on-Metal, unprecedented, and A is what the market leaders do); B (record/replay) explicitly deferred.
 
+**M10 cross-dependency — the multi-disk manifest (filed here from M10 Phase 2, 2026-06-30).** A
+snapshot must record the **disk set** it was taken with, because the device set is part of the VM's
+identity: disks attach mid-stack (balloon→…→block→vsock→net), so adding/removing a `--disk` renumbers
+the trailing vsock/net devices and would mis-restore against the versioned device-state schema (§M9.2).
+Before named snapshots support multi-disk VMs, M9 must (a) persist the disk set (paths + per-disk `:ro`
++ the positional `block_id`, now the stable virtio serial — M10 patch 0038) in the snapshot, and (b) on
+`--restore`, **fail closed** if the attached `--disk`/`--cdrom` set doesn't match (or, for clone, CoW
+the data disks per M9.4). Until then, gate named snapshots to single-disk VMs. M10 deliberately did *not*
+build this on Phase-2 argv — it has no consumer until M9 starts. See `docs/design/m10-multiple-disks.md`
+§6.2.
+
 ---
 
 ## Appendix A — Guest-side Linux S4 hibernation (considered, demoted)

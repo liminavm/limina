@@ -327,6 +327,17 @@ libkrun." Multiple disks themselves need **no** patch.
 > only worth doing if/when the *dev direct-kernel* path is itself run multi-disk, and it needs
 > per-image PARTUUID resolution (a real chore — hardcoding a UUID would break boots). Tracked in
 > §11.
+>
+> **As-built (Phase 2 partial, landed 2026-06-30):** `feat(m10): Phase 2 — stable disk identity …`.
+> *Done:* the stable-identity libkrun patch (`patches/libkrun/0038`) — virtio-blk serial = the
+> positional `block_id`, so the guest gets `/dev/disk/by-id/virtio-root` (vda) / `virtio-disk1`
+> (vdb), clone/move-stable; and `--cdrom PATH` supervisor sugar (read-only `--disk`, appended after
+> the data disks), with the disk/cdrom forwarding extracted into a unit-tested `build_disk_args`.
+> `tests/disks.rs` asserts the by-id mapping + its reboot-stability (RED→GREEN proven by toggling
+> 0038). *Deferred:* the disk-set **manifest for multi-disk snapshots** (decision 6 / §6.2) — it has
+> no consumer until M9 (not started), so it's filed as an M9 cross-dependency rather than built on
+> Phase-2 argv. The `--cdrom` runtime path (a guest read-only mount) is the same `:ro` virtio-blk
+> Phase 1 already ships; full *boot/install from* an ISO is Phase 3.
 
 **Phase 0 — harness prerequisite (no user-visible feature).** The test harness was single-disk:
 the `Boot` enum carried one `disk: PathBuf` and the arg builder emitted exactly one `--disk`

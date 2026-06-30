@@ -888,6 +888,14 @@ snapshots because adding a disk renumbers the trailing vsock+net devices. It als
 *creation* (`--disk PATH:create=SIZE`) and a concurrent-attach lock, both of which a daily driver
 needs.
 
+**Status (2026-06-30):** Phase 0 + 1 + most of Phase 2 shipped + HVF-validated. Repeatable
+`--disk PATH[:ro][:create=SIZE]` (attach order = device order, empirically confirmed), sparse image
+creation, writable-image `flock`, the discard-truncate durability fix (vendored/patched imago), and
+**stable identity** — libkrun patch 0038 makes the virtio-blk serial the `block_id`, so the guest
+gets a clone/move-stable `/dev/disk/by-id/virtio-<id>` — plus `--cdrom` sugar. Remaining: the
+multi-disk **snapshot manifest** (deferred to M9, its only consumer), **Phase 3** boot/install from
+an ISO, and **Phase 4** qcow2. The dev-path PARTUUID switch stays deferred (§11).
+
 ---
 
 ## Milestone 11 — Perfected productization (build / dev / delivery ergonomics)
