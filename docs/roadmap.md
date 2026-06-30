@@ -867,10 +867,12 @@ for offline filesystem repair after a migrated guest's v1-space-cache btrfs woul
   cases: data/scratch disks, multi-volume guests, and **offline fs repair / rescue** — boot a rescue
   rootfs as `vda`, attach the target disk as `vdb`, then `btrfs check` / `btrfstune` / `fsck` it
   while unmounted.
-- **ISO / CD-ROM boot (more work).** A read-only optical device the guest sees as a CD-ROM, plus
-  teaching the GOP firmware to boot El-Torito EFI media, so limina can run installer / live / rescue
-  ISOs directly. Heavier than multi-disk (a cdrom-class device + firmware boot-path validation);
-  multi-disk already covers the rescue use case, so it comes first.
+- **ISO / CD-ROM boot — SHIPPED (Phase 3a, zero code).** It turned out *not* to need a cdrom-class
+  device or new firmware work: an ISO is a read-only virtio-blk disk (the guest mounts ISO9660 off
+  `/dev/vdX`), and our GOP firmware *already* boots El Torito EFI media (its `PartitionDxe`/FAT stack
+  finds the embedded ESP and chainloads `BOOTAA64.EFI`). So `--cdrom file.iso` runs an installer /
+  live / rescue ISO directly — verified end to end (firmware → GRUB → installer kernel). The only
+  remaining piece is multi-bootable determinism (Phase 3b: host-managed `BootOrder`), still deferred.
 
 Neither is urgent: the btrfs case that motivated them is fixed more simply by adding
 `space_cache=v2` to the root cmdline (no rescue needed). These are general capability gaps to close
@@ -888,14 +890,19 @@ snapshots because adding a disk renumbers the trailing vsock+net devices. It als
 *creation* (`--disk PATH:create=SIZE`) and a concurrent-attach lock, both of which a daily driver
 needs.
 
-**Status (2026-06-30):** Phases 0, 1, 4 + most of 2 shipped + HVF-validated. Repeatable
+**Status (2026-06-30):** Phases 0, 1, 3a, 4 + most of 2 shipped + HVF-validated. Repeatable
 `--disk PATH[:ro][:create=SIZE]` (attach order = device order, empirically confirmed), sparse image
 creation, writable-image `flock`, the discard-truncate durability fix (vendored/patched imago),
 **stable identity** (libkrun patch 0038: virtio serial = `block_id` → clone/move-stable
-`/dev/disk/by-id/virtio-<id>`), `--cdrom` sugar, and **qcow2** data disks (Phase 4 — format
-auto-detected by magic, read-write + reboot-stable). Remaining: the multi-disk **snapshot manifest**
-(deferred to M9, its only consumer) and **Phase 3** boot/install from an ISO (the §11 firmware-BDS
-unknown). The dev-path PARTUUID switch stays deferred (§11).
+`/dev/disk/by-id/virtio-<id>`), `--cdrom` sugar, **qcow2** data disks (Phase 4 — format
+auto-detected by magic, read-write + reboot-stable), and **boot/install from an ISO** (Phase 3a —
+an EFI-bootable aarch64 ISO attached as the sole disk wins firmware BDS out of the box: El Torito →
+ESP → `BOOTAA64.EFI` → GRUB → installer kernel, **zero code**; the §11 firmware-BDS unknown is
+resolved. Spike `spikes/m10-iso-boot/`, guard `tests/disks.rs::boots_efi_iso_to_bootloader`).
+Remaining: the multi-disk **snapshot manifest** (deferred to M9, its only consumer) and **Phase 3b**
+(host-managed `BootOrder` via a baked EFI varstore — scripted/unattended installs + multi-bootable
+determinism; deferred, a productization concern not a boot blocker). The dev-path PARTUUID switch
+stays deferred (§11).
 
 ---
 

@@ -341,3 +341,52 @@ fn qcow2_data_disk_reads_writes_and_survives_reboot() {
         .expect("supervisor did not stop");
     eprintln!("teardown outcome: {outcome:?}");
 }
+
+/// M10 Phase 3a — **boot from install media**. An EFI-bootable aarch64 installer ISO, attached as
+/// the *sole* disk (so it is `vda`, read-only) via the firmware path, must reach its own
+/// bootloader: the firmware's El Torito + FAT driver stack discovers the embedded ESP and
+/// chainloads `\EFI\BOOT\BOOTAA64.EFI` (→ GRUB). No `--kernel`, no separate root disk, no guest
+/// agent — pure firmware self-discovery. This is the path to installing a fresh guest from scratch.
+///
+/// Evidence: GRUB renders its menu over the firmware console (PL011 serial + GOP); reaching
+/// "GRUB version" proves the El Torito EFI image was found and launched, and "Install Fedora"
+/// confirms it is *this ISO's* installer menu (not a stray match). The matching GOP-scanout PNG is
+/// the separate visual proof in `spikes/m10-iso-boot/`.
+///
+/// SKIPs when HVF is unavailable or the large gitignored ISO / GOP firmware is absent (like the
+/// other image-gated L2s); set `LIMINA_TEST_ISO` / `LIMINA_GOP_FIRMWARE` to point elsewhere.
+#[test]
+fn boots_efi_iso_to_bootloader() {
+    if !limina_test::require_hvf_or_skip("boots_efi_iso_to_bootloader") {
+        return;
+    }
+    let cfg = match GuestConfig::iso_boot_from_env() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("SKIP boots_efi_iso_to_bootloader: {e}");
+            return;
+        }
+    };
+    eprintln!("booting an EFI-bootable aarch64 installer ISO as the sole disk on the GOP firmware");
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor on the ISO");
+
+    // Firmware → El Torito → ESP → BOOTAA64.EFI → GRUB. Generous timeout: firmware init + GRUB.
+    guest
+        .wait_for("GRUB version", Duration::from_secs(90))
+        .expect(
+            "firmware did not chainload the ISO's bootloader (GRUB) from its El Torito EFI image",
+        );
+    // It's the ISO's own installer menu, not an incidental "GRUB version" elsewhere.
+    guest
+        .wait_for("Install Fedora", Duration::from_secs(10))
+        .expect("the ISO's GRUB installer menu did not render");
+    eprintln!("ISO booted to its GRUB bootloader (El Torito → ESP → BOOTAA64.EFI) ✓");
+
+    // The installer guest has no OS to power off; teardown SIGTERMs the supervisor, which SIGKILLs
+    // the worker after its grace window (so the outcome is a forced stop — that's expected here).
+    let outcome = guest
+        .shutdown(Duration::from_secs(20))
+        .expect("supervisor did not stop");
+    eprintln!("teardown outcome: {outcome:?}");
+}

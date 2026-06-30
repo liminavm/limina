@@ -44,6 +44,11 @@ const DEFAULT_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
 /// firmware → GRUB → kernel all render to the virtio-gpu scanout — the windowed boot console.
 const DEFAULT_GOP_FIRMWARE: &str = "target/krun-efi/KRUN_EFI.gop.fd";
 
+/// Default EFI-bootable aarch64 installer ISO for the M10 Phase 3a boot-from-media test
+/// ([`GuestConfig::iso_boot_from_env`]). Gitignored & large (~1.1 GB) like the `.raw` images, so the
+/// test SKIPs when it (or `LIMINA_TEST_ISO`) is absent. Fetch from dl.fedoraproject.org.
+const DEFAULT_TEST_ISO: &str = "Fedora-Server-netinst-aarch64-43-1.6.iso";
+
 /// The Fedora release the L2 image set targets — `LIMINA_FEDORA_REL` (default `"43"`). The image
 /// set is mirrored per release (`vanilla`/`accessible`/`stock.test`/`enhanced`/`enhanced.test`), so
 /// the suite runs against either F43 or F44 by flipping this one var. Per-image overrides
@@ -381,6 +386,65 @@ impl GuestConfig {
         }
         // software-2D display capture (the GOP scanout oracle) + NAT (writable clone + sshd).
         Ok(cfg.with_display(1280, 800).with_net())
+    }
+
+    /// L2 config that EFI-boots an **aarch64 installer ISO as the sole disk** on our GOP firmware
+    /// (M10 Phase 3a — boot from install media). The ISO is `vda` (read-only); the firmware's El
+    /// Torito + FAT driver stack discovers the embedded ESP and chainloads the ISO's bootloader
+    /// (`\EFI\BOOT\BOOTAA64.EFI` → GRUB). There is **no `--kernel`, no separate root disk, and no
+    /// guest agent / SSH** — pure firmware self-discovery; the test watches the firmware/GRUB
+    /// **console** ([`Guest::wait_for`]) for the bootloader-reached signal.
+    ///
+    /// Overrides: `LIMINA_TEST_ISO` (default repo-root [`DEFAULT_TEST_ISO`]), `LIMINA_GOP_FIRMWARE`
+    /// (default [`DEFAULT_GOP_FIRMWARE`]). Returns an error (the test should SKIP) if the GOP firmware
+    /// or the ISO is missing — both are gitignored & large.
+    pub fn iso_boot_from_env() -> Result<GuestConfig> {
+        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
+        anyhow::ensure!(
+            firmware.exists(),
+            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
+             (or set LIMINA_GOP_FIRMWARE)"
+        );
+        let iso = std::env::var("LIMINA_TEST_ISO")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| repo_root().join(DEFAULT_TEST_ISO));
+        anyhow::ensure!(
+            iso.exists(),
+            "test ISO not found at {iso:?} (set LIMINA_TEST_ISO); fetch an EFI-bootable aarch64 \
+             installer ISO, e.g. {DEFAULT_TEST_ISO} from dl.fedoraproject.org"
+        );
+
+        // Build directly (not via `fedora_from_env`, which would require the Fedora root disk): the
+        // ISO IS the boot disk. No display — GRUB still mirrors its menu to the firmware's serial
+        // ConOut even with the GOP firmware, so a serial `wait_for` is the lean, deterministic signal
+        // (the spike's GOP-scanout PNG is the separate visual proof; see spikes/m10-iso-boot).
+        Ok(GuestConfig {
+            limina_bin: resolve_bin("limina", "LIMINA_BIN")?,
+            vmm_bin: resolve_bin("limina-vmm", "LIMINA_VMM_BIN")?,
+            boot: Boot::Firmware {
+                firmware,
+                disk: iso,
+                read_only: true,
+            },
+            vsock: None,
+            display: None,
+            cpus: 4,
+            ram_mib: 4096,
+            shutdown_grace: Duration::from_secs(grace_from_env()),
+            console_input: false,
+            console_channel: ConsoleChannel::Virtio,
+            net: false,
+            ssh_port: None,
+            supervisor_log: false,
+            control_socket: false,
+            balloon_control: false,
+            memory: None,
+            envs: Vec::new(),
+            shares: Vec::new(),
+            data_disks: Vec::new(),
+        })
     }
 
     /// L2 baseline-tier config: a **stock 4 KiB** Fedora that **autologins to a seated GNOME

@@ -348,8 +348,24 @@ libkrun." Multiple disks themselves need **no** patch.
 > `qcow2_data_disk_reads_writes_and_survives_reboot` uses `/sys/block/vdb/size` as the discriminator
 > (a `qemu-img` qcow2 is 64 MiB virtual / ~200 KiB physical, so the guest sees 64 MiB only if opened
 > as qcow2) — RED→GREEN proven; + an L0 magic-detection test. Backing chains open via imago. qcow2
-> *creation* via `--disk` stays out of scope (`:create` makes a raw). **Remaining M10:** Phase 3
-> (boot/install from an ISO — the §11 firmware-BDS unknown).
+> *creation* via `--disk` stays out of scope (`:create` makes a raw).
+>
+> **As-built (Phase 3a landed 2026-06-30):** `feat(m10): Phase 3a — boot from an installer ISO …`.
+> The §11 "only real unknown" is **resolved — with zero code.** An EFI-bootable aarch64 ISO attached
+> as the sole disk (`--cdrom`, so it is `vda` read-only) wins firmware BDS out of the box: our GOP
+> EDK2 firmware already carries the El Torito + FAT driver stack (`PartitionDxe`/`EnhancedFatDxe`/
+> `VirtioBlkDxe`), self-discovers the embedded ESP, and chainloads `\EFI\BOOT\BOOTAA64.EFI` → GRUB.
+> Spiked with `Fedora-Server-netinst-aarch64-43-1.6.iso` on both the debug- and release-GOP firmware
+> (`spikes/m10-iso-boot/`, RESULTS.md): the full chain is in the serial log — `PartitionDxe: El Torito
+> standard found` → `Installed Fat filesystem` → `FSOpen '\EFI\BOOT\BOOTAA64.EFI' Success` →
+> `BdsDxe: starting Boot0001 … CDROM(…)/\EFI\BOOT\BOOTAA64.EFI` → `GRUB version 2.12` — and the GOP
+> scanout PNG shows the same Fedora installer menu (two independent channels). Left to auto-boot it
+> even loaded the installer **kernel+initrd off the ISO** (ISO9660 mount + Anaconda media-check on
+> `/dev/vda`). Regression guard: `tests/disks.rs::boots_efi_iso_to_bootloader` boots the ISO as the
+> sole disk and asserts the firmware reaches GRUB on the console (serial `wait_for`; SKIPs when the
+> gitignored ISO/GOP firmware is absent, like the other image-gated L2s). **Remaining M10:** only
+> Phase 3b (deferred — host-managed `BootOrder` via a baked EFI varstore, for scripted/unattended
+> installs and multi-bootable-disk determinism; a productization concern, not a boot blocker).
 
 **Phase 0 — harness prerequisite (no user-visible feature).** The test harness was single-disk:
 the `Boot` enum carried one `disk: PathBuf` and the arg builder emitted exactly one `--disk`
@@ -380,9 +396,11 @@ the as-built note).
   changed). (RO/ISO mounting itself ships in Phase 1 — it's free given the device support.)
 
 **Phase 3 — boot/install from an ISO.**
-- 3a (ship): the sole-ISO and interactive-menu levers (§5.2; relies on shipped keyboard-at-GRUB).
-  RED-first: boot a known EFI-bootable aarch64 ISO as the sole disk → reaches the ISO's
-  bootloader (serial/GOP evidence).
+- 3a (**SHIPPED 2026-06-30, zero code**): the sole-ISO and interactive-menu levers (§5.2; relies on
+  shipped keyboard-at-GRUB). RED-first done: a known EFI-bootable aarch64 ISO booted as the sole
+  disk reaches the ISO's bootloader on both serial *and* GOP evidence (and on into the installer
+  kernel). The GOP firmware's El Torito + FAT stack already does this; `--cdrom` (Phase 2) supplies
+  the attach. Guard: `tests/disks.rs::boots_efi_iso_to_bootloader`; spike `spikes/m10-iso-boot/`.
 - 3b (deferred): EFI varstore + host-written `BootOrder` for scripted installs / multi-bootable
   determinism.
 
@@ -392,8 +410,12 @@ the as-built note).
 
 ## 11. Open questions & risks
 
-- **Boot-device selection (§5.2)** is the only real unknown. Confirm a sole EFI-bootable aarch64
-  installer ISO actually wins BDS before promising installs; multi-bootable determinism needs 3b.
+- **Boot-device selection (§5.2)** — ~~the only real unknown~~ **RESOLVED for the sole-ISO case
+  (Phase 3a, 2026-06-30):** a sole EFI-bootable aarch64 installer ISO *does* win BDS — verified end
+  to end (El Torito → ESP → BOOTAA64.EFI → GRUB → installer kernel), no code needed, guarded by
+  `tests/disks.rs::boots_efi_iso_to_bootloader` (spike `spikes/m10-iso-boot/RESULTS.md`). Only
+  multi-bootable determinism (two+ bootable disks, scripted/unattended installs) remains open — that
+  needs **3b** (a baked EFI varstore + host-written `BootOrder`), still deferred.
 - **Root selection (§4.2) — PARTUUID switch DEFERRED.** Both shipping tiers boot BLS `root=UUID=`
   (no concern). Only the **dev/test direct-kernel** path uses positional `root=/dev/vda3`
   (`lib.rs:518-522`, `run-venus-window.sh:82`, `run-enhanced.sh:44`, `prepare-efi-image.sh:78`),
