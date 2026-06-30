@@ -192,14 +192,28 @@ add_drivers+=" virtio_blk virtio_pci virtio_console virtio_net virtio_input virt
 filesystems+=" btrfs ext4 xfs vfat "
 DRACUT
 
-echo "-- installing kernel: $(basename "$RPM")"
-# limina-kernel-16k is now installonly (Provides: installonlypkg(kernel)) and is NOT versionlocked:
-# locking our OWN kernel did nothing to stop stock from grabbing the default, and it "filtered out"
-# our own newer kernel ("Error: ... filtered out by exclude filtering"). Clear any STALE lock a
-# previous installer left so this (possibly newer) kernel installs and co-exists with the old one.
+# Clear any STALE limina-kernel-16k versionlock a previous installer left (locking our own kernel
+# did nothing for stock and blocked our own updates); harmless if absent. We no longer lock it.
 dnf versionlock delete limina-kernel-16k >/dev/null 2>&1 || true
-dnf install -y "$RPM"
-KREL=$(ls -d /lib/modules/*limina16k* 2>/dev/null | xargs -n1 basename | head -1)
+# Install the kernel with rpm -i, NOT dnf install, so it CO-EXISTS with the running enhanced kernel
+# (keeps the prior one as a fallback) instead of replacing it. Even with Provides:
+# installonlypkg(kernel), dnf treats the new RPM as an UPGRADE of the installed older
+# limina-kernel-16k (which predates the provide) and tries to REMOVE it — but that's the running
+# kernel, so dnf aborts: "cannot install both ... conflicting requests". rpm -i adds the new
+# versioned files with no conflict (/boot/vmlinuz-<rel>, /lib/modules/<rel>); %posttrans
+# (kernel-install add) writes the BLS entry + initramfs just as dnf would. The provide keeps FUTURE
+# dnf installonly bookkeeping correct. Idempotent: skip if this exact version is already installed.
+KNVR=$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}' "$RPM" 2>/dev/null)
+if [ -n "$KNVR" ] && rpm -q "$KNVR" >/dev/null 2>&1; then
+  echo "-- kernel $KNVR already installed; skipping kernel install (idempotent)"
+else
+  echo "-- installing kernel (rpm -i, co-installs beside the running kernel): $(basename "$RPM")"
+  rpm -ivh "$RPM"
+fi
+# KREL of the kernel we just installed — from the RPM's kernel-uname-r provide, NOT a /lib/modules
+# glob: multiple limina16k kernels now co-exist, so a glob+head would pick the wrong (older) one.
+KREL=$(rpm -qp --provides "$RPM" 2>/dev/null | sed -n 's/^kernel-uname-r = //p' | head -1)
+[ -n "$KREL" ] || KREL=$(ls -d /lib/modules/*limina16k* 2>/dev/null | xargs -n1 basename | sort -V | tail -1)
 [ -n "$KREL" ] || { echo "kernel modules dir not found after install"; exit 1; }
 IMG="/boot/initramfs-$KREL.img"
 [ -f "$IMG" ] || { echo "dracut did NOT build an initramfs for $KREL"; exit 1; }
