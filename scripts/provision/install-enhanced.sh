@@ -263,8 +263,11 @@ echo "-- installing mesa (replaces stock -> our venus/zink build):"; echo "$MESA
 # install — lifting before install is what lets the installer UPDATE a versionlocked package. On a
 # fresh guest there is no lock yet (no-op). We re-lock immediately after. (This needs the payload's
 # mesa to be a STRICTLY NEWER NEVRA than what's installed; the build bumps LIMINA_REL for that.)
-dnf versionlock delete 'mesa-*' >/dev/null 2>&1 \
-  || for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do dnf versionlock delete "$p" >/dev/null 2>&1 || true; done
+# Delete by EXACT name: dnf5's `versionlock delete <glob>` is a silent no-op that still exits 0
+# (so a `glob || per-package` form never falls through). Iterate the installed mesa packages.
+for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do
+  dnf versionlock delete "$p" >/dev/null 2>&1 || true
+done
 # `dnf install` of the higher-versioned local RPMs upgrades/replaces the matching packages.
 dnf install -y --allowerasing $MESA_RPMS
 # Re-lock the mesa stack so a later `dnf update` cannot revert it to a venus-breaking stock version.
