@@ -174,20 +174,23 @@ KK feature work that lifts the GL ceiling (see `limina-kk-feature-gaps`). Boot t
 
 Remaining (deferred per user — "first make it work, then add features to KK"):
 
-- **Lift the GL ceiling above 3.1 — BLOCKED BY GEOMETRY SHADERS (re-probed 2026-06-30).**
-  Advertised `VK_EXT_custom_border_color` (`patches/kosmickrisp/0005`) and re-ran `glprobe`: its
-  base-requirement warning (`have_EXT_custom_border_color`) is **gone**, but GL is **still 3.1**
-  (core 3.2/3.3/4.1 still `EGL_BAD_MATCH`/`0x3009`). So custom_border_color was a **LEAD, not the
-  cause** (exactly the caveat this RESULTS already flagged, line ~161). Source-verified root cause:
-  GL 3.2 core **mandates geometry shaders**, **Metal has none** — KK advertises `tessellationShader=
-  true` but **not `geometryShader`** (`kk_physical_device.c`), and zink gates the GL version on
-  `feats.features.geometryShader` (`zink_screen.c:522/757/2978/2989/3240`). The new
-  `VK_EXT_depth_clip_enable` warning is a *secondary* 3.2 requirement (→ `ARB_depth_clamp`; Metal CAN
-  depth-clamp via `setDepthClipMode`, so it's addable) but can't lift the cap while geometry shaders
-  are missing. **Conclusion:** zink-on-KK core profiles are effectively capped at **GL 3.1** unless KK
-  *emulates* geometry shaders (large, MoltenVK-style compute prepass) — not a feature-advertise. The
-  enhanced **venus** tier is unaffected (Vulkan, not GL-version-gated). Raw probe output:
-  `glprobe-after-0005.txt`. Tracked in `limina-kk-feature-gaps`.
+- **GL ceiling: 3.1 → 3.2 by adding `ARB_depth_clamp` (re-probed 2026-06-30). GEOMETRY-SHADER
+  THEORY WAS WRONG.** Two probes, in order:
+  1. Advertised `VK_EXT_custom_border_color` (`0005`) → its base-requirement warning gone, but GL
+     **still 3.1** (`glprobe-after-0005.txt`). So custom_border_color was a **lead, not the cause**
+     (as this RESULTS flagged at line ~161). I then *wrongly* concluded geometry shaders were the
+     cap (KK lacks `geometryShader`; Metal has no GS). **That was itself a lead-not-cause error** —
+     disproven by the next probe.
+  2. Advertised `VK_EXT_depth_clip_enable` (`0006`) → GL **3.1 → 3.2 core** (`ctx granted 3.2 core`;
+     `glprobe-after-0006.txt`), zero warnings. **`ARB_depth_clamp` was the real 3.1 gate** — Mesa's
+     desktop-GL `ver_3_2` (`src/mesa/main/version.c`) requires `ARB_depth_clamp` (which zink exposes
+     via `VK_EXT_depth_clip_enable`), and **geometry shaders are NOT in the desktop 3.2/3.3 gates**
+     (only the GLES `OES_geometry_shader` path). KK already had core `depthClamp` + the Metal
+     `setDepthClipMode` bridge; `0006` just exposes the EXT + honors the decoupled state.
+  **Now at GL 3.2 core.** Next gate for 3.3 = the 3.3 ext set (`ARB_blend_func_extended`/`dualSrcBlend`,
+  `ARB_timer_query`, `ARB_instanced_arrays`, …), NOT geometry shaders — enumerate KK vs those before
+  chasing 3.3. The enhanced **venus** tier is unaffected (Vulkan, not GL-version-gated). Lesson (again):
+  don't conclude a cap from a missing-feature observation — *test* it. Tracked in `limina-kk-feature-gaps`.
 - **Root-cause the bounded `0x1200` (ERR_UNSPEC)** SUBMIT_3D/CTX_DETACH responses — non-fatal.
 - **Production `.app` bundling** of zink-kk Mesa + epoxy-egl + KK ICD via `@rpath` (no `DYLD_*` /
   no `VK_ICD_FILENAMES` at runtime) — the dev path uses `boot-virgl-guest.sh`'s env exports.

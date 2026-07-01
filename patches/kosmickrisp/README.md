@@ -76,10 +76,21 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
   `VK_BORDER_COLOR_{INT,FLOAT}_CUSTOM_EXT`, `sampler->custom_border`) and the
   `maxCustomBorderColorSamplers` property were already in tree, but the extension + its feature
   bits (`customBorderColors`, `customBorderColorWithoutFormat`) were never exposed, so the driver
-  didn't actually offer the feature. zink lists it as a **base requirement**; without it zink-on-KK
-  (and zink-on-venus) is capped at **GL 3.1** and core-profile context creation fails
-  `EGL_BAD_MATCH`. Enabling the already-implemented feature removes that prerequisite gap (the
-  first of the `limina-kk-feature-gaps` items). Built into the shipped `.app` since 2026-06-30.
+  didn't actually offer the feature. zink lists it as a **base requirement** and warned loudly
+  about it. NOTE: contrary to the patch subject, this was **not** what capped GL at 3.1 — it
+  cleared a correctness *warning* but the version was unchanged (a lead-not-cause; `0006`'s
+  `ARB_depth_clamp` was the actual 3.1 gate). Still worth having (removes a real zink base-req
+  warning). Built into the shipped `.app` since 2026-06-30.
+- **`0006-kk-advertise-VK_EXT_depth_clip_enable-GL_ARB_depth_c.patch`** — advertise
+  `VK_EXT_depth_clip_enable` + the `depthClipEnable` feature, and make `kk_cmd_draw.c` honor the
+  decoupled state via `vk_rasterization_state_depth_clip_enable()` (Metal `setDepthClipMode:`
+  clip/clamp; clip-disabled → clamp). KK already had core `depthClamp` + the Metal bridge; this
+  exposes the EXT zink needs to advertise `GL_ARB_depth_clamp`, which is a **Mesa desktop-GL 3.2
+  version gate** (`version.c` `ver_3_2`). **Verified it lifts zink-on-KK from GL 3.1 → GL 3.2 core**
+  (`glprobe`: `ctx granted 3.2 core`; `glprobe-after-0006.txt`) and clears the depth_clip_enable
+  warning. Corrects the earlier wrong "geometry shaders cap at 3.1" theory — Mesa's desktop 3.2/3.3
+  gates don't require geometry shaders (only the GLES path does). Next gate for 3.3 = the 3.3 ext
+  set (`ARB_blend_func_extended`/`dualSrcBlend`, `ARB_timer_query`, …), not geometry shaders.
 
 ## Apply / rebuild
 The `/Volumes/mesa-cs/mesa` tree is on the `limina/kosmickrisp` branch with these committed.
