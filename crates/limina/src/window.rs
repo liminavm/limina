@@ -378,6 +378,28 @@ fn send_resize(path: &Path, width: u32, height: u32) {
     });
 }
 
+/// Should the supervisor tear the VM down (orderly guest power-off, then kill the worker)?
+///
+/// True only when the user asked to stop (Ctrl-C) or actually **closed** the window. It is NOT
+/// true when the window is merely *miniaturized* (minimize-to-Dock) or the whole app is *hidden*
+/// (Cmd-H): both of those also make `NSWindow.isVisible()` return `false`, but the user wants the
+/// VM to keep running in the background, not be powered off. The old check was a bare
+/// `stop_requested || !visible`, which powered the guest off the instant the window was minimized
+/// or the app was hidden (reproduced live: minimizing the enhanced-tier window triggered
+/// "window closed → asked the guest agent to power off" ~1s later). A closed window is the only
+/// not-visible state that is neither miniaturized nor app-hidden.
+fn should_initiate_quit(
+    stop_requested: bool,
+    visible: bool,
+    miniaturized: bool,
+    app_hidden: bool,
+) -> bool {
+    // A closed window is the only not-visible state that is neither miniaturized nor app-hidden,
+    // so guarding those two turns "is it closed?" back into a reliable signal while letting a
+    // minimized/hidden VM keep running.
+    stop_requested || (!visible && !miniaturized && !app_hidden)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     shared: Arc<Mutex<Shared>>,
@@ -737,6 +759,9 @@ pub fn run(
     let timer_captured = captured.clone();
     let timer_cursor_layer = cursor_layer.clone();
     let timer_surface_map = surface_map.clone();
+    // For the quit-check below: distinguish a real window CLOSE from a mere miniaturize/app-hide
+    // (all three make the window not-visible, but only a close should power the guest off).
+    let timer_app = app.clone();
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         let exited = shared.lock().unwrap().worker_exited;
 
@@ -751,8 +776,14 @@ pub fn run(
 
         // The user closed the window or hit Ctrl-C: prefer an orderly guest power-off via
         // the agent control plane (window-close = the M2 orderly-shutdown clause); without
-        // an agent — or once the grace runs out — kill the worker's process group.
-        if crate::supervisor::stop_requested() || !window.isVisible() {
+        // an agent — or once the grace runs out — kill the worker's process group. A minimized
+        // window or a hidden app is NOT a close (both report isVisible()==false) — keep running.
+        if should_initiate_quit(
+            crate::supervisor::stop_requested(),
+            window.isVisible(),
+            window.isMiniaturized(),
+            timer_app.isHidden(),
+        ) {
             let force_now = match quit_deadline.get() {
                 None => {
                     let orderly = control
@@ -1283,6 +1314,37 @@ fn set_layer_surface(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minimize_and_hide_do_not_power_off_the_vm() {
+        // Regression for the live-reproduced bug: minimizing the window (or hiding the app via
+        // Cmd-H) makes NSWindow.isVisible() return false, which the render-timer quit-check used
+        // to treat as a window close → orderly guest power-off. Minimize/hide must KEEP the VM
+        // running; only an actual close (not-visible AND not-miniaturized AND app-not-hidden) or
+        // an explicit stop (Ctrl-C) tears it down.
+        //
+        // args: (stop_requested, visible, miniaturized, app_hidden)
+        // Steady state — window on screen: never quit.
+        assert!(!should_initiate_quit(false, true, false, false));
+        // Minimized to Dock (isVisible()==false, isMiniaturized()==true): keep the VM running.
+        assert!(
+            !should_initiate_quit(false, false, true, false),
+            "minimizing the window must NOT power off the guest"
+        );
+        // App hidden with Cmd-H (isVisible()==false, NSApp.isHidden()==true): keep the VM running.
+        assert!(
+            !should_initiate_quit(false, false, false, true),
+            "hiding the app must NOT power off the guest"
+        );
+        // Window closed (not visible, not miniaturized, app not hidden): the one not-visible state
+        // that IS a close — tear the VM down.
+        assert!(
+            should_initiate_quit(false, false, false, false),
+            "closing the window must power off the guest"
+        );
+        // Ctrl-C (stop_requested) always tears down, regardless of window state.
+        assert!(should_initiate_quit(true, true, false, false));
+    }
 
     #[test]
     fn worker_conn_swap_retargets_every_field() {
