@@ -3,8 +3,9 @@
 
 //! limina dev tasks. Run via `cargo xtask <command>`.
 //!
-//! `vendor` — materialize the gitignored `third_party/` source trees (libkrun checkout + the
-//! patched imago) from the committed patch series, so a fresh clone can build. Run it first.
+//! `vendor` — materialize the gitignored `third_party/` source trees (libkrun + virglrenderer
+//! checkouts + the patched imago) from the committed patch series, so a fresh clone can build.
+//! Run it first.
 //!
 //! `bundle` — assemble a minimal, codesigned `Limina.app` and (optionally) launch
 //! it through LaunchServices. This validates the *normal* launch path early: an app started
@@ -58,14 +59,20 @@ fn main() -> Result<()> {
 /// it to `patches/libkrun/UPSTREAM_BASE` and applies our series.
 const LIBKRUN_GIT: &str = "https://github.com/containers/libkrun.git";
 
+/// virglrenderer upstream — cloned into `third_party/virglrenderer` when absent; the apply script
+/// then resets it to `patches/virglrenderer/UPSTREAM_BASE` and applies our series. Built separately
+/// into `third_party/virgl-prefix` by `scripts/build-virglrenderer.sh` (the worker links it).
+const VIRGL_GIT: &str = "https://gitlab.freedesktop.org/virgl/virglrenderer.git";
+
 /// Apply every patch series onto its vendored source tree, so the workspace can build.
 ///
-/// We consume libkrun's internal crates and override `imago` by path, both under the gitignored
-/// `third_party/`. A fresh clone has neither tree; this recreates them from the committed patch
-/// series (`patches/libkrun`, `patches/imago`) via the per-dependency apply scripts. Idempotent —
-/// re-running just resets each tree to its base and re-applies. (The imago step is self-sufficient:
-/// it downloads the pristine crate if the cargo cache is empty, since the `[patch.crates-io]`
-/// override would otherwise block `cargo fetch`.)
+/// We consume libkrun's internal crates and override `imago` by path, and link our patched
+/// virglrenderer — all under the gitignored `third_party/`. A fresh clone has none of these trees;
+/// this recreates them from the committed patch series (`patches/libkrun`, `patches/virglrenderer`,
+/// `patches/imago`) via the per-dependency apply scripts. Idempotent — re-running just resets each
+/// tree to its base and re-applies. (The imago step is self-sufficient: it downloads the pristine
+/// crate if the cargo cache is empty, since the `[patch.crates-io]` override would otherwise block
+/// `cargo fetch`.)
 fn vendor() -> Result<()> {
     let repo = repo_root();
 
@@ -83,6 +90,22 @@ fn vendor() -> Result<()> {
     run(Command::new("bash")
         .current_dir(&repo)
         .arg("scripts/apply-libkrun-patches.sh"))?;
+
+    // virglrenderer: a from-source git checkout built into third_party/virgl-prefix (the worker
+    // links it — see the limina-virgl-link-trap memory). Clone if absent, then apply our series.
+    let virgl = repo.join("third_party/virglrenderer");
+    if !virgl.join(".git").exists() {
+        eprintln!("==> cloning virglrenderer ({VIRGL_GIT}) — third_party/virglrenderer is absent");
+        run(Command::new("git").current_dir(&repo).args([
+            "clone",
+            VIRGL_GIT,
+            "third_party/virglrenderer",
+        ]))?;
+    }
+    eprintln!("==> applying the virglrenderer patch series");
+    run(Command::new("bash")
+        .current_dir(&repo)
+        .arg("scripts/apply-virgl-patches.sh"))?;
 
     // imago: vendored from crates.io + our discard/vm-memory patches ([patch.crates-io] override).
     eprintln!("==> vendoring + patching imago");

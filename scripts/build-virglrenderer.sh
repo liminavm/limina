@@ -7,9 +7,10 @@
 # the homebrew slp
 # `0.10.4e-krunkit` bottle whose vkr only knows VK_KHR_maintenance1..4 and caps the guest at
 # Vulkan 1.2 — too old for zink (which needs maintenance5). Upstream 1.3.0's vkr knows
-# maintenance1..9 and the krunkit macOS work is fully upstreamed, so this builds with NO
-# source patches; the only krun-side delta (the macOS blob `get_map_ptr`) is handled in
-# rutabaga against upstream's resource_map API. See memory limina-tier2-venus / docs/roadmap M4.
+# maintenance1..9. This script builds whatever is checked out under third_party/virglrenderer:
+# our macOS/venus enablement + zero-copy IOSurface scanout + the vrend/vkr fixes live as a
+# git format-patch series in patches/virglrenderer/ (apply with scripts/apply-virgl-patches.sh,
+# which `cargo xtask vendor` runs on a fresh clone). See memory limina-tier2-venus / docs/roadmap M4.
 #
 # Output: a prefix at third_party/virgl-prefix whose virglrenderer.pc goes first on
 # PKG_CONFIG_PATH when building limina-vmm (rutabaga_gfx/build.rs probes `virglrenderer`).
