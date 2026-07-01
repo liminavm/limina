@@ -1345,6 +1345,17 @@ impl Guest {
             cmd.env(k, v);
         }
 
+        // Several L1 tests assert on info-level supervisor log lines (e.g. "guest agent
+        // connected"). Since the supervisor's logger now defaults to warn (quiet production
+        // logs), those lines are suppressed unless RUST_LOG opts in — which silently broke the
+        // control-plane tests. Default the spawned supervisor to info here, respecting an
+        // explicit level from the caller's env or cfg.envs.
+        let rust_log_chosen = std::env::var_os("RUST_LOG").is_some()
+            || cfg.envs.iter().any(|(k, _)| k.as_str() == "RUST_LOG");
+        if !rust_log_chosen {
+            cmd.env("RUST_LOG", "info");
+        }
+
         // Supervisor/worker logs: flow to the test's stderr by default (visible with
         // --nocapture); captured to a scratch file when the test asserts on them.
         cmd.stdin(Stdio::null());
