@@ -25,9 +25,12 @@
 #                          installer lifts the lock to UPDATE it, then re-locks (re-runnable).
 #   3. mutter RPMs       -> replace stock mutter at /usr (patched compositor);          NOT locked
 #                          (mutter tracks the distro/gnome-shell version; see limina-enh-delivery)
-#   4. limina-agent      -> /usr/local/bin + unit (clipboard, dynamic resize, PSI autoballoon).
-#                          OPTIONAL: installed only if staged into the payload, and SELinux-
-#                          relabeled so it starts on a stock (Enforcing) guest.
+#   4. limina-agent      -> /usr/local/bin + system unit (dynamic resize, PSI autoballoon);
+#      limina-agent-session -> /usr/local/bin + systemd USER unit (the clipboard bridge — it
+#                          must live in the graphical session, so it is a separate binary and
+#                          is enabled --global for every user's next login).
+#                          Both OPTIONAL: installed only if staged into the payload, and
+#                          SELinux-relabeled so they start on a stock (Enforcing) guest.
 #   5. driver-select env -> /etc/environment.d (route GL through zink->venus, force the venus ICD)
 #   6. GRUB              -> default to the 16k kernel + auto-boot (unattended)
 #
@@ -318,9 +321,9 @@ echo "$MUTTER_RPMS" | sed 's#.*/#     #'
 dnf install -y --allowerasing $MUTTER_RPMS
 echo "   patched mutter installed"
 
-### 4. limina-agent -> /usr/local/bin + unit (OPTIONAL; present iff staged into the payload) ##
+### 4. limina-agent + limina-agent-session (OPTIONAL; present iff staged into the payload) ##
 # Folds in what scripts/install-guest-agent.sh used to do over SSH, so the whole enhanced upgrade
-# rides the one offline virtiofs channel. Without the agent, clipboard / dynamic display resize /
+# rides the one offline virtiofs channel. Without the agent, dynamic display resize /
 # PSI autoballoon / share auto-mount stay inactive — so a payload that ships it is preferred, but
 # its absence is non-fatal (two-tier: each feature lights up on its own prerequisite).
 AGENT_BIN="$PAYLOAD/limina-agent"
@@ -348,7 +351,35 @@ if [ -f "$AGENT_BIN" ]; then
     echo "   WARN limina-agent failed to start (check: journalctl -u limina-agent)"
   fi
 else
-  echo "-- no limina-agent in payload; skipping (clipboard / dynamic resize / PSI stay inactive)"
+  echo "-- no limina-agent in payload; skipping (dynamic resize / PSI stay inactive)"
+fi
+
+# limina-agent-session: the per-user clipboard bridge. It is session state (a Wayland
+# ext-data-control client, or the gnome-shell RemoteDesktop portal on stock mutter), so it runs
+# as a systemd USER unit inside the graphical session — the system-level limina-agent cannot do
+# clipboard, and without this helper host<->guest copy/paste is silently inert (no guest peer
+# ever advertises the `clipboard` cap; found on the 2026-07-01 dogfooding VM).
+SESSION_BIN="$PAYLOAD/limina-agent-session"
+if [ -f "$SESSION_BIN" ]; then
+  echo "-- installing limina-agent-session + user unit (clipboard bridge)"
+  install -m 0755 "$SESSION_BIN" /usr/local/bin/limina-agent-session
+  SESSION_UNIT="$PAYLOAD/limina-agent-session.service"
+  [ -f "$SESSION_UNIT" ] && install -m 0644 "$SESSION_UNIT" /usr/lib/systemd/user/limina-agent-session.service
+  if command -v restorecon >/dev/null 2>&1; then
+    restorecon -v /usr/local/bin/limina-agent-session \
+      /usr/lib/systemd/user/limina-agent-session.service 2>/dev/null || true
+  fi
+  # --global enables it for EVERY user's graphical session (symlink under /etc/systemd/user);
+  # no user bus needed, so it works from this root, offline installer. It starts at the next
+  # login — the reboot this install already asks for covers that.
+  if systemctl --user --global enable limina-agent-session 2>/dev/null; then
+    echo "   limina-agent-session enabled --global (starts at each user's next graphical login)"
+  else
+    echo "   WARN limina-agent-session could not be enabled (clipboard stays inactive;" >&2
+    echo "        try: sudo systemctl --user --global enable limina-agent-session)" >&2
+  fi
+else
+  echo "-- no limina-agent-session in payload; skipping (host<->guest clipboard stays inactive)"
 fi
 
 ### 5. driver selection: GL via zink -> venus (force the venus ICD over lavapipe) #

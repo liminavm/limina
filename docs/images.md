@@ -70,6 +70,14 @@ dogfood-guest as `~/limina-guest-tools-7.1.2-f44.tar.zst` (built by `scripts/pro
 installed by `scripts/provision/install-enhanced.sh`). See the `limina-enh-delivery` + `limina-devmac-kernel-build`
 memories.
 
+**Repack 2026-07-01 (`target/guest-tools-7.1.2-clipboard/limina-guest-tools-f44.tar.zst`)** — same RPMs, plus
+`limina-agent-session` (static musl) + its systemd **user** unit and the updated `install-enhanced.sh` that
+installs/enables it `--global`: the clipboard bridge is session state, so the system-level `limina-agent` never
+advertised the `clipboard` cap and host↔guest copy/paste was silently inert on the dogfooding VM. VALIDATED
+end-to-end 2026-07-01 on a fresh `enhanced.test` clone: installer clean (kernel 7.1.2 co-install + mesa `-2`
+upgrade + helper enabled), trial-boot to 7.1.2, helper auto-starts at login on the ext-data-control backend,
+and a two-way pbcopy/wl-paste + wl-copy/pbpaste round trip passed.
+
 ## Images
 
 ### Fedora 44 — mirrored image set (in progress, started 2026-06-29)

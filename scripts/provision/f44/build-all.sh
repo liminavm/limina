@@ -5,8 +5,9 @@
 # Build the whole enhanced tier IN-GUEST on Fedora 44, then assemble a payload directory that
 # scripts/provision/install-enhanced.sh consumes. Run inside a booted basic F44 dogfood guest.
 #
-# Builds: kernel-16k, mesa (venus/zink), mutter, and the native limina-agent; then collects the
-# RPMs + agent (+ unit + gschema override) + install-enhanced.sh + a manifest into $PAYLOAD.
+# Builds: kernel-16k, mesa (venus/zink), mutter, and the native limina-agent +
+# limina-agent-session; then collects the RPMs + agents (+ units + gschema override) +
+# install-enhanced.sh + a manifest into $PAYLOAD.
 #
 # Usage (in the guest):  scripts/provision/f44/build-all.sh
 # Then:                  sudo scripts/provision/install-enhanced.sh "$PAYLOAD" && sudo reboot
@@ -20,7 +21,7 @@ echo "############ kernel ############"; OUT="$KOUT" "$HERE/build-kernel-rpm.sh"
 echo "############ mesa   ############"; OUT="$MOUT" "$HERE/build-mesa-rpm.sh"
 echo "############ mutter ############"; OUT="$UOUT" "$HERE/build-mutter-rpm.sh"
 
-echo "############ limina-agent (native gnu) ############"
+echo "############ limina-agent + limina-agent-session (native gnu) ############"
 # guest/.cargo/config.toml defaults to aarch64-unknown-linux-musl (the portable STATIC artifact the
 # over-SSH install-guest-agent.sh ships). But Fedora's rust does NOT package the musl std
 # (rust-std-static-*-musl is absent, no rustup in-guest), so a bare `cargo build` here dies with
@@ -28,14 +29,18 @@ echo "############ limina-agent (native gnu) ############"
 # guest glibc — fine for the same-distro enhanced image); the explicit --target overrides the musl
 # default and reads from the matching target/<triple>/release path.
 AGENT_OK=
+SESSION_OK=
 AGENT_TGT=aarch64-unknown-linux-gnu
 if ! command -v cargo >/dev/null; then sudo dnf install -y cargo rust || true; fi
 if command -v cargo >/dev/null; then
-  ( cd "$REPO/guest" && cargo build --release -p limina-agent --target "$AGENT_TGT" )
+  ( cd "$REPO/guest" && cargo build --release -p limina-agent -p limina-agent-session --target "$AGENT_TGT" )
   AGENT_BIN="$REPO/guest/target/$AGENT_TGT/release/limina-agent"
+  SESSION_BIN="$REPO/guest/target/$AGENT_TGT/release/limina-agent-session"
   [ -x "$AGENT_BIN" ] && AGENT_OK=1
+  [ -x "$SESSION_BIN" ] && SESSION_OK=1
 fi
 [ -n "$AGENT_OK" ] || echo "WARN: limina-agent not built (no cargo) — install-enhanced.sh will skip it"
+[ -n "$SESSION_OK" ] || echo "WARN: limina-agent-session not built — clipboard will stay inactive"
 
 echo "############ assemble payload -> $PAYLOAD ############"
 rm -rf "$PAYLOAD"; mkdir -p "$PAYLOAD"
@@ -43,11 +48,17 @@ rm -rf "$PAYLOAD"; mkdir -p "$PAYLOAD"
 cp -f "$KOUT"/*.rpm "$MOUT"/*.rpm "$UOUT"/*.rpm "$PAYLOAD"/ 2>/dev/null || true
 # The installer itself (it defaults its payload dir to its own location).
 cp -f "$REPO/scripts/provision/install-enhanced.sh" "$PAYLOAD"/
-# The agent + its unit + the flat-pointer gschema override (install-enhanced.sh installs these).
+# The agents + their units + the flat-pointer gschema override (install-enhanced.sh installs these).
 if [ -n "$AGENT_OK" ]; then
   cp -f "$AGENT_BIN" "$PAYLOAD"/
   cp -f "$REPO/guest/limina-agent/limina-agent.service" "$PAYLOAD"/ 2>/dev/null || true
   cp -f "$REPO/guest/limina-config/90-limina-pointer.gschema.override" "$PAYLOAD"/ 2>/dev/null || true
+fi
+# The per-session helper (clipboard bridge): a systemd USER unit, so it rides the payload
+# separately from the system agent (each lights up on its own prerequisite).
+if [ -n "$SESSION_OK" ]; then
+  cp -f "$SESSION_BIN" "$PAYLOAD"/
+  cp -f "$REPO/guest/limina-agent-session/limina-agent-session.service" "$PAYLOAD"/ 2>/dev/null || true
 fi
 # Manifest: the target release + the component versions, so the payload is self-describing
 # (and a future install-enhanced.sh version check can read it).
@@ -57,6 +68,7 @@ fi
   . /etc/os-release; echo "target: $ID $VERSION_ID  (kernel $(uname -r))"
   echo "rpms:"; ls -1 "$PAYLOAD"/*.rpm 2>/dev/null | sed 's#.*/#  - #'
   [ -n "$AGENT_OK" ] && echo "agent: limina-agent ($AGENT_TGT)"
+  [ -n "$SESSION_OK" ] && echo "agent: limina-agent-session ($AGENT_TGT)" || true
 } > "$PAYLOAD/manifest.txt"
 cat "$PAYLOAD/manifest.txt"
 
