@@ -180,6 +180,8 @@ pub(crate) mod tests {
             name: name.into(),
             disk: None,
             import_mode: ImportMode::CloneIntoBundle,
+            blank_size: None,
+            cdrom: None,
             cpus: 4,
             memory: Memory::default(),
             ssh_port: 0,

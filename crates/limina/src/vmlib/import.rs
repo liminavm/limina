@@ -35,6 +35,11 @@ pub struct CreateOpts {
     /// Existing disk image to import; None = a definition with no disks yet.
     pub disk: Option<PathBuf>,
     pub import_mode: ImportMode,
+    /// Create a blank sparse boot disk of this many bytes (mutually exclusive with
+    /// `disk`) — the "new empty VM + installer ISO" path.
+    pub blank_size: Option<u64>,
+    /// Attach an installer/media ISO, referenced where it is (read-only by nature).
+    pub cdrom: Option<PathBuf>,
     pub cpus: u8,
     pub memory: Memory,
     /// 0 = auto-allocate the SSH forward port at start.
@@ -53,6 +58,10 @@ pub fn create(opts: &CreateOpts, dest_dir: &Path) -> Result<VmBundle> {
         opts.name
     );
     anyhow::ensure!(opts.cpus > 0, "cpus must be > 0");
+    anyhow::ensure!(
+        !(opts.disk.is_some() && opts.blank_size.is_some()),
+        "an imported disk and a blank disk are mutually exclusive"
+    );
 
     let bundle = VmBundle::new(dest_dir.join(format!("{}.{BUNDLE_EXT}", opts.name)));
     anyhow::ensure!(
@@ -68,8 +77,32 @@ pub fn create(opts: &CreateOpts, dest_dir: &Path) -> Result<VmBundle> {
         std::fs::create_dir_all(bundle.run_dir())?;
         std::fs::create_dir_all(bundle.logs_dir())?;
 
-        let disks = match &opts.disk {
-            Some(src) => vec![import_disk(src, &bundle, opts.import_mode)?],
+        let disks = match (&opts.disk, opts.blank_size) {
+            (Some(src), _) => vec![import_disk(src, &bundle, opts.import_mode)?],
+            (None, Some(size)) => {
+                let rel = PathBuf::from("disks/root.raw");
+                crate::create_disk_image(&bundle.path.join(&rel), size)?;
+                vec![DiskEntry {
+                    path: rel,
+                    ro: false,
+                }]
+            }
+            (None, None) => vec![],
+        };
+        let cdroms = match &opts.cdrom {
+            Some(iso) => {
+                let meta = std::fs::metadata(iso)
+                    .with_context(|| format!("ISO not found: {}", iso.display()))?;
+                anyhow::ensure!(
+                    meta.is_file(),
+                    "ISO is not a regular file: {}",
+                    iso.display()
+                );
+                let abs = iso
+                    .canonicalize()
+                    .with_context(|| format!("resolving {}", iso.display()))?;
+                vec![crate::vmlib::schema::CdromEntry { path: abs }]
+            }
             None => vec![],
         };
 
@@ -86,7 +119,7 @@ pub fn create(opts: &CreateOpts, dest_dir: &Path) -> Result<VmBundle> {
                 memory: opts.memory.clone(),
             },
             disks,
-            cdroms: vec![],
+            cdroms,
             // Managed VMs get networking by default — a desktop VM without SSH/net
             // is the exception, not the rule. The MAC is persisted now (identity
             // first), plumbed to the worker later.
@@ -275,6 +308,38 @@ mod tests {
             !lib.join("nodisk.liminavm").exists(),
             "failed create must clean up the partial bundle"
         );
+
+        std::fs::remove_dir_all(&lib).ok();
+    }
+
+    #[test]
+    fn create_blank_disk_with_iso_records_both() {
+        let lib = scratch_library("blank");
+        let iso = lib.join("installer.iso");
+        std::fs::write(&iso, b"eltorito").unwrap();
+
+        let mut opts = basic_opts("fresh");
+        opts.blank_size = Some(64 * 1024 * 1024);
+        opts.cdrom = Some(iso.clone());
+        let bundle = create(&opts, &lib).unwrap();
+
+        let cfg = bundle.load().unwrap();
+        assert_eq!(cfg.disks.len(), 1);
+        assert_eq!(cfg.disks[0].path, PathBuf::from("disks/root.raw"));
+        let disk = bundle.resolve_path(&cfg.disks[0].path);
+        assert_eq!(
+            std::fs::metadata(&disk).unwrap().len(),
+            64 * 1024 * 1024,
+            "blank sparse disk at the requested size"
+        );
+        assert_eq!(cfg.cdroms.len(), 1);
+        assert!(cfg.cdroms[0].path.is_absolute(), "ISO referenced in place");
+
+        // Blank + imported disk together is rejected.
+        let mut bad = basic_opts("conflict");
+        bad.disk = Some(iso.clone());
+        bad.blank_size = Some(1024);
+        assert!(create(&bad, &lib).is_err());
 
         std::fs::remove_dir_all(&lib).ok();
     }

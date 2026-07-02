@@ -239,6 +239,13 @@ struct CreateArgs {
     /// Reference the disk where it is instead of cloning/copying it into the bundle.
     #[arg(long, requires = "disk")]
     in_place: bool,
+    /// Create a blank sparse boot disk of this size (e.g. "40G") instead of importing one.
+    #[arg(long, conflicts_with = "disk", value_name = "SIZE")]
+    blank: Option<String>,
+    /// Attach an installer/media ISO (referenced in place, read-only). With --blank and
+    /// no bootable disk, the firmware boots the ISO — the OS-install path.
+    #[arg(long, value_name = "PATH")]
+    cdrom: Option<PathBuf>,
     /// Number of vCPUs.
     #[arg(long, default_value_t = 4)]
     cpus: u8,
@@ -371,6 +378,13 @@ fn cmd_create(args: CreateArgs) -> Result<()> {
         } else {
             vmlib::import::ImportMode::CloneIntoBundle
         },
+        blank_size: args
+            .blank
+            .as_deref()
+            .map(parse_disk_size)
+            .transpose()
+            .context("--blank")?,
+        cdrom: args.cdrom,
         cpus: args.cpus,
         memory,
         ssh_port: args.ssh_port,
@@ -1587,6 +1601,24 @@ mod tests {
 
         // --in-place requires --disk.
         assert!(Cli::try_parse_from(["limina", "create", "dev", "--in-place"]).is_err());
+
+        // A blank disk + ISO (the OS-install shape); --blank and --disk conflict.
+        let cli = Cli::try_parse_from([
+            "limina", "create", "inst", "--blank", "40G", "--cdrom", "/i/f.iso",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Some(Cmd::Create(a)) => {
+                assert_eq!(a.blank.as_deref(), Some("40G"));
+                assert_eq!(a.cdrom, Some(PathBuf::from("/i/f.iso")));
+                assert!(a.disk.is_none());
+            }
+            other => panic!("expected create, got {other:?}"),
+        }
+        assert!(Cli::try_parse_from([
+            "limina", "create", "x", "--blank", "1G", "--disk", "/d.raw"
+        ])
+        .is_err());
 
         // stop/rm/ls/center parse.
         assert!(matches!(

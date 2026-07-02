@@ -170,6 +170,8 @@ mod tests {
                 name: "Alpha".into(),
                 disk: Some(src),
                 import_mode: ImportMode::CloneIntoBundle,
+                blank_size: None,
+                cdrom: None,
                 cpus: 2,
                 memory: Memory::Fixed("2G".into()),
                 ssh_port: 2299,

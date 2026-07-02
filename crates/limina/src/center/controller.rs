@@ -169,9 +169,9 @@ define_class!(
             }
         }
 
-        #[unsafe(method(importClicked:))]
-        fn import_clicked(&self, _sender: &NSButton) {
-            self.run_import_flow();
+        #[unsafe(method(newVmClicked:))]
+        fn new_vm_clicked(&self, _sender: &NSButton) {
+            self.run_new_vm_flow();
         }
     }
 );
@@ -219,15 +219,15 @@ impl CenterController {
         let title = NSTextField::labelWithString(&NSString::from_str("Virtual Machines"), mtm);
         title.setFont(Some(&NSFont::boldSystemFontOfSize(16.0)));
         header.addView_inGravity(&title, NSStackViewGravity::Leading);
-        let import = unsafe {
+        let new_vm = unsafe {
             NSButton::buttonWithTitle_target_action(
-                &NSString::from_str("Import…"),
+                &NSString::from_str("New…"),
                 Some(self.as_ref()),
-                Some(sel!(importClicked:)),
+                Some(sel!(newVmClicked:)),
                 mtm,
             )
         };
-        header.addView_inGravity(&import, NSStackViewGravity::Trailing);
+        header.addView_inGravity(&new_vm, NSStackViewGravity::Trailing);
         content.addSubview(&header);
 
         // The row list lives in a scroll view filling the rest of the window, so a
@@ -277,7 +277,7 @@ impl CenterController {
 
         let empty = NSTextField::labelWithString(
             &NSString::from_str(
-                "No virtual machines yet.\nClick Import… to create one from a disk image.",
+                "No virtual machines yet.\nClick New… to import a disk image or create an empty VM.",
             ),
             mtm,
         );
@@ -611,7 +611,112 @@ impl CenterController {
         }
     }
 
-    /// Import…: pick a disk image, name the VM, clone it into a new bundle in the
+    /// New…: the one entry point for making VMs — import an existing disk image,
+    /// or create an empty VM (blank sparse disk + optional installer ISO).
+    fn run_new_vm_flow(&self) {
+        let alert = NSAlert::new(self.mtm());
+        alert.setMessageText(&NSString::from_str("New Virtual Machine"));
+        alert.setInformativeText(&NSString::from_str(
+            "Import an existing disk image as a VM, or create an empty VM with a \
+             blank disk (attach an installer ISO to install an OS into it).",
+        ));
+        alert.addButtonWithTitle(&NSString::from_str("Import a Disk Image…"));
+        alert.addButtonWithTitle(&NSString::from_str("New Empty VM…"));
+        alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+        match alert.runModal() {
+            r if r == NSAlertFirstButtonReturn => self.run_import_flow(),
+            r if r == NSAlertSecondButtonReturn => self.run_blank_vm_flow(),
+            _ => {}
+        }
+    }
+
+    /// New empty VM: name + blank-disk size, then an optional installer ISO. With a
+    /// blank disk and an ISO, the firmware finds no bootable disk and boots the ISO
+    /// (El Torito → the installer) — the OS-install path.
+    fn run_blank_vm_flow(&self) {
+        let mtm = self.mtm();
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str("New Empty VM"));
+        alert.setInformativeText(&NSString::from_str(
+            "The boot disk is created blank and sparse — it only uses real space as \
+             the guest writes.",
+        ));
+        alert.addButtonWithTitle(&NSString::from_str("Create"));
+        alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 300.0, 62.0));
+        let name_field = labeled_field(mtm, &accessory, 34.0, "Name:", "New VM");
+        let size_field = labeled_field(mtm, &accessory, 4.0, "Disk size:", "40G");
+        alert.setAccessoryView(Some(&accessory));
+        if alert.runModal() != NSAlertFirstButtonReturn {
+            return;
+        }
+        let name = name_field.stringValue().to_string().trim().to_string();
+        if name.is_empty() {
+            self.alert("Cannot create the VM", "The VM needs a non-empty name.");
+            return;
+        }
+        let size = match crate::parse_disk_size(&size_field.stringValue().to_string()) {
+            Ok(s) => s,
+            Err(e) => {
+                self.alert("Invalid disk size", &format!("{e:#}"));
+                return;
+            }
+        };
+
+        // Optional installer ISO (referenced where it is, read-only by nature).
+        let iso_alert = NSAlert::new(mtm);
+        iso_alert.setMessageText(&NSString::from_str("Attach an installer ISO?"));
+        iso_alert.setInformativeText(&NSString::from_str(
+            "With a blank disk and an ISO attached, starting the VM boots the OS installer.",
+        ));
+        iso_alert.addButtonWithTitle(&NSString::from_str("Choose ISO…"));
+        iso_alert.addButtonWithTitle(&NSString::from_str("No ISO"));
+        iso_alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+        let cdrom = match iso_alert.runModal() {
+            r if r == NSAlertFirstButtonReturn => {
+                let panel = NSOpenPanel::openPanel(mtm);
+                panel.setCanChooseFiles(true);
+                panel.setCanChooseDirectories(false);
+                panel.setAllowsMultipleSelection(false);
+                if panel.runModal() != NSModalResponseOK {
+                    return; // backing out of the picker cancels the flow
+                }
+                panel
+                    .URL()
+                    .and_then(|u| u.path())
+                    .map(|p| PathBuf::from(p.to_string()))
+            }
+            r if r == NSAlertSecondButtonReturn => None,
+            _ => return,
+        };
+
+        // Creating the blank sparse disk is instant; no background thread needed.
+        let result = (|| -> anyhow::Result<()> {
+            let dest = vmlib::bundle::library_dir();
+            std::fs::create_dir_all(&dest)?;
+            vmlib::import::create(
+                &vmlib::import::CreateOpts {
+                    name,
+                    disk: None,
+                    import_mode: vmlib::import::ImportMode::CloneIntoBundle,
+                    blank_size: Some(size),
+                    cdrom,
+                    cpus: 4,
+                    memory: vmlib::schema::Memory::default(),
+                    ssh_port: 0,
+                    window: true,
+                },
+                &dest,
+            )?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            self.alert("Could not create the VM", &format!("{e:#}"));
+        }
+        self.refresh(true);
+    }
+
+    /// Import: pick a disk image, name the VM, clone it into a new bundle in the
     /// library. The clone runs off the main thread (instant on-volume via APFS
     /// clonefile, but a cross-volume copy of a big image takes a while).
     fn run_import_flow(&self) {
@@ -658,6 +763,8 @@ impl CenterController {
                         name: name.clone(),
                         disk: Some(disk.clone()),
                         import_mode: vmlib::import::ImportMode::CloneIntoBundle,
+                        blank_size: None,
+                        cdrom: None,
                         cpus: 4,
                         memory: vmlib::schema::Memory::default(),
                         ssh_port: 0,
