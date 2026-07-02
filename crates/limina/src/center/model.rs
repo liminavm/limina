@@ -74,10 +74,7 @@ pub fn snapshot() -> Vec<VmRow> {
 }
 
 fn summarize(cfg: &schema::VmConfig) -> String {
-    let mem = match &cfg.hardware.memory {
-        schema::Memory::Fixed(s) => s.clone(),
-        schema::Memory::Range { min, max } => format!("{min}..{max}"),
-    };
+    let mem = cfg.hardware.memory.0.clone();
     format!("{} vCPU · {mem}", cfg.hardware.cpus)
 }
 
@@ -179,7 +176,7 @@ mod tests {
                 blank_size: None,
                 cdrom: None,
                 cpus: 2,
-                memory: Memory::Fixed("2G".into()),
+                memory: Memory("2G".into()),
                 ssh_port: 2299,
                 window: true,
             },

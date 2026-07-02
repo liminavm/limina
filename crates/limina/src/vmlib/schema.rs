@@ -74,7 +74,10 @@ pub struct Identity {
 #[serde(default)]
 pub struct Hardware {
     pub cpus: u8,
-    /// Placed after `cpus` so the Range form (a TOML table) serializes legally.
+    /// How hard the balloon reclaims idle guest memory: disabled / light / moderate
+    /// (default) / aggressive. See `--reclaim`.
+    pub reclaim: crate::balloon_policy::ReclaimMode,
+    /// The maximum; managed VMs always boot dynamic with a [`DYNAMIC_MIN_MIB`] floor.
     pub memory: Memory,
 }
 
@@ -82,42 +85,50 @@ impl Default for Hardware {
     fn default() -> Self {
         Self {
             cpus: 4,
+            reclaim: crate::balloon_policy::ReclaimMode::Moderate,
             memory: Memory::default(),
         }
     }
 }
 
-/// Guest memory: a fixed size (`"4096M"`, bare MiB, `"8G"`) or an M6 dynamic range
-/// (`{ min = "2G", max = "8G" }` → ballooning between the bounds). Strings are parsed
-/// by the same `parse_size_mib` the CLI flags use.
+/// Guest memory: a size string (`"4G"`, `"8GiB"`, bare MiB) that is the **maximum**. Managed
+/// VMs are always dynamic: the balloon may reclaim idle memory down to a fixed
+/// [`DYNAMIC_MIN_MIB`] floor, governed by `hardware.reclaim` (set `reclaim = "disabled"` for
+/// static-like behavior — the balloon then never engages). Parsed by the same `parse_size_mib`
+/// the CLI flags use.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Memory {
-    Fixed(String),
-    Range { min: String, max: String },
-}
+pub struct Memory(pub String);
+
+/// The dynamic-memory floor for managed VMs (MiB): the balloon never shrinks effective guest
+/// RAM below this. Clamped to the configured maximum for tiny VMs.
+pub const DYNAMIC_MIN_MIB: usize = 1024;
 
 impl Default for Memory {
     fn default() -> Self {
-        Memory::Fixed("4096M".into())
+        Memory("4G".into())
     }
 }
 
 impl Memory {
-    /// Parse the CLI's memory string: `MIN..MAX` → a dynamic range, anything else a
-    /// fixed size. Both forms are validated by the same parsers the flags use.
+    /// Validate + normalize a CLI/UI memory string (the maximum; no ranges here — the min is
+    /// always [`DYNAMIC_MIN_MIB`]).
     pub fn parse(s: &str) -> Result<Self> {
-        if let Some((min, max)) = s.split_once("..") {
-            crate::parse_memory_range(s)?; // bounds + ordering validation
-            Ok(Memory::Range {
-                min: min.trim().to_string(),
-                max: max.trim().to_string(),
-            })
-        } else {
-            let mib = crate::parse_size_mib(s)?;
-            anyhow::ensure!(mib > 0, "memory must be > 0: {s:?}");
-            Ok(Memory::Fixed(s.trim().to_string()))
-        }
+        let mib = crate::parse_size_mib(s)?;
+        anyhow::ensure!(mib > 0, "memory must be > 0: {s:?}");
+        Ok(Memory(s.trim().to_string()))
+    }
+
+    /// The maximum in MiB.
+    pub fn max_mib(&self) -> Result<usize> {
+        let mib = crate::parse_size_mib(&self.0).context("vm.toml hardware.memory")?;
+        anyhow::ensure!(mib > 0, "vm.toml hardware.memory must be > 0");
+        Ok(mib)
+    }
+
+    /// The `--memory MIN..MAX` argument this configuration boots with (min clamped to max).
+    pub fn to_memory_arg(&self) -> Result<String> {
+        let max = self.max_mib()?;
+        Ok(format!("{}..{max}", DYNAMIC_MIN_MIB.min(max)))
     }
 }
 
@@ -289,22 +300,11 @@ fn rfc3339_from_unix(secs: i64) -> String {
     format!("{year:04}-{month:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
 }
 
-/// Parse a `Memory` into what the CLI consumes: `(ram_mib, Some("MIN..MAX") for ranges)`.
-/// For a range, `ram_mib` is MAX (what libkrun allocates), matching `--memory` semantics.
+/// Parse a `Memory` into what the CLI consumes: `(ram_mib, "MIN..MAX")`. Managed VMs always
+/// boot dynamic — `ram_mib` is the max (what libkrun allocates) and the range floors at
+/// [`DYNAMIC_MIN_MIB`] (clamped for tiny VMs).
 pub fn memory_to_cli(memory: &Memory) -> Result<(usize, Option<String>)> {
-    match memory {
-        Memory::Fixed(s) => {
-            let mib = crate::parse_size_mib(s).context("vm.toml hardware.memory")?;
-            anyhow::ensure!(mib > 0, "vm.toml hardware.memory must be > 0");
-            Ok((mib, None))
-        }
-        Memory::Range { min, max } => {
-            let range = format!("{min}..{max}");
-            let (_, max_mib) =
-                crate::parse_memory_range(&range).context("vm.toml hardware.memory range")?;
-            Ok((max_mib, Some(range)))
-        }
-    }
+    Ok((memory.max_mib()?, Some(memory.to_memory_arg()?)))
 }
 
 #[cfg(test)]
@@ -345,7 +345,7 @@ mod tests {
         back.validate().unwrap();
         assert_eq!(back.identity.uuid, cfg.identity.uuid);
         assert_eq!(back.hardware.cpus, 4);
-        assert_eq!(back.hardware.memory, Memory::Fixed("4096M".into()));
+        assert_eq!(back.hardware.memory, Memory("4G".into()));
         assert_eq!(back.disks.len(), 1);
         assert_eq!(back.disks[0].path, PathBuf::from("disks/root.raw"));
         assert_eq!(back.networks[0].ssh_port, 0);
@@ -354,27 +354,25 @@ mod tests {
     }
 
     #[test]
-    fn memory_parses_both_forms() {
-        // Fixed, with and without a suffix.
+    fn memory_is_the_maximum_and_boots_dynamic() {
+        // A plain size string is the max; the CLI form floors at DYNAMIC_MIN_MIB.
         let m: Memory = toml::from_str::<Hardware>("memory = \"8G\"")
             .unwrap()
             .memory;
-        assert_eq!(m, Memory::Fixed("8G".into()));
-        assert_eq!(memory_to_cli(&m).unwrap(), (8192, None));
-        // Range table.
-        let m: Memory = toml::from_str::<Hardware>("memory = { min = \"2G\", max = \"8G\" }")
-            .unwrap()
-            .memory;
+        assert_eq!(m, Memory("8G".into()));
         assert_eq!(
             memory_to_cli(&m).unwrap(),
-            (8192, Some("2G..8G".to_string()))
+            (8192, Some("1024..8192".to_string()))
         );
-        // A bad range (min > max) is rejected by the shared parser.
-        let bad = Memory::Range {
-            min: "8G".into(),
-            max: "2G".into(),
-        };
-        assert!(memory_to_cli(&bad).is_err());
+        // Tiny VM: the floor clamps to the max (a degenerate range the policy no-ops on).
+        let m = Memory("512M".into());
+        assert_eq!(
+            memory_to_cli(&m).unwrap(),
+            (512, Some("512..512".to_string()))
+        );
+        // Garbage is rejected.
+        assert!(Memory("8Q".into()).max_mib().is_err());
+        assert!(Memory::parse("0").is_err());
     }
 
     #[test]

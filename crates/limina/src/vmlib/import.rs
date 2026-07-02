@@ -117,6 +117,7 @@ pub fn create(opts: &CreateOpts, dest_dir: &Path) -> Result<VmBundle> {
             hardware: Hardware {
                 cpus: opts.cpus,
                 memory: opts.memory.clone(),
+                ..Hardware::default()
             },
             disks,
             cdroms,

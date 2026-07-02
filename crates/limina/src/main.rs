@@ -159,6 +159,14 @@ struct Cli {
     #[arg(long)]
     balloon_control_socket: Option<PathBuf>,
 
+    /// How hard the balloon reclaims idle guest memory (only meaningful with `--memory`).
+    /// `moderate` (default) and `light` key the squeeze to HOST memory pressure and leave the
+    /// guest a page-cache allowance while the host is fine; `aggressive` squeezes to the floor
+    /// whenever the guest is idle; `disabled` never drives the balloon (free-page reporting
+    /// still returns freed guest memory). See spikes/mem-overhead-2026-07-02 for the numbers.
+    #[arg(long, value_enum, default_value_t = balloon_policy::ReclaimMode::Moderate)]
+    reclaim: balloon_policy::ReclaimMode,
+
     /// Force the software-2D-only GPU (no virglrenderer/venus). Default is the coexist device
     /// (software-2D 2D + Venus 3D). Use for the capture oracle or the local-Terminal GPU-init hang.
     #[arg(long)]
@@ -255,8 +263,9 @@ struct CreateArgs {
     /// Number of vCPUs.
     #[arg(long, default_value_t = 4)]
     cpus: u8,
-    /// Memory: fixed ("4096M", "8G") or a dynamic range ("2G..8G").
-    #[arg(long, default_value = "4096M")]
+    /// Maximum memory (e.g. "4G", "8GiB"; managed VMs are always dynamic with a 1 GiB
+    /// floor — the reclaim mode governs how hard the balloon claws idle memory back).
+    #[arg(long, default_value = "4G")]
     memory: String,
     /// Pin the inbound-SSH host port (default 0 = auto-allocate from 2222 up).
     #[arg(long, default_value_t = 0)]
@@ -291,9 +300,13 @@ struct StartOverrides {
     /// Override the vCPU count for this run.
     #[arg(long)]
     cpus: Option<u8>,
-    /// Override memory for this run: fixed ("8G") or a range ("2G..8G").
+    /// Override the maximum memory for this run (e.g. "8G"; managed VMs are always dynamic
+    /// with a 1 GiB floor — use --reclaim disabled for static-like behavior).
     #[arg(long)]
     memory: Option<String>,
+    /// Override the memory reclaim mode for this run (disabled/light/moderate/aggressive).
+    #[arg(long, value_enum)]
+    reclaim: Option<balloon_policy::ReclaimMode>,
     /// Override the inbound-SSH host port for this run.
     #[arg(long)]
     ssh_port: Option<u16>,
@@ -434,10 +447,7 @@ fn cmd_ls() -> Result<()> {
         };
         match bundle.load() {
             Ok(cfg) => {
-                let mem = match &cfg.hardware.memory {
-                    vmlib::schema::Memory::Fixed(s) => s.clone(),
-                    vmlib::schema::Memory::Range { min, max } => format!("{min}..{max}"),
-                };
+                let mem = cfg.hardware.memory.0.clone();
                 let ssh = match cfg.networks.first() {
                     Some(n) if n.ssh_port != 0 => n.ssh_port.to_string(),
                     Some(_) => "auto".to_string(),
@@ -587,6 +597,7 @@ fn cli_from_definition(
         display_control_socket: None,
         memory,
         balloon_control_socket: None,
+        reclaim: ov.reclaim.unwrap_or(cfg.hardware.reclaim),
         gpu_software_2d: cfg.display.gpu == GpuMode::Software2d,
         net,
         net_log: None,
@@ -624,16 +635,25 @@ fn run_vm(cli: Cli) -> Result<()> {
         })
     });
 
-    // The PSI autoballoon policy runs in the supervisor when a range + socket both exist: it
-    // consumes guest MemPressure over the control plane and drives the balloon target.
+    // The PSI autoballoon policy runs in the supervisor when a range + socket both exist (and
+    // reclaim isn't disabled): it consumes guest MemPressure over the control plane, samples
+    // host memory pressure, and drives the balloon target per the reclaim mode.
     let balloon_policy = match (mem_range, balloon_socket.clone()) {
-        (Some((min, max)), Some(sock)) => {
-            log::info!("dynamic memory: {min}..{max} MiB (balloon policy shrinks toward {min})");
+        (Some((min, max)), Some(sock)) if cli.reclaim != balloon_policy::ReclaimMode::Disabled => {
+            log::info!(
+                "dynamic memory: {min}..{max} MiB (reclaim {:?})",
+                cli.reclaim
+            );
             Some(balloon_policy::BalloonPolicy::new(
                 min as u32 * balloon_policy::PAGES_PER_MIB,
                 max as u32 * balloon_policy::PAGES_PER_MIB,
+                cli.reclaim,
                 sock,
             ))
+        }
+        (Some((min, max)), Some(_)) => {
+            log::info!("dynamic memory: {min}..{max} MiB (reclaim disabled — balloon idle)");
+            None
         }
         _ => None,
     };
@@ -984,15 +1004,25 @@ fn parse_memory_range(s: &str) -> Result<(usize, usize)> {
     Ok((min, max))
 }
 
-/// Parse a memory size into MiB. Optional `G`/`M` suffix (case-insensitive); a bare number is MiB.
+/// Parse a memory size into MiB. Optional suffix, case-insensitive: `G`/`GB`/`GiB` (all GiB —
+/// RAM sizes are binary) or `M`/`MB`/`MiB`; a bare number is MiB.
 fn parse_size_mib(s: &str) -> Result<usize> {
     let s = s.trim();
-    let (num, mult) = if let Some(n) = s.strip_suffix(['G', 'g']) {
+    let lower = s.to_ascii_lowercase();
+    let (num, mult) = if let Some(n) = lower
+        .strip_suffix("gib")
+        .or_else(|| lower.strip_suffix("gb"))
+        .or_else(|| lower.strip_suffix('g'))
+    {
         (n, 1024)
-    } else if let Some(n) = s.strip_suffix(['M', 'm']) {
+    } else if let Some(n) = lower
+        .strip_suffix("mib")
+        .or_else(|| lower.strip_suffix("mb"))
+        .or_else(|| lower.strip_suffix('m'))
+    {
         (n, 1)
     } else {
-        (s, 1)
+        (lower.as_str(), 1)
     };
     let v: usize = num
         .trim()
@@ -1227,6 +1257,14 @@ mod tests {
     fn memory_range_parses_suffixes_and_bare_mib() {
         assert_eq!(parse_memory_range("2G..12G").unwrap(), (2048, 12288));
         assert_eq!(parse_memory_range("512M..4096").unwrap(), (512, 4096));
+        // GB/GiB/MB/MiB spellings (all binary), any case.
+        assert_eq!(parse_size_mib("8GB").unwrap(), 8192);
+        assert_eq!(parse_size_mib("8GiB").unwrap(), 8192);
+        assert_eq!(parse_size_mib("8gib").unwrap(), 8192);
+        assert_eq!(parse_size_mib("512MB").unwrap(), 512);
+        assert_eq!(parse_size_mib("512MiB").unwrap(), 512);
+        assert_eq!(parse_size_mib(" 4 G ").unwrap(), 4096);
+        assert!(parse_size_mib("8QB").is_err());
         assert_eq!(parse_memory_range("2048..12288").unwrap(), (2048, 12288));
         assert_eq!(parse_memory_range(" 1g .. 2g ").unwrap(), (1024, 2048));
         // min must be > 0 and <= max
@@ -1462,10 +1500,8 @@ mod tests {
             },
             hardware: Hardware {
                 cpus: 6,
-                memory: Memory::Range {
-                    min: "2G".into(),
-                    max: "8G".into(),
-                },
+                memory: Memory("8G".into()),
+                ..Hardware::default()
             },
             disks: vec![
                 DiskEntry {
@@ -1504,8 +1540,12 @@ mod tests {
 
         let cli = cli_from_definition(&cfg, &bundle, &StartOverrides::default()).unwrap();
         assert_eq!(cli.cpus, 6);
-        assert_eq!(cli.ram_mib, 8192, "range MAX is what libkrun allocates");
-        assert_eq!(cli.memory.as_deref(), Some("2G..8G"));
+        assert_eq!(cli.ram_mib, 8192, "the max is what libkrun allocates");
+        assert_eq!(
+            cli.memory.as_deref(),
+            Some("1024..8192"),
+            "managed VMs always boot dynamic, floored at 1 GiB"
+        );
         assert_eq!(
             cli.disk,
             vec![
@@ -1551,7 +1591,7 @@ mod tests {
                 uuid: "u".into(),
                 created: "t".into(),
             },
-            hardware: Hardware::default(), // cpus 4, 4096M fixed
+            hardware: Hardware::default(), // cpus 4, 4G max
             disks: vec![],
             cdroms: vec![],
             networks: vec![NetworkEntry {
@@ -1578,7 +1618,11 @@ mod tests {
         assert!(!cli.window, "--no-window override beats window=true");
         assert_eq!(cli.cpus, 2);
         assert_eq!(cli.ram_mib, 1024);
-        assert_eq!(cli.memory, None, "fixed override → no balloon range");
+        assert_eq!(
+            cli.memory.as_deref(),
+            Some("1024..1024"),
+            "a max at the floor degrades to a no-op range (room 0)"
+        );
         assert_eq!(cli.ssh_port, Some(2444));
         assert_eq!(cli.firmware, Some(PathBuf::from("/fw.fd")));
         assert_eq!(cli.shutdown_grace_secs, 5);
@@ -1616,14 +1660,14 @@ mod tests {
 
         // create with an import.
         let cli = Cli::try_parse_from([
-            "limina", "create", "dev", "--disk", "/i/f.raw", "--memory", "2G..8G",
+            "limina", "create", "dev", "--disk", "/i/f.raw", "--memory", "8G",
         ])
         .unwrap();
         match cli.cmd {
             Some(Cmd::Create(a)) => {
                 assert_eq!(a.name, "dev");
                 assert_eq!(a.disk, Some(PathBuf::from("/i/f.raw")));
-                assert_eq!(a.memory, "2G..8G");
+                assert_eq!(a.memory, "8G");
                 assert!(!a.in_place);
                 assert_eq!(a.ssh_port, 0);
             }

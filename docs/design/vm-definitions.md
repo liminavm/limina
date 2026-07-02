@@ -59,7 +59,7 @@ Fedora.liminavm/
   the two-tier posture). Unknown *required* semantics bump `config_version`.
 - **The CLI keeps working flag-only.** No definition required: today's invocation shape
   stays as the "ephemeral VM" path (harness, spikes, CI depend on it). Flags also override
-  definition values when both are given (`limina start fedora --window --memory 2G..8G`),
+  definition values when both are given (`limina start fedora --window --memory 8G`),
   which is how one-off experiments avoid editing the file.
 
 ## 3. `vm.toml` schema (v1 sketch)
@@ -74,7 +74,8 @@ created = "2026-07-01T12:00:00Z"
 
 [hardware]
 cpus   = 4
-memory = { min = "2G", max = "8G" }   # M6 dynamic range; a bare string = fixed size
+memory = "8G"        # the MAXIMUM; managed VMs always boot dynamic with a 1 GiB floor
+reclaim = "moderate" # disabled|light|moderate|aggressive (how hard idle memory is clawed back)
 
 [[disk]]                        # ordered — attach order IS device order (M10)
 path  = "disks/root.raw"        # relative = inside the bundle

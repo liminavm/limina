@@ -919,17 +919,14 @@ impl CenterController {
             }
         };
 
-        let mem_now = match &cfg.hardware.memory {
-            vmlib::schema::Memory::Fixed(s) => s.clone(),
-            vmlib::schema::Memory::Range { min, max } => format!("{min}..{max}"),
-        };
+        let mem_now = cfg.hardware.memory.0.clone();
         let ssh_now = cfg.networks.first().map(|n| n.ssh_port).unwrap_or(0);
 
         let alert = NSAlert::new(mtm);
         alert.setMessageText(&NSString::from_str(&format!("Configure “{}”", row.name)));
         alert.setInformativeText(&NSString::from_str(
-            "Memory: a fixed size (\"4096M\", \"8G\") or a dynamic range (\"2G..8G\"). \
-             SSH port 0 = pick automatically.",
+            "Memory: the maximum (\"4G\", \"8GiB\"); idle memory is reclaimed down to a \
+             1 GiB floor per the reclaim mode. SSH port 0 = pick automatically.",
         ));
         alert.addButtonWithTitle(&NSString::from_str("Save"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));

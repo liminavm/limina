@@ -595,3 +595,35 @@ limina's `phys_footprint` drop back toward 2G as pages are madvised back to macO
 `patches/libkrun/0034-*` (inflate/deflate + `DEFLATE_ON_OOM` + `BalloonControlHandle` +
 `Vmm` accessor). Steps 3–4 carry **no** libkrun patch (limina + guest only). Re-export the
 series per `patches/libkrun/README.md`.
+
+## Addendum (2026-07-02): reclaim modes — host-pressure-driven squeeze
+
+`spikes/mem-overhead-2026-07-02` Run D quantified what the always-squeeze-on-idle policy costs
+the guest: full inflation permanently evicts the guest page cache — warm 4 KiB random reads go
+852k IOPS / 1 µs → 13.3k IOPS / 75 µs (**64×**; metadata walks 4×; sequential re-reads are
+rescued by the host UBC since we run buffered) — to buy ~2–4 GB of host RAM the host may not
+even need. So the squeeze is now keyed to **host** memory pressure
+(`kern.memorystatus_vm_pressure_level`), selected by `--reclaim` / vm.toml
+`hardware.reclaim` (`crates/limina/src/balloon_policy.rs::ReclaimMode`):
+
+| mode | host normal | host warn | host critical |
+|------|-------------|-----------|---------------|
+| `disabled`   | never engage (FRQ still returns freed guest memory) | — | — |
+| `light`      | no balloon (target drifts to 0) | leave 25% of max (≥2 GiB) as cache | full squeeze |
+| `moderate` (default) | leave 12.5% of max (≥1 GiB) as cache | full squeeze | full squeeze |
+| `aggressive` | full squeeze whenever the guest is idle (the original Step-4 policy, host pressure ignored) | 〃 | 〃 |
+
+Mechanics: guest-pressure release-to-0 is unchanged and immediate in every mode; inflation
+still requires an idle guest (PSI `some ≤ 2%`) and is allowance-bounded — the balloon may only
+take `MemAvailable − allowance`, and deflates by the shortfall if the guest dips below the
+allowance while idle. A 16 MiB dead band prevents target dribble. Host pressure is sampled per
+guest report and injected into the pure `decide()` (unit-tested per mode/pressure).
+
+### Managed VMs are always dynamic (2026-07-02, follow-up)
+
+vm.toml's `hardware.memory` is now **just the maximum** (`"8G"`, `"8GiB"`, bare MiB — GB/GiB/
+MB/MiB spellings all binary); every managed VM boots `--memory 1024..MAX`
+(`schema::DYNAMIC_MIN_MIB`, clamped to max for tiny VMs — min == max degrades to a no-op
+policy). `reclaim = "disabled"` is the static-like escape hatch (balloon idle, FRQ still
+active). The flat CLI keeps explicit `--ram-mib` / `--memory MIN..MAX` for tests and
+special cases.
