@@ -10,7 +10,8 @@ and vrend (GL via zink-on-KK).
 - **`UPSTREAM_BASE`** — the upstream virglrenderer commit the series applies onto
   (`2048dfb`, from https://gitlab.freedesktop.org/virgl/virglrenderer.git).
 - **`NNNN-*.patch`** — our patches, in order. Author with `git format-patch` from the vendored
-  checkout (commit on the `gkvm/*` branch first), output here.
+  checkout (commit on the `limina/*` branch first — currently `limina/macos-venus`; the old
+  `gkvm/*` branch is the pre-2026-07-01 history, kept for archaeology), output here.
 
 ## Apply onto a fresh checkout
 
@@ -23,28 +24,49 @@ This checks out `third_party/virglrenderer` at `UPSTREAM_BASE` and `git am`s the
 
 ## Add / update a patch
 
-1. Edit `third_party/virglrenderer` directly, commit on the `gkvm/*` branch (one logical change
+1. Edit `third_party/virglrenderer` directly, commit on the `limina/*` branch (one logical change
    per commit) with a `Co-Authored-By` trailer.
 2. Re-export the whole series: `rm patches/virglrenderer/*.patch && git -C third_party/virglrenderer
    format-patch <UPSTREAM_BASE>..HEAD -o "$PWD/patches/virglrenderer"`.
 3. Verify it reconstructs HEAD (throwaway worktree): `git -C third_party/virglrenderer worktree add
    --detach /tmp/vg <BASE> && git -C /tmp/vg am patches/virglrenderer/*.patch` → the tree must equal
-   HEAD's; then `git -C third_party/virglrenderer worktree remove --force /tmp/vg`.
+   HEAD's (`git -C /tmp/vg diff <branch>` empty — **this check exists because a 65k-line editor-index
+   blob once rode a patch unnoticed**); then `git -C third_party/virglrenderer worktree remove
+   --force /tmp/vg`.
 4. Commit the regenerated `.patch` files to the limina repo.
 
-## The series (26 patches) — themes
+## The series (21 patches) — themes
 
 - **macOS/venus enablement (0001-0002):** `shm_open` O_CLOEXEC + host-unsupported-ext filtering +
   `get_map_ptr`; kqueue eventfd emulation + fence-eventfd-by-value in same-process mode.
-- **Zero-copy IOSurface scanout (0003-0011, 0015, 0017-0019, 0022-0023):** IOSurface-backed
+- **Zero-copy IOSurface scanout (0003-0009, 0011, 0013-0015, 0017-0018):** IOSurface-backed
   `MTLTexture`/exportable scanout memory, fix-A "external" scanout image backing + modifier
   normalization, render-server proxy IOSurface-id threading, `#28` share-HOST_VISIBLE-by-pointer,
   KosmicKrisp winsys, cross-context dmabuf import, capture-sink readback.
-- **Correctness fixes (0006, 0012-0014, 0021, 0024):** venus ring idle/notify handshake — the
-  `#30` timed-wait (0006) and its proper root-cause replacement, the seq_cst idle-check tail load
-  that lets the ring block at idle with ~0 host wakeups (0024, see
-  `docs/design/venus-ring-idle-wakeups.md`); MoltenVK uint8 index-conversion hide; `#8/#31` present
-  fences on reserved ring 63.
-- **vrend/GL tier (0025-0026):** WebRender/Firefox tile-displacement tear fix
+- **Correctness fixes (0010, 0016, 0019):** the `__APPLE__` index_type_uint8 hide (Metal-backend
+  uint8 index conversion corrupts quads — KK also emulates it, never re-validated: probe before
+  dropping); `#8/#31` present fences on reserved ring 63; the seq_cst idle-check tail load that
+  lets the ring block at idle with ~0 host wakeups (0019, see
+  `docs/design/venus-ring-idle-wakeups.md`).
+- **vrend/GL tier (0020-0021):** WebRender/Firefox tile-displacement tear fix
   (`GL_MAP_INVALIDATE_BUFFER_BIT` for guest orphan refills); no-GBM surfaceless EGL winsys so the
   virgl/GL tier comes up on GBM-less hosts (zink-on-KK).
+
+## 2026-07-01 series cleanup (26 → 21)
+
+Re-exported from the rebuilt `limina/macos-venus` branch (full review memo,
+`docs/reviews/2026-07-01-full-review.md` Part III). End tree verified identical to the old
+series except two deliberate removals:
+
+- **Squashed:** the `virgl_context_blob` zero-init fixup into its parent (old 0008→0007); the
+  index_type_uint8 hide + `__APPLE__` gate + root-cause docs into one patch (old 0012–0014 →
+  new 0010) — **also stripping 262 accidental `.cache/clangd/index/*.idx` editor blobs
+  (~65k patch lines) old 0014 carried**; the interim #30 2 ms timed-wait (old 0006) folded
+  into its root-cause replacement (new 0019 — the seq_cst fix reverts it anyway).
+- **Dropped:** the `GKVM_RING_RELAX_US` backoff-cap experiment (old 0020) — exonerated by its
+  own A/B ("no change at 10k aquarium"); nothing outside the patch referenced the env var.
+- **Still MoltenVK-era but deliberately KEPT** (entangled with the live KK path; retire only
+  with re-validation, ideally during upstreaming): old 0004/0005 (fix-A backing — introduced
+  the `mtl_iosurface` tracking KK's 0011 uses), old 0010 (now 0008, MVK `useIOSurface`), old
+  0018 (now 0014, the IFP2 synthesize gate), and the uint8 hide (KK advertises the extension
+  too — `spikes/venus-draw-probe/RESULTS.md:375`).

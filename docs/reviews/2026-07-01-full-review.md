@@ -613,8 +613,10 @@ privileged helper, Tailscale.
 
 - **Stock-tier guest Vulkan fails at the venus ICD instead of degrading to lavapipe**
   (hardening-backlog §M4 residue) — violates the graceful-degradation floor.
-- **No keyboard at GRUB / dracut emergency shell** — fix = virtio-input EFI driver in
-  the GOP firmware (the driver is already vendored under `patches/edk2/`).
+- ~~**No keyboard at GRUB / dracut emergency shell**~~ — **CORRECTION (same day):** this
+  was already fixed & user-validated 2026-06-30 (commit `3210a36`, VirtioKeyboardDxe +
+  libkrun 0037); the backlog item the review relied on was stale and has been updated.
+  Residual: `virtio_input` in a *stock* guest's initramfs.
 
 ## Risk ranking (vs "replace Parallels")
 

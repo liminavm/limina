@@ -248,16 +248,14 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   tree exists; otherwise a `limina-arm-16k.service` arms it after a plain stock boot has built it (so
   the 16k never boots onto a still-v1 fs). **NEEDS end-to-end validation on a real v1-btrfs guest**
   (only the awk + `bash -n` are checked so far).
-- **No keyboard at GRUB / early boot / dracut emergency shell** (open, real recovery gap — found
-  2026-06-29) — limina's keyboard only comes alive once the full guest virtio-input path is up. At
-  **GRUB** (the GOP firmware's EFI console almost certainly lacks a virtio-input driver) and in the
-  **dracut emergency shell** (the stock initramfs didn't include `virtio_input`) the user can type
-  *nothing*, so a failed boot is unrecoverable from inside the VM and you can't interrupt GRUB to pick
-  another kernel. The install-safety fix above (auto-fallback + forcing `virtio_input` into the
-  enhanced initramfs) works *around* it, but the real fix is two-fold: (a) add a virtio-input EFI
-  driver to the GOP firmware (`scripts/build-krun-efi.sh`) so GRUB sees the keyboard, and (b) ensure
-  `virtio_input` is in every initramfs. Needed for any interactive GRUB use (kernel pick, cmdline
-  edit) and for self-recovery.
+- ~~**No keyboard at GRUB / early boot / dracut emergency shell**~~ — **(a) FIXED & user-validated
+  2026-06-30** (commit `3210a36`): VirtioKeyboardDxe vendored into the GOP firmware + ConIn wiring
+  (`patches/edk2/`), plus the libkrun virtio-input Inactive-on-reset fix (patch 0037) so desktop
+  input survives the firmware→kernel handoff. The keyboard works at the GRUB menu; the RELEASE GOP
+  firmware is rebuilt. **(b) partially open:** `virtio_input` is forced into the *enhanced*
+  initramfs by `install-enhanced.sh`; a *stock* initramfs may still lack it → the dracut emergency
+  shell on a never-enhanced guest can still be keyboard-less. Small residual, revisit with the
+  import tooling.
 - **No Parallels-import tooling** (open) — converting an existing Parallels disk (merge snapshots →
   `qemu-img -f parallels` → raw, the `virtio_mmio` initramfs regen, `console=` GRUB args, Tools
   removal) is documented in the runbook but not scripted. A guided `import` helper would de-risk the

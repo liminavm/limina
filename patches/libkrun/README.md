@@ -24,103 +24,221 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
 2. Re-export: `git -C third_party/libkrun format-patch <base>.. -o "$PWD/patches/libkrun"`.
 3. Commit the regenerated `.patch` files to the limina repo.
 
-## Current patches
+## The series (40 patches) — by theme
 
-- **0001 — software 2D virtio-gpu scanout for GL-less hosts (no renderer init).** libkrun
-  maps `RESOURCE_CREATE_2D` onto a virgl GL render target, which has no host context on
-  macOS, so 2D resource creation fails and nothing reaches the display. Shadows 2D
-  resources in host CPU memory (create/attach-backing/transfer/set-scanout/flush) without
-  touching rutabaga — a working software scanout baseline (fbcon, EFI GOP, simpledrm).
-  Adds an opt-in software-2D-only device mode (`set_gpu_software_2d`) that skips renderer
-  init entirely: `rutabaga` stays `None` (renderer-backed 3D/blob/context/capset/fence
-  commands degrade to ERR_UNSPEC), and the device advertises a plain 2D virtio-gpu (no
-  VIRGL/BLOB/CONTEXT_INIT, 0 capsets) so the guest never issues 3D. This removes the
-  virglrenderer/Metal dependency (and its init cost/hangs) from limina's Tier-1 display
-  floor. With the mode off, renderer init and the accelerated Venus/blob/3D path are
-  unchanged.
-- **0002 — PL011 drops serial output on WouldBlock instead of erroring.** The serial TX
-  path runs on the vCPU thread; a non-blocking sink (e.g. a pty with no reader) returns
-  WouldBlock on a full buffer. Drop the byte rather than stall the vCPU or error per byte.
-- **0003 — virtio-console `ConsoleInOut` port + quiet raw-mode ENOTTY.** Adds a
-  `PortConfig::ConsoleInOut` that wires non-tty fds (a file + a FIFO) as a *console* port
-  (so the guest exposes it as `hvc0`, not a `/dev/vport` data port) with no `isatty`
-  gating; downgrades the terminal raw-mode ENOTTY on a non-tty fd from error to debug.
-- **0004 — HVF support 16-bit (halfword) MMIO writes.** The aarch64 data-abort write path
-  matched only len 1/4/8 and `panic!`ed on len=2, killing the vCPU thread. The ARM PL011
-  driver uses 16-bit `writew`/`readw`; the read side already handled len=2. Add the write
-  case. (Was the real cause of the apparent "PL011 amba-probe deadlock".)
-- **0005 — FDT mark PL011 serial node as arm,primecell.** Lets the guest's AMBA layer bind
-  `amba-pl011` and expose a real bidirectional `/dev/ttyAMA0` (the interactive serial debug
-  console), instead of PL011 being an earlycon/output-only stdout-path. Safe given 0004.
-- **0006 — virtio-mmio default ready queue to max_size when QueueNum unset.** EDK2's
-  VirtioGpuDxe over virtio-mmio marks its control queue ready (reg 0x44) without ever
-  programming QueueNum (reg 0x38), so our `size`-0 init made `actual_size()`/`pop()` ignore
-  the avail ring and the GOP firmware hung in BDS. QEMU tolerates this (vring.num defaults to
-  max); we snap a ready-but-unsized queue to `max_size` (the ring the driver allocated from
-  QueueNumMax). Compliant drivers (blk/rng/net/console) program QueueNum and are unaffected.
-  Unblocked the Track B GOP graphical boot console (VirtioGpuDxe now produces a 1280x800 GOP).
-- **0007 — virtio-gpu stop the worker thread on device reset.** The gpu worker ran an
-  unbounded blocking loop on the control eventfd with no stop path, and the device had no
-  `reset()`. On guest re-init (EFI→kernel hand-off, driver rebind, reboot) the stale worker
-  kept running on the freed firmware-era ring, busy-looping `pop()`→None on garbage and
-  pinning a CPU so the kernel's fresh virtio-gpu driver never presented. Adopt the
-  block/input/fs pattern: worker epolls control + a stop eventfd and exits when signalled;
-  the device holds the JoinHandle + stop fd and `reset()` signals+joins then goes Inactive
-  (returns true), so re-activation spawns a clean worker on the new rings. With 0006+0007 the
-  GOP boot hands off to the kernel and the live console renders (verified: 157 frames).
-  **Superseded by 0022** for the reset lifecycle: stop+join dropped the renderer, which
-  can't be re-init'd (singleton), so the worker now persists instead of being joined.
-- **0022 — virtio-gpu persist the renderer across device reset (singleton fix).**
-  `virgl_renderer_init` is a process-global, init-once, thread-bound singleton (a successful
-  init leaves a static `INIT_ONCE` set forever; `VirglRenderer::drop` runs
-  `virgl_renderer_cleanup` but never clears it). 0007's stop+join dropped `VirtioGpu` →
-  `Rutabaga` → cleanup AND left `INIT_ONCE` set, so the next `activate()` re-ran init →
-  `AlreadyInUse` → "degrading to software-2D". Every guest-driven reset (EFI→kernel hand-off,
-  driver unbind/rebind, reboot) therefore killed venus → llvmpipe — the blocker for the GOP
-  boot console and the EFI-booted enhanced tier. Now the gpu worker is spawned ONCE (first
-  activate) and lives for the whole VMM process (renderer init'd once, on one thread, never
-  dropped); `activate()`/`reset()` message it (`WorkerCmd::Activate/Deactivate/Shutdown` over
-  an mpsc channel, woken via the stop eventfd) to bind/unbind the per-activation transport.
-  The long-lived fence handler reaches the current queue/mem/interrupt through a shared
-  `Arc<Mutex<Option<GpuActivation>>>` swapped on activate and cleared on reset; reset drops
-  the session bookkeeping (resources/sw2d/scanouts + fence descriptors indexing the freed
-  queue) but keeps rutabaga + the display backend; `Gpu::drop` joins the worker. Verified:
-  limina `venus_reset` (unbind/rebind → venus still enumerates) + the full boot suite green.
+Patches are listed in series order within each theme. Full rationale lives in each
+patch's commit message; this is the map.
+
+### HVF / vCPU correctness
+
+- **0004 — HVF: support 16-bit (halfword) MMIO writes.** The aarch64 data-abort write
+  path matched only len 1/4/8 and `panic!`ed on len=2, killing the vCPU thread. The PL011
+  driver uses 16-bit `writew` — the missing case looked like a guest "deadlock".
 - **0023 — distinguish guest reboot (PSCI SYSTEM_RESET) from power-off.** HVF collapsed
-  `SYSTEM_OFF` and `SYSTEM_RESET` into one `VcpuExit::Shutdown`, so a guest reboot exited the
-  worker with `FC_EXIT_CODE_OK` — indistinguishable from a clean power-off, so limina's supervisor
-  tore the VM down on reboot. Decode `SYSTEM_RESET` into a distinct `VcpuExit::Reset` →
-  `VcpuEmulation::Rebooted` → exit with a new `FC_EXIT_CODE_REBOOT` (125). libkrun stays
-  single-shot (a reboot still exits the process); the distinct code lets the supervisor relaunch
-  the worker for a fresh boot while keeping the VM's host-side resources (gvproxy, control plane)
-  alive. Verified: limina `reboot::guest_reboot_relaunches_the_worker` (a guest `systemctl reboot`
-  comes back with a fresh boot id over the same NAT) + the full boot suite green.
-- **0024 — implement virtio-gpu `transfer_read` (`TRANSFER_FROM_HOST_3D`).** The readback path
-  was a `panic!("unimplemented")` stub: venus (zero-copy host-visible blobs) never reads back, so
-  upstream never needed it. But the coexist device drives virgl/vrend for stock 4 KiB guests, and
-  vrend's copy model **does** read back — any `glReadPixels` / `glxinfo` / WebGL readback issues
-  `TRANSFER_FROM_HOST_3D`. The panic killed the GPU worker thread, after which every later
-  virtio-gpu command blocked on a fence that never completed and the whole guest appeared to hang.
-  Delegate to rutabaga's `transfer_read` exactly as `transfer_write` does (the scanout 2D readback
-  path already calls it); `buf` is `None` on the common path (rutabaga copies the host resource
-  into the resource's attached guest iovecs), a provided `VolatileSlice` becomes an `IoSliceMut`;
-  software-2D resources already mirror the guest backing so readback is a no-op. Never panic.
-  Sibling to 0014 (the same fix for the scanout readback path). Verified: a stock F44 guest runs
-  `glxinfo` (renderer `virgl (zink … KosmicKrisp)`) with zero GPU-worker panics — pre-fix it
-  wedged the GPU on the first readback.
-- **0031 — map `KRUN_DISPLAY_ERR_METHOD_UNSUPPORTED` (-2) in `into_rust_result!`.** The macro
-  mapped -1/-3/-4 but let -2 fall through to the catch-all, so a backend returning
-  `MethodNotSupported` was misreported as `InternalError`. Callers that branch on
-  `MethodNotSupported` to take a fallback (virtio-gpu `present_surface` → readback, for a
-  display sink with no zero-copy present such as the headless capture sink) never took it.
-- **0032 — virtio-gpu read the venus scanout IOSurface for the headless capture sink.** A venus
-  `SET_SCANOUT_BLOB` scanout presents zero-copy via `present_surface`; a sink with no zero-copy
-  path falls back to readback. But venus blobs are host-visible zero-copy — rutabaga's
-  `transfer_read` EINVALs on them — so `read_2d_resource` yielded a blank frame. Read the
-  presented IOSurface's shared storage directly: a new `Rutabaga::read_iosurface`
-  (`RutabagaComponent` trait method, default `Unsupported`, implemented by the virgl/venus
-  component over virglrenderer's new `virgl_renderer_resource_read_iosurface` export) feeds the
-  readback path for an IOSurface-backed scanout. The zero-copy window present path and the
-  sw-2D / non-venus 3D readback paths are unchanged. Needs 0031 (so the -2 fall-through fires)
-  and virglrenderer patch 0002 (the export). Verified: `venus_desktop_pixel_verifies_through_host_capture`
-  flipped 187 colors/0.99-dominant (blank) → 17369 colors/0.39-dominant (real desktop).
+  both into one `Shutdown` exit, so a guest reboot looked like a clean power-off and the
+  supervisor tore the VM down. Decode SYSTEM_RESET → `FC_EXIT_CODE_REBOOT` (125) so limina
+  relaunches the worker while keeping host-side resources (gvproxy, control plane) alive.
+- **0028 — HVF: don't panic the worker on unhandled guest traps.** Unknown PSCI/SMC
+  functions now return `PSCI_RET_NOT_SUPPORTED` (spec behavior; the guest degrades
+  gracefully); every other unhandled trap logs and tears down cleanly instead of SIGABRT.
+  Load-bearing for the stock-guest compatibility floor.
+- **0040 — hvf vtimer: multiply before dividing so the WFI timeout isn't ~1.6% short.**
+  The tick→ns conversion floored 1e9/cntfrq first, so every timed WFI woke early and the
+  guest re-WFI'd — two host wakeups per guest timer deadline. u128 math, idle-wakeup fix.
+
+### Serial & console
+
+- **0002 — PL011 drops serial output on WouldBlock instead of erroring.** A non-blocking
+  sink (pty with no reader) returned WouldBlock per byte, flooding the log from the vCPU
+  thread. Serial output is lossy when nothing drains it; the vCPU must not stall on it.
+- **0003 — virtio-console `ConsoleInOut` port + quiet raw-mode ENOTTY.** A `PortConfig`
+  that wires non-tty fds (file + FIFO) as a real *console* port (guest sees `hvcN`, not a
+  `/dev/vport` data port) — how the test harness drives a bidirectional console. Also
+  demotes the raw-mode ENOTTY on a non-tty fd from error to debug.
+- **0005 — FDT: mark the PL011 serial node `arm,primecell`.** Lets the guest AMBA layer
+  bind `amba-pl011` and expose a real bidirectional `/dev/ttyAMA0` (the interactive serial
+  debug console) instead of an output-only earlycon. Safe given 0004.
+
+### virtio-mmio transport
+
+- **0006 — default a ready queue to max_size when QueueNum is unset.** EDK2's
+  VirtioGpuDxe marks its queue ready without ever programming QueueNum, so our size-0
+  init made `pop()` ignore the avail ring and the GOP firmware hung in BDS. Match QEMU's
+  tolerance: snap a ready-but-unsized queue to max_size. Unblocked the graphical boot
+  console; compliant drivers unaffected.
+
+### virtio-gpu: software-2D scanout + coexist
+
+- **0001 — software 2D virtio-gpu scanout for GL-less hosts (no renderer init).** Upstream
+  maps `RESOURCE_CREATE_2D` onto a virgl GL render target, which has no host context on
+  macOS. Shadow 2D resources in host CPU memory instead (create/attach-backing/transfer/
+  set-scanout/flush) — the Tier-1 display floor (fbcon, EFI GOP, simpledrm) — plus an
+  opt-in renderer-less device mode (`set_gpu_software_2d`) that advertises a plain 2D GPU.
+- **0008 — hardware cursor (service the cursor queue).** Upstream dropped the cursor queue
+  and `panic!`ed on UPDATE/MOVE_CURSOR, forcing guests to composite the cursor into the
+  scanout (flicker on every pointer move). Adds optional `set_cursor`/`move_cursor`
+  krun-display vtable methods; limina renders the cursor as a separate overlay layer.
+- **0010 — coexist: route fences by ring + graceful renderer fallback.** Global-ring
+  fences (2D/software-2D, incl. the firmware GOP) complete synchronously — a venus-only
+  rutabaga can't fence ctx 0, and routing them there wedged boot at the firmware GOP. On
+  renderer-init failure degrade to software-2D (rutabaga = None) instead of panicking.
+- **0015 — treat cursor resource pixels as alpha-carrying despite XRGB dumb format.** The
+  guest kernel hardcodes XRGB for dumb BOs while GNOME writes real ARGB into the cursor;
+  promote X formats (as QEMU does) so the overlay isn't an opaque black rectangle.
+- **0024 — implement `transfer_read` (TRANSFER_FROM_HOST_3D).** Was a `panic!` stub —
+  venus never reads back, but the coexist device drives vrend for stock 4 KiB guests and
+  vrend's copy model does (`glReadPixels`, `glxinfo`, WebGL). The panic killed the GPU
+  worker and hung the whole guest. Delegate to rutabaga like `transfer_write`; never panic.
+- **0027 — present the scanout rect at the resource's stride (de-shear).** The scanout
+  resource can be wider than the visible rect (mutter pads its framebuffer); a flat-blob
+  copy sheared the desktop into diagonal stripes on non-stride-aligned window resizes.
+  Extract just the SET_SCANOUT rect at the resource's own stride; unit-tested.
+- **0029 — advertise only the capsets the renderer backs.** The device hardcoded
+  num_capsets=5 while rutabaga registered all nine; guests probed capsets we can't serve
+  (noisy EINVALs). Derive the capset mask from virgl_flags — venus-only configs now
+  advertise exactly one capset.
+- **0030 — rutabaga: tolerate coexist 2D-resource attach/detach on a 3D context.** In
+  coexist mode the 2D scanout resources live in the software-2D path, but the guest still
+  issues CTX_ATTACH/DETACH_RESOURCE for them against its 3D context. Treat the
+  missing-endpoint case as an idempotent no-op — zero virtio_gpu dmesg errors at boot.
+
+### virtio-gpu: zero-copy IOSurface present (venus)
+
+- **0012 — map blob via `map_ptr` for upstream virglrenderer 1.3.0.** The blob-map path
+  gated on the old slp bottle's `APPLE` fd type, which upstream 1.3.0 doesn't produce, so
+  venus host-visible blobs were never hv_vm_map'd into the guest. `map_ptr()` is itself
+  the gate; this is what lets the venus feedback/scanout blobs reach the guest.
+- **0013 — implement SET_SCANOUT_BLOB as zero-copy IOSurface present.** Previously a
+  panic — mutter's first page-flip killed the worker. Plumbs a cached iosurface_id on
+  RutabagaResource (from the virgl fork's `virgl_renderer_resource_get_iosurface_id`
+  export) and adds an optional `present_surface` vtable method; falls back to readback
+  for backends without zero-copy.
+- **0014 — don't panic the GPU worker on scanout-readback failure (#30).**
+  `read_2d_resource` unwrap'd `transfer_read`, which EINVALs on a blob/venus scanout;
+  mutter's secondary-GPU copy fallback hit exactly that and wedged the guest. Propagate
+  the error — `flush_resource` already handles it gracefully.
+- **0031 — map `KRUN_DISPLAY_ERR_METHOD_UNSUPPORTED` (-2) in `into_rust_result!`.** The
+  macro let -2 fall through to the catch-all, so `MethodNotSupported` was misreported as
+  `InternalError` and callers never took their fallback (present_surface → readback).
+- **0032 — read the venus scanout IOSurface for the headless capture sink.** Venus blobs
+  are host-visible zero-copy, so rutabaga's `transfer_read` EINVALs and captured frames
+  were blank. New `Rutabaga::read_iosurface` (over the virgl fork's
+  `virgl_renderer_resource_read_iosurface` export) feeds the readback path for
+  IOSurface-backed scanouts. Needs 0031 and virglrenderer's export.
+
+### virtio-gpu: fence-accurate present chain (#8/#31)
+
+- **0017 — fence-accurate scanout presents (`LIMINA_FENCE_PRESENT`).** A zero-copy flush
+  presented at mutter's *submit* time, before the GPU executed the repaint, so Core
+  Animation could sample stale content (#31's convicted race). Park the frame and inject
+  a fence on the context's reserved present ring (vkr ring 63 — see the virglrenderer
+  fork); present only on true GPU completion. Frames are latency-shifted, never dropped.
+- **0018 — hold guest flush fences until present + latch (#8, host half).** With the
+  patched guest kernel (`patches/linux/0001`) fencing blob-scanout flushes, hold the
+  virtio fence until the parked frame actually presented plus a latch delay
+  (`LIMINA_FENCE_LATCH_MS`, default 35 ms) — the guest's commit completes only when its
+  frame is on glass. Unpatched kernels send unfenced flushes: behavior unchanged.
+- **0019 — complete held flush fences on supervisor shown-acks.** The open-loop 35 ms
+  latch serialized mutter to ~17 fps. The supervisor acks `shown <id>` from a
+  CATransaction completion block (fd rendezvous'd via `LIMINA_SHOWN_ACK_FD`); the device
+  completes the held fence immediately on confirmation, with a 150 ms fallback deadline.
+- **0021 — fence-present must never wedge the guest scanout pipeline.** Two hardenings:
+  the injection-failure path leaked a parked cookie that hard-wedged the guest's display
+  fence (roll it all the way back), and a 500 ms unconditional-completion ceiling — a
+  display fence held that long is pathological, but killing the guest's display over it
+  is never right.
+
+### virtio-gpu: device reset lifecycle
+
+- **0007 — stop the worker thread on device reset.** The worker had no stop path and the
+  device no `reset()`, so a guest re-init (EFI→kernel hand-off, rebind, reboot) left a
+  stale worker busy-looping on the freed firmware-era ring. Stop+join on reset.
+  **Superseded by 0022** (kept for history — see the squash plan below).
+- **0022 — persist the renderer across device reset (singleton fix).**
+  `virgl_renderer_init` is process-global, init-once, thread-bound; 0007's stop+join
+  dropped the renderer, and the next activate hit `AlreadyInUse` → software-2D — every
+  guest-driven reset killed venus. Spawn the worker ONCE for the process lifetime;
+  activate/reset message it to bind/unbind the per-activation transport, keeping
+  rutabaga + the display backend alive.
+- **0035 — drop leaked contexts/resources on a dirty device reset.** A guest that resets
+  without clean teardown (compositor crash mid-teardown) leaves contexts/resources in
+  the process-global renderer; the recovering session's fresh ids then collide
+  (CTX_CREATE → InvalidContextId cascade-crashed gdm, nautilus, ptyxis). New
+  `Rutabaga::reset_session_state()`, called from reset_session; a no-op on clean resets.
+
+### Display resize
+
+- **0025 — runtime display resize (config-change mechanism).** A cloneable, thread-safe
+  `DisplayResizeHandle` pushes a new display size into the live device: the worker
+  applies it, sets `VIRTIO_GPU_EVENT_DISPLAY`, and raises a config-change interrupt so
+  the guest re-reads GET_DISPLAY_INFO and re-modesets; EDID regenerates. Mechanism only —
+  policy (when/what size) lives in limina. See `docs/design/runtime-display-resize.md`.
+- **0026 — expose the GPU `DisplayResizeHandle` to the host VMM.** Carry the handle on
+  `Vmm` (`gpu_resize_handle()`) so limina-vmm reaches it without downcasting bus devices.
+
+### Balloon / dynamic memory (M6)
+
+- **0033 — reclaim free pages with `MADV_FREE_REUSABLE` + 16 KiB-safe coalescing.**
+  `MADV_DONTNEED` returns *nothing* to a macOS host (spike-proven), so free-page
+  reporting freed no memory. `MADV_FREE_REUSABLE` debits phys_footprint, coalesced to
+  whole host pages with the invariant that a 16 KiB host page is reclaimed only when
+  every constituent 4 KiB guest page was reported free.
+- **0034 — inflate/deflate, target/actual, DEFLATE_ON_OOM, `BalloonControlHandle`.**
+  Implements the stubbed inflate/deflate queue handlers (persisted inflate coalescer,
+  safe across heads because inflated pages stay balloon-owned) and a host-driven target
+  via a config-change interrupt, so limina can cap effective guest RAM at runtime.
+
+### virtio-input
+
+- **0037 — return to Inactive on `reset()` so the device can re-activate.** `reset()`
+  never cleared device_state, so the transport skipped re-activation and the guest got
+  zero input events whenever the device was driven twice — which the EDK2
+  VirtioKeyboardDxe→kernel hand-off does on every GRUB boot. Same lifecycle family as
+  0007/0022.
+- **0039 — worker blocks (epoll -1) instead of a pointless 1 s timeout.** Every fd it
+  needs is event-driven and it did no work on expiry — the timeout was a pure ~1 Hz idle
+  wakeup. Shutdown still rides the stop eventfd.
+
+### virtio-blk
+
+- **0038 — serial = block_id (stable `/dev/disk/by-id/virtio-<id>`).** The GET_ID serial
+  derived from host st_dev/st_ino, which changes across an APFS clone or image move —
+  exactly the snapshot-clone path. Build it from the caller-supplied block_id instead;
+  empty id falls back to the inode-derived serial, so stock boot is unaffected.
+
+### Observability / logging
+
+- **0009 — log renderer-init failure instead of swallowing it.** `create_rutabaga` used
+  `.build(...).ok()`, discarding the actual RutabagaError behind a generic fallback line.
+- **0011 — log `hv_vm_map` failures with alignment breakdown.** The wrapper discarded
+  HV_BAD_ARGUMENT; logging the operands and which is misaligned is how we diagnosed the
+  4 KiB-guest-blob / 16 KiB-host mapping mismatch.
+- **0016 — log context lifecycle and error responses at visible levels.** CTX_CREATE/
+  DESTROY at info with the guest process name, RESP_ERR at warn with the precise rutabaga
+  error — a guest whose context creation fails otherwise degrades with no host trace.
+- **0020 — demote per-frame FLUSHDBG/SET_SCANOUT_BLOB lines to debug.** Both fired ~60/s
+  and dominated the worker log at Info. Log-level fixup of earlier patches (squash — see
+  below).
+- **0036 — demote per-frame present DIAGs (`[FLUSH2]`/`[FENCEPRESENT]`) to trace.** Keeps
+  the flicker-hunt oracles in-tree without the spam; recover them with `RUST_LOG=trace`.
+  Log-level fixup (squash — see below).
+
+## Upstreaming & planned squashes
+
+From the 2026-07-01 full review (`docs/reviews/2026-07-01-full-review.md` Part II, which
+holds the per-patch **A/B/C/D upstreamability triage** — A upstreamable as-is/near, B needs
+rework, C keep downstream, D obsolete/superseded; census: 22 A, 12 B, 1 C, 3 D, 2 B/C):
+
+- **0007 is superseded by 0022** (stop+join → persistent worker) and is kept only for
+  history. At the next series restructure / upstream submission, **squash 0007 + 0022 +
+  0035 into one reset-lifecycle patch**.
+- **0020 and 0036 are log-level fixups** of earlier patches in this same series — squash
+  each into its parent at the same time.
+- **The fence-present chain (0017/0018/0019/0021)** carries limina-shaped gating —
+  `LIMINA_FENCE_PRESENT` env / `/tmp/limina-fence-present` marker, `LIMINA_FENCE_LATCH_MS`,
+  `LIMINA_SHOWN_ACK_FD` — that must be replaced with a proper config API before
+  upstreaming. **0019 stays downstream** (it is limina supervisor-protocol glue).
+- **Cross-repo couplings:** 0013/0032 pair with the virglrenderer fork's IOSurface exports
+  (`virgl_renderer_resource_get_iosurface_id` / `_read_iosurface`); 0017 mirrors the
+  fork's reserved present-ring constant (vkr ring 63); 0018 pairs with
+  `patches/linux/0001` (the guest-kernel flush fence).

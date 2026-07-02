@@ -1,17 +1,34 @@
-# patches/mesa — limina enhanced-tier Mesa patches (zink)
+# patches/mesa — limina enhanced-tier GUEST Mesa patches (zink + venus)
 
-The limina enhanced tier ships a **patched zink** (GL→Vulkan) so the GNOME/GL stack runs on
-**venus → MoltenVK → Metal → Apple GPU** instead of llvmpipe. This dir carries our patch
-series over upstream Mesa; the source clone + build happen in the Apple `container` Linux
-build env (host APFS is case-insensitive and can't check out mesa) via
-`scripts/build-mesa-zink.sh`, which installs the `/opt/mesa-zink` tree we deliver to the guest.
+The limina enhanced tier ships a **patched guest Mesa**: zink (GL→Vulkan) and venus (the
+guest Vulkan driver) fixes so the GNOME/GL stack runs on **venus → KosmicKrisp → Metal**
+instead of llvmpipe. This dir carries our patches over upstream Mesa; the source clone +
+build happen in the Apple `container` Linux build env (host APFS is case-insensitive and
+can't check out mesa). The host-side Mesa series (KosmicKrisp + host zink) lives separately
+in `patches/kosmickrisp/`.
 
-This replaces the old ad-hoc in-guest `~/mesa` build (task #26).
+> **⚠ This is a patch POOL, not a single-base series** (unlike `patches/libkrun`/
+> `patches/virglrenderer`): raw context diffs, three different effective bases, and three
+> consumers applying different subsets. That shape is documented debt — flagged in the
+> 2026-07-01 review (`docs/reviews/2026-07-01-full-review.md` Part III) — to be resolved
+> when the patches go to Mesa upstream (each becomes an MR and the pool shrinks). Until
+> then, THIS file is the map; keep it current when adding/retiring a diff.
 
-## Base
-- **Upstream Mesa main, commit `3515c52e8cf31549b6068ef43c23c89830b6db46`** (pinned in
-  `scripts/build-mesa-zink.sh` as `MESA_COMMIT`; 2026-06-07). gitlab.freedesktop.org is
-  Anubis-bot-blocked → build clones a GitHub mirror.
+## Bases × consumers (the map)
+
+| Consumer | Base | Applies |
+|---|---|---|
+| `scripts/build-mesa-zink.sh` (guest GL/zink tree, `/opt/mesa-zink`) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`, 2026-06-07) | 0001–0006 (the zink pool) |
+| `scripts/build-venus.sh` (guest venus ICD rebuild) | tag `mesa-26.1.0` (parametric `MESA_TAG`) | 0009 + 0010 |
+| `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM) | Fedora F44 `mesa-26.1.3` SRPM | 0001 + 0009 + 0010 + 0011 |
+
+gitlab.freedesktop.org is Anubis-bot-blocked → builds clone a GitHub mirror.
+
+**Duplicate encodings of 0010 (known, deliberate for now):** `venus-dmabuf-patch.py` is the
+anchored-string "version-robust" re-encoding of 0010's physdev edits, and
+`spikes/venus-draw-probe/patch-venus-dmabuf-nomod.py` is the F44 no-modifier variant —
+"keep both until the F44 scanout story is settled" (py header). Retire the py forms when
+that settles or when 0010 lands upstream, whichever first.
 
 ## Patches (apply in filename order)
 - **`0001-zink-nullDescriptor-emulation-MR37115.diff`** — Mesa **MR !37115**: zink
@@ -81,6 +98,13 @@ debug traces and a dead `tiling_translated_to_optimal` flag were stripped (DIAG 
 the guest) applies `0009`+`0010` and emits `libvulkan_virtio.so` + the ICD. dev-enh's exact
 venus+WSI sources are preserved under `spikes/venus-261-source/`. The host KosmicKrisp +
 host-zink series lives separately in `patches/kosmickrisp/`.
+
+- **`0011-venus-wsi-drop-16bit-unorm-swapchain.diff`** (2026-06-30, ships in the F44 RPM as
+  mesa 26.1.3-2.limina) — venus/Wayland WSI: drop 16-bit-unorm swapchain formats
+  (`R16G16B16A16_UNORM` etc.), matching lavapipe. venus offered a wgpu-unrenderable
+  `Rgba16Unorm` Wayland swapchain format, producing the "ghost UI" in wgpu apps. NOT a KK
+  gap (see the corrected story in the `limina-kk-feature-gaps` memory). Upstreamable with
+  the lavapipe precedent as the argument.
 
 ## Re-export / DIAG hygiene
 The in-guest working tree carried temporary `LIMINA-DIAG` debug hacks (force
