@@ -59,7 +59,12 @@ pub fn run() -> ! {
     app_item.setSubmenu(Some(&app_menu));
     app.setMainMenu(Some(&menubar));
 
-    let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(560.0, 400.0));
+    // Size the first-launch window to the library (≈116 pt per row + chrome) so a
+    // small library doesn't open into mostly empty space; afterwards the frame
+    // autosave restores whatever size/position the user chose.
+    let vms = crate::vmlib::bundle::list().map(|v| v.len()).unwrap_or(0);
+    let height = (90.0 + 116.0 * vms.max(1) as f64).clamp(240.0, 640.0);
+    let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(560.0, height));
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
@@ -76,8 +81,9 @@ pub fn run() -> ! {
     // The window outlives every scope here (the controller retains it); created
     // outside a window controller, so opt out of release-when-closed.
     unsafe { window.setReleasedWhenClosed(false) };
-    window.setTitle(&NSString::from_str("Limina — Virtual Machines"));
+    window.setTitle(&NSString::from_str("Limina"));
     window.center();
+    window.setFrameAutosaveName(&NSString::from_str("LiminaCenterWindow"));
 
     let controller = CenterController::new(mtm, &window);
     app.setDelegate(Some(ProtocolObject::from_ref(&*controller)));

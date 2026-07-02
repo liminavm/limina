@@ -75,6 +75,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSBox",
     "NSScrollView",
     "NSClipView",
+    "NSScreen",
     "NSLayoutConstraint",
     "NSLayoutAnchor",
     # Host-cursor adoption: the guest's cursor image (an IOSurface from the worker) becomes

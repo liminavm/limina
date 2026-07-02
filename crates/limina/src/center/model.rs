@@ -112,19 +112,25 @@ fn disks_line(bundle: &bundle::VmBundle, cfg: &schema::VmConfig) -> String {
     parts.join(" · ")
 }
 
-/// The SSH line. For a running VM the truth is the supervisor log (the port
-/// auto-allocates from 2222 when not pinned — "guest SSH forward ready: ssh -p N");
-/// fall back to the pinned port. For a stopped VM, show what's configured.
+/// The SSH line — the actual copyable command whenever the port is knowable.
+/// For a running VM the truth is the supervisor log (the port auto-allocates from
+/// 2222 when not pinned — "guest SSH forward ready: ssh -p N"), falling back to
+/// the pinned port. A stopped VM with a pinned port shows the same command (it's
+/// what to use after Start); auto-port + stopped is the one unknowable case.
 fn ssh_line(bundle: &bundle::VmBundle, cfg: &schema::VmConfig, running: bool) -> Option<String> {
     let net = cfg.networks.first()?;
-    if running {
-        let port = port_from_log(&bundle.logs_dir().join("supervisor.log"))
-            .or((net.ssh_port != 0).then_some(net.ssh_port))?;
-        Some(format!("ssh -p {port} 127.0.0.1"))
-    } else if net.ssh_port != 0 {
-        Some(format!("ssh port {}", net.ssh_port))
+    let port = if running {
+        port_from_log(&bundle.logs_dir().join("supervisor.log"))
+            .or((net.ssh_port != 0).then_some(net.ssh_port))
     } else {
-        Some("ssh port auto".into())
+        (net.ssh_port != 0).then_some(net.ssh_port)
+    };
+    match (port, running) {
+        (Some(p), _) => Some(format!("ssh -p {p} 127.0.0.1")),
+        (None, false) => Some("ssh: port assigned at start".into()),
+        // Running but the log has no forward line (yet, or started from a terminal
+        // where the supervisor's stdout never reached logs/supervisor.log).
+        (None, true) => Some("ssh: port not yet known".into()),
     }
 }
 
@@ -192,7 +198,7 @@ mod tests {
         assert!(!alpha.running);
         assert_eq!(alpha.summary, "2 vCPU · 2G");
         assert_eq!(alpha.disks, "root.raw (2 MB)");
-        assert_eq!(alpha.ssh.as_deref(), Some("ssh port 2299"));
+        assert_eq!(alpha.ssh.as_deref(), Some("ssh -p 2299 127.0.0.1"));
         let trash = rows.iter().find(|r| r.name == "Trash").unwrap();
         assert!(trash.broken);
         assert!(trash.summary.starts_with("broken:"), "{}", trash.summary);
@@ -216,10 +222,10 @@ mod tests {
         .unwrap();
         let cfg = bundle.load().unwrap();
 
-        // Stopped, auto port.
+        // Stopped, auto port: no command to show yet.
         assert_eq!(
             ssh_line(&bundle, &cfg, false).as_deref(),
-            Some("ssh port auto")
+            Some("ssh: port assigned at start")
         );
         // Running with a supervisor log: the auto-allocated port wins.
         std::fs::write(

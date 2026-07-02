@@ -21,21 +21,23 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
+use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::Sel;
-use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSApplication,
-    NSApplicationDelegate, NSAutoresizingMaskOptions, NSBox, NSBoxType, NSButton, NSColor, NSFont,
-    NSImage, NSLayoutAttribute, NSLayoutConstraint, NSModalResponseOK, NSOpenPanel, NSPasteboard,
-    NSPasteboardTypeString, NSScrollView, NSStackView, NSStackViewGravity, NSTextField,
-    NSUserInterfaceLayoutOrientation, NSView, NSWindow,
+    NSApplicationDelegate, NSBox, NSBoxType, NSButton, NSColor, NSFont, NSImage, NSLayoutAttribute,
+    NSLayoutConstraint, NSModalResponseOK, NSOpenPanel, NSPasteboard, NSPasteboardTypeString,
+    NSScrollView, NSStackView, NSStackViewGravity, NSTextField, NSUserInterfaceLayoutOrientation,
+    NSView, NSWindow,
 };
 use objc2_foundation::{
-    NSArray, NSEdgeInsets, NSFileManager, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize,
-    NSString, NSURL,
+    NSArray, NSEdgeInsets, NSFileManager, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop,
+    NSRunLoopCommonModes, NSSize, NSString, NSTimer, NSURL,
 };
 
 use super::{model, model::VmRow, spawn};
@@ -60,6 +62,9 @@ pub struct CenterIvars {
     /// busy+stopping as of the last rebuild, so a state flip alone triggers one.
     last_busy: RefCell<HashSet<PathBuf>>,
     last_stopping: RefCell<HashSet<PathBuf>>,
+    /// Non-list window chrome height (margins + header + gap), measured by
+    /// `build_ui`; `fit_window_to_content` adds the list's fitting height to it.
+    chrome_h: std::cell::Cell<f64>,
 }
 
 define_class!(
@@ -191,6 +196,18 @@ define_class!(
                     pb.setString_forType(&NSString::from_str(ssh), unsafe {
                         NSPasteboardTypeString
                     });
+                    // Feedback in place: flip the clicked command to "Copied ✓",
+                    // then force a row rebuild to restore it.
+                    sender.setTitle(&NSString::from_str("Copied ✓"));
+                    let controller = self.retain();
+                    let block = RcBlock::new(move |_t: NonNull<NSTimer>| {
+                        controller.refresh(true);
+                    });
+                    let timer =
+                        unsafe { NSTimer::timerWithTimeInterval_repeats_block(1.2, false, &block) };
+                    unsafe {
+                        NSRunLoop::currentRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes);
+                    }
                 }
             }
         }
@@ -213,6 +230,7 @@ impl CenterController {
             errors: Arc::new(Mutex::new(Vec::new())),
             last_busy: RefCell::new(HashSet::new()),
             last_stopping: RefCell::new(HashSet::new()),
+            chrome_h: std::cell::Cell::new(0.0),
         });
         // SAFETY: NSObject's init signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
@@ -220,28 +238,17 @@ impl CenterController {
         this
     }
 
-    /// Build the static chrome: root stack (header with Import…, the row list, the
-    /// empty-state label) filling the window's content view.
+    /// Build the static chrome: header (title + New…), the scrolling row list, and
+    /// the empty-state label — all positioned by Auto Layout. (No manual frames:
+    /// `stackViewWithViews` opts out of autoresizing-mask translation, so masks
+    /// would be silently ignored and the header would drift on window resize.)
     fn build_ui(&self, mtm: MainThreadMarker, window: &NSWindow) {
         let content = window.contentView().expect("window content view");
-        let bounds = content.bounds();
-        let (w, h) = (bounds.size.width, bounds.size.height);
         const MARGIN: f64 = 16.0;
-        const HEADER_H: f64 = 28.0;
 
-        // Header (title + Import…) pinned to the top edge, stretching with the window.
         let header = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
         header.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
         header.setAlignment(NSLayoutAttribute::CenterY);
-        header.setFrame(rect(
-            MARGIN,
-            h - MARGIN - HEADER_H,
-            w - 2.0 * MARGIN,
-            HEADER_H,
-        ));
-        header.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
-        );
         let title = NSTextField::labelWithString(&NSString::from_str("Virtual Machines"), mtm);
         title.setFont(Some(&NSFont::boldSystemFontOfSize(16.0)));
         header.addView_inGravity(&title, NSStackViewGravity::Leading);
@@ -260,19 +267,8 @@ impl CenterController {
         // large library scrolls instead of clipping. The stack is the document view,
         // pinned to the clip view's top/leading/width by Auto Layout; its height is
         // intrinsic (>= the clip so short content stays top-anchored).
-        let scroll = NSScrollView::initWithFrame(
-            NSScrollView::alloc(mtm),
-            rect(
-                MARGIN,
-                MARGIN,
-                w - 2.0 * MARGIN,
-                h - 2.0 * MARGIN - HEADER_H - 8.0,
-            ),
-        );
-        scroll.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable
-                | NSAutoresizingMaskOptions::ViewHeightSizable,
-        );
+        let scroll = NSScrollView::new(mtm);
+        scroll.setTranslatesAutoresizingMaskIntoConstraints(false);
         scroll.setHasVerticalScroller(true);
         scroll.setDrawsBackground(false);
 
@@ -290,15 +286,6 @@ impl CenterController {
         list.setTranslatesAutoresizingMaskIntoConstraints(false);
         scroll.setDocumentView(Some(&list));
         let clip = scroll.contentView();
-        NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
-            list.topAnchor().constraintEqualToAnchor(&clip.topAnchor()),
-            list.leadingAnchor()
-                .constraintEqualToAnchor(&clip.leadingAnchor()),
-            list.widthAnchor()
-                .constraintEqualToAnchor(&clip.widthAnchor()),
-            list.heightAnchor()
-                .constraintGreaterThanOrEqualToAnchor(&clip.heightAnchor()),
-        ]));
         content.addSubview(&scroll);
 
         let empty = NSTextField::labelWithString(
@@ -308,19 +295,55 @@ impl CenterController {
             mtm,
         );
         empty.setTextColor(Some(&NSColor::secondaryLabelColor()));
-        empty.setFrame(rect(
-            MARGIN + 4.0,
-            h - MARGIN - HEADER_H - 60.0,
-            w - 2.0 * MARGIN,
-            40.0,
-        ));
-        empty.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
-        );
+        empty.setTranslatesAutoresizingMaskIntoConstraints(false);
         content.addSubview(&empty);
+
+        NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+            // Header: pinned to the top edge, full width.
+            header
+                .topAnchor()
+                .constraintEqualToAnchor_constant(&content.topAnchor(), MARGIN),
+            header
+                .leadingAnchor()
+                .constraintEqualToAnchor_constant(&content.leadingAnchor(), MARGIN),
+            header
+                .trailingAnchor()
+                .constraintEqualToAnchor_constant(&content.trailingAnchor(), -MARGIN),
+            // Scroll view: everything below the header.
+            scroll
+                .topAnchor()
+                .constraintEqualToAnchor_constant(&header.bottomAnchor(), 8.0),
+            scroll
+                .leadingAnchor()
+                .constraintEqualToAnchor_constant(&content.leadingAnchor(), MARGIN),
+            scroll
+                .trailingAnchor()
+                .constraintEqualToAnchor_constant(&content.trailingAnchor(), -MARGIN),
+            scroll
+                .bottomAnchor()
+                .constraintEqualToAnchor_constant(&content.bottomAnchor(), -MARGIN),
+            // Document stack inside the clip view (top-anchored short content).
+            list.topAnchor().constraintEqualToAnchor(&clip.topAnchor()),
+            list.leadingAnchor()
+                .constraintEqualToAnchor(&clip.leadingAnchor()),
+            list.widthAnchor()
+                .constraintEqualToAnchor(&clip.widthAnchor()),
+            list.heightAnchor()
+                .constraintGreaterThanOrEqualToAnchor(&clip.heightAnchor()),
+            // Empty-state placeholder just below the header.
+            empty
+                .topAnchor()
+                .constraintEqualToAnchor_constant(&header.bottomAnchor(), 24.0),
+            empty
+                .leadingAnchor()
+                .constraintEqualToAnchor_constant(&content.leadingAnchor(), MARGIN + 4.0),
+        ]));
 
         *self.ivars().list.borrow_mut() = Some(list);
         *self.ivars().empty_label.borrow_mut() = Some(empty);
+        self.ivars()
+            .chrome_h
+            .set(2.0 * MARGIN + header.fittingSize().height + 8.0);
     }
 
     /// Refresh the model and rebuild the rows if anything changed (or `force`).
@@ -353,6 +376,38 @@ impl CenterController {
         *self.ivars().rows.borrow_mut() = snap;
         *self.ivars().last_busy.borrow_mut() = busy_now;
         *self.ivars().last_stopping.borrow_mut() = stopping_now;
+        self.fit_window_to_content();
+    }
+
+    /// Track the list with the window height: after a rebuild, resize (animated,
+    /// top edge pinned) so the rows fit exactly — shrinking when VMs are deleted,
+    /// growing when they're added — clamped to the screen. Width and position
+    /// stay whatever the user chose.
+    fn fit_window_to_content(&self) {
+        let list_ref = self.ivars().list.borrow();
+        let Some(list) = list_ref.as_ref() else {
+            return;
+        };
+        let Some(window) = list.window() else {
+            return;
+        };
+        let desired = self.ivars().chrome_h.get() + list.fittingSize().height.max(60.0);
+        let max_h = window
+            .screen()
+            .map(|s| s.visibleFrame().size.height - 40.0)
+            .unwrap_or(800.0);
+        let desired = desired.clamp(160.0, max_h);
+        let frame = window.frame();
+        let content = window.contentRectForFrameRect(frame);
+        if (content.size.height - desired).abs() < 1.0 {
+            return;
+        }
+        let mut new_frame = window.frameRectForContentRect(NSRect::new(
+            content.origin,
+            NSSize::new(content.size.width, desired),
+        ));
+        new_frame.origin.y = frame.origin.y + frame.size.height - new_frame.size.height;
+        window.setFrame_display_animate(new_frame, true, true);
     }
 
     fn rebuild_rows(&self, rows: &[VmRow], busy: &HashSet<PathBuf>, stopping: &HashSet<PathBuf>) {
@@ -434,20 +489,29 @@ impl CenterController {
             info.addView_inGravity(&small_label(mtm, &row.disks), NSStackViewGravity::Top);
         }
         if let Some(ssh) = &row.ssh {
+            // Right-aligned on its own line. A real command is itself the copy
+            // affordance: a borderless text button that copies on click (the action
+            // flips its title to "Copied ✓" for a moment).
             let ssh_row = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
             ssh_row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
             ssh_row.setAlignment(NSLayoutAttribute::CenterY);
-            ssh_row.setSpacing(4.0);
-            ssh_row.addView_inGravity(&small_label(mtm, ssh), NSStackViewGravity::Leading);
-            if row.running {
-                let copy = self.icon_button(
-                    mtm,
-                    "doc.on.doc",
-                    "Copy the SSH command",
-                    sel!(copySshClicked:),
-                    index,
-                );
-                ssh_row.addView_inGravity(&copy, NSStackViewGravity::Leading);
+            if ssh.starts_with("ssh -p") {
+                let cmd = unsafe {
+                    NSButton::buttonWithTitle_target_action(
+                        &NSString::from_str(ssh),
+                        Some(self.as_ref()),
+                        Some(sel!(copySshClicked:)),
+                        mtm,
+                    )
+                };
+                cmd.setBordered(false);
+                cmd.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+                cmd.setContentTintColor(Some(&NSColor::linkColor()));
+                cmd.setToolTip(Some(&NSString::from_str("Click to copy")));
+                cmd.setTag(index as isize);
+                ssh_row.addView_inGravity(&cmd, NSStackViewGravity::Trailing);
+            } else {
+                ssh_row.addView_inGravity(&small_label(mtm, ssh), NSStackViewGravity::Trailing);
             }
             info.addView_inGravity(&ssh_row, NSStackViewGravity::Top);
         }
