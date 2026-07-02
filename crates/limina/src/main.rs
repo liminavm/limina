@@ -204,6 +204,10 @@ struct Cli {
     /// on the command line wins.
     #[arg(long, overrides_with = "swap_cmd_opt")]
     no_swap_cmd_opt: bool,
+
+    /// Title for the VM window (managed starts pass the VM's name; default "Limina").
+    #[arg(long, hide = true)]
+    window_title: Option<String>,
 }
 
 /// Managed-VM subcommands (docs/design/vm-definitions.md Phase 1): a VM definition
@@ -573,6 +577,7 @@ fn cli_from_definition(
         // swap_cmd_opt_enabled() resolves to exactly cfg.input.swap_cmd_opt.
         swap_cmd_opt: cfg.input.swap_cmd_opt,
         no_swap_cmd_opt: !cfg.input.swap_cmd_opt,
+        window_title: Some(cfg.identity.name.clone()),
     })
 }
 
@@ -820,6 +825,7 @@ fn run_vm(cli: Cli) -> Result<()> {
             control,
             resize_socket,
             remap: limina_input::keymap::KeyRemap { swap_cmd_opt },
+            title: cli.window_title.clone().unwrap_or_else(|| "Limina".into()),
         });
     }
 
@@ -1483,6 +1489,7 @@ mod tests {
         );
         assert!(!cli.swap_cmd_opt_enabled(), "definition's swap=false wins");
         assert_eq!(cli.shutdown_grace_secs, 20, "flat default");
+        assert_eq!(cli.window_title.as_deref(), Some("Fedora"));
         assert!(cli.cmd.is_none());
     }
 

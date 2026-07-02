@@ -35,6 +35,8 @@ pub struct SessionConfig {
     pub control: Option<control::ControlPlane>,
     pub resize_socket: Option<PathBuf>,
     pub remap: limina_input::keymap::KeyRemap,
+    /// Window title — the managed VM's name, or "Limina" for ephemeral flat-CLI VMs.
+    pub title: String,
 }
 
 /// One windowed worker plus the supervisor-side fds wiring the window to it. Re-created on a
@@ -160,6 +162,7 @@ pub struct WindowedSession {
     control: Option<control::ControlPlane>,
     resize_socket: Option<PathBuf>,
     remap: limina_input::keymap::KeyRemap,
+    title: String,
 }
 
 impl WindowedSession {
@@ -176,6 +179,7 @@ impl WindowedSession {
             control,
             resize_socket,
             remap,
+            title,
         } = config;
 
         // Capability-scope the scanout IOSurfaces: register a Mach surface-port receiver the
@@ -272,6 +276,7 @@ impl WindowedSession {
             control,
             resize_socket,
             remap,
+            title,
         })
     }
 
@@ -289,6 +294,7 @@ impl WindowedSession {
             self.resize_socket,
             self.surface_map,
             self.remap,
+            &self.title,
         );
     }
 }

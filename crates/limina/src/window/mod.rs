@@ -91,6 +91,7 @@ pub fn run(
     resize_socket: Option<PathBuf>,
     surface_map: SurfaceMap,
     remap: limina_input::keymap::KeyRemap,
+    title: &str,
 ) -> ! {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
@@ -109,7 +110,7 @@ pub fn run(
             false,
         )
     };
-    window.setTitle(&NSString::from_str("Limina"));
+    window.setTitle(&NSString::from_str(title));
     // Allow native (Spaces) full screen: the green title-bar button becomes Enter Full Screen
     // and `toggleFullScreen:` (our Cmd-Ctrl-F host shortcut, below) works. Going fullscreen
     // resizes the window, which the existing resize path reflows into the guest resolution.
