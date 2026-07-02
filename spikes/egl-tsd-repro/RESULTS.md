@@ -35,6 +35,21 @@ destructor stays mapped for the life of the process. This is the standard idiom
 for the pthread_key-vs-dlclose hazard; the pin is a one-time ~few-MB residency
 cost only for processes that actually used venus. Upstreamable.
 
-Validation: rebuild the F44 mesa RPM (`scripts/provision/f44/build-mesa-rpm.sh`,
-in-guest) with 0013 → install in the build VM → repro exits 0 + venus still
-enumerates. (See the git log for the validated result.)
+## Validation — GREEN 2026-07-02
+
+Rebuilt the F44 mesa RPM set with 0013 inside a fresh build VM (100G-grown clone
+of `Fedora-Workstation-44.enhanced.raw`, `build-mesa-rpm.sh` as a guest systemd
+unit, ~7 min wall on 8 vCPUs), installed `mesa-vulkan-drivers`, and:
+
+- repro: **exit 0** — "thread joined cleanly — no repro"
+- venus still enumerates (`Virtio-GPU Venus (Apple M1 Max)` via KK)
+
+Built RPMs kept at `target/mesa-26.1.3-tsd-fix/` (release `1.limina`).
+
+**Trap hit during validation (remember this):** `build-mesa-rpm.sh` pins
+`Release: ${LIMINA_REL:-1}.limina`, and the build VM already ran `-1.limina` —
+same NEVRA, so `dnf upgrade` was a SILENT NO-OP and the first "post-fix" run
+still crashed with the old ICD on disk. The artifact check (`ls -la
+/usr/lib64/libvulkan_virtio.so` — size/mtime) caught it; `rpm -Uvh --force`
+installed for real. For delivery to a guest already on `-N.limina`, build with
+`LIMINA_REL=N+1` (dogfood-guest is on `-2.limina` → use `LIMINA_REL=3`).
