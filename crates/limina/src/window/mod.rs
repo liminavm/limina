@@ -109,7 +109,7 @@ pub fn run(
             false,
         )
     };
-    window.setTitle(&NSString::from_str("limina"));
+    window.setTitle(&NSString::from_str("Limina"));
     // Allow native (Spaces) full screen: the green title-bar button becomes Enter Full Screen
     // and `toggleFullScreen:` (our Cmd-Ctrl-F host shortcut, below) works. Going fullscreen
     // resizes the window, which the existing resize path reflows into the guest resolution.

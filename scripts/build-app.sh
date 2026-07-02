@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 # Copyright © 2026 Gustavo Noronha Silva
 
-# Assemble a self-contained limina.app.
+# Assemble a self-contained Limina.app.
 #
 # Bundles the entire host venus/GL dylib closure into Contents/Frameworks, relocated
 # to @rpath so it resolves relative to the app (no /Volumes/mesa-cs, no third_party
@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 PROFILE="${1:-debug}"
 
-APP="$ROOT/target/limina.app"
+APP="$ROOT/target/Limina.app"
 MACOS="$APP/Contents/MacOS"
 FW="$APP/Contents/Frameworks"
 RES="$APP/Contents/Resources"
@@ -129,8 +129,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>limina</string>
-  <key>CFBundleDisplayName</key><string>limina</string>
+  <key>CFBundleName</key><string>Limina</string>
+  <key>CFBundleDisplayName</key><string>Limina</string>
   <key>CFBundleIdentifier</key><string>eti.noronha.limina</string>
   <key>CFBundleExecutable</key><string>limina</string>
   <key>CFBundlePackageType</key><string>APPL</string>

@@ -147,7 +147,7 @@ The bundle is host-side self-contained: libkrun is statically linked in; the pat
 virglrenderer + the KosmicKrisp/zink GL closure are vendored at `@rpath`; the GOP firmware is
 in `Resources/`; and (as of the gvproxy fix) `gvproxy` is vendored at `Contents/MacOS/gvproxy`
 so `--net` works without Homebrew. **Rebuild the app** (`scripts/build-app.sh`) on the dev Mac
-to pick up the bundled gvproxy, then copy `target/limina.app` to Mac B.
+to pick up the bundled gvproxy, then copy `target/Limina.app` to Mac B.
 
 ```bash
 # Transfer the .app with a tool that does NOT set quarantine (scp/rsync/USB/zip). If it ever

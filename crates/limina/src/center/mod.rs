@@ -50,7 +50,7 @@ pub fn run() -> ! {
     let quit = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),
-            &NSString::from_str("Quit limina"),
+            &NSString::from_str("Quit Limina"),
             Some(objc2::sel!(terminate:)),
             &NSString::from_str("q"),
         )
@@ -76,7 +76,7 @@ pub fn run() -> ! {
     // The window outlives every scope here (the controller retains it); created
     // outside a window controller, so opt out of release-when-closed.
     unsafe { window.setReleasedWhenClosed(false) };
-    window.setTitle(&NSString::from_str("limina — Virtual Machines"));
+    window.setTitle(&NSString::from_str("Limina — Virtual Machines"));
     window.center();
 
     let controller = CenterController::new(mtm, &window);
