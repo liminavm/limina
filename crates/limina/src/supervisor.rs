@@ -80,8 +80,13 @@ impl RebootGuard {
 
 /// Set by the SIGINT/SIGTERM handler; observed by the monitor loop.
 static STOP: AtomicBool = AtomicBool::new(false);
+/// Counts stop signals: the FIRST asks for the graceful ladder, a SECOND means
+/// "skip the remaining grace, kill now" (`limina stop --force`, an impatient
+/// double Ctrl-C). Only ever incremented from the handler.
+static SIG_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 extern "C" fn on_signal(_sig: libc::c_int) {
+    SIG_COUNT.fetch_add(1, Ordering::SeqCst);
     STOP.store(true, Ordering::SeqCst);
 }
 
@@ -209,8 +214,14 @@ pub fn monitor(
                 }
                 sigterm_sent = true;
             }
-            if t.elapsed() >= grace {
-                log::warn!("guest did not power off within {grace:?}; forcing (SIGKILL)");
+            if t.elapsed() >= grace || force_stop_requested() {
+                if force_stop_requested() {
+                    log::warn!(
+                        "force stop requested (second signal); skipping the grace (SIGKILL)"
+                    );
+                } else {
+                    log::warn!("guest did not power off within {grace:?}; forcing (SIGKILL)");
+                }
                 let _ = child.kill();
                 let status = child.wait().context("waiting on worker after SIGKILL")?;
                 return Ok(report_exit(status));
@@ -224,6 +235,13 @@ pub fn monitor(
 /// True once a SIGINT/SIGTERM has asked us to stop (observed by the window loop).
 pub fn stop_requested() -> bool {
     STOP.load(Ordering::SeqCst)
+}
+
+/// True once a SECOND stop signal has arrived: skip whatever grace remains and
+/// kill immediately. Observed by both the headless monitor ladder and the
+/// windowed quit check.
+pub fn force_stop_requested() -> bool {
+    SIG_COUNT.load(Ordering::SeqCst) >= 2
 }
 
 /// Spawn and supervise the worker until the VM stops (headless/non-windowed path).

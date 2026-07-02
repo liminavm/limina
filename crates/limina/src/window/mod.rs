@@ -453,24 +453,27 @@ pub fn run(
             window.isMiniaturized(),
             timer_app.isHidden(),
         ) {
-            let force_now = match quit_deadline.get() {
-                None => {
-                    let orderly = control
-                        .as_ref()
-                        .map(|c| c.request_shutdown(crate::control::AGENT_GRACE))
-                        .unwrap_or(false);
-                    if orderly {
-                        log::info!("window closed → asked the guest agent to power off");
-                        quit_deadline.set(Some(
-                            std::time::Instant::now() + crate::control::AGENT_GRACE,
-                        ));
-                        false
-                    } else {
-                        true
+            // A SECOND stop signal (limina stop --force, impatient double Ctrl-C)
+            // skips whatever grace remains — mirror of the headless monitor ladder.
+            let force_now = crate::supervisor::force_stop_requested()
+                || match quit_deadline.get() {
+                    None => {
+                        let orderly = control
+                            .as_ref()
+                            .map(|c| c.request_shutdown(crate::control::AGENT_GRACE))
+                            .unwrap_or(false);
+                        if orderly {
+                            log::info!("window closed → asked the guest agent to power off");
+                            quit_deadline.set(Some(
+                                std::time::Instant::now() + crate::control::AGENT_GRACE,
+                            ));
+                            false
+                        } else {
+                            true
+                        }
                     }
-                }
-                Some(d) => std::time::Instant::now() >= d,
-            };
+                    Some(d) => std::time::Instant::now() >= d,
+                };
             if force_now {
                 kill_worker_group(timer_conn.pid());
                 crate::gateway::cleanup();
