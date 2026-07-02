@@ -103,6 +103,44 @@ transport + heap, and all of it *returns* when the workload ends (C3/C4). The us
 its ring+reply shmem mapped and its pages dirty — a long browsing session accumulates
 thousands of contexts), fixed 2026-07-02 (patches/virglrenderer/0022 + libkrun/0041).
 
+## Measured (Run D: what the full-inflation clawback costs the guest page cache)
+
+Question: the idle policy inflates to the floor, permanently evicting the guest page cache —
+how much does that actually hurt, and does it justify a host-pressure heuristic instead of
+"always claw back when idle"? Suite: `cache-bench.sh` run identically in the squeezed state
+(dynamic `2048..12288`, balloon at full 10 GiB) and the cache-friendly state (static 12288),
+host UBC deliberately warm in both so the delta isolates the guest cache. 3 GiB incompressible
+test file.
+
+| test | squeezed | with cache (static) | penalty |
+|------|----------|---------------------|---------|
+| seq re-read 3 GiB           | 5.4 GB/s | 23.5 GB/s | 4.3× — but 5.4 GB/s via virtio+host-UBC is still fast; sequential is RESCUED by the host cache |
+| 4k buffered randread (fio, invalidate=0) | 13.3k IOPS / 75 µs | **852k IOPS / 1.0 µs** | **64×** — the workload class that hurts: rpmdb/sqlite, git, app relaunch, code search |
+| `du -s /usr` warm           | 0.93 s | 0.23 s | 4× (dentry/inode cache) |
+| `rpm -qa` warm              | 0.48 s | 0.45 s | ~1× (small hot set survives even at the floor — ~400 MB cache remains) |
+| claim 4 GiB anon            | 2.69 s | 2.28 s | +0.4 s balloon give-back latency — negligible |
+
+(fio gotcha for posterity: fio defaults to `invalidate=1` — it wipes the page cache for the
+test file before running, silently hiding the cache benefit; the honest cached number needs
+`--invalidate=0`.)
+
+**Reading.** The host UBC (we run buffered, `direct_io: false`) fully rescues *sequential*
+re-reads and softens everything else — the guest cache's irreplaceable value is the ~1 µs
+random hit, which the squeeze turns into a 75 µs virtio round trip, 64× slower. Fedora keeps
+the hottest ~400 MB of slab/cache alive even at the 2 GiB floor, so small hot sets (rpm -qa)
+survive; anything bigger (repo greps, sqlite scans, relaunching a fat app) pays 4–64×. The
+benefit side is ~2–4 GB of host RAM at idle (2.7 vs 4.3–5.0 GB measured).
+
+**Verdict: "always claw back when idle" is too aggressive as the default.** It buys host RAM
+the host may not even need, at a real interactive cost. The data supports a two-input policy:
+- **FRQ stays always-on** (it returns only truly-free pages — zero cache cost, and it alone
+  handled the 8 GiB free→reclaim in Run A).
+- **Balloon squeeze becomes host-pressure-driven**: at host pressure *normal*, inflate at most
+  to `used + cache allowance` (leave the guest ~1–2 GiB of cache — restores the ~1 µs hits for
+  typical hot sets) or don't inflate at all; at *warn*, current behavior; at *critical*, full
+  squeeze to the floor. macOS exposes the signal (dispatch memory-pressure source /
+  `kern.memorystatus_vm_pressure_level`) — this was already lever #2, now with numbers behind it.
+
 ## Where the memory goes (sourced; workflow `mem-overhead-sources`, 4 agents, all claims path:line-cited)
 
 1. **Guest RAM (the big term).** One anon `MAP_NORESERVE` mmap sized at max
