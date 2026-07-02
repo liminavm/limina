@@ -123,6 +123,9 @@ JSON
 # ---- GOP firmware (existing bundle-resolution pattern) ---------------------------
 cp "$GOP_FD" "$RES/KRUN_EFI.gop.fd"
 
+# ---- app icon (source + prep tool in assets/icon/) --------------------------------
+cp "$ROOT/assets/icon/Limina.icns" "$RES/Limina.icns"
+
 # ---- Info.plist ------------------------------------------------------------------
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -139,6 +142,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>LSArchitecturePriority</key><array><string>arm64</string></array>
   <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleIconFile</key><string>Limina</string>
   <!-- .liminavm bundles: a package (the directory shows as one Finder item) owned
        by Limina; opening one routes to application:openURLs: in the control
        center, which starts the VM. -->
@@ -148,6 +152,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
       <key>CFBundleTypeName</key><string>Limina Virtual Machine</string>
       <key>LSItemContentTypes</key><array><string>eti.noronha.limina.vm</string></array>
       <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>CFBundleTypeIconFile</key><string>Limina</string>
       <key>LSHandlerRank</key><string>Owner</string>
       <key>LSTypeIsPackage</key><true/>
     </dict>
