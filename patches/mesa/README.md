@@ -115,6 +115,16 @@ host-zink series lives separately in `patches/kosmickrisp/`.
   the enhanced image's *stock-kernel GRUB-fallback boot* today; truly-stock guests get it
   when it lands upstream (strong candidate — the stub path already exists for version
   mismatches). Applied by `build-venus.sh` and the F44 RPM build.
+- **`0013-venus-pin-icd-for-tls-destructor.diff`** (2026-07-02, thread-exit crash fix) —
+  venus registers a C11/pthread TLS key whose destructor `vn_tls_free` lives in the ICD,
+  but TLS-key destructors (unlike `__cxa_thread_atexit_impl`) do not pin their DSO; when
+  the Vulkan loader `dlclose()`s the driver after the last instance is destroyed, any
+  thread that ever used venus SIGSEGVs in `__nptl_deallocate_tsd` on exit. Fix: after
+  creating the key, re-open ourselves with `RTLD_NODELETE` (dladdr on `vn_tls_free`) so
+  the destructor stays mapped. Deterministic repro + full story:
+  `spikes/egl-tsd-repro/` (surfaceless EGL init + `eglTerminate` on a worker thread —
+  the shape of niri's headless `egl_*` tests). Upstream `main` still has the bug
+  (checked 2026-07-02). Clearly upstreamable.
 
 ## Re-export / DIAG hygiene
 The in-guest working tree carried temporary `LIMINA-DIAG` debug hacks (force
