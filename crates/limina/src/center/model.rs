@@ -6,6 +6,8 @@
 //! Kept AppKit-free so it is unit-testable; the controller diffs consecutive
 //! snapshots and only rebuilds the row views when something actually changed.
 
+use std::path::Path;
+
 use crate::vmlib::{bundle, runtime, schema};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,8 +18,13 @@ pub struct VmRow {
     pub running: bool,
     /// Supervisor pid when running (0 = unknown-but-running).
     pub pid: i32,
-    /// "4 vCPU · 4096M · ssh auto" — or the load error for broken bundles.
+    /// "8 vCPU · 4G..12G" — or the load error for broken bundles.
     pub summary: String,
+    /// "root.raw (40 GB) · data.raw (ro)" — the disks/cdroms line ("" = none).
+    pub disks: String,
+    /// The SSH command ("ssh -p 4444 127.0.0.1") when running with networking, or
+    /// the configured port ("port 4444" / "auto") when stopped. None = no network.
+    pub ssh: Option<String>,
     /// vm.toml failed to load/validate: show the row (with the error) but offer no
     /// lifecycle actions except Delete.
     pub broken: bool,
@@ -44,6 +51,8 @@ pub fn snapshot() -> Vec<VmRow> {
                 Ok(cfg) => VmRow {
                     name: cfg.identity.name.clone(),
                     summary: summarize(&cfg),
+                    disks: disks_line(&b, &cfg),
+                    ssh: ssh_line(&b, &cfg, running),
                     running,
                     pid,
                     broken: false,
@@ -52,6 +61,8 @@ pub fn snapshot() -> Vec<VmRow> {
                 Err(e) => VmRow {
                     name: b.dir_name(),
                     summary: format!("broken: {e:#}"),
+                    disks: String::new(),
+                    ssh: None,
                     running,
                     pid,
                     broken: true,
@@ -67,12 +78,77 @@ fn summarize(cfg: &schema::VmConfig) -> String {
         schema::Memory::Fixed(s) => s.clone(),
         schema::Memory::Range { min, max } => format!("{min}..{max}"),
     };
-    let ssh = match cfg.networks.first() {
-        Some(n) if n.ssh_port != 0 => format!(" · ssh {}", n.ssh_port),
-        Some(_) => " · ssh auto".to_string(),
-        None => String::new(),
-    };
-    format!("{} vCPU · {mem}{ssh}", cfg.hardware.cpus)
+    format!("{} vCPU · {mem}", cfg.hardware.cpus)
+}
+
+/// One line describing the attached storage: in-bundle disks by file name with their
+/// size, external disks by path, cdroms marked `iso:`.
+fn disks_line(bundle: &bundle::VmBundle, cfg: &schema::VmConfig) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for d in &cfg.disks {
+        let resolved = bundle.resolve_path(&d.path);
+        let shown = if d.path.is_absolute() {
+            d.path.display().to_string()
+        } else {
+            d.path
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_else(|| d.path.display().to_string())
+        };
+        let size = std::fs::metadata(&resolved)
+            .map(|m| format!(" ({})", human_size(m.len())))
+            .unwrap_or_else(|_| " (missing)".into());
+        let ro = if d.ro { " ro" } else { "" };
+        parts.push(format!("{shown}{size}{ro}"));
+    }
+    for c in &cfg.cdroms {
+        let shown = c
+            .path
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_else(|| c.path.display().to_string());
+        parts.push(format!("iso: {shown}"));
+    }
+    parts.join(" · ")
+}
+
+/// The SSH line. For a running VM the truth is the supervisor log (the port
+/// auto-allocates from 2222 when not pinned — "guest SSH forward ready: ssh -p N");
+/// fall back to the pinned port. For a stopped VM, show what's configured.
+fn ssh_line(bundle: &bundle::VmBundle, cfg: &schema::VmConfig, running: bool) -> Option<String> {
+    let net = cfg.networks.first()?;
+    if running {
+        let port = port_from_log(&bundle.logs_dir().join("supervisor.log"))
+            .or((net.ssh_port != 0).then_some(net.ssh_port))?;
+        Some(format!("ssh -p {port} 127.0.0.1"))
+    } else if net.ssh_port != 0 {
+        Some(format!("ssh port {}", net.ssh_port))
+    } else {
+        Some("ssh port auto".into())
+    }
+}
+
+/// Parse the LAST "guest SSH forward ready: ssh -p N …" from a supervisor log (a
+/// terminal-started VM has no log here — the caller falls back to the pinned port).
+fn port_from_log(log: &Path) -> Option<u16> {
+    let text = std::fs::read_to_string(log).ok()?;
+    text.lines()
+        .rev()
+        .find_map(|l| l.split("guest SSH forward ready: ssh -p ").nth(1))
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|p| p.parse().ok())
+}
+
+fn human_size(bytes: u64) -> String {
+    const G: u64 = 1024 * 1024 * 1024;
+    const M: u64 = 1024 * 1024;
+    if bytes >= 10 * G {
+        format!("{} GB", bytes / G)
+    } else if bytes >= G {
+        format!("{:.1} GB", bytes as f64 / G as f64)
+    } else {
+        format!("{} MB", bytes.div_ceil(M).max(1))
+    }
 }
 
 #[cfg(test)]
@@ -87,10 +163,12 @@ mod tests {
         let lib = crate::vmlib::bundle::tests::scratch_library("model");
         std::env::set_var("LIMINA_VM_LIBRARY", &lib);
 
+        let src = lib.join("img.raw");
+        std::fs::write(&src, vec![0u8; 2 * 1024 * 1024]).unwrap();
         create(
             &CreateOpts {
                 name: "Alpha".into(),
-                disk: None,
+                disk: Some(src),
                 import_mode: ImportMode::CloneIntoBundle,
                 cpus: 2,
                 memory: Memory::Fixed("2G".into()),
@@ -110,12 +188,55 @@ mod tests {
         let alpha = rows.iter().find(|r| r.name == "Alpha").unwrap();
         assert!(!alpha.broken);
         assert!(!alpha.running);
-        assert_eq!(alpha.summary, "2 vCPU · 2G · ssh 2299");
+        assert_eq!(alpha.summary, "2 vCPU · 2G");
+        assert_eq!(alpha.disks, "root.raw (2 MB)");
+        assert_eq!(alpha.ssh.as_deref(), Some("ssh port 2299"));
         let trash = rows.iter().find(|r| r.name == "Trash").unwrap();
         assert!(trash.broken);
         assert!(trash.summary.starts_with("broken:"), "{}", trash.summary);
 
         std::env::remove_var("LIMINA_VM_LIBRARY");
         std::fs::remove_dir_all(&lib).ok();
+    }
+
+    #[test]
+    fn ssh_line_prefers_the_log_port_when_running() {
+        let _guard = crate::vmlib::bundle::tests::ENV_LOCK.lock().unwrap();
+        let lib = crate::vmlib::bundle::tests::scratch_library("sshline");
+        let bundle = create(
+            &{
+                let mut o = crate::vmlib::bundle::tests::basic_opts("Net");
+                o.ssh_port = 0;
+                o
+            },
+            &lib,
+        )
+        .unwrap();
+        let cfg = bundle.load().unwrap();
+
+        // Stopped, auto port.
+        assert_eq!(
+            ssh_line(&bundle, &cfg, false).as_deref(),
+            Some("ssh port auto")
+        );
+        // Running with a supervisor log: the auto-allocated port wins.
+        std::fs::write(
+            bundle.logs_dir().join("supervisor.log"),
+            "noise\nguest SSH forward ready: ssh -p 2223 <user>@127.0.0.1\n",
+        )
+        .unwrap();
+        assert_eq!(
+            ssh_line(&bundle, &cfg, true).as_deref(),
+            Some("ssh -p 2223 127.0.0.1")
+        );
+
+        std::fs::remove_dir_all(&lib).ok();
+    }
+
+    #[test]
+    fn human_sizes_read_naturally() {
+        assert_eq!(human_size(40 * 1024 * 1024 * 1024), "40 GB");
+        assert_eq!(human_size(3 * 1024 * 1024 * 1024 / 2), "1.5 GB");
+        assert_eq!(human_size(2 * 1024 * 1024), "2 MB");
     }
 }

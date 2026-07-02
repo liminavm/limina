@@ -14,7 +14,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use std::os::unix::process::CommandExt;
 
-use crate::vmlib::{bundle::VmBundle, import, runtime};
+use crate::vmlib::{bundle::VmBundle, runtime};
 
 /// Spawn `limina start <bundle>` as a detached child. Its own process group so a
 /// terminal Ctrl-C on the center never reaches it; stdout/stderr to the bundle's
@@ -67,10 +67,4 @@ pub fn reset_vm(bundle: &VmBundle) -> Result<()> {
         bundle.dir_name()
     );
     start_vm(bundle)
-}
-
-/// Delete a stopped VM's bundle (refuses while running; absolute-path disks are
-/// never touched — `vmlib::import::remove` owns those rules).
-pub fn delete_vm(bundle: &VmBundle) -> Result<()> {
-    import::remove(bundle)
 }

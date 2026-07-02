@@ -46,6 +46,10 @@ objc2-foundation = { version = "0.3", features = [
     "NSTimer",
     "NSDate",
     "block2",
+    # Control center: move deleted VM bundles to the macOS Trash.
+    "NSFileManager",
+    "NSError",
+    "NSURL",
 ] }
 objc2-app-kit = { version = "0.3", features = [
     "NSApplication",
@@ -68,6 +72,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSColor",
     "NSFont",
     "NSUserInterfaceLayout",
+    "NSBox",
     # Host-cursor adoption: the guest's cursor image (an IOSurface from the worker) becomes
     # the macOS NSCursor while the pointer is over the guest view, so the only visible
     # pointer is the zero-latency host one wearing the guest's shape.

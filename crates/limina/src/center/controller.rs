@@ -3,29 +3,39 @@
 
 //! The control-center's one ObjC class: app delegate + row-button action target.
 //!
-//! The visible list is a vertical `NSStackView` of row views (status dot, name,
-//! summary, per-row buttons) rebuilt from a [`model::snapshot`] only when it
-//! changes. Buttons carry the row index in their `tag`. Long-running operations
-//! (reset, import copies) run on background threads; they report errors into a
-//! shared queue the next refresh drains into an alert, and mark their bundle
-//! "busy" so the row shows a disabled placeholder meanwhile.
+//! The visible list is a vertical `NSStackView` of row views rebuilt from a
+//! [`model::snapshot`] only when it changes. Each row is: status dot + a multi-line
+//! info block (name / config+status / disks / ssh) + an action row of SF-symbol
+//! icon buttons. Buttons carry the row index in their `tag`.
+//!
+//! Lifecycle affordances: Stop asks for the graceful ladder and the button then
+//! MORPHS into a force-stop (bolt) icon — the discoverable UI for the "second
+//! signal skips the grace" escalation. Deletion moves the bundle to the macOS
+//! Trash (never a hard rm from the UI), optionally relocating in-bundle disk
+//! images out first ("Keep Disks").
+//!
+//! Long-running operations (reset, import copies) run on background threads; they
+//! report errors into a shared queue the next refresh drains into an alert, and
+//! mark their bundle "busy" so the row shows a placeholder meanwhile.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use objc2::rc::Retained;
 use objc2::runtime::Sel;
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationDelegate,
-    NSAutoresizingMaskOptions, NSButton, NSColor, NSFont, NSLayoutAttribute, NSModalResponseOK,
-    NSOpenPanel, NSStackView, NSStackViewGravity, NSTextField, NSUserInterfaceLayoutOrientation,
-    NSView, NSWindow,
+    NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSApplication,
+    NSApplicationDelegate, NSAutoresizingMaskOptions, NSBox, NSBoxType, NSButton, NSColor, NSFont,
+    NSImage, NSLayoutAttribute, NSModalResponseOK, NSOpenPanel, NSPasteboard,
+    NSPasteboardTypeString, NSStackView, NSStackViewGravity, NSTextField,
+    NSUserInterfaceLayoutOrientation, NSView, NSWindow,
 };
 use objc2_foundation::{
-    NSArray, NSEdgeInsets, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
+    NSArray, NSEdgeInsets, NSFileManager, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize,
+    NSString, NSURL,
 };
 
 use super::{model, model::VmRow, spawn};
@@ -39,12 +49,17 @@ pub struct CenterIvars {
     /// "No virtual machines yet" placeholder, hidden while rows exist.
     empty_label: RefCell<Option<Retained<NSTextField>>>,
     /// Bundles with an in-flight background operation (reset/import): their rows
-    /// show a disabled "Working…" placeholder instead of buttons.
+    /// show a placeholder instead of buttons. Arc: background threads clear it.
     busy: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Bundles the user asked to stop (graceful ladder in flight): their Stop
+    /// button morphs into the force-stop bolt. Main-thread only; pruned when the
+    /// row is no longer running.
+    stopping: RefCell<HashSet<PathBuf>>,
     /// Errors from background threads, drained into an alert on the next refresh.
     errors: Arc<Mutex<Vec<String>>>,
-    /// The busy set as of the last rebuild, so a busy-flip alone triggers one.
+    /// busy+stopping as of the last rebuild, so a state flip alone triggers one.
     last_busy: RefCell<HashSet<PathBuf>>,
+    last_stopping: RefCell<HashSet<PathBuf>>,
 }
 
 define_class!(
@@ -83,9 +98,24 @@ define_class!(
             if let Some(row) = self.row_for(sender) {
                 if let Err(e) = spawn::stop_vm(&row.bundle, false) {
                     self.alert("Could not stop the VM", &format!("{e:#}"));
+                    return;
                 }
-                // The flock releases when the supervisor exits; the 1 s refresh
-                // flips the row on its own.
+                // Graceful ladder is in flight: morph this row's Stop into the
+                // force-stop bolt (the discoverable second tap).
+                self.ivars()
+                    .stopping
+                    .borrow_mut()
+                    .insert(row.bundle.path.clone());
+                self.refresh(true);
+            }
+        }
+
+        #[unsafe(method(forceStopClicked:))]
+        fn force_stop_clicked(&self, sender: &NSButton) {
+            if let Some(row) = self.row_for(sender) {
+                if let Err(e) = spawn::stop_vm(&row.bundle, true) {
+                    self.alert("Could not force-stop the VM", &format!("{e:#}"));
+                }
             }
         }
 
@@ -120,21 +150,22 @@ define_class!(
 
         #[unsafe(method(deleteClicked:))]
         fn delete_clicked(&self, sender: &NSButton) {
-            let Some(row) = self.row_for(sender) else { return };
-            let mtm = self.mtm();
-            let alert = NSAlert::new(mtm);
-            alert.setMessageText(&NSString::from_str(&format!("Delete “{}”?", row.name)));
-            alert.setInformativeText(&NSString::from_str(
-                "This deletes the VM bundle including the disks inside it. \
-                 Disk images outside the bundle are not touched.",
-            ));
-            alert.addButtonWithTitle(&NSString::from_str("Delete"));
-            alert.addButtonWithTitle(&NSString::from_str("Cancel"));
-            if alert.runModal() == NSAlertFirstButtonReturn {
-                if let Err(e) = spawn::delete_vm(&row.bundle) {
-                    self.alert("Could not delete the VM", &format!("{e:#}"));
-                }
+            if let Some(row) = self.row_for(sender) {
+                self.run_delete_flow(&row);
                 self.refresh(true);
+            }
+        }
+
+        #[unsafe(method(copySshClicked:))]
+        fn copy_ssh_clicked(&self, sender: &NSButton) {
+            if let Some(row) = self.row_for(sender) {
+                if let Some(ssh) = &row.ssh {
+                    let pb = NSPasteboard::generalPasteboard();
+                    pb.clearContents();
+                    pb.setString_forType(&NSString::from_str(ssh), unsafe {
+                        NSPasteboardTypeString
+                    });
+                }
             }
         }
 
@@ -152,8 +183,10 @@ impl CenterController {
             list: RefCell::new(None),
             empty_label: RefCell::new(None),
             busy: Arc::new(Mutex::new(HashSet::new())),
+            stopping: RefCell::new(HashSet::new()),
             errors: Arc::new(Mutex::new(Vec::new())),
             last_busy: RefCell::new(HashSet::new()),
+            last_stopping: RefCell::new(HashSet::new()),
         });
         // SAFETY: NSObject's init signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
@@ -204,7 +237,7 @@ impl CenterController {
         let list = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
         list.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
         list.setAlignment(NSLayoutAttribute::Width);
-        list.setSpacing(6.0);
+        list.setSpacing(8.0);
         root.addView_inGravity(&list, NSStackViewGravity::Top);
 
         let empty = NSTextField::labelWithString(
@@ -231,19 +264,29 @@ impl CenterController {
         }
 
         let snap = model::snapshot();
+        // Prune transient per-bundle state that resolved itself: a bundle that is
+        // no longer running is done "stopping".
+        self.ivars()
+            .stopping
+            .borrow_mut()
+            .retain(|p| snap.iter().any(|r| &r.bundle.path == p && r.running));
+
         let busy_now = self.ivars().busy.lock().unwrap().clone();
+        let stopping_now = self.ivars().stopping.borrow().clone();
         let changed = force
             || snap != *self.ivars().rows.borrow()
-            || busy_now != *self.ivars().last_busy.borrow();
+            || busy_now != *self.ivars().last_busy.borrow()
+            || stopping_now != *self.ivars().last_stopping.borrow();
         if !changed {
             return;
         }
-        self.rebuild_rows(&snap, &busy_now);
+        self.rebuild_rows(&snap, &busy_now, &stopping_now);
         *self.ivars().rows.borrow_mut() = snap;
         *self.ivars().last_busy.borrow_mut() = busy_now;
+        *self.ivars().last_stopping.borrow_mut() = stopping_now;
     }
 
-    fn rebuild_rows(&self, rows: &[VmRow], busy: &HashSet<PathBuf>) {
+    fn rebuild_rows(&self, rows: &[VmRow], busy: &HashSet<PathBuf>, stopping: &HashSet<PathBuf>) {
         let mtm = self.mtm();
         let list_ref = self.ivars().list.borrow();
         let Some(list) = list_ref.as_ref() else {
@@ -255,25 +298,35 @@ impl CenterController {
             v.removeFromSuperview();
         }
         for (i, row) in rows.iter().enumerate() {
-            let view = self.row_view(mtm, i, row, busy.contains(&row.bundle.path));
+            let view = self.row_view(
+                mtm,
+                i,
+                row,
+                busy.contains(&row.bundle.path),
+                stopping.contains(&row.bundle.path),
+            );
             list.addView_inGravity(&view, NSStackViewGravity::Top);
+            if i + 1 < rows.len() {
+                list.addView_inGravity(&separator(mtm), NSStackViewGravity::Top);
+            }
         }
         if let Some(empty) = self.ivars().empty_label.borrow().as_ref() {
             empty.setHidden(!rows.is_empty());
         }
     }
 
-    /// One VM row: `● Name / summary …… [buttons]`.
+    /// One VM row: `● | name / config·status / disks / ssh (copy) / [actions…]`.
     fn row_view(
         &self,
         mtm: MainThreadMarker,
         index: usize,
         row: &VmRow,
         busy: bool,
+        stopping: bool,
     ) -> Retained<NSView> {
         let outer = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
         outer.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
-        outer.setAlignment(NSLayoutAttribute::CenterY);
+        outer.setAlignment(NSLayoutAttribute::Top);
         outer.setSpacing(8.0);
 
         let dot = NSTextField::labelWithString(&NSString::from_str("●"), mtm);
@@ -289,54 +342,144 @@ impl CenterController {
 
         let info = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
         info.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        info.setAlignment(NSLayoutAttribute::Leading);
-        info.setSpacing(2.0);
+        info.setAlignment(NSLayoutAttribute::Width);
+        info.setSpacing(3.0);
+
         let name = NSTextField::labelWithString(&NSString::from_str(&row.name), mtm);
         name.setFont(Some(&NSFont::boldSystemFontOfSize(13.0)));
         info.addView_inGravity(&name, NSStackViewGravity::Top);
-        let mut detail = row.summary.clone();
-        if row.running {
-            detail.push_str(&format!(" · running (pid {})", row.pid));
-        }
-        let summary = NSTextField::labelWithString(&NSString::from_str(&detail), mtm);
-        summary.setFont(Some(&NSFont::systemFontOfSize(11.0)));
-        summary.setTextColor(Some(&NSColor::secondaryLabelColor()));
-        info.addView_inGravity(&summary, NSStackViewGravity::Top);
-        outer.addView_inGravity(&info, NSStackViewGravity::Leading);
 
+        let mut status = row.summary.clone();
         if busy {
-            let working = NSTextField::labelWithString(&NSString::from_str("Working…"), mtm);
-            working.setTextColor(Some(&NSColor::secondaryLabelColor()));
-            outer.addView_inGravity(&working, NSStackViewGravity::Trailing);
-            return Retained::into_super(outer);
+            status.push_str(" · working…");
+        } else if stopping {
+            status.push_str(" · stopping…");
+        } else if row.running {
+            status.push_str(&format!(" · running (pid {})", row.pid));
+        } else if !row.broken {
+            status.push_str(" · stopped");
+        }
+        info.addView_inGravity(&small_label(mtm, &status), NSStackViewGravity::Top);
+
+        if !row.disks.is_empty() {
+            info.addView_inGravity(&small_label(mtm, &row.disks), NSStackViewGravity::Top);
+        }
+        if let Some(ssh) = &row.ssh {
+            let ssh_row = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
+            ssh_row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+            ssh_row.setAlignment(NSLayoutAttribute::CenterY);
+            ssh_row.setSpacing(4.0);
+            ssh_row.addView_inGravity(&small_label(mtm, ssh), NSStackViewGravity::Leading);
+            if row.running {
+                let copy = self.icon_button(
+                    mtm,
+                    "doc.on.doc",
+                    "Copy the SSH command",
+                    sel!(copySshClicked:),
+                    index,
+                );
+                ssh_row.addView_inGravity(&copy, NSStackViewGravity::Leading);
+            }
+            info.addView_inGravity(&ssh_row, NSStackViewGravity::Top);
         }
 
-        // Per-row actions: what the state allows, nothing else.
-        let mut buttons: Vec<(&str, Sel)> = Vec::new();
-        if row.broken {
-            buttons.push(("Delete", sel!(deleteClicked:)));
+        // The action row: lifecycle icons leading, Configure…/trash trailing.
+        let actions = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
+        actions.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        actions.setAlignment(NSLayoutAttribute::CenterY);
+        actions.setSpacing(6.0);
+        if busy {
+            actions.addView_inGravity(&small_label(mtm, "Working…"), NSStackViewGravity::Leading);
+        } else if row.broken {
+            let trash =
+                self.icon_button(mtm, "trash", "Move to Trash", sel!(deleteClicked:), index);
+            actions.addView_inGravity(&trash, NSStackViewGravity::Trailing);
         } else if row.running {
-            buttons.push(("Stop", sel!(stopClicked:)));
-            buttons.push(("Reset", sel!(resetClicked:)));
+            if stopping {
+                // The graceful ladder is running: the second tap is the kill.
+                let force = self.icon_button(
+                    mtm,
+                    "bolt.fill",
+                    "Force Stop — kill immediately (shutdown in progress…)",
+                    sel!(forceStopClicked:),
+                    index,
+                );
+                actions.addView_inGravity(&force, NSStackViewGravity::Leading);
+            } else {
+                let stop = self.icon_button(
+                    mtm,
+                    "power",
+                    "Shut Down (then click again to force-kill)",
+                    sel!(stopClicked:),
+                    index,
+                );
+                actions.addView_inGravity(&stop, NSStackViewGravity::Leading);
+            }
+            let reset = self.icon_button(
+                mtm,
+                "arrow.counterclockwise",
+                "Reset (kill and start again)",
+                sel!(resetClicked:),
+                index,
+            );
+            actions.addView_inGravity(&reset, NSStackViewGravity::Leading);
         } else {
-            buttons.push(("Start", sel!(startClicked:)));
-            buttons.push(("Configure…", sel!(configureClicked:)));
-            buttons.push(("Delete", sel!(deleteClicked:)));
-        }
-        for (title, action) in buttons {
-            let b = unsafe {
+            let start = self.icon_button(mtm, "play.fill", "Start", sel!(startClicked:), index);
+            actions.addView_inGravity(&start, NSStackViewGravity::Leading);
+            let configure = unsafe {
                 NSButton::buttonWithTitle_target_action(
-                    &NSString::from_str(title),
+                    &NSString::from_str("Configure…"),
+                    Some(self.as_ref()),
+                    Some(sel!(configureClicked:)),
+                    mtm,
+                )
+            };
+            configure.setTag(index as isize);
+            actions.addView_inGravity(&configure, NSStackViewGravity::Trailing);
+            let trash =
+                self.icon_button(mtm, "trash", "Move to Trash", sel!(deleteClicked:), index);
+            actions.addView_inGravity(&trash, NSStackViewGravity::Trailing);
+        }
+        info.addView_inGravity(&actions, NSStackViewGravity::Top);
+
+        outer.addView_inGravity(&info, NSStackViewGravity::Leading);
+        Retained::into_super(outer)
+    }
+
+    /// An SF-symbol icon button with a tooltip (falls back to a title button if the
+    /// symbol is unavailable). `tag` = row index.
+    fn icon_button(
+        &self,
+        mtm: MainThreadMarker,
+        symbol: &str,
+        tooltip: &str,
+        action: Sel,
+        tag: usize,
+    ) -> Retained<NSButton> {
+        let b = match NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str(symbol),
+            Some(&NSString::from_str(tooltip)),
+        ) {
+            Some(img) => unsafe {
+                NSButton::buttonWithImage_target_action(
+                    &img,
                     Some(self.as_ref()),
                     Some(action),
                     mtm,
                 )
-            };
-            b.setTag(index as isize);
-            outer.addView_inGravity(&b, NSStackViewGravity::Trailing);
-        }
-
-        Retained::into_super(outer)
+            },
+            None => unsafe {
+                NSButton::buttonWithTitle_target_action(
+                    &NSString::from_str(tooltip),
+                    Some(self.as_ref()),
+                    Some(action),
+                    mtm,
+                )
+            },
+        };
+        b.setTag(tag as isize);
+        b.setToolTip(Some(&NSString::from_str(tooltip)));
+        b
     }
 
     /// The row a clicked button belongs to (its `tag` indexes the applied snapshot).
@@ -350,6 +493,79 @@ impl CenterController {
         alert.setMessageText(&NSString::from_str(title));
         alert.setInformativeText(&NSString::from_str(text));
         alert.runModal();
+    }
+
+    /// Delete = move to the macOS Trash (recoverable), with a choice about disks:
+    /// "Move to Trash" trashes the whole bundle (in-bundle disks included);
+    /// "Keep Disks" first relocates in-bundle disk images out beside the bundle,
+    /// then trashes the rest. Disks referenced by absolute path are never touched.
+    fn run_delete_flow(&self, row: &VmRow) {
+        if row.running {
+            self.alert("VM is running", "Stop the VM before deleting it.");
+            return;
+        }
+        let mtm = self.mtm();
+        // Which disks live inside the bundle? (broken bundle: unknown → whole-bundle trash only)
+        let bundle_disks: Vec<PathBuf> = row
+            .bundle
+            .load()
+            .map(|cfg| {
+                cfg.disks
+                    .iter()
+                    .filter(|d| !d.path.is_absolute())
+                    .map(|d| d.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str(&format!(
+            "Move “{}” to the Trash?",
+            row.name
+        )));
+        alert.setInformativeText(&NSString::from_str(if bundle_disks.is_empty() {
+            "The VM bundle will be moved to the Trash. \
+             Disk images outside the bundle are never touched."
+        } else {
+            "The VM and the disk images inside its bundle will be moved to the Trash \
+             (recoverable from there). “Keep Disks” moves the disk images out into the \
+             VM library first. Disk images outside the bundle are never touched."
+        }));
+        alert.addButtonWithTitle(&NSString::from_str("Move to Trash"));
+        if !bundle_disks.is_empty() {
+            alert.addButtonWithTitle(&NSString::from_str("Keep Disks"));
+        }
+        alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+
+        let response = alert.runModal();
+        let keep_disks = !bundle_disks.is_empty() && response == NSAlertSecondButtonReturn;
+        if response != NSAlertFirstButtonReturn && !keep_disks {
+            return; // Cancel
+        }
+
+        let result = (|| -> anyhow::Result<()> {
+            if keep_disks {
+                let dest_dir = vmlib::bundle::library_dir();
+                for rel in &bundle_disks {
+                    let src = row.bundle.resolve_path(rel);
+                    if !src.exists() {
+                        continue;
+                    }
+                    let file = rel
+                        .file_name()
+                        .map(|f| f.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "disk.raw".into());
+                    let dest = unique_path(&dest_dir.join(format!("{}-{}", row.name, file)));
+                    std::fs::rename(&src, &dest).map_err(|e| {
+                        anyhow::anyhow!("moving {} out of the bundle: {e}", src.display())
+                    })?;
+                }
+            }
+            trash(&row.bundle.path)
+        })();
+        if let Err(e) = result {
+            self.alert("Could not delete the VM", &format!("{e:#}"));
+        }
     }
 
     /// Import…: pick a disk image, name the VM, clone it into a new bundle in the
@@ -506,6 +722,52 @@ impl CenterController {
 
 fn rect(x: f64, y: f64, w: f64, h: f64) -> NSRect {
     NSRect::new(NSPoint::new(x, y), NSSize::new(w, h))
+}
+
+fn small_label(mtm: MainThreadMarker, text: &str) -> Retained<NSTextField> {
+    let l = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+    l.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+    l.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    l
+}
+
+fn separator(mtm: MainThreadMarker) -> Retained<NSView> {
+    let sep = NSBox::initWithFrame(NSBox::alloc(mtm), rect(0.0, 0.0, 100.0, 1.0));
+    sep.setBoxType(NSBoxType::Separator);
+    Retained::into_super(sep)
+}
+
+/// Move a path to the macOS Trash (recoverable — the UI never hard-deletes).
+fn trash(path: &Path) -> anyhow::Result<()> {
+    let s = path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("path is not valid UTF-8: {path:?}"))?;
+    let url = NSURL::fileURLWithPath(&NSString::from_str(s));
+    NSFileManager::defaultManager()
+        .trashItemAtURL_resultingItemURL_error(&url, None)
+        .map_err(|e| anyhow::anyhow!("moving {} to the Trash: {}", path.display(), e))
+}
+
+/// `p`, or `p` with `-1`/`-2`/… appended before the extension until it's free.
+fn unique_path(p: &Path) -> PathBuf {
+    if !p.exists() {
+        return p.to_path_buf();
+    }
+    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned());
+    let ext = p.extension().map(|e| e.to_string_lossy().into_owned());
+    let dir = p.parent().unwrap_or(Path::new("."));
+    for n in 1..1000 {
+        let name = match (&stem, &ext) {
+            (Some(s), Some(e)) => format!("{s}-{n}.{e}"),
+            (Some(s), None) => format!("{s}-{n}"),
+            _ => format!("disk-{n}"),
+        };
+        let candidate = dir.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    p.to_path_buf()
 }
 
 /// A `Label:` + editable field pair placed at `y` inside the accessory view.
