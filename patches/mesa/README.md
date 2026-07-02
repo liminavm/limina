@@ -105,6 +105,16 @@ host-zink series lives separately in `patches/kosmickrisp/`.
   `Rgba16Unorm` Wayland swapchain format, producing the "ghost UI" in wgpu apps. NOT a KK
   gap (see the corrected story in the `limina-kk-feature-gaps` memory). Upstreamable with
   the lavapipe precedent as the argument.
+- **`0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff`** (2026-07-01, the
+  two-tier Vulkan-floor fix) — venus: when the renderer connects but the instance ring /
+  version handshake fails (on limina: a 4 KiB-page guest under the 16 KiB host can't map
+  the ring's 132 KiB shmem blob), degrade to the existing STUB instance (0 devices) instead
+  of returning `VK_ERROR_OUT_OF_HOST_MEMORY` — which the loader treats as fatal for the
+  WHOLE `vkCreateInstance`, killing lavapipe with it. Root-caused + validated RED→GREEN on
+  a stock F44 guest 2026-07-01 (venus+lavapipe → llvmpipe enumerates, no error). Protects
+  the enhanced image's *stock-kernel GRUB-fallback boot* today; truly-stock guests get it
+  when it lands upstream (strong candidate — the stub path already exists for version
+  mismatches). Applied by `build-venus.sh` and the F44 RPM build.
 
 ## Re-export / DIAG hygiene
 The in-guest working tree carried temporary `LIMINA-DIAG` debug hacks (force

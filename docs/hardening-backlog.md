@@ -63,19 +63,21 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   use GLX apps → deferred. Investigation start: the kopper DRI3 pixmap sharing / X Present on a
   venus-backed Xwayland (is the present-buffer a virtio-gpu blob that isn't flushed/attached to the
   Xwayland Wayland surface?); compare client-direct DRI3 present vs Xwayland glamor.
-- **Stock/basic tier: guest Vulkan doesn't degrade to lavapipe** (open, to investigate — reported
-  2026-06-29 while dogfooding) — on the basic tier (stock F44, 4 KiB pages, virgl GL works, no venus),
-  guest Vulkan apps **fail** instead of falling back to **lavapipe** (Mesa's CPU/llvmpipe Vulkan). This
-  breaks the two-tier graceful-degradation guarantee: the stock baseline should still offer *working* (if
-  slow) Vulkan via lavapipe when hardware/venus Vulkan is unavailable. Likely cause: stock Fedora ships the
-  **venus ICD** (`libvulkan_virtio.so`), which on a 4 KiB-page guest under the 16 KiB host fails init
-  (`vkEnumeratePhysicalDevices → ERROR_INITIALIZATION_FAILED`), and the Vulkan loader doesn't fall through
-  to lavapipe — either lavapipe (`libvulkan_lvp.so`) isn't installed, or the loader picks the failing venus
-  ICD and stops. Investigation start: in a basic guest, `ls /usr/share/vulkan/icd.d/` + `vulkaninfo` ICD
-  enumeration (is lavapipe present? does `VK_ICD_FILENAMES`→lvp work?), then decide the fix (ensure
-  lavapipe + loader fall-through, or a venus ICD that declines cleanly so the loader tries the next). The
-  enhanced tier (16k + venus) is unaffected — venus enumerates the real GPU there; this is a *basic-tier*
-  usability gap.
+- **Stock/basic tier: guest Vulkan doesn't degrade to lavapipe** — **ROOT-CAUSED + FIX AUTHORED &
+  VALIDATED 2026-07-01** (was: open, reported 2026-06-29 dogfooding). The earlier guesses were wrong:
+  lavapipe IS installed, and the loader DOES skip ICDs that fail at *enumerate*. The real mechanism:
+  on a 4 KiB-page guest with the coexist GPU, venus's **instance ring** shmem blob (132 KiB — a 4k
+  multiple, not 16k) can't be `hv_vm_map`ed (`size%16k=4096`, patch 0011's alignment log), guest mmap
+  fails, and **venus returns `VK_ERROR_OUT_OF_HOST_MEMORY` from `vkCreateInstance` — which the loader
+  treats as fatal for the WHOLE instance** (unlike `INCOMPATIBLE_DRIVER`, which it skips), killing
+  lavapipe with it (`vulkaninfo: vkCreateInstance failed with ERROR_OUT_OF_HOST_MEMORY`). Fix =
+  `patches/mesa/0012` (venus: degrade to the existing STUB instance — 0 devices — when post-connect
+  ring/version setup fails, mirroring the wire-version-mismatch path). Validated RED→GREEN on a stock
+  F44 guest: patched venus + lavapipe → llvmpipe enumerates cleanly. Ships in `build-venus.sh` + the
+  F44 mesa RPM (protects the enhanced image's **stock-kernel GRUB-fallback boot** — a 4k kernel + our
+  mesa); **truly-stock guests are fixed only when 0012 lands upstream** (Wave-1 upstream candidate) and
+  trickles into Fedora — until then the stock-tier Vulkan floor still fails on coexist boots (residual,
+  accepted). Headless boots (no GPU device) were never affected — venus declines cleanly there.
 - **GNOME notification shows a green corruption artifact** (open, low priority — reported 2026-06-29
   while dogfooding the F44 enhanced tier) — a notification ("Disk Usage Analyzer / Low Disk Space on
   'boot'") renders a small **green glitch** (a few stray bright-green pixels) just below the bold

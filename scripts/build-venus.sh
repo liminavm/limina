@@ -60,7 +60,8 @@ container run --rm \
     #   0010 = vn_physical_device native LINEAR-modifier reporting + dma_buf-on-opaque-fd
     #          (supersedes old 0008) + vn_image modifier plane/tiling handling.
     for p in /patches/0009-venus-wsi-present-fix.diff \
-             /patches/0010-venus-image-physdev-native-modifier.diff; do
+             /patches/0010-venus-image-physdev-native-modifier.diff \
+             /patches/0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff; do
       echo "=== applying $(basename "$p") ==="
       if git apply --verbose "$p"; then echo "OK: $p";
       elif patch -p1 -F5 --dry-run < "$p" >/dev/null 2>&1 && patch -p1 -F5 < "$p"; then echo "OK(fuzz): $p";

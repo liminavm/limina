@@ -15,6 +15,9 @@
 #   0001  zink nullDescriptor emulation (MR!37115) — GL correctness on zink.
 #   0009  venus WSI present-fix — THE black-screen fix; without it the venus desktop never paints.
 #   0010  venus image physdev native modifier — advertises EXT_image_drm_format_modifier.
+#   0012  venus: degrade to the stub instance when ring/version setup fails post-connect —
+#         without it a 4 KiB-kernel boot (the stock-kernel GRUB fallback!) returns
+#         OUT_OF_HOST_MEMORY from vkCreateInstance and the loader kills lavapipe with it.
 #   0011  venus WSI: drop the 16-bit-unorm wayland swapchain format. Rgba16Unorm is a legal
 #         Vulkan surface format but NOT a wgpu render attachment, so a conventional "first
 #         non-sRGB" wgpu client (ghost-ui) that lands on it fails pipeline creation. Matches
@@ -50,11 +53,12 @@ cp -f "$PATCHES"/0001-zink-nullDescriptor-emulation-MR37115.diff \
       "$PATCHES"/0009-venus-wsi-present-fix.diff \
       "$PATCHES"/0010-venus-image-physdev-native-modifier.diff \
       "$PATCHES"/0011-venus-wsi-drop-16bit-unorm-swapchain.diff \
+      "$PATCHES"/0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff \
       "$HOME/rpmbuild/SOURCES/"
 SPEC="$HOME/rpmbuild/SPECS/mesa.spec"
 LAST_PATCH_LINE=$( { grep -nE "^Patch[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
 [ -n "$LAST_PATCH_LINE" ] || LAST_PATCH_LINE=$( { grep -nE "^Source[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
-ins="Patch9001: 0001-zink-nullDescriptor-emulation-MR37115.diff\nPatch9009: 0009-venus-wsi-present-fix.diff\nPatch9010: 0010-venus-image-physdev-native-modifier.diff\nPatch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff"
+ins="Patch9001: 0001-zink-nullDescriptor-emulation-MR37115.diff\nPatch9009: 0009-venus-wsi-present-fix.diff\nPatch9010: 0010-venus-image-physdev-native-modifier.diff\nPatch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff\nPatch9012: 0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff"
 sed -i "${LAST_PATCH_LINE}a ${ins}" "$SPEC"
 # Our patches are plain `git diff` (no mailbox headers); ensure %autosetup uses GNU patch (-p1).
 sed -i -E "s/^%autosetup -S git/%autosetup -p1/" "$SPEC"
