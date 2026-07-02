@@ -73,6 +73,10 @@ objc2-app-kit = { version = "0.3", features = [
     "NSFont",
     "NSUserInterfaceLayout",
     "NSBox",
+    "NSScrollView",
+    "NSClipView",
+    "NSLayoutConstraint",
+    "NSLayoutAnchor",
     # Host-cursor adoption: the guest's cursor image (an IOSurface from the worker) becomes
     # the macOS NSCursor while the pointer is over the guest view, so the only visible
     # pointer is the zero-latency host one wearing the guest's shape.

@@ -29,8 +29,8 @@ use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThr
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSApplication,
     NSApplicationDelegate, NSAutoresizingMaskOptions, NSBox, NSBoxType, NSButton, NSColor, NSFont,
-    NSImage, NSLayoutAttribute, NSModalResponseOK, NSOpenPanel, NSPasteboard,
-    NSPasteboardTypeString, NSStackView, NSStackViewGravity, NSTextField,
+    NSImage, NSLayoutAttribute, NSLayoutConstraint, NSModalResponseOK, NSOpenPanel, NSPasteboard,
+    NSPasteboardTypeString, NSScrollView, NSStackView, NSStackViewGravity, NSTextField,
     NSUserInterfaceLayoutOrientation, NSView, NSWindow,
 };
 use objc2_foundation::{
@@ -198,28 +198,24 @@ impl CenterController {
     /// empty-state label) filling the window's content view.
     fn build_ui(&self, mtm: MainThreadMarker, window: &NSWindow) {
         let content = window.contentView().expect("window content view");
+        let bounds = content.bounds();
+        let (w, h) = (bounds.size.width, bounds.size.height);
+        const MARGIN: f64 = 16.0;
+        const HEADER_H: f64 = 28.0;
 
-        let root = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
-        root.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        // Width-alignment stretches every arranged view to the stack's width, so
-        // the header's and rows' Trailing-gravity buttons hug the right edge.
-        root.setAlignment(NSLayoutAttribute::Width);
-        root.setSpacing(10.0);
-        root.setEdgeInsets(NSEdgeInsets {
-            top: 14.0,
-            left: 16.0,
-            bottom: 14.0,
-            right: 16.0,
-        });
-        root.setFrame(content.bounds());
-        root.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable
-                | NSAutoresizingMaskOptions::ViewHeightSizable,
-        );
-
+        // Header (title + Import…) pinned to the top edge, stretching with the window.
         let header = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
         header.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
         header.setAlignment(NSLayoutAttribute::CenterY);
+        header.setFrame(rect(
+            MARGIN,
+            h - MARGIN - HEADER_H,
+            w - 2.0 * MARGIN,
+            HEADER_H,
+        ));
+        header.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
+        );
         let title = NSTextField::labelWithString(&NSString::from_str("Virtual Machines"), mtm);
         title.setFont(Some(&NSFont::boldSystemFontOfSize(16.0)));
         header.addView_inGravity(&title, NSStackViewGravity::Leading);
@@ -232,13 +228,52 @@ impl CenterController {
             )
         };
         header.addView_inGravity(&import, NSStackViewGravity::Trailing);
-        root.addView_inGravity(&header, NSStackViewGravity::Top);
+        content.addSubview(&header);
+
+        // The row list lives in a scroll view filling the rest of the window, so a
+        // large library scrolls instead of clipping. The stack is the document view,
+        // pinned to the clip view's top/leading/width by Auto Layout; its height is
+        // intrinsic (>= the clip so short content stays top-anchored).
+        let scroll = NSScrollView::initWithFrame(
+            NSScrollView::alloc(mtm),
+            rect(
+                MARGIN,
+                MARGIN,
+                w - 2.0 * MARGIN,
+                h - 2.0 * MARGIN - HEADER_H - 8.0,
+            ),
+        );
+        scroll.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        scroll.setHasVerticalScroller(true);
+        scroll.setDrawsBackground(false);
 
         let list = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
         list.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
         list.setAlignment(NSLayoutAttribute::Width);
         list.setSpacing(8.0);
-        root.addView_inGravity(&list, NSStackViewGravity::Top);
+        // Keep the rows clear of the overlay scroller on the right.
+        list.setEdgeInsets(NSEdgeInsets {
+            top: 2.0,
+            left: 0.0,
+            bottom: 2.0,
+            right: 6.0,
+        });
+        list.setTranslatesAutoresizingMaskIntoConstraints(false);
+        scroll.setDocumentView(Some(&list));
+        let clip = scroll.contentView();
+        NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+            list.topAnchor().constraintEqualToAnchor(&clip.topAnchor()),
+            list.leadingAnchor()
+                .constraintEqualToAnchor(&clip.leadingAnchor()),
+            list.widthAnchor()
+                .constraintEqualToAnchor(&clip.widthAnchor()),
+            list.heightAnchor()
+                .constraintGreaterThanOrEqualToAnchor(&clip.heightAnchor()),
+        ]));
+        content.addSubview(&scroll);
 
         let empty = NSTextField::labelWithString(
             &NSString::from_str(
@@ -247,9 +282,17 @@ impl CenterController {
             mtm,
         );
         empty.setTextColor(Some(&NSColor::secondaryLabelColor()));
-        root.addView_inGravity(&empty, NSStackViewGravity::Top);
+        empty.setFrame(rect(
+            MARGIN + 4.0,
+            h - MARGIN - HEADER_H - 60.0,
+            w - 2.0 * MARGIN,
+            40.0,
+        ));
+        empty.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
+        );
+        content.addSubview(&empty);
 
-        content.addSubview(&root);
         *self.ivars().list.borrow_mut() = Some(list);
         *self.ivars().empty_label.borrow_mut() = Some(empty);
     }
