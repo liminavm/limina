@@ -70,6 +70,39 @@ Measurement gotchas (cost us an hour; keep):
 Dynamic memory works end-to-end exactly as designed: the host pays the guest's true working
 set, page cache cannot accumulate, and real demand gets the memory back within seconds.
 
+## Measured (Run C: the user's scenario — GPU-heavy tabs + stress-ng, static 12288)
+
+Six WebGL tabs (aquarium ×2 @10k/30k fish, dynamic-cubemap, field, blob, electricflower),
+then `swapoff` + `stress-ng --vm 4 --vm-bytes 7400M --vm-keep` (7.4 GB total — note stress-ng
+SPLITS --vm-bytes across workers) pinning the guest to ~full.
+
+| phase | footprint | notes |
+|-------|-----------|-------|
+| C0 idle                       | 5.0 GB  | (dnf install of stress-ng churned cache) |
+| C1 six WebGL tabs settled     | 7.0 GB  | IOAccelerator 1.0 GB dirty, IOSurface 146 MB/47 surfaces, venus shmem pool 1.4 GB resident |
+| C2 tabs + stress-ng (guest full) | **15.0 GB** | the "assigned 12 GiB → what does the host pay" answer |
+| C3 stress-ng ends +2 min      | 8.6 GB  | FRQ returned ~6.4 GB |
+| C4 Firefox closed +2 min      | 7.3 GB  | IOAccelerator → 284 MB, IOSurface → 20 MB — graphics returns |
+
+**The gap, decomposed (C2: 15.0 GB total, guest RAM ≈ 12.0 GiB fully touched → gap ≈ 3.0 GB,
+matching footprint(1)'s guest-RAM-excluding ledger of 3003 MB):**
+
+| contributor | size | what it is |
+|-------------|------|------------|
+| untagged VM_ALLOCATE            | 1.47 GB | dominated by the venus shmem pool: guest-visible CS/reply/ring buffers + mtl_shm blob carriers (vmmap types it "shared memory", 20.6 G virtual / ~1.4 G hot; macOS pushed it to compressor/swap under the C2 pressure) |
+| IOAccelerator (graphics), dirty | 1.10 GB | KK Metal heaps — the six tabs' WebGL textures/buffers/render targets |
+| MALLOC_SMALL + LARGE            | 0.19 GB | worker heap |
+| IOSurface                       | 0.15 GB | 48 window/scanout buffers |
+| owned-unmapped (Metal internal) | 0.07 GB | |
+| page tables + binaries + misc   | ~0.05 GB | |
+| **total overhead**              | **≈3.0 GB** | + outside the worker: supervisor ~130 MB (debug build), gvproxy 30 MB |
+
+So with the guest genuinely full, host cost = assigned + ~25% — all of it graphics + venus
+transport + heap, and all of it *returns* when the workload ends (C3/C4). The user's original
+~20 GB reading additionally contained the pre-fix venus context leak (each dead context kept
+its ring+reply shmem mapped and its pages dirty — a long browsing session accumulates
+thousands of contexts), fixed 2026-07-02 (patches/virglrenderer/0022 + libkrun/0041).
+
 ## Where the memory goes (sourced; workflow `mem-overhead-sources`, 4 agents, all claims path:line-cited)
 
 1. **Guest RAM (the big term).** One anon `MAP_NORESERVE` mmap sized at max
