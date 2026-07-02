@@ -80,6 +80,32 @@ define_class!(
         fn should_terminate_after_last_window_closed(&self, _app: &NSApplication) -> bool {
             true
         }
+
+        // Finder opened one or more `.liminavm` bundles (double-click, or a drop
+        // on the Dock icon — CFBundleDocumentTypes in build-app.sh routes them
+        // here). Start each stopped one; a running one just stays as it is.
+        #[unsafe(method(application:openURLs:))]
+        fn application_open_urls(&self, _app: &NSApplication, urls: &NSArray<NSURL>) {
+            for url in urls.iter() {
+                let Some(path) = url.path().map(|p| PathBuf::from(p.to_string())) else {
+                    continue;
+                };
+                let bundle = vmlib::bundle::VmBundle::new(&path);
+                if !bundle.vm_toml().is_file() {
+                    self.alert(
+                        "Not a Limina VM",
+                        &format!("{} does not contain a vm.toml.", path.display()),
+                    );
+                    continue;
+                }
+                if !vmlib::runtime::status(&bundle).is_running() {
+                    if let Err(e) = spawn::start_vm(&bundle) {
+                        self.alert("Could not start the VM", &format!("{e:#}"));
+                    }
+                }
+            }
+            self.refresh(true);
+        }
     }
 
     impl CenterController {

@@ -139,6 +139,35 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>LSArchitecturePriority</key><array><string>arm64</string></array>
   <key>NSHighResolutionCapable</key><true/>
+  <!-- .liminavm bundles: a package (the directory shows as one Finder item) owned
+       by Limina; opening one routes to application:openURLs: in the control
+       center, which starts the VM. -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Limina Virtual Machine</string>
+      <key>LSItemContentTypes</key><array><string>eti.noronha.limina.vm</string></array>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>LSTypeIsPackage</key><true/>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>eti.noronha.limina.vm</string>
+      <key>UTTypeDescription</key><string>Limina Virtual Machine</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>com.apple.package</string>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key><array><string>liminavm</string></array>
+      </dict>
+    </dict>
+  </array>
 </dict>
 </plist>
 PLIST
