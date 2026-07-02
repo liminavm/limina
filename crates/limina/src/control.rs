@@ -93,8 +93,22 @@ fn silent_threshold() -> Duration {
     Duration::from_secs(secs)
 }
 
+/// How long a write to a peer may block before we declare the peer wedged and drop it.
+/// A peer that hasn't drained its socket buffer for this long has effectively stopped
+/// serving its side of the protocol; without a bound, one such peer blocks whoever is
+/// sending to it forever — historically the Ctrl-C shutdown ladder, since a blocking
+/// send also serialized against registration and the liveness sweep. Override with
+/// `LIMINA_CONTROL_WRITE_TIMEOUT_MS` (tests shorten it); 0 disables the bound.
+fn write_timeout() -> Option<Duration> {
+    let ms = std::env::var("LIMINA_CONTROL_WRITE_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2000u64);
+    (ms > 0).then(|| Duration::from_millis(ms))
+}
+
 struct Inner {
-    peers: Mutex<Vec<Peer>>,
+    peers: Mutex<Vec<Arc<Peer>>>,
     next_id: AtomicU64,
     clipboard: crate::clipboard::Clipboard,
     /// M6 PSI autoballoon policy, driven by guest `MemPressure` reports. `None` unless `--memory`
@@ -184,22 +198,13 @@ impl ControlPlane {
             grace_ms: grace.as_millis() as u64,
         });
         let mut sent = false;
-        self.inner.peers.lock().unwrap().retain(|peer| {
-            if !peer.has_cap("shutdown") {
-                return true;
-            }
-            match peer.send(&msg, CHANNEL_CONTROL) {
-                Ok(()) => {
-                    log::info!("control: SHUTDOWN sent to {}", peer.agent);
-                    sent = true;
-                    true
-                }
-                Err(e) => {
-                    log::warn!("control: sending SHUTDOWN to {} failed ({e})", peer.agent);
-                    false
-                }
-            }
-        });
+        for peer in self
+            .inner
+            .send_to_capable("shutdown", &msg, CHANNEL_CONTROL)
+        {
+            log::info!("control: SHUTDOWN sent to {peer}");
+            sent = true;
+        }
         sent
     }
 }
@@ -208,18 +213,44 @@ impl Inner {
     /// Send a clipboard message to every clipboard-capable peer, dropping any whose
     /// send fails (dead connection).
     fn broadcast_clipboard(&self, msg: &Message) {
-        self.peers.lock().unwrap().retain(|peer| {
-            if !peer.has_cap("clipboard") {
-                return true;
-            }
-            match peer.send(msg, CHANNEL_CLIPBOARD) {
-                Ok(()) => true,
+        self.send_to_capable("clipboard", msg, CHANNEL_CLIPBOARD);
+    }
+
+    /// Send `msg` to every peer with `cap`, returning the agents that took it and
+    /// dropping any whose send fails (dead or wedged connection).
+    ///
+    /// Sends happen on a SNAPSHOT of the registry, never while holding the peers lock:
+    /// each peer's socket has a write timeout ([`write_timeout`]) rather than blocking
+    /// forever, but even a bounded stall must not serialize registration, the liveness
+    /// sweep, and the shutdown ladder behind one slow peer. (Snapshotting is what makes
+    /// this safe: a peer that deregisters concurrently just gets a failed send here.)
+    fn send_to_capable(&self, cap: &str, msg: &Message, channel: u32) -> Vec<String> {
+        let targets: Vec<Arc<Peer>> = self
+            .peers
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.has_cap(cap))
+            .cloned()
+            .collect();
+        let mut delivered = Vec::new();
+        let mut failed = Vec::new();
+        for peer in targets {
+            match peer.send(msg, channel) {
+                Ok(()) => delivered.push(peer.agent.clone()),
                 Err(e) => {
-                    log::warn!("control: clipboard send to {} failed ({e})", peer.agent);
-                    false
+                    log::warn!("control: send to {} failed ({e}); dropping it", peer.agent);
+                    failed.push(peer.id);
                 }
             }
-        });
+        }
+        if !failed.is_empty() {
+            self.peers
+                .lock()
+                .unwrap()
+                .retain(|p| !failed.contains(&p.id));
+        }
+        delivered
     }
 }
 
@@ -230,6 +261,12 @@ fn accept_loop(listener: UnixListener, inner: Arc<Inner>) {
         match stream {
             Ok(stream) => {
                 set_nosigpipe(&stream);
+                // Bound every write to this peer (the option rides the socket, so the
+                // serve thread's `try_clone` write half inherits it): a peer that stops
+                // draining must produce a send ERROR to be dropped over, not a hang.
+                if let Err(e) = stream.set_write_timeout(write_timeout()) {
+                    log::warn!("control: set_write_timeout failed ({e}); sends may block");
+                }
                 let peer_inner = inner.clone();
                 let spawned = std::thread::Builder::new()
                     .name("limina-control-peer".into())
@@ -280,14 +317,14 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
     let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
     let writer = Arc::new(Mutex::new(stream.try_clone()?));
     let last_seen = Arc::new(Mutex::new(Instant::now()));
-    let peer = Peer {
+    let peer = Arc::new(Peer {
         id,
         agent: hello.agent.clone(),
         caps: hello.caps,
         stream: writer.clone(),
         last_seen: last_seen.clone(),
         silent: Arc::new(AtomicBool::new(false)),
-    };
+    });
     // A late joiner needs the CURRENT host clipboard, not just the next change.
     if peer.has_cap("clipboard") {
         if let Some(offer) = inner.clipboard.initial_offer() {
@@ -371,5 +408,65 @@ fn set_nosigpipe(stream: &UnixStream) {
             &on as *const _ as *const libc::c_void,
             std::mem::size_of::<libc::c_int>() as libc::socklen_t,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use limina_proto::Hello;
+
+    /// Connect a fake agent to the plane's socket, handshake, and return the stream.
+    fn connect_agent(path: &Path, caps: &[&str]) -> UnixStream {
+        let mut s = UnixStream::connect(path).unwrap();
+        write_message(
+            &mut s,
+            CHANNEL_CONTROL,
+            &Message::Hello(Hello {
+                agent: "test-agent/0".into(),
+                caps: caps.iter().map(|c| c.to_string()).collect(),
+                pagesize: 4096,
+            }),
+        )
+        .unwrap();
+        let (_, welcome) = read_message(&mut s).unwrap();
+        assert!(matches!(welcome, Message::Welcome(_)));
+        s
+    }
+
+    /// A shutdown-capable agent that never drains its socket must not stall
+    /// `request_shutdown`: `Peer::send` used to be a blocking write with no timeout,
+    /// made while holding the peers lock — one wedged agent froze the Ctrl-C shutdown
+    /// ladder, new-peer registration, and the liveness sweep. The plane must time the
+    /// write out and drop the peer instead.
+    #[test]
+    fn wedged_peer_cannot_stall_request_shutdown() {
+        std::env::set_var("LIMINA_CONTROL_WRITE_TIMEOUT_MS", "200");
+        let path =
+            std::env::temp_dir().join(format!("limina-ctl-test-{}.sock", std::process::id()));
+        let plane = ControlPlane::start(&path, None).unwrap();
+        // HELLO, then never read again: the socket buffers fill and stay full.
+        let wedged = connect_agent(&path, &["shutdown"]);
+
+        // Hammer SHUTDOWN until the buffers fill. Run in a thread so a regression
+        // (send blocking forever) fails the test instead of hanging it. Each frame is
+        // ~30 bytes; 8192 sends is comfortably past any default unix-socket buffering.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let hammer = plane.clone();
+        std::thread::spawn(move || {
+            for _ in 0..8192 {
+                if !hammer.request_shutdown(Duration::from_secs(0)) {
+                    break; // peer dropped after the write timed out
+                }
+            }
+            let _ = tx.send(());
+        });
+        rx.recv_timeout(Duration::from_secs(20))
+            .expect("request_shutdown wedged on a non-draining peer");
+
+        // The wedged peer must have been dropped from the registry.
+        assert!(!plane.request_shutdown(Duration::from_secs(0)));
+        drop(wedged);
+        let _ = std::fs::remove_file(&path);
     }
 }

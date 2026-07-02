@@ -400,6 +400,19 @@ fn should_initiate_quit(
     stop_requested || (!visible && !miniaturized && !app_hidden)
 }
 
+/// SIGKILL the worker's process group — refusing a non-positive pid. `WorkerConn.pid()`
+/// is 0 while there is "no current worker" (mid-relaunch), and `kill(0, sig)` signals the
+/// CALLER'S own process group (`kill(-1, sig)` everything we may signal): tearing down
+/// during that window must be a no-op, not supervisor suicide. Returns whether a kill
+/// was actually issued.
+fn kill_worker_group(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    unsafe { libc::kill(-pid, libc::SIGKILL) };
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     shared: Arc<Mutex<Shared>>,
@@ -768,7 +781,7 @@ pub fn run(
         // Worker gone (guest powered off, orderly or not): net any process-group
         // stragglers and exit. (`conn.pid()` is the *current* worker — relaunch keeps it fresh.)
         if exited {
-            unsafe { libc::kill(-timer_conn.pid(), libc::SIGKILL) };
+            kill_worker_group(timer_conn.pid());
             crate::gateway::cleanup();
             crate::control::cleanup();
             std::process::exit(0);
@@ -803,7 +816,7 @@ pub fn run(
                 Some(d) => std::time::Instant::now() >= d,
             };
             if force_now {
-                unsafe { libc::kill(-timer_conn.pid(), libc::SIGKILL) };
+                kill_worker_group(timer_conn.pid());
                 crate::gateway::cleanup();
                 crate::control::cleanup();
                 std::process::exit(0);
@@ -1344,6 +1357,19 @@ mod tests {
         );
         // Ctrl-C (stop_requested) always tears down, regardless of window state.
         assert!(should_initiate_quit(true, true, false, false));
+    }
+
+    #[test]
+    fn kill_worker_group_refuses_non_positive_pids() {
+        // WorkerConn.pid() == 0 means "no current worker" (mid-relaunch). kill(-0, SIGKILL)
+        // is kill(0, SIGKILL) — the supervisor's OWN process group — and kill(-(-1)) is
+        // kill(1). A teardown racing the relaunch window must be a no-op, never a kill
+        // aimed at ourselves (or init).
+        assert!(!kill_worker_group(0), "pid 0 must not issue any kill");
+        assert!(
+            !kill_worker_group(-1),
+            "negative pids must not issue any kill"
+        );
     }
 
     #[test]
