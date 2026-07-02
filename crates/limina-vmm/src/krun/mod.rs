@@ -319,7 +319,7 @@ fn add_net(vmr: &mut VmResources, net: &NetSpec) -> Result<()> {
             net.gvproxy_socket.clone(),
             /* vfkit magic */ true,
         ),
-        mac: NET_GUEST_MAC,
+        mac: net.mac.unwrap_or(NET_GUEST_MAC),
         features: NET_COMPAT_FEATURES,
     })
     .map_err(|e| anyhow!("add_network_interface(gvproxy): {e:?}"))?;

@@ -147,6 +147,10 @@ pub enum DisplaySink {
 pub struct NetSpec {
     /// Path to gvproxy's vfkit unixgram socket (`gvproxy -listen-vfkit unixgram://<path>`).
     pub gvproxy_socket: PathBuf,
+    /// Guest MAC for the NIC. `None` = the well-known vfkit MAC (gvproxy's default static
+    /// .2 lease); managed VMs pass their persistent per-VM MAC (the supervisor then rebinds
+    /// gvproxy's lease to match).
+    pub mac: Option<[u8; 6]>,
 }
 
 /// virtio-input devices attached to the guest (M2). A keyboard, an absolute pointer, and —

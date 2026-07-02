@@ -182,6 +182,12 @@ struct Cli {
     #[arg(long, requires = "net")]
     ssh_port: Option<u16>,
 
+    /// Guest MAC address for the NAT NIC (aa:bb:cc:dd:ee:ff). Managed VMs pass their persistent
+    /// per-VM MAC from vm.toml; when omitted, the well-known vfkit MAC is used. The gateway's
+    /// static .2 lease is rebound to this MAC so DHCP and the SSH forward keep working.
+    #[arg(long, requires = "net", value_parser = parse_mac_arg)]
+    net_mac: Option<String>,
+
     /// Seconds to wait for an orderly guest power-off before force-killing.
     #[arg(long, default_value_t = 20)]
     shutdown_grace_secs: u64,
@@ -584,6 +590,7 @@ fn cli_from_definition(
         gpu_software_2d: cfg.display.gpu == GpuMode::Software2d,
         net,
         net_log: None,
+        net_mac: cfg.networks.first().map(|n| n.mac.clone()),
         ssh_port,
         shutdown_grace_secs: ov.shutdown_grace_secs.unwrap_or(20),
         vmm_bin: ov.vmm_bin.clone(),
@@ -810,7 +817,7 @@ fn run_vm(cli: Cli) -> Result<()> {
                 gateway::SSH_PORT_MIN
             );
         }
-        let gw = gateway::start(cli.net_log.as_deref(), cli.ssh_port)
+        let gw = gateway::start(cli.net_log.as_deref(), cli.ssh_port, cli.net_mac.as_deref())
             .context("starting the gvproxy NAT gateway")?;
         // Surface the resolved port — with auto-allocation the user can't know it in advance.
         // User-facing output: print directly so it shows at the default warn level.
@@ -820,6 +827,10 @@ fn run_vm(cli: Cli) -> Result<()> {
         );
         args.push("--net-gvproxy".into());
         args.push(path_arg(gw.socket_path())?);
+        if let Some(mac) = &cli.net_mac {
+            args.push("--net-mac".into());
+            args.push(mac.clone());
+        }
         Some(gw)
     } else {
         None
@@ -941,6 +952,21 @@ fn path_arg(p: &std::path::Path) -> Result<String> {
     p.to_str()
         .map(str::to_string)
         .with_context(|| format!("path is not valid UTF-8: {p:?}"))
+}
+
+/// clap value-parser for `--net-mac`: validate + normalize `aa:bb:cc:dd:ee:ff` to lowercase.
+fn parse_mac_arg(s: &str) -> Result<String, String> {
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() != 6
+        || parts
+            .iter()
+            .any(|p| p.len() != 2 || u8::from_str_radix(p, 16).is_err())
+    {
+        return Err(format!(
+            "MAC must be six colon-separated hex octets (aa:bb:cc:dd:ee:ff), got {s:?}"
+        ));
+    }
+    Ok(s.to_ascii_lowercase())
 }
 
 /// Parse a `MIN..MAX` dynamic-memory range (M6) into `(min_mib, max_mib)`. Each bound is a size with
@@ -1495,6 +1521,11 @@ mod tests {
         assert_eq!(cli.share, vec!["Projects=/Users/x/Projects:ro".to_string()]);
         assert!(cli.net);
         assert_eq!(cli.ssh_port, Some(2299));
+        assert_eq!(
+            cli.net_mac.as_deref(),
+            Some("5a:00:00:00:00:01"),
+            "the persistent per-VM MAC reaches the worker + gateway"
+        );
         assert!(!cli.window);
         assert!(cli.gpu_software_2d);
         assert_eq!(

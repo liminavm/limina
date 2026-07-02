@@ -134,3 +134,51 @@ fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
         "a supervisor had to be forced down — multi-VM teardown is broken"
     );
 }
+
+/// Per-VM MAC (managed VMs' persistent MAC from vm.toml): a custom `--net-mac` must not
+/// break the deterministic network identity. The supervisor rebinds gvproxy's static `.2`
+/// lease to the custom MAC via a generated config file (in config mode gvproxy installs
+/// NO default forwards/leases, and `-ssh-port` is ignored — the config must carry both).
+/// The proof is end-to-end: the DHCP Ack goes to the custom MAC, the guest still gets the
+/// static 192.168.127.2, and the SSH forward still lands on it.
+#[test]
+fn custom_guest_mac_keeps_the_static_lease_and_ssh_forward() {
+    if !limina_test::require_hvf_or_skip("custom_guest_mac_keeps_the_static_lease_and_ssh_forward")
+    {
+        return;
+    }
+
+    const MAC: &str = "5a:11:22:33:44:55";
+    let cfg = GuestConfig::fedora_from_env()
+        .expect("resolving guest config")
+        .with_net_mac(MAC);
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+
+    guest
+        .wait_for_gateway_log("MessageType:Ack", Duration::from_secs(150))
+        .expect("guest never obtained a DHCP lease from gvproxy (custom MAC)");
+
+    let log = guest.gateway_log();
+    assert!(
+        log.contains(MAC),
+        "the gateway packet log must show traffic from the custom MAC {MAC}"
+    );
+    assert!(
+        !log.contains("5a:94:ef:e4:0c:ee"),
+        "the well-known vfkit MAC must NOT appear — the NIC really carries the custom MAC"
+    );
+    assert!(
+        log.contains("YourClientIP=192.168.127.2 "),
+        "the static .2 lease must follow the custom MAC (config-file rebind)"
+    );
+
+    let banner = guest
+        .wait_for_ssh_banner(Duration::from_secs(30))
+        .expect("SSH forward broken with a custom MAC (config-mode forward missing?)");
+    eprintln!("guest SSH reachable with custom MAC: {banner}");
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(20))
+        .expect("supervisor did not stop");
+    assert!(!outcome.forced, "teardown had to be forced");
+}

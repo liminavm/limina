@@ -286,6 +286,11 @@ pub struct GuestConfig {
     /// collide on the host port — what lets more than one run in parallel. Set via
     /// [`with_ssh_port`](GuestConfig::with_ssh_port) (which also implies `net`).
     pub ssh_port: Option<u16>,
+    /// Custom guest MAC for the NAT NIC (`--net-mac`). `None` → the well-known vfkit MAC.
+    /// With a custom MAC the supervisor generates a gvproxy config rebinding the static .2
+    /// lease, so this exercises the managed-VM (per-VM MAC) network path. Set via
+    /// [`with_net_mac`](GuestConfig::with_net_mac) (which also implies `net`).
+    pub net_mac: Option<String>,
     /// Capture the supervisor's own stderr (its log) to a scratch file instead of letting
     /// it flow to the test's stderr — for asserting on supervisor-side events (e.g. the
     /// control plane's "guest agent connected"). See [`Guest::wait_for_supervisor_log`].
@@ -353,6 +358,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_mac: None,
             supervisor_log: false,
             control_socket: false,
             balloon_control: false,
@@ -437,6 +443,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_mac: None,
             supervisor_log: false,
             control_socket: false,
             balloon_control: false,
@@ -523,6 +530,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_mac: None,
             supervisor_log: false,
             control_socket: false,
             balloon_control: false,
@@ -560,6 +568,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_mac: None,
             supervisor_log: false,
             control_socket: false,
             balloon_control: false,
@@ -619,6 +628,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_mac: None,
             supervisor_log: false,
             control_socket: false,
             balloon_control: false,
@@ -674,6 +684,15 @@ impl GuestConfig {
     pub fn with_ssh_port(mut self, port: u16) -> GuestConfig {
         self.net = true;
         self.ssh_port = Some(port);
+        self
+    }
+
+    /// Like [`with_net`](GuestConfig::with_net) but give the guest NIC a custom MAC
+    /// (`--net-mac`) — the managed-VM path where the supervisor rebinds gvproxy's static
+    /// .2 lease to the VM's persistent MAC via a generated config file.
+    pub fn with_net_mac(mut self, mac: &str) -> GuestConfig {
+        self.net = true;
+        self.net_mac = Some(mac.to_string());
         self
     }
 
@@ -1325,6 +1344,10 @@ impl Guest {
             // ports let several VMs run in parallel.
             if let Some(port) = cfg.ssh_port {
                 cmd.arg("--ssh-port").arg(port.to_string());
+            }
+            // Per-VM guest MAC → the supervisor's gvproxy-config (static-lease rebind) path.
+            if let Some(mac) = &cfg.net_mac {
+                cmd.arg("--net-mac").arg(mac);
             }
             Some(log)
         } else {

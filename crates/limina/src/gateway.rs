@@ -78,6 +78,9 @@ pub struct Gateway {
     socket_path: PathBuf,
     debug_log: Option<PathBuf>,
     ssh_port: u16,
+    /// Custom guest MAC (normalized lowercase) — rebinds the static .2 lease via a
+    /// generated gvproxy config file. None = gvproxy's built-in well-known-MAC config.
+    guest_mac: Option<String>,
 }
 
 impl Gateway {
@@ -100,7 +103,12 @@ impl Gateway {
     /// gvproxy. The socket path is keyed on the supervisor pid, so a restart reuses it.
     pub fn restart(&self) -> Result<()> {
         cleanup();
-        spawn_gvproxy(&self.socket_path, self.debug_log.as_deref(), self.ssh_port)
+        spawn_gvproxy(
+            &self.socket_path,
+            self.debug_log.as_deref(),
+            self.ssh_port,
+            self.guest_mac.as_deref(),
+        )
     }
 }
 
@@ -162,8 +170,17 @@ fn default_socket_path() -> PathBuf {
 /// auto-allocate the first free port from [`DEFAULT_SSH_PORT`] upward (so two VMs that both omit
 /// `--ssh-port` don't collide). The resolved port is readable via [`Gateway::ssh_port`].
 ///
+/// `guest_mac`: a custom guest MAC (managed VMs pass their persistent per-VM MAC) — the
+/// gateway then runs gvproxy with a generated config file that rebinds the static .2 lease
+/// (and the SSH forward, which moves into the config) to that MAC. `None` keeps gvproxy's
+/// built-in well-known-vfkit-MAC behavior.
+///
 /// First reaps any gvproxy orphaned by a previously-crashed supervisor (see [`sweep_orphans`]).
-pub fn start(debug_log: Option<&Path>, ssh_port: Option<u16>) -> Result<Gateway> {
+pub fn start(
+    debug_log: Option<&Path>,
+    ssh_port: Option<u16>,
+    guest_mac: Option<&str>,
+) -> Result<Gateway> {
     // Reap leftovers from a supervisor that died un-cleanly before it could run its own
     // teardown. Only strays whose owning supervisor is GONE are killed, so a concurrent VM's
     // gvproxy is untouched.
@@ -171,22 +188,28 @@ pub fn start(debug_log: Option<&Path>, ssh_port: Option<u16>) -> Result<Gateway>
 
     let ssh_port = allocate_ssh_port(ssh_port)?;
     let socket_path = default_socket_path();
-    spawn_gvproxy(&socket_path, debug_log, ssh_port)?;
+    spawn_gvproxy(&socket_path, debug_log, ssh_port, guest_mac)?;
     Ok(Gateway {
         socket_path,
         debug_log: debug_log.map(Path::to_path_buf),
         ssh_port,
+        guest_mac: guest_mac.map(str::to_string),
     })
 }
 
 /// Spawn (or respawn) gvproxy listening on `socket_path`, recording its pid/socket in the
 /// statics used by [`cleanup`] and a pid-file in the registry used by [`sweep_orphans`].
 /// Shared by [`start`] and [`Gateway::restart`].
-fn spawn_gvproxy(socket_path: &Path, debug_log: Option<&Path>, ssh_port: u16) -> Result<()> {
+fn spawn_gvproxy(
+    socket_path: &Path,
+    debug_log: Option<&Path>,
+    ssh_port: u16,
+    guest_mac: Option<&str>,
+) -> Result<()> {
     let _ = fs::remove_file(socket_path);
     let _ = fs::remove_file(local_bind_path(socket_path));
 
-    let child = spawn_gvproxy_process(socket_path, debug_log, ssh_port)?;
+    let child = spawn_gvproxy_process(socket_path, debug_log, ssh_port, guest_mac)?;
     let pid = child.id() as i32;
     GVPROXY_PID.store(pid, Ordering::SeqCst);
     *GVPROXY_SOCK.lock().unwrap() = Some(socket_path.to_path_buf());
@@ -211,7 +234,20 @@ fn spawn_gvproxy_process(
     socket_path: &Path,
     debug_log: Option<&Path>,
     ssh_port: u16,
+    guest_mac: Option<&str>,
 ) -> Result<Child> {
+    // A custom guest MAC needs a gvproxy config file: the static .2 lease is only
+    // configurable there, and once `-config` is in play `-ssh-port` is ignored — so the
+    // SSH forward moves into the file too (see `gvproxy_config_yaml`).
+    let config_path = match guest_mac {
+        Some(mac) => {
+            let p = socket_path.with_extension("yaml");
+            fs::write(&p, gvproxy_config_yaml(mac, ssh_port))
+                .with_context(|| format!("writing gvproxy config {p:?}"))?;
+            Some(p)
+        }
+        None => None,
+    };
     let bin = gvproxy_bin();
     let mut cmd = Command::new(&bin);
     // Own process group so a terminal Ctrl-C (SIGINT to the foreground group) doesn't kill
@@ -222,7 +258,12 @@ fn spawn_gvproxy_process(
         let f2 = f.try_clone().context("cloning gvproxy log handle")?;
         cmd.stdout(f).stderr(f2);
     }
-    cmd.args(gvproxy_args(socket_path, ssh_port, debug_log.is_some()));
+    cmd.args(gvproxy_args(
+        socket_path,
+        ssh_port,
+        debug_log.is_some(),
+        config_path.as_deref(),
+    ));
 
     let child = cmd.spawn().with_context(|| {
         format!("spawning gvproxy ({bin:?}); set LIMINA_GVPROXY_BIN if not installed")
@@ -237,7 +278,14 @@ fn spawn_gvproxy_process(
 /// component is mistaken for the URL host → `bind: no such file or directory`). `-ssh-port`
 /// sets the host port for gvproxy's built-in `127.0.0.1:<port> → <guest .2>:22` forward —
 /// the knob that lets multiple VMs run at once without fighting over one host port.
-fn gvproxy_args(socket_path: &Path, ssh_port: u16, debug: bool) -> Vec<OsString> {
+/// With a `config` file, `-ssh-port` is ignored by gvproxy (warned, not honored) — the
+/// forward lives in the file instead, so the flag is omitted to keep the argv honest.
+fn gvproxy_args(
+    socket_path: &Path,
+    ssh_port: u16,
+    debug: bool,
+    config: Option<&Path>,
+) -> Vec<OsString> {
     let mut v: Vec<OsString> = Vec::new();
     if debug {
         v.push("-debug".into());
@@ -247,9 +295,46 @@ fn gvproxy_args(socket_path: &Path, ssh_port: u16, debug: bool) -> Vec<OsString>
         "unixgram://{}",
         socket_path.display()
     )));
-    v.push("-ssh-port".into());
-    v.push(OsString::from(ssh_port.to_string()));
+    match config {
+        Some(c) => {
+            v.push("-config".into());
+            v.push(c.as_os_str().to_os_string());
+        }
+        None => {
+            v.push("-ssh-port".into());
+            v.push(OsString::from(ssh_port.to_string()));
+        }
+    }
     v
+}
+
+/// The gvproxy config for a custom guest MAC (pure — unit-tested). gvproxy defaults
+/// subnet/gateway/NAT/mtu even in config mode, but forwards, static leases and the DNS
+/// zones only exist in its no-config path — so this reproduces the stock vfkit config
+/// (upstream `cmd/gvproxy/config.yaml`) with the .2 lease bound to `mac` and the SSH
+/// forward at `ssh_port`.
+fn gvproxy_config_yaml(mac: &str, ssh_port: u16) -> String {
+    format!(
+        r#"stack:
+    dhcpStaticLeases:
+        192.168.127.2: {mac}
+    forwards:
+        127.0.0.1:{ssh_port}: 192.168.127.2:22
+    dns:
+        - name: containers.internal.
+          records:
+            - name: gateway
+              ip: 192.168.127.1
+            - name: host
+              ip: 192.168.127.254
+        - name: docker.internal.
+          records:
+            - name: gateway
+              ip: 192.168.127.1
+            - name: host
+              ip: 192.168.127.254
+"#
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +405,8 @@ pub fn cleanup() {
     }
     if let Some(sock) = GVPROXY_SOCK.lock().unwrap().take() {
         let _ = fs::remove_file(local_bind_path(&sock));
+        // The generated config for a custom guest MAC, if one was written.
+        let _ = fs::remove_file(sock.with_extension("yaml"));
         let _ = fs::remove_file(&sock);
     }
     // Drop our registry record so a future sweep doesn't consider us an orphan.
@@ -661,7 +748,7 @@ mod tests {
 
     #[test]
     fn ssh_port_and_listen_are_in_the_argv() {
-        let args = gvproxy_args(Path::new("/tmp/x.sock"), 2345, false);
+        let args = gvproxy_args(Path::new("/tmp/x.sock"), 2345, false, None);
         let sp = args
             .iter()
             .position(|a| a == "-ssh-port")
@@ -681,9 +768,38 @@ mod tests {
 
     #[test]
     fn debug_flag_added_only_when_logging() {
-        assert!(gvproxy_args(Path::new("/x"), 2222, true)
+        assert!(gvproxy_args(Path::new("/x"), 2222, true, None)
             .iter()
             .any(|a| a == "-debug"));
+    }
+
+    #[test]
+    fn config_mode_swaps_ssh_port_for_config() {
+        // With `-config`, gvproxy ignores `-ssh-port` (the forward lives in the file), so
+        // the argv must carry `-config` and NOT `-ssh-port`.
+        let args = gvproxy_args(
+            Path::new("/tmp/x.sock"),
+            2345,
+            false,
+            Some(Path::new("/c.yaml")),
+        );
+        let cp = args
+            .iter()
+            .position(|a| a == "-config")
+            .expect("-config present");
+        assert_eq!(args[cp + 1], OsString::from("/c.yaml"));
+        assert!(!args.iter().any(|a| a == "-ssh-port"));
+    }
+
+    #[test]
+    fn config_yaml_binds_lease_and_forward() {
+        let y = gvproxy_config_yaml("aa:bb:cc:dd:ee:ff", 2345);
+        // The .2 static lease is rebound to the custom MAC…
+        assert!(y.contains("192.168.127.2: aa:bb:cc:dd:ee:ff"), "{y}");
+        // …and the SSH forward (unavailable as a flag in config mode) is in the file.
+        assert!(y.contains("127.0.0.1:2345: 192.168.127.2:22"), "{y}");
+        // The DNS zones gvproxy only installs in no-config mode are reproduced.
+        assert!(y.contains("containers.internal."), "{y}");
     }
 
     #[test]
@@ -863,8 +979,8 @@ mod tests {
         let dir = unique_tmp_dir("limina-gw-coexist");
         // Two VMs = two gvproxy on distinct sockets AND distinct ssh-ports (the resource that
         // used to collide). Both must come up and stay up.
-        let a = spawn_gvproxy_process(&dir.join("a.sock"), None, 2222).expect("gateway A");
-        let b = spawn_gvproxy_process(&dir.join("b.sock"), None, 2223).expect("gateway B");
+        let a = spawn_gvproxy_process(&dir.join("a.sock"), None, 2222, None).expect("gateway A");
+        let b = spawn_gvproxy_process(&dir.join("b.sock"), None, 2223, None).expect("gateway B");
         let (pa, pb) = (a.id() as i32, b.id() as i32);
         let both = pid_is_alive(pa) && pid_is_alive(pb);
         // Reap our children.
@@ -890,7 +1006,7 @@ mod tests {
         let dir = unique_tmp_dir("limina-gw-autoport");
         // VM A: no `--ssh-port` → auto-allocate the first free port from the base.
         let pa = allocate_ssh_port(None).expect("allocate port for A");
-        let a = spawn_gvproxy_process(&dir.join("a.sock"), None, pa).expect("gateway A");
+        let a = spawn_gvproxy_process(&dir.join("a.sock"), None, pa, None).expect("gateway A");
         // gvproxy binds its TCP ssh-port at startup; wait until A actually holds `pa` so B's scan
         // is forced to skip it (in real use VMs start seconds apart, but the test serializes).
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -903,7 +1019,7 @@ mod tests {
         }
         // VM B: auto-allocate again → must NOT reuse the port A is holding.
         let pb = allocate_ssh_port(None).expect("allocate port for B");
-        let b = spawn_gvproxy_process(&dir.join("b.sock"), None, pb).expect("gateway B");
+        let b = spawn_gvproxy_process(&dir.join("b.sock"), None, pb, None).expect("gateway B");
         let (pida, pidb) = (a.id() as i32, b.id() as i32);
         let both = pid_is_alive(pida) && pid_is_alive(pidb);
         for mut c in [a, b] {

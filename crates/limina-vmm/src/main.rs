@@ -156,6 +156,11 @@ struct Cli {
     #[arg(long)]
     net_gvproxy: Option<PathBuf>,
 
+    /// Guest MAC for the NAT NIC (aa:bb:cc:dd:ee:ff). Default: the well-known vfkit MAC.
+    /// The supervisor keeps gvproxy's static .2 lease in sync with this.
+    #[arg(long, requires = "net_gvproxy")]
+    net_mac: Option<String>,
+
     /// fd of the keyboard event socket (supervisor→worker). Enables the virtio-keyboard.
     /// Requires --input-ptr-fd (the pointer comes as a pair).
     #[arg(long, requires = "input_ptr_fd")]
@@ -249,6 +254,21 @@ fn lock_writable_disks(disks: &[DiskSpec]) -> Result<Vec<std::fs::File>> {
         guards.push(f);
     }
     Ok(guards)
+}
+
+/// Parse `aa:bb:cc:dd:ee:ff` into MAC bytes.
+fn parse_mac(s: &str) -> Result<[u8; 6]> {
+    let mut mac = [0u8; 6];
+    let parts: Vec<&str> = s.split(':').collect();
+    anyhow::ensure!(
+        parts.len() == 6,
+        "--net-mac must be six colon-separated hex octets, got {s:?}"
+    );
+    for (b, p) in mac.iter_mut().zip(parts) {
+        *b = u8::from_str_radix(p, 16)
+            .map_err(|_| anyhow::anyhow!("--net-mac has a non-hex octet {p:?} in {s:?}"))?;
+    }
+    Ok(mac)
 }
 
 fn main() -> Result<()> {
@@ -365,9 +385,11 @@ fn main() -> Result<()> {
         _ => None,
     };
 
-    let net = cli
-        .net_gvproxy
-        .map(|gvproxy_socket| NetSpec { gvproxy_socket });
+    let net_mac = cli.net_mac.as_deref().map(parse_mac).transpose()?;
+    let net = cli.net_gvproxy.map(|gvproxy_socket| NetSpec {
+        gvproxy_socket,
+        mac: net_mac,
+    });
 
     let spec = VmSpec {
         cpus: cli.cpus,
@@ -401,6 +423,21 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use std::os::unix::io::AsRawFd;
+
+    #[test]
+    fn parse_mac_accepts_colon_hex_and_rejects_garbage() {
+        assert_eq!(
+            parse_mac("5a:94:ef:e4:0c:ee").unwrap(),
+            [0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee]
+        );
+        assert_eq!(
+            parse_mac("AA:BB:CC:00:11:22").unwrap(),
+            [0xaa, 0xbb, 0xcc, 0x00, 0x11, 0x22]
+        );
+        assert!(parse_mac("5a:94:ef:e4:0c").is_err()); // five octets
+        assert!(parse_mac("zz:94:ef:e4:0c:ee").is_err()); // non-hex
+        assert!(parse_mac("5a94efe40cee").is_err()); // no colons
+    }
 
     #[test]
     fn parse_disk_attach_ro_suffix() {
