@@ -53,6 +53,21 @@ objc2-app-kit = { version = "0.3", features = [
     "NSView",
     "NSResponder",
     "NSEvent",
+    # Control center (src/center): the VM-library window — stack-view rows with
+    # per-row buttons, import via NSOpenPanel, configure via an NSAlert sheet.
+    "NSAlert",
+    "NSButton",
+    "NSControl",
+    "NSStackView",
+    "NSTextField",
+    "NSOpenPanel",
+    "NSSavePanel",
+    "NSPanel",
+    "NSMenu",
+    "NSMenuItem",
+    "NSColor",
+    "NSFont",
+    "NSUserInterfaceLayout",
     # Host-cursor adoption: the guest's cursor image (an IOSurface from the worker) becomes
     # the macOS NSCursor while the pointer is over the guest view, so the only visible
     # pointer is the zero-latency host one wearing the guest's shape.

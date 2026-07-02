@@ -9,6 +9,7 @@
 //! AppKit UI grows on top of this supervisor later.
 
 mod balloon_policy;
+mod center;
 mod clipboard;
 mod control;
 mod gateway;
@@ -340,14 +341,15 @@ fn main() -> Result<()> {
 
     let mut cli = Cli::parse();
     match cli.cmd.take() {
-        // The control-center window lands with the UI milestone; until then the verb
-        // exists so scripts/help are stable.
-        Some(Cmd::Center) => anyhow::bail!("the control center UI is not built yet"),
+        Some(Cmd::Center) => center::run(),
         Some(Cmd::Create(args)) => cmd_create(args),
         Some(Cmd::Start(args)) => cmd_start(args),
         Some(Cmd::Ls) => cmd_ls(),
         Some(Cmd::Stop(args)) => cmd_stop(args),
         Some(Cmd::Rm(args)) => cmd_rm(args),
+        // Bare `limina` — a double-clicked limina.app or a plain terminal launch —
+        // opens the control center. Any flag at all means the flat ephemeral-VM CLI.
+        None if std::env::args_os().len() == 1 => center::run(),
         None => run_vm(cli),
     }
 }

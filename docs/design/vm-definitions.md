@@ -1,11 +1,21 @@
-# Design — VM definitions & persistence  ·  PROPOSED
+# Design — VM definitions & persistence  ·  PHASE 1 SHIPPED
 
-> **Status: PROPOSED (2026-07-01), nothing built.** Written because three in-flight designs
-> silently presume per-VM persistent identity that does not exist today: the `Network`
+> **Status: Phase 1 + the control-center UI SHIPPED 2026-07-02** (`crates/limina/src/vmlib/`
+> + `src/center/`; L2 guard `crates/limina-test/tests/vmdef.rs`): `.liminavm` bundles with
+> `vm.toml` v1, `limina create/start/ls/stop/rm`, flag overrides, run-lock + pidfile, and the
+> AppKit control center (bare `limina` / double-clicked limina.app) with import (clonefile),
+> configure (cpus/memory/ssh port), start/stop/reset/delete. Two as-built deltas from the
+> sketch below: the running-VM flock lives on a stable `run/lock` sentinel, NOT `vm.toml`
+> (atomic tmp+rename saves would swap the inode out from under the lock), and `vm.toml`
+> gained a `[boot] firmware` key (headless starts need one). The MAC is allocated + stored
+> but not yet plumbed to the worker. Snapshots (M9), bridged modes, and `limina snapshot/
+> restore` remain future phases.
+>
+> Originally PROPOSED 2026-07-01 because three in-flight designs
+> silently presume per-VM persistent identity that did not exist: the `Network`
 > abstraction wants stable per-VM MACs (`multi-vm-networking.md` §3.1), M9 wants named
 > snapshots plus a recorded disk set (`m9-suspend-resume.md` §8, the M10 cross-dependency),
-> and the future multi-VM app wants a VM library at all. Writing the model once prevents
-> three incompatible ad-hoc versions. This doc decides the *shape*; fields marked (later)
+> and the multi-VM app wants a VM library at all. Fields marked (later)
 > ship with their feature, not before.
 
 ## 1. The problem

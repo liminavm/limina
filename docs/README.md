@@ -47,7 +47,9 @@ Decision-oriented design docs — the founding one plus one per major feature
 - [M9 suspend/resume + VM snapshots](design/m9-suspend-resume.md) — designed, not started.
 - [M10 multiple disks](design/m10-multiple-disks.md) — shipped.
 - [Multi-VM networking](design/multi-vm-networking.md) — proposal (phases 0–3 in scope).
-- [VM definitions & persistence](design/vm-definitions.md) — the per-VM config model.
+- [VM definitions & persistence](design/vm-definitions.md) — the per-VM config model;
+  Phase 1 + the control-center UI shipped (`.liminavm` bundles, `limina create/start/
+  ls/stop/rm`, bare `limina` opens the VM library window).
 - [Distribution & updates](design/distribution.md) — signing, notarization,
   updates, guest-tools delivery.
 
