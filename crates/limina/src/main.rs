@@ -223,6 +223,14 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     let cli = Cli::parse();
+    run_vm(cli)
+}
+
+/// Boot and supervise one VM described by a fully-resolved `Cli` — the flat-flag
+/// invocation today, or (later) one synthesized from a managed VM definition. On
+/// success it never returns to the caller: the windowed path runs the AppKit loop
+/// forever and the headless path ends in `process::exit`.
+fn run_vm(cli: Cli) -> Result<()> {
     // Resolve the Command/Option swap policy up front (default ON; --no-swap-cmd-opt opts out)
     // before any field of `cli` is moved out below, so the windowed path can use it freely.
     let swap_cmd_opt = cli.swap_cmd_opt_enabled();
