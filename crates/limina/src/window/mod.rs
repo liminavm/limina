@@ -42,7 +42,7 @@ mod input;
 mod lifecycle;
 mod present;
 
-pub use lifecycle::WorkerConn;
+pub use lifecycle::{WorkerConn, WorkerIo};
 pub use present::{
     empty_surface_map, mark_worker_exited, spawn_reader, surface_rendezvous, Shared, SurfaceMap,
 };
@@ -223,14 +223,19 @@ pub fn run(
         let conn = conn.clone();
         std::thread::spawn(move || {
             while let Ok(id) = ack_rx.recv() {
-                let fd = conn.ack_fd();
-                if fd < 0 {
-                    continue;
-                }
+                // Snapshot the current worker's endpoints and hold the Arc across the send: the
+                // ack fd can't be closed (nor its number reused) mid-send even if a relaunch
+                // retires this worker concurrently.
+                let io = conn.io();
                 let line = format!("shown {id}\n");
                 // Blocking is fine here — a wedged/booting worker only stalls this thread.
                 unsafe {
-                    libc::send(fd, line.as_ptr() as *const libc::c_void, line.len(), 0);
+                    libc::send(
+                        io.ack_fd(),
+                        line.as_ptr() as *const libc::c_void,
+                        line.len(),
+                        0,
+                    );
                 }
             }
         });

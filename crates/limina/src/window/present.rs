@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::os::fd::{FromRawFd, RawFd};
+use std::os::fd::OwnedFd;
 use std::sync::{Arc, Mutex};
 
 use block2::RcBlock;
@@ -182,11 +182,11 @@ pub fn mark_worker_exited(shared: &Arc<Mutex<Shared>>) {
     shared.lock().unwrap().worker_exited = true;
 }
 
-/// Read the control channel on a background thread, updating `shared`. Consumes `fd`.
-pub fn spawn_reader(fd: RawFd, shared: Arc<Mutex<Shared>>) {
+/// Read the control channel on a background thread, updating `shared`. Consumes (owns) `fd` —
+/// the supervisor's end of the control socketpair — and closes it when the reader hits EOF.
+pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
     std::thread::spawn(move || {
-        // SAFETY: we own `fd` (the supervisor's end of the control socketpair).
-        let reader = BufReader::new(unsafe { File::from_raw_fd(fd) });
+        let reader = BufReader::new(File::from(fd));
         for line in reader.lines() {
             let Ok(line) = line else { break };
             let mut parts = line.split_whitespace();

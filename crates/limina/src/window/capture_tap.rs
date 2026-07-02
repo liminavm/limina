@@ -179,10 +179,11 @@ extern "C" fn tap_callback(
     // boundary because the matching key-up always reaches the guest via whichever path (tap or
     // monitor) is active at release time.
     if matches!(etype, KEY_DOWN | KEY_UP | FLAGS_CHANGED) {
-        let kbd: RawFd = ctx.conn.kbd_fd();
-        if kbd < 0 {
-            return std::ptr::null_mut();
-        }
+        // Snapshot the current worker's endpoints; holding the Arc keeps the fds open (and
+        // their numbers un-reusable) for the sends below even if a relaunch retires this
+        // worker mid-callback.
+        let io = ctx.conn.io();
+        let kbd: RawFd = io.kbd_fd();
         let keycode = geti(FIELD_KEYBOARD_KEYCODE) as u16;
         let flags = unsafe { CGEventGetFlags(event) };
         let send_kbd = |ev: InputEvent| send_event(kbd, ev);
@@ -219,10 +220,9 @@ extern "C" fn tap_callback(
         return std::ptr::null_mut(); // consume — the combo went to the guest
     }
 
-    let fd: RawFd = ctx.conn.rel_ptr_fd();
-    if fd < 0 {
-        return std::ptr::null_mut();
-    }
+    // Same snapshot rule as the keyboard path above: the Arc keeps the fd open across the sends.
+    let io = ctx.conn.io();
+    let fd: RawFd = io.rel_ptr_fd();
     let send = |ev: InputEvent| send_event(fd, ev);
     match etype {
         MOUSE_MOVED | LMB_DRAG | RMB_DRAG | OMB_DRAG => {

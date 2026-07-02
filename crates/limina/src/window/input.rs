@@ -240,16 +240,6 @@ impl InputState {
         now
     }
 
-    /// The pointer event sink for the current mode: the relative-mouse device while captured,
-    /// the absolute pointer otherwise.
-    fn ptr_sink(&self) -> RawFd {
-        if self.is_captured() {
-            self.conn.rel_ptr_fd()
-        } else {
-            self.conn.ptr_fd()
-        }
-    }
-
     /// Handle one captured event. Returns `true` if it should be swallowed (not passed on
     /// to AppKit) — we swallow keys so unhandled keystrokes don't beep, but let mouse
     /// events through so the title bar / close button keep working.
@@ -483,11 +473,23 @@ impl InputState {
     }
 
     fn send_kbd(&self, ev: InputEvent) {
-        send_event(self.conn.kbd_fd(), ev);
+        // Snapshot the current worker's endpoints and hold the Arc across the send, so a
+        // reboot relaunch can't close (or let the OS reuse) the fd mid-write.
+        let io = self.conn.io();
+        send_event(io.kbd_fd(), ev);
     }
 
+    /// Send to the pointer sink for the current mode: the relative-mouse device while
+    /// captured, the absolute pointer otherwise. Same snapshot-held-across-the-send rule
+    /// as `send_kbd`.
     fn send_ptr(&self, ev: InputEvent) {
-        send_event(self.ptr_sink(), ev);
+        let io = self.conn.io();
+        let fd = if self.is_captured() {
+            io.rel_ptr_fd()
+        } else {
+            io.ptr_fd()
+        };
+        send_event(fd, ev);
     }
 }
 

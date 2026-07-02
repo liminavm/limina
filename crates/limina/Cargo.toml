@@ -13,6 +13,9 @@ path = "src/main.rs"
 # The supervisor does not call hv_vm_create itself, so it needs no entitlement and
 # no libkrun deps — it spawns the (signed) limina-vmm worker and monitors it.
 anyhow     = { workspace = true }
+# Lock-free swappable Arc for the window's WorkerConn: readers snapshot the current worker's
+# pid+fds (OwnedFd — held open while the snapshot lives), the reboot relaunch swaps the set.
+arc-swap   = { workspace = true }
 clap       = { workspace = true }
 env_logger = { workspace = true }
 libc       = { workspace = true }

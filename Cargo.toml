@@ -40,6 +40,7 @@ limina-surfaceport = { path = "crates/limina-surfaceport" }
 
 # --- shared third-party ---
 anyhow            = "1"
+arc-swap          = "1"
 clap              = { version = "4", features = ["derive"] }
 crossbeam-channel = ">=0.5.15"
 env_logger        = "0.11"
