@@ -47,6 +47,10 @@ env_logger        = "0.11"
 libc              = "0.2"
 log               = "0.4"
 png               = "0.17"
+# VM definitions (docs/design/vm-definitions.md): vm.toml inside a .liminavm bundle.
+# Only the supervisor persists config; the control plane stays minicbor.
+serde             = { version = "1", features = ["derive"] }
+toml              = "0.8"
 
 # Override imago (libkrun's virtio-blk storage backend, a transitive crates.io dep) with our
 # vendored + patched copy. The patch stops a tail-reaching discard from truncating the backing

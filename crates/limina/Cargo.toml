@@ -20,6 +20,9 @@ clap       = { workspace = true }
 env_logger = { workspace = true }
 libc       = { workspace = true }
 log        = { workspace = true }
+# Managed VM definitions (.liminavm bundles / vm.toml) — src/vmlib.
+serde      = { workspace = true }
+toml       = { workspace = true }
 
 # Shared evdev constants + macOS->Linux keymap + wire format (NO `backends` feature here,
 # so this pulls in no libkrun/bindgen; only the worker enables the krun_input backends).

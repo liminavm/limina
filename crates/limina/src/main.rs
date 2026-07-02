@@ -15,6 +15,7 @@ mod gateway;
 mod session;
 mod supervisor;
 mod venus_env;
+mod vmlib;
 mod window;
 
 use std::path::{Path, PathBuf};
@@ -29,6 +30,11 @@ use crate::supervisor::WorkerSpec;
 #[derive(Parser, Debug)]
 #[command(name = "limina", about, version)]
 struct Cli {
+    /// Managed-VM verbs (create/start/ls/stop/rm/center). Without a subcommand the
+    /// flat flags below describe one ephemeral VM, exactly as before.
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+
     /// EFI firmware blob (EDK2 .fd) to load into guest RAM. The stock-baseline boot
     /// path; mutually exclusive with --kernel. Optional under --window: windowed boots
     /// default to the GOP firmware so EFI/GRUB/early-kernel render in the window (see
@@ -199,6 +205,116 @@ struct Cli {
     no_swap_cmd_opt: bool,
 }
 
+/// Managed-VM subcommands (docs/design/vm-definitions.md Phase 1): a VM definition
+/// is a `.liminavm` bundle in the library; `start` resolves it to the same `Cli`
+/// the flat flags produce, so both paths share every semantic downstream.
+#[derive(clap::Subcommand, Debug)]
+enum Cmd {
+    /// Open the VM control center window (also the default when run with no arguments).
+    Center,
+    /// Create a managed VM in the library, optionally importing an existing disk image.
+    Create(CreateArgs),
+    /// Start a managed VM by name or .liminavm bundle path.
+    Start(StartArgs),
+    /// List managed VMs and their status.
+    Ls,
+    /// Ask a running managed VM to shut down (--force skips the guest-side grace).
+    Stop(StopArgs),
+    /// Delete a stopped managed VM's bundle (disks outside the bundle are never touched).
+    Rm(RmArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct CreateArgs {
+    /// Name of the new VM (the bundle becomes <name>.liminavm in the library).
+    name: String,
+    /// Existing disk image to import as the VM's boot disk.
+    #[arg(long)]
+    disk: Option<PathBuf>,
+    /// Reference the disk where it is instead of cloning/copying it into the bundle.
+    #[arg(long, requires = "disk")]
+    in_place: bool,
+    /// Number of vCPUs.
+    #[arg(long, default_value_t = 4)]
+    cpus: u8,
+    /// Memory: fixed ("4096M", "8G") or a dynamic range ("2G..8G").
+    #[arg(long, default_value = "4096M")]
+    memory: String,
+    /// Pin the inbound-SSH host port (default 0 = auto-allocate from 2222 up).
+    #[arg(long, default_value_t = 0)]
+    ssh_port: u16,
+    /// Create the VM headless (no window when started).
+    #[arg(long)]
+    no_window: bool,
+    /// Create the bundle in this directory instead of the default library.
+    #[arg(long)]
+    dir: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+struct StartArgs {
+    /// VM name (library lookup) or path to a .liminavm bundle.
+    vm: String,
+    #[command(flatten)]
+    overrides: StartOverrides,
+}
+
+/// One-shot overrides for `limina start` — `None`/unset means "use the definition".
+/// Deliberately NOT a flattened `Cli`: its `default_value_t` fields can't distinguish
+/// "user passed the default" from "user passed nothing".
+#[derive(clap::Args, Debug, Default)]
+struct StartOverrides {
+    /// Open a window even if the definition says headless.
+    #[arg(long, overrides_with = "no_window")]
+    window: bool,
+    /// Run headless even if the definition wants a window.
+    #[arg(long, overrides_with = "window")]
+    no_window: bool,
+    /// Override the vCPU count for this run.
+    #[arg(long)]
+    cpus: Option<u8>,
+    /// Override memory for this run: fixed ("8G") or a range ("2G..8G").
+    #[arg(long)]
+    memory: Option<String>,
+    /// Override the inbound-SSH host port for this run.
+    #[arg(long)]
+    ssh_port: Option<u16>,
+    /// Override the boot firmware for this run.
+    #[arg(long)]
+    firmware: Option<PathBuf>,
+    /// Path to the limina-vmm worker binary (default: sibling of this executable).
+    #[arg(long)]
+    vmm_bin: Option<PathBuf>,
+    /// Seconds to wait for an orderly guest power-off before force-killing.
+    #[arg(long)]
+    shutdown_grace_secs: Option<u64>,
+    /// Capture the guest serial console to this file (harness/debug).
+    #[arg(long)]
+    console: Option<PathBuf>,
+    /// Bind the control plane at this path (lets a test harness join as a peer).
+    #[arg(long)]
+    control_socket: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+struct StopArgs {
+    /// VM name or .liminavm bundle path.
+    vm: String,
+    /// Skip the guest-side grace: kill the VM immediately (a second SIGTERM to the
+    /// supervisor, which escalates straight to SIGKILL).
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct RmArgs {
+    /// VM name or .liminavm bundle path.
+    vm: String,
+    /// Force-stop the VM first if it is running.
+    #[arg(long)]
+    force: bool,
+}
+
 impl Cli {
     /// Effective Command/Option swap policy. Swap is **on by default** (PC-style muscle memory);
     /// `--no-swap-cmd-opt` opts out. `--swap-cmd-opt` and `--no-swap-cmd-opt` override each other
@@ -222,8 +338,240 @@ fn main() -> Result<()> {
     // printed directly, not via the logger, so it survives the default level.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    match cli.cmd.take() {
+        // The control-center window lands with the UI milestone; until then the verb
+        // exists so scripts/help are stable.
+        Some(Cmd::Center) => anyhow::bail!("the control center UI is not built yet"),
+        Some(Cmd::Create(args)) => cmd_create(args),
+        Some(Cmd::Start(args)) => cmd_start(args),
+        Some(Cmd::Ls) => cmd_ls(),
+        Some(Cmd::Stop(args)) => cmd_stop(args),
+        Some(Cmd::Rm(args)) => cmd_rm(args),
+        None => run_vm(cli),
+    }
+}
+
+fn cmd_create(args: CreateArgs) -> Result<()> {
+    let memory = vmlib::schema::Memory::parse(&args.memory).context("--memory")?;
+    let dest = args.dir.unwrap_or_else(vmlib::bundle::library_dir);
+    std::fs::create_dir_all(&dest)
+        .with_context(|| format!("creating the VM library {}", dest.display()))?;
+    let opts = vmlib::import::CreateOpts {
+        name: args.name,
+        disk: args.disk,
+        import_mode: if args.in_place {
+            vmlib::import::ImportMode::ReferenceInPlace
+        } else {
+            vmlib::import::ImportMode::CloneIntoBundle
+        },
+        cpus: args.cpus,
+        memory,
+        ssh_port: args.ssh_port,
+        window: !args.no_window,
+    };
+    let bundle = vmlib::import::create(&opts, &dest)?;
+    println!("created {}", bundle.path.display());
+    Ok(())
+}
+
+fn cmd_start(args: StartArgs) -> Result<()> {
+    let bundle = vmlib::bundle::resolve(&args.vm)?;
+    let cfg = bundle.load()?;
+    let cli = cli_from_definition(&cfg, &bundle, &args.overrides)?;
+    // Exclusive run lock + pidfile: taken before the VM comes up so a double-start
+    // fails fast, leaked deliberately because every supervisor exit path is
+    // process::exit — the kernel releases the flock with the process.
+    let lock = vmlib::runtime::acquire(&bundle)?;
+    vmlib::runtime::write_pidfile(&bundle)?;
+    std::mem::forget(lock);
     run_vm(cli)
+}
+
+fn cmd_ls() -> Result<()> {
+    let all = vmlib::bundle::list()?;
+    if all.is_empty() {
+        println!(
+            "no VMs in {} (create one with `limina create`)",
+            vmlib::bundle::library_dir().display()
+        );
+        return Ok(());
+    }
+    println!(
+        "{:<24} {:<16} {:>4}  {:<12} {:<6}",
+        "NAME", "STATUS", "CPUS", "MEMORY", "SSH"
+    );
+    for bundle in all {
+        let status = match vmlib::runtime::status(&bundle) {
+            vmlib::runtime::VmStatus::Running { pid } => format!("running (pid {pid})"),
+            vmlib::runtime::VmStatus::Stopped => "stopped".to_string(),
+        };
+        match bundle.load() {
+            Ok(cfg) => {
+                let mem = match &cfg.hardware.memory {
+                    vmlib::schema::Memory::Fixed(s) => s.clone(),
+                    vmlib::schema::Memory::Range { min, max } => format!("{min}..{max}"),
+                };
+                let ssh = match cfg.networks.first() {
+                    Some(n) if n.ssh_port != 0 => n.ssh_port.to_string(),
+                    Some(_) => "auto".to_string(),
+                    None => "-".to_string(),
+                };
+                println!(
+                    "{:<24} {:<16} {:>4}  {:<12} {:<6}",
+                    cfg.identity.name, status, cfg.hardware.cpus, mem, ssh
+                );
+            }
+            Err(e) => {
+                println!("{:<24} broken: {e:#}", bundle.dir_name());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn cmd_stop(args: StopArgs) -> Result<()> {
+    let bundle = vmlib::bundle::resolve(&args.vm)?;
+    let pid = match vmlib::runtime::status(&bundle) {
+        vmlib::runtime::VmStatus::Stopped => {
+            println!("{} is not running", bundle.dir_name());
+            return Ok(());
+        }
+        vmlib::runtime::VmStatus::Running { pid } => pid,
+    };
+    vmlib::runtime::signal_stop(pid, args.force)?;
+    // The graceful ladder is bounded (agent grace + shutdown grace + SIGKILL), so a
+    // healthy supervisor always releases the lock; 60s covers a slow guest shutdown.
+    if vmlib::runtime::wait_stopped(&bundle, Duration::from_secs(60)) {
+        println!("{} stopped", bundle.dir_name());
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "{} did not stop within 60s (supervisor pid {pid})",
+            bundle.dir_name()
+        )
+    }
+}
+
+fn cmd_rm(args: RmArgs) -> Result<()> {
+    let bundle = vmlib::bundle::resolve(&args.vm)?;
+    if let vmlib::runtime::VmStatus::Running { pid } = vmlib::runtime::status(&bundle) {
+        anyhow::ensure!(
+            args.force,
+            "{} is running; stop it first or pass --force",
+            bundle.dir_name()
+        );
+        vmlib::runtime::signal_stop(pid, true)?;
+        anyhow::ensure!(
+            vmlib::runtime::wait_stopped(&bundle, Duration::from_secs(30)),
+            "{} did not stop; not deleting",
+            bundle.dir_name()
+        );
+    }
+    vmlib::import::remove(&bundle)?;
+    println!("deleted {}", bundle.path.display());
+    Ok(())
+}
+
+/// Resolve a VM definition to the `Cli` the flat flags would have produced — the
+/// definition layer is pure policy over the existing invocation shape, so disks,
+/// firmware resolution, the gateway, the control plane and the reboot relaunch all
+/// behave identically for managed and ephemeral VMs. Overrides win over the
+/// definition; everything else takes the flat CLI's defaults.
+fn cli_from_definition(
+    cfg: &vmlib::schema::VmConfig,
+    bundle: &vmlib::bundle::VmBundle,
+    ov: &StartOverrides,
+) -> Result<Cli> {
+    use vmlib::schema::{memory_to_cli, GpuMode, Memory};
+
+    let (ram_mib, memory) = match &ov.memory {
+        Some(s) => memory_to_cli(&Memory::parse(s).context("--memory")?)?,
+        None => memory_to_cli(&cfg.hardware.memory)?,
+    };
+
+    let mut disk = Vec::new();
+    for d in &cfg.disks {
+        let p = bundle.resolve_path(&d.path);
+        let s = path_arg(&p)?;
+        disk.push(format!("{s}{}", if d.ro { ":ro" } else { "" }));
+    }
+    let cdrom: Vec<PathBuf> = cfg
+        .cdroms
+        .iter()
+        .map(|c| bundle.resolve_path(&c.path))
+        .collect();
+    let mut share = Vec::new();
+    for s in &cfg.shares {
+        let p = path_arg(&s.path)?;
+        let ro = if s.ro { ":ro" } else { "" };
+        share.push(match &s.name {
+            Some(n) => format!("{n}={p}{ro}"),
+            None => format!("{p}{ro}"),
+        });
+    }
+
+    let net = !cfg.networks.is_empty();
+    let ssh_port = ov.ssh_port.or_else(|| {
+        cfg.networks
+            .first()
+            .and_then(|n| (n.ssh_port != 0).then_some(n.ssh_port))
+    });
+    anyhow::ensure!(
+        net || ssh_port.is_none(),
+        "--ssh-port needs a [[network]] in the definition"
+    );
+
+    let window = if ov.window {
+        true
+    } else if ov.no_window {
+        false
+    } else {
+        cfg.display.window
+    };
+    let firmware = ov
+        .firmware
+        .clone()
+        .or_else(|| cfg.boot.firmware.as_ref().map(|f| bundle.resolve_path(f)));
+
+    Ok(Cli {
+        cmd: None,
+        firmware,
+        kernel: None,
+        initramfs: None,
+        cmdline: None,
+        rootfs: None,
+        disk,
+        read_only: false,
+        cdrom,
+        share,
+        cpus: ov.cpus.unwrap_or(cfg.hardware.cpus),
+        ram_mib,
+        vsock_port: None,
+        vsock_socket: None,
+        control_socket: ov.control_socket.clone(),
+        console: ov.console.clone(),
+        console_input: None,
+        console_pty: false,
+        virtio_console: None,
+        virtio_console_input: None,
+        window,
+        display_capture: None,
+        display_size: "1280x800".into(),
+        display_control_socket: None,
+        memory,
+        balloon_control_socket: None,
+        gpu_software_2d: cfg.display.gpu == GpuMode::Software2d,
+        net,
+        net_log: None,
+        ssh_port,
+        shutdown_grace_secs: ov.shutdown_grace_secs.unwrap_or(20),
+        vmm_bin: ov.vmm_bin.clone(),
+        // Encode the definition's swap policy as the equivalent flag pair, so
+        // swap_cmd_opt_enabled() resolves to exactly cfg.input.swap_cmd_opt.
+        swap_cmd_opt: cfg.input.swap_cmd_opt,
+        no_swap_cmd_opt: !cfg.input.swap_cmd_opt,
+    })
 }
 
 /// Boot and supervise one VM described by a fully-resolved `Cli` — the flat-flag
@@ -1047,6 +1395,209 @@ mod tests {
         Cli::try_parse_from(argv)
             .expect("parsing swap flags")
             .swap_cmd_opt_enabled()
+    }
+
+    /// A definition + empty overrides must map onto the exact `Cli` the equivalent
+    /// flat invocation would produce — the definition layer is policy, not mechanism.
+    #[test]
+    fn definition_maps_onto_the_flat_cli() {
+        use crate::vmlib::bundle::VmBundle;
+        use crate::vmlib::schema::*;
+
+        let bundle = VmBundle::new("/lib/Fedora.liminavm");
+        let cfg = VmConfig {
+            config_version: CONFIG_VERSION,
+            identity: Identity {
+                name: "Fedora".into(),
+                uuid: "u".into(),
+                created: "t".into(),
+            },
+            hardware: Hardware {
+                cpus: 6,
+                memory: Memory::Range {
+                    min: "2G".into(),
+                    max: "8G".into(),
+                },
+            },
+            disks: vec![
+                DiskEntry {
+                    path: "disks/root.raw".into(),
+                    ro: false,
+                },
+                DiskEntry {
+                    path: "/elsewhere/data.raw".into(),
+                    ro: true,
+                },
+            ],
+            cdroms: vec![CdromEntry {
+                path: "media.iso".into(),
+            }],
+            networks: vec![NetworkEntry {
+                mode: NetMode::Nat,
+                mac: "5a:00:00:00:00:01".into(),
+                ssh_port: 2299,
+            }],
+            shares: vec![ShareEntry {
+                name: Some("Projects".into()),
+                path: "/Users/x/Projects".into(),
+                ro: true,
+            }],
+            boot: BootCfg {
+                firmware: Some("fw/KRUN_EFI.fd".into()),
+            },
+            display: DisplayCfg {
+                window: false,
+                gpu: GpuMode::Software2d,
+            },
+            input: InputCfg {
+                swap_cmd_opt: false,
+            },
+        };
+
+        let cli = cli_from_definition(&cfg, &bundle, &StartOverrides::default()).unwrap();
+        assert_eq!(cli.cpus, 6);
+        assert_eq!(cli.ram_mib, 8192, "range MAX is what libkrun allocates");
+        assert_eq!(cli.memory.as_deref(), Some("2G..8G"));
+        assert_eq!(
+            cli.disk,
+            vec![
+                "/lib/Fedora.liminavm/disks/root.raw".to_string(),
+                "/elsewhere/data.raw:ro".to_string(),
+            ],
+            "bundle-relative resolved, order preserved, ro suffixed"
+        );
+        assert_eq!(
+            cli.cdrom,
+            vec![PathBuf::from("/lib/Fedora.liminavm/media.iso")]
+        );
+        assert_eq!(cli.share, vec!["Projects=/Users/x/Projects:ro".to_string()]);
+        assert!(cli.net);
+        assert_eq!(cli.ssh_port, Some(2299));
+        assert!(!cli.window);
+        assert!(cli.gpu_software_2d);
+        assert_eq!(
+            cli.firmware,
+            Some(PathBuf::from("/lib/Fedora.liminavm/fw/KRUN_EFI.fd"))
+        );
+        assert!(!cli.swap_cmd_opt_enabled(), "definition's swap=false wins");
+        assert_eq!(cli.shutdown_grace_secs, 20, "flat default");
+        assert!(cli.cmd.is_none());
+    }
+
+    #[test]
+    fn start_overrides_beat_the_definition() {
+        use crate::vmlib::bundle::VmBundle;
+        use crate::vmlib::schema::*;
+
+        let bundle = VmBundle::new("/lib/vm.liminavm");
+        let cfg = VmConfig {
+            config_version: CONFIG_VERSION,
+            identity: Identity {
+                name: "vm".into(),
+                uuid: "u".into(),
+                created: "t".into(),
+            },
+            hardware: Hardware::default(), // cpus 4, 4096M fixed
+            disks: vec![],
+            cdroms: vec![],
+            networks: vec![NetworkEntry {
+                mode: NetMode::Nat,
+                mac: "m".into(),
+                ssh_port: 0,
+            }],
+            shares: vec![],
+            boot: BootCfg::default(),
+            display: DisplayCfg::default(), // window = true
+            input: InputCfg::default(),
+        };
+
+        let ov = StartOverrides {
+            no_window: true,
+            cpus: Some(2),
+            memory: Some("1G".into()),
+            ssh_port: Some(2444),
+            firmware: Some("/fw.fd".into()),
+            shutdown_grace_secs: Some(5),
+            ..Default::default()
+        };
+        let cli = cli_from_definition(&cfg, &bundle, &ov).unwrap();
+        assert!(!cli.window, "--no-window override beats window=true");
+        assert_eq!(cli.cpus, 2);
+        assert_eq!(cli.ram_mib, 1024);
+        assert_eq!(cli.memory, None, "fixed override → no balloon range");
+        assert_eq!(cli.ssh_port, Some(2444));
+        assert_eq!(cli.firmware, Some(PathBuf::from("/fw.fd")));
+        assert_eq!(cli.shutdown_grace_secs, 5);
+
+        // An ssh-port override without any [[network]] is an error, not silence.
+        let mut no_net = cfg.clone();
+        no_net.networks.clear();
+        let ov = StartOverrides {
+            ssh_port: Some(2444),
+            ..Default::default()
+        };
+        assert!(cli_from_definition(&no_net, &bundle, &ov).is_err());
+    }
+
+    #[test]
+    fn subcommands_parse_and_flat_cli_is_untouched() {
+        // Flat invocation (the harness shape) still parses with no subcommand.
+        let cli = Cli::try_parse_from(["limina", "--window", "--cpus", "2"]).unwrap();
+        assert!(cli.cmd.is_none());
+        assert!(cli.window);
+        assert_eq!(cli.cpus, 2);
+
+        // start with overrides.
+        let cli = Cli::try_parse_from(["limina", "start", "fedora", "--cpus", "2", "--no-window"])
+            .unwrap();
+        match cli.cmd {
+            Some(Cmd::Start(a)) => {
+                assert_eq!(a.vm, "fedora");
+                assert_eq!(a.overrides.cpus, Some(2));
+                assert!(a.overrides.no_window);
+                assert!(!a.overrides.window);
+            }
+            other => panic!("expected start, got {other:?}"),
+        }
+
+        // create with an import.
+        let cli = Cli::try_parse_from([
+            "limina", "create", "dev", "--disk", "/i/f.raw", "--memory", "2G..8G",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Some(Cmd::Create(a)) => {
+                assert_eq!(a.name, "dev");
+                assert_eq!(a.disk, Some(PathBuf::from("/i/f.raw")));
+                assert_eq!(a.memory, "2G..8G");
+                assert!(!a.in_place);
+                assert_eq!(a.ssh_port, 0);
+            }
+            other => panic!("expected create, got {other:?}"),
+        }
+
+        // --in-place requires --disk.
+        assert!(Cli::try_parse_from(["limina", "create", "dev", "--in-place"]).is_err());
+
+        // stop/rm/ls/center parse.
+        assert!(matches!(
+            Cli::try_parse_from(["limina", "stop", "dev", "--force"])
+                .unwrap()
+                .cmd,
+            Some(Cmd::Stop(StopArgs { force: true, .. }))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["limina", "rm", "dev"]).unwrap().cmd,
+            Some(Cmd::Rm(RmArgs { force: false, .. }))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["limina", "ls"]).unwrap().cmd,
+            Some(Cmd::Ls)
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["limina", "center"]).unwrap().cmd,
+            Some(Cmd::Center)
+        ));
     }
 
     #[test]
