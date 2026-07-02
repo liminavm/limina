@@ -272,8 +272,10 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
 - **KK/Metal never tested cross-machine** (open/unknown) — the host Vulkan-on-Metal stack was only
   exercised on the M1 Max / macOS 26.5 dev Mac. `--gpu-software-2d` is the degraded fallback if venus
   init aborts on different silicon/macOS.
-- **F44 enhanced tier blocked** (open) — GNOME 49→50 mutter/cogl scanout regression; tracked with the
-  F44 enhanced build prep. Basic-tier F44 is unaffected.
+- ~~**F44 enhanced tier blocked** — GNOME 49→50 mutter/cogl scanout regression~~ — **FALSIFIED
+  2026-06-29**: the feared regression (and the mutter-50 `kk_encoder.c:299` assert) did NOT
+  reproduce; the F44 enhanced desktop was validated end-to-end (16k + venus + patched mutter 50.1,
+  pixel-verified; see `docs/images.md` §Component versions and [[limina-enh-delivery]]).
 
 ---
 

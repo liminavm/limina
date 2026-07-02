@@ -114,24 +114,22 @@ orderly shutdown signal) as the forcing fallback.
 
 The UI and vmm worker are connected by AF_UNIX sockets:
 - **display backend channel**: the worker must call the display vtable, but the *window*
-  lives in the UI process. Two viable models (decide during D6 spike):
-  - **(A) Frames cross the process boundary** via an IOSurface/shared-memory handle: the vmm
-    worker's `alloc_frame` returns a pointer into a shared region the UI process maps and
-    presents. This is the long-term zero-copy direction. [09]
+  lives in the UI process. Two models were weighed during D6:
+  - **(A) Frames cross the process boundary** via an IOSurface handle: the worker allocates
+    IOSurface-backed scanouts and the UI process maps and presents them. Zero-copy. [09]
   - **(B) Co-locate the display backend in the worker**: run a minimal CAMetalLayer-bearing
     `NSWindow` *in the vmm worker* and let the UI process drive only chrome/prefs via IPC.
-    Simpler for milestone-1 (no frame marshalling) but splits AppKit across two processes.
-  - **Milestone-1 choice: (B)** — the vmm worker hosts the guest window directly; the UI
-    process is thin. Migrate to (A) when zero-copy scanout lands.
-- **input channel**: NSEvents captured in whichever process owns the window are translated
-  and pushed into libkrun's event-provider ring. With model (B) for M1, input is captured in
-  the worker; with model (A), input is captured in the UI and forwarded.
-- **control plane**: liminad ⇄ guest agent over vsock (independent of which process owns the
-  window).
-
-> Trade-off note: model (B) temporarily puts UI code in the "privileged" (hypervisor-
-> entitled) worker. That's acceptable for milestone-1; the long-term split (A) keeps the
-> entitled worker headless and is the target once IOSurface zero-copy is in place.
+    Simpler bootstrap (no frame marshalling) but splits AppKit across two processes.
+  - **As shipped: (A).** Model (B) was only ever a bootstrap crutch; the shipped design is
+    the supervisor-owned window (`crates/limina/src/window.rs`, layer-hosting CALayer whose
+    `contents` is the guest IOSurface) fed by the worker over a scanout socketpair, with
+    non-global IOSurfaces crossed by Mach port (`limina-surfaceport`, 2026-06-23) and
+    `shown` acks flowing back on the same fd. The entitled worker is headless.
+- **input channel**: NSEvents are captured in the UI process (window + capture CGEventTap)
+  and forwarded as evdev triples over three SOCK_DGRAM socketpairs (keyboard, absolute
+  pointer, relative pointer) into the worker's virtio-input fd backends.
+- **control plane**: supervisor ⇄ guest agent over vsock (independent of which process owns
+  the window).
 
 ---
 
@@ -226,6 +224,22 @@ Conventions:
 ---
 
 ## 4. limina crate / module layout
+
+> **As-built deltas (2026-07-01).** This section is the founding plan; the shipped layout
+> differs in named places — trust the workspace over this tree:
+> - No `limina-net` crate: gvproxy lifecycle lives in the supervisor as
+>   `crates/limina/src/gateway.rs`. No host `limina-config` crate yet: the worker's own
+>   vocabulary is `crates/limina-vmm/src/config.rs`; the per-VM persistent config is designed
+>   in `design/vm-definitions.md`.
+> - No `liminad` module: the control plane is `crates/limina/src/control.rs` (+
+>   `clipboard.rs`, `balloon_policy.rs`).
+> - The guest side is `guest/` (its own workspace, `aarch64-unknown-linux-musl`):
+>   `limina-agent`, `limina-agent-session` (clipboard), `limina-init` (L1 test init),
+>   `limina-mock-mutter`, `limina-config`.
+> - Extra shipped crates the plan didn't name: `limina-surfaceport` (Mach-port IOSurface
+>   hand-off), `limina-usbip` (M7), `limina-test` (the L1/L2 harness).
+> - Display model (A) shipped (supervisor-owned window; see §2.4) — `limina-display` holds
+>   the worker-side backends (IOSurface ring + PNG capture oracle), not the presenter.
 
 A Cargo workspace. Host crates build for macOS arm64; the agent crate builds for
 `aarch64-unknown-linux-gnu` (Linux guest).

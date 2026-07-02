@@ -397,9 +397,12 @@ flip straight to the primary plane). Converged truth + open-threads ledger live 
 
 ### Open M4 items (the remaining ledger)
 
-1. **Productize the enhanced tier.** Deliver what's baked into the dev image (16 KiB kernel, mesa
-   zink + venus ICD, patched mutter, `environment.d` policy) via the M5 agent/installer **(still
-   TODO — the guest side)**; the **host side is ✅ DONE (2026-06-23):** `scripts/build-app.sh`
+1. **Productize the enhanced tier.** The **guest side is ✅ DONE** (2026-06-25 F43, 2026-06-29
+   F44, [[limina-enh-delivery]]): the 16 KiB kernel + venus mesa + patched mutter ship as rebuilt
+   Fedora RPMs installed by `install-enhanced.sh` from the guest-tools tarball (see item 3 and the
+   M5 productization section). What remains is *distribution from the app* (`limina
+   install-guest-tools` + version manifest — `docs/design/distribution.md`). The **host side is
+   ✅ DONE (2026-06-23):** `scripts/build-app.sh`
    assembles a self-contained `limina.app` — the whole host venus/GL closure (virglrenderer fork,
    epoxy, Vulkan loader, `libvulkan_kosmickrisp.dylib`, the zink-on-KK Mesa stack + LLVM) is vendored
    into `Contents/Frameworks`, relocated to `@rpath`, with a relative-path KK ICD under
@@ -449,7 +452,7 @@ on the GPU, GNOME Shell animations are smooth; full-screen 3D/video shows no per
 ## Milestone 5 — Clipboard + virtiofs file sharing + guest agent
 
 **Status: 🟢 core done.** Control plane, clipboard, virtiofs sharing, and liveness are all live;
-only the productization track (sysext guest-tools + kernel RPM) and follow-ups remain.
+the productization track SHIPPED as RPMs (see below); follow-ups remain.
 
 **Goal:** bidirectional text clipboard, a host folder shared into the guest, and a versioned control
 channel between limina and a guest agent.
@@ -492,33 +495,29 @@ channel between limina and a guest agent.
 `l1_share` (read+write round-trip + `:ro` refusal), `l1_liveness`. Live-verified on the seated
 desktop both clipboard directions + shares + window-close → orderly GNOME power-off (~1s, exit 0).
 
-### Remaining: productization (delivery design SETTLED) + follow-ups
+### Productization: ✅ SHIPPED as RPMs replacing stock at `/usr` (2026-06-25, re-validated on F44 2026-06-29)
 
-The agent is the enhanced-tier configurator. Two carriers:
-- **Userspace rides a versioned `systemd-sysext` image (+ confext for `/etc`):**
-  `limina-guest-tools-<ver>.sysext.raw` carries the agent + units, the patched mutter (overlayfs
-  upper shadows the exact path gnome-shell loads — solves not-parallel-installable; `unmerge` =
-  instant rollback), mesa zink + venus ICD under a limina-owned dir selected via ICD JSON/env (do
-  NOT shadow stock mesa), and `/usr/lib/environment.d/` policy. Additive, reversible, rpmdb-untouched
-  — the package-manager-shaped two-tier tenet. **Distro-agnostic** (plain systemd ≥254);
-  `systemd-sysupdate`/`importctl` is the update channel.
-- **The kernel goes through the distro's own EFI boot machinery, NOT host direct-boot** (that was
-  the dev vehicle; BLS/GRUB fallback, kdump, dracut, the M2.5 boot console all assume the guest boots
-  itself): package as a kernel RPM installed via `kernel-install` → BLS entry alongside the stock
-  kernels (stock = one GRUB choice away = the degradation path). **Host-built primary** (the
-  container pipeline already cross-builds it; needs `CONFIG_EFI_STUB` + dracut-managed rootfs),
-  in-guest rebuild as the self-hosting fallback. A sysext can't carry the kernel image (the
-  bootloader reads `/boot` before userspace; sysext overlays `/usr` only).
-- **Bootstrap is a one-time Parallels-style "install guest tools"** (ISO/attached volume): graceful
-  degradation makes this acceptable — the stock guest has a working software-GL desktop before
-  enrollment; the installer drops the sysext + kernel package, and the agent owns updates thereafter.
+The sysext design originally written here was **rejected during implementation** and the section
+rewritten after the fact (2026-07-01) — the authoritative rationale lives in `docs/tiers.md`
+(§"Why RPM-replace, not a sysext overlay") and `docs/images.md`. Short form:
 
-**Consequence:** EFI-booting the enhanced tier needs venus to survive the EFI→kernel reset — that
-singleton prerequisite is ✅ DONE (libkrun 0022). Making the 16 KiB kernel BLS-bootable so GRUB
-selects it is **also ✅ DONE** (2026-06-27, [[limina-enh-delivery]]): the `limina-kernel-16k` RPM's
-`%post` runs `kernel-install add` (dracut initramfs + BLS entry, distro-standard `root=UUID=`) and
-`install-enhanced.sh` `grubby --set-default`s it; `enhanced.raw` EFI-boots the 16k kernel to a
-pixel-verified venus desktop.
+- **Userspace = rebuilt Fedora SRPMs replacing stock at `/usr`** (mesa pinned to our version +
+  dnf-versionlocked; mutter matched to the target distro's version with `patches/mutter` rebased
+  per GNOME release). Why not sysext for mesa: our-mesa-vs-stock **libgallium SONAME mismatch**,
+  and an overlayfs upper can't *remove* stock files — the resulting ABI blend broke mutter's KMS
+  EGL. The retired sysext builders live in `scripts/archive/`.
+- **The kernel goes through the distro's own EFI boot machinery** (this part of the original
+  design survived): a stock-like kernel RPM whose `%post` runs `kernel-install add` (dracut
+  initramfs + BLS entry); stock kernel = one GRUB choice away = the degradation path. venus
+  surviving the EFI→kernel reset (libkrun 0022) and the 16 KiB kernel being BLS-bootable are both
+  ✅ DONE ([[limina-enh-delivery]]).
+- **Bootstrap is a one-time Parallels-style "install guest tools"**: `install-enhanced.sh` + the
+  guest-tools tarball, run in the *stock* guest (which has a working software-GL desktop first —
+  the two-tier bootstrap floor). Validated end-to-end on pristine F43 (2026-06-25) and F44
+  (2026-06-29); component versions in `docs/images.md` §Component versions.
+- **Still open in this track:** guest-tools distribution *from the app* (`limina
+  install-guest-tools`) + the payload↔guest version-manifest check — designed in
+  `docs/design/distribution.md`.
 
 **Follow-ups:** DAX/shm window (`VirtioShmRegion` in `fs/device.rs`; confirm shm-window alignment +
 FUSE_SETUPMAPPING/SHMCAP on 16 KiB host pages; the enhanced tier already runs a 16k guest so
@@ -529,12 +528,7 @@ host→guest time sync (DGRAM vsock port 123, `timesync.rs`) — confirm a guest
 **libkrun patches:** none for the transport (vsock + virtiofs overlays already exist). Possibly a
 small fix if a HANG_UP'd port can't cleanly reconnect without a VM restart (`unix.rs:548-562`).
 
-**Risks / spike first (delivery-design spikes, both cheap):**
-- **SELinux labeling of sysext content** — the overlaid mutter/agent files need correct labels at
-  image-build time or stock (Enforcing) Fedora refuses them.
-- **EFI-boot the 16 KiB kernel end-to-end** — kernel RPM → `kernel-install`/BLS → GRUB → venus
-  desktop (verify `CONFIG_EFI_STUB`, dracut on 16k, BLS default with the stock fallback intact).
-  This is also where the GOP+venus singleton fix gets exercised.
+**Risks that remain live (for clipboard files/images):**
 - NSPasteboard promised-data provider blocking long enough to round-trip a guest REQUEST/DATA
   without AppKit timing out the paste.
 - Large chunked vsock transfers respecting credit flow control without stalling muxer threads
@@ -715,26 +709,23 @@ Parallels replacement: fullscreen, keymap remap, multi-display, system-combo cap
      guest pointer profile (enhanced tier) keep the response linear. If Accessibility is denied,
      `CGEventTapCreate` returns NULL and it falls back to a leaky local-monitor warp path.
    - **Multi-display:** multiplex all displays through the single `krun_set_display_backend` by
-     `scanout_id` (up to 16), each to its own NSWindow/CAMetalLayer.
-   - **Runtime window-follow resize / EDID hotplug (libkrun patch):** no post-`krun_start_enter`
-     entry changes display size today. Add a C call that raises a virtio-gpu config-change interrupt
-     + updates `DisplayInfo` (the GET_DISPLAY_INFO/GET_EDID + config-change capability already
-     exists — plumbing, not new device work). The #1 display gap.
+     `scanout_id` (up to 16), each to its own NSWindow/CAMetalLayer. **The thinnest plan among the
+     named features** — needs a design doc (guest-side mutter multi-monitor via multi-scanout,
+     HiDPI, interaction with runtime resize, and the `frame <id>`-carries-no-scanout-id wire gap
+     flagged in `docs/reviews/2026-07-01-full-review.md`).
+   - ~~**Runtime window-follow resize / EDID hotplug**~~ — **✅ DONE (2026-06-23)**: window resize
+     reflows the guest resolution live, no reboot (libkrun 0025/0026, the `--display-control-socket`
+     transport, 60Hz-debounced window trigger). Design + as-built:
+     `docs/design/runtime-display-resize.md`.
    - ~~Hardware cursor~~ — done in M2. ~~Zero-copy scanout~~ — done in M4.
-   - **Capability-scope the scanout IOSurfaces (security hardening).** The worker exports each guest
-     scanout by its **global `IOSurfaceID`**, mapped with `IOSurfaceLookup` (`window.rs`). That
-     namespace is machine-wide and not capability-gated: ids are low/sequential/enumerable, so any
-     **non-sandboxed same-user** process can brute-force `1..N` and read the guest screen with no
-     screen-recording prompt (`iosdump.swift` is a working PoC). Severity is bounded (local-only,
-     same-user; the macOS app sandbox already blocks the App-Store case) — productization hardening,
-     not an emergency. Fix: export via `IOSurfaceCreateMachPort` and hand the **port right** to the
-     window process (`IOSurfaceLookupFromMachPort`), dropping the global namespace. Cost: a small
-     **mach rendezvous** to pass the port to the worker (`SCM_RIGHTS` passes fds, not port rights).
+   - ~~**Capability-scope the scanout IOSurfaces**~~ — **✅ DONE (2026-06-23)**: both display paths
+     hand NON-global IOSurfaces to the supervisor by Mach port (`limina-surfaceport`), closing the
+     `IOSurfaceLookup` screen-read hole; `iosdump` now needs `LIMINA_GLOBAL_SCANOUT=1`.
    - **CapsLock/NumLock LED parity (libkrun patch):** surface the statusq LED feedback
      (`worker.rs:238-248` no-op).
 
-**libkrun patches:** native virtio-snd (largest); runtime display-reconfigure/EDID-hotplug C call;
-optional LED parity.
+**libkrun patches:** native virtio-snd (largest); optional LED parity. (The runtime
+display-reconfigure call shipped as 0025/0026.)
 
 **Done test:** audio plays from a guest app through the Mac speakers (and mic capture works); an x86
 Linux binary runs in the arm64 guest via FEX; the window goes fullscreen on a Retina display,

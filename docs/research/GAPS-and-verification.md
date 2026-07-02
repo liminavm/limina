@@ -161,11 +161,12 @@ real trap is the **Homebrew dylib vs header mismatch** (§1.1).
 ## 3. Missing topics a Parallels replacement needs that no doc covers
 
 1. ~~**VM lifecycle: snapshot / save-restore / suspend-resume / pause.**~~ **NOW DESIGNED** as
-   **M9 — suspend & resume (hibernate)**: `docs/design/m9-suspend-resume.md` (roadmap digest under
-   Milestone 9). Hybrid — enhanced-tier guest-side Linux S4 (the guest releases the GPU + writes its
-   own image to swap; resume cold-boots with `resume=`) over a stock-tier guest-assisted VMM RAM/vCPU
-   snapshot floor. Confirms HVF has no dirty-log (stop-the-world dump only) and that accelerated-GPU
-   host state is non-serializable (the floor quiesces the guest GPU instead). Not yet built.
+   **M9 — suspend & resume + full VM snapshots**: `docs/design/m9-suspend-resume.md` (roadmap
+   digest under Milestone 9). **Pivoted 2026-06-28: host-side VMM snapshot is primary** (pause
+   vCPUs → serialize vCPU+device+GIC+RAM → kill worker → `--restore` a fresh worker); guest-side
+   Linux S4 was demoted to Appendix A after spike #1 hit two libkrun HVF gaps (PSCI `CPU_OFF`,
+   `OSDLR_EL1`) the host path sidesteps. GPU = Strategy A (quiesce + guest re-init; host GPU state
+   is non-serializable). Confirms HVF has no dirty-log (stop-the-world dump only). Not yet built.
 2. **Disk image management:** create/resize/snapshot of the guest disk, raw vs qcow2,
    discard/TRIM passthrough, sparse reclaim. Doc 01 only boots one fixed raw.
 3. **Shared-folder product surface** beyond raw virtiofs: uid/gid mapping, case
@@ -239,9 +240,12 @@ real trap is the **Homebrew dylib vs header mismatch** (§1.1).
 8. **Snapshot/save-restore feasibility** (§3.1): spike whether HVF vCPU + virtio device +
    guest memory state can be serialized at all, since it gates a top Parallels-parity
    feature and there is no API for it today. **Now scoped as the M9.0 founding spikes**
-   (`docs/design/m9-suspend-resume.md` §8): (1) stock arm64 S4-hibernate inside libkrun + 16 KiB
-   resume across a worker cold-boot, (2) HVF full vCPU + GIC state round-trip (does any EL1 sysreg
-   reject `set_sys_reg` post-run?), (3) venus clean release/re-init across a suspend-shaped reset.
+   (`docs/design/m9-suspend-resume.md` §8, post-pivot set): spike #1 (guest S4) was RUN and is
+   what triggered the 2026-06-28 host-side pivot (blocked on PSCI `CPU_OFF` + `OSDLR_EL1`;
+   `spikes/s4-hibernate/RESULTS.md`); spike #2 (HVF full vCPU + GIC state round-trip — does any
+   EL1 sysreg reject `set_sys_reg` post-run?) is the live go/no-go gate for M9.1+; spike #3
+   (live virtio_gpu unbind) was RUN — a running session does NOT survive abrupt GPU loss, so
+   guest-side resubmit/replay is required (`spikes/s4-hibernate/gpu-reset-live.md`).
 
 ---
 
