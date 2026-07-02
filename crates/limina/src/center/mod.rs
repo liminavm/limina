@@ -20,6 +20,8 @@ mod controller;
 mod model;
 mod spawn;
 
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 
 use block2::RcBlock;
@@ -30,23 +32,120 @@ use objc2_app_kit::{
     NSWindowStyleMask,
 };
 use objc2_foundation::{
-    NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer,
+    NSDistributedNotificationCenter, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize,
+    NSString, NSTimer,
 };
 
 use controller::CenterController;
 
+/// Distributed-notification name a second center posts to ask the running one to
+/// show its window (the single-instance "show yourself" channel).
+pub const SHOW_CENTER_NOTIFICATION: &str = "eti.noronha.limina.show-center";
+
+/// The center's single-instance flock sentinel, next to the VM library.
+fn center_lock_path() -> PathBuf {
+    let lib = crate::vmlib::bundle::library_dir();
+    lib.parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| lib.clone())
+        .join("center.lock")
+}
+
+/// Take the center's exclusive flock. `None` = another center already holds it.
+fn acquire_center_lock() -> Option<std::fs::File> {
+    let path = center_lock_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .ok()?;
+    let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    (r == 0).then_some(f)
+}
+
+/// Is a center running (holding the exclusive flock)? A shared probe fails only then.
+fn center_is_running() -> bool {
+    let Ok(f) = std::fs::File::open(center_lock_path()) else {
+        return false;
+    };
+    let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
+    r != 0 // lock released (LOCK_UN implicit) when f drops
+}
+
+fn post_show_notification() {
+    let dnc = NSDistributedNotificationCenter::defaultCenter();
+    unsafe {
+        dnc.postNotificationName_object_userInfo_deliverImmediately(
+            &NSString::from_str(SHOW_CENTER_NOTIFICATION),
+            None,
+            None,
+            true,
+        );
+    }
+}
+
+/// Bring the control center forward from anywhere (the VM window's
+/// "Control Center…" menu item): ask a running center to show itself, or spawn a
+/// fresh detached `limina center` when none is running.
+pub fn show_or_spawn() -> anyhow::Result<()> {
+    if center_is_running() {
+        post_show_notification();
+        return Ok(());
+    }
+    use std::os::unix::process::CommandExt;
+    let exe = std::env::current_exe()?;
+    let child = std::process::Command::new(exe)
+        .arg("center")
+        .process_group(0)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    // Reap without blocking; the center is not our child in any meaningful sense.
+    std::thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 /// Open the control center and run the AppKit loop. Never returns; quitting the
 /// center exits the process (running VM children are NOT ours — they survive).
 pub fn run() -> ! {
+    // Single instance: hold an exclusive flock for the center's lifetime. A second
+    // `limina center` (double-clicked app, a VM window's "Control Center…" item)
+    // just asks the running one to show itself and exits.
+    match acquire_center_lock() {
+        Some(lock) => std::mem::forget(lock), // held until process exit
+        None => {
+            post_show_notification();
+            std::process::exit(0);
+        }
+    }
+
     let mtm = MainThreadMarker::new().expect("the control center must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-    // A minimal main menu so Cmd-Q works in plist-less dev runs (`cargo run`).
+    // A minimal main menu so Cmd-Q / Cmd-W work in plist-less dev runs (`cargo run`).
     let menubar = NSMenu::new(mtm);
     let app_item = NSMenuItem::new(mtm);
     menubar.addItem(&app_item);
     let app_menu = NSMenu::new(mtm);
+    // Close hides the window; the center keeps running (Dock icon brings it back).
+    let close = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Close Window"),
+            Some(objc2::sel!(performClose:)),
+            &NSString::from_str("w"),
+        )
+    };
+    app_menu.addItem(&close);
     let quit = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),
@@ -89,6 +188,19 @@ pub fn run() -> ! {
     app.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
     controller.refresh(true);
     window.makeKeyAndOrderFront(None);
+
+    // "Show yourself" channel: a second `limina center` (or a VM window's
+    // "Control Center…" menu item) posts this distributed notification instead of
+    // starting another center.
+    let dnc = NSDistributedNotificationCenter::defaultCenter();
+    unsafe {
+        dnc.addObserver_selector_name_object(
+            &controller,
+            objc2::sel!(showCenterRequested:),
+            Some(&NSString::from_str(SHOW_CENTER_NOTIFICATION)),
+            None,
+        );
+    }
 
     // 1 s status refresh (flock probes + vm.toml mtimes are cheap). Common modes so
     // status keeps updating while the user drags/resizes the window.

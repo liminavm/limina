@@ -50,6 +50,10 @@ objc2-foundation = { version = "0.3", features = [
     "NSFileManager",
     "NSError",
     "NSURL",
+    # Center single-instance "show yourself" channel (a second center / the VM
+    # window's Control Center… item posts; the running center observes).
+    "NSNotification",
+    "NSDistributedNotificationCenter",
 ] }
 objc2-app-kit = { version = "0.3", features = [
     "NSApplication",

@@ -22,10 +22,13 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
 use block2::RcBlock;
-use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2::rc::Retained;
+use objc2::runtime::NSObjectProtocol;
+use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSEventMask,
-    NSEventType, NSViewLayerContentsRedrawPolicy, NSWindow, NSWindowCollectionBehavior,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
+    NSApplicationTerminateReply, NSBackingStoreType, NSEvent, NSEventMask, NSEventType, NSMenu,
+    NSMenuItem, NSViewLayerContentsRedrawPolicy, NSWindow, NSWindowCollectionBehavior,
     NSWindowStyleMask,
 };
 use objc2_core_foundation::CFRetained;
@@ -78,6 +81,80 @@ fn send_resize(path: &Path, width: u32, height: u32) {
     });
 }
 
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements; no Drop; the action
+    // signature below matches AppKit's target/action convention.
+    #[unsafe(super = objc2_foundation::NSObject)]
+    #[thread_kind = MainThreadOnly]
+    #[name = "LiminaVmMenuActions"]
+    pub struct VmMenuActions;
+
+    unsafe impl NSObjectProtocol for VmMenuActions {}
+
+    unsafe impl NSApplicationDelegate for VmMenuActions {
+        // A quit Apple event (osascript "quit", logout) must not exit the
+        // supervisor abruptly — that orphans the worker (live-reproduced
+        // 2026-07-02). Cancel the terminate and route into the same graceful
+        // stop the Ctrl-C/window-close path uses; the render timer drives the
+        // shutdown ladder and exits the process when the guest is down.
+        #[unsafe(method(applicationShouldTerminate:))]
+        fn application_should_terminate(
+            &self,
+            _app: &NSApplication,
+        ) -> NSApplicationTerminateReply {
+            crate::supervisor::request_stop();
+            NSApplicationTerminateReply::TerminateCancel
+        }
+    }
+
+    impl VmMenuActions {
+        // "Control Center…": show the running center or spawn a fresh one — the
+        // way back to the center from a VM window (Parallels-style).
+        #[unsafe(method(showControlCenter:))]
+        fn show_control_center(&self, _sender: &NSMenuItem) {
+            if let Err(e) = crate::center::show_or_spawn() {
+                log::warn!("opening the control center: {e:#}");
+            }
+        }
+    }
+);
+
+/// The VM window's minimal main menu: Control Center… (Cmd-Shift-C) and Close
+/// Window (Cmd-W — routes to `performClose:`, i.e. the normal VM-shutdown path).
+/// The actions object also becomes the app delegate so quit Apple events go
+/// through the graceful stop instead of exiting the supervisor under the worker.
+fn install_main_menu(mtm: MainThreadMarker, app: &NSApplication) {
+    let actions: Retained<VmMenuActions> = unsafe { msg_send![VmMenuActions::alloc(mtm), init] };
+    app.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(&*actions)));
+    let menubar = NSMenu::new(mtm);
+    let app_item = NSMenuItem::new(mtm);
+    menubar.addItem(&app_item);
+    let app_menu = NSMenu::new(mtm);
+    let cc = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Control Center…"),
+            Some(objc2::sel!(showControlCenter:)),
+            &NSString::from_str("C"), // uppercase ⇒ Cmd-Shift-C
+        )
+    };
+    unsafe { cc.setTarget(Some(&*actions)) };
+    app_menu.addItem(&cc);
+    let close = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Close Window"),
+            Some(objc2::sel!(performClose:)),
+            &NSString::from_str("w"),
+        )
+    };
+    app_menu.addItem(&close);
+    app_item.setSubmenu(Some(&app_menu));
+    app.setMainMenu(Some(&menubar));
+    // NSMenuItem targets are weak; the actions object must live as long as the menu.
+    std::mem::forget(actions);
+}
+
 /// Run the AppKit window on the main thread. The render timer polls `shared`, updates the
 /// window contents, and — when the worker exits, the window is closed, or Ctrl-C is hit —
 /// kills the worker's process group (`worker_pid`) and exits the process. (We exit from
@@ -95,6 +172,7 @@ pub fn run(
 ) -> ! {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+    install_main_menu(mtm, &app);
 
     let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1024.0, 768.0));
     let style = NSWindowStyleMask::Titled

@@ -36,8 +36,8 @@ use objc2_app_kit::{
     NSView, NSWindow,
 };
 use objc2_foundation::{
-    NSArray, NSEdgeInsets, NSFileManager, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop,
-    NSRunLoopCommonModes, NSSize, NSString, NSTimer, NSURL,
+    NSArray, NSEdgeInsets, NSFileManager, NSNotification, NSObject, NSObjectProtocol, NSPoint,
+    NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer, NSURL,
 };
 
 use super::{model, model::VmRow, spawn};
@@ -65,6 +65,10 @@ pub struct CenterIvars {
     /// Non-list window chrome height (margins + header + gap), measured by
     /// `build_ui`; `fit_window_to_content` adds the list's fitting height to it.
     chrome_h: std::cell::Cell<f64>,
+    /// The center window, for re-showing after close (the center is persistent:
+    /// closing the window hides it, Dock-click/reopen or the show-center
+    /// notification brings it back). Set once by `new`.
+    window: RefCell<Option<Retained<NSWindow>>>,
 }
 
 define_class!(
@@ -79,10 +83,20 @@ define_class!(
     unsafe impl NSObjectProtocol for CenterController {}
 
     unsafe impl NSApplicationDelegate for CenterController {
-        // The center is a launcher: closing its window quits the center process.
-        // Running VMs are independent children and keep running.
+        // The center is persistent: closing its window only hides it (the Dock
+        // icon, a reopen, or the show-center notification brings it back), and
+        // Cmd-Q is the real quit. Running VMs are independent children either way.
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
         fn should_terminate_after_last_window_closed(&self, _app: &NSApplication) -> bool {
+            false
+        }
+
+        // Dock-icon click (or app reopen) with the window closed: re-show it.
+        #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
+        fn should_handle_reopen(&self, _app: &NSApplication, has_visible: bool) -> bool {
+            if !has_visible {
+                self.show_window();
+            }
             true
         }
 
@@ -216,6 +230,13 @@ define_class!(
         fn new_vm_clicked(&self, _sender: &NSButton) {
             self.run_new_vm_flow();
         }
+
+        // The show-center distributed notification (posted by a second `limina
+        // center` or a VM window's "Control Center…" menu item).
+        #[unsafe(method(showCenterRequested:))]
+        fn show_center_requested(&self, _note: &NSNotification) {
+            self.show_window();
+        }
     }
 );
 
@@ -231,11 +252,24 @@ impl CenterController {
             last_busy: RefCell::new(HashSet::new()),
             last_stopping: RefCell::new(HashSet::new()),
             chrome_h: std::cell::Cell::new(0.0),
+            window: RefCell::new(None),
         });
         // SAFETY: NSObject's init signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
+        *this.ivars().window.borrow_mut() = Some(window.retain());
         this.build_ui(mtm, window);
         this
+    }
+
+    /// Re-show the (possibly closed/hidden) center window and bring the app forward.
+    fn show_window(&self) {
+        if let Some(window) = self.ivars().window.borrow().as_ref() {
+            window.makeKeyAndOrderFront(None);
+        }
+        let app = NSApplication::sharedApplication(self.mtm());
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+        self.refresh(true);
     }
 
     /// Build the static chrome: header (title + New…), the scrolling row list, and

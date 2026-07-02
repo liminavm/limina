@@ -90,6 +90,13 @@ extern "C" fn on_signal(_sig: libc::c_int) {
     STOP.store(true, Ordering::SeqCst);
 }
 
+/// Ask for the same graceful stop a SIGTERM triggers — used by the windowed
+/// session's quit-Apple-event handler (osascript "quit", logout), which must never
+/// exit the supervisor abruptly and orphan the worker.
+pub fn request_stop() {
+    STOP.store(true, Ordering::SeqCst);
+}
+
 fn install_signal_handlers() -> Result<()> {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
