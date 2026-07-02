@@ -235,10 +235,20 @@ The spine exists — this is why it's tractable:
 1. ✅ **DONE** — guest-side S4 inside libkrun (`spikes/s4-hibernate/RESULTS.md`): the *guest-side* path is
    blocked by libkrun PSCI/sysreg gaps. **Bearing on this plan:** it's *why* we pivoted to host-side
    (which sidesteps those gaps) and demoted S4 (Appendix A).
-2. **Can HVF round-trip full vCPU + GIC state?** Reuse `spikes/hvf-trap-probe`: get/set all
-   GP/SIMD/EL1-sysreg/PSTATE/vtimer-offset into a fresh vCPU and continue identically; does any EL1 sysreg
-   reject `set_sys_reg` post-run? Confirm `hv_gic_state_get_data` → `hv_gic_set_state` round-trips. **Gates
-   M9.1/M9.2.**
+2. ✅ **GREEN (2026-07-01, `spikes/m9-hvf-state-roundtrip/RESULTS.md`).** HVF round-trips full vCPU +
+   in-kernel-GICv3 state into a **fresh same-process VM** and the guest continues identically
+   (checksum-verified, 5/5 runs; a timer armed pre-snapshot fires correctly post-restore). Key facts:
+   **118/120 EL1 sysregs read OK and ALL accepted `set_sys_reg` post-run — zero rejections** (the 2
+   get-failures are EL2 regs, expected); the GIC blob (126 KB binary plist) `set_state`s into a fresh VM
+   and reads back **byte-identical**; ICC CPU-interface regs are NOT in the blob (save/restore via
+   `hv_gic_get/set_icc_reg`; only `ICC_RPR_EL1` refuses set — read-only running-priority → **quiesce to
+   no-IRQ-in-service before snapshotting**); same-process `hv_vm_destroy`→`hv_vm_create` works;
+   `hv_vcpu_set_vtimer_offset` accepts sets (the CNTVOFF continuity mechanism is confirmed); with the
+   in-kernel GIC **`VTIMER_ACTIVATED` never fires** (the vtimer mask dance is a userspace-GIC artifact).
+   Restore order that worked: vm → gic create → map RAM → vcpu create → **MPIDR first** → `gic_set_state`
+   → ICC → sysregs → GP/PC/CPSR/SIMD → vtimer offset+mask → pending lines. Non-gating deltas left to
+   M9.1/M9.2: multi-vCPU, SPIs pending at snapshot, snapshot mid-IRQ-service, MMU-on (Linux is the real
+   test). **M9.1/M9.2 are unblocked; the userspace-GicV3 fallback is not needed.**
 3. 🟡 **PARTIAL (2026-06-28, `spikes/s4-hibernate/gpu-reset-live.md`).** A real `virtio_gpu` unbind/rebind
    on a *live* seated venus desktop, three rounds (clean stop-gdm; under heavy load — glxgears 59.5 FPS +
    vkcube + Firefox WebGL; and raw unbind with the session **live**). **Proven:** the host worker is

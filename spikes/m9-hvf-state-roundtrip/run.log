@@ -1,0 +1,171 @@
+payload: payload.bin (3972 bytes)
+
+=== phase 1: control run (VM #1, uninterrupted) ===
+[control] hv_vm_create -> 0x0 (HV_SUCCESS)
+[control] checkpoint A (magic 0xa11ce)
+[control] guest CNTVCT delta across checkpoint A: 128 ticks (0.0 ms @24MHz)
+[control] guest IRQ handler: intid=27
+[control] guest IRQ handler: intid=27
+[control] checkpoint B/DONE (magic 0xd05e)
+[control] result=0 sum=0xb11500091e26ada6 irqs=2 vtimer_exits=0 unknown_mmio=0
+
+=== phase 2: snapshot run (VM #2, stop at checkpoint A) ===
+[vm1] hv_vm_create -> 0x0 (HV_SUCCESS)
+[vm1] checkpoint A (magic 0xa11ce)
+[vm1] get_sys_reg CNTVOFF_EL2        -> 0xfae9400f (HV_UNSUPPORTED)
+[vm1] get_sys_reg CNTHCTL_EL2        -> 0xfae9400f (HV_UNSUPPORTED)
+[vm1] sysregs read: 118 ok, 2 failed (of 120)
+[vm1] gic_get_icc ICC_SRE_EL2      -> 0xfae9400f (HV_UNSUPPORTED)
+[vm1] vtimer_offset=0x0 mask=0 pending_irq=0 pending_fiq=0
+[vm1] pc=0x800002a4 cpsr=0x3c5 fpcr=0x400000 fpsr=0x8000000
+[vm1]   DBGBVR0_EL1        = 0x0000000000000000
+[vm1]   DBGBCR0_EL1        = 0x0000000000000000
+[vm1]   DBGWVR0_EL1        = 0x0000000000000000
+[vm1]   DBGWCR0_EL1        = 0x0000000000000000
+[vm1]   DBGBVR1_EL1        = 0x0000000000000000
+[vm1]   DBGBCR1_EL1        = 0x0000000000000000
+[vm1]   DBGWVR1_EL1        = 0x0000000000000000
+[vm1]   DBGWCR1_EL1        = 0x0000000000000000
+[vm1]   DBGBVR2_EL1        = 0x0000000000000000
+[vm1]   DBGBCR2_EL1        = 0x0000000000000000
+[vm1]   DBGWVR2_EL1        = 0x0000000000000000
+[vm1]   DBGWCR2_EL1        = 0x0000000000000000
+[vm1]   DBGBVR3_EL1        = 0x0000000000000000
+[vm1]   DBGBCR3_EL1        = 0x0000000000000000
+[vm1]   DBGWVR3_EL1        = 0x0000000000000000
+[vm1]   DBGWCR3_EL1        = 0x0000000000000000
+[vm1]   DBGBVR4_EL1        = 0x0000000000000000
+[vm1]   DBGBCR4_EL1        = 0x0000000000000000
+[vm1]   DBGWVR4_EL1        = 0x0000000000000000
+[vm1]   DBGWCR4_EL1        = 0x0000000000000000
+[vm1]   DBGBVR5_EL1        = 0x0000000000000000
+[vm1]   DBGBCR5_EL1        = 0x0000000000000000
+[vm1]   DBGWVR5_EL1        = 0x0000000000000000
+[vm1]   DBGWCR5_EL1        = 0x0000000000000000
+[vm1]   DBGBVR6_EL1        = 0x0000000000000000
+[vm1]   DBGBCR6_EL1        = 0x0000000000000000
+[vm1]   DBGWVR6_EL1        = 0x0000000000000000
+[vm1]   DBGWCR6_EL1        = 0x0000000000000000
+[vm1]   DBGBVR7_EL1        = 0x0000000000000000
+[vm1]   DBGBCR7_EL1        = 0x0000000000000000
+[vm1]   DBGWVR7_EL1        = 0x0000000000000000
+[vm1]   DBGWCR7_EL1        = 0x0000000000000000
+[vm1]   DBGBVR8_EL1        = 0x0000000000000000
+[vm1]   DBGBCR8_EL1        = 0x0000000000000000
+[vm1]   DBGWVR8_EL1        = 0x0000000000000000
+[vm1]   DBGWCR8_EL1        = 0x0000000000000000
+[vm1]   DBGBVR9_EL1        = 0x0000000000000000
+[vm1]   DBGBCR9_EL1        = 0x0000000000000000
+[vm1]   DBGWVR9_EL1        = 0x0000000000000000
+[vm1]   DBGWCR9_EL1        = 0x0000000000000000
+[vm1]   DBGBVR10_EL1       = 0x0000000000000000
+[vm1]   DBGBCR10_EL1       = 0x0000000000000000
+[vm1]   DBGWVR10_EL1       = 0x0000000000000000
+[vm1]   DBGWCR10_EL1       = 0x0000000000000000
+[vm1]   DBGBVR11_EL1       = 0x0000000000000000
+[vm1]   DBGBCR11_EL1       = 0x0000000000000000
+[vm1]   DBGWVR11_EL1       = 0x0000000000000000
+[vm1]   DBGWCR11_EL1       = 0x0000000000000000
+[vm1]   DBGBVR12_EL1       = 0x0000000000000000
+[vm1]   DBGBCR12_EL1       = 0x0000000000000000
+[vm1]   DBGWVR12_EL1       = 0x0000000000000000
+[vm1]   DBGWCR12_EL1       = 0x0000000000000000
+[vm1]   DBGBVR13_EL1       = 0x0000000000000000
+[vm1]   DBGBCR13_EL1       = 0x0000000000000000
+[vm1]   DBGWVR13_EL1       = 0x0000000000000000
+[vm1]   DBGWCR13_EL1       = 0x0000000000000000
+[vm1]   DBGBVR14_EL1       = 0x0000000000000000
+[vm1]   DBGBCR14_EL1       = 0x0000000000000000
+[vm1]   DBGWVR14_EL1       = 0x0000000000000000
+[vm1]   DBGWCR14_EL1       = 0x0000000000000000
+[vm1]   DBGBVR15_EL1       = 0x0000000000000000
+[vm1]   DBGBCR15_EL1       = 0x0000000000000000
+[vm1]   DBGWVR15_EL1       = 0x0000000000000000
+[vm1]   DBGWCR15_EL1       = 0x0000000000000000
+[vm1]   MDCCINT_EL1        = 0x0000000000000000
+[vm1]   MDSCR_EL1          = 0x0000000000000000
+[vm1]   MIDR_EL1           = 0x00000000610f0000
+[vm1]   MPIDR_EL1          = 0x0000000000000000
+[vm1]   ID_AA64PFR0_EL1    = 0x1101000011110011
+[vm1]   ID_AA64PFR1_EL1    = 0x0000000000000000
+[vm1]   ID_AA64ZFR0_EL1    = 0x0000000000000000
+[vm1]   ID_AA64SMFR0_EL1   = 0x0000000000000000
+[vm1]   ID_AA64DFR0_EL1    = 0x0000000010305006
+[vm1]   ID_AA64DFR1_EL1    = 0x0000000000000000
+[vm1]   ID_AA64ISAR0_EL1   = 0x0221100110212120
+[vm1]   ID_AA64ISAR1_EL1   = 0x0000011110211202
+[vm1]   ID_AA64MMFR0_EL1   = 0x000010000f100002
+[vm1]   ID_AA64MMFR1_EL1   = 0x0000000011212000
+[vm1]   ID_AA64MMFR2_EL1   = 0x1001001100001011
+[vm1]   SCTLR_EL1          = 0x0000000030150180
+[vm1]   ACTLR_EL1          = 0x0000000000000000
+[vm1]   CPACR_EL1          = 0x0000000000300000
+[vm1]   TTBR0_EL1          = 0x0000000081000000
+[vm1]   TTBR1_EL1          = 0x0000000082000000
+[vm1]   TCR_EL1            = 0x0000000500103519
+[vm1]   APIAKEYLO_EL1      = 0x0000000000000000
+[vm1]   APIAKEYHI_EL1      = 0x0000000000000000
+[vm1]   APIBKEYLO_EL1      = 0x0000000000000000
+[vm1]   APIBKEYHI_EL1      = 0x0000000000000000
+[vm1]   APDAKEYLO_EL1      = 0x0000000000000000
+[vm1]   APDAKEYHI_EL1      = 0x0000000000000000
+[vm1]   APDBKEYLO_EL1      = 0x0000000000000000
+[vm1]   APDBKEYHI_EL1      = 0x0000000000000000
+[vm1]   APGAKEYLO_EL1      = 0x0000000000000000
+[vm1]   APGAKEYHI_EL1      = 0x0000000000000000
+[vm1]   SPSR_EL1           = 0x0000000000000000
+[vm1]   ELR_EL1            = 0x0000000000000000
+[vm1]   SP_EL0             = 0x0000000000000000
+[vm1]   SP_EL1             = 0x0000000080100000
+[vm1]   AFSR0_EL1          = 0x0000000000000000
+[vm1]   AFSR1_EL1          = 0x0000000000000000
+[vm1]   ESR_EL1            = 0x0000000000000000
+[vm1]   FAR_EL1            = 0x0000000000000000
+[vm1]   PAR_EL1            = 0x0000000000000800
+[vm1]   MAIR_EL1           = 0x00000000004404ff
+[vm1]   AMAIR_EL1          = 0x0000000000000000
+[vm1]   VBAR_EL1           = 0x0000000080000800
+[vm1]   CONTEXTIDR_EL1     = 0x0000000000000077
+[vm1]   TPIDR_EL1          = 0x000000005eed0014
+[vm1]   CNTKCTL_EL1        = 0x0000000000000003
+[vm1]   CSSELR_EL1         = 0x0000000000000000
+[vm1]   TPIDR_EL0          = 0x000000005eed0012
+[vm1]   TPIDRRO_EL0        = 0x000000005eed0013
+[vm1]   CNTV_CTL_EL0       = 0x0000000000000001
+[vm1]   CNTV_CVAL_EL0      = 0x00002e6ec2dcb81a
+[vm1]   CNTP_CTL_EL0       = 0x0000000000000004
+[vm1]   CNTP_CVAL_EL0      = 0x0000000000000000
+[vm1]   CNTP_TVAL_EL0      = 0x000000003d510d65
+[vm1]   ICC_PMR_EL1        = 0x00000000000000f8
+[vm1]   ICC_BPR0_EL1       = 0x0000000000000002
+[vm1]   ICC_AP0R0_EL1      = 0x0000000000000000
+[vm1]   ICC_AP1R0_EL1      = 0x0000000000000000
+[vm1]   ICC_RPR_EL1        = 0x00000000000000ff
+[vm1]   ICC_BPR1_EL1       = 0x0000000000000003
+[vm1]   ICC_CTLR_EL1       = 0x0000000000040400
+[vm1]   ICC_SRE_EL1        = 0x0000000000000007
+[vm1]   ICC_IGRPEN0_EL1    = 0x0000000000000000
+[vm1]   ICC_IGRPEN1_EL1    = 0x0000000000000001
+[vm1] GIC state blob: 126343 bytes, fnv1a=0xfd4617167f18e074, head=62706c6973743030d900010002000300
+[vm1] RAM snapshot: 64 MiB, fnv1a(first 1MiB)=0xd55255ca633bb078
+[vm1] VM torn down (vcpu_destroy + vm_destroy OK)
+
+=== phase 3: restore into a FRESH VM (VM #3, same process) ===
+[restore] hv_vm_create -> 0x0 (HV_SUCCESS)
+[restore] hv_gic_set_state(126343 bytes) -> 0x0 (HV_SUCCESS)
+[restore] SET REJECTED ICC_RPR_EL1      val=0xff -> 0xfae94007 (HV_DENIED)
+[restore] hv_vcpu_set_vtimer_offset(0x0) -> 0x0 (HV_SUCCESS)
+[restore] GIC blob readback: IDENTICAL (126343 bytes)
+[restore] restore complete: 1 set-call failures, 0 readback mismatches
+[restore] teardown+rebuild+restore wall time: 11.5 ms
+[restore] slept 150ms — timer #1's CVAL is now in the past; resuming
+[restore] guest CNTVCT delta across checkpoint A: 4252848 ticks (177.2 ms @24MHz)
+[restore] guest IRQ handler: intid=27
+[restore] guest IRQ handler: intid=27
+[restore] checkpoint B/DONE (magic 0xd05e)
+[restore] result=0 sum=0xb11500091e26ada6 irqs=2 vtimer_exits=0 unknown_mmio=0
+
+=== verdict ===
+control : sum=0xb11500091e26ada6 irqs=2 intids: 27 27
+restored: sum=0xb11500091e26ada6 irqs=2 intids: 27 27
+VERDICT: GREEN — full vCPU+GIC state round-tripped into a fresh same-process VM; guest continued from checkpoint A to B with the correct checksum and 2 timer interrupts
