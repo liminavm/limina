@@ -24,7 +24,7 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
 2. Re-export: `git -C third_party/libkrun format-patch <base>.. -o "$PWD/patches/libkrun"`.
 3. Commit the regenerated `.patch` files to the limina repo.
 
-## The series (40 patches) — by theme
+## The series (42 patches) — by theme
 
 Patches are listed in series order within each theme. Full rationale lives in each
 patch's commit message; this is the map.
@@ -125,6 +125,11 @@ patch's commit message; this is the map.
   were blank. New `Rutabaga::read_iosurface` (over the virgl fork's
   `virgl_renderer_resource_read_iosurface` export) feeds the readback path for
   IOSurface-backed scanouts. Needs 0031 and virglrenderer's export.
+- **0041 — rutabaga: balance the eager macOS blob map on unref_resource.** The macOS
+  `get_map_ptr` path mmap'd every host-visible blob at create time but nothing ever
+  munmap'd it, leaking ~2 VM regions per venus context (ring + reply shmem) until the
+  worker's address space was exhausted — the session-collapse ENOMEM. Pairs with
+  virglrenderer 0022.
 
 ### virtio-gpu: fence-accurate present chain (#8/#31)
 
@@ -205,6 +210,15 @@ patch's commit message; this is the map.
   derived from host st_dev/st_ino, which changes across an APFS clone or image move —
   exactly the snapshot-clone path. Build it from the caller-supplied block_id instead;
   empty id falls back to the inode-derived serial, so stock boot is unaffected.
+
+### virtio-i2c
+
+- **0042 — new device with an emulated SBS smart battery slave.** virtio-i2c adapter
+  (device ID 34) whose only slave is an SBS battery at 0x0b, backed by a host-supplied
+  `BatteryProvider` callback (`VmResources::battery_provider`); the FDT child node
+  (`virtio,device22` → `sbs,sbs-battery@b`) makes the guest's stock i2c-virtio +
+  sbs-battery modules expose it as a native power_supply — the host battery mirrors
+  into the guest desktop with zero guest-side components.
 
 ### Observability / logging
 

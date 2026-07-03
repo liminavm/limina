@@ -76,6 +76,7 @@ created = "2026-07-01T12:00:00Z"
 cpus   = 4
 memory = "8G"        # the MAXIMUM; managed VMs always boot dynamic with a 1 GiB floor
 reclaim = "moderate" # disabled|light|moderate|aggressive (how hard idle memory is clawed back)
+battery = true       # mirror the host battery into the guest (virtio-i2c SBS); default true
 
 [[disk]]                        # ordered — attach order IS device order (M10)
 path  = "disks/root.raw"        # relative = inside the bundle
