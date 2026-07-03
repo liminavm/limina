@@ -8,7 +8,9 @@
 # to @rpath so it resolves relative to the app (no /Volumes/mesa-cs, no third_party
 # prefixes, no Homebrew). Generates a relative-path KosmicKrisp ICD, copies the GOP
 # firmware and the gvproxy NAT helper (so `--net` works on a Mac without Homebrew),
-# writes Info.plist, and ad-hoc codesigns inside-out. The supervisor sets the
+# writes Info.plist, and codesigns inside-out (Apple Development identity when one is
+# in the keychain — keeps TCC grants stable across redeploys — ad-hoc otherwise). The
+# supervisor sets the
 # remaining bundle-relative venus env (VK_ICD_FILENAMES + the zink-on-KK Mesa selectors)
 # when it detects it's running from the bundle — see crates/limina/src/venus_env.rs.
 #
@@ -177,13 +179,42 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# ---- codesign inside-out (ad-hoc) ------------------------------------------------
-echo "==> ad-hoc codesigning (dylibs → worker → supervisor → app)"
-find "$FW" -type f -name '*.dylib' -exec codesign -s - --force {} \;
-codesign -s - --force --entitlements "$ROOT/crates/limina-vmm/hvf-entitlements.plist" "$MACOS/limina-vmm"
-codesign -s - --force "$MACOS/gvproxy"
-codesign -s - --force "$MACOS/limina"
-codesign -s - --force "$APP"
+# ---- codesign inside-out ----------------------------------------------------------
+# Prefer a REAL identity over ad-hoc: TCC pins an ad-hoc app's Accessibility grant to
+# the build's CDHash, so key-combo capture silently breaks on EVERY redeploy (System
+# Settings keeps showing the checkbox ON). With an identity we additionally pin the
+# app's designated requirement to identifier+team (subject.OU) instead of codesign's
+# default leaf-CN pin, so grants also survive certificate reissue.
+# LIMINA_SIGN_IDENTITY overrides autodetection; set it to "-" to force ad-hoc.
+SIGN_ID="${LIMINA_SIGN_IDENTITY:-}"
+if [ -z "$SIGN_ID" ]; then
+  SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+             | sed -n 's/.*\([0-9A-F]\{40\}\) "Apple Development.*/\1/p' | head -1)"
+fi
+if [ -z "$SIGN_ID" ]; then
+  SIGN_ID="-"
+  echo "==> WARNING: no Apple Development identity — signing AD-HOC. The Accessibility" >&2
+  echo "    grant (key-combo capture) will break on every redeploy (TCC pins the CDHash)." >&2
+  echo "    Fix: Xcode → Settings → Accounts → Manage Certificates → + Apple Development," >&2
+  echo "    or set LIMINA_SIGN_IDENTITY." >&2
+fi
+echo "==> codesigning as '$SIGN_ID' (dylibs → worker → supervisor → app)"
+find "$FW" -type f -name '*.dylib' -exec codesign -s "$SIGN_ID" --force {} \;
+codesign -s "$SIGN_ID" --force --entitlements "$ROOT/crates/limina-vmm/hvf-entitlements.plist" "$MACOS/limina-vmm"
+codesign -s "$SIGN_ID" --force "$MACOS/gvproxy"
+codesign -s "$SIGN_ID" --force "$MACOS/limina"
+codesign -s "$SIGN_ID" --force "$APP"
+if [ "$SIGN_ID" != "-" ]; then
+  # Re-sign the app with the team-pinned designated requirement. TeamIdentifier comes
+  # off the fresh signature so this works however the identity was specified.
+  TEAM="$(codesign -dvv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+  if [ -n "$TEAM" ] && [ "$TEAM" != "not set" ]; then
+    codesign -s "$SIGN_ID" --force \
+      -r="designated => identifier \"eti.noronha.limina\" and anchor apple generic and certificate leaf[subject.OU] = \"$TEAM\"" \
+      "$APP"
+    echo "    designated requirement pinned to team $TEAM (TCC grants survive rebuilds and cert reissue)"
+  fi
+fi
 
 echo "==> done: $APP"
 du -sh "$APP" | awk '{print "    bundle size: " $1}'
