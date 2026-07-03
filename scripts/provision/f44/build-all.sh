@@ -44,7 +44,10 @@ fi
 
 echo "############ assemble payload -> $PAYLOAD ############"
 rm -rf "$PAYLOAD"; mkdir -p "$PAYLOAD"
-# RPMs (install-enhanced.sh filters debuginfo/devel/tests at install time).
+# RPMs — ALL subpackages (devel/tests/debuginfo included; the mesa/mutter builds produce the
+# full set Fedora ships). install-enhanced.sh installs only the runtime ones by default and
+# serves the rest via the local repo package-payload.sh builds — so do NOT hand-prune this set;
+# a devel-less payload leaves e.g. mesa-libgbm-devel uninstallable on a versionlocked guest.
 cp -f "$KOUT"/*.rpm "$MOUT"/*.rpm "$UOUT"/*.rpm "$PAYLOAD"/ 2>/dev/null || true
 # The installer itself (it defaults its payload dir to its own location).
 cp -f "$REPO/scripts/provision/install-enhanced.sh" "$PAYLOAD"/

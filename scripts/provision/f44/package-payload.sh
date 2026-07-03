@@ -8,8 +8,13 @@
 #     staged in ~/rpmbuild) -> $PAYLOAD/srpms/
 #   - bundle the kernel SOURCE reference (config + patches + build script + tag); the kernel has
 #     no rebuildable Fedora SRPM (built from stable.git + Fedora config, not a distro SRPM)
+#   - build $PAYLOAD/repo: a createrepo_c'd local dnf repo with EVERY mesa/mutter subpackage
+#     Fedora ships (devel/tests included; debuginfo excluded). install-enhanced.sh installs it
+#     into the guest so `dnf install mesa-libgbm-devel` etc. resolves against OUR versionlocked
+#     NEVRA — Fedora's own -devel subpackages require the exact stock NEVRA the lock excludes.
 #   - tar the whole payload -> ~/limina-guest-tools-f44.tar.zst (ship to the target Mac, extract,
-#     `sudo install-enhanced.sh <dir>`; install-enhanced.sh skips the debuginfo/devel/tests RPMs)
+#     `sudo install-enhanced.sh <dir>`; the installer INSTALLS only the runtime RPMs and serves
+#     the rest through the repo)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
@@ -17,7 +22,7 @@ PAYLOAD="${PAYLOAD:-$HOME/limina-guest-tools}"
 [ -f "$PAYLOAD/manifest.txt" ] || { echo "payload not ready (no $PAYLOAD/manifest.txt) — run build-all.sh first" >&2; exit 1; }
 SR="$PAYLOAD/srpms"; mkdir -p "$SR"
 
-echo "== [1/3] patched SRPMs: mesa + mutter (rpmbuild -bs) =="
+echo "== [1/4] patched SRPMs: mesa + mutter (rpmbuild -bs) =="
 for pkg in mesa mutter; do
   spec="$HOME/rpmbuild/SPECS/$pkg.spec"
   if [ ! -f "$spec" ]; then echo "  WARN: $spec missing — skipping $pkg SRPM"; continue; fi
@@ -29,7 +34,7 @@ for pkg in mesa mutter; do
   fi
 done
 
-echo "== [2/3] kernel source reference bundle =="
+echo "== [2/4] kernel source reference bundle =="
 tmpd=$(mktemp -d); kdst="$tmpd/limina-kernel-16k-source"; mkdir -p "$kdst"
 KCONFIG="$HOME/limina-build/linux/.config"
 [ -f "$KCONFIG" ] && cp -f "$KCONFIG" "$kdst/config" || echo "  WARN: kernel .config not found at $KCONFIG"
@@ -56,10 +61,41 @@ tar -czf "$SR/limina-kernel-16k-source.tar.gz" -C "$tmpd" limina-kernel-16k-sour
 rm -rf "$tmpd"
 echo "  ok: limina-kernel-16k-source.tar.gz"
 
-echo "== refresh manifest =="
-{ echo; echo "srpms (saved $(date -u +%Y-%m-%dT%H:%M:%SZ)):"; ls -1 "$SR" | sed 's/^/  - /'; } >> "$PAYLOAD/manifest.txt"
+echo "== [3/4] local dnf repo: every mesa/mutter subpackage (devel/tests in, debuginfo out) =="
+# The guest-side counterpart lives in install-enhanced.sh (step 3b): it copies this dir to
+# /usr/share/limina-guest-tools/repo + drops a .repo file. Hardlink into the subdir so the
+# tarball doesn't double in size (GNU tar stores hardlinks once).
+REPODIR="$PAYLOAD/repo"
+rm -rf "$REPODIR"; mkdir -p "$REPODIR"
+NREPO=0
+for f in "$PAYLOAD"/mesa-*.rpm "$PAYLOAD"/mutter-*.rpm; do
+  [ -f "$f" ] || continue
+  case "$(basename "$f")" in *debuginfo*|*debugsource*|*.src.rpm) continue ;; esac
+  ln -f "$f" "$REPODIR/" 2>/dev/null || cp -f "$f" "$REPODIR/"
+  NREPO=$((NREPO+1))
+done
+if [ "$NREPO" = 0 ]; then
+  echo "  WARN: no mesa/mutter RPMs at the payload top level — repo skipped (devel stays uninstallable)"
+  rm -rf "$REPODIR"
+else
+  # The mesa build produces the -devel subpackages (rpmbuild -bb builds them ALL); their absence
+  # means the payload was hand-curated from a stale/pruned RPM dir — the exact drift that shipped
+  # the devel-less -2/-3 deliveries (dnf install mesa-libgbm-devel unresolvable on the guest).
+  ls "$REPODIR"/mesa-*-devel-*.rpm >/dev/null 2>&1 \
+    || echo "  WARN: no mesa -devel subpackages in the payload — re-collect from ~/rpmbuild/RPMS (build-mesa-rpm.sh [5/5])"
+  command -v createrepo_c >/dev/null || sudo dnf install -y createrepo_c >/dev/null
+  createrepo_c --quiet "$REPODIR"
+  echo "  ok: repo with $NREPO RPMs ($(ls "$REPODIR" | grep -c -- '-devel-' || true) devel) -> $REPODIR"
+fi
 
-echo "== [3/3] tar the payload =="
+echo "== refresh manifest =="
+{ echo; echo "srpms (saved $(date -u +%Y-%m-%dT%H:%M:%SZ)):"; ls -1 "$SR" | sed 's/^/  - /'
+  if [ -d "$REPODIR" ]; then
+    echo "repo: $NREPO RPMs (all mesa/mutter subpackages incl. -devel; served in-guest via /etc/yum.repos.d/limina-guest-tools.repo)"
+  fi
+} >> "$PAYLOAD/manifest.txt"
+
+echo "== [4/4] tar the payload =="
 OUT="$HOME/limina-guest-tools-f44.tar.zst"
 rm -f "$OUT"
 tar -C "$HOME" --owner=0 --group=0 -caf "$OUT" "$(basename "$PAYLOAD")"

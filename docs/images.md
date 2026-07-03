@@ -79,6 +79,19 @@ end-to-end 2026-07-01 on a fresh `enhanced.test` clone: installer clean (kernel 
 upgrade + helper enabled), trial-boot to 7.1.2, helper auto-starts at login on the ext-data-control backend,
 and a two-way pbcopy/wl-paste + wl-copy/pbpaste round trip passed.
 
+**Payloads now carry the FULL mesa/mutter subpackage set via a local dnf repo (2026-07-03)** — the
+delivered payloads above shipped only the *runtime* mesa subpackages, and on an enhanced guest the
+mesa versionlock excludes stock, so Fedora's exact-NEVRA `-devel` subpackages could never resolve
+(`dnf install mesa-libgbm-devel` → "filtered out by exclude filtering", hit on dogfood-guest
+2026-07-03). Fix in the pipeline: `build-all.sh` stages **every** subpackage the builds produce
+(don't hand-prune!), `package-payload.sh` builds `payload/repo/` (createrepo_c, devel/tests in,
+debuginfo out), and `install-enhanced.sh` (step 3b) installs it as
+`/usr/share/limina-guest-tools/repo` + `/etc/yum.repos.d/limina-guest-tools.repo` — so
+`dnf install mesa-libgbm-devel` resolves against our NEVRA on demand. Upgrades carry any
+installed `-devel/-tests` forward in the same transaction (else `--allowerasing` would erase
+them). Takes effect from the NEXT payload build; existing guests can install matching devel RPMs
+by file path (dogfood-guest has the `-3` set at `~/mesa-26.1.3-3.limina/`).
+
 ## Images
 
 ### Fedora 44 — mirrored image set (in progress, started 2026-06-29)

@@ -25,6 +25,11 @@
 #                          installer lifts the lock to UPDATE it, then re-locks (re-runnable).
 #   3. mutter RPMs       -> replace stock mutter at /usr (patched compositor);          NOT locked
 #                          (mutter tracks the distro/gnome-shell version; see limina-enh-delivery)
+#   3b. local dnf repo   -> /usr/share/limina-guest-tools/repo + a .repo file: EVERY mesa/mutter
+#                          subpackage Fedora ships (-devel/-tests included, debuginfo excluded),
+#                          at OUR NEVRA. Installed on demand (`dnf install mesa-libgbm-devel`) —
+#                          Fedora's own -devel subpackages can never resolve against the
+#                          versionlocked runtime (exact-NEVRA requires vs exclude filtering).
 #   4. limina-agent      -> /usr/local/bin + system unit (dynamic resize, PSI autoballoon);
 #      limina-agent-session -> /usr/local/bin + systemd USER unit (the clipboard bridge — it
 #                          must live in the graphical session, so it is a separate binary and
@@ -46,9 +51,23 @@ echo "-- ensuring dnf versionlock plugin"
 dnf install -y 'dnf-command(versionlock)' >/dev/null 2>&1 \
   || dnf install -y python3-dnf-plugin-versionlock >/dev/null 2>&1 || true
 
-# Collect runtime RPMs for a glob, excluding debug/devel/tests (the guest does not build).
+# Collect runtime RPMs for a glob, excluding debug/devel/tests (installed by DEFAULT on every
+# guest; the devel/tests subpackages ship via the local repo of step 3b instead, on demand).
 runtime_rpms() {  # <glob>
   ls $1 2>/dev/null | grep -vE 'debuginfo|debugsource|-devel-|-tests-' || true
+}
+
+# Payload RPMs for optional (-devel/-tests) subpackages the guest ALREADY installed (e.g.
+# mesa-libgbm-devel pulled from the step-3b repo). They MUST ride the same upgrade transaction
+# as the runtime set: their requires are exact-NEVRA, so upgrading the runtime alone would make
+# `dnf --allowerasing` silently ERASE them instead.
+installed_extra_rpms() {  # <glob>
+  local r n
+  for r in $(ls $1 2>/dev/null | grep -E -- '-devel-|-tests-' | grep -vE 'debuginfo|debugsource'); do
+    n=$(rpm -qp --qf '%{NAME}' "$r" 2>/dev/null) || continue
+    rpm -q "$n" >/dev/null 2>&1 && echo "$r"
+  done
+  return 0
 }
 
 # ---- btrfs v1 space cache -> v2 free-space tree -------------------------------------------------
@@ -285,6 +304,10 @@ echo "   (installonly: co-installed beside stock + prior enhanced; stock kernel 
 ### 2. mesa RPMs (26.2 zink+venus) -> REPLACE stock at /usr; versionlock #########
 MESA_RPMS=$(runtime_rpms "$PAYLOAD/mesa-*.rpm")
 [ -n "$MESA_RPMS" ] || { echo "no mesa RPMs in payload"; exit 1; }
+# Carry any already-installed mesa -devel/-tests along in the SAME transaction (see the helper).
+MESA_EXTRAS=$(installed_extra_rpms "$PAYLOAD/mesa-*.rpm")
+[ -z "$MESA_EXTRAS" ] || MESA_RPMS="$MESA_RPMS
+$MESA_EXTRAS"
 echo "-- installing mesa (replaces stock -> our venus/zink build):"; echo "$MESA_RPMS" | sed 's#.*/#     #'
 # Lift any EXISTING mesa versionlock FIRST. On a re-run / update the lock pins the currently
 # installed enhanced mesa, so a newer build would be "filtered out by exclude filtering" and never
@@ -316,10 +339,44 @@ rpm -q mesa-vulkan-drivers --qf '   venus ICD pkg: %{NVRA}\n' 2>/dev/null || tru
 ### 3. mutter RPMs (patched, target-matched) -> REPLACE stock at /usr; NOT locked #
 MUTTER_RPMS=$(runtime_rpms "$PAYLOAD/mutter-*.rpm")
 [ -n "$MUTTER_RPMS" ] || { echo "no mutter RPMs in payload"; exit 1; }
+MUTTER_EXTRAS=$(installed_extra_rpms "$PAYLOAD/mutter-*.rpm")
+[ -z "$MUTTER_EXTRAS" ] || MUTTER_RPMS="$MUTTER_RPMS
+$MUTTER_EXTRAS"
 echo "-- installing mutter (patched, replaces stock; NOT versionlocked — tracks gnome-shell):"
 echo "$MUTTER_RPMS" | sed 's#.*/#     #'
 dnf install -y --allowerasing $MUTTER_RPMS
 echo "   patched mutter installed"
+
+### 3b. local dnf repo: every mesa/mutter subpackage Fedora ships, installable on demand ###
+# The runtime mesa stack is versionlocked at our NEVRA (step 2), which EXCLUDES the stock mesa
+# versions — so Fedora's own -devel subpackages (exact-NEVRA `Requires: mesa-libgbm(aarch-64) =
+# <stock>`) can never resolve on an enhanced guest ("filtered out by exclude filtering"). This
+# repo serves OUR builds of the full subpackage set at the matching NEVRA, so a plain
+# `dnf install mesa-libgbm-devel` works exactly as it does on stock Fedora. The repodata is
+# pre-built by package-payload.sh (createrepo_c in the build guest) — nothing here needs network.
+if [ -d "$PAYLOAD/repo/repodata" ]; then
+  echo "-- installing the limina-guest-tools local dnf repo (-devel/-tests on demand)"
+  rm -rf /usr/share/limina-guest-tools/repo
+  install -d /usr/share/limina-guest-tools
+  cp -a "$PAYLOAD/repo" /usr/share/limina-guest-tools/repo
+  cat > /etc/yum.repos.d/limina-guest-tools.repo <<'REPOCONF'
+# limina enhanced tier: local repo carrying our FULL mesa/mutter subpackage set (the runtime is
+# versionlocked at the limina NEVRA, so Fedora's exact-version -devel subpackages cannot resolve;
+# these match). Installed by install-enhanced.sh; refreshed on every enhanced upgrade.
+[limina-guest-tools]
+name=limina guest tools (local)
+baseurl=file:///usr/share/limina-guest-tools/repo
+enabled=1
+gpgcheck=0
+REPOCONF
+  # cp -a from the virtiofs share preserves xattrs — relabel so enforcing guests read it cleanly.
+  if command -v restorecon >/dev/null 2>&1; then
+    restorecon -R /usr/share/limina-guest-tools /etc/yum.repos.d/limina-guest-tools.repo 2>/dev/null || true
+  fi
+  echo "   repo live: e.g. 'dnf install mesa-libgbm-devel' now resolves against our build"
+else
+  echo "-- payload has no repo/ (pre-repo payload); -devel subpackages stay uninstallable on this guest"
+fi
 
 ### 4. limina-agent + limina-agent-session (OPTIONAL; present iff staged into the payload) ##
 # Folds in what scripts/install-guest-agent.sh used to do over SSH, so the whole enhanced upgrade
