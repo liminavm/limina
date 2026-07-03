@@ -171,6 +171,16 @@ tracks claims still needing verification.
 - **Commit early and often for bisectability**, but only meaningful commits — the
   user has authorized committing without asking. End commit messages with the
   `Co-Authored-By` trailer.
+- **When guest components change, refresh the deliverables AND the enhanced images.** Any
+  rebuild of a guest-side component (16k kernel, mesa, mutter, limina-agent) must flow into
+  (a) the guest-tools tarball (`scripts/provision/f44/package-payload.sh`) and (b) an
+  `install-enhanced.sh` pass over the enhanced-tier images (`enhanced.raw` /
+  `enhanced.test.raw`), then update `docs/images.md` §Component versions. Stale images cost
+  a day on 2026-07-02: every "identical" local repro of a dogfood crash silently ran a
+  guest two deliveries behind (6.19.10 / mesa -1 vs the deployed 7.1.2 / mesa -3).
+- **Never modify the user's dogfood Mac (dogfood-mac) without an explicit request.** Read-only
+  ssh diagnostics are fine; installing/replacing the .app, starting/stopping their VMs, or
+  editing their config is theirs to do unless they ask for that specific action.
 - **Keepable artifacts go in the repo, NOT `/tmp`.** Debug scripts, probes, oracles, and
   notes we'll want again belong under `spikes/` (or the relevant crate), committed. `/tmp`
   is only for genuinely throwaway scratch and transient runtime deploy dirs — it gets wiped
