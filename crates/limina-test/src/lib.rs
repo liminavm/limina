@@ -139,6 +139,36 @@ fn resolve_bin(name: &str, env_override: &str) -> Result<PathBuf> {
     Ok(p)
 }
 
+/// Assert the worker binary still carries `com.apple.security.hypervisor`.
+///
+/// Any cargo invocation that relinks the worker (a concurrent build, an editor task, an
+/// app-bundle build sharing `target/`) replaces the codesigned copy with a plain
+/// linker-signed one — and every subsequent boot then dies with the thoroughly misleading
+/// `build_microvm: Internal(Vm(VmSetup(VmCreate)))` (hv_vm_create → HV_DENIED). This burnt
+/// a debugging session on 2026-07-03 (the whole test-boot tail failed because a parallel
+/// build unsigned the worker mid-suite). Checking up front turns that mystery into a
+/// one-line diagnosis.
+fn ensure_hypervisor_entitlement(vmm_bin: &Path) -> Result<()> {
+    let out = Command::new("codesign")
+        .args(["-d", "--entitlements", "-"])
+        .arg(vmm_bin)
+        .output()
+        .context("running codesign to check the worker's entitlements")?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    anyhow::ensure!(
+        text.contains("com.apple.security.hypervisor"),
+        "worker {vmm_bin:?} is not signed with com.apple.security.hypervisor — a build \
+         relinked it after signing (hv_vm_create would fail as VmSetup(VmCreate)). \
+         Re-sign with crates/limina-vmm/sign.sh, and don't run cargo builds concurrently \
+         with the boot tests."
+    );
+    Ok(())
+}
+
 /// Resolve the **KosmicKrisp** host Vulkan ICD — limina's one supported venus backend.
 ///
 /// venus (the guest 3D path) is driven on the host by a Vulkan driver. We support exactly one:
@@ -1094,6 +1124,10 @@ impl Guest {
     /// serial console to a scratch file. Returns once the process is spawned (boot
     /// proceeds asynchronously — use [`Guest::wait_for`] to await a marker).
     pub fn boot(cfg: &GuestConfig) -> Result<Guest> {
+        // Fail fast (and legibly) if a concurrent build stripped the worker's hypervisor
+        // entitlement — otherwise every boot dies as a cryptic VmSetup(VmCreate).
+        ensure_hypervisor_entitlement(&cfg.vmm_bin)?;
+
         let scratch = std::env::temp_dir().join(format!(
             "limina-test-{}-{}",
             std::process::id(),
