@@ -47,6 +47,13 @@ fn main() {
         }
         power_off();
     }
+    // `limina.blob_probe`: create + mmap a host-visible virtio-gpu blob whose size is
+    // 4 KiB- but NOT 16 KiB-aligned — the deterministic guest-side repro for the 16 KiB-host
+    // hv_vm_map blob alignment bug (see tests/l1_blob_map.rs). Emits RESULT markers; powers off.
+    if cmdline_has("limina.blob_probe") {
+        run_blob_probe();
+        power_off();
+    }
     // `limina.real_agent`: spawn the PRODUCT agent binary (staged at /limina-agent by
     // build-test-guest.sh) — the L1 vehicle for testing the real limina-agent end-to-end.
     // It connects to the control plane on its own and powers the guest off itself on
@@ -818,6 +825,282 @@ fn run_usb_attach(port: u32) {
     }
     klog(b"[limina-init] usb_attach: done");
     // Leave `fd` open: the kernel holds its own reference, but PID 1 closing it early is needless.
+}
+
+// --- virtio-gpu blob-map probe (the 16 KiB-host alignment repro) ---------------------------
+//
+// A stock 4 KiB guest can create a host-visible blob whose size is a multiple of its OWN page
+// size but not of the HOST's 16 KiB page (e.g. 0x21000 = 33 × 4 KiB). Mapping it into the
+// guest's shm window goes through hv_vm_map on the host, which rejects non-16 KiB-granular
+// sizes with HV_BAD_ARGUMENT — so the guest's mmap fails with EINVAL. This probe hand-rolls
+// the exact sequence Mesa's virgl driver would issue (mirroring the hand-rolled USB/IP client
+// above): virgl context init → an EXECBUFFER creating an untyped persistently-mappable
+// PIPE_BUFFER carrying a blob_id → RESOURCE_CREATE_BLOB(HOST3D, MAPPABLE) referencing it →
+// mmap. The first vram allocation of the boot lands at shm-window offset 0 (16 KiB-aligned),
+// so ONLY the odd size is under test. Constants below are ABI (virtgpu_drm.h @ v6.12,
+// virgl_protocol.h/virgl_hw.h) — stable wire format, safe to inline.
+
+/// 33 × 4 KiB: 4 KiB-aligned, NOT 16 KiB-aligned — the size class that trips hv_vm_map.
+const BLOB_ODD_SIZE: u64 = 0x21000;
+
+/// Linux `_IOWR('d', nr, size)` — DRM ioctl request codes (dir RW=3, type 'd'=0x64).
+/// musl's `ioctl` takes a C `int`, so the high dir bits wrap into the sign bit — as the
+/// kernel expects (it truncates the request to 32 bits).
+const fn drm_iowr(nr: u64, size: u64) -> libc::Ioctl {
+    (((3u64 << 30) | (size << 16) | (0x64 << 8) | nr) as u32) as libc::Ioctl
+}
+/// Linux `_IOW('d', nr, size)` (dir W=1).
+const fn drm_iow(nr: u64, size: u64) -> libc::Ioctl {
+    (((1u64 << 30) | (size << 16) | (0x64 << 8) | nr) as u32) as libc::Ioctl
+}
+
+#[repr(C)]
+struct VirtgpuContextSetParam {
+    param: u64,
+    value: u64,
+}
+#[repr(C)]
+struct VirtgpuContextInit {
+    num_params: u32,
+    pad: u32,
+    ctx_set_params: u64,
+}
+#[repr(C)]
+struct VirtgpuGetCaps {
+    cap_set_id: u32,
+    cap_set_ver: u32,
+    addr: u64,
+    size: u32,
+    pad: u32,
+}
+#[repr(C)]
+struct VirtgpuExecbuffer {
+    flags: u32,
+    size: u32,
+    command: u64,
+    bo_handles: u64,
+    num_bo_handles: u32,
+    fence_fd: i32,
+    ring_idx: u32,
+    syncobj_stride: u32,
+    num_in_syncobjs: u32,
+    num_out_syncobjs: u32,
+    in_syncobjs: u64,
+    out_syncobjs: u64,
+}
+#[repr(C)]
+struct VirtgpuResourceCreateBlob {
+    blob_mem: u32,
+    blob_flags: u32,
+    bo_handle: u32,
+    res_handle: u32,
+    size: u64,
+    pad: u32,
+    cmd_size: u32,
+    cmd: u64,
+    blob_id: u64,
+}
+#[repr(C)]
+struct VirtgpuMap {
+    offset: u64,
+    handle: u32,
+    pad: u32,
+}
+#[repr(C)]
+struct GemClose {
+    handle: u32,
+    pad: u32,
+}
+
+/// Emit a `RESULT: <name> <OK|FAIL errno=N>` marker the host harness asserts on.
+fn blob_result(name: &str, ok: bool) {
+    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    let line = if ok {
+        format!("[limina-init] RESULT: {name} OK")
+    } else {
+        format!("[limina-init] RESULT: {name} FAIL errno={errno}")
+    };
+    klog(line.as_bytes());
+}
+
+/// Drive the raw virtio-gpu blob-map sequence and report each step. Best-effort: any failed
+/// step reports FAIL and returns (the harness sees which step broke); we still power off.
+fn run_blob_probe() {
+    klog(b"[limina-init] blob_probe: begin");
+
+    // virtio-gpu's DRM probe is asynchronous; give the node a moment to appear.
+    let card = c"/dev/dri/card0";
+    let mut fd = -1;
+    for _ in 0..250 {
+        fd = unsafe { libc::open(card.as_ptr(), libc::O_RDWR) };
+        if fd >= 0 {
+            break;
+        }
+        unsafe { sleep_ms(20) };
+    }
+    if fd < 0 {
+        blob_result("blob_card0", false);
+        return;
+    }
+    blob_result("blob_card0", true);
+
+    unsafe {
+        // Bind the DRM context to the virgl2 capset (vrend) — what Mesa's virgl driver does.
+        // VIRTGPU_CONTEXT_PARAM_CAPSET_ID = 1; capset id 2 = virgl2, fall back to 1 = virgl.
+        let mut inited = false;
+        for capset in [2u64, 1] {
+            let param = VirtgpuContextSetParam {
+                param: 1,
+                value: capset,
+            };
+            let init = VirtgpuContextInit {
+                num_params: 1,
+                pad: 0,
+                ctx_set_params: &param as *const _ as u64,
+            };
+            if libc::ioctl(fd, drm_iowr(0x4b, 16), &init) == 0 {
+                inited = true;
+                break;
+            }
+        }
+        blob_result("blob_ctx_init", inited);
+        if !inited {
+            libc::close(fd);
+            return;
+        }
+
+        // Read the virgl capset like Mesa does before any 3D work. Load-bearing beyond
+        // realism: vrend initializes its map-caching type (which becomes every buffer's
+        // map_info, the blob-mappability gate) lazily inside the caps fill — skip this and
+        // even a mappable buffer reports map_info NONE.
+        let mut caps = [0u8; 4096];
+        let mut got_caps = false;
+        for capset in [2u32, 1] {
+            let get = VirtgpuGetCaps {
+                cap_set_id: capset,
+                cap_set_ver: 2,
+                addr: caps.as_mut_ptr() as u64,
+                size: caps.len() as u32,
+                pad: 0,
+            };
+            if libc::ioctl(fd, drm_iowr(0x49, 24), &get) == 0 {
+                got_caps = true;
+                break;
+            }
+        }
+        blob_result("blob_get_caps", got_caps);
+        if !got_caps {
+            libc::close(fd);
+            return;
+        }
+
+        // EXECBUFFER: VIRGL_CCMD_PIPE_RESOURCE_CREATE(48), len 11 dwords — an untyped
+        // PIPE_BUFFER (target 0, format R8_UNORM=64, bind VERTEX_BUFFER=1<<4) of the odd size,
+        // flags MAP_PERSISTENT|MAP_COHERENT (1<<1 | 1<<2) so vrend gives it persistently
+        // mappable glBufferStorage storage, tagged blob_id=1 for the CREATE_BLOB below.
+        let cmds: [u32; 12] = [
+            48 | (11 << 16),      // VIRGL_CMD0(PIPE_RESOURCE_CREATE, 0, 11)
+            0,                    // target = PIPE_BUFFER
+            64,                   // format = VIRGL_FORMAT_R8_UNORM
+            1 << 4,               // bind = VIRGL_BIND_VERTEX_BUFFER
+            BLOB_ODD_SIZE as u32, // width = size in bytes
+            1,                    // height
+            1,                    // depth
+            1,                    // array_size
+            0,                    // last_level
+            0,                    // nr_samples
+            (1 << 1) | (1 << 2),  // flags = MAP_PERSISTENT | MAP_COHERENT
+            1,                    // blob_id
+        ];
+        let exec = VirtgpuExecbuffer {
+            flags: 0,
+            size: (cmds.len() * 4) as u32,
+            command: cmds.as_ptr() as u64,
+            bo_handles: 0,
+            num_bo_handles: 0,
+            fence_fd: 0,
+            ring_idx: 0,
+            syncobj_stride: 0,
+            num_in_syncobjs: 0,
+            num_out_syncobjs: 0,
+            in_syncobjs: 0,
+            out_syncobjs: 0,
+        };
+        let ok = libc::ioctl(fd, drm_iowr(0x42, 64), &exec) == 0;
+        blob_result("blob_execbuffer", ok);
+        if !ok {
+            libc::close(fd);
+            return;
+        }
+
+        // RESOURCE_CREATE_BLOB: HOST3D (2) + USE_MAPPABLE (1), referencing blob_id 1. On
+        // 6.12 the kernel maps the vram bo into the host-visible window right here (the
+        // host-side MAP_BLOB → hv_vm_map), but records failure asynchronously — mmap below
+        // is where a host-side failure surfaces (map_state != OK → EINVAL).
+        let mut blob = VirtgpuResourceCreateBlob {
+            blob_mem: 2,
+            blob_flags: 1,
+            bo_handle: 0,
+            res_handle: 0,
+            size: BLOB_ODD_SIZE,
+            pad: 0,
+            cmd_size: 0,
+            cmd: 0,
+            blob_id: 1,
+        };
+        let ok = libc::ioctl(fd, drm_iowr(0x4a, 48), &mut blob) == 0;
+        blob_result("blob_create", ok);
+        if !ok {
+            libc::close(fd);
+            return;
+        }
+
+        // The DRM mmap fake offset for the bo.
+        let mut map = VirtgpuMap {
+            offset: 0,
+            handle: blob.bo_handle,
+            pad: 0,
+        };
+        let ok = libc::ioctl(fd, drm_iowr(0x41, 16), &mut map) == 0;
+        blob_result("blob_map_offset", ok);
+        if !ok {
+            libc::close(fd);
+            return;
+        }
+
+        // THE ASSERTION: mmap succeeds only if the host hv_vm_map'ed the blob into the shm
+        // window. RED (pre-fix): EINVAL — the host rejected the 4k-but-not-16k-aligned size.
+        let ptr = libc::mmap(
+            std::ptr::null_mut(),
+            BLOB_ODD_SIZE as usize,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            fd,
+            map.offset as libc::off_t,
+        );
+        let mapped = ptr != libc::MAP_FAILED;
+        blob_result("blob_map", mapped);
+
+        if mapped {
+            // Prove the pages are live host memory end to end: write + read back through
+            // the mapping, including the last byte of the odd tail page.
+            let base = ptr as *mut u8;
+            *base = 0xa5;
+            *base.add((BLOB_ODD_SIZE - 1) as usize) = 0x5a;
+            let rw = *base == 0xa5 && *base.add((BLOB_ODD_SIZE - 1) as usize) == 0x5a;
+            blob_result("blob_rw", rw);
+            libc::munmap(ptr, BLOB_ODD_SIZE as usize);
+        }
+
+        // Release the bo — drives the host-side UNMAP_BLOB (remove_mapping) path too.
+        let close = GemClose {
+            handle: blob.bo_handle,
+            pad: 0,
+        };
+        libc::ioctl(fd, drm_iow(0x09, 8), &close);
+        libc::close(fd);
+    }
+    klog(b"[limina-init] blob_probe: done");
 }
 
 /// Write the whole buffer to a raw fd, returning false on any error. Used by the USB/IP client
