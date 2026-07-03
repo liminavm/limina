@@ -79,6 +79,9 @@ pub struct Hardware {
     pub reclaim: crate::balloon_policy::ReclaimMode,
     /// The maximum; managed VMs always boot dynamic with a [`DYNAMIC_MIN_MIB`] floor.
     pub memory: Memory,
+    /// Mirror the host battery into the guest (virtio-i2c SBS battery; default true).
+    /// Even when true, nothing attaches on a battery-less host. See `--no-battery`.
+    pub battery: bool,
 }
 
 impl Default for Hardware {
@@ -87,6 +90,7 @@ impl Default for Hardware {
             cpus: 4,
             reclaim: crate::balloon_policy::ReclaimMode::Moderate,
             memory: Memory::default(),
+            battery: true,
         }
     }
 }

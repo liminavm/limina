@@ -208,4 +208,8 @@ pub struct VmSpec {
     pub input: Option<InputSpec>,
     /// Optional user-mode NAT NIC (M3). None = no network.
     pub net: Option<NetSpec>,
+    /// Mirror the host battery into the guest (virtio-i2c SBS battery). Even when
+    /// true the device only attaches if the host actually has a battery (or
+    /// `LIMINA_BATTERY_FAKE` is set) — desktops correctly show none.
+    pub battery: bool,
 }

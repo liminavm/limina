@@ -10,6 +10,7 @@
 //! upstream rebase that changes `VmResources`/`build_microvm` touches this module and
 //! nothing else (architecture decision D2.1).
 
+mod battery;
 mod console;
 
 use anyhow::{anyhow, Context, Result};
@@ -158,6 +159,16 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
 
     if let Some(console) = &spec.console {
         console::attach(&mut vmr, console).context("attaching serial console")?;
+    }
+
+    // Host battery mirror (virtio-i2c SBS battery): only when asked AND the host
+    // actually has a battery to mirror (or the fake hook is set) — a desktop Mac
+    // attaches nothing and the guest correctly shows no battery.
+    if spec.battery {
+        if let Some(provider) = battery::provider() {
+            log::info!("battery: mirroring the host battery into the guest");
+            vmr.battery_provider = Some(provider);
+        }
     }
 
     if let Some(vc) = &spec.virtio_console {

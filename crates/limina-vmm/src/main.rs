@@ -150,6 +150,12 @@ struct Cli {
     #[arg(long)]
     balloon_control_socket: Option<PathBuf>,
 
+    /// Do NOT mirror the host battery into the guest. By default a virtio-i2c SBS
+    /// battery mirroring the host's is attached when the host has one (or
+    /// LIMINA_BATTERY_FAKE is set); this turns the device off entirely.
+    #[arg(long)]
+    no_battery: bool,
+
     /// Attach a user-mode NAT NIC (`eth0`) connected to a gvproxy gateway listening on
     /// this vfkit unixgram socket. The supervisor spawns gvproxy and guarantees it is up
     /// before the guest activates the device.
@@ -441,6 +447,7 @@ fn main() -> Result<()> {
         display,
         input,
         net,
+        battery: !cli.no_battery,
     };
 
     krun::boot(&spec)

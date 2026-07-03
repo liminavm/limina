@@ -172,6 +172,13 @@ struct Cli {
     #[arg(long)]
     gpu_software_2d: bool,
 
+    /// Do NOT mirror the host battery into the guest. By default the worker attaches a
+    /// virtio-i2c SBS battery mirroring the host's whenever the host has one (stock guests
+    /// pick it up via i2c-virtio + sbs-battery and show charge natively); desktops without
+    /// a battery attach nothing either way.
+    #[arg(long)]
+    no_battery: bool,
+
     /// Attach a user-mode NAT NIC: spawn and supervise a gvproxy gateway (DHCP/DNS/NAT,
     /// no root) and connect the guest's virtio-net to it. The guest gets an IP and outbound
     /// internet automatically (e.g. for SSH).
@@ -630,6 +637,7 @@ fn cli_from_definition(
         balloon_control_socket: None,
         reclaim: ov.reclaim.unwrap_or(cfg.hardware.reclaim),
         gpu_software_2d: cfg.display.gpu == GpuMode::Software2d,
+        no_battery: !cfg.hardware.battery,
         net,
         net_log: None,
         net_mac: cfg.networks.first().map(|n| n.mac.clone()),
@@ -833,6 +841,9 @@ fn run_vm(cli: Cli) -> Result<()> {
     // coexist device; this forwards the software-2D-only override).
     if cli.gpu_software_2d {
         args.push("--gpu-software-2d".into());
+    }
+    if cli.no_battery {
+        args.push("--no-battery".into());
     }
 
     // Runtime display-resize control socket: forwarded to the worker (which binds it). Used by
