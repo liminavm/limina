@@ -31,9 +31,9 @@ use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThr
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSApplication,
     NSApplicationDelegate, NSBox, NSBoxType, NSButton, NSColor, NSFont, NSImage, NSLayoutAttribute,
-    NSLayoutConstraint, NSModalResponseOK, NSOpenPanel, NSPasteboard, NSPasteboardTypeString,
-    NSScrollView, NSStackView, NSStackViewGravity, NSTextField, NSUserInterfaceLayoutOrientation,
-    NSView, NSWindow,
+    NSLayoutConstraint, NSLayoutConstraintOrientation, NSModalResponseOK, NSOpenPanel,
+    NSPasteboard, NSPasteboardTypeString, NSPopUpButton, NSScrollView, NSStackView,
+    NSStackViewGravity, NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow,
 };
 use objc2_foundation::{
     NSArray, NSEdgeInsets, NSFileManager, NSNotification, NSObject, NSObjectProtocol, NSPoint,
@@ -41,7 +41,14 @@ use objc2_foundation::{
 };
 
 use super::{model, model::VmRow, spawn};
+use crate::balloon_policy::ReclaimMode;
 use crate::vmlib;
+
+/// Window-content margin, shared by the chrome layout and the fit-to-content math.
+const MARGIN: f64 = 16.0;
+
+/// The list stack's right edge inset (keeps rows clear of the overlay scroller).
+const LIST_RIGHT_INSET: f64 = 6.0;
 
 pub struct CenterIvars {
     /// The last-applied snapshot (row order = view order = button tags).
@@ -278,7 +285,6 @@ impl CenterController {
     /// would be silently ignored and the header would drift on window resize.)
     fn build_ui(&self, mtm: MainThreadMarker, window: &NSWindow) {
         let content = window.contentView().expect("window content view");
-        const MARGIN: f64 = 16.0;
 
         let header = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
         header.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
@@ -308,14 +314,17 @@ impl CenterController {
 
         let list = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
         list.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        list.setAlignment(NSLayoutAttribute::Width);
+        // Rows are left-anchored and stretched to the list width by explicit
+        // constraints in rebuild_rows — alignment alone left short rows hugging
+        // their content, so dots/buttons drifted between rows of different widths.
+        list.setAlignment(NSLayoutAttribute::Leading);
         list.setSpacing(8.0);
         // Keep the rows clear of the overlay scroller on the right.
         list.setEdgeInsets(NSEdgeInsets {
             top: 2.0,
             left: 0.0,
             bottom: 2.0,
-            right: 6.0,
+            right: LIST_RIGHT_INSET,
         });
         list.setTranslatesAutoresizingMaskIntoConstraints(false);
         scroll.setDocumentView(Some(&list));
@@ -413,10 +422,10 @@ impl CenterController {
         self.fit_window_to_content();
     }
 
-    /// Track the list with the window height: after a rebuild, resize (animated,
-    /// top edge pinned) so the rows fit exactly — shrinking when VMs are deleted,
-    /// growing when they're added — clamped to the screen. Width and position
-    /// stay whatever the user chose.
+    /// Track the list with the window size: after a rebuild, resize (animated, top-left
+    /// corner pinned) so the rows fit exactly — height shrinks/grows with the VM count,
+    /// width follows the widest card (a lone short-named VM gets a compact window, a
+    /// long ssh line widens it) — clamped to the screen. Position stays the user's.
     fn fit_window_to_content(&self) {
         let list_ref = self.ivars().list.borrow();
         let Some(list) = list_ref.as_ref() else {
@@ -425,22 +434,30 @@ impl CenterController {
         let Some(window) = list.window() else {
             return;
         };
-        let desired = self.ivars().chrome_h.get() + list.fittingSize().height.max(60.0);
-        let max_h = window
+        let fitting = list.fittingSize();
+        let (max_h, max_w) = window
             .screen()
-            .map(|s| s.visibleFrame().size.height - 40.0)
-            .unwrap_or(800.0);
-        let desired = desired.clamp(160.0, max_h);
+            .map(|s| {
+                let f = s.visibleFrame().size;
+                (f.height - 40.0, f.width - 80.0)
+            })
+            .unwrap_or((800.0, 1200.0));
+        let desired_h =
+            (self.ivars().chrome_h.get() + fitting.height.max(60.0)).clamp(160.0, max_h.max(160.0));
+        let desired_w = (fitting.width + 2.0 * MARGIN).clamp(380.0, max_w.max(380.0));
         let frame = window.frame();
         let content = window.contentRectForFrameRect(frame);
-        if (content.size.height - desired).abs() < 1.0 {
+        if (content.size.height - desired_h).abs() < 1.0
+            && (content.size.width - desired_w).abs() < 1.0
+        {
             return;
         }
         let mut new_frame = window.frameRectForContentRect(NSRect::new(
             content.origin,
-            NSSize::new(content.size.width, desired),
+            NSSize::new(desired_w, desired_h),
         ));
         new_frame.origin.y = frame.origin.y + frame.size.height - new_frame.size.height;
+        new_frame.origin.x = frame.origin.x;
         window.setFrame_display_animate(new_frame, true, true);
     }
 
@@ -455,6 +472,13 @@ impl CenterController {
             list.removeArrangedSubview(&v);
             v.removeFromSuperview();
         }
+        // Every card (and separator) spans the full list width, so the widest row
+        // sets the pace and status dots / action buttons line up across VMs.
+        let full_width = |v: &NSView| {
+            v.widthAnchor()
+                .constraintEqualToAnchor_constant(&list.widthAnchor(), -LIST_RIGHT_INSET)
+                .setActive(true);
+        };
         for (i, row) in rows.iter().enumerate() {
             let view = self.row_view(
                 mtm,
@@ -464,8 +488,11 @@ impl CenterController {
                 stopping.contains(&row.bundle.path),
             );
             list.addView_inGravity(&view, NSStackViewGravity::Top);
+            full_width(&view);
             if i + 1 < rows.len() {
-                list.addView_inGravity(&separator(mtm), NSStackViewGravity::Top);
+                let sep = separator(mtm);
+                list.addView_inGravity(&sep, NSStackViewGravity::Top);
+                full_width(&sep);
             }
         }
         if let Some(empty) = self.ivars().empty_label.borrow().as_ref() {
@@ -498,10 +525,19 @@ impl CenterController {
         dot.setTextColor(Some(&dot_color));
         outer.addView_inGravity(&dot, NSStackViewGravity::Leading);
 
+        // Text lines anchor left (Width is NOT a valid stack alignment — it silently
+        // fell back to centering, which is what skewed rows against each other); the
+        // ssh and action rows get explicit full-width constraints below so their
+        // trailing content reaches the card's right edge.
         let info = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
         info.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        info.setAlignment(NSLayoutAttribute::Width);
+        info.setAlignment(NSLayoutAttribute::Leading);
         info.setSpacing(3.0);
+        let info_wide = |v: &NSView| {
+            v.widthAnchor()
+                .constraintEqualToAnchor(&info.widthAnchor())
+                .setActive(true);
+        };
 
         let name = NSTextField::labelWithString(&NSString::from_str(&row.name), mtm);
         name.setFont(Some(&NSFont::boldSystemFontOfSize(13.0)));
@@ -548,6 +584,7 @@ impl CenterController {
                 ssh_row.addView_inGravity(&small_label(mtm, ssh), NSStackViewGravity::Trailing);
             }
             info.addView_inGravity(&ssh_row, NSStackViewGravity::Top);
+            info_wide(&ssh_row);
         }
 
         // The action row: lifecycle icons leading, Configure…/trash trailing.
@@ -608,8 +645,20 @@ impl CenterController {
             actions.addView_inGravity(&trash, NSStackViewGravity::Trailing);
         }
         info.addView_inGravity(&actions, NSStackViewGravity::Top);
+        info_wide(&actions);
 
+        // The info column absorbs the row's slack width: gravity areas never stretch
+        // their views on their own (hugging low alone did nothing), so pin info's
+        // trailing edge to the row's — that way the ssh command and the trailing
+        // action buttons reach the same right edge on every card.
+        info.setContentHuggingPriority_forOrientation(
+            1.0,
+            NSLayoutConstraintOrientation::Horizontal,
+        );
         outer.addView_inGravity(&info, NSStackViewGravity::Leading);
+        info.trailingAnchor()
+            .constraintEqualToAnchor(&outer.trailingAnchor())
+            .setActive(true);
         Retained::into_super(outer)
     }
 
@@ -925,21 +974,31 @@ impl CenterController {
         let alert = NSAlert::new(mtm);
         alert.setMessageText(&NSString::from_str(&format!("Configure “{}”", row.name)));
         alert.setInformativeText(&NSString::from_str(
-            "Memory: the maximum (\"4G\", \"8GiB\"); idle memory is reclaimed down to a \
-             1 GiB floor per the reclaim mode. SSH port 0 = pick automatically.",
+            "Memory: the maximum (\"4G\", \"8GiB\"). Reclaim: how hard idle guest memory \
+             is returned to the Mac — Moderate keeps some guest disk cache unless the \
+             host is under pressure; Disabled never reclaims. SSH port 0 = pick \
+             automatically.",
         ));
         alert.addButtonWithTitle(&NSString::from_str("Save"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
 
-        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 300.0, 92.0));
+        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 300.0, 122.0));
         let cpus_field = labeled_field(
             mtm,
             &accessory,
-            64.0,
+            94.0,
             "vCPUs:",
             &cfg.hardware.cpus.to_string(),
         );
-        let mem_field = labeled_field(mtm, &accessory, 34.0, "Memory:", &mem_now);
+        let mem_field = labeled_field(mtm, &accessory, 64.0, "Memory:", &mem_now);
+        let reclaim_popup = labeled_popup(
+            mtm,
+            &accessory,
+            34.0,
+            "Reclaim:",
+            RECLAIM_CHOICES,
+            reclaim_index(cfg.hardware.reclaim),
+        );
         let ssh_field = labeled_field(mtm, &accessory, 4.0, "SSH port:", &ssh_now.to_string());
         alert.setAccessoryView(Some(&accessory));
 
@@ -955,6 +1014,7 @@ impl CenterController {
             let ssh_port: u16 = ssh_field.stringValue().to_string().trim().parse()?;
             cfg.hardware.cpus = cpus;
             cfg.hardware.memory = memory;
+            cfg.hardware.reclaim = reclaim_from_index(reclaim_popup.indexOfSelectedItem());
             if let Some(net) = cfg.networks.first_mut() {
                 net.ssh_port = ssh_port;
             } else if ssh_port != 0 {
@@ -1039,6 +1099,52 @@ fn unique_path(p: &Path) -> PathBuf {
         }
     }
     p.to_path_buf()
+}
+
+/// Popup titles for the reclaim mode, in a fixed order the index helpers share.
+const RECLAIM_CHOICES: [&str; 4] = ["Disabled", "Light", "Moderate", "Aggressive"];
+
+fn reclaim_index(mode: ReclaimMode) -> isize {
+    match mode {
+        ReclaimMode::Disabled => 0,
+        ReclaimMode::Light => 1,
+        ReclaimMode::Moderate => 2,
+        ReclaimMode::Aggressive => 3,
+    }
+}
+
+fn reclaim_from_index(index: isize) -> ReclaimMode {
+    match index {
+        0 => ReclaimMode::Disabled,
+        1 => ReclaimMode::Light,
+        3 => ReclaimMode::Aggressive,
+        _ => ReclaimMode::Moderate,
+    }
+}
+
+/// A `Label:` + popup pair placed at `y` inside the accessory view.
+fn labeled_popup(
+    mtm: MainThreadMarker,
+    parent: &NSView,
+    y: f64,
+    label: &str,
+    choices: [&str; 4],
+    selected: isize,
+) -> Retained<NSPopUpButton> {
+    let l = NSTextField::labelWithString(&NSString::from_str(label), mtm);
+    l.setFrame(rect(0.0, y + 3.0, 84.0, 18.0));
+    parent.addSubview(&l);
+    let p = NSPopUpButton::initWithFrame_pullsDown(
+        NSPopUpButton::alloc(mtm),
+        rect(88.0, y - 2.0, 204.0, 26.0),
+        false,
+    );
+    for title in choices {
+        p.addItemWithTitle(&NSString::from_str(title));
+    }
+    p.selectItemAtIndex(selected);
+    parent.addSubview(&p);
+    p
 }
 
 /// A `Label:` + editable field pair placed at `y` inside the accessory view.
