@@ -271,7 +271,34 @@ fn parse_mac(s: &str) -> Result<[u8; 6]> {
     Ok(mac)
 }
 
+/// Raise RLIMIT_NOFILE's soft limit toward the hard cap (clamped to OPEN_MAX, which macOS
+/// always accepts). The venus render server spends one fd per guest shm blob; under the
+/// launchd 256-fd default a GNOME login's context burst hits EMFILE and every blob/context
+/// create fails (the 2026-07-02 login crash). The supervisor raises before spawning us, but
+/// raise here too so direct/dev invocations of the worker are covered. Mirrors
+/// limina::raise_fd_limit — keep the two in sync.
+fn raise_fd_limit() {
+    const TARGET: libc::rlim_t = 10240; // OPEN_MAX
+    unsafe {
+        let mut lim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) != 0 {
+            return;
+        }
+        let want = TARGET.min(lim.rlim_max); // RLIM_INFINITY compares greater
+        if lim.rlim_cur >= want {
+            return;
+        }
+        lim.rlim_cur = want;
+        let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &lim);
+    }
+}
+
 fn main() -> Result<()> {
+    raise_fd_limit();
+
     // Default to warn-and-up so a production run is quiet (the per-frame GPU device chatter
     // lives at trace/debug). RUST_LOG overrides it — e.g. RUST_LOG=debug for venus host-init,
     // RUST_LOG=trace for the present-path DIAGs ([FLUSH2]/[FENCEPRESENT]).

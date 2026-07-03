@@ -50,6 +50,7 @@ memories before anyone noticed. Verified 2026-06-27 by reading each image's rpmd
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
 | **F44 stock** (`*.raw`, `*.boot.raw`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.19.10` *(co-installed beside stock `6.19.10-300`)* | 16 KiB | `26.1.3-1.limina.fc44` *(F44 SRPM + venus patches, same major → no soname dance)* | `50.1-1.limina.fc44` *(0001+0002; 0003 clipboard deferred)* | `50.0` *(stock)* |
+| **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools, NOT yet respun into an image; respin `enhanced.raw` at the next bake)* | `limina-kernel-16k-7.1.2` | 16 KiB | `26.1.3-3.limina.fc44` *(-2 adds 0011 unorm-WSI drop, -3 adds 0013 TLS-dtor fix)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
 
 Notes: enhanced **mesa + kernel** are pinned to *our* version and `dnf versionlock`ed; enhanced
 **mutter** is rebuilt from the target distro's mutter SRPM carrying our patches over the stock GNOME

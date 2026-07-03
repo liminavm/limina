@@ -356,7 +356,38 @@ impl Cli {
     }
 }
 
+/// Raise RLIMIT_NOFILE's soft limit toward the hard cap. A Dock/Finder-launched process
+/// inherits launchd's 256-fd soft default, and the venus render server spends one fd per
+/// guest shm blob — a GNOME login's context burst exhausts 256, every subsequent blob or
+/// context create fails EMFILE, guest venus init dies and gnome-shell aborts (2026-07-02
+/// dogfood-guest login crash; the worker idled 6 fds from the ceiling). Terminal launches
+/// inherit a high shell limit, which is why dev runs never hit it. Called first thing in
+/// main so every child (center → `limina start` → limina-vmm + gvproxy) inherits the
+/// raised limit; the worker also raises its own. macOS rejects an unbounded setrlimit
+/// (rlim_max reads RLIM_INFINITY but the kernel caps at kern.maxfilesperproc), so clamp
+/// to OPEN_MAX (10240), which is always accepted and plenty for any session.
+fn raise_fd_limit() {
+    const TARGET: libc::rlim_t = 10240; // OPEN_MAX
+    unsafe {
+        let mut lim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) != 0 {
+            return;
+        }
+        let want = TARGET.min(lim.rlim_max); // RLIM_INFINITY compares greater
+        if lim.rlim_cur >= want {
+            return;
+        }
+        lim.rlim_cur = want;
+        let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &lim);
+    }
+}
+
 fn main() -> Result<()> {
+    raise_fd_limit();
+
     // Death-pact reaper mode (hidden, spawned by the gateway alongside gvproxy). Handled BEFORE
     // clap/logging/AppKit so it stays a tiny process that only watches a pipe and reaps gvproxy
     // when this supervisor dies. See gateway::spawn_death_pact_watcher / run_reaper.
@@ -1252,6 +1283,39 @@ fn validate_disk_path(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// Guards the launchd-256-fd login crash (2026-07-02): with the soft limit dropped to
+    /// the Finder-launch default, raise_fd_limit must lift it to OPEN_MAX (or the hard cap
+    /// if lower). The real reproducer is launchd-only (12 concurrent venus contexts all
+    /// EMFILE'd); this pins the mechanism the fix relies on.
+    #[test]
+    fn raise_fd_limit_lifts_the_launchd_default() {
+        unsafe {
+            let mut orig = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            assert_eq!(libc::getrlimit(libc::RLIMIT_NOFILE, &mut orig), 0);
+            let lowered = libc::rlimit {
+                rlim_cur: 256,
+                rlim_max: orig.rlim_max,
+            };
+            assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &lowered), 0);
+
+            raise_fd_limit();
+
+            let mut now = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            assert_eq!(libc::getrlimit(libc::RLIMIT_NOFILE, &mut now), 0);
+            let want = 10240u64.min(orig.rlim_max);
+            assert_eq!(now.rlim_cur, want, "soft fd limit not raised");
+
+            // Restore the original soft limit for the rest of the test process.
+            let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &orig);
+        }
+    }
 
     #[test]
     fn memory_range_parses_suffixes_and_bare_mib() {
