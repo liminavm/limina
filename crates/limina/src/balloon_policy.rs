@@ -25,9 +25,17 @@ const PRESSURE_LOW: u32 = 200; // 2.00%
 /// Aggressive only: inflate while MemAvailable is at least this fraction of MemTotal (percent).
 const IDLE_FREE_PERCENT: u64 = 30;
 /// Minimum time between *inflation* steps (releasing under pressure ignores this — it's urgent).
-const DWELL: Duration = Duration::from_millis(800);
+const DWELL: Duration = Duration::from_secs(2);
 /// Ignore target changes smaller than this (pages; 16 MiB) — anti-dribble dead band.
 const DEAD_BAND_PAGES: u32 = 4096;
+/// One inflation step (pages; 256 MiB). The PSI sensor lags the balloon by ~10 s (avg10 window),
+/// so the actuator must move slower than the sensor: 256 MiB per 2 s dwell bounds the overshoot
+/// between reports to a few hundred MiB. The old ¼-of-room step (5.9 GiB on a 24 GiB VM) inflated
+/// 0→20 GB before pressure could register, thrashing the guest to swap (2026-07-03 dogfood-guest).
+const INFLATE_STEP_PAGES: u32 = 256 * PAGES_PER_MIB;
+/// After a pressure-triggered release, don't re-inflate for this long: a blowout proves the guest
+/// is actively using its memory, and each squeeze/release cycle costs it GiBs of disk swap.
+const RELEASE_COOLDOWN: Duration = Duration::from_secs(300);
 
 /// 4 KiB balloon pages per MiB.
 pub const PAGES_PER_MIB: u32 = 256;
@@ -108,6 +116,8 @@ struct State {
     target_pages: u32,
     /// When we last changed the target (for the inflation dwell).
     last_change: Option<Instant>,
+    /// No inflation before this instant (armed on every high-pressure report).
+    cooldown_until: Option<Instant>,
 }
 
 impl BalloonPolicy {
@@ -121,6 +131,7 @@ impl BalloonPolicy {
                 conn: None,
                 target_pages: 0,
                 last_change: None,
+                cooldown_until: None,
             }),
         }
     }
@@ -141,6 +152,11 @@ impl BalloonPolicy {
         let host = read_host_pressure();
         let mut st = self.state.lock().unwrap();
         let now = Instant::now();
+        // A high-pressure report arms the re-inflation cooldown whether or not there is a balloon
+        // to release: the guest just proved it needs its memory.
+        if p.some_avg10 >= PRESSURE_HIGH {
+            st.cooldown_until = Some(now + RELEASE_COOLDOWN);
+        }
         let inputs = DecideInputs {
             mode: self.mode,
             host,
@@ -148,6 +164,7 @@ impl BalloonPolicy {
             room,
             max_pages: self.max_pages,
             last_change: st.last_change,
+            cooldown_until: st.cooldown_until,
             now,
         };
         let Some(new_target) = decide(p, &inputs) else {
@@ -206,6 +223,8 @@ struct DecideInputs {
     /// Total guest RAM libkrun allocated (pages) — the allowance percentages key off this.
     max_pages: u32,
     last_change: Option<Instant>,
+    /// No inflation before this instant (armed by the caller on high-pressure reports).
+    cooldown_until: Option<Instant>,
     now: Instant,
 }
 
@@ -230,20 +249,20 @@ fn allowance_pages(mode: ReclaimMode, host: HostPressure, max_pages: u32) -> Opt
 /// The pure policy decision (unit-tested): given a pressure report and the current state, return
 /// the next target in pages, or `None` to hold.
 ///
-/// All modes release to 0 immediately when the *guest* is under pressure. Inflation requires an
-/// idle guest and is bounded by the mode's cache [`allowance_pages`]: the balloon may only take
-/// what the guest has available *beyond* the allowance, so the guest keeps that much room for
-/// page cache. Aggressive keeps the original M6 shape exactly (squeeze to the floor while ≥30%
-/// is available, host pressure ignored). Deflation (target shrinks) is immediate; inflation is
-/// stepped (¼ of room) and dwell-limited; sub-dead-band changes are held to avoid dribble.
+/// All modes release to 0 immediately when the *guest* is under acute pressure (avg10 ≥ 10%).
+/// Deflation is otherwise always allowed, at any pressure: when available drops below the mode's
+/// cache [`allowance_pages`] the target shrinks by the shortfall immediately — giving memory back
+/// is always safe, and holding it was what let the guest thrash against an unreachable target
+/// (the 2026-07-03 dogfood-guest limit cycle). Inflation is the guarded direction: it requires
+/// *sustained* calm (avg10 AND avg60 ≤ 2%), no recent release blowout ([`RELEASE_COOLDOWN`]),
+/// and moves in small dwell-limited [`INFLATE_STEP_PAGES`] steps so the lagging PSI sensor can
+/// push back before the squeeze overshoots. Aggressive keeps its original shape (squeeze to the
+/// floor while ≥30% is available, host pressure ignored) with the same inflation guards.
 fn decide(p: &MemPressure, i: &DecideInputs) -> Option<u32> {
-    // Guest under pressure: hand memory back, now. All modes.
+    // Guest under acute pressure: hand memory back, now. All modes. (The caller also arms the
+    // re-inflation cooldown on this signal.)
     if p.some_avg10 >= PRESSURE_HIGH {
         return (i.current != 0).then_some(0);
-    }
-    // Inflating (or trimming toward an allowance) needs an idle guest.
-    if p.some_avg10 > PRESSURE_LOW {
-        return None; // neutral band: hold (hysteresis)
     }
 
     let desired = match allowance_pages(i.mode, i.host, i.max_pages) {
@@ -274,17 +293,24 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Option<u32> {
     if desired.abs_diff(i.current) < DEAD_BAND_PAGES && desired != 0 {
         return None;
     }
-    // Deflation is immediate; inflation is gradual and rate-limited.
     let next = if desired <= i.current {
+        // Deflation: immediate, no idle/cooldown/dwell gates.
         desired
     } else {
+        // Inflation: only from a sustainedly calm guest (a 10 s window is just a busy guest
+        // catching its breath), never inside the post-release cooldown, one small step per dwell.
+        if p.some_avg10 > PRESSURE_LOW || p.some_avg60 > PRESSURE_LOW {
+            return None;
+        }
+        if i.cooldown_until.is_some_and(|t| i.now < t) {
+            return None;
+        }
         if let Some(t) = i.last_change {
             if i.now.duration_since(t) < DWELL {
                 return None;
             }
         }
-        let step = (i.room / 4).max(1);
-        i.current.saturating_add(step).min(desired)
+        i.current.saturating_add(INFLATE_STEP_PAGES).min(desired)
     };
     (next != i.current).then_some(next)
 }
@@ -322,6 +348,7 @@ mod tests {
             room: ROOM,
             max_pages: MAX,
             last_change: None,
+            cooldown_until: None,
             now: Instant::now(),
         }
     }
@@ -348,10 +375,10 @@ mod tests {
 
     #[test]
     fn aggressive_keeps_the_original_shape() {
-        // Idle with ≥30% available: one ¼-room step toward full, regardless of host pressure.
+        // Idle with ≥30% available: one step toward full, regardless of host pressure.
         let i = inputs(ReclaimMode::Aggressive, HostPressure::Normal, 0);
         let next = decide(&report_pages(0, MAX * 7 / 10, MAX), &i);
-        assert_eq!(next, Some(ROOM / 4));
+        assert_eq!(next, Some(INFLATE_STEP_PAGES));
         // Idle but <30% available: hold.
         let next = decide(&report_pages(0, MAX / 10, MAX), &i);
         assert_eq!(next, None);
@@ -363,13 +390,11 @@ mod tests {
     }
 
     #[test]
-    fn neutral_band_holds() {
-        // some=5% is between LOW(2%) and HIGH(10%) -> hold, every mode.
-        for mode in [
-            ReclaimMode::Light,
-            ReclaimMode::Moderate,
-            ReclaimMode::Aggressive,
-        ] {
+    fn neutral_band_holds_inflation() {
+        // some=5% is between LOW(2%) and HIGH(10%) -> no inflation, even with room to take.
+        // (Light@Normal is excluded here: its desired target is 0, a deflation — covered by
+        // `light_normal_gives_back_in_the_neutral_band`.)
+        for mode in [ReclaimMode::Moderate, ReclaimMode::Aggressive] {
             let i = inputs(mode, HostPressure::Normal, ROOM / 4);
             let next = decide(&report_pages(500, MAX / 2, MAX), &i);
             assert_eq!(next, None, "{mode:?}");
@@ -379,11 +404,10 @@ mod tests {
     #[test]
     fn moderate_normal_leaves_the_cache_allowance() {
         // Guest idle with 4 GiB available; allowance = max/8 = 1 GiB. The balloon may take
-        // avail − allowance = 3 GiB, stepped by ¼ room.
+        // avail − allowance = 3 GiB, one step at a time.
         let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
         let next = decide(&report_pages(0, 4 * GIB_PAGES, MAX), &i);
-        let desired = 3 * GIB_PAGES;
-        assert_eq!(next, Some(desired.min(ROOM / 4)));
+        assert_eq!(next, Some(INFLATE_STEP_PAGES));
         // Fully converged: current already at avail − allowance → hold (sub-dead-band).
         let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 3 * GIB_PAGES);
         let next = decide(&report_pages(0, GIB_PAGES, MAX), &i);
@@ -403,10 +427,10 @@ mod tests {
     #[test]
     fn moderate_squeezes_fully_under_host_pressure() {
         // Host warn → allowance 0: with 4 GiB available the desired target is current+avail,
-        // stepped; from 0 that's one ¼-room step.
+        // stepped; from 0 that's one step.
         let i = inputs(ReclaimMode::Moderate, HostPressure::Warn, 0);
         let next = decide(&report_pages(0, 4 * GIB_PAGES, MAX), &i);
-        assert_eq!(next, Some(ROOM / 4));
+        assert_eq!(next, Some(INFLATE_STEP_PAGES));
     }
 
     #[test]
@@ -423,18 +447,87 @@ mod tests {
 
     #[test]
     fn light_engages_under_host_warn_with_a_generous_allowance() {
-        // Host warn → allowance max/4 = 2 GiB; guest has 4 GiB available → may take 2 GiB.
+        // Host warn → allowance max/4 = 2 GiB; guest has 4 GiB available → may take 2 GiB,
+        // one step at a time.
         let i = inputs(ReclaimMode::Light, HostPressure::Warn, 0);
         let next = decide(&report_pages(0, 4 * GIB_PAGES, MAX), &i);
-        assert_eq!(next, Some((2 * GIB_PAGES).min(ROOM / 4)));
+        assert_eq!(next, Some(INFLATE_STEP_PAGES));
     }
 
     #[test]
     fn light_critical_squeezes_to_the_floor() {
-        let i = inputs(ReclaimMode::Light, HostPressure::Critical, ROOM - ROOM / 4);
+        // allowance 0: desired = current + avail, capped at room; the last step lands exactly
+        // on the floor squeeze.
+        let i = inputs(
+            ReclaimMode::Light,
+            HostPressure::Critical,
+            ROOM - INFLATE_STEP_PAGES / 2,
+        );
         let next = decide(&report_pages(0, 2 * GIB_PAGES, MAX), &i);
-        // allowance 0: desired = current + avail, capped at room; one step away.
         assert_eq!(next, Some(ROOM));
+    }
+
+    /// 2026-07-03 dogfood-guest oscillation, regression 1: inflation must move in small bounded
+    /// steps (the PSI sensor lags ~10 s; ¼-of-room steps outran it and thrashed the guest).
+    #[test]
+    fn inflation_steps_are_small_and_bounded() {
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
+        // 7 GiB available, 1 GiB allowance: desired is ~6 GiB away, but one decision may only
+        // move one INFLATE_STEP.
+        let next = decide(&report_pages(0, 7 * GIB_PAGES, MAX), &i);
+        assert_eq!(next, Some(INFLATE_STEP_PAGES));
+    }
+
+    /// Regression 2: while the guest sits in the neutral band (2–10%), the policy must still
+    /// give memory back when available drops below the allowance — waiting for ≤2% calm left
+    /// the guest thrashing against an unreachable target until the 10% panic release.
+    #[test]
+    fn neutral_band_still_deflates_below_the_allowance() {
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 5 * GIB_PAGES);
+        // Deflation must ignore the dwell.
+        i.last_change = Some(i.now);
+        // PSI 7%, available 256 MiB < 1 GiB allowance: deflate by the shortfall, now.
+        let next = decide(&report_pages(700, GIB_PAGES / 4, MAX), &i);
+        assert_eq!(next, Some(5 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4)));
+    }
+
+    /// Regression 2b: Light at host-normal holds no balloon; that drift-to-0 is a deflation and
+    /// must not wait for the guest to go calm either.
+    #[test]
+    fn light_normal_gives_back_in_the_neutral_band() {
+        let i = inputs(ReclaimMode::Light, HostPressure::Normal, 2 * GIB_PAGES);
+        let next = decide(&report_pages(500, 2 * GIB_PAGES, MAX), &i);
+        assert_eq!(next, Some(0));
+    }
+
+    /// Regression 3: a 10-second calm window is not "idle" — inflation also requires the 60 s
+    /// average to be low, so a busy guest catching its breath doesn't get squeezed.
+    #[test]
+    fn inflation_requires_sustained_calm() {
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
+        let mut p = report_pages(0, 7 * GIB_PAGES, MAX);
+        p.some_avg60 = 500; // 5% over the last minute
+        assert_eq!(decide(&p, &i), None);
+    }
+
+    /// Regression 4: after a pressure-triggered release the policy must back off, not re-inflate
+    /// the moment avg10 decays — that was the all-day 40 s squeeze/thrash/dump limit cycle.
+    #[test]
+    fn release_cooldown_blocks_reinflation() {
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
+        i.cooldown_until = Some(i.now + Duration::from_secs(100));
+        assert_eq!(decide(&report_pages(0, 7 * GIB_PAGES, MAX), &i), None);
+        // Cooldown elapsed: inflation resumes.
+        i.cooldown_until = Some(i.now - Duration::from_secs(1));
+        assert_eq!(
+            decide(&report_pages(0, 7 * GIB_PAGES, MAX), &i),
+            Some(INFLATE_STEP_PAGES)
+        );
+        // Deflation is never cooldown-gated (giving memory back is always safe).
+        i.cooldown_until = Some(i.now + Duration::from_secs(100));
+        i.current = 5 * GIB_PAGES;
+        let next = decide(&report_pages(700, GIB_PAGES / 4, MAX), &i);
+        assert_eq!(next, Some(5 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4)));
     }
 
     #[test]

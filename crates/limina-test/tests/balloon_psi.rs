@@ -61,8 +61,9 @@ fn pressure_report() -> MemPressure {
     }
 }
 
-/// Inject `report` once per ~1.2 s (above the policy's 800 ms inflate dwell) while polling the
-/// balloon's `actual` until `pred` holds or the timeout elapses. Returns the last `actual` (bytes).
+/// Inject `report` once per ~1.2 s while polling the balloon's `actual` until `pred` holds or the
+/// timeout elapses. Inflation moves one 256 MiB step per 2 s dwell, so reaching the floor takes a
+/// handful of reports. Returns the last `actual` (bytes).
 fn drive(
     guest: &Guest,
     conn: &mut AgentConn,

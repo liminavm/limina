@@ -514,8 +514,8 @@ fn parse_resize(line: &str) -> Option<(u32, u32)> {
 /// Bind a UNIX-socket listener that drives the live virtio-balloon via `handle` (M6 dynamic
 /// memory). Newline-delimited commands:
 /// - `target <bytes>` → set the balloon target (rounded to 4 KiB pages); the guest inflates/deflates.
-/// - `stats`          → reply `actual=<bytes> reclaimed=<bytes>` (the guest's balloon size + total
-///   reclaimed) on the same connection.
+/// - `stats`          → reply `target=<bytes> actual=<bytes> reclaimed=<bytes>` (the last commanded
+///   target, the guest's self-reported balloon size, and total reclaimed) on the same connection.
 ///
 /// Runs on a detached thread for the VMM's lifetime; the supervisor policy and the test harness
 /// connect to it. Mirrors [`install_resize_listener`].
@@ -527,6 +527,9 @@ fn install_balloon_listener(path: std::path::PathBuf, handle: BalloonControlHand
     let listener = UnixListener::bind(&path)
         .with_context(|| format!("bind balloon-control socket {path:?}"))?;
     log::info!("balloon: control socket listening on {path:?}");
+    // The last commanded target (bytes), shared across connections so `stats` can report it.
+    // Targets only ever arrive through this socket, so this is authoritative.
+    let target_bytes = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     std::thread::Builder::new()
         .name("balloon-control".into())
         .spawn(move || {
@@ -542,9 +545,10 @@ fn install_balloon_listener(path: std::path::PathBuf, handle: BalloonControlHand
                 // so a single-threaded accept loop would block all other clients (e.g. a `stats`
                 // query) behind it. Each connection is independent and cheap.
                 let handle = handle.clone();
+                let target_bytes = target_bytes.clone();
                 if let Err(e) = std::thread::Builder::new()
                     .name("balloon-conn".into())
-                    .spawn(move || serve_balloon_conn(stream, handle))
+                    .spawn(move || serve_balloon_conn(stream, handle, target_bytes))
                 {
                     log::error!("balloon: cannot spawn connection thread: {e}");
                 }
@@ -555,9 +559,16 @@ fn install_balloon_listener(path: std::path::PathBuf, handle: BalloonControlHand
 }
 
 /// Serve one balloon control connection: `target <bytes>` drives the live balloon, `stats` replies
-/// with `actual=<bytes> reclaimed=<bytes>`. Reads until EOF.
-fn serve_balloon_conn(stream: std::os::unix::net::UnixStream, handle: BalloonControlHandle) {
+/// with `target=<bytes> actual=<bytes> reclaimed=<bytes>` (the commanded target vs the guest's
+/// self-reported size — a gap between the two is the guest failing/refusing to inflate). Reads
+/// until EOF.
+fn serve_balloon_conn(
+    stream: std::os::unix::net::UnixStream,
+    handle: BalloonControlHandle,
+    target_bytes: std::sync::Arc<std::sync::atomic::AtomicU64>,
+) {
     use std::io::{BufRead, Write};
+    use std::sync::atomic::Ordering;
     let mut writer = match stream.try_clone() {
         Ok(w) => w,
         Err(e) => {
@@ -573,6 +584,7 @@ fn serve_balloon_conn(stream: std::os::unix::net::UnixStream, handle: BalloonCon
                 Some(bytes) => {
                     let pages = (bytes >> 12).min(u32::MAX as u64) as u32;
                     log::info!("balloon: target {bytes} bytes ({pages} pages)");
+                    target_bytes.store(bytes, Ordering::Relaxed);
                     handle.set_target_pages(pages);
                 }
                 None => log::warn!("balloon: ignoring malformed target line {line:?}"),
@@ -582,7 +594,8 @@ fn serve_balloon_conn(stream: std::os::unix::net::UnixStream, handle: BalloonCon
                 let actual_bytes = (stats.actual_pages as u64) << 12;
                 if let Err(e) = writeln!(
                     writer,
-                    "actual={actual_bytes} reclaimed={}",
+                    "target={} actual={actual_bytes} reclaimed={}",
+                    target_bytes.load(Ordering::Relaxed),
                     stats.reclaimed_bytes
                 )
                 .and_then(|()| writer.flush())

@@ -627,3 +627,35 @@ MB/MiB spellings all binary); every managed VM boots `--memory 1024..MAX`
 policy). `reclaim = "disabled"` is the static-like escape hatch (balloon idle, FRQ still
 active). The flat CLI keeps explicit `--ram-mib` / `--memory MIN..MAX` for tests and
 special cases.
+
+## Addendum (2026-07-03): control-loop stabilization — the dogfood-guest oscillation
+
+Live diagnosis on the dogfood VM (24 GiB, `moderate`, active desktop) caught the Step-4 policy
+in a ~40 s **limit cycle**, repeating whenever the user was active: a 10 s calm PSI window let
+the policy ratchet the target up in ¼-of-room steps (5.9 GiB per 800 ms dwell — 0→20 GB in
+seconds, far faster than the ~10 s PSI sensor could push back); the squeeze forced the guest's
+cache out and ~GiBs of anon to its disk swapfile; PSI climbed into the 2–10% band where the
+policy could neither inflate nor correct (the below-allowance give-back was gated on ≤2%), so
+the guest thrashed against an unreachable target (`fill_balloon` → "Out of puff!" kernel spam,
+4.5M major faults / ~17 GB cumulative swap-in over 12 h); at 10% the panic release dumped the
+whole balloon, PSI decayed, and the cycle restarted — all while the 48 GB host sat at pressure
+*normal*. Classic bang-bang oscillation: actuator ≫ sensor, hold-only neutral band, no memory
+of blowouts.
+
+Fixes (all in `decide()` / `on_pressure`, unit-tested as `inflation_steps_are_small_and_bounded`,
+`neutral_band_still_deflates_below_the_allowance`, `light_normal_gives_back_in_the_neutral_band`,
+`inflation_requires_sustained_calm`, `release_cooldown_blocks_reinflation`):
+
+- **Inflation steps 256 MiB per 2 s dwell** (was ¼ room per 800 ms): the actuator now moves
+  slower than the PSI sensor, bounding overshoot between reports to a few hundred MiB.
+- **Deflation is unconditional**: below-allowance give-back (and Light@normal drift-to-0) now
+  fires at *any* PSI, so an over-tight target self-corrects within seconds instead of waiting
+  for the 10% blowout. Only the *inflate* direction is idle-gated.
+- **Inflation requires sustained calm**: `some avg60 ≤ 2%` in addition to avg10 — a busy guest
+  catching its breath for 10 s no longer reads as idle.
+- **Post-release cooldown (5 min)**: any avg10 ≥ 10% report arms it (even at target 0); a
+  blowout proves the guest needs its memory, so the policy stops re-testing that boundary.
+
+Debuggability: the worker's balloon `stats` reply now includes the last commanded
+`target=<bytes>` alongside `actual`/`reclaimed` — the target/actual gap (guest failing to
+inflate) is exactly the oscillation signature, and it was invisible during the diagnosis.
