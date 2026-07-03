@@ -440,7 +440,9 @@ pub fn run(
     // Reliable capture container: a session-level CGEventTap that *consumes* mouse events while
     // captured (so clicks/motion can't escape to host windows) and forwards them to the guest's
     // relative device. Needs Accessibility permission; if absent, capture falls back to the local
-    // monitor's warp path (see input.rs). Installed once, on the main thread, before `app.run()`.
+    // monitor's warp path (see input.rs), the toggle path retries the install (a mid-run grant
+    // heals without a restart), and the first tap-less capture raises the system prompt.
+    // Installed on the main thread, before `app.run()`.
     let _capture_tap =
         capture_tap::install(conn.clone(), captured.clone(), remap, host_cursor.clone());
 
@@ -867,6 +869,14 @@ pub fn run(
                         shortcut_window.toggleFullScreen(None);
                     }
                     input::HostShortcut::ToggleCapture => {
+                        // An installed tap consumes this combo itself, so reaching the local
+                        // monitor means the tap is MISSING (no Accessibility at startup). Retry —
+                        // a grant given since then takes effect on a fresh create — and if it's
+                        // still missing, raise the system prompt (once per run) rather than
+                        // degrading silently to the warp path.
+                        if !capture_tap::retry_install() {
+                            capture_tap::prompt_accessibility_once();
+                        }
                         input_state.toggle_capture();
                     }
                 }

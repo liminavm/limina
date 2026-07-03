@@ -10,10 +10,13 @@
 //!
 //! A session-level event tap fixes this properly: while captured it **consumes** every mouse
 //! event (returns NULL, so nothing reaches any other app) and forwards the motion/buttons/scroll
-//! to the guest's relative-mouse device. It needs **Accessibility** permission (System Settings →
+//! to the guest's relative-mouse device; system key combos (Cmd-Tab/Cmd-Space/media keys) are
+//! consumed and forwarded the same way. It needs **Accessibility** permission (System Settings →
 //! Privacy & Security → Accessibility); if that's not granted `CGEventTapCreate` returns NULL and
-//! we fall back to the (leaky) local-monitor warp path. The tap is also the mechanism the future
-//! system-combo capture (Cmd-Tab/Cmd-Space) will reuse.
+//! we fall back to the (leaky) local-monitor warp path — but not silently: a failed install is
+//! kept retryable ([`retry_install`], the grant takes effect on a fresh create without a VM
+//! restart) and the first capture toggle without the tap raises the system Accessibility prompt
+//! ([`prompt_accessibility_once`]).
 
 use std::cell::Cell;
 use std::os::fd::RawFd;
@@ -39,6 +42,7 @@ type CFMachPortRef = *mut c_void;
 type CFRunLoopSourceRef = *mut c_void;
 type CFRunLoopRef = *mut c_void;
 type CFStringRef = *const c_void;
+type CFDictionaryRef = *const c_void;
 type CGEventRef = *mut c_void;
 type CGEventTapProxy = *mut c_void;
 type CGEventTapCallBack =
@@ -66,7 +70,29 @@ extern "C" {
     fn CGWarpMouseCursorPosition(point: NSPoint) -> i32;
     fn CGMainDisplayID() -> u32;
     fn CGDisplayBounds(display: u32) -> NSRect;
+    fn CFDictionaryCreate(
+        alloc: *const c_void,
+        keys: *const *const c_void,
+        values: *const *const c_void,
+        num_values: isize,
+        key_callbacks: *const c_void,
+        value_callbacks: *const c_void,
+    ) -> CFDictionaryRef;
+    fn CFRelease(cf: *const c_void);
     static kCFRunLoopCommonModes: CFStringRef;
+    static kCFTypeDictionaryKeyCallBacks: c_void;
+    static kCFTypeDictionaryValueCallBacks: c_void;
+    static kCFBooleanTrue: *const c_void;
+}
+
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    /// Returns whether the process is trusted for Accessibility; with
+    /// `kAXTrustedCheckOptionPrompt = true` it ALSO raises the system prompt that registers the
+    /// app in System Settings → Privacy & Security → Accessibility (TCC attributes the request
+    /// to the responsible app — the Limina bundle — not this supervisor process).
+    fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> bool;
+    static kAXTrustedCheckOptionPrompt: CFStringRef;
 }
 
 // CGEventType values (CGEventTypes.h).
@@ -291,10 +317,47 @@ extern "C" fn tap_callback(
     std::ptr::null_mut() // consume — nothing escapes to host windows
 }
 
+thread_local! {
+    /// A failed install's context, kept so [`retry_install`] can re-attempt the tap when
+    /// Accessibility is granted mid-run. Main-thread only (like everything else here).
+    static PENDING_CTX: Cell<*mut TapCtx> = const { Cell::new(std::ptr::null_mut()) };
+}
+
+/// Create + enable the tap for `ctx`. On success the tap owns `ctx` for the app's lifetime.
+fn try_create(ctx: *mut TapCtx) -> bool {
+    let mask: u64 = (1 << LMB_DOWN)
+        | (1 << LMB_UP)
+        | (1 << RMB_DOWN)
+        | (1 << RMB_UP)
+        | (1 << MOUSE_MOVED)
+        | (1 << LMB_DRAG)
+        | (1 << RMB_DRAG)
+        | (1 << KEY_DOWN)
+        | (1 << KEY_UP)
+        | (1 << FLAGS_CHANGED)
+        | (1 << SCROLL)
+        | (1 << OMB_DOWN)
+        | (1 << OMB_UP)
+        | (1 << OMB_DRAG);
+    // tap=kCGSessionEventTap(1), place=kCGHeadInsertEventTap(0), options=kCGEventTapOptionDefault(0,
+    // i.e. active/consuming).
+    let port = unsafe { CGEventTapCreate(1, 0, 0, mask, tap_callback, ctx as *mut c_void) };
+    if port.is_null() {
+        return false;
+    }
+    TAP_PORT.store(port, Ordering::Release);
+    unsafe {
+        let source = CFMachPortCreateRunLoopSource(std::ptr::null(), port, 0);
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopCommonModes);
+        CGEventTapEnable(port, true);
+    }
+    true
+}
+
 /// Install the capture tap on the main run loop. Returns `true` if the tap was created; `false`
 /// if Accessibility permission is missing (capture then falls back to the local-monitor warp
-/// path — leaky, but it still does *something*). Call once, on the main thread, before the app
-/// run loop starts.
+/// path — leaky, but it still does *something* — and [`retry_install`] can pick the tap up
+/// later). Call once, on the main thread, before the app run loop starts.
 pub(crate) fn install(
     conn: Arc<WorkerConn>,
     captured: Arc<AtomicBool>,
@@ -316,39 +379,61 @@ pub(crate) fn install(
         accum_x: Cell::new(0.0),
         accum_y: Cell::new(0.0),
     }));
-    let mask: u64 = (1 << LMB_DOWN)
-        | (1 << LMB_UP)
-        | (1 << RMB_DOWN)
-        | (1 << RMB_UP)
-        | (1 << MOUSE_MOVED)
-        | (1 << LMB_DRAG)
-        | (1 << RMB_DRAG)
-        | (1 << KEY_DOWN)
-        | (1 << KEY_UP)
-        | (1 << FLAGS_CHANGED)
-        | (1 << SCROLL)
-        | (1 << OMB_DOWN)
-        | (1 << OMB_UP)
-        | (1 << OMB_DRAG);
-    // tap=kCGSessionEventTap(1), place=kCGHeadInsertEventTap(0), options=kCGEventTapOptionDefault(0,
-    // i.e. active/consuming).
-    let port = unsafe { CGEventTapCreate(1, 0, 0, mask, tap_callback, ctx as *mut c_void) };
-    if port.is_null() {
-        log::warn!(
-            "pointer capture: CGEventTap unavailable — grant Accessibility permission (System \
-             Settings → Privacy & Security → Accessibility) for reliable capture; falling back \
-             to the leaky warp path"
-        );
-        // SAFETY: the tap won't use `ctx`; reclaim it.
-        unsafe { drop(Box::from_raw(ctx)) };
-        return false;
+    if try_create(ctx) {
+        log::info!("pointer capture: CGEventTap installed (session-level, consuming; sens={sens})");
+        return true;
     }
-    TAP_PORT.store(port, Ordering::Release);
+    log::warn!(
+        "pointer capture: CGEventTap unavailable — grant Accessibility permission (System \
+         Settings → Privacy & Security → Accessibility) for reliable capture; falling back \
+         to the leaky warp path (will retry on each Cmd-Ctrl-G)"
+    );
+    PENDING_CTX.with(|p| p.set(ctx));
+    false
+}
+
+/// Re-attempt a failed [`install`] — an Accessibility grant given mid-run takes effect on a
+/// fresh `CGEventTapCreate`, no process restart needed. Returns whether the tap is installed
+/// after the call (`true` when it already was). Cheap when there is nothing to retry. Main
+/// thread only.
+pub(crate) fn retry_install() -> bool {
+    let ctx = PENDING_CTX.with(|p| p.replace(std::ptr::null_mut()));
+    if ctx.is_null() {
+        return !TAP_PORT.load(Ordering::Acquire).is_null();
+    }
+    if try_create(ctx) {
+        log::info!("pointer capture: CGEventTap installed on retry (Accessibility granted)");
+        return true;
+    }
+    PENDING_CTX.with(|p| p.set(ctx));
+    false
+}
+
+/// Raise the system Accessibility prompt, once per process run. Called on the first capture
+/// toggle that engages WITHOUT the tap: the prompt both tells the user why capture is degraded
+/// and registers the app in the Accessibility list (no hunting with the "+" button); after
+/// granting, the next Cmd-Ctrl-G heals live via [`retry_install`].
+pub(crate) fn prompt_accessibility_once() {
+    static PROMPTED: AtomicBool = AtomicBool::new(false);
+    if PROMPTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    log::warn!(
+        "pointer capture: engaging WITHOUT the consuming tap — system key combos (Cmd-Tab, \
+         media keys) will leak to macOS; raising the Accessibility prompt"
+    );
     unsafe {
-        let source = CFMachPortCreateRunLoopSource(std::ptr::null(), port, 0);
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopCommonModes);
-        CGEventTapEnable(port, true);
+        let keys = [kAXTrustedCheckOptionPrompt];
+        let values = [kCFBooleanTrue];
+        let options = CFDictionaryCreate(
+            std::ptr::null(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            1,
+            &kCFTypeDictionaryKeyCallBacks as *const c_void,
+            &kCFTypeDictionaryValueCallBacks as *const c_void,
+        );
+        let _ = AXIsProcessTrustedWithOptions(options);
+        CFRelease(options);
     }
-    log::info!("pointer capture: CGEventTap installed (session-level, consuming; sens={sens})");
-    true
 }
