@@ -191,12 +191,25 @@ if [ -z "$SIGN_ID" ]; then
   SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
              | sed -n 's/.*\([0-9A-F]\{40\}\) "Apple Development.*/\1/p' | head -1)"
 fi
+if [ -n "$SIGN_ID" ] && [ "$SIGN_ID" != "-" ]; then
+  # Probe the identity before committing to it: keychain signing is context-dependent —
+  # a shell without SecurityAgent access (CI, agent-driven sessions) gets
+  # errSecInternalComponent even though the identity is valid. Run deploy builds from a
+  # normal terminal to get the identity-signed artifact.
+  PROBE="$(mktemp)" && cp /bin/ls "$PROBE"
+  if ! codesign -s "$SIGN_ID" --force "$PROBE" >/dev/null 2>&1; then
+    echo "==> WARNING: identity '$SIGN_ID' found but UNUSABLE from this shell (keychain" >&2
+    echo "    denied — locked, key ACL, or no SecurityAgent in this session)." >&2
+    SIGN_ID=""
+  fi
+  rm -f "$PROBE"
+fi
 if [ -z "$SIGN_ID" ]; then
   SIGN_ID="-"
-  echo "==> WARNING: no Apple Development identity — signing AD-HOC. The Accessibility" >&2
-  echo "    grant (key-combo capture) will break on every redeploy (TCC pins the CDHash)." >&2
-  echo "    Fix: Xcode → Settings → Accounts → Manage Certificates → + Apple Development," >&2
-  echo "    or set LIMINA_SIGN_IDENTITY." >&2
+  echo "==> WARNING: signing AD-HOC. The Accessibility grant (key-combo capture) will" >&2
+  echo "    break on every redeploy (TCC pins the CDHash). DO NOT deploy this bundle to" >&2
+  echo "    the dogfood Mac; rebuild from a terminal with an Apple Development identity" >&2
+  echo "    (Xcode → Settings → Accounts → Manage Certificates), or set LIMINA_SIGN_IDENTITY." >&2
 fi
 echo "==> codesigning as '$SIGN_ID' (dylibs → worker → supervisor → app)"
 find "$FW" -type f -name '*.dylib' -exec codesign -s "$SIGN_ID" --force {} \;
