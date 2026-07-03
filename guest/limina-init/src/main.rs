@@ -994,113 +994,131 @@ fn run_blob_probe() {
             return;
         }
 
-        // EXECBUFFER: VIRGL_CCMD_PIPE_RESOURCE_CREATE(48), len 11 dwords — an untyped
-        // PIPE_BUFFER (target 0, format R8_UNORM=64, bind VERTEX_BUFFER=1<<4) of the odd size,
-        // flags MAP_PERSISTENT|MAP_COHERENT (1<<1 | 1<<2) so vrend gives it persistently
-        // mappable glBufferStorage storage, tagged blob_id=1 for the CREATE_BLOB below.
-        let cmds: [u32; 12] = [
-            48 | (11 << 16),      // VIRGL_CMD0(PIPE_RESOURCE_CREATE, 0, 11)
-            0,                    // target = PIPE_BUFFER
-            64,                   // format = VIRGL_FORMAT_R8_UNORM
-            1 << 4,               // bind = VIRGL_BIND_VERTEX_BUFFER
-            BLOB_ODD_SIZE as u32, // width = size in bytes
-            1,                    // height
-            1,                    // depth
-            1,                    // array_size
-            0,                    // last_level
-            0,                    // nr_samples
-            (1 << 1) | (1 << 2),  // flags = MAP_PERSISTENT | MAP_COHERENT
-            1,                    // blob_id
-        ];
-        let exec = VirtgpuExecbuffer {
-            flags: 0,
-            size: (cmds.len() * 4) as u32,
-            command: cmds.as_ptr() as u64,
-            bo_handles: 0,
-            num_bo_handles: 0,
-            fence_fd: 0,
-            ring_idx: 0,
-            syncobj_stride: 0,
-            num_in_syncobjs: 0,
-            num_out_syncobjs: 0,
-            in_syncobjs: 0,
-            out_syncobjs: 0,
-        };
-        let ok = libc::ioctl(fd, drm_iowr(0x42, 64), &exec) == 0;
-        blob_result("blob_execbuffer", ok);
-        if !ok {
-            libc::close(fd);
-            return;
+        // Blob 1 — the SIZE half of the alignment bug: 4 KiB- but not 16 KiB-aligned size at
+        // window offset 0 (16 KiB-aligned, first allocation of the boot). Fixed host-side by
+        // libkrun patch 0043 (hv map/unmap size rounding).
+        let one = probe_one_blob(fd, 1, BLOB_ODD_SIZE, "blob");
+
+        // Blob 2 — the OFFSET half: with blob 1's 0x21000-byte node still occupying the head
+        // of the window, an unaligned guest kernel packs this node at offset 0x21000
+        // (guest_addr%16k=4096 → hv_vm_map HV_BAD_ARGUMENT no matter the size), while a
+        // kernel with 16 KiB-aligned host-visible allocation (patches/linux/0004 / the
+        // limina-virtio-gpu DKMS module) places it at 0x24000 and it maps. The size (0x4000)
+        // is itself 16 KiB-aligned so ONLY the offset is under test.
+        let two = probe_one_blob(fd, 2, 0x4000, "blob2");
+
+        // Release the bos — drives the host-side UNMAP_BLOB (remove_mapping) path too.
+        for handle in [one, two].into_iter().flatten() {
+            let close = GemClose { handle, pad: 0 };
+            libc::ioctl(fd, drm_iow(0x09, 8), &close);
         }
-
-        // RESOURCE_CREATE_BLOB: HOST3D (2) + USE_MAPPABLE (1), referencing blob_id 1. On
-        // 6.12 the kernel maps the vram bo into the host-visible window right here (the
-        // host-side MAP_BLOB → hv_vm_map), but records failure asynchronously — mmap below
-        // is where a host-side failure surfaces (map_state != OK → EINVAL).
-        let mut blob = VirtgpuResourceCreateBlob {
-            blob_mem: 2,
-            blob_flags: 1,
-            bo_handle: 0,
-            res_handle: 0,
-            size: BLOB_ODD_SIZE,
-            pad: 0,
-            cmd_size: 0,
-            cmd: 0,
-            blob_id: 1,
-        };
-        let ok = libc::ioctl(fd, drm_iowr(0x4a, 48), &mut blob) == 0;
-        blob_result("blob_create", ok);
-        if !ok {
-            libc::close(fd);
-            return;
-        }
-
-        // The DRM mmap fake offset for the bo.
-        let mut map = VirtgpuMap {
-            offset: 0,
-            handle: blob.bo_handle,
-            pad: 0,
-        };
-        let ok = libc::ioctl(fd, drm_iowr(0x41, 16), &mut map) == 0;
-        blob_result("blob_map_offset", ok);
-        if !ok {
-            libc::close(fd);
-            return;
-        }
-
-        // THE ASSERTION: mmap succeeds only if the host hv_vm_map'ed the blob into the shm
-        // window. RED (pre-fix): EINVAL — the host rejected the 4k-but-not-16k-aligned size.
-        let ptr = libc::mmap(
-            std::ptr::null_mut(),
-            BLOB_ODD_SIZE as usize,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            fd,
-            map.offset as libc::off_t,
-        );
-        let mapped = ptr != libc::MAP_FAILED;
-        blob_result("blob_map", mapped);
-
-        if mapped {
-            // Prove the pages are live host memory end to end: write + read back through
-            // the mapping, including the last byte of the odd tail page.
-            let base = ptr as *mut u8;
-            *base = 0xa5;
-            *base.add((BLOB_ODD_SIZE - 1) as usize) = 0x5a;
-            let rw = *base == 0xa5 && *base.add((BLOB_ODD_SIZE - 1) as usize) == 0x5a;
-            blob_result("blob_rw", rw);
-            libc::munmap(ptr, BLOB_ODD_SIZE as usize);
-        }
-
-        // Release the bo — drives the host-side UNMAP_BLOB (remove_mapping) path too.
-        let close = GemClose {
-            handle: blob.bo_handle,
-            pad: 0,
-        };
-        libc::ioctl(fd, drm_iow(0x09, 8), &close);
         libc::close(fd);
     }
     klog(b"[limina-init] blob_probe: done");
+}
+
+/// Create one host-visible mappable blob of `size` bytes (an untyped persistently-mappable
+/// vrend PIPE_BUFFER tagged `blob_id`), mmap it, and prove it holds live memory. Emits
+/// `RESULT: <tag>_{execbuffer,create,map_offset,map,rw}` markers; returns the bo handle on
+/// success (the mapping is released, the bo — and its drm_mm window node — stays alive so a
+/// later blob packs after it).
+unsafe fn probe_one_blob(fd: libc::c_int, blob_id: u64, size: u64, tag: &str) -> Option<u32> {
+    // EXECBUFFER: VIRGL_CCMD_PIPE_RESOURCE_CREATE(48), len 11 dwords — an untyped
+    // PIPE_BUFFER (target 0, format R8_UNORM=64, bind VERTEX_BUFFER=1<<4), flags
+    // MAP_PERSISTENT|MAP_COHERENT (1<<1 | 1<<2) so vrend gives it persistently mappable
+    // glBufferStorage storage, tagged for the CREATE_BLOB below.
+    let cmds: [u32; 12] = [
+        48 | (11 << 16),     // VIRGL_CMD0(PIPE_RESOURCE_CREATE, 0, 11)
+        0,                   // target = PIPE_BUFFER
+        64,                  // format = VIRGL_FORMAT_R8_UNORM
+        1 << 4,              // bind = VIRGL_BIND_VERTEX_BUFFER
+        size as u32,         // width = size in bytes
+        1,                   // height
+        1,                   // depth
+        1,                   // array_size
+        0,                   // last_level
+        0,                   // nr_samples
+        (1 << 1) | (1 << 2), // flags = MAP_PERSISTENT | MAP_COHERENT
+        blob_id as u32,      // blob_id
+    ];
+    let exec = VirtgpuExecbuffer {
+        flags: 0,
+        size: (cmds.len() * 4) as u32,
+        command: cmds.as_ptr() as u64,
+        bo_handles: 0,
+        num_bo_handles: 0,
+        fence_fd: 0,
+        ring_idx: 0,
+        syncobj_stride: 0,
+        num_in_syncobjs: 0,
+        num_out_syncobjs: 0,
+        in_syncobjs: 0,
+        out_syncobjs: 0,
+    };
+    let ok = libc::ioctl(fd, drm_iowr(0x42, 64), &exec) == 0;
+    blob_result(&format!("{tag}_execbuffer"), ok);
+    if !ok {
+        return None;
+    }
+
+    // RESOURCE_CREATE_BLOB: HOST3D (2) + USE_MAPPABLE (1), referencing the blob_id. The
+    // kernel maps the vram bo into the host-visible window right here (the host-side
+    // MAP_BLOB → hv_vm_map), but records failure asynchronously — mmap below is where a
+    // host-side failure surfaces (map_state != OK → EINVAL).
+    let mut blob = VirtgpuResourceCreateBlob {
+        blob_mem: 2,
+        blob_flags: 1,
+        bo_handle: 0,
+        res_handle: 0,
+        size,
+        pad: 0,
+        cmd_size: 0,
+        cmd: 0,
+        blob_id,
+    };
+    let ok = libc::ioctl(fd, drm_iowr(0x4a, 48), &mut blob) == 0;
+    blob_result(&format!("{tag}_create"), ok);
+    if !ok {
+        return None;
+    }
+
+    // The DRM mmap fake offset for the bo.
+    let mut map = VirtgpuMap {
+        offset: 0,
+        handle: blob.bo_handle,
+        pad: 0,
+    };
+    let ok = libc::ioctl(fd, drm_iowr(0x41, 16), &mut map) == 0;
+    blob_result(&format!("{tag}_map_offset"), ok);
+    if !ok {
+        return Some(blob.bo_handle);
+    }
+
+    // THE ASSERTION: mmap succeeds only if the host hv_vm_map'ed the blob into the shm
+    // window. EINVAL = the host rejected the mapping (misaligned size pre-libkrun-0043,
+    // misaligned window offset pre-guest-alignment).
+    let ptr = libc::mmap(
+        std::ptr::null_mut(),
+        size as usize,
+        libc::PROT_READ | libc::PROT_WRITE,
+        libc::MAP_SHARED,
+        fd,
+        map.offset as libc::off_t,
+    );
+    let mapped = ptr != libc::MAP_FAILED;
+    blob_result(&format!("{tag}_map"), mapped);
+
+    if mapped {
+        // Prove the pages are live host memory end to end: write + read back through the
+        // mapping, including the last byte of the tail page.
+        let base = ptr as *mut u8;
+        *base = 0xa5;
+        *base.add((size - 1) as usize) = 0x5a;
+        let rw = *base == 0xa5 && *base.add((size - 1) as usize) == 0x5a;
+        blob_result(&format!("{tag}_rw"), rw);
+        libc::munmap(ptr, size as usize);
+    }
+    Some(blob.bo_handle)
 }
 
 /// Write the whole buffer to a raw fd, returning false on any error. Used by the USB/IP client

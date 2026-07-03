@@ -80,9 +80,10 @@ fn odd_size_blob_maps_into_a_4k_guest() {
         eprintln!("  ✓ {step}");
     }
 
-    // THE assertion: the odd-size blob must map. RED (pre-fix): `RESULT: blob_map FAIL
-    // errno=22` arrives instead and this wait times out — dump the worker log tail so the
-    // host-side failure (e.g. `hv_vm_map failed … size%16k=4096`) is visible in the output.
+    // Assertion 1 — the SIZE half: the odd-size blob (window offset 0, 16 KiB-aligned) must
+    // map. RED pre-libkrun-0043: `RESULT: blob_map FAIL errno=22` arrives instead and this
+    // wait times out — dump the worker log tail so the host-side failure
+    // (`hv_vm_map failed … size%16k=4096`) is visible in the output.
     if let Err(e) = guest.wait_for("RESULT: blob_map OK", Duration::from_secs(20)) {
         let log = guest.supervisor_log();
         panic!(
@@ -101,6 +102,31 @@ fn odd_size_blob_maps_into_a_4k_guest() {
     guest
         .wait_for("RESULT: blob_rw OK", Duration::from_secs(10))
         .expect("the mapped blob was not readable/writable end to end");
+
+    // Assertion 2 — the OFFSET half: with blob 1's 0x21000-byte node holding the head of the
+    // window, blob 2 packs right after it. A guest kernel without 16 KiB-aligned
+    // host-visible allocation places it at offset 0x21000 (guest_addr%16k=4096 →
+    // HV_BAD_ARGUMENT regardless of size); the patched kernel (patches/linux/0004, and the
+    // limina-virtio-gpu DKMS module for stock kernels) aligns the node to 0x24000 and it
+    // maps. RED with an unpatched guest kernel: `RESULT: blob2_map FAIL errno=22`.
+    if let Err(e) = guest.wait_for("RESULT: blob2_map OK", Duration::from_secs(20)) {
+        let log = guest.supervisor_log();
+        panic!(
+            "the second blob (16k-misaligned window offset on an unpatched guest kernel) did \
+             not map: {e}\nworker log tail:\n{}",
+            log.lines()
+                .rev()
+                .take(40)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    guest
+        .wait_for("RESULT: blob2_rw OK", Duration::from_secs(10))
+        .expect("the second mapped blob was not readable/writable end to end");
     guest
         .wait_for("blob_probe: done", Duration::from_secs(10))
         .expect("blob probe did not finish");

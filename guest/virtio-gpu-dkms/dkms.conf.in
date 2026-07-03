@@ -1,0 +1,17 @@
+# dkms.conf for limina-virtio-gpu — the stock-kernel delivery of the host-visible
+# window alignment fix (patches/linux/0004). @VERSION@ is stamped by
+# scripts/build-virtio-gpu-dkms.sh (kernel series + limina patch level).
+#
+# The module deliberately keeps the in-tree name (virtio-gpu): DKMS installs it under
+# /lib/modules/$KVER/extra/, and depmod's search order ("search updates extra built-in ..."
+# on Fedora) makes ours shadow the in-tree module — including inside the dracut initramfs
+# after the %posttrans / install-time `dracut -f`. If a future kernel breaks the build,
+# DKMS simply produces nothing and the guest falls back to the stock in-tree driver:
+# boot is never at risk, only the alignment enhancement (graceful two-tier degradation).
+PACKAGE_NAME="limina-virtio-gpu"
+PACKAGE_VERSION="@VERSION@"
+BUILT_MODULE_NAME[0]="virtio-gpu"
+DEST_MODULE_LOCATION[0]="/extra"
+AUTOINSTALL="yes"
+MAKE[0]="make -C ${kernel_source_dir} M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build modules"
+CLEAN="make -C ${kernel_source_dir} M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build clean"

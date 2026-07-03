@@ -1,0 +1,15 @@
+# Out-of-tree build of the in-tree virtio-gpu DRM driver + limina's host-visible
+# window alignment patch (patches/linux/0004). Object list mirrors the in-tree
+# drivers/gpu/drm/virtio/Makefile for the kernel series the sources were taken from
+# (scripts/build-virtio-gpu-dkms.sh vendors them per series).
+virtio-gpu-y := virtgpu_drv.o virtgpu_kms.o virtgpu_gem.o virtgpu_vram.o \
+	virtgpu_display.o virtgpu_vq.o \
+	virtgpu_fence.o virtgpu_object.o virtgpu_debugfs.o virtgpu_plane.o \
+	virtgpu_ioctl.o virtgpu_prime.o virtgpu_trace_points.o virtgpu_submit.o
+
+obj-m := virtio-gpu.o
+
+# The tracepoint header resolves via TRACE_INCLUDE_PATH; in-tree that's a path
+# relative to include/trace, which doesn't exist out of tree. The build script
+# rewrites it to "." — this -I makes "." resolve to the module source dir.
+ccflags-y += -I$(src)

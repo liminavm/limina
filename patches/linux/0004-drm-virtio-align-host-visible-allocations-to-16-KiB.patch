@@ -1,0 +1,72 @@
+From: limina <gustavo@noronha.eti.br>
+Subject: [PATCH] drm/virtio: align host-visible window allocations to 16 KiB
+
+On hypervisors whose host page size is larger than the guest's - a 4 KiB
+arm64 guest on a 16 KiB Apple Silicon host (Hypervisor.framework via
+libkrun, or KVM on Asahi's 16 KiB kernels) - the host can only map blob
+resources into the host-visible window at host-page granularity:
+hv_vm_map / KVM memslots reject any guest address that is not a multiple
+of the host page.
+
+drm_mm_insert_node() packs vram nodes back to back at guest PAGE_SIZE
+granularity, so the first blob whose size is not a multiple of the host
+page shifts every subsequently packed node to a host-page-misaligned
+window offset - and mapping those blobs fails unpredictably from then on
+(venus: vkMapMemory -> VK_ERROR_MEMORY_MAP_FAILED mid-session). See
+limina's l1_blob_map test (blob2, the offset half) and the memory
+limina-blob-map-16k-alignment; the size half is handled host-side by
+libkrun patch 0043.
+
+Give every node a 16 KiB start alignment. With aligned starts the
+packing order stops mattering: the next aligned start is always >= the
+previous node's host-rounded map end, so no allocation history can
+produce a misaligned offset or an overlapping host mapping, and hole
+reuse stays aligned by induction. The node SIZE stays exact - the size
+half is rounded host-side (libkrun 0043), and virtgpu_vram_mmap
+requires the userspace mapping length to equal the node size. On 4 KiB-host hypervisors the alignment is pure
+bounded slack (at most 12 KiB per allocation; mappable allocations are
+few and large in practice - Vulkan drivers suballocate).
+
+16 KiB covers every Apple Silicon host, the only deployment where the
+mismatch exists today. An upstream submission would likely use 64 KiB
+(the largest arm64 page size) or negotiate the granule; this carry patch
+targets our hosts. The same delta ships out of tree as the
+limina-virtio-gpu DKMS module for stock-kernel guests.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+diff --git a/drivers/gpu/drm/virtio/virtgpu_vram.c b/drivers/gpu/drm/virtio/virtgpu_vram.c
+index 25df81c..8c16020 100644
+--- a/drivers/gpu/drm/virtio/virtgpu_vram.c
++++ b/drivers/gpu/drm/virtio/virtgpu_vram.c
+@@ -2,6 +2,18 @@
+ #include "virtgpu_drv.h"
+ 
+ #include <linux/dma-mapping.h>
++#include <linux/sizes.h>
++
++/*
++ * Host mappings into the host-visible window happen at HOST page granularity;
++ * 16 KiB covers Apple Silicon hosts (the largest-page hosts we target) and is
++ * harmless slack elsewhere. Aligning every node's START is sufficient: the
++ * next aligned start is always >= the previous node's host-rounded map end,
++ * so no allocation history can produce a misaligned or overlapping host
++ * mapping. (The node size stays exact - virtgpu_vram_mmap requires the
++ * userspace mapping length to equal it.)
++ */
++#define VIRTIO_GPU_VRAM_ALIGN SZ_16K
+ 
+ static void virtio_gpu_vram_free(struct drm_gem_object *obj)
+ {
+@@ -150,8 +162,9 @@ static int virtio_gpu_vram_map(struct virtio_gpu_object *bo)
+ 		return -EINVAL;
+ 
+ 	spin_lock(&vgdev->host_visible_lock);
+-	ret = drm_mm_insert_node(&vgdev->host_visible_mm, &vram->vram_node,
+-				 bo->base.base.size);
++	ret = drm_mm_insert_node_generic(&vgdev->host_visible_mm,
++					 &vram->vram_node, bo->base.base.size,
++					 VIRTIO_GPU_VRAM_ALIGN, 0, 0);
+ 	spin_unlock(&vgdev->host_visible_lock);
+ 
+ 	if (ret)
