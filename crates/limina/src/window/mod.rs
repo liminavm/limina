@@ -41,7 +41,7 @@ use objc2_quartz_core::{CALayer, CATransaction};
 mod capture_tap;
 mod cursor;
 mod diag;
-mod fit;
+pub(crate) mod fit;
 mod input;
 mod lifecycle;
 mod present;
@@ -74,8 +74,11 @@ pub struct WindowOptions {
     /// Display mode: host (drive the guest to the window's screen size, letterboxing the
     /// window), dynamic (guest follows the window — the original behavior), or fixed.
     pub mode: DisplayResolution,
-    /// The resolution the worker booted at (window content size in points).
+    /// The resolution the worker booted at.
     pub initial_size: (u32, u32),
+    /// First-appearance window content size (points), used when there is no remembered
+    /// frame — half the display's area at the guest aspect (`fit::default_window_content`).
+    pub default_content: (u32, u32),
     /// Remembered NSWindow frame to restore, if it still lands on a screen.
     pub restore_frame: Option<[f64; 4]>,
     /// Persist window state here (managed VMs: the bundle's state.toml); None = off.
@@ -85,11 +88,19 @@ pub struct WindowOptions {
     pub desired_size: Arc<std::sync::atomic::AtomicU64>,
 }
 
-/// The point size of the screen a remembered window frame lands on (by its midpoint), or
-/// the main screen when there is no frame / no match. `None` off the main thread or on a
-/// screen-less host — callers fall back to a configured size. This is how match-host mode
-/// derives the initial guest resolution BEFORE any window exists.
-pub fn screen_points_for_frame(frame: Option<[f64; 4]>) -> Option<(u32, u32)> {
+/// Point geometry of the screen a windowed boot targets: `frame` is the full screen size
+/// (the match-host guest resolution), `visible` the size minus menu bar/Dock (the
+/// window-content clamp for the first-appearance default).
+pub struct ScreenInfo {
+    pub frame: (u32, u32),
+    pub visible: (f64, f64),
+}
+
+/// The screen a remembered window frame lands on (by its midpoint), or the main screen
+/// when there is no frame / no match. `None` off the main thread or on a screen-less
+/// host — callers fall back to configured sizes. This is how match-host mode derives the
+/// initial guest resolution BEFORE any window exists.
+pub fn screen_info_for_frame(frame: Option<[f64; 4]>) -> Option<ScreenInfo> {
     let mtm = MainThreadMarker::new()?;
     let by_midpoint = frame.and_then(|f| {
         let (mx, my) = (f[0] + f[2] / 2.0, f[1] + f[3] / 2.0);
@@ -103,7 +114,11 @@ pub fn screen_points_for_frame(frame: Option<[f64; 4]>) -> Option<(u32, u32)> {
     });
     let screen = by_midpoint.or_else(|| NSScreen::mainScreen(mtm))?;
     let sz = screen.frame().size;
-    Some((sz.width.round() as u32, sz.height.round() as u32))
+    let vis = screen.visibleFrame().size;
+    Some(ScreenInfo {
+        frame: (sz.width.round() as u32, sz.height.round() as u32),
+        visible: (vis.width, vis.height),
+    })
 }
 
 /// Does this window frame (screen points) intersect any current screen? Guards restoring
@@ -268,6 +283,7 @@ pub fn run(
         title,
         mode,
         initial_size,
+        default_content,
         restore_frame,
         state_path,
         desired_size,
@@ -277,13 +293,14 @@ pub fn run(
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     install_main_menu(mtm, &app);
 
-    // Open at the resolution the worker booted with, so the first presented frame is 1:1
-    // from tick zero (no 1024×768 placeholder jump).
+    // First-appearance content size: half the display's area at the guest aspect (a
+    // remembered frame overrides this below). In dynamic mode the guest boots at exactly
+    // this size, so the first presented frame is 1:1 from tick zero.
     let rect = NSRect::new(
         NSPoint::new(0.0, 0.0),
         NSSize::new(
-            f64::from(initial_size.0.max(64)),
-            f64::from(initial_size.1.max(64)),
+            f64::from(default_content.0.max(64)),
+            f64::from(default_content.1.max(64)),
         ),
     );
     let style = NSWindowStyleMask::Titled

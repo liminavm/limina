@@ -977,29 +977,38 @@ impl CenterController {
             "Memory: the maximum (\"4G\", \"8GiB\"). Reclaim: how hard idle guest memory \
              is returned to the Mac — Moderate keeps some guest disk cache unless the \
              host is under pressure; Disabled never reclaims. SSH port 0 = pick \
-             automatically.",
+             automatically. Display: \"host\" matches the screen the window is on \
+             (letterboxing the window as needed), \"dynamic\" makes the guest follow \
+             the window, or a fixed WIDTHxHEIGHT (e.g. \"1920x1080\").",
         ));
         alert.addButtonWithTitle(&NSString::from_str("Save"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
 
-        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 300.0, 122.0));
+        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 300.0, 152.0));
         let cpus_field = labeled_field(
             mtm,
             &accessory,
-            94.0,
+            124.0,
             "vCPUs:",
             &cfg.hardware.cpus.to_string(),
         );
-        let mem_field = labeled_field(mtm, &accessory, 64.0, "Memory:", &mem_now);
+        let mem_field = labeled_field(mtm, &accessory, 94.0, "Memory:", &mem_now);
         let reclaim_popup = labeled_popup(
             mtm,
             &accessory,
-            34.0,
+            64.0,
             "Reclaim:",
             RECLAIM_CHOICES,
             reclaim_index(cfg.hardware.reclaim),
         );
-        let ssh_field = labeled_field(mtm, &accessory, 4.0, "SSH port:", &ssh_now.to_string());
+        let ssh_field = labeled_field(mtm, &accessory, 34.0, "SSH port:", &ssh_now.to_string());
+        let display_field = labeled_field(
+            mtm,
+            &accessory,
+            4.0,
+            "Display:",
+            &cfg.display.resolution.to_string(),
+        );
         alert.setAccessoryView(Some(&accessory));
 
         if alert.runModal() != NSAlertFirstButtonReturn {
@@ -1012,9 +1021,12 @@ impl CenterController {
             anyhow::ensure!(cpus > 0, "vCPUs must be at least 1");
             let memory = vmlib::schema::Memory::parse(&mem_field.stringValue().to_string())?;
             let ssh_port: u16 = ssh_field.stringValue().to_string().trim().parse()?;
+            let resolution: vmlib::schema::DisplayResolution =
+                display_field.stringValue().to_string().parse()?;
             cfg.hardware.cpus = cpus;
             cfg.hardware.memory = memory;
             cfg.hardware.reclaim = reclaim_from_index(reclaim_popup.indexOfSelectedItem());
+            cfg.display.resolution = resolution;
             if let Some(net) = cfg.networks.first_mut() {
                 net.ssh_port = ssh_port;
             } else if ssh_port != 0 {

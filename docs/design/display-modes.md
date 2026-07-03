@@ -100,7 +100,17 @@ the fullscreen frame — the windowed frame is what we remember), off-thread; pl
 synchronous save on the quit paths. Restored at window creation when the frame still
 intersects a live screen (else `center()`); in host mode the *screen holding the
 remembered frame's midpoint* is the one whose size seeds the boot resolution
-(`window::screen_points_for_frame`, queried on the main thread pre-spawn).
+(`window::screen_info_for_frame`, queried on the main thread pre-spawn).
+
+## First-appearance default size
+
+With no remembered frame, the window opens at **half the display's area, at the guest's
+aspect ratio**, clamped into the visible frame (`fit::default_window_content`) — never
+tiny, never screen-filling, and bar-free on first show because the content aspect
+matches the guest. Dynamic mode derives its first-boot *guest* resolution from the same
+rule at the screen's aspect (window == guest, no early re-modeset); `--display-size` is
+only the last-resort fallback on a screen-less host. Fixed mode keeps the configured
+aspect, so a 4:3 fixed guest gets a 4:3 half-area window.
 
 Ad-hoc `--window` runs have no bundle: they persist nothing unless given
 `--window-state-file <path>`.

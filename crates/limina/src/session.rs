@@ -45,6 +45,8 @@ pub struct SessionConfig {
     pub state_path: Option<PathBuf>,
     /// Remembered NSWindow frame to restore (screen points, Cocoa bottom-left origin).
     pub restore_frame: Option<[f64; 4]>,
+    /// First-appearance window content size (used when `restore_frame` is absent).
+    pub default_content: (u32, u32),
 }
 
 /// Pack/unpack a `(width, height)` for the [`AtomicU64`] the window and the reboot-relaunch
@@ -188,6 +190,7 @@ pub struct WindowedSession {
     state_path: Option<PathBuf>,
     restore_frame: Option<[f64; 4]>,
     initial_size: (u32, u32),
+    default_content: (u32, u32),
     desired_size: Arc<AtomicU64>,
 }
 
@@ -209,6 +212,7 @@ impl WindowedSession {
             mode,
             state_path,
             restore_frame,
+            default_content,
         } = config;
 
         // The resolution the guest is currently driven to — written by the window on every
@@ -318,6 +322,7 @@ impl WindowedSession {
             state_path,
             restore_frame,
             initial_size: (width, height),
+            default_content,
             desired_size,
         })
     }
@@ -340,6 +345,7 @@ impl WindowedSession {
                 title: self.title,
                 mode: self.mode,
                 initial_size: self.initial_size,
+                default_content: self.default_content,
                 restore_frame: self.restore_frame,
                 state_path: self.state_path,
                 desired_size: self.desired_size,

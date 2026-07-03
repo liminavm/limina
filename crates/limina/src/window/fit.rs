@@ -26,6 +26,37 @@ impl FitRect {
     }
 }
 
+/// The first-appearance window content size (no remembered state): **half the
+/// display's area, at the guest's aspect ratio**, clamped into the visible frame
+/// (minus a title-bar allowance). Half-area means the window is never too small, never
+/// screen-filling, and — because the content aspect matches the guest — never
+/// letterboxed on first show. Dynamic mode derives its first-boot guest resolution
+/// from this same rule (screen aspect), so window == guest there.
+pub(crate) fn default_window_content(
+    guest: (u32, u32),
+    screen: (f64, f64),
+    visible: (f64, f64),
+) -> (u32, u32) {
+    const TITLE_BAR: f64 = 28.0;
+    let (gw, gh) = (f64::from(guest.0.max(1)), f64::from(guest.1.max(1)));
+    let aspect = gw / gh;
+    let half_area = (screen.0 * screen.1 / 2.0).max(64.0 * 64.0);
+    let mut h = (half_area / aspect).sqrt();
+    let mut w = h * aspect;
+    // Clamp into the visible frame (aspect preserved) so the first window never spills
+    // off-screen and AppKit never has to constrain it.
+    let (vw, vh) = (visible.0, (visible.1 - TITLE_BAR).max(64.0));
+    if vw > 0.0 && w > vw {
+        h *= vw / w;
+        w = vw;
+    }
+    if h > vh {
+        w *= vh / h;
+        h = vh;
+    }
+    (w.round().max(64.0) as u32, h.round().max(64.0) as u32)
+}
+
 /// Aspect-fit a `gw`×`gh` guest resolution into a `vw`×`vh` view, centered.
 ///
 /// An exact match short-circuits to the full view so float rounding can never
@@ -180,6 +211,31 @@ mod tests {
         let fy = (1.0 - 192.0 / 768.0f64).clamp(0.0, 1.0);
         assert_eq!(x, (fx * f64::from(ABS_MAX)).round() as i32);
         assert_eq!(y, (fy * f64::from(ABS_MAX)).round() as i32);
+    }
+
+    #[test]
+    fn default_window_is_half_the_screen_area_at_guest_aspect() {
+        // 16:9 guest on a 2560×1440 screen: half of 3,686,400 pt² at 16:9.
+        let (w, h) = default_window_content((2560, 1440), (2560.0, 1440.0), (2560.0, 1415.0));
+        assert_eq!((w, h), (1810, 1018));
+        let area = f64::from(w) * f64::from(h);
+        assert!((area / (2560.0 * 1440.0) - 0.5).abs() < 0.01, "≈ half area");
+
+        // A 4:3 fixed guest keeps ITS aspect (no letterbox on first show).
+        let (w, h) = default_window_content((800, 600), (2560.0, 1440.0), (2560.0, 1415.0));
+        assert!((f64::from(w) / f64::from(h) - 4.0 / 3.0).abs() < 0.01);
+
+        // A guest much wider than the screen clamps into the visible frame.
+        let (w, h) = default_window_content((10000, 1000), (1440.0, 900.0), (1440.0, 875.0));
+        assert!(f64::from(w) <= 1440.0 && f64::from(h) <= 875.0 - 28.0);
+        assert!(
+            (f64::from(w) / f64::from(h) - 10.0).abs() < 0.1,
+            "aspect kept"
+        );
+
+        // Degenerate inputs floor at 64 and never panic.
+        let (w, h) = default_window_content((0, 0), (0.0, 0.0), (0.0, 0.0));
+        assert!(w >= 64 && h >= 64);
     }
 
     #[test]

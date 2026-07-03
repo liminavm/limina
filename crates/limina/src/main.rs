@@ -137,8 +137,9 @@ struct Cli {
     #[arg(long)]
     display_capture: Option<PathBuf>,
 
-    /// Display size as WIDTHxHEIGHT (e.g. 1280x800). Used with --display-capture, and as the
-    /// first-boot fallback for windowed dynamic mode (no remembered window state yet).
+    /// Display size as WIDTHxHEIGHT (e.g. 1280x800). Used with --display-capture; windowed
+    /// boots derive their size from --display-resolution (this is only the last-resort
+    /// fallback on a screen-less host).
     #[arg(long, default_value = "1280x800")]
     display_size: String,
 
@@ -937,13 +938,38 @@ fn run_vm(cli: Cli) -> Result<()> {
             .and_then(vmlib::state::load)
             .and_then(|s| s.window);
         let restore_frame = win_state.map(|w| w.frame);
-        let screen_points = window::screen_points_for_frame(restore_frame);
+        let screen = window::screen_info_for_frame(restore_frame);
+        // Dynamic first-boot (nothing remembered): the half-area default at the SCREEN's
+        // aspect — the same rule that sizes the first window, so window == guest with no
+        // early re-modeset. --display-size only backstops a screen-less host.
+        let fallback = screen
+            .as_ref()
+            .map(|s| {
+                window::fit::default_window_content(
+                    s.frame,
+                    (f64::from(s.frame.0), f64::from(s.frame.1)),
+                    s.visible,
+                )
+            })
+            .unwrap_or(parse_display_size(&cli.display_size)?);
         let (width, height) = initial_display_size(
             cli.display_resolution,
             win_state.map(|w| w.content),
-            screen_points,
-            parse_display_size(&cli.display_size)?,
+            screen.as_ref().map(|s| s.frame),
+            fallback,
         );
+        // First-appearance window: half the display's area at the guest's aspect, so the
+        // window is neither tiny, nor screen-filling, nor letterboxed on first show.
+        let default_content = screen
+            .as_ref()
+            .map(|s| {
+                window::fit::default_window_content(
+                    (width, height),
+                    (f64::from(s.frame.0), f64::from(s.frame.1)),
+                    s.visible,
+                )
+            })
+            .unwrap_or((width, height));
         return session::run_windowed(session::SessionConfig {
             vmm_bin,
             base_args: args,
@@ -958,6 +984,7 @@ fn run_vm(cli: Cli) -> Result<()> {
             mode: cli.display_resolution,
             state_path: cli.window_state_file.clone(),
             restore_frame,
+            default_content,
         });
     }
 
@@ -989,8 +1016,9 @@ fn parse_display_resolution_arg(s: &str) -> Result<vmlib::schema::DisplayResolut
 
 /// The guest resolution a windowed boot starts at, by display mode: host → the target
 /// screen's point size (`None` on a screen-less host → the fallback); dynamic → the
-/// remembered window content size, else the `--display-size` fallback; fixed → the
-/// configured resolution. Pure — the screen size is injected — so it tests headless.
+/// remembered window content size, else the fallback (the half-area screen-aspect
+/// default, or `--display-size` on a screen-less host); fixed → the configured
+/// resolution. Pure — the screen size is injected — so it tests headless.
 fn initial_display_size(
     mode: vmlib::schema::DisplayResolution,
     remembered: Option<(u32, u32)>,
