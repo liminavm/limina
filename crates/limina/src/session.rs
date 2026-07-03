@@ -11,6 +11,7 @@
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -37,6 +38,26 @@ pub struct SessionConfig {
     pub remap: limina_input::keymap::KeyRemap,
     /// Window title — the managed VM's name, or "Limina" for ephemeral flat-CLI VMs.
     pub title: String,
+    /// Display mode policy: host (match the window's screen), dynamic (guest follows the
+    /// window — the original behavior), or a fixed resolution. See `vmlib::schema`.
+    pub mode: crate::vmlib::schema::DisplayResolution,
+    /// Where to persist window state (the bundle's state.toml); None = no persistence.
+    pub state_path: Option<PathBuf>,
+    /// Remembered NSWindow frame to restore (screen points, Cocoa bottom-left origin).
+    pub restore_frame: Option<[f64; 4]>,
+}
+
+/// Pack/unpack a `(width, height)` for the [`AtomicU64`] the window and the reboot-relaunch
+/// monitor share: the window records every resolution it drives the guest to, so a worker
+/// relaunched across a guest reboot boots at the *current* size, not the original one. (In
+/// host/fixed mode the window no longer follows the guest, so a stale relaunch size would
+/// sit letterboxed forever instead of being rescued by `setContentSize`.)
+pub fn pack_size(width: u32, height: u32) -> u64 {
+    (u64::from(width) << 32) | u64::from(height)
+}
+
+pub fn unpack_size(packed: u64) -> (u32, u32) {
+    ((packed >> 32) as u32, packed as u32)
 }
 
 /// One windowed worker plus the supervisor-side fds wiring the window to it. Re-created on a
@@ -163,6 +184,11 @@ pub struct WindowedSession {
     resize_socket: Option<PathBuf>,
     remap: limina_input::keymap::KeyRemap,
     title: String,
+    mode: crate::vmlib::schema::DisplayResolution,
+    state_path: Option<PathBuf>,
+    restore_frame: Option<[f64; 4]>,
+    initial_size: (u32, u32),
+    desired_size: Arc<AtomicU64>,
 }
 
 impl WindowedSession {
@@ -180,7 +206,14 @@ impl WindowedSession {
             resize_socket,
             remap,
             title,
+            mode,
+            state_path,
+            restore_frame,
         } = config;
+
+        // The resolution the guest is currently driven to — written by the window on every
+        // resize push, read at each reboot relaunch so the fresh worker boots at it.
+        let desired_size = Arc::new(AtomicU64::new(pack_size(width, height)));
 
         // Capability-scope the scanout IOSurfaces: register a Mach surface-port receiver the
         // worker hands its NON-global scanouts to (so strangers can't IOSurfaceLookup the guest
@@ -219,6 +252,7 @@ impl WindowedSession {
         let monitor_conn = conn.clone();
         let monitor_control = control.clone();
         let monitor_port_name = surface_port_name.clone();
+        let monitor_desired = desired_size.clone();
         std::thread::spawn(move || {
             let mut child = child;
             let mut guard = supervisor::RebootGuard::new();
@@ -239,6 +273,9 @@ impl WindowedSession {
                         break;
                     }
                 }
+                // Boot the fresh worker at the resolution the window is CURRENTLY driving,
+                // not the original one (see `pack_size`).
+                let (width, height) = unpack_size(monitor_desired.load(Ordering::Relaxed));
                 let next = match spawn_windowed_worker(
                     &vmm_bin,
                     &base_args,
@@ -277,6 +314,11 @@ impl WindowedSession {
             resize_socket,
             remap,
             title,
+            mode,
+            state_path,
+            restore_frame,
+            initial_size: (width, height),
+            desired_size,
         })
     }
 
@@ -291,10 +333,17 @@ impl WindowedSession {
             mtm,
             self.conn,
             self.control,
-            self.resize_socket,
             self.surface_map,
-            self.remap,
-            &self.title,
+            window::WindowOptions {
+                resize_socket: self.resize_socket,
+                remap: self.remap,
+                title: self.title,
+                mode: self.mode,
+                initial_size: self.initial_size,
+                restore_frame: self.restore_frame,
+                state_path: self.state_path,
+                desired_size: self.desired_size,
+            },
         );
     }
 }

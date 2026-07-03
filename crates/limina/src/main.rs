@@ -137,9 +137,29 @@ struct Cli {
     #[arg(long)]
     display_capture: Option<PathBuf>,
 
-    /// Display mode as WIDTHxHEIGHT (e.g. 1280x800). Used only with --display-capture.
+    /// Display size as WIDTHxHEIGHT (e.g. 1280x800). Used with --display-capture, and as the
+    /// first-boot fallback for windowed dynamic mode (no remembered window state yet).
     #[arg(long, default_value = "1280x800")]
     display_size: String,
+
+    /// What resolution the guest display is driven to (windowed boots only): `host` (default)
+    /// follows the screen the window is on, letterboxing the window as needed — fullscreen
+    /// needs no modeset; `dynamic` makes the guest follow the window (drag-end resize, and
+    /// guest modesets resize the window — the original behavior); WIDTHxHEIGHT fixes it
+    /// (letterboxed, driven once at boot, never re-pushed).
+    #[arg(
+        long,
+        default_value = "host",
+        value_parser = parse_display_resolution_arg,
+        conflicts_with = "display_capture"
+    )]
+    display_resolution: vmlib::schema::DisplayResolution,
+
+    /// Persist + restore the VM window's frame (and dynamic-mode resolution) in this TOML
+    /// file. Managed starts pass the bundle's state.toml automatically; ad-hoc --window runs
+    /// opt in with an explicit path (no persistence otherwise).
+    #[arg(long, requires = "window")]
+    window_state_file: Option<PathBuf>,
 
     /// UNIX-socket path for runtime display-resize requests, forwarded to the worker. The
     /// window-resize gesture and the test harness connect here to reflow the guest resolution.
@@ -320,6 +340,9 @@ struct StartOverrides {
     /// Override the boot firmware for this run.
     #[arg(long)]
     firmware: Option<PathBuf>,
+    /// Override the display resolution mode for this run (host, dynamic, or WIDTHxHEIGHT).
+    #[arg(long, value_parser = parse_display_resolution_arg)]
+    display_resolution: Option<vmlib::schema::DisplayResolution>,
     /// Path to the limina-vmm worker binary (default: sibling of this executable).
     #[arg(long)]
     vmm_bin: Option<PathBuf>,
@@ -631,7 +654,11 @@ fn cli_from_definition(
         virtio_console_input: None,
         window,
         display_capture: None,
+        // Dynamic-mode first-boot fallback only; the real initial size is derived per
+        // display mode (and remembered state) in run_vm's windowed branch.
         display_size: "1280x800".into(),
+        display_resolution: ov.display_resolution.unwrap_or(cfg.display.resolution),
+        window_state_file: window.then(|| bundle.state_toml()),
         display_control_socket: None,
         memory,
         balloon_control_socket: None,
@@ -901,7 +928,22 @@ fn run_vm(cli: Cli) -> Result<()> {
     // Windowed mode: open a native window in the supervisor and stream the guest scanout
     // from the worker over a control socketpair (the worker publishes shared IOSurfaces).
     if cli.window {
-        let (width, height) = parse_display_size(&cli.display_size)?;
+        // Remembered window state (managed VMs: the bundle's state.toml). Loaded before the
+        // worker spawns because the initial --display-size derives from it (dynamic mode) or
+        // from the screen the remembered frame is on (host mode).
+        let win_state = cli
+            .window_state_file
+            .as_deref()
+            .and_then(vmlib::state::load)
+            .and_then(|s| s.window);
+        let restore_frame = win_state.map(|w| w.frame);
+        let screen_points = window::screen_points_for_frame(restore_frame);
+        let (width, height) = initial_display_size(
+            cli.display_resolution,
+            win_state.map(|w| w.content),
+            screen_points,
+            parse_display_size(&cli.display_size)?,
+        );
         return session::run_windowed(session::SessionConfig {
             vmm_bin,
             base_args: args,
@@ -913,6 +955,9 @@ fn run_vm(cli: Cli) -> Result<()> {
             resize_socket,
             remap: limina_input::keymap::KeyRemap { swap_cmd_opt },
             title: cli.window_title.clone().unwrap_or_else(|| "Limina".into()),
+            mode: cli.display_resolution,
+            state_path: cli.window_state_file.clone(),
+            restore_frame,
         });
     }
 
@@ -935,6 +980,29 @@ fn run_vm(cli: Cli) -> Result<()> {
     drop(gateway);
     control::cleanup();
     std::process::exit(code);
+}
+
+/// clap value parser for `--display-resolution` (host | dynamic | WIDTHxHEIGHT).
+fn parse_display_resolution_arg(s: &str) -> Result<vmlib::schema::DisplayResolution> {
+    s.parse()
+}
+
+/// The guest resolution a windowed boot starts at, by display mode: host → the target
+/// screen's point size (`None` on a screen-less host → the fallback); dynamic → the
+/// remembered window content size, else the `--display-size` fallback; fixed → the
+/// configured resolution. Pure — the screen size is injected — so it tests headless.
+fn initial_display_size(
+    mode: vmlib::schema::DisplayResolution,
+    remembered: Option<(u32, u32)>,
+    screen_points: Option<(u32, u32)>,
+    fallback: (u32, u32),
+) -> (u32, u32) {
+    use vmlib::schema::DisplayResolution::*;
+    match mode {
+        Host => screen_points.unwrap_or(fallback),
+        Dynamic => remembered.unwrap_or(fallback),
+        Fixed(w, h) => (w, h),
+    }
 }
 
 /// Parse a `WIDTHxHEIGHT` string into `(width, height)`.
@@ -1607,6 +1675,7 @@ mod tests {
             display: DisplayCfg {
                 window: false,
                 gpu: GpuMode::Software2d,
+                resolution: DisplayResolution::Fixed(1600, 1000),
             },
             input: InputCfg {
                 swap_cmd_opt: false,
@@ -1650,7 +1719,93 @@ mod tests {
         assert!(!cli.swap_cmd_opt_enabled(), "definition's swap=false wins");
         assert_eq!(cli.shutdown_grace_secs, 20, "flat default");
         assert_eq!(cli.window_title.as_deref(), Some("Fedora"));
+        assert_eq!(cli.display_resolution, DisplayResolution::Fixed(1600, 1000));
+        assert_eq!(
+            cli.window_state_file, None,
+            "a headless start carries no window state"
+        );
         assert!(cli.cmd.is_none());
+    }
+
+    /// The display mode flows definition → Cli (override wins), and a windowed managed
+    /// start carries the bundle's state.toml path so the window can remember its frame.
+    #[test]
+    fn display_resolution_flows_from_definition_and_overrides() {
+        use crate::vmlib::bundle::VmBundle;
+        use crate::vmlib::schema::*;
+
+        let bundle = VmBundle::new("/lib/vm.liminavm");
+        let mut cfg = VmConfig {
+            config_version: CONFIG_VERSION,
+            identity: Identity {
+                name: "vm".into(),
+                uuid: "u".into(),
+                created: "t".into(),
+            },
+            hardware: Hardware::default(),
+            disks: vec![],
+            cdroms: vec![],
+            networks: vec![],
+            shares: vec![],
+            boot: BootCfg::default(),
+            display: DisplayCfg::default(), // window = true, resolution = host
+            input: InputCfg::default(),
+        };
+
+        let cli = cli_from_definition(&cfg, &bundle, &StartOverrides::default()).unwrap();
+        assert_eq!(
+            cli.display_resolution,
+            DisplayResolution::Host,
+            "match-host is the default"
+        );
+        assert_eq!(
+            cli.window_state_file,
+            Some(PathBuf::from("/lib/vm.liminavm/state.toml")),
+            "windowed managed starts persist window state in the bundle"
+        );
+
+        cfg.display.resolution = DisplayResolution::Dynamic;
+        let ov = StartOverrides {
+            display_resolution: Some(DisplayResolution::Fixed(1024, 768)),
+            ..Default::default()
+        };
+        let cli = cli_from_definition(&cfg, &bundle, &ov).unwrap();
+        assert_eq!(
+            cli.display_resolution,
+            DisplayResolution::Fixed(1024, 768),
+            "the one-shot override beats the definition"
+        );
+    }
+
+    /// The boot resolution per display mode: host follows the screen (fallback on a
+    /// screen-less host), dynamic follows the remembered window (fallback on first boot),
+    /// fixed is verbatim.
+    #[test]
+    fn initial_display_size_derivation() {
+        use crate::vmlib::schema::DisplayResolution::*;
+
+        let screen = Some((1728, 1117));
+        let remembered = Some((1400, 900));
+        let fallback = (1280, 800);
+
+        assert_eq!(
+            initial_display_size(Host, remembered, screen, fallback),
+            (1728, 1117),
+            "host mode ignores the remembered content size"
+        );
+        assert_eq!(initial_display_size(Host, None, None, fallback), fallback);
+        assert_eq!(
+            initial_display_size(Dynamic, remembered, screen, fallback),
+            (1400, 900)
+        );
+        assert_eq!(
+            initial_display_size(Dynamic, None, screen, fallback),
+            fallback
+        );
+        assert_eq!(
+            initial_display_size(Fixed(1920, 1080), remembered, screen, fallback),
+            (1920, 1080)
+        );
     }
 
     #[test]

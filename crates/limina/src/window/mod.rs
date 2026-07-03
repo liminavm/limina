@@ -27,9 +27,9 @@ use objc2::runtime::NSObjectProtocol;
 use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
-    NSApplicationTerminateReply, NSBackingStoreType, NSEvent, NSEventMask, NSEventType, NSMenu,
-    NSMenuItem, NSViewLayerContentsRedrawPolicy, NSWindow, NSWindowCollectionBehavior,
-    NSWindowStyleMask,
+    NSApplicationTerminateReply, NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSEventType,
+    NSMenu, NSMenuItem, NSScreen, NSViewLayerContentsRedrawPolicy, NSWindow,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_core_foundation::CFRetained;
 use objc2_foundation::{
@@ -41,6 +41,7 @@ use objc2_quartz_core::{CALayer, CATransaction};
 mod capture_tap;
 mod cursor;
 mod diag;
+mod fit;
 mod input;
 mod lifecycle;
 mod present;
@@ -60,6 +61,100 @@ use diag::{
 };
 use lifecycle::{kill_worker_group, should_initiate_quit};
 use present::{register_apply_hook, set_layer_surface};
+
+use crate::vmlib::schema::DisplayResolution;
+use crate::vmlib::state::{VmState, WindowState};
+
+/// Everything `run` needs beyond the live worker channels: display policy, remembered
+/// window state, and the resize plumbing. Groups what used to be positional arguments.
+pub struct WindowOptions {
+    pub resize_socket: Option<PathBuf>,
+    pub remap: limina_input::keymap::KeyRemap,
+    pub title: String,
+    /// Display mode: host (drive the guest to the window's screen size, letterboxing the
+    /// window), dynamic (guest follows the window — the original behavior), or fixed.
+    pub mode: DisplayResolution,
+    /// The resolution the worker booted at (window content size in points).
+    pub initial_size: (u32, u32),
+    /// Remembered NSWindow frame to restore, if it still lands on a screen.
+    pub restore_frame: Option<[f64; 4]>,
+    /// Persist window state here (managed VMs: the bundle's state.toml); None = off.
+    pub state_path: Option<PathBuf>,
+    /// Shared with the reboot-relaunch monitor: every resolution push records itself here
+    /// so a relaunched worker boots at the current size (see `session::pack_size`).
+    pub desired_size: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// The point size of the screen a remembered window frame lands on (by its midpoint), or
+/// the main screen when there is no frame / no match. `None` off the main thread or on a
+/// screen-less host — callers fall back to a configured size. This is how match-host mode
+/// derives the initial guest resolution BEFORE any window exists.
+pub fn screen_points_for_frame(frame: Option<[f64; 4]>) -> Option<(u32, u32)> {
+    let mtm = MainThreadMarker::new()?;
+    let by_midpoint = frame.and_then(|f| {
+        let (mx, my) = (f[0] + f[2] / 2.0, f[1] + f[3] / 2.0);
+        NSScreen::screens(mtm).into_iter().find(|s| {
+            let sf = s.frame();
+            mx >= sf.origin.x
+                && mx < sf.origin.x + sf.size.width
+                && my >= sf.origin.y
+                && my < sf.origin.y + sf.size.height
+        })
+    });
+    let screen = by_midpoint.or_else(|| NSScreen::mainScreen(mtm))?;
+    let sz = screen.frame().size;
+    Some((sz.width.round() as u32, sz.height.round() as u32))
+}
+
+/// Does this window frame (screen points) intersect any current screen? Guards restoring
+/// a frame remembered on a since-unplugged display (which would open the window off-screen).
+fn frame_on_some_screen(frame: NSRect, mtm: MainThreadMarker) -> bool {
+    NSScreen::screens(mtm).into_iter().any(|s| {
+        let sf = s.frame();
+        frame.origin.x < sf.origin.x + sf.size.width
+            && frame.origin.x + frame.size.width > sf.origin.x
+            && frame.origin.y < sf.origin.y + sf.size.height
+            && frame.origin.y + frame.size.height > sf.origin.y
+    })
+}
+
+/// Apply a fit rect as the scanout layer's frame, with implicit animation off (same
+/// reason as `set_layer_surface`: CA's default action would tween the letterbox).
+fn set_layer_frame(layer: &CALayer, r: fit::FitRect) {
+    CATransaction::begin();
+    CATransaction::setDisableActions(true);
+    layer.setFrame(NSRect::new(NSPoint::new(r.x, r.y), NSSize::new(r.w, r.h)));
+    CATransaction::commit();
+}
+
+/// Snapshot the window's frame + content size for state.toml. `None` while fullscreen
+/// (the *windowed* frame is what we remember) or before the window has a real size.
+fn window_state_snapshot(window: &NSWindow) -> Option<WindowState> {
+    if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
+        return None;
+    }
+    let f = window.frame();
+    let c = window.contentView()?.frame().size;
+    let (cw, ch) = (c.width.round() as u32, c.height.round() as u32);
+    if cw < 64 || ch < 64 {
+        return None;
+    }
+    Some(WindowState {
+        frame: [f.origin.x, f.origin.y, f.size.width, f.size.height],
+        content: (cw, ch),
+    })
+}
+
+/// Best-effort synchronous state save for the exit paths (the periodic saver is async,
+/// so a close right after a move could otherwise lose the final position).
+fn save_state_final(path: Option<&Path>, window: &NSWindow) {
+    let (Some(path), Some(snap)) = (path, window_state_snapshot(window)) else {
+        return;
+    };
+    if let Err(e) = crate::vmlib::state::save(path, &VmState { window: Some(snap) }) {
+        log::warn!("window state save failed: {e}");
+    }
+}
 
 /// Push a window-resize to the worker over its display-control socket (off the AppKit main
 /// thread — a brief connect/write must never beachball the UI). Best-effort: a failure just
@@ -159,22 +254,38 @@ fn install_main_menu(mtm: MainThreadMarker, app: &NSApplication) {
 /// window contents, and — when the worker exits, the window is closed, or Ctrl-C is hit —
 /// kills the worker's process group (`worker_pid`) and exits the process. (We exit from
 /// the timer rather than `NSApplication::stop`, which doesn't return without a UI event.)
-#[allow(clippy::too_many_arguments)]
 pub fn run(
     shared: Arc<Mutex<Shared>>,
     mtm: MainThreadMarker,
     conn: Arc<WorkerConn>,
     control: Option<crate::control::ControlPlane>,
-    resize_socket: Option<PathBuf>,
     surface_map: SurfaceMap,
-    remap: limina_input::keymap::KeyRemap,
-    title: &str,
+    opts: WindowOptions,
 ) -> ! {
+    let WindowOptions {
+        resize_socket,
+        remap,
+        title,
+        mode,
+        initial_size,
+        restore_frame,
+        state_path,
+        desired_size,
+    } = opts;
+
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     install_main_menu(mtm, &app);
 
-    let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1024.0, 768.0));
+    // Open at the resolution the worker booted with, so the first presented frame is 1:1
+    // from tick zero (no 1024×768 placeholder jump).
+    let rect = NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(
+            f64::from(initial_size.0.max(64)),
+            f64::from(initial_size.1.max(64)),
+        ),
+    );
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
@@ -188,7 +299,7 @@ pub fn run(
             false,
         )
     };
-    window.setTitle(&NSString::from_str(title));
+    window.setTitle(&NSString::from_str(&title));
     // Allow native (Spaces) full screen: the green title-bar button becomes Enter Full Screen
     // and `toggleFullScreen:` (our Cmd-Ctrl-F host shortcut, below) works. Going fullscreen
     // resizes the window, which the existing resize path reflows into the guest resolution.
@@ -216,7 +327,23 @@ pub fn run(
     // dropped) until a large enough frame change reallocates the backing. `Never` tells AppKit to
     // keep its hands off so our present is the sole authority on what the layer shows.
     view.setLayerContentsRedrawPolicy(NSViewLayerContentsRedrawPolicy::Never);
-    window.center();
+    // The letterbox bars ARE the window background: in host/fixed modes the scanout layer
+    // aspect-fits inside the content view and the uncovered margin shows the window
+    // background — black so the bars read as bars. (In dynamic mode the layer fills the
+    // window, so this is invisible.)
+    window.setBackgroundColor(Some(&NSColor::blackColor()));
+    // The runtime resize path never asks the guest for less than 64 pt; don't let the
+    // window shrink below what the guest can be driven to.
+    window.setContentMinSize(NSSize::new(64.0, 64.0));
+    // Restore the remembered frame when it still lands on a live screen (a frame from a
+    // since-unplugged display would open the window off-screen); otherwise center.
+    let restored = restore_frame
+        .map(|f| NSRect::new(NSPoint::new(f[0], f[1]), NSSize::new(f[2], f[3])))
+        .filter(|r| frame_on_some_screen(*r, mtm));
+    match restored {
+        Some(r) => window.setFrame_display(r, false),
+        None => window.center(),
+    }
     // Required for hover (non-dragging) motion to be delivered as MouseMoved events.
     window.setAcceptsMouseMovedEvents(true);
     window.makeKeyAndOrderFront(None);
@@ -231,17 +358,29 @@ pub fn run(
     // diag::capture_ids_from_env for the format and why).
     let capture_ids: Vec<u32> = capture_ids_from_env();
     let applies = Cell::new(0u64);
-    // Runtime window-resize → guest. The 60 Hz timer debounces the window's content size and,
-    // once a drag settles, pushes the new size to the worker over `resize_socket` (which forwards
-    // it to the live virtio-gpu → the guest re-modesets). `geom` (the guest's current resolution)
-    // is the feedback guard: a window that already matches it — including the guest-driven
-    // setContentSize echo — sends nothing. See docs/design/runtime-display-resize.md.
+    // Dynamic mode's runtime window-resize → guest. The 60 Hz timer debounces the window's
+    // content size and, once a drag settles, pushes the new size to the worker over
+    // `resize_socket` (which forwards it to the live virtio-gpu → the guest re-modesets).
+    // `geom` (the guest's current resolution) is the feedback guard: a window that already
+    // matches it — including the guest-driven setContentSize echo — sends nothing. See
+    // docs/design/runtime-display-resize.md.
     let resize_sent: Cell<(u32, u32)> = Cell::new((0, 0));
-    // The layer frame currently applied (window content size in points). Tracked every tick so the
-    // scanout layer keeps filling the window DURING a live resize — the guest hasn't re-modeset
-    // yet, so CA scales the current surface to the new frame (smooth stretch) instead of leaving
-    // the grown window painting black around a stale layer.
-    let layer_geom: Cell<(u32, u32)> = Cell::new((0, 0));
+    // Host mode's screen tracker: the screen size the guest was last driven to. Seeded with
+    // the boot size (derived from the same screen), so startup pushes nothing; a poll that
+    // sees a different screen size (window moved to another display, display reconfigured)
+    // pushes exactly once.
+    let screen_sent: Cell<(u32, u32)> = Cell::new(initial_size);
+    // The scanout layer's current placement inside the content view, recomputed every tick
+    // (dynamic: the full view — CA stretches the stale surface during a live drag exactly as
+    // before; host/fixed: the guest resolution aspect-fit onto the black background). Shared
+    // with the input path so the pointer transform can never disagree with the pixels.
+    let fit_cell: std::rc::Rc<Cell<fit::FitRect>> = std::rc::Rc::new(Cell::new(
+        fit::FitRect::full(f64::from(initial_size.0), f64::from(initial_size.1)),
+    ));
+    // Window-state persistence (state.toml): the settle-debounced candidate + what's on disk.
+    let pending_state: Cell<Option<WindowState>> = Cell::new(None);
+    let stable_ticks: Cell<u32> = Cell::new(0);
+    let saved_state: Cell<Option<WindowState>> = Cell::new(None);
     // Diagnostic (LIMINA_PRESENT_COPY=1): never hand the GUEST's scanout surface to Core
     // Animation — copy it into a private 3-deep ring and show the copy. The zero-copy venus
     // path shares mutter's own double-buffered swapchain with the window server; with no
@@ -329,50 +468,91 @@ pub fn run(
         let layer = layer.clone();
         let ack_tx = ack_tx.clone();
         let surface_map = surface_map.clone();
+        let fit_cell = fit_cell.clone();
+        let desired_size = desired_size.clone();
         move || {
-            // Keep the scanout layer filling the window every tick — INCLUDING mid live-resize
-            // (the timer now fires in common modes, so this runs during the drag). The window
-            // grows/shrinks before the guest re-modesets; without this the layer keeps its old
-            // frame and the surrounding window paints black. CA scales the current surface to the
-            // new frame, so the desktop stretches smoothly during the drag and snaps crisp once
-            // the guest re-modesets to the settled size.
+            // Track the scanout layer to the window every tick — INCLUDING mid live-resize
+            // (the timer fires in common modes, so this runs during the drag). Dynamic mode
+            // fills the window (a layer-HOSTING view doesn't auto-size its layer; CA scales
+            // the current surface to the new frame, so the desktop stretches smoothly during
+            // a drag and snaps crisp once the guest re-modesets). Host/fixed aspect-fit the
+            // guest resolution into the view — the letterbox — on the black window
+            // background; the guest never re-modesets for a window resize in those modes.
             if let Some(v) = window.contentView() {
                 let sz = v.frame().size;
-                let wh = (sz.width.round() as u32, sz.height.round() as u32);
-                if wh != layer_geom.get() && wh.0 > 0 && wh.1 > 0 {
-                    layer_geom.set(wh);
-                    CATransaction::begin();
-                    CATransaction::setDisableActions(true);
-                    layer.setFrame(NSRect::new(NSPoint::new(0.0, 0.0), sz));
-                    CATransaction::commit();
+                if sz.width > 0.0 && sz.height > 0.0 {
+                    let g = geom.get();
+                    let target = if mode == DisplayResolution::Dynamic {
+                        fit::FitRect::full(sz.width, sz.height)
+                    } else {
+                        fit::aspect_fit(g.0, g.1, sz.width, sz.height)
+                    };
+                    if target != fit_cell.get() {
+                        fit_cell.set(target);
+                        set_layer_frame(&layer, target);
+                    }
                 }
             }
 
-            // Push the new window size to the guest ONCE the resize gesture ENDS — never during
-            // the drag. `inLiveResize()` is true for the whole drag; firing while it's true would
-            // re-modeset the guest dozens of times mid-gesture (surface churn + cache clears →
-            // the window blanks). So we wait for the drag to finish, then send the settled size.
-            // The layer-tracking above keeps the desktop filling the window (scaled) during the
-            // drag. Only active once the guest has presented a frame (so `geom` is a real
-            // baseline, not 0×0), and skipped when the window already matches the guest (the
-            // feedback guard against the guest-driven setContentSize echo).
+            // Resolution pushes to the guest, by display mode.
             if let Some(sock) = &resize_socket {
-                let base = geom.get();
-                let view = window.contentView();
-                let in_live = view.as_ref().map(|v| v.inLiveResize()).unwrap_or(false);
-                let size = view
-                    .map(|v| v.frame().size)
-                    .unwrap_or(NSSize::new(0.0, 0.0));
-                let want = (size.width.round() as u32, size.height.round() as u32);
-                if base != (0, 0)
-                    && !in_live
-                    && want.0 >= 64
-                    && want.1 >= 64
-                    && want != base
-                    && want != resize_sent.get()
-                {
-                    resize_sent.set(want);
-                    send_resize(sock, want.0, want.1);
+                match mode {
+                    // Dynamic: push the window's content size ONCE the resize gesture ENDS —
+                    // never during the drag. `inLiveResize()` is true for the whole drag;
+                    // firing while it's true would re-modeset the guest dozens of times
+                    // mid-gesture (surface churn + cache clears → the window blanks). Only
+                    // active once the guest has presented a frame (so `geom` is a real
+                    // baseline, not 0×0), and skipped when the window already matches the
+                    // guest (the feedback guard against the guest-driven setContentSize echo).
+                    DisplayResolution::Dynamic => {
+                        let base = geom.get();
+                        let view = window.contentView();
+                        let in_live = view.as_ref().map(|v| v.inLiveResize()).unwrap_or(false);
+                        let size = view
+                            .map(|v| v.frame().size)
+                            .unwrap_or(NSSize::new(0.0, 0.0));
+                        let want = (size.width.round() as u32, size.height.round() as u32);
+                        if base != (0, 0)
+                            && !in_live
+                            && want.0 >= 64
+                            && want.1 >= 64
+                            && want != base
+                            && want != resize_sent.get()
+                        {
+                            resize_sent.set(want);
+                            desired_size.store(
+                                crate::session::pack_size(want.0, want.1),
+                                std::sync::atomic::Ordering::Relaxed,
+                            );
+                            send_resize(sock, want.0, want.1);
+                        }
+                    }
+                    // Host: drive the guest to the point size of the screen the window is
+                    // on; re-push only when that changes (moved to another display, display
+                    // reconfigured). Window drags never modeset the guest. Polled from the
+                    // timer — the established pattern (no NSWindowDelegate), and `screen()`
+                    // is None mid-transition, which simply skips the tick.
+                    DisplayResolution::Host => {
+                        if let Some(screen) = window.screen() {
+                            let sf = screen.frame().size;
+                            let want = (sf.width.round() as u32, sf.height.round() as u32);
+                            if geom.get() != (0, 0)
+                                && want.0 >= 64
+                                && want.1 >= 64
+                                && want != screen_sent.get()
+                            {
+                                screen_sent.set(want);
+                                desired_size.store(
+                                    crate::session::pack_size(want.0, want.1),
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                                send_resize(sock, want.0, want.1);
+                            }
+                        }
+                    }
+                    // Fixed: never pushed — the boot --display-size carries the resolution;
+                    // a divergent guest (in-guest xrandr) just letterboxes differently.
+                    DisplayResolution::Fixed(..) => {}
                 }
             }
 
@@ -388,18 +568,29 @@ pub fn run(
             let Some(id) = show_id else { return };
             if geom.get() != (width, height) {
                 geom.set((width, height));
-                window.setContentSize(NSSize::new(width as f64, height as f64));
-                // A layer-HOSTING view doesn't auto-size its layer — give it the view's bounds
-                // or it stays 0×0 and nothing shows on screen (even though contents is set).
-                let bounds = NSRect::new(
-                    NSPoint::new(0.0, 0.0),
-                    NSSize::new(width as f64, height as f64),
-                );
-                // No implicit animation on the resize either (same reason as set_layer_surface).
-                CATransaction::begin();
-                CATransaction::setDisableActions(true);
-                layer.setFrame(bounds);
-                CATransaction::commit();
+                if mode == DisplayResolution::Dynamic {
+                    // Guest-follow (dynamic only): the window tracks guest modesets, as
+                    // originally shipped.
+                    window.setContentSize(NSSize::new(width as f64, height as f64));
+                    let full = fit::FitRect::full(width as f64, height as f64);
+                    fit_cell.set(full);
+                    set_layer_frame(&layer, full);
+                    // Keep the relaunch size current: a reboot then boots at whatever
+                    // resolution the guest last ran (e.g. an in-guest xrandr choice).
+                    desired_size.store(
+                        crate::session::pack_size(width, height),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                } else if let Some(v) = window.contentView() {
+                    // Host/fixed: the window is host-owned — a guest modeset re-fits the
+                    // letterbox NOW (not next tick) so this frame presents at the right rect.
+                    let sz = v.frame().size;
+                    let target = fit::aspect_fit(width, height, sz.width, sz.height);
+                    if target != fit_cell.get() {
+                        fit_cell.set(target);
+                        set_layer_frame(&layer, target);
+                    }
+                }
                 // A mode change means the worker allocated fresh surfaces; ids from the old mode
                 // are gone (and could be reused for unrelated surfaces), so drop the cache.
                 cache.borrow_mut().clear();
@@ -510,16 +701,49 @@ pub fn run(
     // For the quit-check below: distinguish a real window CLOSE from a mere miniaturize/app-hide
     // (all three make the window not-visible, but only a close should power the guest off).
     let timer_app = app.clone();
+    let timer_state_path = state_path.clone();
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         let exited = shared.lock().unwrap().worker_exited;
 
         // Worker gone (guest powered off, orderly or not): net any process-group
         // stragglers and exit. (`conn.pid()` is the *current* worker — relaunch keeps it fresh.)
         if exited {
+            save_state_final(timer_state_path.as_deref(), &window);
             kill_worker_group(timer_conn.pid());
             crate::gateway::cleanup();
             crate::control::cleanup();
             std::process::exit(0);
+        }
+
+        // Remember the window placement: once the frame settles (~half a second stable,
+        // not mid live-resize — the snapshot itself skips fullscreen), persist it on a
+        // throwaway thread (the send_resize pattern; the write is atomic, so a torn run
+        // at worst loses the last save). state.toml is disposable — best-effort throughout.
+        if let Some(path) = &timer_state_path {
+            let in_live = window
+                .contentView()
+                .map(|v| v.inLiveResize())
+                .unwrap_or(false);
+            if !in_live {
+                if let Some(snap) = window_state_snapshot(&window) {
+                    if pending_state.get() != Some(snap) {
+                        pending_state.set(Some(snap));
+                        stable_ticks.set(0);
+                    } else if stable_ticks.get() < 30 {
+                        stable_ticks.set(stable_ticks.get() + 1);
+                        if stable_ticks.get() == 30 && saved_state.get() != Some(snap) {
+                            saved_state.set(Some(snap));
+                            let path = path.clone();
+                            std::thread::spawn(move || {
+                                let state = VmState { window: Some(snap) };
+                                if let Err(e) = crate::vmlib::state::save(&path, &state) {
+                                    log::warn!("window state save failed: {e}");
+                                }
+                            });
+                        }
+                    }
+                }
+            }
         }
 
         // The user closed the window or hit Ctrl-C: prefer an orderly guest power-off via
@@ -554,6 +778,7 @@ pub fn run(
                     Some(d) => std::time::Instant::now() >= d,
                 };
             if force_now {
+                save_state_final(timer_state_path.as_deref(), &window);
                 kill_worker_group(timer_conn.pid());
                 crate::gateway::cleanup();
                 crate::control::cleanup();
@@ -608,7 +833,8 @@ pub fn run(
 
     // Capture keyboard + mouse via a local event monitor and forward them to the worker as
     // evdev events. Swallowed key events return null; pass-through events return themselves.
-    let input_state = input::InputState::new(conn.clone(), host_cursor.clone(), remap, captured);
+    let input_state =
+        input::InputState::new(conn.clone(), host_cursor.clone(), remap, captured, fit_cell);
     let monitor_view = view.clone();
     let input_block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
         // SAFETY: the monitor hands us a valid, live event for the call's duration.

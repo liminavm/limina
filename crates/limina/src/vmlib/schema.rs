@@ -195,6 +195,8 @@ pub struct BootCfg {
 pub struct DisplayCfg {
     pub window: bool,
     pub gpu: GpuMode,
+    /// What resolution the guest display is driven to. See [`DisplayResolution`].
+    pub resolution: DisplayResolution,
 }
 
 impl Default for DisplayCfg {
@@ -202,7 +204,73 @@ impl Default for DisplayCfg {
         Self {
             window: true,
             gpu: GpuMode::Auto,
+            resolution: DisplayResolution::default(),
         }
+    }
+}
+
+/// The `[display] resolution` key — one key, three shapes, no invalid combos:
+///
+/// - `"host"` (default): the guest is driven to the point size of the screen the
+///   window is on; the window letterboxes as needed. Fullscreen needs no modeset.
+/// - `"dynamic"`: the guest follows the window (drag-end resize push), and guest
+///   modesets resize the window — the original shipped behavior.
+/// - `"WIDTHxHEIGHT"`: fixed; the guest is driven there once at boot, never again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum DisplayResolution {
+    #[default]
+    Host,
+    Dynamic,
+    Fixed(u32, u32),
+}
+
+impl std::fmt::Display for DisplayResolution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Host => f.write_str("host"),
+            Self::Dynamic => f.write_str("dynamic"),
+            Self::Fixed(w, h) => write!(f, "{w}x{h}"),
+        }
+    }
+}
+
+impl std::str::FromStr for DisplayResolution {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let s = s.trim();
+        match s {
+            "host" => return Ok(Self::Host),
+            "dynamic" => return Ok(Self::Dynamic),
+            _ => {}
+        }
+        let parsed = s.split_once(['x', 'X']).and_then(|(w, h)| {
+            Some((w.trim().parse::<u32>().ok()?, h.trim().parse::<u32>().ok()?))
+        });
+        match parsed {
+            // 64 px is the floor the runtime resize path already enforces; reject
+            // smaller fixed sizes at load instead of boot.
+            Some((w, h)) if w >= 64 && h >= 64 => Ok(Self::Fixed(w, h)),
+            _ => anyhow::bail!(
+                "display resolution must be \"host\", \"dynamic\", or WIDTHxHEIGHT \
+                 with both dimensions >= 64 (e.g. \"1920x1080\"): got {s:?}"
+            ),
+        }
+    }
+}
+
+impl TryFrom<String> for DisplayResolution {
+    type Error = anyhow::Error;
+
+    fn try_from(s: String) -> Result<Self> {
+        s.parse()
+    }
+}
+
+impl From<DisplayResolution> for String {
+    fn from(r: DisplayResolution) -> String {
+        r.to_string()
     }
 }
 
@@ -354,7 +422,52 @@ mod tests {
         assert_eq!(back.disks[0].path, PathBuf::from("disks/root.raw"));
         assert_eq!(back.networks[0].ssh_port, 0);
         assert!(back.display.window);
+        assert_eq!(back.display.resolution, DisplayResolution::Host);
         assert!(back.input.swap_cmd_opt);
+    }
+
+    #[test]
+    fn display_resolution_round_trips_and_defaults_to_host() {
+        // The key is absent → match-host (the default for new AND pre-existing VMs).
+        let d: DisplayCfg = toml::from_str("").unwrap();
+        assert_eq!(d.resolution, DisplayResolution::Host);
+
+        for (text, want) in [
+            ("resolution = \"host\"", DisplayResolution::Host),
+            ("resolution = \"dynamic\"", DisplayResolution::Dynamic),
+            (
+                "resolution = \"1920x1080\"",
+                DisplayResolution::Fixed(1920, 1080),
+            ),
+        ] {
+            let d: DisplayCfg = toml::from_str(text).unwrap();
+            assert_eq!(d.resolution, want, "{text}");
+            // Serialize → parse round-trip preserves the value.
+            let back: DisplayCfg = toml::from_str(&toml::to_string(&d).unwrap()).unwrap();
+            assert_eq!(back.resolution, want, "round-trip of {text}");
+        }
+    }
+
+    #[test]
+    fn display_resolution_rejects_garbage() {
+        for bad in ["800x", "axb", "0x0", "x600", "800", "32x32", ""] {
+            let err = bad.parse::<DisplayResolution>();
+            assert!(err.is_err(), "{bad:?} should be rejected");
+            let text = format!("resolution = {bad:?}");
+            assert!(
+                toml::from_str::<DisplayCfg>(&text).is_err(),
+                "{text} should fail to deserialize"
+            );
+        }
+        // Whitespace and a capital X are tolerated.
+        assert_eq!(
+            " 1280 x 800 ".parse::<DisplayResolution>().unwrap(),
+            DisplayResolution::Fixed(1280, 800)
+        );
+        assert_eq!(
+            "1280X800".parse::<DisplayResolution>().unwrap(),
+            DisplayResolution::Fixed(1280, 800)
+        );
     }
 
     #[test]

@@ -48,6 +48,11 @@ impl VmBundle {
         self.path.join("run")
     }
 
+    /// Mutable machine state (window placement etc.) — see `vmlib::state`.
+    pub fn state_toml(&self) -> PathBuf {
+        self.path.join("state.toml")
+    }
+
     pub fn logs_dir(&self) -> PathBuf {
         self.path.join("logs")
     }

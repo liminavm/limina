@@ -206,6 +206,11 @@ pub struct InputState {
     /// timer (an `Arc<AtomicBool>`), which composites the guest cursor at its reported position
     /// while this is set (the host cursor is hidden, so the guest cursor has to be drawn).
     captured: Arc<AtomicBool>,
+    /// Where the guest scanout currently sits inside the content view, written by the render
+    /// path every tick (dynamic mode: the full view — the legacy mapping; host/fixed: the
+    /// letterboxed fit rect). The absolute-pointer transform and the inside-gate go through
+    /// it, so the pointer can never disagree with the pixels. Same main thread → `Rc<Cell>`.
+    fit: Rc<Cell<super::fit::FitRect>>,
 }
 
 impl InputState {
@@ -214,6 +219,7 @@ impl InputState {
         host_cursor: Rc<HostCursor>,
         remap: KeyRemap,
         captured: Arc<AtomicBool>,
+        fit: Rc<Cell<super::fit::FitRect>>,
     ) -> Self {
         Self {
             conn,
@@ -223,6 +229,7 @@ impl InputState {
             host_cursor,
             remap,
             captured,
+            fit,
         }
     }
 
@@ -310,8 +317,10 @@ impl InputState {
         }
     }
 
-    /// Is the event's pointer position inside the guest view? `false` for events with no
-    /// associated window (their location is in screen coordinates and can't be mapped).
+    /// Is the event's pointer position inside the guest *content* (the fit rect — in
+    /// host/fixed modes the letterbox bars are outside, like window chrome)? `false` for
+    /// events with no associated window (their location is in screen coordinates and can't
+    /// be mapped).
     fn pointer_inside(&self, event: &NSEvent, view: &NSView) -> bool {
         // SAFETY: we only run on the main thread (the local event monitor's thread).
         let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
@@ -319,8 +328,7 @@ impl InputState {
             return false;
         }
         let p = view.convertPoint_fromView(event.locationInWindow(), None);
-        let b = view.bounds();
-        p.x >= 0.0 && p.y >= 0.0 && p.x < b.size.width && p.y < b.size.height
+        super::fit::point_in_fit(p.x, p.y, self.fit.get())
     }
 
     fn emit_key(&self, macos_keycode: u16, down: bool) {
@@ -424,10 +432,21 @@ impl InputState {
     }
 
     fn emit_motion(&self, event: &NSEvent, view: &NSView) {
-        let (x, y) = abs_coords(event, view);
+        let (x, y) = self.abs_coords(event, view);
         self.send_ptr(InputEvent::new(EV_ABS, ABS_X, x));
         self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, y));
         self.send_ptr(InputEvent::syn());
+    }
+
+    /// Map the event's window-local cursor position to the absolute device range through
+    /// the current fit rect (letterbox offset + scale, Y flipped — AppKit is bottom-left
+    /// origin, evdev top-left). Positions outside the content (drags that left it) clamp
+    /// to the nearest content edge. With the fit at the full view (dynamic mode) this is
+    /// the legacy full-bounds mapping, bit for bit.
+    fn abs_coords(&self, event: &NSEvent, view: &NSView) -> (i32, i32) {
+        // `None` source view = the point is in window base coordinates.
+        let p = view.convertPoint_fromView(event.locationInWindow(), None);
+        super::fit::abs_through_fit(p.x, p.y, self.fit.get(), ABS_MAX as i32)
     }
 
     /// Capture mode: forward the event's relative delta to the guest's relative-mouse device.
@@ -501,24 +520,6 @@ fn btn_bit(btn: u16) -> u8 {
         BTN_MIDDLE => 4,
         _ => 0,
     }
-}
-
-/// Map the event's window-local cursor position to the absolute device range, flipping Y
-/// (AppKit is bottom-left origin; evdev is top-left). Out-of-view positions (drags that
-/// left the window) clamp to the nearest edge.
-fn abs_coords(event: &NSEvent, view: &NSView) -> (i32, i32) {
-    let loc = event.locationInWindow();
-    // `None` source view = the point is in window base coordinates.
-    let p = view.convertPoint_fromView(loc, None);
-    let bounds = view.bounds();
-    let w = bounds.size.width.max(1.0);
-    let h = bounds.size.height.max(1.0);
-    let fx = (p.x / w).clamp(0.0, 1.0);
-    let fy = (1.0 - p.y / h).clamp(0.0, 1.0);
-    (
-        (fx * ABS_MAX as f64).round() as i32,
-        (fy * ABS_MAX as f64).round() as i32,
-    )
 }
 
 pub(crate) fn send_event(fd: RawFd, ev: InputEvent) {

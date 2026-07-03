@@ -40,6 +40,9 @@ plus everything owned by that VM:
 ```
 Fedora.liminavm/
 ├─ vm.toml              # the definition (schema below)
+├─ state.toml           # mutable machine state (window frame/size) — machine-written,
+│                       #   safe to delete; kept OUT of vm.toml so a window drag never
+│                       #   rewrites user config (see docs/design/display-modes.md)
 ├─ disks/               # default home for this VM's images (definition may reference
 │                       #   absolute paths elsewhere — e.g. a shared base image)
 │  └─ root.raw
@@ -102,7 +105,9 @@ ro   = false
 [display]
 window     = true
 gpu        = "auto"             # auto (coexist venus+sw2d) | software-2d
-resolution = "window"           # window-follow (shipped resize) | WxH fixed
+resolution = "host"             # host (match the window's screen; the DEFAULT) |
+                                # dynamic (guest follows the window) | WxH fixed
+                                # — see docs/design/display-modes.md
 
 [input]
 swap_cmd_opt = true             # the shipped default; false = --no-swap-cmd-opt

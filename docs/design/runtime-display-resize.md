@@ -3,6 +3,12 @@
 **Goal:** dragging the limina window edge reflows the guest desktop to the new resolution, no
 reboot. Resizing the NSWindow updates the guest's preferred mode and the guest re-modesets.
 
+> **2026-07-03:** the drag-follows-window behavior described here is now the **`dynamic`**
+> display mode — no longer the default. The default is **match-host** (guest driven to the
+> screen size, window letterboxes, guest modesets never move the window), with `fixed WxH`
+> as the third option; window frame/size is remembered per VM. Policy layer on top of this
+> mechanism: `docs/design/display-modes.md`.
+
 ## STATUS: SHIPPED ✅ (2026-06-23) — as-built notes
 
 All four layers landed and the L1 sysfs test is GREEN (host resize → guest connector modes update,
