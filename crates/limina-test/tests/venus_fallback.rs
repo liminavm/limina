@@ -11,8 +11,10 @@
 //! VK_ERROR_OUT_OF_HOST_MEMORY, and the Vulkan loader treats OOM as fatal for the
 //! whole instance chain — masking a perfectly healthy lavapipe (observed live
 //! 2026-07-03; the loader only *skips* an ICD for INCOMPATIBLE_DRIVER, cf. dzn).
-//! The upstream fix is for venus to return a skippable error; until Fedora ships
-//! that, the DEFAULT loader path on stock may legitimately have no usable device.
+//! The fix is authored — patches/mesa/0012 makes venus degrade to its stub
+//! instance (ships in our enhanced mesa; upstreaming it is the long-term plan,
+//! see docs/hardening-backlog.md) — but until Fedora ships it, the DEFAULT
+//! loader path on stock may legitimately have no usable device.
 //!
 //! What this test therefore asserts (the truthful, guarding contract):
 //! 1. FLOOR — lavapipe, selected explicitly, fully works: instance + device +

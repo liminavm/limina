@@ -78,6 +78,21 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   mesa); **truly-stock guests are fixed only when 0012 lands upstream** (Wave-1 upstream candidate) and
   trickles into Fedora — until then the stock-tier Vulkan floor still fails on coexist boots (residual,
   accepted). Headless boots (no GPU device) were never affected — venus declines cleanly there.
+  - **2026-07-03 update — decision: address long-term by UPSTREAMING 0012; no host-side mitigation.**
+    The mapping failure itself is now two-thirds fixed: the SIZE half host-side (libkrun 0043 +
+    virglrenderer 0023), the OFFSET half guest-side via the `limina-virtio-gpu` DKMS module
+    (`guest/virtio-gpu-dkms/`; memory `limina-blob-map-16k-alignment`) — with the module installed
+    **venus fully works on a stock 4 KiB guest**. A truly-stock guest (no module, Fedora mesa) still
+    loses ALL Vulkan on coexist boots: post-0043 the ring's odd-size (0x21000) blob maps fine, but its
+    node misaligns the NEXT window allocation's offset → same fatal OOM out of `vkCreateInstance`.
+    Host-side mitigations were considered and rejected: an adaptive "venus quarantine" (drop the venus
+    capset on the boot after seeing the alignment-failure signature) still leaves first-boot Vulkan
+    dead and needs a re-enable policy; 16 KiB-rounding the vkr-reported memoryRequirements only helps
+    well-behaved apps — any legal odd-size `vkAllocateMemory` re-poisons later offsets, turning
+    "cleanly absent" into "randomly OOMs mid-run". Guest-side stopgap if anyone asks:
+    `VK_LOADER_DRIVERS_DISABLE='*virtio*'`. Meanwhile `tests/venus_fallback.rs` (in test-boot.sh since
+    2026-07-03) pins the truthful contract — explicit-lavapipe floor works, default path fails
+    structuredly, session survives — and auto-tightens the day the default path starts succeeding.
 - **GNOME notification shows a green corruption artifact** (open, low priority — reported 2026-06-29
   while dogfooding the F44 enhanced tier) — a notification ("Disk Usage Analyzer / Low Disk Space on
   'boot'") renders a small **green glitch** (a few stray bright-green pixels) just below the bold

@@ -38,8 +38,12 @@ for the whole instance chain**, masking a perfectly healthy lavapipe (it only
 is entirely dead by default, not "degraded to lavapipe". Isolation proof:
 `VK_DRIVER_FILES=lvp_icd → works; virtio_icd alone → OOM`.
 
-Upstream fix to pursue: Mesa `vn` should return a skippable VkResult when its
-transport/ring setup fails. Until Fedora ships that, `tests/venus_fallback.rs`
+The fix already exists: `patches/mesa/0012` (authored + validated 2026-07-01,
+ships in our enhanced-tier mesa RPM) makes vn degrade to its stub instance when
+ring setup fails. **Decision 2026-07-03: upstreaming 0012 is the long-term fix
+for truly-stock guests** (Wave 1 in docs/reviews/2026-07-01-full-review.md); no
+host-side mitigation (quarantine / requirements-rounding rejected — see
+docs/hardening-backlog.md). Until it trickles into Fedora, `tests/venus_fallback.rs`
 asserts the truthful contract (lavapipe-explicit floor works, default path fails
 structuredly, session survives) and auto-tightens once the default path starts
 succeeding.
@@ -56,7 +60,7 @@ succeeding.
 
 - Wire the DKMS tarball into the guest-tools payload (delivery flow, user's call
   on placement) + docs/images.md component versions.
-- Upstream: the Mesa vn skippable-error fix; the virtgpu alignment patch to
-  dri-devel (64 KiB or negotiated granule for the general case).
+- Upstream: `patches/mesa/0012` (the vn skippable-error fix — Wave 1); the virtgpu
+  alignment patch to dri-devel (64 KiB or negotiated granule for the general case).
 - 4 KiB enhanced kernel variant (FEX story) can carry 0004 in-tree; the 16 KiB
   kernel needs nothing (PAGE_ALIGN already 16 KiB).

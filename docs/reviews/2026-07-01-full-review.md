@@ -508,7 +508,9 @@ mutter → GNOME GitLab · linux → dri-devel · imago → hreitz (gitlab.com/h
 - libkrun: 0004, 0040, 0039, 0031, 0014+0024, 0037, 0009/0011, 0005, 0006.
 - virglrenderer: 0024 (with 0006 dropped, not stacked), 0025, 0026, split-out
   shm_open hunk of 0001 + kqueue-eventfd half of 0002.
-- mesa guest: 0002, 0003, 0004, 0006, 0011; track MR !37115 to drop 0001.
+- mesa guest: 0002, 0003, 0004, 0006, 0011, **0012 (venus: degrade to the stub instance when
+  ring setup fails — restores the stock lavapipe floor; decision 2026-07-03: upstreaming is THE
+  long-term fix for stock-tier Vulkan, see hardening-backlog)**; track MR !37115 to drop 0001.
 - **KosmicKrisp 0003–0006 as individual MRs — strategically most urgent** (fastest
   base, active reviewers; every landed patch is one fewer conflict per Mesa bump).
 - mutter 0001/0002 (author commit messages).
