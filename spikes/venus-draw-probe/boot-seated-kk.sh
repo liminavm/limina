@@ -2,6 +2,15 @@
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 # Copyright © 2026 Gustavo Noronha Silva
 
+# ┌─ FRINGE BOOT MODE — NOT the default. ──────────────────────────────────────────────────────┐
+# │ This --kernel-INJECTS an external Image-16k with selinux=0, bypassing the guest's GRUB and   │
+# │ SELinux. It is the deterministic test-kernel vehicle (the L2 venus tests wire it in) and a   │
+# │ low-level kernel/early-boot debug tool — NOT how an image really runs.                       │
+# │ To boot/validate an image normally, use EFI+venus instead:                                   │
+# │   LIMINA_DISK=<enhanced.raw> spikes/venus-draw-probe/boot-enhanced-efi-kk.sh                 │
+# │ (boots the guest's OWN installed kernel via GOP firmware→GRUB, enforcing, KK venus). Only    │
+# │ reach for this script when you specifically need the injected test kernel. See CLAUDE.md.    │
+# └─────────────────────────────────────────────────────────────────────────────────────────────┘
 # Boot the dev-enh guest to the SEATED desktop with KOSMICKRISP (mesa Vulkan-on-Metal,
 # /Volumes/mesa-cs/build-kk) as the host Vulkan driver instead of MoltenVK — the A/B vehicle
 # for evaluating KK as a MoltenVK alternative under virglrenderer/venus.

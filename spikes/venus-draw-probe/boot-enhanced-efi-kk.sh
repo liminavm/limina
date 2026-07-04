@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 # Copyright © 2026 Gustavo Noronha Silva
 
+# ★ THE DEFAULT way to boot/validate an image to the venus desktop. Reach for this FIRST. ★
 # Boot an ENHANCED-tier image to the seated venus desktop via its OWN installed 16k kernel (EFI/GOP
-# firmware -> GRUB -> installed kernel), with KosmicKrisp as the host Vulkan backend. Unlike
-# boot-seated-kk.sh (which --kernel-boots an external Image-16k with selinux=0 for the dev image),
-# this boots the real installed enhanced image ENFORCING — so it never stamps /.autorelabel
-# (see memory limina-selinux-autorelabel) and tests the image as it would actually run.
+# firmware -> GRUB -> installed kernel), with KosmicKrisp as the host Vulkan backend. It boots the
+# real installed image ENFORCING — never stamps /.autorelabel (see memory limina-selinux-autorelabel)
+# — and tests the image exactly as it would actually run. venus + EFI boot have worked for a long
+# time; do NOT reach for the --kernel-inject scripts (boot-seated-kk.sh / run-venus-window.sh) or
+# --gpu-software-2d for normal boots — those are fringe modes (see CLAUDE.md).
 #
 # Use for: validating an enhanced.raw built by scripts/provision/f44/* + install-enhanced.sh.
 #   LIMINA_DISK=Fedora-Workstation-44.enhanced.raw spikes/venus-draw-probe/boot-enhanced-efi-kk.sh

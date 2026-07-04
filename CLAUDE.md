@@ -249,17 +249,30 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   touching `hv_vm_*` must be codesigned with `com.apple.security.hypervisor` (see
   `spikes/balloon-madvise/hv.entitlements`).
 - The big disk images (`*.raw`, `*.raw.xz`) and `third_party/` are gitignored.
-- **Boot a WINDOWED dev VM with `spikes/venus-draw-probe/boot-seated-kk.sh` — coexist venus WORKS;
-  don't reach for `--gpu-software-2d` to "avoid" it.** The coexist GPU (venus 3D + software-2D)
-  needs the host KK/zink env (VK_ICD_FILENAMES → KosmicKrisp, the zink-on-KK DYLD/Mesa selectors);
-  the script sets all of it and boots `--window` to the seated GNOME desktop on the 16 KiB kernel.
-  A *bare* `target/debug/limina --window` with NONE of that env **aborts on GPU init**
-  (`Couldn't open libEGL.dylib` → SIGABRT) — that's the missing env, **not** a coexist problem, and
-  **not** a reason to fall back to software-2D. `LIMINA_DISK=<writable clone>` reuses a disk (the
-  script's hard-coded `dev-enh.raw` is retired — clone `Fedora-Workstation-43.enhanced.raw`);
-  `LIMINA_EXTRA_ARGS="--swap-cmd-opt …"` passes extra limina flags through. `--gpu-software-2d` is
-  ONLY for when software-2D is the explicit subject (the capture oracle / a GPU-less host), per the
-  coexist-default rule in `limina-tier2-venus`. Driving the window: osascript UI scripting works for
+- **DEFAULT way to boot/validate an image (windowed venus desktop): EFI + venus.**
+  `LIMINA_DISK=<enhanced.raw> spikes/venus-draw-probe/boot-enhanced-efi-kk.sh` boots the guest's
+  **own installed kernel** through our GOP firmware → GRUB → BLS entry, **enforcing** (never stamps
+  `/.autorelabel`), coexist venus (3D + software-2D) on KosmicKrisp, `--window --net`. This tests the
+  image exactly as it really runs. venus and EFI boot have worked for a long time — **reach for this
+  first.** `LIMINA_EXTRA_ARGS="--swap-cmd-opt …"` passes extra limina flags; `LIMINA_CPUS`/
+  `LIMINA_RAM_MIB` tune the VM. The script sets all the host KK/zink env (VK_ICD_FILENAMES →
+  KosmicKrisp + the zink-on-KK DYLD/Mesa selectors); a *bare* `target/debug/limina --window` with
+  NONE of that env **aborts on GPU init** (`Couldn't open libEGL.dylib` → SIGABRT) — that's the
+  missing env, **not** a coexist problem, and **not** a reason to fall back to software-2D.
+  - **Verify venus is live in the GNOME SESSION, not over a non-login ssh shell.** `vulkaninfo` in the
+    seated desktop shows `Virtio-GPU Venus`; the same command over `ssh` enumerates **nothing** because
+    a non-login shell doesn't source `/etc/environment.d/90-limina-zink.conf` (the venus ICD selection)
+    — an empty ssh `vulkaninfo` is a false negative, not a venus failure. The other host-side tell:
+    active `Mesa:` GL errors in the worker log mean venus **is** rendering.
+  - **FRINGE — `--kernel` injection** (`spikes/venus-draw-probe/boot-seated-kk.sh`,
+    `scripts/run-venus-window.sh`): direct-boots an *external* `Image-16k` with `selinux=0`, bypassing
+    the guest's GRUB and SELinux. Use **only** when you need a deterministic test kernel (the L2 venus
+    tests wire this in) or are debugging kernel/early-boot itself — NOT for normal image validation, and
+    not "because venus needs it" (EFI+venus works). Don't reach for it by habit.
+  - **FRINGE — `--gpu-software-2d`**: ONLY when software-2D is the explicit subject (the capture oracle
+    / a GPU-less host), per the coexist-default rule in `limina-tier2-venus`. Never a workaround to
+    "avoid" venus — coexist venus works.
+  Driving the window: osascript UI scripting works for
   key+modifier combos (e.g. Cmd-Ctrl-F), but synthetic *lone-modifier* keystrokes may not reach the
   guest — the human is the oracle for those (see `limina-window-control`). **When you need the
   user to act or perceive (interact with the window, eyeball the screen, plug in hardware, run a

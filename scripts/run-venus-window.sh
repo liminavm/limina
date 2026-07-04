@@ -2,6 +2,12 @@
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 # Copyright © 2026 Gustavo Noronha Silva
 
+# ┌─ FRINGE BOOT MODE — NOT the default. ──────────────────────────────────────────────────────┐
+# │ This --kernel-direct-boots an external Image-16k with selinux=0, bypassing the guest's GRUB. │
+# │ For normal image boot/validation use EFI+venus (boots the guest's OWN installed kernel):     │
+# │   LIMINA_DISK=<enhanced.raw> spikes/venus-draw-probe/boot-enhanced-efi-kk.sh                 │
+# │ Reach for this direct-boot script only when you specifically need the injected test kernel.  │
+# └─────────────────────────────────────────────────────────────────────────────────────────────┘
 # Boot the ENHANCED tier (custom 16 KiB-page kernel direct-booting Fedora's btrfs root,
 # coexist Venus GPU + user-mode NAT) in a native limina window, so you can VISUALLY verify
 # 3D acceleration. Pair with scripts/venus-gl-test.sh (run it in another terminal once the
