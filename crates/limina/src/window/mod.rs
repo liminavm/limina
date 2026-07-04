@@ -133,6 +133,20 @@ fn frame_on_some_screen(frame: NSRect, mtm: MainThreadMarker) -> bool {
     })
 }
 
+/// Constrain interactive window resize to a fixed aspect ratio, so the content view can't
+/// be dragged to a shape the guest never fills (which would only grow the letterbox bars).
+/// Host mode locks to the display's aspect (re-applied on display migration); fixed mode to
+/// the configured WxH; dynamic stays unconstrained — there the guest follows the window, so
+/// a free resize is the point. `setContentAspectRatio` only bounds *user* resizing (and the
+/// zoom button); it never resizes the window itself, so the boot frame and any restored frame
+/// are left as-is and the letterbox still absorbs any residual mismatch until the next drag.
+/// A degenerate ratio is ignored (leaves the window free rather than wedging resize).
+fn apply_aspect_lock(window: &NSWindow, ratio: (u32, u32)) {
+    if ratio.0 > 0 && ratio.1 > 0 {
+        window.setContentAspectRatio(NSSize::new(f64::from(ratio.0), f64::from(ratio.1)));
+    }
+}
+
 /// Apply a fit rect as the scanout layer's frame, with implicit animation off (same
 /// reason as `set_layer_surface`: CA's default action would tween the letterbox).
 fn set_layer_frame(layer: &CALayer, r: fit::FitRect) {
@@ -361,6 +375,15 @@ pub fn run(
         Some(r) => window.setFrame_display(r, false),
         None => window.center(),
     }
+    // Lock interactive resize to the guest's aspect so the window can't be dragged into a
+    // shape that only grows the letterbox. Host mode uses the display's aspect (`initial_size`
+    // is the screen the window boots on; re-applied below on display migration); fixed mode
+    // the configured WxH. Dynamic stays free — the guest follows the window there.
+    match mode {
+        DisplayResolution::Host => apply_aspect_lock(&window, initial_size),
+        DisplayResolution::Fixed(w, h) => apply_aspect_lock(&window, (w, h)),
+        DisplayResolution::Dynamic => {}
+    }
     // Required for hover (non-dragging) motion to be delivered as MouseMoved events.
     window.setAcceptsMouseMovedEvents(true);
     window.makeKeyAndOrderFront(None);
@@ -561,6 +584,9 @@ pub fn run(
                                 && want != screen_sent.get()
                             {
                                 screen_sent.set(want);
+                                // Migrated to a differently-shaped display: re-lock resize to
+                                // the new screen's aspect so the constraint tracks the screen.
+                                apply_aspect_lock(&window, want);
                                 desired_size.store(
                                     crate::session::pack_size(want.0, want.1),
                                     std::sync::atomic::Ordering::Relaxed,

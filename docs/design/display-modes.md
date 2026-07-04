@@ -61,6 +61,18 @@ layer's own bounds, so it letterboxes for free.
 In dynamic mode the fit is pinned to the full view every tick, which makes the transform
 bit-identical to the legacy full-bounds mapping (unit-proven in `fit.rs`).
 
+## Window aspect lock (host/fixed)
+
+`window/mod.rs::apply_aspect_lock` sets `NSWindow.setContentAspectRatio` so **interactive**
+resize is constrained to the guest's aspect: host mode → the display's aspect (re-applied on
+display migration, alongside the screen-size push), fixed mode → the configured WxH, dynamic →
+unconstrained (the guest follows the window there, so a free resize is the point). This stops
+the user from dragging the window into a shape the guest never fills — which would only grow
+the letterbox bars. `setContentAspectRatio` bounds *user* resizing (and the zoom button) only;
+it never resizes the window itself, so the boot frame and any restored frame are left as-is and
+the letterbox still absorbs any residual mismatch until the next drag. Fullscreen ignores it
+(the screen already matches the locked aspect in host mode).
+
 ## Push triggers (why they differ per mode)
 
 - **dynamic** keeps the shipped drag-end debounce verbatim: push once the drag settles
