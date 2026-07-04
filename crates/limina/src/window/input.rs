@@ -190,6 +190,10 @@ pub struct InputState {
     conn: Arc<WorkerConn>,
     /// macOS keycodes of *held* modifiers believed to be down (toggled on each flagsChanged).
     pressed_mods: RefCell<HashSet<u16>>,
+    /// macOS keycodes of *held* non-modifier keys we forwarded as down but not yet up. Tracked
+    /// so a focus loss mid-press (Cmd-Tab) can release them — the local monitor stops delivering
+    /// events the instant focus leaves, so the key-up would be lost and the key would stick down.
+    pressed_keys: RefCell<HashSet<u16>>,
     /// Caps Lock is a *lock* key, not a held modifier: kept in sync with the host LED on every
     /// event (see [`InputState::sync_capslock`]), separate from `pressed_mods`.
     caps: RefCell<CapsLockSync>,
@@ -224,6 +228,7 @@ impl InputState {
         Self {
             conn,
             pressed_mods: RefCell::new(HashSet::new()),
+            pressed_keys: RefCell::new(HashSet::new()),
             caps: RefCell::new(CapsLockSync::new()),
             guest_buttons: Cell::new(0),
             host_cursor,
@@ -335,7 +340,40 @@ impl InputState {
         if let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap) {
             self.send_kbd(InputEvent::new(EV_KEY, code, down as i32));
             self.send_kbd(InputEvent::syn());
+            // Track the held key so a focus loss mid-press can release it (see `release_all_held`).
+            if down {
+                self.pressed_keys.borrow_mut().insert(macos_keycode);
+            } else {
+                self.pressed_keys.borrow_mut().remove(&macos_keycode);
+            }
         }
+    }
+
+    /// Release every key we've forwarded as held — the modifiers (`pressed_mods`) and the
+    /// non-modifier keys (`pressed_keys`) — and forget them. Called when the VM window loses key
+    /// focus (e.g. the user hit Cmd-Tab): the local event monitor stops delivering events the
+    /// instant focus leaves, so the matching key-ups never arrive and the keys would stick "down"
+    /// in the guest — a wedged Command then makes the guest compositor eat every later key. Cheap
+    /// and idempotent when nothing is held. State is re-learned once focus returns (modifiers from
+    /// the next `flagsChanged`, keys from the next key-down), so over-releasing here is safe.
+    pub fn release_all_held(&self) {
+        let mut mods = self.pressed_mods.borrow_mut();
+        let mut keys = self.pressed_keys.borrow_mut();
+        if mods.is_empty() && keys.is_empty() {
+            return;
+        }
+        for &macos_keycode in mods.iter().chain(keys.iter()) {
+            if let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap) {
+                self.send_kbd(InputEvent::new(EV_KEY, code, 0));
+                self.send_kbd(InputEvent::syn());
+            }
+        }
+        log::debug!(
+            "input: released {} held key(s) on focus loss",
+            mods.len() + keys.len()
+        );
+        mods.clear();
+        keys.clear();
     }
 
     /// `flagsChanged` reports which modifier key changed but not the direction. [`modifier_emit`]

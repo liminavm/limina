@@ -747,6 +747,20 @@ pub fn run(
     // (all three make the window not-visible, but only a close should power the guest off).
     let timer_app = app.clone();
     let timer_state_path = state_path.clone();
+    // The input translator is created HERE (before the timer block) so it can be shared, via an
+    // Rc, between the render timer — which flushes held keys when the window loses focus — and the
+    // local event monitor below, which drives it per event.
+    let input_state = std::rc::Rc::new(input::InputState::new(
+        conn.clone(),
+        host_cursor.clone(),
+        remap,
+        captured.clone(),
+        fit_cell.clone(),
+    ));
+    let timer_input = input_state.clone();
+    // Window key-focus state carried across ticks, so the timer can detect the key→not-key edge.
+    // Seeded with the current state (the window was just made key), so the first tick is a no-op.
+    let was_key = Cell::new(window.isKeyWindow());
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         let exited = shared.lock().unwrap().worker_exited;
 
@@ -759,6 +773,18 @@ pub fn run(
             crate::control::cleanup();
             std::process::exit(0);
         }
+
+        // Release keys held when the window loses key focus (e.g. the user hit Cmd-Tab): the local
+        // event monitor stops delivering events the instant focus leaves, so the key-up — notably
+        // the Command release — never arrives and the key would stick "down" in the guest. Polled
+        // here on the key→not-key edge rather than via an NSWindowDelegate (the window's deliberate
+        // no-delegate pattern); the timer keeps firing while the app is backgrounded, so it catches
+        // the app-switch case too.
+        let is_key = window.isKeyWindow();
+        if was_key.get() && !is_key {
+            timer_input.release_all_held();
+        }
+        was_key.set(is_key);
 
         // Remember the window placement: once the frame settles (~half a second stable,
         // not mid live-resize — the snapshot itself skips fullscreen), persist it on a
@@ -876,10 +902,10 @@ pub fn run(
     }
     let _timer = timer;
 
-    // Capture keyboard + mouse via a local event monitor and forward them to the worker as
-    // evdev events. Swallowed key events return null; pass-through events return themselves.
-    let input_state =
-        input::InputState::new(conn.clone(), host_cursor.clone(), remap, captured, fit_cell);
+    // Capture keyboard + mouse via a local event monitor and forward them to the worker as evdev
+    // events. Swallowed key events return null; pass-through events return themselves. The
+    // translator (`input_state`, an Rc) was created above so the render timer shares it (to flush
+    // held keys on focus loss); the monitor moves its handle in and drives it per event.
     let monitor_view = view.clone();
     let input_block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
         // SAFETY: the monitor hands us a valid, live event for the call's duration.
