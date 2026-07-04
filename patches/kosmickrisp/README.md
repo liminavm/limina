@@ -92,6 +92,22 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
   gates don't require geometry shaders (only the GLES path does). Next gate for 3.3 = the 3.3 ext
   set (`ARB_blend_func_extended`/`dualSrcBlend`, `ARB_timer_query`, …), not geometry shaders.
 
+- **`0007-kk-clamp-guest-controlled-transform-feedback-buffer-.patch`** — **security fix.**
+  The XFB command handlers `0001` added index the fixed 4-element `gfx->xfb.buf[]`
+  (`kk_cmd_buffer.h`) with a **guest-controlled** base and no clamp:
+  `kk_CmdBindTransformFeedbackBuffersEXT` (`idx = firstBinding + i`) and
+  `kk_Cmd{Begin,End}TransformFeedbackEXT` (`idx = firstCounterBuffer + i`). venus is
+  untrusted from KK's side; a non-conformant guest passing a value past
+  `maxTransformFeedbackBuffers` (4) makes KK write a guest-controlled buffer
+  address/size to a guest-controlled offset past the array — a host memory-corruption
+  primitive (controlled address **and** value). Clamp each loop (`idx` is monotonic, so
+  `break` once out of range). Found in the 2026-07 upstreaming triage
+  (`docs/upstreaming/00-obvious-fixes-and-security.md` §2B); reproduced RED/GREEN with
+  `spikes/venus-draw-probe/xfb-oob-probe.c` (pre-fix SIGBUS on a write 1.34 GB past the
+  array; fixed survives — see `spikes/venus-draw-probe/xfb-oob-RESULTS.md`). Upstream KK
+  has no XFB (limina-authored), so no coordinated-disclosure embargo. When `0001` is
+  split, this folds into the XFB-lowering component.
+
 ## Apply / rebuild
 The `/Volumes/mesa-cs/mesa` tree is on the `limina/kosmickrisp` branch with these committed.
 To re-create from a fresh checkout: `git checkout 178a3d73968 && git am
