@@ -73,6 +73,23 @@ it never resizes the window itself, so the boot frame and any restored frame are
 the letterbox still absorbs any residual mismatch until the next drag. Fullscreen ignores it
 (the screen already matches the locked aspect in host mode).
 
+## Firmware / GRUB run at a modest resolution (upscaled), not the full screen
+
+On the EFI path in host mode the guest boots at the screen size (e.g. 2560×1440), so **the
+firmware console and GRUB** would draw a small, fixed-size menu centered in that huge
+framebuffer, padding the rest with black — a "letterbox" *inside the guest scanout* that the
+compositor cannot upscale (it can't tell the menu from GRUB's own black pixels). Root cause:
+`OvmfPkg/VirtioGpuDxe`'s `GopInitialize` overwrites the modest `PcdVideoHorizontalResolution|1280`
+/ `…VerticalResolution|800` the `.dsc` sets with the host's native display-info size whenever
+`PcdVideoResolutionSource == 0`. The fix (`scripts/build-krun-efi.sh`) pins
+`gUefiOvmfPkgTokenSpaceGuid.PcdVideoResolutionSource|1` — the same sentinel OvmfPkg's Setup uses
+when the user picks a resolution — so the driver leaves the modest 1280×800 alone. Firmware/GRUB
+then render at 1280×800 and the host aspect-fits/**upscales** them to fill the window; the guest
+**kernel** is unaffected (virtio-gpu-drm queries display-info directly and still modesets to the
+full screen for a crisp desktop). Host-side and tier-agnostic — stock and enhanced both benefit.
+Verified by the scanout-geometry timeline (firmware/GRUB `640×480 → 1280×800`, kernel
+`→ 2560×1440`) plus a human eyeball on the enlarged menu.
+
 ## Push triggers (why they differ per mode)
 
 - **dynamic** keeps the shipped drag-end debounce verbatim: push once the drag settles

@@ -182,6 +182,36 @@ if os.environ.get('GOP_ENABLED') == '1':
         '  INF OvmfPkg/VirtioGpuDxe/VirtioGpu.inf\n')
     print('  added OvmfPkg/VirtioGpuDxe')
 
+    # (2b) Pin the firmware console + GRUB to the modest PcdVideo*Resolution the .dsc already
+    #      sets (1280x800) instead of the host display's full size. VirtioGpuDxe's GopInitialize
+    #      overwrites PcdVideoHorizontal/VerticalResolution with the native display-info size
+    #      whenever PcdVideoResolutionSource == 0 (its default). In host-matched display mode the
+    #      guest boots at the screen size (e.g. 2560x1440), so the firmware console — and GRUB,
+    #      which inherits the firmware's GOP mode (verified: no re-modeset through GRUB) — runs at
+    #      that full size and draws a tiny menu centered in a huge black framebuffer. The host
+    #      compositor can't upscale that (it can't tell the menu from GRUB's own black padding).
+    #      Marking the source platform-set (1) stops the clobber, so firmware/GRUB stay at the
+    #      modest resolution and the host aspect-fits/upscales them to fill the window. The guest
+    #      KERNEL is unaffected: virtio-gpu-drm queries display-info directly and still modesets to
+    #      the full screen for a crisp desktop (stock and enhanced alike — this is host-side, tier
+    #      agnostic). Value 1 is exactly what OvmfPkg/PlatformDxe sets when the user picks a
+    #      resolution in Setup, so the guard in VirtioGpuDxe/QemuVideoDxe (== 0) is the contract.
+    d = open(dsc).read()
+    if 'PcdVideoResolutionSource' not in d:
+        res_anchor = '  gEfiMdeModulePkgTokenSpaceGuid.PcdVideoVerticalResolution|800\n'
+        assert res_anchor in d, 'PcdVideoVerticalResolution anchor missing in ArmVirtKrun.dsc'
+        d = d.replace(
+            res_anchor,
+            res_anchor
+            + '  # limina: keep the firmware/GRUB console at the modest resolution above; the\n'
+            + '  # host upscales it to fill the window (VirtioGpuDxe would otherwise clobber it\n'
+            + '  # with the host native size -> a tiny centered GRUB menu the host cannot upscale).\n'
+            + '  gUefiOvmfPkgTokenSpaceGuid.PcdVideoResolutionSource|1\n',
+            1,
+        )
+        open(dsc, 'w').write(d)
+        print('  pinned PcdVideoResolutionSource=1 (modest firmware/GRUB console; host upscales)')
+
     # (3) Connect the virtio-mmio GPU in BDS *before* ConOut is populated. ArmVirt's
     #     PlatformBootManagerBeforeConsole only connects PCI displays before adding GOP
     #     handles to ConOut; our (non-PCI) virtio-mmio GOP is produced later (during
