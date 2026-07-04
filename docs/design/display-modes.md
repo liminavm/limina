@@ -73,6 +73,18 @@ it never resizes the window itself, so the boot frame and any restored frame are
 the letterbox still absorbs any residual mismatch until the next drag. Fullscreen ignores it
 (the screen already matches the locked aspect in host mode).
 
+**Display migration reshape (host).** `setContentAspectRatio` is a constraint on *future*
+interactive resize, not a reshape — so on its own it lets the window's actual shape drift from
+the locked aspect. When the user drags a host-mode window to a differently-shaped display,
+AppKit keeps the window at its old shape while we drive the guest to the new screen's aspect, so
+the guest stops filling the window → a letterbox appears until the user manually resizes. The
+migration branch therefore also `setContentSize`s the window to the new aspect immediately, via
+`fit::reshape_to_aspect` — which **preserves the window's on-screen area** (trades width for
+height, so it neither balloons nor collapses) and clamps into the new screen's visible frame.
+The per-tick fit recompute then re-fits the scanout with no bars. No feedback loop: host-mode
+window resizes push zero modesets, and the guest re-push is keyed off the *screen* size, not the
+window size, so the reshape can't re-trigger a push.
+
 ## Firmware / GRUB run at a modest resolution (upscaled), not the full screen
 
 On the EFI path in host mode the guest boots at the screen size (e.g. 2560×1440), so **the

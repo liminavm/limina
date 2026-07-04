@@ -587,6 +587,23 @@ pub fn run(
                                 // Migrated to a differently-shaped display: re-lock resize to
                                 // the new screen's aspect so the constraint tracks the screen.
                                 apply_aspect_lock(&window, want);
+                                // ...and reshape the window itself to that aspect NOW. The guest
+                                // is being driven to the new screen's shape (below); the window,
+                                // which AppKit left at its old shape on the drag across displays,
+                                // would otherwise letterbox until the user resized it. Preserve
+                                // the on-screen area, clamp into the new screen's visible frame;
+                                // the per-tick fit recompute re-fits the scanout next tick.
+                                if let Some(v) = window.contentView() {
+                                    let cur = v.frame().size;
+                                    let vis = screen.visibleFrame().size;
+                                    let (nw, nh) = fit::reshape_to_aspect(
+                                        (cur.width, cur.height),
+                                        want,
+                                        (vis.width, vis.height),
+                                    );
+                                    window
+                                        .setContentSize(NSSize::new(f64::from(nw), f64::from(nh)));
+                                }
                                 desired_size.store(
                                     crate::session::pack_size(want.0, want.1),
                                     std::sync::atomic::Ordering::Relaxed,

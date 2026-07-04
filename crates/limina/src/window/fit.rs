@@ -37,14 +37,35 @@ pub(crate) fn default_window_content(
     screen: (f64, f64),
     visible: (f64, f64),
 ) -> (u32, u32) {
-    const TITLE_BAR: f64 = 28.0;
     let (gw, gh) = (f64::from(guest.0.max(1)), f64::from(guest.1.max(1)));
-    let aspect = gw / gh;
     let half_area = (screen.0 * screen.1 / 2.0).max(64.0 * 64.0);
-    let mut h = (half_area / aspect).sqrt();
+    content_for_area(half_area, gw / gh, visible)
+}
+
+/// Reshape a window's content to a new aspect while **preserving its on-screen area**,
+/// then clamp into the target screen's visible frame. Used on host-mode display
+/// migration: when the window moves to a differently-shaped display, the guest is driven
+/// to the new screen's aspect, so the window (which AppKit left at its old shape) would
+/// letterbox until the user dragged it. Reshaping here trades width for height at constant
+/// area — the window neither balloons nor collapses — so the guest fills it with no bars.
+pub(crate) fn reshape_to_aspect(
+    current: (f64, f64),
+    aspect: (u32, u32),
+    visible: (f64, f64),
+) -> (u32, u32) {
+    let a = f64::from(aspect.0.max(1)) / f64::from(aspect.1.max(1));
+    let area = (current.0 * current.1).max(64.0 * 64.0);
+    content_for_area(area, a, visible)
+}
+
+/// A content size of the given `area` (pt²) at `aspect` (w/h), clamped into the visible
+/// frame with the aspect preserved so the window never spills off-screen and AppKit never
+/// has to constrain it.
+fn content_for_area(area: f64, aspect: f64, visible: (f64, f64)) -> (u32, u32) {
+    const TITLE_BAR: f64 = 28.0;
+    let aspect = if aspect > 0.0 { aspect } else { 1.0 };
+    let mut h = (area / aspect).sqrt();
     let mut w = h * aspect;
-    // Clamp into the visible frame (aspect preserved) so the first window never spills
-    // off-screen and AppKit never has to constrain it.
     let (vw, vh) = (visible.0, (visible.1 - TITLE_BAR).max(64.0));
     if vw > 0.0 && w > vw {
         h *= vw / w;
@@ -235,6 +256,28 @@ mod tests {
 
         // Degenerate inputs floor at 64 and never panic.
         let (w, h) = default_window_content((0, 0), (0.0, 0.0), (0.0, 0.0));
+        assert!(w >= 64 && h >= 64);
+    }
+
+    #[test]
+    fn reshape_preserves_area_and_takes_the_new_aspect() {
+        // A 16:9 window (1600×900) migrated to a 16:10 display: keep ~the same area, adopt 16:10.
+        let visible = (2560.0, 1415.0);
+        let (w, h) = reshape_to_aspect((1600.0, 900.0), (1920, 1200), visible);
+        assert!(
+            (f64::from(w) / f64::from(h) - 16.0 / 10.0).abs() < 0.01,
+            "adopts the new aspect"
+        );
+        let (before, after) = (1600.0 * 900.0, f64::from(w) * f64::from(h));
+        assert!((after / before - 1.0).abs() < 0.02, "area preserved");
+
+        // Migrating onto a small display clamps into its visible frame (aspect kept).
+        let (w, h) = reshape_to_aspect((3000.0, 2000.0), (1512, 982), (1512.0, 950.0));
+        assert!(f64::from(w) <= 1512.0 && f64::from(h) <= 950.0 - 28.0);
+        assert!((f64::from(w) / f64::from(h) - 1512.0 / 982.0).abs() < 0.02);
+
+        // Degenerate inputs floor at 64 and never panic.
+        let (w, h) = reshape_to_aspect((0.0, 0.0), (0, 0), (0.0, 0.0));
         assert!(w >= 64 && h >= 64);
     }
 
