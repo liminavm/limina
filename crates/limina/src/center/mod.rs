@@ -32,8 +32,8 @@ use objc2_app_kit::{
     NSWindowStyleMask,
 };
 use objc2_foundation::{
-    NSDistributedNotificationCenter, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize,
-    NSString, NSTimer,
+    NSDictionary, NSDistributedNotificationCenter, NSNumber, NSPoint, NSRect, NSRunLoop,
+    NSRunLoopCommonModes, NSSize, NSString, NSTimer, NSUserDefaults,
 };
 
 use controller::CenterController;
@@ -130,6 +130,19 @@ pub fn run() -> ! {
     let mtm = MainThreadMarker::new().expect("the control center must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+
+    // The Configure sheet's "?" hovers use tooltips; the system's ~1.5 s initial
+    // delay makes them feel dead. Register (not set: transient, this app only) a
+    // short delay so help appears essentially on hover.
+    unsafe {
+        let defaults = NSUserDefaults::standardUserDefaults();
+        let delay = NSNumber::new_i32(100);
+        let dict = NSDictionary::from_slices(
+            &[&*NSString::from_str("NSInitialToolTipDelay")],
+            &[delay.as_ref() as &objc2::runtime::AnyObject],
+        );
+        defaults.registerDefaults(&dict);
+    }
 
     // A minimal main menu so Cmd-Q / Cmd-W work in plist-less dev runs (`cargo run`).
     let menubar = NSMenu::new(mtm);

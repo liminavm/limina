@@ -54,6 +54,11 @@ objc2-foundation = { version = "0.3", features = [
     # window's Control Center… item posts; the running center observes).
     "NSNotification",
     "NSDistributedNotificationCenter",
+    # Configure sheet "?" hovers: register a short NSInitialToolTipDelay so help
+    # tooltips appear (near-)immediately on hover.
+    "NSUserDefaults",
+    "NSDictionary",
+    "NSValue",
 ] }
 objc2-app-kit = { version = "0.3", features = [
     "NSApplication",
@@ -90,6 +95,10 @@ objc2-app-kit = { version = "0.3", features = [
     # Clipboard bridge (M5): NSPasteboard polling + writes, host side of the guest
     # clipboard channel.
     "NSPasteboard",
+    # Configure sheet "?" help: clicking the button shows the explanation in a
+    # transient popover (hover shows the same text as a fast tooltip).
+    "NSPopover",
+    "NSViewController",
     "objc2-core-graphics",
     "block2",
 ] }

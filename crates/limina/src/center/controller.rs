@@ -30,14 +30,15 @@ use objc2::runtime::Sel;
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSApplication,
-    NSApplicationDelegate, NSBox, NSBoxType, NSButton, NSColor, NSFont, NSImage, NSLayoutAttribute,
-    NSLayoutConstraint, NSLayoutConstraintOrientation, NSModalResponseOK, NSOpenPanel,
-    NSPasteboard, NSPasteboardTypeString, NSPopUpButton, NSScrollView, NSStackView,
-    NSStackViewGravity, NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow,
+    NSApplicationDelegate, NSBezelStyle, NSBox, NSBoxType, NSButton, NSColor, NSFont, NSImage,
+    NSLayoutAttribute, NSLayoutConstraint, NSLayoutConstraintOrientation, NSModalResponseOK,
+    NSOpenPanel, NSPasteboard, NSPasteboardTypeString, NSPopUpButton, NSPopover, NSPopoverBehavior,
+    NSScrollView, NSStackView, NSStackViewGravity, NSTextField, NSUserInterfaceLayoutOrientation,
+    NSView, NSViewController, NSWindow,
 };
 use objc2_foundation::{
     NSArray, NSEdgeInsets, NSFileManager, NSNotification, NSObject, NSObjectProtocol, NSPoint,
-    NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer, NSURL,
+    NSRect, NSRectEdge, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer, NSURL,
 };
 
 use super::{model, model::VmRow, spawn};
@@ -76,6 +77,11 @@ pub struct CenterIvars {
     /// closing the window hides it, Dock-click/reopen or the show-center
     /// notification brings it back). Set once by `new`.
     window: RefCell<Option<Retained<NSWindow>>>,
+    /// The Configure sheet's resolution popup, present only while the (modal)
+    /// sheet runs — the Display popup's action toggles its enabled state.
+    cfg_resolution_popup: RefCell<Option<Retained<NSPopUpButton>>>,
+    /// The currently shown "?" help popover (kept alive while displayed).
+    cfg_help_popover: RefCell<Option<Retained<NSPopover>>>,
 }
 
 define_class!(
@@ -200,6 +206,46 @@ define_class!(
             }
         }
 
+        // The Configure sheet's Display popup changed: the Resolution popup only
+        // applies to Fixed Size.
+        #[unsafe(method(configureDisplayModeChanged:))]
+        fn configure_display_mode_changed(&self, sender: &NSPopUpButton) {
+            let fixed = sender.indexOfSelectedItem() == DISPLAY_FIXED_INDEX;
+            if let Some(popup) = self.ivars().cfg_resolution_popup.borrow().as_ref() {
+                popup.setEnabled(fixed);
+            }
+        }
+
+        // A Configure-sheet "?" was clicked: show its row's explanation (the
+        // button's tooltip text) in a transient popover, immediately — the button
+        // looks clickable, so clicking must not be slower than hovering.
+        #[unsafe(method(configureHelpClicked:))]
+        fn configure_help_clicked(&self, sender: &NSButton) {
+            let Some(tip) = sender.toolTip() else { return };
+            let mtm = self.mtm();
+            let label = NSTextField::wrappingLabelWithString(&tip, mtm);
+            label.setPreferredMaxLayoutWidth(280.0);
+            let size = label.fittingSize();
+            label.setFrame(rect(12.0, 12.0, size.width, size.height));
+            let container = NSView::initWithFrame(
+                NSView::alloc(mtm),
+                rect(0.0, 0.0, size.width + 24.0, size.height + 24.0),
+            );
+            container.addSubview(&label);
+            let vc = NSViewController::new(mtm);
+            vc.setView(&container);
+            let popover = NSPopover::new(mtm);
+            popover.setContentViewController(Some(&vc));
+            popover.setBehavior(NSPopoverBehavior::Transient);
+            // Keep it alive while shown (replacing the previous one closes it).
+            *self.ivars().cfg_help_popover.borrow_mut() = Some(popover.clone());
+            popover.showRelativeToRect_ofView_preferredEdge(
+                sender.bounds(),
+                sender,
+                NSRectEdge::MaxX,
+            );
+        }
+
         #[unsafe(method(deleteClicked:))]
         fn delete_clicked(&self, sender: &NSButton) {
             if let Some(row) = self.row_for(sender) {
@@ -260,6 +306,8 @@ impl CenterController {
             last_stopping: RefCell::new(HashSet::new()),
             chrome_h: std::cell::Cell::new(0.0),
             window: RefCell::new(None),
+            cfg_resolution_popup: RefCell::new(None),
+            cfg_help_popover: RefCell::new(None),
         });
         // SAFETY: NSObject's init signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
@@ -956,8 +1004,11 @@ impl CenterController {
         });
     }
 
-    /// Configure…: vCPUs / memory / SSH port in a modal alert. Only reachable for
-    /// stopped VMs (the row offers no Configure while running).
+    /// Configure…: vCPUs / memory / reclaim / SSH port / display in a modal alert.
+    /// Only reachable for stopped VMs (the row offers no Configure while running).
+    /// Every row carries a “?” hover with its explanation instead of a wall of
+    /// informative text; Display is a popup, with a resolution popup (the sizes
+    /// this Mac's display offers) that lights up for Fixed Size.
     fn run_configure_sheet(&self, row: &VmRow) {
         let mtm = self.mtm();
         let mut cfg = match row.bundle.load() {
@@ -974,44 +1025,125 @@ impl CenterController {
         let alert = NSAlert::new(mtm);
         alert.setMessageText(&NSString::from_str(&format!("Configure “{}”", row.name)));
         alert.setInformativeText(&NSString::from_str(
-            "Memory: the maximum (\"4G\", \"8GiB\"). Reclaim: how hard idle guest memory \
-             is returned to the Mac — Moderate keeps some guest disk cache unless the \
-             host is under pressure; Disabled never reclaims. SSH port 0 = pick \
-             automatically. Display: \"host\" matches the screen the window is on \
-             (letterboxing the window as needed), \"dynamic\" makes the guest follow \
-             the window, or a fixed WIDTHxHEIGHT (e.g. \"1920x1080\").",
+            "Changes apply the next time the VM starts.",
         ));
         alert.addButtonWithTitle(&NSString::from_str("Save"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
 
-        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 300.0, 152.0));
+        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 182.0));
         let cpus_field = labeled_field(
             mtm,
             &accessory,
-            124.0,
+            152.0,
             "vCPUs:",
             &cfg.hardware.cpus.to_string(),
         );
-        let mem_field = labeled_field(mtm, &accessory, 94.0, "Memory:", &mem_now);
+        self.row_help(
+            &accessory,
+            152.0,
+            &cpus_field,
+            "How many virtual CPUs the guest sees.",
+        );
+        let mem_field = labeled_field(mtm, &accessory, 122.0, "Memory:", &mem_now);
+        self.row_help(
+            &accessory,
+            122.0,
+            &mem_field,
+            "The maximum guest RAM — \"4G\", \"8GiB\", or a bare MiB count. Idle guest \
+             memory is returned to the Mac according to Reclaim.",
+        );
         let reclaim_popup = labeled_popup(
             mtm,
             &accessory,
-            64.0,
+            92.0,
             "Reclaim:",
-            RECLAIM_CHOICES,
+            &RECLAIM_CHOICES,
             reclaim_index(cfg.hardware.reclaim),
         );
-        let ssh_field = labeled_field(mtm, &accessory, 34.0, "SSH port:", &ssh_now.to_string());
-        let display_field = labeled_field(
+        self.row_help(
+            &accessory,
+            92.0,
+            &reclaim_popup,
+            "How hard idle guest memory is returned to the Mac. Moderate keeps some \
+             guest disk cache unless the Mac is under memory pressure; Light engages \
+             only when the Mac is; Aggressive always squeezes; Disabled never reclaims.",
+        );
+        let ssh_field = labeled_field(mtm, &accessory, 62.0, "SSH port:", &ssh_now.to_string());
+        self.row_help(
+            &accessory,
+            62.0,
+            &ssh_field,
+            "The host port forwarded to the guest's SSH. 0 picks a free port \
+             automatically at each start.",
+        );
+
+        let display_popup = labeled_popup(
             mtm,
             &accessory,
-            4.0,
+            32.0,
             "Display:",
-            &cfg.display.resolution.to_string(),
+            &DISPLAY_CHOICES,
+            display_index(cfg.display.resolution),
+        );
+        // SAFETY: standard target/action wiring; self outlives the modal sheet.
+        unsafe {
+            display_popup.setTarget(Some(self.as_ref()));
+            display_popup.setAction(Some(sel!(configureDisplayModeChanged:)));
+        }
+        self.row_help(
+            &accessory,
+            32.0,
+            &display_popup,
+            "Match Host drives the guest to the resolution of the screen the window is \
+             on, letterboxing the window as needed (fullscreen fits exactly). Dynamic \
+             makes the guest follow the window as you resize it. Fixed Size drives one \
+             resolution at boot and never changes it.",
+        );
+
+        // The resolution list: what this Mac's display offers (plus the currently
+        // configured size, so an existing choice never silently changes).
+        let mut resolutions = mac_display_points();
+        if let vmlib::schema::DisplayResolution::Fixed(w, h) = cfg.display.resolution {
+            if !resolutions.contains(&(w, h)) {
+                resolutions.push((w, h));
+                resolutions.sort_by_key(|&(w, h)| std::cmp::Reverse(u64::from(w) * u64::from(h)));
+            }
+        }
+        let titles: Vec<String> = resolutions
+            .iter()
+            .map(|(w, h)| format!("{w} × {h}"))
+            .collect();
+        let title_refs: Vec<&str> = titles.iter().map(String::as_str).collect();
+        let selected = match cfg.display.resolution {
+            vmlib::schema::DisplayResolution::Fixed(w, h) => {
+                resolutions.iter().position(|&r| r == (w, h)).unwrap_or(0) as isize
+            }
+            // Not fixed (yet): preselect what the guest gets today — the screen size.
+            _ => {
+                let (w, h) = main_screen_points();
+                resolutions.iter().position(|&r| r == (w, h)).unwrap_or(0) as isize
+            }
+        };
+        let resolution_popup =
+            labeled_popup(mtm, &accessory, 2.0, "Resolution:", &title_refs, selected);
+        resolution_popup.setEnabled(matches!(
+            cfg.display.resolution,
+            vmlib::schema::DisplayResolution::Fixed(..)
+        ));
+        self.row_help(
+            &accessory,
+            2.0,
+            &resolution_popup,
+            "The fixed guest resolution — the sizes this Mac offers for its display. \
+             Only used with Fixed Size.",
         );
         alert.setAccessoryView(Some(&accessory));
 
-        if alert.runModal() != NSAlertFirstButtonReturn {
+        // Published so configureDisplayModeChanged: can toggle it while the sheet runs.
+        *self.ivars().cfg_resolution_popup.borrow_mut() = Some(resolution_popup.clone());
+        let response = alert.runModal();
+        *self.ivars().cfg_resolution_popup.borrow_mut() = None;
+        if response != NSAlertFirstButtonReturn {
             return;
         }
 
@@ -1021,8 +1153,18 @@ impl CenterController {
             anyhow::ensure!(cpus > 0, "vCPUs must be at least 1");
             let memory = vmlib::schema::Memory::parse(&mem_field.stringValue().to_string())?;
             let ssh_port: u16 = ssh_field.stringValue().to_string().trim().parse()?;
-            let resolution: vmlib::schema::DisplayResolution =
-                display_field.stringValue().to_string().parse()?;
+            let resolution = match display_popup.indexOfSelectedItem() {
+                0 => vmlib::schema::DisplayResolution::Host,
+                1 => vmlib::schema::DisplayResolution::Dynamic,
+                _ => {
+                    let i = resolution_popup.indexOfSelectedItem().max(0) as usize;
+                    let (w, h) = resolutions
+                        .get(i)
+                        .copied()
+                        .ok_or_else(|| anyhow::anyhow!("no resolution selected"))?;
+                    vmlib::schema::DisplayResolution::Fixed(w, h)
+                }
+            };
             cfg.hardware.cpus = cpus;
             cfg.hardware.memory = memory;
             cfg.hardware.reclaim = reclaim_from_index(reclaim_popup.indexOfSelectedItem());
@@ -1134,13 +1276,105 @@ fn reclaim_from_index(index: isize) -> ReclaimMode {
     }
 }
 
+/// Popup titles for the display mode, in a fixed order the index helpers share.
+const DISPLAY_CHOICES: [&str; 3] = ["Match Host", "Dynamic", "Fixed Size"];
+/// The `DISPLAY_CHOICES` index of "Fixed Size" (gates the resolution popup).
+const DISPLAY_FIXED_INDEX: isize = 2;
+
+fn display_index(resolution: vmlib::schema::DisplayResolution) -> isize {
+    match resolution {
+        vmlib::schema::DisplayResolution::Host => 0,
+        vmlib::schema::DisplayResolution::Dynamic => 1,
+        vmlib::schema::DisplayResolution::Fixed(..) => DISPLAY_FIXED_INDEX,
+    }
+}
+
+/// The point resolutions this Mac's main display offers (the list System Settings
+/// shows), deduped and sorted large→small — candidates for a Fixed Size guest.
+/// Guest resolutions are point-sized just like Match Host's pushes, so the Mac's
+/// own mode list is the natural menu.
+fn mac_display_points() -> Vec<(u32, u32)> {
+    use std::ffi::c_void;
+    extern "C" {
+        fn CGMainDisplayID() -> u32;
+        fn CGDisplayCopyAllDisplayModes(display: u32, options: *const c_void) -> *mut c_void;
+        fn CFArrayGetCount(array: *const c_void) -> isize;
+        fn CFArrayGetValueAtIndex(array: *const c_void, index: isize) -> *const c_void;
+        fn CGDisplayModeGetWidth(mode: *const c_void) -> usize;
+        fn CGDisplayModeGetHeight(mode: *const c_void) -> usize;
+        fn CGDisplayModeIsUsableForDesktopGUI(mode: *const c_void) -> bool;
+        fn CFRelease(cf: *const c_void);
+    }
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    // SAFETY: CFArray of CGDisplayModeRef per CGDisplayCopyAllDisplayModes' contract;
+    // the array is ours to release, its elements are borrowed from it.
+    unsafe {
+        let modes = CGDisplayCopyAllDisplayModes(CGMainDisplayID(), std::ptr::null());
+        if !modes.is_null() {
+            for i in 0..CFArrayGetCount(modes) {
+                let mode = CFArrayGetValueAtIndex(modes, i);
+                if mode.is_null() || !CGDisplayModeIsUsableForDesktopGUI(mode) {
+                    continue;
+                }
+                let wh = (
+                    CGDisplayModeGetWidth(mode) as u32,
+                    CGDisplayModeGetHeight(mode) as u32,
+                );
+                if wh.0 >= 64 && wh.1 >= 64 && !out.contains(&wh) {
+                    out.push(wh);
+                }
+            }
+            CFRelease(modes);
+        }
+    }
+    if out.is_empty() {
+        // Headless or CG failure: still offer something sane.
+        out = vec![(1920, 1080), (1280, 800)];
+    }
+    out.sort_by_key(|&(w, h)| std::cmp::Reverse(u64::from(w) * u64::from(h)));
+    out
+}
+
+/// The main display's current point size (what Match Host would drive the guest to).
+fn main_screen_points() -> (u32, u32) {
+    extern "C" {
+        fn CGMainDisplayID() -> u32;
+        fn CGDisplayBounds(display: u32) -> NSRect;
+    }
+    // SAFETY: plain value-returning CG calls.
+    let b = unsafe { CGDisplayBounds(CGMainDisplayID()) };
+    (b.size.width as u32, b.size.height as u32)
+}
+
+impl CenterController {
+    /// A "?" at the end of the row at `y`: hovering shows the explanation as a
+    /// (fast — see the `NSInitialToolTipDelay` registration) tooltip on either the
+    /// button or the control, and clicking shows the same text immediately in a
+    /// popover (`configureHelpClicked:`).
+    fn row_help(&self, parent: &NSView, y: f64, control: &NSView, text: &str) {
+        let mtm = self.mtm();
+        let tip = NSString::from_str(text);
+        control.setToolTip(Some(&tip));
+        let b = NSButton::initWithFrame(NSButton::alloc(mtm), rect(298.0, y - 1.0, 23.0, 25.0));
+        b.setTitle(&NSString::from_str(""));
+        b.setBezelStyle(NSBezelStyle::HelpButton);
+        b.setToolTip(Some(&tip));
+        // SAFETY: standard target/action wiring; self outlives the modal sheet.
+        unsafe {
+            b.setTarget(Some(self.as_ref()));
+            b.setAction(Some(sel!(configureHelpClicked:)));
+        }
+        parent.addSubview(&b);
+    }
+}
+
 /// A `Label:` + popup pair placed at `y` inside the accessory view.
 fn labeled_popup(
     mtm: MainThreadMarker,
     parent: &NSView,
     y: f64,
     label: &str,
-    choices: [&str; 4],
+    choices: &[&str],
     selected: isize,
 ) -> Retained<NSPopUpButton> {
     let l = NSTextField::labelWithString(&NSString::from_str(label), mtm);
