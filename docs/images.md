@@ -49,8 +49,8 @@ memories before anyone noticed. Verified 2026-06-27 by reading each image's rpmd
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
 | **F44 stock** (`*.raw`, `*.boot.raw`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.19.10` *(co-installed beside stock `6.19.10-300`)* | 16 KiB | `26.1.3-1.limina.fc44` *(F44 SRPM + venus patches, same major → no soname dance)* | `50.1-1.limina.fc44` *(0001+0002; 0003 clipboard deferred)* | `50.0` *(stock)* |
-| **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools, NOT yet respun into an image; respin `enhanced.raw` at the next bake)* | `limina-kernel-16k-7.1.2` | 16 KiB | `26.1.3-3.limina.fc44` *(-2 adds 0011 unorm-WSI drop, -3 adds 0013 TLS-dtor fix)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
+| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.2` *(co-installed beside stock `6.19.10-300`; respun 2026-07-04, old `6.19.10-limina16k` pruned)* | 16 KiB | `26.1.3-3.limina.fc44` *(respun 2026-07-04 to dogfood parity)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
+| **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools; the `enhanced`/`enhanced.test` images now match it as of the 2026-07-04 respin)* | `limina-kernel-16k-7.1.2` | 16 KiB | `26.1.3-3.limina.fc44` *(-2 adds 0011 unorm-WSI drop, -3 adds 0013 TLS-dtor fix)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
 
 Notes: enhanced **mesa + kernel** are pinned to *our* version and `dnf versionlock`ed; enhanced
 **mutter** is rebuilt from the target distro's mutter SRPM carrying our patches over the stock GNOME
@@ -60,8 +60,21 @@ regression" / `kk_encoder.c:299` block did NOT reproduce on the clean stack — 
 boots the seated desktop and runs WebGL at ~60fps on venus→KK→Metal (see `limina-enh-delivery` memory).
 The enhanced 16 KiB kernel ships as RPM `limina-kernel-16k` (BLS entry beside stock).
 
-**Latest F44 enhanced guest-tools DELIVERY (2026-06-30)** — newer than the baked `enhanced`/`enhanced.test`
-images above (which still carry kernel `6.19.10` + mesa `26.1.3-1.limina`): kernel
+**Enhanced images RESPUN to dogfood parity (2026-07-04)** — `enhanced.raw` + `enhanced.test.raw` were
+brought from kernel `6.19.10-limina16k` + mesa `26.1.3-1` up to **kernel `7.1.2-limina16k` + mesa
+`26.1.3-3`** (mutter already `50.1-1`). Method: reassembled a `-3` guest-tools payload from the
+prebuilt RPMs (mesa `-2`→`-3` swap + a freshly `createrepo_c`'d `repo/` with the full subpackage set —
+the `-2` tarball predated the local-repo feature), saved as
+`target/guest-tools-7.1.2-mesa3/limina-guest-tools-f44.tar.zst`; then per image: `cp -c` clone →
+boot → prune `/boot` (remove the old `6.19.10-limina16k`; stock `6.19.10-300` kept as fallback) →
+`install-enhanced.sh` → validate (mesa `-3`, kernel `7.1.2` initramfs-verified, venus enumerates,
+on-demand `mesa-libgbm-devel` resolves) → clean poweroff → swap over the golden (originals kept as
+`*.enhanced.raw.pre-mesa3.bak` / `*.enhanced.test.raw.pre-mesa3.bak`). Not EFI-boot-tested in-image
+(the deploy runs on the injected 6.12 kernel; `7.1.2` is the identical dogfood-proven RPM and
+`install-enhanced` verified its initramfs mounts root).
+
+**Latest F44 enhanced guest-tools DELIVERY (2026-06-30)** — was newer than the then-baked images
+(now folded into the 2026-07-04 respin above): kernel
 `limina-kernel-16k-7.1.2` (built from kernel.org `stable.git@v7.1.2` + a Fedora 7.0.x config + `olddefconfig`;
 the 16k kernel is distro-independent so "latest stable" doesn't depend on Fedora packaging it), mesa
 `26.1.3-2.limina` (Release bumped from `-1` so dnf upgrades cleanly; carries venus WSI patch `0011` = drop the
@@ -105,7 +118,7 @@ delta (`scripts/provision/f44/`, `scripts/provision/make-accessible.sh`).
 | `Fedora-Workstation-44.vanilla.raw` (+ `.xz`) | **Pristine** F44 Workstation aarch64 (official `…44-1.7.aarch64.raw.xz`; Fedora-built → SELinux labels intact, EFI-boots *enforcing* with no relabel loop). Clone source only. | ✅ renamed from `…44.raw` |
 | `Fedora-Workstation-44.accessible.raw` | **Stock base**: vanilla + gnome-initial-setup (`claude`) + pubkey + autologin + NOPASSWD sudo + `vulkan-tools` + no-idle-lock gschema + console args + relabel-clear (`make-accessible.sh`). Promoted from the existing `44.boot.raw` (already had user/ssh/autologin/sudo). | ✅ built 2026-06-29 |
 | `Fedora-Workstation-44.stock.test.raw` | **Stock-tier L2 image** — frozen CoW snapshot of `accessible` (`DEFAULT` for `LIMINA_FEDORA_REL=44`; also the seated baseline-3D vehicle). | ✅ built; `efi_boots_to_userspace` GREEN 2026-06-29 |
-| `Fedora-Workstation-44.enhanced.raw` | **Enhanced base** — `accessible` + `scripts/provision/f44/` builds (16k kernel `6.19.10-limina16k`, venus mesa `26.1.3-1.limina`, patched mutter `50.1-1.limina` w/ **all 3 patches** incl 0003 clipboard, + `limina-agent`) → `install-enhanced.sh`. **✅ FINALIZED 2026-06-29**: seated GNOME, WebGL 5000-fish ~60fps on venus→KK→Metal (5-signal+pixel verified); mutter 0003 rebased to 50.1 (`ext_data_control_manager` live in `libmutter-18`); limina-agent (native gnu) active+connected; relabel-clean; build cruft removed. Kernel kept Fedora-config **with debug symbols** (no strip — ~7 GiB modules, slower boot, by choice). Now also carries the **L2 test tooling** (glmark2 + apitrace/`eglretrace` GL replay + `/opt/gfxreconstruct/bin/gfxrecon-replay` VK replay) — folded into `make-accessible.sh` going forward; the enhanced *delivery* (`install-enhanced.sh`) does **not** ship these, so a migrated daily-driver guest stays clean. | ✅ finalized 2026-06-29 |
+| `Fedora-Workstation-44.enhanced.raw` | **Enhanced base** — `accessible` + `scripts/provision/f44/` builds (16k kernel `6.19.10-limina16k`, venus mesa `26.1.3-1.limina`, patched mutter `50.1-1.limina` w/ **all 3 patches** incl 0003 clipboard, + `limina-agent`) → `install-enhanced.sh`. **✅ FINALIZED 2026-06-29**: seated GNOME, WebGL 5000-fish ~60fps on venus→KK→Metal (5-signal+pixel verified); mutter 0003 rebased to 50.1 (`ext_data_control_manager` live in `libmutter-18`); limina-agent (native gnu) active+connected; relabel-clean; build cruft removed. Kernel kept Fedora-config **with debug symbols** (no strip — ~7 GiB modules, slower boot, by choice). Now also carries the **L2 test tooling** (glmark2 + apitrace/`eglretrace` GL replay + `/opt/gfxreconstruct/bin/gfxrecon-replay` VK replay) — folded into `make-accessible.sh` going forward; the enhanced *delivery* (`install-enhanced.sh`) does **not** ship these, so a migrated daily-driver guest stays clean. **Respun 2026-07-04 to kernel `7.1.2-limina16k` + mesa `26.1.3-3` (dogfood parity — see the respin note above); versions in this row are the 2026-06-29 baseline.** | ✅ finalized 2026-06-29; respun 2026-07-04 |
 | `Fedora-Workstation-44.enhanced.test.raw` | **Enhanced-tier L2 image** — frozen CoW snapshot of `enhanced` (`seated_fedora_from_env` for `LIMINA_FEDORA_REL=44`). Refresh: `cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw`. | ✅ **L2 GREEN 7/7 2026-06-29** (venus×3 + replay×3 + reset; replay tooling baked in) |
 
 `Fedora-Workstation-44.boot.raw` is the **pre-accessible** image (stock F44 + `claude`/autologin,
