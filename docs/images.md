@@ -113,13 +113,52 @@ Mirrors the F43 five-role layout (see the release selector in Conventions); sele
 `LIMINA_FEDORA_REL=44`. Built natively in-guest from Fedora's own F44 SRPMs + a minimal limina
 delta (`scripts/provision/f44/`, `scripts/provision/make-accessible.sh`).
 
+#### Rebuilding `enhanced.raw` from the accessible base (validated 2026-07-05)
+
+`install-enhanced.sh` delivers RPMs but deliberately does **NOT** resize the disk (it must also
+run unmodified on a stock user's daily-driver guest). The enhanced **dev** image needs a bigger
+disk than the 13.7 G accessible base — the `7.1.2-limina16k` kernel alone ships ~7 GiB of
+unstripped debug modules, and there must be headroom for **in-guest builds** — so the grow is a
+**manual pre-install step**. Full procedure (all host commands from the repo root):
+
+```bash
+# 1. Fresh CoW clone of the stock base + grow the virtual disk to 40 G (host).
+rm -f Fedora-Workstation-44.enhanced.raw
+cp -c Fedora-Workstation-44.accessible.raw Fedora-Workstation-44.enhanced.raw
+qemu-img resize -f raw Fedora-Workstation-44.enhanced.raw 40G
+
+# 2. Boot basic tier (stock kernel) with networking + ssh (read the port from the log).
+LIMINA_DISK=Fedora-Workstation-44.enhanced.raw spikes/venus-draw-probe/boot-enhanced-efi-kk.sh &
+
+# 3. In-guest: grow the btrfs root partition (vda3) into the new space, online.
+ssh -p <PORT> claude@127.0.0.1 '
+  sudo dnf install -y cloud-utils-growpart
+  sudo growpart /dev/vda 3            # vda1=ESP vda2=/boot vda3=btrfs root
+  sudo btrfs filesystem resize max /' # df / should now show ~38 G
+
+# 4. Copy + install the current guest-tools payload, then clean-poweroff.
+scp -P <PORT> target/guest-tools-7.1.2-mesa3/limina-guest-tools-f44.tar.zst claude@127.0.0.1:
+ssh -p <PORT> claude@127.0.0.1 '
+  tar --zstd -xf limina-guest-tools-f44.tar.zst
+  sudo ./limina-guest-tools/install-enhanced.sh ~/limina-guest-tools
+  sudo systemctl poweroff'
+
+# 5. Reboot: GRUB takes the installer's ONE-SHOT trial into the 16k kernel; reaching the
+#    desktop auto-promotes it to the permanent default. Verify venus (seated GNOME + Mesa
+#    render lines in the worker log), then clean-poweroff again.
+LIMINA_DISK=Fedora-Workstation-44.enhanced.raw spikes/venus-draw-probe/boot-enhanced-efi-kk.sh &
+
+# 6. Reclone the frozen L2 test snapshot from the quiesced (powered-off) image.
+cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw
+```
+
 | Image | Role | Status |
 |---|---|---|
 | `Fedora-Workstation-44.vanilla.raw` (+ `.xz`) | **Pristine** F44 Workstation aarch64 (official `…44-1.7.aarch64.raw.xz`; Fedora-built → SELinux labels intact, EFI-boots *enforcing* with no relabel loop). Clone source only. | ✅ renamed from `…44.raw` |
 | `Fedora-Workstation-44.accessible.raw` | **Stock base**: vanilla + gnome-initial-setup (`claude`) + pubkey + autologin + NOPASSWD sudo + `vulkan-tools` + no-idle-lock gschema + console args + relabel-clear (`make-accessible.sh`). Promoted from the existing `44.boot.raw` (already had user/ssh/autologin/sudo). | ✅ built 2026-06-29 |
 | `Fedora-Workstation-44.stock.test.raw` | **Stock-tier L2 image** — frozen CoW snapshot of `accessible` (`DEFAULT` for `LIMINA_FEDORA_REL=44`; also the seated baseline-3D vehicle). | ✅ built; `efi_boots_to_userspace` GREEN 2026-06-29 |
-| `Fedora-Workstation-44.enhanced.raw` | **Enhanced base** — `accessible` + `scripts/provision/f44/` builds (16k kernel `6.19.10-limina16k`, venus mesa `26.1.3-1.limina`, patched mutter `50.1-1.limina` w/ **all 3 patches** incl 0003 clipboard, + `limina-agent`) → `install-enhanced.sh`. **✅ FINALIZED 2026-06-29**: seated GNOME, WebGL 5000-fish ~60fps on venus→KK→Metal (5-signal+pixel verified); mutter 0003 rebased to 50.1 (`ext_data_control_manager` live in `libmutter-18`); limina-agent (native gnu) active+connected; relabel-clean; build cruft removed. Kernel kept Fedora-config **with debug symbols** (no strip — ~7 GiB modules, slower boot, by choice). Now also carries the **L2 test tooling** (glmark2 + apitrace/`eglretrace` GL replay + `/opt/gfxreconstruct/bin/gfxrecon-replay` VK replay) — folded into `make-accessible.sh` going forward; the enhanced *delivery* (`install-enhanced.sh`) does **not** ship these, so a migrated daily-driver guest stays clean. **Respun 2026-07-04 to kernel `7.1.2-limina16k` + mesa `26.1.3-3` (dogfood parity — see the respin note above); versions in this row are the 2026-06-29 baseline.** | ✅ finalized 2026-06-29; respun 2026-07-04 |
-| `Fedora-Workstation-44.enhanced.test.raw` | **Enhanced-tier L2 image** — frozen CoW snapshot of `enhanced` (`seated_fedora_from_env` for `LIMINA_FEDORA_REL=44`). Refresh: `cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw`. | ✅ **L2 GREEN 7/7 2026-06-29** (venus×3 + replay×3 + reset; replay tooling baked in) |
+| `Fedora-Workstation-44.enhanced.raw` | **Enhanced base** — `accessible` + `scripts/provision/f44/` builds (16k kernel `6.19.10-limina16k`, venus mesa `26.1.3-1.limina`, patched mutter `50.1-1.limina` w/ **all 3 patches** incl 0003 clipboard, + `limina-agent`) → `install-enhanced.sh`. **✅ FINALIZED 2026-06-29**: seated GNOME, WebGL 5000-fish ~60fps on venus→KK→Metal (5-signal+pixel verified); mutter 0003 rebased to 50.1 (`ext_data_control_manager` live in `libmutter-18`); limina-agent (native gnu) active+connected; relabel-clean; build cruft removed. Kernel kept Fedora-config **with debug symbols** (no strip — ~7 GiB modules, slower boot, by choice). Now also carries the **L2 test tooling** (glmark2 + apitrace/`eglretrace` GL replay + `/opt/gfxreconstruct/bin/gfxrecon-replay` VK replay) — folded into `make-accessible.sh` going forward; the enhanced *delivery* (`install-enhanced.sh`) does **not** ship these, so a migrated daily-driver guest stays clean. **Respun 2026-07-04 to kernel `7.1.2-limina16k` + mesa `26.1.3-3` (dogfood parity — see the respin note above); versions in this row are the 2026-06-29 baseline.** **REBUILT FRESH 2026-07-05** from `accessible` per the procedure above (the prior `enhanced.raw`/`.test.raw` had accumulated bad state — the 16k kernel failed its `/boot/efi` mount and dropped to the rescue BLS entry; a clean clone+install booted `7.1.2-limina16k` with `/boot/efi` mounted, venus seated on the new KK). | ✅ finalized 2026-06-29; respun 2026-07-04; rebuilt 2026-07-05 |
+| `Fedora-Workstation-44.enhanced.test.raw` | **Enhanced-tier L2 image** — frozen CoW snapshot of `enhanced` (`seated_fedora_from_env` for `LIMINA_FEDORA_REL=44`). Refresh: `cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw`. **Recloned 2026-07-05 from the fresh rebuild** (see the `enhanced.raw` note). | ✅ **L2 GREEN 7/7 2026-06-29** (venus×3 + replay×3 + reset; replay tooling baked in); recloned 2026-07-05 |
 
 `Fedora-Workstation-44.boot.raw` is the **pre-accessible** image (stock F44 + `claude`/autologin,
 software-2D floor pixel-verified 2026-06-20); running `make-accessible.sh` on it produces

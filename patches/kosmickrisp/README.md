@@ -107,6 +107,20 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
   array; fixed survives — see `spikes/venus-draw-probe/xfb-oob-RESULTS.md`). Upstream KK
   has no XFB (limina-authored), so no coordinated-disclosure embargo. When `0001` is
   split, this folds into the XFB-lowering component.
+- **`0008-kk-implement-timestamp-queries-vkCmdWriteTimestamp2-.patch`** — fills KK's upstream
+  timestamp-query TODO (`timestampValidBits` hardcoded 0 + empty `kk_CmdWriteTimestamp2`, both
+  from the "kk: Add KosmicKrisp" import). This was the **sole remaining GL 3.3 gate** for
+  zink-on-KK (`GL_ARB_timer_query`, gated on `timestampValidBits > 0`), so the baseline GL tier
+  goes **3.2 → 3.3 core / GLSL 330**. Apple GPUs sample the GPU timestamp counter only at
+  `MTLCounterSamplingPointAtStageBoundary` and the resolved value is already CPU-ns
+  (`timestampPeriod=1`): a one-shot blit encoder samples at its start boundary and a **separate
+  fenced** blit encoder `resolveCounters` straight into the query report BO **in GPU command
+  order** (a CPU completion-handler write would race an in-stream `CmdCopyQueryPoolResults` and
+  KK's GPU-encoded fence signal); in-render-pass writes defer to pass end. Gated on
+  `mtl_device_supports_timestamps()`. Bridge additions: `mtl_device_supports_timestamps`,
+  `mtl_new_timestamp_sample_buffer`, `mtl_new_blit_command_encoder_timestamp`,
+  `mtl_blit_resolve_timestamp`. Design + Metal probes + validation in `spikes/kk-timestamp/`;
+  real-timer exercise in `spikes/virgl-zink-kk/timerprobe.c`. Upstreamable (fills an upstream TODO).
 
 ## Apply / rebuild
 The `/Volumes/mesa-cs/mesa` tree is on the `limina/kosmickrisp` branch with these committed.
