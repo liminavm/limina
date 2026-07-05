@@ -237,7 +237,7 @@ These are latent bugs **and** they block clean upstreaming. Ranked by severity.
    **submit/replay**, not record. Both were caught only by instrumenting KK itself.
 
 2. **MED (escape-adjacent) — libkrun 0012/0013: blob-map `offset+size` overflow before
-   bounds check.** `resource_map_blob` does `if offset + resource.size > shm_region.size`
+   bounds check. ✅ FIXED 2026-07-04 — `patches/libkrun/0044`, RED/GREEN unit-tested.** `resource_map_blob` does `if offset + resource.size > shm_region.size`
    and then `guest_addr = shm_region.guest_addr + offset` — both **plain unchecked `u64`
    adds on a guest-controlled `offset`** (`ResourceMapBlob`). *Verified in the diff.* An
    `offset` chosen to wrap bypasses the SHM-window check and feeds a bogus address to
@@ -246,7 +246,10 @@ These are latent bugs **and** they block clean upstreaming. Ranked by severity.
    escape-adjacent item in the tree. Fix: `checked_add`/`checked_mul`; **confirm
    exploitability before touching this path in a public libkrun PR** (see B3).
 
-3. **MED — virglrenderer 0013: host-pointer import never clamps `allocationSize` down.**
+3. **MED — virglrenderer 0013: host-pointer import never clamps `allocationSize` down.
+   ✅ FIXED 2026-07-04 — clamp to backing `span`/`alloc_size` at both import sites in
+   `vkr_device_memory.c` (happy-path unchanged; the fragile `u.data >= 0x10000`
+   ptr-vs-fd heuristic is left documented, not yet reworked).**
    The `gkvm_res_import` block does `if allocationSize <= span { allocationSize = span }`
    — bumps *up* to the backing span but never clamps a *larger* guest-declared
    `allocationSize` *down*. A guest importing a small window-buffer IOSurface while
@@ -255,7 +258,8 @@ These are latent bugs **and** they block clean upstreaming. Ranked by severity.
    Related: the `u.data >= 0x10000` heuristic distinguishing an mmap pointer from an fd
    number (reused in 0013 and 0024) is a fragile type-confusion guard — document/harden.
 
-4. **MED — libkrun 0033: balloon FRQ `get_host_address(desc.addr).unwrap()`.** A
+4. **MED — libkrun 0033: balloon FRQ `get_host_address(desc.addr).unwrap()`.
+   ✅ FIXED 2026-07-04 — `patches/libkrun/0045`, skip out-of-range descriptors.** A
    carried, pre-existing worker panic on an out-of-region **guest-controlled** FRQ
    descriptor address. (The 16 KiB/4 KiB coalescing math itself is sound and reclaim is
    self-harm-only.) Fix: `?`/`continue`, matching 0034's handling.
