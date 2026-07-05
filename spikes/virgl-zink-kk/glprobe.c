@@ -23,6 +23,8 @@
 
 // --- minimal GL loader via eglGetProcAddress ---
 static PFNGLGETSTRINGPROC pglGetString;
+static PFNGLGETSTRINGIPROC pglGetStringi;
+static PFNGLGETINTEGERVPROC pglGetIntegerv;
 static PFNGLCLEARCOLORPROC pglClearColor;
 static PFNGLCLEARPROC pglClear;
 static PFNGLVIEWPORTPROC pglViewport;
@@ -60,6 +62,7 @@ static PFNGLFINISHPROC pglFinish;
 
 static int load_gl(void) {
     LOAD(pglGetString, "glGetString");
+    LOAD(pglGetStringi, "glGetStringi"); LOAD(pglGetIntegerv, "glGetIntegerv");
     LOAD(pglClearColor, "glClearColor"); LOAD(pglClear, "glClear"); LOAD(pglViewport, "glViewport");
     LOAD(pglGenVertexArrays, "glGenVertexArrays"); LOAD(pglBindVertexArray, "glBindVertexArray");
     LOAD(pglGenBuffers, "glGenBuffers"); LOAD(pglBindBuffer, "glBindBuffer"); LOAD(pglBufferData, "glBufferData");
@@ -147,6 +150,28 @@ int main(void) {
     printf("GL_VERSION  : %s\n", ver);
     int is_es = ver && strstr(ver, "ES") != NULL;
     printf("desktop GL  : %s\n", is_es ? "NO (got ES)" : "YES");
+
+    // Which of Mesa's exact GL 3.3 gates (src/mesa/main/version.c ver_3_3) does the driver
+    // expose? ver_3_2 is already granted, so whatever here is MISSING is the true 3.3 blocker.
+    // (Report presence directly from the extension string — version is DERIVED from these.)
+    {
+        static const char *const gates33[] = {
+            "GL_ARB_blend_func_extended", "GL_ARB_explicit_attrib_location",
+            "GL_ARB_instanced_arrays", "GL_ARB_shader_bit_encoding",
+            "GL_ARB_texture_rgb10_a2ui", "GL_ARB_timer_query",
+            "GL_ARB_vertex_type_2_10_10_10_rev", "GL_EXT_texture_swizzle",
+        };
+        GLint n = 0; pglGetIntegerv(0x821D /*GL_NUM_EXTENSIONS*/, &n);
+        printf("GL 3.3 gates (missing = the blocker):\n");
+        for (size_t g = 0; g < sizeof gates33 / sizeof gates33[0]; g++) {
+            int have = 0;
+            for (GLint i = 0; i < n; i++) {
+                const char *e = (const char *)pglGetStringi(GL_EXTENSIONS, i);
+                if (e && strcmp(e, gates33[g]) == 0) { have = 1; break; }
+            }
+            printf("  %-38s %s\n", gates33[g], have ? "present" : "MISSING <=");
+        }
+    }
 
     pglViewport(0, 0, 64, 64);
 
