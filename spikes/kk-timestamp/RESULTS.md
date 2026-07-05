@@ -57,7 +57,17 @@ CORRECTED design — write the result in GPU command order, mirroring existing K
 Stage is over-synchronized to ~bottom-of-pipe for all timestamps: spec-legal (impl may latch at
 any logically-later stage), monotonic preserved, ARB_timer_query has no accuracy conformance.
 
-## Status
-Design validated end-to-end by probes + adversarial review. Implementation = new KK patch
-`patches/kosmickrisp/0008`. Then rebuild KK (native, `/Volumes/mesa-cs/build-kk`) and confirm
-`glprobe` grants **3.3 core**.
+## Status — SHIPPED (patches/kosmickrisp/0008)
+Implemented as `patches/kosmickrisp/0008-kk-implement-timestamp-queries-*`. After rebuilding KK
+(`ninja -C /Volumes/mesa-cs/build-kk`; needs Homebrew `llvm-ar` on PATH):
+- `glprobe` grants **3.3 core** / `GL_VERSION 3.3 (Core Profile)`; `GL_ARB_timer_query` present;
+  textured-triangle render still PASS.
+- Real timer-query exercise (`spikes/virgl-zink-kk/timerprobe.c`): `glGetInteger64v(GL_TIMESTAMP)`,
+  monotonic `glQueryCounter`, and **`GL_TIME_ELAPSED = 54µs nonzero`** — genuine GPU time, the exact
+  thing an encode-time CPU sample would have gotten wrong (~0).
+
+OPEN: deploy the rebuilt KK dylib into the enhanced-tier boot env and confirm the venus desktop
+still comes up (KK is the shared host driver; the change is additive but venus now advertises
+timestampValidBits=64 to guests). v2 (optional): accurate in-render-pass timing via per-pending
+sampling instead of a single pass-end latch; VK_EXT_calibrated_timestamps (probe already proved the
+shared ns domain) to speed zink's one-shot GL_TIMESTAMP path.
