@@ -413,10 +413,15 @@ pub(crate) fn retry_install() -> bool {
 /// toggle that engages WITHOUT the tap: the prompt both tells the user why capture is degraded
 /// and registers the app in the Accessibility list (no hunting with the "+" button); after
 /// granting, the next Cmd-Ctrl-G heals live via [`retry_install`].
-pub(crate) fn prompt_accessibility_once() {
+///
+/// Returns `true` iff it actually raised the dialog this call (i.e. the first tap-less toggle),
+/// `false` on every later call (already prompted). The caller uses this to NOT grab the pointer
+/// on the toggle that opened the dialog — a captured cursor is parked at screen centre and
+/// consumed, so the user could not click the dialog to grant the permission.
+pub(crate) fn prompt_accessibility_once() -> bool {
     static PROMPTED: AtomicBool = AtomicBool::new(false);
     if PROMPTED.swap(true, Ordering::Relaxed) {
-        return;
+        return false;
     }
     log::warn!(
         "pointer capture: engaging WITHOUT the consuming tap — system key combos (Cmd-Tab, \
@@ -436,4 +441,5 @@ pub(crate) fn prompt_accessibility_once() {
         let _ = AXIsProcessTrustedWithOptions(options);
         CFRelease(options);
     }
+    true
 }

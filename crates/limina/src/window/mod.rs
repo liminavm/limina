@@ -943,10 +943,18 @@ pub fn run(
                         // a grant given since then takes effect on a fresh create — and if it's
                         // still missing, raise the system prompt (once per run) rather than
                         // degrading silently to the warp path.
-                        if !capture_tap::retry_install() {
-                            capture_tap::prompt_accessibility_once();
+                        if capture_tap::retry_install() {
+                            // Tap present (or just healed by the retry) — capture normally.
+                            input_state.toggle_capture();
+                        } else if !capture_tap::prompt_accessibility_once() {
+                            // The prompt was already shown earlier and Accessibility is still
+                            // ungranted: honor the toggle in degraded (leaky warp) mode. On the
+                            // FIRST tap-less toggle prompt_accessibility_once() returns true and we
+                            // deliberately do NOT grab — the just-opened Accessibility dialog needs
+                            // a clickable cursor, and a captured pointer is parked/consumed. The
+                            // user grants, then presses Cmd-Ctrl-G again to actually capture.
+                            input_state.toggle_capture();
                         }
-                        input_state.toggle_capture();
                     }
                 }
                 return std::ptr::null_mut(); // swallow — don't forward to the guest
