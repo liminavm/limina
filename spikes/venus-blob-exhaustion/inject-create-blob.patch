@@ -1,0 +1,84 @@
+diff --git a/src/virglrenderer.c b/src/virglrenderer.c
+index 925417c..7266dec 100644
+--- a/src/virglrenderer.c
++++ b/src/virglrenderer.c
+@@ -78,6 +78,17 @@ static struct global_state state;
+ 
+ /* new API - just wrap internal API for now */
+ 
++/* limina spike instrumentation (spikes/venus-blob-exhaustion): per-entry-point call
++ * counters to pin WHICH host resource path the compositor churns per frame. Enable with
++ * LIMINA_BLOB_HEARTBEAT=N (log every Nth call). Off by default. */
++#define LIMINA_TICK(tag) do { \
++   static long _ltick_n = 0, _ltick_hb = -1; \
++   if (_ltick_hb < 0) { const char *_h = getenv("LIMINA_BLOB_HEARTBEAT"); _ltick_hb = _h ? atol(_h) : 0; } \
++   long _c = _ltick_n++; \
++   if (_ltick_hb > 0 && (_c % _ltick_hb) == 0) \
++      fprintf(stderr, "[limina-tick] " tag " count=%ld\n", _c); \
++} while (0)
++
+ static int virgl_renderer_resource_create_internal(struct virgl_renderer_resource_create_args *args,
+                                                    UNUSED struct iovec *iov, UNUSED uint32_t num_iovs,
+                                                    void *image)
+@@ -87,6 +98,8 @@ static int virgl_renderer_resource_create_internal(struct virgl_renderer_resourc
+    struct vrend_renderer_resource_create_args vrend_args =  { 0 };
+    uint32_t map_info;
+ 
++   LIMINA_TICK("resource_create");
++
+    if (!state.vrend_initialized && !state.drm_initialized)
+       return EINVAL;
+ 
+@@ -1206,6 +1219,43 @@ int virgl_renderer_resource_create_blob(const struct virgl_renderer_resource_cre
+    if (!ctx)
+       return -EINVAL;
+ 
++   /* limina fault injection (spikes/venus-blob-exhaustion): deterministically fail
++    * HOST3D *device-memory* blob creation to exercise the guest venus OOM/abort path
++    * without waiting for real host exhaustion. Env, parsed once:
++    *   LIMINA_BLOB_CREATE_FAIL_AFTER=N   start failing after N successful creates
++    *   LIMINA_BLOB_CREATE_FAIL_FOR=K     fail only the next K, then recover (default: unbounded)
++    * Filtered to guest device memory (blob_id != 0); ring/reply/CS shmems (blob_id == 0) are
++    * EXEMPT so we reproduce production's per-frame device-memory churn, not the already-graceful
++    * shmem path (patch-0012 territory). Off by default (no env => inert). NOTE: the counter is a
++    * plain static (not atomic / not per-context) — fine for a single-VM RED repro; make it
++    * per-context before reusing this as real backpressure. */
++   if (args->blob_id != 0) {
++      static int inj_init = 0;
++      static long inj_after = -1, inj_for = -1, inj_seen = 0, hb = 0;
++      if (!inj_init) {
++         const char *a = getenv("LIMINA_BLOB_CREATE_FAIL_AFTER");
++         const char *f = getenv("LIMINA_BLOB_CREATE_FAIL_FOR");
++         const char *h = getenv("LIMINA_BLOB_HEARTBEAT");
++         inj_after = a ? atol(a) : -1;
++         inj_for = f ? atol(f) : -1; /* -1 => unbounded */
++         hb = h ? atol(h) : 0;       /* 0 => no heartbeat (calibration off) */
++         inj_init = 1;
++      }
++      long n = inj_seen++; /* Nth guest device-memory blob create since worker start */
++      if (hb > 0 && (n % hb) == 0)
++         fprintf(stderr, "[limina-inject] device-memory blob create count=%ld\n", n);
++      if (inj_after >= 0 && n >= inj_after && (inj_for < 0 || n < inj_after + inj_for)) {
++         fprintf(stderr,
++                 "[limina-inject] fail device-memory blob create #%ld "
++                 "(res=%u blob_id=%llu size=%llu) -> -ENOMEM\n",
++                 n, args->res_handle, (unsigned long long)args->blob_id,
++                 (unsigned long long)args->size);
++         return -ENOMEM;
++      }
++   } else {
++      LIMINA_TICK("blob_shm"); /* blob_id==0 => ring/reply/CS/shmem blob */
++   }
++
+    ret = ctx->get_blob(ctx, args->res_handle, args->blob_id, args->size, args->blob_flags, &blob);
+    if (ret)
+       return ret;
+@@ -1544,6 +1594,8 @@ virgl_renderer_resource_import_blob(const struct virgl_renderer_resource_import_
+    TRACE_FUNC();
+    struct virgl_resource *res;
+ 
++   LIMINA_TICK("import_blob"); /* the "re-import of the scanout dmabuf" candidate */
++
+    /* user resource id must be greater than 0 */
+    if (args->res_handle == 0)
+       return -EINVAL;
