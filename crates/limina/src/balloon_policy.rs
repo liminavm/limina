@@ -55,10 +55,12 @@ pub enum ReclaimMode {
     /// Never drive the balloon (free-page reporting still returns freed guest memory).
     Disabled,
     /// Host-pressure-driven, generous cache: no inflation while the host is fine; under host
-    /// warn leave the guest 25% of max as cache; full squeeze only when the host is critical.
+    /// warn leave the guest 25% of max as cache; under critical squeeze down to the minimal
+    /// working-set floor (never to zero).
     Light,
     /// Host-pressure-driven (the default): while the host is fine leave the guest 12.5% of max
-    /// (min 1 GiB) as cache; under host warn/critical squeeze to the floor.
+    /// (min 1 GiB) as cache; under host warn 6.25% (min 1 GiB); under critical squeeze down to
+    /// the minimal working-set floor (never to zero).
     Moderate,
     /// Squeeze to the floor whenever the guest is idle, ignoring host pressure (the original
     /// M6 policy).
@@ -73,26 +75,54 @@ pub enum HostPressure {
     Critical,
 }
 
-/// Read the host's memory-pressure level (1 = normal, 2 = warn, 4 = critical). Errors read as
-/// Normal: the host kernel manages its own pressure, and "don't squeeze the guest" is the safe
-/// default for guest performance.
+/// `kern.memorystatus_level` (percent of memory jetsam counts as available) at/above which the
+/// host is demonstrably fine regardless of what the pressure *level* claims.
+const HOST_HEALTHY_AVAILABLE_PERCENT: i32 = 40;
+
+/// Read the host's memory-pressure level (1 = normal, 2 = warn, 4 = critical), blended with the
+/// actual availability percentage. Errors read as Normal: the host kernel manages its own
+/// pressure, and "don't squeeze the guest" is the safe default for guest performance.
 pub fn read_host_pressure() -> HostPressure {
-    let mut level: libc::c_int = 0;
+    blend_host_pressure(
+        sysctl_i32(c"kern.memorystatus_vm_pressure_level"),
+        sysctl_i32(c"kern.memorystatus_level"),
+    )
+}
+
+fn sysctl_i32(name: &std::ffi::CStr) -> Option<i32> {
+    let mut value: libc::c_int = 0;
     let mut len = std::mem::size_of::<libc::c_int>();
-    let name = c"kern.memorystatus_vm_pressure_level";
     let rc = unsafe {
         libc::sysctlbyname(
             name.as_ptr(),
-            &mut level as *mut _ as *mut libc::c_void,
+            &mut value as *mut _ as *mut libc::c_void,
             &mut len,
             std::ptr::null_mut(),
             0,
         )
     };
-    match (rc, level) {
-        (0, l) if l >= 4 => HostPressure::Critical,
-        (0, 2..=3) => HostPressure::Warn,
+    (rc == 0).then_some(value)
+}
+
+/// `kern.memorystatus_vm_pressure_level` is STICKY around swap: dogfood-mac 2026-07-09 reported Warn
+/// with ~49% of RAM free because the swapfile stayed near-full (macOS never proactively drains
+/// it), and the policy squeezed the guest to a 21 GiB balloon against a healthy host for hours.
+/// Demote one level when `kern.memorystatus_level` (jetsam's available-memory percentage — the
+/// number `memory_pressure -Q` prints) says the host demonstrably has memory.
+fn blend_host_pressure(
+    pressure_level: Option<i32>,
+    available_percent: Option<i32>,
+) -> HostPressure {
+    let raw = match pressure_level {
+        Some(l) if l >= 4 => HostPressure::Critical,
+        Some(l) if l >= 2 => HostPressure::Warn,
         _ => HostPressure::Normal,
+    };
+    let healthy = available_percent.is_some_and(|p| p >= HOST_HEALTHY_AVAILABLE_PERCENT);
+    match (raw, healthy) {
+        (HostPressure::Critical, true) => HostPressure::Warn,
+        (HostPressure::Warn, true) => HostPressure::Normal,
+        (level, _) => level,
     }
 }
 
@@ -152,9 +182,9 @@ impl BalloonPolicy {
         let host = read_host_pressure();
         let mut st = self.state.lock().unwrap();
         let now = Instant::now();
-        // A high-pressure report arms the re-inflation cooldown whether or not there is a balloon
-        // to release: the guest just proved it needs its memory.
-        if p.some_avg10 >= PRESSURE_HIGH {
+        // A high-pressure or starvation report arms the re-inflation cooldown whether or not
+        // there is a balloon to release: the guest just proved it needs its memory.
+        if p.some_avg10 >= PRESSURE_HIGH || guest_starved(p) {
             st.cooldown_until = Some(now + RELEASE_COOLDOWN);
         }
         let inputs = DecideInputs {
@@ -235,15 +265,30 @@ struct DecideInputs {
 /// on warm random reads.
 fn allowance_pages(mode: ReclaimMode, host: HostPressure, max_pages: u32) -> Option<u32> {
     const GIB: u32 = 1024 * PAGES_PER_MIB;
+    // Even a critical-pressure squeeze leaves the guest a minimal cache working set: a
+    // zero-allowance target strands a desktop guest re-reading its executables from disk at
+    // GB/s with idle CPUs (2026-07-09 dogfood-guest: 263 MiB available, io-PSI full 44%,
+    // memory-PSI quiet — unusable, and invisible to the PSI release gate).
+    let squeeze_floor = (max_pages / 32).max(GIB / 2);
     match (mode, host) {
         (ReclaimMode::Disabled, _) => None, // not reached: policy isn't constructed
         (ReclaimMode::Light, HostPressure::Normal) => None,
         (ReclaimMode::Light, HostPressure::Warn) => Some((max_pages / 4).max(2 * GIB)),
-        (ReclaimMode::Light, HostPressure::Critical) => Some(0),
+        (ReclaimMode::Light, HostPressure::Critical) => Some(squeeze_floor),
         (ReclaimMode::Moderate, HostPressure::Normal) => Some((max_pages / 8).max(GIB)),
-        (ReclaimMode::Moderate, _) => Some(0),
+        (ReclaimMode::Moderate, HostPressure::Warn) => Some((max_pages / 16).max(GIB)),
+        (ReclaimMode::Moderate, HostPressure::Critical) => Some(squeeze_floor),
         (ReclaimMode::Aggressive, _) => Some(0),
     }
+}
+
+/// A guest is *starved* when MemAvailable is critically low: catastrophic cache starvation
+/// manifests as IO pressure (swap-in and refault storms), NOT as memory-PSI — 2026-07-09
+/// dogfood-guest sat at 263 MiB available / 2.3% memory-some / 44% io-full, wedged behind a
+/// 21 GiB balloon the PSI gates never released. Available this low while we hold a balloon is
+/// the balloon's fault by definition.
+fn guest_starved(p: &MemPressure) -> bool {
+    p.mem_total_kib > 0 && p.mem_available_kib < (256 * 1024).max(p.mem_total_kib / 64)
 }
 
 /// The pure policy decision (unit-tested): given a pressure report and the current state, return
@@ -259,9 +304,10 @@ fn allowance_pages(mode: ReclaimMode, host: HostPressure, max_pages: u32) -> Opt
 /// push back before the squeeze overshoots. Aggressive keeps its original shape (squeeze to the
 /// floor while ≥30% is available, host pressure ignored) with the same inflation guards.
 fn decide(p: &MemPressure, i: &DecideInputs) -> Option<u32> {
-    // Guest under acute pressure: hand memory back, now. All modes. (The caller also arms the
-    // re-inflation cooldown on this signal.)
-    if p.some_avg10 >= PRESSURE_HIGH {
+    // Guest under acute pressure OR starved of cache: hand memory back, now. All modes. (The
+    // caller also arms the re-inflation cooldown on these signals.) The starvation check exists
+    // because thrash shows up as IO pressure, not memory-PSI — see [`guest_starved`].
+    if p.some_avg10 >= PRESSURE_HIGH || guest_starved(p) {
         return (i.current != 0).then_some(0);
     }
 
@@ -425,12 +471,17 @@ mod tests {
     }
 
     #[test]
-    fn moderate_squeezes_fully_under_host_pressure() {
-        // Host warn → allowance 0: with 4 GiB available the desired target is current+avail,
-        // stepped; from 0 that's one step.
+    fn moderate_squeezes_harder_under_host_warn_but_keeps_a_floor() {
+        // Host warn → allowance max/16 (min 1 GiB): with 4 GiB available the balloon may take
+        // 3 GiB, stepped; from 0 that's one step.
         let i = inputs(ReclaimMode::Moderate, HostPressure::Warn, 0);
         let next = decide(&report_pages(0, 4 * GIB_PAGES, MAX), &i);
         assert_eq!(next, Some(INFLATE_STEP_PAGES));
+        // The allowance never reaches zero under warn (2026-07-09 wedge).
+        assert_eq!(
+            allowance_pages(ReclaimMode::Moderate, HostPressure::Warn, MAX),
+            Some(GIB_PAGES)
+        );
     }
 
     #[test]
@@ -456,8 +507,8 @@ mod tests {
 
     #[test]
     fn light_critical_squeezes_to_the_floor() {
-        // allowance 0: desired = current + avail, capped at room; the last step lands exactly
-        // on the floor squeeze.
+        // allowance = the minimal working-set floor: desired = current + (avail − floor),
+        // capped at room; the last step lands exactly on the floor squeeze.
         let i = inputs(
             ReclaimMode::Light,
             HostPressure::Critical,
@@ -551,5 +602,81 @@ mod tests {
             allowance_pages(ReclaimMode::Light, HostPressure::Warn, small_max),
             Some(2 * GIB_PAGES)
         );
+        // Warn keeps the 1 GiB floor; Critical keeps the minimal working-set floor. Zero
+        // allowances died with the 2026-07-09 wedge.
+        assert_eq!(
+            allowance_pages(ReclaimMode::Moderate, HostPressure::Warn, small_max),
+            Some(GIB_PAGES)
+        );
+        assert_eq!(
+            allowance_pages(ReclaimMode::Moderate, HostPressure::Critical, small_max),
+            Some(GIB_PAGES / 2)
+        );
+        assert_eq!(
+            allowance_pages(ReclaimMode::Light, HostPressure::Critical, small_max),
+            Some(GIB_PAGES / 2)
+        );
+    }
+
+    /// 2026-07-09 dogfood-guest sticky-Warn wedge, regression: a 24 GiB VM squeezed to a ~21 GiB
+    /// balloon, 263 MiB available, memory-PSI quiet (2.28% — the thrash showed as 44% io-full,
+    /// which the policy can't see), host stuck at Warn. The policy held forever. A starved
+    /// guest must release the balloon regardless of memory-PSI, host state, or mode.
+    #[test]
+    fn starved_guest_releases_even_under_host_warn() {
+        let max = 24 * GIB_PAGES;
+        let current = 21 * GIB_PAGES;
+        for mode in [
+            ReclaimMode::Light,
+            ReclaimMode::Moderate,
+            ReclaimMode::Aggressive,
+        ] {
+            let mut i = inputs(mode, HostPressure::Warn, current);
+            i.room = max - GIB_PAGES;
+            i.max_pages = max;
+            i.last_change = Some(i.now); // release must ignore the dwell
+            let p = MemPressure {
+                some_avg10: 228,
+                some_avg60: 308,
+                full_avg10: 228,
+                full_avg60: 307,
+                mem_available_kib: 263 * 1024,
+                mem_total_kib: 24870560,
+            };
+            assert_eq!(decide(&p, &i), Some(0), "{mode:?}");
+        }
+    }
+
+    /// Below-allowance (but not starved) under Warn deflates by the shortfall — the allowance
+    /// floor is what makes this reachable (the old zero allowance under Warn never deflated).
+    #[test]
+    fn moderate_warn_deflates_to_the_floor_allowance() {
+        let max = 24 * GIB_PAGES;
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Warn, 21 * GIB_PAGES);
+        i.room = max - GIB_PAGES;
+        i.max_pages = max;
+        i.last_change = Some(i.now);
+        // 600 MiB available; allowance = max/16 = 1.5 GiB → give back the 936 MiB shortfall.
+        let avail = 600 * PAGES_PER_MIB;
+        let allow = max / 16;
+        let next = decide(&report_pages(300, avail, max), &i);
+        assert_eq!(next, Some(21 * GIB_PAGES - (allow - avail)));
+    }
+
+    #[test]
+    fn sticky_host_warn_with_healthy_availability_reads_as_normal() {
+        // dogfood-mac 2026-07-09: level=2 (Warn) with 49% available — swap-full stickiness.
+        assert_eq!(blend_host_pressure(Some(2), Some(49)), HostPressure::Normal);
+        // Genuine warn (little available memory) is preserved.
+        assert_eq!(blend_host_pressure(Some(2), Some(15)), HostPressure::Warn);
+        // Critical demotes one level when availability is healthy, never two.
+        assert_eq!(blend_host_pressure(Some(4), Some(49)), HostPressure::Warn);
+        assert_eq!(
+            blend_host_pressure(Some(4), Some(10)),
+            HostPressure::Critical
+        );
+        // Missing/failed sysctls: pressure level stands alone; total failure reads Normal.
+        assert_eq!(blend_host_pressure(Some(2), None), HostPressure::Warn);
+        assert_eq!(blend_host_pressure(None, None), HostPressure::Normal);
     }
 }
