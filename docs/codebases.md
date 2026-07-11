@@ -7,7 +7,8 @@ one. **limina ships two sets of binaries built from different trees:**
 - **HOST binaries** run on macOS, inside `limina.app` / the `limina-vmm` worker. This is
   the VMM, the host GPU renderer, and the host Vulkan-on-Metal driver.
 - **GUEST binaries** run inside the Linux guest, i.e. baked into the `*.raw` images. This is
-  the guest kernel, the guest Mesa (venus + zink), guest mutter, and `limina-agent`.
+  the guest kernel, the guest Mesa (venus + zink), `limina-agent`, and the
+  `clipboard@limina` gnome-shell extension (guest mutter is STOCK since 2026-07-11).
 
 A given component (especially *Mesa*) exists as source in more than one place and gets
 **built differently for each side**. Never assume "the venus code I'm reading is what the
@@ -50,7 +51,8 @@ guest**, then packaged as RPMs. The **patch series is the durable artifact.**
 |---|---|---|---|---|
 | **Guest Mesa** (venus **+** zink) | Fedora **F44's own** `mesa-*.src.rpm` (F44 ships **26.0.x / 26.1.3**) — *not* the host 26.2.0-devel | `mesa 26.1.3-3.limina` | `patches/mesa/` **0001 (zink)** + **0009–0013 (venus)** | `scripts/provision/f44/build-mesa-rpm.sh` (applies the subset above; dnf-versionlocked) |
 | **Guest kernel** (16k) | `kernel.org` `linux-stable.git`, branch = the tag (e.g. `v7.1.2`) | `7.1.2-limina16k` | `patches/linux/` 0001–0004 (virtio-gpu scanout/modifier + **0004 16 KiB host-visible alignment**) | `scripts/provision/f44/build-kernel-rpm.sh` on a dev-Mac F44 build guest |
-| **Guest mutter** | Fedora mutter SRPM (+ our patches) | `mutter 50.1-*.limina` (shipped) | `patches/mutter/` 0001 (stencil-clip) 0002 (x11 survive) 0003 (ext-data-control clipboard) | `scripts/provision/f44/build-mutter-rpm.sh` |
+| **Guest mutter** | **STOCK Fedora** (since 2026-07-11 the payload ships NO mutter; the GNOME clipboard tier is the shell extension below) | distro's own (e.g. `50.3-2.fc44`) | `patches/mutter/` 0003 kept UNSHIPPED for ext-data-control experiments (0001/0002 retired) | optional: `scripts/provision/f44/build-mutter-rpm.sh` |
+| **clipboard@limina** (gnome-shell extension) | `guest/gnome-shell-extension/` | tracks repo | — (plain GJS, no build) | staged by `build-all.sh`, installed to `/usr/share/gnome-shell/extensions` |
 | **limina-agent** | our repo (`crates/limina-agent` equivalent) | tracks repo | — | cross-compiled, delivered in the guest-tools payload |
 | `third_party/mutter` (49.5, detached) | — | reference source checkout only; shipped mutter is RPM-built as above | `patches/mutter/` | — |
 

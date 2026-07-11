@@ -4,17 +4,22 @@
 
 # Build limina's patched mutter as a Fedora RPM, NATIVELY INSIDE a Fedora 44 guest.
 #
+# OPTIONAL TOOLING since 2026-07-11: patched mutter is NO LONGER part of the guest support
+# payload (build-all.sh doesn't call this) — the GNOME clipboard tier is the clipboard@limina
+# shell extension (guest/gnome-shell-extension/), so stock mutter stays stock and distro
+# updates have nothing of ours to displace. Kept for experiments with the ext-data-control
+# tier on GNOME.
+#
 # This is scripts/build-mutter-rpm.sh's recipe with the macOS `container` wrapper stripped:
 # take THIS guest's own mutter SRPM (its exact 50.x version + Fedora packaging + Fedora patches),
-# add OUR patches (patches/mutter/0001-0003), bump Release so dnf prefers ours over same-version
-# stock. NOT versionlocked — mutter's libmutter-NN ABI is lock-stepped to gnome-shell, so it must
-# track the distro; re-run on a distro bump and rebase patches/mutter/* if they no longer apply.
+# add OUR patches (whatever patches/mutter/*.patch exist), bump Release so dnf prefers ours over
+# same-version stock. NOT versionlocked — mutter's libmutter-NN ABI is lock-stepped to
+# gnome-shell, so it must track the distro; re-run on a distro bump and rebase patches/mutter/*
+# if they no longer apply.
 #
 # OUR patches (see patches/mutter/README.md):
-#   0001  cogl stencil-clip degrade (#32) — seated desktop renders on venus/KK without a stencil
-#         buffer. Touches cogl-framebuffer.c / clutter; MOST LIKELY to need a rebase onto mutter 50.
-#   0002  guard meta_x11_display_init_frames_client against a NULL launch.
 #   0003  ext-data-control-v1, so limina-agent does clipboard as a focusless Wayland client.
+#         (0001/0002 retired to patches/mutter/retired/ — root causes fixed in other layers.)
 #
 # Usage (in the guest):  scripts/provision/f44/build-mutter-rpm.sh
 # Output: $OUT/*.rpm  (default ~/limina-build/mutter)

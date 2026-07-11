@@ -172,7 +172,8 @@ tracks claims still needing verification.
   user has authorized committing without asking. End commit messages with the
   `Co-Authored-By` trailer.
 - **When guest components change, refresh the deliverables AND the enhanced images.** Any
-  rebuild of a guest-side component (16k kernel, mesa, mutter, limina-agent) must flow into
+  rebuild of a guest-side component (16k kernel, mesa, limina-agent, the clipboard@limina
+  shell extension — guest mutter is stock since 2026-07-11) must flow into
   (a) the guest-tools tarball (`scripts/provision/f44/package-payload.sh`) and (b) an
   `install-enhanced.sh` pass over the enhanced-tier images (`enhanced.raw` /
   `enhanced.test.raw`), then update `docs/images.md` §Component versions. Stale images cost

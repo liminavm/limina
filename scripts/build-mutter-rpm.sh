@@ -14,12 +14,14 @@
 # distro bumps mutter, re-run this; if patches/mutter/* no longer apply, rebase them. See memory
 # limina-enh-delivery.
 #
+# OPTIONAL TOOLING since 2026-07-11: patched mutter is NO LONGER part of the guest support
+# payload — the GNOME clipboard tier is the clipboard@limina shell extension
+# (guest/gnome-shell-extension/), so stock mutter stays stock. Kept for experiments.
+#
 # OUR patches (patches/mutter/*.patch, see patches/mutter/README.md):
-#   0001  cogl stencil-clip degrade (#32) -- seated desktop on venus/KK renders without a stencil
-#         buffer; without this the desktop corrupts/crashes.
-#   0002  guard meta_x11_display_init_frames_client against a NULL launch (first X11 app SIGSEGVs
-#         the whole compositor otherwise).
 #   0003  ext-data-control-v1, so limina-agent does clipboard as a focusless Wayland client.
+#         (0001/0002 were retired to patches/mutter/retired/ — their root causes were fixed
+#         in other layers and stock mutter 50.3 was validated clean without them.)
 #
 # FEDORA_REL MUST match the guest: mutter links the guest GLib/GTK/wayland sonames and the
 # libmutter-NN ABI must match the guest gnome-shell.
@@ -72,7 +74,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
     # pipe so a no-match grep does not trip set -e. Fall back to the last Source line if no Patch.
     LAST_PATCH_LINE=$( { grep -nE "^Patch[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
     [ -n "$LAST_PATCH_LINE" ] || LAST_PATCH_LINE=$( { grep -nE "^Source[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
-    ins="Patch9001: 0001-32-stencil-clip-degrade-fix.patch\nPatch9002: 0002-x11-survive-frames-client-launch-failure.patch\nPatch9003: 0003-ext-data-control-v1.patch"
+    ins="Patch9003: 0003-ext-data-control-v1.patch"
     sed -i "${LAST_PATCH_LINE}a ${ins}" "$SPEC"
     # Fedora mutter uses `%autosetup -S git` (git am, needs mailbox-format patches); OUR patches are
     # plain `git diff` output (no From/Subject) -> switch to `%autosetup -p1` (GNU patch) so both the
@@ -81,7 +83,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
     # If the spec uses %autosetup it auto-applies them; if it uses %setup, apply explicitly after it.
     if ! grep -qE "^%autosetup" "$SPEC"; then
       echo "    spec uses %setup (not %autosetup) -- injecting explicit %patch after %setup"
-      sed -i "/^%setup/a %patch -P 9001 -p1\n%patch -P 9002 -p1\n%patch -P 9003 -p1" "$SPEC"
+      sed -i "/^%setup/a %patch -P 9003 -p1" "$SPEC"
     fi
     # Bump Release with a .limina tag so our same-version build outranks stock (l > f in rpm compare).
     sed -i -E "s/^(Release:[[:space:]]*)([^%[:space:]]+)/\1\2.limina/" "$SPEC"

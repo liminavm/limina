@@ -60,6 +60,17 @@ regression" / `kk_encoder.c:299` block did NOT reproduce on the clean stack — 
 boots the seated desktop and runs WebGL at ~60fps on venus→KK→Metal (see `limina-enh-delivery` memory).
 The enhanced 16 KiB kernel ships as RPM `limina-kernel-16k` (BLS entry beside stock).
 
+**Mutter left the delivery (2026-07-11).** The guest support package no longer ships a patched
+mutter: the GNOME clipboard tier is now the `clipboard@limina` gnome-shell extension
+(`guest/gnome-shell-extension/`; agent tier order ext-data-control → extension bridge →
+RemoteDesktop). Trigger: a stock F44 update replaced dogfood-guest's `50.1-1.limina` with stock
+`50.3-2.fc44` (rpm release `.limina` loses to any stock bump; mutter was deliberately unlocked),
+demoting clipboard to the screen-share-indicator tier — and the same event validated that stock
+mutter needs none of our rendering patches (0001/0002 retired; root causes were host-side/our own
+build, see `patches/mutter/README.md`). Images that still contain `50.1-1.limina` mutter are fine:
+it gets displaced by the guest's next distro update, and the tier ladder absorbs either state.
+From the next payload/image refresh, guest mutter is plain stock.
+
 **Enhanced images RESPUN to dogfood parity (2026-07-04)** — `enhanced.raw` + `enhanced.test.raw` were
 brought from kernel `6.19.10-limina16k` + mesa `26.1.3-1` up to **kernel `7.1.2-limina16k` + mesa
 `26.1.3-3`** (mutter already `50.1-1`). Method: reassembled a `-3` guest-tools payload from the

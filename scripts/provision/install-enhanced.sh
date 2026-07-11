@@ -6,8 +6,8 @@
 #
 # Runs INSIDE a basic (stock) Fedora guest and upgrades it to the enhanced tier. Per the
 # two-tier guarantee (CLAUDE.md) this is the bootstrap substrate: it must depend ONLY on what
-# a stock F43 already has (dnf, grubby, systemctl, virtiofs) — NOT on the 16k kernel / venus /
-# mutter it installs. It is delivered via a virtio-fs share (the "attached volume") and run
+# a stock F43 already has (dnf, grubby, systemctl, virtiofs) — NOT on the 16k kernel / venus
+# it installs. It is delivered via a virtio-fs share (the "attached volume") and run
 # here, so the host never mutates the guest image directly.
 #
 # DELIVERY = RPMs that REPLACE stock at /usr (see memory limina-enh-delivery). We do NOT use
@@ -23,9 +23,11 @@
 #                          kernel is locked (not ours) so a stock update can't steal the default.
 #   2. mesa RPMs        -> replace stock mesa at /usr (zink GL + venus Vulkan); LOCKED, but the
 #                          installer lifts the lock to UPDATE it, then re-locks (re-runnable).
-#   3. mutter RPMs       -> replace stock mutter at /usr (patched compositor);          NOT locked
-#                          (mutter tracks the distro/gnome-shell version; see limina-enh-delivery)
-#   3b. local dnf repo   -> /usr/share/limina-guest-tools/repo + a .repo file: EVERY mesa/mutter
+#   3. clipboard@limina  -> the gnome-shell extension (GNOME tier of the clipboard bridge) at
+#                          /usr/share/gnome-shell/extensions; limina-agent-session self-enables
+#                          it per user. Replaces the patched-mutter delivery (2026-07-11):
+#                          stock mutter stays stock, nothing for a distro update to displace.
+#   3b. local dnf repo   -> /usr/share/limina-guest-tools/repo + a .repo file: EVERY mesa
 #                          subpackage Fedora ships (-devel/-tests included, debuginfo excluded),
 #                          at OUR NEVRA. Installed on demand (`dnf install mesa-libgbm-devel`) —
 #                          Fedora's own -devel subpackages can never resolve against the
@@ -336,18 +338,32 @@ done
 echo "   mesa installed + (re-)versionlocked"
 rpm -q mesa-vulkan-drivers --qf '   venus ICD pkg: %{NVRA}\n' 2>/dev/null || true
 
-### 3. mutter RPMs (patched, target-matched) -> REPLACE stock at /usr; NOT locked #
-MUTTER_RPMS=$(runtime_rpms "$PAYLOAD/mutter-*.rpm")
-[ -n "$MUTTER_RPMS" ] || { echo "no mutter RPMs in payload"; exit 1; }
-MUTTER_EXTRAS=$(installed_extra_rpms "$PAYLOAD/mutter-*.rpm")
-[ -z "$MUTTER_EXTRAS" ] || MUTTER_RPMS="$MUTTER_RPMS
-$MUTTER_EXTRAS"
-echo "-- installing mutter (patched, replaces stock; NOT versionlocked — tracks gnome-shell):"
-echo "$MUTTER_RPMS" | sed 's#.*/#     #'
-dnf install -y --allowerasing $MUTTER_RPMS
-echo "   patched mutter installed"
+### 3. clipboard@limina gnome-shell extension -> /usr/share/gnome-shell/extensions ###
+# The GNOME tier of the clipboard bridge (guest/gnome-shell-extension/): plain GJS
+# files scripting Meta.Selection inside the compositor — quiet (no screen-share
+# indicator) without the retired patched-mutter carry, and immune to distro mutter
+# updates. Enabling is per-user dconf state with no session at install time, so
+# limina-agent-session enables it on its first probe (once per user; a later user
+# disable is respected). A previously-installed patched mutter (older enhanced
+# guests) is left alone: harmless while present, and the next distro update
+# replaces it with stock — the helper's tier ladder absorbs either state.
+EXT_UUID="clipboard@limina"
+if [ -d "$PAYLOAD/$EXT_UUID" ]; then
+  echo "-- installing the $EXT_UUID gnome-shell extension"
+  EXT_DST="/usr/share/gnome-shell/extensions/$EXT_UUID"
+  rm -rf "$EXT_DST"
+  install -d "$(dirname "$EXT_DST")"
+  cp -a "$PAYLOAD/$EXT_UUID" "$EXT_DST"
+  # cp -a from the virtiofs share preserves xattrs — relabel for enforcing guests.
+  if command -v restorecon >/dev/null 2>&1; then
+    restorecon -R "$EXT_DST" 2>/dev/null || true
+  fi
+  echo "   installed at $EXT_DST (limina-agent-session enables it at next login)"
+else
+  echo "-- no $EXT_UUID in the payload — skipped (clipboard rides the RemoteDesktop fallback)"
+fi
 
-### 3b. local dnf repo: every mesa/mutter subpackage Fedora ships, installable on demand ###
+### 3b. local dnf repo: every mesa subpackage Fedora ships, installable on demand ###
 # The runtime mesa stack is versionlocked at our NEVRA (step 2), which EXCLUDES the stock mesa
 # versions — so Fedora's own -devel subpackages (exact-NEVRA `Requires: mesa-libgbm(aarch-64) =
 # <stock>`) can never resolve on an enhanced guest ("filtered out by exclude filtering"). This
@@ -360,7 +376,7 @@ if [ -d "$PAYLOAD/repo/repodata" ]; then
   install -d /usr/share/limina-guest-tools
   cp -a "$PAYLOAD/repo" /usr/share/limina-guest-tools/repo
   cat > /etc/yum.repos.d/limina-guest-tools.repo <<'REPOCONF'
-# limina enhanced tier: local repo carrying our FULL mesa/mutter subpackage set (the runtime is
+# limina enhanced tier: local repo carrying our FULL mesa subpackage set (the runtime is
 # versionlocked at the limina NEVRA, so Fedora's exact-version -devel subpackages cannot resolve;
 # these match). Installed by install-enhanced.sh; refreshed on every enhanced upgrade.
 [limina-guest-tools]
@@ -411,9 +427,10 @@ else
   echo "-- no limina-agent in payload; skipping (dynamic resize / PSI stay inactive)"
 fi
 
-# limina-agent-session: the per-user clipboard bridge. It is session state (a Wayland
-# ext-data-control client, or the gnome-shell RemoteDesktop portal on stock mutter), so it runs
-# as a systemd USER unit inside the graphical session — the system-level limina-agent cannot do
+# limina-agent-session: the per-user clipboard bridge. It is session state (an
+# ext-data-control Wayland client, the clipboard@limina extension bridge on GNOME, or
+# mutter's RemoteDesktop D-Bus API as the last resort), so it runs as a systemd USER
+# unit inside the graphical session — the system-level limina-agent cannot do
 # clipboard, and without this helper host<->guest copy/paste is silently inert (no guest peer
 # ever advertises the `clipboard` cap; found on the 2026-07-01 dogfooding VM).
 SESSION_BIN="$PAYLOAD/limina-agent-session"

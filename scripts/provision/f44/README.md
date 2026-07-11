@@ -64,10 +64,11 @@ sudo reboot
   mesa 26.1.0; F44 ships 26.0.x. The build adds them via the spec so a non-applying patch
   **fails the build loudly** (rather than silently skipping → black screen). If it fails,
   rebase the patch onto F44's mesa and re-run.
-- **mutter `0001`+`0002`+`0003`** applied **clean to mutter 50.1** (validated 2026-06-29): `0001`
-  cogl #32 stencil-clip degrade, `0002` x11-survive-frames, `0003` ext-data-control clipboard. No
-  rebase was needed across the GNOME 49→50 bump (only `0003`'s `src/meson.build` hunks were rebased
-  to 50.1's layout).
+- **mutter: none since 2026-07-11** — the payload ships NO mutter; the GNOME clipboard tier is
+  the `clipboard@limina` shell extension (`guest/gnome-shell-extension/`), and stock mutter
+  stays stock. (History: `0001`+`0002`+`0003` applied clean to mutter 50.1 on 2026-06-29;
+  `0001`/`0002` were later retired as root-caused-elsewhere, `0003` is kept unshipped for
+  ext-data-control experiments via the optional `build-mutter-rpm.sh`.)
 - **kernel `patches/linux/0001-0003`** (drm/virtio scanout) may already be upstream in F44's
   kernel; they're applied tolerantly (skipped if they don't apply).
 

@@ -4,11 +4,12 @@
 
 # Package an already-assembled enhanced-tier payload into a SHIPPABLE tarball with SOURCE RPMs.
 # Run in the build guest AFTER build-all.sh has produced $PAYLOAD (~/limina-guest-tools):
-#   - generate the PATCHED source RPMs for mesa + mutter (rpmbuild -bs on the specs build-*.sh
-#     staged in ~/rpmbuild) -> $PAYLOAD/srpms/
+#   - generate the PATCHED source RPM for mesa (rpmbuild -bs on the spec build-mesa-rpm.sh
+#     staged in ~/rpmbuild) -> $PAYLOAD/srpms/  (mutter left the payload 2026-07-11: the GNOME
+#     clipboard tier is the clipboard@limina shell extension now, stock mutter stays stock)
 #   - bundle the kernel SOURCE reference (config + patches + build script + tag); the kernel has
 #     no rebuildable Fedora SRPM (built from stable.git + Fedora config, not a distro SRPM)
-#   - build $PAYLOAD/repo: a createrepo_c'd local dnf repo with EVERY mesa/mutter subpackage
+#   - build $PAYLOAD/repo: a createrepo_c'd local dnf repo with EVERY mesa subpackage
 #     Fedora ships (devel/tests included; debuginfo excluded). install-enhanced.sh installs it
 #     into the guest so `dnf install mesa-libgbm-devel` etc. resolves against OUR versionlocked
 #     NEVRA — Fedora's own -devel subpackages require the exact stock NEVRA the lock excludes.
@@ -22,8 +23,8 @@ PAYLOAD="${PAYLOAD:-$HOME/limina-guest-tools}"
 [ -f "$PAYLOAD/manifest.txt" ] || { echo "payload not ready (no $PAYLOAD/manifest.txt) — run build-all.sh first" >&2; exit 1; }
 SR="$PAYLOAD/srpms"; mkdir -p "$SR"
 
-echo "== [1/4] patched SRPMs: mesa + mutter (rpmbuild -bs) =="
-for pkg in mesa mutter; do
+echo "== [1/4] patched SRPMs: mesa (rpmbuild -bs) =="
+for pkg in mesa; do
   spec="$HOME/rpmbuild/SPECS/$pkg.spec"
   if [ ! -f "$spec" ]; then echo "  WARN: $spec missing — skipping $pkg SRPM"; continue; fi
   if rpmbuild -bs "$spec" >/tmp/$pkg-srpm.log 2>&1; then
@@ -61,21 +62,21 @@ tar -czf "$SR/limina-kernel-16k-source.tar.gz" -C "$tmpd" limina-kernel-16k-sour
 rm -rf "$tmpd"
 echo "  ok: limina-kernel-16k-source.tar.gz"
 
-echo "== [3/4] local dnf repo: every mesa/mutter subpackage (devel/tests in, debuginfo out) =="
+echo "== [3/4] local dnf repo: every mesa subpackage (devel/tests in, debuginfo out) =="
 # The guest-side counterpart lives in install-enhanced.sh (step 3b): it copies this dir to
 # /usr/share/limina-guest-tools/repo + drops a .repo file. Hardlink into the subdir so the
 # tarball doesn't double in size (GNU tar stores hardlinks once).
 REPODIR="$PAYLOAD/repo"
 rm -rf "$REPODIR"; mkdir -p "$REPODIR"
 NREPO=0
-for f in "$PAYLOAD"/mesa-*.rpm "$PAYLOAD"/mutter-*.rpm; do
+for f in "$PAYLOAD"/mesa-*.rpm; do
   [ -f "$f" ] || continue
   case "$(basename "$f")" in *debuginfo*|*debugsource*|*.src.rpm) continue ;; esac
   ln -f "$f" "$REPODIR/" 2>/dev/null || cp -f "$f" "$REPODIR/"
   NREPO=$((NREPO+1))
 done
 if [ "$NREPO" = 0 ]; then
-  echo "  WARN: no mesa/mutter RPMs at the payload top level — repo skipped (devel stays uninstallable)"
+  echo "  WARN: no mesa RPMs at the payload top level — repo skipped (devel stays uninstallable)"
   rm -rf "$REPODIR"
 else
   # The mesa build produces the -devel subpackages (rpmbuild -bb builds them ALL); their absence
@@ -91,7 +92,7 @@ fi
 echo "== refresh manifest =="
 { echo; echo "srpms (saved $(date -u +%Y-%m-%dT%H:%M:%SZ)):"; ls -1 "$SR" | sed 's/^/  - /'
   if [ -d "$REPODIR" ]; then
-    echo "repo: $NREPO RPMs (all mesa/mutter subpackages incl. -devel; served in-guest via /etc/yum.repos.d/limina-guest-tools.repo)"
+    echo "repo: $NREPO RPMs (all mesa subpackages incl. -devel; served in-guest via /etc/yum.repos.d/limina-guest-tools.repo)"
   fi
 } >> "$PAYLOAD/manifest.txt"
 
