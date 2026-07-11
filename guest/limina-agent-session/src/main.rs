@@ -10,14 +10,19 @@
 //! connection to the host control plane (no root needed), advertising the `clipboard`
 //! capability.
 //!
-//! Two backends, probed in tier order (see [`wayland_clip`]):
-//! - **Enhanced**: ext-data-control-v1 Wayland client against our patched mutter
-//!   (`patches/mutter/`) — focusless selection management with no side effects.
+//! Three backends, probed in tier order (see [`wayland_clip`] and [`ext_bridge`]):
+//! - **ext-data-control-v1** Wayland client — focusless selection management with no
+//!   side effects, on compositors that ship the protocol (KDE, wlroots; GNOME
+//!   upstream declines it, mutter#524).
+//! - **The `clipboard@limina` shell-extension bridge** (`guest/gnome-shell-extension/`)
+//!   — the GNOME tier: the extension scripts Meta.Selection inside the compositor
+//!   and we drive it over the session bus. Quiet like ext-data-control, and immune
+//!   to distro mutter updates (which is what retired the patched-mutter carry).
 //! - **Stock fallback**: mutter's private RemoteDesktop D-Bus API on the session bus
 //!   (the clipboard spike, `spikes/clipboard-remotedesktop/`, proved a background
 //!   session-bus client can drive it — and that nothing else on stock mutter 49.5
 //!   can). Cosmetic cost: GNOME shows the screen-share indicator while the
-//!   RemoteDesktop session exists — which is exactly why the enhanced path exists.
+//!   RemoteDesktop session exists — which is exactly why the quieter tiers exist.
 //!
 //! Bridge shape (see `crates/limina/src/clipboard.rs` for the host side and the protocol
 //! rules — symmetric eager-pull, newest serial wins):
@@ -44,7 +49,9 @@ use limina_proto::{
     CHANNEL_CLIPBOARD, CHANNEL_CONTROL, CONTROL_PORT,
 };
 
+mod ext_bridge;
 mod wayland_clip;
+use ext_bridge::BridgeClip;
 use wayland_clip::WaylandClip;
 
 const TEXT_MIME: &str = "text/plain;charset=utf-8";
@@ -53,6 +60,10 @@ const OFFER_MIMES: [&str; 2] = [TEXT_MIME, "text/plain"];
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(1);
 /// Backoff between vsock reconnect attempts.
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
+/// Backend-probe attempts before the RemoteDesktop fallback is taken even while the
+/// extension tier still looks imminent (× RECONNECT_EVERY ≈ 20 s) — the cap on a
+/// stuck "imminent" verdict, e.g. an enabled extension that crashes before exporting.
+const RD_GRACE_ATTEMPTS: u32 = 10;
 
 /// Everything the main loop reacts to, funneled into one mpsc queue.
 enum Event {
@@ -77,16 +88,21 @@ fn main() {
     eprintln!("limina-agent-session {}: starting", version());
 
     // Pick a clipboard backend (retry: gnome-shell may still be coming up when the
-    // user unit starts). Enhanced tier first — ext-data-control on our patched
-    // mutter; a compositor without the protocol is stock tier and falls back to the
-    // RemoteDesktop D-Bus path. If the session dies later we exit and systemd
-    // restarts us into the (new) graphical session.
+    // user unit starts). Tier order: ext-data-control → the clipboard@limina
+    // extension bridge → mutter's RemoteDesktop D-Bus API. Any failure falls
+    // through to the next probe — environments with no Wayland display at all (the
+    // L1 mock guest) must still reach the fallbacks, and in a real session that's
+    // still coming up ALL probes fail and we retry the set. The RemoteDesktop
+    // fallback (the one with the screen-share indicator) is additionally parked
+    // while the extension tier is still plausibly coming ([`BridgeOutlook`]), so a
+    // booting GNOME session lands on the quiet tier instead of racing to the loud
+    // one. If the session dies later we exit and systemd restarts us into the
+    // (new) graphical session.
     let (tx, rx) = mpsc::channel::<Event>();
+    let mut kick = ExtensionKick::new();
+    let mut attempts: u32 = 0;
     let clip = loop {
-        // Any Wayland failure falls through to the D-Bus probe: environments with
-        // no Wayland display at all (the L1 mock-mutter guest) must still reach
-        // the fallback, and in a real session that's still coming up BOTH probes
-        // fail and we retry the pair.
+        attempts += 1;
         let wl_err = match WaylandClip::connect(tx.clone()) {
             Ok(w) => {
                 eprintln!("limina-agent-session: ext-data-control backend up (enhanced tier)");
@@ -94,17 +110,32 @@ fn main() {
             }
             Err(e) => e,
         };
-        match ClipSession::connect() {
-            Ok(c) => {
-                eprintln!("limina-agent-session: RemoteDesktop backend up (wayland: {wl_err})");
-                c.spawn_signal_threads(tx.clone());
-                break Clip::RemoteDesktop(c);
+        let br_err = match BridgeClip::connect(tx.clone()) {
+            Ok(b) => {
+                eprintln!("limina-agent-session: extension-bridge backend up (wayland: {wl_err})");
+                break Clip::Bridge(b);
             }
-            Err(e) => {
-                eprintln!(
-                    "limina-agent-session: no backend yet (wayland: {wl_err}; remotedesktop: {e}); retrying"
-                );
+            Err(e) => e,
+        };
+        if attempts > RD_GRACE_ATTEMPTS || kick.outlook() == BridgeOutlook::Never {
+            match ClipSession::connect() {
+                Ok(c) => {
+                    eprintln!(
+                        "limina-agent-session: RemoteDesktop backend up (wayland: {wl_err}; bridge: {br_err})"
+                    );
+                    c.spawn_signal_threads(tx.clone());
+                    break Clip::RemoteDesktop(c);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "limina-agent-session: no backend yet (wayland: {wl_err}; bridge: {br_err}; remotedesktop: {e}); retrying"
+                    );
+                }
             }
+        } else {
+            eprintln!(
+                "limina-agent-session: extension bridge expected; parking the RemoteDesktop fallback (wayland: {wl_err}; bridge: {br_err})"
+            );
         }
         std::thread::sleep(RECONNECT_EVERY);
     };
@@ -140,11 +171,13 @@ fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// The clipboard backend behind the bridge: same [`Event`] vocabulary either way.
+/// The clipboard backend behind the bridge: same [`Event`] vocabulary each way.
 enum Clip {
-    /// Enhanced tier: ext-data-control-v1 against our patched mutter.
+    /// ext-data-control-v1, on compositors that ship the protocol.
     Wayland(WaylandClip),
-    /// Stock tier: mutter's RemoteDesktop D-Bus API.
+    /// The clipboard@limina shell-extension bridge (stock GNOME, quiet).
+    Bridge(BridgeClip),
+    /// Last resort: mutter's RemoteDesktop D-Bus API (screen-share indicator).
     RemoteDesktop(ClipSession),
 }
 
@@ -152,13 +185,19 @@ impl Clip {
     fn selection_read(&self, mime: &str) -> Result<Vec<u8>, String> {
         match self {
             Clip::Wayland(w) => w.selection_read(mime),
+            Clip::Bridge(b) => b.selection_read(mime),
             Clip::RemoteDesktop(c) => c.selection_read(mime).map_err(|e| e.to_string()),
         }
     }
 
-    fn set_selection(&self) -> Result<(), String> {
+    /// Own the guest selection with host content. `data` is the bridge's cache: the
+    /// Wayland/RemoteDesktop backends ignore it (they announce formats and serve the
+    /// content later, per transfer); the extension bridge sends it up front (the
+    /// compositor serves every paste in-process, so no transfers come back).
+    fn set_selection(&self, data: &[u8]) -> Result<(), String> {
         match self {
             Clip::Wayland(w) => w.set_selection(),
+            Clip::Bridge(b) => b.set_selection(data),
             Clip::RemoteDesktop(c) => c.set_selection().map_err(|e| e.to_string()),
         }
     }
@@ -166,15 +205,17 @@ impl Clip {
     fn selection_write(&self, serial: u32, data: &[u8]) -> Result<(), String> {
         match self {
             Clip::Wayland(w) => w.selection_write(serial, data),
+            Clip::Bridge(_) => Err("extension bridge serves pastes in-shell (no transfers)".into()),
             Clip::RemoteDesktop(c) => c.selection_write(serial, data).map_err(|e| e.to_string()),
         }
     }
 
-    /// Transfer postlude: only the D-Bus path has an explicit done call (on the
-    /// Wayland path closing the fd IS the completion).
+    /// Transfer postlude: only the RemoteDesktop path has an explicit done call (on
+    /// the Wayland path closing the fd IS the completion; the extension bridge has
+    /// no transfers at all).
     fn selection_write_done(&self, serial: u32, success: bool) -> Result<(), String> {
         match self {
-            Clip::Wayland(_) => Ok(()),
+            Clip::Wayland(_) | Clip::Bridge(_) => Ok(()),
             Clip::RemoteDesktop(c) => c
                 .selection_write_done(serial, success)
                 .map_err(|e| e.to_string()),
@@ -327,7 +368,8 @@ impl Bridge {
                     return; // superseded by a newer host offer
                 }
                 self.cached_host_text = Some(d.data);
-                if let Err(e) = self.clip.set_selection() {
+                let data = self.cached_host_text.as_deref().unwrap_or_default();
+                if let Err(e) = self.clip.set_selection(data) {
                     eprintln!("limina-agent-session: SetSelection failed: {e}");
                 }
             }
@@ -377,6 +419,131 @@ fn vsock_connect(port: u32) -> Option<File> {
             None
         }
     }
+}
+
+// --- the extension-tier outlook (drives the RemoteDesktop fallback timing) ------------
+
+const EXTENSION_UUID: &str = "clipboard@limina";
+
+/// gnome-shell extension state numbers (js ExtensionState; `GetExtensionInfo.state`).
+const EXT_STATE_ENABLED: u32 = 1;
+const EXT_STATE_ENABLING: u32 = 8;
+
+/// Whether the probe loop may still hope for the extension bridge this session.
+#[derive(PartialEq, Clone, Copy)]
+enum BridgeOutlook {
+    /// gnome-shell is up and the extension is enabled/enabling (or we just enabled
+    /// it): the bridge export is moments away — keep RemoteDesktop parked.
+    Imminent,
+    /// No gnome-shell, no extension installed, or the user disabled it: fall back.
+    Never,
+}
+
+/// The extension availability oracle + its one-time self-enable.
+///
+/// The enhanced installer drops the extension under /usr/share/gnome-shell/extensions
+/// but cannot enable it: `enabled-extensions` is per-user dconf state and no session
+/// exists at install time. So the first session probe enables it from here, ONCE per
+/// user (stamp file) — a later disable by the user is their call and is never
+/// overridden; those sessions ride the RemoteDesktop tier instead.
+struct ExtensionKick {
+    /// EnableExtension was tried this run (never hammer the shell from the loop).
+    attempted: bool,
+}
+
+impl ExtensionKick {
+    fn new() -> ExtensionKick {
+        ExtensionKick { attempted: false }
+    }
+
+    fn outlook(&mut self) -> BridgeOutlook {
+        let Ok(conn) = zbus::blocking::Connection::session() else {
+            return BridgeOutlook::Never; // no session bus: nothing extension-shaped coming
+        };
+        if !ext_bridge::name_has_owner(&conn, "org.gnome.Shell").unwrap_or(false) {
+            return BridgeOutlook::Never; // not GNOME (or the shell is gone)
+        }
+        match extension_state(&conn) {
+            // Enabled or mid-enable: the export is imminent. This also covers a
+            // still-starting shell that hasn't loaded extensions yet.
+            Some(EXT_STATE_ENABLED | EXT_STATE_ENABLING) => BridgeOutlook::Imminent,
+            // Installed but not enabled (fresh install / user-disabled): see below.
+            Some(_) => self.enable_once(&conn),
+            // Not installed (basic tier without the payload): don't stall clipboard.
+            None => BridgeOutlook::Never,
+        }
+    }
+
+    fn enable_once(&mut self, conn: &zbus::blocking::Connection) -> BridgeOutlook {
+        if self.attempted {
+            return BridgeOutlook::Never; // this run's verdict is already in
+        }
+        let Some(stamp) = enable_stamp_path() else {
+            return BridgeOutlook::Never;
+        };
+        if stamp.exists() {
+            return BridgeOutlook::Never; // enabled once before: the user turned it off
+        }
+        self.attempted = true;
+        match enable_extension(conn) {
+            Ok(true) => {
+                if let Some(dir) = stamp.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::write(&stamp, b"");
+                eprintln!("limina-agent-session: enabled the {EXTENSION_UUID} shell extension");
+                BridgeOutlook::Imminent
+            }
+            Ok(false) => BridgeOutlook::Never,
+            Err(e) => {
+                // The shell may still be booting its Extensions service; retry on
+                // the next probe pass (bounded by RD_GRACE_ATTEMPTS regardless).
+                eprintln!("limina-agent-session: EnableExtension failed: {e}");
+                self.attempted = false;
+                BridgeOutlook::Imminent
+            }
+        }
+    }
+}
+
+/// The shell's state number for our extension (`GetExtensionInfo`); None when the
+/// extension isn't installed (empty dict) or the query itself fails.
+fn extension_state(conn: &zbus::blocking::Connection) -> Option<u32> {
+    let p = shell_extensions_proxy(conn).ok()?;
+    let info: HashMap<String, zbus::zvariant::OwnedValue> =
+        p.call("GetExtensionInfo", &(EXTENSION_UUID,)).ok()?;
+    // The shell packs `state` as a DOUBLE (it's a GJS number).
+    match unwrap_value(info.get("state")?) {
+        zbus::zvariant::Value::F64(v) => Some(*v as u32),
+        zbus::zvariant::Value::U32(v) => Some(*v),
+        _ => None,
+    }
+}
+
+fn enable_extension(conn: &zbus::blocking::Connection) -> Result<bool, String> {
+    let p = shell_extensions_proxy(conn).map_err(|e| e.to_string())?;
+    p.call::<_, _, bool>("EnableExtension", &(EXTENSION_UUID,))
+        .map_err(|e| e.to_string())
+}
+
+fn shell_extensions_proxy(
+    conn: &zbus::blocking::Connection,
+) -> zbus::Result<zbus::blocking::Proxy<'static>> {
+    zbus::blocking::Proxy::new(
+        conn,
+        "org.gnome.Shell.Extensions",
+        "/org/gnome/Shell/Extensions",
+        "org.gnome.Shell.Extensions",
+    )
+}
+
+/// `$XDG_STATE_HOME/limina/clipboard-extension-enabled` (~/.local/state fallback).
+fn enable_stamp_path() -> Option<std::path::PathBuf> {
+    let base = match std::env::var("XDG_STATE_HOME") {
+        Ok(s) if !s.is_empty() => std::path::PathBuf::from(s),
+        _ => std::path::PathBuf::from(std::env::var("HOME").ok()?).join(".local/state"),
+    };
+    Some(base.join("limina/clipboard-extension-enabled"))
 }
 
 // --- the mutter RemoteDesktop client (what rdclip.py prototyped) ----------------------

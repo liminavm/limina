@@ -22,6 +22,12 @@
 //!
 //! On SetSelection the mock immediately plays a pasting app (emits SelectionTransfer),
 //! so a host→guest sync is observable as `PASTED <text>` with no extra choreography.
+//!
+//! `LIMINA_MOCK_BRIDGE=1` additionally claims `org.limina.Clipboard` — the scripted
+//! stand-in for the clipboard@limina gnome-shell extension (the middle backend). Both
+//! names on one bus lets a test assert the helper PREFERS the bridge: `BRIDGE_*` log
+//! lines appear and `CREATE_SESSION` never does. The bridge contract has no transfer
+//! choreography, so host→guest is observable as `BRIDGE_SET <text>` directly.
 
 use std::collections::HashMap;
 use std::fs::OpenOptions;
@@ -164,6 +170,50 @@ impl Session {
     ) -> zbus::Result<()>;
 }
 
+/// The scripted stand-in for the clipboard@limina extension's bridge object.
+struct Bridge {
+    read_content: Shared,
+}
+
+#[interface(name = "org.limina.Clipboard")]
+impl Bridge {
+    /// Serve the scripted "guest app copy" content — on this contract the data
+    /// rides the method reply, no fd dance.
+    fn read(&self, mime_type: String) -> Vec<u8> {
+        let content = self.read_content.lock().unwrap().clone();
+        log_line(&format!(
+            "BRIDGE_READ {mime_type} ({} bytes)",
+            content.len()
+        ));
+        content
+    }
+
+    /// Host content arrived. With the extension contract this IS the delivery (the
+    /// compositor serves every guest paste from the parked memory source), so the
+    /// mock logs it as the observable outcome.
+    fn set(&self, data: Vec<u8>) {
+        log_line(&format!("BRIDGE_SET {}", String::from_utf8_lossy(&data)));
+    }
+
+    #[zbus(property)]
+    fn version(&self) -> u32 {
+        1
+    }
+
+    #[zbus(signal)]
+    async fn owner_changed(
+        emitter: &SignalEmitter<'_>,
+        has_text: bool,
+        is_owner: bool,
+    ) -> zbus::Result<()>;
+}
+
+const BRIDGE_PATH: &str = "/org/limina/Clipboard";
+
+fn bridge_mode() -> bool {
+    std::env::var("LIMINA_MOCK_BRIDGE").is_ok_and(|v| v == "1")
+}
+
 fn pipe() -> fdo::Result<(std::fs::File, std::fs::File)> {
     let mut fds = [0i32; 2];
     if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
@@ -204,6 +254,20 @@ fn main() {
         // The session bus may still be coming up (init spawns dbus-daemon just before us).
         let conn = loop {
             match zbus::connection::Builder::session().and_then(|b| {
+                // Bridge FIRST: names are claimed in order during build, and a helper
+                // probing the sliver between them must not find RemoteDesktop alone
+                // (it would legitimately pick the loud tier and flake the preference
+                // test — on a real desktop the extension exports before the probe).
+                let b = if bridge_mode() {
+                    b.name("org.limina.Clipboard")?.serve_at(
+                        BRIDGE_PATH,
+                        Bridge {
+                            read_content: read_content.clone(),
+                        },
+                    )?
+                } else {
+                    b
+                };
                 b.name("org.gnome.Mutter.RemoteDesktop")?.serve_at(
                     "/org/gnome/Mutter/RemoteDesktop",
                     RemoteDesktop {
@@ -235,6 +299,15 @@ fn main() {
             last = content.clone();
             *read_content.lock().unwrap() = content;
             let server = conn.object_server();
+            // Bridge mode: the extension contract announces owner changes directly.
+            if bridge_mode() {
+                if let Ok(iface) = server.interface::<_, Bridge>(BRIDGE_PATH).await {
+                    match Bridge::owner_changed(iface.signal_emitter(), true, false).await {
+                        Ok(()) => log_line("BRIDGE_OWNER_CHANGED_EMITTED"),
+                        Err(e) => eprintln!("limina-mock-mutter: bridge emit failed: {e}"),
+                    }
+                }
+            }
             let Ok(iface) = server.interface::<_, Session>(SESSION_PATH).await else {
                 continue; // no session yet — the helper hasn't connected
             };
