@@ -50,7 +50,7 @@ memories before anyone noticed. Verified 2026-06-27 by reading each image's rpmd
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
 | **F44 stock** (`*.raw`, `*.boot.raw`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.2` *(co-installed beside stock `6.19.10-300`; respun 2026-07-04, old `6.19.10-limina16k` pruned)* | 16 KiB | `26.1.3-3.limina.fc44` *(respun 2026-07-04 to dogfood parity)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
-| **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools; the `enhanced`/`enhanced.test` images now match it as of the 2026-07-04 respin)* | `limina-kernel-16k-7.1.2` | 16 KiB | `26.1.3-3.limina.fc44` *(-2 adds 0011 unorm-WSI drop, -3 adds 0013 TLS-dtor fix)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
+| **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools; the `enhanced`/`enhanced.test` images now match it as of the 2026-07-04 respin)* | `limina-kernel-16k-7.1.2` | 16 KiB | `26.1.3-3.limina.fc44` *(-2 adds 0011 unorm-WSI drop, -3 adds 0013 TLS-dtor fix)* | **stock** `50.3-2.fc44` *(since 2026-07-11: distro update displaced the patched build; clipboard rides the clipboard@limina extension — deployed + user-verified working)* | `50.3` *(stock)* |
 
 Notes: enhanced **mesa + kernel** are pinned to *our* version and `dnf versionlock`ed; enhanced
 **mutter** is rebuilt from the target distro's mutter SRPM carrying our patches over the stock GNOME
