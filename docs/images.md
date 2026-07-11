@@ -69,7 +69,18 @@ demoting clipboard to the screen-share-indicator tier — and the same event val
 mutter needs none of our rendering patches (0001/0002 retired; root causes were host-side/our own
 build, see `patches/mutter/README.md`). Images that still contain `50.1-1.limina` mutter are fine:
 it gets displaced by the guest's next distro update, and the tier ladder absorbs either state.
-From the next payload/image refresh, guest mutter is plain stock.
+From the next payload/image refresh, guest mutter is plain stock. **Refresh done
+2026-07-11:** the shippable tarball is now `target/guest-tools-7.1.2-ext/limina-guest-tools-f44.tar.zst`
+(mesa-only repo, clipboard@limina extension, 3-tier limina-agent-session, no mutter), and BOTH
+`enhanced.raw` and `enhanced.test.raw` took an `install-enhanced.sh` pass from it (kernel/mesa
+idempotent no-ops; extension + new helper + mesa-only repo landed; 7.1.2 trial boot re-promoted;
+clean poweroff). The images still carry the old patched mutter, so their helper sits on the
+ext-data-control tier until a distro update displaces it — then the extension tier takes over.
+GOTCHA found while validating: the accessible-derived images have gsettings
+`org.gnome.shell disable-user-extensions=true` (origin unknown, not our provisioning), which blocks
+ALL user extensions — on such guests the helper stamps its one-time enable, parks ~20 s, then rides
+the RemoteDesktop tier. Consider `gsettings set org.gnome.shell disable-user-extensions false` in
+`make-accessible.sh` at the next image respin.
 
 **Enhanced images RESPUN to dogfood parity (2026-07-04)** — `enhanced.raw` + `enhanced.test.raw` were
 brought from kernel `6.19.10-limina16k` + mesa `26.1.3-1` up to **kernel `7.1.2-limina16k` + mesa
