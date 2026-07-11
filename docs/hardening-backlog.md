@@ -207,7 +207,27 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
 - ~~**Pointer warps / pointer capture**~~ — **DONE** (2026-06-27). `Cmd-Ctrl-G` capture mode feeds
   the guest a separate relative-mouse virtio-input device; closes the guest-warp gap. Host cursor
   pinned by warp-to-centre (CGAssociate-false alone insufficient on macOS 26).
-- **Pointer-capture containment — revisit fresh** (parked 2026-06-27). The current scheme re-pins the
+- **Pointer grab: review / redesign / validation** (reopened 2026-07-11, user-requested). Three
+  strands. **(a) On the dogfood deployment (dogfood-mac) the Accessibility permission seemingly still
+  isn't sticking, so the grab's CGEventTap can't capture Cmd-Tab** (user, 2026-07-11). This is the
+  suspected tail of the ad-hoc-signing TCC churn: the fix (Apple Development identity + team-pinned
+  designated requirement in `build-app.sh`, plus tap retry / AX re-prompt on Cmd-Ctrl-G, `301a702`)
+  shipped 2026-07-03 but was **never validated on dogfood-mac** — the planned one-time TCC re-add there is
+  still outstanding. Validate: confirm the deployed .app is identity-signed (`codesign -dr -`
+  shows the team-pinned DR, not ad-hoc), have the user delete + re-add the Accessibility entry
+  once, then check the grant survives a redeploy. If it *still* drops with a stable DR, that's a
+  new bug worth its own root-cause pass. Diagnostics on dogfood-mac read-only; the re-add/redeploy steps
+  are the user's.
+  **(b) Grabbed cursor feel** — even where the grab works, captured-mode movement should be
+  indistinguishable from non-grabbed. **(c) Redesign to explore: a *confinement* grab** — keep the
+  exact non-grabbed pointer path (absolute coordinates through the fit rect, host cursor wearing
+  the guest shape, identical movement/acceleration) and have the grab only (1) clamp the cursor to
+  the window's fitted content and (2) capture system combos (Cmd-Tab etc., extending the
+  CGEventTap/`match_host_shortcut` framework). That drops the relative-mouse device + warp-to-centre
+  scheme from the ordinary grab entirely — sidestepping both (a) and (b) and likely the RD fight —
+  while the relative device stays for guest pointer-lock (games), which genuinely needs deltas.
+  Prior verified findings in the next entry still apply.
+- **Pointer-capture containment — prior findings** (parked 2026-06-27). The current scheme re-pins the
   (hidden) host cursor to display-centre on *every* captured motion event. Verified facts: macOS 26
   `CGAssociateMouseAndMouseCursorPosition(false)` does NOT freeze the cursor (its `CGEventGetLocation`
   tracks the mouse 1:1), the session `CGEventTap` never disables under load, and with the per-event
@@ -220,6 +240,19 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   cursor-freeze API instead of warp, `CGDisplayHideCursor`+associate semantics, an `IOHIDEventSystem`
   relative-tap, or detecting/co-existing with an upstream RD capture. Flat guest pointer profile
   (enhanced tier, `accel-profile='flat'`) is the other half and works.
+- **Non-grabbed guest cursor renders too large in a non-fullscreen window** (open, user-reported
+  2026-07-11) — with match-host the guest renders at ~display resolution and the window shows the
+  scanout shrunken through the fit rect, but the host-pointer shape adoption builds the `NSCursor`
+  at **1 px = 1 pt** (`crates/limina/src/window/cursor.rs` `build_guest_cursor`, which even carries
+  a "revisit for HiDPI" note; `nscursor_from_context` sets `NSImage` size = raw `w,h` and the
+  hotspot unscaled). So the desktop scales with the window while the cursor sprite doesn't —
+  correct only at fullscreen where fit scale ≈ 1. The **captured** path is already right
+  (`update_capture_cursor` scales by the parent scanout layer's bounds), which is why it only shows
+  when not grabbed. Fix shape: scale the `NSImage` point size **and the hotspot** by the shared
+  fit-rect scale (`window/fit.rs` — the same pixels↔points transform pointer mapping uses; don't
+  derive a second one), clamp upscale to 1.0 (blurry bitmap), and include the scale (quantized) in
+  `apply_cursor`'s rebuild cache key — today it caches by IOSurface id alone
+  (`built: Cell<Option<u32>>`), so a window resize would never rebuild the shape.
 - ~~**Fullscreen**~~ (`Cmd-Ctrl-F`) and ~~**keymap remap / Command-Option swap**~~ (`--swap-cmd-opt`)
   — **DONE** (2026-06-27). Remaining M8 polish: **system-combo capture** (CGEventTap behind a TCC
   toggle — extends the existing `match_host_shortcut` framework to system combos), **multi-display**
