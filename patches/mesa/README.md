@@ -20,7 +20,7 @@ in `patches/kosmickrisp/`.
 |---|---|---|
 | `scripts/build-mesa-zink.sh` (guest GL/zink tree, `/opt/mesa-zink`) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`, 2026-06-07) | 0001–0006 (the zink pool) |
 | `scripts/build-venus.sh` (guest venus ICD rebuild) | tag `mesa-26.1.0` (parametric `MESA_TAG`) | 0009 + 0010 |
-| `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM) | Fedora F44 `mesa-26.1.3` SRPM | 0001 + 0009 + 0010 + 0011 |
+| `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM) | Fedora F44 `mesa-26.1.3` SRPM | 0001 + 0009–0014 |
 
 gitlab.freedesktop.org is Anubis-bot-blocked → builds clone a GitHub mirror.
 
@@ -125,6 +125,18 @@ host-zink series lives separately in `patches/kosmickrisp/`.
   `spikes/egl-tsd-repro/` (surfaceless EGL init + `eglTerminate` on a worker thread —
   the shape of niri's headless `egl_*` tests). Upstream `main` still has the bug
   (checked 2026-07-02). Clearly upstreamable.
+- **`0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff`** (2026-07-12, suite-wedge fix) —
+  zink: `zink_batch_usage_unflushed_wait()`'s multi-context branch checked `u->unflushed`
+  outside `u->mtx` and then `cnd_wait`ed with no re-check/loop, while `submit_queue`
+  cleared the flag and broadcast without the mutex — a textbook lost wakeup. Bit as a
+  100-minute `venus_replay` hang (eglretrace frozen in `glReadPixels`); live-confirmed by
+  reading `unflushed == false` out of `/proc/<pid>/mem` while the thread slept, and by
+  resuming the process with a hand-delivered `pthread_cond_broadcast` from gdb. Also fixes
+  the `trywait` path's absolute-vs-relative `cnd_timedwait` timespec (always-expired).
+  Full forensics: `spikes/venus-replay-zink-hang-2026-07-12/RESULTS.md`. Upstream `main`
+  still has the bug (checked 2026-07-12). Clearly upstreamable. NOTE: the same code ships
+  in the HOST zink-on-KK GL build (`/Volumes/mesa-cs`) — apply there on the next host mesa
+  refresh.
 
 ## Re-export / DIAG hygiene
 The in-guest working tree carried temporary `LIMINA-DIAG` debug hacks (force

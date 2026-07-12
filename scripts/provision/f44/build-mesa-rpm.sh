@@ -25,6 +25,10 @@
 #         Vulkan surface format but NOT a wgpu render attachment, so a conventional "first
 #         non-sRGB" wgpu client (ghost-ui) that lands on it fails pipeline creation. Matches
 #         lavapipe; loses nothing real (host scanout is 8-bit; 16-bit textures still work).
+#   0014  zink: fix the multi-context unflushed-batch wait lost-wakeup deadlock — without it
+#         a cross-context map (e.g. glReadPixels) can sleep forever on a cnd_broadcast that
+#         fired between the unlocked predicate check and the cnd_wait
+#         (spikes/venus-replay-zink-hang-2026-07-12/, live-confirmed; unfixed upstream).
 # These were authored on mesa 26.1.0; F44 ships 26.0.x, so they may need a rebase. We add them via
 # the spec (NOT a tolerant pre-apply) ON PURPOSE: a non-applying patch FAILS %prep loudly, rather
 # than silently shipping a present-fix-less (black-screen) mesa.
@@ -58,11 +62,12 @@ cp -f "$PATCHES"/0001-zink-nullDescriptor-emulation-MR37115.diff \
       "$PATCHES"/0011-venus-wsi-drop-16bit-unorm-swapchain.diff \
       "$PATCHES"/0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff \
       "$PATCHES"/0013-venus-pin-icd-for-tls-destructor.diff \
+      "$PATCHES"/0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff \
       "$HOME/rpmbuild/SOURCES/"
 SPEC="$HOME/rpmbuild/SPECS/mesa.spec"
 LAST_PATCH_LINE=$( { grep -nE "^Patch[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
 [ -n "$LAST_PATCH_LINE" ] || LAST_PATCH_LINE=$( { grep -nE "^Source[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
-ins="Patch9001: 0001-zink-nullDescriptor-emulation-MR37115.diff\nPatch9009: 0009-venus-wsi-present-fix.diff\nPatch9010: 0010-venus-image-physdev-native-modifier.diff\nPatch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff\nPatch9012: 0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff\nPatch9013: 0013-venus-pin-icd-for-tls-destructor.diff"
+ins="Patch9001: 0001-zink-nullDescriptor-emulation-MR37115.diff\nPatch9009: 0009-venus-wsi-present-fix.diff\nPatch9010: 0010-venus-image-physdev-native-modifier.diff\nPatch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff\nPatch9012: 0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff\nPatch9013: 0013-venus-pin-icd-for-tls-destructor.diff\nPatch9014: 0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff"
 sed -i "${LAST_PATCH_LINE}a ${ins}" "$SPEC"
 # Our patches are plain `git diff` (no mailbox headers); ensure %autosetup uses GNU patch (-p1).
 sed -i -E "s/^%autosetup -S git/%autosetup -p1/" "$SPEC"
