@@ -80,6 +80,63 @@ const FORWARDED_SSH_HOST: &str = "127.0.0.1";
 /// VMs can run in parallel without colliding (see [`GuestConfig::with_ssh_port`]).
 const DEFAULT_SSH_PORT: u16 = 2222;
 
+/// Hard cap on any single guest ssh/scp command, so a wedged guest-side process fails the
+/// test instead of stalling the whole suite (2026-07-12: a zink lost-wakeup deadlock froze
+/// eglretrace mid-`venus_replay` and the un-capped ssh blocked `test-boot.sh` for 100
+/// minutes — spikes/venus-replay-zink-hang-2026-07-12/). Generous on purpose: the longest
+/// legitimate steps (the ~1 GiB trace-fixture upload through gvproxy, a full llvmpipe
+/// reference replay) finish in a few minutes. Steps that truly need more pass their own
+/// deadline via [`Guest::ssh_exec_timeout`].
+pub const SSH_CMD_TIMEOUT: Duration = Duration::from_secs(900);
+
+/// Run a spawned command to completion with a deadline: pipe and drain stdout/stderr on
+/// threads (so a chatty child can't block on a full pipe), poll for exit, and on expiry
+/// kill the child and fail with whatever output it produced. The `Command::output()`
+/// shape, minus the ability to hang forever.
+fn run_capped(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().context("spawning the command")?;
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let out_t = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let err_t = drain(child.stderr.take().map(|p| Box::new(p) as _));
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait().context("waiting for the command")? {
+            Some(status) => break Some(status),
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            None => std::thread::sleep(Duration::from_millis(100)),
+        }
+    };
+    let stdout = out_t.join().unwrap_or_default();
+    let stderr = err_t.join().unwrap_or_default();
+    match status {
+        Some(status) => Ok(std::process::Output {
+            status,
+            stdout,
+            stderr,
+        }),
+        None => bail!(
+            "command did not finish within {timeout:?} (killed).\nstdout tail:\n{}\nstderr tail:\n{}",
+            tail(&String::from_utf8_lossy(&stdout), 10),
+            tail(&String::from_utf8_lossy(&stderr), 10)
+        ),
+    }
+}
+
 /// Is HVF-backed boot testing enabled for this run?
 ///
 /// Returns true iff `LIMINA_HVF_TESTS` is set to a truthy value (`1`/`true`/`yes`). Boot
@@ -1864,27 +1921,36 @@ impl Guest {
     /// running sshd — call [`Guest::wait_for_ssh_banner`] first. Errors if ssh exits non-zero
     /// (stderr is included in the message).
     pub fn ssh_exec(&self, remote_cmd: &str) -> Result<String> {
+        self.ssh_exec_timeout(remote_cmd, SSH_CMD_TIMEOUT)
+    }
+
+    /// [`Guest::ssh_exec`] with an explicit deadline, for steps legitimately longer (or
+    /// tighter) than the default cap. On expiry the local ssh is killed and the call fails;
+    /// the remote command may keep running in the guest (fine for tests — the VM is torn
+    /// down with the `Guest`).
+    pub fn ssh_exec_timeout(&self, remote_cmd: &str, timeout: Duration) -> Result<String> {
         let port = self.ssh_port.to_string();
         let login = format!("claude@{FORWARDED_SSH_HOST}");
-        let out = Command::new("ssh")
-            .args([
-                "-p",
-                &port,
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=10",
-                "-o",
-                "LogLevel=ERROR",
-                &login,
-                remote_cmd,
-            ])
-            .output()
-            .with_context(|| format!("spawning ssh to the guest ({FORWARDED_SSH_HOST}:{port})"))?;
+        let mut cmd = Command::new("ssh");
+        cmd.args([
+            "-p",
+            &port,
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "LogLevel=ERROR",
+            &login,
+            remote_cmd,
+        ]);
+        let out = run_capped(cmd, timeout).with_context(|| {
+            format!("ssh `{remote_cmd}` to the guest ({FORWARDED_SSH_HOST}:{port})")
+        })?;
         if !out.status.success() {
             bail!(
                 "ssh `{remote_cmd}` failed ({}):\n{}",
@@ -2008,12 +2074,11 @@ impl Guest {
     /// Copy a local file into the guest at `remote_path` via scp (same forward and login
     /// as [`Guest::ssh_exec`]).
     pub fn scp_to_guest(&self, local: &Path, remote_path: &str) -> Result<()> {
-        let out = Command::new("scp")
-            .args(self.scp_opts())
+        let mut cmd = Command::new("scp");
+        cmd.args(self.scp_opts())
             .arg(local)
-            .arg(format!("claude@{FORWARDED_SSH_HOST}:{remote_path}"))
-            .output()
-            .context("spawning scp to the guest")?;
+            .arg(format!("claude@{FORWARDED_SSH_HOST}:{remote_path}"));
+        let out = run_capped(cmd, SSH_CMD_TIMEOUT).context("scp to the guest")?;
         anyhow::ensure!(
             out.status.success(),
             "scp {local:?} -> guest:{remote_path} failed ({}):\n{}",
@@ -2028,12 +2093,11 @@ impl Guest {
     pub fn scp_from_guest(&self, remote_glob: &str, local_dir: &Path) -> Result<()> {
         fs::create_dir_all(local_dir)
             .with_context(|| format!("creating {local_dir:?} for scp output"))?;
-        let out = Command::new("scp")
-            .args(self.scp_opts())
+        let mut cmd = Command::new("scp");
+        cmd.args(self.scp_opts())
             .arg(format!("claude@{FORWARDED_SSH_HOST}:{remote_glob}"))
-            .arg(local_dir)
-            .output()
-            .context("spawning scp from the guest")?;
+            .arg(local_dir);
+        let out = run_capped(cmd, SSH_CMD_TIMEOUT).context("scp from the guest")?;
         anyhow::ensure!(
             out.status.success(),
             "scp guest:{remote_glob} -> {local_dir:?} failed ({}):\n{}",
@@ -2336,5 +2400,38 @@ pub fn set_pasteboard_text(name: &str, text: &str) {
         let pb = NSPasteboard::pasteboardWithName(&NSString::from_str(name));
         pb.clearContents();
         pb.setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
+    }
+}
+
+#[cfg(test)]
+mod run_capped_tests {
+    use super::*;
+
+    #[test]
+    fn quick_command_returns_output() {
+        let mut cmd = Command::new("/bin/echo");
+        cmd.arg("hello");
+        let out = run_capped(cmd, Duration::from_secs(10)).expect("echo runs");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hello");
+    }
+
+    #[test]
+    fn wedged_command_is_killed_at_the_deadline() {
+        let mut cmd = Command::new("/bin/sleep");
+        cmd.arg("3600");
+        let start = Instant::now();
+        let err = run_capped(cmd, Duration::from_millis(300)).expect_err("must time out");
+        assert!(start.elapsed() < Duration::from_secs(10), "killed promptly");
+        assert!(err.to_string().contains("did not finish"), "{err}");
+    }
+
+    #[test]
+    fn failing_command_reports_status_not_timeout() {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "echo oops >&2; exit 3"]);
+        let out = run_capped(cmd, Duration::from_secs(10)).expect("sh runs to completion");
+        assert_eq!(out.status.code(), Some(3));
+        assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "oops");
     }
 }
