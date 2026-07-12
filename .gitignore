@@ -31,3 +31,4 @@ Cargo.lock.orig
 # Local environment overrides
 .env
 .env.local
+__pycache__/
