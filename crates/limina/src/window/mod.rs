@@ -450,10 +450,11 @@ pub fn run(
     // Cache looked-up surfaces by id (the worker reuses a small fixed set, its double buffer).
     let cache: RefCell<std::collections::HashMap<u32, CFRetained<IOSurfaceRef>>> =
         RefCell::new(std::collections::HashMap::new());
-    // Guest-cursor per-timer state: the last applied cursor gen and the IOSurface id of
-    // the shape the host pointer currently wears (so we rebuild only on a shape change).
+    // Guest-cursor per-timer state: the last applied cursor gen and the (IOSurface id,
+    // content scale) of the shape the host pointer currently wears (so we rebuild only on
+    // an actual shape or window-scale change).
     let last_cursor_gen = Cell::new(0u64);
-    let built_cursor: Cell<Option<u32>> = Cell::new(None);
+    let built_cursor: Cell<Option<(u32, u32)>> = Cell::new(None);
     // The host pointer's guest-shape adoption, shared with the input monitor (which
     // tracks the pointer crossing the view boundary and asserts/clears the shape).
     let host_cursor = input::HostCursor::new();
@@ -756,6 +757,7 @@ pub fn run(
     let shortcut_window = window.clone();
 
     let timer_cursor = host_cursor.clone();
+    let timer_fit = fit_cell.clone();
     let timer_conn = conn.clone();
     let timer_captured = captured.clone();
     let timer_cursor_layer = cursor_layer.clone();
@@ -875,22 +877,29 @@ pub fn run(
         }
 
         // Guest cursor shape first — it has its own gen so a shape change (or hide)
-        // applies even when the scanout hasn't produced a new frame.
-        let cur = {
+        // applies even when the scanout hasn't produced a new frame. The shape is built at
+        // the window's content scale (the fit rect over the guest resolution), so a resize
+        // that rescales the desktop rescales the pointer with it.
+        let (cur, guest_w) = {
             let s = shared.lock().unwrap();
             (
-                s.cursor_gen,
-                s.cursor_visible,
-                s.cursor_id,
-                s.cursor_w,
-                s.cursor_h,
-                s.hot_x,
-                s.hot_y,
+                (
+                    s.cursor_gen,
+                    s.cursor_visible,
+                    s.cursor_id,
+                    s.cursor_w,
+                    s.cursor_h,
+                    s.hot_x,
+                    s.hot_y,
+                ),
+                s.width,
             )
         };
-        if cur.0 != last_cursor_gen.get() {
+        let scale_key = cursor::cursor_scale_key(timer_fit.get().w, guest_w);
+        let scale_moved = built_cursor.get().is_some_and(|(_, k)| k != scale_key);
+        if cur.0 != last_cursor_gen.get() || scale_moved {
             last_cursor_gen.set(cur.0);
-            apply_cursor(&timer_cursor, &built_cursor, &cur, &surface_map);
+            apply_cursor(&timer_cursor, &built_cursor, &cur, &surface_map, scale_key);
         }
         // Pointer-capture cursor: while captured, composite the guest cursor at its reported
         // position (the host NSCursor is hidden then). Position moves every frame, so unlike the

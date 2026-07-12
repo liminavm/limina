@@ -106,26 +106,47 @@ pub(crate) fn update_capture_cursor(
     }
 }
 
+/// The window-to-guest content scale the host pointer shape is built at: guest cursor
+/// pixels shrink/grow by the same factor the scanout does through the fit rect, so the
+/// pointer stays proportional to the desktop it hovers (a 4K-EDID guest in a small window
+/// no longer wears a giant cursor). Quantized so it can key the rebuild cache; degenerate
+/// geometry (early boot, zero-size fit) pins to 1:1.
+pub(crate) fn cursor_scale_key(fit_w: f64, guest_w: u32) -> u32 {
+    let scale = if guest_w > 0 && fit_w > 0.0 {
+        fit_w / f64::from(guest_w)
+    } else {
+        1.0
+    };
+    let key = (scale * 1024.0).round();
+    if key.is_finite() {
+        (key as u32).max(1)
+    } else {
+        1024
+    }
+}
+
 /// Apply the latest guest cursor state to the host pointer. `cur` is
-/// `(gen, visible, id, w, h, hot_x, hot_y)`; `built` caches the IOSurface id of the shape
-/// the host pointer already wears, so we only rebuild on an actual shape change (the
-/// worker publishes each shape as a fresh IOSurface and keeps it alive until the next).
+/// `(gen, visible, id, w, h, hot_x, hot_y)`; `built` caches the IOSurface id and content
+/// scale (`cursor_scale_key`) of the shape the host pointer already wears, so we only
+/// rebuild on an actual shape or scale change (the worker publishes each shape as a fresh
+/// IOSurface and keeps it alive until the next; the scale moves on a window resize).
 pub(crate) fn apply_cursor(
     host: &input::HostCursor,
-    built: &Cell<Option<u32>>,
+    built: &Cell<Option<(u32, u32)>>,
     cur: &(u64, bool, Option<u32>, u32, u32, u32, u32),
     surface_map: &SurfaceMap,
+    scale_key: u32,
 ) {
     let (_gen, visible, id, w, h, hot_x, hot_y) = *cur;
     match id {
         Some(id) if visible && w > 0 && h > 0 => {
-            if built.get() == Some(id) {
+            if built.get() == Some((id, scale_key)) {
                 return;
             }
-            match build_guest_cursor(id, w, h, hot_x, hot_y, surface_map) {
+            match build_guest_cursor(id, w, h, hot_x, hot_y, surface_map, scale_key) {
                 Some(c) => {
                     host.update(c);
-                    built.set(Some(id));
+                    built.set(Some((id, scale_key)));
                 }
                 None => log::warn!("window: building guest cursor from IOSurface {id} failed"),
             }
@@ -145,7 +166,9 @@ pub(crate) fn apply_cursor(
 /// Build an `NSCursor` wearing the guest's cursor image: look up the worker-published
 /// IOSurface (BGRA, premultiplied alpha), copy it through a `CGBitmapContext` into a
 /// `CGImage`, and wrap it with the guest's hotspot (top-left origin, as NSCursor expects).
-/// 1 px = 1 pt — the window presents the scanout 1:1 today; revisit for HiDPI.
+/// The bitmap keeps the guest's full pixel resolution; `scale_key` (`cursor_scale_key`
+/// units) only shrinks the NSImage *point* size — and the hotspot with it — to the
+/// window's content scale, so downscaled cursors stay crisp on Retina backings.
 fn build_guest_cursor(
     id: u32,
     w: u32,
@@ -153,6 +176,7 @@ fn build_guest_cursor(
     hot_x: u32,
     hot_y: u32,
     surface_map: &SurfaceMap,
+    scale_key: u32,
 ) -> Option<Retained<NSCursor>> {
     // Mach-delivered (non-global) cursor surface first; legacy/global fallback.
     let surface = surface_map
@@ -191,7 +215,14 @@ fn build_guest_cursor(
             std::ptr::null_mut(),
         );
     }
-    nscursor_from_context(&ctx, w, h, hot_x, hot_y)
+    let s = f64::from(scale_key) / 1024.0;
+    nscursor_from_context(
+        &ctx,
+        f64::from(w) * s,
+        f64::from(h) * s,
+        f64::from(hot_x) * s,
+        f64::from(hot_y) * s,
+    )
 }
 
 /// A fully transparent 1×1 cursor — what the host pointer wears while the guest hides its
@@ -205,7 +236,7 @@ pub(crate) fn blank_cursor() -> Option<Retained<NSCursor>> {
         }
         dst.write(0);
     }
-    nscursor_from_context(&ctx, 1, 1, 0, 0)
+    nscursor_from_context(&ctx, 1.0, 1.0, 0.0, 0.0)
 }
 
 /// A BGRA (premultiplied, little-endian) bitmap context matching the worker's cursor
@@ -228,19 +259,52 @@ fn bgra_bitmap_context(w: u32, h: u32) -> Option<CFRetained<CGContext>> {
     }
 }
 
+/// Wrap the bitmap context's image as an `NSCursor`. `w`/`h`/`hot_*` are in *points* —
+/// they may be smaller than the bitmap's pixel size when the window presents the guest
+/// scaled down (NSImage draws the full pixel data into the point size).
 fn nscursor_from_context(
     ctx: &CGContext,
-    w: u32,
-    h: u32,
-    hot_x: u32,
-    hot_y: u32,
+    w: f64,
+    h: f64,
+    hot_x: f64,
+    hot_y: f64,
 ) -> Option<Retained<NSCursor>> {
     let img = CGBitmapContextCreateImage(Some(ctx))?;
-    let size = NSSize::new(w as f64, h as f64);
+    let size = NSSize::new(w, h);
     let nsimage = NSImage::initWithCGImage_size(NSImage::alloc(), &img, size);
     Some(NSCursor::initWithImage_hotSpot(
         NSCursor::alloc(),
         &nsimage,
-        NSPoint::new(hot_x as f64, hot_y as f64),
+        NSPoint::new(hot_x, hot_y),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cursor_scale_key;
+
+    #[test]
+    fn scale_key_is_1024_at_one_to_one() {
+        assert_eq!(cursor_scale_key(1920.0, 1920), 1024);
+    }
+
+    #[test]
+    fn scale_key_tracks_the_fit_ratio() {
+        // Guest at 3456 px wide fitted into a 1728 pt window: half size.
+        assert_eq!(cursor_scale_key(1728.0, 3456), 512);
+        // Upscale (small fixed guest in a big window) grows past 1:1.
+        assert_eq!(cursor_scale_key(1600.0, 800), 2048);
+    }
+
+    #[test]
+    fn degenerate_geometry_pins_to_one_to_one() {
+        assert_eq!(cursor_scale_key(1728.0, 0), 1024);
+        assert_eq!(cursor_scale_key(0.0, 1920), 1024);
+        assert_eq!(cursor_scale_key(-5.0, 1920), 1024);
+    }
+
+    #[test]
+    fn tiny_scales_never_quantize_to_zero() {
+        assert_eq!(cursor_scale_key(1.0, 100_000), 1);
+    }
 }
