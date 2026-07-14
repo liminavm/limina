@@ -46,8 +46,11 @@ GOP_FD="$ROOT/target/krun-efi/KRUN_EFI.gop.fd"
 # Homebrew-less Mac. Override the source with LIMINA_GVPROXY_BIN; defaults to Homebrew's.
 GVPROXY="${LIMINA_GVPROXY_BIN:-/opt/homebrew/bin/gvproxy}"
 
+# KK/zink live on a case-sensitive sparse image whose mount macOS drops on reboot.
+. "$ROOT/scripts/ensure-mesa-cs.sh"
+
 for f in "$VIRGL" "$EPOXY" "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$GOP_FD" "$GVPROXY"; do
-  [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(mount third_party/mesa-cs.sparseimage and build KK/zink, build the GOP firmware, or 'brew install gvproxy' / set LIMINA_GVPROXY_BIN)" >&2; exit 1; }
+  [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(build KK/zink on the mesa-cs volume, build the GOP firmware, or 'brew install gvproxy' / set LIMINA_GVPROXY_BIN)" >&2; exit 1; }
 done
 
 echo "==> building limina + limina-vmm ($PROFILE)"
