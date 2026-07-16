@@ -2,12 +2,15 @@
 
 limina is a native macOS app that runs Linux desktop guests on Apple Silicon via
 [libkrun](https://github.com/containers/libkrun) + Hypervisor.framework, aiming
-to replace Parallels. Milestones M1–M6, M8-polish and M10 are shipped (boot →
-desktop → venus 3D → networking → clipboard/shares → dynamic memory → disks);
-see the [roadmap](roadmap.md) for the live status.
+to replace Parallels. Milestones M1–M7 and M10 are shipped (boot → desktop →
+venus 3D → networking → clipboard/shares → dynamic memory → USB → disks), M8
+polish is largely done, and the `cargo xtask` dev surface (M11) is in; M9
+suspend/resume is designed. See the [roadmap](roadmap.md) for the live status.
 
-Start with the [**overview**](research/00-overview.md) for the layered stack,
-the key findings, the feature matrix, and the cross-cutting decisions.
+New to the repo? Start with [**dev onboarding**](dev-onboarding.md) (clone →
+build → run → test in `cargo xtask` commands). For the architecture, read the
+[**overview**](research/00-overview.md) — the layered stack, key findings,
+feature matrix, and cross-cutting decisions.
 
 ## Research
 

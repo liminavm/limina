@@ -42,13 +42,16 @@ Boot tests touch Hypervisor.framework, so they need the worker **codesigned** wi
 ```sh
 cargo test -p limina-test           # L0-style: boot tests skip
 
-scripts/test-boot.sh              # builds + signs worker + builds L1 guest, runs L1 & L2
-scripts/test-boot.sh release      # release profile
-LIMINA_TEST_DISK=/path/to.raw scripts/test-boot.sh   # override the L2 guest image
+cargo xtask test                  # builds + signs worker + builds L1 guest, runs L1 & L2
+cargo xtask test --release        # release profile
+cargo xtask test -- --test venus  # forward a filter to the test run
+LIMINA_TEST_DISK=/path/to.raw cargo xtask test   # override the L2 guest image
 ```
 
-`test-boot.sh` also runs `scripts/build-test-guest.sh` (extracts the kernel, cross-builds
-`guest/limina-init`, stages the rootfs); run that standalone to rebuild just the L1 guest.
+`cargo xtask test` wraps `scripts/test-boot.sh` (the source of truth — call it directly for
+anything the command doesn't expose). Both also run `scripts/build-test-guest.sh` (extracts the
+kernel, cross-builds `guest/limina-init`, stages the rootfs); run that standalone to rebuild just
+the L1 guest.
 
 ### Environment overrides
 

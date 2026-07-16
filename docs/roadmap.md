@@ -901,35 +901,48 @@ stays deferred (§11).
 
 ## Milestone 11 — Perfected productization (build / dev / delivery ergonomics)
 
-Make building, developing, and delivering limina first-class — one obvious command per task instead
-of a spread of shell scripts you have to know about. The work is mostly *orchestration over* the
-existing, tested scripts (which stay the source of truth), surfaced through `cargo xtask` so a fresh
-clone is trivially buildable and the inner loop is short. Not urgent; it's the "smooth the rough
-edges we keep re-explaining" milestone.
+**Status: 🟢 the `cargo xtask` command surface is shipped (2026-07-16).** Building, developing, and
+running limina is now one obvious command per task instead of a spread of shell scripts you have to
+know about. The commands are thin *orchestration over* the existing, tested scripts (which stay the
+source of truth), so a fresh clone is trivially buildable and the inner loop is short. What remains
+is CI + distribution/notarization (below). It's the "smooth the rough edges we keep re-explaining"
+milestone.
 
-**Already shipped (the foundation, 2026-06-30):**
-- **`cargo xtask vendor`** — one-command `third_party/` bootstrap: clone libkrun if absent, apply the
-  libkrun series, vendor+patch imago. Idempotent. Fixed the bootstrap deadlock the imago
+**The one-command surface (`cargo xtask <cmd>`, wiring in `xtask/src/main.rs`; `--help` lists it):**
+- **`setup`** — fresh-clone bootstrap: `vendor` + `scripts/setup-hooks.sh` (enable the git hooks).
+  The single command to run after cloning.
+- **`vendor`** — materialize the gitignored `third_party/` trees (clone libkrun + virglrenderer if
+  absent, apply each series, vendor+patch imago). Idempotent. Fixed the bootstrap deadlock the imago
   `[patch.crates-io]` introduced (a fresh clone can't `cargo fetch` through the not-yet-vendored
-  patch path — the imago script now downloads the `.crate` from crates.io directly). Confirms the
-  repo model: **patch series committed (`patches/**`), source clones gitignored (`third_party/`).**
+  patch path — the imago script downloads the `.crate` from crates.io directly). Confirms the repo
+  model: **patch series committed (`patches/**`), source clones gitignored (`third_party/`).**
+- **`build [--release]`** — `cargo build -p limina -p limina-vmm` + codesign the worker
+  (`crates/limina-vmm/sign.sh`, hypervisor entitlement) + `check-virgl-link.sh` (the venus link
+  guard). The inner-loop "make a runnable worker" step, previously split across cargo + two scripts.
+- **`sign [--release]`** — just the worker codesign, when you built via plain `cargo` and only need
+  the entitlement.
+- **`test [--release] [args…]`** — wraps `scripts/test-boot.sh`: build + codesign + link-check +
+  build the L1 guest + trap probe + run the HVF boot tests (`LIMINA_HVF_TESTS=1`). Extra args forward
+  to the test run (`--test <name>` filters, a substring after `--`). The canonical "did I break boot".
+- **`run --disk <enhanced.raw> [--no-net] [--cpus N] [--ram-mib N] [-- extra…]`** — boot an
+  enhanced-tier image to the seated venus desktop in a window (EFI+venus, the documented default
+  boot). Builds+signs the debug worker, ensures `/Volumes/mesa-cs` is mounted, then hands off to
+  `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh` (which owns the KK/zink env). The disk boots in
+  place — clone it first to keep it pristine. Fringe modes (`--kernel-inject`, `--gpu-software-2d`)
+  stay as their own scripts, per CLAUDE.md.
+- **`app [--release]`** — assemble the full self-contained `target/Limina.app` (the shipping bundle
+  with the whole host venus/GL closure), wrapping `scripts/build-app.sh`.
+- **`bundle [--release] [--open]`** — a *minimal* `Limina.app` that boots the L1 guest; the
+  launch-path smoke test (LaunchServices launch → capture PNG). Distinct from `app`: `bundle` proves
+  the normal launch path, `app` is the real deliverable.
 
-**Backlog (fold the remaining build steps into `cargo xtask`, keeping the scripts as the mechanism):**
-- **`cargo xtask test [name]`** — wrap `scripts/test-boot.sh`: build + codesign worker +
-  `check-virgl-link` + run the HVF boot tests (`LIMINA_HVF_TESTS=1`). The canonical "did I break
-  boot" command as a first-class task.
-- **`cargo xtask build` / `sign`** — `cargo build -p limina -p limina-vmm` + `check-virgl-link.sh` +
-  the worker codesign (`crates/limina-vmm/sign.sh`, hypervisor entitlement). The inner-loop "make a
-  runnable worker" step, today split across cargo + two scripts.
-- **`cargo xtask run [--window] [--net] …]`** — boot a dev VM (clone a disk, set the venus/KK env,
-  codesign, launch), wrapping `run-fedora-window.sh` / `boot-seated-kk.sh`.
-- **Out of scope for xtask:** the heavy container-based native builds (virglrenderer, guest mesa,
-  KRUN_EFI, the `limina-build` image) stay as scripts — they're Docker/`container`-driven, not pure
-  orchestration. A thin `cargo xtask <name>` shim that just shells out is optional.
+**Out of scope for xtask (stay as scripts):** the heavy container-based native builds
+(virglrenderer, guest mesa, KRUN_EFI, the `limina-build` image) are Docker/`container`-driven, not
+pure orchestration.
 
-Adjacent productization candidates to consider here (not yet scoped): a `setup` task (vendor + git
-hooks), CI that runs vendor→build→clippy→a subset of L1, a one-page dev-onboarding doc, and the
-distribution side of the app bundle (signing/notarization beyond ad-hoc).
+**Still open:** CI that runs vendor→build→clippy→a subset of L1; the distribution side of the app
+bundle (Developer-ID signing / notarization beyond the local Apple-Development identity). A one-page
+onboarding doc shipped: `docs/dev-onboarding.md`.
 
 ---
 

@@ -1,42 +1,70 @@
 # limina
 
-A custom virtual machine application for macOS (Apple Silicon), built in Rust on
-top of [libkrun](https://github.com/containers/libkrun). The goal is a
-Parallels-class experience for running **Linux** guests, with:
+A native macOS app (Apple Silicon) that runs **Linux** desktop guests on
+[libkrun](https://github.com/containers/libkrun) + Hypervisor.framework, built in
+Rust, aiming to **replace Parallels**. Today it boots a stock Fedora guest to a usable
+desktop, and an *enhanced* guest (our custom kernel + drivers) to a full venus-accelerated
+GNOME desktop in a native window.
 
-- High-quality 3D graphics acceleration
+The target feature set — see [Status](#status) for what's already shipped:
+
+- High-quality 3D graphics acceleration (venus → KosmicKrisp → Metal)
 - First-class fullscreen + mouse capture + macOS key-combo capture
-- Customizable key bindings and keyboard layout remapping (e.g. swap
-  Command/Option)
-- Clipboard sharing
+- Customizable key bindings + keyboard-layout remapping (e.g. swap Command/Option)
+- Clipboard sharing and host-folder sharing (virtiofs)
 - USB device passthrough
-- NAT **and** bridged networking
-- Reduced memory overhead (host and guest) and, ideally, dynamic memory
-  assignment (give the VM a range; it takes/returns as needed)
+- NAT networking (bridged deferred)
+- Low host+guest memory overhead and dynamic memory (a `min..max` range the VM
+  takes/returns via ballooning)
 
-We are willing to patch libkrun and any of its dependencies (virglrenderer,
-virtio-gpu, the guest kernel, custom drivers) to achieve these goals.
+We own the whole stack and patch any layer to get the behavior we want — libkrun,
+virglrenderer, imago, the guest kernel, Mesa, and custom guest drivers/agents are all
+fair game (patch series committed under `patches/**`, source clones vendored under the
+gitignored `third_party/`). Two tiers always coexist: an **unmodified stock distro must
+always boot** (degraded), and installing our custom kernel/drivers/agent **unlocks** the
+full experience. See [`CLAUDE.md`](CLAUDE.md) for the project tenets and
+[`docs/`](docs/) for the design.
 
 ## Status
 
-Early research & design. See [`docs/`](docs/).
+Milestones M1–M6 and M10 are shipped (boot → native Metal window → console/serial →
+NAT networking → venus 3D → clipboard/virtiofs/agent → dynamic memory → multiple
+disks/CD-ROM). M7 USB works as an end-to-end mock over vsock — real-device claim needs
+the deferred privileged helper. M8 polish is largely done (fullscreen, key remap,
+combo/pointer capture, runtime resize), and the `cargo xtask` dev surface (M11) is in.
+In flight: M9 suspend/resume + snapshots (designed), M8 audio + x86, and productization
+tails. The live status is in [`docs/roadmap.md`](docs/roadmap.md).
 
-**First milestone:** boot the `Fedora-Workstation-43.raw` image (kept locally,
-gitignored; `.xz` backup alongside it).
+## Getting started (dev)
+
+```sh
+cargo xtask setup     # fresh-clone bootstrap: vendor third_party/ + enable git hooks
+cargo xtask build     # build + codesign the worker + venus link-check
+cargo xtask test      # the full HVF-gated boot suite ("did I break boot")
+cargo xtask run --disk <enhanced.raw>   # boot to the seated venus desktop in a window
+```
+
+`cargo xtask --help` lists the whole surface (also `sign`, `app`, `bundle`). Each
+command shells out to the tested `scripts/`, which stay the source of truth. New to the
+repo? Read [`docs/dev-onboarding.md`](docs/dev-onboarding.md).
 
 ## Layout
 
 | Path | Purpose |
 |------|---------|
-| `src/` | The `limina` Rust application |
-| `docs/research/` | Decision-oriented research on the underlying technologies |
-| `docs/design/` | Architecture and design decisions |
-| `docs/roadmap.md` | Milestones and sequencing |
-| `third_party/` | Vendored / patched native dependencies (not yet present) |
+| `crates/` | The host Rust workspace — `limina` (AppKit supervisor/UI), `limina-vmm` (the HVF worker), display/input/proto/surfaceport/usbip helpers, `limina-test` (the boot-test harness) |
+| `guest/` | aarch64-linux guest components (their own workspace): `limina-agent` (+ session helper), `limina-init`, `limina-config`, the virtio-gpu DKMS driver, the GNOME clipboard extension |
+| `xtask/` | The `cargo xtask` dev-task runner |
+| `scripts/` | The tested build/boot/provision scripts xtask wraps |
+| `patches/` | Committed `git format-patch` series: libkrun, virglrenderer, imago, linux, mesa, mutter, edk2 (KRUN_EFI firmware), kosmickrisp |
+| `spikes/` | Standalone experiments (each with a `RESULTS.md`) |
+| `docs/` | [research](docs/research/) (source-cited), [design](docs/design/), [roadmap](docs/roadmap.md), [images](docs/images.md), [codebases](docs/codebases.md) |
+| `third_party/` | Vendored / patched native dependencies (gitignored; recreated by `cargo xtask vendor`) |
 
 ## Host environment (reference)
 
-- macOS 26.5, Apple M1 Max, 32 GB RAM, arm64
-- Rust 1.88 (edition 2024), full Xcode 26.4 / Apple clang 21
-- Homebrew already provides libkrun, krunkit, libkrunfw, virglrenderer,
-  molten-vk, vulkan-loader, gvproxy, libusb, qemu, etc.
+- macOS 26.5, Apple M1 Max, 32 GB RAM, arm64, **16 KiB host pages**
+- Rust 1.88, full Xcode 26.4 / Apple clang 21
+- Homebrew provides the VM stack (libkrun, krunkit, libkrunfw, virglrenderer,
+  molten-vk, vulkan-loader, gvproxy, libusb, qemu, cmake/meson/ninja) — though the
+  shipping app links our own patched builds, not Homebrew's.

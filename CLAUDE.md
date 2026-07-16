@@ -130,11 +130,18 @@ tracks claims still needing verification.
 - **Verify against real source, not memory or summaries.** Every non-obvious claim
   about libkrun/deps in the docs carries a `path:line` citation into `third_party/`.
   Keep doing that. The research clones are in `third_party/` (gitignored).
-- **Full validation = `scripts/test-boot.sh` (sets `LIMINA_HVF_TESTS=1`).** This is the
-  go-to "did I break anything" command: it builds, codesigns the worker, and runs the
+- **`cargo xtask <cmd>` is the one-command surface** (M11, `xtask/src/main.rs`; `cargo xtask
+  --help` lists everything): `setup` (fresh-clone bootstrap = vendor + git hooks), `vendor`
+  (materialize `third_party/`), `build`/`sign` (make a runnable, codesigned worker + venus
+  link-check), `test` (the full HVF boot suite — see below), `run --disk <enhanced.raw>` (boot
+  EFI+venus in a window), `app`/`bundle` (package). Each just shells out to the tested `scripts/`,
+  which stay the source of truth — reach for the command, fall back to the script it wraps only
+  when you need a flag it doesn't expose. New onboarding lives in `docs/dev-onboarding.md`.
+- **Full validation = `cargo xtask test` (= `scripts/test-boot.sh`, sets `LIMINA_HVF_TESTS=1`).**
+  This is the go-to "did I break anything" command: it builds, codesigns the worker, and runs the
   real boot tests against HVF (`limina` → `limina-vmm` → guest). A plain `cargo test`
   deliberately **skips** the HVF tests (no codesign / sandbox) — green there means
-  almost nothing for boot behavior, so always run `scripts/test-boot.sh` before
+  almost nothing for boot behavior, so always run the full suite before
   declaring something works. It needs `dangerouslyDisableSandbox` (hits `hv_vm_*`).
 - **The worker MUST link our `third_party/virgl-prefix` virglrenderer, not Homebrew's.**
   This is a costly silent trap: a plain `cargo build -p limina-vmm` with no `PKG_CONFIG_PATH`
@@ -251,12 +258,15 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   `spikes/balloon-madvise/hv.entitlements`).
 - The big disk images (`*.raw`, `*.raw.xz`) and `third_party/` are gitignored.
 - **DEFAULT way to boot/validate an image (windowed venus desktop): EFI + venus.**
-  `LIMINA_DISK=<enhanced.raw> spikes/venus-draw-probe/boot-enhanced-efi-kk.sh` boots the guest's
+  **`cargo xtask run --disk <enhanced.raw>`** is the one-command form — it builds+signs the worker,
+  mounts `/Volumes/mesa-cs`, then hands off to `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh`
+  (`LIMINA_DISK=<enhanced.raw> …` directly is the same thing). It boots the guest's
   **own installed kernel** through our GOP firmware → GRUB → BLS entry, **enforcing** (never stamps
   `/.autorelabel`), coexist venus (3D + software-2D) on KosmicKrisp, `--window --net`. This tests the
   image exactly as it really runs. venus and EFI boot have worked for a long time — **reach for this
-  first.** `LIMINA_EXTRA_ARGS="--swap-cmd-opt …"` passes extra limina flags; `LIMINA_CPUS`/
-  `LIMINA_RAM_MIB` tune the VM. The script sets all the host KK/zink env (VK_ICD_FILENAMES →
+  first.** `--no-net`/`--cpus`/`--ram-mib` and trailing `-- <extra limina flags>` map to the script's
+  `LIMINA_NET`/`LIMINA_CPUS`/`LIMINA_RAM_MIB`/`LIMINA_EXTRA_ARGS`; the disk boots **in place**, so
+  clone it first to keep it pristine. The script sets all the host KK/zink env (VK_ICD_FILENAMES →
   KosmicKrisp + the zink-on-KK DYLD/Mesa selectors); a *bare* `target/debug/limina --window` with
   NONE of that env **aborts on GPU init** (`Couldn't open libEGL.dylib` → SIGABRT) — that's the
   missing env, **not** a coexist problem, and **not** a reason to fall back to software-2D.
