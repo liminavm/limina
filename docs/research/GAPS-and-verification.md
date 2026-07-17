@@ -122,11 +122,15 @@ real trap is the **Homebrew dylib vs header mismatch** (§1.1).
   `virgl_renderer_resource_get_map_ptr`? Decides whether Venus host-visible memory and
   MAP_BLOB work. Not checked this pass. Keep as a blocker.
 
-### 1.8 [UNVERIFIED] `krun_set_snd_device` on macOS (docs 01, 11)
-- Symbol is exported by the dylib and in the header. Doc 11 argues the vhost-user path
-  (which `snd` rides) is `cfg(target_os="linux")`, so the exported symbol may be a
-  no-op/error on macOS. Confirm by reading the `snd` wiring in `builder.rs` /
-  `lib.rs::krun_set_snd_device` before assuming audio needs a fully native device.
+### 1.8 [RESOLVED 2026-07-17] `krun_set_snd_device` on macOS (docs 01, 11)
+- **Stale premise, now closed.** Earlier notes claimed a `krun_set_snd_device` symbol was
+  exported by the dylib and present in the header (from an older/Homebrew dylib). In the
+  **current vendored tree it does not exist** — `grep -rni 'set_snd\|snd_device' third_party/libkrun/`
+  finds nothing in source or `include/libkrun.h`, and the empty `snd` Cargo stub features doc 11
+  cited (`libkrun/Cargo.toml`, `vmm/Cargo.toml`) are **gone** as well. There is NO snd wiring of any
+  kind. The header retains only the constants (`KRUN_VIRTIO_DEVICE_SND 25` at `include/libkrun.h:747`
+  and the vhost-user SND queue defines). So audio genuinely starts from a clean slate: a native
+  in-VMM virtio-snd device is the path, and there is no half-wired API to reckon with.
 
 ---
 

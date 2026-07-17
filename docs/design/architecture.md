@@ -217,7 +217,7 @@ Conventions:
 | Net robustness | reconnect (or limina-level restart) on backend HANG_UP | [07] |
 | Input LEDs | surface statusq LED/key-repeat for CapsLock/NumLock parity (currently no-op) | [04] |
 | Panic hardening | unknown PSCI fn / ESR_EL2 EC / HVF exit reason currently `panic!`; a real desktop guest must not crash the VMM | [02] |
-| Native audio | new in-VMM virtio-snd → CoreAudio (fills empty `snd` feature, id 25) | [11] |
+| Native audio | new in-VMM virtio-snd → CoreAudio (reserved id 25; add a `snd` feature + `krun_add_snd`-style API + builder wiring — the old empty `snd` Cargo stub is gone from this tree) | [11] |
 | USB | rebuild libkrunfw kernel w/ USB; native virtio-usb carrying USB/IP PDUs, `krun_add_usb*` | [06] |
 | Zero-copy scanout (v2) | implement `SET_SCANOUT_BLOB` + IOSurface/Metal-texture export vtable | [03][09] |
 
@@ -455,7 +455,7 @@ located EFI firmware; `memory.max_mib` is the libkrun `ram_mib` and the balloon 
 | **Bridged networking** | `limina-net` + vmnet helper (BRIDGED) | needs Apple `com.apple.vm.networking` + privileged helper; opt-in later | [07] |
 | **Low memory overhead** | static `krun_set_vm_config` + demand paging; `MADV_FREE_REUSABLE` reclaim | reclaim patch | [08] |
 | **Dynamic memory (min..max ballooning)** | `limina` balloon policy (PSI) + patched libkrun balloon + `limina-agent` reporter | **patch** (inflate/deflate, public API, 16 KiB align) | [08][10] |
-| **Audio** | native in-VMM virtio-snd → CoreAudio | **patch** (fill `snd` feature, id 25) | [11] |
+| **Audio** | native in-VMM virtio-snd → CoreAudio | **patch** (add `snd` feature + device + builder wiring, id 25) | [11] |
 | **x86 emulation** | guest-side FEX-Emu (primary) / qemu-user (fallback), binfmt_misc | no libkrun patch (Rosetta unavailable: it's Vz-only) | [11] |
 | **File sharing** | `krun_add_virtiofs3` + DAX/shm window | no patch (macOS-capable) | [11] |
 | **Time sync** | libkrun's existing DGRAM port-123 push + guest consumer | confirm guest consumer | [10] |
