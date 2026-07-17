@@ -403,6 +403,11 @@ pub struct GuestConfig {
     /// in this order. See [`with_blank_data_disk`](GuestConfig::with_blank_data_disk) /
     /// [`with_data_disk`](GuestConfig::with_data_disk).
     pub data_disks: Vec<DataDisk>,
+    /// Enable host-side VM snapshot/suspend (M9): the supervisor passes `--snapshot-file
+    /// <scratch>/snapshot` to the worker, so a [`Guest::snapshot`] (SIGUSR1) writes the
+    /// snapshot there and the supervisor relaunches the worker with `--restore <file>`. See
+    /// [`with_snapshot`](GuestConfig::with_snapshot) and [`Guest::snapshot_path`].
+    pub snapshot: bool,
 }
 
 impl GuestConfig {
@@ -453,6 +458,7 @@ impl GuestConfig {
             envs: Vec::new(),
             shares: Vec::new(),
             data_disks: Vec::new(),
+            snapshot: false,
         })
     }
 
@@ -538,6 +544,7 @@ impl GuestConfig {
             envs: Vec::new(),
             shares: Vec::new(),
             data_disks: Vec::new(),
+            snapshot: false,
         })
     }
 
@@ -625,6 +632,7 @@ impl GuestConfig {
             envs: Vec::new(),
             shares: Vec::new(),
             data_disks: Vec::new(),
+            snapshot: false,
         })
     }
 
@@ -663,6 +671,7 @@ impl GuestConfig {
             envs: Vec::new(),
             shares: Vec::new(),
             data_disks: Vec::new(),
+            snapshot: false,
         })
     }
 
@@ -723,6 +732,7 @@ impl GuestConfig {
             envs: Vec::new(),
             shares: Vec::new(),
             data_disks: Vec::new(),
+            snapshot: false,
         })
     }
 
@@ -927,6 +937,13 @@ impl GuestConfig {
         self
     }
 
+    /// Enable host-side VM snapshot/suspend (M9): the worker gets `--snapshot-file
+    /// <scratch>/snapshot`, so [`Guest::snapshot`] can trigger a suspend + `--restore` cycle.
+    pub fn with_snapshot(mut self) -> GuestConfig {
+        self.snapshot = true;
+        self
+    }
+
     /// Pin the supervisor-owned control socket to a known scratch path so the harness can
     /// connect to the plane as a peer itself (playing e.g. a clipboard-capable agent —
     /// protocol-identical to a guest connecting through the vsock bridge). Pair with
@@ -1112,6 +1129,9 @@ pub struct Guest {
     supervisor_log: Option<PathBuf>,
     /// Path to the pinned supervisor-owned control socket (inside `scratch`), if enabled.
     control_socket: Option<PathBuf>,
+    /// Path to the VM snapshot file (inside `scratch`), if [`GuestConfig::snapshot`] was set.
+    /// A [`Guest::snapshot`] writes it and the supervisor relaunches with `--restore` on it.
+    snapshot_path: Option<PathBuf>,
     /// Set once teardown has run, so Drop doesn't double-kill.
     torn_down: bool,
 }
@@ -1348,6 +1368,13 @@ impl Guest {
             None
         };
 
+        // VM snapshot file (M9 suspend/resume): the worker writes the snapshot here on a
+        // SIGUSR1 trigger, and the supervisor relaunches the worker with `--restore <path>`.
+        let snapshot_path = cfg.snapshot.then(|| scratch.join("snapshot"));
+        if let Some(path) = &snapshot_path {
+            cmd.arg("--snapshot-file").arg(path);
+        }
+
         // Display: capture the scanout into the scratch dir (auto-cleaned on Drop). Whenever a
         // display is attached we also wire a runtime resize control socket so tests can drive
         // window-resize via [`Guest::resize_display`] (the worker binds it; we connect per call).
@@ -1504,6 +1531,7 @@ impl Guest {
             ssh_port: cfg.ssh_port.unwrap_or(DEFAULT_SSH_PORT),
             supervisor_log,
             control_socket,
+            snapshot_path,
             torn_down: false,
         })
     }
@@ -2027,6 +2055,33 @@ impl Guest {
             "no child of supervisor {} has path {want:?} (children: {pids:?})",
             self.pid
         )
+    }
+
+    /// Trigger a host-side VM snapshot/suspend (M9): send `SIGUSR1` to the running worker,
+    /// which quiesces the vCPUs, serializes vCPU + GIC + RAM state to the `--snapshot-file`,
+    /// and exits with the "snapshotted" disposition (126). The supervisor then relaunches the
+    /// worker with `--restore <file>`, resuming the guest. Requires [`GuestConfig::with_snapshot`].
+    /// Returns once the signal is sent — await the effect via [`Guest::wait_for_supervisor_log`]
+    /// (the restore marker) and [`Guest::wait_for`] (the guest continuing).
+    pub fn snapshot(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.snapshot_path.is_some(),
+            "no snapshot file configured (use GuestConfig::with_snapshot)"
+        );
+        let worker = self.worker_pid()?;
+        let rc = unsafe { libc::kill(worker, libc::SIGUSR1) };
+        anyhow::ensure!(
+            rc == 0,
+            "kill(worker={worker}, SIGUSR1) failed: {}",
+            std::io::Error::last_os_error()
+        );
+        Ok(())
+    }
+
+    /// Path to the VM snapshot file (inside the scratch dir), if [`GuestConfig::with_snapshot`]
+    /// was set. Exists only after a [`Guest::snapshot`] has been taken.
+    pub fn snapshot_path(&self) -> Option<&Path> {
+        self.snapshot_path.as_deref()
     }
 
     /// The `limina-vmm` worker's `phys_footprint` in bytes — the page count macOS bills the process

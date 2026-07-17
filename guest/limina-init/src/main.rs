@@ -93,6 +93,16 @@ fn main() {
     if cmdline_has("limina.console_shell") {
         run_console_shell();
     }
+    // `limina.counter`: the M9.1 suspend/resume oracle. Loop forever incrementing an
+    // in-guest-RAM counter and emitting a heartbeat line to the console (PL011 ttyAMA0,
+    // via /dev/kmsg → printk). The counter lives in guest RAM and the vCPU keeps executing,
+    // so after a host-side snapshot + `--restore` the value MUST continue climbing from where
+    // it was (RAM + vCPU state rode the snapshot), not reset to ~0 (which would mean a fresh
+    // boot). PL011 is near-stateless output, so heartbeats keep flowing even before virtio
+    // device-state restore (M9.2). Never returns.
+    if cmdline_has("limina.counter") {
+        run_counter();
+    }
     // `limina.hold`: keep the guest alive animating the framebuffer (for the interactive
     // window). Otherwise draw the one-shot test pattern (the capture oracle) and power off.
     if cmdline_has("limina.hold") {
@@ -695,6 +705,47 @@ fn animate_forever() -> ! {
         }
         frame += 3;
         unsafe { sleep_ms(33) };
+    }
+}
+
+/// Marker the host harness waits for before sampling heartbeats — proves the counter is live.
+const COUNTER_READY: &[u8] = b"[limina-init] LIMINA_COUNTER_READY\n";
+
+/// `limina.counter` (M9.1 suspend/resume oracle). Increment an in-RAM counter forever and
+/// emit `LIMINA_COUNTER n=<N> mono_ms=<T>` heartbeats to the console. Both values live in
+/// guest RAM / the vCPU's monotonic counter, so a host snapshot + `--restore` must resume
+/// them mid-climb: `n` keeps rising (never resets toward 0) and `mono_ms` never jumps
+/// backwards. Emitted over PL011 (`/dev/kmsg` → printk → ttyAMA0), which keeps working
+/// across a fresh-worker restore before virtio device state is restored (M9.2). Never returns.
+fn run_counter() -> ! {
+    unsafe { write_to(c"/dev/kmsg", COUNTER_READY) };
+    let mut n: u64 = 0;
+    loop {
+        n = n.wrapping_add(1);
+        // Heartbeat roughly every ~100 ms (20 × 5 ms); frequent enough that the harness
+        // catches several before and after a snapshot without flooding the console.
+        if n.is_multiple_of(20) {
+            klog(
+                format!(
+                    "[limina-init] LIMINA_COUNTER n={n} mono_ms={}",
+                    monotonic_ms()
+                )
+                .as_bytes(),
+            );
+        }
+        unsafe { sleep_ms(5) };
+    }
+}
+
+/// `CLOCK_MONOTONIC` in milliseconds — the guest-visible monotonic clock (backed by CNTVCT
+/// via the vtimer). Used by [`run_counter`] so the harness can assert monotonic time didn't
+/// leap backwards across restore. Returns 0 if the syscall fails (best-effort, never panics).
+fn monotonic_ms() -> u64 {
+    let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) } == 0 {
+        (ts.tv_sec as u64).wrapping_mul(1000) + (ts.tv_nsec as u64) / 1_000_000
+    } else {
+        0
     }
 }
 

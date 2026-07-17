@@ -326,6 +326,18 @@ asserts their output — `l1_command` (L1 in-process shell) and the stock-Fedora
   `worker.rs:146`; the supervisor recreates the path instead).
 - **Offload tuning:** evaluate `GUEST_TSO6|HOST_TSO6` (reachable via the new API) for iperf3 once
   verified non-corrupting; start at `NET_COMPAT_FEATURES` (IPv4 CSUM + TSO4 + UFO).
+- **Ergonomic SSH (zero-port, zero-touch keys) — GNOME Boxes prior art.** Replace "read the
+  auto-allocated port N from the log" with a stable `ssh limina-<vm>` that needs no forwarding and no
+  guest agent. Two independent halves, copied from Boxes (see `docs/research/prior-art-gnome-boxes.md`):
+  (A) **inject the host SSH _public_ key as an SMBIOS type-11 OEM string**
+  (`io.systemd.credential.binary:ssh.ephemeral-authorized_keys-all=<base64>`) — stock guest **systemd**
+  consumes it into sshd with **no cloud-init / no `limina-agent`**, so it's a baseline/bootstrap-tier
+  win; needs libkrun to expose SMBIOS OEM strings (small upstreamable patch if it doesn't already).
+  (B) a tiny **host-side `ProxyCommand` helper that dials the guest's vsock ssh port** (we own the
+  vsock plane already; `systemd-ssh-proxy` is Linux-host-only so we reimplement the dial). Half A is
+  independently useful even over the existing NAT forward. **Gating spike:** does libkrun set any
+  SMBIOS on aarch64 today, and does stock Fedora systemd light up `ssh.ephemeral-authorized_keys-all`
+  from an OEM string under libkrun? (Ties to [[limina-fedora-access]].)
 
 **Risks / spike first:**
 - Does vmnet BRIDGED work over en0 Wi-Fi on M1 Max or only wired/USB Ethernet?
@@ -993,10 +1005,14 @@ virtiofs doesn't give — so it's genuinely additive, which is why it's the inte
 file-xfer protocol and stays out of scope.)
 
 **Why this is worth doing (the strategic case):** `spice-vdagent` is **already in the default Fedora
-Workstation install**, so on our base image the binary is present and xdg-autostart-enabled — it's
-just **dormant** because nothing exposes its virtio-serial port. The entire cost is therefore
-**host-side**; the guest install is $0. A stock guest that has never seen `install-enhanced.sh` would
-gain clipboard (and then drag-in file transfer) the moment limina speaks the vdagent protocol.
+Workstation install** — **hard-verified 2026-07-17** by booting a clone of the stock
+`Fedora-Workstation-43.accessible.raw` (kernel `6.17.1-300.fc43`, mesa 25.2.4, unmodified) and querying
+the RPM db over SSH: `spice-vdagent-0.23.0-1.fc43.aarch64` is installed, both binaries
+(`/usr/bin/spice-vdagent`, `/usr/sbin/spice-vdagentd`) present, and it is **dormant exactly as
+predicted** (`/dev/virtio-ports/` holds only the krun console ports, no `com.redhat.spice.0`; daemon
+`inactive`). The entire cost is therefore **host-side**; the guest install is $0. A stock guest that has
+never seen `install-enhanced.sh` would gain clipboard (and then drag-in file transfer) the moment
+limina speaks the vdagent protocol.
 
 ### Load-bearing facts (from the 2026-07-17 research)
 
@@ -1009,6 +1025,13 @@ gain clipboard (and then drag-in file transfer) the moment limina speaks the vda
   dormant (today's state). libkrun currently gives us virtio-**console** (hvc0), not a SPICE-style
   **named multiport virtserial** — so this is a **new libkrun device/patch** (nearest existing
   plumbing: the console work behind `limina-guest-console`).
+  - **HARD-VERIFIED on a stock F43 boot (2026-07-17):** the exact stock rule is
+    `/usr/lib/udev/rules.d/70-spice-vdagentd.rules`:
+    `ACTION=="add", SUBSYSTEM=="virtio-ports", ENV{DEVLINKS}=="/dev/virtio-ports/com.redhat.spice.0", ENV{SYSTEMD_WANTS}="spice-vdagentd.socket"`.
+    So merely exposing the named port host-side pulls `spice-vdagentd.socket` → daemon, with **zero
+    guest changes** — the M12 premise, confirmed empirically (`spice-vdagentd.service` is `static`,
+    `Requires=spice-vdagentd.socket systemd-logind.service`; `/etc/xdg/autostart/spice-vdagent.desktop`
+    present).
 - **The protocol is coupled to a SPICE server as message broker.** The vdagent wire format
   (`VDIChunkHeader` [8 B: `port`,`size`] wrapping `VDAgentMessage` [`protocol`,`type`,`opaque`,`size`,
   data], types `VD_AGENT_CLIPBOARD*` / `VD_AGENT_MONITORS_CONFIG` / `VD_AGENT_MOUSE_STATE` /
@@ -1053,14 +1076,15 @@ the host and paste it in the guest and vice-versa. Baseline-tier compatibility f
 **Risks / spike first:**
 - **Spike #1 (gating):** does exposing a named `com.redhat.spice.0` virtio-serial port actually wake
   stock `vdagentd`, and how invasive is the libkrun device change vs the existing virtio-console?
-- **Wayland reality on our mutter.** `spice-vdagent`'s clipboard path is historically X11-centric and
-  thinner on Wayland; GNOME-on-Wayland is exactly what we run. Measure whether stock vdagent's Wayland
-  clipboard actually works on our guest mutter before building the broker. (This weak spot is *why* M5
-  went the `ext-data-control`/`RemoteDesktop` route natively — if stock vdagent's Wayland clipboard is
-  a non-starter on our mutter, the whole baseline-tier clipboard case weakens and file transfer, which
-  is compositor-agnostic, may become the *primary* SPICE win instead.)
-- **Confirm the default-install assumption on the actual base image** (`docs/images.md`) — the "$0
-  guest install" case rests on `spice-vdagent` really being present on `Fedora-Workstation-43.*`.
+- **Wayland reality on our mutter — largely de-risked, still worth confirming.** `spice-vdagent`'s
+  clipboard path is historically X11-centric, but **GNOME Boxes ships spice-vdagent clipboard on
+  GNOME/Wayland today** (see `docs/research/prior-art-gnome-boxes.md`), so the old X11-era worry is
+  much reduced. Still confirm it works against *our* guest mutter (which we pin/patch) before building
+  the broker. Residual-risk fallback unchanged: if stock vdagent's Wayland clipboard somehow fails on
+  our mutter, file transfer — compositor-agnostic — becomes the *primary* SPICE win instead.
+- ~~**Confirm the default-install assumption on the actual base image.**~~ **DONE 2026-07-17** — a
+  stock F43 boot confirmed `spice-vdagent-0.23.0-1.fc43` present + dormant + udev-triggered on the
+  named port (see the load-bearing facts above). The "$0 guest install" case holds.
 - **Overlap with M5 is intentional but must not double-own the pasteboard** — one host clipboard
   owner, two possible guest transports.
 
