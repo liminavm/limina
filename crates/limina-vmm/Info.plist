@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Embedded into the limina-vmm Mach-O (__TEXT,__info_plist) by build.rs. A bundle's
+       Info.plist only covers its MAIN executable (limina); the worker is a separate helper
+       that is the process which actually opens CoreAudio for `--mic`, so macOS TCC needs the
+       microphone usage string to live in the WORKER's own Info.plist — otherwise no prompt
+       can be shown and mic access is silently denied. -->
+  <key>CFBundleIdentifier</key><string>eti.noronha.limina.vmm</string>
+  <key>CFBundleName</key><string>Limina</string>
+  <key>NSMicrophoneUsageDescription</key><string>Limina lets a virtual machine capture your microphone when you enable mic sharing for it.</string>
+</dict>
+</plist>
