@@ -211,8 +211,20 @@ if [ -n "$SIGN_ID" ] && [ "$SIGN_ID" != "-" ]; then
     echo "==> WARNING: identity '$SIGN_ID' found but UNUSABLE from this shell (keychain" >&2
     echo "    denied — locked, key ACL, or no SecurityAgent in this session)." >&2
     SIGN_ID=""
+  else
+    # Read the team (cert subject.OU) off the probe now, before signing anything real —
+    # the worker signature (below) needs the team-pinned DR, and computing it here avoids
+    # a chicken-and-egg re-sign of the sealed bundle.
+    TEAM="$(codesign -dvv "$PROBE" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
   fi
   rm -f "$PROBE"
+fi
+
+# The team-pinned designated requirement, shared by the app AND the worker so both satisfy
+# the same TCC grants (see below). Empty when signing ad-hoc.
+DR=""
+if [ "$SIGN_ID" != "-" ] && [ -n "${TEAM:-}" ] && [ "$TEAM" != "not set" ]; then
+  DR="designated => identifier \"eti.noronha.limina\" and anchor apple generic and certificate leaf[subject.OU] = \"$TEAM\""
 fi
 if [ -z "$SIGN_ID" ]; then
   SIGN_ID="-"
@@ -223,20 +235,27 @@ if [ -z "$SIGN_ID" ]; then
 fi
 echo "==> codesigning as '$SIGN_ID' (dylibs → worker → supervisor → app)"
 find "$FW" -type f -name '*.dylib' -exec codesign -s "$SIGN_ID" --force {} \;
-codesign -s "$SIGN_ID" --force --entitlements "$ROOT/crates/limina-vmm/hvf-entitlements.plist" "$MACOS/limina-vmm"
+# The worker (limina-vmm), not the app main, is the process that opens CoreAudio for `--mic`.
+# TCC records the mic grant under the responsible app (eti.noronha.limina) but validates the
+# ACCESSING binary against the grant's csreq (identifier "eti.noronha.limina" + team OU), so
+# the worker must sign with the app's identifier and the same team-pinned DR — otherwise its
+# `.vmm` identity fails the csreq and CoreAudio delivers silence despite an allowed grant.
+if [ -n "$DR" ]; then
+  codesign -s "$SIGN_ID" --force -i "eti.noronha.limina" -r="$DR" \
+    --entitlements "$ROOT/crates/limina-vmm/hvf-entitlements.plist" "$MACOS/limina-vmm"
+else
+  codesign -s "$SIGN_ID" --force \
+    --entitlements "$ROOT/crates/limina-vmm/hvf-entitlements.plist" "$MACOS/limina-vmm"
+fi
 codesign -s "$SIGN_ID" --force "$MACOS/gvproxy"
 codesign -s "$SIGN_ID" --force "$MACOS/limina"
-codesign -s "$SIGN_ID" --force "$APP"
-if [ "$SIGN_ID" != "-" ]; then
-  # Re-sign the app with the team-pinned designated requirement. TeamIdentifier comes
-  # off the fresh signature so this works however the identity was specified.
-  TEAM="$(codesign -dvv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
-  if [ -n "$TEAM" ] && [ "$TEAM" != "not set" ]; then
-    codesign -s "$SIGN_ID" --force \
-      -r="designated => identifier \"eti.noronha.limina\" and anchor apple generic and certificate leaf[subject.OU] = \"$TEAM\"" \
-      "$APP"
-    echo "    designated requirement pinned to team $TEAM (TCC grants survive rebuilds and cert reissue)"
-  fi
+# Seal the app (outer) LAST, after the nested worker is in its final form, with the same
+# team-pinned DR so the app grant (Accessibility, etc.) also survives rebuilds/cert reissue.
+if [ -n "$DR" ]; then
+  codesign -s "$SIGN_ID" --force -r="$DR" "$APP"
+  echo "    designated requirement pinned to team $TEAM (app + worker; TCC grants incl. mic reach the worker and survive rebuilds)"
+else
+  codesign -s "$SIGN_ID" --force "$APP"
 fi
 
 echo "==> done: $APP"
