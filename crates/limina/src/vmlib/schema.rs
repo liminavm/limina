@@ -82,6 +82,14 @@ pub struct Hardware {
     /// Mirror the host battery into the guest (virtio-i2c SBS battery; default true).
     /// Even when true, nothing attaches on a battery-less host. See `--no-battery`.
     pub battery: bool,
+    /// Attach the native virtio-snd audio device driving host CoreAudio (default true).
+    /// The guest's stock virtio_snd driver binds it with no guest components. See `--no-snd`.
+    #[serde(default = "default_true")]
+    pub snd: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Hardware {
@@ -91,6 +99,7 @@ impl Default for Hardware {
             reclaim: crate::balloon_policy::ReclaimMode::Moderate,
             memory: Memory::default(),
             battery: true,
+            snd: true,
         }
     }
 }

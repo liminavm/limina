@@ -200,6 +200,13 @@ struct Cli {
     #[arg(long)]
     no_battery: bool,
 
+    /// Do NOT attach the guest audio device. By default a native virtio-snd card
+    /// (device ID 25) driving the host's CoreAudio output is attached; the guest's
+    /// stock virtio_snd driver binds it and PipeWire routes to it with no guest-side
+    /// components. This turns audio off entirely.
+    #[arg(long)]
+    no_snd: bool,
+
     /// Attach a user-mode NAT NIC: spawn and supervise a gvproxy gateway (DHCP/DNS/NAT,
     /// no root) and connect the guest's virtio-net to it. The guest gets an IP and outbound
     /// internet automatically (e.g. for SSH).
@@ -666,6 +673,7 @@ fn cli_from_definition(
         reclaim: ov.reclaim.unwrap_or(cfg.hardware.reclaim),
         gpu_software_2d: cfg.display.gpu == GpuMode::Software2d,
         no_battery: !cfg.hardware.battery,
+        no_snd: !cfg.hardware.snd,
         net,
         net_log: None,
         net_mac: cfg.networks.first().map(|n| n.mac.clone()),
@@ -872,6 +880,9 @@ fn run_vm(cli: Cli) -> Result<()> {
     }
     if cli.no_battery {
         args.push("--no-battery".into());
+    }
+    if cli.no_snd {
+        args.push("--no-snd".into());
     }
 
     // Runtime display-resize control socket: forwarded to the worker (which binds it). Used by
