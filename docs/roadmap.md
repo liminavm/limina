@@ -783,17 +783,21 @@ backed by a prior-art research pass + the user's primary-source Parallels data:
   (both):** the **kernel virtio-gpu DRM driver** — carry the **Dongwon Kim freeze/restore series** (only
   the kernel owns the guest-id↔host-resource map, so only it can resubmit the resource/context creates).
   **virgl (GL) tier:** that ~suffices (virglrenderer rebuilds from the resubmitted stream + guest-backed
-  contents; Mesa virgl ≈ transparent) — the Parallels/VMware-proven baseline. **venus (Vulkan) tier:** NOT
-  enough — the host render-server's VkObject graph (→ Metal) is gone on a fresh worker, so it needs a
-  **Mesa-venus object-graph replay** (`src/virtio/vulkan/`; unsolved upstream — the venus-resume spike) +
-  a **host-visible blob copy-back** (`TRANSFER_FROM_HOST` at snapshot). Restore uses a **fresh worker**
+  contents; Mesa virgl ≈ transparent) — the Parallels/VMware-proven baseline. **⚠ this "≈ transparent" is an
+  unverified inference** — it never got a source spike like venus did; run one alongside M9.1. **venus
+  (Vulkan) tier:** NOT enough — the host render-server's VkObject graph (→ Metal) is gone on a fresh worker,
+  so it needs a **Mesa-venus object-graph replay** (`src/virtio/vulkan/`; unsolved upstream — the
+  venus-resume spike) **plus a snapshot-time readback of device-local resource *contents*** (textures in
+  Metal heaps are captured by *nothing*; replay alone brings objects back **empty** — this is M9's long
+  pole) + the host-visible blob copy-back (`TRANSFER_FROM_HOST` at snapshot). Restore uses a **fresh worker**
   (empty renderer) — **no in-process renderer-reset hook needed** (that earlier framing was a
   misdiagnosis). Record/replay B is a later optional upgrade, out of M9 scope.
 
-**Two-tier:** stock guests get suspend/snapshots transparently, but with a **GPU re-init blip** (no guest
-resubmit → the desktop flashes/recovers, not seamless 3D). Enhanced guests get seamless re-init: **virgl**
-via the kernel Dongwon-Kim resubmit; **venus** additionally via the Mesa-venus replay + blob copy-back;
-plus agent-driven wall-clock fix. **A degrades gracefully; B wouldn't even start.**
+**Two-tier:** stock guests get suspend/snapshots transparently, but with a **GPU re-init disruption** (no
+guest resubmit → spike #3 showed a *live* 3D session crashes/recovers, not a mere flash). Enhanced guests get
+seamless re-init: **virgl** via the kernel Dongwon-Kim resubmit; **venus** additionally via the Mesa-venus
+replay + device-local content readback + blob copy-back — all triggered by the agent **freeze bracket**
+(`m9-freeze-trigger.md`), which also fixes the wall clock. **A degrades gracefully; B wouldn't even start.**
 
 **Reuse (why it's tractable):** rides the existing **reboot=relaunch** spine (`WORKER_EXIT_REBOOT` →
 relaunch a fresh worker, host resources survive) — suspend adds a third exit disposition
@@ -802,34 +806,47 @@ surface-port persistence, reconnect-tolerant control plane, gvproxy recycle, and
 **already-long-sleep-aware port-123 timesync** are all in place. New `limina-proto`
 `Snapshot`/`Restore`/`TimeSet` messages (update both guest binaries).
 
-**Build plan (bisectable):** M9.0 founding spikes (gate everything) → M9.1 pause + RAM + vCPU snapshot
-(no-GPU/sw-2D guest first) → M9.2 virtio device state + GIC → M9.3 GPU via Strategy A: **virgl tier first**
-(carry Dongwon-Kim kernel resubmit + snapshot-time GPU quiesce), then the **venus tier** (Mesa-venus
-object-graph replay + blob copy-back, gated on the venus-resume spike) → M9.4 full-snapshot feature (save /
-restore / clone / roll back) + suspend/resume UX + capability probe.
+**Build plan (bisectable):** M9.0 founding spikes (gate everything) → M9.1 **multi-vCPU** pause + RAM + vCPU
+snapshot (no-GPU/sw-2D guest first) → **M9.1.5 spike F: the guest freeze/restore trigger** → M9.2 virtio
+device state + GIC → M9.3 GPU via Strategy A: **virgl tier first** (carry Dongwon-Kim kernel resubmit +
+snapshot-time GPU quiesce), then the **venus tier** (Mesa-venus object-graph replay + **device-local content
+readback** + blob copy-back, gated on the venus-resume spike) → M9.4 full-snapshot feature (save / restore /
+clone / roll back) + suspend/resume UX + capability probe.
 
-**libkrun patches:** real HVF pause/quiesce (the `VcpuEvent::Pause`/`Resume` + `resume_vcpus` are inert
-today), bulk vCPU `save_state`/`restore_state` (accessors private, SIMD unbound), in-kernel GIC state
-get/set (unused, highest-risk), `CNTVOFF` set on restore, a `--restore` boot mode, a versioned
-device-state schema, and a snapshot-time GPU **quiesce** (drain fences before the worker dies — restore is
-a fresh worker, so **no in-process renderer reset**; side fix: `reset_session` should also drop rutabaga
-contexts so the reboot/rebind reset is clean). Guest side: carry the `patches/linux` Dongwon-Kim drm/virtio
-freeze/restore series (virgl), + Mesa-venus replay (venus). (The PSCI `CPU_OFF`/`OSDLR_EL1` gaps that
-blocked guest-side S4 are **not** on this path.)
+> **The trigger gap (2026-07-17 review):** an external-pause snapshot never runs the guest's PM path, so the
+> Dongwon-Kim resubmit (and venus replay) **never fires** on its own. Decided in `docs/design/m9-freeze-trigger.md`:
+> an **agent-coordinated suspend-to-idle bracket** on the enhanced tier (also restores the wall clock,
+> dissolves the `ICC_RPR_EL1` edge, drains virtio I/O); the stock tier keeps the raw snapshot with a GPU
+> re-init disruption (may cost a live 3D session — recovers). Gated on spike F.
+
+**libkrun patches:** real HVF pause/quiesce (`VcpuEvent::Pause`/`Resume` + `resume_vcpus` are inert today —
+*and the pause must wake WFE-parked vCPUs blocked on a channel `recv()`*), vCPU `save_state`/`restore_state`
+(wrappers — the `hv_vcpu_get/set_sys_reg` / `set_simd_fp_reg` / `set_vtimer_offset` FFI **already exists**),
+in-kernel GIC state get/set (spike #2 proved it round-trips → the userspace `GicV3` fallback is **not
+needed**), `CNTVOFF` set on restore, a `--restore` boot mode, a versioned device-state schema (+ mapped-blob
+set), virtio freeze/thaw hardening, and a snapshot-time GPU **quiesce** (drain fences before the worker dies
+— restore is a fresh worker, so **no in-process renderer reset**). *(The `reset_session` rutabaga-context
+drop is **already shipped** — patch 0035 — not M9 work.)* Guest side: carry the `patches/linux` Dongwon-Kim
+drm/virtio freeze/restore series (virgl), + Mesa-venus replay + device-local content readback (venus). (The
+PSCI `CPU_OFF`/`OSDLR_EL1` gaps that blocked guest-side S4 are **not** on this path.)
 
 **Founding spikes (M9.0):** (1) ✅ **DONE (2026-06-28, `spikes/s4-hibernate/RESULTS.md`)** — guest-side
 S4 inside libkrun is correctly wired but blocked by two HVF gaps (PSCI `CPU_OFF`/`AFFINITY_INFO`;
 `OSDLR_EL1` debug sysreg); *bearing:* this is why we pivoted host-side (which sidesteps them) and demoted
-S4. (2) can HVF round-trip the **full** vCPU + GIC state (reuse `spikes/hvf-trap-probe` — does any EL1
-sysreg reject `set_sys_reg` post-run? does `hv_gic_state_get_data`→`hv_gic_set_state` round-trip?) —
-gates M9.1/M9.2. (3) 🟡 **PARTIAL (2026-06-28, `gpu-reset-live.md`)** — a live `virtio_gpu` unbind/rebind,
+S4. (2) ✅ **GREEN (2026-07-01, `spikes/m9-hvf-state-roundtrip/RESULTS.md`)** — HVF round-trips the **full**
+vCPU + in-kernel-GICv3 state into a fresh VM, guest continues identically (118/120 EL1 sysregs, all accept
+`set` post-run; GIC blob byte-identical; timer-across-the-gap fires; `ICC_RPR_EL1` read-only → **quiesce to
+no-IRQ-in-service before snapshot**). **M9.1/M9.2 unblocked; the userspace-`GicV3` fallback is not needed;
+the vCPU/GIC round-trip is no longer the top risk.** Non-gating deltas left to M9.1: multi-vCPU, MMU-on,
+pending SPIs. (3) 🟡 **PARTIAL (2026-06-28, `gpu-reset-live.md`)** — a live `virtio_gpu` unbind/rebind,
 three rounds. **Proven:** the host worker is robust (survives resets under any load); the clean path
 cold-rebuilds a correct desktop (pixel-verified). **Decisive (round 3, raw unbind, session live): a running
 guest session does NOT survive abrupt GPU-device loss** (gnome-shell + glxgears + vkcube crash) — so
 guest-side resubmit is *required*, not optional. Root cause in our source: `reset()` keeps the renderer
-alive (`device.rs:379`) + `reset_session` doesn't drop rutabaga contexts (`virtio_gpu.rs:698`) → orphaned-
-context collision on an un-quiesced reset. **Corrected:** that's a same-worker artifact (restore = fresh
-worker), so the real gate is **guest-side** (kernel Dongwon-Kim for virgl; Mesa-venus replay for venus) —
+alive (`device.rs:379`) + the orphaned-context half is **now fixed** (`reset_session` drops rutabaga
+contexts via patch 0035, `virtio_gpu.rs:715`). **Corrected:** that collision was a same-worker artifact
+(restore = fresh worker), so the real gate is **guest-side** (kernel Dongwon-Kim for virgl; Mesa-venus replay
+for venus) —
 **not a libkrun renderer-reset hook** (earlier framing was a misdiagnosis). Green light to *start* M9.3
 guest-side, not a sign-off. Gates M9.3.
 
@@ -837,11 +854,17 @@ guest-side, not a sign-off. Gates M9.3.
 enhanced image; the guest comes back to the same desktop, the clock is correct after a real multi-hour
 suspend, venus re-enumerates, and the host RAM was actually freed while suspended.
 
-**Risks / ASSUMED (spike-gated):** HVF full vCPU + GIC state round-trip (highest-risk — GIC state API is
-unused today; fallback = userspace `GicV3`); the live venus desktop recovers from a host-resource
-teardown (M9.0 #3); re-mmap+`hv_vm_map` at original IPAs behaves like first boot; the Dongwon-Kim series
-applies cleanly to our kernel (carry out-of-tree). HVF has **no dirty-page log** → a stop-the-world full
-RAM dump (multi-second stall) — fine for suspend, a UX note for snapshotting a live VM.
+**Risks / ASSUMED (spike-gated), reframed 2026-07-17:** the top risk is **no longer** the vCPU/GIC
+round-trip (spike #2 retired it) — it is **the venus tier's device-local content capture** (`m9-suspend-resume.md`
+§4b): object-graph replay re-creates VkObjects *empty*, and device-local textures live in Metal heaps captured
+by nothing → they need a snapshot-time venus readback sweep. **Second:** the "virgl ≈ transparent" premise is
+an *unverified inference* (unlike venus it got no source spike) → run a virgl-tier source spike alongside M9.1;
+if it collapses both tiers become Mesa-replay-shaped. **Third:** the freeze-trigger gap (`m9-freeze-trigger.md`,
+decided, spike-F-gated). Still open: re-mmap+`hv_vm_map` at original IPAs behaves like first boot; the stale
+host-visible blob mappings must be re-established before vCPUs run (§3); the Dongwon-Kim series applies cleanly
+to our kernel (carry out-of-tree). HVF has **no first-class dirty-page log** → a stop-the-world full RAM dump
+(multi-second stall) — fine for suspend, a UX note for snapshotting a live VM (`hv_vm_protect` DIY dirty-log is
+a future option, out of M9 scope).
 
 ---
 
@@ -946,6 +969,103 @@ onboarding doc shipped: `docs/dev-onboarding.md`.
 
 ---
 
+## Milestone 12 — SPICE guest-agent support (baseline-tier clipboard first)
+
+**Status: 📋 planned — not started.** Research done (2026-07-17); no code yet.
+
+**Goal:** light up SPICE's `spice-vdagent` in an **unmodified** guest so a stock Fedora VM gets
+integration features **with zero limina guest components installed** — starting with **clipboard
+sharing**, then **client→guest file transfer** (drag-a-file-onto-the-window / "send file"). This is a
+*baseline-tier compatibility on-ramp*, not a replacement for `limina-agent`: the native control plane
+(M5) stays the enhanced-tier path; SPICE is the additive, per-feature story for guests that never
+install our tools (per the two-tier guarantee).
+
+**Explicitly out of scope: display resize.** SPICE's `VD_AGENT_MONITORS_CONFIG` is deliberately *not*
+pursued — limina already does dynamic guest resolution natively via generated EDID + the display-mode
+machinery (M2/M8, [[limina-display-modes]] / [[limina-display-resize]]), which is Wayland-native and
+already shipped. SPICE would only duplicate it (worse, over its weaker Wayland path).
+
+**File transfer complements virtiofs, doesn't duplicate it.** M5's virtiofs share is a *persistent
+mounted folder*; SPICE file transfer is a one-shot **push of a file into the guest** (client→guest,
+drag-and-drop or send-file, landing in the user's Downloads). That's a distinct Parallels-style UX
+virtiofs doesn't give — so it's genuinely additive, which is why it's the interesting secondary here.
+(Classic SPICE file transfer is client→guest only; guest→host drag-out is not part of the vdagent
+file-xfer protocol and stays out of scope.)
+
+**Why this is worth doing (the strategic case):** `spice-vdagent` is **already in the default Fedora
+Workstation install**, so on our base image the binary is present and xdg-autostart-enabled — it's
+just **dormant** because nothing exposes its virtio-serial port. The entire cost is therefore
+**host-side**; the guest install is $0. A stock guest that has never seen `install-enhanced.sh` would
+gain clipboard (and then drag-in file transfer) the moment limina speaks the vdagent protocol.
+
+### Load-bearing facts (from the 2026-07-17 research)
+
+- **Two guest components, both stock:** `spice-vdagentd` (system daemon, `spice-vdagentd.service`)
+  and `spice-vdagent` (per-session, `/etc/xdg/autostart`). They talk to each other over a local Unix
+  socket; `vdagentd` talks to the host over a **virtio-serial port**.
+- **The trigger is a named virtio-serial port:** the host must expose a **virtio-serial (multiport)
+  device with port name `com.redhat.spice.0`** → guest sees `/dev/virtio-ports/com.redhat.spice.0`.
+  A stock **udev rule** matching that port name is what wakes `vdagentd`. No named port ⇒ agent stays
+  dormant (today's state). libkrun currently gives us virtio-**console** (hvc0), not a SPICE-style
+  **named multiport virtserial** — so this is a **new libkrun device/patch** (nearest existing
+  plumbing: the console work behind `limina-guest-console`).
+- **The protocol is coupled to a SPICE server as message broker.** The vdagent wire format
+  (`VDIChunkHeader` [8 B: `port`,`size`] wrapping `VDAgentMessage` [`protocol`,`type`,`opaque`,`size`,
+  data], types `VD_AGENT_CLIPBOARD*` / `VD_AGENT_MONITORS_CONFIG` / `VD_AGENT_MOUSE_STATE` /
+  `VD_AGENT_ANNOUNCE_CAPABILITIES` / `VD_AGENT_REPLY`) assumes a SPICE server routing chunks between
+  guest and client. limina must **implement the host end of that broker itself** and translate to our
+  own AppKit/Metal + control-plane primitives — we do **not** run a SPICE server.
+- **No reusable Rust crate for our side.** The SPICE Rust ecosystem is all client-display-protocol:
+  `spice-client` (pure-Rust *client*, experimental, GPLv3, explicitly **no** vdagent),
+  `spice-client-glib` (spice-gtk bindings), `rust-spice`/`rsspice` (bind the C `spice-server` we're
+  trying to avoid). The piece we need — a host-side **vdagent-framing broker** — doesn't exist as a
+  crate. Good news: the framing is small and stable (~an 8-byte chunk header + 20-byte message header
+  + a handful of message types), so hand-rolling it in a `limina-proto`-style crate is easy and keeps
+  us off GPLv3 and off the SPICE server entirely.
+
+**Key tasks (clipboard first, in dependency order):**
+1. **libkrun: virtio-serial named multiport device exposing `com.redhat.spice.0`.** The gating
+   unknown — spike whether we extend the existing virtio-console device to a named multiport or add a
+   virtserial device. Verify a stock guest's udev rule fires and `vdagentd` comes up against it (no
+   guest changes).
+2. **Host vdagent broker (`limina-vdagent`-ish crate).** De-frame `VDIChunkHeader`/`VDAgentMessage`,
+   do capability negotiation (`VD_AGENT_ANNOUNCE_CAPABILITIES`), and implement the **clipboard**
+   message set (`VD_AGENT_CLIPBOARD_GRAB`/`_REQUEST`/`_RELEASE`/`_CLIPBOARD`) end-to-end. Bridge it to
+   the **same NSPasteboard bridge M5 already owns** (`crates/limina/src/clipboard.rs`) — so the host
+   clipboard surface is shared between the SPICE path and the native `limina-agent` path, never two
+   competing owners. Loop/echo suppression as in M5.
+3. **Then file transfer** (`VD_AGENT_FILE_XFER_START`/`_STATUS`/`_DATA`) as the second feature — the
+   host initiates a push (from an AppKit drop target / "Send File…" menu), streams file chunks over
+   the vdagent channel, and `vdagentd` writes into the guest user's Downloads. Respect the xfer status
+   handshake (guest can decline / cancel). Chunk-size + flow-control caution mirrors M5's large-vsock
+   transfer risks. After clipboard is proven.
+4. **Arbitration with the native path.** When `limina-agent` (enhanced tier) is present, it wins;
+   SPICE is the fallback when only stock `spice-vdagent` is there. Detect granularly/additively (per
+   the cross-cutting rule) — a guest may have one, both, or neither.
+
+**libkrun patches:** the virtio-serial named-multiport device (task 1) — the one real patch. Broker +
+clipboard bridge are pure limina code.
+
+**Done test:** boot an **unmodified** stock Fedora image (no `install-enhanced.sh`, no `limina-agent`)
+under limina; `spice-vdagentd` comes up against `/dev/virtio-ports/com.redhat.spice.0`; copy text in
+the host and paste it in the guest and vice-versa. Baseline-tier compatibility floor (L2) stays green.
+
+**Risks / spike first:**
+- **Spike #1 (gating):** does exposing a named `com.redhat.spice.0` virtio-serial port actually wake
+  stock `vdagentd`, and how invasive is the libkrun device change vs the existing virtio-console?
+- **Wayland reality on our mutter.** `spice-vdagent`'s clipboard path is historically X11-centric and
+  thinner on Wayland; GNOME-on-Wayland is exactly what we run. Measure whether stock vdagent's Wayland
+  clipboard actually works on our guest mutter before building the broker. (This weak spot is *why* M5
+  went the `ext-data-control`/`RemoteDesktop` route natively — if stock vdagent's Wayland clipboard is
+  a non-starter on our mutter, the whole baseline-tier clipboard case weakens and file transfer, which
+  is compositor-agnostic, may become the *primary* SPICE win instead.)
+- **Confirm the default-install assumption on the actual base image** (`docs/images.md`) — the "$0
+  guest install" case rests on `spice-vdagent` really being present on `Fedora-Workstation-43.*`.
+- **Overlap with M5 is intentional but must not double-own the pasteboard** — one host clipboard
+  owner, two possible guest transports.
+
+---
+
 ## Summary of net-new code vs libkrun patches
 
 | Milestone | Net-new limina code | libkrun (or fw/virgl) patches |
@@ -959,7 +1079,8 @@ onboarding doc shipped: `docs/dev-onboarding.md`.
 | M6 dynamic memory ✅ | PSI autoballoon policy + `BalloonControlHandle` / `--memory` / control socket (internal Rust API, not a C ABI) | reclaim fix (MADV_FREE_REUSABLE) + 16 KiB align/coalesce + inflate/deflate handlers + DEFLATE_ON_OOM (0033/0034) |
 | M7 USB | host claim/attach, usbip plumbing | our-kernel config edit (USB+uinput); later native virtio-usb + krun_add_usb* |
 | M8 audio/x86/polish | fullscreen, keymap, multi-display, pointer capture, IOSurface mach-port scoping, FEX wiring | native virtio-snd; runtime resize/EDID; LED parity |
-| M9 suspend/resume + snapshots 📐 designed | host-side VMM snapshot (file format/CRC, `--restore` wiring, device schema, named-snapshot manager + clone, proto `Snapshot`/`Restore`/`TimeSet`, capability probe, UX); Mesa-venus object-graph replay + blob copy-back (venus tier) | HVF pause/quiesce + vCPU save/restore + GIC state + `CNTVOFF` set + `--restore` mode + device (de)serialize + snapshot-time GPU quiesce (restore = fresh worker, no in-process renderer reset; side fix: `reset_session` rutabaga contexts); carry `patches/linux` Dongwon-Kim drm/virtio freeze-restore (virgl) |
+| M9 suspend/resume + snapshots 📐 designed | host-side VMM snapshot (file format/CRC, `--restore` wiring, device schema + mapped-blob set, named-snapshot manager + clone + APFS `clonefile` disk, agent freeze bracket, proto `Snapshot`/`Restore`/`TimeSet`, capability probe, UX); Mesa-venus object-graph replay + **device-local content readback** + blob copy-back (venus tier) | multi-vCPU HVF pause/quiesce (incl. WFE-parked wakeup) + vCPU save/restore (wrappers, FFI exists) + GIC state (spike #2 green) + `CNTVOFF` set + `--restore` mode + device (de)serialize + virtio freeze/thaw hardening + snapshot-time GPU quiesce (restore = fresh worker, no in-process renderer reset; `reset_session` rutabaga-context fix already shipped, 0035); carry `patches/linux` Dongwon-Kim drm/virtio freeze-restore (virgl) |
+| M12 SPICE agent 📋 planned | host vdagent broker (framing + clipboard, then client→guest file transfer), NSPasteboard bridge reuse (M5), native-vs-SPICE arbitration; display-resize deliberately excluded (native EDID already covers it) | virtio-serial named multiport port `com.redhat.spice.0` (wakes stock `spice-vdagentd`); no crate reuse |
 
 ## First three things to spike
 
