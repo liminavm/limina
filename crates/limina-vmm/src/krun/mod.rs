@@ -178,6 +178,8 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     // Native virtio-snd audio device (device ID 25). On by default; the guest's stock
     // virtio_snd driver binds it and exposes an ALSA card with no guest components.
     vmr.snd = spec.snd;
+    // Mic capture is opt-in (default off, privacy); only acts when snd is also on.
+    vmr.snd_capture = spec.mic;
 
     Ok(vmr)
 }

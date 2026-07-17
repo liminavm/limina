@@ -215,4 +215,7 @@ pub struct VmSpec {
     /// Attach the native virtio-snd audio device (device ID 25) driving host audio.
     /// On by default; the guest's stock virtio_snd driver binds it (no guest components).
     pub snd: bool,
+    /// Advertise the mic-capture input stream on the virtio-snd device. Opt-in and
+    /// default-off for privacy (unlike playback); only meaningful when `snd` is also on.
+    pub mic: bool,
 }

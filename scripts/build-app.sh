@@ -148,6 +148,13 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSArchitecturePriority</key><array><string>arm64</string></array>
   <key>NSHighResolutionCapable</key><true/>
   <key>CFBundleIconFile</key><string>Limina</string>
+  <!-- Mic capture (opt-in `--mic` / `[hardware] mic`): the guest's virtio-snd input
+       stream records the host microphone via CoreAudio. macOS gates that behind the
+       mic TCC prompt, which only appears from an app-bundle (LaunchServices) context —
+       this usage string is what the prompt shows. The worker inherits the grant as the
+       app's child (responsible process). No prompt unless a guest actually opens the
+       capture stream. -->
+  <key>NSMicrophoneUsageDescription</key><string>Limina lets a virtual machine capture your microphone when you enable mic sharing for it.</string>
   <!-- .liminavm bundles: a package (the directory shows as one Finder item) owned
        by Limina; opening one routes to application:openURLs: in the control
        center, which starts the VM. -->

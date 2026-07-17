@@ -86,6 +86,11 @@ pub struct Hardware {
     /// The guest's stock virtio_snd driver binds it with no guest components. See `--no-snd`.
     #[serde(default = "default_true")]
     pub snd: bool,
+    /// Let the guest capture the host microphone via the virtio-snd input stream.
+    /// Opt-in, default false for privacy (unlike playback). No effect if `snd = false`.
+    /// See `--mic`.
+    #[serde(default)]
+    pub mic: bool,
 }
 
 fn default_true() -> bool {
@@ -100,6 +105,7 @@ impl Default for Hardware {
             memory: Memory::default(),
             battery: true,
             snd: true,
+            mic: false,
         }
     }
 }

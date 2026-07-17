@@ -162,6 +162,13 @@ struct Cli {
     #[arg(long)]
     no_snd: bool,
 
+    /// Advertise the mic-capture input stream on the virtio-snd device so the guest can
+    /// record the host microphone. Opt-in and OFF by default for privacy (unlike audio
+    /// output). No effect with `--no-snd`. First guest capture triggers the macOS mic TCC
+    /// prompt (needs the app bundle's NSMicrophoneUsageDescription).
+    #[arg(long)]
+    mic: bool,
+
     /// Attach a user-mode NAT NIC (`eth0`) connected to a gvproxy gateway listening on
     /// this vfkit unixgram socket. The supervisor spawns gvproxy and guarantees it is up
     /// before the guest activates the device.
@@ -455,6 +462,7 @@ fn main() -> Result<()> {
         net,
         battery: !cli.no_battery,
         snd: !cli.no_snd,
+        mic: cli.mic,
     };
 
     krun::boot(&spec)

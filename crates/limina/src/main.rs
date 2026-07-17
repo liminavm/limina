@@ -207,6 +207,12 @@ struct Cli {
     #[arg(long)]
     no_snd: bool,
 
+    /// Let the guest capture the host microphone via the virtio-snd input stream. Opt-in
+    /// and OFF by default for privacy (unlike audio output). No effect with `--no-snd`.
+    /// First guest capture triggers the macOS mic permission prompt.
+    #[arg(long)]
+    mic: bool,
+
     /// Attach a user-mode NAT NIC: spawn and supervise a gvproxy gateway (DHCP/DNS/NAT,
     /// no root) and connect the guest's virtio-net to it. The guest gets an IP and outbound
     /// internet automatically (e.g. for SSH).
@@ -674,6 +680,7 @@ fn cli_from_definition(
         gpu_software_2d: cfg.display.gpu == GpuMode::Software2d,
         no_battery: !cfg.hardware.battery,
         no_snd: !cfg.hardware.snd,
+        mic: cfg.hardware.mic,
         net,
         net_log: None,
         net_mac: cfg.networks.first().map(|n| n.mac.clone()),
@@ -883,6 +890,9 @@ fn run_vm(cli: Cli) -> Result<()> {
     }
     if cli.no_snd {
         args.push("--no-snd".into());
+    }
+    if cli.mic {
+        args.push("--mic".into());
     }
 
     // Runtime display-resize control socket: forwarded to the worker (which binds it). Used by
