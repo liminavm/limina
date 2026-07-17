@@ -156,6 +156,12 @@ struct Cli {
     #[arg(long)]
     no_battery: bool,
 
+    /// Do NOT attach the native virtio-snd audio device. By default a virtio-snd card
+    /// (device ID 25) driving host CoreAudio is attached; the guest's stock virtio_snd
+    /// driver binds it with no guest-side components. This turns the device off entirely.
+    #[arg(long)]
+    no_snd: bool,
+
     /// Attach a user-mode NAT NIC (`eth0`) connected to a gvproxy gateway listening on
     /// this vfkit unixgram socket. The supervisor spawns gvproxy and guarantees it is up
     /// before the guest activates the device.
@@ -448,6 +454,7 @@ fn main() -> Result<()> {
         input,
         net,
         battery: !cli.no_battery,
+        snd: !cli.no_snd,
     };
 
     krun::boot(&spec)

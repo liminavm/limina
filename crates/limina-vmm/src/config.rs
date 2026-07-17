@@ -212,4 +212,7 @@ pub struct VmSpec {
     /// true the device only attaches if the host actually has a battery (or
     /// `LIMINA_BATTERY_FAKE` is set) — desktops correctly show none.
     pub battery: bool,
+    /// Attach the native virtio-snd audio device (device ID 25) driving host audio.
+    /// On by default; the guest's stock virtio_snd driver binds it (no guest components).
+    pub snd: bool,
 }

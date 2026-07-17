@@ -175,6 +175,10 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
         console::attach_virtio(&mut vmr, vc).context("attaching virtio-console")?;
     }
 
+    // Native virtio-snd audio device (device ID 25). On by default; the guest's stock
+    // virtio_snd driver binds it and exposes an ALSA card with no guest components.
+    vmr.snd = spec.snd;
+
     Ok(vmr)
 }
 
