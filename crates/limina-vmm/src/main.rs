@@ -15,6 +15,7 @@ mod config;
 mod krun;
 mod shutdown;
 mod snapshot;
+mod suspend;
 
 use std::path::PathBuf;
 

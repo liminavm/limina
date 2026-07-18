@@ -1,11 +1,22 @@
 # M9 — the guest freeze/restore trigger — decision
 
-> **STATUS: PROPOSED — decision recorded, gated on one small feasibility spike (F below).**
+> **STATUS: SPIKE F ANSWERED (2026-07-18) — decision holds, and the stock tier got a free upgrade.**
 > Surfaced by the 2026-07-17 M9 design review as the biggest hole in `m9-suspend-resume.md`:
 > the whole Strategy-A GPU story rests on the guest re-creating its GPU objects on restore, but
 > **nothing in a host-side snapshot ever runs the guest code that does that.** This doc names the
 > problem, lays out the options, and recommends one. Every non-obvious claim carries a `path:line`
 > into `third_party/` or a source URL.
+>
+> **UPDATE (2026-07-18): the stock tier need NOT be a raw mid-flight snapshot.** Spike F proved
+> s2idle is reachable + wakeable in libkrun (PL031 alarm, `spikes/m9-freeze-trigger/RESULTS.md`), and
+> **B3 proved a stock guest enters s2idle from a host-driven GPIO `KEY_SLEEP` button with NO agent and
+> NO custom kernel** (libkrun 0060 — stock `systemd-logind` `HandleSuspendKey`). So §4's "stock =
+> Option 2 raw external-pause (mid-flight queues)" is **superseded**: the stock floor can take a
+> **cooperative, quiesced** s2idle snapshot too — logind drains the virtio queues and reaches the
+> quiesced/INIT state before we serialize. The quiesced-invariant snapshot contract (M9.2) therefore
+> applies to **both** tiers; the tier split narrows to the **GPU resubmit/replay** (enhanced kernel +
+> agent), not the *quiesce mechanism*. Option 2's abrupt reset stays only as the involuntary fallback
+> for a guest that ignores the button (e.g. no logind, or `HandleSuspendKey=ignore`).
 
 ---
 

@@ -163,3 +163,87 @@ ssh -p <PORT> claude@127.0.0.1   # PORT from the "SSH forward ready" log line
   cat /proc/device-tree/rtc@a002000/status  # disabled
   sudo rtcwake -m freeze -s 5 -v            # "set rtc wake alarm failed: Invalid argument"
 ```
+
+---
+
+## ✅ B3 — stock, NO-agent suspend trigger via a GPIO KEY_SLEEP button (2026-07-18, PASS; libkrun 0060)
+
+The freeze trigger the M9 host-side snapshot needs (`docs/design/m9-freeze-trigger.md`) assumed the
+*enhanced* tier (agent-coordinated). B3 proves the **stock floor** can suspend cooperatively with **no
+limina-agent and no custom kernel** — a host-driven GPIO button is enough.
+
+**Mechanism (libkrun 0060):** libkrun's PL061 GPIO already carries a poweroff/restart `gpio-keys`
+button on line 3. Added a **second `gpio-keys` button on line 4 emitting `KEY_SLEEP` (142)**, driven by
+a new *suspend eventfd* that mirrors the existing shutdown eventfd. On the worker, a `SIGUSR2` handler
+pulses that eventfd (`crates/limina-vmm/src/suspend.rs`); the GPIO subscriber raises the line; the
+guest's `gpio-keys` driver emits `KEY_SLEEP`; **stock `systemd-logind` maps `KEY_SLEEP` →
+`HandleSuspendKey` (default: suspend)** → `systemctl suspend` → `/sys/power/state=mem` → s2idle. No
+agent in the loop.
+
+**Result (stock `Fedora-Workstation-44.accessible.raw`, EFI + `--net`, headless SSH):**
+```
+[press SIGUSR2 -> worker]  # == GPIO KEY_SLEEP button
+[    7.121120] PM: suspend entry (s2idle)     # logind suspended the guest, no agent
+   ... SSH unreachable ~27s (guest frozen) ...
+[   38.004689] PM: resume devices took 0.012 seconds   # woke via the pre-armed PL031 alarm
+[   38.020356] PM: suspend exit
+[SSH recovers]                                 # virtio thaw hardening (0058) intact
+```
+Verified premises (via `b3-diag.sh`): the guest `gpio-keys` input dev advertises **both** keys
+(`KEY=1000000 0 0 0 4000 0 0` → bit 142 KEY_SLEEP + bit 408 KEY_RESTART), and udev tags it
+`power-switch` so logind watches it (`CURRENT_TAGS=:power-switch:`).
+
+**Wake is separate & already solved:** the button only *enters* s2idle (logind arms no wake). Here the
+test pre-armed `rtcwake -m no -s 30 -d rtc1` (arms the PL031 alarm without suspending) so the guest
+self-wakes; in production the host injects the wake. PL031 alarm + EFI `status=okay` fix are Spike F.
+
+**Bug found & fixed mid-spike (macOS EventFd read/write-fd trap):** the first run did NOT suspend — the
+worker's gpio debug log never logged "Generate a suspend key press event". Root cause: on macOS
+`EventFd` is a *pipe*; `as_raw_fd()` is the **read** end (which the GPIO subscriber epolls), so the
+`SIGUSR2` handler must write the **write** end via `get_write_fd()` — same trap `snapshot.rs` already
+documents. `suspend.rs` fixed to publish `get_write_fd()`. (Note: `shutdown.rs` still stores the read
+fd — the same latent bug — which is one reason the stock GPIO *poweroff* button has been unreliable;
+left for a follow-up.)
+
+**Scope note:** `SIGUSR2` is the spike/mechanism seam; M9.2 wires the supervisor to pulse the suspend
+button around the host-side snapshot (suspend bracket). The button device always exists (build_microvm
+synthesizes the eventfd if the caller passes None), so it's harmless on the C-API/stock path.
+
+### B3 repro
+```
+bash spikes/m9-freeze-trigger/b3-suspend-button.sh          # PASS verdict
+bash spikes/m9-freeze-trigger/b3-diag.sh                    # premise diagnostics (input/udev/logind)
+```
+
+---
+
+## ✅ B4 — does a >=1h in-place s2idle preserve the guest wall clock? (2026-07-18, PASS: skew 0s)
+
+The 2026-07-17 review predicted a stock guest's `CLOCK_REALTIME` would **freeze during s2idle and drift
+by the sleep duration** unless we injected a resume-time clock step. B4 tests it directly: stock F44
+clone, headless, NTP disabled, `rtcwake -m freeze -s 3720 -d rtc1` (~62 min in-place s2idle), compare
+host vs guest epoch before/after.
+
+**Result:** clock **PRESERVED** — `post_wake_skew=0s` (host_delta=3728s, guest_delta=3727s; the 1s is
+the initial −1s baseline). Guest dmesg: `PM: suspend entry (s2idle)` at +8.4s → `PM: resume devices
+took 0.022s` at +3729s → `suspend exit`. `timedatectl` after wake == host wall time.
+
+**Why (and the M9.2 consequence):** the guest runs its own resume path, and `timekeeping_resume()`
+re-reads the PL031 RTC on s2idle exit — so `CLOCK_REALTIME` self-corrects with **no bespoke port-123
+consumer and no explicit clock step**. This validates the freeze-trigger design's "the clock rides the
+bracket for free" assumption (`docs/design/m9-freeze-trigger.md` §3) and **falsifies the review's drift
+prediction** for the enter/exit mechanics.
+
+**Scope caveat (the teardown case is still open):** B4 is *in-place* s2idle — the worker stays alive,
+so HVF's CNTVCT keeps advancing through the freeze. The real M9 suspend **tears the worker down** and
+restores into a **fresh** worker after an arbitrary gap (possibly a host reboot). There, correctness
+reduces to a single question already scoped elsewhere: **does the fresh worker's PL031 report the
+current wall time?** If yes, the same `timekeeping_resume()` re-read self-corrects the teardown gap for
+free; if the PL031 is `Instant`-anchored (see [[limina-guest-clock]]), that's the scoped PL031
+wallclock fix, not new M9 work. B4 proves the guest *mechanism* is correct; the host RTC source is the
+only remaining variable.
+
+### B4 repro
+```
+bash spikes/m9-freeze-trigger/b4-clock.sh   # (job-tmp copy; ~75 min: 62 min freeze + wake + compare)
+```

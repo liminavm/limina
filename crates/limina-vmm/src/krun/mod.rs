@@ -395,6 +395,10 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     // Guest shutdown eventfd + SIGTERM/SIGINT handlers (graceful power-off request).
     let shutdown_efd = crate::shutdown::install().context("installing shutdown handler")?;
 
+    // Guest suspend eventfd + SIGUSR2 handler (M9 freeze trigger, stock tier): pulses the
+    // GPIO KEY_SLEEP button so a stock guest's logind enters suspend-to-idle, no agent needed.
+    let suspend_efd = crate::suspend::install().context("installing suspend handler")?;
+
     let mut event_manager = EventManager::new().map_err(|e| anyhow!("EventManager::new: {e:?}"))?;
     // The worker channel carries virtio-gpu blob-mapping messages (macOS): the GPU
     // device asks the VMM to map host GPU memory into guest space. We service it on a
@@ -418,6 +422,7 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         &vmr,
         &mut event_manager,
         Some(shutdown_efd),
+        Some(suspend_efd),
         worker_tx,
         spec.restore_file.clone(),
     )
