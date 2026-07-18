@@ -160,6 +160,30 @@ guest, or it should be read as the *small-guest* case — see §M9.4.
 >   favours "idle/asleep, never really ran." **Next:** re-run the restore with `RUST_LOG=krun_vmm=info`
 >   (the per-vCPU "resumed from snapshot at pc=" lines) + a captured guest console to pin the stall PC —
 >   before deciding whether the first M9.3 build item is the wake/GIC-with-GPU path or the SHM remap.
+>
+> ### FLOOR SPIKE — round 2 (2026-07-18): the stall was a latent **≥4 GiB snapshot-format bug**, now FIXED
+> Chain of controls (headless, `m93-headless-control.sh`, so the GPU is out of the picture) isolated the
+> round-1 "black restore" to **RAM size, not the GPU and not the enhanced kernel**:
+> - enhanced 2 vCPU / **1024** MiB → **restores** (SSH back, same boot_id)
+> - enhanced 2 vCPU / **4096** MiB → **stalls**  ← vCPU held at 2, only RAM changed → RAM is the variable
+> - enhanced 4 vCPU / **4096** MiB → **stalls**
+>
+> Round 1's "headless SSHes back in ~3–6 s" baseline was run at **≤2 GiB** — so the headless path was
+> *never actually a working 4 GiB control*; the GPU was wrongly implicated. **Root cause:** the snapshot
+> file format (`vmm/src/snapshot.rs`) wrote every byte-section length as a **u32**. A guest-RAM region at
+> 4096 MiB is `0x1_0000_0000` bytes; `len as u32` truncated it to **0**. `write` still appended the full
+> 4 GiB (so the file was ~4.3 GB and the trailing CRC matched — a silent pass), but on restore `bytes()`
+> read length 0 → an **empty** region → the restore loop wrote **zero bytes back** → the guest resumed
+> into blank RAM and idled (WFI, ~0 % CPU, no SSH). Triggers strictly at region length ≥ 2³², so every
+> prior M9.1/M9.2 test (all ≤2 GiB) masked it. **Fix:** widen the length prefix to **u64** (VERSION 2→3,
+> fail-closed on the old version), libkrun **patch 0067**. **Verified GREEN:** headless enhanced 4 vCPU /
+> 4096 MiB now restores, SSH back in ~12 s, **SAME boot_id** (resumed). Snapshot grew by exactly 12 bytes
+> (3 byte-sections × 4) — confirms the u64 code ran. **A hard M9.1/M9.2 prerequisite that had to land
+> before M9.3 GPU work was meaningful** (real VMs are ≥4 GiB).
+>
+> **Now the windowed-restore stall is genuinely the M9.3 GPU question** (headless 4 GiB works; only the
+> GPU/display path still breaks) — the SHM-window HOST3D blobs Fable flagged. That is the next build item
+> (fault-safe SHM remap on restore), no longer confounded by the RAM-size bug.
 
 **Decision: quiesce the GPU and let the guest re-init on restore. Do NOT serialize live host GPU state.**
 This is backed by a dedicated research pass (the GPU-suspend prior-art workflow, 2026-06-28) and the
