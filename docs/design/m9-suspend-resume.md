@@ -172,13 +172,69 @@ guest, or it should be read as the *small-guest* case — see §M9.4.
 > - **Corrected M9.3 ladder (supersedes line 136):** **Step 0** snapshot hardening (host-only: layout-identity
 >   check + streamed CRC; fix/kill the dead oracle) → **Step 1** corrected round-3 floor spike (§round-2 below;
 >   drop the SHM-fault oracle from the verdict, add guest-side wedge probes) → **Step 2** v1 floor =
->   agent-driven GPU re-init on resume (`limina-agent`: stop-gdm→unbind→rebind→start-gdm; guest death of the
->   *session*, VM/disks/net survive; the spike-#3 clean path, no kernel/Mesa/libkrun patch — ship as v1 with
->   the "logged-in session restarts" contract) → **Step 3** DK series adapted to s2idle (guest kernel:
+>   [REVISED r3 — see below] host-side virtio-gpu TRANSPORT-STATE restore (libkrun-only, STOCK-compatible),
+>   which triggers a self-driven venus-watchdog crash→gdm-respawn chain; agent unbind/rebind demoted to
+>   fallback → **Step 3** DK series adapted to s2idle (guest kernel:
 >   freeze/`del_vqs` deletes the M9.2 GPU exception, then BO resubmit) for virgl-tier seamlessness → **Step 4**
 >   seamless venus = Mesa retain-and-replay + ring re-establishment + host `vkr` id-collision hardening
->   (graceful, not `assert` at `vkr_context.h:223`) + device-local content sweep. Host-only: Step 0 + plumbing
->   of Step 2. Guest-agent: Step 2. Guest kernel: Step 3. Guest Mesa + host virgl: Step 4.
+>   (graceful, not `assert` at `vkr_context.h:223`) + device-local content sweep. Host-only: Step 0 + Step 2.
+>   Guest-agent: Step 2 fallback only. Guest kernel: Step 3. Guest Mesa + host virgl: Step 4.
+>
+> **↪ Step 2 REVISED (Fable r3):** the r3 spike showed the fault is a **dead virtio-gpu transport** (fresh
+> worker's device never re-driven to `DRIVER_OK`), not a missing scanout or an idle compositor. So v1 floor =
+> **host-side GPU transport-state restore** — serialize the GPU device's MMIO register file (queue
+> desc/avail/used addrs, `ready`, features, `device_status`) + per-queue processed indices at snapshot (the
+> rings themselves already ride the RAM snapshot), restore before the vCPU gate (`builder.rs:1234-1243`, beside
+> GIC/GPIO; VERSION bump). The recovery chain then fires with **zero guest changes**: commands process again →
+> `SET_SCANOUT` vs the vanished resource errors but its fence completes → the parked kernel commit unparks →
+> mutter renders through venus → the dead venus ring trips Mesa's ~3 s ring-ALIVE watchdog `abort()`
+> (`vn_common.c:281-289`, `vn_ring.c:456-457`) → gnome-shell dies → **gdm respawns → fresh session re-inits
+> venus against a now-live device → desktop back (~10-20 s "screen blinks")**. Stock-tier (no agent/kernel/Mesa
+> patch). FALLBACK = agent stop-gdm→unbind→rebind→start-gdm (enhanced) if the respawn chain stalls. ELIMINATED:
+> bare `systemctl restart gdm` / display-only kick (device dead for *any* client → D-state hang at init).
+> **"Seamless-lite" (session preserved) is structurally impossible on stock Mesa** — venus ring-death is a
+> hardcoded `abort()`, not a recoverable `DEVICE_LOST`, and the compositor is itself a zink→venus client. What
+> survives the floor: VM, disks, network, ssh/CLI, all non-GPU processes.
+>
+> ### FLOOR SPIKE — round 3 (2026-07-18, post-u64-fix, corrected oracles) — the honest floor is a SOFT idle, not a hard wedge
+> Re-ran `m93-floor-windowed.sh` after patch 0067, with the dead SHM-fault oracle demoted out of the
+> verdict and guest-side wedge probes added (gnome-shell `ps`/`wchan`/`/proc/PID/stack`, dmesg, journal
+> over SSH; human eyeball on the restore window). Enhanced venus, 4 vCPU / 4 GiB, windowed.
+> - **OS survived:** SSH back ~12 s, **boot_id SAME (resumed)**. Snapshot 4.30 GB, worker exit 126.
+> - **Desktop: BLACK** (human eyeball, restore window).
+> - **gnome-shell is NOT hard-wedged.** State `Ssl`, `wchan=hrtimer_nanosleep`; kernel stack is a plain
+>   `clock_nanosleep` main-loop timed sleep (`hrtimer_nanosleep → __arm64_sys_clock_nanosleep → el0_svc`),
+>   S (interruptible) — **not** a `D`-state virtio-gpu/dma-fence park. `gnome-shell-cal` in
+>   `poll_schedule_timeout` (normal). ⇒ **Fable's r2 "compositor parks in a ring/fence wait forever"
+>   mechanism is REFUTED at the kernel level.** The process is alive and unblocked; the screen is just black.
+> - **dmesg clean:** virtio_gpu init fine at boot (`Host memory window 0x180000000 +0x200000000`, +virgl
+>   +resource_blob +host_visible +context_init, 1 scanout); **no post-restore drm/fence/timeout/gpu-hang.**
+> - **journal:** only benign restore churn — `limina-agent: channel error (…107); reconnecting` (fresh-worker
+>   vsock re-handshake), `virtio_blk` queue re-init — no compositor crash, no venus/vulkan error.
+> - **Present-path telemetry: MISSING** — ran at `krun_vmm=info`, so no per-frame `FLUSH2`/`FENCEPRESENT`
+>   DIAGs (those are `trace`). Worker log had only benign vrend format-probe noise. So "guest not rendering"
+>   vs "guest renders but fresh worker has no scanout resource / present target" is **not yet disambiguated.**
+ > - **⚠️ r3 read CORRECTED (Fable r3 addendum):** "gnome-shell in `nanosleep`" is **consistent with a
+>   stalled pipeline, not exculpatory.** Mutter's frame clock waits for flip-done in *userspace* (its normal
+>   poll/timer loop — the `S`-state `clock_nanosleep`), so a permanently-stuck nonblocking atomic commit looks
+>   exactly like a healthy idle loop. The r3 process-state oracle refuted the *D-state* detail, not the
+>   stalled-pipeline model. **Revised mechanism:** on resume, logind `PrepareForSleep(false)` → mutter
+>   re-enables the CRTC with the pre-suspend FB via a **nonblocking atomic commit** (no new render, hence no
+>   venus activity/log line); that commit's `commit_work` runs in a **kernel worker that parks forever** on a
+>   virtio-gpu fence that can't arrive, because the fresh worker's **virtio-gpu transport is unconfigured** —
+>   the guest never re-drives `DRIVER_OK` (M9.2 GPU quiesce exception, `lib.rs:423-424`), so the fresh
+>   `MmioTransport` never activates its queues (`devices/src/virtio/mmio.rs:499-509,545`) and kicks are
+>   swallowed. The guest virtio-gpu driver has **no fence-timeout/hang-check**, so **clean dmesg is the
+>   EXPECTED signature of this failure, not evidence against it**; the virtio_gpu "Host memory window…" lines
+>   are boot-time, riding the RAM snapshot. So it's not idle-compositor and not "renders-but-no-scanout" — it's
+>   one layer earlier: **commands aren't processed at all (dead transport)**; the missing scanout resource is
+>   real but not yet reached.
+> - **Disambiguating experiment (one re-run, machine oracles — no eyeball):** phase-2 at
+>   `RUST_LOG=limina_vmm=debug,krun_vmm=debug` + over root SSH `ps axo pid,stat,wchan:32,comm | awk '$2 ~ /^D/'`
+>   (predict a `kworker` in D-state on `commit_work`/fence while gnome-shell stays S) + `cat
+>   /sys/kernel/debug/dri/0/state` (stuck commit) + host log shows **zero** virtio-gpu queue activity. That
+>   combination = transport-dead confirmed. (Alt branch: if the guest shows *no* pending commit, the
+>   resume-notification/output-re-enable path is the gap — an even cheaper fix.)
 >
 > ### FLOOR SPIKE — round 1 result (2026-07-18, `spikes/m9-freeze-trigger/m93-floor-windowed.sh`) [⚠️ CONTAMINATED — see correction above]
 > Ran the M9.2 bracket on a **windowed venus** enhanced guest (Fedora-44.enhanced.test, 4 vCPU/4 GiB),

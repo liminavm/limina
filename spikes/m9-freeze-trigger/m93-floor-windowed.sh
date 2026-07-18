@@ -32,7 +32,7 @@ say "cloning enhanced image $SRC (COW)…"; cp -c "$SRC" "$DISK" || { say "clone
 # bracket (info) + the SHM-WINDOW FAULT (warn) + restore surface. ROUND 2: override to
 # `limina_vmm=info,krun_vmm=info` to also get the per-vCPU "resumed from snapshot at pc=" lines +
 # venus/Mesa. Console capture pins WHERE the guest kernel resume stalls.
-export RUST_LOG="${RUST_LOG:-limina_vmm=info,krun_vmm=warn}"
+export RUST_LOG="${RUST_LOG:-limina_vmm=info,krun_vmm=info}"
 export LIMINA_DISK="$DISK" LIMINA_CPUS=4 LIMINA_RAM_MIB=4096
 P1CONS="$JOB/tmp/m93-floor-p1-console.log"; P2CONS="$JOB/tmp/m93-floor-p2-console.log"
 KEEP_WINDOW="${LIMINA_KEEP_WINDOW:-0}"   # 1 = leave the restore window up for a human eyeball
@@ -86,19 +86,34 @@ cp -f "$WLOG" "$P2LOG" 2>/dev/null
 if [ "$back" = 1 ]; then
   POST_BOOTID=$($SSH 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -d '\r')
   say "post: boot_id=$POST_BOOTID ($([ "$PRE_BOOTID" = "$POST_BOOTID" ] && echo SAME=resumed || echo CHANGED=rebooted))"
+  # ROUND 3 (Fable r2): the OS survived — the interesting question is now whether the GNOME/venus
+  # SESSION wedged (predicted: silent virtio-gpu ring/fence wait, no crash/log). These guest-side
+  # oracles are the real signal; the SHM-window fault below is EXPECTED-SILENT (dead oracle — the
+  # window is hv_vm_map'd on restore, never faults) and is NOT part of the verdict.
+  say "=== GUEST WEDGE PROBES (over SSH) ==="
+  say "--- gnome-shell / Xwayland state (R=run D=uninterruptible S=sleep; wchan=blocked-on) ---"
+  $SSH "ps -eo stat,wchan:24,comm | egrep 'gnome-shell|Xwayland|gnome-remote|mutter' || echo '(no compositor procs)'" 2>/dev/null | tee -a "$LOG"
+  say "--- gnome-shell kernel stack (is it parked in a virtio-gpu/dma-fence wait?) ---"
+  $SSH 'p=$(pgrep -x gnome-shell | head -1); [ -n "$p" ] && sudo cat /proc/$p/stack 2>/dev/null | head -12 || echo "(no gnome-shell pid / no stack)"' 2>/dev/null | tee -a "$LOG"
+  say "--- dmesg tail: virtio_gpu / drm timeouts, fence waits ---"
+  $SSH "sudo dmesg 2>/dev/null | egrep -i 'virtio.?gpu|drm|fence|timeout|gpu hang' | tail -12 || echo '(none)'" 2>/dev/null | tee -a "$LOG"
+  say "--- journal (last 3 min): compositor / session errors ---"
+  $SSH "sudo journalctl -b --since '-3 min' --no-pager 2>/dev/null | egrep -i 'gnome-shell|mutter|venus|vulkan|virtio|gpu|fail|error' | tail -15 || echo '(none)'" 2>/dev/null | tee -a "$LOG"
+  say "--- venus liveness in the SEATED session (systemd --user env; non-login ssh is a FALSE negative) ---"
+  $SSH 'u=$(id -u); busctl --user 2>/dev/null >/dev/null; sudo -u claude XDG_RUNTIME_DIR=/run/user/$u vulkaninfo 2>/dev/null | grep -m1 "deviceName" || echo "(vulkaninfo empty over ssh — inconclusive; eyeball is the oracle)"' 2>/dev/null | tee -a "$LOG"
 fi
 say "=== per-vCPU RESUME PCs (needs RUST_LOG=krun_vmm=info) — did the vCPUs come back? ==="
 grep -iE 'resumed from snapshot at pc=' "$P2LOG" 2>/dev/null | tail -8 | tee -a "$LOG" || true
 say "=== guest CONSOLE tail (where the kernel resume stalls) ==="
 tail -25 "$P2CONS" 2>/dev/null | tee -a "$LOG" || say "  (no console captured)"
-say "=== SHM-WINDOW FAULT (the GPU-gone-on-restore oracle) ==="
-if [ -n "$fault" ]; then say "  FAULT SEEN → $fault"; else say "  (no SHM-window fault — guest did NOT reach a userspace GPU-window touch)"; fi
+say "=== SHM-WINDOW FAULT (DEAD ORACLE — expected silent, NOT part of the verdict) ==="
+if [ -n "$fault" ]; then say "  FAULT SEEN → $fault (SURPRISING — the window is normally hv_vm_map'd on restore; investigate)"; else say "  (silent, as expected: the window is hv_vm_map'd on restore so a touch never faults — this line proves nothing)"; fi
 say "=== phase2 worker log — restore/wake/venus/error (tcpproxy filtered) ==="; grep -iE 'restoring from snapshot|injecting guest wake|SHM-WINDOW FAULT|resumed from snapshot|Mesa:|venus|virgl_renderer|error|panic|segfault' "$P2LOG" 2>/dev/null | grep -viE 'tcpproxy|no route to host' | tail -25 | tee -a "$LOG"
 say ""
 say "SUMMARY (machine oracles):"
 say "  OS survived restore (SSH): $([ "$back" = 1 ] && echo YES || echo NO)"
 say "  boot_id continuity: $([ -n "${POST_BOOTID:-}" ] && ([ "$PRE_BOOTID" = "$POST_BOOTID" ] && echo 'SAME (resumed)' || echo 'CHANGED (rebooted)') || echo unknown)"
-say "  SHM-window GPU fault: $([ -n "$fault" ] && echo 'YES (mode i)' || echo 'not observed (stalls earlier)')"
+say "  SHM-window GPU fault: $([ -n "$fault" ] && echo 'YES (unexpected — investigate)' || echo 'silent (expected — dead oracle, ignore)')"
 if [ "$KEEP_WINDOW" = 1 ]; then
   say "  → DESKTOP recovery is the HUMAN oracle: eyeball the window. Kill later: pkill -9 -f m93-floor.raw"
 else
