@@ -448,6 +448,43 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         }
     }
 
+    // VM snapshot trigger (M9 suspend/resume): when a snapshot path was requested, install the
+    // SIGUSR1 handler + a trigger thread. On signal it locks the Vmm, quiesces the vCPUs, writes
+    // the snapshot, and exits 126 ("snapshotted") — the supervisor reports the VM suspended and,
+    // unlike a reboot, does NOT relaunch. `save_snapshot` self-quiesces (the per-vCPU Snapshot
+    // event saves-then-parks each vCPU), so we do NOT pause first — pausing would make the vCPUs
+    // discard the Snapshot event and time out. A FAILED save leaves the guest parked with no way
+    // to resume (macOS `resume_vcpus` is a no-op stub), so it's fatal (exit 1), not recoverable.
+    if let Some(path) = spec.snapshot_file.clone() {
+        let trigger = crate::snapshot::install().context("installing the snapshot trigger")?;
+        let vmm_for_snapshot = vmm.clone();
+        std::thread::Builder::new()
+            .name("snapshot-trigger".into())
+            .spawn(move || {
+                // Block until SIGUSR1 writes the trigger eventfd.
+                if let Err(e) = trigger.read() {
+                    log::error!("snapshot: trigger read failed: {e}; suspend disabled");
+                    return;
+                }
+                log::info!("snapshot: SIGUSR1 received, capturing VM state to {path:?}");
+                let mut guard = vmm_for_snapshot.lock().unwrap();
+                match guard.save_snapshot(&path) {
+                    Ok(()) => {
+                        log::info!("snapshot: complete; exiting 126 (snapshotted)");
+                        guard.stop(126); // runs exit observers, then libc::_exit — never returns
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "snapshot: save failed: {e:?}; the guest is quiesced and cannot resume \
+                             (macOS has no in-process vCPU resume) — exiting 1"
+                        );
+                        guard.stop(1);
+                    }
+                }
+            })
+            .map_err(|e| anyhow!("spawning the snapshot trigger thread: {e}"))?;
+    }
+
     // Start the GPU worker-message servicer when a display is attached (mirrors
     // krun_start_enter's `if gpu_virgl_flags.is_some()`). Without it, a guest blob map
     // would block the GPU worker forever waiting on a reply.

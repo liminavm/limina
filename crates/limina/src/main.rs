@@ -118,6 +118,12 @@ struct Cli {
     #[arg(long, conflicts_with = "console")]
     console_pty: bool,
 
+    /// Enable VM suspend (M9): forward `--snapshot-file <path>` to the worker so a SIGUSR1 to the
+    /// worker writes a VM snapshot there and exits "snapshotted" (126). Resuming from the file is a
+    /// separate `--restore` boot; the durable decision to resume is per-VM policy, not this flag.
+    #[arg(long)]
+    snapshot_file: Option<PathBuf>,
+
     /// Capture the guest virtio-console (`hvc0`) output to this file — the robust
     /// bidirectional console. Pair with `console=hvc0` on the cmdline and
     /// --virtio-console-input to make hvc0 the guest's interactive `/dev/console`.
@@ -664,6 +670,9 @@ fn cli_from_definition(
         console: ov.console.clone(),
         console_input: None,
         console_pty: false,
+        // Managed-VM suspend wiring (persisted Suspended{snapshot} status) is M9.4; a definition
+        // never asks for an ad-hoc snapshot file today.
+        snapshot_file: None,
         virtio_console: None,
         virtio_console_input: None,
         window,
@@ -877,6 +886,12 @@ fn run_vm(cli: Cli) -> Result<()> {
     }
     if cli.console_pty {
         args.push("--console-pty".into());
+    }
+    // VM suspend (M9): forward the snapshot file path to the worker (which installs the SIGUSR1
+    // trigger). Works for both the headless and windowed paths since it rides `args`/`base_args`.
+    if let Some(path) = &cli.snapshot_file {
+        args.push("--snapshot-file".into());
+        args.push(path_arg(path)?);
     }
     let grace = Duration::from_secs(cli.shutdown_grace_secs);
 

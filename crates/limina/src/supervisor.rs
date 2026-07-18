@@ -35,6 +35,14 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 /// constant from `krun-vmm`.
 pub const WORKER_EXIT_REBOOT: i32 = 125;
 
+/// Worker process exit code meaning "the guest was snapshotted" (M9 suspend/resume): the worker
+/// wrote its VM snapshot to `--snapshot-file` on a SIGUSR1 trigger and tore itself down. Unlike a
+/// reboot this does **not** relaunch — suspend is teardown + resume-on-next-start, and the decision
+/// to resume is durable per-VM policy (a persisted `Suspended{snapshot}` status read at start),
+/// never an in-memory supervisor relaunch. So [`should_relaunch`](RebootGuard::should_relaunch)
+/// leaves it alone (it only ever relaunches [`WORKER_EXIT_REBOOT`]); we just report it distinctly.
+pub const WORKER_EXIT_SNAPSHOT: i32 = 126;
+
 /// A worker that exits with [`WORKER_EXIT_REBOOT`] after running less than this is treated as a
 /// boot loop, not a healthy reboot.
 const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(5);
@@ -292,6 +300,8 @@ fn report_exit(status: ExitStatus) -> i32 {
             log::info!("VM powered off cleanly (worker exit 0)");
         } else if code == WORKER_EXIT_REBOOT {
             log::info!("guest rebooted (worker exit {WORKER_EXIT_REBOOT})");
+        } else if code == WORKER_EXIT_SNAPSHOT {
+            log::info!("guest snapshotted (worker exit {WORKER_EXIT_SNAPSHOT}); VM suspended");
         } else {
             log::warn!("VM stopped — worker exited with code {code}");
         }

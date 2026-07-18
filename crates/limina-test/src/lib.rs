@@ -2265,6 +2265,30 @@ impl Guest {
         self.terminate(Duration::from_secs(0))
     }
 
+    /// Wait for the supervisor to exit **on its own**, returning its [`Outcome`], **without**
+    /// consuming the `Guest` or removing its scratch dir. Use this (not [`Guest::wait_for_exit`],
+    /// which consumes `self` and so drops the scratch) when the run leaves an artifact behind that
+    /// a follow-up needs — e.g. a suspend's `--snapshot-file`, which a second `Guest` restores
+    /// from: the file lives in *this* Guest's scratch, so this Guest must stay alive (in scope)
+    /// until the restoring boot has read it. Reaps the child so `Drop` won't signal a dead pid; on
+    /// timeout it errors and leaves teardown to `Drop`.
+    pub fn wait_supervisor_exit(&mut self, timeout: Duration) -> Result<Outcome> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.child.try_wait().context("polling supervisor")? {
+                self.torn_down = true; // reaped; Drop must not signal a now-dead pid
+                return Ok(self.outcome_from(status, false));
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "supervisor did not exit within {timeout:?}.\n--- console tail ---\n{}",
+                    tail(&self.console(), 40)
+                );
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     /// Internal teardown shared by [`Guest::shutdown`] and `Drop`.
     fn terminate(&mut self, timeout: Duration) -> Result<Outcome> {
         if self.torn_down {

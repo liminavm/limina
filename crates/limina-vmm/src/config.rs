@@ -218,4 +218,10 @@ pub struct VmSpec {
     /// Advertise the mic-capture input stream on the virtio-snd device. Opt-in and
     /// default-off for privacy (unlike playback); only meaningful when `snd` is also on.
     pub mic: bool,
+    /// Where to write the VM snapshot on a SIGUSR1 suspend trigger (M9 suspend/resume). When set,
+    /// the worker installs the SIGUSR1 handler and a trigger thread; on signal it quiesces the
+    /// vCPUs, serializes vCPU+GIC+RAM here, and exits [`WORKER_EXIT_SNAPSHOT`](126). `None` = no
+    /// snapshot capability (the default). Mechanism only — the supervisor owns the trigger and the
+    /// path; resuming from the file is a separate `restore` boot.
+    pub snapshot_file: Option<PathBuf>,
 }

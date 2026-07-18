@@ -14,6 +14,7 @@
 mod config;
 mod krun;
 mod shutdown;
+mod snapshot;
 
 use std::path::PathBuf;
 
@@ -193,6 +194,13 @@ struct Cli {
     /// virtio-mouse used in pointer-capture mode (M8). Optional; requires the pointer pair.
     #[arg(long, requires = "input_ptr_fd")]
     input_rel_ptr_fd: Option<i32>,
+
+    /// Write a VM snapshot to this path on a SIGUSR1 suspend trigger (M9 suspend/resume). When set,
+    /// the worker installs a SIGUSR1 handler; on signal it quiesces the vCPUs, serializes
+    /// vCPU+GIC+RAM to the file, and exits 126 ("snapshotted"). The supervisor drives the trigger
+    /// and owns the path; resuming is a separate `--restore` boot.
+    #[arg(long)]
+    snapshot_file: Option<PathBuf>,
 }
 
 /// Parse a `WIDTHxHEIGHT` display mode string into `(width, height)`.
@@ -463,6 +471,7 @@ fn main() -> Result<()> {
         battery: !cli.no_battery,
         snd: !cli.no_snd,
         mic: cli.mic,
+        snapshot_file: cli.snapshot_file,
     };
 
     krun::boot(&spec)
