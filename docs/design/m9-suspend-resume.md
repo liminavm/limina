@@ -139,6 +139,27 @@ guest, or it should be read as the *small-guest* case — see §M9.4.
 >   retain-and-replay + content readback (seamless target, its own sub-project).
 > - **Retire the Parallels comparison as evidence for our virgl tier** — whatever it does, it is not
 >   "stock kernel resubmit + stock Mesa," because stock Mesa demonstrably cannot rebuild vrend sub-objects.
+>
+> ### FLOOR SPIKE — round 1 result (2026-07-18, `spikes/m9-freeze-trigger/m93-floor-windowed.sh`)
+> Ran the M9.2 bracket on a **windowed venus** enhanced guest (Fedora-44.enhanced.test, 4 vCPU/4 GiB),
+> instrumented with the new libkrun 0066 SHM-window-fault oracle.
+> - **✅ Phase 1 — windowed venus SUSPEND+SNAPSHOT works.** The seated GNOME/venus desktop quiesced in
+>   ~1 s on the GPIO suspend button (GNOME did **not** inhibit it) and snapshotted cleanly (4.3 GB,
+>   worker exit 126). So a GPU-bearing suspend is reachable at the snapshot level — the M9.2 mechanism
+>   composes with a live GPU (virtio-gpu stays `DRIVER_OK`, excepted by the oracle; everything else
+>   quiesces).
+> - **❌ Phase 2 — the restored guest does NOT come back.** Fresh worker restored RAM+vCPU+GIC+GPIO and
+>   injected the wake, but: **black window**, **SSH never returns** (gvproxy "no route to host"), worker
+>   **0.4 % CPU / 83 MB RSS** (guest idle/asleep, not spinning), and — critically — **the SHM-window
+>   fault oracle NEVER FIRED.** So the guest stalls **earlier** than Fable's predicted "faults on first
+>   GPU-window touch": it never reaches a userspace GPU access at all. Contrast the **headless** M9.2
+>   restore, which SSHes back in ~3–6 s — so the GPU/display config specifically breaks resume.
+> - **Open question (round 2):** *where* does it stall? Candidates: (B) the wake didn't wake it (still
+>   frozen in s2idle — but headless wake works, same mechanism) vs a **kernel-resume hang** (dpm_resume
+>   blocked on a device with the GPU/display present) that parks the vCPUs. Near-zero CPU + tiny RSS
+>   favours "idle/asleep, never really ran." **Next:** re-run the restore with `RUST_LOG=krun_vmm=info`
+>   (the per-vCPU "resumed from snapshot at pc=" lines) + a captured guest console to pin the stall PC —
+>   before deciding whether the first M9.3 build item is the wake/GIC-with-GPU path or the SHM remap.
 
 **Decision: quiesce the GPU and let the guest re-init on restore. Do NOT serialize live host GPU state.**
 This is backed by a dedicated research pass (the GPU-suspend prior-art workflow, 2026-06-28) and the
