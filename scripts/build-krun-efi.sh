@@ -84,6 +84,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         git checkout -- ArmVirtPkg/ArmVirtKrun.dsc ArmVirtPkg/ArmVirtKrun.fdf \
             ArmVirtPkg/Library/PlatformBootManagerLib/PlatformBm.c \
             ArmVirtPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf \
+            ArmVirtPkg/Library/ArmVirtPL031FdtClientLib/ArmVirtPL031FdtClientLib.c \
             OvmfPkg/Include/IndustryStandard/Virtio10.h \
             OvmfPkg/VirtioSerialDxe/VirtioSerialPort.c 2>/dev/null || true
         # Init ONLY the submodules ArmVirtKrun actually needs (idempotent — already-init'd
@@ -167,6 +168,27 @@ if n:
     print(f'  VirtioSerial: raised {n} SerialIo RaiseTPL site(s) TPL_CALLBACK -> TPL_NOTIFY')
 elif 'RaiseTPL (TPL_NOTIFY)' not in v:
     raise SystemExit('VirtioSerialPort.c: no RaiseTPL(TPL_CALLBACK) and no TPL_NOTIFY — shape changed, update patch')
+
+# (1c) Keep the PL031 RTC DT node visible to the OS (limina). ArmVirtPL031FdtClientLib's
+# constructor sets the pl031 node status=\"disabled\" so ONLY UEFI runtime services drive the RTC.
+# But the resulting EFI runtime RTC has no alarm (the guest's rtc-efi wakealarm ioctl returns
+# EINVAL), leaving rtcwake / suspend-to-idle with no wakeup source. libkrun's PL031 alarm patch
+# (0054) gives the device a real alarm IRQ, so flip that \"disabled\" to \"okay\": the guest's
+# rtc-pl031 driver then binds and exposes its wakealarm (UEFI keeps using the same PL031 for
+# GetTime — concurrent reads don't conflict). The stale in-file comment/DEBUG text is left as-is;
+# this build-script comment is the authority.
+rtc = 'ArmVirtPkg/Library/ArmVirtPL031FdtClientLib/ArmVirtPL031FdtClientLib.c'
+r = open(rtc).read()
+# The only double-quoted \"disabled\" occurrences are the SetNodeProperty value arg and its
+# sizeof(); the DEBUG message uses single-quoted 'disabled'. So this targets exactly the DT status.
+n = r.count('\"disabled\"')
+if n == 2:
+    open(rtc, 'w').write(r.replace('\"disabled\"', '\"okay\"'))
+    print('  PL031: DT node kept enabled (status okay) for OS rtc-pl031 + wakealarm')
+elif '\"disabled\"' not in r and '\"okay\"' in r:
+    print('  PL031: already patched (status okay)')
+else:
+    raise SystemExit(f'ArmVirtPL031FdtClientLib.c: expected 2 \"disabled\" tokens, found {n} — update patch')
 
 # (2) GOP: insert VirtioGpuDxe after VirtioSerial (same binding family) in .dsc + .fdf.
 if os.environ.get('GOP_ENABLED') == '1':

@@ -39,23 +39,37 @@ On the EFI/GRUB boot path (how **all** real images boot, stock and enhanced):
   the DT RTC with its own EFI runtime RTC, an ArmVirtPkg-style pattern). We own that firmware
   (`scripts/build-krun-efi.sh`).
 
+### ✅ FIX + VALIDATION — krun-efi patched, s2idle round-trip wakes (2026-07-18)
+The blocker was purely the firmware. **Root cause: `ArmVirtPkg/Library/ArmVirtPL031FdtClientLib`'s
+constructor explicitly sets the pl031 DT node `status="disabled"`** ("UEFI takes ownership of the RTC
+hardware... disable it in the device tree to prevent the OS from attaching its device driver as
+well"). **Fix (`scripts/build-krun-efi.sh` patch step 1c): flip that `"disabled"` → `"okay"`** so the
+guest's `rtc-pl031` binds (UEFI keeps using the same PL031 for GetTime — concurrent reads don't
+conflict). Rebuilt `KRUN_EFI.gop.fd`; re-probed a fresh clone:
+
+- `rtc1 -> rtc-pl031 a002000.rtc; wakealarm: YES`; `/proc/device-tree/rtc@a002000/status` = `okay`;
+  `a002000.rtc` is now an amba device; `/proc/interrupts` shows `rtc-pl031` on GIC SPI 33 (Edge).
+- **`rtcwake -m freeze -s 10 -d rtc1` round-trip:**
+  - **ENTRY works** — guest freezes, virtio drivers quiesce (`update virtio queue in invalid state
+    0x8f`), NO S4-style PSCI/OSDLR crash.
+  - **WAKE works** — the libkrun 0054 alarm arms with correct timing (`match=…273 now=…262 -> 11.1s`),
+    fires on schedule 11 s later (`fire_alarm imsc=1 intc=true irq_line=Some(33)`), and the **vCPU
+    resumes from s2idle**: proven by the guest immediately executing the `RTCIMSC=0` MMIO store (only a
+    running vCPU can), i.e. its rtc IRQ handler ran.
+  - ⚠️ **Full resume/thaw is incomplete** — post-wake the guest network never recovers (SSH resets),
+    and no further guest activity is seen. This is the **virtio freeze/thaw hardening** the design
+    already flags for M9.2 (spike #1's `invalid queue state 0x8f`), NOT a wake failure.
+
 ## Conclusion / where this leaves M9
 
-The wakeup-source half of spike F is **blocked on the EFI firmware disabling the PL031**, not on
-libkrun's device layer (now fixed) or on s2idle being unavailable (it isn't). To get a working
-`rtcwake`/s2idle wakeup on the real boot path we need **one** of:
+**Spike F wakeup-half: ANSWERED — s2idle is reachable in libkrun and the PL031 alarm wakes it.** The
+mechanism is now complete on the real (EFI) boot path: libkrun 0054 (RTC alarm) + the krun-efi patch
+(PL031 enabled) → `rtcwake -m freeze` enters s2idle and the vCPU wakes on schedule.
 
-1. **Patch krun-efi/EDK2 to leave the PL031 DT node enabled** (stop shadowing it with the EFI RTC),
-   so `rtc-pl031` binds and its `wakealarm` rides the libkrun 0054 alarm. Smallest, mechanism-in-
-   firmware, we own it. **← recommended next.**
-2. Implement EFI `SetWakeupTime` in libkrun's EFI RTC runtime so `rtc-efi` gains a wakealarm. Larger.
-3. Use a non-RTC PM wakeup source (a virtio IRQ marked wakeup) — sidesteps RTC but diverges from the
-   standard `rtcwake` path the freeze bracket assumes.
-
-Also still open (independent of the wakeup): our **16k enhanced kernel has no PM configs**
-(`CONFIG_SUSPEND` etc.) — the enhanced tier needs them added before it can s2idle at all. And spike
-F **part 2** (does the virtio-gpu resubmit hook the sleep callbacks) can't run until we carry the
-Dongwon-Kim series.
+**Next (M9.2-shaped):** make the resume *complete* — virtio freeze/thaw hardening so the guest (esp.
+virtio-net) comes back cleanly after wake. Still open independently: our **16k enhanced kernel has no
+PM configs** (`CONFIG_SUSPEND`), needed before the enhanced tier can s2idle; and spike F **part 2**
+(does the virtio-gpu resubmit hook the sleep callbacks) needs the Dongwon-Kim series we don't carry.
 
 ## Repro
 ```
