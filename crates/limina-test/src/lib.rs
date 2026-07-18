@@ -2103,6 +2103,27 @@ impl Guest {
         Ok(())
     }
 
+    /// Trigger the M9.2 **suspend bracket**: send `SIGTSTP` to the worker, which pulses the guest
+    /// suspend button, polls the quiesce oracle, and — only if the guest fully s2idle-quiesces —
+    /// snapshots + exits 126. On a guest that CANNOT quiesce (e.g. a virtiofs rootfs, whose
+    /// `virtio_fs_freeze` returns -EOPNOTSUPP so s2idle aborts in-guest) the bracket times out, wakes
+    /// the guest, and the worker keeps running — the fail-safe abort path this exercises. Requires
+    /// [`GuestConfig::with_snapshot`] (which arms the bracket thread).
+    pub fn suspend_bracket(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.snapshot_path.is_some(),
+            "no snapshot file configured (use GuestConfig::with_snapshot)"
+        );
+        let worker = self.worker_pid()?;
+        let rc = unsafe { libc::kill(worker, libc::SIGTSTP) };
+        anyhow::ensure!(
+            rc == 0,
+            "kill(worker={worker}, SIGTSTP) failed: {}",
+            std::io::Error::last_os_error()
+        );
+        Ok(())
+    }
+
     /// Path to the VM snapshot file (inside the scratch dir), if [`GuestConfig::with_snapshot`]
     /// was set. Exists only after a [`Guest::snapshot`] has been taken.
     pub fn snapshot_path(&self) -> Option<&Path> {

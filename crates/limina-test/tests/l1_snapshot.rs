@@ -229,3 +229,76 @@ fn l1_guest_resumes_in_fresh_worker_from_snapshot() {
     // Device state is not restored (M9.1 scope), so the rootfs/virtio are dead — accept any outcome.
     let _ = g2.shutdown(Duration::from_secs(10));
 }
+
+/// M9.2 **suspend-bracket abort** guard: a guest that CANNOT s2idle-quiesce must never be
+/// snapshotted, and must never be left wedged. The L1 counter guest has a **virtiofs rootfs**, whose
+/// `virtio_fs_freeze` returns `-EOPNOTSUPP`, so s2idle aborts *inside the guest* — the bracket's
+/// quiesce poll (`Vmm::is_quiesced`) never succeeds. This asserts the fail-safe: after the quiesce
+/// timeout the bracket wakes the guest and the worker KEEPS RUNNING (never exits 126), and the guest
+/// survives (its counter keeps advancing). This is the untested half of the bracket — the abort path.
+#[test]
+fn l2_suspend_bracket_aborts_when_guest_cannot_quiesce() {
+    if !limina_test::require_hvf_or_skip("l2_suspend_bracket_aborts_when_guest_cannot_quiesce") {
+        return;
+    }
+
+    let mut cfg = GuestConfig::l1_from_env()
+        .expect("resolving L1 guest config")
+        .append_cmdline("limina.counter")
+        .with_supervisor_log()
+        .with_snapshot(); // arms the SIGTSTP bracket thread (and the raw SIGUSR1 path)
+    cfg.cpus = 2;
+    cfg.ram_mib = 512;
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    guest
+        .wait_for("LIMINA_COUNTER_READY", Duration::from_secs(20))
+        .expect("counter guest did not reach userspace");
+    guest
+        .wait_for("mono_ms=", Duration::from_secs(5))
+        .expect("no counter heartbeat before the bracket");
+    let before = last_counter(&guest.console()).expect("a counter heartbeat before the bracket");
+
+    // Fire the suspend bracket. The virtiofs rootfs makes the guest unable to s2idle-quiesce, so the
+    // bracket must poll, time out (~20s in the worker), wake the guest, and keep the worker alive.
+    guest
+        .suspend_bracket()
+        .expect("sending the SIGTSTP suspend bracket");
+
+    // Wait past the worker's 20s quiesce timeout, with margin.
+    std::thread::sleep(Duration::from_secs(28));
+
+    // The worker must still be alive — an aborted suspend never exits 126.
+    let worker = guest.worker_pid();
+    assert!(
+        worker.is_ok(),
+        "worker should still be running after an aborted suspend (it must NOT exit 126): {worker:?}\n\
+         === supervisor+worker log ===\n{}",
+        guest.supervisor_log()
+    );
+
+    // The worker log must show the bracket aborted (guest didn't quiesce), NOT a completed snapshot.
+    let log = guest.supervisor_log();
+    assert!(
+        log.contains("did not quiesce"),
+        "expected the bracket to log an aborted (non-quiesced) suspend; got:\n{log}"
+    );
+    assert!(
+        !log.contains("exiting 126 (suspended)"),
+        "the bracket must NOT have snapshotted a non-quiesced guest; got:\n{log}"
+    );
+
+    // The guest survived: its counter kept advancing past the pre-bracket baseline.
+    guest
+        .wait_for("mono_ms=", Duration::from_secs(15))
+        .expect("no counter heartbeat after the aborted suspend");
+    let after = last_counter(&guest.console()).expect("a counter heartbeat after the bracket");
+    assert!(
+        after.0 > before.0,
+        "the counter must keep advancing after an aborted suspend (before n={}, after n={})",
+        before.0,
+        after.0
+    );
+
+    let _ = guest.shutdown(Duration::from_secs(10));
+}

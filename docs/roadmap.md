@@ -756,9 +756,15 @@ attaches at runtime, and resizing the window reflows the guest resolution.
 
 ## Milestone 9 — Suspend / resume + full VM snapshots (host-side)
 
-**Status: 📐 DESIGNED — direction chosen, not yet started.** Full design (the decision + rationale, the
-GPU prior-art section, two-tier mapping, M9.0–M9.4 build plan, founding spikes, and the demoted
-guest-side-S4 analysis) is `docs/design/m9-suspend-resume.md`. This is the roadmap-shaped digest.
+**Status: 🚧 M9.1 + M9.2 DONE (headless); M9.3 = GPU, next.** M9.1 (host-side vCPU+GIC+RAM snapshot
+mechanism) and **M9.2 (headless device continuity) are shipped and GREEN** — `limina suspend`/`start`
+suspends a running managed VM (GPIO suspend button → guest s2idle quiesces virtio to INIT → snapshot →
+teardown → next start `--restore`s the same boot_id) with automated happy-path + abort-path L2 guards.
+M9.2 is **headless-scoped**: virtio-gpu has no s2idle PM ops, so it's excepted from the quiesce oracle —
+suspending a **windowed/GPU** VM is **M9.3**, the next milestone. Full design (decision + rationale, GPU
+prior-art, two-tier mapping, M9.0–M9.4 build plan, founding spikes, the demoted guest-side-S4 analysis,
+and the **2026-07-18 Fable M9.3 review**) is `docs/design/m9-suspend-resume.md`; M9.2 build detail in
+`docs/design/m9.2-quiesced-snapshot.md`. This is the roadmap-shaped digest.
 
 **Goal:** Parallels-parity "Suspend" — freeze the running guest to a host-side file in a second or two,
 **tear the worker process down** (reclaim all host RAM, the GPU/Metal/IOSurface graph, gvproxy), and a

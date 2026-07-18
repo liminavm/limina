@@ -104,6 +104,42 @@ guest, or it should be read as the *small-guest* case — see §M9.4.
 
 ## 4. The GPU: Strategy A, and why (the load-bearing section)
 
+> ### ⚠️ M9.3 ADVERSARIAL REVIEW (2026-07-18, Fable agent) — the SHM-window correction
+> A source-level review (verified against `third_party/` + the guest Mesa tree at `/Volumes/mesa-cs`)
+> found the M9.3 plan rests on a **false premise** and reshaped the build order. Load-bearing findings:
+> - **"Guest-backed GPU contents ride the RAM snapshot for free" is FALSE for venus, and worse than
+>   false.** `dump_ram` skips every region at `gpa >= shm_start_addr` (`lib.rs:483-490`). Guest **venus**
+>   sets *both* `shmem_blob_mem` *and* `bo_blob_mem` to `VIRTGPU_BLOB_MEM_HOST3D`
+>   (`vn_renderer_virtgpu.c:1556,1626`), so its ring, reply shmem, and every mappable `VkDeviceMemory`
+>   are host allocations mapped into **exactly the skipped window**. The snapshot therefore captures
+>   **live guest PTEs into a window the fresh worker has nothing mapped at → first GPU touch on restore
+>   is an unrecoverable vCPU fault, before any replay code runs.** A **fault-safe SHM remap on restore
+>   is priority-zero** (the §3 "mapped-blob set" row), not bookkeeping. (Modern virgl has a HOST3D-blob
+>   path too; classic virgl resources are guest-shadowed and do ride the snapshot.)
+> - **"virgl ≈ transparent" is REFUTED.** vrend keeps a per-context hash of guest-handle-keyed
+>   sub-objects (shaders/CSOs/surfaces) built *only* by decoding `CREATE_OBJECT` in `SUBMIT_3D`
+>   (`vrend_decode.c:1959`); the kernel never sees them and can't resubmit, and guest Mesa creates each
+>   CSO exactly once (`virgl_context.c:345-352`). So a fresh vrend context has the **same
+>   host-object-graph-gone problem as venus** — smaller, but real. Escape hatch: vrend has GL robustness,
+>   so the natural stock outcome may be "GL clients crash, gdm respawns" rather than "guest wedges."
+> - **Dongwon-Kim series: real but narrower than assumed.** v5 (Oct 2025, 3 patches), **UNMERGED**, we
+>   carry none. It fires only on **S4 hibernation** — *not* our s2idle bracket — so "carry the series" is
+>   really "fork an unmerged, S4-scoped series and re-trigger it ourselves." It restores BO identity
+>   (`RESOURCE_CREATE` + `ATTACH_BACKING`) only — not contents, streams, or host context state.
+> - **Biggest unknown = the honest floor:** (i) guest death (stale SHM-window PTEs fault) vs (ii) session
+>   crash-and-recover (gdm respawns). Decided next step (**user, 2026-07-18**): **run the floor spike
+>   first** — the existing M9.2 bracket on a *windowed* guest (vrend/4k + venus), restore into a fresh
+>   worker, and observe survival / faulting GPA (≥ `shm_start_addr`) / gnome-shell recovery. ~1 day, no
+>   kernel patches. **Venus v1 target (user): SEAMLESS** (full retain-and-replay + device-local content
+>   readback) — the floor spike still comes first, but the eventual venus goal is transparent survival,
+>   not "apps restart."
+> - **Revised M9.3 order:** floor spike → **fault-safe SHM remap on restore** → carry DK patch-1
+>   (freeze/`del_vqs`, adapted to s2idle; deletes the M9.2 GPU exception) → DK patches 2-3 + our s2idle
+>   trigger (BO resubmit) → Mesa-virgl CSO recovery (retain-replay *or* robustness/reset-notify) → venus
+>   retain-and-replay + content readback (seamless target, its own sub-project).
+> - **Retire the Parallels comparison as evidence for our virgl tier** — whatever it does, it is not
+>   "stock kernel resubmit + stock Mesa," because stock Mesa demonstrably cannot rebuild vrend sub-objects.
+
 **Decision: quiesce the GPU and let the guest re-init on restore. Do NOT serialize live host GPU state.**
 This is backed by a dedicated research pass (the GPU-suspend prior-art workflow, 2026-06-28) and the
 user's own primary-source data from a Parallels box.
