@@ -170,6 +170,14 @@ struct Cli {
     #[arg(long)]
     mic: bool,
 
+    /// Advertise `VIRTIO_BALLOON_F_REPORTING` (free-page-reporting fast reclaim) to the guest.
+    /// OFF by default: a stock Linux guest with page-reporting enabled crashes on suspend-to-idle
+    /// (upstream `virtballoon_freeze` frees the reporting virtqueue while its non-freezable worker is
+    /// still live). Enable only for enhanced-tier guests that carry the kernel fix; stock guests keep
+    /// the coarser inflate-time reclaim and suspend safely.
+    #[arg(long)]
+    balloon_free_page_reporting: bool,
+
     /// Attach a user-mode NAT NIC (`eth0`) connected to a gvproxy gateway listening on
     /// this vfkit unixgram socket. The supervisor spawns gvproxy and guarantees it is up
     /// before the guest activates the device.
@@ -478,6 +486,7 @@ fn main() -> Result<()> {
         battery: !cli.no_battery,
         snd: !cli.no_snd,
         mic: cli.mic,
+        free_page_reporting: cli.balloon_free_page_reporting,
         snapshot_file: cli.snapshot_file,
         restore_file: cli.restore,
     };

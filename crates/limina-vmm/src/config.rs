@@ -218,6 +218,12 @@ pub struct VmSpec {
     /// Advertise the mic-capture input stream on the virtio-snd device. Opt-in and
     /// default-off for privacy (unlike playback); only meaningful when `snd` is also on.
     pub mic: bool,
+    /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest. **Default false**: a
+    /// stock Linux guest with page-reporting enabled crashes on suspend-to-idle (upstream
+    /// `virtballoon_freeze` frees the reporting vq while its worker is still live). Enable only for
+    /// enhanced-tier guests carrying the kernel fix. Stock keeps the coarser inflate-time reclaim and
+    /// s2idles safely. See `devices::virtio::Balloon::new`.
+    pub free_page_reporting: bool,
     /// Where to write the VM snapshot on a SIGUSR1 suspend trigger (M9 suspend/resume). When set,
     /// the worker installs the SIGUSR1 handler and a trigger thread; on signal it quiesces the
     /// vCPUs, serializes vCPU+GIC+RAM here, and exits [`WORKER_EXIT_SNAPSHOT`](126). `None` = no
