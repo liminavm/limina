@@ -13,6 +13,7 @@
 
 mod config;
 mod krun;
+mod restart;
 mod shutdown;
 mod snapshot;
 mod suspend;

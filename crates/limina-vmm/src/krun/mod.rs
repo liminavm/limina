@@ -399,6 +399,10 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     // GPIO KEY_SLEEP button so a stock guest's logind enters suspend-to-idle, no agent needed.
     let suspend_efd = crate::suspend::install().context("installing suspend handler")?;
 
+    // Guest restart eventfd + SIGHUP handler: pulses the GPIO KEY_RESTART button so a stock
+    // guest's logind reboots gracefully (worker exits 125 → supervisor relaunches a fresh worker).
+    let restart_efd = crate::restart::install().context("installing restart handler")?;
+
     let mut event_manager = EventManager::new().map_err(|e| anyhow!("EventManager::new: {e:?}"))?;
     // The worker channel carries virtio-gpu blob-mapping messages (macOS): the GPU
     // device asks the VMM to map host GPU memory into guest space. We service it on a
@@ -423,6 +427,7 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         &mut event_manager,
         Some(shutdown_efd),
         Some(suspend_efd),
+        Some(restart_efd),
         worker_tx,
         spec.restore_file.clone(),
     )

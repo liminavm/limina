@@ -14,17 +14,21 @@
 //! Whether a *stock* EFI guest honors the GPIO power button depends on its ACPI/DT
 //! advertising the button; the enhanced tier (our DT / limina-agent) makes it reliable.
 
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use anyhow::{anyhow, Result};
 use utils::eventfd::{EventFd, EFD_NONBLOCK};
 
-/// Raw fd of the shutdown eventfd, published for the (async-signal-safe) handler.
-static SHUTDOWN_FD: AtomicI32 = AtomicI32::new(-1);
+/// Write end of the shutdown eventfd, published for the (async-signal-safe) handler. On macOS
+/// `EventFd` is a pipe; `as_raw_fd()` is the *read* end (which the GPIO subscriber epolls), so the
+/// handler must write the *write* end (`get_write_fd()`) — mirroring `snapshot.rs`/`suspend.rs`.
+/// Writing the read end silently EBADFs, so the power button never fired and shutdown fell through
+/// to the supervisor's SIGKILL escalation.
+static SHUTDOWN_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
 
 extern "C" fn handle_signal(_sig: libc::c_int) {
-    let fd = SHUTDOWN_FD.load(Ordering::SeqCst);
+    let fd = SHUTDOWN_WRITE_FD.load(Ordering::SeqCst);
     if fd >= 0 {
         let one: u64 = 1;
         // write() is async-signal-safe; the eventfd is non-blocking.
@@ -40,7 +44,8 @@ extern "C" fn handle_signal(_sig: libc::c_int) {
 /// handler writes to).
 pub fn install() -> Result<EventFd> {
     let efd = EventFd::new(EFD_NONBLOCK).map_err(|e| anyhow!("shutdown EventFd: {e}"))?;
-    SHUTDOWN_FD.store(efd.as_raw_fd(), Ordering::SeqCst);
+    let write_fd: RawFd = efd.get_write_fd();
+    SHUTDOWN_WRITE_FD.store(write_fd, Ordering::SeqCst);
 
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
