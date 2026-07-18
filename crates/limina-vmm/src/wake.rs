@@ -43,8 +43,6 @@ extern "C" fn handle_sigwinch(_sig: libc::c_int) {
 
 /// Inject a guest wake (raise the `KEY_WAKEUP` GPIO line). Called on the M9 restore path once the
 /// reloaded guest's vCPUs are live, to bring it out of s2idle. Async-signal-safe.
-// Wired into the restore path in a follow-up; the SIGWINCH seam exercises the same mechanism now.
-#[allow(dead_code)]
 pub fn pulse() {
     pulse_fd();
 }

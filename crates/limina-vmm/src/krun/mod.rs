@@ -519,6 +519,17 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     }
     log::info!("microVM running; entering event loop (SIGTERM/SIGINT → guest power-off)");
 
+    // M9 restore: a suspended guest was snapshotted parked in s2idle. Now that its vCPUs are live
+    // behind the restored GIC + PL061 registers, inject the wake (KEY_WAKEUP) so it runs its own
+    // s2idle resume path and re-initialises its virtio devices (the 0058 thaw ladder). The wake_efd
+    // is level-triggered, so the first event-loop iteration below delivers it to the GPIO device;
+    // the raised SPI is latched pending in the restored GIC, so it wakes the vCPU regardless of
+    // exact timing. Harmless if the snapshot was of a running (non-suspended) guest.
+    if spec.restore_file.is_some() {
+        log::info!("restore: injecting guest wake (KEY_WAKEUP) to resume from s2idle");
+        crate::wake::pulse();
+    }
+
     // Keep the Vmm alive for the lifetime of the event loop.
     let _vmm = vmm;
     loop {
