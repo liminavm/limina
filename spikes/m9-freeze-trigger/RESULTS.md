@@ -66,10 +66,28 @@ conflict). Rebuilt `KRUN_EFI.gop.fd`; re-probed a fresh clone:
 mechanism is now complete on the real (EFI) boot path: libkrun 0054 (RTC alarm) + the krun-efi patch
 (PL031 enabled) → `rtcwake -m freeze` enters s2idle and the vCPU wakes on schedule.
 
-**Next (M9.2-shaped):** make the resume *complete* — virtio freeze/thaw hardening so the guest (esp.
-virtio-net) comes back cleanly after wake. Still open independently: our **16k enhanced kernel has no
-PM configs** (`CONFIG_SUSPEND`), needed before the enhanced tier can s2idle; and spike F **part 2**
-(does the virtio-gpu resubmit hook the sleep callbacks) needs the Dongwon-Kim series we don't carry.
+### 🚧 Virtio freeze/thaw hardening — started (2026-07-18, libkrun 0055)
+On resume the guest re-inits each virtio device, starting with a reset (status=0). Root cause of the
+dead network: **virtio-net never overrode `reset()`**, so the transport's default returned `false` →
+marked the device FAILED (`device_status 0x8f`) and dropped all queue re-init → networking dead. Fixed
+(libkrun 0055): virtio-net now implements `reset()` (stop the worker via a new stop-eventfd, go
+Inactive, return true) **and preserves the gateway connection** across the reset (the backend — the
+gvproxy unixgram socket — is opened once and handed back by the worker's JoinHandle on stop, then
+reused on re-activate). Reconnecting instead dropped gvproxy (it exits when its vfkit peer
+disconnects). Result: across a freeze/wake cycle **gvproxy now survives and frames flow both ways**;
+normal NAT/DHCP/SSH test still green.
+
+**Still not a fully clean thaw:** post-wake SSH still resets, and `0x8f` warnings persist from the
+*other* reset-less devices (**balloon, vsock** — same default-`reset` bug as net had). Next:
+- implement `reset()` for balloon + vsock (same pattern; they have no external backend to preserve);
+- name the device in the mmio `invalid state` warning (`log_target`) so the remaining FAILED device
+  is obvious;
+- then re-verify the full SSH round-trip; if SSH still resets with all devices resetting cleanly,
+  investigate virtio-net feature re-negotiation / connection-tracking on resume.
+
+**Independent of thaw:** our **16k enhanced kernel has no PM configs** (`CONFIG_SUSPEND`), needed
+before the enhanced tier can s2idle; spike F **part 2** (does the virtio-gpu resubmit hook the sleep
+callbacks) needs the Dongwon-Kim series we don't carry.
 
 ## Repro
 ```
