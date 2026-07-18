@@ -130,6 +130,12 @@ struct Cli {
     #[arg(long)]
     restore: Option<PathBuf>,
 
+    /// Managed-VM only (M9.2): the bundle's `state.toml`, so the supervisor can persist the
+    /// `[suspended]` record when the worker exits 126. Set by `cli_from_definition`; not a user
+    /// flag. Distinct from `--window-state-file` (which is windowed-display only).
+    #[arg(skip)]
+    suspend_state_file: Option<PathBuf>,
+
     /// Capture the guest virtio-console (`hvc0`) output to this file — the robust
     /// bidirectional console. Pair with `console=hvc0` on the cmdline and
     /// --virtio-console-input to make hvc0 the guest's interactive `/dev/console`.
@@ -292,6 +298,10 @@ enum Cmd {
     Ls,
     /// Ask a running managed VM to shut down (--force skips the guest-side grace).
     Stop(StopArgs),
+    /// Suspend a running managed VM (M9.2): snapshot the guest and tear it down; the next `start`
+    /// resumes it. Falls back to leaving the VM running if the guest can't quiesce (e.g. a
+    /// virtiofs share refuses suspend-to-idle).
+    Suspend(SuspendArgs),
     /// Delete a stopped managed VM's bundle (disks outside the bundle are never touched).
     Rm(RmArgs),
 }
@@ -394,6 +404,12 @@ struct StopArgs {
 }
 
 #[derive(clap::Args, Debug)]
+struct SuspendArgs {
+    /// VM name or .liminavm bundle path.
+    vm: String,
+}
+
+#[derive(clap::Args, Debug)]
 struct RmArgs {
     /// VM name or .liminavm bundle path.
     vm: String,
@@ -463,6 +479,7 @@ fn main() -> Result<()> {
         Some(Cmd::Start(args)) => cmd_start(args),
         Some(Cmd::Ls) => cmd_ls(),
         Some(Cmd::Stop(args)) => cmd_stop(args),
+        Some(Cmd::Suspend(args)) => cmd_suspend(args),
         Some(Cmd::Rm(args)) => cmd_rm(args),
         // Bare `limina` — a double-clicked limina.app or a plain terminal launch —
         // opens the control center. Any flag at all means the flat ephemeral-VM CLI.
@@ -576,6 +593,40 @@ fn cmd_stop(args: StopArgs) -> Result<()> {
     }
 }
 
+fn cmd_suspend(args: SuspendArgs) -> Result<()> {
+    let bundle = vmlib::bundle::resolve(&args.vm)?;
+    let pid = match vmlib::runtime::status(&bundle) {
+        vmlib::runtime::VmStatus::Stopped => {
+            println!("{} is not running", bundle.dir_name());
+            return Ok(());
+        }
+        vmlib::runtime::VmStatus::Running { pid } => pid,
+    };
+    vmlib::runtime::signal_suspend(pid)?;
+    // The bracket is bounded (worker quiesce ≤20s + snapshot; the supervisor gives up at 60s). Wait
+    // a bit beyond that for the VM to tear down. If it stops AND state.toml records the suspend we
+    // succeeded; if it stays up the guest could not quiesce (a virtiofs share, or a guest that
+    // ignores the suspend button) and the VM keeps running.
+    if vmlib::runtime::wait_stopped(&bundle, Duration::from_secs(75)) {
+        match vmlib::state::load(&bundle.state_toml()).and_then(|s| s.suspended) {
+            Some(_) => {
+                println!("{} suspended", bundle.dir_name());
+                Ok(())
+            }
+            None => anyhow::bail!(
+                "{} stopped without recording a snapshot (it may have powered off instead)",
+                bundle.dir_name()
+            ),
+        }
+    } else {
+        anyhow::bail!(
+            "{} did not suspend within 75s — the guest could not quiesce (a virtiofs share or a \
+             guest ignoring the suspend button); it is still running",
+            bundle.dir_name()
+        )
+    }
+}
+
 fn cmd_rm(args: RmArgs) -> Result<()> {
     let bundle = vmlib::bundle::resolve(&args.vm)?;
     if let vmlib::runtime::VmStatus::Running { pid } = vmlib::runtime::status(&bundle) {
@@ -645,6 +696,33 @@ fn cli_from_definition(
         "--ssh-port needs a [[network]] in the definition"
     );
 
+    // M9.2 managed-VM suspend wiring. Always arm suspend by giving the worker a snapshot path (the
+    // bundle's run/snapshot.bin) and the state.toml to persist into, so `limina suspend` works on any
+    // running managed VM. If state.toml records a prior suspend, boot with `--restore <snapshot>` and
+    // CONSUME the record now (clear it before boot) — a snapshot that wedges the worker then degrades
+    // to a cold boot next time instead of a restore-loop. The snapshot file survives on disk and is
+    // overwritten by the next suspend.
+    let snapshot_bin = bundle.snapshot_bin();
+    let state_toml = bundle.state_toml();
+    let restore = match vmlib::state::load(&state_toml).and_then(|s| s.suspended) {
+        Some(sus) if sus.snapshot.exists() => {
+            log::info!("resuming suspended VM from {}", sus.snapshot.display());
+            if let Err(e) = vmlib::state::set_suspended(&state_toml, None) {
+                log::warn!("clearing the suspended state failed: {e}; continuing");
+            }
+            Some(sus.snapshot)
+        }
+        Some(sus) => {
+            log::warn!(
+                "state.toml records a suspend but snapshot {} is missing; cold-booting",
+                sus.snapshot.display()
+            );
+            let _ = vmlib::state::set_suspended(&state_toml, None);
+            None
+        }
+        None => None,
+    };
+
     let window = if ov.window {
         true
     } else if ov.no_window {
@@ -676,10 +754,11 @@ fn cli_from_definition(
         console: ov.console.clone(),
         console_input: None,
         console_pty: false,
-        // Managed-VM suspend wiring (persisted Suspended{snapshot} status) is M9.4; a definition
-        // never asks for an ad-hoc snapshot file or restore today.
-        snapshot_file: None,
-        restore: None,
+        // M9.2 suspend wiring (computed above): arm the worker's snapshot path, restore if the VM
+        // was suspended, and hand run_vm the state.toml to persist `[suspended]` into on a 126 exit.
+        snapshot_file: Some(snapshot_bin),
+        restore,
+        suspend_state_file: Some(state_toml),
         virtio_console: None,
         virtio_console_input: None,
         window,
@@ -1050,6 +1129,20 @@ fn run_vm(cli: Cli) -> Result<()> {
     };
 
     let code = supervisor::run(&spec, control.as_ref(), gateway.as_ref())?;
+    // M9.2: the worker exited 126 → the guest was snapshotted and torn down by the suspend bracket.
+    // Persist the `[suspended]` record so the next `start` boots with `--restore`. Managed VMs only
+    // (a flat `--disk` run sets no `suspend_state_file`, so this is a no-op there).
+    if code == supervisor::WORKER_EXIT_SNAPSHOT {
+        if let (Some(state_file), Some(snapshot)) = (&cli.suspend_state_file, &cli.snapshot_file) {
+            let sus = vmlib::state::Suspended {
+                snapshot: snapshot.clone(),
+            };
+            match vmlib::state::set_suspended(state_file, Some(sus)) {
+                Ok(()) => log::info!("VM suspended; snapshot at {}", snapshot.display()),
+                Err(e) => log::error!("persisting the suspended state failed: {e}"),
+            }
+        }
+    }
     // Explicit: process::exit skips destructors, so tear the gateway + control socket
     // down before exiting.
     drop(gateway);

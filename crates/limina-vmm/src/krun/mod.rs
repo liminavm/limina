@@ -484,6 +484,7 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     if let Some(path) = spec.snapshot_file.clone() {
         let trigger = crate::snapshot::install().context("installing the snapshot trigger")?;
         let vmm_for_snapshot = vmm.clone();
+        let snap_path = path.clone();
         std::thread::Builder::new()
             .name("snapshot-trigger".into())
             .spawn(move || {
@@ -492,9 +493,9 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                     log::error!("snapshot: trigger read failed: {e}; suspend disabled");
                     return;
                 }
-                log::info!("snapshot: SIGUSR1 received, capturing VM state to {path:?}");
+                log::info!("snapshot: SIGUSR1 received, capturing VM state to {snap_path:?}");
                 let mut guard = vmm_for_snapshot.lock().unwrap();
-                match guard.save_snapshot(&path) {
+                match guard.save_snapshot(&snap_path) {
                     Ok(()) => {
                         log::info!("snapshot: complete; exiting 126 (snapshotted)");
                         guard.stop(126); // runs exit observers, then libc::_exit — never returns
@@ -525,6 +526,85 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                 }
             })
             .map_err(|e| anyhow!("spawning the snapshot trigger thread: {e}"))?;
+
+        // M9.2 suspend bracket (the PRODUCTION suspend path). On SIGTSTP: pulse the guest suspend
+        // button, wait for the guest to s2idle-quiesce (every virtio device reset to INIT — the
+        // `is_quiesced` oracle), then snapshot + exit 126. Unlike the raw SIGUSR1 path above it
+        // NEVER snapshots a non-quiesced guest, so a restore always resumes cleanly. If the guest
+        // never quiesces within the timeout (e.g. a virtiofs mount refuses s2idle), the bracket
+        // wakes it back out of suspend and keeps the VM running — the supervisor sees no exit-126
+        // and reports the suspend failed. See `crate::bracket` and docs/design/m9.2-*.md.
+        let bracket_path = path.clone();
+        let trigger =
+            crate::bracket::install().context("installing the suspend-bracket trigger")?;
+        let vmm_for_bracket = vmm.clone();
+        std::thread::Builder::new()
+            .name("suspend-bracket".into())
+            .spawn(move || {
+                if let Err(e) = trigger.read() {
+                    log::error!("bracket: trigger read failed: {e}; suspend bracket disabled");
+                    return;
+                }
+                log::info!("bracket: SIGTSTP received; pulsing the guest suspend button");
+                crate::suspend::pulse();
+
+                // Poll the quiesce oracle until every virtio device has reset to INIT, or give up.
+                const POLL: std::time::Duration = std::time::Duration::from_millis(250);
+                const QUIESCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+                let deadline = std::time::Instant::now() + QUIESCE_TIMEOUT;
+                let quiesced = loop {
+                    if vmm_for_bracket.lock().unwrap().is_quiesced() {
+                        break true;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        break false;
+                    }
+                    std::thread::sleep(POLL);
+                };
+
+                if !quiesced {
+                    let holdouts = vmm_for_bracket.lock().unwrap().quiesce_holdouts();
+                    log::warn!(
+                        "bracket: guest did not quiesce within {QUIESCE_TIMEOUT:?} \
+                         (holdouts: {holdouts:?}); waking it and aborting the suspend (VM lives on)"
+                    );
+                    crate::wake::pulse();
+                    return;
+                }
+
+                log::info!("bracket: guest quiesced; capturing snapshot to {bracket_path:?}");
+                let mut guard = vmm_for_bracket.lock().unwrap();
+                match guard.save_snapshot(&bracket_path) {
+                    Ok(()) => {
+                        log::info!("bracket: snapshot complete; exiting 126 (suspended)");
+                        guard.stop(126); // exit observers, then libc::_exit — never returns
+                    }
+                    Err(e) => {
+                        // Same abort as the raw path: the vCPUs were parked by save_snapshot; resume
+                        // them and wake the guest so the VM lives on. Only a failed resume is fatal.
+                        log::error!(
+                            "bracket: save failed: {e:?}; resuming the guest (abort, non-fatal)"
+                        );
+                        match guard.resume_parked_vcpus() {
+                            Ok(()) => {
+                                drop(guard);
+                                crate::wake::pulse();
+                                log::warn!(
+                                    "bracket: aborted and guest resumed; suspend request failed"
+                                );
+                            }
+                            Err(re) => {
+                                log::error!(
+                                    "bracket: resume after failed save also failed: {re:?}; the \
+                                     guest is wedged — exiting 1"
+                                );
+                                guard.stop(1);
+                            }
+                        }
+                    }
+                }
+            })
+            .map_err(|e| anyhow!("spawning the suspend-bracket thread: {e}"))?;
     }
 
     // Start the GPU worker-message servicer when a display is attached (mirrors

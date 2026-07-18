@@ -49,6 +49,11 @@ const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(5);
 /// Give up relaunching after this many back-to-back rapid reboots (boot-loop backstop).
 const MAX_RAPID_REBOOTS: u32 = 5;
 
+/// Bound on the whole M9.2 suspend bracket (worker: pulse suspend button → wait the guest to
+/// s2idle-quiesce [≤20s] → snapshot [seconds for a 1–2 GB image]). If the worker hasn't exited 126
+/// by now the guest could not quiesce; the supervisor gives up and the VM keeps running.
+const SUSPEND_BRACKET_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Decides whether a worker exit should relaunch the VM (a guest reboot) or end it, capping
 /// runaway boot loops. Shared by the headless [`run`] loop and the windowed relaunch loop so
 /// the reboot policy lives in one place.
@@ -98,6 +103,15 @@ extern "C" fn on_signal(_sig: libc::c_int) {
     STOP.store(true, Ordering::SeqCst);
 }
 
+/// Set by the SIGTSTP handler (a `limina suspend` request relayed to the supervisor pid); observed
+/// by the monitor loop, which relays it to the worker as the M9.2 suspend bracket. Distinct from
+/// [`STOP`] — suspend is snapshot-and-teardown-to-resume, not power-off.
+static SUSPEND: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn on_suspend(_sig: libc::c_int) {
+    SUSPEND.store(true, Ordering::SeqCst);
+}
+
 /// Ask for the same graceful stop a SIGTERM triggers — used by the windowed
 /// session's quit-Apple-event handler (osascript "quit", logout), which must never
 /// exit the supervisor abruptly and orphan the worker.
@@ -116,6 +130,20 @@ fn install_signal_handlers() -> Result<()> {
         {
             anyhow::bail!(
                 "installing signal handlers: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+
+        // SIGTSTP → suspend request (M9.2). Its default disposition is *stop the process* (job
+        // control); a handler overrides that. The supervisor runs in its own process group with no
+        // controlling terminal, so SIGTSTP only ever arrives from `limina suspend` relaying it.
+        let mut sus: libc::sigaction = std::mem::zeroed();
+        sus.sa_sigaction = on_suspend as usize;
+        libc::sigemptyset(&mut sus.sa_mask);
+        sus.sa_flags = libc::SA_RESTART;
+        if libc::sigaction(libc::SIGTSTP, &sus, std::ptr::null_mut()) != 0 {
+            anyhow::bail!(
+                "installing SIGTSTP handler: {}",
                 std::io::Error::last_os_error()
             );
         }
@@ -197,9 +225,34 @@ pub fn monitor(
     let pid = child.id() as libc::pid_t;
     let mut shutdown_at: Option<Instant> = None;
     let mut sigterm_sent = false;
+    let mut suspend_at: Option<Instant> = None;
     loop {
         if let Some(status) = child.try_wait().context("polling worker")? {
             return Ok(report_exit(status));
+        }
+
+        // M9.2 suspend bracket: relay a `limina suspend` (SIGTSTP to us) to the worker, which
+        // pulses the guest suspend button, waits for the guest to s2idle-quiesce, snapshots it, and
+        // exits 126 (caught by `try_wait` above → we return 126, the caller persists `[suspended]`).
+        // If the guest can't quiesce (e.g. a virtiofs mount refuses s2idle) the worker wakes it and
+        // keeps running — never exiting 126 — so we bound the wait and, on timeout, give up and let
+        // the VM keep running, clearing the request so a later suspend can retry.
+        if SUSPEND.load(Ordering::SeqCst) && suspend_at.is_none() && shutdown_at.is_none() {
+            log::info!("suspend requested → running the suspend bracket (SIGTSTP → worker)");
+            unsafe {
+                libc::kill(pid, libc::SIGTSTP);
+            }
+            suspend_at = Some(Instant::now());
+        }
+        if let Some(t) = suspend_at {
+            if t.elapsed() >= SUSPEND_BRACKET_TIMEOUT {
+                log::warn!(
+                    "suspend bracket did not complete within {SUSPEND_BRACKET_TIMEOUT:?} (guest \
+                     could not quiesce — e.g. a virtiofs mount); the VM keeps running"
+                );
+                SUSPEND.store(false, Ordering::SeqCst);
+                suspend_at = None;
+            }
         }
 
         if STOP.load(Ordering::SeqCst) && shutdown_at.is_none() {

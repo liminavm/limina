@@ -180,7 +180,13 @@ fn save_state_final(path: Option<&Path>, window: &NSWindow) {
     let (Some(path), Some(snap)) = (path, window_state_snapshot(window)) else {
         return;
     };
-    if let Err(e) = crate::vmlib::state::save(path, &VmState { window: Some(snap) }) {
+    if let Err(e) = crate::vmlib::state::save(
+        path,
+        &VmState {
+            window: Some(snap),
+            suspended: None,
+        },
+    ) {
         log::warn!("window state save failed: {e}");
     }
 }
@@ -825,7 +831,10 @@ pub fn run(
                             saved_state.set(Some(snap));
                             let path = path.clone();
                             std::thread::spawn(move || {
-                                let state = VmState { window: Some(snap) };
+                                let state = VmState {
+                                    window: Some(snap),
+                                    suspended: None,
+                                };
                                 if let Err(e) = crate::vmlib::state::save(&path, &state) {
                                     log::warn!("window state save failed: {e}");
                                 }

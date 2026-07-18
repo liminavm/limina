@@ -119,6 +119,22 @@ pub fn signal_stop(pid: i32, force: bool) -> Result<()> {
     Ok(())
 }
 
+/// Ask a running supervisor to suspend the VM (M9.2). One `SIGTSTP` starts the suspend bracket:
+/// the supervisor relays it to the worker, which pulses the guest suspend button, waits for the
+/// guest to s2idle-quiesce, snapshots it, and exits 126 — after which the supervisor persists the
+/// `[suspended]` state and tears down. If the guest cannot quiesce (e.g. a virtiofs mount refuses
+/// s2idle) the bracket wakes it and the VM keeps running; the request is a no-op the caller detects
+/// by the VM still being up (see [`wait_stopped`]).
+pub fn signal_suspend(pid: i32) -> Result<()> {
+    anyhow::ensure!(pid > 0, "refusing to signal pid {pid}");
+    let rc = unsafe { libc::kill(pid, libc::SIGTSTP) };
+    if rc != 0 {
+        let e = std::io::Error::last_os_error();
+        anyhow::bail!("signaling supervisor pid {pid} to suspend: {e}");
+    }
+    Ok(())
+}
+
 /// Poll a bundle's run state until it stops or the timeout expires.
 pub fn wait_stopped(bundle: &VmBundle, timeout: std::time::Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;

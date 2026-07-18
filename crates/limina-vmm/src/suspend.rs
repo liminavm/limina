@@ -27,7 +27,7 @@ use utils::eventfd::{EventFd, EFD_NONBLOCK};
 /// the handler must write the *write* end (`get_write_fd()`) — mirroring `snapshot.rs`.
 static SUSPEND_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
 
-extern "C" fn handle_sigusr2(_sig: libc::c_int) {
+fn pulse_fd() {
     let fd = SUSPEND_WRITE_FD.load(Ordering::SeqCst);
     if fd >= 0 {
         let one: u64 = 1;
@@ -36,6 +36,17 @@ extern "C" fn handle_sigusr2(_sig: libc::c_int) {
             libc::write(fd, &one as *const u64 as *const libc::c_void, 8);
         }
     }
+}
+
+extern "C" fn handle_sigusr2(_sig: libc::c_int) {
+    pulse_fd();
+}
+
+/// Raise the guest suspend button (`KEY_SLEEP`) internally — the M9.2 suspend bracket pulses this
+/// itself, then polls the guest to s2idle-quiesce before snapshotting. Async-signal-safe; equivalent
+/// to a `SIGUSR2`. No-op until [`install`] has published the eventfd.
+pub fn pulse() {
+    pulse_fd();
 }
 
 /// Create the guest suspend eventfd and install a `SIGUSR2` handler that signals it.

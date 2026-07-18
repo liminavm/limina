@@ -53,6 +53,14 @@ impl VmBundle {
         self.path.join("state.toml")
     }
 
+    /// The VM's suspend snapshot file (M9.2). Written by the worker when the guest is suspended
+    /// (`limina suspend`) and reloaded on the next start when `state.toml` records `[suspended]`.
+    /// Lives under `run/` (per-boot state, not user content) so it travels with the bundle but is
+    /// clearly disposable.
+    pub fn snapshot_bin(&self) -> PathBuf {
+        self.run_dir().join("snapshot.bin")
+    }
+
     pub fn logs_dir(&self) -> PathBuf {
         self.path.join("logs")
     }
