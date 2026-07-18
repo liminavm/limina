@@ -11,8 +11,15 @@ libkrun HVF-backend gaps (which we own and can patch). Resume itself is therefor
 - Disk: a CoW clone of the **stock** `Fedora-Workstation-43.accessible.raw` (Fedora kernel
   `6.17.1-300.fc43.aarch64`, **4 KiB pages**, stock mesa). Chosen deliberately over `enhanced.raw`:
   Fedora's own kernel has `CONFIG_HIBERNATION=y`, so this isolates "does the libkrun *environment*
-  support S4" from "does our 16k kernel have the PM configs" (it doesn't — `build-kernel-rpm.sh` /
-  `build-test-kernel.sh` carry zero PM configs; that's an M9.1 task, not what this spike tests).
+  support S4" from the kernel-config question.
+  > ⚠️ CORRECTION (2026-07-18): an earlier version of this line claimed "our 16k kernel doesn't have
+  > the PM configs". That is WRONG for the **shipped enhanced kernel** — it's built by
+  > `scripts/provision/f44/build-kernel-rpm.sh` **from Fedora's config** + a 16k delta, so it inherits
+  > `CONFIG_SUSPEND=y` / `CONFIG_PM_SLEEP=y` / `CONFIG_HIBERNATION=y` (verified on the shipped
+  > `/boot/config-7.1.2-limina16k`, and the enhanced kernel does a clean `rtcwake -m freeze` round-trip
+  > — see `spikes/m9-freeze-trigger/RESULTS.md`). The "zero PM configs" only ever applied to the
+  > `scripts/build-test-kernel.sh` `--kernel`-injection *test* kernel (arm64 defconfig + fragment) and
+  > the retired upstream-defconfig `scripts/build-kernel-rpm.sh` fallback, NOT the enhanced tier.
 - Boot: headless `limina --net --ssh-port 2222 --ram-mib 2048 --cpus N`, silent serial firmware
   (`target/krun-efi/KRUN_EFI.silent-rebuilt.fd`), SSH control via `gssh.sh`.
 
@@ -105,8 +112,10 @@ the snapshot step; what blocks it is squarely in the dependency we own:
 2. **libkrun: handle the EL1 debug/suspend sysreg set** on the CPU-suspend path — OSDLR_EL1 (the one
    that crashed), and almost certainly OSLAR_EL1 / MDSCR_EL1 / the DBGB*/DBGW* breakpoint regs —
    read+write, modeled or safely stubbed, instead of "stop the VM."
-3. **Image-build (enhanced tier):** label swap for SELinux; add PM configs to the 16k kernel; provision
-   swap ≥ RAM + `resume=`/`resume_offset=` + dracut resume.
+3. **Image-build (enhanced tier):** label swap for SELinux; provision swap ≥ RAM +
+   `resume=`/`resume_offset=` + dracut resume. (The 16k kernel already carries the PM configs —
+   `CONFIG_SUSPEND`/`CONFIG_PM_SLEEP`/`CONFIG_HIBERNATION=y`, inherited from its Fedora config base;
+   verified 2026-07-18. No kernel-config change needed.)
 4. **Harden virtio-mmio freeze/restore** in libkrun (the `0x8f` invalid-state warnings + the
    virtio_config.h:276 guest WARNs), at least for the real resume path.
 

@@ -56,9 +56,9 @@ conflict). Rebuilt `KRUN_EFI.gop.fd`; re-probed a fresh clone:
     fires on schedule 11 s later (`fire_alarm imsc=1 intc=true irq_line=Some(33)`), and the **vCPU
     resumes from s2idle**: proven by the guest immediately executing the `RTCIMSC=0` MMIO store (only a
     running vCPU can), i.e. its rtc IRQ handler ran.
-  - ⚠️ **Full resume/thaw is incomplete** — post-wake the guest network never recovers (SSH resets),
-    and no further guest activity is seen. This is the **virtio freeze/thaw hardening** the design
-    already flags for M9.2 (spike #1's `invalid queue state 0x8f`), NOT a wake failure.
+  - ✅ **Full resume/thaw now works** (libkrun 0055/0056/0057 — see below). The `0x8f` on the initial
+    attempt was the reset-less-device bug (the design's M9.2 virtio freeze/thaw item), NOT a wake
+    failure; fixing `reset()` on net/balloon/vsock gives a clean, repeatable SSH+net round-trip.
 
 ## Conclusion / where this leaves M9
 
@@ -66,28 +66,54 @@ conflict). Rebuilt `KRUN_EFI.gop.fd`; re-probed a fresh clone:
 mechanism is now complete on the real (EFI) boot path: libkrun 0054 (RTC alarm) + the krun-efi patch
 (PL031 enabled) → `rtcwake -m freeze` enters s2idle and the vCPU wakes on schedule.
 
-### 🚧 Virtio freeze/thaw hardening — started (2026-07-18, libkrun 0055)
-On resume the guest re-inits each virtio device, starting with a reset (status=0). Root cause of the
-dead network: **virtio-net never overrode `reset()`**, so the transport's default returned `false` →
-marked the device FAILED (`device_status 0x8f`) and dropped all queue re-init → networking dead. Fixed
-(libkrun 0055): virtio-net now implements `reset()` (stop the worker via a new stop-eventfd, go
-Inactive, return true) **and preserves the gateway connection** across the reset (the backend — the
-gvproxy unixgram socket — is opened once and handed back by the worker's JoinHandle on stop, then
-reused on re-activate). Reconnecting instead dropped gvproxy (it exits when its vfkit peer
-disconnects). Result: across a freeze/wake cycle **gvproxy now survives and frames flow both ways**;
-normal NAT/DHCP/SSH test still green.
+### ✅ Virtio freeze/thaw hardening — DONE (2026-07-18, libkrun 0055/0056/0057)
+On resume the guest re-inits each virtio device, starting with a reset (status write 0). The MMIO
+transport calls `VirtioDevice::reset()`; the trait default returns `false`, which marks the device
+FAILED (`device_status 0x8f`) and drops all queue re-init → the device never comes back. Three of our
+devices lacked a `reset()` override:
+- **virtio-net** (libkrun 0055): now implements `reset()` — stops the worker via a new stop-eventfd,
+  goes Inactive, returns true — **and preserves the gateway connection** across the reset (the backend,
+  the gvproxy unixgram socket, is opened once and handed back by the worker's `JoinHandle` on stop,
+  then reused on re-activate). Reconnecting instead dropped gvproxy (it exits when its vfkit peer
+  disconnects).
+- **balloon + vsock** (libkrun 0056): implement `reset()` → drop to Inactive, return true. Unlike
+  net/block they have no dedicated worker; they run under the shared EventManager with queue eventfds
+  that stay registered across a transport reset (the transport reuses `queue_evts`), so re-activate
+  just works. Also named the device in the two mmio diagnostics (the `invalid state 0x…` warning and
+  the `does not support reset` path).
+- 0057 adds gated `debug!` traces (per-device status-transition ladder + net reset/activate) that made
+  the resume path observable.
 
-**Still not a fully clean thaw:** post-wake SSH still resets, and `0x8f` warnings persist from the
-*other* reset-less devices (**balloon, vsock** — same default-`reset` bug as net had). Next:
-- implement `reset()` for balloon + vsock (same pattern; they have no external backend to preserve);
-- name the device in the mmio `invalid state` warning (`log_target`) so the remaining FAILED device
-  is obvious;
-- then re-verify the full SSH round-trip; if SSH still resets with all devices resetting cleanly,
-  investigate virtio-net feature re-negotiation / connection-tracking on resume.
+**VALIDATED — full, repeatable s2idle suspend/resume round-trip (F44 stock, EFI + `--net`):**
+`rtcwake -m freeze -s N -d rtc1` now suspends and cleanly resumes. Guest `dmesg`:
+`PM: suspend entry (s2idle)` → `PM: resume devices took 0.005 seconds` → `PM: suspend exit`. The worker
+log shows **every** device walk the full re-init ladder on resume
+(`0x0 -> 0x1 -> 0x3 -> 0xb -> 0xf`, i.e. INIT→…→DRIVER_OK) — net, vsock, balloon, block, console, rng,
+snd, i2c. Post-resume the guest is fully alive: **SSH round-trips, `eth0` is UP, outbound `curl`
+returns 200.** Verified across **two consecutive freeze/wake cycles** on the same guest (dmesg shows
+2× suspend entry / 2× suspend exit), both recovering SSH + net.
 
-**Independent of thaw:** our **16k enhanced kernel has no PM configs** (`CONFIG_SUSPEND`), needed
-before the enhanced tier can s2idle; spike F **part 2** (does the virtio-gpu resubmit hook the sleep
-callbacks) needs the Dongwon-Kim series we don't carry.
+> ⚠️ Observation discipline note: the resume is **delayed** — the wake fires ~N s after freeze-entry and
+> the guest completes `dpm_resume` a moment later. Checking the worker log too soon shows only the
+> freeze-entry `0xf -> 0x0` reset ladder and *looks* like "the guest never resumes / net is dead."
+> It does resume; wait past the armed wake before judging. (This false-negative cost a couple of
+> boot cycles here — the well-instrumented run with `mmio=debug` status-transition logging is what
+> made the real behavior unambiguous.)
+
+**Enhanced tier also s2idles (verified 2026-07-18).** An earlier note here claimed the 16k enhanced
+kernel "has no PM configs" — that was WRONG (it conflated the `scripts/build-test-kernel.sh`
+`--kernel`-injection *test* kernel with the shipped enhanced tier). The enhanced kernel is built by
+`scripts/provision/f44/build-kernel-rpm.sh` **from the guest's real Fedora config** + only a 16k
+delta, so it inherits Fedora's full PM stack. Grepped the shipped `/boot/config-7.1.2-limina16k`:
+`CONFIG_SUSPEND=y`, `CONFIG_PM_SLEEP=y`, `CONFIG_HIBERNATION=y`, `CONFIG_RTC_DRV_PL031=y`,
+`CONFIG_ARM64_16K_PAGES=y`; `/sys/power/state`=`freeze mem disk`, `mem_sleep`=`[s2idle]`. And the
+**enhanced 16k kernel does the same clean `rtcwake -m freeze` round-trip** as stock F44 (WOKE, eth0
+UP, outbound 200, `PM: suspend entry (s2idle)` → `resume devices took 0.019s` → `suspend exit`). So
+there is **no enhanced-tier kernel blocker** for s2idle.
+
+Spike F **part 2** (does the virtio-gpu resubmit hook the sleep callbacks) still needs the
+Dongwon-Kim series we don't carry — that's the remaining GPU-state question, independent of the
+kernel PM config.
 
 ## Repro
 ```
