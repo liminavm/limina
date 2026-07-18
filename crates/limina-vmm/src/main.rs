@@ -17,6 +17,7 @@ mod restart;
 mod shutdown;
 mod snapshot;
 mod suspend;
+mod wake;
 
 use std::path::PathBuf;
 

@@ -403,6 +403,10 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     // guest's logind reboots gracefully (worker exits 125 → supervisor relaunches a fresh worker).
     let restart_efd = crate::restart::install().context("installing restart handler")?;
 
+    // Guest wake eventfd (M9 restore): pulses the GPIO KEY_WAKEUP (wakeup-source) button to bring a
+    // suspended guest out of s2idle. Injected internally on restore; SIGWINCH is an out-of-band seam.
+    let wake_efd = crate::wake::install().context("installing wake handler")?;
+
     let mut event_manager = EventManager::new().map_err(|e| anyhow!("EventManager::new: {e:?}"))?;
     // The worker channel carries virtio-gpu blob-mapping messages (macOS): the GPU
     // device asks the VMM to map host GPU memory into guest space. We service it on a
@@ -428,6 +432,7 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         Some(shutdown_efd),
         Some(suspend_efd),
         Some(restart_efd),
+        Some(wake_efd),
         worker_tx,
         spec.restore_file.clone(),
     )
