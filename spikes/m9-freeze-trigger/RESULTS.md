@@ -96,9 +96,46 @@ returns 200.** Verified across **two consecutive freeze/wake cycles** on the sam
 > ⚠️ Observation discipline note: the resume is **delayed** — the wake fires ~N s after freeze-entry and
 > the guest completes `dpm_resume` a moment later. Checking the worker log too soon shows only the
 > freeze-entry `0xf -> 0x0` reset ladder and *looks* like "the guest never resumes / net is dead."
-> It does resume; wait past the armed wake before judging. (This false-negative cost a couple of
-> boot cycles here — the well-instrumented run with `mmio=debug` status-transition logging is what
-> made the real behavior unambiguous.)
+> It does resume; wait past the armed wake before judging.
+
+### ⚠️ CORRECTION (2026-07-18) — the "DONE" above was validated through a RACE that masked a guest crash
+The clean round-trips above were **real but not reliable**: whether they worked depended on a race, and
+the same recipe soon failed *consistently* (guest wedged, never recovers). An adversarial review + a
+follow-up investigation root-caused it, and the earlier "invariance is a smell" discipline applied
+squarely — the failing/​passing didn't correlate with any host-side change:
+
+- **Two more host-side bugs the review found (fixed, libkrun 0058):** (1) `Vsock::reset` made the device
+  re-activatable, but `muxer.activate` unconditionally spawned a fresh timesync/muxer/reaper trio with
+  **no teardown of the old ones** → every suspend cycle leaked 3 threads that kept writing used-ring
+  entries into the **freed/reallocated** guest RX ring (memory corruption). Fixed: stop the muxer
+  threads on reset. (2) balloon/vsock/snd/i2c didn't drain their eventfd in the not-activated branch →
+  a level-triggered spurious event (e.g. the host balloon policy kicking `target_evt` while suspended)
+  **busy-spun the worker at 100 % CPU** for the whole suspended interval. Fixed: drain-before-warn.
+  (+ net stop-eventfd drain, balloon reset-state clear, transport feature-clear.)
+- **The actual wedge = an upstream `virtio_balloon` kernel bug, triggered by OUR `F_REPORTING`
+  feature.** `virtballoon_freeze()` frees the balloon virtqueues (`remove_common`) **without** stopping
+  the free-page-reporting worker, which runs on the non-freezable system `events` workqueue (unlike
+  `virtballoon_remove`, which `page_reporting_unregister`s first). ~1.5 s into s2idle the worker
+  use-after-frees the dead reporting vq → oops (`page_reporting_process → virtballoon_free_page_report
+  → virtqueue_add_inbuf`, identical PC across runs, recovered from a **RAM-dump of a wedged guest**);
+  with default `console_suspend=Y` the mid-suspend oops then deadlocks `dpm_resume` and the guest parks
+  forever. Decisive control: `modprobe -r virtio_balloon` → clean repeated round-trips. limina hit it
+  because M6 dynamic-memory advertised `VIRTIO_BALLOON_F_REPORTING`; upstream QEMU users rarely pair it
+  with s2idle. (The "earlier successes were real" — the race is whether page-reporting work lands in the
+  freeze window; a settled GNOME session makes the worker hot → consistent failure.)
+- **Fixes:** (a) host-side — **mask `VIRTIO_BALLOON_F_REPORTING` by default** (libkrun 0059 +
+  `VmResources.balloon_free_page_reporting`, worker `--balloon-free-page-reporting`, default off); stock
+  keeps coarser inflate-time `MADV_FREE_REUSABLE` reclaim and s2idles safely (two-tier: degraded but
+  working). (b) real fix — **kernel patch `patches/linux/0005`** (`virtballoon_freeze` unregisters
+  page-reporting, `virtballoon_restore` re-registers) so the enhanced tier can re-enable FRQ reclaim and
+  still suspend; needs a kernel rebuild + enhanced-image respin to deploy, then flip the flag on for
+  enhanced VMs. Submit upstream.
+
+**RE-VALIDATED with the mask (2026-07-18):** `page_reporting` absent in the guest; **5/5 consecutive
+`rtcwake -m freeze` cycles clean** on stock F44 — every cycle recovers SSH + outbound `curl` 200, and
+the worker **thread count stays flat at 11** (was leaking +3/cycle before 0058). This is the reliable
+result; the un-caveated "DONE" above stands only with `F_REPORTING` masked (default) or the kernel patch
+deployed.
 
 **Enhanced tier also s2idles (verified 2026-07-18).** An earlier note here claimed the 16k enhanced
 kernel "has no PM configs" — that was WRONG (it conflated the `scripts/build-test-kernel.sh`
