@@ -478,8 +478,9 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     // the snapshot, and exits 126 ("snapshotted") — the supervisor reports the VM suspended and,
     // unlike a reboot, does NOT relaunch. `save_snapshot` self-quiesces (the per-vCPU Snapshot
     // event saves-then-parks each vCPU), so we do NOT pause first — pausing would make the vCPUs
-    // discard the Snapshot event and time out. A FAILED save leaves the guest parked with no way
-    // to resume (macOS `resume_vcpus` is a no-op stub), so it's fatal (exit 1), not recoverable.
+    // discard the Snapshot event and time out. A FAILED save is now recoverable: the parked vCPUs are
+    // resumed (`resume_parked_vcpus`) and the guest woken, so the VM lives on (only if that resume
+    // itself fails is it fatal, exit 1).
     if let Some(path) = spec.snapshot_file.clone() {
         let trigger = crate::snapshot::install().context("installing the snapshot trigger")?;
         let vmm_for_snapshot = vmm.clone();
@@ -499,11 +500,27 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                         guard.stop(126); // runs exit observers, then libc::_exit — never returns
                     }
                     Err(e) => {
-                        log::error!(
-                            "snapshot: save failed: {e:?}; the guest is quiesced and cannot resume \
-                             (macOS has no in-process vCPU resume) — exiting 1"
-                        );
-                        guard.stop(1);
+                        // Abort path: the vCPUs are parked (snapshot_vcpus). Resume them so the guest
+                        // returns to execution instead of wedging, then inject the wake so a
+                        // bracket-suspended guest comes back out of s2idle. Non-fatal — the VM lives on
+                        // and the supervisor just sees the suspend request fail.
+                        log::error!("snapshot: save failed: {e:?}; resuming the guest (abort, non-fatal)");
+                        match guard.resume_parked_vcpus() {
+                            Ok(()) => {
+                                drop(guard);
+                                crate::wake::pulse();
+                                log::warn!(
+                                    "snapshot: aborted and guest resumed; suspend request failed"
+                                );
+                            }
+                            Err(re) => {
+                                log::error!(
+                                    "snapshot: resume after failed save also failed: {re:?}; the guest \
+                                     is wedged — exiting 1"
+                                );
+                                guard.stop(1);
+                            }
+                        }
                     }
                 }
             })
