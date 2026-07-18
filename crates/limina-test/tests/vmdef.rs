@@ -322,11 +322,15 @@ fn managed_vm_suspends_and_resumes() {
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).expect("creating the scratch library");
 
-    // create: COW-clone the shared image into the bundle (never mutate the source). 2 GiB keeps the
-    // RAM snapshot small/fast; the managed VM is dynamic with a 1 GiB floor.
+    // create: COW-clone the shared image into the bundle (never mutate the source). 4 GiB is
+    // load-bearing, NOT arbitrary: the guest-RAM region is then exactly 0x1_0000_0000 bytes, which is
+    // the value that overflowed the snapshot format's byte-section length when it was a u32 (truncated
+    // to 0 → restore wrote back an empty region → guest resumed into blank RAM). This test is the
+    // ≥4 GiB restore regression guard for libkrun patch 0067; a ≤2 GiB VM cannot reach the bug. The
+    // managed VM is dynamic with a 1 GiB floor, so the resident cost stays modest.
     run_ok(
         limina_cmd(&cfg.limina_bin, &scratch)
-            .args(["create", "susp-test", "--memory", "2G", "--disk"])
+            .args(["create", "susp-test", "--memory", "4G", "--disk"])
             .arg(disk),
         "limina create",
     );

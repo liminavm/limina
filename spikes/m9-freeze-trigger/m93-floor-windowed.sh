@@ -29,13 +29,17 @@ cd "$REPO"; rm -f "$SNAP"
 say "cloning enhanced image $SRC (COW)…"; cp -c "$SRC" "$DISK" || { say "clone failed"; exit 1; }
 
 # Common env for the windowed venus boot (KK stack set by boot-enhanced-efi-kk.sh). RUST_LOG so the
-# bracket (info, limina_vmm) + the SHM-WINDOW FAULT (warn, krun_vmm) + restore (info) all surface.
-export RUST_LOG="limina_vmm=info,krun_vmm=warn"
+# bracket (info) + the SHM-WINDOW FAULT (warn) + restore surface. ROUND 2: override to
+# `limina_vmm=info,krun_vmm=info` to also get the per-vCPU "resumed from snapshot at pc=" lines +
+# venus/Mesa. Console capture pins WHERE the guest kernel resume stalls.
+export RUST_LOG="${RUST_LOG:-limina_vmm=info,krun_vmm=warn}"
 export LIMINA_DISK="$DISK" LIMINA_CPUS=4 LIMINA_RAM_MIB=4096
+P1CONS="$JOB/tmp/m93-floor-p1-console.log"; P2CONS="$JOB/tmp/m93-floor-p2-console.log"
+KEEP_WINDOW="${LIMINA_KEEP_WINDOW:-0}"   # 1 = leave the restore window up for a human eyeball
 
 ### PHASE 1 — windowed venus boot + suspend bracket + snapshot
 say "PHASE1: windowed venus boot (a WINDOW will appear) + snapshot bracket"
-LIMINA_EXTRA_ARGS="--ssh-port $PORT --snapshot-file $SNAP" \
+LIMINA_EXTRA_ARGS="--ssh-port $PORT --snapshot-file $SNAP --console $P1CONS" \
   spikes/venus-draw-probe/boot-enhanced-efi-kk.sh >"$JOB/tmp/m93-p1-boot.out" 2>&1 &
 BOOTPID=$!
 up=0; for i in $(seq 1 75); do ssh_up && { up=1; say "SSH up ~$((i*4))s"; break; }; sleep 4; done
@@ -67,7 +71,7 @@ cleanup; sleep 3
 
 ### PHASE 2 — restore into a fresh worker; measure the SHM-window fault + OS survival
 say "PHASE2: restore the windowed venus guest into a FRESH worker (a WINDOW will appear again)"
-LIMINA_EXTRA_ARGS="--ssh-port $PORT --restore $SNAP" \
+LIMINA_EXTRA_ARGS="--ssh-port $PORT --restore $SNAP --console $P2CONS" \
   spikes/venus-draw-probe/boot-enhanced-efi-kk.sh >"$JOB/tmp/m93-p2-boot.out" 2>&1 &
 BOOTPID2=$!
 say "restore launched; watching for the SHM-window fault + SSH survival (90s)…"
@@ -83,14 +87,21 @@ if [ "$back" = 1 ]; then
   POST_BOOTID=$($SSH 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -d '\r')
   say "post: boot_id=$POST_BOOTID ($([ "$PRE_BOOTID" = "$POST_BOOTID" ] && echo SAME=resumed || echo CHANGED=rebooted))"
 fi
-say "=== SHM-WINDOW FAULT (the decisive GPU-gone-on-restore oracle) ==="
-if [ -n "$fault" ]; then say "  FAULT SEEN → $fault"; else say "  (no SHM-window fault logged — guest did NOT touch unmapped GPU memory in the window watched)"; fi
-say "=== phase2 worker log — restore/wake/venus/error ==="; grep -iE 'restoring from snapshot|injecting guest wake|SHM-WINDOW FAULT|Mesa:|venus|virgl_renderer|error|panic|segfault' "$P2LOG" 2>/dev/null | tail -25 | tee -a "$LOG"
+say "=== per-vCPU RESUME PCs (needs RUST_LOG=krun_vmm=info) — did the vCPUs come back? ==="
+grep -iE 'resumed from snapshot at pc=' "$P2LOG" 2>/dev/null | tail -8 | tee -a "$LOG" || true
+say "=== guest CONSOLE tail (where the kernel resume stalls) ==="
+tail -25 "$P2CONS" 2>/dev/null | tee -a "$LOG" || say "  (no console captured)"
+say "=== SHM-WINDOW FAULT (the GPU-gone-on-restore oracle) ==="
+if [ -n "$fault" ]; then say "  FAULT SEEN → $fault"; else say "  (no SHM-window fault — guest did NOT reach a userspace GPU-window touch)"; fi
+say "=== phase2 worker log — restore/wake/venus/error (tcpproxy filtered) ==="; grep -iE 'restoring from snapshot|injecting guest wake|SHM-WINDOW FAULT|resumed from snapshot|Mesa:|venus|virgl_renderer|error|panic|segfault' "$P2LOG" 2>/dev/null | grep -viE 'tcpproxy|no route to host' | tail -25 | tee -a "$LOG"
 say ""
 say "SUMMARY (machine oracles):"
 say "  OS survived restore (SSH): $([ "$back" = 1 ] && echo YES || echo NO)"
 say "  boot_id continuity: $([ -n "${POST_BOOTID:-}" ] && ([ "$PRE_BOOTID" = "$POST_BOOTID" ] && echo 'SAME (resumed)' || echo 'CHANGED (rebooted)') || echo unknown)"
-say "  SHM-window GPU fault: $([ -n "$fault" ] && echo 'YES (mode i — needs the fault-safe SHM remap first)' || echo 'not observed (possibly mode ii — session recovers)')"
-say "  → The DESKTOP recovery (black/frozen/usable) is the HUMAN oracle: eyeball the window now."
-say "Leaving the restore window UP for inspection. Kill later: pkill -9 -f m93-floor.raw"
-say "spike phase 2 running (BOOTPID2=$BOOTPID2); NOT auto-cleaning so the window stays for the human."
+say "  SHM-window GPU fault: $([ -n "$fault" ] && echo 'YES (mode i)' || echo 'not observed (stalls earlier)')"
+if [ "$KEEP_WINDOW" = 1 ]; then
+  say "  → DESKTOP recovery is the HUMAN oracle: eyeball the window. Kill later: pkill -9 -f m93-floor.raw"
+else
+  say "cleanup (LIMINA_KEEP_WINDOW=1 to keep the window for a human eyeball)"; cleanup; rm -f "$DISK" "$SNAP"
+fi
+say "spike done."

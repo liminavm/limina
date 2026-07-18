@@ -139,8 +139,48 @@ guest, or it should be read as the *small-guest* case — see §M9.4.
 >   retain-and-replay + content readback (seamless target, its own sub-project).
 > - **Retire the Parallels comparison as evidence for our virgl tier** — whatever it does, it is not
 >   "stock kernel resubmit + stock Mesa," because stock Mesa demonstrably cannot rebuild vrend sub-objects.
+
+> ### ⛔ CORRECTION (Fable round-2 review, 2026-07-18) — the "unrecoverable fault" / "SHM remap" premise is FALSE
+> A second source-level review + a direct code check **refute the two starred claims above**. Strike them:
+> - **The SHM window is NOT unmapped on a fresh restore worker.** The GPU window is created and appended to
+>   `arch_mem_regions` (`builder.rs:1730-1743`), and `Vm::memory_init` `hv_vm_map`s **every** `guest_memory`
+>   region — the window included — on *every* boot, **restore included** (`macos/vstate.rs:111-131`). So on
+>   restore the window is mapped to **fresh anonymous zero pages**; a guest touch there **does not fault, does
+>   not exit, is invisible to the host** (it reads zeros / writes into memory nobody consumes). ⇒ "first GPU
+>   touch on restore is an unrecoverable vCPU fault" (lines 115-116) is **wrong**, and **"fault-safe SHM remap
+>   is priority-zero" (lines 116-117, 136) targets a fault that cannot occur** — option (a) "remap the window"
+>   is already the accidental status quo and is demonstrably not enough (zeros ≠ contents + a live ring
+>   consumer). The *contents-are-gone* half of the original review stands; the *fault-mechanics* half does not.
+> - **The libkrun 0066 SHM-window-fault oracle is structurally dead code** — it only observes MMIO exits, and
+>   the window never produces one. Round-1's "SHM fault never fired" was **guaranteed silence**, not evidence
+>   of "stalls before any GPU touch." Re-point it at the only real hole (`resource_unmap_blob` `hv_vm_unmap`
+>   without rebacking, `virtio_gpu.rs:2126-2136`) or delete it; its comments (`vstate.rs:223,379`) encode the
+>   false premise. (Also noted: `EC_DATAABORT` decoder never checks `isv` — `hvf/src/lib.rs:1024-1035` — a
+>   pre-existing decode hazard for a real window hole; add to the upstreaming/security list.)
+> - **The REAL first wall is a virtio-gpu device-state mismatch, not a fault.** M9.2 excepts virtio-gpu from
+>   quiesce (no s2idle PM ops, `lib.rs:423-424`), so the restored guest kernel believes the GPU is `DRIVER_OK`
+>   with configured virtqueues, while the fresh worker built a **fresh device in `INIT` with no queues**. The
+>   guest never re-reads `device_status`; its first frame submission kicks an unconfigured device → the kick is
+>   dropped, fences never signal, the vn ring seqno (read from zero-backed window) never advances → the
+>   compositor parks in a **silent ring/fence wait forever**. No fault, no crash, no log line.
+> - **Two cheap snapshot-hardening items surfaced (do while cheap):** (i) **no memory-layout identity check on
+>   restore** — `builder.rs` validates only vCPU count; restoring a 4 GiB snapshot into an 8 GiB worker
+>   succeeds silently but `shm_start` moves → split-brain corruption. Embed ram-size/`shm_start`/firmware-mode
+>   in the header, fail closed. (ii) **~2×-RAM peak host allocation** — `dump_ram` copies every region into
+>   `Vec`s and `snapshot::write` serializes the whole file into a second `Vec` before one `fs::write`; a 4 GiB
+>   guest ≈ 8.6 GB transient, an 8 GiB guest thrashes a 32 GB host. Stream sections with an incremental CRC.
+> - **Corrected M9.3 ladder (supersedes line 136):** **Step 0** snapshot hardening (host-only: layout-identity
+>   check + streamed CRC; fix/kill the dead oracle) → **Step 1** corrected round-3 floor spike (§round-2 below;
+>   drop the SHM-fault oracle from the verdict, add guest-side wedge probes) → **Step 2** v1 floor =
+>   agent-driven GPU re-init on resume (`limina-agent`: stop-gdm→unbind→rebind→start-gdm; guest death of the
+>   *session*, VM/disks/net survive; the spike-#3 clean path, no kernel/Mesa/libkrun patch — ship as v1 with
+>   the "logged-in session restarts" contract) → **Step 3** DK series adapted to s2idle (guest kernel:
+>   freeze/`del_vqs` deletes the M9.2 GPU exception, then BO resubmit) for virgl-tier seamlessness → **Step 4**
+>   seamless venus = Mesa retain-and-replay + ring re-establishment + host `vkr` id-collision hardening
+>   (graceful, not `assert` at `vkr_context.h:223`) + device-local content sweep. Host-only: Step 0 + plumbing
+>   of Step 2. Guest-agent: Step 2. Guest kernel: Step 3. Guest Mesa + host virgl: Step 4.
 >
-> ### FLOOR SPIKE — round 1 result (2026-07-18, `spikes/m9-freeze-trigger/m93-floor-windowed.sh`)
+> ### FLOOR SPIKE — round 1 result (2026-07-18, `spikes/m9-freeze-trigger/m93-floor-windowed.sh`) [⚠️ CONTAMINATED — see correction above]
 > Ran the M9.2 bracket on a **windowed venus** enhanced guest (Fedora-44.enhanced.test, 4 vCPU/4 GiB),
 > instrumented with the new libkrun 0066 SHM-window-fault oracle.
 > - **✅ Phase 1 — windowed venus SUSPEND+SNAPSHOT works.** The seated GNOME/venus desktop quiesced in
