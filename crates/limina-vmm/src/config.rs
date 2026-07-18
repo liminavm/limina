@@ -224,4 +224,10 @@ pub struct VmSpec {
     /// snapshot capability (the default). Mechanism only — the supervisor owns the trigger and the
     /// path; resuming from the file is a separate `restore` boot.
     pub snapshot_file: Option<PathBuf>,
+    /// Resume from this VM snapshot instead of a cold boot (M9 suspend/resume). When set, the
+    /// worker still builds the machine from the same config (same kernel/RAM/cpus — the snapshot
+    /// carries no device topology), then, inside `build_microvm`, overwrites guest RAM and restores
+    /// every vCPU + the in-kernel GIC from the file so the guest continues mid-execution. `None` =
+    /// cold boot. The decision to pass this is limina policy (durable per-VM Suspended status).
+    pub restore_file: Option<PathBuf>,
 }

@@ -413,8 +413,17 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         spec.shares.len(),
         spec.display.is_some(),
     );
-    let vmm = vmm::builder::build_microvm(&vmr, &mut event_manager, Some(shutdown_efd), worker_tx)
-        .map_err(|e| anyhow!("build_microvm: {e:?}"))?;
+    let vmm = vmm::builder::build_microvm(
+        &vmr,
+        &mut event_manager,
+        Some(shutdown_efd),
+        worker_tx,
+        spec.restore_file.clone(),
+    )
+    .map_err(|e| anyhow!("build_microvm: {e:?}"))?;
+    if let Some(path) = &spec.restore_file {
+        log::info!("restoring from snapshot {path:?}");
+    }
 
     // Runtime display resize: if a control socket was requested, wire it to the live virtio-gpu
     // device's resize handle. This is a dedicated UNIX socket, decoupled from the present/ack

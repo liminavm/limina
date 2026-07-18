@@ -124,6 +124,12 @@ struct Cli {
     #[arg(long)]
     snapshot_file: Option<PathBuf>,
 
+    /// Resume from a VM snapshot (M9): forward `--restore <path>` to the worker so it rebuilds the
+    /// machine and restores RAM + vCPUs + GIC instead of cold-booting. Pass the SAME machine config
+    /// (kernel/cmdline/cpus/ram) the VM was suspended with.
+    #[arg(long)]
+    restore: Option<PathBuf>,
+
     /// Capture the guest virtio-console (`hvc0`) output to this file — the robust
     /// bidirectional console. Pair with `console=hvc0` on the cmdline and
     /// --virtio-console-input to make hvc0 the guest's interactive `/dev/console`.
@@ -671,8 +677,9 @@ fn cli_from_definition(
         console_input: None,
         console_pty: false,
         // Managed-VM suspend wiring (persisted Suspended{snapshot} status) is M9.4; a definition
-        // never asks for an ad-hoc snapshot file today.
+        // never asks for an ad-hoc snapshot file or restore today.
         snapshot_file: None,
+        restore: None,
         virtio_console: None,
         virtio_console_input: None,
         window,
@@ -891,6 +898,11 @@ fn run_vm(cli: Cli) -> Result<()> {
     // trigger). Works for both the headless and windowed paths since it rides `args`/`base_args`.
     if let Some(path) = &cli.snapshot_file {
         args.push("--snapshot-file".into());
+        args.push(path_arg(path)?);
+    }
+    // VM resume (M9): forward the snapshot path so the worker restores instead of cold-booting.
+    if let Some(path) = &cli.restore {
+        args.push("--restore".into());
         args.push(path_arg(path)?);
     }
     let grace = Duration::from_secs(cli.shutdown_grace_secs);

@@ -201,6 +201,13 @@ struct Cli {
     /// and owns the path; resuming is a separate `--restore` boot.
     #[arg(long)]
     snapshot_file: Option<PathBuf>,
+
+    /// Resume from a VM snapshot written by an earlier `--snapshot-file` suspend (M9), instead of a
+    /// cold boot. Pass the SAME machine config (kernel/cmdline/cpus/ram) as the suspended VM plus
+    /// this flag; the worker rebuilds the machine and restores RAM + every vCPU + the GIC so the
+    /// guest continues mid-execution. Device state is not in the snapshot (re-established on resume).
+    #[arg(long)]
+    restore: Option<PathBuf>,
 }
 
 /// Parse a `WIDTHxHEIGHT` display mode string into `(width, height)`.
@@ -472,6 +479,7 @@ fn main() -> Result<()> {
         snd: !cli.no_snd,
         mic: cli.mic,
         snapshot_file: cli.snapshot_file,
+        restore_file: cli.restore,
     };
 
     krun::boot(&spec)

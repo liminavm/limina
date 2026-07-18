@@ -404,10 +404,16 @@ pub struct GuestConfig {
     /// [`with_data_disk`](GuestConfig::with_data_disk).
     pub data_disks: Vec<DataDisk>,
     /// Enable host-side VM snapshot/suspend (M9): the supervisor passes `--snapshot-file
-    /// <scratch>/snapshot` to the worker, so a [`Guest::snapshot`] (SIGUSR1) writes the
-    /// snapshot there and the supervisor relaunches the worker with `--restore <file>`. See
-    /// [`with_snapshot`](GuestConfig::with_snapshot) and [`Guest::snapshot_path`].
+    /// <scratch>/snapshot` to the worker, so a [`Guest::snapshot`] (SIGUSR1) writes the snapshot
+    /// there; the worker then exits "snapshotted" (126) and the supervisor stops (suspend =
+    /// teardown, NOT relaunch). See [`with_snapshot`](GuestConfig::with_snapshot) and
+    /// [`Guest::snapshot_path`].
     pub snapshot: bool,
+    /// Resume from a VM snapshot instead of cold-booting (M9): the supervisor forwards
+    /// `--restore <path>` to the worker. Set via [`restore_from`](GuestConfig::restore_from) with
+    /// the snapshot a previous [`Guest`]'s [`Guest::snapshot`] wrote — model the real suspend/resume
+    /// split (a second, separate boot reads the file). `None` = cold boot.
+    pub restore_from: Option<PathBuf>,
 }
 
 impl GuestConfig {
@@ -459,6 +465,7 @@ impl GuestConfig {
             shares: Vec::new(),
             data_disks: Vec::new(),
             snapshot: false,
+            restore_from: None,
         })
     }
 
@@ -545,6 +552,7 @@ impl GuestConfig {
             shares: Vec::new(),
             data_disks: Vec::new(),
             snapshot: false,
+            restore_from: None,
         })
     }
 
@@ -633,6 +641,7 @@ impl GuestConfig {
             shares: Vec::new(),
             data_disks: Vec::new(),
             snapshot: false,
+            restore_from: None,
         })
     }
 
@@ -672,6 +681,7 @@ impl GuestConfig {
             shares: Vec::new(),
             data_disks: Vec::new(),
             snapshot: false,
+            restore_from: None,
         })
     }
 
@@ -733,6 +743,7 @@ impl GuestConfig {
             shares: Vec::new(),
             data_disks: Vec::new(),
             snapshot: false,
+            restore_from: None,
         })
     }
 
@@ -941,6 +952,15 @@ impl GuestConfig {
     /// <scratch>/snapshot`, so [`Guest::snapshot`] can trigger a suspend + `--restore` cycle.
     pub fn with_snapshot(mut self) -> GuestConfig {
         self.snapshot = true;
+        self
+    }
+
+    /// Resume from a VM snapshot (M9): the supervisor forwards `--restore <path>` to the worker so
+    /// it restores RAM + vCPUs + GIC instead of cold-booting. Pass the snapshot file a previous
+    /// suspended [`Guest`] wrote (from [`Guest::snapshot_path`]); keep that Guest alive until this
+    /// one has booted, since the file lives in its scratch dir. Use the SAME cpus/ram/boot config.
+    pub fn restore_from(mut self, snapshot: impl Into<PathBuf>) -> GuestConfig {
+        self.restore_from = Some(snapshot.into());
         self
     }
 
@@ -1368,11 +1388,16 @@ impl Guest {
             None
         };
 
-        // VM snapshot file (M9 suspend/resume): the worker writes the snapshot here on a
-        // SIGUSR1 trigger, and the supervisor relaunches the worker with `--restore <path>`.
+        // VM snapshot file (M9 suspend/resume): the worker writes the snapshot here on a SIGUSR1
+        // trigger, then exits "snapshotted" (126) and the supervisor stops (no relaunch).
         let snapshot_path = cfg.snapshot.then(|| scratch.join("snapshot"));
         if let Some(path) = &snapshot_path {
             cmd.arg("--snapshot-file").arg(path);
+        }
+        // VM resume (M9): forward `--restore <path>` so the worker restores instead of cold-booting.
+        // The path points into a *previous* Guest's scratch (that Guest must stay alive until we boot).
+        if let Some(path) = &cfg.restore_from {
+            cmd.arg("--restore").arg(path);
         }
 
         // Display: capture the scanout into the scratch dir (auto-cleaned on Drop). Whenever a
@@ -2057,12 +2082,12 @@ impl Guest {
         )
     }
 
-    /// Trigger a host-side VM snapshot/suspend (M9): send `SIGUSR1` to the running worker,
-    /// which quiesces the vCPUs, serializes vCPU + GIC + RAM state to the `--snapshot-file`,
-    /// and exits with the "snapshotted" disposition (126). The supervisor then relaunches the
-    /// worker with `--restore <file>`, resuming the guest. Requires [`GuestConfig::with_snapshot`].
-    /// Returns once the signal is sent — await the effect via [`Guest::wait_for_supervisor_log`]
-    /// (the restore marker) and [`Guest::wait_for`] (the guest continuing).
+    /// Trigger a host-side VM snapshot/suspend (M9): send `SIGUSR1` to the running worker, which
+    /// quiesces the vCPUs, serializes vCPU + GIC + RAM state to the `--snapshot-file`, and exits
+    /// with the "snapshotted" disposition (126); the supervisor reports the VM suspended and stops
+    /// (suspend = teardown, NOT relaunch). Requires [`GuestConfig::with_snapshot`]. Returns once the
+    /// signal is sent — await the exit via [`Guest::wait_supervisor_exit`], then resume in a fresh
+    /// boot with [`GuestConfig::restore_from`] the [`Guest::snapshot_path`].
     pub fn snapshot(&self) -> Result<()> {
         anyhow::ensure!(
             self.snapshot_path.is_some(),
