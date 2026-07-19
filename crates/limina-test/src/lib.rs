@@ -2482,7 +2482,9 @@ fn tail(s: &str, n: usize) -> String {
 
 /// APFS copy-on-write clone `src` → `dst` (`cp -c`): instant and space-shared, so a test
 /// can boot a *writable* copy of the multi-GB image without mutating or duplicating it.
-fn cow_clone(src: &Path, dst: &Path) -> Result<()> {
+/// Public: suspend/restore tests use it to preserve a suspended guest's disk past its
+/// scratch teardown (the restore must resume against the exact suspended filesystem).
+pub fn cow_clone(src: &Path, dst: &Path) -> Result<()> {
     let status = Command::new("cp")
         .arg("-c")
         .arg(src)
