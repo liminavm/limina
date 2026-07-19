@@ -275,6 +275,57 @@ Image layouts: after replay, images are in `UNDEFINED` while the guest believes 
 transitions every replayed image to `GENERAL` after content restore (correct if conservative on
 UMA/KK); v3 tracks last-known layout by watching barriers/renderpass final layouts at record time.
 
+**P2 SHIPPED (2026-07-19, virglrenderer 0038 + libkrun 0079): full VkDeviceMemory content
+capture.** Three premises were verified in source before writing a line, and each is
+load-bearing:
+
+1. **vn defers blob creation until `vkMapMemory`** (`vn_device_memory.c`: "By deferring bo
+   creation until now"), so a never-mapped VkDeviceMemory is a plain host allocation — in
+   neither the guest-RAM dump nor the P1 mapped-blob capture. Textures, render targets and
+   non-staging buffers are exactly this class; it is why a P1 restore replayed the object
+   graph but the pixels were garbage.
+2. **KK advertises exactly ONE memory type** (`kk_physical_device.c`: HOST_VISIBLE |
+   HOST_COHERENT | HOST_CACHED | DEVICE_LOCAL) — every allocation is host-mappable by
+   construction; the design's "non-host-visible fails closed" branch is dead on KK.
+3. **`kk_bo.c` maps the WHOLE placement heap** (a buffer at offset 0 spanning it, `bo->cpu =
+   contents`), and `kk_image_plane_create_texture` places textures in that heap at bind
+   offsets — so `vkMapMemory` bytes ARE the raw (tiled) texture storage, and a byte-copy
+   restore is faithful on the same device+driver (the snapshot fingerprint's job).
+
+Mechanism: `virgl_renderer_limina_memory_census(ctx)` returns (object id, allocation size)
+pairs for every live **capturable** memory; read/write copy bytes through a
+`vkMapMemory`/`vkUnmapMemory` round-trip. *Capturable* excludes (a) `exported && !mtl_shm`
+map_ptr blobs — already host-mapped by the export (second map invalid) and captured by the
+P1 blob path — and (b) imports (`VkImportMemoryResourceInfoMESA` → new `gkvm_res_imported`
+flag, plus cross-context `imported_iosurface`) — they alias another storage, captured at its
+source. The KK scanout host-pointer import of a memory's *own* dedicated image's IOSurface
+stays capturable: that is how the framebuffer pixels survive. libkrun: payload v2 grows a
+`memory_contents` (ctx, mem id, bytes) section; capture runs per venus context after its
+journal export; restore writes after the context's wire drain (allocs exist) and **before**
+`replay_end` (rings consume parked commands the moment they start).
+
+RED/GREEN: `vkcontent.py` (now a gate-test client) stages a pattern in a never-mapped device
+buffer via GPU copy, zeroes the staging blob, and copy-backs after restore — run 32 red
+(1044480/1048576 bytes wrong: fresh zeroed heap), runs 33/34/36/37/38 green. Seated-desktop
+capture: 22 memories / 117 MiB across 4 venus contexts; DRIVER_OK held ~330–400 ms total.
+
+Deferred out of P2 deliberately: **pipeline-cache seeding** (perf-only — the pipelines
+themselves are CREATE-class and replay; seeding only speeds the replay) and the **GENERAL
+layout transition pass** (KK lowers to Metal where layouts are no-ops; five green runs and
+the earlier eyeball showed no layout-class corruption — revisit if one does). Known-lost:
+contents of a `private_bo` tiled image bound to venus host-pointer-imported memory (the
+wgpu-only KK path) — the texture lives in a side heap the memory bytes don't alias.
+
+**OPEN intermittent (run 35, 1-in-6): post-restore heartbeat stall.** The fd-hold beat due
+*exactly at the snapshot quiesce* never completed after restore (holder alive, zero beats,
+gnome-shell fine, replay clean — 32 recoverable drops). Candidate mechanism: §6's "drain
+rings to `cur == tail`" step is **not implemented** (only the fence ledger drains), so a
+ring command mid-execution at capture can tear across the ring/reply blobs. Unconfirmed —
+the window ought to be µs-scale. The test now (a) gates the suspend on an advancing
+heartbeat and (b) dumps `vkfdhold.out` + a guest `eu-stack` of the live holder on the next
+stall, which will separate dead-ring (vn_relax spin) from lost-reply (poll/futex) from
+innocent (nanosleep). P3 item.
+
 ## 9. Phasing
 
 - **P0 — recording infrastructure.** Classification table, journal + tombstones in vkr, rutabaga
@@ -287,10 +338,14 @@ UMA/KK); v3 tracks last-known layout by watching barriers/renderpass final layou
   glitch (stale textures redraw within frames on a compositor).
 - **P2 — full content capture.** All VkDeviceMemory captured/restored; pipeline cache seeding.
   Success = visually clean seamless resume, eyeball-verified. This is the ship gate for M9.3.
-- **P3 — hardening.** Device-local GPU-copy path, layout tracking, journal compaction (dset
-  replace semantics), zstd for contents, multi-context/app-diversity soak (games, video players,
-  Firefox), host-reboot L2 (restore from file with caches cleared / worker cold-started), and the
-  upstream conversation (venus migration RFC with the classification table).
+- **P3 — hardening.** Ring drain-to-tail before capture + the run-35 heartbeat-stall
+  intermittent (forensics armed in the gate test), layout tracking, journal compaction (dset
+  replace semantics; RECORDING-class closure noting), zstd for contents, pipeline-cache
+  seeding, `private_bo` tiled-image contents (wgpu path), multi-context/app-diversity soak
+  (games, video players, Firefox), host-reboot L2 (restore from file with caches cleared /
+  worker cold-started), and the upstream conversation (venus migration RFC with the
+  classification table). (The "device-local GPU-copy path" is dead on KK — one memory type,
+  all host-visible.)
 
 ## 10. Testing
 

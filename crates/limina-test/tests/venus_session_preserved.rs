@@ -176,6 +176,21 @@ fn seated_gnome_session_survives_snapshot_restore() {
     });
     eprintln!("content venus client parked (pattern staged in non-blob device memory)");
 
+    // The fd-hold heartbeat must be ADVANCING at suspend time, or the post-restore
+    // beat assert can blame the restore for a wedge that predates it (run 35: the
+    // holder froze at beat 1, seconds after READY and long before the snapshot).
+    g1.ssh_poll(
+        "test \"$(grep -c 'FDHOLD BEAT' /tmp/vkfdhold.out)\" -ge 2",
+        Duration::from_secs(30),
+    )
+    .unwrap_or_else(|e| {
+        let out = g1.ssh_exec("cat /tmp/vkfdhold.out").unwrap_or_default();
+        panic!(
+            "the fd-hold heartbeat wedged BEFORE the suspend (pre-existing guest-side \
+             stall, not a restore failure): {e}\n--- vkfdhold.out ---\n{out}"
+        );
+    });
+
     // Identity baseline: the resumed guest must present the SAME kernel boot and the
     // SAME compositor process.
     let boot_id = ssh_retry(&g1, "cat /proc/sys/kernel/random/boot_id");
@@ -345,12 +360,20 @@ fn seated_gnome_session_survives_snapshot_restore() {
     std::thread::sleep(Duration::from_secs(12));
     let beat_b = ssh_retry(&g2, "grep -c 'FDHOLD BEAT' /tmp/vkfdhold.out");
     let (a, b): (u64, u64) = (beat_a.parse().unwrap_or(0), beat_b.parse().unwrap_or(0));
-    assert!(
-        b > a,
-        "the fd-hold client's heartbeat stalled after restore ({a} -> {b}) — its \
-         re-created venus contexts do not service submissions (the freed-while-\
-         exported blob replay is broken)"
-    );
+    if b <= a {
+        let out = g2.ssh_exec("cat /tmp/vkfdhold.out").unwrap_or_default();
+        // Where is it wedged? A stack of the live (not aborted) holder tells the
+        // restore-bug class apart: vn_relax spin = dead ring; futex/poll = lost
+        // reply; nanosleep = the beat loop is fine and something else is wrong.
+        let stack = g2
+            .ssh_exec(&format!("sudo eu-stack -p {holder_pid} 2>&1 | head -40"))
+            .unwrap_or_default();
+        panic!(
+            "the fd-hold client's heartbeat stalled after restore ({a} -> {b}) — its \
+             re-created venus contexts do not service submissions\n\
+             --- vkfdhold.out ---\n{out}\n--- eu-stack ---\n{stack}"
+        );
+    }
 
     // The content oracle: trigger the parked client's copy-back and require the
     // pattern it staged in a never-mapped (non-blob) VkDeviceMemory to have
