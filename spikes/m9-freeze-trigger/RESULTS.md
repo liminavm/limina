@@ -298,3 +298,49 @@ an enhanced-tier follow-up that makes the leniency a no-op.
 image_view=43 memory=29 cmd_buf=26 pipeline=19 cmd_pool=17 shader=16 dpool=14 pipe_layout=9
 semaphore=9 dset_layout=8 pipe_cache=8 sampler=7 buffer_view=2 (queue/fence/device/instance/
 phys_dev ×1). Idle desktop ≈ GPU-silent; bursts ~11 submits / 5 fences; req==ret, outstanding=0.
+
+## ⚠️ M9.3 round 10 (eyeball) — 0072 VALIDATED, but "seamless" was overclaimed: the SESSION RESTARTS (2026-07-19)
+
+Second consecutive clean restore (windowed, human-verified): SSH back ~12 s, same boot_id, CRTC
+live, zero GPUTRACE error counts at steady state, and the user eyeballed the kept window: **live
+and responsive, no black screen, no garbled frames**. The transport fix (libkrun 0072 sticky queue
+re-arm) is fully validated — the virtio-gpu wedge and its D-contagion are gone.
+
+**But round 9's "gnome-shell re-creates its venus context / session preserved" was WRONG.** The
+window came back on **GDM**, not the user session: ~17 s after restore the pre-suspend gnome-shell
+**SIGABRTs** (core dumped, pid 1270), every Wayland client dies ("Lost connection to Wayland
+compositor" — the injected gnome-calculator continuity marker died with it), and GNOME starts a
+fresh session. What looked like recovery was a **restart**.
+
+**Abort origin (root-caused from the core, both ends corroborated):** guest gdb was not installed;
+`eu-stack` saw only the signal-handler re-raise, but `dnf install gdb` + `gdb -batch bt` through
+the signal frame gave the full chain:
+
+```
+abort()
+vn_relax                      ← mesa venus ring-wait loop hit its dead-ring abort threshold (~17 s)
+vn_ring_submit_locked
+vn_ring_submit_command
+vn_image_init → vn_image_create → vn_CreateImage        (zink resource_object_create)
+st_TexSubImage ← cogl glyph-cache upload ← clutter_text (the clock repainting text!)
+```
+
+The host restores with an **empty GPU world** — worker log at the abort moment:
+`rutabaga state: 0 contexts, 0 resources`, `vkr state: renderer not initialized`; then the dying
+shell's teardown bounces off it (3× `CtxDestroy → ErrRutabaga(InvalidContextId)`,
+`unknown_ctx=+3 unknown_res=+93` — the stale-id burst), and the *replacement* session builds a
+fresh world (`submits=+154, fences 67/67 req==ret`). So: the guest's mesa still believes in its
+pre-suspend venus context and rings; the host no longer services them; the first real submission
+after thaw (a glyph texture for the clock) spins in `vn_relax` until mesa's dead-ring abort.
+
+**Where this leaves seamless (the actual M9.3 goal):** the transport layer is done; the remaining
+gap is **host-side venus state loss across restore**. The options, in the order worth trying:
+1. **Retain-and-replay** (the plan of record): recreate the vkr context/rings/objects at restore
+   from the bill of materials above — the guest then never notices.
+2. A guest-side reset/notify path (e.g. virtio-gpu PM ops + mesa VK_ERROR_DEVICE_LOST plumbing) —
+   upstream-friendly but turns every venus app into a device-lost survivor; compositors mostly
+   are not.
+
+Forensics recipe that worked (keep): `coredumpctl dump PID -o core` + scp out; `eu-stack --core`
+for thread census (no gdb needed); `gdb -batch -ex "bt 40"` unwinds THROUGH the signal frame where
+eu-stack stops; correlate guest-local time with the worker log's UTC (+3 h from -03).
