@@ -324,7 +324,47 @@ ring command mid-execution at capture can tear across the ring/reply blobs. Unco
 the window ought to be µs-scale. The test now (a) gates the suspend on an advancing
 heartbeat and (b) dumps `vkfdhold.out` + a guest `eu-stack` of the live holder on the next
 stall, which will separate dead-ring (vn_relax spin) from lost-reply (poll/futex) from
-innocent (nanosleep). P3 item.
+innocent (nanosleep). P3 item. **UPDATE (same day): almost certainly the sync-epoch wedge
+below** — a wedged ctx-3 ring thread blocks the context worker's proxy socket, and ALL
+contexts' virtqueue traffic queues behind it on the one gpu worker thread; the L2 greens
+were runs where mutter had no frame in flight at the freeze.
+
+**P2.1 ROOT-CAUSED + FIXED (2026-07-19, virglrenderer 0039 + libkrun 0080): the windowed
+black-screen wedge was pre-suspend-epoch SYNC-OBJECT state.** The headless L2 gate went
+green while the real windowed eyeball stayed black — the pixel path only fails where
+frames flow. Host thread sampling (`sample` of the live worker; lldb can't attach
+non-interactively) told the whole story in three stacks: the gpu worker stuck in
+`proxy_socket_receive_reply_internal ← CREATE_BLOB` (every context's control-queue traffic
+queues behind ONE stuck proxy), the ctx-3 context worker stuck in
+`vkr_dispatch_vkWaitRingSeqnoMESA → cond_wait` (guest wants head ≥ N; tail ≥ N but head
+stalled), and the ctx-3 ring thread stuck INSIDE a consumed command:
+`vkWaitSemaphoreResourceMESA → KK GetSemaphoreFdKHR → kk_timeline_wait →
+MTLSharedEvent waitUntilSignaledValue` — waiting on a signal that belonged to the
+pre-suspend epoch. Signal ops are queue submits (TRANSIENT, never journaled), so every
+replayed VkFence/VkSemaphore is freshly-created while the resumed guest's belief (guest
+RAM) is the quiesced pre-suspend epoch where everything had retired.
+
+Fix: **sync fast-forward at restore, after the wire drain, before `replay_end`** (rings
+consume immediately on start). vkr_fence/vkr_semaphore now carry their owning device
+(+ `is_timeline` from `VkSemaphoreTypeCreateInfo`) captured at create;
+`vkr_renderer_sync_export` captures fence signaled-status + timeline counter values
+(opaque blob, payload v3 `sync_states` section); `vkr_renderer_sync_restore` re-applies
+them — timelines via `vkSignalSemaphore`, captured-signaled fences and ALL binary
+semaphores via empty queue submits (the submit's execution flips the underlying KK
+timeline exactly like a real signal; every replayed binary is unsignaled so the extra
+signal is valid) — then drains the queue so nothing races the thawing guest. Result:
+desktop restores visually (user-confirmed; a WebGL demo's textures came back intact —
+the P2 content capture proving itself end-to-end).
+
+Two operational scars from the same session: (a) **never log on the venus hot path** — the
+first wedge diagnostic logged every `wait_ring_seqno` entry, and that dispatch runs per
+exported frame sync fd (`vn_create_sync_file`), ~424/s under a WebGL load → visible frame
+stutter; the log now fires only after a wait blocks >500 ms (the wedge case it exists
+for). (b) The **suspend-button pulse is latched by a suspended guest** — bracketing an
+already-asleep guest without `LIMINA_BRACKET_NO_BUTTON` re-delivered the pulse at resume
+and re-suspended the restored guest into an unwakeable sleep (run-11 class, reproduced
+operationally). Known cosmetic follow-up: the guest cursor comes back as a small dot
+(cursor plane/resource state is not journaled) — P3.
 
 ## 9. Phasing
 
