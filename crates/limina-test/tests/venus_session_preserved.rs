@@ -36,6 +36,11 @@ use limina_test::{Guest, GuestConfig};
 /// margin without meaningfully slowing a green run.
 const ABORT_WINDOW: Duration = Duration::from_secs(35);
 
+/// The fd-census ctypes plumbing (staged next to the holder, which imports it).
+const VKFDCYCLE: &str = include_str!("../guest/vkfdcycle.py");
+/// Parks a freed-while-exported cross-context blob across the suspend (ctx-15 hazard).
+const VKFDHOLD: &str = include_str!("../guest/vkfdhold.py");
+
 /// `ssh_exec` with a few retries: a loaded host (the suite runs several VMs) can
 /// drop a single connection (exit 255) right after the banner poll succeeded.
 fn ssh_retry(guest: &Guest, cmd: &str) -> String {
@@ -108,6 +113,38 @@ fn seated_gnome_session_survives_snapshot_restore() {
     // Let the session settle: the shell's venus world (rings, glyph caches, scanouts)
     // should be steady-state, matching the real suspend-a-working-desktop scenario.
     std::thread::sleep(Duration::from_secs(10));
+
+    // --- Seed the ctx-15 replay hazard (multi-context; eyeball item 3) ---
+    // A second venus client parks a cross-context blob whose EXPORTING VkDeviceMemory
+    // it has already freed while the import keeps the resource attached — Xwayland's
+    // window-buffer flow. Replaying its context needs the freed alloc back before the
+    // blob create (virgl journal pin + retained free); pre-fix this was a structural
+    // CREATE_BLOB failure that killed the whole replay.
+    ssh_retry(
+        &g1,
+        &format!("cat > /tmp/vkfdcycle.py <<'VKFDCYCLE_PY_EOF'\n{VKFDCYCLE}\nVKFDCYCLE_PY_EOF"),
+    );
+    ssh_retry(
+        &g1,
+        &format!("cat > /tmp/vkfdhold.py <<'VKFDHOLD_PY_EOF'\n{VKFDHOLD}\nVKFDHOLD_PY_EOF"),
+    );
+    ssh_retry(
+        &g1,
+        "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
+         setsid nohup python3 /tmp/vkfdhold.py Venus </dev/null >/tmp/vkfdhold.out 2>&1 & \
+         echo spawned",
+    );
+    g1.ssh_poll(
+        "grep -q 'FDHOLD READY' /tmp/vkfdhold.out",
+        Duration::from_secs(60),
+    )
+    .unwrap_or_else(|e| {
+        let out = g1.ssh_exec("cat /tmp/vkfdhold.out").unwrap_or_default();
+        panic!("the fd-hold venus client never reached READY: {e}\n--- vkfdhold.out ---\n{out}");
+    });
+    let holder_pid = ssh_retry(&g1, "pgrep -f 'python3 /tmp/vkfdhold.py' | head -1");
+    assert!(!holder_pid.is_empty(), "no vkfdhold pid after READY");
+    eprintln!("fd-hold venus client parked (pid {holder_pid})");
 
     // Identity baseline: the resumed guest must present the SAME kernel boot and the
     // SAME compositor process.
@@ -258,6 +295,31 @@ fn seated_gnome_session_survives_snapshot_restore() {
         shell_pid_after, shell_pid,
         "gnome-shell is a DIFFERENT process after restore — the session restarted \
          instead of being preserved (the seamless-resume goal)"
+    );
+
+    // The multi-context oracle: the parked fd-hold client (freed-while-exported
+    // cross-context blob) must be the same live process AND its heartbeats — real
+    // host-touching allocs on its venus ring — must still be advancing. A partial
+    // replay that lost only ITS context leaves gnome-shell intact (all the asserts
+    // above pass) while this client's next ring submission wedges in vn_relax and
+    // aborts: exactly what run 22 proved a pid check alone cannot see. (Don't grep
+    // host logs for "replay FAILED" here — the worker's stderr does not land in
+    // the supervisor-log file this reads; run 22 proved that oracle blind too.)
+    let holder_after = ssh_retry(&g2, "pgrep -f 'python3 /tmp/vkfdhold.py' | head -1");
+    assert_eq!(
+        holder_after, holder_pid,
+        "the fd-hold venus client did not survive the restore (vn_relax abort — \
+         its re-created contexts were unusable)"
+    );
+    let beat_a = ssh_retry(&g2, "grep -c 'FDHOLD BEAT' /tmp/vkfdhold.out");
+    std::thread::sleep(Duration::from_secs(12));
+    let beat_b = ssh_retry(&g2, "grep -c 'FDHOLD BEAT' /tmp/vkfdhold.out");
+    let (a, b): (u64, u64) = (beat_a.parse().unwrap_or(0), beat_b.parse().unwrap_or(0));
+    assert!(
+        b > a,
+        "the fd-hold client's heartbeat stalled after restore ({a} -> {b}) — its \
+         re-created venus contexts do not service submissions (the freed-while-\
+         exported blob replay is broken)"
     );
 
     let outcome = g2

@@ -248,6 +248,29 @@ drops the whole entry there too). Run 20: NOTED drops 112–170 → **0**, total
 (all RECORDING-class `vkCmd*` stale refs — same treatment is possible later; much smaller storm,
 still recoverable). Full HVF suite green on 0075+0076+0077.
 
+**Eyeball item 3 FIXED (2026-07-19, virglrenderer 0037 + libkrun 0078): the ctx-15 structural
+CREATE_BLOB failure was a pruned blob-backing allocation.** Root-caused with a new in-test
+reproducer (`vkfdhold.py`, now part of the gate test): a cross-context dmabuf export whose
+exporting memory is freed and dedicated buffer destroyed while the import keeps the resource
+attached — Xwayland's window-buffer flow. Three prunes had to be tamed: (1) the guest's free of
+an exported memory (pin + defer + retain the freeing command, which replays after the blob create
+by seq order); (2) the destroy of the alloc's **dedicated** buffer/image (the pin covers the
+closure — a surviving alloc entry is useless if its dedicated-info lookup fails at replay); and
+(3) the exporter's **per-context detach**, which must NOT release the pin — the release belongs
+to the **global** resource unref, driven by the libkrun rutabaga journal through the new
+`limina_journal_unpin` FFI. Oracle lesson (runs 21–25): liveness checks must **use the parked
+object** — a sleeping holder survives a partial replay, and fresh allocs beat on a healthy ring
+while the parked import is broken; the honest heartbeat is a host round-trip naming the parked
+memory (`vn_GetDeviceMemoryCommitment`). RED/GREEN: run 24 red on pre-pin virgl with the wild
+signature; runs 30/31 green.
+
+**Operational lesson (2026-07-19): a snapshot is SINGLE-USE against its exact post-suspend
+disk.** The `eyeball-m93` repro pair was destroyed by restoring the same snapshot twice: the
+second resume wrote stale btrfs metadata over the disk the first resume had advanced (`parent
+transid verify failed — wanted 196 found 206` → unbootable). M9.4's persisted
+`Suspended{snapshot}` status must invalidate the snapshot on first resume (or restore onto a
+copy-on-write clone).
+
 Image layouts: after replay, images are in `UNDEFINED` while the guest believes otherwise. v1
 transitions every replayed image to `GENERAL` after content restore (correct if conservative on
 UMA/KK); v3 tracks last-known layout by watching barriers/renderpass final layouts at record time.
