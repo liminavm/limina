@@ -91,6 +91,12 @@ if [ "$back" = 1 ]; then
   # oracles are the real signal; the SHM-window fault below is EXPECTED-SILENT (dead oracle — the
   # window is hv_vm_map'd on restore, never faults) and is NOT part of the verdict.
   say "=== GUEST WEDGE PROBES (over SSH) ==="
+  say "--- ⭐ D-STATE SWEEP (decisive: predict a kworker parked on commit_work/fence, gnome-shell stays S) ---"
+  $SSH "ps axo pid,stat,wchan:32,comm | awk 'NR==1 || \$2 ~ /^D/'" 2>/dev/null | tee -a "$LOG"
+  say "--- D-state kworker stacks (what fence/queue are they blocked on?) ---"
+  $SSH 'for p in $(ps axo pid,stat | awk "\$2 ~ /^D/ {print \$1}"); do echo "== pid $p =="; sudo cat /proc/$p/stack 2>/dev/null | head -10; done | head -60 || echo "(no D-state procs)"' 2>/dev/null | tee -a "$LOG"
+  say "--- ⭐ DRM atomic commit state (is a commit stuck? which FB does the CRTC think it scans?) ---"
+  $SSH 'sudo cat /sys/kernel/debug/dri/0/state 2>/dev/null | head -40 || echo "(no dri/0/state — debugfs off or driver mismatch)"' 2>/dev/null | tee -a "$LOG"
   say "--- gnome-shell / Xwayland state (R=run D=uninterruptible S=sleep; wchan=blocked-on) ---"
   $SSH "ps -eo stat,wchan:24,comm | egrep 'gnome-shell|Xwayland|gnome-remote|mutter' || echo '(no compositor procs)'" 2>/dev/null | tee -a "$LOG"
   say "--- gnome-shell kernel stack (is it parked in a virtio-gpu/dma-fence wait?) ---"

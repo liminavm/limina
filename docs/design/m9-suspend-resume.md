@@ -180,7 +180,9 @@ guest, or it should be read as the *small-guest* case — see §M9.4.
 >   (graceful, not `assert` at `vkr_context.h:223`) + device-local content sweep. Host-only: Step 0 + Step 2.
 >   Guest-agent: Step 2 fallback only. Guest kernel: Step 3. Guest Mesa + host virgl: Step 4.
 >
-> **↪ Step 2 REVISED (Fable r3):** the r3 spike showed the fault is a **dead virtio-gpu transport** (fresh
+> **↪ Step 2 REVISED (Fable r3) — ✅ CONFIRMED by round 5 (see the round-5 block + snapshot-v4 spec below;
+> unbind/rebind FALLBACK now judged LIKELY-DEAD, since unkillable `vram_mmap` waiters block driver removal):**
+> the spike showed the fault is a **dead virtio-gpu transport** (fresh
 > worker's device never re-driven to `DRIVER_OK`), not a missing scanout or an idle compositor. So v1 floor =
 > **host-side GPU transport-state restore** — serialize the GPU device's MMIO register file (queue
 > desc/avail/used addrs, `ready`, features, `device_status`) + per-queue processed indices at snapshot (the
@@ -235,6 +237,94 @@ guest, or it should be read as the *small-guest* case — see §M9.4.
 >   /sys/kernel/debug/dri/0/state` (stuck commit) + host log shows **zero** virtio-gpu queue activity. That
 >   combination = transport-dead confirmed. (Alt branch: if the guest shows *no* pending commit, the
 >   resume-notification/output-re-enable path is the gap — an even cheaper fix.)
+>
+> ### FLOOR SPIKE — round 4 (2026-07-18, debug confirmation) — NEITHER theory cleanly; needs a clean time-series
+> Host confirms the restore mechanics: **`restore: injecting guest wake (KEY_WAKEUP) to resume from s2idle`**,
+> all 4 vCPUs resume. At **t≈12 s** post-restore (clean machine oracles):
+> - **NO GPU `kworker` in D-state** (sweep header, zero `D` rows; one transient `D` proc was in
+>   `anon_pipe_read`, unrelated). ⇒ **Fable r3's "commit_work parked on a virtio-gpu fence" is ABSENT at 12 s.**
+> - **DRM CRTC DISABLED, not stuck:** `dri/0/state` → `crtc-0 enable=0 active=0`, planes `crtc=(null) fb=0`,
+>   connector `Virtual-1 crtc=(null)`. Display pipeline **off**; mutter did NOT re-enable the output.
+> - **Host: ZERO virtio-gpu command traffic** post-restore (debug). Guest isn't submitting GPU commands.
+> - gnome-shell: normal `nanosleep`; dmesg clean.
+>
+> **BUT by t≈3 min the load climbed to ~23 and `ps` itself D-hung** (reading `/proc` of many D-state procs
+> blocks) — something D-piles up over minutes that was absent at 12 s. **CONFOUNDED:** the run's own
+> `vulkaninfo` liveness probe (self-D-hangs on the GPU) + my concurrent SSH poking contaminate the 3-min
+> sample. Honest state = **AMBIGUOUS**; two live hypotheses:
+> - **(A) resume-notification gap** — display never re-enabled (logind `PrepareForSleep(false)` / mutter output
+>   re-enable never fires); no GPU touch ever. Cheap fix (drive the resume / re-enable). Favoured by the clean
+>   12-s data (CRTC off, no GPU touch).
+> - **(B) delayed transport-dead** — display re-enables later, first GPU touch then D-hangs (Fable r3, just
+>   after 12 s). Favoured by the 3-min D-pileup (if it's real and not self-inflicted). → transport-restore.
+> - **NEXT (round 5, clean time-series):** one automated run, NO manual poking, NO `vulkaninfo` probe (remove
+>   it — it self-confounds); a single persistent SSH samples at t=5/15/30/60/120 s: CRTC `active=`, D-state
+>   count + wchan, host GPU-traffic. Decides A vs B — CRTC stays off + D-count 0 = (A); CRTC flips `active=1`
+>   or a virtio-gpu-fence `kworker` appears = (B).
+>
+> ### ✅ FLOOR SPIKE — round 5 (2026-07-18, clean time-series, Fable-run) — RESOLVED: (B) delayed transport-dead
+> A non-perturbing time-series (`spikes/m9-freeze-trigger/m93-round5-timeseries.sh`; no `vulkaninfo` probe, one
+> ssh per tick) + D-safe `/proc/*/stat` forensics settles the A/B question decisively as **(B)**, and proves
+> the whole causal chain with kernel stacks.
+> - **CRTC DID re-enable** — flipped `enable=1 active=1` between t=15 s and t=30 s (so hypothesis (A)
+>   "display never re-enabled" is DEAD). But it was **fbcon/fbdev**, not a mutter commit.
+> - **The parked commit worker is REAL and captured verbatim:** a `kworker` in
+>   `virtio_gpu_queue_ctrl_sgs → virtio_gpu_cmd_resource_flush → virtio_gpu_primary_plane_update →
+>   drm_atomic_helper_commit_tail → drm_fbdev_shmem_helper_fb_dirty` — a display flush waiting forever for free
+>   slots in the GPU **control virtqueue that nothing drains**. It holds the DRM modeset lock (so the t=60 s
+>   debugfs read itself wedged in `drm_modeset_lock → __drm_state_dump`).
+> - **Three successive gnome-shell instances** (gdm respawn-loop) each D in
+>   `virtio_gpu_vram_mmap → drm_gem_mmap` (a blob-map mmap waiting on a host response that never comes), with
+>   sibling threads stuck in `exit_mm → do_exit` — they took fatal signals but **cannot finish dying** (the
+>   mmap-stuck thread pins the mm) → **unkillable corpses**. `ps`/`systemd-journal` then go D in
+>   `__access_remote_vm` reading those corpses' `/proc/*/cmdline` — the **D-contagion** that drove round-4's
+>   3-min pileup (so that pileup was REAL, not just the `vulkaninfo`/poking confound). Load climbed to 42+.
+> - **Guest journal:** the original compositor (pid 1282) died **SIGABRT + core dump at ≈25-30 s post-resume**
+>   (timing consistent with the venus ring watchdog, `vn_common.c:281-289`); gdm respawn-loops from there.
+> - **Host is the clincher:** all 4 vCPUs `resumed from snapshot at pc=`, `KEY_WAKEUP` injected, **zero**
+>   post-restore GPU traffic (only the boot-time `virgl_flags = 0x35b`). MMIO ISR-read histogram: net 26 617 /
+>   blk 12 125 / i2c 1 480 / vsock 1 379 (all re-negotiated + interrupt-alive on resume) — **virtio-gpu slot
+>   `a008`: 0 interrupts, ever.** The device is dead. (Two log caveats recorded by Fable: the MMIO *write* arm
+>   has no `debug!` so kicks are invisible — `vstate.rs:483-488`; and round-4's `0xa00d060` 1 Hz reads were
+>   **vsock** ISR polls, not GPU — a red herring.)
+> - **Root cause (confirmed):** the restored guest believes the GPU is `DRIVER_OK` with live queues (M9.2
+>   quiesce exception, `lib.rs:423-424`), but the fresh worker's device was **never activated** — no
+>   `DRIVER_OK` write ever arrives on restore — so commands queue into a ring nothing drains → vq fills →
+>   `queue_ctrl_sgs`/`vram_mmap` waiters park in D → compositor aborts → gdm respawn-loop → each respawn wedges
+>   unkillably at its first blob map → fbcon grabs the CRTC and its flush parks too (modeset lock hostage) →
+>   D-contagion → load 42+. Round-4's clean t≈12 s was simply **before the ≈25-30 s cascade onset**; both
+>   rounds are consistent.
+> - **Two earlier recommendations now REFUTED by this data:** (1) "crash→respawn converges" is FALSE without
+>   the transport fix — respawn doesn't just fail, it **accumulates unkillable D-state corpses and
+>   self-poisons the whole guest** (the floor without a fix is *worse* than a black screen). (2) The agent
+>   unbind/rebind fallback is **probably unworkable** — driver removal can't complete while unkillable
+>   `vram_mmap` waiters hold GEM/device refs and the modeset lock is hostage. Demote it from "fallback" to
+>   "likely dead against this failure mode."
+> - **Stray finding:** phase-2 `--console` capture came back **empty (0 bytes)** on the restore path — would
+>   have been the stall-PC oracle; worth a look someday.
+>
+> ### ✅ v1 BUILD CONFIRMED (round 5): virtio-gpu TRANSPORT-STATE restore — snapshot v4 spec
+> With a live transport, the recovery chain becomes benign: the parked flush completes (error responses for
+> vanished resources still consume descriptors and **signal their fences**), the corpses' mmaps complete and
+> their `exit_mm` unwedges, the compositor's abort still fires once, and the **next** gdm respawn does a clean
+> venus init against a responsive device + empty-but-functional rutabaga → working greeter (~10-30 s, session
+> lost). Snapshot must carry (**VERSION 3→4**), for each device with `device_status != 0` at capture (today:
+> exactly virtio-gpu):
+> 1. **MMIO transport register file** — `device_status`, negotiated feature pages, per-queue `QueueNum`,
+>    `ready`, desc/avail/used ring GPAs, `interrupt_status`. (The rings are guest RAM — already snapshotted.)
+> 2. **Device-side queue progress** — the `Queue` next-avail/next-used counters, so the device resumes
+>    consuming exactly where the restored rings expect.
+> 3. **Restore-side ACTIVATION** — run the device activation (worker thread + queue-event wiring) that a live
+>    boot triggers on the `DRIVER_OK` write, before the vCPUs release (`builder.rs:1234-1243`, beside GIC/GPIO).
+> 4. **Snapshot-side quiesce refinement** — drain the GPU control queue/fences before capture (the planned
+>    "drain fences") so the captured queue state is empty/consistent (vq must not be mid-command).
+> 5. **RED-test keystone** — confirm each command path against a missing resource/context returns an error
+>    response **and signals its fence** (not a dropped descriptor); the `ErrInvalidResourceId` paths in
+>    `devices/src/virtio/gpu/virtio_gpu.rs` look right but the fence-on-error semantics need a RED test — the
+>    entire recovery rests on error responses still completing.
+> **Gate:** re-run this exact spike on the transport-restore build; decisive oracles = abort fires once
+> (journal), **no** D-state `vram_mmap` corpses accumulate, gdm respawn reaches a rendered greeter (eyeball /
+> window capture), load stays sane.
 >
 > ### FLOOR SPIKE — round 1 result (2026-07-18, `spikes/m9-freeze-trigger/m93-floor-windowed.sh`) [⚠️ CONTAMINATED — see correction above]
 > Ran the M9.2 bracket on a **windowed venus** enhanced guest (Fedora-44.enhanced.test, 4 vCPU/4 GiB),
@@ -532,6 +622,37 @@ patch 0035, `virtio_gpu.rs:715` — not M9 work.)*
 **Done test:** a GPU-enabled enhanced guest snapshots + restores; the seated **virgl** desktop rebuilds
 (baseline); then the **venus** desktop rebuilds with correct texture contents (not just empty objects), no
 parked-fence hang, pixel-verified (`iosdump` + human).
+
+> **DECISION RECORD (2026-07-18) — transport-state restore attempted, then removed; the wedge is venus
+> host-state loss.** An earlier round-5 diagnosis blamed the post-restore venus wedge on a *dead virtio-gpu
+> transport* (the fresh worker built the GPU in INIT) and a host-side **snapshot-carried transport-state
+> restore** was built (snapshot v4). RED-first validation overturned that premise: with the restore-side
+> replay disabled the guest *self-revived* the GPU (fresh worker's Status register went DRIVER_OK on its
+> own), and an R4 re-run of the windowed-venus timeseries **still wedged with the replay ON**. Cause, cited
+> against the guest kernel (`7.1.2-limina16k`): `virtio_mmio_restore → virtio_device_restore` runs for every
+> device on s2idle thaw; the GPU has no driver PM ops so it's the only device left at status `0xf` (the only
+> one *captured*), but the bus still resets + re-negotiates it on thaw → the fresh worker activates from the
+> guest's own writes. So the transport comes back regardless; the real wedge is **lost host-side venus
+> context/resource state** (fresh virglrenderer has no vkr contexts / venus ring blob / VRAM-hostmem blob
+> mappings → stale-resource submissions never signal their fence → gnome-shell D-hangs in
+> `virtio_gpu_vram_mmap`). That is the venus retain-and-replay above — this doc's §4b, unchanged.
+>
+> **What landed instead (libkrun patches 0069/0070):** snapshot v4 format + capture of each DRIVER_OK
+> device's transport (diagnostics + the substrate for a feature-drift fail-closed guard) + restore-side
+> layout validation. The restore-side **negotiation replay** and the save-side **queue drain** were both
+> removed: replay is redundant (guest self-revives), and the drain's `avail==used` oracle is wrong for
+> RX-style queues (they sit at avail>used at idle) while its fence-consistency purpose is mooted by the
+> thaw-reset. The negotiation-replay code stays reachable in git history (libkrun branch, pre-`ec09351`) if
+> guest-uncooperative snapshots are ever needed.
+>
+> **Commitment:** the **s2idle bracket is the sole production snapshot path.** The raw SIGUSR1 path cannot be
+> a product path without the removed replay (no thaw ⇒ nothing revives the transports for a guest that never
+> knew it was snapshotted); it remains the **L1 test vehicle** for vCPU/GIC/RAM mechanics only.
+>
+> **Follow-up (worker-quiesce, hardening):** the drain accidentally provided one real thing — no device
+> worker writes guest RAM during `dump_ram` (torn dump; loudest as net RX from gvproxy). Replace it with
+> "stop the writers, not the rings": park the separate-thread writers (GPU renderer / blk) around the dump.
+> Narrow on the production s2idle path (the guest froze net/blk to INIT; only the GPU worker is live).
 
 ### M9.4 — Full-snapshot feature + suspend/resume UX
 Named snapshots (save / restore / **clone** / roll back / delete); VMGenID reseed on clone; one-click

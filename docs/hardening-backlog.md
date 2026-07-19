@@ -325,6 +325,23 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   reproduce; the F44 enhanced desktop was validated end-to-end (16k + venus + patched mutter 50.1,
   pixel-verified; see `docs/images.md` §Component versions and [[limina-enh-delivery]]).
 
+## M9 snapshot hardening (from the 2026-07-18 transport-restore removal)
+
+- **Worker-quiesce during `dump_ram` (torn-dump race).** A device worker writing guest RAM while the
+  RAM dump runs can tear the dump (used.idx advanced, payload half-copied). Pausing vCPUs stops new
+  kicks but not asynchronous writers already in motion — loudest is **net RX from gvproxy** (delivers
+  regardless of vCPU state) on the raw path; on the s2idle production path it narrows to the **GPU
+  renderer** (the guest froze net/blk to INIT before we snapshot). Fix = *stop the writers, not the
+  rings*: park the separate-thread writers (GPU renderer / blk) for the dump's duration. If
+  `save_snapshot` runs on the main event-loop thread, EventManager-dispatched devices quiesce for free;
+  verify the thread inventory vs source. Pre-dates M9.3; the removed drain accidentally masked it.
+- **`Queue::len` unwraps the avail index (`queue.rs:443`).** Any spurious kick of a **not-ready** queue
+  (e.g. the balloon free-page-reporting queue when `F_REPORTING` is masked, patch 0059) reaches
+  `Balloon::process_frq → Queue::pop → Queue::len`, which `unwrap()`s `avail_idx` on an unconfigured
+  ring → panic (exit 101). The M9.3 drain removal deleted the caller that tripped it, but the unwrap is
+  a live balloon-hardening item (also on the upstreaming triage list) — `Queue::len`/`is_empty` should
+  fail soft on a not-ready/invalid ring.
+
 ---
 
 When a milestone's loose ends are all closed, fold the remainder back into the roadmap milestone
