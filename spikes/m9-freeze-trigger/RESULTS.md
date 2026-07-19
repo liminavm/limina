@@ -247,3 +247,54 @@ only remaining variable.
 ```
 bash spikes/m9-freeze-trigger/b4-clock.sh   # (job-tmp copy; ~75 min: 62 min freeze + wake + compare)
 ```
+
+## ⭐ M9.3 rounds 5–9 — ROOT CAUSE: dead GPU queues after the no-PM-ops bus-fallback resume (2026-07-19)
+
+The five instrumentation probes (libkrun 0071 `gpu/trace.rs` + virglrenderer 0033 vkr dump; vehicle
+`m93-floor-windowed.sh`) were built to count the presumed stale-ctx storm hitting the fresh renderer.
+They found the opposite, and the chain ended at a **register-level root cause one layer below venus**:
+
+- **Round 6 (counted):** post-restore the guest sends the GPU device **nothing** — 902 ticks of
+  `submits=+0 unknown_ctx=+0 fences_req=+0 outstanding=0`. No stale-ctx storm; pure silence.
+- **Round 7 (guest stacks):** gnome-shell AND a fresh `vulkaninfo` canary D-state in
+  `virtio_gpu_vram_mmap` (uninterruptible; guest `timeout` can't kill it). `PM: resume devices took
+  0.003s` — dpm_resume completed; **virtio_blk logged its re-probe, the GPU logged nothing**.
+  OS otherwise healthy (same boot_id, vsock RSTs); degrades progressively (~30 min → new SSH hangs).
+- **Round 8 (MMIOTRACE, the direct observation):** on s2idle thaw every device re-programs its queue
+  geometry (input 42 writes, balloon/snd 28, vsock 21, net 14, blk/i2c/rng 7) **except the gpu:
+  `Status 0x0 → 0x1 → 0x3 → features → 0xb → 0xf` and ZERO queue writes.** DRIVER_OK driven onto a
+  device whose queue registers were never programmed → dead control queue → every GPU command waits
+  forever → `vram_mmap` D-hang → CRTC never re-lights → D-contagion (mmap_lock → logind/sshd).
+- **Kernel citation (v7.1.2 sources, fetched):** `virtgpu_drv.c` has **no PM ops** (no freeze/restore,
+  even at 7.1.2); `virtio.c virtio_device_restore_priv()` **always resets the device**, re-negotiates
+  features, calls `drv->restore` *if present*, else just `virtio_device_ready()` — queues never
+  re-programmed. So **upstream virtio-gpu s2idle is architecturally broken** against any
+  spec-faithful device (reset must clear queue state). The snapshot angle was incidental — an
+  in-place guest s2idle should wedge the GPU identically.
+- **Retro-explanations:** the removed transport-restore replay was *necessary but not sufficient* —
+  and also *mis-timed*: the guest's thaw reset wipes replay-time registers (the old
+  R4-with-replay-ON "CRTC enable=1 then D-hang" was requested software state, not command flow).
+  R2's fenced-dd GREEN was blind to dead queues (`fb_deferred_io_fsync` waits for the flush *work*,
+  not device consumption; one small write can't fill the vring), so both R2 arms were false-GREEN
+  on queue liveness — GPU_STATUS=0xf proved *status* re-negotiation only.
+
+**FIX (round 9): device-side sticky queue re-arm** (mechanism in libkrun `mmio.rs`, in the spirit of
+the existing QueueNum=0 leniency): track `queues_programmed` per negotiation cycle; if a driver
+reaches DRIVER_OK having programmed **no** queue and a previous activation's register file exists
+(`activated_queue_regs` — survives reset), re-arm the queues from it, ring cursors from restored
+RAM's `used.idx` (completed stays completed; the backlog re-processes). The restore path seeds the
+stash from the snapshot's captured transport state (`validate_transport_states`). Covers both the
+snapshot restore AND in-place s2idle; inert on normal boots (any queue write sets the flag) and for
+every PM-ops driver. The upstreamable deep fix — guest kernel virtio-gpu freeze/restore PM ops — is
+an enhanced-tier follow-up that makes the leniency a no-op.
+
+**Instrumentation gotchas (recorded):** a bare `RUST_LOG` directive list silences all other targets
+(GPUTRACE = `krun_devices`, vkr dump = `krun_rutabaga_gfx` at info) — use
+`warn,limina_vmm=info,krun_vmm=info,krun_rutabaga_gfx=info`. Host-side timebox every guest probe
+(`ssht`); a D-state guest process shrugs off guest-side `timeout`.
+
+**Retain-and-replay bill of materials (probe 4, healthy seated GNOME):** 1 vkr context
+("gnome-shell") = 3 rings, 1 sync_queue, 18 resources, **1137 objects**: dset=770 buffer=93 image=62
+image_view=43 memory=29 cmd_buf=26 pipeline=19 cmd_pool=17 shader=16 dpool=14 pipe_layout=9
+semaphore=9 dset_layout=8 pipe_cache=8 sampler=7 buffer_view=2 (queue/fence/device/instance/
+phys_dev ×1). Idle desktop ≈ GPU-silent; bursts ~11 submits / 5 fences; req==ret, outstanding=0.

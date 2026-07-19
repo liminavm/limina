@@ -32,7 +32,11 @@ say "cloning enhanced image $SRC (COW)…"; cp -c "$SRC" "$DISK" || { say "clone
 # bracket (info) + the SHM-WINDOW FAULT (warn) + restore surface. ROUND 2: override to
 # `limina_vmm=info,krun_vmm=info` to also get the per-vCPU "resumed from snapshot at pc=" lines +
 # venus/Mesa. Console capture pins WHERE the guest kernel resume stalls.
-export RUST_LOG="${RUST_LOG:-limina_vmm=info,krun_vmm=info}"
+# ROUND 5 LESSON: a bare directive list (limina_vmm=info,krun_vmm=info) leaves every OTHER target
+# at error-only, silently suppressing the [GPUTRACE] reporter + per-event stale-ctx warns (target
+# krun_devices) AND the vkr context dump (vkr_log = virgl INFO → target krun_rutabaga_gfx). The
+# bare `warn` default restores production visibility; rutabaga at info carries the dump lines.
+export RUST_LOG="${RUST_LOG:-warn,limina_vmm=info,krun_vmm=info,krun_rutabaga_gfx=info}"
 # ROUND 4+ (M9.3 probes, libkrun 0071 + virglrenderer 0033): counted GPU evidence. GPU_TRACE=1
 # emits one [GPUTRACE] aggregate line per 2s tick (submit/unknown_ctx/unknown_res deltas + the
 # fence ledger with outstanding ages); GPU_TRACE_VKR=1 additionally dumps the vkr context table
@@ -80,7 +84,11 @@ cleanup; sleep 3
 
 ### PHASE 2 — restore into a fresh worker; measure the SHM-window fault + OS survival
 say "PHASE2: restore the windowed venus guest into a FRESH worker (a WINDOW will appear again)"
-LIMINA_EXTRA_ARGS="--ssh-port $PORT --restore $SNAP --console $P2CONS" \
+# ROUND 8: LIMINA_MMIO_TRACE=1 (phase 2 only — phase-1 boot negotiation is noise) logs every
+# transport register write post-restore: the direct observation of whether the guest re-programs
+# each device's queue addresses on s2idle thaw (prediction: blk/net DO — driver PM ops re-create
+# vqs; virtio-gpu does NOT — no PM ops → DRIVER_OK re-driven onto DEAD queues = the wedge).
+LIMINA_MMIO_TRACE=1 LIMINA_EXTRA_ARGS="--ssh-port $PORT --restore $SNAP --console $P2CONS" \
   spikes/venus-draw-probe/boot-enhanced-efi-kk.sh >"$JOB/tmp/m93-p2-boot.out" 2>&1 &
 BOOTPID2=$!
 say "restore launched; watching for the SHM-window fault + SSH survival (90s)…"
@@ -99,23 +107,38 @@ if [ "$back" = 1 ]; then
   # SESSION wedged (predicted: silent virtio-gpu ring/fence wait, no crash/log). These guest-side
   # oracles are the real signal; the SHM-window fault below is EXPECTED-SILENT (dead oracle — the
   # window is hv_vm_map'd on restore, never faults) and is NOT part of the verdict.
+  # ROUND 7: every guest probe is host-side timeboxed (round 6: a probe that touched the GPU
+  # went D-state — guest `timeout` can't kill it — and stalled the script 30 min; later even
+  # FRESH ssh sessions hung as the guest degraded, so guest-side timeouts are not enough).
+  ssht(){ local t=$1; shift; $SSH "$@" 2>/dev/null & local p=$!; ( sleep "$t"; kill "$p" 2>/dev/null ) & local k=$!; wait "$p" 2>/dev/null; local rc=$?; kill "$k" 2>/dev/null; wait "$k" 2>/dev/null; return $rc; }
   say "=== GUEST WEDGE PROBES (over SSH) ==="
-  say "--- ⭐ D-STATE SWEEP (decisive: predict a kworker parked on commit_work/fence, gnome-shell stays S) ---"
-  $SSH "ps axo pid,stat,wchan:32,comm | awk 'NR==1 || \$2 ~ /^D/'" 2>/dev/null | tee -a "$LOG"
-  say "--- D-state kworker stacks (what fence/queue are they blocked on?) ---"
-  $SSH 'for p in $(ps axo pid,stat | awk "\$2 ~ /^D/ {print \$1}"); do echo "== pid $p =="; sudo cat /proc/$p/stack 2>/dev/null | head -10; done | head -60 || echo "(no D-state procs)"' 2>/dev/null | tee -a "$LOG"
+  say "--- ⭐ EARLY: PM resume trace (did dpm_resume finish? which device resumed last?) ---"
+  ssht 30 "sudo dmesg 2>/dev/null | grep -aE 'PM:|s2idle|suspend|resume|virtio|Freezing|Restarting' | tail -25" | tee -a "$LOG"
+  say "--- ⭐ EARLY: arm hung-task detector (15s) + dmesg stream + a venus CANARY (expected to D-state; its hung-task report names the exact stall stack) ---"
+  ssht 20 'sudo sysctl -w kernel.hung_task_timeout_secs=15 >/dev/null 2>&1; sudo -u claude XDG_RUNTIME_DIR=/run/user/$(id -u) nohup vulkaninfo >/tmp/vkinfo.out 2>&1 & echo "(venus canary launched)"' | tee -a "$LOG"
+  DMSTREAM="$JOB/tmp/m93-p2-dmesg-stream.log"
+  $SSH 'sudo dmesg -w' >"$DMSTREAM" 2>/dev/null &
+  DMPID=$!
+  say "dmesg streaming → $DMSTREAM; giving the canary 50s to trip the hung-task detector…"
+  sleep 50
+  say "--- ⭐ D-STATE SWEEP (canary should be D; stacks below name the wedge) ---"
+  ssht 30 "ps axo pid,stat,wchan:32,comm | awk 'NR==1 || \$2 ~ /^D/'" | tee -a "$LOG"
+  say "--- D-state kernel stacks (what fence/queue are they blocked on?) ---"
+  ssht 30 'for p in $(ps axo pid,stat | awk "\$2 ~ /^D/ {print \$1}"); do echo "== pid $p ($(cat /proc/$p/comm 2>/dev/null)) =="; sudo cat /proc/$p/stack 2>/dev/null | head -14; done | head -80 || echo "(no D-state procs)"' | tee -a "$LOG"
   say "--- ⭐ DRM atomic commit state (is a commit stuck? which FB does the CRTC think it scans?) ---"
-  $SSH 'sudo cat /sys/kernel/debug/dri/0/state 2>/dev/null | head -40 || echo "(no dri/0/state — debugfs off or driver mismatch)"' 2>/dev/null | tee -a "$LOG"
+  ssht 30 'sudo cat /sys/kernel/debug/dri/0/state 2>/dev/null | head -40 || echo "(no dri/0/state — debugfs off or driver mismatch)"' | tee -a "$LOG"
   say "--- gnome-shell / Xwayland state (R=run D=uninterruptible S=sleep; wchan=blocked-on) ---"
-  $SSH "ps -eo stat,wchan:24,comm | egrep 'gnome-shell|Xwayland|gnome-remote|mutter' || echo '(no compositor procs)'" 2>/dev/null | tee -a "$LOG"
+  ssht 30 "ps -eo stat,wchan:24,comm | egrep 'gnome-shell|Xwayland|gnome-remote|mutter' || echo '(no compositor procs)'" | tee -a "$LOG"
   say "--- gnome-shell kernel stack (is it parked in a virtio-gpu/dma-fence wait?) ---"
-  $SSH 'p=$(pgrep -x gnome-shell | head -1); [ -n "$p" ] && sudo cat /proc/$p/stack 2>/dev/null | head -12 || echo "(no gnome-shell pid / no stack)"' 2>/dev/null | tee -a "$LOG"
+  ssht 30 'p=$(pgrep -x gnome-shell | head -1); [ -n "$p" ] && sudo cat /proc/$p/stack 2>/dev/null | head -12 || echo "(no gnome-shell pid / no stack)"' | tee -a "$LOG"
   say "--- dmesg tail: virtio_gpu / drm timeouts, fence waits ---"
-  $SSH "sudo dmesg 2>/dev/null | egrep -i 'virtio.?gpu|drm|fence|timeout|gpu hang' | tail -12 || echo '(none)'" 2>/dev/null | tee -a "$LOG"
+  ssht 30 "sudo dmesg 2>/dev/null | egrep -i 'virtio.?gpu|drm|fence|timeout|gpu hang' | tail -12 || echo '(none)'" | tee -a "$LOG"
   say "--- journal (last 3 min): compositor / session errors ---"
-  $SSH "sudo journalctl -b --since '-3 min' --no-pager 2>/dev/null | egrep -i 'gnome-shell|mutter|venus|vulkan|virtio|gpu|fail|error' | tail -15 || echo '(none)'" 2>/dev/null | tee -a "$LOG"
-  say "--- venus liveness in the SEATED session (systemd --user env; non-login ssh is a FALSE negative) ---"
-  $SSH 'u=$(id -u); busctl --user 2>/dev/null >/dev/null; sudo -u claude XDG_RUNTIME_DIR=/run/user/$u vulkaninfo 2>/dev/null | grep -m1 "deviceName" || echo "(vulkaninfo empty over ssh — inconclusive; eyeball is the oracle)"' 2>/dev/null | tee -a "$LOG"
+  ssht 30 "sudo journalctl -b --since '-3 min' --no-pager 2>/dev/null | egrep -i 'gnome-shell|mutter|venus|vulkan|virtio|gpu|fail|error' | tail -15 || echo '(none)'" | tee -a "$LOG"
+  say "=== ⭐ HUNG-TASK REPORTS from the dmesg stream (the exact guest stall stacks) ==="
+  kill "$DMPID" 2>/dev/null; wait "$DMPID" 2>/dev/null
+  grep -aA16 "blocked for more" "$DMSTREAM" 2>/dev/null | head -70 | tee -a "$LOG" || true
+  [ -s "$DMSTREAM" ] || say "  (dmesg stream empty — sshd may already be degraded)"
 fi
 say "=== per-vCPU RESUME PCs (needs RUST_LOG=krun_vmm=info) — did the vCPUs come back? ==="
 grep -iE 'resumed from snapshot at pc=' "$P2LOG" 2>/dev/null | tail -8 | tee -a "$LOG" || true
@@ -125,6 +148,14 @@ say "=== SHM-WINDOW FAULT (DEAD ORACLE — expected silent, NOT part of the verd
 if [ -n "$fault" ]; then say "  FAULT SEEN → $fault (SURPRISING — the window is normally hv_vm_map'd on restore; investigate)"; else say "  (silent, as expected: the window is hv_vm_map'd on restore so a touch never faults — this line proves nothing)"; fi
 say "=== phase2 ⭐ [GPUTRACE] COUNTED EVIDENCE (stale-ctx submissions / fence ledger / fresh-renderer dump) ==="
 grep -E '\[GPUTRACE\]' "$P2LOG" 2>/dev/null | tail -35 | tee -a "$LOG" || say "  (no GPUTRACE lines)"
+say "=== phase2 ⭐ [MMIOTRACE] post-thaw transport writes per device (did the guest re-program THIS device's queues?) ==="
+for dev in $(grep -aoE '\[MMIOTRACE\] [a-z0-9_-]+' "$P2LOG" 2>/dev/null | awk '{print $2}' | sort -u); do
+  QW=$(grep -ac "\[MMIOTRACE\] $dev write 0x\(80\|84\|90\|94\|a0\|a4\|44\)" "$P2LOG" 2>/dev/null || echo 0)
+  ST=$(grep -a "\[MMIOTRACE\] $dev write 0x70" "$P2LOG" 2>/dev/null | tail -1 | grep -oE '= 0x[0-9a-f]+' || echo '= none')
+  say "  $dev: queue-geometry writes=$QW last-status $ST"
+done
+say "--- gpu MMIOTRACE sequence (full) ---"
+grep -a "\[MMIOTRACE\] gpu" "$P2LOG" 2>/dev/null | head -40 | tee -a "$LOG" || say "  (no gpu transport writes post-restore)"
 say "=== phase2 per-event stale-ctx/resource warns (first 10) ==="
 grep -E 'ErrRutabaga\(Invalid(Context|Resource)Id\)|ErrInvalid(Context|Resource)Id' "$P2LOG" 2>/dev/null | head -10 | tee -a "$LOG" || say "  (none)"
 say "=== phase2 worker log — restore/wake/venus/error (tcpproxy filtered) ==="; grep -iE 'restoring from snapshot|injecting guest wake|SHM-WINDOW FAULT|resumed from snapshot|Mesa:|venus|virgl_renderer|error|panic|segfault' "$P2LOG" 2>/dev/null | grep -viE 'tcpproxy|no route to host|GPUTRACE' | tail -25 | tee -a "$LOG"
@@ -142,6 +173,9 @@ say "  SHM-window GPU fault: $([ -n "$fault" ] && echo 'YES (unexpected — inve
 if [ "$KEEP_WINDOW" = 1 ]; then
   say "  → DESKTOP recovery is the HUMAN oracle: eyeball the window. Kill later: pkill -9 -f m93-floor.raw"
 else
-  say "cleanup (LIMINA_KEEP_WINDOW=1 to keep the window for a human eyeball)"; cleanup; rm -f "$DISK" "$SNAP"
+  say "cleanup (LIMINA_KEEP_WINDOW=1 to keep the window for a human eyeball)"; cleanup
+  # ROUND 8: keep DISK+SNAP by default — they enable fast restore-only iteration (a matched
+  # clone+snapshot pair); LIMINA_KEEP_ARTIFACTS=0 to delete.
+  [ "${LIMINA_KEEP_ARTIFACTS:-1}" = 1 ] || rm -f "$DISK" "$SNAP"
 fi
 say "spike done."
