@@ -545,8 +545,18 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                     log::error!("bracket: trigger read failed: {e}; suspend bracket disabled");
                     return;
                 }
-                log::info!("bracket: SIGTSTP received; pulsing the guest suspend button");
-                crate::suspend::pulse();
+                // LIMINA_BRACKET_NO_BUTTON: the caller already arranged the guest-side suspend
+                // (e.g. the L2 test schedules `systemctl suspend` in-guest because a fresh seated
+                // session can swallow the button). Pulsing the button TOO means the guest gets two
+                // suspend requests; the one that lands after userspace freezes replays on resume
+                // and re-suspends the restored guest into an unwakeable sleep (run-11 MMIO trace:
+                // thaw renegotiates every device, then everything freezes back to 0).
+                if std::env::var_os("LIMINA_BRACKET_NO_BUTTON").is_some() {
+                    log::info!("bracket: SIGTSTP received; button pulse suppressed (env), waiting for guest-initiated quiesce");
+                } else {
+                    log::info!("bracket: SIGTSTP received; pulsing the guest suspend button");
+                    crate::suspend::pulse();
+                }
 
                 // Poll the quiesce oracle until every virtio device has reset to INIT, or give up.
                 const POLL: std::time::Duration = std::time::Duration::from_millis(250);

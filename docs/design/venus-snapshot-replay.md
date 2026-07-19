@@ -214,6 +214,40 @@ same pid, zero coredumps, most of the world replayed), but:
    diagnostics are INFO-level and the default `warn` run captured nothing). Repro pair kept:
    `eyeball-m93.{raw,snap}` at the repo root (gitignored; ~49 GB — delete after P2).
 
+**P2 progress (2026-07-19):** item 1 is FIXED — the worker drains the fence ledger to zero before
+capture (libkrun 0075; `save_snapshot` reordered so GPU capture precedes the GIC save, letting
+drain-time completion IRQs latch). The ~50% SSH-after-restore flake alongside it was a *double
+suspend trigger* (the test's in-guest `systemctl suspend` + the bracket's button pulse; whichever
+lands post-freeze replays on resume and re-suspends the restored guest unwakeable) — fixed with
+`LIMINA_BRACKET_NO_BUTTON`. One open intermittent remains: run 12 resumed, then live ring traffic
+hit `vn_cs_decoder_set_fatal` (ctx 3) ~1 s later → vn_relax abort → shell core. Run 13 (identical
+build) was fully green, and its drop census (libkrun 0076: per-class histogram + cmd_type) showed
+all 167 replay drops were **NOTED-class stale dset/bind writes** — the benign kind — with **zero
+RING-class drops**, so the "dropped reply-position entry skews the ring" theory is unconfirmed.
+
+**ROOT-CAUSED + FIXED (2026-07-19, libkrun 0077): the resumed guest raced the staged replay.**
+Run 14's red log was decisive: the first *live* ring command after replay-complete was a genuine
+`vkExecuteCommandStreamsMESA` (valid resource id, in-bounds offset/size — not framing garbage)
+whose **nested stream** decoded as `vkCreateInstance` nonsense, i.e. the host read stale bytes
+where the guest had just written its post-resume command stream. The staged replay runs
+asynchronously at the thaw's DRIVER_OK re-activation while the vCPUs are already running; when
+guest userspace thawed before the replay had re-established the blob GPA mappings, mesa's writes
+landed in not-yet-remapped shmem and were lost. Fix: `Gpu::activate` blocks the guest's DRIVER_OK
+write — a vCPU MMIO exit during `dpm_resume`, while guest userspace is still frozen — on a
+`restore_done` condvar the worker flips after the staged replay completes (~360 ms observed;
+120 s timeout escape hatch). Deadlock-free: the replay's `GpuAddMapping` messages are serviced by
+the VMM worker thread, which needs nothing the blocked vCPU holds. Validated 5/5 green
+(`venus-sess-loop.sh` runs 15–19) vs ~50% red before, barrier engaged every run.
+
+**Eyeball item 2 FIXED (2026-07-19, virglrenderer 0036): the dset stale storm dies at record
+time.** A `vkUpdateDescriptorSets` journal entry was keyed only by the touched set, so a
+referenced view/sampler/buffer dying never pruned it — the 11k stale writes were entries whose
+references died pre-snapshot. Now every referenced object is also a key; a NOTED entry dies with
+its first dead key, which is behavior-equivalent to the replay-time drop (one dead reference
+drops the whole entry there too). Run 20: NOTED drops 112–170 → **0**, total drops 700+ → 31
+(all RECORDING-class `vkCmd*` stale refs — same treatment is possible later; much smaller storm,
+still recoverable). Full HVF suite green on 0075+0076+0077.
+
 Image layouts: after replay, images are in `UNDEFINED` while the guest believes otherwise. v1
 transitions every replayed image to `GENERAL` after content restore (correct if conservative on
 UMA/KK); v3 tracks last-known layout by watching barriers/renderpass final layouts at record time.

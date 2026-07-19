@@ -92,6 +92,10 @@ fn seated_gnome_session_survives_snapshot_restore() {
         .with_net()
         .with_supervisor_log()
         .with_snapshot();
+    // Inherited by supervisor -> worker: this test suspends from INSIDE the guest, so
+    // the bracket must not add a second (button) suspend trigger — see the bracket
+    // comment below.
+    std::env::set_var("LIMINA_BRACKET_NO_BUTTON", "1");
     eprintln!("booting the seated enhanced venus desktop (snapshot-armed)");
     let mut g1 = Guest::boot(&cfg1).expect("spawning the limina supervisor");
     let banner = g1
@@ -125,6 +129,10 @@ fn seated_gnome_session_survives_snapshot_restore() {
     // session state (observed: a fresh seated session ignores it and no device ever
     // leaves DRIVER_OK), so trigger the s2idle from INSIDE the guest, scheduled a
     // beat ahead and inhibitor-ignoring, then arm the bracket for quiesce+snapshot.
+    // The bracket must NOT also pulse the button (LIMINA_BRACKET_NO_BUTTON, inherited
+    // by the worker): with two suspend triggers, whichever lands after userspace
+    // freezes replays on resume and re-suspends the restored guest into an
+    // unwakeable sleep — the ~50% SSH-after-restore flake (run-11 MMIO trace).
     ssh_retry(
         &g1,
         "sudo systemd-run --on-active=2 systemctl suspend -i >/dev/null 2>&1; echo armed",
@@ -199,6 +207,18 @@ fn seated_gnome_session_survives_snapshot_restore() {
             match g2.read_capture() {
                 Ok(f) => eprintln!("display capture: {}x{} frame present", f.width, f.height),
                 Err(e) => eprintln!("display capture: none ({e})"),
+            }
+            // The host-side net oracle: did the restored guest transmit ANYTHING?
+            let gvlog =
+                std::fs::read_to_string(g2.scratch_dir().join("gvproxy.log")).unwrap_or_default();
+            eprintln!("--- gvproxy log: {} lines, tail ---", gvlog.lines().count());
+            for line in gvlog.lines().rev().take(6).collect::<Vec<_>>().iter().rev() {
+                eprintln!("{}", &line[..line.len().min(200)]);
+            }
+            eprintln!("--- restore supervisor log tail ---");
+            let slog = g2.supervisor_log();
+            for line in slog.lines().rev().take(20).collect::<Vec<_>>().iter().rev() {
+                eprintln!("{line}");
             }
             cleanup();
             panic!("restored guest never became reachable over SSH: {e}");
