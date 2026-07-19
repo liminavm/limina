@@ -74,9 +74,16 @@ fn seated_gnome_session_survives_snapshot_restore() {
     // virtio_i2c/virtio_snd, so those two devices hold out the s2idle quiesce and the
     // suspend bracket aborts. The test needs neither battery nor audio — drop them on
     // BOTH sides of the round-trip (restore requires an identical device topology).
+    //
+    // The MAC is pinned on both sides: the restored guest keeps the NIC identity it read
+    // at boot (it does not re-probe config space mid-resume), and production restore
+    // carries the managed VM's MAC forward the same way. A fresh random MAC on the
+    // restore worker orphans the guest's cached one and SSH never comes back.
+    const NET_MAC: &str = "5a:94:ef:44:0f:aa";
     let devices = |cfg: GuestConfig| {
         cfg.with_supervisor_arg("--no-snd")
             .with_supervisor_arg("--no-battery")
+            .with_net_mac(NET_MAC)
     };
 
     // --- Guest 1: seated venus desktop, snapshot-armed ---
@@ -148,6 +155,16 @@ fn seated_gnome_session_survives_snapshot_restore() {
     drop(g1);
 
     let cleanup = || {
+        // LIMINA_KEEP_ARTIFACTS=1 preserves the snapshot+disk pair on failure so a
+        // failing restore can be re-run by hand (the pair is the whole repro).
+        if std::env::var_os("LIMINA_KEEP_ARTIFACTS").is_some() {
+            eprintln!(
+                "keeping artifacts: snap={} disk={}",
+                snap.display(),
+                disk.display()
+            );
+            return;
+        }
         let _ = std::fs::remove_file(&snap);
         let _ = std::fs::remove_file(&disk);
     };
@@ -170,6 +187,19 @@ fn seated_gnome_session_survives_snapshot_restore() {
     let banner = g2
         .wait_for_ssh_banner(Duration::from_secs(120))
         .unwrap_or_else(|e| {
+            // Liveness forensics: the console tail shows whether the guest thaw
+            // completed (vs a wedged resume), and a present frame proves the
+            // compositor is alive even with the network down.
+            let console = g2.console();
+            let tail: Vec<&str> = console.lines().rev().take(30).collect();
+            eprintln!("--- restored guest console tail ---");
+            for line in tail.iter().rev() {
+                eprintln!("{line}");
+            }
+            match g2.read_capture() {
+                Ok(f) => eprintln!("display capture: {}x{} frame present", f.width, f.height),
+                Err(e) => eprintln!("display capture: none ({e})"),
+            }
             cleanup();
             panic!("restored guest never became reachable over SSH: {e}");
         });

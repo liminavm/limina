@@ -157,6 +157,63 @@ fresh-renderer, log why. The session restarts — today's behavior as the gracef
 5. Resume vCPUs (existing 0072 transport re-arm runs as-is). The guest's parked submission is
    consumed; seqno advances; `vn_relax` wakes; **nobody aborts**.
 
+**When replay runs (learned in P1, 2026-07-19): at the guest thaw's re-activation, not before
+`gate.open()`.** The payload is *staged* on the device during `build_microvm` and the GPU worker
+replays it when the guest's `DRIVER_OK` re-activates the device. Replaying before the vCPUs run
+is doubly wrong: (a) the thaw resets the GPU (0072's bus fallback `reset → features → DRIVER_OK`),
+and the host-side `reset_session`/`reset_session_state` would wipe the just-replayed world; (b) the
+`GpuAddMapping` messages replay emits are serviced by a VMM thread that only starts *after*
+`build_microvm` returns — a deadlock. At activation both hazards are gone, no queue command has
+run yet, and the guest kernel is still mid-thaw so userspace can't touch mapped blobs before the
+mappings are re-established. `replay_begin/end` run only for contexts that own a vkr wire journal
+(the kernel's ctx 1 is virgl/none — no host venus state). On success the device journal adopts the
+payload's op list (warm baseline for the next suspend); `reset_session` clears the journal.
+
+Three more P1 lessons, each worth its scar:
+
+- **Stale references are normal; context-FATAL must not be sticky during replay.** A retained
+  `vkUpdateDescriptorSets` can reference an object destroyed pre-snapshot (its create was pruned);
+  the lookup miss trips the context-wide FATAL and, left sticky, early-bails every later entry
+  (one stale descriptor write killed 4k+ entries). The write is semantically droppable (dangling
+  reference before, unwritten slot after — garbage-if-accessed either way): virgl clears the FATAL
+  after a failed replay entry while `ctx->replaying`, libkrun counts it as a *recoverable* wire
+  failure. Only structural rutabaga failures (context/blob/map) fail the replay. A seated GNOME
+  snapshot replays with ~150–190 dropped stale entries out of ~4k.
+- **`replay_begin` must poll: context creation is asynchronous.** The proxied create goes to the
+  same-process render-server *thread*; the direct `limina_*` calls overtake it. libkrun retries
+  `replay_begin` (1 ms × 2000) — each FFI call re-takes the renderer lock, letting the server in.
+- **Pin the guest MAC across the restore.** The resumed guest keeps the NIC identity it read at
+  boot, and gvproxy's config statically binds IP↔MAC — a fresh random MAC on the restore worker
+  orphans the guest's cached one and the network never comes back (production restore keeps
+  gvproxy alive across the worker swap; the L2 test pins `--net-mac` on both legs instead).
+
+**P1 gate GREEN (2026-07-19):** `venus_session_preserved` passes — same boot_id, same gnome-shell
+pid across suspend → snapshot → fresh-worker restore, zero new coredumps through the 35 s abort
+window, and the gvproxy packet log showed a pre-suspend HTTPS connection *continuing* post-restore.
+
+**First eyeball on a lived-in session (2026-07-19, F44 enhanced, user-driven apps): NOT ship-ready —
+black window, and three concrete P2 work items.** The session core held (same boot_id, gnome-shell
+same pid, zero coredumps, most of the world replayed), but:
+
+1. **In-flight sync fd wedge (the black window).** gnome-shell resumed alive but wedged:
+   `eu-stack` showed the main thread in `zink_flush → util_queue_fence` waiting on mesa's submit
+   thread, which sat in `vn_GetSemaphoreFdKHR → vn_wsi_sync_wait → poll()` — a `sync_file` backed
+   by a pre-suspend virtio-gpu fence that the new epoch never signals. The guest froze mid-frame;
+   the fence's completion either raced the RAM dump or was never re-emitted. Fix shape: in
+   `save_snapshot`, after the vCPUs park, wait (bounded) for the GPU **fence ledger** (0071 probe)
+   to drain before `dump_ram` — the guest is frozen so no new submissions arrive, completions land
+   in guest RAM/GIC before capture, and restored waiters see signaled fences. (The v4-era
+   "worker-quiesce during the dump" open item, now with a body attached.)
+2. **Descriptor-write journal bloat + stale storm.** A lived-in session retained **11,279** stale
+   `vkUpdateDescriptorSets` entries (all referencing destroyed `VkImageView`s) vs ~150 on the idle
+   test desktop. Recovery dropped them all correctly, but dset compaction (latest-wins per binding,
+   deferred to P3) must move up to P2 — the journal is mostly garbage without it.
+3. **Multi-context structural failure.** ctx 15 (a user-launched app) failed CREATE_BLOB res 144:
+   `blob_id 51 is not a live VkDeviceMemory` — its backing alloc wasn't there despite the fence.
+   The single-context L2 test never exercises this; needs a repro with `RUST_LOG=info` (the replay
+   diagnostics are INFO-level and the default `warn` run captured nothing). Repro pair kept:
+   `eyeball-m93.{raw,snap}` at the repo root (gitignored; ~49 GB — delete after P2).
+
 Image layouts: after replay, images are in `UNDEFINED` while the guest believes otherwise. v1
 transitions every replayed image to `GENERAL` after content restore (correct if conservative on
 UMA/KK); v3 tracks last-known layout by watching barriers/renderpass final layouts at record time.
