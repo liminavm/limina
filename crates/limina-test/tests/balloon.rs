@@ -54,7 +54,11 @@ fn free_page_reporting_returns_memory_to_the_host() {
     let cfg = match GuestConfig::baseline_fedora_from_env() {
         Ok(mut cfg) => {
             cfg.ram_mib = 6144; // headroom for a 2 GiB anonymous allocation
+                                // F_REPORTING is masked by default since the M9.2 s2idle work (a stock guest that
+                                // negotiates it crashes on suspend — upstream virtballoon_freeze bug). This test
+                                // exercises the FRQ reclaim *mechanism* and never suspends, so opt in explicitly.
             cfg.with_net()
+                .with_supervisor_arg("--balloon-free-page-reporting")
         }
         Err(e) => {
             eprintln!("SKIPPED free_page_reporting_returns_memory_to_the_host: {e}");

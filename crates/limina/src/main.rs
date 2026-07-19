@@ -206,6 +206,14 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = balloon_policy::ReclaimMode::Moderate)]
     reclaim: balloon_policy::ReclaimMode,
 
+    /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest — forwarded to the
+    /// worker. OFF by default: a stock Linux guest that negotiates page reporting crashes on
+    /// suspend-to-idle (upstream `virtballoon_freeze` frees the reporting virtqueue while its
+    /// non-freezable worker is still live). Enable only for enhanced-tier guests carrying the
+    /// kernel fix (patches/linux/0005); stock guests keep inflate-time reclaim and suspend safely.
+    #[arg(long)]
+    balloon_free_page_reporting: bool,
+
     /// Force the software-2D-only GPU (no virglrenderer/venus). Default is the coexist device
     /// (software-2D 2D + Venus 3D). Use for the capture oracle or the local-Terminal GPU-init hang.
     #[arg(long)]
@@ -771,6 +779,9 @@ fn cli_from_definition(
         display_control_socket: None,
         memory,
         balloon_control_socket: None,
+        // Managed VMs keep the safe default (off): a stock guest that negotiates F_REPORTING
+        // crashes on s2idle. Per-VM enablement belongs with enhanced-tier capability detection.
+        balloon_free_page_reporting: false,
         reclaim: ov.reclaim.unwrap_or(cfg.hardware.reclaim),
         gpu_software_2d: cfg.display.gpu == GpuMode::Software2d,
         no_battery: !cfg.hardware.battery,
@@ -1019,6 +1030,12 @@ fn run_vm(cli: Cli) -> Result<()> {
     if let Some(path) = &balloon_socket {
         args.push("--balloon-control-socket".into());
         args.push(path_arg(path)?);
+    }
+
+    // FRQ fast-reclaim opt-in (see the flag doc: enhanced-tier guests only; a stock guest that
+    // negotiates it crashes on s2idle).
+    if cli.balloon_free_page_reporting {
+        args.push("--balloon-free-page-reporting".into());
     }
 
     // User-mode NAT: spawn + supervise a gvproxy gateway and connect the guest NIC to it.

@@ -414,6 +414,10 @@ pub struct GuestConfig {
     /// the snapshot a previous [`Guest`]'s [`Guest::snapshot`] wrote — model the real suspend/resume
     /// split (a second, separate boot reads the file). `None` = cold boot.
     pub restore_from: Option<PathBuf>,
+    /// Extra flags appended verbatim to the `limina` supervisor command line, for options the
+    /// harness has no dedicated knob for (e.g. `--balloon-free-page-reporting`). Set via
+    /// [`with_supervisor_arg`](GuestConfig::with_supervisor_arg).
+    pub extra_supervisor_args: Vec<String>,
 }
 
 impl GuestConfig {
@@ -466,6 +470,7 @@ impl GuestConfig {
             data_disks: Vec::new(),
             snapshot: false,
             restore_from: None,
+            extra_supervisor_args: Vec::new(),
         })
     }
 
@@ -553,6 +558,7 @@ impl GuestConfig {
             data_disks: Vec::new(),
             snapshot: false,
             restore_from: None,
+            extra_supervisor_args: Vec::new(),
         })
     }
 
@@ -642,6 +648,7 @@ impl GuestConfig {
             data_disks: Vec::new(),
             snapshot: false,
             restore_from: None,
+            extra_supervisor_args: Vec::new(),
         })
     }
 
@@ -682,6 +689,7 @@ impl GuestConfig {
             data_disks: Vec::new(),
             snapshot: false,
             restore_from: None,
+            extra_supervisor_args: Vec::new(),
         })
     }
 
@@ -744,6 +752,7 @@ impl GuestConfig {
             data_disks: Vec::new(),
             snapshot: false,
             restore_from: None,
+            extra_supervisor_args: Vec::new(),
         })
     }
 
@@ -780,6 +789,12 @@ impl GuestConfig {
 
     /// Attach a user-mode NAT NIC. The supervisor spawns a gvproxy gateway and captures its
     /// `-debug` log; assert on it via [`Guest::wait_for_gateway_log`] (DHCP lease, outbound).
+    /// Append a verbatim extra flag to the `limina` supervisor command line.
+    pub fn with_supervisor_arg(mut self, arg: &str) -> GuestConfig {
+        self.extra_supervisor_args.push(arg.to_string());
+        self
+    }
+
     pub fn with_net(mut self) -> GuestConfig {
         self.net = true;
         self
@@ -1506,6 +1521,10 @@ impl Guest {
         } else {
             None
         };
+
+        for arg in &cfg.extra_supervisor_args {
+            cmd.arg(arg);
+        }
 
         for (k, v) in &cfg.envs {
             cmd.env(k, v);
