@@ -36,6 +36,20 @@ use limina_test::{Guest, GuestConfig};
 /// margin without meaningfully slowing a green run.
 const ABORT_WINDOW: Duration = Duration::from_secs(35);
 
+/// `ssh_exec` with a few retries: a loaded host (the suite runs several VMs) can
+/// drop a single connection (exit 255) right after the banner poll succeeded.
+fn ssh_retry(guest: &Guest, cmd: &str) -> String {
+    let mut last_err = String::new();
+    for _ in 0..4 {
+        match guest.ssh_exec(cmd) {
+            Ok(out) => return out.trim().to_string(),
+            Err(e) => last_err = e.to_string(),
+        }
+        std::thread::sleep(Duration::from_secs(5));
+    }
+    panic!("ssh `{cmd}` kept failing: {last_err}");
+}
+
 #[test]
 fn seated_gnome_session_survives_snapshot_restore() {
     if !limina_test::require_hvf_or_skip("seated_gnome_session_survives_snapshot_restore") {
@@ -86,26 +100,17 @@ fn seated_gnome_session_survives_snapshot_restore() {
 
     // Identity baseline: the resumed guest must present the SAME kernel boot and the
     // SAME compositor process.
-    let boot_id = g1
-        .ssh_exec("cat /proc/sys/kernel/random/boot_id")
-        .expect("reading boot_id")
-        .trim()
-        .to_string();
-    let shell_pid = g1
-        .ssh_exec("pgrep -x gnome-shell | head -1")
-        .expect("reading the gnome-shell pid")
-        .trim()
-        .to_string();
+    let boot_id = ssh_retry(&g1, "cat /proc/sys/kernel/random/boot_id");
+    let shell_pid = ssh_retry(&g1, "pgrep -x gnome-shell | head -1");
     assert!(
         !shell_pid.is_empty(),
         "no gnome-shell pid before the snapshot"
     );
     // Coredump baseline (count, not emptiness: the golden may carry old cores).
-    let cores_before = g1
-        .ssh_exec("sudo coredumpctl list --no-legend gnome-shell 2>/dev/null | wc -l")
-        .expect("counting baseline gnome-shell coredumps")
-        .trim()
-        .to_string();
+    let cores_before = ssh_retry(
+        &g1,
+        "sudo coredumpctl list --no-legend gnome-shell 2>/dev/null | wc -l",
+    );
     eprintln!("pre-suspend: boot_id={boot_id} gnome-shell pid={shell_pid} cores={cores_before}");
 
     // --- Suspend: s2idle bracket -> quiesce -> snapshot -> worker exits 126 ---
@@ -113,8 +118,10 @@ fn seated_gnome_session_survives_snapshot_restore() {
     // session state (observed: a fresh seated session ignores it and no device ever
     // leaves DRIVER_OK), so trigger the s2idle from INSIDE the guest, scheduled a
     // beat ahead and inhibitor-ignoring, then arm the bracket for quiesce+snapshot.
-    g1.ssh_exec("sudo systemd-run --on-active=2 systemctl suspend -i >/dev/null 2>&1; echo armed")
-        .expect("scheduling the in-guest suspend");
+    ssh_retry(
+        &g1,
+        "sudo systemd-run --on-active=2 systemctl suspend -i >/dev/null 2>&1; echo armed",
+    );
     g1.suspend_bracket().expect("sending the suspend bracket");
     let outcome = g1
         .wait_supervisor_exit(Duration::from_secs(120))
@@ -170,11 +177,7 @@ fn seated_gnome_session_survives_snapshot_restore() {
 
     // Same kernel boot — a differing boot_id means the guest REBOOTED, which is a
     // transport regression (0072), not the session gap this test measures.
-    let boot_id_after = g2
-        .ssh_exec("cat /proc/sys/kernel/random/boot_id")
-        .expect("reading post-restore boot_id")
-        .trim()
-        .to_string();
+    let boot_id_after = ssh_retry(&g2, "cat /proc/sys/kernel/random/boot_id");
     assert_eq!(
         boot_id_after, boot_id,
         "boot_id changed across restore — the guest rebooted instead of resuming"
@@ -188,16 +191,11 @@ fn seated_gnome_session_survives_snapshot_restore() {
     );
     std::thread::sleep(ABORT_WINDOW);
 
-    let shell_pid_after = g2
-        .ssh_exec("pgrep -x gnome-shell | head -1")
-        .expect("reading the post-restore gnome-shell pid")
-        .trim()
-        .to_string();
-    let cores_after = g2
-        .ssh_exec("sudo coredumpctl list --no-legend gnome-shell 2>/dev/null | wc -l")
-        .expect("counting post-restore gnome-shell coredumps")
-        .trim()
-        .to_string();
+    let shell_pid_after = ssh_retry(&g2, "pgrep -x gnome-shell | head -1");
+    let cores_after = ssh_retry(
+        &g2,
+        "sudo coredumpctl list --no-legend gnome-shell 2>/dev/null | wc -l",
+    );
     eprintln!("post-restore: gnome-shell pid={shell_pid_after} cores={cores_after}");
     cleanup();
 
