@@ -40,6 +40,9 @@ const ABORT_WINDOW: Duration = Duration::from_secs(35);
 const VKFDCYCLE: &str = include_str!("../guest/vkfdcycle.py");
 /// Parks a freed-while-exported cross-context blob across the suspend (ctx-15 hazard).
 const VKFDHOLD: &str = include_str!("../guest/vkfdhold.py");
+/// Parks a pattern in a never-mapped (non-blob) VkDeviceMemory across the suspend
+/// and verifies it after restore (P2 content capture).
+const VKCONTENT: &str = include_str!("../guest/vkcontent.py");
 
 /// `ssh_exec` with a few retries: a loaded host (the suite runs several VMs) can
 /// drop a single connection (exit 255) right after the banner poll succeeded.
@@ -145,6 +148,33 @@ fn seated_gnome_session_survives_snapshot_restore() {
     let holder_pid = ssh_retry(&g1, "pgrep -f 'python3 /tmp/vkfdhold.py' | head -1");
     assert!(!holder_pid.is_empty(), "no vkfdhold pid after READY");
     eprintln!("fd-hold venus client parked (pid {holder_pid})");
+
+    // --- Seed the P2 content oracle ---
+    // A third venus client parks a known pattern in a NEVER-MAPPED VkDeviceMemory
+    // (vn defers blob creation until vkMapMemory, so this memory is a plain host
+    // allocation — in neither the guest-RAM dump nor the mapped-blob capture).
+    // Post-restore it copies the memory back and verifies the pattern: the direct
+    // oracle for full VkDeviceMemory content capture.
+    ssh_retry(
+        &g1,
+        &format!("cat > /tmp/vkcontent.py <<'VKCONTENT_PY_EOF'\n{VKCONTENT}\nVKCONTENT_PY_EOF"),
+    );
+    ssh_retry(
+        &g1,
+        "rm -f /tmp/vkcontent-go; \
+         VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
+         setsid nohup python3 /tmp/vkcontent.py Venus </dev/null >/tmp/vkcontent.out 2>&1 & \
+         echo spawned",
+    );
+    g1.ssh_poll(
+        "grep -q 'CONTENT READY' /tmp/vkcontent.out",
+        Duration::from_secs(60),
+    )
+    .unwrap_or_else(|e| {
+        let out = g1.ssh_exec("cat /tmp/vkcontent.out").unwrap_or_default();
+        panic!("the content venus client never reached READY: {e}\n--- vkcontent.out ---\n{out}");
+    });
+    eprintln!("content venus client parked (pattern staged in non-blob device memory)");
 
     // Identity baseline: the resumed guest must present the SAME kernel boot and the
     // SAME compositor process.
@@ -320,6 +350,27 @@ fn seated_gnome_session_survives_snapshot_restore() {
         "the fd-hold client's heartbeat stalled after restore ({a} -> {b}) — its \
          re-created venus contexts do not service submissions (the freed-while-\
          exported blob replay is broken)"
+    );
+
+    // The content oracle: trigger the parked client's copy-back and require the
+    // pattern it staged in a never-mapped (non-blob) VkDeviceMemory to have
+    // survived the restore byte-for-byte. Without full content capture the
+    // replayed allocation is a fresh host heap — the copy-back returns garbage
+    // (CONTENT BAD) even though every liveness assert above passes.
+    ssh_retry(&g2, "touch /tmp/vkcontent-go");
+    g2.ssh_poll(
+        "grep -Eq 'CONTENT (OK|BAD|FAIL)' /tmp/vkcontent.out",
+        Duration::from_secs(60),
+    )
+    .unwrap_or_else(|e| {
+        let out = g2.ssh_exec("cat /tmp/vkcontent.out").unwrap_or_default();
+        panic!("the content client never delivered a verdict: {e}\n--- vkcontent.out ---\n{out}");
+    });
+    let verdict = ssh_retry(&g2, "grep -E 'CONTENT (OK|BAD|FAIL)' /tmp/vkcontent.out");
+    assert_eq!(
+        verdict, "CONTENT OK",
+        "device-memory contents did not survive the restore — the never-mapped \
+         VkDeviceMemory came back as a fresh (garbage) allocation: {verdict}"
     );
 
     let outcome = g2
