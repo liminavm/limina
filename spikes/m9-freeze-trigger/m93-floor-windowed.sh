@@ -33,6 +33,12 @@ say "cloning enhanced image $SRC (COW)…"; cp -c "$SRC" "$DISK" || { say "clone
 # `limina_vmm=info,krun_vmm=info` to also get the per-vCPU "resumed from snapshot at pc=" lines +
 # venus/Mesa. Console capture pins WHERE the guest kernel resume stalls.
 export RUST_LOG="${RUST_LOG:-limina_vmm=info,krun_vmm=info}"
+# ROUND 4+ (M9.3 probes, libkrun 0071 + virglrenderer 0033): counted GPU evidence. GPU_TRACE=1
+# emits one [GPUTRACE] aggregate line per 2s tick (submit/unknown_ctx/unknown_res deltas + the
+# fence ledger with outstanding ages); GPU_TRACE_VKR=1 additionally dumps the vkr context table
+# (objects tallied by VkObjectType — the retain-and-replay bill of materials on a healthy
+# session) every 10th tick, and ALWAYS on the first stale-ctx submission after restore.
+export LIMINA_GPU_TRACE="${LIMINA_GPU_TRACE:-1}" LIMINA_GPU_TRACE_VKR="${LIMINA_GPU_TRACE_VKR:-1}"
 export LIMINA_DISK="$DISK" LIMINA_CPUS=4 LIMINA_RAM_MIB=4096
 P1CONS="$JOB/tmp/m93-floor-p1-console.log"; P2CONS="$JOB/tmp/m93-floor-p2-console.log"
 KEEP_WINDOW="${LIMINA_KEEP_WINDOW:-0}"   # 1 = leave the restore window up for a human eyeball
@@ -48,6 +54,9 @@ say "SSH up; settling 75s for the seated GNOME/venus desktop…"; sleep 75
 PRE_BOOTID=$($SSH 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -d '\r')
 VENUS=$($SSH 'grep -c "Virtio-GPU Venus" <(vulkaninfo 2>/dev/null) || true' 2>/dev/null | tr -d '\r')
 say "pre: boot_id=$PRE_BOOTID (venus-in-ssh=$VENUS — 0 is a FALSE negative over non-login ssh)"
+cp -f "$WLOG" "$P1LOG" 2>/dev/null
+say "=== phase1 [GPUTRACE] healthy-session baseline (fence flow + vkr object tally = replay bill of materials) ==="
+grep -E '\[GPUTRACE\]' "$P1LOG" 2>/dev/null | tail -25 | tee -a "$LOG" || say "  (no GPUTRACE lines — worker built without 0071, or env not reaching it)"
 W=$(wpid); say "worker pid=$W; firing suspend bracket (SIGTSTP → button → quiesce poll → snapshot)"
 kill -TSTP "$W"
 rc=none; for i in $(seq 1 40); do
@@ -114,9 +123,19 @@ say "=== guest CONSOLE tail (where the kernel resume stalls) ==="
 tail -25 "$P2CONS" 2>/dev/null | tee -a "$LOG" || say "  (no console captured)"
 say "=== SHM-WINDOW FAULT (DEAD ORACLE — expected silent, NOT part of the verdict) ==="
 if [ -n "$fault" ]; then say "  FAULT SEEN → $fault (SURPRISING — the window is normally hv_vm_map'd on restore; investigate)"; else say "  (silent, as expected: the window is hv_vm_map'd on restore so a touch never faults — this line proves nothing)"; fi
-say "=== phase2 worker log — restore/wake/venus/error (tcpproxy filtered) ==="; grep -iE 'restoring from snapshot|injecting guest wake|SHM-WINDOW FAULT|resumed from snapshot|Mesa:|venus|virgl_renderer|error|panic|segfault' "$P2LOG" 2>/dev/null | grep -viE 'tcpproxy|no route to host' | tail -25 | tee -a "$LOG"
+say "=== phase2 ⭐ [GPUTRACE] COUNTED EVIDENCE (stale-ctx submissions / fence ledger / fresh-renderer dump) ==="
+grep -E '\[GPUTRACE\]' "$P2LOG" 2>/dev/null | tail -35 | tee -a "$LOG" || say "  (no GPUTRACE lines)"
+say "=== phase2 per-event stale-ctx/resource warns (first 10) ==="
+grep -E 'ErrRutabaga\(Invalid(Context|Resource)Id\)|ErrInvalid(Context|Resource)Id' "$P2LOG" 2>/dev/null | head -10 | tee -a "$LOG" || say "  (none)"
+say "=== phase2 worker log — restore/wake/venus/error (tcpproxy filtered) ==="; grep -iE 'restoring from snapshot|injecting guest wake|SHM-WINDOW FAULT|resumed from snapshot|Mesa:|venus|virgl_renderer|error|panic|segfault' "$P2LOG" 2>/dev/null | grep -viE 'tcpproxy|no route to host|GPUTRACE' | tail -25 | tee -a "$LOG"
 say ""
+UC=$(grep -oE 'unknown_ctx=\+[0-9]+' "$P2LOG" 2>/dev/null | awk -F'+' '{s+=$2} END {print s+0}')
+UR=$(grep -oE 'unknown_res=\+[0-9]+' "$P2LOG" 2>/dev/null | awk -F'+' '{s+=$2} END {print s+0}')
+FREQ=$(grep -oE 'fences_req=\+[0-9]+' "$P2LOG" 2>/dev/null | awk -F'+' '{s+=$2} END {print s+0}')
+FRET=$(grep -oE 'fences_ret=\+[0-9]+' "$P2LOG" 2>/dev/null | awk -F'+' '{s+=$2} END {print s+0}')
+OUTLAST=$(grep -oE 'outstanding=[0-9]+' "$P2LOG" 2>/dev/null | tail -1 | cut -d= -f2)
 say "SUMMARY (machine oracles):"
+say "  [GPUTRACE] phase2 totals: unknown_ctx=$UC unknown_res=$UR fences req=$FREQ ret=$FRET outstanding(last tick)=${OUTLAST:-?}"
 say "  OS survived restore (SSH): $([ "$back" = 1 ] && echo YES || echo NO)"
 say "  boot_id continuity: $([ -n "${POST_BOOTID:-}" ] && ([ "$PRE_BOOTID" = "$POST_BOOTID" ] && echo 'SAME (resumed)' || echo 'CHANGED (rebooted)') || echo unknown)"
 say "  SHM-window GPU fault: $([ -n "$fault" ] && echo 'YES (unexpected — investigate)' || echo 'silent (expected — dead oracle, ignore)')"
