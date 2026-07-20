@@ -46,6 +46,9 @@ fn l1_real_session_helper_bridges_clipboard_via_mock_mutter() {
         .with_cmdline_token("limina.dbus")
         .with_cmdline_token("limina.mock_mutter")
         .with_cmdline_token("limina.session_helper")
+        // The RemoteDesktop backend is production-default-OFF; this test exists to
+        // exercise it, so opt in (limina-init maps the token to LIMINA_CLIPBOARD_RD=1).
+        .with_cmdline_token("limina.clipboard_rd")
         .with_cmdline_token(&format!("limina.mock_id={uniq}"))
         .with_supervisor_log()
         .with_env("LIMINA_PASTEBOARD", &pb_name)
@@ -127,6 +130,9 @@ fn l1_real_session_helper_prefers_extension_bridge() {
         .with_cmdline_token("limina.mock_mutter")
         .with_cmdline_token("limina.mock_bridge")
         .with_cmdline_token("limina.session_helper")
+        // RD opted in so the preference assertion is meaningful: the bridge must win
+        // over an AVAILABLE RemoteDesktop backend, not a disabled one.
+        .with_cmdline_token("limina.clipboard_rd")
         .with_cmdline_token(&format!("limina.mock_id={uniq}"))
         .with_supervisor_log()
         .with_env("LIMINA_PASTEBOARD", &pb_name)
@@ -187,6 +193,72 @@ fn l1_real_session_helper_prefers_extension_bridge() {
 
     let _ = std::fs::remove_file(&mock_log);
     let _ = std::fs::remove_file(&mock_copy);
+}
+
+/// Production default (2026-07-20, user-decided): withOUT the RD opt-in
+/// (`LIMINA_CLIPBOARD_RD=1`), the helper must NEVER create a RemoteDesktop session —
+/// even when that API is the only backend on offer and the probe grace has long
+/// expired. A resident RemoteDesktop session lights GNOME's screen-share indicator for
+/// the whole session; the clipboard@limina extension bridge supersedes it. The mock
+/// claims only the RemoteDesktop API here (no bridge), so the helper has nothing quiet
+/// to land on and must park forever rather than go loud.
+#[test]
+fn l1_real_session_helper_never_takes_remotedesktop_without_optin() {
+    if !limina_test::require_hvf_or_skip(
+        "l1_real_session_helper_never_takes_remotedesktop_without_optin",
+    ) {
+        return;
+    }
+
+    let uniq = format!("{}c", std::process::id()); // distinct mock files from the other tests
+    let cfg = GuestConfig::l1_from_env()
+        .expect("resolving L1 guest config")
+        .with_control_agent()
+        .with_cmdline_token("limina.dbus")
+        .with_cmdline_token("limina.mock_mutter")
+        .with_cmdline_token("limina.session_helper")
+        // NO limina.clipboard_rd token — the production default.
+        .with_cmdline_token(&format!("limina.mock_id={uniq}"))
+        .with_supervisor_log();
+    let rootfs = rootfs_of(&cfg);
+    let mock_log = rootfs.join(format!("mock-{uniq}.log"));
+    let _ = std::fs::remove_file(&mock_log);
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+
+    // The helper announces the disabled fallback on its first failed probe round
+    // (its stderr reaches the guest console via limina-init).
+    guest
+        .wait_for(
+            "RemoteDesktop fallback disabled (LIMINA_CLIPBOARD_RD unset)",
+            Duration::from_secs(30),
+        )
+        .expect("helper never reported the RD fallback as disabled");
+
+    // Outlast the enabled-path grace window (RD_GRACE_ATTEMPTS × 2 s ≈ 20 s) with
+    // margin: if the gate were broken, the helper would have gone loud by now.
+    std::thread::sleep(Duration::from_secs(25));
+    let log = std::fs::read_to_string(&mock_log).unwrap_or_default();
+    assert!(
+        !log.contains("CREATE_SESSION"),
+        "helper created a RemoteDesktop session despite the opt-in being absent:\n{log}"
+    );
+    // And it must still be probing quietly, not connected via a loud backend: the
+    // clipboard capability handshake only happens once a backend is chosen.
+    assert!(
+        !guest
+            .supervisor_log()
+            .contains("guest agent connected: limina-agent-session/"),
+        "helper picked a backend with nothing quiet available and RD opted out"
+    );
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(10))
+        .expect("supervisor did not stop");
+    assert!(!outcome.forced, "harness had to force teardown");
+    assert_eq!(outcome.code, Some(0), "expected orderly power-off");
+
+    let _ = std::fs::remove_file(&mock_log);
 }
 
 fn wait_for_file_contains(path: &std::path::Path, needle: &str, timeout: Duration) {

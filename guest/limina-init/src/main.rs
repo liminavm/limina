@@ -165,10 +165,15 @@ fn spawn_dbus_stack() {
         }
     }
     if cmdline_has("limina.session_helper") {
-        match std::process::Command::new("/limina-agent-session")
-            .env("DBUS_SESSION_BUS_ADDRESS", DBUS_ADDR)
-            .spawn()
-        {
+        let mut cmd = std::process::Command::new("/limina-agent-session");
+        cmd.env("DBUS_SESSION_BUS_ADDRESS", DBUS_ADDR);
+        // The RemoteDesktop fallback is opt-in (it lights GNOME's screen-share
+        // indicator, so production defaults it OFF); the L1 mock-mutter tests that
+        // exercise that backend opt in via this cmdline token.
+        if cmdline_has("limina.clipboard_rd") {
+            cmd.env("LIMINA_CLIPBOARD_RD", "1");
+        }
+        match cmd.spawn() {
             Ok(_) => klog(b"[limina-init] spawned /limina-agent-session"),
             Err(_) => klog(b"[limina-init] failed to spawn /limina-agent-session"),
         }

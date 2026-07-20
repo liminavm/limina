@@ -18,11 +18,13 @@
 //!   — the GNOME tier: the extension scripts Meta.Selection inside the compositor
 //!   and we drive it over the session bus. Quiet like ext-data-control, and immune
 //!   to distro mutter updates (which is what retired the patched-mutter carry).
-//! - **Stock fallback**: mutter's private RemoteDesktop D-Bus API on the session bus
-//!   (the clipboard spike, `spikes/clipboard-remotedesktop/`, proved a background
-//!   session-bus client can drive it — and that nothing else on stock mutter 49.5
-//!   can). Cosmetic cost: GNOME shows the screen-share indicator while the
-//!   RemoteDesktop session exists — which is exactly why the quieter tiers exist.
+//! - **Opt-in fallback** (`LIMINA_CLIPBOARD_RD=1`): mutter's private RemoteDesktop
+//!   D-Bus API on the session bus (the clipboard spike,
+//!   `spikes/clipboard-remotedesktop/`, proved a background session-bus client can
+//!   drive it — and that nothing else on stock mutter 49.5 can). Cosmetic cost: GNOME
+//!   shows the screen-share indicator while the RemoteDesktop session exists — which
+//!   is why the quieter tiers exist, and why this rung is DISABLED by default since
+//!   the extension bridge supersedes it (user-decided 2026-07-20).
 //!
 //! Bridge shape (see `crates/limina/src/clipboard.rs` for the host side and the protocol
 //! rules — symmetric eager-pull, newest serial wins):
@@ -63,7 +65,25 @@ const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 /// Backend-probe attempts before the RemoteDesktop fallback is taken even while the
 /// extension tier still looks imminent (× RECONNECT_EVERY ≈ 20 s) — the cap on a
 /// stuck "imminent" verdict, e.g. an enabled extension that crashes before exporting.
+/// Only meaningful when the fallback is enabled at all ([`rd_enabled`]).
 const RD_GRACE_ATTEMPTS: u32 = 10;
+/// Once the quiet-tier probes have failed this many times (~1 min) with no fallback to
+/// take, slow the retry cadence and stop logging every attempt — a session that never
+/// grows a backend (extensions administratively disabled, RD opted out) must not spam
+/// the journal every 2 s forever.
+const QUIET_RETRY_AFTER: u32 = 30;
+/// Retry cadence after [`QUIET_RETRY_AFTER`] unanswered probes.
+const QUIET_RETRY_EVERY: Duration = Duration::from_secs(10);
+
+/// The RemoteDesktop fallback is OPT-IN (`LIMINA_CLIPBOARD_RD=1`): a resident
+/// RemoteDesktop session lights GNOME's screen-share indicator for the whole session,
+/// and the `clipboard@limina` extension bridge (which the helper self-enables) has
+/// superseded it as the stock-GNOME tier (user-decided 2026-07-20). Kept in the binary
+/// for sessions where user extensions are administratively disabled — and for the L1
+/// mock-mutter tests, whose init opts in.
+fn rd_enabled() -> bool {
+    std::env::var("LIMINA_CLIPBOARD_RD").is_ok_and(|v| v == "1")
+}
 
 /// Everything the main loop reacts to, funneled into one mpsc queue.
 enum Event {
@@ -89,15 +109,17 @@ fn main() {
 
     // Pick a clipboard backend (retry: gnome-shell may still be coming up when the
     // user unit starts). Tier order: ext-data-control → the clipboard@limina
-    // extension bridge → mutter's RemoteDesktop D-Bus API. Any failure falls
-    // through to the next probe — environments with no Wayland display at all (the
-    // L1 mock guest) must still reach the fallbacks, and in a real session that's
-    // still coming up ALL probes fail and we retry the set. The RemoteDesktop
-    // fallback (the one with the screen-share indicator) is additionally parked
-    // while the extension tier is still plausibly coming ([`BridgeOutlook`]), so a
-    // booting GNOME session lands on the quiet tier instead of racing to the loud
-    // one. If the session dies later we exit and systemd restarts us into the
-    // (new) graphical session.
+    // extension bridge → mutter's RemoteDesktop D-Bus API (OPT-IN only, see
+    // [`rd_enabled`]). Any failure falls through to the next probe — environments
+    // with no Wayland display at all (the L1 mock guest) must still reach the
+    // fallbacks, and in a real session that's still coming up ALL probes fail and we
+    // retry the set. When enabled, the RemoteDesktop fallback (the one with the
+    // screen-share indicator) is additionally parked while the extension tier is
+    // still plausibly coming ([`BridgeOutlook`]), so a booting GNOME session lands
+    // on the quiet tier instead of racing to the loud one; when disabled (the
+    // production default) the quiet tiers are simply retried, at a slowed cadence
+    // after ~1 min. If the session dies later we exit and systemd restarts us into
+    // the (new) graphical session.
     let (tx, rx) = mpsc::channel::<Event>();
     let mut kick = ExtensionKick::new();
     let mut attempts: u32 = 0;
@@ -117,7 +139,8 @@ fn main() {
             }
             Err(e) => e,
         };
-        if attempts > RD_GRACE_ATTEMPTS || kick.outlook() == BridgeOutlook::Never {
+        if rd_enabled() && (attempts > RD_GRACE_ATTEMPTS || kick.outlook() == BridgeOutlook::Never)
+        {
             match ClipSession::connect() {
                 Ok(c) => {
                     eprintln!(
@@ -132,12 +155,26 @@ fn main() {
                     );
                 }
             }
-        } else {
+        } else if attempts <= QUIET_RETRY_AFTER {
+            let rd_note = if rd_enabled() {
+                "parking the RemoteDesktop fallback"
+            } else {
+                "RemoteDesktop fallback disabled (LIMINA_CLIPBOARD_RD unset)"
+            };
             eprintln!(
-                "limina-agent-session: extension bridge expected; parking the RemoteDesktop fallback (wayland: {wl_err}; bridge: {br_err})"
+                "limina-agent-session: waiting for a quiet backend; {rd_note} (wayland: {wl_err}; bridge: {br_err})"
             );
+            if attempts == QUIET_RETRY_AFTER {
+                eprintln!(
+                    "limina-agent-session: still no backend after {QUIET_RETRY_AFTER} probes; retrying every {QUIET_RETRY_EVERY:?} (further attempts unlogged)"
+                );
+            }
         }
-        std::thread::sleep(RECONNECT_EVERY);
+        std::thread::sleep(if attempts >= QUIET_RETRY_AFTER {
+            QUIET_RETRY_EVERY
+        } else {
+            RECONNECT_EVERY
+        });
     };
 
     let mut bridge = Bridge {
