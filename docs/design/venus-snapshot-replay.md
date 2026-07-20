@@ -264,6 +264,28 @@ while the parked import is broken; the honest heartbeat is a host round-trip nam
 memory (`vn_GetDeviceMemoryCommitment`). RED/GREEN: run 24 red on pre-pin virgl with the wild
 signature; runs 30/31 green.
 
+**The vkmark-on-resume crash FIXED (2026-07-20, virglrenderer 0040): the journal is now
+transitively closed over create-argument references.** Dogfood crash, root-caused entirely from
+the saved resume log (`spikes/m9-vkmark-resume-crash/RESULTS.md`): a destroyed object's prune
+killed its create entry even when a retained CREATE still *referenced* the id in its wire args
+— and the canonical case is legal, universal Vulkan: create shader modules → create pipeline →
+destroy the modules (+ layout). At replay the pipeline's create failed its module lookups and
+dropped (the histogram's exactly-2 "create" drops); once `replay_end` flipped FATAL back to
+sticky, the first parked ring command referencing the guest-live pipeline killed the ring
+thread, which set the guest-visible `VK_RING_STATUS_FATAL_BIT_MESA`, and vkmark abort()ed in
+`vn_ring_submit_locked` the same second. (The FATAL arithmetic closed exactly: 3608 log lines =
+3607 replay drops + the 1 lethal live failure. The drop mass — thousands of firefox/gnome-shell
+recordings referencing destroyed buffers/images — is the benign flavor of the same non-closure.)
+The fix generalizes eyeball-item-3's pin machinery to *every* CREATE: `vkr_cs_decoder_lookup_object`
+notes each successful decode-time handle lookup on the TLS dispatch frame, the CREATE entry pins
+those ids (dedup'd, self-creates skipped), the referenced object's destroy defers + retains as
+before, and the pins drop when the CREATE entry dies (unpin-drained prunes run on an iterative
+fire-worklist under the journal mutex — never recursive). Re-baselining is self-sustaining: the
+replayed pipeline create re-pins during replay recording, so generation N+1 retains the same
+closure. RED/GREEN: the gate test's new `vkpipeline.py` leg (live compute pipeline, module+layout
+destroyed at create, heartbeating dispatches) SIGABRTs at the first post-restore beat on pre-fix
+virgl and survives both restore generations post-fix (225 s green run, 2026-07-20).
+
 **Operational lesson (2026-07-19): a snapshot is SINGLE-USE against its exact post-suspend
 disk.** The `eyeball-m93` repro pair was destroyed by restoring the same snapshot twice: the
 second resume wrote stale btrfs metadata over the disk the first resume had advanced (`parent

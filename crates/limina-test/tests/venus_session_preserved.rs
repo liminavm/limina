@@ -43,6 +43,10 @@ const VKFDHOLD: &str = include_str!("../guest/vkfdhold.py");
 /// Parks a pattern in a never-mapped (non-blob) VkDeviceMemory across the suspend
 /// and verifies it after restore (P2 content capture).
 const VKCONTENT: &str = include_str!("../guest/vkcontent.py");
+/// Parks a live compute pipeline whose shader module + layout were destroyed after
+/// creation (the journal create-arg closure hazard — the 2026-07-20 vkmark crash),
+/// heartbeating dispatches that reference the pipeline across the suspend.
+const VKPIPELINE: &str = include_str!("../guest/vkpipeline.py");
 
 /// `ssh_exec` with a few retries: a loaded host (the suite runs several VMs) can
 /// drop a single connection (exit 255) right after the banner poll succeeded.
@@ -175,6 +179,51 @@ fn seated_gnome_session_survives_snapshot_restore() {
         panic!("the content venus client never reached READY: {e}\n--- vkcontent.out ---\n{out}");
     });
     eprintln!("content venus client parked (pattern staged in non-blob device memory)");
+
+    // --- Seed the create-arg closure hazard (the 2026-07-20 vkmark crash) ---
+    // A fourth venus client creates a compute pipeline, destroys its shader module
+    // and pipeline layout (legal, and what every real app does), then heartbeats
+    // dispatches that reference the pipeline. Replaying its context needs the
+    // pruned module/layout creates back before the pipeline create (journal
+    // create-arg pinning); pre-fix the pipeline create drops at replay and the
+    // first post-restore beat hits a sticky ring FATAL — the host ring thread
+    // exits, the guest sees VK_RING_STATUS_FATAL_BIT_MESA, and the client aborts
+    // in vn_ring_submit_locked exactly like vkmark did
+    // (spikes/m9-vkmark-resume-crash/RESULTS.md).
+    ssh_retry(
+        &g1,
+        &format!("cat > /tmp/vkpipeline.py <<'VKPIPELINE_PY_EOF'\n{VKPIPELINE}\nVKPIPELINE_PY_EOF"),
+    );
+    ssh_retry(
+        &g1,
+        "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
+         setsid nohup python3 /tmp/vkpipeline.py Venus </dev/null >/tmp/vkpipeline.out 2>&1 & \
+         echo spawned",
+    );
+    g1.ssh_poll(
+        "grep -q 'PIPE READY' /tmp/vkpipeline.out",
+        Duration::from_secs(60),
+    )
+    .unwrap_or_else(|e| {
+        let out = g1.ssh_exec("cat /tmp/vkpipeline.out").unwrap_or_default();
+        panic!("the pipeline venus client never reached READY: {e}\n--- vkpipeline.out ---\n{out}");
+    });
+    let pipe_pid = ssh_retry(&g1, "pgrep -f '[v]kpipeline.py' | head -1");
+    assert!(!pipe_pid.is_empty(), "no vkpipeline pid after READY");
+    // Like the fd-hold client: the heartbeat must be ADVANCING at suspend time so a
+    // post-restore stall can't be blamed on a pre-existing wedge.
+    g1.ssh_poll(
+        "test \"$(grep -c 'PIPE BEAT' /tmp/vkpipeline.out)\" -ge 2",
+        Duration::from_secs(30),
+    )
+    .unwrap_or_else(|e| {
+        let out = g1.ssh_exec("cat /tmp/vkpipeline.out").unwrap_or_default();
+        panic!(
+            "the pipeline heartbeat wedged BEFORE the suspend (pre-existing guest-side \
+             stall, not a restore failure): {e}\n--- vkpipeline.out ---\n{out}"
+        );
+    });
+    eprintln!("pipeline venus client parked (pid {pipe_pid}, module+layout destroyed)");
 
     // The fd-hold heartbeat must be ADVANCING at suspend time, or the post-restore
     // beat assert can blame the restore for a wedge that predates it (run 35: the
@@ -381,6 +430,41 @@ fn seated_gnome_session_survives_snapshot_restore() {
         );
     }
 
+    // The create-arg closure oracle: the pipeline client must be the SAME live
+    // process and its beats — live wire commands referencing a pipeline whose
+    // shader module + layout were destroyed pre-suspend — must still advance.
+    // Pre-fix this is the vkmark death: the pipeline's create dropped at replay
+    // (its module/layout creates were pruned), the first post-restore beat set a
+    // sticky ring FATAL, and the client aborted in vn_ring_submit_locked.
+    let pipe_after = ssh_retry(&g2, "pgrep -f '[v]kpipeline.py' | head -1");
+    if pipe_after != pipe_pid {
+        let out = g2.ssh_exec("cat /tmp/vkpipeline.out").unwrap_or_default();
+        let cores = g2
+            .ssh_exec("sudo coredumpctl list --no-legend python3 2>/dev/null | tail -3")
+            .unwrap_or_default();
+        panic!(
+            "the pipeline venus client did not survive the restore (pid {pipe_pid} -> \
+             {pipe_after:?}) — its re-created context lost the pipeline whose module/layout \
+             were destroyed pre-suspend (journal create-arg closure)\n\
+             --- vkpipeline.out ---\n{out}\n--- python3 cores ---\n{cores}"
+        );
+    }
+    let pbeat_a = ssh_retry(&g2, "grep -c 'PIPE BEAT' /tmp/vkpipeline.out");
+    std::thread::sleep(Duration::from_secs(12));
+    let pbeat_b = ssh_retry(&g2, "grep -c 'PIPE BEAT' /tmp/vkpipeline.out");
+    let (pa, pb): (u64, u64) = (pbeat_a.parse().unwrap_or(0), pbeat_b.parse().unwrap_or(0));
+    if pb <= pa {
+        let out = g2.ssh_exec("cat /tmp/vkpipeline.out").unwrap_or_default();
+        let stack = g2
+            .ssh_exec(&format!("sudo eu-stack -p {pipe_pid} 2>&1 | head -40"))
+            .unwrap_or_default();
+        panic!(
+            "the pipeline client's heartbeat stalled after restore ({pa} -> {pb}) — its \
+             re-created context does not service pipeline-referencing submissions\n\
+             --- vkpipeline.out ---\n{out}\n--- eu-stack ---\n{stack}"
+        );
+    }
+
     // The content oracle: trigger the parked client's copy-back and require the
     // pattern it staged in a never-mapped (non-blob) VkDeviceMemory to have
     // survived the restore byte-for-byte. Without full content capture the
@@ -496,6 +580,29 @@ fn seated_gnome_session_survives_snapshot_restore() {
         "gnome-shell is a DIFFERENT process after the second restore — the session was \
          lost on generation 2"
     );
+
+    // The pipeline client rides through BOTH generations: gen 2's re-baselined
+    // journal must still pin the (long-destroyed) module/layout creates for the
+    // still-live pipeline.
+    let pipe_gen2 = ssh_retry(&g3, "pgrep -f '[v]kpipeline.py' | head -1");
+    if pipe_gen2 != pipe_pid {
+        let out = g3.ssh_exec("cat /tmp/vkpipeline.out").unwrap_or_default();
+        panic!(
+            "the pipeline venus client did not survive the SECOND restore (pid {pipe_pid} \
+             -> {pipe_gen2:?})\n--- vkpipeline.out ---\n{out}"
+        );
+    }
+    let gbeat_a = ssh_retry(&g3, "grep -c 'PIPE BEAT' /tmp/vkpipeline.out");
+    std::thread::sleep(Duration::from_secs(12));
+    let gbeat_b = ssh_retry(&g3, "grep -c 'PIPE BEAT' /tmp/vkpipeline.out");
+    let (ga, gb): (u64, u64) = (gbeat_a.parse().unwrap_or(0), gbeat_b.parse().unwrap_or(0));
+    if gb <= ga {
+        let out = g3.ssh_exec("cat /tmp/vkpipeline.out").unwrap_or_default();
+        panic!(
+            "the pipeline client's heartbeat stalled after the SECOND restore \
+             ({ga} -> {gb})\n--- vkpipeline.out ---\n{out}"
+        );
+    }
 
     let outcome = g3
         .shutdown(Duration::from_secs(15))

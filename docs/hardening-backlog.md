@@ -342,17 +342,25 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
 
 ## M9 snapshot hardening (from the 2026-07-18 transport-restore removal)
 
-- **NEXT UP (user-designated first pick-up, 2026-07-20): live-ring contexts don't survive resume —
-  vkmark crash.** A context with a large in-flight command stream at suspend (vkmark mid-benchmark;
-  Firefox too) comes back with its ring poisoned: the restore replay dropped 3607 wire entries
-  (3539 "recording"-class) → cascading `vkr` object-lookup failures during replay → ring FATAL
-  (0026 containment, worker + session survive) → the app's first post-resume submit hits the dead
-  ring and guest venus `abort()`s (`vn_ring_submit_locked`, upstream by-design). Full evidence +
-  timeline + candidate root-cause shapes (drop cascade vs journal gap; possible overlap with the
-  0086 fence-epoch area): `spikes/m9-vkmark-resume-crash/RESULTS.md`. Repro lever: suspend with
-  vkmark running (add a vkmark leg to `venus_session_preserved` or extend the gen2-repro script).
-  Guest-side hardening candidate (upstreamable): venus failing submits with `VK_ERROR_DEVICE_LOST`
-  instead of aborting.
+- **FIXED 2026-07-20 (virglrenderer 0040): the vkmark-on-resume crash — journal create-arg
+  closure.** Root cause was neither candidate shape: the journal pruned a destroyed object's
+  create entry even when a retained CREATE referenced the id in its wire args (pipeline ←
+  destroyed shader modules/layout, legal and universal). The dropped pipeline create left a
+  guest-live pipeline missing at replay; the first parked ring command referencing it after
+  `replay_end` (FATAL sticky again) killed the ring → guest-visible FATAL status → vkmark
+  abort. Fixed by pinning every CREATE's decoded handle refs (generalizing the blob←memory pin);
+  RED/GREEN via the new `vkpipeline.py` leg in `venus_session_preserved`. Full forensics:
+  `spikes/m9-vkmark-resume-crash/RESULTS.md`; design:
+  `docs/design/venus-snapshot-replay.md` §"vkmark-on-resume crash FIXED".
+  Remaining follow-ups from the same incident, still open:
+  - guest kernel `RESOURCE_UNREF → 0x1203` right at resume (guest unref of a resource the host
+    lost) — benign-looking (kernel logs and continues), unexplained.
+  - ctx 4 (gnome-shell) `vkr_dispatch_vkWaitRingSeqnoMESA:399` ring FATAL 55 s post-resume
+    (wait for a seqno the restored ring never reached) — desktop survived; plausibly its own
+    first use of an affected pipeline (would be cured by 0040) or a seqno-epoch gap; watch
+    post-deploy.
+  - guest-side hardening candidate (upstreamable mesa): venus failing submits with
+    `VK_ERROR_DEVICE_LOST` instead of `abort()` on ring loss.
 
 - **Worker-quiesce during `dump_ram` (torn-dump race).** A device worker writing guest RAM while the
   RAM dump runs can tear the dump (used.idx advanced, payload half-copied). Pausing vCPUs stops new

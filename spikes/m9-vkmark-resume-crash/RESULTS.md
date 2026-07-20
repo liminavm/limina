@@ -1,4 +1,11 @@
-# vkmark crash on resume (dogfood, 2026-07-20) — ROOT-CAUSED
+# vkmark crash on resume (dogfood, 2026-07-20) — FIXED (virglrenderer 0040)
+
+**FIXED same day: virglrenderer 0040 (journal create-arg closure).** RED/GREEN via the new
+`vkpipeline.py` leg in the `venus_session_preserved` gate: a live compute pipeline whose
+shader module + layout were destroyed at create, heartbeating dispatches — SIGABRT at the
+first post-restore beat on pre-fix virgl (the exact vkmark death, coredump and all), survives
+both restore generations post-fix. Design write-up: docs/design/venus-snapshot-replay.md
+§"The vkmark-on-resume crash FIXED".
 
 **ROOT CAUSE (2026-07-20, from this log alone — see §Root cause below): the venus
 re-creation journal is not transitively closed over create-argument references.**
