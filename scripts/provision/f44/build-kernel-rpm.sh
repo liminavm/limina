@@ -55,10 +55,15 @@ git clean -qfdx 2>/dev/null || true
 echo "==> [3/6] limina-patch the source (tolerant — likely already upstream in $KVER)"
 shopt -s nullglob
 for p in "$PATCHES"/*.patch; do
+  case "$(basename "$p")" in 0005-*) continue ;; esac  # mandatory, applied below
   if git apply --check "$p" 2>/dev/null; then git apply "$p"; echo "    applied $(basename "$p")"
   else echo "    SKIP $(basename "$p") (does not apply — likely already upstream)"; fi
 done
 shopt -u nullglob
+# 0005 (virtio_balloon: stop page-reporting across suspend) is NOT upstream — a silent skip would
+# ship the s2idle UAF back into the image, so apply it FAIL-LOUD (drop this once it lands upstream).
+git apply "$PATCHES"/0005-virtio-balloon-stop-page-reporting-across-suspend.patch
+echo "    applied 0005-virtio-balloon-stop-page-reporting-across-suspend.patch (mandatory)"
 # We git-apply patches WITHOUT committing, so the tree is "dirty" and scripts/setlocalversion (which
 # in current kernels IGNORES an empty .scmversion) appends `-dirty` to the release even with
 # LOCALVERSION_AUTO=n — e.g. 6.19.10-limina16k-dirty, whose second dash is an INVALID rpm EVR for
