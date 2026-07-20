@@ -20,7 +20,13 @@ in `patches/kosmickrisp/`.
 |---|---|---|
 | `scripts/build-mesa-zink.sh` (guest GL/zink tree, `/opt/mesa-zink`) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`, 2026-06-07) | 0001–0006 (the zink pool) |
 | `scripts/build-venus.sh` (guest venus ICD rebuild) | tag `mesa-26.1.0` (parametric `MESA_TAG`) | 0009 + 0010 |
-| `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM) | Fedora F44 `mesa-26.1.3` SRPM | 0001 + 0009–0014 |
+| `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM) | Fedora F44 `mesa-26.1.4` SRPM (repo-current) | 0001 + 0015 + 0010–0014 |
+
+**0009 vs 0015 — same fix, two bases.** Fedora's 26.1.4 stable backported an equivalent of
+0009's `vn_wsi_clone_present_info` rectangle deep-copy, so 0009 no longer applies there.
+`0015-venus-wsi-present-fix-post-rect-clone.diff` is 0009 minus those three hunks — use it on
+bases ≥ 26.1.4-stable; keep 0009 for bases without the backport (26.1.0…26.1.3, and 26.2.0,
+which branched before it). Never apply both.
 
 gitlab.freedesktop.org is Anubis-bot-blocked → builds clone a GitHub mirror.
 
@@ -137,6 +143,13 @@ host-zink series lives separately in `patches/kosmickrisp/`.
   still has the bug (checked 2026-07-12). Clearly upstreamable. NOTE: the same code ships
   in the HOST zink-on-KK GL build (`/Volumes/mesa-cs`) — apply there on the next host mesa
   refresh.
+- **`0015-venus-wsi-present-fix-post-rect-clone.diff`** (2026-07-20, base catch-up) — the
+  0009 present-fix re-cut for bases that already carry the upstreamed
+  `vn_wsi_clone_present_info` rectangle deep-copy (Fedora mesa ≥ 26.1.4 stable): 0009 minus
+  those three hunks, keeping the vn_wsi_init modifier/format flags, the create-image
+  DRM_MOD→OPTIMAL translation, and the wsi_common/wayland plumbing. See "0009 vs 0015" in
+  the map above; validated on the F44 26.1.4-1.fc44 SRPM (PREP + full RPM build + venus ICD
+  in the payload). One of 0009/0015 per base, never both.
 
 ## Re-export / DIAG hygiene
 The in-guest working tree carried temporary `LIMINA-DIAG` debug hacks (force

@@ -82,6 +82,22 @@ ALL user extensions — on such guests the helper stamps its one-time enable, pa
 the RemoteDesktop tier. Consider `gsettings set org.gnome.shell disable-user-extensions false` in
 `make-accessible.sh` at the next image respin.
 
+**Guest-mesa 26.1.4 base catch-up + clipboard RD opt-in (2026-07-20)** — F44 guest mesa respun
+`26.1.3-4.limina` → **`26.1.4-1.limina.fc44`**, rebasing the base onto the CURRENT F44 stock SRPM
+(`26.1.4-1.fc44`, `dnf download --source` — no koji pin needed anymore). The 26.1.4 stable branch
+carries an upstream equivalent of venus patch 0009's `vn_wsi_clone_present_info` rectangle
+deep-copy, so 0009 is superseded there by **`patches/mesa/0015-venus-wsi-present-fix-post-rect-clone.diff`**
+(0009 minus those three hunks; see `patches/mesa/README.md` §"0009 vs 0015" — 0009 stays for
+26.2.0/F43, never apply both). Patch set: 0001 + 0015 + 0010–0014, all `%prep`-clean; venus
+verified in the RPM (`rpm -qlp … libvulkan_virtio.so` + `virtio_icd.aarch64.json` — the build
+script's own venus WARN false-negatived AGAIN, trust only `rpm -qlp`). The same payload updates
+**limina-agent-session**: the RemoteDesktop clipboard fallback is now **opt-in**
+(`LIMINA_CLIPBOARD_RD=1`, default off — it lights GNOME's screen-share indicator; the
+clipboard@limina extension bridge is the stock-GNOME tier). Payload =
+`guest-tools-7.1.4-mesa2614/limina-guest-tools-f44.tar.zst` (kernel 7.1.4 + mesa 26.1.4-1.limina
++ new helper; repo/ regenerated, srpm refreshed). `build-mesa-rpm.sh` gained `PREP_ONLY=1`
+(rpmbuild -bp fast patch-apply iteration).
+
 **F44 kernel 7.1.4 respin (2026-07-20)** — `limina-kernel-16k-7.1.2-1` → **`7.1.4-1.fc44`** (latest
 stable), carrying **`patches/linux/0005`** (virtio_balloon: stop page-reporting across suspend — the
 s2idle UAF the host masks with libkrun 0059; the guest-side prerequisite for re-enabling

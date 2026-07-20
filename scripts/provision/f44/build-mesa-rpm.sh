@@ -13,7 +13,10 @@
 #
 # OUR patches (patches/mesa/, see its README):
 #   0001  zink nullDescriptor emulation (MR!37115) — GL correctness on zink.
-#   0009  venus WSI present-fix — THE black-screen fix; without it the venus desktop never paints.
+#   0015  venus WSI present-fix (post-rect-clone variant of 0009) — THE black-screen fix; without
+#         it the venus desktop never paints. 0015 fits bases >= 26.1.4, whose stable branch
+#         upstreamed 0009's vn_wsi_clone_present_info rectangle deep-copy; 0009 itself is for
+#         older bases (and 26.2.0, which branched before the backport).
 #   0010  venus image physdev native modifier — advertises EXT_image_drm_format_modifier.
 #   0012  venus: degrade to the stub instance when ring/version setup fails post-connect —
 #         without it a 4 KiB-kernel boot (the stock-kernel GRUB fallback!) returns
@@ -49,8 +52,9 @@ echo "==> [1/5] fetch THIS guest's mesa SRPM"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cd "$WORK"
 # MESA_SRPM_URL pins the base to a specific SRPM (e.g. koji) instead of whatever version the
-# repos serve today — needed when the distro moves the version under us and our patches would
-# need a rebase (e.g. 26.1.4 broke 0009; the validated base is 26.1.3).
+# repos serve today — use it when the distro moves the version under us and our patches would
+# need a rebase before the new base is validated. (History: 26.1.4 broke 0009 → rebased as
+# 0015, validated 2026-07-20; 26.1.3 was the pinned base before that.)
 if [ -n "${MESA_SRPM_URL:-}" ]; then
   curl -fLO "$MESA_SRPM_URL"
 else
@@ -64,7 +68,7 @@ cp -f mesa.spec "$HOME/rpmbuild/SPECS/mesa.spec"
 
 echo "==> [2/5] add OUR venus/zink patches + bump Release"
 cp -f "$PATCHES"/0001-zink-nullDescriptor-emulation-MR37115.diff \
-      "$PATCHES"/0009-venus-wsi-present-fix.diff \
+      "$PATCHES"/0015-venus-wsi-present-fix-post-rect-clone.diff \
       "$PATCHES"/0010-venus-image-physdev-native-modifier.diff \
       "$PATCHES"/0011-venus-wsi-drop-16bit-unorm-swapchain.diff \
       "$PATCHES"/0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff \
@@ -74,7 +78,7 @@ cp -f "$PATCHES"/0001-zink-nullDescriptor-emulation-MR37115.diff \
 SPEC="$HOME/rpmbuild/SPECS/mesa.spec"
 LAST_PATCH_LINE=$( { grep -nE "^Patch[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
 [ -n "$LAST_PATCH_LINE" ] || LAST_PATCH_LINE=$( { grep -nE "^Source[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
-ins="Patch9001: 0001-zink-nullDescriptor-emulation-MR37115.diff\nPatch9009: 0009-venus-wsi-present-fix.diff\nPatch9010: 0010-venus-image-physdev-native-modifier.diff\nPatch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff\nPatch9012: 0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff\nPatch9013: 0013-venus-pin-icd-for-tls-destructor.diff\nPatch9014: 0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff"
+ins="Patch9001: 0001-zink-nullDescriptor-emulation-MR37115.diff\nPatch9009: 0015-venus-wsi-present-fix-post-rect-clone.diff\nPatch9010: 0010-venus-image-physdev-native-modifier.diff\nPatch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff\nPatch9012: 0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff\nPatch9013: 0013-venus-pin-icd-for-tls-destructor.diff\nPatch9014: 0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff"
 sed -i "${LAST_PATCH_LINE}a ${ins}" "$SPEC"
 # Our patches are plain `git diff` (no mailbox headers); ensure %autosetup uses GNU patch (-p1).
 sed -i -E "s/^%autosetup -S git/%autosetup -p1/" "$SPEC"
@@ -90,6 +94,16 @@ LIMINA_REL="${LIMINA_REL:-1}"
 sed -i -E "/^%autochangelog/d" "$SPEC"
 sed -i -E "s/^Release:.*/Release:        ${LIMINA_REL}.limina%{?dist}/" "$SPEC"
 grep -nE "^Version:|^Release:|^Patch9|^%autosetup|^%setup" "$SPEC" | head
+
+# PREP_ONLY=1: stop after proving %prep applies (Fedora patches + ours) — the fast
+# iteration loop for rebasing a patch onto a new distro base, without the builddep +
+# compile cost. --nodeps because %prep needs no BuildRequires.
+if [ -n "${PREP_ONLY:-}" ]; then
+  echo "==> PREP_ONLY: rpmbuild -bp --nodeps (patch-apply test)"
+  rpmbuild -bp --nodeps "$SPEC"
+  echo "==> PREP_ONLY: all patches applied cleanly on mesa $MESA_VER"
+  exit 0
+fi
 
 echo "==> [3/5] builddep (live, against this guest's repos)"
 sudo dnf -y builddep "$SPEC"
