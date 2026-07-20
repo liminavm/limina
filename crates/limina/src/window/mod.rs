@@ -969,6 +969,7 @@ pub fn run(
     // M9.4 felt-resume overlay: present from startup when restoring (splash until the first
     // presented frame); created by the timer when a suspend request is observed (dim scrim
     // over the live frame). One at a time.
+    let window_opened_at = std::time::Instant::now();
     let timer_overlay: std::rc::Rc<RefCell<Option<overlay::Overlay>>> =
         std::rc::Rc::new(RefCell::new(None));
     if let Some(splash) = &restore_splash {
@@ -1060,6 +1061,13 @@ pub fn run(
                         close_choice.set(None);
                         suspend_close_at.set(None);
                         CLOSE_REQUESTED.with(|c| c.set(false));
+                    } else {
+                        // The felt-resume endpoint (perf oracle): splash up → first
+                        // presented guest frame.
+                        log::info!(
+                            "restore: first frame presented {:.1}s after the window opened",
+                            window_opened_at.elapsed().as_secs_f32()
+                        );
                     }
                     o.remove();
                 }

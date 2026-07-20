@@ -680,6 +680,47 @@ and zero-page holes already capture reclaimed pages at zero delay. A bounded **o
 inflate** (low target, ~2–3 s deadline, proceed regardless) remains a possible later refinement,
 enhanced tier first (FRQ free-page reporting makes it cheap).
 
+**Suspend/resume speed vs Parallels — CLOSED 2026-07-20 (libkrun 0085 + a build-profile trap).**
+Dogfood said "much slower than Parallels"; forensics on a lived-in 8 GiB guest (seated Firefox
+session, 2.5 GiB snapshot, ~840 MB GPU section) found two compounding causes, neither in the v6
+format itself:
+
+1. **lz4_flex default features select the SAFE codec** — the checked iterator implementation.
+   The save spent ~80% of its time there (`sample` on the worker), the serial GPU-section
+   compress alone running ~100 MB/s. Fix = `default-features = false` (0085); frames stay
+   CRC-verified at apply, so torn/corrupt data is still caught.
+2. **`build-app.sh` defaulted to DEBUG**, and the 2026-07-20 dogfood deploy was a bare
+   invocation — debug assertions (ub-checks hot in the sample) stacked on the safe codec.
+   The default is now **release**; `cargo xtask app/bundle` always passed the profile
+   explicitly and was never affected.
+
+Measured on the same lived-in guest, felt end-to-end (trigger → torn down / start → first
+presented frame, via the new `first frame presented` window log):
+
+| build | suspend felt | resume felt | read / apply |
+|---|---|---|---|
+| debug + safe lz4 (deployed state) | 27.2 s | 14.0 s | 6.4 / 5.7 s |
+| debug + fast lz4 | 16.2 s | 10.4 s | 4.8 / 3.9 s |
+| **release + fast lz4 (shipped)** | **3.4 s** | **3.7 s** | 1.0 / 1.4 s |
+
+Save breakdown at the shipped config: guest s2idle quiesce ~1 s + GPU fence-drain/capture 0.2 s
++ streamed write 2.0 s. Remaining known headroom (not currently worth the churn): the GPU
+section still compresses serially in `encode_head` (~0.5 s), the restore still `fs::read`s the
+whole file before applying (mmap would overlap IO with decompress), and F_NOCACHE would stop a
+multi-GB apply from flushing the host page cache (the suspected cause of the dogfood-mac-wide UI
+stutter during dogfood-guest's resume — see the center-hang exoneration note in
+[[limina-m9-suspend-resume]]).
+
+**OPEN (filed as task #16, found during this measurement): second-generation resume aborts the
+worker.** First resume of a suspended session is green; suspending the *resumed* session and
+resuming again crashed 2/2 — cascading vkr replay `entry failed (stale reference?)` + res-import
+failures (`fd_type=-999`), ending in the KK assert `kk_descriptor_set.c:74
+(sampled_gpu_resource_id)` → SIGABRT. Reproduced across safe/fast lz4 and debug/release, so it's
+generation-correlated (GPU journal re-baseline after a first replay), not codec/build. Coverage
+gap: `venus_session_preserved` restores exactly once per lineage — needs a two-generation leg.
+Auto-resume keeps the failure safe (snapshot consumed → next start cold-boots; disk unharmed)
+but the session is lost.
+
 **Suspend/resume UX — SHIPPED 2026-07-20** (commits bff4cc3, 206d43f, 0dedba4, f881807): the four
 bullets below are implemented and eyeball-verified. Deltas from the sketches: the splash rides a
 close INTERCEPT (`windowShouldClose` returns NO; the window stays up dimmed with a CA-drawn

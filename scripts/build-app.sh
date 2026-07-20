@@ -14,11 +14,16 @@
 # remaining bundle-relative venus env (VK_ICD_FILENAMES + the zink-on-KK Mesa selectors)
 # when it detects it's running from the bundle — see crates/limina/src/venus_env.rs.
 #
-# Usage: scripts/build-app.sh [debug|release]
+# Usage: scripts/build-app.sh [release|debug]
+#
+# DEFAULT IS RELEASE: the .app is the deployable artifact, and a debug default once
+# shipped a debug build to the dogfood Mac (2026-07-20) — debug assertions + unoptimized
+# lz4 made suspend/resume look 5-10x slower than the product actually is. Pass `debug`
+# explicitly only when you need a debuggable bundle.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
-PROFILE="${1:-debug}"
+PROFILE="${1:-release}"
 
 APP="$ROOT/target/Limina.app"
 MACOS="$APP/Contents/MacOS"
