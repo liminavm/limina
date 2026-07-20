@@ -540,7 +540,7 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         let vmm_for_bracket = vmm.clone();
         std::thread::Builder::new()
             .name("suspend-bracket".into())
-            .spawn(move || {
+            .spawn(move || loop {
                 if let Err(e) = trigger.read() {
                     log::error!("bracket: trigger read failed: {e}; suspend bracket disabled");
                     return;
@@ -579,7 +579,7 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                          (holdouts: {holdouts:?}); waking it and aborting the suspend (VM lives on)"
                     );
                     crate::wake::pulse();
-                    return;
+                    continue; // re-arm: the next SIGTSTP gets a fresh bracket
                 }
 
                 log::info!("bracket: guest quiesced; capturing snapshot to {bracket_path:?}");

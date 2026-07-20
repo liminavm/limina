@@ -366,6 +366,21 @@ and re-suspended the restored guest into an unwakeable sleep (run-11 class, repr
 operationally). Known cosmetic follow-up: the guest cursor comes back as a small dot
 (cursor plane/resource state is not journaled) — P3.
 
+**P2.1 closed out (2026-07-20).** Full HVF suite green (32/32) on the final stack. A scripted
+windowed re-measure (WebGL blobs demo launched into the seated session, suspend → restore)
+retired the eyeball round's CPU/FPS observation: post-restore worker CPU matches the
+pre-suspend baseline (62.6% avg vs ~67%), the demo animates at 50–60 fps with no present-cadence
+gap over 3 s, and zero >500 ms ring-wait stalls logged — the stutter the eyeball round saw was
+entirely the unconditional hot-path log, not a restore defect. Confirmed by human eyeball on
+the committed stack: a fresh cold boot and a live suspend→restore cycle were both judged
+smooth, with no stutter, FPS instability, or compositor hangs. The re-measure also flushed out a
+real bracket bug, fixed RED-first (limina c3c9f22): the SIGTSTP suspend-bracket thread was
+one-shot — after an aborted suspend (quiesce timeout or failed save) it died and every later
+SIGTSTP was silently swallowed, so a VM whose first suspend failed could never be suspended
+again. The bracket now loops and re-arms on both abort paths;
+`l2_suspend_bracket_aborts_when_guest_cannot_quiesce` fires it twice and asserts one abort per
+trigger.
+
 ## 9. Phasing
 
 - **P0 — recording infrastructure.** Classification table, journal + tombstones in vkr, rutabaga

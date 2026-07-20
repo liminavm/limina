@@ -300,5 +300,25 @@ fn l2_suspend_bracket_aborts_when_guest_cannot_quiesce() {
         after.0
     );
 
+    // RE-ARM guard: an aborted suspend must not disable the bracket for the rest of the worker's
+    // life (a one-shot trigger thread silently swallows every later SIGTSTP, so a VM whose first
+    // suspend fails can never be suspended again). Fire the bracket a second time — it must run a
+    // full second cycle, which aborts the same way since this guest still can't quiesce.
+    guest
+        .suspend_bracket()
+        .expect("sending the second SIGTSTP suspend bracket");
+    std::thread::sleep(Duration::from_secs(28));
+    let log = guest.supervisor_log();
+    assert_eq!(
+        log.matches("did not quiesce").count(),
+        2,
+        "expected a second bracket abort (one 'did not quiesce' per SIGTSTP) — an aborted \
+         bracket must re-arm, not die; got:\n{log}"
+    );
+    assert!(
+        guest.worker_pid().is_ok(),
+        "worker should still be running after the second aborted suspend"
+    );
+
     let _ = guest.shutdown(Duration::from_secs(10));
 }
