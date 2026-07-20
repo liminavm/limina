@@ -342,6 +342,18 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
 
 ## M9 snapshot hardening (from the 2026-07-18 transport-restore removal)
 
+- **NEXT UP (user-designated first pick-up, 2026-07-20): live-ring contexts don't survive resume —
+  vkmark crash.** A context with a large in-flight command stream at suspend (vkmark mid-benchmark;
+  Firefox too) comes back with its ring poisoned: the restore replay dropped 3607 wire entries
+  (3539 "recording"-class) → cascading `vkr` object-lookup failures during replay → ring FATAL
+  (0026 containment, worker + session survive) → the app's first post-resume submit hits the dead
+  ring and guest venus `abort()`s (`vn_ring_submit_locked`, upstream by-design). Full evidence +
+  timeline + candidate root-cause shapes (drop cascade vs journal gap; possible overlap with the
+  0086 fence-epoch area): `spikes/m9-vkmark-resume-crash/RESULTS.md`. Repro lever: suspend with
+  vkmark running (add a vkmark leg to `venus_session_preserved` or extend the gen2-repro script).
+  Guest-side hardening candidate (upstreamable): venus failing submits with `VK_ERROR_DEVICE_LOST`
+  instead of aborting.
+
 - **Worker-quiesce during `dump_ram` (torn-dump race).** A device worker writing guest RAM while the
   RAM dump runs can tear the dump (used.idx advanced, payload half-copied). Pausing vCPUs stops new
   kicks but not asynchronous writers already in motion — loudest is **net RX from gvproxy** (delivers

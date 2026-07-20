@@ -1,0 +1,75 @@
+           PID: 9088 (vkmark)
+           UID: 1000 (kov)
+           GID: 1000 (kov)
+        Signal: 6 (ABRT)
+     Timestamp: Mon 2026-07-20 15:08:46 -03 (17min ago)
+  Command Line: vkmark
+    Executable: /usr/bin/vkmark
+ Control Group: /user.slice/user-1000.slice/user@1000.service/app.slice/app-org.gnome.Terminal.slice/vte-spawn-8ef059ea-ea27-4a60-a0b4-85131d6ed6cf.scope
+          Unit: user@1000.service
+     User Unit: vte-spawn-8ef059ea-ea27-4a60-a0b4-85131d6ed6cf.scope
+         Slice: user-1000.slice
+     Owner UID: 1000 (kov)
+       Boot ID: 3fa43974764847c5a869d9b944a58f80
+    Machine ID: f2e1fc6f47d8484ba3804011f0bd423f
+      Hostname: dogfood-guest
+       Storage: /var/lib/systemd/coredump/core.vkmark.1000.3fa43974764847c5a869d9b944a58f80.9088.1784570926000000.zst (present)
+  Size on Disk: 2.6M
+       Package: vkmark/2025.01-3.20250123git2bf2ca7.fc44
+      build-id: 75a7fa18c1faf369356f80358b852140416f902c
+       Message: Process 9088 (vkmark) of user 1000 dumped core.
+                
+                Module libVkLayer_MESA_device_select.so from rpm mesa-26.1.4-1.limina.fc44.aarch64
+                Module libXau.so.6 from rpm libXau-1.0.12-4.fc44.aarch64
+                Module libexpat.so.1 from rpm expat-2.8.1-1.fc44.aarch64
+                Module libudev.so.1 from rpm systemd-259.7-1.fc44.aarch64
+                Module libdisplay-info.so.3 from rpm libdisplay-info-0.3.0-1.fc44.aarch64
+                Module libxshmfence.so.1 from rpm libxshmfence-1.3.2-8.fc44.aarch64
+                Module libxcb-shm.so.0 from rpm libxcb-1.17.0-7.fc44.aarch64
+                Module libxcb-randr.so.0 from rpm libxcb-1.17.0-7.fc44.aarch64
+                Module libxcb-sync.so.1 from rpm libxcb-1.17.0-7.fc44.aarch64
+                Module libxcb-xfixes.so.0 from rpm libxcb-1.17.0-7.fc44.aarch64
+                Module libxcb-present.so.0 from rpm libxcb-1.17.0-7.fc44.aarch64
+                Module libxcb-dri3.so.0 from rpm libxcb-1.17.0-7.fc44.aarch64
+                Module libX11-xcb.so.1 from rpm libX11-1.8.13-1.fc44.aarch64
+                Module libxcb.so.1 from rpm libxcb-1.17.0-7.fc44.aarch64
+                Module libdrm.so.2 from rpm libdrm-2.4.134-1.fc44.aarch64
+                Module libzstd.so.1 from rpm zstd-1.5.7-5.fc44.aarch64
+                Module libvulkan_virtio.so from rpm mesa-26.1.4-1.limina.fc44.aarch64
+                Module libffi.so.8 from rpm libffi-3.5.2-2.fc44.aarch64
+                Module libwayland-client.so.0 from rpm wayland-1.25.0-1.fc44.aarch64
+                Module wayland.so from rpm vkmark-2025.01-3.20250123git2bf2ca7.fc44.aarch64
+                Module libpugixml.so.1 from rpm pugixml-1.16-1.fc44.aarch64
+                Module libpoly2tri.so.1.0 from rpm poly2tri-0.0^20130501hg26242d0aa7b8-7.fc44.aarch64
+                Module libz.so.1 from rpm zlib-ng-2.3.3-3.fc44.aarch64
+                Module libassimp.so.6 from rpm assimp-6.0.5-2.fc44.aarch64
+                Module libvulkan.so.1 from rpm vulkan-loader-1.4.341.0-1.fc44.aarch64
+                Module vkmark from rpm vkmark-2025.01-3.20250123git2bf2ca7.fc44.aarch64
+                Stack trace of thread 9088:
+                #0  0x0000ffff5be4ff70 __pthread_kill_implementation (libc.so.6 + 0x8ff70)
+                #1  0x0000ffff5bdfb89c raise (libc.so.6 + 0x3b89c)
+                #2  0x0000ffff5bde6720 abort (libc.so.6 + 0x26720)
+                #3  0x0000ffff5baead40 vn_ring_submit_locked (libvulkan_virtio.so + 0x7ad40)
+                #4  0x0000ffff5baeae68 vn_ring_submit_command (libvulkan_virtio.so + 0x7ae68)
+                #5  0x0000ffff5ba7b764 vn_buffer_init (libvulkan_virtio.so + 0xb764)
+                #6  0x0000ffff5ba7be50 vn_buffer_create (libvulkan_virtio.so + 0xbe50)
+                #7  0x0000ffff5ba7bf6c vn_CreateBuffer (libvulkan_virtio.so + 0xbf6c)
+                #8  0x0000aaaac3d47c7c _ZN6vkutil13BufferBuilder5buildEv (vkmark + 0x17c7c)
+                #9  0x0000aaaac3d7127c _ZN9CubeScene5setupER11VulkanStateRKSt6vectorI11VulkanImageSaIS3_EE (vkmark + 0x4127c)
+                #10 0x0000aaaac3db7d10 _ZN8MainLoop3runEv (vkmark + 0x87d10)
+                #11 0x0000aaaac3d399bc main (vkmark + 0x99bc)
+                #12 0x0000ffff5bde6f1c __libc_start_call_main (libc.so.6 + 0x26f1c)
+                #13 0x0000ffff5bde705c __libc_start_main@@GLIBC_2.34 (libc.so.6 + 0x2705c)
+                #14 0x0000aaaac3d3fd30 _start (vkmark + 0xfd30)
+                
+                Stack trace of thread 9099:
+                #0  0x0000ffff5be577a8 __syscall_cancel_arch (libc.so.6 + 0x977a8)
+                #1  0x0000ffff5be4a300 __internal_syscall_cancel (libc.so.6 + 0x8a300)
+                #2  0x0000ffff5be4a774 __GI___futex_abstimed_wait_cancelable64 (libc.so.6 + 0x8a774)
+                #3  0x0000ffff5be4d508 pthread_cond_wait@@GLIBC_2.17 (libc.so.6 + 0x8d508)
+                #4  0x0000ffff5bb5b650 cnd_wait (libvulkan_virtio.so + 0xeb650)
+                #5  0x0000ffff5baf0dbc vn_wsi_present_thread (libvulkan_virtio.so + 0x80dbc)
+                #6  0x0000ffff5bb5b540 impl_thrd_routine (libvulkan_virtio.so + 0xeb540)
+                #7  0x0000ffff5be4e0fc start_thread (libc.so.6 + 0x8e0fc)
+                #8  0x0000ffff5beb845c thread_start (libc.so.6 + 0xf845c)
+                ELF object binary architecture: AARCH64

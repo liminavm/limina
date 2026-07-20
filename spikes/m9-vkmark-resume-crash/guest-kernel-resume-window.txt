@@ -1,0 +1,19 @@
+Jul 20 15:07:48 dogfood-guest kernel: PM: suspend entry (s2idle)
+Jul 20 15:07:48 dogfood-guest kernel: Filesystems sync: 0.075 seconds
+Jul 20 15:08:46 dogfood-guest kernel: Freezing user space processes
+Jul 20 15:08:46 dogfood-guest kernel: Freezing user space processes completed (elapsed 0.002 seconds)
+Jul 20 15:08:46 dogfood-guest kernel: OOM killer disabled.
+Jul 20 15:08:46 dogfood-guest kernel: Freezing remaining freezable tasks
+Jul 20 15:08:46 dogfood-guest kernel: Freezing remaining freezable tasks completed (elapsed 0.000 seconds)
+Jul 20 15:08:46 dogfood-guest kernel: printk: Suspending console(s) (use no_console_suspend to debug)
+Jul 20 15:08:46 dogfood-guest kernel: PM: suspend devices took 5.086 seconds
+Jul 20 15:08:46 dogfood-guest kernel: virtio_blk virtio9: 1/0/0 default/read/poll queues
+Jul 20 15:08:46 dogfood-guest kernel: PM: resume devices took 2.011 seconds
+Jul 20 15:08:46 dogfood-guest kernel: OOM killer enabled.
+Jul 20 15:08:46 dogfood-guest kernel: Restarting tasks: Starting
+Jul 20 15:08:46 dogfood-guest kernel: Restarting tasks: Done
+Jul 20 15:08:46 dogfood-guest kernel: efivarfs: resyncing variable state
+Jul 20 15:08:46 dogfood-guest kernel: efivarfs: finished resyncing variable state
+Jul 20 15:08:46 dogfood-guest kernel: random: crng reseeded on system resumption
+Jul 20 15:08:46 dogfood-guest kernel: PM: suspend exit
+Jul 20 15:08:46 dogfood-guest kernel: [drm:virtio_gpu_dequeue_ctrl_func] *ERROR* response 0x1203 (command 0x102)
