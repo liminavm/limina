@@ -91,6 +91,13 @@ pub struct Hardware {
     /// See `--mic`.
     #[serde(default)]
     pub mic: bool,
+    /// Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` to the guest (default false; M6 addendum
+    /// 2026-07-20). The bit makes Linux keep ballooned pages inside `MemTotal`, so an inflated
+    /// dynamic VM reads as nearly out of memory and systemd-oomd fires; without it accounting
+    /// stays truthful and the supervisor's PSI policy owns the release path. Escape hatch only.
+    /// See `--balloon-deflate-on-oom`.
+    #[serde(default)]
+    pub balloon_deflate_on_oom: bool,
 }
 
 fn default_true() -> bool {
@@ -106,6 +113,7 @@ impl Default for Hardware {
             battery: true,
             snd: true,
             mic: false,
+            balloon_deflate_on_oom: false,
         }
     }
 }
@@ -457,6 +465,19 @@ mod tests {
         assert!(back.display.window);
         assert_eq!(back.display.resolution, DisplayResolution::Host);
         assert!(back.input.swap_cmd_opt);
+    }
+
+    #[test]
+    fn balloon_deflate_on_oom_defaults_off_and_round_trips() {
+        // Absent key (every pre-existing vm.toml) → off: accounting stays transparent.
+        let h: Hardware = toml::from_str("").unwrap();
+        assert!(!h.balloon_deflate_on_oom);
+
+        // The escape hatch survives a save/load cycle.
+        let h: Hardware = toml::from_str("balloon_deflate_on_oom = true").unwrap();
+        assert!(h.balloon_deflate_on_oom);
+        let back: Hardware = toml::from_str(&toml::to_string(&h).unwrap()).unwrap();
+        assert!(back.balloon_deflate_on_oom);
     }
 
     #[test]

@@ -182,6 +182,14 @@ struct Cli {
     #[arg(long)]
     balloon_free_page_reporting: bool,
 
+    /// Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` to the guest. OFF by default: the bit makes
+    /// Linux keep ballooned pages inside `MemTotal` (transparent accounting), so an inflated
+    /// dynamic VM looks almost out of memory and systemd-oomd starts killing; the supervisor's
+    /// PSI policy is the release path instead. Escape hatch for guests that need the in-kernel
+    /// deflate-at-OOM net (see docs/design/m6-dynamic-memory.md, 2026-07-20 addendum).
+    #[arg(long)]
+    balloon_deflate_on_oom: bool,
+
     /// Attach a user-mode NAT NIC (`eth0`) connected to a gvproxy gateway listening on
     /// this vfkit unixgram socket. The supervisor spawns gvproxy and guarantees it is up
     /// before the guest activates the device.
@@ -491,6 +499,7 @@ fn main() -> Result<()> {
         snd: !cli.no_snd,
         mic: cli.mic,
         free_page_reporting: cli.balloon_free_page_reporting,
+        deflate_on_oom: cli.balloon_deflate_on_oom,
         snapshot_file: cli.snapshot_file,
         restore_file: cli.restore,
     };

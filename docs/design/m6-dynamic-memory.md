@@ -735,3 +735,36 @@ will now see the effective size instead; that's the honest number.
 the managed count anyway. Fixes only the enhanced tier, forks accounting semantics from
 upstream (the tie between the bit and the accounting is deliberate there), and isn't
 upstreamable — the host-side bit drop is the smaller, two-tier-clean change.
+
+### Implemented (2026-07-20, libkrun 0087)
+
+Shipped exactly as decided, in commit 69a2551:
+
+- **libkrun 0087**: `AVAIL_FEATURES` no longer carries the bit;
+  `Balloon::new(free_page_reporting, deflate_on_oom)` re-advertises it per VM via
+  `VmResources::balloon_deflate_on_oom` (default false).
+- **Escape hatch (compensation 2)**: `--balloon-deflate-on-oom` on both binaries, plus
+  vm.toml `[hardware] balloon_deflate_on_oom = true` (default false, round-trip-tested).
+- **Burst guard (compensation 1)**: `balloon_burst.rs` / `allocation_burst_survives_inflated_balloon`,
+  registered in `test-boot.sh`. The harness plays the agent (as in `balloon_psi.rs`),
+  inflates to the policy cap via synthetic idle reports (3840 MiB on the 2048..6144 test
+  VM — effective guest memory ≈ 2 GiB), then runs a 3 GiB C-speed anonymous memset burst
+  (python3 ctypes, 12×256 MiB) in the guest while relaying its **real**
+  `/proc/pressure/memory` + `/proc/meminfo` to the policy at the agent's ~1 s cadence.
+  Assertions: the burst completes AND `journalctl -k` shows zero OOM kills.
+- **Post-drop verdict: GREEN.** The relay trace caught `MemAvailable` cratering to
+  757 MiB, then the PSI spike (`some_avg10` = 4.16 %) with a 256 MiB policy release while
+  direct reclaim spilled the burst's (compressible) pages to zram — burst completed, no
+  OOM. On a stock guest the release path is **policy deflate + zram absorbing the
+  overshoot**, and that combination held even with the balloon pinned at its cap.
+- Transparent accounting observed live: guest `MemTotal` tracked the balloon 1:1 all the
+  way down to ≈ `min` (2055 MiB shown for the 2048 MiB floor — the delta is the kernel's
+  own reservations), and back up on release. The MemTotal≈min presentation described
+  above is exactly what the guest now shows.
+
+Two test-vehicle traps worth remembering (both bit silently): a `\`-continued Rust string
+literal strips the next line's leading whitespace, which de-indented the staged python so
+it died instantly with `IndentationError` while the constant avail/total gap in the relay
+trace was the only tell the burst never ran; and `pgrep -f <pattern>` over ssh matches the
+ssh-spawned shell whose own command line carries the pattern — bracket the first character
+(`pgrep -f '[b]urst.py'`) or a dead allocator looks alive forever.

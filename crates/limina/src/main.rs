@@ -218,6 +218,14 @@ struct Cli {
     #[arg(long)]
     balloon_free_page_reporting: bool,
 
+    /// Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` to the guest — forwarded to the worker.
+    /// OFF by default (M6 addendum, 2026-07-20): the bit makes Linux keep ballooned pages inside
+    /// `MemTotal`, so an inflated dynamic VM reads as nearly out of memory and systemd-oomd
+    /// starts killing; the PSI policy's deflate is the release path instead. Escape hatch for a
+    /// guest whose workload provably needs the in-kernel deflate-at-OOM net.
+    #[arg(long)]
+    balloon_deflate_on_oom: bool,
+
     /// Force the software-2D-only GPU (no virglrenderer/venus). Default is the coexist device
     /// (software-2D 2D + Venus 3D). Use for the capture oracle or the local-Terminal GPU-init hang.
     #[arg(long)]
@@ -767,6 +775,7 @@ fn cli_from_definition(
         // Managed VMs keep the safe default (off): a stock guest that negotiates F_REPORTING
         // crashes on s2idle. Per-VM enablement belongs with enhanced-tier capability detection.
         balloon_free_page_reporting: false,
+        balloon_deflate_on_oom: cfg.hardware.balloon_deflate_on_oom,
         reclaim: ov.reclaim.unwrap_or(cfg.hardware.reclaim),
         gpu_software_2d: cfg.display.gpu == GpuMode::Software2d,
         no_battery: !cfg.hardware.battery,
@@ -1016,6 +1025,12 @@ fn run_vm(cli: Cli) -> Result<()> {
     // negotiates it crashes on s2idle).
     if cli.balloon_free_page_reporting {
         args.push("--balloon-free-page-reporting".into());
+    }
+
+    // DEFLATE_ON_OOM escape hatch (see the flag doc: default off so balloon accounting stays
+    // transparent and systemd-oomd doesn't fire against phantom memory use).
+    if cli.balloon_deflate_on_oom {
+        args.push("--balloon-deflate-on-oom".into());
     }
 
     // User-mode NAT: spawn + supervise a gvproxy gateway and connect the guest NIC to it.

@@ -224,6 +224,14 @@ pub struct VmSpec {
     /// enhanced-tier guests carrying the kernel fix. Stock keeps the coarser inflate-time reclaim and
     /// s2idles safely. See `devices::virtio::Balloon::new`.
     pub free_page_reporting: bool,
+    /// Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` to the guest. **Default false** (M6 addendum,
+    /// 2026-07-20): with the bit set, Linux stops subtracting ballooned pages from `MemTotal`
+    /// ("transparent accounting"), so a dynamic VM inflated toward `min` reads as nearly
+    /// out-of-memory to the guest and its userspace killers (systemd-oomd) fire long before the
+    /// kernel's balloon-deflate OOM notifier could help. Without the bit, inflated pages leave
+    /// `MemTotal`, accounting stays truthful, and the supervisor's PSI policy owns the release
+    /// path. Escape hatch only — for a guest whose workload provably needs the in-kernel net.
+    pub deflate_on_oom: bool,
     /// Where to write the VM snapshot on a SIGUSR1 suspend trigger (M9 suspend/resume). When set,
     /// the worker installs the SIGUSR1 handler and a trigger thread; on signal it quiesces the
     /// vCPUs, serializes vCPU+GIC+RAM here, and exits [`WORKER_EXIT_SNAPSHOT`](126). `None` = no
