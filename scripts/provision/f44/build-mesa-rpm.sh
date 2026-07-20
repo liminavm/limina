@@ -32,6 +32,11 @@
 #         a cross-context map (e.g. glReadPixels) can sleep forever on a cnd_broadcast that
 #         fired between the unlocked predicate check and the cnd_wait
 #         (spikes/venus-replay-zink-hang-2026-07-12/, live-confirmed; unfixed upstream).
+#   0016  venus: surface ring loss as VK_ERROR_DEVICE_LOST instead of abort() — a dead venus
+#         ring (host-side FATAL, e.g. a snapshot-restore replay gap) used to abort() the whole
+#         process at its next submit/wait (the 2026-07-20 vkmark-on-resume SIGABRT); now the
+#         loss propagates as DEVICE_LOST from the calling entrypoints (upstream-shaped;
+#         spikes/m9-vkmark-resume-crash/RESULTS.md).
 # These were authored on mesa 26.1.0; F44 ships 26.0.x, so they may need a rebase. We add them via
 # the spec (NOT a tolerant pre-apply) ON PURPOSE: a non-applying patch FAILS %prep loudly, rather
 # than silently shipping a present-fix-less (black-screen) mesa.
@@ -74,11 +79,12 @@ cp -f "$PATCHES"/0001-zink-nullDescriptor-emulation-MR37115.diff \
       "$PATCHES"/0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff \
       "$PATCHES"/0013-venus-pin-icd-for-tls-destructor.diff \
       "$PATCHES"/0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff \
+      "$PATCHES"/0016-venus-ring-loss-device-lost-not-abort.diff \
       "$HOME/rpmbuild/SOURCES/"
 SPEC="$HOME/rpmbuild/SPECS/mesa.spec"
 LAST_PATCH_LINE=$( { grep -nE "^Patch[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
 [ -n "$LAST_PATCH_LINE" ] || LAST_PATCH_LINE=$( { grep -nE "^Source[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
-ins="Patch9001: 0001-zink-nullDescriptor-emulation-MR37115.diff\nPatch9009: 0015-venus-wsi-present-fix-post-rect-clone.diff\nPatch9010: 0010-venus-image-physdev-native-modifier.diff\nPatch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff\nPatch9012: 0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff\nPatch9013: 0013-venus-pin-icd-for-tls-destructor.diff\nPatch9014: 0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff"
+ins="Patch9001: 0001-zink-nullDescriptor-emulation-MR37115.diff\nPatch9009: 0015-venus-wsi-present-fix-post-rect-clone.diff\nPatch9010: 0010-venus-image-physdev-native-modifier.diff\nPatch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff\nPatch9012: 0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff\nPatch9013: 0013-venus-pin-icd-for-tls-destructor.diff\nPatch9014: 0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff\nPatch9016: 0016-venus-ring-loss-device-lost-not-abort.diff"
 sed -i "${LAST_PATCH_LINE}a ${ins}" "$SPEC"
 # Our patches are plain `git diff` (no mailbox headers); ensure %autosetup uses GNU patch (-p1).
 sed -i -E "s/^%autosetup -S git/%autosetup -p1/" "$SPEC"

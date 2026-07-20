@@ -20,7 +20,7 @@ in `patches/kosmickrisp/`.
 |---|---|---|
 | `scripts/build-mesa-zink.sh` (guest GL/zink tree, `/opt/mesa-zink`) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`, 2026-06-07) | 0001–0006 (the zink pool) |
 | `scripts/build-venus.sh` (guest venus ICD rebuild) | tag `mesa-26.1.0` (parametric `MESA_TAG`) | 0009 + 0010 |
-| `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM) | Fedora F44 `mesa-26.1.4` SRPM (repo-current) | 0001 + 0015 + 0010–0014 |
+| `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM) | Fedora F44 `mesa-26.1.4` SRPM (repo-current) | 0001 + 0015 + 0010–0014 + 0016 |
 
 **0009 vs 0015 — same fix, two bases.** Fedora's 26.1.4 stable backported an equivalent of
 0009's `vn_wsi_clone_present_info` rectangle deep-copy, so 0009 no longer applies there.
@@ -150,6 +150,20 @@ host-zink series lives separately in `patches/kosmickrisp/`.
   DRM_MOD→OPTIMAL translation, and the wsi_common/wayland plumbing. See "0009 vs 0015" in
   the map above; validated on the F44 26.1.4-1.fc44 SRPM (PREP + full RPM build + venus ICD
   in the payload). One of 0009/0015 per base, never both.
+- **`0016-venus-ring-loss-device-lost-not-abort.diff`** (2026-07-20, resume-crash hardening) —
+  venus: surface ring loss as `VK_ERROR_DEVICE_LOST` instead of `abort()`. A dead venus ring
+  (host sets `VK_RING_STATUS_FATAL_BIT_MESA` — e.g. a snapshot-restore replay gap, the
+  2026-07-20 vkmark-on-resume SIGABRT) used to abort() the process at its next submit
+  (`vn_ring_submit_internal`), relax-wait (`vn_relax`), or feedback probe (ffb/sfb/qfb).
+  Now: `vn_relax` returns false on ring FATAL (callers stop waiting), the ring submit/wait
+  paths return DEVICE_LOST (submission bookkeeping unwound, reply decoder NULLed so
+  generated `vn_call_*` fail cleanly), and the three feedback probes propagate instead of
+  aborting. The watchdog/iter aborts (renderer HANG detection) are deliberately unchanged.
+  Authored on the mesa-cs tree (26.2-era); applies to both the F44 26.1.4 SRPM base and the
+  F43 26.2.0 snapshot — **F43 (`scripts/build-mesa-rpm.sh`) not yet wired; add it at the
+  next F43 respin.** Upstream mesa still aborts (checked 2026-07-20). Clearly upstreamable —
+  companion to the host-side virglrenderer 0040 create-arg closure
+  (`spikes/m9-vkmark-resume-crash/RESULTS.md`).
 
 ## Re-export / DIAG hygiene
 The in-guest working tree carried temporary `LIMINA-DIAG` debug hacks (force
