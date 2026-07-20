@@ -566,6 +566,15 @@ Tests: `crates/limina-test/tests/balloon.rs` (FRQ reclaim drops `phys_footprint`
 `balloon_inflate.rs` (target→`actual`→guest), `balloon_psi.rs` (PSI policy inflate/deflate), plus
 coalescer + policy + proto unit tests.
 
+> **Post-M6 decision (2026-07-20): drop `DEFLATE_ON_OOM`** (reverses task 2's "advertise it"
+> below). The bit is why a freshly booted VM looks out of memory: Linux keeps ballooned pages in
+> `MemTotal` (counted as *used*) exactly when the bit is negotiated, and only subtracts them from
+> the totals without it — so dropping it makes balloon inflation transparent (`MemTotal` tracks
+> effective RAM, usage reads true) on stock and enhanced guests alike, host-side only. Its
+> guest-side OOM net is also preempted by systemd-oomd on modern Fedora anyway. Costs and required
+> compensations (RED-first allocation-burst test before the drop, possible per-VM escape hatch):
+> full analysis in the 2026-07-20 addendum of `docs/design/m6-dynamic-memory.md`.
+
 **Goal:** the VM is given a `min..max` RAM range; it takes memory under guest pressure and returns
 it to macOS when idle, with `phys_footprint` actually dropping.
 

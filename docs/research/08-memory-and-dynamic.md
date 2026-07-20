@@ -299,6 +299,15 @@ dynamic memory.
    `/proc/pressure/memory` + `MemAvailable`; host control loop with hysteresis,
    rate-limiting, clamped to `[min,max]`, driving `krun_balloon_set_target`.
 
+> **Update 2026-07-20 — `F_DEFLATE_ON_OOM` recommendation reversed.** The bit was advertised
+> as planned (M6, patch 0034) and is now being **dropped**: Linux keeps ballooned pages in
+> `MemTotal`/counted-as-used exactly when the bit is negotiated (`fill_balloon()` skips
+> `adjust_managed_page_count` — the accounting is keyed on the bit, commit `997e120843e8`),
+> which makes a freshly ballooned VM look out of memory and feeds systemd-oomd false
+> pressure that preempts the bit's own OOM notifier. Without the bit, `MemTotal` tracks
+> effective RAM and inflation is transparent. Analysis + compensations: the 2026-07-20
+> addendum in `docs/design/m6-dynamic-memory.md`.
+
 **Defer Option E (virtio-mem)** until balloon proves insufficient (very large
 swings, fragmentation). It is the right long-term tool for big grow ranges but a
 large, risky from-scratch device.
@@ -333,7 +342,9 @@ libkrun:
       even while `hv_vm_map`'d).
 - [ ] 16 KiB host-page alignment/coalescing in `process_frq()` (and the new inflate handler).
 - [ ] Implement IFQ (and DFQ) handlers (currently stubs, `event_handler.rs:14-40`); update `num_pages`/`actual` in config; config-change interrupt.
-- [ ] Advertise `F_DEFLATE_ON_OOM` (and consider `STATS` impl) at `device.rs:27-30`.
+- [ ] ~~Advertise `F_DEFLATE_ON_OOM` (and consider `STATS` impl) at `device.rs:27-30`.~~
+      **Reversed 2026-07-20** — the bit makes ballooned pages read as used in the guest;
+      being dropped (see §4 update above).
 - [ ] Public C API (`krun_add_balloon`, `_set_target`, `_get_actual`, `_get_stats`) in `src/libkrun/src/lib.rs` + `include/libkrun.h`; thread `min/max` through `VmConfig` (`lib.rs:570`).
 
 limina:

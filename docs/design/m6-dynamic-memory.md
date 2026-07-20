@@ -234,6 +234,10 @@ enhanced 16 KiB guest → mask is always `full` after one page → exact 1:1 rec
 
 ### Step 2 — Inflate/deflate handlers + `DEFLATE_ON_OOM` + target + `BalloonControlHandle`
 
+> **2026-07-20:** `DEFLATE_ON_OOM` is being **dropped** — it's what makes ballooned memory
+> read as "used" inside the guest. See the transparent-accounting addendum at the end of
+> this doc; the rest of Step 2 stands as built.
+
 **Patch:** `patches/libkrun/0034-limina-balloon-inflate-deflate-target-DEFLATE_ON_OOM-.patch`
 (subject: `limina: balloon — inflate/deflate handlers, num_pages target, DEFLATE_ON_OOM, BalloonControlHandle`).
 
@@ -564,7 +568,7 @@ appear. A guest mid-upgrade (some pieces present) is normal and tolerated.
 | M5 | major | The L1 reclaim test's page-reporting may not fire deterministically. | `munmap`+`compact_memory` nudge + generous poll; Step 2's inflate path is the **deterministic forcing oracle**; the safety unit test is fully deterministic. |
 | M6 | major | Roadmap says add a `krun_*` C API; project decision is internal Rust only. | `BalloonControlHandle` internal Rust API (mirrors shipped `DisplayResizeHandle`); C shim **deferred** (§4). |
 | M7 | major | `phys_footprint` of which process? Supervisor RSS won't reflect reclaim. | Measure the **worker** (limina-vmm holds the guest-RAM `MAP_ANON`) via `proc_listchildpids`+`proc_pid_rusage` `ri_phys_footprint`. |
-| M8 | major | `DEFLATE_ON_OOM` must be advertised **before** driving inflate. | Feature bit lands in the **same patch (0034)** as the inflate handlers; inflate is never driven by a build lacking it. |
+| M8 | major | `DEFLATE_ON_OOM` must be advertised **before** driving inflate. | Feature bit lands in the **same patch (0034)** as the inflate handlers; inflate is never driven by a build lacking it. **Superseded 2026-07-20:** the bit is being dropped — see the transparent-accounting addendum at the end of this doc. |
 | M9 | minor | config-change raised while the device is briefly Inactive. | `target_evt` stays hot; `num_pages` applied on activate; the guest reads it after activate (parallels the GPU resize "applied on next service" path). |
 | m10 | minor | Balloon STATS_VQ guest stats not parsed. | Deferred — the PSI agent supplies richer pressure data; `handle_stq_event` keeps draining (`event_handler.rs:42-54`). |
 | m11 | minor | `psi=1` may be off on stock Fedora. | Agent `MemAvailable`-only fallback; enhanced image sets `psi=1`. |
@@ -659,3 +663,75 @@ Fixes (all in `decide()` / `on_pressure`, unit-tested as `inflation_steps_are_sm
 Debuggability: the worker's balloon `stats` reply now includes the last commanded
 `target=<bytes>` alongside `actual`/`reclaimed` — the target/actual gap (guest failing to
 inflate) is exactly the oscillation signature, and it was invisible during the diagnosis.
+
+## Addendum (2026-07-20): drop `DEFLATE_ON_OOM` — transparent balloon accounting
+
+**Decision: stop advertising `VIRTIO_BALLOON_F_DEFLATE_ON_OOM`.** This supersedes Step 2's
+"OOM safety net" rationale and risk **M8** in §6. Implementation pending (see the
+compensations below — the burst test lands RED-first, before the bit is dropped).
+
+**The symptom.** A freshly booted managed VM looks nearly out of memory: the autoballoon
+inflates toward `min` right after boot, and `free`/htop/GNOME System Monitor show
+`MemTotal = max` with almost all of it "used" — alarming, and indistinguishable from real
+exhaustion inside the guest.
+
+**Why — guest accounting is keyed on this exact bit.** Linux's `virtio_balloon` subtracts
+ballooned pages from the managed page count **only when `DEFLATE_ON_OOM` is NOT negotiated**
+(verified against v6.12 `drivers/virtio/virtio_balloon.c`, `fill_balloon()`/`leak_balloon()`):
+
+```c
+if (!virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_DEFLATE_ON_OOM))
+    adjust_managed_page_count(page, -1);   /* +1 on leak */
+```
+
+With the bit (what we ship today): inflated pages stay in `MemTotal` but sit allocated and
+unreclaimable → they read as *used*, `MemAvailable` collapses. Without the bit: `MemTotal`
+itself shrinks/grows with the balloon, so the guest's totals track *effective* RAM
+(`max − actual`) and "used" reflects only real guest usage. That is the transparent
+accounting we want, and it's the stock-driver code path — a **host-side-only change that
+benefits stock and enhanced guests alike** (two-tier clean).
+
+**The two ownership models (upstream rationale: commit `997e120843e8`, Denis V. Lunev,
+2015, "virtio_balloon: do not change memory amount visible via /proc/meminfo").** The bit
+encodes contract semantics, not just an OOM hook:
+
+- **Bit absent — pages are donated.** The guest has no mechanism to take them back (only
+  the host deflates), so honest accounting removes them from the totals; watermarks and
+  overcommit heuristics are sized against memory that actually exists.
+- **Bit present — pages are a loan callable at OOM.** The Virtuozzo-style SLA reading:
+  "the memory is still yours by contract", so the total keeps showing the full guarantee,
+  and the driver registers an OOM notifier that hands pages back at true OOM instead of
+  letting the kill proceed. The visible "usage" is **load-bearing** in this model — it
+  *relies* on the guest building real memory pressure to trigger the give-back.
+
+**Why the guest-side net is worth less than it looks on a modern guest.** The kernel OOM
+notifier fires at the last moment, inside the kernel OOM path. Fedora ships
+**systemd-oomd**, which watches PSI/`MemAvailable` and kills *earlier* — and to oomd,
+balloon-induced apparent usage is indistinguishable from real pressure. So a heavily
+inflated `DEFLATE_ON_OOM` balloon can get user apps killed by oomd **before the kernel net
+ever engages**: the bit's safety mechanism is preempted by the very pressure appearance it
+creates. Meanwhile our host-side policy is the entity with the actual global view and
+deflates *before* guest pressure builds (unconditional deflation + sustained-calm gating,
+§Addendum 2026-07-03; MemAvailable-floor starvation release, 76f3ec2 2026-07-09).
+
+**Trade-off accepted, with compensations.** Dropping the bit removes the guest's
+last-resort synchronous deflate at OOM; the PSI policy (2 s cadence, 256 MiB steps) becomes
+the only pressure response, and a fast multi-GiB allocation burst is the case that could
+outrun it. Required with the change:
+
+1. **RED-first allocation-burst test** (`crates/limina-test`): guest ballooned near `min`
+   suddenly allocates several GiB; assert no OOM kill — the release path must outrun the
+   burst. Tune release step/cadence if RED. Lands *before* the bit is dropped.
+2. Consider a per-VM escape hatch (vm.toml) to re-advertise the bit, at least while we
+   gain confidence.
+
+**Cosmetic flip side (expected, fine):** with the bit gone, a fresh `min..max` VM shows
+`MemTotal` ≈ `min`, growing under load — the standard dynamic-memory presentation (QEMU's
+default balloon, Hyper-V dynamic memory, virtio-mem). Anything reading `MemTotal` as "the
+configured size" (monitoring dashboards, `nproc`-style sizing heuristics in guest apps)
+will now see the effective size instead; that's the honest number.
+
+**Rejected alternative:** keep the bit and patch the *enhanced* kernel's driver to adjust
+the managed count anyway. Fixes only the enhanced tier, forks accounting semantics from
+upstream (the tie between the bit and the accounting is deliberate there), and isn't
+upstreamable — the host-side bit drop is the smaller, two-tier-clean change.
