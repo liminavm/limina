@@ -306,6 +306,16 @@ echo "   (installonly: co-installed beside stock + prior enhanced; stock kernel 
 ### 2. mesa RPMs (26.2 zink+venus) -> REPLACE stock at /usr; versionlock #########
 MESA_RPMS=$(runtime_rpms "$PAYLOAD/mesa-*.rpm")
 [ -n "$MESA_RPMS" ] || { echo "no mesa RPMs in payload"; exit 1; }
+# Guard against a STALE-OVERLAY payload (hit 2026-07-20): extracting a new tarball over an
+# old payload dir leaves the previous mesa NEVRA's RPMs beside the new ones (tar does not
+# delete), and dnf then sees both versions "from @commandline" and fails the transaction.
+# All payload mesa RPMs must share one VERSION-RELEASE.
+MESA_VRS=$(for r in $MESA_RPMS; do rpm -qp --qf '%{VERSION}-%{RELEASE}\n' "$r" 2>/dev/null; done | sort -u)
+[ "$(echo "$MESA_VRS" | wc -l)" -eq 1 ] || {
+  echo "ERROR: payload holds MIXED mesa versions ($(echo $MESA_VRS | tr '\n' ' ')) — stale" >&2
+  echo "       extract-over-old-dir? rm the payload dir and re-extract the tarball fresh." >&2
+  exit 1
+}
 # Carry any already-installed mesa -devel/-tests along in the SAME transaction (see the helper).
 MESA_EXTRAS=$(installed_extra_rpms "$PAYLOAD/mesa-*.rpm")
 [ -z "$MESA_EXTRAS" ] || MESA_RPMS="$MESA_RPMS
