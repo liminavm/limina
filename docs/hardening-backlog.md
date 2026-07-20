@@ -51,6 +51,18 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   Image) + `crates/limina-test/tests/hvf_graceful.rs` — verified RED (SIGABRT) before, GREEN after.
 
 ## M4 venus residue
+- **Concurrent VM makes NEW venus instance creation fail in another guest** (open — found 2026-07-20)
+  — with a second windowed VM running (the 12 GiB f44-kbuild build guest), the
+  `seated_gnome_session_survives` L2 gate failed deterministically (3/3) at its **fd-hold client's
+  `vkCreateInstance` → `-1 OUT_OF_HOST_MEMORY`**, on BOTH pre-0040 and 0040 host virgl and on an
+  untouched F43 guest image — while the SAME guest's gnome-shell venus session (contexts created
+  earlier in the boot) kept rendering fine. Shutting the second VM down → full 223s pass, same
+  binaries. Manual repros of the same client on non-snapshot-armed boots worked even WITH the
+  second VM up, so the trigger is some {concurrent-VM × snapshot-armed-worker} resource edge at
+  new-context/instance creation (KK instance? render-server? fd?). Multi-VM is a supported
+  scenario — worth a root-cause pass: reproduce with two VMs + `RUST_LOG=debug` on the failing
+  worker and see what the vkr context/KK instance creation actually returns. Costed us an evening
+  chasing phantom regressions in mesa 0016/virgl 0040 (both exonerated by A/B).
 - **GLX / Xwayland apps present black on venus** (open, low priority — diagnosed 2026-06-29) — on the
   F44 enhanced tier, `glmark2` (no args → GLX) and `glxgears` show a **black window**; native-Wayland
   GL (Firefox WebGL) is fine. **Root-caused to the PRESENT path, not render/context** (verified on the
@@ -359,8 +371,14 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
     (wait for a seqno the restored ring never reached) — desktop survived; plausibly its own
     first use of an affected pipeline (would be cured by 0040) or a seqno-epoch gap; watch
     post-deploy.
-  - guest-side hardening candidate (upstreamable mesa): venus failing submits with
-    `VK_ERROR_DEVICE_LOST` instead of `abort()` on ring loss.
+  - ~~guest-side hardening candidate (upstreamable mesa): venus failing submits with
+    `VK_ERROR_DEVICE_LOST` instead of `abort()` on ring loss.~~ **DONE 2026-07-20** =
+    `patches/mesa/0016-venus-ring-loss-device-lost-not-abort.diff`, shipped in guest mesa
+    `26.1.4-2.limina.fc44` (both F44 enhanced images refreshed). Validated by A/B: with a
+    pre-0040 host (replay gap present) the `vkpipeline.py` client now prints
+    `PIPE FAIL beat7-vkQueueWaitIdle -1` and exits cleanly — zero coredumps (pre-0016 the same
+    scenario SIGABRTed); with the 0040 host the full gate stays green (239 s, both generations).
+    Watchdog/renderer-hang aborts deliberately unchanged. F43 pickup at its next respin.
 
 - **Worker-quiesce during `dump_ram` (torn-dump race).** A device worker writing guest RAM while the
   RAM dump runs can tear the dump (used.idx advanced, payload half-copied). Pausing vCPUs stops new

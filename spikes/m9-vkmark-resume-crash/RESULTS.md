@@ -117,7 +117,12 @@ to **every CREATE entry's decoded handle references**:
   no recursion / no mid-dispatch mis-retention: retention only happens when pinned>0).
 - Guest-side hardening (separate, upstreamable): venus aborts on ring loss by design;
   failing submits with VK_ERROR_DEVICE_LOST instead is a mesa change worth pursuing
-  independently.
+  independently. **DONE 2026-07-20** = `patches/mesa/0016-venus-ring-loss-device-lost-not-abort.diff`
+  (guest mesa `26.1.4-2.limina.fc44`, both F44 enhanced images). A/B-validated: pre-0040 host
+  (replay gap live) + hardened guest → the vkpipeline client prints
+  `PIPE FAIL beat7-vkQueueWaitIdle -1` and exits cleanly, zero coredumps (this exact scenario
+  SIGABRTed pre-0016); 0040 host + hardened guest → full gate green. Belt (0040) and
+  suspenders (0016) both hold independently.
 
 ## Files
 

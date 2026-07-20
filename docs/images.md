@@ -49,7 +49,7 @@ memories before anyone noticed. Verified 2026-06-27 by reading each image's rpmd
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-2.limina.fc43` *(respun 2026-07-19: adds mesa 0014)* | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
 | **F44 stock** (`*.raw`, `*.boot.raw`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.4` *(respun 2026-07-20: latest stable + linux 0005 balloon-suspend fix; co-installed beside `7.1.2-limina16k` [fallback] + stock `6.19.10-300`)* | 16 KiB | `26.1.4-1.limina.fc44` *(respun 2026-07-20: base caught up to stock 26.1.4, venus fix as patch 0015; 26.1.3-4 was the prior)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
+| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.4` *(respun 2026-07-20: latest stable + linux 0005 balloon-suspend fix; co-installed beside `7.1.2-limina16k` [fallback] + stock `6.19.10-300`)* | 16 KiB | `26.1.4-2.limina.fc44` *(respun 2026-07-20 twice: -1 caught the base up to stock 26.1.4 [venus fix as patch 0015]; -2 adds mesa 0016 ring-loss DEVICE_LOST hardening)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
 | **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools; the `enhanced`/`enhanced.test` images now match it as of the 2026-07-04 respin)* | `limina-kernel-16k-7.1.2` | 16 KiB | `26.1.3-3.limina.fc44` *(-2 adds 0011 unorm-WSI drop, -3 adds 0013 TLS-dtor fix)* | **stock** `50.3-2.fc44` *(since 2026-07-11: distro update displaced the patched build; clipboard rides the clipboard@limina extension — deployed + user-verified working)* | `50.3` *(stock)* |
 
 Notes: enhanced **mesa + kernel** are pinned to *our* version and `dnf versionlock`ed; enhanced
@@ -82,6 +82,21 @@ ALL user extensions — on such guests the helper stamps its one-time enable, pa
 the RemoteDesktop tier. Consider `gsettings set org.gnome.shell disable-user-extensions false` in
 `make-accessible.sh` at the next image respin.
 
+**Guest-mesa 26.1.4-2 ring-loss hardening (2026-07-20, same-day follow-up)** — F44 guest mesa
+`26.1.4-1.limina` → **`26.1.4-2.limina.fc44`**, adding
+**`patches/mesa/0016-venus-ring-loss-device-lost-not-abort.diff`**: a dead venus ring (host-side
+`VK_RING_STATUS_FATAL_BIT_MESA`, e.g. a snapshot-restore replay gap) now surfaces as
+`VK_ERROR_DEVICE_LOST` from the calling entrypoints instead of `abort()`ing the whole client
+process — the guest-side companion to host virglrenderer 0040 (the vkmark-on-resume SIGABRT,
+`spikes/m9-vkmark-resume-crash/RESULTS.md`; watchdog/renderer-hang aborts deliberately unchanged).
+Built with the same F44 SRPM recipe in the `f44-kbuild` build guest (`LIMINA_REL=2`; all patches
+`%prep`-clean; venus ICD + the 0016 marker strings verified in the RPM). Payload =
+`target/guest-tools-7.1.4-mesa2614r2/limina-guest-tools-f44.tar.zst` (kernel/agent/extension/
+installer unchanged). Both `enhanced.raw` (installer pass: mesa upgraded + re-versionlocked,
+16k trial re-promoted, venus live in the seated session, clean poweroff) and `enhanced.test.raw`
+(recloned) carry it. Graceful-death validated: with a pre-0040 host virgl, the L2 vkpipeline
+client exits with `PIPE FAIL` instead of a SIGABRT coredump. NOT yet on dogfood-guest.
+
 **Guest-mesa 26.1.4 base catch-up + clipboard RD opt-in (2026-07-20)** — F44 guest mesa respun
 `26.1.3-4.limina` → **`26.1.4-1.limina.fc44`**, rebasing the base onto the CURRENT F44 stock SRPM
 (`26.1.4-1.fc44`, `dnf download --source` — no koji pin needed anymore). The 26.1.4 stable branch
@@ -93,10 +108,9 @@ verified in the RPM (`rpm -qlp … libvulkan_virtio.so` + `virtio_icd.aarch64.js
 script's own venus WARN false-negatived AGAIN, trust only `rpm -qlp`). The same payload updates
 **limina-agent-session**: the RemoteDesktop clipboard fallback is now **opt-in**
 (`LIMINA_CLIPBOARD_RD=1`, default off — it lights GNOME's screen-share indicator; the
-clipboard@limina extension bridge is the stock-GNOME tier). Payload =
-`guest-tools-7.1.4-mesa2614/limina-guest-tools-f44.tar.zst` (kernel 7.1.4 + mesa 26.1.4-1.limina
-+ new helper; repo/ regenerated, srpm refreshed). `build-mesa-rpm.sh` gained `PREP_ONLY=1`
-(rpmbuild -bp fast patch-apply iteration).
+clipboard@limina extension bridge is the stock-GNOME tier). The `-1` payload tarball was
+superseded the same day by the `-2` ring-loss-hardening respin above (which is the one kept on
+disk). `build-mesa-rpm.sh` gained `PREP_ONLY=1` (rpmbuild -bp fast patch-apply iteration).
 
 **F44 kernel 7.1.4 respin (2026-07-20)** — `limina-kernel-16k-7.1.2-1` → **`7.1.4-1.fc44`** (latest
 stable), carrying **`patches/linux/0005`** (virtio_balloon: stop page-reporting across suspend — the
