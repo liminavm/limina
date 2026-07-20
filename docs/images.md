@@ -49,7 +49,7 @@ memories before anyone noticed. Verified 2026-06-27 by reading each image's rpmd
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-2.limina.fc43` *(respun 2026-07-19: adds mesa 0014)* | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
 | **F44 stock** (`*.raw`, `*.boot.raw`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.2` *(co-installed beside stock `6.19.10-300`; respun 2026-07-04, old `6.19.10-limina16k` pruned)* | 16 KiB | `26.1.3-4.limina.fc44` *(respun 2026-07-19: adds mesa 0014)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
+| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.4` *(respun 2026-07-20: latest stable + linux 0005 balloon-suspend fix; co-installed beside `7.1.2-limina16k` [fallback] + stock `6.19.10-300`)* | 16 KiB | `26.1.3-4.limina.fc44` *(respun 2026-07-19: adds mesa 0014)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
 | **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools; the `enhanced`/`enhanced.test` images now match it as of the 2026-07-04 respin)* | `limina-kernel-16k-7.1.2` | 16 KiB | `26.1.3-3.limina.fc44` *(-2 adds 0011 unorm-WSI drop, -3 adds 0013 TLS-dtor fix)* | **stock** `50.3-2.fc44` *(since 2026-07-11: distro update displaced the patched build; clipboard rides the clipboard@limina extension — deployed + user-verified working)* | `50.3` *(stock)* |
 
 Notes: enhanced **mesa + kernel** are pinned to *our* version and `dnf versionlock`ed; enhanced
@@ -82,6 +82,20 @@ ALL user extensions — on such guests the helper stamps its one-time enable, pa
 the RemoteDesktop tier. Consider `gsettings set org.gnome.shell disable-user-extensions false` in
 `make-accessible.sh` at the next image respin.
 
+**F44 kernel 7.1.4 respin (2026-07-20)** — `limina-kernel-16k-7.1.2-1` → **`7.1.4-1.fc44`** (latest
+stable), carrying **`patches/linux/0005`** (virtio_balloon: stop page-reporting across suspend — the
+s2idle UAF the host masks with libkrun 0059; the guest-side prerequisite for re-enabling
+`--balloon-free-page-reporting` across suspend/resume). Built in the F44 build guest
+(`f44-kbuild.raw`, stable.git `v7.1.4` + the validated 7.0.13 Fedora config base);
+`build-kernel-rpm.sh` now applies 0005 **fail-loud** (not upstream — a silent skip would ship the
+UAF back). 0001 skipped as already upstream in 7.1.4; 0002–0004 applied. Payload =
+`target/guest-tools-7.1.4/limina-guest-tools-f44.tar.zst` (mesa/agent/extension unchanged from
+2026-07-19; kernel-source reference regenerated). `enhanced.raw` took the installer pass (kernel
+co-installed beside 7.1.2, one-shot trial boot → 16384-byte pages, auto-promoted to default, venus
+enumerates in the seated session, clean poweroff); `enhanced.test.raw` recloned from it. The F43
+family keeps its 6.12.0 kernel (F43 is mesa-current only). NOT yet on dogfood-guest — the tarball is
+ready when the user wants to deploy.
+
 **Guest-mesa 0014 refresh (2026-07-19)** — both image families' guest mesa respun to pick up
 `patches/mesa/0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff` (the zink multi-context
 unflushed-batch-wait lost-wakeup deadlock that wedged `venus_replay` for ~100 min on 2026-07-12;
@@ -99,9 +113,9 @@ see the `limina-zink-lost-wakeup` memory + `spikes/venus-replay-zink-hang-2026-0
   `scripts/build-mesa-rpm.sh`, which now applies 0014 fail-loud + takes `LIMINA_REL`); the six
   installed subpackages were dnf-upgraded in-guest (versionlock delete-by-exact-name → upgrade →
   re-lock at `-2`), clean poweroff, `enhanced.test.raw` recloned.
-- NOT deployed: `patches/linux/0005` (virtio_balloon suspend page-reporting stop) — needs a kernel
-  rebuild, explicitly "not yet built" per its commit; the host zink-on-KK build (`/Volumes/mesa-cs`)
-  still lacks 0014 (apply at the next host mesa refresh).
+- ~~NOT deployed: `patches/linux/0005`~~ *(deployed 2026-07-20 via the 7.1.4 kernel respin, see
+  below)*; the host zink-on-KK build (`/Volumes/mesa-cs`) still lacks 0014 (apply at the next host
+  mesa refresh).
 
 **Enhanced images RESPUN to dogfood parity (2026-07-04)** — `enhanced.raw` + `enhanced.test.raw` were
 brought from kernel `6.19.10-limina16k` + mesa `26.1.3-1` up to **kernel `7.1.2-limina16k` + mesa
