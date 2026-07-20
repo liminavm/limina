@@ -95,6 +95,8 @@ objc2-app-kit = { version = "0.3", features = [
     # Clipboard bridge (M5): NSPasteboard polling + writes, host side of the guest
     # clipboard channel.
     "NSPasteboard",
+    # VM window menu (M9.4): Show in Finder.
+    "NSWorkspace",
     # Configure sheet "?" help: clicking the button shows the explanation in a
     # transient popover (hover shows the same text as a fast tooltip).
     "NSPopover",

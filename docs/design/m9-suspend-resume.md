@@ -680,6 +680,18 @@ and zero-page holes already capture reclaimed pages at zero delay. A bounded **o
 inflate** (low target, ~2–3 s deadline, proceed regardless) remains a possible later refinement,
 enhanced tier first (FRQ free-page reporting makes it cheap).
 
+**Suspend/resume UX — SHIPPED 2026-07-20** (commits bff4cc3, 206d43f, 0dedba4, f881807): the four
+bullets below are implemented and eyeball-verified. Deltas from the sketches: the splash rides a
+close INTERCEPT (`windowShouldClose` returns NO; the window stays up dimmed with a CA-drawn
+spinner + "Suspending…" for the save, then closes itself — user-preferred over hide-and-reopen),
+and the overlay is pure Core Animation because the scanout view is layer-hosting (AppKit controls
+never composite in it). Suspend persistence now also covers the WINDOWED path (the session monitor
+persists `[suspended]`; window-state savers merge via `state::set_window` instead of clobbering),
+and the snapshot is SINGLE-USE (renamed `.consumed` at restore-consume; the double-restore
+disk-brick class is closed). The VM menu ships without **Restart** — that needs an agent-side
+Reboot verb (proto addition; batch with the next guest-tools delivery). Remaining polish: bigger
+arc/caption (user request), and the named-snapshot manager / clone / VMGenID half of M9.4 below.
+
 **Suspend/resume UX (filed 2026-07-20, from dogfood feedback).**
 - **Last-scanout splash:** at suspend, save the final presented frame (the present path already
   holds the IOSurface; the window-capture oracle proves the grab) into the VM bundle next to the

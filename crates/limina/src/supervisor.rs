@@ -133,6 +133,14 @@ pub fn suspend_requested() -> bool {
     SUSPEND.load(Ordering::SeqCst)
 }
 
+/// Ask for an IMMEDIATE forceful stop (SIGKILL, no grace) — the window menu's Force Stop.
+/// Equivalent to a stop request plus the impatient second signal, which every ladder site
+/// already honors via [`force_stop_requested`].
+pub fn request_force_stop() {
+    SIG_COUNT.fetch_add(2, Ordering::SeqCst);
+    STOP.store(true, Ordering::SeqCst);
+}
+
 fn install_signal_handlers() -> Result<()> {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();

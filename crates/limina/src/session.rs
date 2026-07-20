@@ -209,6 +209,7 @@ pub struct WindowedSession {
     on_window_close: crate::vmlib::schema::WindowCloseAction,
     splash_save_path: Option<PathBuf>,
     restore_splash: Option<PathBuf>,
+    menu_ctx: window::MenuCtx,
 }
 
 impl WindowedSession {
@@ -244,6 +245,20 @@ impl WindowedSession {
             on_window_close
         } else {
             crate::vmlib::schema::WindowCloseAction::Shutdown
+        };
+
+        // The VM menu's per-VM context (M9.4): Suspend gating, the bundle for Show in
+        // Finder (the state.toml's parent — bundle-rooted for managed VMs), and the SSH
+        // forward for Copy SSH Command.
+        let menu_ctx = window::MenuCtx {
+            suspend_armed,
+            bundle_dir: suspend_state_file
+                .as_ref()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_path_buf()),
+            ssh_cmd: gateway
+                .as_ref()
+                .map(|g| format!("ssh -p {} 127.0.0.1", g.ssh_port())),
         };
 
         // The resolution the guest is currently driven to — written by the window on every
@@ -388,6 +403,7 @@ impl WindowedSession {
             on_window_close,
             splash_save_path,
             restore_splash,
+            menu_ctx,
         })
     }
 
@@ -416,6 +432,7 @@ impl WindowedSession {
                 on_window_close: self.on_window_close,
                 splash_save_path: self.splash_save_path,
                 restore_splash: self.restore_splash,
+                menu_ctx: self.menu_ctx,
             },
         );
     }

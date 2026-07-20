@@ -98,6 +98,8 @@ pub struct WindowOptions {
     /// A splash to show from window creation until the first presented frame — set when
     /// this boot restores from a snapshot and the splash file exists.
     pub restore_splash: Option<PathBuf>,
+    /// The VM-menu context (Suspend gating, Show in Finder, Copy SSH Command).
+    pub menu_ctx: MenuCtx,
 }
 
 /// Point geometry of the screen a windowed boot targets: `frame` is the full screen size
@@ -246,9 +248,27 @@ fn send_resize(path: &Path, width: u32, height: u32) {
     });
 }
 
+/// What the VM menu's items need to know about THIS VM (M9.4). Set once by `run` before
+/// the menu is built; read by the action methods and the Dock-menu builder. Main-thread
+/// only, like all menu state.
+#[derive(Clone, Default)]
+pub(crate) struct MenuCtx {
+    /// Suspend is armed (managed VM: snapshot + state paths both set) — gates the
+    /// Suspend item.
+    pub(crate) suspend_armed: bool,
+    /// The VM's .liminavm bundle directory — gates Show in Finder.
+    pub(crate) bundle_dir: Option<PathBuf>,
+    /// The ready-to-paste SSH command (NAT gateway forward) — gates Copy SSH Command.
+    pub(crate) ssh_cmd: Option<String>,
+}
+
+thread_local! {
+    static MENU_CTX: RefCell<MenuCtx> = RefCell::new(MenuCtx::default());
+}
+
 define_class!(
     // SAFETY: NSObject has no subclassing requirements; no Drop; the action
-    // signature below matches AppKit's target/action convention.
+    // signatures below match AppKit's target/action convention.
     #[unsafe(super = objc2_foundation::NSObject)]
     #[thread_kind = MainThreadOnly]
     #[name = "LiminaVmMenuActions"]
@@ -270,19 +290,113 @@ define_class!(
             crate::supervisor::request_stop();
             NSApplicationTerminateReply::TerminateCancel
         }
+
+        // The Dock icon's context menu carries the same VM verbs as the menu bar.
+        #[unsafe(method_id(applicationDockMenu:))]
+        fn application_dock_menu(&self, _app: &NSApplication) -> Option<Retained<NSMenu>> {
+            Some(build_vm_menu(self.mtm(), self))
+        }
     }
 
     impl VmMenuActions {
-        // "Control Center…": show the running center or spawn a fresh one — the
-        // way back to the center from a VM window (Parallels-style).
+        // "Control Center…" / "Settings…": show the running center or spawn a fresh one —
+        // the way back to the center (where VM configuration lives), Parallels-style.
         #[unsafe(method(showControlCenter:))]
         fn show_control_center(&self, _sender: &NSMenuItem) {
             if let Err(e) = crate::center::show_or_spawn() {
                 log::warn!("opening the control center: {e:#}");
             }
         }
+
+        // Suspend: same path as close-to-suspend / `limina suspend` — the monitor relays
+        // the bracket, the overlay dims the live frame, the exit persists [suspended].
+        #[unsafe(method(suspendVm:))]
+        fn suspend_vm(&self, _sender: &NSMenuItem) {
+            log::info!("menu: Suspend");
+            crate::supervisor::request_suspend();
+        }
+
+        // Shut Down: the graceful power-off ladder (agent shutdown → power button →
+        // SIGKILL after grace) — identical to Ctrl-C / `limina stop`.
+        #[unsafe(method(shutDownVm:))]
+        fn shut_down_vm(&self, _sender: &NSMenuItem) {
+            log::info!("menu: Shut Down");
+            crate::supervisor::request_stop();
+        }
+
+        // Force Stop: SIGKILL now, no grace — the hung-guest escape hatch.
+        #[unsafe(method(forceStopVm:))]
+        fn force_stop_vm(&self, _sender: &NSMenuItem) {
+            log::warn!("menu: Force Stop (no grace)");
+            crate::supervisor::request_force_stop();
+        }
+
+        // Show in Finder: reveal the .liminavm bundle.
+        #[unsafe(method(revealVm:))]
+        fn reveal_vm(&self, _sender: &NSMenuItem) {
+            let Some(dir) = MENU_CTX.with(|c| c.borrow().bundle_dir.clone()) else {
+                return;
+            };
+            let url = objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(
+                &dir.to_string_lossy(),
+            ));
+            objc2_app_kit::NSWorkspace::sharedWorkspace().activateFileViewerSelectingURLs(
+                &objc2_foundation::NSArray::from_retained_slice(&[url]),
+            );
+        }
+
+        // Copy SSH Command: the NAT gateway's inbound forward, ready to paste.
+        #[unsafe(method(copySshVm:))]
+        fn copy_ssh_vm(&self, _sender: &NSMenuItem) {
+            let Some(cmd) = MENU_CTX.with(|c| c.borrow().ssh_cmd.clone()) else {
+                return;
+            };
+            unsafe {
+                let pb = objc2_app_kit::NSPasteboard::generalPasteboard();
+                pb.clearContents();
+                pb.setString_forType(
+                    &NSString::from_str(&cmd),
+                    objc2_app_kit::NSPasteboardTypeString,
+                );
+            }
+        }
     }
 );
+
+/// Build the "Virtual Machine" verbs menu (shared between the menu bar and the Dock menu).
+/// Items whose prerequisite is absent (no bundle, no SSH forward, suspend unarmed) are
+/// simply not added — the menu never shows dead verbs.
+fn build_vm_menu(mtm: MainThreadMarker, actions: &VmMenuActions) -> Retained<NSMenu> {
+    let ctx = MENU_CTX.with(|c| c.borrow().clone());
+    let menu = NSMenu::new(mtm);
+    menu.setTitle(&NSString::from_str("Virtual Machine"));
+    let add = |title: &str, sel: objc2::runtime::Sel, key: &str| {
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(title),
+                Some(sel),
+                &NSString::from_str(key),
+            )
+        };
+        unsafe { item.setTarget(Some(actions)) };
+        menu.addItem(&item);
+    };
+    if ctx.suspend_armed {
+        add("Suspend", objc2::sel!(suspendVm:), "");
+    }
+    add("Shut Down", objc2::sel!(shutDownVm:), "");
+    add("Force Stop", objc2::sel!(forceStopVm:), "");
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    add("Settings…", objc2::sel!(showControlCenter:), ",");
+    if ctx.bundle_dir.is_some() {
+        add("Show in Finder", objc2::sel!(revealVm:), "");
+    }
+    if ctx.ssh_cmd.is_some() {
+        add("Copy SSH Command", objc2::sel!(copySshVm:), "");
+    }
+    menu
+}
 
 thread_local! {
     /// Set by [`WindowCloseInterceptor`] when the user asked to close the window (red
@@ -347,6 +461,11 @@ fn install_main_menu(mtm: MainThreadMarker, app: &NSApplication) {
     };
     app_menu.addItem(&close);
     app_item.setSubmenu(Some(&app_menu));
+    // The VM verbs menu (M9.4): every lifecycle action reachable from the menu bar
+    // (and the same set from the Dock icon via applicationDockMenu:).
+    let vm_item = NSMenuItem::new(mtm);
+    menubar.addItem(&vm_item);
+    vm_item.setSubmenu(Some(&build_vm_menu(mtm, &actions)));
     app.setMainMenu(Some(&menubar));
     // NSMenuItem targets are weak; the actions object must live as long as the menu.
     std::mem::forget(actions);
@@ -377,7 +496,11 @@ pub fn run(
         on_window_close,
         splash_save_path,
         restore_splash,
+        menu_ctx,
     } = opts;
+
+    // The VM menu reads this when install_main_menu (below) builds it — set it first.
+    MENU_CTX.with(|c| *c.borrow_mut() = menu_ctx);
 
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
