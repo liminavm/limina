@@ -63,7 +63,7 @@ use lifecycle::{kill_worker_group, should_initiate_quit};
 use present::{register_apply_hook, set_layer_surface};
 
 use crate::vmlib::schema::DisplayResolution;
-use crate::vmlib::state::{VmState, WindowState};
+use crate::vmlib::state::WindowState;
 
 /// Everything `run` needs beyond the live worker channels: display policy, remembered
 /// window state, and the resize plumbing. Groups what used to be positional arguments.
@@ -180,13 +180,9 @@ fn save_state_final(path: Option<&Path>, window: &NSWindow) {
     let (Some(path), Some(snap)) = (path, window_state_snapshot(window)) else {
         return;
     };
-    if let Err(e) = crate::vmlib::state::save(
-        path,
-        &VmState {
-            window: Some(snap),
-            suspended: None,
-        },
-    ) {
+    // Merge, never whole-save: on a windowed suspend the monitor thread has just written
+    // [suspended]; a full save here would consume it and the VM would cold-boot (M9.4-1a).
+    if let Err(e) = crate::vmlib::state::set_window(path, Some(snap)) {
         log::warn!("window state save failed: {e}");
     }
 }
@@ -831,11 +827,8 @@ pub fn run(
                             saved_state.set(Some(snap));
                             let path = path.clone();
                             std::thread::spawn(move || {
-                                let state = VmState {
-                                    window: Some(snap),
-                                    suspended: None,
-                                };
-                                if let Err(e) = crate::vmlib::state::save(&path, &state) {
+                                // Merge (set_window), never whole-save — see save_state_final.
+                                if let Err(e) = crate::vmlib::state::set_window(&path, Some(snap)) {
                                     log::warn!("window state save failed: {e}");
                                 }
                             });

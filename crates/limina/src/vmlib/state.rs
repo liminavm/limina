@@ -55,6 +55,17 @@ pub fn set_suspended(path: &Path, suspended: Option<Suspended>) -> std::io::Resu
     save(path, &state)
 }
 
+/// Load-modify-save the `[window]` record while preserving every other field. The window
+/// savers MUST use this, never a whole-`VmState` [`save`]: a windowed suspend writes
+/// `[suspended]` from the session monitor thread moments before the window's final state
+/// save runs, and a full save with `suspended: None` would silently consume the record —
+/// the VM would cold-boot instead of resuming (M9.4).
+pub fn set_window(path: &Path, window: Option<WindowState>) -> std::io::Result<()> {
+    let mut state = load(path).unwrap_or_default();
+    state.window = window;
+    save(path, &state)
+}
+
 /// Atomic save (tmp + rename, the `VmBundle::save` pattern). Best-effort at the
 /// call sites — losing a window-placement save is not worth failing anything.
 pub fn save(path: &Path, state: &VmState) -> std::io::Result<()> {
@@ -132,6 +143,35 @@ mod tests {
         let cleared = load(&path).unwrap();
         assert_eq!(cleared.window, Some(win));
         assert_eq!(cleared.suspended, None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn set_window_preserves_suspended() {
+        // The windowed-suspend ordering: the monitor thread persists [suspended], then the
+        // window's final state save runs. It must MERGE, not clobber (the M9.4-1a bug class).
+        let dir = scratch("setwindow");
+        let path = dir.join("state.toml");
+        let snap = std::path::PathBuf::from("/tmp/snap.bin");
+        set_suspended(
+            &path,
+            Some(Suspended {
+                snapshot: snap.clone(),
+            }),
+        )
+        .unwrap();
+        let win = WindowState {
+            frame: [1.0, 2.0, 800.0, 600.0],
+            content: (800, 600),
+        };
+        set_window(&path, Some(win)).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(
+            loaded.suspended,
+            Some(Suspended { snapshot: snap }),
+            "suspend record survives a window save"
+        );
+        assert_eq!(loaded.window, Some(win));
         std::fs::remove_dir_all(&dir).ok();
     }
 

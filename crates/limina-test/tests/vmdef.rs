@@ -416,6 +416,13 @@ fn managed_vm_suspends_and_resumes() {
         !state2.contains("[suspended]"),
         "the [suspended] record must be consumed on restore:\n{state2}"
     );
+    // SINGLE-USE (M9.4-1b): the snapshot must be renamed off its canonical path at consume time —
+    // a snapshot restored twice against the advanced disk destroys the filesystem (stale btrfs
+    // metadata), so after a restore NOTHING may find it at the canonical name.
+    assert!(
+        !snap.exists(),
+        "snapshot.bin must be renamed away (single-use) once a restore consumed it"
+    );
 
     // --- teardown: stop the restored VM, then rm the bundle ---
     run_ok(
@@ -423,6 +430,11 @@ fn managed_vm_suspends_and_resumes() {
         "limina stop",
     );
     let _ = boot2.0.wait();
+    // The worker exit also reaps the consumed copy (the ~half-GB cleanup).
+    assert!(
+        !bundle.join("run/snapshot.bin.consumed").exists(),
+        "the consumed snapshot copy must be deleted once the worker exits"
+    );
     run_ok(
         limina_cmd(&cfg.limina_bin, &scratch).args(["rm", "susp-test"]),
         "limina rm",

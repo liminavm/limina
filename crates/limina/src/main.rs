@@ -718,7 +718,24 @@ fn cli_from_definition(
             if let Err(e) = vmlib::state::set_suspended(&state_toml, None) {
                 log::warn!("clearing the suspended state failed: {e}; continuing");
             }
-            Some(sus.snapshot)
+            // SINGLE-USE enforcement (M9.4-1b): rename the snapshot out of its canonical name
+            // before the worker reads it. A snapshot is only valid against the disk EXACTLY as
+            // the suspend left it — the resumed guest immediately advances the disk, and a
+            // second restore of the same snapshot writes stale fs metadata over it (this
+            // destroyed a btrfs image once: "parent transid verify failed"). After the rename,
+            // nothing — a stale state.toml copy, a re-run of the same argv — can find the
+            // consumed snapshot at its canonical path. The next suspend writes the canonical
+            // name fresh, atomically replacing any previous `.consumed` leftover here.
+            let consumed = sus.snapshot.with_extension("bin.consumed");
+            match std::fs::rename(&sus.snapshot, &consumed) {
+                Ok(()) => Some(consumed),
+                Err(e) => {
+                    // Degrade: restore from the canonical path (worse invalidation, still a
+                    // consumed state record) rather than failing the resume.
+                    log::warn!("marking the snapshot consumed failed: {e}; restoring in place");
+                    Some(sus.snapshot)
+                }
+            }
         }
         Some(sus) => {
             log::warn!(
@@ -1129,6 +1146,8 @@ fn run_vm(cli: Cli) -> Result<()> {
             state_path: cli.window_state_file.clone(),
             restore_frame,
             default_content,
+            suspend_state_file: cli.suspend_state_file.clone(),
+            snapshot_file: cli.snapshot_file.clone(),
         });
     }
 
@@ -1159,6 +1178,11 @@ fn run_vm(cli: Cli) -> Result<()> {
                 Err(e) => log::error!("persisting the suspended state failed: {e}"),
             }
         }
+    }
+    // The worker is gone: a consumed snapshot (this run restored from it) has no further use —
+    // free the ~half-GB. Missing file is the normal case.
+    if let Some(snapshot) = &cli.snapshot_file {
+        let _ = std::fs::remove_file(snapshot.with_extension("bin.consumed"));
     }
     // Explicit: process::exit skips destructors, so tear the gateway + control socket
     // down before exiting.

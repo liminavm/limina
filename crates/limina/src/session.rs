@@ -47,6 +47,11 @@ pub struct SessionConfig {
     pub restore_frame: Option<[f64; 4]>,
     /// First-appearance window content size (used when `restore_frame` is absent).
     pub default_content: (u32, u32),
+    /// Where to persist `[suspended]` when the worker exits with a snapshot (the bundle's
+    /// state.toml); None = flat-CLI VM, nothing to persist.
+    pub suspend_state_file: Option<PathBuf>,
+    /// The snapshot file the worker writes on suspend (the bundle's `run/snapshot.bin`).
+    pub snapshot_file: Option<PathBuf>,
 }
 
 /// Pack/unpack a `(width, height)` for the [`AtomicU64`] the window and the reboot-relaunch
@@ -213,6 +218,8 @@ impl WindowedSession {
             state_path,
             restore_frame,
             default_content,
+            suspend_state_file,
+            snapshot_file,
         } = config;
 
         // The resolution the guest is currently driven to — written by the window on every
@@ -264,6 +271,33 @@ impl WindowedSession {
                 let started = std::time::Instant::now();
                 let code = supervisor::monitor(child, grace, monitor_control.as_ref()).unwrap_or(0);
                 if !guard.should_relaunch(code, started.elapsed()) {
+                    // The suspend bracket snapshotted the guest and the worker tore down:
+                    // persist `[suspended]` so the next start boots with `--restore`. Must
+                    // happen BEFORE mark_worker_exited — the window's final state save (a
+                    // merge) runs on the next timer tick and the record has to exist by then.
+                    // The headless twin of this lives in main.rs::run_vm.
+                    if code == supervisor::WORKER_EXIT_SNAPSHOT {
+                        if let (Some(state_file), Some(snapshot)) =
+                            (&suspend_state_file, &snapshot_file)
+                        {
+                            let sus = crate::vmlib::state::Suspended {
+                                snapshot: snapshot.clone(),
+                            };
+                            match crate::vmlib::state::set_suspended(state_file, Some(sus)) {
+                                Ok(()) => {
+                                    log::info!("VM suspended; snapshot at {}", snapshot.display())
+                                }
+                                Err(e) => {
+                                    log::error!("persisting the suspended state failed: {e}")
+                                }
+                            }
+                        }
+                    }
+                    // A consumed snapshot (this run restored from it) has no further use once
+                    // the worker is gone — free the ~half-GB. Missing file is the normal case.
+                    if let Some(snapshot) = &snapshot_file {
+                        let _ = std::fs::remove_file(snapshot.with_extension("bin.consumed"));
+                    }
                     window::mark_worker_exited(&monitor_shared);
                     break;
                 }
