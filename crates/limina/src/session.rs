@@ -52,6 +52,9 @@ pub struct SessionConfig {
     pub suspend_state_file: Option<PathBuf>,
     /// The snapshot file the worker writes on suspend (the bundle's `run/snapshot.bin`).
     pub snapshot_file: Option<PathBuf>,
+    /// Window-close policy (M9.4). Only meaningful when suspend is armed (both paths above
+    /// set); resolved to Shutdown otherwise — see [`WindowedSession::start`].
+    pub on_window_close: crate::vmlib::schema::WindowCloseAction,
 }
 
 /// Pack/unpack a `(width, height)` for the [`AtomicU64`] the window and the reboot-relaunch
@@ -197,6 +200,7 @@ pub struct WindowedSession {
     initial_size: (u32, u32),
     default_content: (u32, u32),
     desired_size: Arc<AtomicU64>,
+    on_window_close: crate::vmlib::schema::WindowCloseAction,
 }
 
 impl WindowedSession {
@@ -220,7 +224,17 @@ impl WindowedSession {
             default_content,
             suspend_state_file,
             snapshot_file,
+            on_window_close,
         } = config;
+
+        // Close-to-suspend needs somewhere to persist the suspend and a snapshot path for the
+        // worker; without both (flat-CLI runs) the policy degrades to the power-off ladder.
+        let suspend_armed = suspend_state_file.is_some() && snapshot_file.is_some();
+        let on_window_close = if suspend_armed {
+            on_window_close
+        } else {
+            crate::vmlib::schema::WindowCloseAction::Shutdown
+        };
 
         // The resolution the guest is currently driven to — written by the window on every
         // resize push, read at each reboot relaunch so the fresh worker boots at it.
@@ -358,6 +372,7 @@ impl WindowedSession {
             initial_size: (width, height),
             default_content,
             desired_size,
+            on_window_close,
         })
     }
 
@@ -383,6 +398,7 @@ impl WindowedSession {
                 restore_frame: self.restore_frame,
                 state_path: self.state_path,
                 desired_size: self.desired_size,
+                on_window_close: self.on_window_close,
             },
         );
     }

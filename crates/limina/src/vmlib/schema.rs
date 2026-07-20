@@ -212,6 +212,9 @@ pub struct DisplayCfg {
     pub gpu: GpuMode,
     /// What resolution the guest display is driven to. See [`DisplayResolution`].
     pub resolution: DisplayResolution,
+    /// What closing the VM window does. See [`WindowCloseAction`]; default = suspend
+    /// (the M9.4 UX: closing the window parks the VM, reopening resumes it).
+    pub on_window_close: WindowCloseAction,
 }
 
 impl Default for DisplayCfg {
@@ -220,8 +223,23 @@ impl Default for DisplayCfg {
             window: true,
             gpu: GpuMode::Auto,
             resolution: DisplayResolution::default(),
+            on_window_close: WindowCloseAction::default(),
         }
     }
+}
+
+/// The `[display] on_window_close` key — what closing the VM window means (M9.4).
+/// `limina stop` / Ctrl-C always power off regardless; this only governs the red button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowCloseAction {
+    /// Suspend the VM (snapshot + teardown; the next start resumes). The default.
+    #[default]
+    Suspend,
+    /// Power the guest off (the pre-M9.4 behavior).
+    Shutdown,
+    /// Ask each time (Suspend / Shut Down / Cancel).
+    Ask,
 }
 
 /// The `[display] resolution` key — one key, three shapes, no invalid combos:
@@ -461,6 +479,30 @@ mod tests {
             let back: DisplayCfg = toml::from_str(&toml::to_string(&d).unwrap()).unwrap();
             assert_eq!(back.resolution, want, "round-trip of {text}");
         }
+    }
+
+    #[test]
+    fn window_close_action_round_trips_and_defaults_to_suspend() {
+        // Absent key → suspend (the M9.4 default: closing the window parks the VM). This is
+        // also what every pre-M9.4 vm.toml resolves to.
+        let d: DisplayCfg = toml::from_str("").unwrap();
+        assert_eq!(d.on_window_close, WindowCloseAction::Suspend);
+
+        for (text, want) in [
+            ("on_window_close = \"suspend\"", WindowCloseAction::Suspend),
+            (
+                "on_window_close = \"shutdown\"",
+                WindowCloseAction::Shutdown,
+            ),
+            ("on_window_close = \"ask\"", WindowCloseAction::Ask),
+        ] {
+            let d: DisplayCfg = toml::from_str(text).unwrap();
+            assert_eq!(d.on_window_close, want, "{text}");
+            let back: DisplayCfg = toml::from_str(&toml::to_string(&d).unwrap()).unwrap();
+            assert_eq!(back.on_window_close, want, "round-trip of {text}");
+        }
+        // Garbage is rejected loudly, not defaulted.
+        assert!(toml::from_str::<DisplayCfg>("on_window_close = \"park\"").is_err());
     }
 
     #[test]

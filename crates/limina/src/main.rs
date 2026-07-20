@@ -136,6 +136,13 @@ struct Cli {
     #[arg(skip)]
     suspend_state_file: Option<PathBuf>,
 
+    /// Window-close policy (M9.4). Set by `cli_from_definition` from `[display]
+    /// on_window_close`; not a user flag. The default (Suspend) only takes effect when
+    /// suspend is armed (`suspend_state_file` + `snapshot_file`), i.e. managed VMs — a flat
+    /// `--disk` run has nothing to persist a suspend into and resolves to Shutdown.
+    #[arg(skip)]
+    on_window_close: vmlib::schema::WindowCloseAction,
+
     /// Capture the guest virtio-console (`hvc0`) output to this file — the robust
     /// bidirectional console. Pair with `console=hvc0` on the cmdline and
     /// --virtio-console-input to make hvc0 the guest's interactive `/dev/console`.
@@ -784,6 +791,7 @@ fn cli_from_definition(
         snapshot_file: Some(snapshot_bin),
         restore,
         suspend_state_file: Some(state_toml),
+        on_window_close: cfg.display.on_window_close,
         virtio_console: None,
         virtio_console_input: None,
         window,
@@ -1148,6 +1156,7 @@ fn run_vm(cli: Cli) -> Result<()> {
             default_content,
             suspend_state_file: cli.suspend_state_file.clone(),
             snapshot_file: cli.snapshot_file.clone(),
+            on_window_close: cli.on_window_close,
         });
     }
 
@@ -1886,6 +1895,7 @@ mod tests {
                 window: false,
                 gpu: GpuMode::Software2d,
                 resolution: DisplayResolution::Fixed(1600, 1000),
+                on_window_close: vmlib::schema::WindowCloseAction::Suspend,
             },
             input: InputCfg {
                 swap_cmd_opt: false,

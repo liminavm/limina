@@ -52,7 +52,7 @@ const MAX_RAPID_REBOOTS: u32 = 5;
 /// Bound on the whole M9.2 suspend bracket (worker: pulse suspend button → wait the guest to
 /// s2idle-quiesce [≤20s] → snapshot [seconds for a 1–2 GB image]). If the worker hasn't exited 126
 /// by now the guest could not quiesce; the supervisor gives up and the VM keeps running.
-const SUSPEND_BRACKET_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const SUSPEND_BRACKET_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Decides whether a worker exit should relaunch the VM (a guest reboot) or end it, capping
 /// runaway boot loops. Shared by the headless [`run`] loop and the windowed relaunch loop so
@@ -117,6 +117,13 @@ extern "C" fn on_suspend(_sig: libc::c_int) {
 /// exit the supervisor abruptly and orphan the worker.
 pub fn request_stop() {
     STOP.store(true, Ordering::SeqCst);
+}
+
+/// Ask for the M9.2 suspend bracket exactly as `limina suspend`'s SIGTSTP does — used by the
+/// windowed session's close-to-suspend policy (M9.4). Observed by the monitor loop, which
+/// relays SIGTSTP to the worker; on success the worker exits [`WORKER_EXIT_SNAPSHOT`].
+pub fn request_suspend() {
+    SUSPEND.store(true, Ordering::SeqCst);
 }
 
 fn install_signal_handlers() -> Result<()> {

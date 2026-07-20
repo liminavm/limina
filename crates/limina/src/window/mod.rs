@@ -26,10 +26,10 @@ use objc2::rc::Retained;
 use objc2::runtime::NSObjectProtocol;
 use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
-    NSApplicationTerminateReply, NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSEventType,
-    NSMenu, NSMenuItem, NSScreen, NSViewLayerContentsRedrawPolicy, NSWindow,
-    NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSApplication,
+    NSApplicationActivationPolicy, NSApplicationDelegate, NSApplicationTerminateReply,
+    NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSEventType, NSMenu, NSMenuItem, NSScreen,
+    NSViewLayerContentsRedrawPolicy, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_core_foundation::CFRetained;
 use objc2_foundation::{
@@ -86,6 +86,9 @@ pub struct WindowOptions {
     /// Shared with the reboot-relaunch monitor: every resolution push records itself here
     /// so a relaunched worker boots at the current size (see `session::pack_size`).
     pub desired_size: Arc<std::sync::atomic::AtomicU64>,
+    /// What closing the window does (M9.4): suspend (default), shutdown, or ask. Already
+    /// resolved by the session — Suspend only arrives when suspend is armed.
+    pub on_window_close: crate::vmlib::schema::WindowCloseAction,
 }
 
 /// Point geometry of the screen a windowed boot targets: `frame` is the full screen size
@@ -184,6 +187,33 @@ fn save_state_final(path: Option<&Path>, window: &NSWindow) {
     // [suspended]; a full save here would consume it and the VM would cold-boot (M9.4-1a).
     if let Err(e) = crate::vmlib::state::set_window(path, Some(snap)) {
         log::warn!("window state save failed: {e}");
+    }
+}
+
+/// The `on_window_close = ask` dialog: Suspend / Shut Down / Cancel (→ `None`). Modal on the
+/// main thread — the render timer pauses for the answer, which is fine (the guest keeps
+/// running; frames resume with the next tick).
+fn ask_close_action(
+    mtm: MainThreadMarker,
+    vm_name: &str,
+) -> Option<crate::vmlib::schema::WindowCloseAction> {
+    use crate::vmlib::schema::WindowCloseAction;
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(&format!("Close “{vm_name}”?")));
+    alert.setInformativeText(&NSString::from_str(
+        "Suspend parks the VM and resumes it the next time it starts; \
+         Shut Down powers the guest off.",
+    ));
+    alert.addButtonWithTitle(&NSString::from_str("Suspend"));
+    alert.addButtonWithTitle(&NSString::from_str("Shut Down"));
+    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+    let r = alert.runModal();
+    if r == NSAlertFirstButtonReturn {
+        Some(WindowCloseAction::Suspend)
+    } else if r == NSAlertSecondButtonReturn {
+        Some(WindowCloseAction::Shutdown)
+    } else {
+        None
     }
 }
 
@@ -303,6 +333,7 @@ pub fn run(
         restore_frame,
         state_path,
         desired_size,
+        on_window_close,
     } = opts;
 
     let app = NSApplication::sharedApplication(mtm);
@@ -754,6 +785,12 @@ pub fn run(
     // the guest agent to power off; reaching the deadline falls back to SIGKILL.
     let quit_deadline: Cell<Option<std::time::Instant>> = Cell::new(None);
 
+    // M9.4 close-policy state: the action chosen for THIS close episode (Ask answers once; a
+    // close-suspend that times out demotes itself to Shutdown here), and when the
+    // close-triggered suspend was requested (bounds the wait before falling back).
+    let close_choice: Cell<Option<crate::vmlib::schema::WindowCloseAction>> = Cell::new(None);
+    let suspend_close_at: Cell<Option<std::time::Instant>> = Cell::new(None);
+
     // Clone a window handle for the input monitor's fullscreen shortcut BEFORE the timer block
     // below moves `window` in.
     let shortcut_window = window.clone();
@@ -838,43 +875,96 @@ pub fn run(
             }
         }
 
-        // The user closed the window or hit Ctrl-C: prefer an orderly guest power-off via
-        // the agent control plane (window-close = the M2 orderly-shutdown clause); without
-        // an agent — or once the grace runs out — kill the worker's process group. A minimized
-        // window or a hidden app is NOT a close (both report isVisible()==false) — keep running.
+        // The user closed the window or hit Ctrl-C. `limina stop`/Ctrl-C always powers off; a
+        // pure window CLOSE consults the `[display] on_window_close` policy (M9.4): suspend
+        // (default — snapshot + teardown, the next start resumes), shutdown (the power-off
+        // ladder), or ask. A minimized window or a hidden app is NOT a close (both report
+        // isVisible()==false) — keep running.
         if should_initiate_quit(
             crate::supervisor::stop_requested(),
             window.isVisible(),
             window.isMiniaturized(),
             timer_app.isHidden(),
         ) {
-            // A SECOND stop signal (limina stop --force, impatient double Ctrl-C)
-            // skips whatever grace remains — mirror of the headless monitor ladder.
-            let force_now = crate::supervisor::force_stop_requested()
-                || match quit_deadline.get() {
-                    None => {
-                        let orderly = control
-                            .as_ref()
-                            .map(|c| c.request_shutdown(crate::control::AGENT_GRACE))
-                            .unwrap_or(false);
-                        if orderly {
-                            log::info!("window closed → asked the guest agent to power off");
-                            quit_deadline.set(Some(
-                                std::time::Instant::now() + crate::control::AGENT_GRACE,
-                            ));
-                            false
-                        } else {
-                            true
-                        }
-                    }
-                    Some(d) => std::time::Instant::now() >= d,
+            use crate::vmlib::schema::WindowCloseAction;
+            let action = if crate::supervisor::stop_requested() {
+                Some(WindowCloseAction::Shutdown)
+            } else if let Some(a) = close_choice.get() {
+                Some(a)
+            } else {
+                let picked = match on_window_close {
+                    WindowCloseAction::Ask => ask_close_action(mtm, &title),
+                    other => Some(other),
                 };
-            if force_now {
-                save_state_final(timer_state_path.as_deref(), &window);
-                kill_worker_group(timer_conn.pid());
-                crate::gateway::cleanup();
-                crate::control::cleanup();
-                std::process::exit(0);
+                match picked {
+                    Some(a) => {
+                        close_choice.set(Some(a));
+                        Some(a)
+                    }
+                    None => {
+                        // Cancel: reopen the window; the close never happened.
+                        window.makeKeyAndOrderFront(None);
+                        None
+                    }
+                }
+            };
+            match action {
+                None => {}
+                Some(WindowCloseAction::Suspend) => match suspend_close_at.get() {
+                    None => {
+                        log::info!("window closed → suspending the VM (on_window_close)");
+                        crate::supervisor::request_suspend();
+                        suspend_close_at.set(Some(std::time::Instant::now()));
+                    }
+                    // Success lands in the `exited` branch above (worker exits 126; the
+                    // session monitor persists [suspended]) — this arm only waits. If the
+                    // bracket never completes (guest can't quiesce, e.g. a virtiofs mount),
+                    // fall back to the power-off ladder rather than leaving a closed-window
+                    // VM running forever. Margin past the supervisor's own bracket timeout
+                    // so the demotion can't race a bracket that is still being torn down.
+                    Some(t)
+                        if t.elapsed()
+                            >= crate::supervisor::SUSPEND_BRACKET_TIMEOUT
+                                + std::time::Duration::from_secs(15) =>
+                    {
+                        log::warn!("close-to-suspend did not complete; falling back to power-off");
+                        close_choice.set(Some(WindowCloseAction::Shutdown));
+                    }
+                    Some(_) => {}
+                },
+                // Ask cannot reach here (resolved above); route it like Shutdown for safety.
+                Some(WindowCloseAction::Shutdown | WindowCloseAction::Ask) => {
+                    // A SECOND stop signal (limina stop --force, impatient double Ctrl-C)
+                    // skips whatever grace remains — mirror of the headless monitor ladder.
+                    let force_now = crate::supervisor::force_stop_requested()
+                        || match quit_deadline.get() {
+                            None => {
+                                let orderly = control
+                                    .as_ref()
+                                    .map(|c| c.request_shutdown(crate::control::AGENT_GRACE))
+                                    .unwrap_or(false);
+                                if orderly {
+                                    log::info!(
+                                        "window closed → asked the guest agent to power off"
+                                    );
+                                    quit_deadline.set(Some(
+                                        std::time::Instant::now() + crate::control::AGENT_GRACE,
+                                    ));
+                                    false
+                                } else {
+                                    true
+                                }
+                            }
+                            Some(d) => std::time::Instant::now() >= d,
+                        };
+                    if force_now {
+                        save_state_final(timer_state_path.as_deref(), &window);
+                        kill_worker_group(timer_conn.pid());
+                        crate::gateway::cleanup();
+                        crate::control::cleanup();
+                        std::process::exit(0);
+                    }
+                }
             }
         }
 
