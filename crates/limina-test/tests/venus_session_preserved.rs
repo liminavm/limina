@@ -265,7 +265,7 @@ fn seated_gnome_session_survives_snapshot_restore() {
     };
 
     // --- Guest 2: fresh worker restoring the snapshot against the preserved disk ---
-    let mut cfg2 = devices(base_cfg)
+    let mut cfg2 = devices(base_cfg.clone())
         .with_coexist_display(1280, 800)
         .with_net()
         .with_supervisor_log()
@@ -334,7 +334,8 @@ fn seated_gnome_session_survives_snapshot_restore() {
         "sudo coredumpctl list --no-legend gnome-shell 2>/dev/null | wc -l",
     );
     eprintln!("post-restore: gnome-shell pid={shell_pid_after} cores={cores_after}");
-    cleanup();
+    // NOTE: no cleanup() here anymore — the snapshot/disk pair must survive into the
+    // generation-2 leg below; the leg's failure paths and the final teardown clean up.
 
     assert_eq!(
         cores_after, cores_before,
@@ -401,8 +402,103 @@ fn seated_gnome_session_survives_snapshot_restore() {
          VkDeviceMemory came back as a fresh (garbage) allocation: {verdict}"
     );
 
+    // --- Generation 2: suspend the RESUMED session and restore it AGAIN ---
+    // Dogfood does this daily (suspend at night, resume in the morning, repeat), and it
+    // crashed 2/2 on 2026-07-20: the second restore's replay cascades stale-reference
+    // failures and aborts the WORKER in a KK assert (kk_descriptor_set.c:74
+    // sampled_gpu_resource_id). First restores are green across codec/build combos, so
+    // the failure is generation-correlated — the GPU journal re-baselined after a first
+    // replay must still describe a re-creatable world. The oracles repeat generation 1's:
+    // the worker survives the replay, SSH returns, same boot_id, same shell pid past the
+    // abort window, no new cores.
+    eprintln!("generation 2: suspending the restored session");
+    ssh_retry(
+        &g2,
+        "sudo systemd-run --on-active=2 systemctl suspend -i >/dev/null 2>&1; echo armed",
+    );
+    g2.suspend_bracket()
+        .expect("sending the gen-2 suspend bracket");
     let outcome = g2
+        .wait_supervisor_exit(Duration::from_secs(120))
+        .expect("supervisor did not exit after the gen-2 suspend bracket");
+    assert_eq!(
+        outcome.code,
+        Some(126),
+        "the restored guest should suspend again (worker exit 126); got {outcome:?}\n\
+         === supervisor+worker log ===\n{}",
+        g2.supervisor_log()
+    );
+    // The gen-2 suspend wrote its snapshot at g2's armed path (restore_from arms
+    // --snapshot-file at `snap`, and the suspend recreates the canonical name there).
+    // The gen-2 DISK state lives in g2's scratch (the harness boots a clone of the
+    // preserved disk, not the preserved file itself) — carry it out before g2 drops.
+    let disk2: PathBuf = std::env::temp_dir().join(format!("limina-venus-session-{pid}-g2.raw"));
+    limina_test::cow_clone(&g2.scratch_dir().join("disk.raw"), &disk2)
+        .expect("preserving the gen-2 suspended guest's disk");
+    drop(g2);
+    let disk2_for_cleanup = disk2.clone();
+    let cleanup2 = move || {
+        cleanup();
+        if std::env::var_os("LIMINA_KEEP_ARTIFACTS").is_none() {
+            let _ = std::fs::remove_file(&disk2_for_cleanup);
+        }
+    };
+
+    let mut cfg3 = devices(base_cfg)
+        .with_coexist_display(1280, 800)
+        .with_net()
+        .with_supervisor_log()
+        .restore_from(&snap);
+    if let limina_test::Boot::KernelDisk { disk: d, .. } = &mut cfg3.boot {
+        *d = disk2.clone();
+    }
+    let mut g3 = Guest::boot(&cfg3).expect("spawning the gen-2 restoring supervisor");
+    let banner = g3
+        .wait_for_ssh_banner(Duration::from_secs(120))
+        .unwrap_or_else(|e| {
+            eprintln!("--- gen-2 restore supervisor log tail ---");
+            let slog = g3.supervisor_log();
+            for line in slog.lines().rev().take(25).collect::<Vec<_>>().iter().rev() {
+                eprintln!("{line}");
+            }
+            cleanup2();
+            panic!(
+                "gen-2 restored guest never became reachable over SSH (the second-generation \
+                 replay crashed or wedged the worker): {e}"
+            );
+        });
+    eprintln!("gen-2 restored guest SSH up: {banner}");
+
+    let boot_id_gen2 = ssh_retry(&g3, "cat /proc/sys/kernel/random/boot_id");
+    assert_eq!(
+        boot_id_gen2, boot_id,
+        "boot_id changed across the SECOND restore — the guest rebooted instead of resuming"
+    );
+    eprintln!(
+        "riding out the {}s abort window before the gen-2 identity checks",
+        ABORT_WINDOW.as_secs()
+    );
+    std::thread::sleep(ABORT_WINDOW);
+    let shell_pid_gen2 = ssh_retry(&g3, "pgrep -x gnome-shell | head -1");
+    let cores_gen2 = ssh_retry(
+        &g3,
+        "sudo coredumpctl list --no-legend gnome-shell 2>/dev/null | wc -l",
+    );
+    eprintln!("post-gen-2-restore: gnome-shell pid={shell_pid_gen2} cores={cores_gen2}");
+    cleanup2();
+    assert_eq!(
+        cores_gen2, cores_before,
+        "gnome-shell dumped core across the SECOND restore — the re-baselined GPU journal \
+         did not survive another replay"
+    );
+    assert_eq!(
+        shell_pid_gen2, shell_pid,
+        "gnome-shell is a DIFFERENT process after the second restore — the session was \
+         lost on generation 2"
+    );
+
+    let outcome = g3
         .shutdown(Duration::from_secs(15))
-        .expect("shutting down the restored guest");
+        .expect("shutting down the gen-2 restored guest");
     eprintln!("teardown outcome: {outcome:?}");
 }

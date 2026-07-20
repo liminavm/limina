@@ -711,15 +711,25 @@ multi-GB apply from flushing the host page cache (the suspected cause of the dog
 stutter during dogfood-guest's resume — see the center-hang exoneration note in
 [[limina-m9-suspend-resume]]).
 
-**OPEN (filed as task #16, found during this measurement): second-generation resume aborts the
-worker.** First resume of a suspended session is green; suspending the *resumed* session and
-resuming again crashed 2/2 — cascading vkr replay `entry failed (stale reference?)` + res-import
-failures (`fd_type=-999`), ending in the KK assert `kk_descriptor_set.c:74
-(sampled_gpu_resource_id)` → SIGABRT. Reproduced across safe/fast lz4 and debug/release, so it's
-generation-correlated (GPU journal re-baseline after a first replay), not codec/build. Coverage
-gap: `venus_session_preserved` restores exactly once per lineage — needs a two-generation leg.
-Auto-resume keeps the failure safe (snapshot consumed → next start cold-boots; disk unharmed)
-but the session is lost.
+**Second-generation resume crash — ROOT-CAUSED + FIXED same day (libkrun 0086).** First resume
+of a suspended session was green; suspending the *resumed* session and resuming again crashed
+2/2 — cascading vkr replay `entry failed (stale reference?)` + res-import failures
+(`fd_type=-999`), ending in the KK assert `kk_descriptor_set.c:74 (sampled_gpu_resource_id)` →
+SIGABRT. Mechanism: **vkr_seq fence epoch mixing.** The rutabaga journal adopted at gen-1
+restore (`restore_entries`) keeps its old-epoch CreateBlob fences (~1.5M), while the fresh venus
+context's wire journal re-records the replayed commands from seq 1 (`vkr_journal_create` →
+`seq_next = 1`). Generation 2's rutabaga/wire merge is then cross-epoch garbage: the first old
+fence drains the *entire* new wire journal, so every `VkImportMemoryResourceInfoMESA` import
+replays before its exporter blob exists — the -999 cascade; the dropped binds leave an image
+view with no memory and a replayed descriptor write trips KK's assert. Fix in the replay driver
+(the only place that knows the epoch mapping): right after feeding a CreateBlob's fence, rewrite
+`entry.vkr_seq` to the new journal's watermark (`journal_vkr_seq`) — the adopted journal is
+single-epoch and generation N+1 is correct by induction. Verified on the 2/2 lived-in repro:
+**three** suspend/resume generations green (same boot_id, Firefox alive, 3.7 s felt resume
+each). `venus_session_preserved` grew a generation-2 leg as a survival guard — note it does NOT
+reproduce the pre-fix crash (the L2 seated session's imports never reference forward blobs); the
+lived-in repro script is the sharp instrument. Auto-resume kept the pre-fix failure safe
+(consumed snapshot → cold boot; disk unharmed) — only the session was lost.
 
 **Suspend/resume UX — SHIPPED 2026-07-20** (commits bff4cc3, 206d43f, 0dedba4, f881807): the four
 bullets below are implemented and eyeball-verified. Deltas from the sketches: the splash rides a
