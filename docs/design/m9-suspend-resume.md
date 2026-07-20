@@ -663,19 +663,22 @@ RAM/device state, so restoring later corrupts the fs; take an **APFS `clonefile(
 the pause point (cheap, CoW) and bind it into the snapshot manifest (§8 already scopes disk-*set* identity;
 this adds disk-*contents* identity). Until built, gate live snapshots to a clean pause.
 
-**Snapshot write speed (filed 2026-07-20; biggest current gain).** Measured on the P2 stack: 8.8 GB
-in ~54 s (~165 MB/s) — `save_snapshot` is fully serial (whole-RAM `Vec` copy at ~2× guest RAM
-transient, single-threaded CRC32, serial write). Plan, in effort order: (1) stream chunks to disk
-(kills the 2× RAM transient — standing M9.2-polish debt); (2) **skip pages we already know are
-dead**: ballooned-out ranges (host tracks them; `dump_ram` currently copies them anyway) and
-zero-page detection → sparse writes; (3) per-chunk parallel CRC (or a faster hash); (4)
-multithreaded zstd/lz4 (compression shrinks the write, which is most of the wall time). Balloon
-note: a *blocking* pre-suspend balloon expansion is the wrong default — inflation needs live guest
-cooperation (so it must run before s2idle entry, adding user-visible suspend latency, and reclaiming
-page cache can take tens of seconds under writeback). The host-side skips in (2) get most of the
-same win at zero delay. A bounded **opportunistic inflate** (request a low target, take whatever the
-guest returns within a ~2–3 s deadline, then proceed) is a reasonable later refinement, enhanced
-tier first (FRQ free-page reporting makes it cheap).
+**Snapshot write speed — SHIPPED 2026-07-20 (libkrun 0081, v6 format).** Baseline on the P2 stack:
+8.8 GB in ~54 s (~165 MB/s) — v5 `save_snapshot` was fully serial (whole-RAM `Vec` copy at ~2×
+guest RAM transient, single-threaded CRC32 over the whole file, serial write; ballooned pages
+copied too). v6 keeps the head encoding under its own CRC and rebuilds the RAM section as 4 MiB
+chunked frames: all-zero chunks become data-less holes, the rest lz4 blocks (raw if lz4 would
+grow them), each with a per-frame CRC; a worker pool streams frames straight out of guest memory
+(no whole-RAM copy either direction), and restore decompresses frames into guest memory in
+parallel (holes zeroed — the fresh worker's boot payload/FDT must be overwritten). Measured,
+8 GiB fresh-boot guest: **save 6.6 s / 465 MiB file** (1677 zero + 367 lz4 + 5 raw frames),
+**restore RAM apply 2.3 s**; restored guest verified alive. A lived-in guest will land between
+this and the old numbers (fewer holes, same parallel lz4 floor). Balloon note: a *blocking*
+pre-suspend balloon expansion stays rejected — inflation needs live guest cooperation before
+s2idle entry (user-visible latency; page-cache reclaim can take tens of seconds under writeback),
+and zero-page holes already capture reclaimed pages at zero delay. A bounded **opportunistic
+inflate** (low target, ~2–3 s deadline, proceed regardless) remains a possible later refinement,
+enhanced tier first (FRQ free-page reporting makes it cheap).
 
 **Suspend/resume UX (filed 2026-07-20, from dogfood feedback).**
 - **Last-scanout splash:** at suspend, save the final presented frame (the present path already
