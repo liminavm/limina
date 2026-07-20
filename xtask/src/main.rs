@@ -98,10 +98,13 @@ enum Cmd {
         extra: Vec<String>,
     },
     /// Assemble the full self-contained `target/Limina.app` (wraps scripts/build-app.sh).
+    /// Builds RELEASE by default — the .app is the deployable artifact, and an explicit
+    /// debug profile passed here once overrode build-app.sh's release default and shipped
+    /// a debug bundle to the dogfood Mac (2026-07-20, twice).
     App {
-        /// Build in release mode.
+        /// Build a debuggable (unoptimized, debug-assertions) bundle instead of release.
         #[arg(long)]
-        release: bool,
+        debug: bool,
     },
     /// Build + assemble + codesign a minimal `target/Limina.app` (launch-path smoke test).
     Bundle {
@@ -129,7 +132,7 @@ fn main() -> Result<()> {
             ram_mib,
             extra,
         } => run_vm(disk, no_net, cpus, ram_mib, &extra),
-        Cmd::App { release } => app(release),
+        Cmd::App { debug } => app(!debug),
         Cmd::Bundle { release, open } => bundle(release, open),
     }
 }
