@@ -662,6 +662,34 @@ docs. **Point-in-time disk capture** — a live snapshot-then-keep-running diver
 RAM/device state, so restoring later corrupts the fs; take an **APFS `clonefile()`** of each data disk at
 the pause point (cheap, CoW) and bind it into the snapshot manifest (§8 already scopes disk-*set* identity;
 this adds disk-*contents* identity). Until built, gate live snapshots to a clean pause.
+
+**Snapshot write speed (filed 2026-07-20; biggest current gain).** Measured on the P2 stack: 8.8 GB
+in ~54 s (~165 MB/s) — `save_snapshot` is fully serial (whole-RAM `Vec` copy at ~2× guest RAM
+transient, single-threaded CRC32, serial write). Plan, in effort order: (1) stream chunks to disk
+(kills the 2× RAM transient — standing M9.2-polish debt); (2) **skip pages we already know are
+dead**: ballooned-out ranges (host tracks them; `dump_ram` currently copies them anyway) and
+zero-page detection → sparse writes; (3) per-chunk parallel CRC (or a faster hash); (4)
+multithreaded zstd/lz4 (compression shrinks the write, which is most of the wall time). Balloon
+note: a *blocking* pre-suspend balloon expansion is the wrong default — inflation needs live guest
+cooperation (so it must run before s2idle entry, adding user-visible suspend latency, and reclaiming
+page cache can take tens of seconds under writeback). The host-side skips in (2) get most of the
+same win at zero delay. A bounded **opportunistic inflate** (request a low target, take whatever the
+guest returns within a ~2–3 s deadline, then proceed) is a reasonable later refinement, enhanced
+tier first (FRQ free-page reporting makes it cheap).
+
+**Suspend/resume UX (filed 2026-07-20, from dogfood feedback).**
+- **Last-scanout splash:** at suspend, save the final presented frame (the present path already
+  holds the IOSurface; the window-capture oracle proves the grab) into the VM bundle next to the
+  snapshot; at restore, the window shows it immediately (letterboxed by the existing fit-rect)
+  until the first real post-restore present — no more long blank window.
+- **Dim/blur + progress animation:** AppKit overlay in the window process (blur the held frame,
+  progress indicator), driven by lifecycle events the supervisor already observes (bracket fired /
+  snapshot written / restore started / first present).
+- **Window-close behavior:** `vm.toml` setting `on_window_close = suspend | shutdown | ask`,
+  **default suspend** (rides on this milestone's persisted `Suspended` status + auto-`--restore`).
+- **VM window menu:** every VM verb in the menu bar + Dock menu — Suspend, Shut Down (power
+  button), Force Stop, Restart, Settings, Show in Finder, Copy SSH command.
+
 **Done test:** human-verified suspend→resume and snapshot→restore→clone on both a stock and an enhanced
 image; clock correct after a real multi-hour suspend; a cloned snapshot's disk is independent of the
 original; window survives; host RAM freed while suspended.
