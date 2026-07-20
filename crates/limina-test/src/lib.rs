@@ -409,10 +409,12 @@ pub struct GuestConfig {
     /// teardown, NOT relaunch). See [`with_snapshot`](GuestConfig::with_snapshot) and
     /// [`Guest::snapshot_path`].
     pub snapshot: bool,
-    /// Resume from a VM snapshot instead of cold-booting (M9): the supervisor forwards
-    /// `--restore <path>` to the worker. Set via [`restore_from`](GuestConfig::restore_from) with
-    /// the snapshot a previous [`Guest`]'s [`Guest::snapshot`] wrote — model the real suspend/resume
-    /// split (a second, separate boot reads the file). `None` = cold boot.
+    /// Resume from a VM snapshot instead of cold-booting (M9): arms `--snapshot-file` at this
+    /// path, and the supervisor's auto-resume (a pending snapshot at the armed path is consumed
+    /// and restored, one-shot) picks it up. Set via [`restore_from`](GuestConfig::restore_from)
+    /// with the snapshot a previous [`Guest`]'s [`Guest::snapshot`] wrote — models the real
+    /// suspend/resume split (a second, separate boot finds the file). NOTE: the consume renames
+    /// the file to `<name>.consumed`. `None` = cold boot.
     pub restore_from: Option<PathBuf>,
     /// Extra flags appended verbatim to the `limina` supervisor command line, for options the
     /// harness has no dedicated knob for (e.g. `--balloon-free-page-reporting`). Set via
@@ -964,14 +966,15 @@ impl GuestConfig {
     }
 
     /// Enable host-side VM snapshot/suspend (M9): the worker gets `--snapshot-file
-    /// <scratch>/snapshot`, so [`Guest::snapshot`] can trigger a suspend + `--restore` cycle.
+    /// <scratch>/snapshot`, so [`Guest::snapshot`] can trigger a suspend + auto-resume cycle.
     pub fn with_snapshot(mut self) -> GuestConfig {
         self.snapshot = true;
         self
     }
 
-    /// Resume from a VM snapshot (M9): the supervisor forwards `--restore <path>` to the worker so
-    /// it restores RAM + vCPUs + GIC instead of cold-booting. Pass the snapshot file a previous
+    /// Resume from a VM snapshot (M9): arms `--snapshot-file` at the given path so the
+    /// supervisor's auto-resume consumes it (single-use rename to `.consumed`) and the worker
+    /// restores RAM + vCPUs + GIC instead of cold-booting. Pass the snapshot file a previous
     /// suspended [`Guest`] wrote (from [`Guest::snapshot_path`]); keep that Guest alive until this
     /// one has booted, since the file lives in its scratch dir. Use the SAME cpus/ram/boot config.
     pub fn restore_from(mut self, snapshot: impl Into<PathBuf>) -> GuestConfig {
@@ -1164,8 +1167,9 @@ pub struct Guest {
     supervisor_log: Option<PathBuf>,
     /// Path to the pinned supervisor-owned control socket (inside `scratch`), if enabled.
     control_socket: Option<PathBuf>,
-    /// Path to the VM snapshot file (inside `scratch`), if [`GuestConfig::snapshot`] was set.
-    /// A [`Guest::snapshot`] writes it and the supervisor relaunches with `--restore` on it.
+    /// The armed VM snapshot path: `<scratch>/snapshot` if [`GuestConfig::snapshot`] was set,
+    /// or the [`GuestConfig::restore_from`] path. A [`Guest::snapshot`] writes it; a later boot
+    /// arming the same path auto-resumes from it (consuming it — rename to `.consumed`).
     snapshot_path: Option<PathBuf>,
     /// Set once teardown has run, so Drop doesn't double-kill.
     torn_down: bool,
@@ -1404,15 +1408,16 @@ impl Guest {
         };
 
         // VM snapshot file (M9 suspend/resume): the worker writes the snapshot here on a SIGUSR1
-        // trigger, then exits "snapshotted" (126) and the supervisor stops (no relaunch).
-        let snapshot_path = cfg.snapshot.then(|| scratch.join("snapshot"));
+        // trigger, then exits "snapshotted" (126) and the supervisor stops (no relaunch). Resume
+        // is AUTOMATIC and one-shot (M9.4): arming a path where a snapshot already exists makes
+        // the supervisor consume it (rename `.consumed`) and boot the worker restoring — there is
+        // no `--restore` flag anymore, so `restore_from` is just arming a pre-existing snapshot.
+        let snapshot_path = cfg
+            .restore_from
+            .clone()
+            .or_else(|| cfg.snapshot.then(|| scratch.join("snapshot")));
         if let Some(path) = &snapshot_path {
             cmd.arg("--snapshot-file").arg(path);
-        }
-        // VM resume (M9): forward `--restore <path>` so the worker restores instead of cold-booting.
-        // The path points into a *previous* Guest's scratch (that Guest must stay alive until we boot).
-        if let Some(path) = &cfg.restore_from {
-            cmd.arg("--restore").arg(path);
         }
 
         // Display: capture the scanout into the scratch dir (auto-cleaned on Drop). Whenever a

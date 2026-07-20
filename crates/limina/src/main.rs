@@ -119,16 +119,13 @@ struct Cli {
     console_pty: bool,
 
     /// Enable VM suspend (M9): forward `--snapshot-file <path>` to the worker so a SIGUSR1 to the
-    /// worker writes a VM snapshot there and exits "snapshotted" (126). Resuming from the file is a
-    /// separate `--restore` boot; the durable decision to resume is per-VM policy, not this flag.
+    /// worker writes a VM snapshot there and exits "snapshotted" (126). Resume is AUTOMATIC and
+    /// one-shot: a snapshot present at this path when the worker spawns is consumed and restored
+    /// (pass the SAME machine config it was suspended with). There is deliberately no --restore
+    /// flag — a restore mismatched against the suspend state destroys the disk (see
+    /// supervisor::take_pending_resume).
     #[arg(long)]
     snapshot_file: Option<PathBuf>,
-
-    /// Resume from a VM snapshot (M9): forward `--restore <path>` to the worker so it rebuilds the
-    /// machine and restores RAM + vCPUs + GIC instead of cold-booting. Pass the SAME machine config
-    /// (kernel/cmdline/cpus/ram) the VM was suspended with.
-    #[arg(long)]
-    restore: Option<PathBuf>,
 
     /// Managed-VM only (M9.2): the bundle's `state.toml`, so the supervisor can persist the
     /// `[suspended]` record when the worker exits 126. Set by `cli_from_definition`; not a user
@@ -712,48 +709,12 @@ fn cli_from_definition(
     );
 
     // M9.2 managed-VM suspend wiring. Always arm suspend by giving the worker a snapshot path (the
-    // bundle's run/snapshot.bin) and the state.toml to persist into, so `limina suspend` works on any
-    // running managed VM. If state.toml records a prior suspend, boot with `--restore <snapshot>` and
-    // CONSUME the record now (clear it before boot) — a snapshot that wedges the worker then degrades
-    // to a cold boot next time instead of a restore-loop. The snapshot file survives on disk and is
-    // overwritten by the next suspend.
+    // bundle's run/snapshot.bin) and the state.toml to persist into, so `limina suspend` works on
+    // any running managed VM. Resume needs no wiring here: a snapshot present at that path is
+    // detected — and consumed, single-use — at worker spawn (supervisor::take_pending_resume), so
+    // a suspended VM resumes and a reboot relaunch cold-boots, by construction.
     let snapshot_bin = bundle.snapshot_bin();
     let state_toml = bundle.state_toml();
-    let restore = match vmlib::state::load(&state_toml).and_then(|s| s.suspended) {
-        Some(sus) if sus.snapshot.exists() => {
-            log::info!("resuming suspended VM from {}", sus.snapshot.display());
-            if let Err(e) = vmlib::state::set_suspended(&state_toml, None) {
-                log::warn!("clearing the suspended state failed: {e}; continuing");
-            }
-            // SINGLE-USE enforcement (M9.4-1b): rename the snapshot out of its canonical name
-            // before the worker reads it. A snapshot is only valid against the disk EXACTLY as
-            // the suspend left it — the resumed guest immediately advances the disk, and a
-            // second restore of the same snapshot writes stale fs metadata over it (this
-            // destroyed a btrfs image once: "parent transid verify failed"). After the rename,
-            // nothing — a stale state.toml copy, a re-run of the same argv — can find the
-            // consumed snapshot at its canonical path. The next suspend writes the canonical
-            // name fresh, atomically replacing any previous `.consumed` leftover here.
-            let consumed = sus.snapshot.with_extension("bin.consumed");
-            match std::fs::rename(&sus.snapshot, &consumed) {
-                Ok(()) => Some(consumed),
-                Err(e) => {
-                    // Degrade: restore from the canonical path (worse invalidation, still a
-                    // consumed state record) rather than failing the resume.
-                    log::warn!("marking the snapshot consumed failed: {e}; restoring in place");
-                    Some(sus.snapshot)
-                }
-            }
-        }
-        Some(sus) => {
-            log::warn!(
-                "state.toml records a suspend but snapshot {} is missing; cold-booting",
-                sus.snapshot.display()
-            );
-            let _ = vmlib::state::set_suspended(&state_toml, None);
-            None
-        }
-        None => None,
-    };
 
     let window = if ov.window {
         true
@@ -786,10 +747,9 @@ fn cli_from_definition(
         console: ov.console.clone(),
         console_input: None,
         console_pty: false,
-        // M9.2 suspend wiring (computed above): arm the worker's snapshot path, restore if the VM
-        // was suspended, and hand run_vm the state.toml to persist `[suspended]` into on a 126 exit.
+        // M9.2 suspend wiring (computed above): arm the worker's snapshot path and hand run_vm
+        // the state.toml to persist `[suspended]` into on a 126 exit.
         snapshot_file: Some(snapshot_bin),
-        restore,
         suspend_state_file: Some(state_toml),
         on_window_close: cfg.display.on_window_close,
         virtio_console: None,
@@ -1015,11 +975,6 @@ fn run_vm(cli: Cli) -> Result<()> {
         args.push("--snapshot-file".into());
         args.push(path_arg(path)?);
     }
-    // VM resume (M9): forward the snapshot path so the worker restores instead of cold-booting.
-    if let Some(path) = &cli.restore {
-        args.push("--restore".into());
-        args.push(path_arg(path)?);
-    }
     let grace = Duration::from_secs(cli.shutdown_grace_secs);
 
     // GPU mode applies to both the windowed and capture display paths (worker default is the
@@ -1163,10 +1118,12 @@ fn run_vm(cli: Cli) -> Result<()> {
                 .snapshot_file
                 .as_ref()
                 .map(|p| p.with_file_name("splash.png")),
+            // A resume is pending iff the armed snapshot exists (a PEEK — the consume happens
+            // at worker spawn inside the session); show its splash until the first frame.
             restore_splash: cli
-                .restore
+                .snapshot_file
                 .as_ref()
-                .and(cli.snapshot_file.as_ref())
+                .filter(|p| p.exists())
                 .map(|p| p.with_file_name("splash.png"))
                 .filter(|p| p.exists()),
         });
@@ -1183,12 +1140,15 @@ fn run_vm(cli: Cli) -> Result<()> {
         vmm_bin,
         args,
         shutdown_grace: grace,
+        snapshot_file: cli.snapshot_file.clone(),
+        suspend_state_file: cli.suspend_state_file.clone(),
     };
 
     let code = supervisor::run(&spec, control.as_ref(), gateway.as_ref())?;
     // M9.2: the worker exited 126 → the guest was snapshotted and torn down by the suspend bracket.
-    // Persist the `[suspended]` record so the next `start` boots with `--restore`. Managed VMs only
-    // (a flat `--disk` run sets no `suspend_state_file`, so this is a no-op there).
+    // Persist the `[suspended]` record (UI status; the snapshot file itself is what the next
+    // start's auto-resume detects). Managed VMs only (a flat `--disk` run sets no
+    // `suspend_state_file`, so this is a no-op there).
     if code == supervisor::WORKER_EXIT_SNAPSHOT {
         if let (Some(state_file), Some(snapshot)) = (&cli.suspend_state_file, &cli.snapshot_file) {
             let sus = vmlib::state::Suspended {

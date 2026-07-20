@@ -174,6 +174,16 @@ fn l1_guest_resumes_in_fresh_worker_from_snapshot() {
     let snap = std::env::temp_dir().join(format!("limina-m9-roundtrip-{}.bin", std::process::id()));
     std::fs::copy(&snap_src, &snap).expect("copying snapshot out of the suspended VM's scratch");
     drop(g1);
+    // Auto-resume consumes the snapshot by renaming it (M9.4 single-use); clean up whichever
+    // name survives the test.
+    let cleanup = {
+        let consumed = snap.with_extension("bin.consumed");
+        let snap = snap.clone();
+        move || {
+            let _ = std::fs::remove_file(&snap);
+            let _ = std::fs::remove_file(&consumed);
+        }
+    };
 
     // --- Guest 2: a fresh, separate worker that RESTORES from the snapshot ---
     let restore_cfg = {
@@ -187,7 +197,7 @@ fn l1_guest_resumes_in_fresh_worker_from_snapshot() {
     // The fresh worker announces it is taking the restore path (not a fresh boot)...
     g2.wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(20))
         .unwrap_or_else(|e| {
-            let _ = std::fs::remove_file(&snap);
+            cleanup();
             panic!("restore worker never entered the restore path: {e}");
         });
     // ...and then every vCPU comes back live at its saved PC behind the restored GIC. Wait for the
@@ -195,7 +205,7 @@ fn l1_guest_resumes_in_fresh_worker_from_snapshot() {
     // of them landed — the per-vCPU restore the single-vCPU spike couldn't reach.
     g2.wait_for_supervisor_log("resumed from snapshot at pc=", Duration::from_secs(30))
         .unwrap_or_else(|e| {
-            let _ = std::fs::remove_file(&snap);
+            cleanup();
             panic!("restored guest never resumed a vCPU: {e}");
         });
     // Both vCPUs' "resumed" lines may not be flushed at the same instant; poll briefly for all of
@@ -209,7 +219,7 @@ fn l1_guest_resumes_in_fresh_worker_from_snapshot() {
         }
         std::thread::sleep(Duration::from_millis(100));
     };
-    let _ = std::fs::remove_file(&snap);
+    cleanup();
     eprintln!("resumed PCs: {pcs:?}");
 
     // Every vCPU resumed (multi-vCPU per-vCPU + GIC restore worked)...

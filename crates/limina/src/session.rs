@@ -102,6 +102,7 @@ fn spawn_windowed_worker(
     width: u32,
     height: u32,
     surface_port_name: Option<&str>,
+    resume: supervisor::ResumePaths<'_>,
 ) -> Result<WindowedWorker> {
     // Control channel (worker→supervisor scanout): sup stays here (CLOEXEC so the worker
     // can't inherit it); worker_fd is inherited and referenced by --control-fd. Stream type
@@ -157,6 +158,11 @@ fn spawn_windowed_worker(
         vmm_bin: vmm_bin.to_path_buf(),
         args,
         shutdown_grace: grace,
+        // Auto-resume is decided inside spawn_worker per spawn (M9.4): the first spawn of a
+        // suspended VM consumes the snapshot and restores; a reboot relaunch finds nothing
+        // and cold-boots.
+        snapshot_file: resume.snapshot_file.map(|p| p.to_path_buf()),
+        suspend_state_file: resume.suspend_state_file.map(|p| p.to_path_buf()),
     };
     let child = supervisor::spawn_worker(
         &spec,
@@ -287,6 +293,10 @@ impl WindowedSession {
             width,
             height,
             surface_port_name.as_deref(),
+            supervisor::ResumePaths {
+                snapshot_file: snapshot_file.as_deref(),
+                suspend_state_file: suspend_state_file.as_deref(),
+            },
         )?;
         let conn = window::WorkerConn::new(io);
         let shared = window::Shared::new();
@@ -311,7 +321,8 @@ impl WindowedSession {
                 let code = supervisor::monitor(child, grace, monitor_control.as_ref()).unwrap_or(0);
                 if !guard.should_relaunch(code, started.elapsed()) {
                     // The suspend bracket snapshotted the guest and the worker tore down:
-                    // persist `[suspended]` so the next start boots with `--restore`. Must
+                    // persist `[suspended]` (UI status; the snapshot file itself is what the
+                    // next start's auto-resume detects and consumes). Must
                     // happen BEFORE mark_worker_exited — the window's final state save (a
                     // merge) runs on the next timer tick and the record has to exist by then.
                     // The headless twin of this lives in main.rs::run_vm.
@@ -363,6 +374,13 @@ impl WindowedSession {
                     width,
                     height,
                     monitor_port_name.as_deref(),
+                    // Reboot relaunch: no snapshot can be pending here (a suspend never
+                    // relaunches), so this resolves to a cold boot — by construction, not
+                    // by trusting argv (the bug that destroyed a dogfood disk).
+                    supervisor::ResumePaths {
+                        snapshot_file: snapshot_file.as_deref(),
+                        suspend_state_file: suspend_state_file.as_deref(),
+                    },
                 ) {
                     Ok(n) => n,
                     Err(e) => {

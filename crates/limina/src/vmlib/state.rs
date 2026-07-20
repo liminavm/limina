@@ -16,9 +16,11 @@ pub struct VmState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowState>,
     /// Present iff the VM was suspended (M9.2): the guest was snapshotted to `snapshot` and the
-    /// process torn down. The next `start` reads this, boots the worker with `--restore <snapshot>`,
-    /// and clears it (consume-on-start, so a crash-loop never re-restores a bad snapshot). Absent
-    /// for a normally-stopped or running VM.
+    /// process torn down. STATUS ONLY (what `limina ls` / the control center show): the resume
+    /// decision is made from the snapshot file's presence at worker spawn, not from this record
+    /// (`supervisor::take_pending_resume`, which also clears this when it consumes the snapshot —
+    /// or reconciles a stale record whose snapshot is gone). Absent for a normally-stopped or
+    /// running VM.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suspended: Option<Suspended>,
 }

@@ -394,7 +394,7 @@ fn managed_vm_suspends_and_resumes() {
         "snapshot.bin missing or implausibly small ({snap_len} bytes)"
     );
 
-    // --- restore: the next start reads [suspended] and boots --restore ---
+    // --- restore: the next start finds the pending snapshot and auto-resumes ---
     let mut boot2 = KillOnDrop(
         start_cmd()
             .spawn()
@@ -422,6 +422,35 @@ fn managed_vm_suspends_and_resumes() {
     assert!(
         !snap.exists(),
         "snapshot.bin must be renamed away (single-use) once a restore consumed it"
+    );
+
+    // --- reboot after restore: --restore must be ONE-SHOT across worker relaunches ---
+    // The dogfood-guest disk-destruction bug (dogfood 2026-07-20): the reboot relaunch reused
+    // the original worker argv INCLUDING --restore, so an in-guest reboot of a restored
+    // session re-applied the stale pre-resume RAM over the now-advanced disk (btrfs
+    // "parent transid verify failed" → emergency mode). A reboot must produce a genuine
+    // fresh boot: NEW boot_id, healthy writable filesystem.
+    let _ = ssh_exec(PORT, "sudo reboot"); // the connection drops mid-command; error is fine
+    let gone = std::time::Instant::now();
+    while ssh_exec(PORT, "true").is_some() && gone.elapsed() < Duration::from_secs(60) {
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    assert!(
+        wait_ssh(PORT, Duration::from_secs(180)),
+        "guest did not come back on SSH after the in-guest reboot"
+    );
+    let post_reboot = ssh_exec(PORT, "cat /proc/sys/kernel/random/boot_id")
+        .expect("reading the post-reboot boot_id over SSH");
+    assert_ne!(
+        pre, post_reboot,
+        "boot_id UNCHANGED after an in-guest reboot → the relaunch re-applied the stale \
+         snapshot (the disk-destroying --restore-survives-relaunch bug)"
+    );
+    let fs_ok = ssh_exec(PORT, "touch /var/tmp/reboot-ok && sync && echo fs-ok");
+    assert_eq!(
+        fs_ok.as_deref().map(str::trim),
+        Some("fs-ok"),
+        "filesystem unhealthy after the reboot (read-only remount = stale-snapshot damage)"
     );
 
     // --- teardown: stop the restored VM, then rm the bundle ---

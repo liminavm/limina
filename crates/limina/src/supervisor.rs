@@ -177,10 +177,90 @@ fn install_signal_handlers() -> Result<()> {
 pub struct WorkerSpec {
     /// Path to the (codesigned) limina-vmm binary.
     pub vmm_bin: PathBuf,
-    /// Arguments forwarded to the worker.
+    /// Arguments forwarded to the worker. NEVER contains `--restore`: resume is decided
+    /// per-spawn by [`take_pending_resume`] inside [`spawn_worker`], precisely so a reboot
+    /// relaunch (which reuses these args) can't re-apply a consumed snapshot.
     pub args: Vec<String>,
     /// How long to wait for an orderly guest power-off before SIGKILL.
     pub shutdown_grace: Duration,
+    /// Armed suspend snapshot path (mirrors the worker's `--snapshot-file`). Consulted at
+    /// every spawn: a snapshot present here IS a pending resume. `None` = suspend not armed.
+    pub snapshot_file: Option<PathBuf>,
+    /// Managed-VM `state.toml` whose `[suspended]` record is cleared when a pending resume
+    /// is consumed (the record is UI status; the snapshot file is the source of truth).
+    pub suspend_state_file: Option<PathBuf>,
+}
+
+/// Borrowed view of the suspend/auto-resume paths, for handing a spawn site both halves of
+/// [`WorkerSpec`]'s resume state in one argument.
+#[derive(Clone, Copy)]
+pub struct ResumePaths<'a> {
+    /// See [`WorkerSpec::snapshot_file`].
+    pub snapshot_file: Option<&'a std::path::Path>,
+    /// See [`WorkerSpec::suspend_state_file`].
+    pub suspend_state_file: Option<&'a std::path::Path>,
+}
+
+/// M9.4 auto-resume: the armed snapshot path IS the resume-pending record. If `snapshot`
+/// exists, the VM was suspended and this boot MUST restore from it (cold-booting would leave a
+/// stale snapshot behind that a later start would apply over an advanced disk); if it doesn't,
+/// the boot MUST be cold (there is nothing valid to restore). There is deliberately **no other
+/// way** to request a restore — no `--restore` flag on `limina` — because every mismatch
+/// between "a suspend exists" and "we are restoring" destroys data in one direction or the
+/// other.
+///
+/// Called at EVERY worker spawn — first boot and reboot relaunch alike — and CONSUMES the
+/// snapshot when found: rename to `.consumed` + clear the `[suspended]` record, so the next
+/// spawn in the same session (a guest reboot) finds nothing and cold-boots. This
+/// one-shot-by-construction shape replaced a `--restore` argv flag after that argv rode a
+/// reboot relaunch and re-applied the stale snapshot over the advanced disk (btrfs "parent
+/// transid verify failed" — destroyed a dogfood guest's filesystem, 2026-07-20).
+///
+/// Returns the path the worker must restore from (normally the `.consumed` name; the
+/// canonical name only if the rename failed and we degrade to restoring in place).
+pub fn take_pending_resume(
+    snapshot: &std::path::Path,
+    state_file: Option<&std::path::Path>,
+) -> Option<PathBuf> {
+    if !snapshot.exists() {
+        // Reconcile a stale [suspended] record pointing at a missing snapshot so status
+        // stops claiming a resume that can't happen.
+        if let Some(state) = state_file {
+            if crate::vmlib::state::load(state)
+                .and_then(|s| s.suspended)
+                .is_some()
+            {
+                log::warn!(
+                    "state.toml records a suspend but snapshot {} is missing; cold-booting",
+                    snapshot.display()
+                );
+                let _ = crate::vmlib::state::set_suspended(state, None);
+            }
+        }
+        return None;
+    }
+    log::info!("resume pending: restoring from {}", snapshot.display());
+    if let Some(state) = state_file {
+        if let Err(e) = crate::vmlib::state::set_suspended(state, None) {
+            log::warn!("clearing the suspended state failed: {e}; continuing");
+        }
+    }
+    // SINGLE-USE enforcement (M9.4-1b): rename the snapshot out of its canonical name before
+    // the worker reads it. A snapshot is only valid against the disk EXACTLY as the suspend
+    // left it — the resumed guest immediately advances the disk, and a second restore of the
+    // same snapshot writes stale fs metadata over it. After the rename, nothing — a stale
+    // state.toml copy, a reboot relaunch, a re-run — can find the consumed snapshot at its
+    // canonical path. The next suspend writes the canonical name fresh.
+    let consumed = snapshot.with_extension("bin.consumed");
+    match std::fs::rename(snapshot, &consumed) {
+        Ok(()) => Some(consumed),
+        Err(e) => {
+            // Degrade: restore from the canonical path (worse invalidation, still a cleared
+            // state record) rather than failing the resume.
+            log::warn!("marking the snapshot consumed failed: {e}; restoring in place");
+            Some(snapshot.to_path_buf())
+        }
+    }
 }
 
 /// Spawn the worker in its own process group. `inherit_fds` are extra file descriptors
@@ -190,6 +270,13 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<std::proce
     install_signal_handlers()?;
     let mut cmd = Command::new(&spec.vmm_bin);
     cmd.args(&spec.args).process_group(0);
+    // Auto-resume (M9.4): decided HERE, per spawn, never via spec.args — see
+    // `take_pending_resume` for why (a reboot relaunch must cold-boot, not re-restore).
+    if let Some(snap) = &spec.snapshot_file {
+        if let Some(pending) = take_pending_resume(snap, spec.suspend_state_file.as_deref()) {
+            cmd.arg("--restore").arg(&pending);
+        }
+    }
 
     // When running from an assembled limina.app, hand the worker the bundle-relative venus
     // env (KK ICD + zink-on-KK Mesa selectors). In a dev/cargo run no bundle is present, so
@@ -385,5 +472,71 @@ fn report_exit(status: ExitStatus) -> i32 {
         let sig = status.signal().unwrap_or(0);
         log::warn!("VM stopped — worker terminated by signal {sig}");
         128 + sig
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("limina-resume-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn pending_resume_consumes_snapshot_and_record() {
+        let dir = scratch("consume");
+        let snap = dir.join("snapshot.bin");
+        let state = dir.join("state.toml");
+        std::fs::write(&snap, b"fake-snapshot").unwrap();
+        crate::vmlib::state::set_suspended(
+            &state,
+            Some(crate::vmlib::state::Suspended {
+                snapshot: snap.clone(),
+            }),
+        )
+        .unwrap();
+
+        let got = take_pending_resume(&snap, Some(&state)).expect("a pending resume");
+        assert_eq!(got, dir.join("snapshot.bin.consumed"));
+        assert!(!snap.exists(), "snapshot must leave its canonical name");
+        assert!(got.exists(), "consumed snapshot must hold the payload");
+        assert!(
+            crate::vmlib::state::load(&state)
+                .and_then(|s| s.suspended)
+                .is_none(),
+            "[suspended] record must be cleared at consume"
+        );
+
+        // The SAME check again (what a reboot relaunch does) must find nothing: one-shot.
+        assert_eq!(take_pending_resume(&snap, Some(&state)), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_snapshot_means_cold_boot_and_clears_stale_record() {
+        let dir = scratch("stale");
+        let snap = dir.join("snapshot.bin");
+        let state = dir.join("state.toml");
+        crate::vmlib::state::set_suspended(
+            &state,
+            Some(crate::vmlib::state::Suspended {
+                snapshot: snap.clone(),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(take_pending_resume(&snap, Some(&state)), None);
+        assert!(
+            crate::vmlib::state::load(&state)
+                .and_then(|s| s.suspended)
+                .is_none(),
+            "a record with no snapshot behind it must be reconciled away"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

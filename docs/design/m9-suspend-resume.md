@@ -692,6 +692,22 @@ disk-brick class is closed). The VM menu ships without **Restart** — that need
 Reboot verb (proto addition; batch with the next guest-tools delivery). Remaining polish: bigger
 arc/caption (user request), and the named-snapshot manager / clone / VMGenID half of M9.4 below.
 
+**Auto-resume, one-shot by construction — SHIPPED 2026-07-20 (dogfood incident fix).** The first
+dogfood deploy destroyed a guest's btrfs ("parent transid verify failed" → emergency mode): an
+in-guest **reboot of a restored session** relaunched the worker with the original argv — including
+`--restore` — re-applying the stale pre-resume RAM over the advanced disk. Fix is structural, not
+an argv patch: `limina` no longer has a `--restore` flag at all. The armed `--snapshot-file` path
+IS the resume-pending record — `supervisor::take_pending_resume` runs inside `spawn_worker` at
+EVERY spawn (first boot and reboot relaunch, headless and windowed): snapshot present ⇒ consume it
+(rename `.consumed`, clear the `[suspended]` record — now pure UI status) and pass the worker its
+internal `--restore` for that one spawn; absent ⇒ cold boot. Both harm directions are closed by
+construction: a pending suspend can't be skipped (detection is not optional) and a restore can't
+be forged or repeated (nothing to point a flag at; the file leaves its canonical name at consume).
+Guards: L2 `managed_vm_suspends_and_resumes` grew a reboot-after-restore leg (in-guest `reboot`
+must yield a NEW boot_id + writable fs; RED reproduced the disk-destroyer in 30s), plus
+`supervisor::tests` unit tests for consume/one-shot/stale-record reconcile. The harness's
+`restore_from` now just arms `--snapshot-file` at an existing snapshot.
+
 **Suspend/resume UX (filed 2026-07-20, from dogfood feedback).**
 - **Last-scanout splash:** at suspend, save the final presented frame (the present path already
   holds the IOSurface; the window-capture oracle proves the grab) into the VM bundle next to the

@@ -244,18 +244,23 @@ fn seated_gnome_session_survives_snapshot_restore() {
         .expect("preserving the suspended guest's disk");
     drop(g1);
 
+    // Auto-resume consumes the snapshot by renaming it (M9.4 single-use), so the file may
+    // survive under either name.
+    let snap_consumed = snap.with_extension("bin.consumed");
     let cleanup = || {
         // LIMINA_KEEP_ARTIFACTS=1 preserves the snapshot+disk pair on failure so a
         // failing restore can be re-run by hand (the pair is the whole repro).
         if std::env::var_os("LIMINA_KEEP_ARTIFACTS").is_some() {
             eprintln!(
-                "keeping artifacts: snap={} disk={}",
+                "keeping artifacts: snap={} (or {}) disk={}",
                 snap.display(),
+                snap_consumed.display(),
                 disk.display()
             );
             return;
         }
         let _ = std::fs::remove_file(&snap);
+        let _ = std::fs::remove_file(&snap_consumed);
         let _ = std::fs::remove_file(&disk);
     };
 
