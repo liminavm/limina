@@ -51,18 +51,21 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   Image) + `crates/limina-test/tests/hvf_graceful.rs` — verified RED (SIGABRT) before, GREEN after.
 
 ## M4 venus residue
-- **Concurrent VM makes NEW venus instance creation fail in another guest** (open — found 2026-07-20)
-  — with a second windowed VM running (the 12 GiB f44-kbuild build guest), the
-  `seated_gnome_session_survives` L2 gate failed deterministically (3/3) at its **fd-hold client's
-  `vkCreateInstance` → `-1 OUT_OF_HOST_MEMORY`**, on BOTH pre-0040 and 0040 host virgl and on an
-  untouched F43 guest image — while the SAME guest's gnome-shell venus session (contexts created
-  earlier in the boot) kept rendering fine. Shutting the second VM down → full 223s pass, same
-  binaries. Manual repros of the same client on non-snapshot-armed boots worked even WITH the
-  second VM up, so the trigger is some {concurrent-VM × snapshot-armed-worker} resource edge at
-  new-context/instance creation (KK instance? render-server? fd?). Multi-VM is a supported
-  scenario — worth a root-cause pass: reproduce with two VMs + `RUST_LOG=debug` on the failing
-  worker and see what the vkr context/KK instance creation actually returns. Costed us an evening
-  chasing phantom regressions in mesa 0016/virgl 0040 (both exonerated by A/B).
+- **~~Concurrent VM makes NEW venus instance creation fail in another guest~~ ROOT-CAUSED + FIXED
+  2026-07-20 — it was never a GPU bug: the TEST HARNESS ssh'ed into the WRONG VM.** With a second
+  VM holding host port 2222, the supervisor correctly auto-allocated the test VM's ssh forward
+  elsewhere (2224), but `Guest::boot` stored `cfg.ssh_port.unwrap_or(2222)` — so every `ssh_exec`
+  landed in the BYSTANDER's guest, where identical test creds made all checks "pass" against the
+  wrong guest. The `vkCreateInstance → -1` came from that bystander (the f44-kbuild guest: STOCK
+  4 KiB kernel + STOCK mesa, whose venus hits the known MAP_BLOB offset-alignment gap — degraded
+  exactly as the two-tier floor intends). In-guest forensics that unmasked it: `free -m` showed
+  12 GiB in a "4 GiB" VM, battery-driver dmesg in a `--no-battery` VM, uptime 514 s in a 75 s-old
+  test. Fix: the harness now pre-allocates an ephemeral port and ALWAYS passes `--ssh-port`
+  (limina-test lib.rs); `two_vms_run_in_parallel_on_distinct_ssh_ports` upgraded to ride the
+  auto-allocated path and prove per-handle guest IDENTITY (markers), which banner checks cannot.
+  Multi-VM GPU coexistence verified working (two windowed KK VMs, venus live in both). LESSON:
+  the assume-2222 rule ("READ the port from the log") applies to the harness too, not just
+  interactive ssh — and wrong-VM crosstalk is invisible when guests share creds.
 - **GLX / Xwayland apps present black on venus** (open, low priority — diagnosed 2026-06-29) — on the
   F44 enhanced tier, `glmark2` (no args → GLX) and `glxgears` show a **black window**; native-Wayland
   GL (Firefox WebGL) is fine. **Root-caused to the PRESENT path, not render/context** (verified on the

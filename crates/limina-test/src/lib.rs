@@ -1481,6 +1481,10 @@ impl Guest {
             None => None,
         };
 
+        // Filled in by the net block below with the port the supervisor is TOLD to use
+        // (explicit cfg.ssh_port or a pre-allocated ephemeral one).
+        let mut allocated_ssh_port: Option<u16> = None;
+
         // vsock: bind the host listener BEFORE spawning, so the guest agent's connect
         // (which libkrun bridges to this socket) can't race ahead of us.
         let (vsock_listener, vsock_socket) = match &cfg.vsock {
@@ -1503,11 +1507,22 @@ impl Guest {
         let gateway_log = if cfg.net {
             let log = scratch.join("gvproxy.log");
             cmd.arg("--net").arg("--net-log").arg(&log);
-            // Per-VM SSH-forward port (defaults to 2222 in the supervisor when unset) — distinct
-            // ports let several VMs run in parallel.
-            if let Some(port) = cfg.ssh_port {
-                cmd.arg("--ssh-port").arg(port.to_string());
-            }
+            // Per-VM SSH-forward port — ALWAYS passed explicitly. When the flag is absent the
+            // supervisor AUTO-ALLOCATES from 2222 up, so with another VM holding 2222 the forward
+            // silently lands elsewhere while a harness that assumes 2222 ssh'es into the BYSTANDER
+            // VM's guest (identical test creds — every check "works", against the wrong guest;
+            // cost an evening of phantom venus failures, 2026-07-20). Pre-allocating an ephemeral
+            // port here keeps the port known without parsing the supervisor log.
+            let port = match cfg.ssh_port {
+                Some(p) => p,
+                None => std::net::TcpListener::bind((FORWARDED_SSH_HOST, 0))
+                    .context("probing a free ssh-forward port")?
+                    .local_addr()
+                    .context("reading the probed ssh-forward port")?
+                    .port(),
+            };
+            allocated_ssh_port = Some(port);
+            cmd.arg("--ssh-port").arg(port.to_string());
             // Per-VM guest MAC → the supervisor's gvproxy-config (static-lease rebind) path.
             if let Some(mac) = &cfg.net_mac {
                 cmd.arg("--net-mac").arg(mac);
@@ -1577,7 +1592,7 @@ impl Guest {
             balloon_socket,
             console_in,
             gateway_log,
-            ssh_port: cfg.ssh_port.unwrap_or(DEFAULT_SSH_PORT),
+            ssh_port: allocated_ssh_port.unwrap_or(DEFAULT_SSH_PORT),
             supervisor_log,
             control_socket,
             snapshot_path,
@@ -1956,6 +1971,12 @@ impl Guest {
             }
             std::thread::sleep(Duration::from_millis(200));
         }
+    }
+
+    /// The host port of this VM's SSH forward (`127.0.0.1:<port> → guest:22`) — the explicit
+    /// [`GuestConfig::with_ssh_port`] or the ephemeral port the harness pre-allocated at boot.
+    pub fn ssh_port(&self) -> u16 {
+        self.ssh_port
     }
 
     /// Block until the guest's SSH server answers through gvproxy's inbound port-forward

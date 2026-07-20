@@ -74,31 +74,39 @@ fn fedora_gets_nat_dhcp_and_outbound() {
 /// Per-VM network config → run two VMs in parallel (the multi-VM goal: design doc Phase 2).
 ///
 /// Two stock Fedora guests boot AT ONCE, each its own gvproxy NAT island, each on a DISTINCT
-/// host SSH-forward port (`--ssh-port`). gvproxy's built-in `127.0.0.1:<port> → guest:22` forward
-/// used to be hard-wired to 2222, so a second VM collided on it; giving each VM its own port is
-/// what lets more than one run side by side. The proof is end-to-end and concurrent: both gateways
-/// must independently lease (two separate NAT islands) AND both guests must answer SSH on their own
-/// host port at the same time — if only one VM were really up, only one port would answer.
+/// host SSH-forward port — the harness's AUTO-ALLOCATED ephemeral ports (the default path every
+/// test rides), not explicit ones. The proof is end-to-end and concurrent: both gateways must
+/// independently lease (two separate NAT islands), both guests must answer SSH on their own host
+/// port at the same time, AND each harness handle must demonstrably reach ITS OWN guest (identity
+/// markers) — banner-answering alone can't catch a port mix-up because all test guests share
+/// creds, which is exactly how the 2026-07-20 assume-2222 crosstalk stayed invisible.
 #[test]
 fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
     if !limina_test::require_hvf_or_skip("two_vms_run_in_parallel_on_distinct_ssh_ports") {
         return;
     }
 
-    // Distinct host ports are the only per-VM resource that used to collide (the gvproxy socket is
-    // already pid-keyed). Each VM cow-clones its own writable disk via with_net, so the two share
-    // nothing on disk either.
+    // NO explicit ports: this exercises the harness's pre-allocated ephemeral ssh-forward
+    // ports (the default path every other test rides). Assuming the supervisor default (2222)
+    // here once sent every ssh_exec into a BYSTANDER VM's guest when a dev VM held 2222 —
+    // identical test creds made every check "pass" against the wrong guest (2026-07-20).
+    // Each VM cow-clones its own writable disk via with_net, so the two share nothing on disk.
     let cfg_a = GuestConfig::fedora_from_env()
         .expect("resolving guest config A")
-        .with_ssh_port(2222);
+        .with_net();
     let cfg_b = GuestConfig::fedora_from_env()
         .expect("resolving guest config B")
-        .with_ssh_port(2223);
+        .with_net();
 
     // Boot BOTH before waiting on either, so they come up concurrently (wall-clock ~= one boot).
-    eprintln!("booting two Fedora VMs in parallel: A on ssh-port 2222, B on ssh-port 2223");
+    eprintln!("booting two Fedora VMs in parallel on auto-allocated ssh ports");
     let mut a = Guest::boot(&cfg_a).expect("spawning supervisor A");
     let mut b = Guest::boot(&cfg_b).expect("spawning supervisor B");
+    assert_ne!(
+        a.ssh_port(),
+        b.ssh_port(),
+        "the two VMs were given the same ssh-forward port — parallel VMs would collide"
+    );
 
     // Both gateways lease independently — two live NAT islands, not one shared (and proves B's
     // gvproxy didn't fail to start behind A's).
@@ -110,16 +118,33 @@ fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
     // The headline: both guests answer SSH on their OWN forward port, simultaneously.
     let banner_a = a
         .wait_for_ssh_banner(Duration::from_secs(60))
-        .expect("VM A SSH not reachable on 127.0.0.1:2222");
+        .unwrap_or_else(|e| panic!("VM A SSH not reachable on port {}: {e}", a.ssh_port()));
     let banner_b = b
         .wait_for_ssh_banner(Duration::from_secs(60))
-        .expect("VM B SSH not reachable on 127.0.0.1:2223");
-    eprintln!("VM A SSH (port 2222): {banner_a}");
-    eprintln!("VM B SSH (port 2223): {banner_b}");
+        .unwrap_or_else(|e| panic!("VM B SSH not reachable on port {}: {e}", b.ssh_port()));
+    eprintln!("VM A SSH (port {}): {banner_a}", a.ssh_port());
+    eprintln!("VM B SSH (port {}): {banner_b}", b.ssh_port());
     assert!(
         banner_a.starts_with("SSH-") && banner_b.starts_with("SSH-"),
         "both VMs must answer SSH on their distinct ports at once (A={banner_a:?}, B={banner_b:?})"
     );
+
+    // Identity proof — a banner answering is NOT proof the harness reached the RIGHT guest
+    // (all test guests share creds, so crosstalk is invisible to every other check). Stamp
+    // each guest with its own marker through its handle, then read BOTH back: a port mix-up
+    // makes the markers land in (or read from) the same guest and the assert catches it.
+    a.ssh_exec("echo vm-a > /tmp/limina-vm-identity")
+        .expect("stamping VM A");
+    b.ssh_exec("echo vm-b > /tmp/limina-vm-identity")
+        .expect("stamping VM B");
+    let id_a = a
+        .ssh_exec("cat /tmp/limina-vm-identity")
+        .expect("reading VM A identity");
+    let id_b = b
+        .ssh_exec("cat /tmp/limina-vm-identity")
+        .expect("reading VM B identity");
+    assert_eq!(id_a.trim(), "vm-a", "handle A is not talking to guest A");
+    assert_eq!(id_b.trim(), "vm-b", "handle B is not talking to guest B");
 
     // Tear both down cleanly; neither teardown may need forcing (gateway killed with each).
     let oa = a
