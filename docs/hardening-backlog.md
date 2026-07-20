@@ -187,6 +187,21 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
     broadly. (`msaa-test.c` is the standing oracle; memory `limina-tier2-venus` thread 7.)
   - Remaining (untouched, genuinely low-value): KK GPU-side per-draw root re-fetch (only if GPU-bound
     workloads reappear). Roadmap M4 (~line 413).
+- **Khronos VK-GL-CTS on the enhanced guest as an opt-in validation layer** (noted 2026-07-20, not
+  started) — add a way to run the Khronos conformance suite
+  (<https://github.com/KhronosGroup/VK-GL-CTS>: dEQP-VK for Vulkan, KHR-GL/dEQP-GLES for GL) inside
+  the enhanced guest, exercising the full stack we own end-to-end: guest mesa (venus, zink) →
+  virtio-gpu → virglrenderer (vkr) → KosmicKrisp → Metal. Rationale: our current oracles
+  (pixel-verify probes, venus_replay, glmark) catch crashes and gross wrong-rendering; CTS is the
+  conformance-grade net that catches subtle wrong results (format/precision/sync edge cases), and
+  since we own every layer, each failure is actionable — same spirit as the KK feature-gap probing
+  ([[limina-kk-feature-gaps]]). **Explicitly NOT in the default suite** (`test-boot.sh` stays as-is):
+  a full dEQP-VK run is hours-long; this is an additional, on-demand layer. Sketch: build the CTS for
+  aarch64-linux (in the limina-build container or the F44 build guest), stage it into the enhanced
+  test image (or a virtiofs share), drive it over ssh via a `scripts/`/xtask runner with curated
+  caselists — start with the `*-main` mustpass subsets and a smoke list sized for minutes, keep a
+  known-failures baseline so runs diff against expectations rather than demand 100%. Useful
+  precedent: virglrenderer/crosvm CI runs exactly this shape of guest-CTS-subset job.
 
 ## M5 hardening
 - **Clipboard test-coverage gaps** — the ext-data-control (enhanced) backend is live-verified only,
