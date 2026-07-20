@@ -1,4 +1,19 @@
-# vkmark crash on resume (dogfood, 2026-07-20) — evidence + first analysis
+# vkmark crash on resume (dogfood, 2026-07-20) — ROOT-CAUSED
+
+**ROOT CAUSE (2026-07-20, from this log alone — see §Root cause below): the venus
+re-creation journal is not transitively closed over create-argument references.**
+vkmark destroyed its shader modules after pipeline creation (standard, legal Vulkan);
+the modules' destroys pruned their create entries; at restore, the two retained
+`vkCreateGraphicsPipelines` entries (pipelines 454/457) failed their shader-module
+lookups (452/453/455/456) and were dropped — the histogram's exactly-2 "create" drops.
+After `replay complete` (FATAL sticky again), a parked live ring command referenced
+pipeline 454 → ring FATAL → ring thread exit → guest-visible
+`VK_RING_STATUS_FATAL_BIT_MESA` → vkmark's next submit aborts (`vn_ring_submit_internal`
+aborts on the status bit — the coredump's `vn_ring_submit_locked` frame).
+Fix direction: pin create-arg references (the journal's existing pin/deferred-prune
+machinery, today used only for blob←VkDeviceMemory, generalized to every CREATE
+entry's decoded handle refs — single hook site: `vkr_cs_decoder_lookup_object` via
+`vn_protocol_renderer_cs.h:83`).
 
 User report: vkmark was running (mid-benchmark) during a suspend/resume on dogfood-mac/dogfood-guest;
 on resume it crashed. Firefox was also open. **Worker survived; GNOME session survived;
@@ -32,33 +47,70 @@ Build under test: the 14:41 dogfood deploy — **debug profile**, but current ma
     mid `vkCreateBuffer` in `CubeScene::setup`. Coredump 9088 preserved in the guest.
 - 15:09:40 ctx 4 also trips `ring FATAL at vkr_dispatch_vkWaitRingSeqnoMESA:399`.
 
-## First-pass read (NOT yet root-caused — premises to verify)
+## Root cause (verified against the log + owned sources, 2026-07-20)
 
-The 3539 dropped **recording**-class wire entries dominate. Both busy contexts had large
-in-flight command streams at snapshot time (vkmark mid-benchmark is the stress case).
-The failed lookups happen DURING replay: dropped entries would have created objects that
-later entries reference → cascading lookup failures → decoder poisons the ring → the app
-dies at its first post-resume submit. Two candidate shapes, in decreasing suspicion:
+Neither of the first-pass candidate shapes was right — not a drop *cascade* inside the
+replay (drops during replay clear the shared `ctx->cs_fatal_error` each time,
+`vkr_renderer.c` `vkr_replay_recover_fatal`, and never orphan later entries by
+themselves), and not a capture *race* (the journal had everything it ever retained).
+The journal's pruning is the gap:
 
-1. **Drop cascade**: the initial drops are legitimate (stale refs), but each drop orphans
-   downstream entries in the same ring, and the classifier counts the whole cascade as
-   "recording" drops. Root cause would be whatever invalidated the FIRST reference —
-   possibly the same journal/wire-epoch merge area as the gen-2 fence bug (0086 is in
-   this build; this was likely a gen-1 resume — verify).
-2. **Journal gap**: creates for objects 438+ (vkmark) genuinely missing from the adopted
-   journal (only 2 "create" drops though), i.e. capture raced the live benchmark's
-   creation stream.
+- Recording rule (`vkr_journal.c`): an object's destroy prunes every entry **keyed by**
+  that object's id. But retained entries that merely *reference* the id in their wire
+  args are not keyed by it — and creates referencing it can't replay once its create
+  entry is gone. **The journal is not transitively closed over create-argument
+  references.** Pipeline←shader-module is the canonical *legal* case (apps destroy
+  modules right after pipeline creation; the pipeline stays live).
+- The kill chain, exact and fully accounted in the log:
+  1. Replay of ctx 14 (vkmark) reaches the tail: lookups of shader modules 452, 453,
+     455, 456 (type 15) fail — their creates were pruned at vkmark's module destroys.
+  2. The two `vkCreateGraphicsPipelines` entries (454, 457, type 19) fail on those
+     lookups → dropped → **exactly the histogram's 2 create-class drops**.
+  3. Recording entries binding 454/457 drop (part of the 3539). All replay-time
+     FATALs are cleared (recoverable mode).
+  4. `replay complete` logs; `replay_end` starts the rings and clears `ctx->replaying`
+     → FATAL is sticky again.
+  5. The re-created ring consumes its **parked** pre-suspend commands; one references
+     pipeline 454 → `vkr_cs_decoder_lookup_object:342` FATAL, now sticky → ring thread
+     exits → `vkr_ring_set_status_bits(VK_RING_STATUS_FATAL_BIT_MESA)` (guest-visible,
+     `vkr_ring.c:476`).
+  6. Guest venus `vn_ring_submit_internal` (`vn_ring.c:455`) reads the status bit on
+     vkmark's next submit → `abort()` — the coredump's `vn_ring_submit_locked` frame,
+     same second (15:08:46).
+- The arithmetic closes exactly: FATAL-set lines by context = 66 (vkmark) + 449
+  (gnome-shell) + 3093 (firefox) = 3608 = 3607 replay drops + **1 post-replay live
+  failure** — the single one that killed vkmark's ring.
+- The mass of the storm is the *benign* flavor of the same non-closure: 6331 of 6891
+  failed lookups are type 9 (VkBuffer), ~6100 of them just THREE firefox buffers
+  (307455/307489/307491) referenced by thousands of retained recordings — command
+  buffers recorded against since-destroyed buffers (invalid to resubmit anyway;
+  dropping is semantically fine). gnome-shell's 449 ≈ the 451 type-10 (VkImage)
+  lookups — same shape.
+- Secondary casualties, same family: guest kernel `RESOURCE_UNREF → 0x1203` right at
+  resume (guest unref of a resource the host lost), and ctx 4 (gnome-shell) tripping
+  `vkr_dispatch_vkWaitRingSeqnoMESA:399` (wait for a ring seqno the restored ring never
+  reached) 55s later — the desktop visibly survived both.
 
-Next steps (when picked up):
-- Read the 0076 classifier: what exactly lands in "recording" vs "noted"; whether a
-  cascade is expected to poison the ring or skip cleanly.
-- Repro locally: the gen2-repro script pattern with vkmark running at suspend time
-  ($CLAUDE_JOB_DIR pattern from 2026-07-20; or add a vkmark leg to venus_session_preserved).
-- Decide the product goal: apps with live rings surviving resume (full fix) vs contained
-  per-app death (current behavior — arguably acceptable for a benchmark, not for Firefox).
-- Note: guest-side abort is upstream venus behavior (`vn_ring_submit_locked` aborts on
-  lost ring) — containment beyond this needs the guest driver to fail queue-submits
-  gracefully instead (VK_ERROR_DEVICE_LOST), an upstreamable mesa change.
+## Fix direction
+
+Generalize the journal's existing pin machinery (`vkr_journal_pin_key` /
+`prune_deferred` / retained-destroy replay — today used only for blob←VkDeviceMemory)
+to **every CREATE entry's decoded handle references**:
+
+- Note each successful decode-time handle lookup into the TLS dispatch frame — single
+  funnel: `vkr_cs_decoder_lookup_object` (all generated protocol lookups go through
+  `vn_protocol_renderer_cs.h:83`).
+- At `post_dispatch`, when the frame created objects (CREATE entry), pin every noted
+  ref id that isn't one of the created ids; store the pinned refs on the entry.
+- A pinned object's destroy defers its prune and retains the destroy command (existing
+  machinery) — replay then re-runs create(module) → create(pipeline) → destroy(module)
+  in original seq order, ending in the exact live world.
+- Unpin when the create entry is killed (all its created ids dead) — needs an iterative
+  worklist under the journal mutex (unpin may fire the deferred prune of the ref;
+  no recursion / no mid-dispatch mis-retention: retention only happens when pinned>0).
+- Guest-side hardening (separate, upstreamable): venus aborts on ring loss by design;
+  failing submits with VK_ERROR_DEVICE_LOST instead is a mesa change worth pursuing
+  independently.
 
 ## Files
 
