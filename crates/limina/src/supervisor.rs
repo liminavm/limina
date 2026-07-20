@@ -126,6 +126,13 @@ pub fn request_suspend() {
     SUSPEND.store(true, Ordering::SeqCst);
 }
 
+/// Is a suspend request pending (bracket running or about to)? The window polls this to
+/// show the suspend overlay for CLI-triggered (`limina suspend`) suspends too, not just
+/// close-triggered ones. Cleared by the monitor when a bracket times out.
+pub fn suspend_requested() -> bool {
+    SUSPEND.load(Ordering::SeqCst)
+}
+
 fn install_signal_handlers() -> Result<()> {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();

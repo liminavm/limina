@@ -1157,6 +1157,18 @@ fn run_vm(cli: Cli) -> Result<()> {
             suspend_state_file: cli.suspend_state_file.clone(),
             snapshot_file: cli.snapshot_file.clone(),
             on_window_close: cli.on_window_close,
+            // The restore splash lives beside the snapshot under its canonical name (the
+            // snapshot itself gets renamed `.consumed` at restore; the splash does not).
+            splash_save_path: cli
+                .snapshot_file
+                .as_ref()
+                .map(|p| p.with_file_name("splash.png")),
+            restore_splash: cli
+                .restore
+                .as_ref()
+                .and(cli.snapshot_file.as_ref())
+                .map(|p| p.with_file_name("splash.png"))
+                .filter(|p| p.exists()),
         });
     }
 

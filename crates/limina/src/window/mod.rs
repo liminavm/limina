@@ -29,7 +29,8 @@ use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSApplication,
     NSApplicationActivationPolicy, NSApplicationDelegate, NSApplicationTerminateReply,
     NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSEventType, NSMenu, NSMenuItem, NSScreen,
-    NSViewLayerContentsRedrawPolicy, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSViewLayerContentsRedrawPolicy, NSWindow, NSWindowCollectionBehavior, NSWindowDelegate,
+    NSWindowStyleMask,
 };
 use objc2_core_foundation::CFRetained;
 use objc2_foundation::{
@@ -44,11 +45,13 @@ mod diag;
 pub(crate) mod fit;
 mod input;
 mod lifecycle;
+mod overlay;
 mod present;
 
 pub use lifecycle::{WorkerConn, WorkerIo};
 pub use present::{
-    empty_surface_map, mark_worker_exited, spawn_reader, surface_rendezvous, Shared, SurfaceMap,
+    empty_surface_map, mark_worker_exited, mark_worker_suspended, spawn_reader, surface_rendezvous,
+    Shared, SurfaceMap,
 };
 
 // `input` builds the host pointer's default (blank) shape from the cursor module; re-exported
@@ -89,6 +92,12 @@ pub struct WindowOptions {
     /// What closing the window does (M9.4): suspend (default), shutdown, or ask. Already
     /// resolved by the session — Suspend only arrives when suspend is armed.
     pub on_window_close: crate::vmlib::schema::WindowCloseAction,
+    /// Where the last-presented frame is saved when the worker suspends (the restore
+    /// splash, next to the snapshot). None = flat-CLI VM, no splash.
+    pub splash_save_path: Option<PathBuf>,
+    /// A splash to show from window creation until the first presented frame — set when
+    /// this boot restores from a snapshot and the splash file exists.
+    pub restore_splash: Option<PathBuf>,
 }
 
 /// Point geometry of the screen a windowed boot targets: `frame` is the full screen size
@@ -275,6 +284,38 @@ define_class!(
     }
 );
 
+thread_local! {
+    /// Set by [`WindowCloseInterceptor`] when the user asked to close the window (red
+    /// button / Cmd-W); consumed by the render timer, which routes it through the
+    /// `on_window_close` policy. Main-thread only, like all window state.
+    static CLOSE_REQUESTED: Cell<bool> = const { Cell::new(false) };
+}
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements; no Drop; only
+    // `windowShouldClose:` is implemented, so every other delegate behavior keeps its
+    // AppKit default (the window otherwise stays on its deliberate no-delegate diet).
+    #[unsafe(super = objc2_foundation::NSObject)]
+    #[thread_kind = MainThreadOnly]
+    #[name = "LiminaWindowCloseInterceptor"]
+    struct WindowCloseInterceptor;
+
+    unsafe impl NSObjectProtocol for WindowCloseInterceptor {}
+
+    unsafe impl NSWindowDelegate for WindowCloseInterceptor {
+        // Intercept the close (M9.4, user-decided over hide-and-reopen): the window must
+        // STAY VISIBLE while the close policy runs — a suspend shows the dim + spinner in
+        // place for the save's ~10-20s, an Ask dialog's Cancel is a true no-op, and a
+        // shutdown closes the window programmatically. Returning NO here is what keeps
+        // the red button from hiding the window before any of that can be seen.
+        #[unsafe(method(windowShouldClose:))]
+        fn window_should_close(&self, _sender: &NSWindow) -> bool {
+            CLOSE_REQUESTED.with(|c| c.set(true));
+            false
+        }
+    }
+);
+
 /// The VM window's minimal main menu: Control Center… (Cmd-Shift-C) and Close
 /// Window (Cmd-W — routes to `performClose:`, i.e. the normal VM-shutdown path).
 /// The actions object also becomes the app delegate so quit Apple events go
@@ -334,6 +375,8 @@ pub fn run(
         state_path,
         desired_size,
         on_window_close,
+        splash_save_path,
+        restore_splash,
     } = opts;
 
     let app = NSApplication::sharedApplication(mtm);
@@ -791,6 +834,26 @@ pub fn run(
     let close_choice: Cell<Option<crate::vmlib::schema::WindowCloseAction>> = Cell::new(None);
     let suspend_close_at: Cell<Option<std::time::Instant>> = Cell::new(None);
 
+    // M9.4: intercept window closes so the close policy runs with the window still up
+    // (see WindowCloseInterceptor). The Retained binding must outlive the run loop —
+    // delegates are weak references (`run` never returns, so this frame suffices).
+    let close_interceptor: Retained<WindowCloseInterceptor> =
+        unsafe { msg_send![WindowCloseInterceptor::alloc(mtm), init] };
+    window.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(
+        &*close_interceptor,
+    )));
+
+    // M9.4 felt-resume overlay: present from startup when restoring (splash until the first
+    // presented frame); created by the timer when a suspend request is observed (dim scrim
+    // over the live frame). One at a time.
+    let timer_overlay: std::rc::Rc<RefCell<Option<overlay::Overlay>>> =
+        std::rc::Rc::new(RefCell::new(None));
+    if let Some(splash) = &restore_splash {
+        timer_overlay
+            .borrow_mut()
+            .replace(overlay::Overlay::restore(&layer, &view, splash));
+    }
+
     // Clone a window handle for the input monitor's fullscreen shortcut BEFORE the timer block
     // below moves `window` in.
     let shortcut_window = window.clone();
@@ -820,16 +883,74 @@ pub fn run(
     // Seeded with the current state (the window was just made key), so the first tick is a no-op.
     let was_key = Cell::new(window.isKeyWindow());
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
-        let exited = shared.lock().unwrap().worker_exited;
+        let (exited, worker_suspended, show_id, frames) = {
+            let s = shared.lock().unwrap();
+            (s.worker_exited, s.worker_suspended, s.show_id, s.frames)
+        };
 
         // Worker gone (guest powered off, orderly or not): net any process-group
         // stragglers and exit. (`conn.pid()` is the *current* worker — relaunch keeps it fresh.)
         if exited {
+            // A suspend teardown first saves the last-presented frame as the next restore's
+            // splash (M9.4 felt-resume) — the IOSurface outlives the dead worker in our
+            // mapping, so the grab still reads the final content.
+            if worker_suspended {
+                if let (Some(path), Some(id)) = (splash_save_path.as_deref(), show_id) {
+                    let resolved = timer_surface_map
+                        .lock()
+                        .unwrap()
+                        .get(id)
+                        .or_else(|| IOSurfaceLookup(id));
+                    match resolved {
+                        Some(surface) => {
+                            diag::capture_iosurface(&surface, id, &path.to_string_lossy())
+                        }
+                        None => log::warn!("splash save: surface {id} unresolved; skipping"),
+                    }
+                }
+            }
             save_state_final(timer_state_path.as_deref(), &window);
             kill_worker_group(timer_conn.pid());
             crate::gateway::cleanup();
             crate::control::cleanup();
             std::process::exit(0);
+        }
+
+        // M9.4 overlay lifecycle: the restore splash comes down on the first presented frame;
+        // the suspend dim appears when a suspend request is observed (close-triggered or
+        // `limina suspend`) and comes down if the bracket is abandoned (timeout → the VM keeps
+        // running). While up, re-fit to the content view every tick.
+        {
+            let mut ov = timer_overlay.borrow_mut();
+            let suspending = crate::supervisor::suspend_requested();
+            let take_down = match ov.as_ref() {
+                Some(o) if o.until_first_frame => frames > 0,
+                Some(_) => !suspending,
+                None => false,
+            };
+            if take_down {
+                if let Some(o) = ov.take() {
+                    // A suspend flavor coming down = the bracket was ABANDONED (timeout;
+                    // the VM keeps running). Forget the close episode too, so a later close
+                    // starts a fresh suspend instead of resuming a spent one.
+                    if !o.until_first_frame {
+                        close_choice.set(None);
+                        suspend_close_at.set(None);
+                        CLOSE_REQUESTED.with(|c| c.set(false));
+                    }
+                    o.remove();
+                }
+            } else if let Some(o) = ov.as_ref() {
+                if let Some(content) = window.contentView() {
+                    o.fit(&content);
+                }
+            } else if suspending {
+                if let Some(content) = window.contentView() {
+                    if let Some(host_layer) = content.layer() {
+                        ov.replace(overlay::Overlay::suspend(&host_layer, &content));
+                    }
+                }
+            }
         }
 
         // Release keys held when the window loses key focus (e.g. the user hit Cmd-Tab): the local
@@ -875,17 +996,20 @@ pub fn run(
             }
         }
 
-        // The user closed the window or hit Ctrl-C. `limina stop`/Ctrl-C always powers off; a
-        // pure window CLOSE consults the `[display] on_window_close` policy (M9.4): suspend
-        // (default — snapshot + teardown, the next start resumes), shutdown (the power-off
-        // ladder), or ask. A minimized window or a hidden app is NOT a close (both report
-        // isVisible()==false) — keep running.
+        // The user closed the window (intercepted — the window is still visible) or hit
+        // Ctrl-C / `limina stop`. Stop requests always power off; a window CLOSE consults
+        // the `[display] on_window_close` policy (M9.4): suspend (default — the dim +
+        // spinner run in place, then the process exits), shutdown (the power-off ladder,
+        // window closed programmatically), or ask. A minimized window or a hidden app is
+        // NOT a close (visibility is only a backstop signal here — the interceptor flag is
+        // the real close trigger).
         if should_initiate_quit(
             crate::supervisor::stop_requested(),
             window.isVisible(),
             window.isMiniaturized(),
             timer_app.isHidden(),
-        ) {
+        ) || CLOSE_REQUESTED.with(|c| c.get())
+        {
             use crate::vmlib::schema::WindowCloseAction;
             let action = if crate::supervisor::stop_requested() {
                 Some(WindowCloseAction::Shutdown)
@@ -902,38 +1026,35 @@ pub fn run(
                         Some(a)
                     }
                     None => {
-                        // Cancel: reopen the window; the close never happened.
-                        window.makeKeyAndOrderFront(None);
+                        // Cancel: the close was intercepted, the window never went away —
+                        // just forget it was asked.
+                        CLOSE_REQUESTED.with(|c| c.set(false));
                         None
                     }
                 }
             };
             match action {
                 None => {}
-                Some(WindowCloseAction::Suspend) => match suspend_close_at.get() {
-                    None => {
-                        log::info!("window closed → suspending the VM (on_window_close)");
+                Some(WindowCloseAction::Suspend) => {
+                    if suspend_close_at.get().is_none() {
+                        log::info!("window close → suspending the VM (on_window_close)");
                         crate::supervisor::request_suspend();
                         suspend_close_at.set(Some(std::time::Instant::now()));
+                        // The window stays up (close intercepted): the overlay block above
+                        // shows the dim + spinner for the save's duration. Success exits
+                        // via the `exited` branch; a bracket timeout clears the request
+                        // and the overlay block resets this close episode.
                     }
-                    // Success lands in the `exited` branch above (worker exits 126; the
-                    // session monitor persists [suspended]) — this arm only waits. If the
-                    // bracket never completes (guest can't quiesce, e.g. a virtiofs mount),
-                    // fall back to the power-off ladder rather than leaving a closed-window
-                    // VM running forever. Margin past the supervisor's own bracket timeout
-                    // so the demotion can't race a bracket that is still being torn down.
-                    Some(t)
-                        if t.elapsed()
-                            >= crate::supervisor::SUSPEND_BRACKET_TIMEOUT
-                                + std::time::Duration::from_secs(15) =>
-                    {
-                        log::warn!("close-to-suspend did not complete; falling back to power-off");
-                        close_choice.set(Some(WindowCloseAction::Shutdown));
-                    }
-                    Some(_) => {}
-                },
+                }
                 // Ask cannot reach here (resolved above); route it like Shutdown for safety.
                 Some(WindowCloseAction::Shutdown | WindowCloseAction::Ask) => {
+                    // A close-triggered shutdown hides the window now, matching the native
+                    // close feel (the intercept kept it up; `close()` bypasses the
+                    // delegate). Stop-triggered shutdowns keep it visible while the guest
+                    // powers off — the pre-existing Ctrl-C behavior.
+                    if CLOSE_REQUESTED.with(|c| c.get()) && window.isVisible() {
+                        window.close();
+                    }
                     // A SECOND stop signal (limina stop --force, impatient double Ctrl-C)
                     // skips whatever grace remains — mirror of the headless monitor ladder.
                     let force_now = crate::supervisor::force_stop_requested()

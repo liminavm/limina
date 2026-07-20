@@ -102,7 +102,16 @@ objc2-app-kit = { version = "0.3", features = [
     "objc2-core-graphics",
     "block2",
 ] }
-objc2-quartz-core = { version = "0.3", features = ["CALayer", "objc2-core-graphics"] }
+objc2-quartz-core = { version = "0.3", features = [
+    "CALayer",
+    "objc2-core-graphics",
+    # M9.4 felt-resume overlay: the spinner is a rotating CALayer (the scanout view is
+    # layer-HOSTING, so AppKit controls like NSProgressIndicator never composite in it),
+    # and the "Suspending…"/"Resuming…" caption is a CATextLayer for the same reason.
+    "CAAnimation",
+    "CAMediaTiming",
+    "CATextLayer",
+] }
 objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef", "IOSurfaceTypes", "libc"] }
 objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-core-graphics = { version = "0.3", features = [
@@ -110,6 +119,8 @@ objc2-core-graphics = { version = "0.3", features = [
     "CGColorSpace",
     "CGImage",
     "CGBitmapContext",
+    # M9.4 felt-resume overlay: the dim-scrim layer color.
+    "CGColor",
 ] }
 # Diagnostic: dump the rendered layer to a PNG (LIMINA_WINDOW_CAPTURE) without screen-record.
 png = { workspace = true }

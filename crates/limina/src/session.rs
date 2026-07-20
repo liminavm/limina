@@ -55,6 +55,12 @@ pub struct SessionConfig {
     /// Window-close policy (M9.4). Only meaningful when suspend is armed (both paths above
     /// set); resolved to Shutdown otherwise — see [`WindowedSession::start`].
     pub on_window_close: crate::vmlib::schema::WindowCloseAction,
+    /// Where the window saves the last-presented frame on a suspend exit (the restore
+    /// splash; the snapshot's sibling). None = no splash.
+    pub splash_save_path: Option<PathBuf>,
+    /// Splash to show until the first presented frame (set when this boot restores and the
+    /// file exists).
+    pub restore_splash: Option<PathBuf>,
 }
 
 /// Pack/unpack a `(width, height)` for the [`AtomicU64`] the window and the reboot-relaunch
@@ -201,6 +207,8 @@ pub struct WindowedSession {
     default_content: (u32, u32),
     desired_size: Arc<AtomicU64>,
     on_window_close: crate::vmlib::schema::WindowCloseAction,
+    splash_save_path: Option<PathBuf>,
+    restore_splash: Option<PathBuf>,
 }
 
 impl WindowedSession {
@@ -225,6 +233,8 @@ impl WindowedSession {
             suspend_state_file,
             snapshot_file,
             on_window_close,
+            splash_save_path,
+            restore_splash,
         } = config;
 
         // Close-to-suspend needs somewhere to persist the suspend and a snapshot path for the
@@ -291,6 +301,9 @@ impl WindowedSession {
                     // merge) runs on the next timer tick and the record has to exist by then.
                     // The headless twin of this lives in main.rs::run_vm.
                     if code == supervisor::WORKER_EXIT_SNAPSHOT {
+                        // Before mark_worker_exited, so the window's exit path sees both
+                        // flags together and saves the restore splash (M9.4).
+                        window::mark_worker_suspended(&monitor_shared);
                         if let (Some(state_file), Some(snapshot)) =
                             (&suspend_state_file, &snapshot_file)
                         {
@@ -373,6 +386,8 @@ impl WindowedSession {
             default_content,
             desired_size,
             on_window_close,
+            splash_save_path,
+            restore_splash,
         })
     }
 
@@ -399,6 +414,8 @@ impl WindowedSession {
                 state_path: self.state_path,
                 desired_size: self.desired_size,
                 on_window_close: self.on_window_close,
+                splash_save_path: self.splash_save_path,
+                restore_splash: self.restore_splash,
             },
         );
     }

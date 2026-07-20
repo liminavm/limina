@@ -150,6 +150,13 @@ pub struct Shared {
     pub(crate) gen: u64,
     /// Set when the worker/control channel is gone — the window should close.
     pub(crate) worker_exited: bool,
+    /// Set (before `worker_exited`) when the worker exited BY SUSPENDING (exit 126): the
+    /// window's exit path saves the last-presented frame as the restore splash (M9.4).
+    pub(crate) worker_suspended: bool,
+    /// Count of *presented frames* (`frame` messages), as opposed to `gen`, which also bumps
+    /// on surface geometry. The restore overlay comes down on the first real frame, not on
+    /// the fresh worker's surface announcement (which would flash black under the spinner).
+    pub(crate) frames: u64,
 
     /// Guest hardware-cursor state (decoupled from the scanout above; the worker publishes
     /// the cursor image as its own IOSurface). In the normal (absolute) path the host pointer
@@ -180,6 +187,12 @@ impl Shared {
 /// Mark the worker as gone (called by the monitor when the worker exits).
 pub fn mark_worker_exited(shared: &Arc<Mutex<Shared>>) {
     shared.lock().unwrap().worker_exited = true;
+}
+
+/// Mark that the worker exited by SUSPENDING (exit 126). Call BEFORE
+/// [`mark_worker_exited`] so the window's exit path sees both flags together.
+pub fn mark_worker_suspended(shared: &Arc<Mutex<Shared>>) {
+    shared.lock().unwrap().worker_suspended = true;
 }
 
 /// Read the control channel on a background thread, updating `shared`. Consumes (owns) `fd` —
@@ -214,6 +227,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
                         let mut s = shared.lock().unwrap();
                         s.show_id = Some(id);
                         s.gen += 1;
+                        s.frames += 1;
                         drop(s);
                         wake_main_apply();
                     }
