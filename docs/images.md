@@ -47,9 +47,9 @@ memories before anyone noticed. Verified 2026-06-27 by reading each image's rpmd
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
-| **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
+| **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-2.limina.fc43` *(respun 2026-07-19: adds mesa 0014)* | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
 | **F44 stock** (`*.raw`, `*.boot.raw`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.2` *(co-installed beside stock `6.19.10-300`; respun 2026-07-04, old `6.19.10-limina16k` pruned)* | 16 KiB | `26.1.3-3.limina.fc44` *(respun 2026-07-04 to dogfood parity)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
+| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.2` *(co-installed beside stock `6.19.10-300`; respun 2026-07-04, old `6.19.10-limina16k` pruned)* | 16 KiB | `26.1.3-4.limina.fc44` *(respun 2026-07-19: adds mesa 0014)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
 | **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools; the `enhanced`/`enhanced.test` images now match it as of the 2026-07-04 respin)* | `limina-kernel-16k-7.1.2` | 16 KiB | `26.1.3-3.limina.fc44` *(-2 adds 0011 unorm-WSI drop, -3 adds 0013 TLS-dtor fix)* | **stock** `50.3-2.fc44` *(since 2026-07-11: distro update displaced the patched build; clipboard rides the clipboard@limina extension — deployed + user-verified working)* | `50.3` *(stock)* |
 
 Notes: enhanced **mesa + kernel** are pinned to *our* version and `dnf versionlock`ed; enhanced
@@ -81,6 +81,27 @@ GOTCHA found while validating: the accessible-derived images have gsettings
 ALL user extensions — on such guests the helper stamps its one-time enable, parks ~20 s, then rides
 the RemoteDesktop tier. Consider `gsettings set org.gnome.shell disable-user-extensions false` in
 `make-accessible.sh` at the next image respin.
+
+**Guest-mesa 0014 refresh (2026-07-19)** — both image families' guest mesa respun to pick up
+`patches/mesa/0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff` (the zink multi-context
+unflushed-batch-wait lost-wakeup deadlock that wedged `venus_replay` for ~100 min on 2026-07-12;
+see the `limina-zink-lost-wakeup` memory + `spikes/venus-replay-zink-hang-2026-07-12/`):
+
+- **F44**: mesa `26.1.3-3.limina` → **`26.1.3-4.limina.fc44`**, built with the f44 SRPM recipe in a
+  `fedora:44` Apple container from the **koji `mesa-26.1.3-1.fc44` SRPM** (new `MESA_SRPM_URL` pin in
+  `build-mesa-rpm.sh`): F44's repos have moved to mesa **26.1.4**, where venus patch `0009` no longer
+  applies (3/5 hunks fail in `vn_wsi.c`) — rebase 0009/0010 before any 26.1.4-based build. Patch set:
+  0001 + 0009–0014. Tarball = `target/guest-tools-7.1.2-mesa4/limina-guest-tools-f44.tar.zst`
+  (kernel/agent/extension unchanged); `enhanced.raw` took a full `install-enhanced.sh` pass
+  (kernel idempotent, mesa upgraded + re-versionlocked, 7.1.2 trial re-promoted, venus enumerates,
+  clean poweroff), `enhanced.test.raw` recloned from it.
+- **F43**: mesa `26.2.0-1.limina` → **`26.2.0-2.limina.fc43`** (container build
+  `scripts/build-mesa-rpm.sh`, which now applies 0014 fail-loud + takes `LIMINA_REL`); the six
+  installed subpackages were dnf-upgraded in-guest (versionlock delete-by-exact-name → upgrade →
+  re-lock at `-2`), clean poweroff, `enhanced.test.raw` recloned.
+- NOT deployed: `patches/linux/0005` (virtio_balloon suspend page-reporting stop) — needs a kernel
+  rebuild, explicitly "not yet built" per its commit; the host zink-on-KK build (`/Volumes/mesa-cs`)
+  still lacks 0014 (apply at the next host mesa refresh).
 
 **Enhanced images RESPUN to dogfood parity (2026-07-04)** — `enhanced.raw` + `enhanced.test.raw` were
 brought from kernel `6.19.10-limina16k` + mesa `26.1.3-1` up to **kernel `7.1.2-limina16k` + mesa

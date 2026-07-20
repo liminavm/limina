@@ -48,7 +48,14 @@ rpmdev-setuptree
 echo "==> [1/5] fetch THIS guest's mesa SRPM"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cd "$WORK"
-dnf download --source mesa
+# MESA_SRPM_URL pins the base to a specific SRPM (e.g. koji) instead of whatever version the
+# repos serve today — needed when the distro moves the version under us and our patches would
+# need a rebase (e.g. 26.1.4 broke 0009; the validated base is 26.1.3).
+if [ -n "${MESA_SRPM_URL:-}" ]; then
+  curl -fLO "$MESA_SRPM_URL"
+else
+  dnf download --source mesa
+fi
 SRPM=$(ls mesa-*.src.rpm | head -1); echo "    SRPM: $SRPM"
 rpm2cpio "$SRPM" | cpio -idmu --quiet
 MESA_VER=$(rpm -q --qf "%{VERSION}" -p "$SRPM"); echo "    mesa version: $MESA_VER"

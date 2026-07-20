@@ -28,6 +28,8 @@
 #
 # Usage: scripts/build-mesa-rpm.sh                 # F43 target, our 26.2 snapshot
 #        FEDORA_REL=44 scripts/build-mesa-rpm.sh   # build for an F44 guest
+#        LIMINA_REL=2 scripts/build-mesa-rpm.sh    # bump Release (REQUIRED for redelivery:
+#                                                  # a same-NEVRA rebuild makes dnf silently no-op)
 # Output: target/test-guest/mesa/rpm/*.aarch64.rpm  (gitignored)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -51,6 +53,7 @@ SPEC_REL="${SPEC_REL:-rawhide}"          # which Fedora's mesa.spec to base on (
 # zink (our GL) rides with_vulkan_hw, which stays on; radeonsi/radv/svga/etc. stay (build clean on
 # F43, unused but harmless) to avoid %files surgery -- trim later if we want slimmer RPMs.
 DISABLE_DRIVERS="${DISABLE_DRIVERS:-d3d12 nvk asahi panfrost opencl spirv_tools teflon}"
+LIMINA_REL="${LIMINA_REL:-1}"            # Release = <N>.limina; bump for any redelivery (NEVRA must move)
 JOBS="${JOBS:-8}"
 MEM="${MEM:-12g}"
 OUT="target/test-guest/mesa"
@@ -72,7 +75,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
   -v "$VOL:/build" \
   limina-build:fc43 bash -euo pipefail -c '
     MESA_VER="'"$MESA_VER"'"; MESA_COMMIT="'"$MESA_COMMIT"'"; SPEC_REL="'"$SPEC_REL"'"
-    DISABLE_DRIVERS="'"$DISABLE_DRIVERS"'"
+    DISABLE_DRIVERS="'"$DISABLE_DRIVERS"'"; LIMINA_REL="'"$LIMINA_REL"'"
     export HOME=/build
 
     git config --global user.email limina@local
@@ -113,6 +116,11 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
       else echo "      SKIP $(basename "$p") (does not apply -- likely already upstream)"; fi
     done
     shopt -u nullglob
+    # 0014 (zink unflushed-wait lost-wakeup deadlock) is NOT upstream (checked 2026-07-12) and is
+    # load-bearing for the seated zink desktop / venus_replay — a silent skip would ship the
+    # deadlock back into the image, so apply it FAIL-LOUD (no tolerant fallback).
+    git apply /patches/0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff
+    echo "      applied 0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff (mandatory)"
     git add -A
     git commit -q -m "limina mesa patches" || true
     git archive --format=tar --prefix="mesa-$MESA_VER/" HEAD | xz -T0 > "$HOME/rpmbuild/SOURCES/mesa-$MESA_VER.tar.xz"
@@ -127,10 +135,10 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
     SPEC="$HOME/rpmbuild/SPECS/mesa.spec"
     # pin version; fixed Release that beats stock (25.3.6) AND rawhide (26.1.3) for dnf preference
     sed -i -E "s/^Version:.*/Version:        $MESA_VER/" "$SPEC"
-    sed -i -E "s/^Release:.*/Release:        1.limina%{?dist}/" "$SPEC"
+    sed -i -E "s/^Release:.*/Release:        ${LIMINA_REL}.limina%{?dist}/" "$SPEC"
     # drop rpmautospec macros (no package git here)
     sed -i -E "/^%autochangelog/d" "$SPEC"
-    sed -i -E "/%changelog/a * Wed Jun 25 2026 limina <limina@local> - $MESA_VER-1.limina\n- limina enhanced-tier: our pinned mesa (zink+venus) + patches" "$SPEC"
+    sed -i -E "/%changelog/a * Wed Jun 25 2026 limina <limina@local> - $MESA_VER-${LIMINA_REL}.limina\n- limina enhanced-tier: our pinned mesa (zink+venus) + patches" "$SPEC"
     # strip Fedora downstream patches (against 26.1.3; our tree is pre-patched at $MESA_VER)
     sed -i -E "/^Patch[0-9]*:/d" "$SPEC"
     # %autosetup must unpack our mesa-$MESA_VER/ and apply NO patches (-N)
