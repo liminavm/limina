@@ -57,11 +57,21 @@ pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
 
 ## Trim levers, ranked by expected yield (the future-milestone backlog)
 
-1. **Guest scheduler wake-chain locality (~5k IPI/s at stake).** Options: fewer vCPUs by
-   default (the pipeline packs onto fewer CPUs → wakes become local, no IPI, no host wake);
-   guest `sched` tuning (wake-affinity biasing); dynamic vCPU right-sizing (offline vCPUs when
-   idle — pairs with the ballooning philosophy). Cheap A/B first: boot 2-vCPU vs 6-vCPU, same
-   demo, compare procwake.
+1. **Per-frame GPU/IO wake CHAIN (~13k/s at stake — THE dominant term, measured 2026-07-21).**
+   A/B (below) showed ~70% of the ~18.6k is invariant to vCPU count: doorbell eventfds, fence
+   injections, present handshakes, and the cross-thread condvar hops (vcpu → kevent main loop →
+   gpu worker → vkr-ring → KK → vkr-queue → fence → IRQ inject). Attack with EVENT_IDX on the
+   GPU queues + fence-IRQ coalescing (lever 3, promoted) and doorbell-path shortening (lever 5).
+   This is the biggest lever and it helps STOCK guests too.
+
+2. **vCPU right-sizing (~3k/s at stake — MEASURED, smaller than expected).** A/B 2026-07-21:
+   6→2 vCPU cut total host wakeups −16% (~2,950/s: IPI −67%, timer −56%) with throughput
+   UNAFFECTED on blobs (GPU + single-threaded-JS bound). IMPORTANT CORRECTION: the guest
+   topology is ALREADY shared-LLC-correct (L2 shared 0-5, one MC sched domain) — the ttwu IPIs
+   are the idle-target branch, so a topology patch would do nothing; the win comes purely from
+   fewer idle CPUs to wake. Ship as DYNAMIC vCPU offlining via limina-agent (a static low
+   default would hurt genuinely parallel guest workloads — compiles, etc.); pairs with
+   ballooning. NOT a topology change.
 2. **Kernel tick — DROPPED 2026-07-21 (user decision: no Fedora-config divergence unless
    absolutely required).** HZ audit found Fedora aarch64 ships 1000 too, so lowering HZ
    would be a deliberate divergence, enhanced-tier-only, and NO_HZ already makes idle free —
