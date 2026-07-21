@@ -68,12 +68,31 @@ pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
    CPU 68.6 → 65.5%, render throughput unchanged (user-eyeballed smooth, firefox CPU
    signature flat).
 
-1. **Per-frame GPU/IO wake CHAIN (~8k/s still at stake — the dominant remaining term).**
-   The vCPU A/B showed the chain invariant to vCPU count; EVENT_IDX trimmed it ~2.5k. What
-   remains: doorbell eventfds that still hop through the kevent main loop, present
-   handshakes, and the cross-thread condvar hops (vcpu → kevent main loop → gpu worker →
-   vkr-ring → KK → vkr-queue → fence → IRQ inject). Attack with doorbell-path shortening
-   (lever 5). Helps STOCK guests too.
+0b. **vkr ring relax ladder — SHIPPED 2026-07-21 (virglrenderer 0041, task #38): the
+   dominant term, ~−8-9k/s.** Direct instrumentation (LIMINA_WAKE_TRACE, libkrun 0092 +
+   virgl 0042) attributed the wake budget and found the "chain" guess wrong: the main
+   event loop wakes **6/s**, the gpu worker ~720/s (672 doorbells + 60 present), fences
+   ~240/s → the missing term was **~15.5k/s of nanosleep expiries in `vkr_ring_relax`**,
+   which slept once per iteration with the duration doubling only per power-of-two block
+   (~55 sleeps per 1 ms ring idle window, relax_iter reset on every decoded command).
+   Fix: one sleep per rung, doubling per call (10→640 µs cap — worst-case in-window
+   pickup latency unchanged), ~7 sleeps per full window. Same-protocol A/B at matched
+   session age: total wakeups **14.3k → 6.4k/s**, ring poll sleeps 15.5k → 3.3k/s,
+   fences/present rates identical, smoothness eyeball-confirmed both legs; worker CPU
+   showed no resolvable delta (both legs 79-108% across boots — the blobs workload is
+   not stationary enough for finer CPU comparisons; wakeups are the reliable oracle).
+   The poll window is *useful* (catches ~600 resumes/s vs ~245 parks/s), so early-park
+   variants were rejected.
+
+1. **Doorbell-path shortening — PREMISE KILLED 2026-07-21 (source-verified during #38).**
+   The GPU doorbell is already direct (vCPU MMIO write at 0x50 → queue eventfd → gpu
+   worker's own epoll, mmio.rs:702-708 / gpu/worker.rs inner_run) and fence IRQ injection
+   is already `hv_gic_set_spi` from the fence thread (hvfgicv3.rs:130 — in-kernel GIC, no
+   main-loop bounce). There is nothing to shorten; the "kevent main loop hop" existed only
+   in the sample-inferred chain description. Remaining ~6k/s ≈ ring poll ~3.3k (tunable:
+   a coarser first rung, e.g. 20-40 µs base, would trade pickup latency for another
+   ~1-2k/s) + in-kernel vCPU wakes (IPI/timer — #35 territory) + KK/Metal internal
+   threads (~1k, uninstrumented) + libkrun ~1k.
 
 2. **vCPU right-sizing (~3k/s at stake — MEASURED, smaller than expected).** A/B 2026-07-21:
    6→2 vCPU cut total host wakeups −16% (~2,950/s: IPI −67%, timer −56%) with throughput
@@ -94,10 +113,9 @@ pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
 4. **venus notify throttle.** Mesa already rate-limits `vkNotifyRingMESA` to 1/ms
    (`VN_RING_IDLE_TIMEOUT_NS`); the host ring parks on cnd_wait (virgl 0003). Check the
    remaining kick rate under load; the ring being ACTIVE should need zero doorbells — verify.
-5. **Shorten the host wake chain per submission.** Today: vcpu → eventfd → kevent main loop →
-   gpu-worker channel → vkr-ring condvar (→ KK → vkr-queue → fence eventfd → main loop → IRQ
-   inject). Candidates: route the GPU queue doorbell eventfd directly to the gpu worker
-   (skip the main-loop hop); fence completion → IRQ without the main-loop bounce.
+5. ~~Shorten the host wake chain per submission~~ — KILLED, see lever 1: both hops it
+   proposed to remove were already absent (doorbell eventfd goes straight to the gpu
+   worker's epoll; IRQ inject is in-kernel hv_gic_set_spi from the calling thread).
 6. **Re-baseline after mesa 0017** (free-list fix) — guest venus encode pp should drop and
    stay flat over hours; keep a long-soak procwake trace as the regression oracle.
 

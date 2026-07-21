@@ -170,3 +170,55 @@ bounce through the main loop for IRQ injection — that's the doorbell-path-shor
 The EFI GOP driver doesn't ack EVENT_IDX → stock semantics preserved (this boot went
 GOP → GRUB → 16k kernel and rendered fine); a stock guest that does ack it gets the same
 suppression (the feature is transport-level, kernel-side since forever).
+
+## Direct attribution + the ring-relax fix (2026-07-21, task #38 — virgl 0041)
+
+Lever 5's premises ("doorbell hops through the kevent main loop", "fence→IRQ bounces
+through the main loop") were checked against source before coding and BOTH were false:
+the queue doorbell is vCPU MMIO 0x50 → queue eventfd → the gpu worker's own epoll
+(libkrun mmio.rs:702, gpu/worker.rs), and IRQ injection is `hv_gic_set_spi` straight from
+the fence thread (hvfgicv3.rs:130, in-kernel GIC). The chain description in earlier notes
+was sample-inferred, never observed. Lesson re-banked: enumerate and verify premises.
+
+So we instrumented instead of guessing (LIMINA_WAKE_TRACE=1; libkrun 0092 event-manager /
+gpu-worker / fence counters + virgl 0042 ring counters, all env-gated, ~5s cadence to the
+worker log). Attribution under blobs (post-0091 EVENT_IDX build):
+
+| source | rate |
+|---|---|
+| **vkr_ring poll sleeps (relax ladder)** | **~15,500/s** |
+| gpu worker epoll (672 doorbells + 60 present) | ~720/s |
+| fence callbacks → IRQ signals | ~240/s → ~235/s |
+| main event loop (all other devices) | **6-11/s** |
+
+The ladder slept once per ITERATION, duration doubling only per power-of-two block (16
+sleeps @10µs, 32 @20µs, ...) ≈ ~55 timed wakeups per 1ms idle window, restarted on every
+decoded command. Fix (virgl 0041): one sleep per rung, doubling per call, 640µs cap —
+worst-case in-window pickup latency unchanged, ~7 sleeps per full window.
+
+Same-protocol A/B (fresh boot each leg, measure after blobs confirmed rendering):
+
+| metric | old ladder | new ladder |
+|---|---|---|
+| host wakeups/s | ~14,300 | **~6,400** |
+| vkr_ring poll sleeps/s | ~15,500* | ~3,300 |
+| poll resumes / parks per s | 680 / 315 | ~620 / ~240 |
+| fences / present per s | 240 / 60 | 240 / 60 |
+| render (user eyeball) | smooth | smooth |
+
+*pre-fix sleeps measured on a leg whose total read ~18k; totals move ±2k between boots.
+
+The poll window is USEFUL — ~600/s resumes are caught mid-window vs ~245/s doorbell parks
+— so don't replace it with immediate parking (that would trade guest-notify vmexits and
+add latency). Remaining knob: coarser first rung (20-40µs base) ≈ another ~1-2k/s if ever
+needed, at the cost of early-pickup latency.
+
+CPU-comparison caveat (methodology): worker %CPU read 79-108% and firefox parent 12-22%
+ACROSS BOOTS in BOTH configs at matched workloads — the blobs specimen is not stationary
+enough to resolve CPU deltas of that size across sessions; an apparent "40pp regression"
+and a "firefox creep" during this work were both boot-to-boot / top-slicing artifacts
+(a direct /proc utime 10s delta on the "creeping" firefox showed a healthy 13.6% with the
+0017-fixed thread mix). Wakeup rates are the reliable cross-boot oracle here.
+
+Post-fix budget ≈ 6k/s: ring poll ~3.3k + libkrun sources ~1k + in-kernel vCPU wakes
+(IPI/timer, #35's territory) + KK/Metal internals (uninstrumented, ~1k).
