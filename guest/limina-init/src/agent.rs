@@ -124,11 +124,12 @@ fn serve(stream: &mut File) -> std::io::Result<AgentEnd> {
             | Ok((_, Message::Heartbeat(_)))
             | Ok((_, Message::MemPressure(_)))
             | Ok((_, Message::Error(_))) => {}
-            // Clipboard frames (this agent never advertises the cap), HELLO from a
-            // host, stray acks: ignore rather than die.
+            // Clipboard/timesync frames (this agent never advertises those caps), HELLO
+            // from a host, stray acks: ignore rather than die.
             Ok((_, Message::ClipOffer(_)))
             | Ok((_, Message::ClipRequest(_)))
             | Ok((_, Message::ClipData(_)))
+            | Ok((_, Message::TimeSync(_)))
             | Ok((_, Message::Hello(_)))
             | Ok((_, Message::ShutdownAck)) => {}
             // Host hung up: orderly end (the supervisor side owns forcing teardown).

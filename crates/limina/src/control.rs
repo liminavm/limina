@@ -157,6 +157,55 @@ impl ControlPlane {
             })
             .context("spawning the clipboard poll thread")?;
 
+        // The guest-clock sync sender. The guest kernel's CLOCK_REALTIME is CNTVCT-anchored
+        // and CNTVCT freezes while the HOST sleeps, so a host nap lags a running guest's
+        // clock by the nap's length (dogfood-guest drifted 6h). Send the host wallclock to
+        // timesync-capable agents: right after a detected host sleep (the oversleep trick —
+        // a 2s tick that took ≥3× longer means the host napped), and periodically as drift
+        // insurance. The on-connect seed lives in serve_agent (covers boot + post-restore
+        // reconnect). Policy knob: LIMINA_TIMESYNC_SECS (default 60; tests shrink it).
+        let tsync_inner = inner.clone();
+        std::thread::Builder::new()
+            .name("limina-timesync".into())
+            .spawn(move || {
+                const TICK: Duration = Duration::from_secs(2);
+                let interval = std::env::var("LIMINA_TIMESYNC_SECS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .map(Duration::from_secs)
+                    .unwrap_or(Duration::from_secs(60));
+                // NB: measured on the WALLCLOCK, not Instant — macOS Instant (mach
+                // absolute time) freezes during host sleep, which would blind this
+                // detector to exactly the event it exists to catch.
+                let mut last_sent = std::time::SystemTime::now();
+                let mut last_awake = std::time::SystemTime::now();
+                loop {
+                    std::thread::sleep(TICK);
+                    let now = std::time::SystemTime::now();
+                    let asleep = now
+                        .duration_since(last_awake)
+                        .unwrap_or(Duration::ZERO)
+                        .saturating_sub(TICK);
+                    let overslept = asleep >= TICK * 2;
+                    let due = now
+                        .duration_since(last_sent)
+                        .map(|d| d >= interval)
+                        .unwrap_or(true);
+                    if overslept || due {
+                        if overslept {
+                            log::info!(
+                                "control: host slept ~{:.0}s; syncing guest clocks",
+                                asleep.as_secs_f64()
+                            );
+                        }
+                        tsync_inner.send_to_capable("timesync", &time_sync_now(), CHANNEL_CONTROL);
+                        last_sent = now;
+                    }
+                    last_awake = std::time::SystemTime::now();
+                }
+            })
+            .context("spawning the timesync thread")?;
+
         // The liveness monitor: agents heartbeat every second; report (once) any peer
         // that goes quiet past the threshold, and its recovery. This is the signal a
         // status surface (CLI/UI) consumes later — for now the supervisor log IS the
@@ -331,6 +380,11 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
             let _ = peer.send(&offer, CHANNEL_CLIPBOARD);
         }
     }
+    // Seed the guest clock immediately: the agent (re)connects at boot AND right after a
+    // snapshot restore — exactly the moments the guest's CNTVCT-anchored clock is stale.
+    if peer.has_cap("timesync") {
+        let _ = peer.send(&time_sync_now(), CHANNEL_CONTROL);
+    }
     inner.peers.lock().unwrap().push(peer);
 
     let result = serve_loop(&mut stream, &writer, inner, &last_seen);
@@ -388,11 +442,21 @@ fn serve_loop(
             // HELLO twice / host-only messages from a guest: ignore rather than die.
             Ok((_, Message::Hello(_)))
             | Ok((_, Message::Welcome(_)))
-            | Ok((_, Message::Shutdown(_))) => {}
+            | Ok((_, Message::Shutdown(_)))
+            | Ok((_, Message::TimeSync(_))) => {}
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(e) => return Err(e),
         }
     }
+}
+
+/// The host's authoritative wallclock as a [`Message::TimeSync`] frame.
+fn time_sync_now() -> Message {
+    let unix_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    Message::TimeSync(limina_proto::TimeSync { unix_ns })
 }
 
 /// Writing to a dead peer must fail with EPIPE, not raise SIGPIPE and kill the

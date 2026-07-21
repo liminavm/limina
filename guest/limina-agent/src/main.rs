@@ -178,6 +178,7 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
                 "heartbeat".to_string(),
                 "shutdown".to_string(),
                 "mempressure".to_string(),
+                "timesync".to_string(),
             ],
             pagesize,
         }),
@@ -204,6 +205,7 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
                 let _ = write_message(stream, CHANNEL_CONTROL, &Message::ShutdownAck);
                 return Ok(End::Shutdown);
             }
+            Ok((_, Message::TimeSync(ts))) => apply_time_sync(ts.unix_ns),
             Ok((_, Message::Unknown { msg_type, .. })) => {
                 write_message(stream, CHANNEL_CONTROL, &Message::unsupported(msg_type))?;
             }
@@ -222,6 +224,49 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
             Err(e) => return Err(e),
         }
     }
+}
+
+/// Step the guest clock to the host's authoritative wallclock when it is clearly wrong.
+/// The guest's CLOCK_REALTIME rides CNTVCT, and CNTVCT freezes while the HOST sleeps —
+/// so a host nap lags a running guest's clock by the nap's length, a snapshot restore
+/// lags it by the save→restore gap, and a CNTVCT wrap once threw it 95 years FORWARD.
+/// Deltas under the threshold are left alone (that territory belongs to the guest's own
+/// NTP when one runs); larger ones step in EITHER direction (backward steps are the cure
+/// for the wrap). Needs CAP_SYS_TIME — this daemon runs as root.
+fn apply_time_sync(host_unix_ns: u64) {
+    const STEP_THRESHOLD_NS: i128 = 1_000_000_000; // 1 s
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    if unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut now) } != 0 {
+        return;
+    }
+    let guest_ns = (now.tv_sec as i128) * 1_000_000_000 + now.tv_nsec as i128;
+    let delta_ns = host_unix_ns as i128 - guest_ns;
+    if delta_ns.abs() < STEP_THRESHOLD_NS {
+        return;
+    }
+    let target = libc::timespec {
+        tv_sec: (host_unix_ns / 1_000_000_000) as _,
+        tv_nsec: (host_unix_ns % 1_000_000_000) as libc::c_long,
+    };
+    let line = if unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &target) } == 0 {
+        format!(
+            "limina-agent: stepped the clock by {:+.3}s to the host's wallclock",
+            delta_ns as f64 / 1e9
+        )
+    } else {
+        format!(
+            "limina-agent: clock step failed: {} (delta {:+.3}s)",
+            std::io::Error::last_os_error(),
+            delta_ns as f64 / 1e9
+        )
+    };
+    // stderr for the journal on real distros; /dev/kmsg so the L1 world's serial console
+    // (and any dmesg) sees it too — the L1 timesync test asserts on this line.
+    eprintln!("{line}");
+    let _ = std::fs::write("/dev/kmsg", &line);
 }
 
 /// Read a one-shot memory-pressure snapshot for the host's M6 autoballoon policy. PSI fields are 0

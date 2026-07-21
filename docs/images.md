@@ -82,6 +82,19 @@ ALL user extensions — on such guests the helper stamps its one-time enable, pa
 the RemoteDesktop tier. Consider `gsettings set org.gnome.shell disable-user-extensions false` in
 `make-accessible.sh` at the next image respin.
 
+**limina-agent 0.2.0 — guest-clock TimeSync (2026-07-20, same-day follow-up #2)** — the agent
+now advertises the **`timesync`** cap and steps the guest `CLOCK_REALTIME` to the host's
+wallclock when it drifts ≥1 s (TimeSync over the control plane; supervisor sends on agent
+connect, on detected host sleep, and every `LIMINA_TIMESYNC_SECS` [60] as insurance) — cures
+the host-sleep clock lag (the dogfood-guest 6 h drift), the post-restore gap, and the CNTVCT
+2119 wrap (backward steps allowed). Ships with **libkrun 0088** (PL031 RTC reads anchored to
+the host wallclock instead of a sleep-frozen Instant). Payload =
+`target/guest-tools-7.1.4-agent02/limina-guest-tools-f44.tar.zst` (host-side reassembly of the
+mesa2614r2 payload: agent binary swap + manifest note; kernel/mesa/extension unchanged). Both
+`enhanced.raw` (installer pass) and `enhanced.test.raw` (reclone) carry it. L1 gate =
+`l1_agent_steps_a_skewed_guest_clock` (init skews the clock −7200 s via `limina.skew_clock`;
+the agent steps it back within ~2 s of boot). NOT yet on dogfood-guest.
+
 **Guest-mesa 26.1.4-2 ring-loss hardening (2026-07-20, same-day follow-up)** — F44 guest mesa
 `26.1.4-1.limina` → **`26.1.4-2.limina.fc44`**, adding
 **`patches/mesa/0016-venus-ring-loss-device-lost-not-abort.diff`**: a dead venus ring (host-side

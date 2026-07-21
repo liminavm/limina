@@ -63,3 +63,59 @@ fn l1_real_agent_binary_handshakes_and_powers_off() {
         "orderly shutdown took {elapsed:?} — smells like a fallback path, not the agent"
     );
 }
+
+/// The guest-clock sync (task: guest clock lags by host-sleep / restore gap): boot with a
+/// deliberately WRONG guest clock (`limina.skew_clock=-7200` — init steps CLOCK_REALTIME two
+/// hours back before spawning the agent), and assert the real limina-agent, on receiving the
+/// supervisor's on-connect `TimeSync`, steps the clock back to the host's wallclock. The
+/// agent logs the step to /dev/kmsg, which the serial console carries — that line (with the
+/// right magnitude) is the oracle. Without the timesync leg the clock silently stays 2h
+/// behind forever (the dogfood-guest 6h-drift bug).
+#[test]
+fn l1_agent_steps_a_skewed_guest_clock() {
+    if !limina_test::require_hvf_or_skip("l1_agent_steps_a_skewed_guest_clock") {
+        return;
+    }
+
+    let cfg = GuestConfig::l1_from_env()
+        .expect("resolving L1 guest config")
+        .with_cmdline_token("limina.skew_clock=-7200")
+        .with_cmdline_token("limina.real_agent")
+        .with_cmdline_token("limina.hold")
+        .with_supervisor_log();
+    eprintln!("booting L1 guest with a -7200s clock skew: {:?}", cfg.boot);
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+
+    guest
+        .wait_for_supervisor_log(
+            "guest agent connected: limina-agent/",
+            Duration::from_secs(15),
+        )
+        .expect("supervisor never logged the limina-agent handshake");
+
+    // The on-connect TimeSync should land immediately after the handshake; the agent's
+    // correction line then shows up on the console via /dev/kmsg.
+    guest
+        .wait_for("stepped the clock by +7", Duration::from_secs(20))
+        .unwrap_or_else(|e| {
+            panic!(
+                "the agent never stepped the skewed clock: {e}\n--- console tail ---\n{}",
+                guest
+                    .console()
+                    .lines()
+                    .rev()
+                    .take(30)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        });
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(10))
+        .expect("supervisor did not stop");
+    assert!(!outcome.forced, "harness had to force teardown");
+}

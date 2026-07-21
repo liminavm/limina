@@ -76,6 +76,8 @@ pub mod msg_type {
     pub const ERROR: u8 = 6;
     /// Guest → host memory-pressure report (M6 dynamic memory / PSI autoballoon).
     pub const MEM_PRESSURE: u8 = 7;
+    /// Host → guest authoritative wallclock (guest-clock sync across host sleep/restore).
+    pub const TIME_SYNC: u8 = 8;
     pub const CLIP_OFFER: u8 = 16;
     pub const CLIP_REQUEST: u8 = 17;
     pub const CLIP_DATA: u8 = 18;
@@ -177,6 +179,20 @@ impl MemPressure {
     }
 }
 
+/// Host → guest: the host's authoritative wallclock. The guest kernel's CLOCK_REALTIME is
+/// CNTVCT-anchored and CNTVCT freezes while the host sleeps (mach_absolute_time), so a host
+/// nap lags the running guest's clock by the nap's length — and a snapshot restore lags it
+/// by the save→restore gap. The supervisor sends this on agent connect (covers boot and the
+/// post-restore reconnect), when it detects the host slept (oversleep), and periodically;
+/// the agent steps the guest clock when the delta is large and leaves small deltas to the
+/// guest's own NTP. Backward steps are allowed (a wrapped/late clock must come back).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub struct TimeSync {
+    /// Host `CLOCK_REALTIME` in nanoseconds since the Unix epoch.
+    #[n(0)]
+    pub unix_ns: u64,
+}
+
 /// Host → guest: please power off cleanly (the orderly window-close path).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub struct Shutdown {
@@ -245,6 +261,7 @@ pub enum Message {
     Welcome(Welcome),
     Heartbeat(Heartbeat),
     MemPressure(MemPressure),
+    TimeSync(TimeSync),
     Shutdown(Shutdown),
     /// Empty payload: acknowledges a [`Shutdown`]; the guest powers off right after.
     ShutdownAck,
@@ -266,6 +283,7 @@ impl Message {
             Message::Welcome(_) => msg_type::WELCOME,
             Message::Heartbeat(_) => msg_type::HEARTBEAT,
             Message::MemPressure(_) => msg_type::MEM_PRESSURE,
+            Message::TimeSync(_) => msg_type::TIME_SYNC,
             Message::Shutdown(_) => msg_type::SHUTDOWN,
             Message::ShutdownAck => msg_type::SHUTDOWN_ACK,
             Message::ClipOffer(_) => msg_type::CLIP_OFFER,
@@ -294,6 +312,7 @@ impl Message {
             Message::Welcome(m) => cbor(m),
             Message::Heartbeat(m) => cbor(m),
             Message::MemPressure(m) => cbor(m),
+            Message::TimeSync(m) => cbor(m),
             Message::Shutdown(m) => cbor(m),
             Message::ShutdownAck => Ok(Vec::new()),
             Message::ClipOffer(m) => cbor(m),
@@ -313,6 +332,7 @@ impl Message {
             msg_type::WELCOME => Message::Welcome(cbor(&payload)?),
             msg_type::HEARTBEAT => Message::Heartbeat(cbor(&payload)?),
             msg_type::MEM_PRESSURE => Message::MemPressure(cbor(&payload)?),
+            msg_type::TIME_SYNC => Message::TimeSync(cbor(&payload)?),
             msg_type::SHUTDOWN => Message::Shutdown(cbor(&payload)?),
             msg_type::SHUTDOWN_ACK => Message::ShutdownAck,
             msg_type::CLIP_OFFER => Message::ClipOffer(cbor(&payload)?),
@@ -457,6 +477,15 @@ mod tests {
         assert_eq!(mp.full_avg60, 0);
         assert_eq!(mp.mem_available_kib, 80);
         assert_eq!(mp.mem_total_kib, 100);
+    }
+
+    #[test]
+    fn time_sync_round_trips() {
+        let ts = TimeSync {
+            unix_ns: 1_789_000_000_123_456_789,
+        };
+        let (_, decoded) = round_trip(Message::TimeSync(ts));
+        assert_eq!(decoded, Message::TimeSync(ts));
     }
 
     #[test]
