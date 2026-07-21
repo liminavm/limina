@@ -222,3 +222,21 @@ and a "firefox creep" during this work were both boot-to-boot / top-slicing arti
 
 Post-fix budget ≈ 6k/s: ring poll ~3.3k + libkrun sources ~1k + in-kernel vCPU wakes
 (IPI/timer, #35's territory) + KK/Metal internals (uninstrumented, ~1k).
+
+## Final rung shape: quadruple per rung (2026-07-21, folded into virgl 0041)
+
+Third leg, same protocol: ladder 10→40→160→640µs (one sleep per rung, quadrupling per
+call). Quadrupling keeps the 10µs first rung — early pickup latency unchanged — versus
+raising the base, and a full window walk is ~4 sleeps.
+
+| metric | per-iteration (upstream) | doubling rungs | quad rungs (shipped) |
+|---|---|---|---|
+| host wakeups/s | ~14,300-18,000 | ~6,400 | **~4,180** |
+| ring poll sleeps/s | ~15,500 | ~3,300 | **~1,900** |
+| poll resumes / parks | 680 / 315 | 620 / 240 | 440 / 200 |
+| render (user eyeball) | smooth | smooth | smooth |
+
+Day summary (blobs specimen, 6 vCPU): 18.6k → 4.2k/s (−77%) via libkrun 0091
+(EVENT_IDX + fence coalescing) + virgl 0041 (ring relax ladder, quad rungs).
+Remaining ≈ 4.2k: ring poll 1.9k + in-kernel vCPU IPI/timer wakes (#35) + KK/Metal
+internals + libkrun ~1k.

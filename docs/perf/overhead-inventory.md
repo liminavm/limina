@@ -69,30 +69,31 @@ pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
    signature flat).
 
 0b. **vkr ring relax ladder — SHIPPED 2026-07-21 (virglrenderer 0041, task #38): the
-   dominant term, ~−8-9k/s.** Direct instrumentation (LIMINA_WAKE_TRACE, libkrun 0092 +
+   dominant term, ~−10k/s.** Direct instrumentation (LIMINA_WAKE_TRACE, libkrun 0092 +
    virgl 0042) attributed the wake budget and found the "chain" guess wrong: the main
    event loop wakes **6/s**, the gpu worker ~720/s (672 doorbells + 60 present), fences
    ~240/s → the missing term was **~15.5k/s of nanosleep expiries in `vkr_ring_relax`**,
    which slept once per iteration with the duration doubling only per power-of-two block
    (~55 sleeps per 1 ms ring idle window, relax_iter reset on every decoded command).
-   Fix: one sleep per rung, doubling per call (10→640 µs cap — worst-case in-window
-   pickup latency unchanged), ~7 sleeps per full window. Same-protocol A/B at matched
-   session age: total wakeups **14.3k → 6.4k/s**, ring poll sleeps 15.5k → 3.3k/s,
-   fences/present rates identical, smoothness eyeball-confirmed both legs; worker CPU
-   showed no resolvable delta (both legs 79-108% across boots — the blobs workload is
-   not stationary enough for finer CPU comparisons; wakeups are the reliable oracle).
-   The poll window is *useful* (catches ~600 resumes/s vs ~245 parks/s), so early-park
-   variants were rejected.
+   Fix: one sleep per rung, quadrupling per call (10, 40, 160, 640 µs — the 10 µs first
+   rung keeps early pickup latency unchanged; worst-case in-window pickup stays at the
+   640 µs cap), ~4 sleeps per full window. Same-protocol legs: total wakeups
+   **14.3k → 6.4k/s (doubling rungs) → 4.2k/s (quad rungs, shipped)**, ring poll sleeps
+   15.5k → 1.9k/s, fences/present rates identical, smoothness eyeball-confirmed every
+   leg; worker CPU showed no resolvable delta (79-108% across boots in every config —
+   the blobs workload is not stationary enough for finer CPU comparisons; wakeup rates
+   are the reliable cross-boot oracle). The poll window is *useful* (catches ~440
+   resumes/s vs ~200 doorbell parks/s), so early-park variants were rejected.
+   **Day total: 18.6k → 4.2k/s (−77%).**
 
 1. **Doorbell-path shortening — PREMISE KILLED 2026-07-21 (source-verified during #38).**
    The GPU doorbell is already direct (vCPU MMIO write at 0x50 → queue eventfd → gpu
    worker's own epoll, mmio.rs:702-708 / gpu/worker.rs inner_run) and fence IRQ injection
    is already `hv_gic_set_spi` from the fence thread (hvfgicv3.rs:130 — in-kernel GIC, no
    main-loop bounce). There is nothing to shorten; the "kevent main loop hop" existed only
-   in the sample-inferred chain description. Remaining ~6k/s ≈ ring poll ~3.3k (tunable:
-   a coarser first rung, e.g. 20-40 µs base, would trade pickup latency for another
-   ~1-2k/s) + in-kernel vCPU wakes (IPI/timer — #35 territory) + KK/Metal internal
-   threads (~1k, uninstrumented) + libkrun ~1k.
+   in the sample-inferred chain description. Remaining ~4.2k/s ≈ ring poll ~1.9k +
+   in-kernel vCPU wakes (IPI/timer — #35 territory) + KK/Metal internal threads
+   (uninstrumented) + libkrun ~1k.
 
 2. **vCPU right-sizing (~3k/s at stake — MEASURED, smaller than expected).** A/B 2026-07-21:
    6→2 vCPU cut total host wakeups −16% (~2,950/s: IPI −67%, timer −56%) with throughput
