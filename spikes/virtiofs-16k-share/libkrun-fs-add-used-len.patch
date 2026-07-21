@@ -1,0 +1,31 @@
+diff --git a/src/devices/src/virtio/fs/worker.rs b/src/devices/src/virtio/fs/worker.rs
+index b8e722b..3b281c0 100644
+--- a/src/devices/src/virtio/fs/worker.rs
++++ b/src/devices/src/virtio/fs/worker.rs
+@@ -231,7 +231,7 @@ impl FsWorker {
+                 .map_err(FsError::QueueWriter)
+                 .unwrap();
+ 
+-            if let Err(e) = self.server.handle_message(
++            let reply_len = match self.server.handle_message(
+                 reader,
+                 writer,
+                 &self.shm_region,
+@@ -239,10 +239,14 @@ impl FsWorker {
+                 #[cfg(target_os = "macos")]
+                 &self.map_sender,
+             ) {
+-                error!("error handling message: {e:?}");
+-            }
++                Ok(len) => len as u32,
++                Err(e) => {
++                    error!("error handling message: {e:?}");
++                    0
++                }
++            };
+ 
+-            if let Err(e) = queue.add_used(&self.mem, head.index, 0) {
++            if let Err(e) = queue.add_used(&self.mem, head.index, reply_len) {
+                 error!("failed to add used elements to the queue: {e:?}");
+             }
+ 
