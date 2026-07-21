@@ -31,7 +31,7 @@ cumulative and NOT top's IDLEW — see `spikes/wakeup-probe/RESULTS.md`.
 | source | rate | what it is |
 |---|---|---|
 | IPI1 function-call IPIs | **~4,970/s** | **93% = `ttwu_queue_wakelist` remote task wakeups** (perf ipi:ipi_raise: 22.6k of 24.2k raises in 5 s); 7% = `kick_ilb` nohz balance kicks. The guest scheduler spreads the frame pipeline (Renderer → firefox:zfq0 → vn_wsi → Compositor → WaylandProxy → gnome-shell) across 6 vCPUs and pays an IPI per cross-CPU wake. Each IPI = a sender vmexit (GIC SGI trap) + a host wakeup of the target vCPU thread. |
-| arch_timer | ~3,590/s | tick + hrtimers. Our 16k kernel is **CONFIG_HZ=1000** (Fedora aarch64 stock is 100); NO_HZ_FULL is built in but `nohz_full=` is not on the cmdline, so busy CPUs tick at 1 kHz. Each timer fire on an idle vCPU is a host wakeup. |
+| arch_timer | ~3,590/s | tick + hrtimers. Our 16k kernel is **CONFIG_HZ=1000** — CORRECTION (2026-07-21, verified at src.fedoraproject.org kernel f44 kernel-aarch64-fedora.config): Fedora aarch64 stock is ALSO 1000 (the earlier "stock is 100" claim was wrong — that's RHEL/server); our config inherits it faithfully per build-kernel-rpm.sh's Fedora-fidelity goal. Lowering HZ is therefore a DELIBERATE enhanced-tier divergence (HZ=250 upstream-defconfig-like ≈ 4x cut, HZ=100 RHEL-like ≈ 10x), not a restore — and it cannot help stock guests. NO_HZ_FULL=y is already in both configs; `nohz_full=` is not on the cmdline. |
 | virtio5 = virtio_gpu | ~912/s (~15/frame) | host→guest fence/ctrl completion injections. |
 | virtio9/11/10/1 (blk/net/vsock/i2c) | ~40/s total | noise. |
 
@@ -62,9 +62,12 @@ pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
    guest `sched` tuning (wake-affinity biasing); dynamic vCPU right-sizing (offline vCPUs when
    idle — pairs with the ballooning philosophy). Cheap A/B first: boot 2-vCPU vs 6-vCPU, same
    demo, compare procwake.
-2. **Kernel tick (~3.6k/s at stake).** HZ=1000 → 100/250 on the 16k kernel config (why 1000?
-   audit; Fedora ships 100 on aarch64), and/or wire `nohz_full`. Watch: HZ interacts with
-   balloon FRQ latency and PSI sampling — re-run the M6 gates.
+2. **Kernel tick — DROPPED 2026-07-21 (user decision: no Fedora-config divergence unless
+   absolutely required).** HZ audit found Fedora aarch64 ships 1000 too, so lowering HZ
+   would be a deliberate divergence, enhanced-tier-only, and NO_HZ already makes idle free —
+   the HZ cost is confined to the busy/oscillating regime, which lever 1 (shared-LLC
+   topology → wake_affine packing → fewer WFI-oscillating vCPUs) attacks without diverging.
+   Revisit ONLY if topology + EVENT_IDX leave us far from the kernel_task-sum bar.
 3. **virtio-gpu EVENT_IDX (~1-2k/s at stake, both directions).** libkrun offers EVENT_IDX on
    net + block ONLY; the GPU, vsock, input, snd devices don't
    (`third_party/libkrun/src/devices/src/virtio/gpu/device.rs` AVAIL_FEATURES). Offering it on
