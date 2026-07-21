@@ -368,6 +368,9 @@ fn managed_vm_suspends_and_resumes() {
     let pre = ssh_exec(PORT, "cat /proc/sys/kernel/random/boot_id")
         .expect("reading the pre-suspend boot_id over SSH");
     assert!(!pre.is_empty(), "empty pre-suspend boot_id");
+    // Silence NTP for the wallclock guard below: the clock must come out right via the RTC
+    // path alone (PL031 → rtc-efi → kernel sleeptime injection), not because chrony fixed it.
+    let _ = ssh_exec(PORT, "sudo systemctl stop chronyd || true");
 
     // --- suspend: `limina suspend` relays SIGTSTP → the supervisor runs the bracket (snapshot +
     // teardown), persists [suspended], and the start #1 supervisor exits 126. cmd_suspend blocks
@@ -394,6 +397,11 @@ fn managed_vm_suspends_and_resumes() {
         "snapshot.bin missing or implausibly small ({snap_len} bytes)"
     );
 
+    // A real wallclock gap while suspended, so the clock guard below has a signal: if the
+    // resume path failed to advance CLOCK_REALTIME (broken RTC anchoring or sleeptime
+    // injection), the guest would come back ~20s behind — far outside the 5s tolerance.
+    std::thread::sleep(Duration::from_secs(15));
+
     // --- restore: the next start finds the pending snapshot and auto-resumes ---
     let mut boot2 = KillOnDrop(
         start_cmd()
@@ -409,6 +417,27 @@ fn managed_vm_suspends_and_resumes() {
     assert_eq!(
         pre, post,
         "boot_id changed → the VM REBOOTED instead of resuming from the snapshot"
+    );
+    // Wallclock guard (M9.4 "stock resume clock-step", verified closed 2026-07-20): a STOCK
+    // guest — no limina-agent, NTP stopped above — must resume with a correct CLOCK_REALTIME
+    // purely via the kernel's s2idle thaw re-reading the RTC and injecting the slept duration.
+    // The RTC is honest because libkrun 0088 anchors the PL031 to host CLOCK_REALTIME (served
+    // to this guest through EDK2's rtc-efi runtime service); the restore rebuilds it at the
+    // current host time. A regression here strands resumed guests behind by the suspend gap.
+    let guest_now: f64 = ssh_exec(PORT, "date +%s.%N")
+        .expect("reading the guest wallclock over SSH")
+        .trim()
+        .parse()
+        .expect("parsing the guest wallclock");
+    let host_now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("host wallclock")
+        .as_secs_f64();
+    let skew = guest_now - host_now;
+    assert!(
+        skew.abs() <= 5.0,
+        "guest wallclock skewed {skew:+.1}s from the host after resume — the RTC \
+         sleeptime-injection path is broken (PL031 anchoring / snapshot RTC rebuild)"
     );
     // The [suspended] record was consumed on start (so a later start cold-boots, not restore-loops).
     let state2 = std::fs::read_to_string(bundle.join("state.toml")).unwrap_or_default();

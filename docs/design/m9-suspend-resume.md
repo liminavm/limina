@@ -656,8 +656,16 @@ parked-fence hang, pixel-verified (`iosdump` + human).
 
 ### M9.4 — Full-snapshot feature + suspend/resume UX
 Named snapshots (save / restore / **clone** / roll back / delete); VMGenID reseed on clone; one-click
-Suspend; capability probe; **stock wall-clock one-shot step on resume** (not just slew — see §3
-CLOCK_REALTIME); **lz4 + sparse RAM writes** to make the "second or two" headline hold for a large guest;
+Suspend; capability probe; ~~stock wall-clock one-shot step on resume~~ **VERIFIED ALREADY CLOSED
+2026-07-20, no new code needed**: libkrun 0088 (PL031 anchored to host `CLOCK_REALTIME`; the restore's
+fresh worker rebuilds it at current host time) flows through EDK2's `rtc-efi` runtime service — the
+guest's hctosys device — and the stock kernel's own s2idle-thaw sleeptime injection does the step.
+Measured on an F44 stock guest (own 6.19.10 kernel via EFI, chronyd stopped, no limina components):
+guest−host delta **+0.058 s** after a 122 s suspend gap, same as the boot baseline (a broken path
+would read −122 s). Guarded permanently in `managed_vm_suspends_and_resumes` (15 s deliberate gap +
+±5 s wallclock assertion). Note the *other* stock clock gap — host sleeps while the guest keeps
+running — remains enhanced-tier-only (agent TimeSync; see [[limina-guest-clock]]): nothing re-reads
+the RTC on a guest that never suspended; **lz4 + sparse RAM writes** to make the "second or two" headline hold for a large guest;
 docs. **Point-in-time disk capture** — a live snapshot-then-keep-running diverges the disk from the frozen
 RAM/device state, so restoring later corrupts the fs; take an **APFS `clonefile()`** of each data disk at
 the pause point (cheap, CoW) and bind it into the snapshot manifest (§8 already scopes disk-*set* identity;
