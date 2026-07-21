@@ -43,9 +43,12 @@ echo "==> running boot tests (LIMINA_HVF_TESTS=1)"
 # `venus_replay` is the tier-2 RENDERING test (seated dev-enh boot + GL trace replay,
 # venus vs llvmpipe pixel compare); it SKIPs without the dev-enh golden, the KK ICD, or
 # the trace fixture (fixtures/traces/ — regenerate via spikes/trace-replay/).
+# `l2_share_71` is the ≥7.1-kernel virtiofs --share guard (libkrun 0090); it SKIPs unless a
+# ≥7.1 16 KiB test kernel exists (build with
+# `KVER=v7.1 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 PATCHES_OPTIONAL=1 scripts/build-test-kernel.sh`).
 # --no-fail-fast is load-bearing: cargo test fail-fasts ACROSS test binaries, so without it the
 # first failing binary (e.g. boot) silently stops the run and every later binary (net, venus,
 # venus_replay, …) never executes — masking their status. With it, every binary runs and reports.
 LIMINA_HVF_TESTS=1 cargo test --no-fail-fast ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina-test \
-    --test l1_boot --test l1_agent --test l1_shutdown --test l1_real_agent --test l1_multi_agent --test l1_clipboard --test l1_session_helper --test l1_share --test l1_liveness --test l1_display --test l1_blob_map --test l1_console --test l1_serial --test l1_command --test l1_resize --test l1_snapshot --test boot --test net --test reboot --test disks --test vmdef --test inplace_s2idle --test venus --test venus_reset --test venus_replay --test venus_fallback --test venus_fd_census --test venus_session_preserved --test virgl --test balloon --test balloon_inflate --test balloon_psi --test balloon_burst --test usb --test battery \
+    --test l1_boot --test l1_agent --test l1_shutdown --test l1_real_agent --test l1_multi_agent --test l1_clipboard --test l1_session_helper --test l1_share --test l1_liveness --test l1_display --test l1_blob_map --test l1_console --test l1_serial --test l1_command --test l1_resize --test l1_snapshot --test boot --test net --test reboot --test disks --test vmdef --test inplace_s2idle --test l2_share_71 --test venus --test venus_reset --test venus_replay --test venus_fallback --test venus_fd_census --test venus_session_preserved --test virgl --test balloon --test balloon_inflate --test balloon_psi --test balloon_burst --test usb --test battery \
     -- --nocapture --test-threads=1 "$@"

@@ -31,6 +31,7 @@ KVER="${KVER:-v6.12}"
 JOBS="${JOBS:-8}"
 MEM="${MEM:-8g}"
 PAGESIZE="${PAGESIZE:-4k}"               # 4k (default) or 16k (matches the 16 KiB host)
+PATCHES_OPTIONAL="${PATCHES_OPTIONAL:-0}" # 1 = a patch that doesn't apply is a WARN, not fatal
 OUT="target/test-guest/kernel"          # gitignored (under target/)
 mkdir -p "$OUT"
 
@@ -41,6 +42,10 @@ case "$PAGESIZE" in
     16k) OUT_NAME="Image-16k"; PAGE_CONFIG="CONFIG_ARM64_16K_PAGES=y" ;;
     *)   echo "PAGESIZE must be 4k or 16k (got '$PAGESIZE')" >&2; exit 1 ;;
 esac
+# Output-name override: build a variant to a distinct file without clobbering the default
+# (e.g. KIMAGE_NAME=Image-16k-71 for the ≥7.1 virtiofs share guard, task #36 — kept separate
+# from the 6.12 Image-16k the venus tests inject).
+OUT_NAME="${KIMAGE_NAME:-$OUT_NAME}"
 
 command -v container >/dev/null || { echo "Apple 'container' not installed (brew install container)" >&2; exit 1; }
 
@@ -164,7 +169,14 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         shopt -s nullglob
         for p in /patches/*.patch; do
             echo \"    applying \$(basename \"\$p\")\"
-            git apply --verbose \"\$p\"
+            if ! git apply --verbose \"\$p\"; then
+                if [ '$PATCHES_OPTIONAL' = '1' ]; then
+                    echo \"    WARN: \$(basename \"\$p\") did not apply on $KVER — skipping (PATCHES_OPTIONAL=1)\" >&2
+                else
+                    echo \"    ERROR: \$(basename \"\$p\") did not apply on $KVER (set PATCHES_OPTIONAL=1 if it is not needed for this build)\" >&2
+                    exit 1
+                fi
+            fi
         done
         shopt -u nullglob
         make ARCH=arm64 defconfig

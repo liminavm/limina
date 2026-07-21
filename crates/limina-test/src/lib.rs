@@ -789,6 +789,78 @@ impl GuestConfig {
         Ok(cfg)
     }
 
+    /// L2 config for the **≥7.1-kernel virtiofs share guard** (task #36): the same injected-kernel
+    /// enhanced path as [`enhanced_fedora_from_env`](GuestConfig::enhanced_fedora_from_env), but
+    /// booting a **≥7.1** 16 KiB test kernel instead of the venus tests' 6.12 `Image-16k`.
+    ///
+    /// Linux ≥7.1 added `virtio_fs_verify_response`, which rejects any FUSE reply whose virtio
+    /// used-ring length doesn't cover the out-header (`-EIO` → latches `fc->conn_error` → surfaces
+    /// as `ECONNREFUSED` at `mount(2)`); libkrun 0090 reports the reply byte count as the used
+    /// length. No automated test ran a share on a ≥7.1 guest before this — L1 (`l1_share`) uses
+    /// libkrunfw's 6.12 kernel, the enhanced/seated L2 inject the 6.12 `Image-16k`, and only the
+    /// un-tested EFI path runs the real 7.1.4 — so the fix shipped without a guard. Kept on a
+    /// **distinct** kernel file so the venus suite still runs on its validated 6.12 kernel.
+    ///
+    /// Build the kernel first:
+    /// `KVER=v7.1 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 PATCHES_OPTIONAL=1 scripts/build-test-kernel.sh`.
+    /// Overrides: `LIMINA_TEST_KERNEL_71` (default `target/test-guest/kernel/Image-16k-71`),
+    /// `LIMINA_TEST_DISK` (default this release's `stock.test`), plus the usual
+    /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the ≥7.1 kernel or
+    /// the disk is missing. Pair with [`with_net`](GuestConfig::with_net) +
+    /// [`with_share`](GuestConfig::with_share)/[`with_share_ro`](GuestConfig::with_share_ro); no
+    /// display is needed (this exercises virtio-fs, not venus).
+    pub fn enhanced_share_from_env() -> Result<GuestConfig> {
+        let kernel = std::env::var("LIMINA_TEST_KERNEL_71")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| repo_root().join("target/test-guest/kernel/Image-16k-71"));
+        anyhow::ensure!(
+            kernel.exists(),
+            "≥7.1 test kernel not found at {kernel:?}; build it with \
+             `KVER=v7.1 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 PATCHES_OPTIONAL=1 \
+             scripts/build-test-kernel.sh` (or set LIMINA_TEST_KERNEL_71)"
+        );
+        let disk = match std::env::var("LIMINA_TEST_DISK") {
+            Ok(p) => PathBuf::from(p),
+            Err(_) => fedora_image("stock.test"),
+        };
+        anyhow::ensure!(
+            disk.exists(),
+            "guest disk not found at {disk:?} (set LIMINA_TEST_DISK)"
+        );
+
+        Ok(GuestConfig {
+            limina_bin: resolve_bin("limina", "LIMINA_BIN")?,
+            vmm_bin: resolve_bin("limina-vmm", "LIMINA_VMM_BIN")?,
+            boot: Boot::KernelDisk {
+                kernel,
+                disk,
+                cmdline: "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 \
+                          console=ttyAMA0"
+                    .to_string(),
+            },
+            vsock: None,
+            display: None,
+            cpus: 4,
+            ram_mib: 4096,
+            shutdown_grace: Duration::from_secs(grace_from_env()),
+            console_input: false,
+            console_channel: ConsoleChannel::Virtio,
+            net: false,
+            ssh_port: None,
+            net_mac: None,
+            supervisor_log: false,
+            control_socket: false,
+            balloon_control: false,
+            memory: None,
+            envs: Vec::new(),
+            shares: Vec::new(),
+            data_disks: Vec::new(),
+            snapshot: false,
+            restore_from: None,
+            extra_supervisor_args: Vec::new(),
+        })
+    }
+
     /// Attach a user-mode NAT NIC. The supervisor spawns a gvproxy gateway and captures its
     /// `-debug` log; assert on it via [`Guest::wait_for_gateway_log`] (DHCP lease, outbound).
     /// Append a verbatim extra flag to the `limina` supervisor command line.

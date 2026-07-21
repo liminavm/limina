@@ -504,8 +504,14 @@ channel between limina and a guest agent.
 **Tests:** limina-proto L0; `l1_agent`, `l1_shutdown`, `l1_real_agent`, `l1_multi_agent`,
 `l1_clipboard` (+ `_oversized_content`), `l1_session_helper` (real helper vs a scripted
 `limina-mock-mutter` zbus stand-in on a real musl dbus-daemon — general L1 D-Bus infrastructure),
-`l1_share` (read+write round-trip + `:ro` refusal), `l1_liveness`. Live-verified on the seated
-desktop both clipboard directions + shares + window-close → orderly GNOME power-off (~1s, exit 0).
+`l1_share` (read+write round-trip + `:ro` refusal, on libkrunfw's 6.12 kernel), `l1_liveness`.
+Live-verified on the seated desktop both clipboard directions + shares + window-close → orderly
+GNOME power-off (~1s, exit 0). `l2_share_71` extends the share coverage to a **≥7.1 guest kernel**
+(the virtio-fs used-ring-length path, libkrun 0090): Linux ≥7.1's `virtio_fs_verify_response`
+rejects a FUSE reply whose used length is 0, which bricked shares on the enhanced tier and escaped
+review because no automated test ran a share on ≥7.1 (L1 uses 6.12; the injected L2 kernel is 6.12
+too). It boots a distinct ≥7.1 16 KiB test kernel (`Image-16k-71`) and mounts rw + ro shares over
+SSH — RED/GREEN-verified against the pre/post-0090 worker.
 
 ### Productization: ✅ SHIPPED as RPMs replacing stock at `/usr` (2026-06-25, re-validated on F44 2026-06-29)
 
