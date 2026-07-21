@@ -750,6 +750,9 @@ and the snapshot is SINGLE-USE (renamed `.consumed` at restore-consume; the doub
 disk-brick class is closed). The VM menu ships without **Restart** — that needs an agent-side
 Reboot verb (proto addition; batch with the next guest-tools delivery). Remaining polish: bigger
 arc/caption (user request), and the named-snapshot manager / clone / VMGenID half of M9.4 below.
+A sibling feature was designed 2026-07-20 (not built): **host sleep → in-place guest s2idle** with a
+session-preserving thaw for stock guests (defer-and-classify the GPU session reset) —
+`docs/design/host-sleep-s2idle.md`.
 
 **Auto-resume, one-shot by construction — SHIPPED 2026-07-20 (dogfood incident fix).** The first
 dogfood deploy destroyed a guest's btrfs ("parent transid verify failed" → emergency mode): an

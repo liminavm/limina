@@ -775,6 +775,17 @@ prior-art, two-tier mapping, M9.0–M9.4 build plan, founding spikes, the demote
 and the **2026-07-18 Fable M9.3 review**) is `docs/design/m9-suspend-resume.md`; M9.2 build detail in
 `docs/design/m9.2-quiesced-snapshot.md`. This is the roadmap-shaped digest.
 
+**Follow-up (2026-07-20, LOW priority): guest-kernel virtio-gpu PM ops.** The root of the whole
+thaw-reset dance is a *Linux* gap: `virtgpu_drv.c` registers no `.freeze`/`.restore` PM ops, so
+every s2idle thaw takes the virtio core's bus fallback (reset → renegotiate → DRIVER_OK with zero
+queue re-programming) — broken on any spec-faithful device; libkrun 0072's sticky re-arm and the
+defer-and-classify session reset (`docs/design/host-sleep-s2idle.md`) are host-side leniencies for
+it. The proper fix is guest-side: carry/refresh the unmerged **Dongwon-Kim drm/virtio
+freeze/restore series** in `patches/linux` (enhanced tier) and upstream-report the core gap.
+Deliberately low priority: the host-side fixes are sufficient on their own and cover **stock**
+guests, which the kernel fix never can; this item's value is upstream hygiene + the clean PM path
+for enhanced guests.
+
 **Goal:** Parallels-parity "Suspend" — freeze the running guest to a host-side file in a second or two,
 **tear the worker process down** (reclaim all host RAM, the GPU/Metal/IOSurface graph, gvproxy), and a
 later "Resume" that restores the *same* desktop (open apps, correct wall clock, working accelerated
