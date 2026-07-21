@@ -244,4 +244,10 @@ pub struct VmSpec {
     /// every vCPU + the in-kernel GIC from the file so the guest continues mid-execution. `None` =
     /// cold boot. The decision to pass this is limina policy (durable per-VM Suspended status).
     pub restore_file: Option<PathBuf>,
+    /// s2idle the guest around HOST sleep (M9 follow-on, `--on-host-sleep`). When true the
+    /// worker registers for IOKit sleep/wake notifications: on host `willSleep` it pulses the
+    /// guest sleep button and holds the ack until the guest quiesces (so its clock/timers ride
+    /// the host sleep via its own suspend), and on `didWake` it wakes a guest it put to sleep.
+    /// False = leave the guest running with a frozen counter across host sleep (old behavior).
+    pub host_sleep_s2idle: bool,
 }

@@ -618,6 +618,14 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
             .map_err(|e| anyhow!("spawning the suspend-bracket thread: {e}"))?;
     }
 
+    // Host-sleep integration (docs/design/host-sleep-s2idle.md §4): s2idle the guest around
+    // host sleep so its own thaw restores the wall clock (0088 RTC) and its apps see an honest
+    // suspend — and wake it on host wake, but only if WE put it to sleep. Works for any guest
+    // with zero guest components; independent of the snapshot machinery above.
+    if spec.host_sleep_s2idle {
+        crate::power::start(vmm.clone());
+    }
+
     // Start the GPU worker-message servicer when a display is attached (mirrors
     // krun_start_enter's `if gpu_virgl_flags.is_some()`). Without it, a guest blob map
     // would block the GPU worker forever waiting on a reply.

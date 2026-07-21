@@ -5,6 +5,27 @@ s2idle preserve the venus session for ANY guest (stock included), and the limina
 bracket that rides on it. The guest-kernel PM-ops fix is on the roadmap as a separate low-priority
 item — it is an upstream-facing improvement, not a prerequisite (see §5).*
 
+**IMPLEMENTED 2026-07-20/21 (same night).** Phase 1: L2
+`stock_guest_survives_inplace_s2idle_with_correct_clock` green first run (same boot_id, same
+worker, clock skew +0.218 s across a 15 s gap). Phase 2: defer-and-classify shipped as **libkrun
+0089** (`set_thaw_activation` transport hook + park/classify in the GPU worker); RED→GREEN on the
+new L2 `venus_session_survives_inplace_s2idle` — RED reproduced the exact predicted wipe
+(gnome-shell +1 coredump, "destroying context 3 (gnome-shell)"), GREEN logs the designed flow
+("device reset with a quiescent session — PARKED" → "adopting the parked session across a
+bus-fallback thaw (no replay needed)") with the same shell pid and zero cores. Phase 3: worker-side
+IOKit listener (`limina-vmm/src/power.rs`, `IORegisterForSystemPower` on a dedicated CFRunLoop
+thread), wake-ownership state machine unit-tested (5 cases incl. the late-suspend recovery and
+user-suspended-guest cases), `--on-host-sleep s2idle|ignore` on worker + supervisor, `vm.toml
+[power] on_host_sleep` (default `s2idle`). **Eyeball-validated 2026-07-21** on the dev Mac with a
+windowed enhanced-venus guest: two user suspends plus one system-initiated wake (plugging in the
+power adapter mid-sleep wakes macOS to show the charge level, then it re-sleeps — the guest was
+awake only 5 s) produced three full sleep/wake cycles, and all three completed cleanly — pulse → quiesced in ~1 s →
+ack released, then wake → session parked → adopted with no replay. Guest afterwards: same boot_id,
+same gnome-shell pid, exactly 3 `PM: suspend entry` journal lines, zero coredumps, clock +0.14 s vs
+the host; the user confirmed the window came back perfect. (The IOKit half cannot run in CI —
+sleeping the host kills the session driving it — so this manual pass plus the per-piece unit/L2
+coverage is the validation story.)
+
 ## 1. Motivation
 
 - **Close the last stock clock gap.** The suspend/resume clock is verified correct (2026-07-20:

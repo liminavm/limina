@@ -237,11 +237,17 @@ pub(crate) mod tests {
         let mut cfg = bundle.load().unwrap();
         cfg.hardware.cpus = 7;
         cfg.networks[0].ssh_port = 2299;
+        cfg.power.on_host_sleep = crate::vmlib::schema::OnHostSleep::Ignore;
         bundle.save(&cfg).unwrap();
 
         let back = bundle.load().unwrap();
         assert_eq!(back.hardware.cpus, 7);
         assert_eq!(back.networks[0].ssh_port, 2299);
+        assert_eq!(
+            back.power.on_host_sleep,
+            crate::vmlib::schema::OnHostSleep::Ignore,
+            "[power] on_host_sleep must round-trip"
+        );
         assert!(
             !bundle.path.join("vm.toml.tmp").exists(),
             "tmp file cleaned"

@@ -251,6 +251,14 @@ struct Cli {
     #[arg(long)]
     mic: bool,
 
+    /// What to do with the guest when the HOST goes to sleep: `s2idle` (default) suspends
+    /// the guest first (sleep-button pulse, held until it quiesces) and wakes it on host
+    /// wake, so its wall clock and timers come back correct on every tier; `ignore` leaves
+    /// it running with a frozen counter across the host sleep. Managed VMs set this via
+    /// `vm.toml [power] on_host_sleep`.
+    #[arg(long, value_parser = ["s2idle", "ignore"])]
+    on_host_sleep: Option<String>,
+
     /// Attach a user-mode NAT NIC: spawn and supervise a gvproxy gateway (DHCP/DNS/NAT,
     /// no root) and connect the guest's virtio-net to it. The guest gets an IP and outbound
     /// internet automatically (e.g. for SSH).
@@ -781,6 +789,7 @@ fn cli_from_definition(
         no_battery: !cfg.hardware.battery,
         no_snd: !cfg.hardware.snd,
         mic: cfg.hardware.mic,
+        on_host_sleep: Some(cfg.power.on_host_sleep.as_flag().to_string()),
         net,
         net_log: None,
         net_mac: cfg.networks.first().map(|n| n.mac.clone()),
@@ -999,6 +1008,10 @@ fn run_vm(cli: Cli) -> Result<()> {
     }
     if cli.mic {
         args.push("--mic".into());
+    }
+    if let Some(policy) = &cli.on_host_sleep {
+        args.push("--on-host-sleep".into());
+        args.push(policy.clone());
     }
 
     // Runtime display-resize control socket: forwarded to the worker (which binds it). Used by
@@ -1887,10 +1900,16 @@ mod tests {
             input: InputCfg {
                 swap_cmd_opt: false,
             },
+            power: PowerCfg::default(),
         };
 
         let cli = cli_from_definition(&cfg, &bundle, &StartOverrides::default()).unwrap();
         assert_eq!(cli.cpus, 6);
+        assert_eq!(
+            cli.on_host_sleep.as_deref(),
+            Some("s2idle"),
+            "the default [power] policy must reach the worker flag"
+        );
         assert_eq!(cli.ram_mib, 8192, "the max is what libkrun allocates");
         assert_eq!(
             cli.memory.as_deref(),
@@ -1957,6 +1976,7 @@ mod tests {
             boot: BootCfg::default(),
             display: DisplayCfg::default(), // window = true, resolution = host
             input: InputCfg::default(),
+            power: PowerCfg::default(),
         };
 
         let cli = cli_from_definition(&cfg, &bundle, &StartOverrides::default()).unwrap();
@@ -2040,6 +2060,7 @@ mod tests {
             boot: BootCfg::default(),
             display: DisplayCfg::default(), // window = true
             input: InputCfg::default(),
+            power: PowerCfg::default(),
         };
 
         let ov = StartOverrides {

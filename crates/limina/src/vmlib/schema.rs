@@ -38,6 +38,8 @@ pub struct VmConfig {
     pub display: DisplayCfg,
     #[serde(default)]
     pub input: InputCfg,
+    #[serde(default)]
+    pub power: PowerCfg,
 }
 
 impl VmConfig {
@@ -102,6 +104,35 @@ pub struct Hardware {
 
 fn default_true() -> bool {
     true
+}
+
+/// `[power]` — host power-event policy (docs/design/host-sleep-s2idle.md).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PowerCfg {
+    /// What to do with the guest when the HOST goes to sleep: `s2idle` (default) suspends
+    /// the guest first and wakes it on host wake — its own thaw restores the wall clock on
+    /// every tier; `ignore` leaves it running with a frozen counter (pre-M9.5 behavior).
+    pub on_host_sleep: OnHostSleep,
+}
+
+/// The `[power] on_host_sleep` policy values.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnHostSleep {
+    #[default]
+    S2idle,
+    Ignore,
+}
+
+impl OnHostSleep {
+    /// The value the `--on-host-sleep` flag (supervisor and worker) expects.
+    pub fn as_flag(&self) -> &'static str {
+        match self {
+            OnHostSleep::S2idle => "s2idle",
+            OnHostSleep::Ignore => "ignore",
+        }
+    }
 }
 
 impl Default for Hardware {
@@ -447,6 +478,7 @@ mod tests {
             boot: BootCfg::default(),
             display: DisplayCfg::default(),
             input: InputCfg::default(),
+            power: PowerCfg::default(),
         }
     }
 

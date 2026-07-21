@@ -14,6 +14,7 @@
 mod bracket;
 mod config;
 mod krun;
+mod power;
 mod restart;
 mod shutdown;
 mod snapshot;
@@ -228,6 +229,13 @@ struct Cli {
     /// guest continues mid-execution. Device state is not in the snapshot (re-established on resume).
     #[arg(long)]
     restore: Option<PathBuf>,
+
+    /// What to do with the guest when the HOST goes to sleep. `s2idle` (default): pulse the guest
+    /// sleep button on `willSleep` (holding the ack while it quiesces) and wake it on `didWake` —
+    /// its own thaw re-reads the host-anchored RTC, so the wall clock is correct on every tier.
+    /// `ignore`: leave it running with a frozen counter across host sleep (the old behavior).
+    #[arg(long, default_value = "s2idle")]
+    on_host_sleep: String,
 }
 
 /// Parse a `WIDTHxHEIGHT` display mode string into `(width, height)`.
@@ -466,6 +474,12 @@ fn main() -> Result<()> {
         _ => None,
     };
 
+    let host_sleep_s2idle = match cli.on_host_sleep.as_str() {
+        "s2idle" => true,
+        "ignore" => false,
+        other => anyhow::bail!("--on-host-sleep must be 's2idle' or 'ignore', got {other:?}"),
+    };
+
     let net_mac = cli.net_mac.as_deref().map(parse_mac).transpose()?;
     let net = cli.net_gvproxy.map(|gvproxy_socket| NetSpec {
         gvproxy_socket,
@@ -502,6 +516,7 @@ fn main() -> Result<()> {
         deflate_on_oom: cli.balloon_deflate_on_oom,
         snapshot_file: cli.snapshot_file,
         restore_file: cli.restore,
+        host_sleep_s2idle,
     };
 
     krun::boot(&spec)

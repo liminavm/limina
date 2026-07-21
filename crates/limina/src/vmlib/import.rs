@@ -136,6 +136,7 @@ pub fn create(opts: &CreateOpts, dest_dir: &Path) -> Result<VmBundle> {
                 ..Default::default()
             },
             input: Default::default(),
+            power: Default::default(),
         };
         bundle.save(&cfg)?;
         Ok(bundle.clone())
