@@ -68,6 +68,7 @@ each destination. ✚ marks a patch that is *also* a security fix (see §2B1).
 | patch (subject-pinned) | one-line | note |
 |---|---|---|
 | 0031 map `KRUN_DISPLAY_ERR_METHOD_UNSUPPORTED (-2)` in `into_rust_result!` | missing enum arm | trivial; send first |
+| 0090 virtio-fs: report bytes-written as the used-ring length (was hardcoded 0) | correctness | ✚ **send early** — breaks all shares on Linux ≥7.1 (`virtio_fs_verify_response` → -EIO → FUSE_INIT fails → ECONNREFUSED at mount); upstream libkrun has the same bug. spikes/virtiofs-16k-share/ |
 | 0039 virtio-input worker blocks `epoll(-1)` instead of a 1 s timeout | drop idle wakeup | trivial |
 | 0040 hvf vtimer: multiply before dividing so WFI timeout isn't ~1.6 % short | u128 mul-before-div | trivial arithmetic |
 | 0037 virtio-input: return to `Inactive` on `reset()` so it can re-activate | one-liner, matches blk/console | fixes firmware→kernel input handoff |
