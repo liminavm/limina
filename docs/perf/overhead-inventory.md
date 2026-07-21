@@ -32,7 +32,7 @@ cumulative and NOT top's IDLEW — see `spikes/wakeup-probe/RESULTS.md`.
 |---|---|---|
 | IPI1 function-call IPIs | **~4,970/s** | **93% = `ttwu_queue_wakelist` remote task wakeups** (perf ipi:ipi_raise: 22.6k of 24.2k raises in 5 s); 7% = `kick_ilb` nohz balance kicks. The guest scheduler spreads the frame pipeline (Renderer → firefox:zfq0 → vn_wsi → Compositor → WaylandProxy → gnome-shell) across 6 vCPUs and pays an IPI per cross-CPU wake. Each IPI = a sender vmexit (GIC SGI trap) + a host wakeup of the target vCPU thread. |
 | arch_timer | ~3,590/s | tick + hrtimers. Our 16k kernel is **CONFIG_HZ=1000** — CORRECTION (2026-07-21, verified at src.fedoraproject.org kernel f44 kernel-aarch64-fedora.config): Fedora aarch64 stock is ALSO 1000 (the earlier "stock is 100" claim was wrong — that's RHEL/server); our config inherits it faithfully per build-kernel-rpm.sh's Fedora-fidelity goal. Lowering HZ is therefore a DELIBERATE enhanced-tier divergence (HZ=250 upstream-defconfig-like ≈ 4x cut, HZ=100 RHEL-like ≈ 10x), not a restore — and it cannot help stock guests. NO_HZ_FULL=y is already in both configs; `nohz_full=` is not on the cmdline. |
-| virtio5 = virtio_gpu | ~912/s (~15/frame) | host→guest fence/ctrl completion injections. |
+| virtio5 = virtio_gpu | ~912/s (~15/frame) | host→guest fence/ctrl completion injections. **539/s after libkrun 0091** (EVENT_IDX + one-signal-per-fence-callback, lever 0). |
 | virtio9/11/10/1 (blk/net/vsock/i2c) | ~40/s total | noise. |
 
 Guest-invisible other half (host-internal, from `sample` + architecture): guest→host doorbell
@@ -57,12 +57,23 @@ pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
 
 ## Trim levers, ranked by expected yield (the future-milestone backlog)
 
-1. **Per-frame GPU/IO wake CHAIN (~13k/s at stake — THE dominant term, measured 2026-07-21).**
-   A/B (below) showed ~70% of the ~18.6k is invariant to vCPU count: doorbell eventfds, fence
-   injections, present handshakes, and the cross-thread condvar hops (vcpu → kevent main loop →
-   gpu worker → vkr-ring → KK → vkr-queue → fence → IRQ inject). Attack with EVENT_IDX on the
-   GPU queues + fence-IRQ coalescing (lever 3, promoted) and doorbell-path shortening (lever 5).
-   This is the biggest lever and it helps STOCK guests too.
+0. **virtio-gpu EVENT_IDX + fence-IRQ coalescing — SHIPPED 2026-07-21 (libkrun 0091, task
+   #30): −2.9k/s.** The GPU queues now offer `VIRTIO_RING_F_EVENT_IDX` (both feature sets;
+   a driver that doesn't ack it keeps stock semantics — the EFI GOP phase and 6.12 test
+   kernel verified unaffected), the worker drains control/cursor inside a
+   disable/enable-notification bracket, and the fence handler signals once per completion
+   callback (was once per retired descriptor — over-notified stock guests too), all gated
+   on `needs_notification`. Measured, same specimen/method as the A/B below: host wakeups
+   18.6k → **15.7k/s**, guest virtio5 fence-IRQ injections 912 → **539/s (−41%)**, worker
+   CPU 68.6 → 65.5%, render throughput unchanged (user-eyeballed smooth, firefox CPU
+   signature flat).
+
+1. **Per-frame GPU/IO wake CHAIN (~8k/s still at stake — the dominant remaining term).**
+   The vCPU A/B showed the chain invariant to vCPU count; EVENT_IDX trimmed it ~2.5k. What
+   remains: doorbell eventfds that still hop through the kevent main loop, present
+   handshakes, and the cross-thread condvar hops (vcpu → kevent main loop → gpu worker →
+   vkr-ring → KK → vkr-queue → fence → IRQ inject). Attack with doorbell-path shortening
+   (lever 5). Helps STOCK guests too.
 
 2. **vCPU right-sizing (~3k/s at stake — MEASURED, smaller than expected).** A/B 2026-07-21:
    6→2 vCPU cut total host wakeups −16% (~2,950/s: IPI −67%, timer −56%) with throughput
@@ -78,13 +89,8 @@ pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
    the HZ cost is confined to the busy/oscillating regime, which lever 1 (shared-LLC
    topology → wake_affine packing → fewer WFI-oscillating vCPUs) attacks without diverging.
    Revisit ONLY if topology + EVENT_IDX leave us far from the kernel_task-sum bar.
-3. **virtio-gpu EVENT_IDX (~1-2k/s at stake, both directions).** libkrun offers EVENT_IDX on
-   net + block ONLY; the GPU, vsock, input, snd devices don't
-   (`third_party/libkrun/src/devices/src/virtio/gpu/device.rs` AVAIL_FEATURES). Offering it on
-   the GPU queues suppresses redundant guest→host kicks (driver reads avail_event) and
-   host→guest completions (used_event) when the other side is already active. Transport
-   support exists (queue.rs handles both event fields; mmio.rs:480 gates on negotiation).
-   Also: batch fence IRQ injection (15/frame → coalesce within a present interval).
+3. **virtio EVENT_IDX on the remaining devices (vsock, input, snd) — small.** The GPU got it
+   in lever 0; vsock is the only other chatty one (control plane + timesync). Same recipe.
 4. **venus notify throttle.** Mesa already rate-limits `vkNotifyRingMESA` to 1/ms
    (`VN_RING_IDLE_TIMEOUT_NS`); the host ring parks on cnd_wait (virgl 0003). Check the
    remaining kick rate under load; the ring being ACTIVE should need zero doorbells — verify.

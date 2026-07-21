@@ -141,3 +141,32 @@ FINAL CONCLUSION: vCPU count is a shallow ±3k/s knob (min at 2, IPI-driven) aro
 floor set by the per-frame GPU/IO wake chain. That floor is the target — task #30 (EVENT_IDX
 + fence coalescing + doorbell-path shortening). vCPU right-sizing stays a minor, dynamic-only
 lever (#35). No shipping decision rides on the static vCPU count; these were bounding extremes.
+
+## EVENT_IDX + fence-IRQ coalescing A/B (2026-07-21, libkrun 0091 — task #30)
+
+Same specimen and method (host-sleep-eyeball.raw, 6 vCPU, blobs fullscreen, overview
+dismissed, user-eyeballed rendering, settle ~45s, procwake 5s×4 + guest /proc/interrupts
+10s delta). Change under test: GPU queues offer `VIRTIO_RING_F_EVENT_IDX` (negotiation
+verified in-guest: `/sys/bus/virtio/devices/virtio5/features` bit 29 = 1), worker drains
+control/cursor inside a disable/enable-notification bracket, fence handler signals once
+per completion callback (was once per retired descriptor) gated on `needs_notification`.
+
+| metric | before (0090) | after (0091) | Δ |
+|---|---|---|---|
+| host wakeups/s (ri_interrupt_wkups) | ~18,600 | ~15,700 | **−2,900 (−16%)** |
+| guest virtio5 IRQ/s (fence/ctrl injections) | ~912 | ~539 | **−41%** |
+| guest IPI1/s | ~4,560 | ~4,360 | flat |
+| guest arch_timer/s | ~3,330 | ~3,080 | flat |
+| worker CPU | 68.6% | 65.5% | −3pp |
+| firefox render CPU | 14.7% | ~13-14% | flat (render unchanged) |
+
+Reading: EVENT_IDX + coalescing trimmed ~2.5-3k/s off the wake chain (suppressed doorbell
+kicks while the worker drains + fewer, batched fence injections). IPI/timer terms untouched,
+as expected — they're guest-scheduler terms (#35's territory). The remaining chain share is
+~8k/s: doorbells still hop vcpu → kevent main loop → gpu worker, and fence completions still
+bounce through the main loop for IRQ injection — that's the doorbell-path-shortening lever
+(inventory lever 5), not EVENT_IDX's.
+
+The EFI GOP driver doesn't ack EVENT_IDX → stock semantics preserved (this boot went
+GOP → GRUB → 16k kernel and rendered fine); a stock guest that does ack it gets the same
+suppression (the feature is transport-level, kernel-side since forever).
