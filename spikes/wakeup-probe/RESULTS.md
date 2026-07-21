@@ -240,3 +240,40 @@ Day summary (blobs specimen, 6 vCPU): 18.6k → 4.2k/s (−77%) via libkrun 0091
 (EVENT_IDX + fence coalescing) + virgl 0041 (ring relax ladder, quad rungs).
 Remaining ≈ 4.2k: ring poll 1.9k + in-kernel vCPU IPI/timer wakes (#35) + KK/Metal
 internals + libkrun ~1k.
+
+## Dynamic vCPU offlining de-risk (2026-07-21, task #35 — vcpu-offline-probe.sh)
+
+Before investing in agent-driven vCPU offlining, the probe asked the two load-bearing
+questions empirically (6-vCPU 7.1.0 injected-16k guest, headless+NAT, idle, offline cpus
+2..5 via `echo 0 > /sys/devices/system/cpu/cpuN/online`):
+
+| state | worker %CPU | outcome |
+|---|---|---|
+| 6 vCPUs online (baseline) | ~2.9% | idle, all parked |
+| after offlining cpus 2..5 | **~546%** | **guest WEDGED (ssh Connection reset)** |
+
+**Offlining a running vCPU SPINS, it does not park — and it wedges the guest.** Root cause:
+libkrun's PSCI (`hvf/src/lib.rs handle_psci_request`) models CPU_ON (0xc400_0003) but NOT
+CPU_OFF (0x8400_0002) or AFFINITY_INFO (0xc400_0004) — both return `NOT_SUPPORTED` (both
+warns seen in the log). So arm64 Linux commits to the offline at `cpu_psci_cpu_disable`
+(function-id is registered), then `cpu_die`'s CPU_OFF HVC fails → the dying vCPU threads
+can't stop and busy-spin (~+5 cores), while the reaper (`cpu_psci_cpu_kill`) polls
+AFFINITY_INFO forever. Re-online is moot (guest already dead) AND structurally broken: the
+secondary boot channel (`macos/vstate.rs` `boot_receiver.recv()`) is **one-shot**, consumed
+at boot — a runtime CPU_ON sends an entry addr to a channel nobody reads.
+
+**Conclusion: dynamic offlining is NOT a guest-only feature on current libkrun — it is
+destructive.** It requires a libkrun CPU-hotplug mechanism: model CPU_OFF so the vCPU thread
+parks cleanly (reuse the M9 `handle_pause` park machinery — a new `VcpuEvent::Online(entry)`
++ per-vCPU park), model AFFINITY_INFO for a parked vCPU, make CPU_ON re-deliverable at
+runtime (durable per-vCPU control channel, PC reset on the owning thread since HVF regs are
+thread-bound), and handle IRQ/vtimer re-affinity + snapshot-while-offlined + CPU_ON↔CPU_OFF
+races. **Cost/benefit (advisor-reviewed, opus):** the original ~3k/s was measured vs the OLD
+18.6k baseline; #30/#38 attacked the GPU/IO chain that *drives* the guest ttwu IPIs, so the
+in-kernel IPI/timer slice of today's 4.2k is likely <1k/s — a poor trade for a full
+hotplug state machine on a GPU-bound workload that never needed the vCPUs. **Recommendation:
+DEFER the dynamic feature; remeasure the IPI/timer slice against today's 4.2k baseline before
+any build (if <1k/s → DROP).** Independently worthwhile regardless: a minimal "model CPU_OFF
+so it parks instead of wedging the VMM" patch is a real robustness fix — a stock guest that
+offlines a CPU today hangs the whole VM, violating the two-tier stock-guest guarantee — and
+is upstreamable + de-risks a future #35 without committing to the policy.

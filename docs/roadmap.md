@@ -633,6 +633,44 @@ drop back toward 2G as pages are madvised back to macOS.
 - Re-touch latency/cost of MADV_FREE_REUSE on deflate for an interactive desktop.
 - PSI watermark/hysteresis tuning to avoid balloon thrash (build/browser/IDE workloads).
 
+### Dynamic vCPU hotplug — the CPU sibling of ballooning (planned)
+
+**Status: mechanism half IN PROGRESS (robustness, task #40); dynamic policy DEFERRED (task #35).**
+The same `min..max` philosophy as ballooning, on the CPU axis: dynamically offline idle guest
+vCPUs to shrink the worker's in-kernel IPI/timer host-wakeup budget, and re-online them under
+load. A boot-time A/B (`spikes/wakeup-probe/RESULTS.md`) measured 6→2 vCPUs cutting host wakeups
+~3k/s (IPI −67%, timer −56%) at flat throughput on the GPU-bound blobs workload; the mechanism's
+yield is real but shallow.
+
+**The two halves (mechanism in libkrun, policy in limina):**
+1. **Mechanism — libkrun CPU-hotplug (task #40, a robustness fix worth shipping on its own).** A
+   guest that offlines a vCPU today (`echo 0 > /sys/devices/system/cpu/cpuN/online`) **wedges the
+   whole VMM** — a two-tier stock-guest-guarantee violation. Root cause (de-risk probe
+   `vcpu-offline-probe.sh` + opus review, 2026-07-21): libkrun's PSCI
+   (`hvf/src/lib.rs handle_psci_request`) models CPU_ON but **not CPU_OFF (0x8400_0002) or
+   AFFINITY_INFO (0xc400_0004)** — both return `NOT_SUPPORTED`, so the dying vCPU busy-spins
+   (probe saw the worker hit ~546% CPU) and the reaper polls AFFINITY_INFO forever; re-online is
+   also broken (the secondary boot channel `boot_receiver.recv()` is one-shot, consumed at boot).
+   Fix: model CPU_OFF → park the vCPU thread cleanly (reuse the M9 `handle_pause` park machinery,
+   zero host CPU/wakeups); model AFFINITY_INFO (OFF for a parked vCPU, ON otherwise); make CPU_ON
+   re-deliverable at runtime (durable per-vCPU control channel; PC/X0 reset on the owning thread
+   since HVF register access is thread-bound); plus IRQ/vtimer re-affinity on re-online,
+   snapshot-while-offlined state, and CPU_ON↔CPU_OFF race safety.
+2. **Policy — limina-agent (task #35, deferred).** Agent-driven offline/online under a
+   runnable-task-pressure signal (PSI `cpu`/loadavg/`nr_running`) with hysteresis + interactivity
+   guardrails (never offline cpu0; step one at a time; fast re-online on a load spike; cooldown to
+   avoid oscillation — the balloon-thrash lessons apply directly, see the balloon oscillation
+   ledger). Host config exposes the range (`--cpus MIN..MAX` / `vm.toml [hardware]`), boots MAX,
+   hands the range to the agent — mirroring `--memory MIN..MAX`. A static low default is rejected
+   (would starve genuinely parallel guest workloads like compiles).
+
+**Cost/benefit caveat (why the policy is deferred, not built):** the ~3k/s was measured against
+the OLD ~18.6k baseline; the round-2 fixes (libkrun 0091 EVENT_IDX + virgl 0041 ring relax)
+attacked the GPU/IO wake chain that *drives* the guest ttwu IPIs, so the in-kernel IPI/timer slice
+of today's ~4.2k/s budget is likely <1k/s. **Remeasure that slice against the 4.2k baseline before
+building the policy** — if it's <1k/s the dynamic feature is a DROP and only the #40 robustness
+fix is worth keeping. Authoritative perf context: `docs/perf/overhead-inventory.md`.
+
 ---
 
 ## Milestone 7 — USB passthrough
