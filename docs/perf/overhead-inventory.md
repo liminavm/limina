@@ -1,0 +1,93 @@
+# Runtime overhead inventory — wakeups, exits, and CPU tax under load
+
+**Date:** 2026-07-21. **Status: measured + decomposed (read-only pass); trimming is future
+milestone work.** Goal per the user: *figure out exactly what the sources of overhead are and
+plan to trim them down to the absolute minimum.*
+
+Specimen: 6-vCPU enhanced F44 guest (kernel 7.1.4-limina16k, coexist venus/KK), windowed
+1512x982, firefox running the blobs WebGL demo at ~60 fps steady. Dev M1 Max. Probes:
+`spikes/wakeup-probe/procwake.c` (host, `proc_pid_rusage`), guest `/proc/interrupts` deltas,
+guest `perf -e ipi:ipi_raise`, host `sample`. NOTE: numbers were taken while the guest mesa
+still had the vn_ring free-list bug (patches/mesa/0017); re-baseline after it ships — the
+malloc/scan churn inflates guest CPU but the *wakeup* budget below is structural.
+
+## The headline numbers (worker process, under load)
+
+| metric | value |
+|---|---|
+| worker CPU | ~75-85% of one core |
+| interrupt wakeups (`ri_interrupt_wkups`) | **~20,300/s** (~340/frame) |
+| pkg-idle wakeups (`ri_pkg_idle_wkups`) | ~8-47/s |
+| host context switches | ~7k/s |
+| guest context switches | ~11.5k/s |
+| supervisor process | ~7% CPU, ~71 wakeups/s (negligible) |
+| GPU device utilization | ~17% |
+
+Activity Monitor's "Idle Wake Ups" column = the interrupt-wakeup **rate** (windowed), NOT
+cumulative and NOT top's IDLEW — see `spikes/wakeup-probe/RESULTS.md`.
+
+## Decomposition (guest-visible half, /proc/interrupts over 10 s)
+
+| source | rate | what it is |
+|---|---|---|
+| IPI1 function-call IPIs | **~4,970/s** | **93% = `ttwu_queue_wakelist` remote task wakeups** (perf ipi:ipi_raise: 22.6k of 24.2k raises in 5 s); 7% = `kick_ilb` nohz balance kicks. The guest scheduler spreads the frame pipeline (Renderer → firefox:zfq0 → vn_wsi → Compositor → WaylandProxy → gnome-shell) across 6 vCPUs and pays an IPI per cross-CPU wake. Each IPI = a sender vmexit (GIC SGI trap) + a host wakeup of the target vCPU thread. |
+| arch_timer | ~3,590/s | tick + hrtimers. Our 16k kernel is **CONFIG_HZ=1000** (Fedora aarch64 stock is 100); NO_HZ_FULL is built in but `nohz_full=` is not on the cmdline, so busy CPUs tick at 1 kHz. Each timer fire on an idle vCPU is a host wakeup. |
+| virtio5 = virtio_gpu | ~912/s (~15/frame) | host→guest fence/ctrl completion injections. |
+| virtio9/11/10/1 (blk/net/vsock/i2c) | ~40/s total | noise. |
+
+Guest-invisible other half (host-internal, from `sample` + architecture): guest→host doorbell
+kicks (GPU submit + venus notify; each = kevent wake of the worker main loop → gpu-worker hop →
+vkr-ring cnd_signal), KK submit → MTLSharedEvent → vkr-queue fence retirement, present
+handshake (gpu shown-ack pipe + gpu latch), and the main-thread kevent loop itself (~10pp of a
+core, always caught parked in `kevent` because each dispatch is µs-short).
+
+## Where the worker's ~80% CPU goes
+
+~60pp in-guest execution (demo JS ~10-15pp; guest venus/zink encode ~10pp — inflated by the
+0017 free-list bug; gnome-shell ~5pp; guest kernel/IRQ/exit overhead the rest — the guest's own
+accounting shows only ~48pp because tick sampling undercounts µs bursts and the host bills
+exit/entry to the vCPU threads) + ~10pp worker kevent event loop + ~7pp venus decode
+(vkr-ring) + ~3pp gpu worker/present. vkr-queue threads *look* busy in ps but are blocked in
+`IOSurfaceSharedEvent waitUntilSignaledValue` (kernel wait, not spin).
+
+**P/E-core placement is NOT a factor in accounting gaps**: the guest's timebase (CNTVCT) ticks
+at constant rate regardless of core, so E-core placement would *inflate* guest-reported CPU,
+never deflate it. (Whether vCPU threads get E-core residency IS an open question for frame
+pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
+
+## Trim levers, ranked by expected yield (the future-milestone backlog)
+
+1. **Guest scheduler wake-chain locality (~5k IPI/s at stake).** Options: fewer vCPUs by
+   default (the pipeline packs onto fewer CPUs → wakes become local, no IPI, no host wake);
+   guest `sched` tuning (wake-affinity biasing); dynamic vCPU right-sizing (offline vCPUs when
+   idle — pairs with the ballooning philosophy). Cheap A/B first: boot 2-vCPU vs 6-vCPU, same
+   demo, compare procwake.
+2. **Kernel tick (~3.6k/s at stake).** HZ=1000 → 100/250 on the 16k kernel config (why 1000?
+   audit; Fedora ships 100 on aarch64), and/or wire `nohz_full`. Watch: HZ interacts with
+   balloon FRQ latency and PSI sampling — re-run the M6 gates.
+3. **virtio-gpu EVENT_IDX (~1-2k/s at stake, both directions).** libkrun offers EVENT_IDX on
+   net + block ONLY; the GPU, vsock, input, snd devices don't
+   (`third_party/libkrun/src/devices/src/virtio/gpu/device.rs` AVAIL_FEATURES). Offering it on
+   the GPU queues suppresses redundant guest→host kicks (driver reads avail_event) and
+   host→guest completions (used_event) when the other side is already active. Transport
+   support exists (queue.rs handles both event fields; mmio.rs:480 gates on negotiation).
+   Also: batch fence IRQ injection (15/frame → coalesce within a present interval).
+4. **venus notify throttle.** Mesa already rate-limits `vkNotifyRingMESA` to 1/ms
+   (`VN_RING_IDLE_TIMEOUT_NS`); the host ring parks on cnd_wait (virgl 0003). Check the
+   remaining kick rate under load; the ring being ACTIVE should need zero doorbells — verify.
+5. **Shorten the host wake chain per submission.** Today: vcpu → eventfd → kevent main loop →
+   gpu-worker channel → vkr-ring condvar (→ KK → vkr-queue → fence eventfd → main loop → IRQ
+   inject). Candidates: route the GPU queue doorbell eventfd directly to the gpu worker
+   (skip the main-loop hop); fence completion → IRQ without the main-loop bounce.
+6. **Re-baseline after mesa 0017** (free-list fix) — guest venus encode pp should drop and
+   stay flat over hours; keep a long-soak procwake trace as the regression oracle.
+
+## Reproduction
+
+```
+spikes/wakeup-probe/procwake <worker-pid> 5 5              # host wakeup budget
+ssh guest 'cat /proc/interrupts' twice, 10 s apart          # guest-visible decomposition
+ssh guest sudo perf record -a -g -e ipi:ipi_raise sleep 5   # IPI attribution
+sample <worker-pid> 10 + spikes/venus-draw-probe/threadacct.py  # thread attribution
+#   (threadacct wait-leaf set must include iokit_user_client_trap, plain read, mach_msg)
+```

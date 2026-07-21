@@ -164,6 +164,22 @@ host-zink series lives separately in `patches/kosmickrisp/`.
   next F43 respin.** Upstream mesa still aborts (checked 2026-07-20). Clearly upstreamable —
   companion to the host-side virglrenderer 0040 create-arg closure
   (`spikes/m9-vkmark-resume-crash/RESULTS.md`).
+- **`0017-venus-fix-ring-submit-freelist-capacity.diff`** (2026-07-21, perf) — venus: fix the
+  ring-submit free-list degeneration. `vn_ring_get_submit` matched recycled nodes on
+  `submit->shmem_count >= wanted`, but the caller (`vn_ring_submission_get_ring_submit`)
+  overwrites that field with the count USED this time — a node last used for a direct
+  (0-shmem) submission is recorded 0 forever, its real ≥2-slot capacity lost. The free list
+  (never pruned before ring destruction) fills with recorded-0 nodes; every ≥1-shmem
+  submission walks the whole list, misses, and mallocs a node that later joins the same
+  list → unbounded growth + O(n) walk per submission = quadratic CPU creep in any
+  long-running venus app. Live evidence (blobs WebGL demo, 2026-07-21): perf-annotate put
+  88% of the zink-flush-queue thread on the list-walk load; at constant workload over
+  ~10 min firefox grew 19.6→29.3% CPU, worker 75→83%, RES +25MB, while the demo's JIT
+  stayed flat. Fix: track the allocated slot count in a new `shmem_capacity` field, set once
+  at malloc; match the scan on it. Wired into the F44 script; **F43
+  (`scripts/build-mesa-rpm.sh`) not yet wired; add at the next F43 respin.** Upstream mesa
+  main still has the bug (checked 38169ede9b2, 2026-07-21). Clearly upstreamable.
+  Memory/forensics: `limina-venus-submit-freelist`.
 
 ## Re-export / DIAG hygiene
 The in-guest working tree carried temporary `LIMINA-DIAG` debug hacks (force
