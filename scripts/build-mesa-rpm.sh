@@ -121,6 +121,21 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
     # deadlock back into the image, so apply it FAIL-LOUD (no tolerant fallback).
     git apply /patches/0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff
     echo "      applied 0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff (mandatory)"
+    # 0016-pre: upstream 2cf1f6cb508 ("venus: fix unbound malloc leak in vn_ring_get_submits",
+    # landed on main AFTER our 3515c52 pin; its stable backport is already in F44 26.1.4).
+    # It reshapes vn_ring_get_submit into the free-list scan that 0016 anchors on and 0017
+    # fixes — without it neither applies to this base.
+    # 0016 (venus ring loss -> DEVICE_LOST, not abort) + 0017 (ring-submit free-list capacity
+    # fix, quadratic CPU creep) are NOT upstream (checked 2026-07-21) and load-bearing for
+    # snapshot-resume survival and long-running venus apps. ORDER MATTERS: 0016-pre -> 0016 ->
+    # 0017 (0017 was authored on top of the 0016-reshaped vn_ring.c). All fail-loud, like 0014.
+    # (NB: this whole block lives inside a single-quoted bash -c string -- no apostrophes.)
+    git apply /patches/0016-pre-venus-ring-get-submit-freelist-scan-backport.diff
+    echo "      applied 0016-pre-venus-ring-get-submit-freelist-scan-backport.diff (mandatory)"
+    git apply /patches/0016-venus-ring-loss-device-lost-not-abort.diff
+    echo "      applied 0016-venus-ring-loss-device-lost-not-abort.diff (mandatory)"
+    git apply /patches/0017-venus-fix-ring-submit-freelist-capacity.diff
+    echo "      applied 0017-venus-fix-ring-submit-freelist-capacity.diff (mandatory)"
     git add -A
     git commit -q -m "limina mesa patches" || true
     git archive --format=tar --prefix="mesa-$MESA_VER/" HEAD | xz -T0 > "$HOME/rpmbuild/SOURCES/mesa-$MESA_VER.tar.xz"

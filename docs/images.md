@@ -47,7 +47,7 @@ memories before anyone noticed. Verified 2026-06-27 by reading each image's rpmd
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
-| **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-2.limina.fc43` *(respun 2026-07-19: adds mesa 0014)* | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
+| **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-3.limina.fc43` *(respun 2026-07-21: -3 adds mesa 0016 ring-loss DEVICE_LOST + 0017 venus submit free-list fix [via the 0016-pre upstream free-list-scan backport — the 26.2.0 base predates it]; -2 [2026-07-19] added mesa 0014)* | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
 | **F44 stock** (`*.raw`, `*.boot.raw`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.4` *(respun 2026-07-20: latest stable + linux 0005 balloon-suspend fix; co-installed beside `7.1.2-limina16k` [fallback] + stock `6.19.10-300`)* | 16 KiB | `26.1.4-3.limina.fc44` *(respun 2026-07-21: -3 adds mesa 0017 venus submit free-list fix [quadratic CPU creep in long-running venus apps]; -1 caught the base up to stock 26.1.4 [venus fix as patch 0015]; -2 added mesa 0016 ring-loss DEVICE_LOST hardening)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
 | **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools; the `enhanced`/`enhanced.test` images now match it as of the 2026-07-04 respin)* | `limina-kernel-16k-7.1.2` | 16 KiB | `26.1.3-3.limina.fc44` *(-2 adds 0011 unorm-WSI drop, -3 adds 0013 TLS-dtor fix)* | **stock** `50.3-2.fc44` *(since 2026-07-11: distro update displaced the patched build; clipboard rides the clipboard@limina extension — deployed + user-verified working)* | `50.3` *(stock)* |
@@ -81,6 +81,22 @@ GOTCHA found while validating: the accessible-derived images have gsettings
 ALL user extensions — on such guests the helper stamps its one-time enable, parks ~20 s, then rides
 the RemoteDesktop tier. Consider `gsettings set org.gnome.shell disable-user-extensions false` in
 `make-accessible.sh` at the next image respin.
+
+**F43 guest-mesa 26.2.0-3 ring-loss + submit free-list respin (2026-07-21)** — F43 guest mesa
+`26.2.0-2.limina` → **`26.2.0-3.limina.fc43`**, catching the F43 family up to the F44 26.1.4-3
+patch level: **mesa 0016** (venus ring loss → `VK_ERROR_DEVICE_LOST` instead of `abort()`) +
+**mesa 0017** (venus ring-submit free-list capacity fix — the quadratic CPU creep in
+long-running venus apps). The F43 base (26.2.0-devel `3515c52`) predates upstream's
+free-list-scan commit `2cf1f6cb508` that 0016 anchors on and 0017 fixes, so the build now
+applies it first as **`patches/mesa/0016-pre-venus-ring-get-submit-freelist-scan-backport.diff`**
+(verbatim upstream; also fixes the unbound free-submits malloc leak on this base). All three
+wired **fail-loud** into `scripts/build-mesa-rpm.sh` (container build, `LIMINA_REL=3`); venus
+verified in the RPM (`rpm -qlp` → `libvulkan_virtio.so` + `virtio_icd.aarch64.json`, 0016
+marker strings present). Delivery: the six installed subpackages scp'd + dnf-upgraded in-guest
+(versionlock delete-by-exact-name → upgrade → re-lock at `-3`), installed
+`libvulkan_virtio.so` sha256-matched the RPM payload, reboot came back seated on
+`6.12.0-limina16k+` with venus enumerating (`Virtio-GPU Venus`), clean poweroff;
+`enhanced.test.raw` recloned.
 
 **limina-agent 0.2.0 — guest-clock TimeSync (2026-07-20, same-day follow-up #2)** — the agent
 now advertises the **`timesync`** cap and steps the guest `CLOCK_REALTIME` to the host's

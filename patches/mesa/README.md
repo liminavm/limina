@@ -20,7 +20,8 @@ in `patches/kosmickrisp/`.
 |---|---|---|
 | `scripts/build-mesa-zink.sh` (guest GL/zink tree, `/opt/mesa-zink`) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`, 2026-06-07) | 0001–0006 (the zink pool) |
 | `scripts/build-venus.sh` (guest venus ICD rebuild) | tag `mesa-26.1.0` (parametric `MESA_TAG`) | 0009 + 0010 |
-| `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM) | Fedora F44 `mesa-26.1.4` SRPM (repo-current) | 0001 + 0015 + 0010–0014 + 0016 |
+| `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM) | Fedora F44 `mesa-26.1.4` SRPM (repo-current) | 0001 + 0015 + 0010–0014 + 0016 + 0017 |
+| `scripts/build-mesa-rpm.sh` (the SHIPPING F43 RPM) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`) | 0001 + 0009 + 0010 + 0014 + 0016-pre + 0016 + 0017 |
 
 **0009 vs 0015 — same fix, two bases.** Fedora's 26.1.4 stable backported an equivalent of
 0009's `vn_wsi_clone_present_info` rectangle deep-copy, so 0009 no longer applies there.
@@ -159,9 +160,10 @@ host-zink series lives separately in `patches/kosmickrisp/`.
   paths return DEVICE_LOST (submission bookkeeping unwound, reply decoder NULLed so
   generated `vn_call_*` fail cleanly), and the three feedback probes propagate instead of
   aborting. The watchdog/iter aborts (renderer HANG detection) are deliberately unchanged.
-  Authored on the mesa-cs tree (26.2-era); applies to both the F44 26.1.4 SRPM base and the
-  F43 26.2.0 snapshot — **F43 (`scripts/build-mesa-rpm.sh`) not yet wired; add it at the
-  next F43 respin.** Upstream mesa still aborts (checked 2026-07-20). Clearly upstreamable —
+  Authored on the mesa-cs tree (26.2-era); applies to the F44 26.1.4 SRPM base directly, and
+  to the F43 26.2.0 snapshot after `0016-pre` (see below) — wired into both RPM builds
+  (F43 since the 26.2.0-3.limina respin). Upstream mesa still aborts (checked 2026-07-20).
+  Clearly upstreamable —
   companion to the host-side virglrenderer 0040 create-arg closure
   (`spikes/m9-vkmark-resume-crash/RESULTS.md`).
 - **`0017-venus-fix-ring-submit-freelist-capacity.diff`** (2026-07-21, perf) — venus: fix the
@@ -176,10 +178,20 @@ host-zink series lives separately in `patches/kosmickrisp/`.
   88% of the zink-flush-queue thread on the list-walk load; at constant workload over
   ~10 min firefox grew 19.6→29.3% CPU, worker 75→83%, RES +25MB, while the demo's JIT
   stayed flat. Fix: track the allocated slot count in a new `shmem_capacity` field, set once
-  at malloc; match the scan on it. Wired into the F44 script; **F43
-  (`scripts/build-mesa-rpm.sh`) not yet wired; add at the next F43 respin.** Upstream mesa
-  main still has the bug (checked 38169ede9b2, 2026-07-21). Clearly upstreamable.
-  Memory/forensics: `limina-venus-submit-freelist`.
+  at malloc; match the scan on it. Wired into the F44 script AND the F43 script (since the
+  26.2.0-3.limina respin; F43 needs `0016-pre` first — the F43 base predates the free-list
+  scan). Upstream mesa main still has the bug (checked 38169ede9b2, 2026-07-21). Clearly
+  upstreamable. Memory/forensics: `limina-venus-submit-freelist`.
+- **`0016-pre-venus-ring-get-submit-freelist-scan-backport.diff`** (2026-07-21, F43-base
+  prep — sorts before `0016-venus-*` so filename order stays the apply order) — verbatim
+  upstream `2cf1f6cb508` "venus: fix unbound malloc leak in vn_ring_get_submits" (Yiwei
+  Zhang, landed on main 2026-06 AFTER our F43 `MESA_COMMIT` pin 3515c52; its stable
+  backport `d54c04f96c2` is already in the F44 26.1.4 base — never apply it there). It
+  replaces vn_ring_get_submit's pop-first-node-if-small shape with the free-list capacity
+  scan: the code 0016's vn_ring.c hunk anchors on and 0017 fixes (the scan as landed
+  matches on the caller-overwritten `shmem_count` — the very bug 0017 addresses). Chain is
+  exact: this diff's post-image blob (`ff72774d243`) is 0016/0017's pre-image. F43
+  (`scripts/build-mesa-rpm.sh`) only; NOT for upstreaming (it IS upstream).
 
 ## Re-export / DIAG hygiene
 The in-guest working tree carried temporary `LIMINA-DIAG` debug hacks (force
