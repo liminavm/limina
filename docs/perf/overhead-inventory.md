@@ -86,6 +86,21 @@ pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
    resumes/s vs ~200 doorbell parks/s), so early-park variants were rejected.
    **Day total: 18.6k → 4.2k/s (−77%).**
 
+0b′. **vkr relax throughput cost + adaptive-plateau fix — SHIPPED 2026-07-21 (virgl 0043,
+   task #38/#39).** The 640 µs quad-rung cap above bought its wakeup savings with pickup
+   latency: on **vkmark** (venus, uncapped ~2400 fps, a submit-latency-bound ping-pong)
+   the Score fell from ~2760 (relax off) to **1193** at cap=640 — roughly halved. A/B
+   attributed the whole drop to the relax ladder (EVENT_IDX/0091 is throughput-neutral).
+   A flat low cap recovers throughput (cap=40 → 2342) but sleeps at the cap rate when the
+   ring is *idle* (~25k/s at 40 µs), destroying the idle win. Fix (0043): a two-phase
+   backoff keyed on idle duration — a responsive 40 µs plateau (held for `warm_rungs`,
+   ~640 µs) that an actively-fed ring never leaves (`relax_iter` resets per command), then
+   a 640 µs deep-idle fallback / park. Result: **vkmark ~2360 (≈2× cap=640) with idle
+   wakeups unchanged (~270/s)**, load wakeups ~18.4k/s under vkmark's worst-case continuous
+   submit. See spikes/wakeup-probe/RESULTS.md for the full table; ~18.4k is the uncapped
+   ceiling — a vsync-capped 60 fps workload sits far closer to the ~270/s idle floor
+   (unmeasured against 0043, a TODO).
+
 1. **Doorbell-path shortening — PREMISE KILLED 2026-07-21 (source-verified during #38).**
    The GPU doorbell is already direct (vCPU MMIO write at 0x50 → queue eventfd → gpu
    worker's own epoll, mmio.rs:702-708 / gpu/worker.rs inner_run) and fence IRQ injection

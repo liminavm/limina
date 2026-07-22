@@ -277,3 +277,42 @@ any build (if <1k/s → DROP).** Independently worthwhile regardless: a minimal 
 so it parks instead of wedging the VMM" patch is a real robustness fix — a stock guest that
 offlines a CPU today hangs the whole VM, violating the two-tier stock-guest guarantee — and
 is upstreamable + de-risks a future #35 without committing to the policy.
+
+## Throughput cost of the relax ladder + the adaptive-plateau fix (2026-07-21, virgl 0043)
+
+The wakeup work traded away throughput and we hadn't priced it. A/B on the ring-relax
+(virgl 0041) + EVENT_IDX (libkrun 0091) changes, scored on **vkmark** (venus, seated,
+`vkmark -s 1280x720`, host-sleep-eyeball.raw, 6 vCPU) — chosen over the blobs eyeball
+specimen because it is a *stationary, scored* oracle (leg B ran 1193/1193, 0% variance)
+and it is **submit-latency-bound** (uncapped ~2400 fps, a tight submit->wait->submit
+ping-pong), so it is the most sensitive probe for the ring-poll pickup latency.
+
+| leg | EVENT_IDX | ring-relax | vkmark Score | wakeups/s (load) | wakeups/s (idle) |
+|---|---|---|---|---|---|
+| A  | off | off (per-iter)      | 2399 / 2801 | ~30–55k | (busy) |
+| C1 | **on** | off (per-iter)   | 2745 / 2782 | ~29k    | — |
+| B  | on | on, cap=640 (shipped) | 1193 / 1193 | ~11k    | ~270 |
+| —  | on | on, cap=160           | 1562 / 1561 | ~12.5k  | — |
+| —  | on | on, cap=40 (flat)     | 2332 / 2353 | ~18k    | **~25k (idle regression)** |
+| **✔** | on | **adaptive plateau** | **2333 / 2390** | **~18.4k** | **~270** |
+
+FINDINGS:
+1. **The 2× throughput drop is ENTIRELY the ring-relax ladder, not EVENT_IDX.** Leg C1
+   (EVENT_IDX on, relax off) scores the same ~2760 as leg A (both off) → EVENT_IDX is
+   throughput-neutral (keep it). The relax backoff added up to 640 µs of pickup latency
+   per inter-submit gap; on a ping-pong workload that halves fps (1193 vs ~2760).
+2. **A flat low cap is NOT the answer** — it fixes load throughput (cap=40 → 2342) but a
+   permanently-idle ring then sleeps at the cap rate (~25k/s at 40 µs), destroying the
+   idle-wakeup win the whole path exists for.
+3. **Adaptive plateau (shipped, virgl 0043) is the optimal trade** — keyed on how long the
+   ring has been idle (`relax_iter` resets on every processed command): an actively-fed ring
+   stays on a responsive 40 µs plateau (~2360 Score, full throughput), a quiet desktop crosses
+   it once and falls back to 640 µs / parks (~270/s idle). ~2× the throughput of shipped-640
+   with idle wakeups unchanged.
+
+CAVEAT (unmeasured): the ~18.4k/s load figure is vkmark's worst case (continuous uncapped
+submit at ~2400 fps). A vsync-capped 60 fps workload is mostly idle gaps → its rate sits far
+closer to the ~270/s idle floor. The blobs 60 fps A/B numbers earlier in this file were NOT
+re-measured against 0043; the 60 fps wakeup delta from the plateau is expected small but is a
+TODO. Oracle: `spikes/wakeup-probe/ab-vkmark.sh <label>` (fresh clone → venus boot → idle
+sample → vkmark ×N with per-run wakeup sampling → teardown) built each leg here.

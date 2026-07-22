@@ -1160,6 +1160,103 @@ the host and paste it in the guest and vice-versa. Baseline-tier compatibility f
 
 ---
 
+## Milestone 13 — Visibility- & power-aware runtime rendering adaptation
+
+**Status: 📋 planned — high-level design only (2026-07-21).** Builds directly on the wakeup-reduction
+work (adaptive vkr relax, virgl 0043; `docs/perf/overhead-inventory.md`) and the host power/present
+machinery from M8/M9.
+
+**Goal:** dynamically scale the render/present workload to what is actually needed *right now* —
+**throttle hard when the guest's output isn't being seen** (window occluded, on another Space/virtual
+desktop, or minimized) and **cap/relax when the host is on battery** / in Low Power Mode — to save
+battery, host CPU/GPU, and host wakeups, with **zero perceptible cost when the window is live and on
+AC**. Resume must be instantaneous and clean. This is the *rendering* sibling of dynamic memory and
+dynamic vCPU hotplug (M6): the same "give back what you're not using" philosophy, on the GPU/present
+axis, driven by host-observable context instead of a fixed rate.
+
+**Signals (inputs — observed by the AppKit front-end; policy lives in limina, per the tenet):**
+- **Visibility:** `NSWindow.occlusionState` (fully occluded behind other windows / minimized) and
+  `isOnActiveSpace`. The "behind other windows", "on an inactive Space/desktop", and "minimized" cases
+  all collapse into one **"output not visible"** signal (macOS already marks off-Space windows
+  non-visible via occlusion).
+- **Display context:** fullscreen vs windowed, which display, multi-display — already tracked
+  ([[limina-display-modes]], M8).
+- **Host power:** AC vs battery, battery level, Low Power Mode. The IOKit power-source *read* already
+  exists (`crates/limina-vmm/src/krun/battery.rs`, `IOPSCopyPowerSourcesInfo`) but is **pull-only**
+  today — queried lazily to feed the virtio battery mirror (libkrun 0042, [[limina-battery]]). This
+  milestone adds a **notification-driven power listener** (modeled on the existing host-sleep listener
+  `crates/limina-vmm/src/power.rs` / `IORegisterForSystemPower`, [[limina-host-sleep-s2idle]]) and
+  surfaces AC/battery + Low Power Mode (`NSProcessInfo.isLowPowerModeEnabled`, net-new) as a host signal.
+- *(future)* thermal pressure.
+
+**Policy — a small hysteresis state machine mapping signals → a target present/render budget**
+(configurable via `vm.toml`, sensible defaults, escape hatch to disable):
+- **Visible + AC:** full rate (today's behavior).
+- **Not visible** (occluded / off-Space / minimized): **hard throttle** — pause or cap presents to a
+  few fps; latency is irrelevant when nothing is seen. The biggest win.
+- **On battery (visible):** cap to a target (follow display refresh or a configurable cap), bias the
+  vkr relax toward deep-idle sooner; optionally honor Low Power Mode.
+- **Battery + not visible:** most aggressive.
+- **Hysteresis + cooldown** to avoid oscillation on rapid focus/Space flips (the balloon-thrash
+  lessons apply directly — see the balloon oscillation ledger, [[limina-balloon-oscillation]]).
+
+**Mechanism — layered, cheapest first, two-tier-friendly (mechanism in libkrun, policy in limina):**
+1. **Host present cap / pause (front-end + worker, stock-safe).** Cap the present rate / stop
+   compositing to screen when throttled — purely host-side, works for an **unmodified stock guest**
+   (degraded tier). Presents today are event-driven present-on-flush with a 60 Hz `NSTimer` fallback
+   (`crates/limina/src/window/`) and **no cap** — that is the host throttle point. A host→worker knob
+   rides the established per-worker control-socket seam (the display-resize / balloon sockets in
+   `crates/limina-vmm/src/krun/mod.rs`). The s2idle GPU-session **park** (libkrun 0089) is related but
+   is *not* a general present-pause toggle — add one. Ships a real throttle with no guest cooperation.
+2. **Guest backpressure via fence / present-complete feedback.** The fence-accurate present path
+   (`LIMINA_FENCE_PRESENT`) already holds the guest's `RESOURCE_FLUSH` fence until the frame is shown
+   and releases it on the `shown <id>` ack → `process_retired_presents` (libkrun `virtio_gpu.rs`).
+   **Pacing that release** (delaying the ack / completion) slows the guest's own frame loop → throttles
+   **guest** CPU/GPU, not just host compositing. Composes with the adaptive relax (occluded → skip the
+   warm plateau → straight to deep-idle → fewer wakeups).
+3. **Guest-cooperative throttle (enhanced tier, `limina-agent` + control plane).** Host sends the agent
+   a target rate; the agent hints mutter to cap the compositor's frame rate. Deepest guest-side saving;
+   **degrades gracefully to (1)/(2)** when the agent/enhanced components aren't present.
+
+**Two-tier:** a stock guest gets host present-cap/pause (mechanism 1) with zero guest components; an
+enhanced guest layers on backpressure + agent-driven compositor throttle. Detect granularly/additively
+(a guest may have none, some, or all of the enhanced pieces).
+
+**Correctness / interactions:**
+- **Instant, clean resume** on becoming visible again — no stale frame, no dropped input; reuse the
+  s2idle resume path.
+- **Never throttle audio, mic, the control plane, or networking** — rendering only.
+- Composes with host sleep/s2idle (M9), snapshot, display resize, and dynamic memory/vCPU (M6) as one
+  coherent "idle/occluded power posture."
+- Detection must be reliable across Spaces, minimize, fullscreen-on-another-display, and multi-display.
+
+**Key tasks (rough dependency order):**
+1. **Front-end signal source:** observe `occlusionState` / `isOnActiveSpace` / minimize + the existing
+   power-source listener; collapse to a `(visible, power)` state with hysteresis + a debug log.
+2. **Host present cap/pause mechanism** (reuse the s2idle pause/resume) and wire the policy to it —
+   ships the stock-tier throttle by itself.
+3. **`vm.toml` policy config** (a `[power]`/`[render]` section: enable, occluded-fps, battery-fps
+   cap, follow-low-power-mode) + defaults + disable switch.
+4. **Guest backpressure** via fence-feedback pacing (mechanism knob) + relax bias on occlusion.
+5. **Enhanced-tier agent throttle:** a control-plane host→guest "target rate" message → `limina-agent`
+   → mutter frame-rate hint.
+
+**Done test:** with the window occluded / on another Space, host GPU+CPU and wakeups drop sharply and
+recover instantly on focus; on battery with the window live, a measurable framerate cap / wakeup
+reduction; a **stock** guest still throttles (host-side) with no guest components; L2 baseline green.
+
+**libkrun patches:** a present pause/cap knob (extends the s2idle path) + a fence-feedback pacing knob;
+everything else is limina + control-plane + `limina-agent` code.
+
+**Precursors already in place:** adaptive vkr relax (virgl 0043); the host-sleep listener
+(`crates/limina-vmm/src/power.rs`, `IORegisterForSystemPower`) + GPU-session park (libkrun 0089) as the
+model for a power listener + quiesce; the IOKit AC/battery read (`krun/battery.rs`) + virtio battery
+mirror (libkrun 0042); the fence-accurate present backpressure path (`LIMINA_FENCE_PRESENT`,
+`virtio_gpu.rs`); the host→worker control-socket seam (display-resize / balloon) and the host→guest
+control plane (`limina-proto` `SHUTDOWN`/`TIME_SYNC`) + `limina-agent` (M5); display modes (M8).
+
+---
+
 ## Summary of net-new code vs libkrun patches
 
 | Milestone | Net-new limina code | libkrun (or fw/virgl) patches |
@@ -1175,6 +1272,7 @@ the host and paste it in the guest and vice-versa. Baseline-tier compatibility f
 | M8 audio/x86/polish | fullscreen, keymap, multi-display, pointer capture, IOSurface mach-port scoping, FEX wiring | native virtio-snd; runtime resize/EDID; LED parity |
 | M9 suspend/resume + snapshots 📐 designed | host-side VMM snapshot (file format/CRC, `--restore` wiring, device schema + mapped-blob set, named-snapshot manager + clone + APFS `clonefile` disk, agent freeze bracket, proto `Snapshot`/`Restore`/`TimeSet`, capability probe, UX); Mesa-venus object-graph replay + **device-local content readback** + blob copy-back (venus tier) | multi-vCPU HVF pause/quiesce (incl. WFE-parked wakeup) + vCPU save/restore (wrappers, FFI exists) + GIC state (spike #2 green) + `CNTVOFF` set + `--restore` mode + device (de)serialize + virtio freeze/thaw hardening + snapshot-time GPU quiesce (restore = fresh worker, no in-process renderer reset; `reset_session` rutabaga-context fix already shipped, 0035); carry `patches/linux` Dongwon-Kim drm/virtio freeze-restore (virgl) |
 | M12 SPICE agent 📋 planned | host vdagent broker (framing + clipboard, then client→guest file transfer), NSPasteboard bridge reuse (M5), native-vs-SPICE arbitration; display-resize deliberately excluded (native EDID already covers it) | virtio-serial named multiport port `com.redhat.spice.0` (wakes stock `spice-vdagentd`); no crate reuse |
+| M13 visibility/power render adaptation 📋 planned | front-end occlusion/Space/power signal + hysteresis policy, `vm.toml [power]/[render]` config, host present cap/pause (reuse s2idle), agent frame-rate throttle message | present pause/cap knob (extends s2idle 0089) + fence-feedback pacing knob; relax deep-idle bias on occlusion |
 
 ## First three things to spike
 

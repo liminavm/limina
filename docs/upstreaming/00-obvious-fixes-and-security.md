@@ -85,7 +85,7 @@ each destination. ✚ marks a patch that is *also* a security fix (see §2B1).
 
 | patch | one-line | note |
 |---|---|---|
-| 0041 vkr: ring relax backoff — one sleep per rung, not per iteration | perf; replaces upstream's literal `/* TODO do better */` | upstream ladder = ~55 timed wakeups per 1 ms ring idle window; fix = true exponential (≤7 sleeps), same 640 µs worst-case pickup. Measured 14.3k→6.4k total process wakeups/s under a 60 fps venus load. OS-agnostic, applies verbatim. spikes/wakeup-probe/RESULTS.md |
+| 0041 (+**0043**) vkr: ring relax backoff — adaptive plateau, not per iteration | perf; replaces upstream's literal `/* TODO do better */` | upstream ladder = ~55 timed wakeups per 1 ms ring idle window; fix = a two-phase backoff (40 µs responsive plateau for a fed ring → 640 µs deep-idle). **Squash 0043 into 0041 before sending** — 0043 supersedes 0041's flat quad-rung cap after an A/B showed the 640 µs cap halved uncapped vkmark throughput (1193 vs ~2360) with no idle-wakeup benefit over the plateau. OS-agnostic, applies verbatim. spikes/wakeup-probe/RESULTS.md |
 | 0020 vrend: fix WebRender/Firefox tile-displacement tear | orphan refill via `GL_MAP_INVALIDATE_BUFFER_BIT` | generic vrend correctness; clean |
 | 0023 vrend: infer a map caching type for zink renderers | `MAP_CACHE_CACHED` when unset | fixes blob-map on zink hosts |
 | 0021 vrend(macOS): wire the no-GBM surfaceless EGL winsys | small init-path branch | self-contained |
