@@ -1333,7 +1333,15 @@ enhanced guest layers on backpressure + agent-driven compositor throttle. Detect
    signal + re-run both gates; (b) shelve — round-2 (0091+0041) already landed the big wakeup win,
    this was only an increment; (c) ship gated off, enable under this M13 `(visible, occluded,
    power)` policy which already knows the app isn't the focused 3D workload.
-   `vkr-adaptive-plateau-depth.patch` is preserved but NOT promoted.
+   **RESOLVED 2026-07-22 (direction a) — shipped as virgl 0044.** Re-classify by the FRACTION OF
+   WALL-CLOCK spent in long (≥2 ms) idle gaps over a sliding window (default 200 ms), coarsen when
+   that fraction ≥ 50%. Time-weighting (not gap-count) makes a capped app's one long idle/frame
+   dominate (~84%) even with many sub-ms flushes/frame (firefox ~24) while vkmark's sporadic stalls
+   stay a tiny fraction. Clean dylib-swap A/B: vkmark 2373/2376/2375 (baseline 2433/2440/2446, ring
+   stays responsive — the −44% cliff is gone) and vkcube ~800 poll_sleeps/s (baseline ~2,690, −70%
+   — win preserved); robust at coarsen_pct 50–70. Env-tunable LIMINA_RELAX_WARM_MAX/WARM_MIN/
+   LONG_IDLE_US/WINDOW_MS/COARSEN_PCT. Non-blocking: eyeball a real capped desktop in coarsen mode
+   (vkcube's identical depth eyeballed SMOOTH); confirm defaults scale to 30/120 fps caps.
 5. **Enhanced-tier agent throttle:** a control-plane host→guest "target rate" message → `limina-agent`
    → mutter frame-rate hint.
 

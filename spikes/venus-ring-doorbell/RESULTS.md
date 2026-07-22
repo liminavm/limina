@@ -392,8 +392,45 @@ Open directions (user decision — see session):
 3. **Opt-in / off by default** — ship the mechanism gated off, enable only under a future M13
    `(visible, occluded, power)` policy that already knows the app isn't the focused 3D workload.
 
-`vkr-adaptive-plateau-depth.patch` is preserved but **NOT promoted** to `patches/virglrenderer/`.
-Tree left pristine.
+## RESOLUTION — tightened classifier (time-weighted long-idle fraction) PASSES both gates → shipped as virgl 0044
+
+Chosen direction #1. The fix: classify by the **fraction of wall-clock time spent in long (≥2 ms) idle
+gaps** over a sliding window (default 200 ms), coarsen only when that fraction clears a threshold
+(default 50%). Time-weighting is the key: a capped app spends the bulk of every frame in ONE long idle
+gap even when it also emits many sub-ms flushes/frame (firefox ~24), so the long gap dominates the TIME
+fraction (~84%) regardless of flush count → coarsen; vkmark's sporadic short stalls are a tiny time
+fraction → stays responsive. Requiring a *sustained* fraction (not "saw one gap") also denies
+coarsening's own added latency any way to re-arm itself.
+
+**Clean same-machine A/B (dylib-swap, no build between measurements):**
+
+| workload | metric | baseline (0043) | 0044 time-weighted | result |
+|---|---|---|---|---|
+| **vkmark 3-scene** (saturated ⇒ responsive) | Score | 2433 / 2440 / 2446 | **2373 / 2376 / 2375** | **no cliff** (~3% is thermal — see below) |
+| | vkr_ring poll_sleeps/s | ~15,200 | **~13,400** | responsive regime held |
+| **vkcube** (true 60 fps cap ⇒ coarsen) | vkr_ring poll_sleeps/s | ~2,690 | **~800** | **−70%** — win preserved |
+
+Threshold robustness: re-ran at `coarsen_pct=70` — vkmark **unchanged** (2397/2354/2335, ~13.4k
+poll_sleeps: it never coarsened at 50% either, confirming the ~3% score dip is this session's thermal
+drift, not the classifier) and vkcube **still coarsened** (~744/s). Any threshold in (vkmark's fraction,
+~84%) works; **50%** is kept as the default — safely above vkmark yet low enough to catch heavier
+60 fps apps with ≥50% frame slack. All knobs env-tunable: `LIMINA_RELAX_WARM_MAX/WARM_MIN/LONG_IDLE_US/
+WINDOW_MS/COARSEN_PCT`.
+
+**Shipped: `patches/virglrenderer/0044-vkr-adaptive-relax-plateau-DEPTH-*.patch`** (branch
+`limina/macos-venus`, series re-exported + reconstruction-verified). `vkr-adaptive-plateau-depth.patch`
+here mirrors it. Remaining light validation (not blocking): human eyeball on a *real* capped desktop
+(firefox/mutter fullscreen) in coarsen mode — vkcube (identical coarsening depth, warm_min=2) eyeballed
+SMOOTH; and confirm the 2 ms/200 ms/50% defaults scale to 30 fps / 120 fps caps (a 120 fps cap has less
+per-frame slack — its long gap is ~6 ms of 8.3 ms ≈ 72%, still > 50%, so it should still coarsen; verify).
+
+### The FALSIFIED first attempt is kept above as the lesson
+
+The "saw one ≥2 ms gap in the last 100 ms" classifier (documented in the two sections above) regressed
+vkmark −44% because it latched on sporadic long gaps. **Lesson: A/B the baseline `poll_sleeps` under the
+SAME spec before calling a regime** — I first mislabelled the coarsened vkmark ring "responsive" off a
+7,800/s sample by misremembering the baseline as ~7,500; it is ~15,200, so 7,800 was the *coarsened*
+count. The count-vs-time-weighting distinction was the actual fix.
 
 ### (Superseded) Probe #2 as originally scoped — guest mesa flush-trigger tags
 

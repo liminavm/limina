@@ -1,5 +1,5 @@
 diff --git a/src/venus/vkr_ring.c b/src/venus/vkr_ring.c
-index b63d473..24a6a82 100644
+index b63d473..8be6579 100644
 --- a/src/venus/vkr_ring.c
 +++ b/src/venus/vkr_ring.c
 @@ -266,31 +266,41 @@ vkr_ring_wake_trace_add(uint64_t *counter)
@@ -56,33 +56,35 @@ index b63d473..24a6a82 100644
  
     (*iter)++;
     if (*iter < (1u << busy_wait_order)) {
-@@ -316,6 +326,53 @@ vkr_ring_relax(uint32_t *iter)
+@@ -316,6 +326,67 @@ vkr_ring_relax(uint32_t *iter)
  #endif
  }
  
-+/* task #42: choose the warm-plateau depth for the UPCOMING idle period from a longer-period
-+ * PROFILE of the ring, not immediate gap history. Called once per drain with the drain time;
-+ * it updates the profile (has the ring gone genuinely long-idle recently?) and returns the
-+ * plateau depth for the next idle period.
++/* task #42: choose the warm-plateau depth for the UPCOMING idle period from a TIME-WEIGHTED
++ * profile of the ring over a sliding window. Called once per drain with the drain time.
 + *
 + * The insight: the expensive "plateau-walk" happens on the inter-frame idle gap, which FOLLOWS
-+ * a burst — so immediate history (the just-ended gaps) can't predict it. But over a longer
-+ * window the REGIME is obvious: a vsync-capped app goes long-idle once per frame (it has
-+ * per-cycle slack), while a saturated, submit-latency-bound app (uncapped vkmark) never does.
-+ * In the CAPPED/SLACK regime we coarsen EVERY gap — safe because the regime itself guarantees
-+ * the <=640 us pickup latency is hidden by the slack (empirically: forcing the minimal plateau
-+ * held a steady 60 fps). In the SATURATED regime we keep the full responsive plateau. The
-+ * classifier: a long idle (>= long_idle_ns, a genuine vsync-like gap that no tight-submit
-+ * workload produces) seen within the last slack_window_ns => capped => minimal plateau.
-+ * Never changes when the ring parks (idle_timeout), so the guest notify handshake is untouched.
-+ * Env-tunable for A/B. */
++ * a burst — so immediate history (the just-ended gaps) can't predict it. But over a window the
++ * REGIME is obvious: a vsync-capped app spends the BULK OF WALL-CLOCK idle in a long per-frame
++ * gap, while a saturated, submit-latency-bound app (uncapped vkmark) spends it busy with only
++ * sporadic short stalls. We classify by the FRACTION OF WALL-CLOCK spent in long (>= long_idle)
++ * idle gaps — time-weighted, so a frame's one long idle dominates even when the app also emits
++ * many sub-ms flushes/frame (firefox ~24); a gap-COUNT fraction would misread that as saturated,
++ * and any single stray long gap could latch coarsening (the earlier 100 ms "saw one gap" bug).
++ * In the CAPPED/SLACK regime (long-idle time >= coarsen_pct% of the window) we coarsen EVERY gap
++ * — safe because the slack hides the <=640 us pickup latency (empirically: forced minimal plateau
++ * held 60 fps). Otherwise keep the full responsive plateau. Requiring a SUSTAINED time fraction
++ * also denies coarsening's own added latency any way to re-arm itself on a latency-bound ring.
++ * Starts responsive (relax_coarsen=0). Never changes when the ring parks (idle_timeout), so the
++ * guest notify handshake is untouched. Env-tunable for A/B. */
 +static uint32_t
 +vkr_ring_profile_warm_rungs(struct vkr_ring *ring, uint64_t drain_now)
 +{
 +   static int inited = 0;
 +   static uint32_t warm_max = 16, warm_min = 2;
-+   static uint64_t long_idle_ns = 2000000ull;      /* 2 ms: a genuine per-cycle idle gap */
-+   static uint64_t slack_window_ns = 100000000ull; /* 100 ms (~6 frames): remember the regime */
++   static uint64_t long_idle_ns = 2000000ull; /* 2 ms: a genuine per-cycle (vsync-like) idle gap */
++   static uint64_t window_ns = 200000000ull;  /* 200 ms evaluation window */
++   static uint32_t coarsen_pct = 50;          /* coarsen when >= this % of wall-clock is long-idle */
 +   if (!inited) {
 +      const char *e;
 +      if ((e = getenv("LIMINA_RELAX_WARM_MAX")))
@@ -91,26 +93,38 @@ index b63d473..24a6a82 100644
 +         warm_min = (uint32_t)atoi(e);
 +      if ((e = getenv("LIMINA_RELAX_LONG_IDLE_US")))
 +         long_idle_ns = (uint64_t)atoi(e) * 1000ull;
-+      if ((e = getenv("LIMINA_RELAX_SLACK_MS")))
-+         slack_window_ns = (uint64_t)atoi(e) * 1000000ull;
++      if ((e = getenv("LIMINA_RELAX_WINDOW_MS")))
++         window_ns = (uint64_t)atoi(e) * 1000000ull;
++      if ((e = getenv("LIMINA_RELAX_COARSEN_PCT")))
++         coarsen_pct = (uint32_t)atoi(e);
 +      inited = 1;
 +   }
 +
-+   if (ring->relax_last_drain_ns &&
-+       drain_now - ring->relax_last_drain_ns >= long_idle_ns)
-+      ring->relax_last_long_idle_ns = drain_now;
++   if (ring->relax_last_drain_ns) {
++      uint64_t gap = drain_now - ring->relax_last_drain_ns;
++      if (gap >= long_idle_ns)
++         ring->relax_long_time_ns += gap;
++   } else {
++      /* first drain on this ring: anchor the window, don't count a bogus startup gap */
++      ring->relax_window_start_ns = drain_now;
++   }
 +   ring->relax_last_drain_ns = drain_now;
 +
-+   return ring->relax_last_long_idle_ns &&
-+                drain_now - ring->relax_last_long_idle_ns < slack_window_ns
-+             ? warm_min
-+             : warm_max;
++   uint64_t elapsed = drain_now - ring->relax_window_start_ns;
++   if (elapsed >= window_ns) {
++      ring->relax_coarsen =
++         (ring->relax_long_time_ns * 100 >= elapsed * (uint64_t)coarsen_pct) ? 1u : 0u;
++      ring->relax_window_start_ns = drain_now;
++      ring->relax_long_time_ns = 0;
++   }
++
++   return ring->relax_coarsen ? warm_min : warm_max;
 +}
 +
  static bool
  vkr_ring_submit_cmd(struct vkr_ring *ring,
                      const uint8_t *buffer,
-@@ -448,6 +505,8 @@ vkr_ring_thread(void *arg)
+@@ -448,6 +519,8 @@ vkr_ring_thread(void *arg)
  
     uint64_t last_submit = vkr_ring_now();
     uint32_t relax_iter = 0;
@@ -119,7 +133,7 @@ index b63d473..24a6a82 100644
     int ret = 0;
     while (ring->started) {
        /* gkvm (#8): everything decoded so far has fully executed — fire any
-@@ -500,6 +559,11 @@ vkr_ring_thread(void *arg)
+@@ -500,6 +573,11 @@ vkr_ring_thread(void *arg)
        if (cmd_size) {
           if (relax_iter >= (1u << 4))
              vkr_ring_wake_trace_add(&vkr_ring_wake_trace.poll_resumes);
@@ -131,7 +145,7 @@ index b63d473..24a6a82 100644
           if (cmd_size > ring->buffer.size) {
              vkr_log("%s: cmd_size(%u) > ring->buffer.size(%u)", __func__, cmd_size,
                      ring->buffer.size);
-@@ -534,7 +598,7 @@ vkr_ring_thread(void *arg)
+@@ -534,7 +612,7 @@ vkr_ring_thread(void *arg)
              }
           }
  
@@ -141,25 +155,32 @@ index b63d473..24a6a82 100644
     }
  
 diff --git a/src/venus/vkr_ring.h b/src/venus/vkr_ring.h
-index f49c92d..fcd4a3c 100644
+index f49c92d..0331996 100644
 --- a/src/venus/vkr_ring.h
 +++ b/src/venus/vkr_ring.h
-@@ -110,6 +110,18 @@ struct vkr_ring {
+@@ -110,6 +110,25 @@ struct vkr_ring {
      * relaxed load when no barriers are pending. */
     atomic_bool has_gkvm_barriers;
     struct list_head gkvm_barriers;
 +
-+   /* limina adaptive relax plateau depth (task #42): the warm-plateau length is chosen per
-+    * idle period from a longer-period PROFILE of the ring's cadence, not immediate history.
-+    * `relax_last_drain_ns` timestamps the previous drain (drain-to-drain gaps span parks);
-+    * `relax_last_long_idle_ns` timestamps the last "long" idle gap (>= long_idle threshold, a
-+    * genuine vsync-like idle). If a long idle occurred within the recent slack window the ring
-+    * is in a CAPPED/SLACK regime (it regularly goes idle, e.g. a vsync-capped app) => it can be
-+    * polled coarsely, the <=640us pickup latency hidden by its per-cycle slack. If it has NOT
-+    * gone long-idle recently it is SATURATED/latency-bound (e.g. uncapped vkmark) => keep the
-+    * full responsive plateau. Never affects when the ring parks (idle_timeout). */
++   /* limina adaptive relax plateau depth (task #42): the warm-plateau length is chosen from a
++    * TIME-WEIGHTED profile of the ring's cadence over a sliding window. Per drain we measure the
++    * gap since the previous drain and, if it is "long" (>= long_idle threshold, a genuine vsync-
++    * like idle), add its DURATION to `relax_long_time_ns`. Once `window_ns` of wall-clock elapses
++    * we set `relax_coarsen` iff long-idle time was >= coarsen_pct% of the window, then reset.
++    *
++    * Why time-weighted, not gap-COUNT: a capped app spends the bulk of every frame idle in ONE
++    * long gap even if it also emits many sub-ms flushes/frame (firefox ~24), so the long gap
++    * dominates the TIME fraction (~84%) regardless of flush count => coarsen. A saturated latency-
++    * bound ring (uncapped vkmark) has only sporadic short stalls => tiny time fraction => stays
++    * responsive. A pure count-fraction would misread firefox as saturated and a single stray long
++    * gap could latch coarsening (the earlier 100 ms "saw one gap" bug); requiring a sustained TIME
++    * fraction fixes both and denies coarsening's own added latency any way to re-arm itself.
++    * Never affects when the ring parks (idle_timeout). */
 +   uint64_t relax_last_drain_ns;
-+   uint64_t relax_last_long_idle_ns;
++   uint64_t relax_window_start_ns;
++   uint64_t relax_long_time_ns;
++   uint32_t relax_coarsen;
  };
  
  struct vkr_present_fence;
