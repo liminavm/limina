@@ -1278,6 +1278,17 @@ enhanced guest layers on backpressure + agent-driven compositor throttle. Detect
    low latency is worth it for focused+AC game-latency, but a 60 fps-capped / battery / background
    workload would prefer the deeper backoff. Fold that knob into this policy (a control-plane or env
    selector for plateau depth) instead of a static retune.
+   **This IS the whole of the former "vkr doorbell-handshake" idea** — the doorbell-handshake spike
+   (#42, `spikes/venus-ring-doorbell/RESULTS.md`) found the wakeup-suppression handshake already
+   exists and is race-free (host publishes IDLE + parks on cnd_wait; guest notifies only on IDLE,
+   seq_cst-race-closed), and that a position-threshold EVENT_IDX buys nothing because the host
+   bulk-drains per wake. The 5.9k poll-sleeps are the deliberate pre-park poll window; the only knobs
+   to cut them are relax plateau depth + `idle_timeout` (bounded by the guest's coupled 1 ms notify
+   rate-limit), both latency-vs-wakeup trades — exactly this `(visible, power)` selector. So there is
+   **no separate doorbell mechanism to build; it is this task 4 knob.** `idle_timeout` is a possible
+   second dimension of the selector (park sooner when occluded), if the plateau-depth knob alone is
+   insufficient — but it requires a coordinated guest notify-rate-limit change and adds vmexits, so
+   try plateau depth first.
 5. **Enhanced-tier agent throttle:** a control-plane host→guest "target rate" message → `limina-agent`
    → mutter frame-rate hint.
 

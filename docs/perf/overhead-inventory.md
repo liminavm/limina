@@ -148,19 +148,24 @@ pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
    (virgl 0003). Wake-trace under clean-fullscreen blobs confirms the ACTIVE venus ring is
    **poll-driven, not doorbell-driven** — the ~485/s gpu_worker "doorbells" are structural
    virtio-gpu submit-queue kicks (~8/frame), NOT venus-ring notifies. Nothing to *throttle* here.
-   **BUT — a down-the-line lever (post-M13): make the active ring doorbell-driven via a
-   wakeup-suppression HANDSHAKE, not a naive block-on-notify.** The ~5.9k vkr_ring poll-sleeps
-   (lever 0b′) are the dominant remaining term. A plain "host blocks, guest kicks every submit"
-   is a NET LOSS — it trades cheap host nanosleep wakeups for guest vmexits (each notify is an
-   MMIO trap host-ward), and mesa deliberately does NOT notify while actively submitting because
-   it assumes the host polls; the poll window catches ~440 resumes/s that would each need a
-   doorbell. The winning form is the **EVENT_IDX pattern (shipped for the virtio-gpu queue in
-   0091) applied to the vkr ring** (shared-memory, not a virtio queue, so it doesn't get it for
-   free): host publishes "parked at ring position X" before blocking on a futex/cnd; guest kicks
-   ONLY when it advances past a parked host, silent (no vmexit) whenever the host keeps up by
-   polling. Eliminates the poll-sleeps without a notify-per-submit. Composes with the M13
-   `(visible,power)` knob (occluded/battery → park-and-doorbell sooner; focused/AC → poll for
-   latency) — SAME lever as the plateau retune below, so revisit both together post-M13.
+   **Doorbell-HANDSHAKE spike — DONE 2026-07-22 (task #42), premise FALSIFIED, no mechanism to
+   build.** The plan was to build an EVENT_IDX-style handshake for the vkr ring. Source-mapping
+   all three sides (host `vkr_ring.c`, guest mesa `vn_ring.c`, libkrun EVENT_IDX template) found
+   **the handshake already exists and is already race-free**: on idle the host sets
+   `VK_RING_STATUS_IDLE_BIT_MESA` + seq_cst-reloads tail + parks on `cnd_wait` (0 wakeups); the
+   guest emits `vkNotifyRingMESA` ONLY when it observes IDLE (seq_cst SB-litmus closes the race,
+   exactly like libkrun's `fence(SeqCst)`+recheck). A full position-threshold EVENT_IDX buys
+   NOTHING because the host **bulk-drains the whole ring per wake** — one notify already
+   coalesces everything, no per-descriptor over-notification to suppress. The ~5.9k poll-sleeps
+   are the deliberate **pre-park poll window** for sub-`idle_timeout` micro-gaps (normal venus
+   submits are shared-memory-only, no doorbell — the host must poll OR park+wait, no cheap
+   middle). And `idle_timeout` (1ms) is deliberately **coupled to the guest's 1ms notify
+   rate-limit** (`VN_RING_IDLE_TIMEOUT_NS`), so parking sooner alone would STALL the host up to
+   1ms; parking sooner *safely* requires shortening the guest rate-limit too → MORE guest
+   vmexits, the same net-loss the 0b′ early-park rejection already found. **Net: the only levers
+   are latency-trading tuning (relax plateau depth + `idle_timeout`) = the M13 `(visible,power)`
+   knob (task 4). The doorbell-handshake and the plateau retune are literally the same lever.**
+   Full write-up + code citations: `spikes/venus-ring-doorbell/RESULTS.md`.
 5. ~~Shorten the host wake chain per submission~~ — KILLED, see lever 1: both hops it
    proposed to remove were already absent (doorbell eventfd goes straight to the gpu
    worker's epoll; IRQ inject is in-kernel hv_gic_set_spi from the calling thread).
