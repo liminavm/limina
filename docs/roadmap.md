@@ -1289,6 +1289,18 @@ enhanced guest layers on backpressure + agent-driven compositor throttle. Detect
    second dimension of the selector (park sooner when occluded), if the plateau-depth knob alone is
    insufficient — but it requires a coordinated guest notify-rate-limit change and adds vmexits, so
    try plateau depth first.
+   **Concrete form (from the #42 flush-cadence probes, 2026-07-22 — see
+   `spikes/venus-ring-doorbell/RESULTS.md`): adaptive `warm_rungs` (plateau depth) keyed on recent
+   inter-flush history.** Per-ring gap histograms showed the residual poll-sleeps are dominated by
+   the *plateau-walk*: every gap reaching the 1 ms `idle_timeout` first burns ~17 poll-sleeps
+   walking the full warm plateau before parking — even on a ring that's 100% parkable (mutter:
+   2 flushes/frame, ~1.9k poll-sleeps/s of pure plateau-walk). ~3.5–4k of ~7.3k poll-sleeps are
+   this walk on gaps ≥1 ms, where early-park is SAFE (guest 1 ms notify rate-limit not tripped) and
+   adds zero doorbells. So: shorten the plateau for a ring whose recent gaps are long (sparse),
+   keep it full during a tight burst. Est. ~halving of poll-sleeps, host-side only, NO mutter patch
+   (direct scanout already quiets the compositor ring 4×), NO guest change. Safety boundary: never
+   park-early on a gap you can't be sure is ≥1 ms. The `(visible, power)` signal biases the same
+   knob. This subsumes the former "doorbell-handshake" and "plateau retune" — one lever.
 5. **Enhanced-tier agent throttle:** a control-plane host→guest "target rate" message → `limina-agent`
    → mutter frame-rate hint.
 

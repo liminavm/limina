@@ -1,0 +1,149 @@
+diff --git a/src/venus/vkr_ring.c b/src/venus/vkr_ring.c
+index b63d473..56df7fc 100644
+--- a/src/venus/vkr_ring.c
++++ b/src/venus/vkr_ring.c
+@@ -234,8 +234,87 @@ static struct {
+    uint64_t poll_resumes;
+    uint64_t parks;
+    uint64_t park_resumes;
++   /* limina flush-cadence probe (spike venus-ring-doorbell): how many non-empty drains the
++    * host observes and their sizes — batches/s ÷ ~60 = flushes/frame; batch_avg/max show
++    * whether the ring is kept warm by many small flushes (coalescing headroom) or few large
++    * forced ones. Reported/reset alongside the wake counters below. */
++   uint64_t batches;
++   uint64_t batch_bytes;
++   uint32_t batch_max;
+ } vkr_ring_wake_trace = { .enabled = -1 };
+ 
++static void
++vkr_ring_wake_trace_batch(uint32_t size)
++{
++   if (vkr_ring_wake_trace.enabled < 0)
++      vkr_ring_wake_trace.enabled = getenv("LIMINA_WAKE_TRACE") != NULL;
++   if (!vkr_ring_wake_trace.enabled)
++      return;
++   vkr_ring_wake_trace.batches++;
++   vkr_ring_wake_trace.batch_bytes += size;
++   if (size > vkr_ring_wake_trace.batch_max)
++      vkr_ring_wake_trace.batch_max = size;
++}
++
++/* Per-ring inter-flush gap histogram (lever-2 decision oracle). Called on every non-empty
++ * drain with the ring's ctx_id. Buckets the time since the previous drain; gaps >= 1ms
++ * (buckets 4..6) are "parkable" — the fraction of wall time in them is the poll-time a
++ * per-ring poll<->trap switch could reclaim on THIS ring. Reports per ctx_id ~5s. */
++static void
++vkr_ring_wake_trace_gap(struct vkr_ring *ring, uint32_t ctx_id)
++{
++   if (vkr_ring_wake_trace.enabled < 0)
++      vkr_ring_wake_trace.enabled = getenv("LIMINA_WAKE_TRACE") != NULL;
++   if (!vkr_ring_wake_trace.enabled)
++      return;
++
++   const uint64_t now = vkr_ring_now();
++   if (ring->wt_last_batch_ns) {
++      const uint64_t gap = now - ring->wt_last_batch_ns;
++      unsigned b;
++      if (gap < 40000ull)
++         b = 0;
++      else if (gap < 160000ull)
++         b = 1;
++      else if (gap < 640000ull)
++         b = 2;
++      else if (gap < 1000000ull)
++         b = 3;
++      else if (gap < 4000000ull)
++         b = 4;
++      else if (gap < 16000000ull)
++         b = 5;
++      else
++         b = 6;
++      ring->wt_gap_buckets[b]++;
++      if (b >= 4)
++         ring->wt_gap_sum_parkable_ns += gap;
++   }
++   ring->wt_last_batch_ns = now;
++   ring->wt_batches++;
++
++   if (!ring->wt_last_report_ns)
++      ring->wt_last_report_ns = now;
++   const uint64_t elapsed = now - ring->wt_last_report_ns;
++   if (elapsed >= 5000000000ull) {
++      const double secs = (double)elapsed / 1e9;
++      fprintf(stderr,
++              "[WAKETRACE ring-gap ctx=%u] flushes=%.0f/s parkable=%.1f%% gaps[<40u=%.0f "
++              "<160u=%.0f <640u=%.0f <1m=%.0f <4m=%.0f <16m=%.0f >=16m=%.0f]/s\n",
++              ctx_id, (double)ring->wt_batches / secs,
++              100.0 * (double)ring->wt_gap_sum_parkable_ns / (double)elapsed,
++              (double)ring->wt_gap_buckets[0] / secs, (double)ring->wt_gap_buckets[1] / secs,
++              (double)ring->wt_gap_buckets[2] / secs, (double)ring->wt_gap_buckets[3] / secs,
++              (double)ring->wt_gap_buckets[4] / secs, (double)ring->wt_gap_buckets[5] / secs,
++              (double)ring->wt_gap_buckets[6] / secs);
++      ring->wt_batches = 0;
++      ring->wt_gap_sum_parkable_ns = 0;
++      for (unsigned i = 0; i < 7; i++)
++         ring->wt_gap_buckets[i] = 0;
++      ring->wt_last_report_ns = now;
++   }
++}
++
+ static void
+ vkr_ring_wake_trace_add(uint64_t *counter)
+ {
+@@ -250,17 +329,24 @@ vkr_ring_wake_trace_add(uint64_t *counter)
+    const uint64_t elapsed = now - vkr_ring_wake_trace.last_report_ns;
+    if (elapsed >= 5000000000ull) {
+       const double secs = (double)elapsed / 1e9;
++      const uint64_t b = vkr_ring_wake_trace.batches;
+       fprintf(stderr,
+               "[WAKETRACE vkr_ring] poll_sleeps=%.0f/s poll_resumes=%.0f/s parks=%.0f/s "
+-              "park_resumes=%.0f/s\n",
++              "park_resumes=%.0f/s batches=%.0f/s batch_avg=%.0fB batch_max=%uB\n",
+               (double)vkr_ring_wake_trace.sleeps / secs,
+               (double)vkr_ring_wake_trace.poll_resumes / secs,
+               (double)vkr_ring_wake_trace.parks / secs,
+-              (double)vkr_ring_wake_trace.park_resumes / secs);
++              (double)vkr_ring_wake_trace.park_resumes / secs,
++              (double)b / secs,
++              b ? (double)vkr_ring_wake_trace.batch_bytes / (double)b : 0.0,
++              vkr_ring_wake_trace.batch_max);
+       vkr_ring_wake_trace.sleeps = 0;
+       vkr_ring_wake_trace.poll_resumes = 0;
+       vkr_ring_wake_trace.parks = 0;
+       vkr_ring_wake_trace.park_resumes = 0;
++      vkr_ring_wake_trace.batches = 0;
++      vkr_ring_wake_trace.batch_bytes = 0;
++      vkr_ring_wake_trace.batch_max = 0;
+       vkr_ring_wake_trace.last_report_ns = now;
+    }
+ }
+@@ -498,6 +584,8 @@ vkr_ring_thread(void *arg)
+ 
+       const uint32_t cmd_size = vkr_ring_load_tail(ring) - ring->buffer.cur;
+       if (cmd_size) {
++         vkr_ring_wake_trace_batch(cmd_size);
++         vkr_ring_wake_trace_gap(ring, ctx->ctx_id);
+          if (relax_iter >= (1u << 4))
+             vkr_ring_wake_trace_add(&vkr_ring_wake_trace.poll_resumes);
+          if (cmd_size > ring->buffer.size) {
+diff --git a/src/venus/vkr_ring.h b/src/venus/vkr_ring.h
+index f49c92d..705194c 100644
+--- a/src/venus/vkr_ring.h
++++ b/src/venus/vkr_ring.h
+@@ -110,6 +110,16 @@ struct vkr_ring {
+     * relaxed load when no barriers are pending. */
+    atomic_bool has_gkvm_barriers;
+    struct list_head gkvm_barriers;
++
++   /* limina flush-cadence probe (spike venus-ring-doorbell, LIMINA_WAKE_TRACE=1): per-ring
++    * inter-flush gap histogram — decides whether a per-ring poll<->trap switch (lever 2) can
++    * help this ring. Gaps in buckets >= ~1ms are "parkable" (the ring could sleep instead of
++    * poll). Reported per ctx_id ~5s. */
++   uint64_t wt_last_batch_ns;
++   uint64_t wt_last_report_ns;
++   uint64_t wt_batches;
++   uint64_t wt_gap_buckets[7]; /* <40us, <160us, <640us, <1ms, <4ms, <16ms, >=16ms */
++   uint64_t wt_gap_sum_parkable_ns; /* total time in gaps >= 1ms (buckets 4..6) */
+ };
+ 
+ struct vkr_present_fence;

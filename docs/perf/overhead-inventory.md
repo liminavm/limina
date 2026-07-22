@@ -166,6 +166,22 @@ pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
    are latency-trading tuning (relax plateau depth + `idle_timeout`) = the M13 `(visible,power)`
    knob (task 4). The doorbell-handshake and the plateau retune are literally the same lever.**
    Full write-up + code citations: `spikes/venus-ring-doorbell/RESULTS.md`.
+
+   **Flush-cadence probes (#42 follow-on, 2026-07-22) — the concrete M13 lever is now known.**
+   A host-only per-ring gap histogram (LIMINA_WAKE_TRACE batch/gap counters, saved as
+   `spikes/venus-ring-doorbell/vkr-flush-cadence-probe.patch`) on clean-fullscreen blobs found:
+   (1) **two independent ring pollers** — mutter (ctx=3) + firefox (ctx=6); direct scanout quiets
+   mutter's ring ~4× (515→120 flushes/s in fullscreen, 100% parkable). (2) The decisive subtlety:
+   **every gap that reaches the 1 ms `idle_timeout` first walks the full warm plateau (~17
+   poll-sleeps) before parking** — so a ring 100% parkable still burns ~1.9k poll-sleeps/s just
+   walking to an inevitable park (mutter does exactly this on 2 flushes/frame). ~3.5–4k of the
+   ~7.3k poll-sleeps are this plateau-walk on gaps ≥1 ms, where parking earlier is SAFE (guest's
+   1 ms notify rate-limit isn't tripped by ≥1 ms-spaced flushes) and adds ZERO extra doorbells.
+   **So lever 4/plateau-retune = make `warm_rungs` (plateau depth) adaptive to recent inter-flush
+   history** — sparse regime → park after ~4 rungs; tight burst → keep the full responsive
+   plateau. Est. safe win ~3.4k/s (~halving), host-side only, no mutter patch, no guest change.
+   Safety boundary: never park-early on a gap you can't be sure is ≥1 ms (recent-gap history is
+   the signal). This is the M13 task-4 knob, now concretely specified.
 5. ~~Shorten the host wake chain per submission~~ — KILLED, see lever 1: both hops it
    proposed to remove were already absent (doorbell eventfd goes straight to the gpu
    worker's epoll; IRQ inject is in-kernel hv_gic_set_spi from the calling thread).

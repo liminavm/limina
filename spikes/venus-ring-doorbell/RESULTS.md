@@ -158,6 +158,157 @@ on the roadmap (M13 task 4) — not a new spike, not a new protocol.
 
 Same discipline as the #35 gate: the spike's value is preventing a redundant mechanism build.
 
+## Design directions to evaluate later (not yet built)
+
+- **Traffic-rate-driven poll↔trap switch (user idea, 2026-07-22).** Today the poll/park choice is
+  keyed on idle *duration* (`idle_timeout` → park). A cleaner hysteresis: **default to trap
+  (park + doorbell)** — cheap and correct when traffic is sparse — and **switch to polling only
+  once the ring is being *flooded*** ("remove the turnstile"). Sparse desktops pay ~1 doorbell per
+  wake; only a genuine flood (vkmark ping-pong, uncapped GL) pays the poll's timer wakeups, and gets
+  the low pickup latency it actually needs. Composes directly with the flush-cadence finding below:
+  if a frame's work coalesces toward ~1 flush/frame, that IS the "sparse" regime → traps handle it,
+  poll-sleeps vanish. This is the same M13 `(visible,power)` machinery but keyed on measured submit
+  RATE rather than occlusion/power alone — a third input to the selector. Evaluate after the
+  flush-cadence probe (a low submit rate is the precondition that makes trap-by-default cheap).
+
+## Flush-cadence probe (host-only instrumentation)
+
+Probe #1: extend `LIMINA_WAKE_TRACE` with per-drain batch counters (`batches/s`, `batch_avg`,
+`batch_max`) in `vkr_ring_thread`, to learn how many command-batches the host drains per frame and
+their sizes — i.e. whether the ring stays warm because of many small spread-out flushes (coalescing
+headroom → structural win) or a few large forced ones (no headroom → M13 tuning is the ceiling).
+Instrumentation saved as `vkr-flush-cadence-probe.patch` (spike-only; third_party is gitignored).
+
+### Result (2026-07-22) — clean-fullscreen blobs, F44 enhanced (7.1.4-limina16k, mesa 26.1.4-3, virgl 0043 + probe), 6 vCPU, present=60/s, user-confirmed clean fullscreen
+
+| metric | clean fullscreen | overview-composited (artifact) |
+|---|---|---|
+| host wakeups/s (procwake) | **~8,050** (matches the re-baseline 8.1k ✓) | ~9,050 |
+| vkr_ring poll_sleeps/s | **~5,900** (matches 5.9k ✓) | ~6,800 |
+| poll_resumes/s | ~555 | ~800 |
+| parks/s | ~182 (~3/frame) | ~210 |
+| **batches/s (flushes host drains)** | **~1,600 ≈ 26–27 per frame** | ~1,950 |
+| batch_avg | **~575 B** | ~590 B |
+| batch_max | ~7–10 KB | ~12–21 KB |
+
+**FINDING — the ring is fed ~26 small flushes per frame (~575 B each), not ~7.** My earlier
+~7/frame estimate (from `poll_resumes` ~440/s) undercounted badly: `poll_resumes` only counts
+pickups *after a timed sleep*; ~870 of the ~1,600 batches/s are picked up in the cheap
+`thrd_yield` window (relax_iter < 16) and never counted. Derived: ~3.7 poll-sleeps per
+inter-flush gap; average inter-flush gap ≈ 16.6 ms / 26 ≈ **640 µs** — squarely inside the
+40 µs warm plateau and *below* the 1 ms `idle_timeout`, so the ring rarely parks (~3/frame) and
+spends the frame poll-climbing the plateau between the 26 flushes. That IS the 5.9k poll-sleeps.
+
+The flushes are **small** (~575 B; ring buffer is far larger) → they are NOT capacity-forced.
+Something triggers ~26 flushes/frame at ~640 µs spacing. **Coalescing headroom looks real** —
+if a frame's work collapsed toward a handful of flushes, inter-flush gaps would exceed
+`idle_timeout` and the ring would park (doorbell) instead of poll → 5.9k → hundreds/s.
+
+**CAVEAT (drives probe #2): `batches` is summed across ALL active venus rings** (the wake-trace
+uses process-wide statics; one ring thread per venus context). The ~26/frame is the *aggregate*
+of every process feeding venus — plausibly mutter + firefox-main + firefox-content, each with its
+own ring thread independently polling on the 40 µs plateau. So the poll-sleep budget scales with
+the *number of concurrently-active rings*, not just one app's submit rate. In clean unredirected
+fullscreen mutter *should* be direct-scanning firefox's buffer (not compositing) → its ring should
+be parked, but that's unverified. Per-ring attribution is required before claiming firefox alone
+does 26 flushes/frame or that coalescing within one app is the lever.
+
+### Probe #2 RESULT (2026-07-22) — per-ring gap histogram, clean fullscreen, decides lever 2
+
+Extended the probe with a per-ring inter-flush gap histogram (`vkr_ring_wake_trace_gap`, keyed by
+`ctx_id`; buckets <40µs/<160µs/<640µs/<1ms/<4ms/<16ms/≥16ms; "parkable" = fraction of wall time in
+gaps ≥1ms). Same F44 enhanced / blobs / clean-fullscreen (user-confirmed) / present=60/s setup.
+
+**Per-ring, clean fullscreen (representative samples):**
+
+| ring | flushes/s | parkable | dominant gaps/s |
+|---|---|---|---|
+| **ctx=3 mutter** | **120 (2/frame)** | **100%** | ~110 in 4–16ms (nothing < 1ms) |
+| **ctx=6 firefox** | ~1,440 (24/frame) | ~89% | <40µs ~650, <160µs ~375, <640µs ~200, **1–4ms ~110**, 4–16ms ~65 |
+
+(overview state for contrast: mutter jumps to ~515 flushes/s — direct scanout quiets it ~4×.)
+
+**THE key subtlety — "parkable" ≠ "no poll-sleeps".** Every gap that reaches the 1 ms
+`idle_timeout` first **walks the full warm plateau** (16 warm rungs ≈ 610 µs + one 640 µs deep
+sleep ≈ **~17 poll-sleeps**) *before* the ring parks. So a ring can be 100% parkable and STILL
+burn thousands of poll-sleeps/s just walking to the park point:
+- **mutter**: 2 flushes/frame, all gaps ≥4ms, yet ~110 gaps/s × ~17 = **~1,900 poll-sleeps/s**
+  spent walking a plateau it never needed (it was always going to park).
+- **firefox**: the expensive gaps are the **~110/s in 1–4ms** (~2–3/frame, the sync-separated
+  flushes) — each also walks the full ~17-sleep plateau → ~1,900/s — plus the intra-burst
+  <640µs gaps (~200/s × several sleeps). The <40µs gaps (~650/s, ~11/frame) are FREE (caught in
+  the 16-`thrd_yield` window, no timed sleep).
+
+So of the ~7.3k poll-sleeps this run, **~3.5–4k are "plateau-walk to an inevitable park"** on gaps
+that are ≥1ms — where parking earlier is SAFE (the guest's 1 ms notify rate-limit isn't tripped,
+because consecutive flushes are ≥1 ms apart) and adds **zero** extra doorbells (the gap was going
+to park+doorbell anyway). The remaining ~3k are intra-burst <640µs gaps where the ring is genuinely
+active and polling is the right call.
+
+### Lever 2 VERDICT — validated, but reshaped: history-adaptive plateau depth (not a binary poll/trap switch)
+
+The rings are **already** parked 89–100% of the time (idle_timeout does the "trap when idle" job).
+A binary poll↔trap switch adds nothing there. The waste is that the warm plateau — whose *purpose*
+is low-latency pickup for an **actively-fed** ring — is walked **unconditionally on every gap**,
+including the long idle gaps of a mostly-parked ring, where it's ~17 pure-waste sleeps to reach a
+park that was inevitable.
+
+**The win = make the plateau depth adaptive to recent traffic (the user's traffic-rate idea, made
+concrete):** a ring whose recent gaps have been *long* (sparse regime — mutter always; firefox's
+post-burst sync gaps) should park after a **short probe** (~4 rungs) instead of walking all 16;
+a ring in a *tight burst* (recent gaps < ~160µs) keeps the full responsive plateau. Estimated
+safe win: both rings' ≥1ms gaps (~260/s) parking after ~4 rungs instead of ~17 saves ~13×260 ≈
+**~3,400 poll-sleeps/s — roughly halving the total — with no extra doorbells, no mutter patch, no
+guest change.** The hard safety boundary is the guest's 1 ms notify rate-limit: never park-early
+on a gap you can't be confident is ≥1 ms, or the guest may rate-limit-suppress its wake → stall.
+Recent-gap history is exactly the signal that says "we're in a sparse regime, early-park is safe."
+
+This is a refinement of the 0043 adaptive plateau (which resets `relax_iter` per command): add a
+second axis — adapt `warm_rungs` to observed inter-flush history — and let M13 `(visible,power)`
+bias it. It is entirely host-side (virglrenderer), fits the two-tier guarantee (stock guests
+benefit; the rate-limit coupling already exists in stock mesa), and does not touch mutter.
+
+**Compositor angle (for the user's own compositor):** a compositor that direct-scans the fullscreen
+app (mutter already does — 2 flushes/frame) needs to do nothing special; its residual ~1.9k
+plateau-walk is a *host* artifact fixed by the adaptive plateau above, not a compositor change.
+
+**App angle:** firefox's ~24 flushes/frame (esp. the ~2–3 sync-separated 1–4ms gaps) drives the
+intra-burst remainder; reducing app flushes (guest coalescing) would help but is per-app and out of
+scope. The guest-side flush-trigger attribution (mesa `vn_ring` tags) is only worth doing if we
+later want to chase that; the host adaptive plateau is the general, one-place lever.
+
+### (Superseded) Probe #2 as originally scoped — guest mesa flush-trigger tags
+
+Attribute the ~26 flushes/frame: (a) **per-ring breakdown** host-side (tag each batch with
+`ctx->ctx_id`, count rings + flushes/ring — cheap, host-only, tells us how many *processes* feed
+and whether mutter is parked in unredirected fullscreen); (b) **guest-side flush-trigger tags**
+in mesa `vn_ring` (fence-wait / queue-submit / present / ring-full) — the decisive one: how many
+of a single app's flushes are *forced* by a sync point (irreducible) vs *eager* (batchable). If
+most are forced → coalescing lever closes, M13 tuning is the ceiling. If many are eager → the
+structural win (park-per-frame) is real. Start with (a) — it's host-only and may already explain
+much of the count as "N processes each polling."
+
+### Probe #2a partial answer, gathered live (host `sample` + guest `/proc/*/fd`)
+
+**Two active venus rings, each an independent poller:** `vkr-ring-3` = **gnome-shell (mutter)**,
+`vkr-ring-6` = **firefox** (the only two processes holding `/dev/dri/renderD*`). So the aggregate
+~26 flushes/frame and ~5.9k poll-sleeps are **split across a compositor ring + an app ring**, both
+polling the 40 µs plateau concurrently. Notable: even in *clean unredirected fullscreen*, mutter
+keeps an active, feeding ring — it is NOT parked (whether it still composites per-frame or just does
+cursor/bookkeeping is unknown without the per-ring flush split).
+
+**This reshapes the levers:**
+- The poll-sleep budget scales with the **number of concurrently-active venus apps**, not one app's
+  submit rate. A "single fullscreen 3D app" already means ≥2 pollers (compositor + app).
+- A concrete new lever: **can mutter's ring park during unredirected fullscreen** (direct scanout,
+  no compositing)? If so, that's potentially ~half the poll-sleeps gone for the common
+  fullscreen-game case — independent of any per-app coalescing.
+- The user's **traffic-rate poll↔trap hybrid maps naturally onto per-ring state**: a lightly-fed
+  compositor ring would trap/park while a flooded app ring polls. The switch is per-ring, which is
+  exactly where the shared-memory ring already has its own thread + IDLE handshake.
+
+---
+
 **Optional empirical nail (not run):** clamp `idle_timeout` host-side in `vkr_ring_create`
 (ignore the guest's 1ms, use e.g. 100 µs) and measure — expected to surface the stall (§4) as
 frame hitches and/or no net wakeup win. Reasoned + backed by the 0b′ early-park rejection;
