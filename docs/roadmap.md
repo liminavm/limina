@@ -676,11 +676,17 @@ make the vCPU slice a larger relative fraction again).
    AFFINITY_INFO (0xc400_0004)** — both return `NOT_SUPPORTED`, so the dying vCPU busy-spins
    (probe saw the worker hit ~546% CPU) and the reaper polls AFFINITY_INFO forever; re-online is
    also broken (the secondary boot channel `boot_receiver.recv()` is one-shot, consumed at boot).
-   Fix: model CPU_OFF → park the vCPU thread cleanly (reuse the M9 `handle_pause` park machinery,
-   zero host CPU/wakeups); model AFFINITY_INFO (OFF for a parked vCPU, ON otherwise); make CPU_ON
-   re-deliverable at runtime (durable per-vCPU control channel; PC/X0 reset on the owning thread
-   since HVF register access is thread-bound); plus IRQ/vtimer re-affinity on re-online,
-   snapshot-while-offlined state, and CPU_ON↔CPU_OFF race safety.
+   Fix (SHIPPED, libkrun 0094): model CPU_OFF → park the vCPU thread cleanly (reuse the M9
+   `handle_pause` park machinery, zero host CPU/wakeups); model AFFINITY_INFO (OFF for a parked
+   vCPU, ON otherwise); make CPU_ON re-deliverable at runtime (durable per-vCPU control channel;
+   PC/X0 reset on the owning thread since HVF register access is thread-bound); IRQ/vtimer
+   re-affinity on re-online. Guarded by `tests/l2_vcpu_hotplug.rs`.
+   **Known limitation → task #41 (DEFERRED, kept tracked):** the guest-visible online state lives
+   in `VcpuList` and is NOT in the M9 snapshot, so a snapshot taken while a vCPU is offline restores
+   it as online (guest-kernel/host bookkeeping diverges; a later re-online times out gracefully — no
+   wedge). Also CPU_ON has no ALREADY_ON idempotency guard. Deferred 2026-07-22: with #35 dropped the
+   trigger is manual-only + graceful, not worth the M9 snapshot-format-change risk now; revisit if
+   vCPU offlining resurfaces or during an M9 hardening pass.
 2. **Policy — limina-agent (task #35, DROPPED 2026-07-22).** The design would have been:
    agent-driven offline/online under a runnable-task-pressure signal (PSI `cpu`/loadavg/`nr_running`)
    with hysteresis + interactivity guardrails (never offline cpu0; step one at a time; fast re-online
