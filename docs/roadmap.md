@@ -100,6 +100,18 @@ seated-desktop + iosdump oracles. Capture protocols + divergence notes in
 **Rule: fix bugs RED-first.** Every bug fix starts with a failing test that reproduces it (see
 CLAUDE.md). L1 is what makes this cheap enough to always do.
 
+**Backlog — programmatic key/input injection into the guest (test + agent tooling).** Driving a
+windowed guest today relies on host-side osascript `System Events` keystrokes, which is unreliable:
+macOS intercepts function keys (F11 = *Show Desktop* on the host, never reaching the guest), lone
+modifiers may not route to the window, and the mapping is opaque (F12 vs F11 keycode confusion cost
+a detour during the 2026-07-22 wakeup re-baseline). We already own the guest keyboard/pointer
+(`--input-kbd-fd`/`--input-ptr-fd`, evdev). Add a **host→guest synthetic-input path** that writes
+evdev events directly into those devices, exposed as (a) a control-plane message and (b) a CLI/test
+helper (`limina sendkey <combo>` / a harness API on the `Guest` type), so automation and agent
+driving of a windowed VM is deterministic and independent of the macOS event system. Pairs with the
+GNOME state problem hit above: kiosk-mode app launch is the workaround; robust key injection is the
+fix. Small; unblocks scripted UI tests and reliable agent control of the desktop.
+
 ---
 
 ## Milestone 1 — Boot Fedora-Workstation-43.raw to a serial console
@@ -1238,6 +1250,13 @@ enhanced guest layers on backpressure + agent-driven compositor throttle. Detect
 3. **`vm.toml` policy config** (a `[power]`/`[render]` section: enable, occluded-fps, battery-fps
    cap, follow-low-power-mode) + defaults + disable switch.
 4. **Guest backpressure** via fence-feedback pacing (mechanism knob) + relax bias on occlusion.
+   Also make the **vkr relax aggressiveness itself a `(visible, power)` function** — not just
+   occluded→deep-idle. Measured 2026-07-22 (`spikes/wakeup-probe/RESULTS.md`): the shipped 0043
+   responsive 40 µs warm plateau costs ~5,900 vkr_ring poll-sleeps/s under a *visible* 60 fps blobs
+   workload (host wakeups ~8.1k/s) vs ~1,900/s for the old flat-640 cap (~4.2k/s) — the plateau's
+   low latency is worth it for focused+AC game-latency, but a 60 fps-capped / battery / background
+   workload would prefer the deeper backoff. Fold that knob into this policy (a control-plane or env
+   selector for plateau depth) instead of a static retune.
 5. **Enhanced-tier agent throttle:** a control-plane host→guest "target rate" message → `limina-agent`
    → mutter frame-rate hint.
 

@@ -7,9 +7,11 @@ plan to trim them down to the absolute minimum.*
 Specimen: 6-vCPU enhanced F44 guest (kernel 7.1.4-limina16k, coexist venus/KK), windowed
 1512x982, firefox running the blobs WebGL demo at ~60 fps steady. Dev M1 Max. Probes:
 `spikes/wakeup-probe/procwake.c` (host, `proc_pid_rusage`), guest `/proc/interrupts` deltas,
-guest `perf -e ipi:ipi_raise`, host `sample`. NOTE: numbers were taken while the guest mesa
-still had the vn_ring free-list bug (patches/mesa/0017); re-baseline after it ships — the
-malloc/scan churn inflates guest CPU but the *wakeup* budget below is structural.
+guest `perf -e ipi:ipi_raise`, host `sample`. NOTE: the ORIGINAL headline numbers below were
+taken while the guest mesa still had the vn_ring free-list bug (patches/mesa/0017). Re-baselined
+2026-07-22 on the shipped image (mesa 26.1.4-3.limina, virgl 0043) — guest CPU is now flat (no
+creep, lever 6) and the current 60 fps common-case wakeup rate is ~8.1k/s (lever 0b′); the
+malloc/scan churn is gone but the *wakeup* budget below is structural.
 
 ## The headline numbers (worker process, under load)
 
@@ -98,8 +100,18 @@ pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
    a 640 µs deep-idle fallback / park. Result: **vkmark ~2360 (≈2× cap=640) with idle
    wakeups unchanged (~270/s)**, load wakeups ~18.4k/s under vkmark's worst-case continuous
    submit. See spikes/wakeup-probe/RESULTS.md for the full table; ~18.4k is the uncapped
-   ceiling — a vsync-capped 60 fps workload sits far closer to the ~270/s idle floor
-   (unmeasured against 0043, a TODO).
+   ceiling.
+   **60 fps common-case re-baseline — MEASURED 2026-07-22 (closed the TODO; virgl 0043 +
+   mesa 0017, 6 vCPU): idle ~130/s, vkcube ~3.2k/s, clean-fullscreen blobs ~8.1k/s**
+   (overview-compositing adds ~2.7k — measure fullscreen only). Wake-trace: the plateau is
+   NOT free at a *visible* 60 fps — vkr_ring poll-sleeps ~5.9k/s (vs ~1.9k for old flat-640),
+   the whole 4.2k→8.1k rise, because blobs feeds the ring in small per-frame submits so
+   relax_iter keeps resetting onto the 40 µs plateau. Still −56% vs 18.6k; cheap timer
+   wakeups. DECISION (user 2026-07-22): keep 0043 shipped, make plateau depth a `(visible,power)`
+   knob under M13 (roadmap M13 task 4) rather than a static retune. The user is **not fully happy
+   with the plateau tuning** and believes we can do better — deliberately **parked for another pass
+   POST-M13**, revisited together with the vkr doorbell-handshake idea (lever 4) since they're the
+   same lever. Not a static retune now.
 
 1. **Doorbell-path shortening — PREMISE KILLED 2026-07-21 (source-verified during #38).**
    The GPU doorbell is already direct (vCPU MMIO write at 0x50 → queue eventfd → gpu
@@ -126,14 +138,33 @@ pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
    Revisit ONLY if topology + EVENT_IDX leave us far from the kernel_task-sum bar.
 3. **virtio EVENT_IDX on the remaining devices (vsock, input, snd) — small.** The GPU got it
    in lever 0; vsock is the only other chatty one (control plane + timesync). Same recipe.
-4. **venus notify throttle.** Mesa already rate-limits `vkNotifyRingMESA` to 1/ms
-   (`VN_RING_IDLE_TIMEOUT_NS`); the host ring parks on cnd_wait (virgl 0003). Check the
-   remaining kick rate under load; the ring being ACTIVE should need zero doorbells — verify.
+4. **venus notify throttle — VERIFIED 2026-07-22, no throttle win.** Mesa already rate-limits
+   `vkNotifyRingMESA` to 1/ms (`VN_RING_IDLE_TIMEOUT_NS`); the host ring parks on cnd_wait
+   (virgl 0003). Wake-trace under clean-fullscreen blobs confirms the ACTIVE venus ring is
+   **poll-driven, not doorbell-driven** — the ~485/s gpu_worker "doorbells" are structural
+   virtio-gpu submit-queue kicks (~8/frame), NOT venus-ring notifies. Nothing to *throttle* here.
+   **BUT — a down-the-line lever (post-M13): make the active ring doorbell-driven via a
+   wakeup-suppression HANDSHAKE, not a naive block-on-notify.** The ~5.9k vkr_ring poll-sleeps
+   (lever 0b′) are the dominant remaining term. A plain "host blocks, guest kicks every submit"
+   is a NET LOSS — it trades cheap host nanosleep wakeups for guest vmexits (each notify is an
+   MMIO trap host-ward), and mesa deliberately does NOT notify while actively submitting because
+   it assumes the host polls; the poll window catches ~440 resumes/s that would each need a
+   doorbell. The winning form is the **EVENT_IDX pattern (shipped for the virtio-gpu queue in
+   0091) applied to the vkr ring** (shared-memory, not a virtio queue, so it doesn't get it for
+   free): host publishes "parked at ring position X" before blocking on a futex/cnd; guest kicks
+   ONLY when it advances past a parked host, silent (no vmexit) whenever the host keeps up by
+   polling. Eliminates the poll-sleeps without a notify-per-submit. Composes with the M13
+   `(visible,power)` knob (occluded/battery → park-and-doorbell sooner; focused/AC → poll for
+   latency) — SAME lever as the plateau retune below, so revisit both together post-M13.
 5. ~~Shorten the host wake chain per submission~~ — KILLED, see lever 1: both hops it
    proposed to remove were already absent (doorbell eventfd goes straight to the gpu
    worker's epoll; IRQ inject is in-kernel hv_gic_set_spi from the calling thread).
-6. **Re-baseline after mesa 0017** (free-list fix) — guest venus encode pp should drop and
-   stay flat over hours; keep a long-soak procwake trace as the regression oracle.
+6. **Re-baseline after mesa 0017** (free-list fix) — **VERIFIED FLAT 2026-07-22.** ~14 min
+   clean-fullscreen blobs soak on the shipped image (mesa 26.1.4-3.limina): firefox lifetime
+   average 114s CPU / 835s elapsed = 13.65%, instantaneous %CPU 13.7% — they MATCH, so
+   per-frame cost is flat over the whole run (a quadratic free-list creep would push
+   instantaneous well above the lifetime average). Matches the documented GREEN post-0017
+   signature (flat ~14%) vs the RED bug (19.6→29.3% creep). No creep; 0017 holding.
 
 ## Reproduction
 

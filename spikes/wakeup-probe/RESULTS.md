@@ -316,3 +316,54 @@ closer to the ~270/s idle floor. The blobs 60 fps A/B numbers earlier in this fi
 re-measured against 0043; the 60 fps wakeup delta from the plateau is expected small but is a
 TODO. Oracle: `spikes/wakeup-probe/ab-vkmark.sh <label>` (fresh clone → venus boot → idle
 sample → vkmark ×N with per-run wakeup sampling → teardown) built each leg here.
+
+**UPDATE (2026-07-22): that "expected small" guess was WRONG — the 60 fps re-baseline below
+measures the plateau's common-case cost at ~4k/s, not small.** See the next section.
+
+## 60 fps common-case re-baseline vs 0043 (2026-07-22) — the plateau is NOT free at 60 fps
+
+Closing the TODO above. Fresh COW clone of `Fedora-Workstation-44.enhanced.raw` (kernel
+7.1.4-limina16k, **mesa 26.1.4-3.limina with the 0017 free-list fix**), 6 vCPU, windowed
+venus+net, current shipped worker (virgl 0043). procwake 5s×5 + guest `/proc/interrupts` 10s
+deltas + `LIMINA_WAKE_TRACE` attribution. **Method note (load-bearing):** the windowed guest
+MUST be in **clean fullscreen** (unredirected scanout) before measuring — a firefox launched
+into an undismissed GNOME **Activities overview** makes mutter composite every frame and adds
+~2.7k/s of pure artifact. Get there with `firefox --kiosk <url>` (robust) — NOT host osascript
+function keys (F11 = macOS *Show Desktop*, hits the host; see the key-injection roadmap backlog).
+
+| workload (0043 + mesa 0017, 6 vCPU) | host wakeups/s |
+|---|---|
+| idle (seated desktop, no GPU) | **~130/s** (better than the ~270 claimed; deep-idle backoff) |
+| vkcube (light 60 fps venus, one cube) | ~3,200/s |
+| **blobs, clean fullscreen 60 fps** | **~8,100/s** |
+| blobs, overview-composited 60 fps (artifact) | ~10,800/s |
+
+Guest half under clean-fullscreen blobs (unchanged from the historical 60 fps specimen, i.e.
+the workload is the same): IPI1 ~4,390/s, arch_timer ~2,910/s, virtio5 (GPU fence IRQ) ~491/s.
+
+Wake-trace decomposition of the clean 8.1k, vs the prior-session 0041 (flat-640, quad rungs):
+
+| source | 0043 adaptive (now) | 0041 flat-640 (prior) |
+|---|---|---|
+| **vkr_ring poll_sleeps** | **~5,900/s** | ~1,900/s |
+| gpu_worker doorbells (control) | ~485/s | ~672/s |
+| present | ~56/s | ~60/s |
+| fence callbacks → IRQ | ~235/s | ~240/s |
+| event_manager | 6/s | 6/s |
+
+FINDING: the entire 4.2k → 8.1k rise is **vkr_ring poll-sleeps tripling** (1.9k → 5.9k). blobs
+feeds the ring in many small submits per frame (WebGL + compositor), so `relax_iter` keeps
+resetting and the ring sits almost continuously on the responsive 40 µs warm plateau → ~5,900
+cheap nanosleep expiries/s. The flat-640 cap slept 640 µs regardless → far fewer. This is 0043
+doing exactly what it was designed to (stay responsive for actively-fed rings) — it's the
+latency-vs-wakeups trade, now quantified on the 60 fps case. Both are big wins over the 18.6k
+original (−56% and −77%); these are cheap timer wakeups, not real work.
+
+DECISION (2026-07-22, user): **leave 0043 as shipped** — the responsive plateau is worth it for
+game/interactive latency, 8.1k is a fine common-case number, and instead of a static retune the
+plateau depth becomes a **`(visible, power)`-keyed knob under M13** (focused+AC → responsive;
+60 fps-capped / battery / occluded → deep backoff). Folded into `docs/roadmap.md` M13 task 4.
+
+Lever 4 (venus notify / doorbell) also answered here: the ACTIVE venus ring is **poll-driven,
+not doorbell-driven** (venus notify throttle working); the ~485/s gpu_worker "doorbells" are
+structural virtio-gpu submit-queue kicks (~8/frame), not venus-ring notifies — no easy win.
