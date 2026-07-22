@@ -1,0 +1,165 @@
+diff --git a/src/venus/vkr_ring.c b/src/venus/vkr_ring.c
+index b63d473..24a6a82 100644
+--- a/src/venus/vkr_ring.c
++++ b/src/venus/vkr_ring.c
+@@ -266,31 +266,41 @@ vkr_ring_wake_trace_add(uint64_t *counter)
+ }
+ 
+ static void
+-vkr_ring_relax(uint32_t *iter)
++vkr_ring_relax(uint32_t *iter, uint32_t warm_rungs)
+ {
+-   /* gkvm (host-wakeup trim, adaptive plateau — measured A/B, task #38/#39):
++   /* gkvm (host-wakeup trim, adaptive plateau — measured A/B, task #38/#39; plateau DEPTH
++    * made adaptive, task #42):
+     *
+     * An idle ring is polled on a two-phase backoff. The first 16 spins are a cheap
+     * thrd_yield (no timed wakeup). Then a RESPONSIVE PLATEAU: short sleeps ramping
+-    * 10 -> 40 us and holding at 40 us for warm_rungs rungs (~640 us of continued
+-    * idle). Only once the ring has stayed idle PAST the plateau does it fall back
+-    * to a DEEP-IDLE sleep of 640 us.
++    * 10 -> 40 us and holding at 40 us for `warm_rungs` rungs. Only once the ring has stayed
++    * idle PAST the plateau does it fall back to a DEEP-IDLE sleep of 640 us.
+     *
+     * Why two phases: relax_iter resets to 0 on every processed command, so an
+     * actively-fed ring (a game / uncapped GL, whose inter-submit gaps are a few
+     * hundred us) never leaves the plateau -> ~40 us worst-case pickup latency ->
+     * full throughput. A quiet desktop (idle gaps of milliseconds+) crosses the
+-    * plateau once and then sleeps at 640 us -> ~1.5k wakeups/s, preserving the
+-    * idle-wakeup win. Measured on vkmark (uncapped, submit-latency-bound): a flat
+-    * 640 us cap scored 1193 at 11k wakeups/s and a flat 40 us cap scored ~2340 but
+-    * would sleep ~25k/s at idle; this plateau scores ~2340 at ~18k under load while
+-    * holding ~1.5k at true idle. (Upstream slept once per ITERATION, ~15.5k
+-    * wakeups/s — the original regression this whole path fixes.) */
++    * plateau once and then sleeps at 640 us. Measured on vkmark (uncapped,
++    * submit-latency-bound): a flat 640 us cap scored 1193 at 11k wakeups/s and a flat
++    * 40 us cap scored ~2340 but would sleep ~25k/s at idle; this plateau scores ~2340
++    * at ~18k under load while holding low at true idle. (Upstream slept once per
++    * ITERATION, ~15.5k wakeups/s — the original regression this whole path fixes.)
++    *
++    * PLATEAU DEPTH is now caller-supplied (`warm_rungs`) and adapts to the ring's recent
++    * inter-flush cadence (see vkr_ring_thread): a bursting ring keeps the full warm plateau
++    * (WARM_RUNGS_MAX) for low latency; a ring in a demonstrably SPARSE regime (recent gaps
++    * long, i.e. it keeps walking to the idle_timeout park) uses a MINIMAL plateau so it
++    * reaches the deep-idle sleep in a few rungs instead of ~16, cutting the "plateau-walk to
++    * an inevitable park" poll-sleeps. This never parks earlier than idle_timeout, so the
++    * guest notify-rate-limit handshake is untouched — it only makes the mandatory pre-park
++    * poll window coarser when a flush is unlikely to land in it. (task #42: measured on
++    * clean-fullscreen blobs the plateau-walk was ~3-4k/s of the wakeups; a purely idle/
++    * parking ring like the fullscreen compositor burnt ~1.9k/s walking a plateau it never
++    * needed.) */
+    const uint32_t busy_wait_order = 4;
+    const uint32_t base_sleep_us = 10;
+    const uint32_t warm_sleep_us = 40;  /* responsive plateau: low pickup latency for active rings */
+    const uint32_t idle_sleep_us = 640; /* deep-idle backoff: few wakeups on a quiet desktop */
+-   const uint32_t warm_rungs = 16;     /* plateau length before falling back to deep idle */
+ 
+    (*iter)++;
+    if (*iter < (1u << busy_wait_order)) {
+@@ -316,6 +326,53 @@ vkr_ring_relax(uint32_t *iter)
+ #endif
+ }
+ 
++/* task #42: choose the warm-plateau depth for the UPCOMING idle period from a longer-period
++ * PROFILE of the ring, not immediate gap history. Called once per drain with the drain time;
++ * it updates the profile (has the ring gone genuinely long-idle recently?) and returns the
++ * plateau depth for the next idle period.
++ *
++ * The insight: the expensive "plateau-walk" happens on the inter-frame idle gap, which FOLLOWS
++ * a burst — so immediate history (the just-ended gaps) can't predict it. But over a longer
++ * window the REGIME is obvious: a vsync-capped app goes long-idle once per frame (it has
++ * per-cycle slack), while a saturated, submit-latency-bound app (uncapped vkmark) never does.
++ * In the CAPPED/SLACK regime we coarsen EVERY gap — safe because the regime itself guarantees
++ * the <=640 us pickup latency is hidden by the slack (empirically: forcing the minimal plateau
++ * held a steady 60 fps). In the SATURATED regime we keep the full responsive plateau. The
++ * classifier: a long idle (>= long_idle_ns, a genuine vsync-like gap that no tight-submit
++ * workload produces) seen within the last slack_window_ns => capped => minimal plateau.
++ * Never changes when the ring parks (idle_timeout), so the guest notify handshake is untouched.
++ * Env-tunable for A/B. */
++static uint32_t
++vkr_ring_profile_warm_rungs(struct vkr_ring *ring, uint64_t drain_now)
++{
++   static int inited = 0;
++   static uint32_t warm_max = 16, warm_min = 2;
++   static uint64_t long_idle_ns = 2000000ull;      /* 2 ms: a genuine per-cycle idle gap */
++   static uint64_t slack_window_ns = 100000000ull; /* 100 ms (~6 frames): remember the regime */
++   if (!inited) {
++      const char *e;
++      if ((e = getenv("LIMINA_RELAX_WARM_MAX")))
++         warm_max = (uint32_t)atoi(e);
++      if ((e = getenv("LIMINA_RELAX_WARM_MIN")))
++         warm_min = (uint32_t)atoi(e);
++      if ((e = getenv("LIMINA_RELAX_LONG_IDLE_US")))
++         long_idle_ns = (uint64_t)atoi(e) * 1000ull;
++      if ((e = getenv("LIMINA_RELAX_SLACK_MS")))
++         slack_window_ns = (uint64_t)atoi(e) * 1000000ull;
++      inited = 1;
++   }
++
++   if (ring->relax_last_drain_ns &&
++       drain_now - ring->relax_last_drain_ns >= long_idle_ns)
++      ring->relax_last_long_idle_ns = drain_now;
++   ring->relax_last_drain_ns = drain_now;
++
++   return ring->relax_last_long_idle_ns &&
++                drain_now - ring->relax_last_long_idle_ns < slack_window_ns
++             ? warm_min
++             : warm_max;
++}
++
+ static bool
+ vkr_ring_submit_cmd(struct vkr_ring *ring,
+                     const uint8_t *buffer,
+@@ -448,6 +505,8 @@ vkr_ring_thread(void *arg)
+ 
+    uint64_t last_submit = vkr_ring_now();
+    uint32_t relax_iter = 0;
++   uint32_t warm_rungs = 16; /* task #42: plateau depth for the current idle period; the profile
++                              * classifier updates it per drain. Starts responsive. */
+    int ret = 0;
+    while (ring->started) {
+       /* gkvm (#8): everything decoded so far has fully executed — fire any
+@@ -500,6 +559,11 @@ vkr_ring_thread(void *arg)
+       if (cmd_size) {
+          if (relax_iter >= (1u << 4))
+             vkr_ring_wake_trace_add(&vkr_ring_wake_trace.poll_resumes);
++
++         /* task #42: update the longer-period profile and pick the plateau depth for the next
++          * idle period (capped/slack ring => coarse, saturated/latency-bound => responsive). */
++         warm_rungs = vkr_ring_profile_warm_rungs(ring, vkr_ring_now());
++
+          if (cmd_size > ring->buffer.size) {
+             vkr_log("%s: cmd_size(%u) > ring->buffer.size(%u)", __func__, cmd_size,
+                     ring->buffer.size);
+@@ -534,7 +598,7 @@ vkr_ring_thread(void *arg)
+             }
+          }
+ 
+-         vkr_ring_relax(&relax_iter);
++         vkr_ring_relax(&relax_iter, warm_rungs);
+       }
+    }
+ 
+diff --git a/src/venus/vkr_ring.h b/src/venus/vkr_ring.h
+index f49c92d..fcd4a3c 100644
+--- a/src/venus/vkr_ring.h
++++ b/src/venus/vkr_ring.h
+@@ -110,6 +110,18 @@ struct vkr_ring {
+     * relaxed load when no barriers are pending. */
+    atomic_bool has_gkvm_barriers;
+    struct list_head gkvm_barriers;
++
++   /* limina adaptive relax plateau depth (task #42): the warm-plateau length is chosen per
++    * idle period from a longer-period PROFILE of the ring's cadence, not immediate history.
++    * `relax_last_drain_ns` timestamps the previous drain (drain-to-drain gaps span parks);
++    * `relax_last_long_idle_ns` timestamps the last "long" idle gap (>= long_idle threshold, a
++    * genuine vsync-like idle). If a long idle occurred within the recent slack window the ring
++    * is in a CAPPED/SLACK regime (it regularly goes idle, e.g. a vsync-capped app) => it can be
++    * polled coarsely, the <=640us pickup latency hidden by its per-cycle slack. If it has NOT
++    * gone long-idle recently it is SATURATED/latency-bound (e.g. uncapped vkmark) => keep the
++    * full responsive plateau. Never affects when the ring parks (idle_timeout). */
++   uint64_t relax_last_drain_ns;
++   uint64_t relax_last_long_idle_ns;
+ };
+ 
+ struct vkr_present_fence;

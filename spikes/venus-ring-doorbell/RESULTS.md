@@ -277,6 +277,109 @@ intra-burst remainder; reducing app flushes (guest coalescing) would help but is
 scope. The guest-side flush-trigger attribution (mesa `vn_ring` tags) is only worth doing if we
 later want to chase that; the host adaptive plateau is the general, one-place lever.
 
+## Implementation attempt — adaptive plateau DEPTH (2026-07-22)
+
+Implemented adaptive `warm_rungs` in `vkr_ring_relax` (saved as
+`spikes/venus-ring-doorbell/vkr-adaptive-plateau-depth.patch`, env-tunable
+`LIMINA_RELAX_WARM_MAX/MIN/SPARSE_AFTER`): a per-ring counter of consecutive "long" gaps
+(≥640µs, i.e. gaps that walked into the deep-idle/park region); after `sparse_after` of them the
+ring uses a MINIMAL warm plateau (park-walk in ~4 sleeps instead of ~17). Never parks before
+`idle_timeout` → guest notify-rate-limit handshake untouched. Verified loaded (symbol present,
+worker maps our prefix).
+
+**Mechanism — VALIDATED (decisive).** Forcing the minimal plateau for *all* rings
+(`LIMINA_RELAX_WARM_MAX=LIMINA_RELAX_WARM_MIN=2`), same overview state as the ~6.8k baseline:
+**poll_sleeps 6.8k → ~2.2k, present still 60/s.** So coarsening the pre-park poll window delivers
+a ~3× cut — the plateau-walk really is most of the budget, and cutting it doesn't stop rendering.
+
+**Detector at default (`sparse_after=2`) — INERT on the interactive workload.** Clean-fullscreen
+blobs poll_sleeps stayed ~5.9k (unchanged). Root cause, and it's **fundamental, not a tuning miss**:
+the expensive plateau-walk happens on the **inter-frame idle gap**, which **follows a burst**. A
+vsync-capped app's frame = [burst of short-gap flushes] → [one long idle gap to the next vsync].
+The burst's short gaps keep resetting `consec_long` to 0, so when the ring *enters* the long idle
+gap it's at `warm_max` and walks the full ~17-sleep plateau before parking. **No gap-history signal
+can predict that the post-burst gap will be long** — history says "we were just bursting."
+
+And you can't fix it by globally shortening the warm phase: vkmark's submit-latency-bound gaps are
+~400–640µs — exactly what the 640µs warm plateau was tuned (in 0043) to cover. Shorten it and
+vkmark's throughput falls back off the cliff. So **there is no safe static / gap-history default
+that wins the vsync-capped case without regressing vkmark.**
+
+## Verdict — mechanism proven, ship it under the M13 signal (not gap-history)
+
+The distinguishing signal between "coarsen freely" and "must stay responsive" is **not recent gap
+history — it's whether the ring is latency-bound**: a **vsync-capped / occluded / battery** app can
+always coarsen (the added ≤640µs pickup latency is hidden by the frame budget — proven: forced
+warm=2 held 60fps), while an **uncapped, submit-latency-bound** app (vkmark, uncapped game) must
+keep the responsive plateau. That is precisely the **M13 `(visible, power)` (and vsync-capped)
+state**, known directly — whereas gap-history is a proxy that provably can't see the post-burst
+idle coming.
+
+So: **the adaptive-plateau-depth mechanism is the right vehicle and is proven (~3× cut, no
+early-park, no guest change, no mutter patch), but it must be driven by the M13 signal, not a
+standalone gap-history heuristic.** Landing:
+- Mechanism saved as `vkr-adaptive-plateau-depth.patch` (env-tunable `warm_rungs`); becomes a
+  virglrenderer patch when M13 wires the signal to select `warm_rungs` per ring.
+- M13 drives it: vsync-capped/occluded/battery ring → minimal plateau (≈ the forced-warm=2 win,
+  ~3× fewer poll-sleeps); focused + uncapped/AC → full responsive plateau (vkmark-safe).
+- The gap-history detector is kept in the patch as a *fallback* for genuinely-never-bursting rings
+  (idle/background apps) where it's safe and non-inert, but it is NOT the primary signal.
+- **Guardrail before shipping under M13: a vkmark A/B** confirming the "uncapped ⇒ full plateau"
+  path leaves the ~2360 score intact (by construction it should — uncapped rings never enter the
+  coarsen state — but confirm empirically).
+
+This is the same conclusion the earlier analysis reached from the other direction: the doorbell-
+handshake / plateau-retune / "lever 2" all converge on **one M13 knob**, and probe-driven work has
+now (a) proven the mechanism and its magnitude, (b) built the mechanism, and (c) established that
+its driving signal is M13's visibility/vsync/power state, not anything the ring can infer locally.
+
+## UPDATE — longer-period PROFILE detector makes it a STANDALONE win (2026-07-22)
+
+The "needs M13" verdict above was too pessimistic — it assumed the detector had to *predict the
+next gap* from immediate history (which can't work). The user's idea: don't predict the gap,
+**classify the regime over a longer window**. A vsync-capped app goes genuinely long-idle once per
+frame (per-cycle slack); a saturated submit-latency-bound app (uncapped vkmark) never does. In the
+capped regime you coarsen EVERY gap — safe *because the regime guarantees slack* (the ≤640µs pickup
+latency is hidden). No need to predict which gap is long.
+
+Implemented as `vkr_ring_profile_warm_rungs` (replaces the consec-long detector;
+`vkr-adaptive-plateau-depth.patch`, env-tunable): a per-ring signal "has this ring had a **long
+(≥2 ms) idle gap within the last 100 ms**?" → yes = capped/slack → minimal plateau; no = saturated →
+full responsive plateau. The "longer period" is the 100 ms (~6 frame) slack window, so a burst's
+short gaps no longer fool it. Starts responsive; never changes the park time (idle_timeout).
+
+**A/B — both axes win (defaults long_idle=2ms, slack=100ms, warm_min=2, warm_max=16):**
+
+| workload | metric | baseline (0043) | profile build | result |
+|---|---|---|---|---|
+| **blobs, clean fullscreen 60 fps** (vsync-capped ⇒ coarsen) | vkr_ring poll_sleeps/s | ~5,900 | **~1,750** | **−70% (~3.4×)** |
+| | host wakeups/s (procwake) | ~8,100 | **~4,000** | **−51% (~2×)** |
+| | present | 60/s | **60/s** | held |
+| **vkmark** (saturated ⇒ stay responsive) | Score | ~2,360 | **2,289** (vertex 2212 / texture 2367 FPS) | responsive — **NOT** the cap=640 cliff (1193) |
+
+The profile correctly classified: firefox+mutter (regular per-frame long idles) → coarsen → the ~3×
+poll-sleep cut; vkmark (continuous sub-ms gaps, no long idle) → responsive → score intact. This is
+the forced-warm=2 magnitude, achieved *selectively and safely*.
+
+## FINAL VERDICT — standalone shippable win (M13 composes, isn't required)
+
+The adaptive plateau depth with the **longer-period profile detector** is a self-tuning, per-ring,
+host-side win: **−70% vkr_ring poll-sleeps / −50% host wakeups on the visible 60 fps common case,
+vkmark throughput intact, guest-transparent, no mutter patch, no early-park (guest notify handshake
+untouched).** It does NOT need the M13 signal — the ring derives "capped vs latency-bound" from its
+own traffic profile. M13 **composes** later: `(visible, power)` can bias the thresholds (e.g. on
+battery, lower `long_idle`/raise coarseness; occluded → coarsen hardest).
+
+Promote `vkr-adaptive-plateau-depth.patch` to a real `patches/virglrenderer/` patch. Remaining
+before ship:
+- **Human eyeball on blobs smoothness in coarsen mode** — NOT yet captured (firefox WebGL got flaky
+  on re-launch this session, the known scanout-automation flakiness; `present=60/s` held steady
+  throughout the measured window as a strong proxy, but a human confirm of no micro-stutter is the
+  proper gate).
+- **Full vkmark-suite A/B** (this run was 2 scenes, 2289; confirm the whole suite stays ≈2360).
+- Tune check: `long_idle=2ms`/`slack=100ms` defaults chosen from the blob profile; confirm they
+  hold for 30 fps-capped and ~120 fps-capped apps (the regime test should scale, but verify).
+
 ### (Superseded) Probe #2 as originally scoped — guest mesa flush-trigger tags
 
 Attribute the ~26 flushes/frame: (a) **per-ring breakdown** host-side (tag each batch with

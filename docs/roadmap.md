@@ -1301,6 +1301,31 @@ enhanced guest layers on backpressure + agent-driven compositor throttle. Detect
    (direct scanout already quiets the compositor ring 4×), NO guest change. Safety boundary: never
    park-early on a gap you can't be sure is ≥1 ms. The `(visible, power)` signal biases the same
    knob. This subsumes the former "doorbell-handshake" and "plateau retune" — one lever.
+   **Mechanism BUILT + PROVEN 2026-07-22 (`spikes/venus-ring-doorbell/vkr-adaptive-plateau-depth.patch`):**
+   adaptive `warm_rungs` in `vkr_ring_relax`, env-tunable. Forcing the minimal plateau cut
+   clean/overview poll-sleeps ~3× (6.8k→2.2k) at a steady 60 fps — the plateau-walk really is most
+   of the budget and coarsening it doesn't stop rendering. **Key finding: the driving signal must be
+   THIS task's `(visible, vsync-capped, power)` state, NOT a per-ring gap-history heuristic.** The
+   expensive plateau-walk is on the *inter-frame idle gap that follows a burst*, which gap-history
+   can't predict (the burst resets any "recently long" counter); and globally shortening the warm
+   phase re-hurts vkmark (its ~400–640 µs gaps are what the 640 µs plateau protects — the 0043
+   trade). A vsync-capped/occluded/battery ring can always coarsen (the ≤640 µs added latency is
+   hidden by the frame budget — proven, held 60 fps); an uncapped submit-latency-bound ring (vkmark)
+   must keep the full plateau. So M13 selects `warm_rungs` per ring from the visibility/vsync/power
+   state. **Ship guardrail: a vkmark A/B confirming the uncapped path keeps the ~2360 score.** The
+   gap-history detector stays in the patch as a safe fallback for never-bursting rings only.
+   **UPGRADE 2026-07-22: a longer-period PROFILE detector makes this a STANDALONE win, M13 not
+   required.** Instead of predicting the next gap from immediate history (can't be done — the
+   costly walk follows a burst), classify the *regime* over a ~100 ms window: "has this ring had a
+   long (≥2 ms) idle gap recently?" → vsync-capped/slack ⇒ coarsen every gap (safe, slack hides the
+   latency); saturated/latency-bound (vkmark) ⇒ full plateau. A/B (defaults long_idle=2ms,
+   slack=100ms): clean-fullscreen blobs **poll_sleeps ~5.9k→~1.75k (−70%), host wakeups ~8.1k→~4.0k
+   (−50%), present held 60/s**; **vkmark stayed responsive (Score 2289, NOT the 1193 cliff)**. So
+   the mechanism self-tunes per ring from its own traffic — ship it standalone
+   (`vkr-adaptive-plateau-depth.patch` → a real virglrenderer patch); M13 `(visible, power)` then
+   only *biases the thresholds* (battery → coarsen harder). Remaining before ship: human eyeball on
+   blobs smoothness (present=60 proxy only so far — firefox re-launch got flaky) + full vkmark-suite
+   A/B + confirm the 2ms/100ms defaults scale to 30/120 fps caps.
 5. **Enhanced-tier agent throttle:** a control-plane host→guest "target rate" message → `limina-agent`
    → mutter frame-rate hint.
 
