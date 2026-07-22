@@ -348,37 +348,52 @@ Implemented as `vkr_ring_profile_warm_rungs` (replaces the consec-long detector;
 full responsive plateau. The "longer period" is the 100 ms (~6 frame) slack window, so a burst's
 short gaps no longer fool it. Starts responsive; never changes the park time (idle_timeout).
 
-**A/B — both axes win (defaults long_idle=2ms, slack=100ms, warm_min=2, warm_max=16):**
+**A/B — blobs win holds, but the vkmark GATE FAILS (defaults long_idle=2ms, slack=100ms, warm_min=2, warm_max=16):**
 
 | workload | metric | baseline (0043) | profile build | result |
 |---|---|---|---|---|
-| **blobs, clean fullscreen 60 fps** (vsync-capped ⇒ coarsen) | vkr_ring poll_sleeps/s | ~5,900 | **~1,750** | **−70% (~3.4×)** |
-| | host wakeups/s (procwake) | ~8,100 | **~4,000** | **−51% (~2×)** |
+| **blobs, clean fullscreen 60 fps** (vsync-capped ⇒ coarsen) | vkr_ring poll_sleeps/s | ~5,900 | **~1,750** | **−70% (~3.4×)** — real |
+| | host wakeups/s (procwake) | ~8,100 | **~4,000** | **−51% (~2×)** — real |
 | | present | 60/s | **60/s** | held |
-| **vkmark** (saturated ⇒ stay responsive) | Score | ~2,360 | **2,289** (vertex 2212 / texture 2367 FPS) | responsive — **NOT** the cap=640 cliff (1193) |
+| **vkmark 3-scene** (vertex/texture/shading, dur=5) | Score | **2433 / 2440 / 2446** | **1374 / 1362** | **−44% REGRESSION** |
+| | vkr_ring poll_sleeps/s (during vkmark) | **~15,200** | **~7,800** | coarsened — ring picks up ~2× less often |
 
-The profile correctly classified: firefox+mutter (regular per-frame long idles) → coarsen → the ~3×
-poll-sleep cut; vkmark (continuous sub-ms gaps, no long idle) → responsive → score intact. This is
-the forced-warm=2 magnitude, achieved *selectively and safely*.
+**The clean same-machine A/B (2026-07-22, dylib-swap, no build between measurements) falsifies the
+earlier "vkmark intact" claim.** The earlier 2289 reading was a *2-scene, post-firefox-warm* run that
+happened not to trip the classifier; a proper 3-scene run from a cold seat reproduces **1370 ±10 across
+runs**, vs a rock-stable **2440 ±6** pristine under identical conditions. The `poll_sleeps` tell is
+decisive: baseline vkmark drives **~15,200/s** (full responsive plateau), the profile build only
+**~7,800/s** — i.e. the classifier **coarsens vkmark's ring**, adding up to ~640 µs pickup latency per
+submit and roughly doubling frame time on this submit-latency-bound benchmark.
 
-## FINAL VERDICT — standalone shippable win (M13 composes, isn't required)
+**Root cause — the classifier is too loose.** vkmark is not *continuously* saturated: it has sporadic
+≥2 ms drain-to-drain gaps (scene transitions, mailbox/GPU stalls — it parks ~95×/s even at 2440 fps).
+A single such gap arms the 100 ms coarsen window, and once coarsened the added latency stretches more
+gaps past 2 ms, so it stays coarsened. "Saw one ≥2 ms gap in the last 100 ms" does **not** separate a
+*sustained* vsync cap (idle most of every frame, regular cadence) from a *bursty-but-latency-bound*
+workload (busy most of the time, occasional stall). vkcube (a true 60 fps cap) coarsened correctly and
+eyeballed **SMOOTH** — the mechanism works for its intended target; the collateral damage is on
+saturated-but-bursty rings.
 
-The adaptive plateau depth with the **longer-period profile detector** is a self-tuning, per-ring,
-host-side win: **−70% vkr_ring poll-sleeps / −50% host wakeups on the visible 60 fps common case,
-vkmark throughput intact, guest-transparent, no mutter patch, no early-park (guest notify handshake
-untouched).** It does NOT need the M13 signal — the ring derives "capped vs latency-bound" from its
-own traffic profile. M13 **composes** later: `(visible, power)` can bias the thresholds (e.g. on
-battery, lower `long_idle`/raise coarseness; occluded → coarsen hardest).
+## VERDICT — profile detector as implemented is NOT shippable (blobs win real, vkmark regression real)
 
-Promote `vkr-adaptive-plateau-depth.patch` to a real `patches/virglrenderer/` patch. Remaining
-before ship:
-- **Human eyeball on blobs smoothness in coarsen mode** — NOT yet captured (firefox WebGL got flaky
-  on re-launch this session, the known scanout-automation flakiness; `present=60/s` held steady
-  throughout the measured window as a strong proxy, but a human confirm of no micro-stutter is the
-  proper gate).
-- **Full vkmark-suite A/B** (this run was 2 scenes, 2289; confirm the whole suite stays ≈2360).
-- Tune check: `long_idle=2ms`/`slack=100ms` defaults chosen from the blob profile; confirm they
-  hold for 30 fps-capped and ~120 fps-capped apps (the regime test should scale, but verify).
+The `long_idle`/`slack` classifier trades a genuine blobs idle-wakeup win (−70% poll-sleeps / −50%
+host wakeups) for a genuine **−44% vkmark throughput loss**. That trade is unacceptable as-is: vkmark
+is the saturated-GL representative and a games-relevant worst case. The blobs win does not require this
+mechanism — round-2 (libkrun 0091 EVENT_IDX + virgl 0041 relax ladder) already landed the big wakeup
+cut (18.6k→4.2k/s); this adaptive plateau was an *additional* trim on top.
+
+Open directions (user decision — see session):
+1. **Tighten the regime signal** to distinguish *sustained cap* from *sporadic gap* — e.g. a duty-cycle
+   / long-idle-*rate* test (coarsen only when the ring is idle a large fraction of wall-clock AND goes
+   long-idle at a regular per-frame cadence), then re-run BOTH gates. Modest change, more spike work.
+2. **Shelve the coarsening** — keep the shipped round-2 relax ladder (0041); the incremental blobs win
+   isn't worth a 44% saturated-GL regression.
+3. **Opt-in / off by default** — ship the mechanism gated off, enable only under a future M13
+   `(visible, occluded, power)` policy that already knows the app isn't the focused 3D workload.
+
+`vkr-adaptive-plateau-depth.patch` is preserved but **NOT promoted** to `patches/virglrenderer/`.
+Tree left pristine.
 
 ### (Superseded) Probe #2 as originally scoped — guest mesa flush-trigger tags
 

@@ -1314,18 +1314,26 @@ enhanced guest layers on backpressure + agent-driven compositor throttle. Detect
    must keep the full plateau. So M13 selects `warm_rungs` per ring from the visibility/vsync/power
    state. **Ship guardrail: a vkmark A/B confirming the uncapped path keeps the ~2360 score.** The
    gap-history detector stays in the patch as a safe fallback for never-bursting rings only.
-   **UPGRADE 2026-07-22: a longer-period PROFILE detector makes this a STANDALONE win, M13 not
-   required.** Instead of predicting the next gap from immediate history (can't be done — the
-   costly walk follows a burst), classify the *regime* over a ~100 ms window: "has this ring had a
-   long (≥2 ms) idle gap recently?" → vsync-capped/slack ⇒ coarsen every gap (safe, slack hides the
-   latency); saturated/latency-bound (vkmark) ⇒ full plateau. A/B (defaults long_idle=2ms,
-   slack=100ms): clean-fullscreen blobs **poll_sleeps ~5.9k→~1.75k (−70%), host wakeups ~8.1k→~4.0k
-   (−50%), present held 60/s**; **vkmark stayed responsive (Score 2289, NOT the 1193 cliff)**. So
-   the mechanism self-tunes per ring from its own traffic — ship it standalone
-   (`vkr-adaptive-plateau-depth.patch` → a real virglrenderer patch); M13 `(visible, power)` then
-   only *biases the thresholds* (battery → coarsen harder). Remaining before ship: human eyeball on
-   blobs smoothness (present=60 proxy only so far — firefox re-launch got flaky) + full vkmark-suite
-   A/B + confirm the 2ms/100ms defaults scale to 30/120 fps caps.
+   **2026-07-22: a longer-period PROFILE detector was tried as a standalone win — the vkmark ship
+   gate FAILED, so it is NOT shippable as-is and M13 remains the path.** Idea: classify the *regime*
+   over a ~100 ms window ("has this ring had a long ≥2 ms idle gap recently?" → capped ⇒ coarsen;
+   saturated ⇒ full plateau; `vkr_ring_profile_warm_rungs`, env-tunable). The blobs half is real
+   (clean-fullscreen poll_sleeps ~5.9k→~1.75k −70%, host ~8.1k→~4.0k −50%, present 60/s). **But a
+   clean same-machine A/B (dylib-swap, no build between measurements) shows a −44% vkmark
+   regression: pristine 2433/2440/2446 vs adaptive 1374/1362.** The earlier "2289 intact" was a
+   2-scene/warm fluke; a cold 3-scene run reproduces ~1370. The tell is `poll_sleeps` during vkmark
+   — baseline ~15,200/s (full responsive plateau) vs adaptive ~7,800/s → the classifier **coarsens
+   vkmark's ring**, adding ~640 µs pickup latency per submit. **Root cause: the classifier is too
+   loose** — vkmark isn't continuously saturated (sporadic ≥2 ms gaps from scene transitions /
+   mailbox stalls; parks ~95×/s even at 2440 fps), one gap arms the 100 ms window and coarsening's
+   own added latency keeps re-arming it. "Saw one ≥2 ms gap in 100 ms" does not separate a
+   *sustained* vsync cap from a *bursty-but-latency-bound* app. vkcube (a true 60 fps cap) coarsened
+   correctly and eyeballed SMOOTH — the mechanism is right for its intended target, wrong on
+   saturated-but-bursty rings. Open directions: (a) tighten to a duty-cycle / long-idle-*rate*
+   signal + re-run both gates; (b) shelve — round-2 (0091+0041) already landed the big wakeup win,
+   this was only an increment; (c) ship gated off, enable under this M13 `(visible, occluded,
+   power)` policy which already knows the app isn't the focused 3D workload.
+   `vkr-adaptive-plateau-depth.patch` is preserved but NOT promoted.
 5. **Enhanced-tier agent throttle:** a control-plane host→guest "target rate" message → `limina-agent`
    → mutter frame-rate hint.
 
