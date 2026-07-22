@@ -367,3 +367,25 @@ plateau depth becomes a **`(visible, power)`-keyed knob under M13** (focused+AC 
 Lever 4 (venus notify / doorbell) also answered here: the ACTIVE venus ring is **poll-driven,
 not doorbell-driven** (venus notify throttle working); the ~485/s gpu_worker "doorbells" are
 structural virtio-gpu submit-queue kicks (~8/frame), not venus-ring notifies — no easy win.
+
+## #35 dynamic vCPU offlining — GO/NO-GO GATE (2026-07-22): DROPPED
+
+The roadmap (§Dynamic vCPU hotplug) set a gate: the old ~2,950/s 6→2 win was measured against the
+18.6k baseline; remeasure on the current stack before building the policy, drop it if <1k/s. Done —
+same 0043+mesa-0017 stack, clean-fullscreen blobs, same procwake+interrupts method; only `--cpus`
+differs (the 6-vCPU leg is the 8.1k re-baseline above):
+
+| metric | 6 vCPU | 2 vCPU | Δ |
+|---|---|---|---|
+| **host wakeups/s** | ~8,100 | ~7,300 | **−800 (below the 1k drop bar)** |
+| guest IPI1/s (ttwu wakelist) | ~4,390 | ~1,115 | −75% |
+| guest arch_timer/s | ~2,910 | ~1,900 | −35% |
+| render (user eyeball) | smooth | smooth | flat |
+
+VERDICT: **DROP the dynamic policy (#35).** The mechanism plainly works (guest IPI/timer fell hard),
+but the HOST budget is now dominated by the ~5,900/s vkr_ring poll-sleeps (0043 plateau), which are
+INVARIANT to vCPU count — so the vCPU host-wakeup slice is ~800/s at the 6→2 EXTREME (a dynamic
+policy offlining fewer, on average, would save less). Not worth the signal→policy→hysteresis
+machinery + oscillation risk. The mechanism half (#40, libkrun 0094) already shipped as a standalone
+two-tier robustness fix. RE-GATE only if the post-M13 vkr doorbell-handshake cuts the poll-sleep
+floor (which would make the vCPU slice a larger relative fraction).

@@ -647,12 +647,25 @@ drop back toward 2G as pages are madvised back to macOS.
 
 ### Dynamic vCPU hotplug — the CPU sibling of ballooning (planned)
 
-**Status: mechanism half IN PROGRESS (robustness, task #40); dynamic policy DEFERRED (task #35).**
-The same `min..max` philosophy as ballooning, on the CPU axis: dynamically offline idle guest
-vCPUs to shrink the worker's in-kernel IPI/timer host-wakeup budget, and re-online them under
-load. A boot-time A/B (`spikes/wakeup-probe/RESULTS.md`) measured 6→2 vCPUs cutting host wakeups
-~3k/s (IPI −67%, timer −56%) at flat throughput on the GPU-bound blobs workload; the mechanism's
-yield is real but shallow.
+**Status: mechanism half SHIPPED (robustness, task #40, libkrun 0094). Dynamic policy DROPPED
+(task #35, 2026-07-22) — the go/no-go gate below failed.** The same `min..max` philosophy as
+ballooning, on the CPU axis: dynamically offline idle guest vCPUs to shrink the worker's in-kernel
+IPI/timer host-wakeup budget, and re-online them under load. A boot-time A/B against the OLD 18.6k
+baseline measured 6→2 vCPUs cutting host wakeups ~3k/s (IPI −67%, timer −56%) at flat throughput
+on the GPU-bound blobs workload.
+
+**GATE RESULT (2026-07-22) — #35 DROPPED.** Re-ran the 6-vs-2 A/B on the CURRENT shipped stack
+(virgl 0043 + mesa 0017), clean-fullscreen blobs, same method (`spikes/wakeup-probe/RESULTS.md`):
+6-vCPU ~8.1k/s → 2-vCPU ~7.3k/s = **only −800/s host wakeups**, below the 1k/s drop bar set in the
+caveat. The guest half still moved a lot (IPI1 −75%, arch_timer −35%) — the mechanism works — but
+the round-2 fixes made the HOST budget dominated by the ~5.9k/s vkr_ring poll-sleeps, which are
+INVARIANT to vCPU count, so the vCPU slice is now a small absolute number. Throughput was already
+fine and idle vCPUs are near-free under NO_HZ (~130/s floor). Building the full
+signal→policy→mechanism→hysteresis machinery (with real oscillation risk) for <800/s of
+nanosleep-class wakeups is not worth it. **Only the #40 robustness fix was worth keeping** (a stock
+guest offlining a vCPU no longer wedges the VMM — a two-tier-guarantee fix, shipped). Re-run this
+gate ONLY if the post-M13 vkr doorbell-handshake lands and cuts the poll-sleep floor (which would
+make the vCPU slice a larger relative fraction again).
 
 **The two halves (mechanism in libkrun, policy in limina):**
 1. **Mechanism — libkrun CPU-hotplug (task #40, a robustness fix worth shipping on its own).** A
@@ -668,20 +681,22 @@ yield is real but shallow.
    re-deliverable at runtime (durable per-vCPU control channel; PC/X0 reset on the owning thread
    since HVF register access is thread-bound); plus IRQ/vtimer re-affinity on re-online,
    snapshot-while-offlined state, and CPU_ON↔CPU_OFF race safety.
-2. **Policy — limina-agent (task #35, deferred).** Agent-driven offline/online under a
-   runnable-task-pressure signal (PSI `cpu`/loadavg/`nr_running`) with hysteresis + interactivity
-   guardrails (never offline cpu0; step one at a time; fast re-online on a load spike; cooldown to
-   avoid oscillation — the balloon-thrash lessons apply directly, see the balloon oscillation
-   ledger). Host config exposes the range (`--cpus MIN..MAX` / `vm.toml [hardware]`), boots MAX,
-   hands the range to the agent — mirroring `--memory MIN..MAX`. A static low default is rejected
-   (would starve genuinely parallel guest workloads like compiles).
+2. **Policy — limina-agent (task #35, DROPPED 2026-07-22).** The design would have been:
+   agent-driven offline/online under a runnable-task-pressure signal (PSI `cpu`/loadavg/`nr_running`)
+   with hysteresis + interactivity guardrails (never offline cpu0; step one at a time; fast re-online
+   on a load spike; cooldown to avoid oscillation — the balloon-thrash lessons apply directly), host
+   config exposing the range (`--cpus MIN..MAX` / `vm.toml [hardware]`), booting MAX, handing the
+   range to the agent — mirroring `--memory MIN..MAX`. The full codebase map for this (guest sensor →
+   host `VcpuPolicy` mirroring `BalloonPolicy` → cap-gated host→guest control message → agent sysfs
+   write; offline/online is entirely guest-driven so it must route through the agent) was captured
+   before the gate failed; if the gate is ever re-passed, that shape is the plan. Not built.
 
-**Cost/benefit caveat (why the policy is deferred, not built):** the ~3k/s was measured against
-the OLD ~18.6k baseline; the round-2 fixes (libkrun 0091 EVENT_IDX + virgl 0041 ring relax)
-attacked the GPU/IO wake chain that *drives* the guest ttwu IPIs, so the in-kernel IPI/timer slice
-of today's ~4.2k/s budget is likely <1k/s. **Remeasure that slice against the 4.2k baseline before
-building the policy** — if it's <1k/s the dynamic feature is a DROP and only the #40 robustness
-fix is worth keeping. Authoritative perf context: `docs/perf/overhead-inventory.md`.
+**Cost/benefit caveat — SATISFIED, verdict DROP (2026-07-22):** the ~3k/s was measured against the
+OLD ~18.6k baseline; the round-2 fixes (libkrun 0091 EVENT_IDX + virgl 0041/0043 ring relax) attacked
+the GPU/IO wake chain that *drives* the guest ttwu IPIs. Remeasured on the current stack (see the GATE
+RESULT above): the vCPU host-wakeup slice is **~800/s at the 6→2 extreme, below the 1k/s bar → the
+dynamic feature is a DROP; only the #40 robustness fix was kept.** Authoritative perf context:
+`docs/perf/overhead-inventory.md`.
 
 ---
 

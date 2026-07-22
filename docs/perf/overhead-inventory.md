@@ -122,14 +122,19 @@ pacing/battery — measure with `powermetrics --samplers tasks`, needs sudo.)
    in-kernel vCPU wakes (IPI/timer — #35 territory) + KK/Metal internal threads
    (uninstrumented) + libkrun ~1k.
 
-2. **vCPU right-sizing (~3k/s at stake — MEASURED, smaller than expected).** A/B 2026-07-21:
-   6→2 vCPU cut total host wakeups −16% (~2,950/s: IPI −67%, timer −56%) with throughput
-   UNAFFECTED on blobs (GPU + single-threaded-JS bound). IMPORTANT CORRECTION: the guest
-   topology is ALREADY shared-LLC-correct (L2 shared 0-5, one MC sched domain) — the ttwu IPIs
-   are the idle-target branch, so a topology patch would do nothing; the win comes purely from
-   fewer idle CPUs to wake. Ship as DYNAMIC vCPU offlining via limina-agent (a static low
-   default would hurt genuinely parallel guest workloads — compiles, etc.); pairs with
-   ballooning. NOT a topology change.
+2. **vCPU right-sizing — DROPPED as a dynamic feature 2026-07-22 (task #35 gate failed).** The
+   2026-07-21 A/B against the OLD 18.6k baseline showed 6→2 vCPU cutting ~2,950/s. RE-GATED
+   2026-07-22 on the current stack (virgl 0043 + mesa 0017, clean-fullscreen blobs, same method):
+   6-vCPU ~8.1k → 2-vCPU ~7.3k = **only −800/s host, below the 1k/s drop bar**. Guest half still
+   moved (IPI1 −75%, arch_timer −35%) but the host budget is now dominated by the ~5.9k/s vkr_ring
+   poll-sleeps, INVARIANT to vCPU count — so the earlier ~2,950 shrank to ~800 once the round-2
+   fixes collapsed everything else. Throughput was already fine; idle vCPUs near-free under NO_HZ.
+   Building the full agent-driven policy + hysteresis (oscillation risk) for <800/s is not worth it.
+   The mechanism half (#40, libkrun 0094: clean CPU_OFF/AFFINITY_INFO/re-deliverable CPU_ON) SHIPPED
+   on its own as a two-tier robustness fix (stock guest offlining a vCPU no longer wedges the VMM).
+   Topology stays MOOT (already shared-LLC-correct: L2 shared 0-5, one MC sched domain; ttwu IPIs are
+   the idle-target branch, not the cache branch). RE-GATE only if the post-M13 vkr doorbell-handshake
+   cuts the poll-sleep floor.
 2. **Kernel tick — DROPPED 2026-07-21 (user decision: no Fedora-config divergence unless
    absolutely required).** HZ audit found Fedora aarch64 ships 1000 too, so lowering HZ
    would be a deliberate divergence, enhanced-tier-only, and NO_HZ already makes idle free —
