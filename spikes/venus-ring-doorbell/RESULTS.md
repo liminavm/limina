@@ -419,10 +419,17 @@ WINDOW_MS/COARSEN_PCT`.
 
 **Shipped: `patches/virglrenderer/0044-vkr-adaptive-relax-plateau-DEPTH-*.patch`** (branch
 `limina/macos-venus`, series re-exported + reconstruction-verified). `vkr-adaptive-plateau-depth.patch`
-here mirrors it. Remaining light validation (not blocking): human eyeball on a *real* capped desktop
-(firefox/mutter fullscreen) in coarsen mode — vkcube (identical coarsening depth, warm_min=2) eyeballed
-SMOOTH; and confirm the 2 ms/200 ms/50% defaults scale to 30 fps / 120 fps caps (a 120 fps cap has less
-per-frame slack — its long gap is ~6 ms of 8.3 ms ≈ 72%, still > 50%, so it should still coarsen; verify).
+here mirrors it.
+
+**Human eyeball VERIFIED 2026-07-22 (SMOOTH).** Booted 0044 windowed, launched firefox --kiosk on a
+full-screen 60 fps requestAnimationFrame animation (scrolling bars + gliding ball). With coarsening
+confirmed engaged on the live desktop (vkr_ring poll_sleeps ~1,150–1,800/s vs ~5,900/s responsive;
+present held 59/s), the user reported the motion **smooth — no stutter/hitching**. The coarsen-mode
+path is clean on a real compositor+app, not just vkcube.
+
+Remaining (not blocking, optional): confirm the 2 ms / 200 ms / 50% defaults scale to 30 fps / 120 fps
+caps (a 120 fps cap has less per-frame slack — its long gap is ~6 ms of 8.3 ms ≈ 72%, still > 50%, so
+it should still coarsen; verify when convenient).
 
 ### The FALSIFIED first attempt is kept above as the lesson
 
