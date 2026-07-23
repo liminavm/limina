@@ -257,8 +257,8 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
                     // guest drives its own cursor (mouselook / warps) and the host cursor is
                     // grabbed away, so this *is* the only source of truth for where to draw the
                     // guest cursor — store it for `update_capture_cursor`.
-                    let x = parts.next().and_then(|s| s.parse::<i32>().ok());
-                    let y = parts.next().and_then(|s| s.parse::<i32>().ok());
+                    let x = parts.next().and_then(parse_cursor_coord);
+                    let y = parts.next().and_then(parse_cursor_coord);
                     if let (Some(x), Some(y)) = (x, y) {
                         let mut s = shared.lock().unwrap();
                         s.cursor_pos_x = x;
@@ -279,6 +279,18 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
         // a relaunch a fresh reader is spawned on the new channel; this thread just ends.
         log::info!("window: control channel closed (worker gone)");
     });
+}
+
+/// Parse a guest cursor coordinate. The virtio-gpu wire carries the position as **u32**, but a
+/// cursor whose hotspot hangs past the scanout's left/top edge is legitimately *negative* —
+/// the guest kernel just casts it (`move +1353+-2` in its own DRM debug), so `4294967294`
+/// really means `-2`. Accept the signed form AND the wrapped-unsigned form; rejecting the
+/// wrap (the old `parse::<i32>` alone) silently dropped every cursormove along those edges,
+/// freezing the captured-mode cursor overlay there.
+fn parse_cursor_coord(s: &str) -> Option<i32> {
+    s.parse::<i32>()
+        .ok()
+        .or_else(|| s.parse::<u32>().ok().map(|v| v as i32))
 }
 
 /// Set an IOSurface as the layer's contents (it's a CF object accepted by `contents`).
@@ -310,5 +322,32 @@ pub(crate) fn set_layer_surface(
         }
         layer.setContents(Some(obj));
         CATransaction::commit();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_cursor_coord;
+
+    #[test]
+    fn cursor_coords_accept_plain_and_negative_values() {
+        assert_eq!(parse_cursor_coord("1353"), Some(1353));
+        assert_eq!(parse_cursor_coord("-2"), Some(-2));
+        assert_eq!(parse_cursor_coord("0"), Some(0));
+    }
+
+    #[test]
+    fn cursor_coords_unwrap_u32_cast_negatives_from_the_virtio_wire() {
+        // The guest kernel casts a negative pos into the unsigned wire field: -2 arrives as
+        // 4294967294. The old i32-only parse dropped these (froze the cursor at left/top
+        // edges); they must decode back to the signed value.
+        assert_eq!(parse_cursor_coord("4294967294"), Some(-2));
+        assert_eq!(parse_cursor_coord(&u32::MAX.to_string()), Some(-1));
+    }
+
+    #[test]
+    fn cursor_coord_garbage_is_rejected() {
+        assert_eq!(parse_cursor_coord("nope"), None);
+        assert_eq!(parse_cursor_coord("184467440737095516150"), None);
     }
 }

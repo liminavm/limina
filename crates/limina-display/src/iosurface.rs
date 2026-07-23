@@ -381,7 +381,11 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
     }
 
     fn move_cursor(&mut self, x: u32, y: u32) -> Result<(), DisplayBackendError> {
-        self.send(&format!("cursormove {x} {y}"));
+        // The virtio wire field is u32, but a cursor whose hotspot hangs past the scanout's
+        // left/top edge is legitimately negative — the guest kernel casts (e.g. -2 arrives as
+        // 4294967294). Recover the signed value before forwarding, so the supervisor draws the
+        // sprite partially off-edge instead of dropping the position.
+        self.send(&format!("cursormove {} {}", x as i32, y as i32));
         Ok(())
     }
 }
