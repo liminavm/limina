@@ -268,8 +268,11 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   **Plan when we return:** research how VNC/RDP **servers** solve the same capture problem (they have
   this exact problem space and are far more numerous) before redesigning. Candidate angles: a real
   cursor-freeze API instead of warp, `CGDisplayHideCursor`+associate semantics, an `IOHIDEventSystem`
-  relative-tap, or detecting/co-existing with an upstream RD capture. Flat guest pointer profile
-  (enhanced tier, `accel-profile='flat'`) is the other half and works.
+  relative-tap, or detecting/co-existing with an upstream RD capture. (2026-07-23: the guest-side
+  half of the old scheme — the enhanced-tier flat pointer profile + `LIMINA_CAPTURE_SENS` — was
+  retired: captured motion now integrates the macOS-accelerated deltas into a virtual cursor
+  driving the absolute tablet, so no guest profile tweak is needed. The per-event centre re-pin,
+  and thus this RD-confound item, is unchanged.)
 - **Non-grabbed guest cursor renders too large in a non-fullscreen window** (open, user-reported
   2026-07-11) — with match-host the guest renders at ~display resolution and the window shows the
   scanout shrunken through the fit rect, but the host-pointer shape adoption builds the `NSCursor`

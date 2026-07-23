@@ -798,14 +798,18 @@ Parallels replacement: fullscreen, keymap remap, multi-display, system-combo cap
      **Limitation:** multi-finger trackpad gestures (Mission Control / Spaces swipe) are processed by
      the WindowServer upstream of a session tap and are NOT interceptable (two-finger scroll is).
      Secure Input (password fields) can still suppress the tap — acceptable.
-   - ~~**Pointer capture (relative mode):**~~ **DONE** — `Cmd-Ctrl-G`. A **session-level consuming
-     CGEventTap** (needs Accessibility permission) intercepts mouse + keyboard while captured and
-     feeds the guest a **separate** relative-mouse virtio-input device (`REL_X/REL_Y`), distinct from
-     the absolute tablet so capture never reclassifies it in the guest's libinput. The guest cursor
-     is composited at its reported `cursormove` position (host NSCursor hidden); **closes the M2
-     guest-warp gap**. Sensitivity scaled host-side (`LIMINA_CAPTURE_SENS`, default 0.65) + a flat
-     guest pointer profile (enhanced tier) keep the response linear. If Accessibility is denied,
-     `CGEventTapCreate` returns NULL and it falls back to a leaky local-monitor warp path.
+   - ~~**Pointer capture:**~~ **DONE** — `Cmd-Ctrl-G`. A **session-level consuming
+     CGEventTap** (needs Accessibility permission) intercepts mouse + keyboard while captured.
+     Since 2026-07-23 captured motion integrates the macOS-accelerated deltas into a host-side
+     **virtual cursor** (seeded where the pointer was grabbed, clamped to the fit rect) and drives
+     the **absolute tablet** — the same device/mapping as uncaptured mode, so movement feels
+     exactly like the host cursor and release warps the cursor back to where the virtual cursor
+     ended. This retired the old workarounds (`LIMINA_CAPTURE_SENS` host scale + the enhanced-tier
+     flat guest pointer profile); the separate relative-mouse virtio-input device stays attached
+     but dormant, reserved for a future explicit mouselook/game mode. The guest cursor is
+     composited at its reported `cursormove` position (host NSCursor hidden); **closes the M2
+     guest-warp gap**. If Accessibility is denied, `CGEventTapCreate` returns NULL and it falls
+     back to a leaky local-monitor warp path (same virtual-cursor motion, weaker containment).
    - **Multi-display:** multiplex all displays through the single `krun_set_display_backend` by
      `scanout_id` (up to 16), each to its own NSWindow/CAMetalLayer. **The thinnest plan among the
      named features** — needs a design doc (guest-side mutter multi-monitor via multi-scanout,

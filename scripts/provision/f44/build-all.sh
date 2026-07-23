@@ -60,7 +60,6 @@ cp -f "$REPO/scripts/provision/install-enhanced.sh" "$PAYLOAD"/
 if [ -n "$AGENT_OK" ]; then
   cp -f "$AGENT_BIN" "$PAYLOAD"/
   cp -f "$REPO/guest/limina-agent/limina-agent.service" "$PAYLOAD"/ 2>/dev/null || true
-  cp -f "$REPO/guest/limina-config/90-limina-pointer.gschema.override" "$PAYLOAD"/ 2>/dev/null || true
 fi
 # The per-session helper (clipboard bridge): a systemd USER unit, so it rides the payload
 # separately from the system agent (each lights up on its own prerequisite).

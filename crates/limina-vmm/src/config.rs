@@ -163,8 +163,10 @@ pub struct InputSpec {
     pub kbd_fd: i32,
     /// Read end of the absolute-pointer event socket (worker inherits it).
     pub ptr_fd: i32,
-    /// Read end of the relative-pointer (mouse) event socket for capture mode, or `-1` if no
-    /// relative device is attached (e.g. headless display-capture runs).
+    /// Read end of the relative-pointer (mouse) event socket, or `-1` if no relative device is
+    /// attached (e.g. headless display-capture runs). The supervisor currently keeps this device
+    /// dormant (captured motion drives the absolute tablet); it stays plumbed for a future
+    /// explicit mouselook/game mode.
     pub rel_ptr_fd: i32,
 }
 

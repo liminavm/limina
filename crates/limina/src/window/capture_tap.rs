@@ -9,8 +9,11 @@
 //! cursor on macOS 26, so the cursor *does* drift. The result: clicks "escape" to host windows.
 //!
 //! A session-level event tap fixes this properly: while captured it **consumes** every mouse
-//! event (returns NULL, so nothing reaches any other app) and forwards the motion/buttons/scroll
-//! to the guest's relative-mouse device; system key combos (Cmd-Tab/Cmd-Space/media keys) are
+//! event (returns NULL, so nothing reaches any other app), integrates the motion deltas into a
+//! virtual cursor position, and drives the guest's **absolute tablet** with it — the same device
+//! and fit mapping as uncaptured mode, so captured movement feels exactly like the host cursor
+//! (macOS pointer ballistics are already in the deltas, and libinput never accelerates an
+//! absolute device); system key combos (Cmd-Tab/Cmd-Space/media keys) are
 //! consumed and forwarded the same way. It needs **Accessibility** permission (System Settings →
 //! Privacy & Security → Accessibility); if that's not granted `CGEventTapCreate` returns NULL and
 //! we fall back to the (leaky) local-monitor warp path — but not silently: a failed install is
@@ -25,16 +28,21 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Arc;
 
+use objc2::rc::Retained;
+use objc2_app_kit::NSView;
 use objc2_foundation::{NSPoint, NSRect};
 
 use limina_input::constants::{
-    BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_KEY, EV_REL, REL_HWHEEL, REL_WHEEL, REL_X, REL_Y,
+    ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
+    REL_WHEEL,
 };
 use limina_input::keymap::{macos_keycode_to_linux_remapped, modifier_is_down, KeyRemap};
 use limina_input::InputEvent;
 
+use super::fit::{self, FitRect};
 use super::input::{
-    apply_capture_cursor, match_host_shortcut, send_event, HostCursor, HostShortcut,
+    apply_capture_cursor, match_host_shortcut, send_event, view_point_to_cg_global, HostCursor,
+    HostShortcut,
 };
 use super::WorkerConn;
 
@@ -59,6 +67,7 @@ extern "C" {
     ) -> CFMachPortRef;
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+    fn CGEventGetDoubleValueField(event: CGEventRef, field: u32) -> f64;
     fn CGEventGetFlags(event: CGEventRef) -> u64;
     fn CFMachPortCreateRunLoopSource(
         alloc: *const c_void,
@@ -136,14 +145,17 @@ struct TapCtx {
     /// Keyboard remap policy (e.g. `--swap-cmd-opt`) — same as the local monitor uses, so keys
     /// captured here translate identically to keys handled in absolute mode.
     remap: KeyRemap,
-    /// Motion sensitivity: the macOS deltas the tap sees are already pointer-accelerated, and the
-    /// guest's libinput accelerates *again*, so 1:1 feels far too fast. We scale by this factor
-    /// (env `LIMINA_CAPTURE_SENS`, default 0.65) and carry the truncated remainder in `accum_*`
-    /// so slow movements aren't quantized away. The enhanced tier additionally sets the guest
-    /// pointer to a *flat* (non-accelerating) profile so the response curve stays linear.
-    sens: f64,
-    accum_x: Cell<f64>,
-    accum_y: Cell<f64>,
+    /// The current fit rect (letterbox geometry), shared with the render path — the virtual
+    /// cursor moves and clamps in its space, so captured motion maps to guest pixels exactly
+    /// like uncaptured motion does.
+    fit: Rc<Cell<FitRect>>,
+    /// The virtual cursor position (view points, bottom-left origin), shared with
+    /// `InputState`: uncaptured motion keeps it at the pointer's last position over the
+    /// content (the grab seed); captured motion integrates the macOS-accelerated deltas into
+    /// it; a release warps the host cursor back to it.
+    pos: Rc<Cell<Option<(f64, f64)>>>,
+    /// The guest view, for mapping the virtual cursor back to screen coordinates on release.
+    view: Retained<NSView>,
 }
 
 /// Centre of the main display in global (points) coordinates — where we keep the hidden cursor
@@ -188,8 +200,16 @@ extern "C" fn tap_callback(
             Some(HostShortcut::ToggleCapture)
         ) {
             let now = !ctx.captured.load(Ordering::Acquire);
+            // On release, put the host cursor where the virtual cursor ended (seamless exit).
+            let release_to = if now {
+                None
+            } else {
+                ctx.pos
+                    .get()
+                    .and_then(|p| view_point_to_cg_global(&ctx.view, p))
+            };
             ctx.captured.store(now, Ordering::Release);
-            apply_capture_cursor(now, &ctx.host_cursor);
+            apply_capture_cursor(now, &ctx.host_cursor, release_to);
             return std::ptr::null_mut(); // consume — the toggle never reaches macOS or the guest
         }
     }
@@ -247,27 +267,39 @@ extern "C" fn tap_callback(
     }
 
     // Same snapshot rule as the keyboard path above: the Arc keeps the fd open across the sends.
+    // Captured pointer traffic drives the ABSOLUTE tablet — the same device as uncaptured mode —
+    // via the virtual cursor; the relative-mouse device stays dormant (reserved for a future
+    // explicit mouselook/game mode).
     let io = ctx.conn.io();
-    let fd: RawFd = io.rel_ptr_fd();
+    let fd: RawFd = io.ptr_fd();
     let send = |ev: InputEvent| send_event(fd, ev);
+    // Send the virtual cursor's absolute position (stepped by `(dx, dy)`, clamped to the fit).
+    let send_pos = |dx: f64, dy: f64| {
+        let fit = ctx.fit.get();
+        let p = fit::capture_step(ctx.pos.get(), dx, dy, fit);
+        ctx.pos.set(Some(p));
+        let (x, y) = fit::abs_through_fit(p.0, p.1, fit, ABS_MAX as i32);
+        send(InputEvent::new(EV_ABS, ABS_X, x));
+        send(InputEvent::new(EV_ABS, ABS_Y, y));
+        send(InputEvent::syn());
+    };
+    // A press re-sends the position first — same staleness guard as the uncaptured path.
+    let send_click = |btn: u16, down: bool| {
+        if down {
+            send_pos(0.0, 0.0);
+        }
+        send(InputEvent::new(EV_KEY, btn, i32::from(down)));
+        send(InputEvent::syn());
+    };
     match etype {
         MOUSE_MOVED | LMB_DRAG | RMB_DRAG | OMB_DRAG => {
-            // Scale by sensitivity, carrying the sub-pixel remainder so slow motion still moves.
-            let fx = ctx.accum_x.get() + geti(FIELD_DELTA_X) as f64 * ctx.sens;
-            let fy = ctx.accum_y.get() + geti(FIELD_DELTA_Y) as f64 * ctx.sens;
-            let dx = fx.trunc() as i32;
-            let dy = fy.trunc() as i32;
-            ctx.accum_x.set(fx - dx as f64);
-            ctx.accum_y.set(fy - dy as f64);
-            if dx != 0 {
-                send(InputEvent::new(EV_REL, REL_X, dx));
-            }
-            if dy != 0 {
-                send(InputEvent::new(EV_REL, REL_Y, dy));
-            }
-            if dx != 0 || dy != 0 {
-                send(InputEvent::syn());
-            }
+            // The deltas carry the pointer-ballistics-processed motion the macOS cursor would
+            // have made, so integrating them moves the virtual cursor exactly like the host
+            // cursor moves outside capture (the absolute device adds no guest acceleration).
+            // Double-valued reads: the integer field truncates, which would eat slow sub-point
+            // motion; the f64 position integrates fractions losslessly.
+            let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
+            send_pos(getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y));
             // Park the hidden cursor at centre so it can't reach a hot corner / screen edge.
             // NOTE: re-pinning every event fights any OTHER agent that also moves the macOS cursor
             // — notably a remote-desktop client driving this Mac — which reads as jitter under RD.
@@ -275,28 +307,14 @@ extern "C" fn tap_callback(
             // same capture problem?) is parked in docs/hardening-backlog.md.
             unsafe { CGWarpMouseCursorPosition(main_display_center()) };
         }
-        LMB_DOWN => {
-            send(InputEvent::new(EV_KEY, BTN_LEFT, 1));
-            send(InputEvent::syn());
-        }
-        LMB_UP => {
-            send(InputEvent::new(EV_KEY, BTN_LEFT, 0));
-            send(InputEvent::syn());
-        }
-        RMB_DOWN => {
-            send(InputEvent::new(EV_KEY, BTN_RIGHT, 1));
-            send(InputEvent::syn());
-        }
-        RMB_UP => {
-            send(InputEvent::new(EV_KEY, BTN_RIGHT, 0));
-            send(InputEvent::syn());
-        }
+        LMB_DOWN => send_click(BTN_LEFT, true),
+        LMB_UP => send_click(BTN_LEFT, false),
+        RMB_DOWN => send_click(BTN_RIGHT, true),
+        RMB_UP => send_click(BTN_RIGHT, false),
         OMB_DOWN | OMB_UP => {
             // Middle button only (buttonNumber 2); ignore higher buttons for now.
             if geti(FIELD_BUTTON_NUMBER) == 2 {
-                let v = i32::from(etype == OMB_DOWN);
-                send(InputEvent::new(EV_KEY, BTN_MIDDLE, v));
-                send(InputEvent::syn());
+                send_click(BTN_MIDDLE, etype == OMB_DOWN);
             }
         }
         SCROLL => {
@@ -363,24 +381,21 @@ pub(crate) fn install(
     captured: Arc<AtomicBool>,
     remap: KeyRemap,
     host_cursor: Rc<HostCursor>,
+    fit: Rc<Cell<FitRect>>,
+    pos: Rc<Cell<Option<(f64, f64)>>>,
+    view: Retained<NSView>,
 ) -> bool {
-    // Read sensitivity ONCE here (never on the hot callback path). Clamp to a sane band.
-    let sens = std::env::var("LIMINA_CAPTURE_SENS")
-        .ok()
-        .and_then(|s| s.parse::<f64>().ok())
-        .filter(|s| *s > 0.0 && *s <= 4.0)
-        .unwrap_or(0.65);
     let ctx = Box::into_raw(Box::new(TapCtx {
         captured,
         conn,
         host_cursor,
         remap,
-        sens,
-        accum_x: Cell::new(0.0),
-        accum_y: Cell::new(0.0),
+        fit,
+        pos,
+        view,
     }));
     if try_create(ctx) {
-        log::info!("pointer capture: CGEventTap installed (session-level, consuming; sens={sens})");
+        log::info!("pointer capture: CGEventTap installed (session-level, consuming)");
         return true;
     }
     log::warn!(

@@ -43,7 +43,11 @@ impl WorkerIo {
     pub fn ptr_fd(&self) -> RawFd {
         self.ptr.as_raw_fd()
     }
-    /// The relative-pointer (capture-mode mouse) sink fd.
+    /// The relative-mouse sink fd. Currently DORMANT: captured motion drives the absolute
+    /// tablet (via the virtual cursor) so movement feels identical to uncaptured mode; the
+    /// device stays attached — and this end held open so the worker never sees it close —
+    /// reserved for a future explicit mouselook/game mode. Tests assert relaunch retargets it.
+    #[allow(dead_code)]
     pub fn rel_ptr_fd(&self) -> RawFd {
         self.rel_ptr.as_raw_fd()
     }

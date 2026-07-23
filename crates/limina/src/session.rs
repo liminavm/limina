@@ -114,7 +114,9 @@ fn spawn_windowed_worker(
     // preserves the 8-byte record boundaries the worker's backends rely on.
     let (kbd_sup, kbd_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
     let (ptr_sup, ptr_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
-    // The relative-pointer (mouse) device for pointer-capture mode (M8) — same datagram model.
+    // The relative-pointer (mouse) device — same datagram model. Currently DORMANT (captured
+    // motion drives the absolute tablet so it feels identical to uncaptured mode); kept attached
+    // for a future explicit mouselook/game mode.
     let (rel_ptr_sup, rel_ptr_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
     // Input events are tiny (8 bytes) but bursty (a key chord, a fast drag). Give the
     // datagram pipes a deep buffer (~32k events) so a momentary worker lag never drops

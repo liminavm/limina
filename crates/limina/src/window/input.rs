@@ -31,7 +31,7 @@ use objc2_foundation::{NSPoint, NSRect};
 
 use limina_input::constants::{
     ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
-    REL_WHEEL, REL_X, REL_Y,
+    REL_WHEEL,
 };
 use limina_input::keymap::{
     capslock_on, macos_keycode_to_linux_remapped, modifier_emit, CapsLockSync, KeyRemap, ModEmit,
@@ -43,8 +43,8 @@ use limina_input::InputEvent;
 //   - `CGAssociateMouseAndMouseCursorPosition(0)` asks the HID layer to stop driving the cursor
 //     from the mouse. It's unreliable on its own (the cursor still drifted onto windows behind us
 //     on macOS 26), so we ALSO re-pin the cursor to the display centre on every captured move.
-//   - `CGWarpMouseCursorPosition` does the re-pin; crucially `NSEvent.deltaX/deltaY` are *hardware*
-//     deltas, unaffected by warping, so re-centring never corrupts the motion we send the guest.
+//   - `CGWarpMouseCursorPosition` does the re-pin; crucially `NSEvent.deltaX/deltaY` come from the
+//     mouse, unaffected by warping, so re-centring never corrupts the motion we integrate.
 // `connected` is a `boolean_t` (C `int`); 0 = decoupled (captured), 1 = normal.
 extern "C" {
     fn CGAssociateMouseAndMouseCursorPosition(connected: i32) -> i32;
@@ -65,10 +65,16 @@ fn main_display_center() -> NSPoint {
 }
 
 /// Apply the host-cursor side of a capture transition: on grab, decouple the HW mouse, park the
-/// cursor at centre, and hide it; on release, re-couple, show it, and re-assert the guest shape.
-/// Shared by the local-monitor toggle ([`InputState::toggle_capture`]) and the capture tap, so the
-/// two stay byte-identical. Main thread only (NSCursor hide/unhide must balance).
-pub(crate) fn apply_capture_cursor(on: bool, host_cursor: &HostCursor) {
+/// cursor at centre, and hide it; on release, re-couple, warp the cursor to `release_to` (where
+/// the captured virtual cursor ended, so leaving capture is as seamless as entering it), show it,
+/// and re-assert the guest shape. Shared by the local-monitor toggle
+/// ([`InputState::toggle_capture`]) and the capture tap, so the two stay byte-identical. Main
+/// thread only (NSCursor hide/unhide must balance).
+pub(crate) fn apply_capture_cursor(
+    on: bool,
+    host_cursor: &HostCursor,
+    release_to: Option<NSPoint>,
+) {
     if on {
         unsafe {
             CGAssociateMouseAndMouseCursorPosition(0);
@@ -82,13 +88,32 @@ pub(crate) fn apply_capture_cursor(on: bool, host_cursor: &HostCursor) {
         }
         log::info!("pointer capture: ON (Cmd-Ctrl-G to release)");
     } else {
-        unsafe { CGAssociateMouseAndMouseCursorPosition(1) };
+        unsafe {
+            CGAssociateMouseAndMouseCursorPosition(1);
+            // Warp while still hidden, so the cursor *appears* at the release point rather
+            // than visibly jumping from the parked centre.
+            if let Some(p) = release_to {
+                CGWarpMouseCursorPosition(p);
+            }
+        }
         if CURSOR_HIDDEN.swap(false, Ordering::AcqRel) {
             NSCursor::unhide();
         }
         host_cursor.reassert();
         log::info!("pointer capture: OFF");
     }
+}
+
+/// Map a view point (bottom-left origin, view coordinates) to CG *global* coordinates
+/// (top-left origin of the primary display) — the space `CGWarpMouseCursorPosition` speaks.
+/// `None` when the view isn't in a window. NS global coordinates share the primary display's
+/// origin with CG but grow upward, so the flip goes through the primary display height.
+pub(crate) fn view_point_to_cg_global(view: &NSView, p: (f64, f64)) -> Option<NSPoint> {
+    let window = view.window()?;
+    let base = view.convertPoint_toView(NSPoint::new(p.0, p.1), None);
+    let scr = window.convertPointToScreen(base);
+    let h = unsafe { CGDisplayBounds(CGMainDisplayID()) }.size.height;
+    Some(NSPoint::new(scr.x, h - scr.y))
 }
 
 /// Whether we currently have the host cursor hidden for capture — keeps `NSCursor::hide`/`unhide`
@@ -204,12 +229,22 @@ pub struct InputState {
     host_cursor: Rc<HostCursor>,
     /// Keyboard remap policy (e.g. the Command/Option swap), applied to every key/modifier.
     remap: KeyRemap,
-    /// Pointer-capture (relative/mouselook) mode: when set, the host cursor is grabbed (frozen
-    /// and hidden) and pointer events go to the guest's relative-mouse device as `REL_X`/`REL_Y`
-    /// deltas instead of the absolute tablet. Toggled by `Cmd-Ctrl-G`. Shared with the render
-    /// timer (an `Arc<AtomicBool>`), which composites the guest cursor at its reported position
-    /// while this is set (the host cursor is hidden, so the guest cursor has to be drawn).
+    /// Pointer-capture mode: when set, the host cursor is grabbed (frozen and hidden) and the
+    /// macOS-accelerated motion deltas integrate into a *virtual* cursor position
+    /// ([`InputState::capture_pos`]) that drives the same absolute tablet as uncaptured mode —
+    /// so movement feels exactly like the host cursor (same acceleration, same fit mapping, and
+    /// libinput never accelerates an absolute device on top). Toggled by `Cmd-Ctrl-G`. Shared
+    /// with the render timer (an `Arc<AtomicBool>`), which composites the guest cursor at its
+    /// reported position while this is set (the host cursor is hidden, so the guest cursor has
+    /// to be drawn).
     captured: Arc<AtomicBool>,
+    /// The virtual cursor position in view points (bottom-left origin, the fit rect's space).
+    /// Uncaptured motion keeps it at the pointer's last position over the content, so a grab
+    /// starts exactly where the cursor was; captured motion integrates deltas into it
+    /// ([`fit::capture_step`]); a release warps the host cursor back to it. `None` until the
+    /// pointer has ever been placed (then capture seeds at the content centre). Shared with the
+    /// capture tap (same main thread → `Rc<Cell>`).
+    capture_pos: Rc<Cell<Option<(f64, f64)>>>,
     /// Where the guest scanout currently sits inside the content view, written by the render
     /// path every tick (dynamic mode: the full view — the legacy mapping; host/fixed: the
     /// letterboxed fit rect). The absolute-pointer transform and the inside-gate go through
@@ -224,6 +259,7 @@ impl InputState {
         remap: KeyRemap,
         captured: Arc<AtomicBool>,
         fit: Rc<Cell<super::fit::FitRect>>,
+        capture_pos: Rc<Cell<Option<(f64, f64)>>>,
     ) -> Self {
         Self {
             conn,
@@ -234,6 +270,7 @@ impl InputState {
             host_cursor,
             remap,
             captured,
+            capture_pos,
             fit,
         }
     }
@@ -243,12 +280,20 @@ impl InputState {
     }
 
     /// Toggle pointer capture. On grab: decouple the hardware mouse from the cursor (so deltas
-    /// flow while the cursor stays frozen — mouselook) and hide the cursor. On release: restore
-    /// both. Returns the new captured state. Main thread only.
-    pub fn toggle_capture(&self) -> bool {
+    /// flow while the cursor stays frozen) and hide the cursor. On release: restore both and put
+    /// the host cursor where the virtual cursor ended, so the transition is seamless in both
+    /// directions. Returns the new captured state. Main thread only.
+    pub fn toggle_capture(&self, view: &NSView) -> bool {
         let now = !self.is_captured();
+        let release_to = if now {
+            None
+        } else {
+            self.capture_pos
+                .get()
+                .and_then(|p| view_point_to_cg_global(view, p))
+        };
         self.captured.store(now, Ordering::Release);
-        apply_capture_cursor(now, &self.host_cursor);
+        apply_capture_cursor(now, &self.host_cursor, release_to);
         now
     }
 
@@ -280,7 +325,7 @@ impl InputState {
             }
             NSEventType::MouseMoved => {
                 if self.is_captured() {
-                    self.emit_rel_motion(event);
+                    self.emit_captured_motion(event);
                     return false;
                 }
                 let inside = self.pointer_inside(event, view);
@@ -294,7 +339,7 @@ impl InputState {
             | NSEventType::RightMouseDragged
             | NSEventType::OtherMouseDragged => {
                 if self.is_captured() {
-                    self.emit_rel_motion(event);
+                    self.emit_captured_motion(event);
                     return false;
                 }
                 let inside = self.pointer_inside(event, view);
@@ -429,9 +474,11 @@ impl InputState {
     /// matching release (and intervening drags) follow even if the pointer has left.
     fn emit_press(&self, event: &NSEvent, view: &NSView, btn: u16) -> bool {
         if self.is_captured() {
-            // Captured: no view gate, no absolute position — the relative mouse just clicks.
+            // Captured: no view gate — the virtual cursor is always over the content. Re-send
+            // its position with the press (same staleness guard as the uncaptured path below).
             self.guest_buttons
                 .set(self.guest_buttons.get() | btn_bit(btn));
+            self.send_captured_pos();
             self.send_ptr(InputEvent::new(EV_KEY, btn, 1));
             self.send_ptr(InputEvent::syn());
         } else if self.pointer_inside(event, view) {
@@ -469,43 +516,56 @@ impl InputState {
         false
     }
 
+    /// Map the event's window-local cursor position to the absolute device range through
+    /// the current fit rect (letterbox offset + scale, Y flipped — AppKit is bottom-left
+    /// origin, evdev top-left). Positions outside the content (drags that left it) clamp
+    /// to the nearest content edge. With the fit at the full view (dynamic mode) this is
+    /// the legacy full-bounds mapping, bit for bit. Also remembers the (clamped) position
+    /// as the capture seed, so a grab starts exactly where the cursor was.
     fn emit_motion(&self, event: &NSEvent, view: &NSView) {
-        let (x, y) = self.abs_coords(event, view);
+        // `None` source view = the point is in window base coordinates.
+        let p = view.convertPoint_fromView(event.locationInWindow(), None);
+        let fit = self.fit.get();
+        self.capture_pos.set(Some(super::fit::capture_step(
+            Some((p.x, p.y)),
+            0.0,
+            0.0,
+            fit,
+        )));
+        let (x, y) = super::fit::abs_through_fit(p.x, p.y, fit, ABS_MAX as i32);
         self.send_ptr(InputEvent::new(EV_ABS, ABS_X, x));
         self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, y));
         self.send_ptr(InputEvent::syn());
     }
 
-    /// Map the event's window-local cursor position to the absolute device range through
-    /// the current fit rect (letterbox offset + scale, Y flipped — AppKit is bottom-left
-    /// origin, evdev top-left). Positions outside the content (drags that left it) clamp
-    /// to the nearest content edge. With the fit at the full view (dynamic mode) this is
-    /// the legacy full-bounds mapping, bit for bit.
-    fn abs_coords(&self, event: &NSEvent, view: &NSView) -> (i32, i32) {
-        // `None` source view = the point is in window base coordinates.
-        let p = view.convertPoint_fromView(event.locationInWindow(), None);
-        super::fit::abs_through_fit(p.x, p.y, self.fit.get(), ABS_MAX as i32)
-    }
-
-    /// Capture mode: forward the event's relative delta to the guest's relative-mouse device.
-    /// `deltaX/deltaY` are raw movement (present even with the cursor frozen), and evdev `REL_Y`
-    /// is positive-down like AppKit's mouse `deltaY`, so they pass through directly.
-    fn emit_rel_motion(&self, event: &NSEvent) {
-        let dx = event.deltaX().round() as i32;
-        let dy = event.deltaY().round() as i32;
+    /// Capture mode: integrate the event's motion delta into the virtual cursor and drive the
+    /// absolute tablet with it. `deltaX/deltaY` carry the pointer-ballistics-processed motion
+    /// the macOS cursor would have made, and the absolute device adds no guest-side
+    /// acceleration, so captured movement feels exactly like the host cursor.
+    fn emit_captured_motion(&self, event: &NSEvent) {
         // Re-pin the (hidden) host cursor to the display centre so it can't drift onto windows
         // behind us — CGAssociate(false) alone doesn't reliably freeze it. The warp doesn't
-        // affect `deltaX/deltaY` (hardware deltas), so the guest still gets clean motion.
+        // affect `deltaX/deltaY`, so the virtual cursor still integrates clean motion.
         unsafe { CGWarpMouseCursorPosition(main_display_center()) };
-        if dx == 0 && dy == 0 {
-            return;
-        }
-        if dx != 0 {
-            self.send_ptr(InputEvent::new(EV_REL, REL_X, dx));
-        }
-        if dy != 0 {
-            self.send_ptr(InputEvent::new(EV_REL, REL_Y, dy));
-        }
+        let fit = self.fit.get();
+        let p =
+            super::fit::capture_step(self.capture_pos.get(), event.deltaX(), event.deltaY(), fit);
+        self.capture_pos.set(Some(p));
+        let (x, y) = super::fit::abs_through_fit(p.0, p.1, fit, ABS_MAX as i32);
+        self.send_ptr(InputEvent::new(EV_ABS, ABS_X, x));
+        self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, y));
+        self.send_ptr(InputEvent::syn());
+    }
+
+    /// Send the virtual cursor's current absolute position (seeding it if nothing ever
+    /// placed it) — the captured-mode analogue of the position-with-press staleness guard.
+    fn send_captured_pos(&self) {
+        let fit = self.fit.get();
+        let p = super::fit::capture_step(self.capture_pos.get(), 0.0, 0.0, fit);
+        self.capture_pos.set(Some(p));
+        let (x, y) = super::fit::abs_through_fit(p.0, p.1, fit, ABS_MAX as i32);
+        self.send_ptr(InputEvent::new(EV_ABS, ABS_X, x));
+        self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, y));
         self.send_ptr(InputEvent::syn());
     }
 
@@ -536,17 +596,13 @@ impl InputState {
         send_event(io.kbd_fd(), ev);
     }
 
-    /// Send to the pointer sink for the current mode: the relative-mouse device while
-    /// captured, the absolute pointer otherwise. Same snapshot-held-across-the-send rule
-    /// as `send_kbd`.
+    /// Send to the absolute-pointer device — both modes drive it now (captured mode moves a
+    /// virtual cursor through the same mapping). The relative-mouse device stays attached but
+    /// dormant, reserved for a future explicit mouselook/game mode. Same
+    /// snapshot-held-across-the-send rule as `send_kbd`.
     fn send_ptr(&self, ev: InputEvent) {
         let io = self.conn.io();
-        let fd = if self.is_captured() {
-            io.rel_ptr_fd()
-        } else {
-            io.ptr_fd()
-        };
-        send_event(fd, ev);
+        send_event(io.ptr_fd(), ev);
     }
 }
 

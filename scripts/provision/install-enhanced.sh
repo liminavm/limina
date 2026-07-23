@@ -415,12 +415,14 @@ if [ -f "$AGENT_BIN" ]; then
   install -m 0755 "$AGENT_BIN" /usr/local/bin/limina-agent
   UNIT="$PAYLOAD/limina-agent.service"
   [ -f "$UNIT" ] && install -m 0644 "$UNIT" /etc/systemd/system/limina-agent.service
-  # Flat (linear) pointer profile so captured mouselook doesn't double-accelerate; ships as a
-  # gschema DEFAULT override (a user gsettings override still wins; stock guests are unaffected).
-  GSCHEMA="$PAYLOAD/90-limina-pointer.gschema.override"
-  if [ -f "$GSCHEMA" ]; then
-    install -m 0644 "$GSCHEMA" /usr/share/glib-2.0/schemas/
+  # The flat-pointer gschema override is RETIRED (2026-07-23): captured motion now drives the
+  # absolute tablet (host-integrated, macOS-accelerated deltas), which libinput never
+  # accelerates — no guest-side profile tweak needed. Remove it from previously-provisioned
+  # guests so a passed-through real mouse keeps the distro default profile.
+  if [ -f /usr/share/glib-2.0/schemas/90-limina-pointer.gschema.override ]; then
+    rm -f /usr/share/glib-2.0/schemas/90-limina-pointer.gschema.override
     glib-compile-schemas /usr/share/glib-2.0/schemas/ >/dev/null 2>&1 || true
+    echo "   removed retired 90-limina-pointer.gschema.override (flat-profile capture workaround)"
   fi
   # SELinux: a freshly-converted stock guest runs Enforcing, so relabel what we just dropped (the
   # dev guest dodges this with selinux=0). A no-op on a permissive/disabled guest.

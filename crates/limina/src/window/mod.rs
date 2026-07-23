@@ -660,14 +660,27 @@ pub fn run(
     // Pointer-capture flag, shared between the input monitor (which toggles it on Cmd-Ctrl-G),
     // the render timer (which composites the guest cursor while it's set), and the capture tap.
     let captured = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // The captured-mode virtual cursor (view points): seeded by uncaptured motion with the
+    // pointer's last position over the content, stepped by the macOS-accelerated deltas while
+    // captured, and driven through the SAME absolute-tablet mapping as uncaptured motion — so
+    // captured movement feels exactly like the host cursor. Shared between the input translator
+    // and the capture tap (both main thread).
+    let capture_pos: std::rc::Rc<Cell<Option<(f64, f64)>>> = std::rc::Rc::new(Cell::new(None));
     // Reliable capture container: a session-level CGEventTap that *consumes* mouse events while
-    // captured (so clicks/motion can't escape to host windows) and forwards them to the guest's
-    // relative device. Needs Accessibility permission; if absent, capture falls back to the local
-    // monitor's warp path (see input.rs), the toggle path retries the install (a mid-run grant
-    // heals without a restart), and the first tap-less capture raises the system prompt.
-    // Installed on the main thread, before `app.run()`.
-    let _capture_tap =
-        capture_tap::install(conn.clone(), captured.clone(), remap, host_cursor.clone());
+    // captured (so clicks/motion can't escape to host windows) and integrates them into the
+    // virtual cursor driving the absolute tablet. Needs Accessibility permission; if absent,
+    // capture falls back to the local monitor's warp path (see input.rs), the toggle path
+    // retries the install (a mid-run grant heals without a restart), and the first tap-less
+    // capture raises the system prompt. Installed on the main thread, before `app.run()`.
+    let _capture_tap = capture_tap::install(
+        conn.clone(),
+        captured.clone(),
+        remap,
+        host_cursor.clone(),
+        fit_cell.clone(),
+        capture_pos.clone(),
+        view.clone(),
+    );
 
     // Shown-ack channel (#8 leg 2): after Core Animation latches a frame, tell the worker
     // "shown <id>" so it can complete the guest's held flush fence. The blocking send is done on
@@ -1001,6 +1014,7 @@ pub fn run(
         remap,
         captured.clone(),
         fit_cell.clone(),
+        capture_pos.clone(),
     ));
     let timer_input = input_state.clone();
     // Window key-focus state carried across ticks, so the timer can detect the key→not-key edge.
@@ -1298,7 +1312,7 @@ pub fn run(
                         // degrading silently to the warp path.
                         if capture_tap::retry_install() {
                             // Tap present (or just healed by the retry) — capture normally.
-                            input_state.toggle_capture();
+                            input_state.toggle_capture(&monitor_view);
                         } else if !capture_tap::prompt_accessibility_once() {
                             // The prompt was already shown earlier and Accessibility is still
                             // ungranted: honor the toggle in degraded (leaky warp) mode. On the
@@ -1306,7 +1320,7 @@ pub fn run(
                             // deliberately do NOT grab — the just-opened Accessibility dialog needs
                             // a clickable cursor, and a captured pointer is parked/consumed. The
                             // user grants, then presses Cmd-Ctrl-G again to actually capture.
-                            input_state.toggle_capture();
+                            input_state.toggle_capture(&monitor_view);
                         }
                     }
                 }

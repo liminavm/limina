@@ -117,6 +117,21 @@ pub(crate) fn abs_through_fit(px: f64, py: f64, fit: FitRect, abs_max: i32) -> (
     )
 }
 
+/// Advance the captured-mode virtual cursor by one motion delta, clamped to the fitted
+/// content. `pos` is the position in view points (bottom-left origin, same space as the
+/// fit rect); `None` seeds at the content centre (nothing has ever placed the cursor).
+/// `dx`/`dy` are AppKit mouse deltas — positive `dy` is *downward*, so it subtracts in
+/// this bottom-left space. The clamp is what contains the cursor at the guest's edges,
+/// exactly like the host screen edge does outside capture; it also re-pins a stale
+/// position into a fit rect that shrank (fullscreen toggle mid-capture).
+pub(crate) fn capture_step(pos: Option<(f64, f64)>, dx: f64, dy: f64, fit: FitRect) -> (f64, f64) {
+    let (sx, sy) = pos.unwrap_or((fit.x + fit.w / 2.0, fit.y + fit.h / 2.0));
+    (
+        (sx + dx).clamp(fit.x, fit.x + fit.w.max(0.0)),
+        (sy - dy).clamp(fit.y, fit.y + fit.h.max(0.0)),
+    )
+}
+
 /// Is a view point inside the fitted content (as opposed to the letterbox bars)?
 pub(crate) fn point_in_fit(px: f64, py: f64, fit: FitRect) -> bool {
     fit.w > 0.0
@@ -279,6 +294,74 @@ mod tests {
         // Degenerate inputs floor at 64 and never panic.
         let (w, h) = reshape_to_aspect((0.0, 0.0), (0, 0), (0.0, 0.0));
         assert!(w >= 64 && h >= 64);
+    }
+
+    #[test]
+    fn capture_step_moves_in_view_space_with_y_down() {
+        let fit = FitRect {
+            x: 100.0,
+            y: 50.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        // A downward AppKit delta (positive dy) lowers y in this bottom-left space.
+        assert_eq!(
+            capture_step(Some((500.0, 350.0)), 10.0, 20.0, fit),
+            (510.0, 330.0)
+        );
+    }
+
+    #[test]
+    fn capture_step_seeds_at_the_content_centre() {
+        let fit = FitRect {
+            x: 100.0,
+            y: 50.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        assert_eq!(capture_step(None, 0.0, 0.0, fit), (500.0, 350.0));
+    }
+
+    #[test]
+    fn capture_step_clamps_to_the_content_edges() {
+        let fit = FitRect {
+            x: 100.0,
+            y: 50.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        // A huge delta pins to the edge — the guest edge contains the cursor like the host
+        // screen edge does outside capture.
+        assert_eq!(
+            capture_step(Some((500.0, 350.0)), 1e6, -1e6, fit),
+            (900.0, 650.0)
+        );
+        assert_eq!(
+            capture_step(Some((500.0, 350.0)), -1e6, 1e6, fit),
+            (100.0, 50.0)
+        );
+    }
+
+    #[test]
+    fn capture_step_repins_a_stale_position_into_a_new_fit() {
+        // The fit shrank (e.g. fullscreen toggled off mid-capture): a zero-delta step
+        // re-pins the old position into the new content.
+        let fit = FitRect {
+            x: 0.0,
+            y: 0.0,
+            w: 400.0,
+            h: 300.0,
+        };
+        assert_eq!(
+            capture_step(Some((1000.0, 900.0)), 0.0, 0.0, fit),
+            (400.0, 300.0)
+        );
+    }
+
+    #[test]
+    fn capture_step_survives_a_degenerate_fit() {
+        let degenerate = FitRect::default();
+        assert_eq!(capture_step(None, 5.0, 5.0, degenerate), (0.0, 0.0));
     }
 
     #[test]
