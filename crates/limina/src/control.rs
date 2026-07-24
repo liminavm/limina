@@ -452,18 +452,51 @@ fn serve_loop(
                 }
             }
             Ok((_, Message::ClipData(d))) => inner.clipboard.on_data(d),
-            // M14: one CTAP HID report from the guest's uhid FIDO device; the CTAPHID
-            // state machine may answer with zero or more reports. Only reachable when a
-            // Secure Enclave is present (the guest was told `fido`), so `fido` is Some.
+            // M14: one CTAP HID report from the guest's uhid FIDO device. Only reachable
+            // when a Secure Enclave is present (the guest was told `fido`), so `fido` is
+            // Some. Transport frames (INIT/PING/errors) answer immediately; a CTAP2 CBOR
+            // command may block on a host Touch ID prompt, so it runs on a worker thread
+            // while we pump CTAPHID_KEEPALIVE (else libfido2/browsers time out FIDO_ERR_RX).
             Ok((_, Message::FidoReport(r))) => {
                 if let Some(fido) = fido.as_mut() {
-                    for resp in fido.on_report(&r.data) {
+                    let send = |f: [u8; crate::fido::REPORT_SIZE]| -> std::io::Result<()> {
                         reply(
-                            &Message::FidoReport(limina_proto::FidoReport {
-                                data: resp.to_vec(),
-                            }),
+                            &Message::FidoReport(limina_proto::FidoReport { data: f.to_vec() }),
                             limina_proto::CHANNEL_FIDO,
-                        )?;
+                        )
+                    };
+                    match fido.on_report(&r.data) {
+                        crate::fido::Outcome::Reports(frames) => {
+                            for f in frames {
+                                send(f)?;
+                            }
+                        }
+                        crate::fido::Outcome::Cbor { cid, payload } => {
+                            let store = fido.store();
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            std::thread::Builder::new()
+                                .name("limina-fido-ctap2".into())
+                                .spawn(move || {
+                                    let _ = tx.send(crate::fido::ctap2::handle(&store, &payload));
+                                })
+                                .ok();
+                            let response = loop {
+                                match rx.recv_timeout(Duration::from_millis(100)) {
+                                    Ok(resp) => break resp,
+                                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                        send(crate::fido::keepalive_report(cid))?;
+                                    }
+                                    // Worker died (panic) → answer CTAP1_ERR_OTHER so the
+                                    // client fails cleanly instead of hanging.
+                                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                        break vec![0x7f]
+                                    }
+                                }
+                            };
+                            for f in crate::fido::cbor_report_frames(cid, &response) {
+                                send(f)?;
+                            }
+                        }
                     }
                 }
             }
