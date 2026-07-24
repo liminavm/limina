@@ -1450,6 +1450,7 @@ device forwarding.
    the prompt needs a finger).
 6. **Stock wave:** xHCI device model + the two gadgets; pick the MOC target from libfprint
    sources (simplest protocol, no pairing/TLS if avoidable); fwupd-neutralization verify.
+   Controller design (prior-art survey, scope, trait, wave plan): `docs/design/usb-xhci.md`.
 
 **Done test:** on a **stock** F44 guest (USB build): Firefox registers + asserts a passkey on
 webauthn.io with Touch ID prompts appearing on the host; GNOME Settings shows Fingerprint Login;
