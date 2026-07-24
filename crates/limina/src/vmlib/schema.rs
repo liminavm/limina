@@ -93,6 +93,11 @@ pub struct Hardware {
     /// See `--mic`.
     #[serde(default)]
     pub mic: bool,
+    /// Attach the emulated xHCI USB controller (platform `generic-xhci`; default false).
+    /// A stock guest binds it with its own xhci-plat driver (no guest components). Opt-in;
+    /// the controller is a bring-up skeleton today (no devices yet). See `--usb`.
+    #[serde(default)]
+    pub usb: bool,
     /// Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` to the guest (default false; M6 addendum
     /// 2026-07-20). The bit makes Linux keep ballooned pages inside `MemTotal`, so an inflated
     /// dynamic VM reads as nearly out of memory and systemd-oomd fires; without it accounting
@@ -144,6 +149,7 @@ impl Default for Hardware {
             battery: true,
             snd: true,
             mic: false,
+            usb: false,
             balloon_deflate_on_oom: false,
         }
     }

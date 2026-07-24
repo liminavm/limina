@@ -253,6 +253,13 @@ struct Cli {
     #[arg(long)]
     mic: bool,
 
+    /// Attach the emulated xHCI USB controller (platform `generic-xhci`). Opt-in and OFF
+    /// by default; a stock guest binds it with its own xhci-plat driver and brings the USB
+    /// root hub up with no guest-side components. Stage A bring-up: the controller
+    /// enumerates but carries no devices yet.
+    #[arg(long)]
+    usb: bool,
+
     /// What to do with the guest when the HOST goes to sleep: `s2idle` (default) suspends
     /// the guest first (sleep-button pulse, held until it quiesces) and wakes it on host
     /// wake, so its wall clock and timers come back correct on every tier; `ignore` leaves
@@ -797,6 +804,7 @@ fn cli_from_definition(
         no_battery: !cfg.hardware.battery,
         no_snd: !cfg.hardware.snd,
         mic: cfg.hardware.mic,
+        usb: cfg.hardware.usb,
         on_host_sleep: Some(cfg.power.on_host_sleep.as_flag().to_string()),
         net,
         net_log: None,
@@ -1024,6 +1032,9 @@ fn run_vm(cli: Cli) -> Result<()> {
     }
     if cli.mic {
         args.push("--mic".into());
+    }
+    if cli.usb {
+        args.push("--usb".into());
     }
     if let Some(policy) = &cli.on_host_sleep {
         args.push("--on-host-sleep".into());

@@ -175,6 +175,13 @@ struct Cli {
     #[arg(long)]
     mic: bool,
 
+    /// Attach the emulated xHCI USB controller (platform `generic-xhci`). Opt-in and OFF
+    /// by default; a stock guest binds it with its own xhci-plat driver and brings the
+    /// root hub up with no guest-side components. Stage A is a bring-up skeleton (the
+    /// controller enumerates but carries no devices yet).
+    #[arg(long)]
+    usb: bool,
+
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (free-page-reporting fast reclaim) to the guest.
     /// OFF by default: a stock Linux guest with page-reporting enabled crashes on suspend-to-idle
     /// (upstream `virtballoon_freeze` frees the reporting virtqueue while its non-freezable worker is
@@ -512,6 +519,7 @@ fn main() -> Result<()> {
         battery: !cli.no_battery,
         snd: !cli.no_snd,
         mic: cli.mic,
+        usb: cli.usb,
         free_page_reporting: cli.balloon_free_page_reporting,
         deflate_on_oom: cli.balloon_deflate_on_oom,
         snapshot_file: cli.snapshot_file,

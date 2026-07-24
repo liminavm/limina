@@ -220,6 +220,10 @@ pub struct VmSpec {
     /// Advertise the mic-capture input stream on the virtio-snd device. Opt-in and
     /// default-off for privacy (unlike playback); only meaningful when `snd` is also on.
     pub mic: bool,
+    /// Attach the emulated xHCI USB controller (platform `generic-xhci`). Opt-in and
+    /// default-off; a stock guest binds it with its own xhci-plat driver (no guest
+    /// components). The controller is a stub data path today (Stage A bring-up).
+    pub usb: bool,
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest. **Default false**: a
     /// stock Linux guest with page-reporting enabled crashes on suspend-to-idle (upstream
     /// `virtballoon_freeze` frees the reporting vq while its worker is still live). Enable only for

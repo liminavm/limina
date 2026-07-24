@@ -182,6 +182,9 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     vmr.snd = spec.snd;
     // Mic capture is opt-in (default off, privacy); only acts when snd is also on.
     vmr.snd_capture = spec.mic;
+    // Emulated xHCI USB controller (opt-in, default off). A stock guest binds it via
+    // its own xhci-plat driver; Stage A is a bring-up skeleton (no devices yet).
+    vmr.usb = spec.usb;
 
     Ok(vmr)
 }
