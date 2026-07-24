@@ -73,6 +73,9 @@ use crate::vmlib::state::WindowState;
 pub struct WindowOptions {
     pub resize_socket: Option<PathBuf>,
     pub remap: limina_input::keymap::KeyRemap,
+    /// Soft keyboard grab: while the window is key, the tap consumes keyboard input (system
+    /// combos included) for the guest, mouse left free. `--no-soft-kbd-grab` opts out.
+    pub soft_kbd_grab: bool,
     pub title: String,
     /// Display mode: host (drive the guest to the window's screen size, letterboxing the
     /// window), dynamic (guest follows the window — the original behavior), or fixed.
@@ -486,6 +489,7 @@ pub fn run(
     let WindowOptions {
         resize_socket,
         remap,
+        soft_kbd_grab,
         title,
         mode,
         initial_size,
@@ -672,11 +676,23 @@ pub fn run(
     // capture falls back to the local monitor's warp path (see input.rs), the toggle path
     // retries the install (a mid-run grant heals without a restart), and the first tap-less
     // capture raises the system prompt. Installed on the main thread, before `app.run()`.
+    // The input translator, created before the tap so both share it: the render timer flushes
+    // held keys on focus loss, the local event monitor drives it per event, and the tap
+    // delegates capture toggles + the ungrab chord to it (one source of truth for the
+    // capture-boundary modifier bookkeeping).
+    let input_state = std::rc::Rc::new(input::InputState::new(
+        conn.clone(),
+        host_cursor.clone(),
+        remap,
+        captured.clone(),
+        fit_cell.clone(),
+        capture_pos.clone(),
+    ));
     let _capture_tap = capture_tap::install(
         conn.clone(),
         captured.clone(),
-        remap,
-        host_cursor.clone(),
+        input_state.clone(),
+        soft_kbd_grab,
         fit_cell.clone(),
         capture_pos.clone(),
         view.clone(),
@@ -1005,17 +1021,7 @@ pub fn run(
     // (all three make the window not-visible, but only a close should power the guest off).
     let timer_app = app.clone();
     let timer_state_path = state_path.clone();
-    // The input translator is created HERE (before the timer block) so it can be shared, via an
-    // Rc, between the render timer — which flushes held keys when the window loses focus — and the
-    // local event monitor below, which drives it per event.
-    let input_state = std::rc::Rc::new(input::InputState::new(
-        conn.clone(),
-        host_cursor.clone(),
-        remap,
-        captured.clone(),
-        fit_cell.clone(),
-        capture_pos.clone(),
-    ));
+    // (`input_state` itself was created further up, before the capture tap, which shares it.)
     let timer_input = input_state.clone();
     // Window key-focus state carried across ticks, so the timer can detect the key→not-key edge.
     // Seeded with the current state (the window was just made key), so the first tick is a no-op.

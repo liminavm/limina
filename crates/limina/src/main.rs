@@ -306,6 +306,12 @@ struct Cli {
     #[arg(long, overrides_with = "swap_cmd_opt")]
     no_swap_cmd_opt: bool,
 
+    /// Disable the soft keyboard grab. By default, while the VM window is focused, system
+    /// key combos (Cmd-Tab, Cmd-Space, …) go to the guest — the mouse stays free, clicking
+    /// another window (or Ctrl-Opt) returns the keyboard to the host.
+    #[arg(long)]
+    no_soft_kbd_grab: bool,
+
     /// Title for the VM window (managed starts pass the VM's name; default "Limina").
     #[arg(long, hide = true)]
     window_title: Option<String>,
@@ -800,6 +806,7 @@ fn cli_from_definition(
         // swap_cmd_opt_enabled() resolves to exactly cfg.input.swap_cmd_opt.
         swap_cmd_opt: cfg.input.swap_cmd_opt,
         no_swap_cmd_opt: !cfg.input.swap_cmd_opt,
+        no_soft_kbd_grab: false,
         window_title: Some(cfg.identity.name.clone()),
     })
 }
@@ -1132,6 +1139,7 @@ fn run_vm(cli: Cli) -> Result<()> {
             control,
             resize_socket,
             remap: limina_input::keymap::KeyRemap { swap_cmd_opt },
+            soft_kbd_grab: !cli.no_soft_kbd_grab,
             title: cli.window_title.clone().unwrap_or_else(|| "Limina".into()),
             mode: cli.display_resolution,
             state_path: cli.window_state_file.clone(),

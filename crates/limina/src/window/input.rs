@@ -31,7 +31,7 @@ use objc2_foundation::{NSPoint, NSRect};
 
 use limina_input::constants::{
     ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
-    REL_WHEEL,
+    REL_WHEEL, REL_X, REL_Y,
 };
 use limina_input::keymap::{
     capslock_on, macos_keycode_to_linux_remapped, modifier_emit, CapsLockSync, KeyRemap, ModEmit,
@@ -155,6 +155,33 @@ pub fn match_host_shortcut(keycode: u16, flags: u64) -> Option<HostShortcut> {
     }
 }
 
+/// One step of the modifier-only ungrab chord (Control+Option, VMware-style): given whether
+/// the chord is currently armed and the new `flagsChanged` bitmask, returns `(armed, fire)`.
+/// Arms when EXACTLY Control+Option are held (no Command/Shift); fires when the chord then
+/// breaks cleanly (either key lifts, nothing else joined). Any other modifier joining
+/// disarms, and the caller disarms on any key/button/scroll — so guest combos that *start*
+/// with Ctrl+Alt (Ctrl-Alt-T, Ctrl-Alt-arrows) still reach the guest while captured: they
+/// press another key mid-chord, which cancels the ungrab.
+pub(crate) fn ungrab_chord_step(armed: bool, flags: u64) -> (bool, bool) {
+    const SHIFT: u64 = 1 << 17;
+    const CONTROL: u64 = 1 << 18;
+    const OPTION: u64 = 1 << 19;
+    const COMMAND: u64 = 1 << 20;
+    let held = |m: u64| flags & m != 0;
+    let (ctrl, opt, cmd, shift) = (held(CONTROL), held(OPTION), held(COMMAND), held(SHIFT));
+    if ctrl && opt && !cmd && !shift {
+        return (true, false);
+    }
+    // Named parts (not one expression) — clippy's "minimal" form is unreadable here.
+    let chord_broke = !(ctrl && opt);
+    let nothing_else_held = !cmd && !shift;
+    (false, armed && chord_broke && nothing_else_held)
+}
+
+/// The macOS virtual keycodes of every held-modifier key (left/right pairs of
+/// Command/Shift/Option/Control) — the set force-released at an ungrab boundary.
+const MODIFIER_KEYCODES: [u16; 8] = [0x37, 0x36, 0x38, 0x3C, 0x3A, 0x3D, 0x3B, 0x3E];
+
 /// The host pointer's adoption of the guest cursor (main thread only). `cursor` is what
 /// the macOS pointer should look like over the guest view (the guest's current cursor
 /// image, or a blank cursor while the guest hides it); `inside` tracks whether the pointer
@@ -238,6 +265,10 @@ pub struct InputState {
     /// reported position while this is set (the host cursor is hidden, so the guest cursor has
     /// to be drawn).
     captured: Arc<AtomicBool>,
+    /// Ungrab-chord (Ctrl+Option) arm state, shared by whichever path is consuming
+    /// `flagsChanged` (the tap while captured, this monitor in degraded capture) — see
+    /// [`ungrab_chord_step`]. Main thread only.
+    ungrab_armed: Cell<bool>,
     /// The virtual cursor position in view points (bottom-left origin, the fit rect's space).
     /// Uncaptured motion keeps it at the pointer's last position over the content, so a grab
     /// starts exactly where the cursor was; captured motion integrates deltas into it
@@ -270,6 +301,7 @@ impl InputState {
             host_cursor,
             remap,
             captured,
+            ungrab_armed: Cell::new(false),
             capture_pos,
             fit,
         }
@@ -294,7 +326,68 @@ impl InputState {
         };
         self.captured.store(now, Ordering::Release);
         apply_capture_cursor(now, &self.host_cursor, release_to);
+        self.ungrab_armed.set(false);
+        // Reconcile modifier bookkeeping across the boundary: while captured the TAP forwards
+        // modifier edges, so this monitor's believed-pressed sets go stale — and stale state
+        // makes `modifier_emit` swallow a later edge (a stuck or missed modifier in the guest).
+        // On grab, release everything WE forwarded (the tap re-emits what's still held on its
+        // next flagsChanged); on ungrab, force-release every modifier key — the ungrab chord
+        // itself is always mid-press at this moment (releases of un-pressed keys are dropped
+        // by the guest's input core, so over-releasing is safe).
+        if now {
+            self.release_all_held();
+        } else {
+            self.release_all_modifiers();
+        }
         now
+    }
+
+    /// Force-release every held-modifier key in the guest and reset the believed-pressed
+    /// sets. Called on capture release: whatever the tap left pressed (the ungrab chord at
+    /// minimum) must not stay wedged down in the guest.
+    fn release_all_modifiers(&self) {
+        for &kc in &MODIFIER_KEYCODES {
+            if let Some(code) = macos_keycode_to_linux_remapped(kc, &self.remap) {
+                self.send_kbd(InputEvent::new(EV_KEY, code, 0));
+                self.send_kbd(InputEvent::syn());
+            }
+        }
+        self.pressed_mods.borrow_mut().clear();
+    }
+
+    /// Tap-side key forwarding: same bookkeeping as the local monitor (caps-lock sync,
+    /// believed-pressed tracking so a focus-loss flush releases tap-forwarded keys too).
+    /// The tap calls this for keyDown/keyUp it consumes (captured or soft-grab mode).
+    pub(crate) fn tap_key(&self, macos_keycode: u16, down: bool, flags: u64) {
+        self.sync_capslock(flags);
+        self.emit_key(macos_keycode, down);
+    }
+
+    /// Tap-side `flagsChanged` forwarding — the modifier twin of [`InputState::tap_key`].
+    pub(crate) fn tap_flags(&self, macos_keycode: u16, flags: u64) {
+        self.sync_capslock(flags);
+        self.emit_modifier(macos_keycode, flags);
+    }
+
+    /// Exit the SOFT keyboard grab (Ctrl+Option while focused but not captured): flush the
+    /// modifiers the chord pushed into the guest so nothing stays wedged. The caller mutes
+    /// soft mode until the window regains key status.
+    pub(crate) fn flush_modifiers(&self) {
+        self.release_all_modifiers();
+    }
+
+    /// Feed a captured-mode `flagsChanged` bitmask to the ungrab chord. Returns `true` when
+    /// the chord fired (the caller should release capture and consume the event).
+    pub(crate) fn observe_ungrab_flags(&self, flags: u64) -> bool {
+        let (armed, fire) = ungrab_chord_step(self.ungrab_armed.get(), flags);
+        self.ungrab_armed.set(armed);
+        fire
+    }
+
+    /// Disarm the ungrab chord — any non-modifier activity (key, button, scroll) between the
+    /// chord press and its break means the user was typing a combo, not ungrabbing.
+    pub(crate) fn cancel_ungrab_chord(&self) {
+        self.ungrab_armed.set(false);
     }
 
     /// Handle one captured event. Returns `true` if it should be swallowed (not passed on
@@ -309,6 +402,7 @@ impl InputState {
         self.sync_capslock(event.modifierFlags().0 as u64);
         match event.r#type() {
             NSEventType::KeyDown => {
+                self.cancel_ungrab_chord();
                 // The guest kernel autorepeats from key-down state; drop macOS repeats.
                 if !event.isARepeat() {
                     self.emit_key(event.keyCode(), true);
@@ -320,6 +414,12 @@ impl InputState {
                 true
             }
             NSEventType::FlagsChanged => {
+                // Degraded (tap-less) capture consumes flagsChanged here — give the ungrab
+                // chord (Ctrl+Option) the same meaning it has under the tap.
+                if self.is_captured() && self.observe_ungrab_flags(event.modifierFlags().0 as u64) {
+                    self.toggle_capture(view);
+                    return true;
+                }
                 self.emit_modifier(event.keyCode(), event.modifierFlags().0 as u64);
                 true
             }
@@ -473,6 +573,7 @@ impl InputState {
     /// Forward a button press if it lands inside the guest view; remember it so the
     /// matching release (and intervening drags) follow even if the pointer has left.
     fn emit_press(&self, event: &NSEvent, view: &NSView, btn: u16) -> bool {
+        self.cancel_ungrab_chord();
         if self.is_captured() {
             // Captured: no view gate — the virtual cursor is always over the content. Re-send
             // its position with the press (same staleness guard as the uncaptured path below).
@@ -526,12 +627,9 @@ impl InputState {
         // `None` source view = the point is in window base coordinates.
         let p = view.convertPoint_fromView(event.locationInWindow(), None);
         let fit = self.fit.get();
-        self.capture_pos.set(Some(super::fit::capture_step(
-            Some((p.x, p.y)),
-            0.0,
-            0.0,
-            fit,
-        )));
+        self.capture_pos.set(Some(
+            super::fit::capture_step(Some((p.x, p.y)), 0.0, 0.0, fit).pos,
+        ));
         let (x, y) = super::fit::abs_through_fit(p.x, p.y, fit, ABS_MAX as i32);
         self.send_ptr(InputEvent::new(EV_ABS, ABS_X, x));
         self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, y));
@@ -548,20 +646,21 @@ impl InputState {
         // affect `deltaX/deltaY`, so the virtual cursor still integrates clean motion.
         unsafe { CGWarpMouseCursorPosition(main_display_center()) };
         let fit = self.fit.get();
-        let p =
+        let step =
             super::fit::capture_step(self.capture_pos.get(), event.deltaX(), event.deltaY(), fit);
-        self.capture_pos.set(Some(p));
-        let (x, y) = super::fit::abs_through_fit(p.0, p.1, fit, ABS_MAX as i32);
+        self.capture_pos.set(Some(step.pos));
+        let (x, y) = super::fit::abs_through_fit(step.pos.0, step.pos.1, fit, ABS_MAX as i32);
         self.send_ptr(InputEvent::new(EV_ABS, ABS_X, x));
         self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, y));
         self.send_ptr(InputEvent::syn());
+        send_edge_overflow(&self.conn, step.overflow);
     }
 
     /// Send the virtual cursor's current absolute position (seeding it if nothing ever
     /// placed it) — the captured-mode analogue of the position-with-press staleness guard.
     fn send_captured_pos(&self) {
         let fit = self.fit.get();
-        let p = super::fit::capture_step(self.capture_pos.get(), 0.0, 0.0, fit);
+        let p = super::fit::capture_step(self.capture_pos.get(), 0.0, 0.0, fit).pos;
         self.capture_pos.set(Some(p));
         let (x, y) = super::fit::abs_through_fit(p.0, p.1, fit, ABS_MAX as i32);
         self.send_ptr(InputEvent::new(EV_ABS, ABS_X, x));
@@ -570,6 +669,7 @@ impl InputState {
     }
 
     fn emit_scroll(&self, event: &NSEvent) {
+        self.cancel_ungrab_chord();
         // macOS deltas are continuous; emit one wheel notch per event in the delta's
         // direction (crude but usable; precise pixel scrolling is a later refinement).
         let dy = event.scrollingDeltaY();
@@ -597,13 +697,38 @@ impl InputState {
     }
 
     /// Send to the absolute-pointer device — both modes drive it now (captured mode moves a
-    /// virtual cursor through the same mapping). The relative-mouse device stays attached but
-    /// dormant, reserved for a future explicit mouselook/game mode. Same
-    /// snapshot-held-across-the-send rule as `send_kbd`.
+    /// virtual cursor through the same mapping). The relative-mouse device carries only the
+    /// edge-clamped overflow ([`send_edge_overflow`]). Same snapshot-held-across-the-send
+    /// rule as `send_kbd`.
     fn send_ptr(&self, ev: InputEvent) {
         let io = self.conn.io();
         send_event(io.ptr_fd(), ev);
     }
+}
+
+/// Forward clamped-off captured motion to the guest's relative-mouse device as edge
+/// *pressure*. mutter's pressure barriers (GNOME's hot corner) fire on motion pushed INTO a
+/// barrier while the pointer is pinned — something a pre-clamped absolute stream can never
+/// express, which is why the hot corner went dead in capture mode. Away from edges the
+/// overflow is zero and the device stays silent; when it does fire, the resulting relative
+/// motion cannot drift the guest cursor, because the compositor clamps it at the same screen
+/// edge the absolute position is already pinned to.
+pub(crate) fn send_edge_overflow(conn: &Arc<WorkerConn>, overflow: (f64, f64)) {
+    let dx = overflow.0.round() as i32;
+    let dy = overflow.1.round() as i32;
+    if dx == 0 && dy == 0 {
+        return;
+    }
+    // Snapshot rule as everywhere: hold the Arc so the fd stays open across the sends.
+    let io = conn.io();
+    let fd = io.rel_ptr_fd();
+    if dx != 0 {
+        send_event(fd, InputEvent::new(EV_REL, REL_X, dx));
+    }
+    if dy != 0 {
+        send_event(fd, InputEvent::new(EV_REL, REL_Y, dy));
+    }
+    send_event(fd, InputEvent::syn());
 }
 
 /// One bit per mouse button for the forwarded-press mask.
@@ -681,5 +806,39 @@ mod tests {
     #[test]
     fn bare_f_goes_to_the_guest() {
         assert_eq!(match_host_shortcut(KC_F, 0), None);
+    }
+
+    #[test]
+    fn ungrab_chord_arms_on_exactly_ctrl_opt_and_fires_on_break() {
+        // Ctrl alone: nothing.
+        assert_eq!(ungrab_chord_step(false, CONTROL), (false, false));
+        // Ctrl+Opt: armed, no fire yet.
+        assert_eq!(ungrab_chord_step(false, CONTROL | OPTION), (true, false));
+        // One of them lifts: fire.
+        assert_eq!(ungrab_chord_step(true, CONTROL), (false, true));
+        // Or both lift at once: fire.
+        assert_eq!(ungrab_chord_step(true, 0), (false, true));
+    }
+
+    #[test]
+    fn ungrab_chord_disarms_when_another_modifier_joins() {
+        // Cmd joins the chord: disarm, and the later break must NOT fire.
+        assert_eq!(
+            ungrab_chord_step(true, CONTROL | OPTION | COMMAND),
+            (false, false)
+        );
+        // Shift prevents arming in the first place.
+        assert_eq!(
+            ungrab_chord_step(false, CONTROL | OPTION | SHIFT),
+            (false, false)
+        );
+        // Breaking an unarmed chord is inert.
+        assert_eq!(ungrab_chord_step(false, CONTROL), (false, false));
+    }
+
+    #[test]
+    fn ungrab_chord_rearms_after_a_disarm_once_exactly_ctrl_opt_again() {
+        // Cmd joined (disarmed), then Cmd lifted leaving exactly Ctrl+Opt: armed again.
+        assert_eq!(ungrab_chord_step(false, CONTROL | OPTION), (true, false));
     }
 }

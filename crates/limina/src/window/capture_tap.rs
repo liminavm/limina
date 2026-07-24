@@ -13,8 +13,11 @@
 //! virtual cursor position, and drives the guest's **absolute tablet** with it — the same device
 //! and fit mapping as uncaptured mode, so captured movement feels exactly like the host cursor
 //! (macOS pointer ballistics are already in the deltas, and libinput never accelerates an
-//! absolute device); system key combos (Cmd-Tab/Cmd-Space/media keys) are
-//! consumed and forwarded the same way. It needs **Accessibility** permission (System Settings →
+//! absolute device). Motion the edge clamp eats is forwarded to the relative-mouse device as
+//! *pressure* so mutter's barriers (GNOME hot corner) still fire. System key combos
+//! (Cmd-Tab/Cmd-Space/media keys) are consumed and forwarded the same way. Because the tap is
+//! session-wide, the grab arm of the toggle only engages while our window is key.
+//! It needs **Accessibility** permission (System Settings →
 //! Privacy & Security → Accessibility); if that's not granted `CGEventTapCreate` returns NULL and
 //! we fall back to the (leaky) local-monitor warp path — but not silently: a failed install is
 //! kept retryable ([`retry_install`], the grant takes effect on a fresh create without a VM
@@ -36,14 +39,10 @@ use limina_input::constants::{
     ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
     REL_WHEEL,
 };
-use limina_input::keymap::{macos_keycode_to_linux_remapped, modifier_is_down, KeyRemap};
 use limina_input::InputEvent;
 
 use super::fit::{self, FitRect};
-use super::input::{
-    apply_capture_cursor, match_host_shortcut, send_event, view_point_to_cg_global, HostCursor,
-    HostShortcut,
-};
+use super::input::{match_host_shortcut, send_edge_overflow, send_event, HostShortcut, InputState};
 use super::WorkerConn;
 
 type CFMachPortRef = *mut c_void;
@@ -140,11 +139,17 @@ static TAP_PORT: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 struct TapCtx {
     captured: Arc<AtomicBool>,
     conn: Arc<WorkerConn>,
-    /// Guest-cursor adoption, for the host-cursor side of a capture toggle (hide/show/re-assert).
-    host_cursor: Rc<HostCursor>,
-    /// Keyboard remap policy (e.g. `--swap-cmd-opt`) — same as the local monitor uses, so keys
-    /// captured here translate identically to keys handled in absolute mode.
-    remap: KeyRemap,
+    /// The shared input translator: keyboard forwarding, capture toggles
+    /// ([`InputState::toggle_capture`] — host-cursor transition, release warp, modifier
+    /// reconciliation), and the Ctrl+Option ungrab-chord state all live there, so the tap
+    /// and the local monitor can never disagree. Main thread only, like everything here.
+    input: Rc<InputState>,
+    /// Soft keyboard grab enabled (policy; `--no-soft-kbd-grab` turns it off).
+    soft_enabled: bool,
+    /// Ctrl-Opt muted the soft grab; cleared when the window regains key status.
+    soft_muted: Cell<bool>,
+    /// Whether the window was key at the last event — the regain edge un-mutes.
+    was_key: Cell<bool>,
     /// The current fit rect (letterbox geometry), shared with the render path — the virtual
     /// cursor moves and clamps in its space, so captured motion maps to guest pixels exactly
     /// like uncaptured motion does.
@@ -187,6 +192,17 @@ extern "C" fn tap_callback(
     let ctx = unsafe { &*(user as *const TapCtx) };
     let geti = |field: u32| unsafe { CGEventGetIntegerValueField(event, field) };
 
+    // Key-window tracking: the SOFT keyboard grab engages only while our window is key, and
+    // a Ctrl-Opt mute of it lasts until the window regains key status (losing and retaking
+    // focus is the natural "reset" — clicking back into the VM means you want it again).
+    let is_key = ctx.view.window().is_some_and(|w| w.isKeyWindow());
+    if is_key && !ctx.was_key.replace(true) {
+        ctx.soft_muted.set(false);
+    }
+    if !is_key {
+        ctx.was_key.set(false);
+    }
+
     // Capture toggle (Cmd-Ctrl-G) is recognized HERE, in any state, and acted on directly — never
     // delegated to the local monitor. Reason: while captured we consume the Cmd/Ctrl flagsChanged,
     // so the window server loses the modifier state and the passed-through G keyDown reaches the
@@ -200,92 +216,104 @@ extern "C" fn tap_callback(
             Some(HostShortcut::ToggleCapture)
         ) {
             let now = !ctx.captured.load(Ordering::Acquire);
-            // On release, put the host cursor where the virtual cursor ended (seamless exit).
-            let release_to = if now {
-                None
-            } else {
-                ctx.pos
-                    .get()
-                    .and_then(|p| view_point_to_cg_global(&ctx.view, p))
-            };
-            ctx.captured.store(now, Ordering::Release);
-            apply_capture_cursor(now, &ctx.host_cursor, release_to);
+            // GRAB only when our window is key: this is a SESSION tap, so it sees the combo
+            // even while another app (or another VM) is focused — grabbing then steals the
+            // user's mouse out from under whatever they were doing. Pass the combo through
+            // instead so the focused party (possibly another VM's key-gated tap) handles it.
+            // RELEASE is deliberately not gated — the escape hatch must always work.
+            if now && !is_key {
+                return event;
+            }
+            ctx.input.toggle_capture(&ctx.view);
             return std::ptr::null_mut(); // consume — the toggle never reaches macOS or the guest
         }
     }
 
-    if !ctx.captured.load(Ordering::Acquire) {
-        return event; // not captured → let it through; the local monitor drives absolute mode
-    }
+    let captured = ctx.captured.load(Ordering::Acquire);
+    // SOFT keyboard grab: while our window is key (and not Ctrl-Opt-muted), keyboard input —
+    // including system combos like Cmd-Tab / Cmd-Space — goes to the guest, but the mouse
+    // stays free (absolute mode via the local monitor, cursor can leave the window). Losing
+    // key status disengages it instantly, so clicking anywhere else returns the keyboard to
+    // the host with no chord needed.
+    let soft = !captured && ctx.soft_enabled && is_key && !ctx.soft_muted.get();
 
-    // Keyboard: while captured, system combos (Cmd-Tab, Cmd-Space, Ctrl-arrows, fn keys, …) go to
-    // the GUEST, not macOS — translate to evdev and consume. Capture-release (Cmd-Ctrl-G) was
-    // already handled above. The other host shortcut (Cmd-Ctrl-F fullscreen) is passed through
-    // best-effort so the local monitor still toggles it. Modifiers stay balanced across the capture
-    // boundary because the matching key-up always reaches the guest via whichever path (tap or
-    // monitor) is active at release time.
-    if matches!(etype, KEY_DOWN | KEY_UP | FLAGS_CHANGED) {
-        // Snapshot the current worker's endpoints; holding the Arc keeps the fds open (and
-        // their numbers un-reusable) for the sends below even if a relaunch retires this
-        // worker mid-callback.
-        let io = ctx.conn.io();
-        let kbd: RawFd = io.kbd_fd();
+    // Keyboard: while captured (or soft-grabbed), system combos (Cmd-Tab, Cmd-Space,
+    // Ctrl-arrows, fn keys, …) go to the GUEST, not macOS — forward through the shared
+    // input translator (same remap, caps sync, and pressed-set bookkeeping as the local
+    // monitor, so a focus-loss flush covers tap-forwarded keys too) and consume.
+    // Capture-release (Cmd-Ctrl-G) was already handled above; the other host shortcuts pass
+    // through so the local monitor still gets them.
+    if matches!(etype, KEY_DOWN | KEY_UP | FLAGS_CHANGED) && (captured || soft) {
         let keycode = geti(FIELD_KEYBOARD_KEYCODE) as u16;
         let flags = unsafe { CGEventGetFlags(event) };
-        let send_kbd = |ev: InputEvent| send_event(kbd, ev);
         match etype {
             KEY_DOWN => {
+                // Any real key mid-chord means a guest combo (Ctrl-Alt-T…), not an ungrab.
+                ctx.input.cancel_ungrab_chord();
                 // Let our host shortcuts reach the local monitor (it toggles fullscreen/capture).
                 if match_host_shortcut(keycode, flags).is_some() {
                     return event;
                 }
                 // Skip autorepeat: the guest compositor generates its own key repeat from one press.
                 if geti(FIELD_KEYBOARD_AUTOREPEAT) == 0 {
-                    if let Some(code) = macos_keycode_to_linux_remapped(keycode, &ctx.remap) {
-                        send_kbd(InputEvent::new(EV_KEY, code, 1));
-                        send_kbd(InputEvent::syn());
-                    }
+                    ctx.input.tap_key(keycode, true, flags);
                 }
             }
             KEY_UP => {
-                if let Some(code) = macos_keycode_to_linux_remapped(keycode, &ctx.remap) {
-                    send_kbd(InputEvent::new(EV_KEY, code, 0));
-                    send_kbd(InputEvent::syn());
-                }
+                ctx.input.tap_key(keycode, false, flags);
             }
             _ => {
-                // flagsChanged carries no up/down — read the modifier's resulting state.
-                if let Some(down) = modifier_is_down(keycode, flags) {
-                    if let Some(code) = macos_keycode_to_linux_remapped(keycode, &ctx.remap) {
-                        send_kbd(InputEvent::new(EV_KEY, code, i32::from(down)));
-                        send_kbd(InputEvent::syn());
+                // Ungrab chord (Ctrl+Option pressed and released alone). Captured: release
+                // the grab (toggle_capture force-releases all guest modifiers, so the edges
+                // this chord already forwarded can't stay wedged down). Soft: mute the soft
+                // grab until the window regains key status, flushing modifiers the same way.
+                if ctx.input.observe_ungrab_flags(flags) {
+                    if captured {
+                        ctx.input.toggle_capture(&ctx.view);
+                    } else {
+                        ctx.soft_muted.set(true);
+                        ctx.input.flush_modifiers();
+                        log::info!(
+                            "soft keyboard grab: muted (Ctrl-Opt) — host combos return \
+                             until the window regains focus"
+                        );
                     }
+                    return std::ptr::null_mut();
                 }
+                ctx.input.tap_flags(keycode, flags);
             }
         }
         return std::ptr::null_mut(); // consume — the combo went to the guest
     }
 
+    if !captured {
+        return event; // not captured → let it through; the local monitor drives absolute mode
+    }
+
     // Same snapshot rule as the keyboard path above: the Arc keeps the fd open across the sends.
     // Captured pointer traffic drives the ABSOLUTE tablet — the same device as uncaptured mode —
-    // via the virtual cursor; the relative-mouse device stays dormant (reserved for a future
-    // explicit mouselook/game mode).
+    // via the virtual cursor; the relative-mouse device carries only the edge-clamped overflow
+    // as pressure (send_edge_overflow).
     let io = ctx.conn.io();
     let fd: RawFd = io.ptr_fd();
     let send = |ev: InputEvent| send_event(fd, ev);
-    // Send the virtual cursor's absolute position (stepped by `(dx, dy)`, clamped to the fit).
+    // Send the virtual cursor's absolute position (stepped by `(dx, dy)`, clamped to the
+    // fit); motion the clamp eats goes to the relative device as edge pressure (hot corner).
     let send_pos = |dx: f64, dy: f64| {
         let fit = ctx.fit.get();
-        let p = fit::capture_step(ctx.pos.get(), dx, dy, fit);
-        ctx.pos.set(Some(p));
-        let (x, y) = fit::abs_through_fit(p.0, p.1, fit, ABS_MAX as i32);
+        let step = fit::capture_step(ctx.pos.get(), dx, dy, fit);
+        ctx.pos.set(Some(step.pos));
+        let (x, y) = fit::abs_through_fit(step.pos.0, step.pos.1, fit, ABS_MAX as i32);
         send(InputEvent::new(EV_ABS, ABS_X, x));
         send(InputEvent::new(EV_ABS, ABS_Y, y));
         send(InputEvent::syn());
+        send_edge_overflow(&ctx.conn, step.overflow);
     };
     // A press re-sends the position first — same staleness guard as the uncaptured path.
+    // Buttons also disarm the ungrab chord (clicking mid-chord = interacting, not ungrabbing).
     let send_click = |btn: u16, down: bool| {
         if down {
+            ctx.input.cancel_ungrab_chord();
             send_pos(0.0, 0.0);
         }
         send(InputEvent::new(EV_KEY, btn, i32::from(down)));
@@ -318,6 +346,7 @@ extern "C" fn tap_callback(
             }
         }
         SCROLL => {
+            ctx.input.cancel_ungrab_chord();
             let v = geti(FIELD_SCROLL_AXIS1) as i32;
             let h = geti(FIELD_SCROLL_AXIS2) as i32;
             if v != 0 {
@@ -379,8 +408,8 @@ fn try_create(ctx: *mut TapCtx) -> bool {
 pub(crate) fn install(
     conn: Arc<WorkerConn>,
     captured: Arc<AtomicBool>,
-    remap: KeyRemap,
-    host_cursor: Rc<HostCursor>,
+    input: Rc<InputState>,
+    soft_kbd_grab: bool,
     fit: Rc<Cell<FitRect>>,
     pos: Rc<Cell<Option<(f64, f64)>>>,
     view: Retained<NSView>,
@@ -388,8 +417,10 @@ pub(crate) fn install(
     let ctx = Box::into_raw(Box::new(TapCtx {
         captured,
         conn,
-        host_cursor,
-        remap,
+        input,
+        soft_enabled: soft_kbd_grab,
+        soft_muted: Cell::new(false),
+        was_key: Cell::new(false),
         fit,
         pos,
         view,

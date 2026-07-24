@@ -805,8 +805,20 @@ Parallels replacement: fullscreen, keymap remap, multi-display, system-combo cap
      the **absolute tablet** — the same device/mapping as uncaptured mode, so movement feels
      exactly like the host cursor and release warps the cursor back to where the virtual cursor
      ended. This retired the old workarounds (`LIMINA_CAPTURE_SENS` host scale + the enhanced-tier
-     flat guest pointer profile); the separate relative-mouse virtio-input device stays attached
-     but dormant, reserved for a future explicit mouselook/game mode. The guest cursor is
+     flat guest pointer profile); the separate relative-mouse virtio-input device now carries
+     only the edge-clamped motion overflow as *pressure* (mutter pressure barriers — GNOME's
+     hot corner — fire on motion pushed INTO a barrier while pinned, which a pre-clamped
+     absolute stream can't express), and seeds a future explicit mouselook/game mode. The
+     capture tap only grabs when its window is key (it's a session tap and sees the combo
+     system-wide; release stays ungated as the escape hatch). **Ctrl-Opt (press and release
+     alone, VMware-style) ungrabs**; any key/click mid-chord cancels it, so guest Ctrl-Alt-*
+     combos still work grabbed; capture toggles force-release all guest modifiers so nothing
+     wedges across the boundary. **Soft keyboard grab (default ON, `--no-soft-kbd-grab`)**:
+     while the VM window is key and not fully grabbed, the tap consumes ALL keyboard input —
+     system combos included (Cmd-Tab acts in the guest) — while the mouse stays free; losing
+     key status returns the keyboard instantly (click anywhere else), and Ctrl-Opt mutes it
+     until the window regains focus. The tap forwards keys through the shared `InputState`
+     (one pressed-set/caps-sync bookkeeping for tap + monitor). The guest cursor is
      composited at its reported `cursormove` position (host NSCursor hidden); **closes the M2
      guest-warp gap**. If Accessibility is denied, `CGEventTapCreate` returns NULL and it falls
      back to a leaky local-monitor warp path (same virtual-cursor motion, weaker containment).

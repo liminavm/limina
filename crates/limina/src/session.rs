@@ -36,6 +36,8 @@ pub struct SessionConfig {
     pub control: Option<control::ControlPlane>,
     pub resize_socket: Option<PathBuf>,
     pub remap: limina_input::keymap::KeyRemap,
+    /// Soft keyboard grab policy (window::WindowOptions::soft_kbd_grab).
+    pub soft_kbd_grab: bool,
     /// Window title — the managed VM's name, or "Limina" for ephemeral flat-CLI VMs.
     pub title: String,
     /// Display mode policy: host (match the window's screen), dynamic (guest follows the
@@ -114,9 +116,9 @@ fn spawn_windowed_worker(
     // preserves the 8-byte record boundaries the worker's backends rely on.
     let (kbd_sup, kbd_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
     let (ptr_sup, ptr_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
-    // The relative-pointer (mouse) device — same datagram model. Currently DORMANT (captured
-    // motion drives the absolute tablet so it feels identical to uncaptured mode); kept attached
-    // for a future explicit mouselook/game mode.
+    // The relative-pointer (mouse) device — same datagram model. Captured motion drives the
+    // absolute tablet (native feel); this device carries only the edge-clamped overflow as
+    // pressure (mutter barriers / GNOME hot corner), and seeds a future explicit mouselook mode.
     let (rel_ptr_sup, rel_ptr_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
     // Input events are tiny (8 bytes) but bursty (a key chord, a fast drag). Give the
     // datagram pipes a deep buffer (~32k events) so a momentary worker lag never drops
@@ -207,6 +209,7 @@ pub struct WindowedSession {
     control: Option<control::ControlPlane>,
     resize_socket: Option<PathBuf>,
     remap: limina_input::keymap::KeyRemap,
+    soft_kbd_grab: bool,
     title: String,
     mode: crate::vmlib::schema::DisplayResolution,
     state_path: Option<PathBuf>,
@@ -234,6 +237,7 @@ impl WindowedSession {
             control,
             resize_socket,
             remap,
+            soft_kbd_grab,
             title,
             mode,
             state_path,
@@ -413,6 +417,7 @@ impl WindowedSession {
             control,
             resize_socket,
             remap,
+            soft_kbd_grab,
             title,
             mode,
             state_path,
@@ -442,6 +447,7 @@ impl WindowedSession {
             window::WindowOptions {
                 resize_socket: self.resize_socket,
                 remap: self.remap,
+                soft_kbd_grab: self.soft_kbd_grab,
                 title: self.title,
                 mode: self.mode,
                 initial_size: self.initial_size,

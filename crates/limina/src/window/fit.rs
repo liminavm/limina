@@ -117,6 +117,20 @@ pub(crate) fn abs_through_fit(px: f64, py: f64, fit: FitRect, abs_max: i32) -> (
     )
 }
 
+/// One captured-mode virtual-cursor step: the clamped position plus the motion the clamp
+/// ate ([`capture_step`]).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct CaptureStep {
+    /// The new virtual cursor position (view points, bottom-left origin), clamped into the fit.
+    pub pos: (f64, f64),
+    /// The clamped-off overflow, in AppKit **delta** convention (positive `y` = down): the
+    /// component of the motion that tried to push past a content edge. Zero away from edges.
+    /// Forwarded to the guest's relative-mouse device so edge/corner *pressure* still exists
+    /// in the guest — GNOME's hot corner is a mutter pressure barrier that fires on motion
+    /// pushed INTO it while pinned, which a pre-clamped absolute stream can never express.
+    pub overflow: (f64, f64),
+}
+
 /// Advance the captured-mode virtual cursor by one motion delta, clamped to the fitted
 /// content. `pos` is the position in view points (bottom-left origin, same space as the
 /// fit rect); `None` seeds at the content centre (nothing has ever placed the cursor).
@@ -124,12 +138,19 @@ pub(crate) fn abs_through_fit(px: f64, py: f64, fit: FitRect, abs_max: i32) -> (
 /// this bottom-left space. The clamp is what contains the cursor at the guest's edges,
 /// exactly like the host screen edge does outside capture; it also re-pins a stale
 /// position into a fit rect that shrank (fullscreen toggle mid-capture).
-pub(crate) fn capture_step(pos: Option<(f64, f64)>, dx: f64, dy: f64, fit: FitRect) -> (f64, f64) {
+pub(crate) fn capture_step(pos: Option<(f64, f64)>, dx: f64, dy: f64, fit: FitRect) -> CaptureStep {
     let (sx, sy) = pos.unwrap_or((fit.x + fit.w / 2.0, fit.y + fit.h / 2.0));
-    (
-        (sx + dx).clamp(fit.x, fit.x + fit.w.max(0.0)),
-        (sy - dy).clamp(fit.y, fit.y + fit.h.max(0.0)),
-    )
+    let (ux, uy) = (sx + dx, sy - dy);
+    let cx = ux.clamp(fit.x, fit.x + fit.w.max(0.0));
+    let cy = uy.clamp(fit.y, fit.y + fit.h.max(0.0));
+    // Overflow is bounded by this event's own delta: a *stale-position* clamp (the fit
+    // shrank while captured) repins silently instead of masquerading as a huge shove.
+    // View-space y grows UP, deltas grow DOWN — flip y back into delta convention.
+    let bound = |v: f64, d: f64| v.clamp(d.min(0.0), d.max(0.0));
+    CaptureStep {
+        pos: (cx, cy),
+        overflow: (bound(ux - cx, dx), bound(-(uy - cy), dy)),
+    }
 }
 
 /// Is a view point inside the fitted content (as opposed to the letterbox bars)?
@@ -304,11 +325,11 @@ mod tests {
             w: 800.0,
             h: 600.0,
         };
-        // A downward AppKit delta (positive dy) lowers y in this bottom-left space.
-        assert_eq!(
-            capture_step(Some((500.0, 350.0)), 10.0, 20.0, fit),
-            (510.0, 330.0)
-        );
+        // A downward AppKit delta (positive dy) lowers y in this bottom-left space; motion
+        // inside the content has no overflow.
+        let s = capture_step(Some((500.0, 350.0)), 10.0, 20.0, fit);
+        assert_eq!(s.pos, (510.0, 330.0));
+        assert_eq!(s.overflow, (0.0, 0.0));
     }
 
     #[test]
@@ -319,7 +340,7 @@ mod tests {
             w: 800.0,
             h: 600.0,
         };
-        assert_eq!(capture_step(None, 0.0, 0.0, fit), (500.0, 350.0));
+        assert_eq!(capture_step(None, 0.0, 0.0, fit).pos, (500.0, 350.0));
     }
 
     #[test]
@@ -332,36 +353,60 @@ mod tests {
         };
         // A huge delta pins to the edge — the guest edge contains the cursor like the host
         // screen edge does outside capture.
-        assert_eq!(
-            capture_step(Some((500.0, 350.0)), 1e6, -1e6, fit),
-            (900.0, 650.0)
-        );
-        assert_eq!(
-            capture_step(Some((500.0, 350.0)), -1e6, 1e6, fit),
-            (100.0, 50.0)
-        );
+        let s = capture_step(Some((500.0, 350.0)), 1e6, -1e6, fit);
+        assert_eq!(s.pos, (900.0, 650.0));
+        let s = capture_step(Some((500.0, 350.0)), -1e6, 1e6, fit);
+        assert_eq!(s.pos, (100.0, 50.0));
+    }
+
+    #[test]
+    fn capture_step_reports_the_clamped_off_overflow_as_deltas() {
+        let fit = FitRect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        // Pinned at the left edge, pushing further left: the position stays put and the
+        // eaten leftward component comes back as a negative-x delta (pressure for the guest).
+        let s = capture_step(Some((0.0, 300.0)), -30.0, 0.0, fit);
+        assert_eq!(s.pos, (0.0, 300.0));
+        assert_eq!(s.overflow, (-30.0, 0.0));
+        // Pinned at the top (view y = h), pushing further up (negative AppKit dy): overflow
+        // comes back in delta convention, negative y = up.
+        let s = capture_step(Some((400.0, 600.0)), 0.0, -25.0, fit);
+        assert_eq!(s.pos, (400.0, 600.0));
+        assert_eq!(s.overflow, (0.0, -25.0));
+        // A diagonal shove into the top-left corner keeps both components.
+        let s = capture_step(Some((0.0, 600.0)), -10.0, -15.0, fit);
+        assert_eq!(s.pos, (0.0, 600.0));
+        assert_eq!(s.overflow, (-10.0, -15.0));
+        // Partial overflow: only the past-the-edge part is reported.
+        let s = capture_step(Some((5.0, 300.0)), -30.0, 0.0, fit);
+        assert_eq!(s.pos, (0.0, 300.0));
+        assert_eq!(s.overflow, (-25.0, 0.0));
     }
 
     #[test]
     fn capture_step_repins_a_stale_position_into_a_new_fit() {
         // The fit shrank (e.g. fullscreen toggled off mid-capture): a zero-delta step
-        // re-pins the old position into the new content.
+        // re-pins the old position into the new content — and the repin distance must NOT
+        // masquerade as motion overflow (it wasn't input).
         let fit = FitRect {
             x: 0.0,
             y: 0.0,
             w: 400.0,
             h: 300.0,
         };
-        assert_eq!(
-            capture_step(Some((1000.0, 900.0)), 0.0, 0.0, fit),
-            (400.0, 300.0)
-        );
+        let s = capture_step(Some((1000.0, 900.0)), 0.0, 0.0, fit);
+        assert_eq!(s.pos, (400.0, 300.0));
+        assert_eq!(s.overflow, (0.0, 0.0));
     }
 
     #[test]
     fn capture_step_survives_a_degenerate_fit() {
         let degenerate = FitRect::default();
-        assert_eq!(capture_step(None, 5.0, 5.0, degenerate), (0.0, 0.0));
+        assert_eq!(capture_step(None, 5.0, 5.0, degenerate).pos, (0.0, 0.0));
     }
 
     #[test]
