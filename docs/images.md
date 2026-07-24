@@ -98,6 +98,17 @@ marker strings present). Delivery: the six installed subpackages scp'd + dnf-upg
 `6.12.0-limina16k+` with venus enumerating (`Virtio-GPU Venus`), clean poweroff;
 `enhanced.test.raw` recloned.
 
+**limina-agent 0.3.0 — Touch ID FIDO authenticator (2026-07-24)** — the agent advertises the
+**`fido`** cap and, when the host has a Secure Enclave, creates a `/dev/uhid` FIDO2 HID device
+and bridges CTAP over the vsock control plane (M14; the guest gets WebAuthn passkeys + Touch-ID
+`pam_u2f` login, backed by enclave-bound keys). Feature doc + recipes: `docs/fido-authenticator.md`.
+⚠️ **IMAGE REFRESH PENDING:** both enhanced images still carry **0.2.0**, so a fresh boot of
+`enhanced.raw` / `enhanced.test.raw` has NO FIDO device until the 0.3.0 agent is delivered. Refresh
+= rebuild the guest-tools payload (`build-all.sh` picks up 0.3.0 from source) + install pass over
+both images (or, agent-only: boot each image in place, `scripts/install-guest-agent.sh`-style swap
+of `/usr/local/bin/limina-agent` + `restorecon` + clean poweroff). The **app-bundle** side ships
+already (`liblimina_sep.dylib` in Frameworks, per-VM store). See the "stale images cost a day" rule.
+
 **limina-agent 0.2.0 — guest-clock TimeSync (2026-07-20, same-day follow-up #2)** — the agent
 now advertises the **`timesync`** cap and steps the guest `CLOCK_REALTIME` to the host's
 wallclock when it drifts ≥1 s (TimeSync over the control plane; supervisor sends on agent
