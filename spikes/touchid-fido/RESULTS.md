@@ -72,8 +72,47 @@ new agent delivered over SSH:
   (`FIDO_2_0`, aaguid `6c…2121` = "limina-touchid!!") through the full chain:
   hidraw → uhid → agent → vsock → host state machine → back.
 
-## Next
+## CTAP2 core — GREEN end-to-end (2026-07-24, same day)
 
-CTAP2 core: makeCredential/getAssertion (evaluate `passkey-rs`) on the Spike A
-SEP primitives, per-VM credential blob store, then `fido2-cred`/`fido2-assert`
-and webauthn.io in a guest browser as the next oracle rungs.
+The virtual authenticator is now a real WebAuthn platform authenticator. Host
+CTAP2 was **hand-rolled** (ES256-only, consistent with our hand-rolled CTAPHID;
+no `passkey-rs`) over a **Swift CryptoKit SEP shim** (`swift/fido_sep.swift` +
+`build.rs` + `src/sep.rs`) — the only no-entitlement SEP persistence (blob, not
+keychain). Commands: `fido/ctap2.rs` (makeCredential = packed self-attestation,
+getAssertion = SEP-signed, getInfo), `fido/store.rs` (per-VM passkey store).
+
+**Verified on a live F44 enhanced guest** with the real `fido2-cred` / `fido2-
+assert` tools driving `/dev/hidraw0`:
+- `fido2-cred -M … | fido2-cred -V` → registration **attestation verified**;
+  credential id + EC public key written.
+- `fido2-assert -G … | fido2-assert -V` → **`ASSERTION-VERIFIED-OK`**: libfido2
+  cryptographically verified the ES256 signature against the enclave public key.
+- Both steps prompted host Touch ID (register, then sign-in). Counter increments.
+
+### Two bugs, both root-caused by instrumenting the wire (not guessing)
+
+1. **Missing CTAPHID keepalive.** makeCredential/getAssertion block for seconds
+   on the Touch ID prompt; CTAPHID requires `KEEPALIVE(processing)` meanwhile or
+   the client times out (`FIDO_ERR_RX`). Fixed: `on_report` returns an `Outcome`;
+   the CBOR command runs on a worker thread while `control.rs` pumps keepalive
+   every 100 ms. (Real browsers need this too.)
+2. **Non-canonical CBOR.** getInfo options were `rk,up,plat,uv`; CTAP2 canonical
+   order is shorter-keys-first then bytewise = `rk,up,uv,plat`. libfido2's
+   `FIDO_DEBUG` trace showed `ctap_check_cbor: invalid cbor … iterator < 0 on
+   i=2`, then a U2F fallback → RX. A raw CTAPHID probe bypassing libfido2 had
+   already proven our multi-packet + keepalive + SEP path correct (92-byte
+   request, 32 keepalives during the touch, valid packed attestation), which is
+   what pinned the fault to libfido2's stricter parse. Regression test added.
+
+## Next (productization, not core)
+
+- Per-VM store path wired to the VM state dir (currently `LIMINA_FIDO_STORE`).
+- Deliver the FIDO agent + SEP-signed supervisor via the enhanced payload /
+  app-bundle (build-app.sh must copy `liblimina_sep.dylib` into Frameworks and
+  fix its rpath — dev/test bakes the rpath to OUT_DIR).
+- ✅ Browser oracle: **webauthn.io in guest Firefox** registered + logged in a
+  passkey with a host Touch ID prompt (2026-07-24, user-verified). Firefox uses
+  its own CTAP stack (authenticator-rs), not libfido2 — so this independently
+  confirms the CTAP2/canonical-CBOR implementation across two clients.
+- PAM `pam_u2f` recipe, then the stock-tier xHCI + impersonated-MOC-fingerprint
+  wave (roadmap M14).

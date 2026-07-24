@@ -1379,10 +1379,14 @@ control plane (`limina-proto` `SHUTDOWN`/`TIME_SYNC`) + `limina-agent` (M5); dis
 
 ## Milestone 14 — Biometric auth: host Touch ID → guest passkeys + fingerprint login
 
-**Status: 🟡 Spikes A **and** B GREEN (2026-07-24, `spikes/touchid-fido/RESULTS.md`): the SEP/Touch ID
-primitive is proven, and the uhid↔vsock transport is live end-to-end — a guest `fido2-token -I`
-completes CTAPHID INIT + CTAP2 getInfo against the host stub, with systemd fido-id detecting the
-vendor-neutral device. Next: the CTAP2 core (makeCredential/getAssertion on SEP keys).**
+**Status: 🟢 CTAP2 core GREEN end-to-end (2026-07-24, `spikes/touchid-fido/RESULTS.md`). Spikes A
+(SEP/Touch ID primitive) + B (uhid↔vsock transport) done, then the real authenticator: hand-rolled
+CTAP2 over a Swift CryptoKit SEP shim. On a live F44 enhanced guest, `fido2-cred`/`fido2-assert`
+against `/dev/hidraw0` register + assert a passkey with host Touch ID prompts and libfido2
+cryptographically verifies both attestation and assertion (ES256, enclave-bound). Two bugs found by
+wire-tracing: missing CTAPHID keepalive during the Touch ID wait, and non-canonical getInfo CBOR
+(options must be `rk,up,uv,plat`). Remaining = productization (payload/app-bundle delivery of the
+SEP dylib + agent, browser/PAM oracles) + the stock-tier xHCI wave.**
 
 **Goal:** the guest uses the Mac's Touch ID as (a) a WebAuthn/passkey authenticator in browsers
 (and `sk-*` SSH keys), and (b) fingerprint login/sudo/GDM. **Raw sensor passthrough is impossible
@@ -1432,14 +1436,17 @@ device forwarding.
 
 **Key tasks:**
 1. ✅ **Spike A** — host SEP/LAContext primitive (`spikes/touchid-fido/`).
-2. **Spike B** — agent uhid FIDO device + vsock channel + host CTAPHID (INIT/PING) stub; oracle
-   ladder: `fido2-token -L` → `fido2-cred`/`fido2-assert` → webauthn.io in Firefox on the enhanced
-   image.
-3. **CTAP2 core** — evaluate `passkey-rs` vs hand-rolled state machine; SEP backend behind a
-   trait; per-VM credential store (blob + RP ID + user handle + credential ID).
-4. **PAM recipe** + L2 guard (`fido2-assert` round-trip; test-only auto-approve knob for CI since
+2. ✅ **Spike B** — agent uhid FIDO device + vsock channel + host CTAPHID; `fido2-token` sees it.
+3. ✅ **CTAP2 core** — hand-rolled (ES256-only) over the Swift CryptoKit SEP shim; per-VM store;
+   `fido/{ctap2,store}.rs`, `sep.rs`, `swift/fido_sep.swift`. `fido2-cred`/`fido2-assert` verify
+   register + assert live with Touch ID. (Chose hand-rolled over `passkey-rs`.)
+4. **Productize (next):** wire the store path to the per-VM state dir (currently
+   `LIMINA_FIDO_STORE`); deliver the FIDO agent + the SEP-signed supervisor + `liblimina_sep.dylib`
+   via the enhanced payload / app-bundle (`build-app.sh` copies the dylib into Frameworks + fixes
+   the rpath — dev/test bakes it to OUT_DIR); browser oracle (webauthn.io in guest Firefox).
+5. **PAM recipe** + L2 guard (`fido2-assert` round-trip; test-only auto-approve knob for CI since
    the prompt needs a finger).
-5. **Stock wave:** xHCI device model + the two gadgets; pick the MOC target from libfprint
+6. **Stock wave:** xHCI device model + the two gadgets; pick the MOC target from libfprint
    sources (simplest protocol, no pairing/TLS if avoidable); fwupd-neutralization verify.
 
 **Done test:** on a **stock** F44 guest (USB build): Firefox registers + asserts a passkey on

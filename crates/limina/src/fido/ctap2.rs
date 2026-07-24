@@ -80,17 +80,19 @@ fn get_info() -> Vec<u8> {
     // 3: aaguid
     w.uint(3);
     w.bytes(&AAGUID);
-    // 4: options
+    // 4: options — CTAP2 canonical CBOR order (shorter keys first, then bytewise),
+    // i.e. rk, up, uv, plat. libfido2 rejects any other order as invalid cbor and
+    // falls back to U2F, which we don't support (→ FIDO_ERR_RX).
     w.uint(4);
     w.map_header(4);
     w.text("rk");
     w.bool(true); // discoverable (resident) credentials
     w.text("up");
     w.bool(true); // user presence
-    w.text("plat");
-    w.bool(true); // platform (bound to this device)
     w.text("uv");
     w.bool(true); // user verification (Touch ID)
+    w.text("plat");
+    w.bool(true); // platform (bound to this device)
     w.finish()
 }
 
@@ -465,6 +467,10 @@ mod tests {
         let opts = map_get(m, 4).and_then(as_map).unwrap();
         assert_eq!(text_key(opts, "rk").and_then(as_bool_v), Some(true));
         assert_eq!(text_key(opts, "uv").and_then(as_bool_v), Some(true));
+        // CTAP2 canonical order: shorter keys first, then bytewise. libfido2 rejects
+        // any other order (that was the FIDO_ERR_RX bug). rk,up,uv (len 2) then plat.
+        let keys: Vec<&str> = opts.iter().filter_map(|(k, _)| as_text(k)).collect();
+        assert_eq!(keys, vec!["rk", "up", "uv", "plat"]);
     }
 
     #[test]
