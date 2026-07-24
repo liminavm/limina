@@ -14,6 +14,7 @@ mod clipboard;
 mod control;
 mod fido;
 mod gateway;
+mod sep;
 mod session;
 mod supervisor;
 mod venus_env;

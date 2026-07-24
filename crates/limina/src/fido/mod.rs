@@ -1,22 +1,27 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 // Copyright © 2026 Gustavo Noronha Silva
 
-//! Host side of the virtual FIDO authenticator (M14, Spike B tier).
+//! Host side of the virtual FIDO authenticator (M14).
 //!
 //! Speaks CTAPHID over 64-byte reports carried by `Message::FidoReport` frames on
-//! `CHANNEL_FIDO`. This spike-level implementation handles the transport layer
-//! completely (channel allocation, packet reassembly, chunked responses) plus the
-//! minimum CTAP2 surface for tooling to recognize a live FIDO2 authenticator:
-//! `CTAPHID_INIT`, `CTAPHID_PING`, and `authenticatorGetInfo`. Everything else
-//! answers a proper CTAPHID/CTAP2 error instead of wedging the channel.
-//!
-//! The real authenticator (makeCredential/getAssertion on Secure-Enclave keys behind
-//! a Touch ID prompt — Spike A proved the primitive) plugs in at [`dispatch`]'s
-//! `CMD_CBOR` arm; the framing below stays as-is for both the uhid transport and the
-//! future emulated-USB one (see roadmap M14).
+//! `CHANNEL_FIDO`. This module owns the transport layer completely (channel
+//! allocation, packet reassembly, chunked responses); the CTAP2 command semantics
+//! (`getInfo` / `makeCredential` / `getAssertion`, backed by Secure-Enclave ES256
+//! keys behind a host Touch ID prompt) live in [`ctap2`], and the credential
+//! records in [`store`]. `CMD_CBOR` frames are handed to `ctap2::handle`; the
+//! framing below is shared by both the uhid transport and the future emulated-USB
+//! one (see roadmap M14).
 //!
 //! One instance per control-plane peer: CTAPHID channel ids are per-device state and
-//! the agent creates one uhid device per connection.
+//! the agent creates one uhid device per connection. All peers of one VM share the
+//! same credential [`store`].
+
+use std::sync::Arc;
+
+pub mod ctap2;
+pub mod store;
+
+use store::FidoStore;
 
 /// CTAPHID reports are always this size (no report ids).
 pub const REPORT_SIZE: usize = 64;
@@ -42,15 +47,6 @@ const ERR_INVALID_CHANNEL: u8 = 0x0B;
 const CAP_CBOR: u8 = 0x04;
 const CAP_NMSG: u8 = 0x08;
 
-/// CTAP2 command byte for authenticatorGetInfo.
-const CTAP2_GET_INFO: u8 = 0x04;
-/// CTAP2 status: success / invalid command.
-const CTAP2_OK: u8 = 0x00;
-const CTAP2_ERR_INVALID_COMMAND: u8 = 0x01;
-
-/// Our AAGUID (16 bytes, fixed). Self-attested authenticators may use any stable id.
-const AAGUID: &[u8; 16] = b"limina-touchid!!";
-
 /// An in-progress multi-packet CTAPHID message.
 struct Reassembly {
     cid: u32,
@@ -65,19 +61,16 @@ struct Reassembly {
 pub struct FidoAuthenticator {
     next_cid: u32,
     rx: Option<Reassembly>,
-}
-
-impl Default for FidoAuthenticator {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Shared per-VM credential store (CTAP2 commands read/write it).
+    store: Arc<FidoStore>,
 }
 
 impl FidoAuthenticator {
-    pub fn new() -> FidoAuthenticator {
+    pub fn new(store: Arc<FidoStore>) -> FidoAuthenticator {
         FidoAuthenticator {
             next_cid: 1,
             rx: None,
+            store,
         }
     }
 
@@ -166,31 +159,14 @@ impl FidoAuthenticator {
             }
             CMD_PING => packetize(cid, CMD_PING, payload),
             CMD_CBOR => {
-                let resp = match payload.first() {
-                    Some(&CTAP2_GET_INFO) => get_info_response(),
-                    _ => vec![CTAP2_ERR_INVALID_COMMAND],
-                };
+                // CTAP2: status byte + response CBOR. Signing commands may block on
+                // a host Touch ID prompt — acceptable on this per-peer serve thread.
+                let resp = ctap2::handle(&self.store, payload);
                 packetize(cid, CMD_CBOR, &resp)
             }
             _ => vec![error_report(cid, ERR_INVALID_CMD)],
         }
     }
-}
-
-/// authenticatorGetInfo: status OK + a minimal CBOR map — versions=["FIDO_2_0"],
-/// aaguid. Hand-encoded (the payload is small and fixed; a CBOR crate arrives with
-/// the real CTAP2 core).
-fn get_info_response() -> Vec<u8> {
-    let mut r = vec![CTAP2_OK];
-    r.push(0xA2); // map(2)
-    r.push(0x01); // key 1: versions
-    r.push(0x81); // array(1)
-    r.push(0x68); // text(8)
-    r.extend_from_slice(b"FIDO_2_0");
-    r.push(0x03); // key 3: aaguid
-    r.push(0x50); // bytes(16)
-    r.extend_from_slice(AAGUID);
-    r
 }
 
 /// One CTAPHID_ERROR report.
@@ -232,6 +208,12 @@ fn packetize(cid: u32, cmd: u8, payload: &[u8]) -> Vec<[u8; REPORT_SIZE]> {
 mod tests {
     use super::*;
 
+    /// A fresh authenticator with an empty in-memory store. These transport tests
+    /// never reach the SEP-backed CTAP2 commands, so no store contents are needed.
+    fn auth() -> FidoAuthenticator {
+        FidoAuthenticator::new(Arc::new(FidoStore::in_memory()))
+    }
+
     fn init_frame(cid: u32, cmd: u8, payload: &[u8]) -> [u8; REPORT_SIZE] {
         assert!(payload.len() <= INIT_DATA);
         let mut f = [0u8; REPORT_SIZE];
@@ -245,7 +227,7 @@ mod tests {
     /// Broadcast INIT allocates a channel and echoes the nonce.
     #[test]
     fn init_allocates_channel() {
-        let mut auth = FidoAuthenticator::new();
+        let mut auth = auth();
         let nonce = [9u8, 8, 7, 6, 5, 4, 3, 2];
         let out = auth.on_report(&init_frame(BROADCAST_CID, CMD_INIT, &nonce));
         assert_eq!(out.len(), 1);
@@ -270,7 +252,7 @@ mod tests {
     /// PING echoes on the allocated channel.
     #[test]
     fn ping_echoes() {
-        let mut auth = FidoAuthenticator::new();
+        let mut auth = auth();
         let cid = open_channel(&mut auth);
         let out = auth.on_report(&init_frame(cid, CMD_PING, b"hello"));
         assert_eq!(out.len(), 1);
@@ -282,7 +264,7 @@ mod tests {
     /// A multi-packet PING reassembles and the echo chunks back out.
     #[test]
     fn multipacket_ping_roundtrips() {
-        let mut auth = FidoAuthenticator::new();
+        let mut auth = auth();
         let cid = open_channel(&mut auth);
         let payload: Vec<u8> = (0..200u16).map(|i| i as u8).collect();
 
@@ -324,25 +306,25 @@ mod tests {
         assert_eq!(echoed, payload);
     }
 
-    /// getInfo answers CTAP2 OK with FIDO_2_0 + our AAGUID in the CBOR.
+    /// getInfo (CTAP2 cmd 0x04) answers OK with FIDO_2_0 + our AAGUID in the CBOR,
+    /// routed through the real `ctap2::handle`.
     #[test]
     fn get_info_speaks_fido2() {
-        let mut auth = FidoAuthenticator::new();
+        let mut auth = auth();
         let cid = open_channel(&mut auth);
-        let out = auth.on_report(&init_frame(cid, CMD_CBOR, &[CTAP2_GET_INFO]));
+        let out = auth.on_report(&init_frame(cid, CMD_CBOR, &[0x04]));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0][4], CMD_CBOR);
-        assert_eq!(out[0][7], CTAP2_OK);
+        assert_eq!(out[0][7], 0x00); // CTAP2_OK
         let body = &out[0][8..8 + u16::from_be_bytes([out[0][5], out[0][6]]) as usize - 1];
-        let needle = b"FIDO_2_0";
-        assert!(body.windows(needle.len()).any(|w| w == needle));
-        assert!(body.windows(AAGUID.len()).any(|w| w == AAGUID));
+        assert!(body.windows(8).any(|w| w == b"FIDO_2_0"));
+        assert!(body.windows(16).any(|w| w == b"limina-touchid!!"));
     }
 
     /// Unknown CTAPHID commands answer CTAPHID_ERROR, never silence.
     #[test]
     fn unknown_cmd_errors() {
-        let mut auth = FidoAuthenticator::new();
+        let mut auth = auth();
         let cid = open_channel(&mut auth);
         let out = auth.on_report(&init_frame(cid, 0x88 /* WINK */, &[]));
         assert_eq!(out.len(), 1);
@@ -353,7 +335,7 @@ mod tests {
     /// A stray continuation with no reassembly in flight errors instead of panicking.
     #[test]
     fn stray_continuation_errors() {
-        let mut auth = FidoAuthenticator::new();
+        let mut auth = auth();
         let cid = open_channel(&mut auth);
         let mut c = [0u8; REPORT_SIZE];
         c[..4].copy_from_slice(&cid.to_be_bytes());

@@ -23,6 +23,11 @@ log        = { workspace = true }
 # Managed VM definitions (.liminavm bundles / vm.toml) — src/vmlib.
 serde      = { workspace = true }
 toml       = { workspace = true }
+# M14 virtual FIDO authenticator: SHA-256 (rpIdHash) + CBOR parsing of CTAP2 requests.
+# Output CBOR is hand-encoded (CTAP canonical ordering), so ciborium is parse-only.
+sha2       = { workspace = true }
+ciborium   = { workspace = true }
+serde_json = { workspace = true }
 
 # Shared evdev constants + macOS->Linux keymap + wire format (NO `backends` feature here,
 # so this pulls in no libkrun/bindgen; only the worker enables the krun_input backends).

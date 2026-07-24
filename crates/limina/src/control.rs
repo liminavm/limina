@@ -114,6 +114,10 @@ struct Inner {
     /// M6 PSI autoballoon policy, driven by guest `MemPressure` reports. `None` unless `--memory`
     /// configured a dynamic range.
     balloon_policy: Option<crate::balloon_policy::BalloonPolicy>,
+    /// M14 virtual FIDO authenticator: the per-VM passkey store, shared by every peer.
+    /// `None` when this host has no Secure Enclave — then the `fido` capability is never
+    /// advertised and a guest presents no authenticator (stock-degrade rule).
+    fido_store: Option<Arc<crate::fido::store::FidoStore>>,
 }
 
 impl ControlPlane {
@@ -129,11 +133,19 @@ impl ControlPlane {
             .with_context(|| format!("binding control socket {socket_path:?}"))?;
         *CLEANUP_PATH.lock().unwrap() = Some(socket_path.to_path_buf());
 
+        // Only stand up the FIDO authenticator where the Secure Enclave can back it.
+        let fido_store = if crate::sep::available() {
+            Some(Arc::new(crate::fido::store::FidoStore::from_env()))
+        } else {
+            log::info!("control: no Secure Enclave; FIDO authenticator disabled");
+            None
+        };
         let inner = Arc::new(Inner {
             peers: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
             clipboard: crate::clipboard::Clipboard::new(),
             balloon_policy,
+            fido_store,
         });
         let serve_inner = inner.clone();
         std::thread::Builder::new()
@@ -355,16 +367,16 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
         hello.caps,
         hello.pagesize
     );
+    // Advertise `fido` only when we can actually back it with a Secure Enclave, so a
+    // guest never creates an authenticator device with nothing behind it.
+    let mut caps = vec!["shutdown".to_string(), "clipboard".to_string()];
+    if inner.fido_store.is_some() {
+        caps.push("fido".to_string());
+    }
     write_message(
         &mut stream,
         CHANNEL_CONTROL,
-        &Message::Welcome(Welcome {
-            caps: vec![
-                "shutdown".to_string(),
-                "clipboard".to_string(),
-                "fido".to_string(),
-            ],
-        }),
+        &Message::Welcome(Welcome { caps }),
     )?;
 
     let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
@@ -392,8 +404,13 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
     inner.peers.lock().unwrap().push(peer);
 
     // Per-peer CTAPHID state: the agent creates one uhid FIDO device per connection,
-    // so channel ids and reassembly are connection-scoped by construction.
-    let mut fido = crate::fido::FidoAuthenticator::new();
+    // so channel ids and reassembly are connection-scoped by construction; the passkey
+    // store is shared VM-wide. Absent a Secure Enclave there is no store and no
+    // authenticator — the guest was never told `fido`, so no CBOR frames arrive.
+    let mut fido = inner
+        .fido_store
+        .clone()
+        .map(crate::fido::FidoAuthenticator::new);
     let result = serve_loop(&mut stream, &writer, inner, &last_seen, &mut fido);
     inner.peers.lock().unwrap().retain(|p| p.id != id);
     log::info!("control: guest agent disconnected: {}", hello.agent);
@@ -407,7 +424,7 @@ fn serve_loop(
     writer: &Mutex<UnixStream>,
     inner: &Inner,
     last_seen: &Mutex<Instant>,
-    fido: &mut crate::fido::FidoAuthenticator,
+    fido: &mut Option<crate::fido::FidoAuthenticator>,
 ) -> std::io::Result<()> {
     let reply = |msg: &Message, channel: u32| -> std::io::Result<()> {
         write_message(&mut *writer.lock().unwrap(), channel, msg)
@@ -436,15 +453,18 @@ fn serve_loop(
             }
             Ok((_, Message::ClipData(d))) => inner.clipboard.on_data(d),
             // M14: one CTAP HID report from the guest's uhid FIDO device; the CTAPHID
-            // state machine may answer with zero or more reports.
+            // state machine may answer with zero or more reports. Only reachable when a
+            // Secure Enclave is present (the guest was told `fido`), so `fido` is Some.
             Ok((_, Message::FidoReport(r))) => {
-                for resp in fido.on_report(&r.data) {
-                    reply(
-                        &Message::FidoReport(limina_proto::FidoReport {
-                            data: resp.to_vec(),
-                        }),
-                        limina_proto::CHANNEL_FIDO,
-                    )?;
+                if let Some(fido) = fido.as_mut() {
+                    for resp in fido.on_report(&r.data) {
+                        reply(
+                            &Message::FidoReport(limina_proto::FidoReport {
+                                data: resp.to_vec(),
+                            }),
+                            limina_proto::CHANNEL_FIDO,
+                        )?;
+                    }
                 }
             }
             // M6: feed guest memory-pressure reports to the autoballoon policy (if configured).
