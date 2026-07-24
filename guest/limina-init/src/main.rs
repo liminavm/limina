@@ -63,6 +63,14 @@ fn main() {
         run_hid_echo();
         power_off();
     }
+    // `limina.fido_probe`: the stock-tier FIDO USB oracle (M14 Stage C). Find the hidraw node
+    // the FIDO gadget binds (VID 1D6B, PID 0F1D) — verifying its usage page is 0xF1D0 like
+    // fido-id would — then drive CTAPHID INIT + authenticatorGetInfo through it (both
+    // presence-free, no Touch ID). Emits RESULT markers; powers off.
+    if cmdline_has("limina.fido_probe") {
+        run_fido_probe();
+        power_off();
+    }
     // `limina.blob_probe`: create + mmap a host-visible virtio-gpu blob whose size is
     // 4 KiB- but NOT 16 KiB-aligned — the deterministic guest-side repro for the 16 KiB-host
     // hv_vm_map blob alignment bug (see tests/l1_blob_map.rs). Emits RESULT markers; powers off.
@@ -1094,6 +1102,137 @@ fn run_hid_echo() {
         b"[limina-init] RESULT: hid_echo FAIL (mismatch/no data)"
     });
     klog(b"[limina-init] hid_echo: done");
+}
+
+// --- FIDO USB authenticator (M14 Stage C stock-tier oracle) ------------------------------
+
+/// CTAPHID over the FIDO gadget's `/dev/hidrawN`: verify the node exists with usage page
+/// 0xF1D0 (fido-id's discriminator), then drive INIT + authenticatorGetInfo — both
+/// presence-free (no Touch ID). Proves the whole stock-tier path: xHCI → FIDO report-pipe
+/// gadget → worker↔supervisor socket → the SEP-backed CTAP2 authenticator and back.
+fn run_fido_probe() {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::OpenOptionsExt;
+
+    klog(b"[limina-init] fido_probe: begin");
+
+    // Locate the FIDO hidraw node by VID/PID (1D6B:0F1D) and confirm its report descriptor
+    // opens with the FIDO usage page (0x06 0xD0 0xF1) — what systemd's fido-id keys off.
+    let mut node: Option<String> = None;
+    'find: for _ in 0..250 {
+        if let Ok(entries) = std::fs::read_dir("/sys/class/hidraw") {
+            for e in entries.filter_map(|e| e.ok()) {
+                let name = e.file_name().to_string_lossy().to_string(); // hidrawN
+                let uevent = e.path().join("device/uevent");
+                let Ok(txt) = std::fs::read_to_string(&uevent) else {
+                    continue;
+                };
+                // HID_ID=0003:00001D6B:00000F1D
+                if !(txt.contains("1D6B") && txt.contains("0F1D")) {
+                    continue;
+                }
+                let rdesc =
+                    std::fs::read(e.path().join("device/report_descriptor")).unwrap_or_default();
+                if rdesc.windows(3).any(|w| w == [0x06, 0xd0, 0xf1]) {
+                    node = Some(format!("/dev/{name}"));
+                    break 'find;
+                }
+            }
+        }
+        unsafe { sleep_ms(20) };
+    }
+    let Some(node) = node else {
+        klog(b"[limina-init] RESULT: fido_hidraw MISSING");
+        klog(b"[limina-init] fido_probe: done");
+        return;
+    };
+    klog(b"[limina-init] RESULT: fido_hidraw PRESENT");
+    klog(format!("[limina-init] fido_probe: using {node}").as_bytes());
+
+    let mut dev = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&node)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            klog(format!("[limina-init] RESULT: fido_init FAIL (open {node}: {e})").as_bytes());
+            klog(b"[limina-init] fido_probe: done");
+            return;
+        }
+    };
+
+    // hidraw write: a leading report-number byte (0 = unnumbered) then the 64-byte report.
+    let write_report = |dev: &mut std::fs::File, frame: &[u8; 64]| -> std::io::Result<()> {
+        let mut wbuf = [0u8; 65];
+        wbuf[1..].copy_from_slice(frame);
+        dev.write_all(&wbuf)
+    };
+    // Read one 64-byte report, retrying and skipping CTAPHID_KEEPALIVE (cmd 0xBB) frames.
+    let read_report = |dev: &mut std::fs::File| -> Option<[u8; 64]> {
+        let mut rbuf = [0u8; 64];
+        for _ in 0..250 {
+            match dev.read(&mut rbuf) {
+                Ok(n) if n >= 64 && rbuf[4] != 0xBB => return Some(rbuf),
+                _ => unsafe { sleep_ms(20) },
+            }
+        }
+        None
+    };
+
+    // CTAPHID_INIT on the broadcast channel: cmd 0x86, 8-byte nonce; the response echoes the
+    // nonce and allocates a channel id (bytes 15..19).
+    let nonce = [0xDEu8, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04];
+    let mut init = [0u8; 64];
+    init[..4].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]); // broadcast cid
+    init[4] = 0x86; // CTAPHID_INIT
+    init[6] = 8; // BCNT
+    init[7..15].copy_from_slice(&nonce);
+    if let Err(e) = write_report(&mut dev, &init) {
+        klog(format!("[limina-init] RESULT: fido_init FAIL (write: {e})").as_bytes());
+        klog(b"[limina-init] fido_probe: done");
+        return;
+    }
+    let cid = match read_report(&mut dev) {
+        Some(r) if r[4] == 0x86 && r[7..15] == nonce => {
+            let cid = [r[15], r[16], r[17], r[18]];
+            klog(b"[limina-init] RESULT: fido_init OK");
+            cid
+        }
+        _ => {
+            klog(b"[limina-init] RESULT: fido_init FAIL (no/invalid INIT response)");
+            klog(b"[limina-init] fido_probe: done");
+            return;
+        }
+    };
+
+    // authenticatorGetInfo (CTAP2 cmd 0x04) carried in a CTAPHID_CBOR (0x90) frame on the
+    // allocated channel. The response is status(0x00) followed by canonical CBOR that must
+    // advertise "FIDO_2_0". No user presence needed.
+    let mut gi = [0u8; 64];
+    gi[..4].copy_from_slice(&cid);
+    gi[4] = 0x90; // CTAPHID_CBOR
+    gi[6] = 1; // BCNT
+    gi[7] = 0x04; // authenticatorGetInfo
+    if let Err(e) = write_report(&mut dev, &gi) {
+        klog(format!("[limina-init] RESULT: fido_getinfo FAIL (write: {e})").as_bytes());
+        klog(b"[limina-init] fido_probe: done");
+        return;
+    }
+    match read_report(&mut dev) {
+        Some(r) if r[4] == 0x90 && r[7] == 0x00 => {
+            let bcnt = u16::from_be_bytes([r[5], r[6]]) as usize;
+            let body = &r[7..7 + bcnt.min(64 - 7)];
+            if body.windows(8).any(|w| w == b"FIDO_2_0") {
+                klog(b"[limina-init] RESULT: fido_getinfo OK");
+            } else {
+                klog(b"[limina-init] RESULT: fido_getinfo FAIL (no FIDO_2_0 in CBOR)");
+            }
+        }
+        _ => klog(b"[limina-init] RESULT: fido_getinfo FAIL (no/invalid response)"),
+    }
+    klog(b"[limina-init] fido_probe: done");
 }
 
 // --- virtio-gpu blob-map probe (the 16 KiB-host alignment repro) ---------------------------

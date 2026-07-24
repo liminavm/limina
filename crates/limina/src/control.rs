@@ -124,31 +124,20 @@ impl ControlPlane {
     /// Bind `socket_path` and start the accept thread (which spawns a serve thread per
     /// connection). The returned handle is what shutdown paths use; the threads run for
     /// the process's lifetime.
-    /// `fido_store_path` is where per-VM passkeys persist (a JSON file in the managed
-    /// VM's bundle dir); `None` for ad-hoc VMs falls back to `LIMINA_FIDO_STORE` / in-memory.
+    /// `fido_store` is the shared per-VM passkey store (built by [`crate::fido::store_if_capable`]
+    /// — `Some` only where a Secure Enclave, or the test-approve knob, can back the authenticator).
+    /// It is shared with the USB gadget transport so both speak to one store; `None` advertises
+    /// no `fido` capability at all.
     pub fn start(
         socket_path: &Path,
         balloon_policy: Option<crate::balloon_policy::BalloonPolicy>,
-        fido_store_path: Option<PathBuf>,
+        fido_store: Option<Arc<crate::fido::store::FidoStore>>,
     ) -> Result<ControlPlane> {
         let _ = std::fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path)
             .with_context(|| format!("binding control socket {socket_path:?}"))?;
         *CLEANUP_PATH.lock().unwrap() = Some(socket_path.to_path_buf());
 
-        // Only stand up the FIDO authenticator where the Secure Enclave can back it.
-        // Persist passkeys in the VM's bundle dir when we have one, so they survive a
-        // restart; ad-hoc VMs fall back to LIMINA_FIDO_STORE / in-memory.
-        let fido_store = if crate::sep::available() {
-            let store = match fido_store_path {
-                Some(path) => crate::fido::store::FidoStore::with_path(path),
-                None => crate::fido::store::FidoStore::from_env(),
-            };
-            Some(Arc::new(store))
-        } else {
-            log::info!("control: no Secure Enclave; FIDO authenticator disabled");
-            None
-        };
         let inner = Arc::new(Inner {
             peers: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
@@ -474,39 +463,8 @@ fn serve_loop(
                             limina_proto::CHANNEL_FIDO,
                         )
                     };
-                    match fido.on_report(&r.data) {
-                        crate::fido::Outcome::Reports(frames) => {
-                            for f in frames {
-                                send(f)?;
-                            }
-                        }
-                        crate::fido::Outcome::Cbor { cid, payload } => {
-                            let store = fido.store();
-                            let (tx, rx) = std::sync::mpsc::channel();
-                            std::thread::Builder::new()
-                                .name("limina-fido-ctap2".into())
-                                .spawn(move || {
-                                    let _ = tx.send(crate::fido::ctap2::handle(&store, &payload));
-                                })
-                                .ok();
-                            let response = loop {
-                                match rx.recv_timeout(Duration::from_millis(100)) {
-                                    Ok(resp) => break resp,
-                                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                        send(crate::fido::keepalive_report(cid))?;
-                                    }
-                                    // Worker died (panic) → answer CTAP1_ERR_OTHER so the
-                                    // client fails cleanly instead of hanging.
-                                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                        break vec![0x7f]
-                                    }
-                                }
-                            };
-                            for f in crate::fido::cbor_report_frames(cid, &response) {
-                                send(f)?;
-                            }
-                        }
-                    }
+                    // The shared keepalive engine (identical to the USB gadget transport).
+                    crate::fido::pump(fido, &r.data, send)?;
                 }
             }
             // M6: feed guest memory-pressure reports to the autoballoon policy (if configured).

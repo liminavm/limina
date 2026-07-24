@@ -13,6 +13,7 @@
 
 mod bracket;
 mod config;
+mod fido_usb;
 mod krun;
 mod power;
 mod restart;
@@ -181,6 +182,13 @@ struct Cli {
     /// controller enumerates but carries no devices yet).
     #[arg(long)]
     usb: bool,
+
+    /// UNIX-socket path the worker binds for the stock-tier FIDO USB gadget (M14 Stage C).
+    /// The worker cold-plugs a HID report-pipe gadget with the FIDO identity and shuttles
+    /// CTAPHID frames over this socket to the supervisor's authenticator (SEP/Touch ID lives
+    /// there). Only meaningful with `--usb`; absent → no FIDO gadget.
+    #[arg(long, requires = "usb")]
+    fido_socket: Option<PathBuf>,
 
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (free-page-reporting fast reclaim) to the guest.
     /// OFF by default: a stock Linux guest with page-reporting enabled crashes on suspend-to-idle
@@ -520,6 +528,7 @@ fn main() -> Result<()> {
         snd: !cli.no_snd,
         mic: cli.mic,
         usb: cli.usb,
+        fido_socket: cli.fido_socket,
         free_page_reporting: cli.balloon_free_page_reporting,
         deflate_on_oom: cli.balloon_deflate_on_oom,
         snapshot_file: cli.snapshot_file,

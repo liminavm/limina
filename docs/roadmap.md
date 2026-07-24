@@ -1448,9 +1448,16 @@ device forwarding.
    FIDO guard (fido2-assert round-trip with a test-only Touch-ID bypass).
 5. **PAM recipe** + L2 guard (`fido2-assert` round-trip; test-only auto-approve knob for CI since
    the prompt needs a finger).
-6. **Stock wave:** xHCI device model + the two gadgets; pick the MOC target from libfprint
-   sources (simplest protocol, no pairing/TLS if avoidable); fwupd-neutralization verify.
-   Controller design (prior-art survey, scope, trait, wave plan): `docs/design/usb-xhci.md`.
+6. **Stock wave — FIDO half ✅ done (2026-07-24):** the emulated xHCI controller (patches
+   0095–0097) + the **FIDO gadget** (patch 0098 `HidReportPipe` mechanism, wired to the CTAP2/SEP
+   authenticator as policy in a **proxy** split — worker gadget = thin CTAPHID transport over a
+   UNIX socket to the supervisor's one `FidoAuthenticator`/store/keepalive engine). A stock guest
+   with `limina --usb` binds it as `/dev/hidrawN` (usage page 0xF1D0) with zero guest components.
+   Guarded by `l1_xhci_fido_authenticator` (INIT + getInfo, presence-free); Touch-ID credential
+   flows (fido2-cred/browser/pam_u2f) are the manual follow-up (same SEP path as the verified uhid
+   transport). **Fingerprint half remains:** the impersonated MOC gadget needs its own design doc —
+   pick the target from libfprint sources (simplest protocol, no pairing/TLS if avoidable),
+   fwupd-neutralization verify. Controller design: `docs/design/usb-xhci.md`.
 
 **Done test:** on a **stock** F44 guest (USB build): Firefox registers + asserts a passkey on
 webauthn.io with Touch ID prompts appearing on the host; GNOME Settings shows Fingerprint Login;

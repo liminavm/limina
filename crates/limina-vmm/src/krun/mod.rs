@@ -207,6 +207,19 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
             }
             None => {}
         }
+        // Real FIDO authenticator gadget (M14 Stage C): the supervisor gates this on a usable
+        // Secure Enclave + passkey store, so if it handed us a socket we cold-plug the gadget
+        // and bridge CTAPHID to the supervisor's authenticator. Additive: it coexists with any
+        // mock above and with the agent/uhid path (a guest with both gets both transports).
+        if let Some(socket) = &spec.fido_socket {
+            match crate::fido_usb::build(socket) {
+                Ok(gadget) => {
+                    vmr.usb_devices.push(gadget);
+                    log::info!("USB: cold-plugging the FIDO authenticator gadget ({socket:?})");
+                }
+                Err(e) => log::warn!("USB: FIDO gadget disabled: {e:#}"),
+            }
+        }
     }
 
     Ok(vmr)

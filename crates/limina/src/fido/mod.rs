@@ -16,12 +16,84 @@
 //! the agent creates one uhid device per connection. All peers of one VM share the
 //! same credential [`store`].
 
+use std::path::PathBuf;
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub mod ctap2;
 pub mod store;
+pub mod usb;
 
 use store::FidoStore;
+
+/// Build the shared per-VM passkey store **iff** this host can back a FIDO authenticator —
+/// a usable Secure Enclave, or the test-only approve knob (see [`test_approve`]). Returns the
+/// `Arc` both transports share (control-plane uhid + USB gadget), or `None` to advertise no
+/// `fido` capability at all (the stock-degrade rule). `path` persists passkeys in the managed
+/// VM's bundle dir; `None` falls back to `LIMINA_FIDO_STORE` / in-memory.
+pub fn store_if_capable(path: Option<PathBuf>) -> Option<Arc<FidoStore>> {
+    if crate::sep::available() || test_approve() {
+        let store = match path {
+            Some(p) => FidoStore::with_path(p),
+            None => FidoStore::from_env(),
+        };
+        Some(Arc::new(store))
+    } else {
+        log::info!("fido: no Secure Enclave; authenticator disabled");
+        None
+    }
+}
+
+/// Test-only escape hatch (`LIMINA_FIDO_TEST_APPROVE=1`, default off): advertise the `fido`
+/// capability and stand up the gadget on a host **without** a usable Secure Enclave, so CI /
+/// the L1 harness can drive the SEP-free CTAPHID paths (INIT + getInfo). Obviously
+/// non-production: it does **not** synthesize enclave keys, so makeCredential/getAssertion
+/// still fail without a real SEP — only the presence-free info/transport flows work.
+pub fn test_approve() -> bool {
+    std::env::var_os("LIMINA_FIDO_TEST_APPROVE").is_some_and(|v| v == "1")
+}
+
+/// Drive one 64-byte CTAPHID report through `auth`, sending any response frames via `send`.
+/// Transport frames (INIT/PING/errors) answer immediately; a CTAP2 CBOR command may block on
+/// a host Touch ID prompt, so it runs on a worker thread while we pump `CTAPHID_KEEPALIVE`
+/// every ~100 ms (else libfido2/browsers time out with `FIDO_ERR_RX`). This is the single
+/// keepalive engine shared by the uhid/agent transport (the control plane) and the USB gadget
+/// transport ([`usb`]).
+pub fn pump<F>(auth: &mut FidoAuthenticator, report: &[u8], send: F) -> std::io::Result<()>
+where
+    F: Fn([u8; REPORT_SIZE]) -> std::io::Result<()>,
+{
+    match auth.on_report(report) {
+        Outcome::Reports(frames) => {
+            for f in frames {
+                send(f)?;
+            }
+        }
+        Outcome::Cbor { cid, payload } => {
+            let store = auth.store();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::Builder::new()
+                .name("limina-fido-ctap2".into())
+                .spawn(move || {
+                    let _ = tx.send(ctap2::handle(&store, &payload));
+                })
+                .ok();
+            let response = loop {
+                match rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(resp) => break resp,
+                    Err(RecvTimeoutError::Timeout) => send(keepalive_report(cid))?,
+                    // Worker died (panic) → CTAP1_ERR_OTHER so the client fails cleanly.
+                    Err(RecvTimeoutError::Disconnected) => break vec![0x7f],
+                }
+            };
+            for f in cbor_report_frames(cid, &response) {
+                send(f)?;
+            }
+        }
+    }
+    Ok(())
+}
 
 /// CTAPHID reports are always this size (no report ids).
 pub const REPORT_SIZE: usize = 64;

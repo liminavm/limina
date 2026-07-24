@@ -248,3 +248,55 @@ fn l1_xhci_hid_echo() {
         "expected clean power-off: {outcome:?}"
     );
 }
+
+/// Stock-tier FIDO over USB (M14 Stage C): `--usb` with a usable passkey store cold-plugs the
+/// real FIDO authenticator gadget (no `LIMINA_USB_MOCK`, no guest agent). The guest's stock
+/// usbhid binds it as a `/dev/hidrawN` with usage page 0xF1D0, and a raw CTAPHID probe drives
+/// INIT + authenticatorGetInfo through it — both presence-free, so no Touch ID is needed. This
+/// is the USB twin of the shipped uhid/agent path. `LIMINA_FIDO_TEST_APPROVE=1` makes the
+/// supervisor advertise the `fido` capability even on a host without a usable Secure Enclave,
+/// so the gadget attaches deterministically in CI; getInfo touches no enclave key.
+#[test]
+fn l1_xhci_fido_authenticator() {
+    if !limina_test::require_hvf_or_skip("l1_xhci_fido_authenticator") {
+        return;
+    }
+
+    let cfg = GuestConfig::l1_from_env()
+        .expect("resolving L1 guest config")
+        .with_supervisor_arg("--usb")
+        .with_env("LIMINA_FIDO_TEST_APPROVE", "1")
+        .with_cmdline_token("limina.fido_probe");
+    eprintln!("booting L1 xHCI FIDO-authenticator guest: {:?}", cfg.boot);
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+
+    guest
+        .wait_for("fido_probe: begin", Duration::from_secs(15))
+        .expect("guest did not start the FIDO probe");
+    // usbhid binds the FIDO gadget; a hidraw node with usage page 0xF1D0 appears (fido-id-style).
+    guest
+        .wait_for("RESULT: fido_hidraw PRESENT", Duration::from_secs(20))
+        .expect("no FIDO hidraw node (usage page 0xF1D0) appeared for the gadget");
+    // CTAPHID INIT round-trips (nonce echo + a channel allocated) through the whole proxy path.
+    guest
+        .wait_for("RESULT: fido_init OK", Duration::from_secs(20))
+        .expect("CTAPHID INIT did not complete through the FIDO gadget");
+    // authenticatorGetInfo returns well-formed CBOR advertising FIDO_2_0.
+    guest
+        .wait_for("RESULT: fido_getinfo OK", Duration::from_secs(20))
+        .expect("authenticatorGetInfo did not return FIDO_2_0 through the FIDO gadget");
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(10))
+        .expect("supervisor did not stop");
+    assert!(
+        !outcome.forced,
+        "harness had to force teardown: {outcome:?}"
+    );
+    assert_eq!(
+        outcome.code,
+        Some(0),
+        "expected clean power-off: {outcome:?}"
+    );
+}

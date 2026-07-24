@@ -221,9 +221,16 @@ trait is deliberately the same shape as `limina-usbip::UsbDevice`.
 
 1. **Controller bring-up:** MMIO/FDT/IRQ plumbing + register file + rings; oracle
    = stock guest's own xhci-plat binds, root hub up, `lsusb` empty but sane.
-2. **FIDO gadget:** trait + gadget in limina; oracle = L1 fido-gadget, then
-   browser/pam_u2f re-run on the USB path; retire nothing (uhid path stays for
-   agent-tier guests — capability detection is additive per CLAUDE.md).
+2. **FIDO gadget** — ✅ **done (2026-07-24, Stage C).** libkrun carries a generic
+   `HidReportPipe` gadget (mechanism, patch 0098); limina wires it to the CTAPHID/SEP
+   authenticator (policy). Chosen split is the **proxy** (option a): the worker's gadget is a
+   thin transport shuttling 64-byte CTAPHID frames over a UNIX socket (`--fido-socket`) to the
+   supervisor's `FidoAuthenticator` — one authenticator, one store, one keepalive engine
+   (`crate::fido::pump`), shared with the uhid path. Gated on `sep::available()` + store, cold-
+   plugged at VM start. Oracle = `l1_xhci_fido_authenticator` (hidraw usage page 0xF1D0 →
+   CTAPHID INIT + getInfo, presence-free). Browser/pam_u2f/fido2-cred re-run on the USB path is
+   the manual Touch-ID follow-up. Nothing retired: the uhid path stays for agent-tier guests
+   (capability detection is additive per CLAUDE.md).
 3. **Fingerprint reader:** own design doc (target device selection, protocol
    corpus, enrollment UX), then gadget implementation.
 4. *(unscheduled)* passthrough backend behind privhelperd.

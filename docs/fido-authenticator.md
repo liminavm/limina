@@ -12,6 +12,23 @@ whose keys live in the Secure Enclave; the guest agent presents a `/dev/uhid` FI
 device and bridges CTAP frames over the vsock control plane. Design + decisions:
 `docs/roadmap.md` M14.
 
+## Two transports (agent/uhid + stock USB), one authenticator
+
+The CTAPHID core (`crates/limina/src/fido/`) is transport-agnostic by design, so the
+Touch-ID authenticator reaches the guest two ways — both feeding the *same* per-VM passkey
+store and the same keepalive engine (`crate::fido::pump`):
+
+- **Enhanced tier — `limina-agent` + `/dev/uhid`, over the vsock control plane.** The
+  agent creates the HID device; CTAP frames ride `Message::FidoReport`. Needs the agent.
+- **Stock tier — emulated USB HID gadget, over the xHCI controller** (M14 Stage C, shared
+  infra with M7 USB). With `--usb` and a usable Secure Enclave, limina cold-plugs a
+  vendor-neutral FIDO HID gadget onto the emulated controller; the guest's stock `xhci-plat`
+  + `usbhid` bind it as a plain `/dev/hidrawN` with **zero guest components**. The gadget in
+  the worker is a thin transport (a generic libkrun "HID report pipe" — mechanism); its
+  64-byte CTAPHID frames are shuttled over a UNIX socket to the supervisor's authenticator
+  (policy — SEP/LAContext + the store live in the Apple-Development-signed supervisor). A
+  guest with the agent gets uhid; a stock guest gets USB; a guest with both gets both.
+
 ## What works today (enhanced tier)
 
 - **Vendor-neutral FIDO HID device** — systemd's fido-id detects it by usage page
@@ -84,9 +101,25 @@ use prompts Touch ID. Resident variant: `-t ecdsa-sk -O resident`.
   CTAPHID probe on `/dev/hidraw0` isolates our-stack-vs-client (see
   `spikes/touchid-fido/`).
 
+## Stock-tier USB path: what's automated vs. manual
+
+**Automated (L1, `l1_xhci_fido_authenticator`):** with `--usb`, the gadget cold-plugs, the
+stock guest binds it as `/dev/hidrawN` with usage page 0xF1D0 (fido-id-style detection), and
+a raw CTAPHID probe drives **INIT + authenticatorGetInfo** end-to-end through the whole proxy
+path — both presence-free, so no Touch ID. `LIMINA_FIDO_TEST_APPROVE=1` lets CI advertise the
+capability on a host without a usable enclave (getInfo touches no enclave key). Run a stock
+guest yourself with `limina --usb`: `fido2-token -L` sees the device and `fido2-token -I`
+completes.
+
+**Left for a human to validate (real Touch ID):** `makeCredential` / `getAssertion` — i.e.
+`fido2-cred`, `fido2-assert`, browser passkey registration/login, and `pam_u2f` — all block
+on a live host Touch ID prompt, so they need someone at the Mac. They exercise the identical
+SEP path the (already-verified) uhid transport uses; only the transport in front of it is new.
+
 ## Not yet
 
-- Stock-tier coverage (unmodified guest, no agent) via a VMM-emulated xHCI USB
-  controller presenting the FIDO device — roadmap M14, shared infra with M7 USB.
+- **Stock-tier user-presence flows over USB not yet auto-guarded** — makeCredential/
+  getAssertion over the USB gadget need an L2 (enhanced image, `fido2-cred`/`fido2-assert`)
+  with the test-approve knob backing a software key, parallel to the existing FIDO guard.
 - `hmac-secret` (systemd-cryptenroll / LUKS) — can't live in the SEP; needs a
   software-key fallback, decided per use.

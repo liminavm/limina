@@ -401,6 +401,41 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   a live balloon-hardening item (also on the upstreaming triage list) — `Queue::len`/`is_empty` should
   fail soft on a not-ready/invalid ring.
 
+## GPU / rendering perf
+- **Stock-tier virgl (vrend GL) desktop is far slower than expected — suspected regression.** Observed
+  2026-07-24 on a pristine stock **F44 accessible** guest (venus coexist, `--usb`): GNOME is very
+  sluggish and a WebGL "blob" demo runs at **~17 fps**. This is NOT software-2D (worker log:
+  `virtio-gpu virgl_flags = 0x35b, software_2d = false (coexist = true)`; the worker links our
+  `third_party/virgl-prefix`, not Homebrew) — the guest brings up an accelerated context
+  (`virgl: gl_version 31 - es profile enabled`, `GLSL feature level 310`). vrend GL is the *degraded*
+  stock tier by design (venus/Vulkan is the enhanced fast path), but ~17 fps on a trivial WebGL scene
+  is worse than "degraded" should be, so **treat as a possible regression in the virgl/vrend→zink→KK
+  path**, not expected behavior.
+  - **Decisive signal (2026-07-24, user):** even basic GNOME window/overview **animations are slow —
+    and those are smooth under software-2D**. So the "accelerated" path is *slower than the CPU 2D
+    path*. That points squarely at **per-frame present/transfer overhead, not GL/shader throughput** —
+    every composited frame pays a cost software-2D doesn't. The prime lead below (>100 copy boxes)
+    most likely fires on the per-frame scanout/framebuffer copy: each frame fragmented into 100+ Metal
+    copies fits the symptom. Localize by comparing the present/copy path against the (fast) software-2D
+    path.
+  - **Prime lead:** repeating `MESA: warning: zink: PERF WARNING! > 100 copy boxes detected for 0x…`
+    in the worker log — zink-on-KK (which backs the GL path) is fragmenting each resource transfer
+    into 100+ individual copies, a classic zink pathological slow path. Start here: why are transfers
+    hitting the >100-copy-box path (tiling/format mismatch forcing per-box copies?), and did a recent
+    virgl/zink/KK change introduce it.
+  - **To confirm regression:** bisect against a known-good stock-guest GL baseline (was stock virgl
+    perf ever measured — check `docs/perf/`, `spikes/virgl-zink-kk/`, git history of `patches/virglrenderer`
+    + `patches/kosmickrisp`). The recent clear-rect fixes (`patches/virglrenderer/0045`,
+    `patches/kosmickrisp/0009`) are on the **venus/vkr + vk_meta** paths, not vrend GL — unlikely the
+    cause, but rule them out.
+  - **Benign, ruled out as the cause:** the `Mesa: error GL_INVALID_ENUM in glTexImage2D(...)` lines are
+    one-time startup format-capability probing (36 total, not per-frame); the
+    `vrend_decode_ctx_submit_cmd: … "gst-plugin-scan" Illegal command buffer` errors are gst-plugin-scan
+    GL probing at startup (the clear-rect-sibling zero-area class).
+  - Repro vehicle for a later session: `LIMINA_DISK=<stock-clone> LIMINA_EXTRA_ARGS="--usb"
+    spikes/venus-draw-probe/boot-enhanced-efi-kk.sh`, then a WebGL demo in guest Firefox (seated).
+    Memory: `limina-virgl-vrend-perf`.
+
 ---
 
 When a milestone's loose ends are all closed, fold the remainder back into the roadmap milestone

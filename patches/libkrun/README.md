@@ -24,7 +24,7 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
 2. Re-export: `git -C third_party/libkrun format-patch <base>.. -o "$PWD/patches/libkrun"`.
 3. Commit the regenerated `.patch` files to the limina repo.
 
-## The series (42 patches) — by theme
+## The series (43 patches) — by theme
 
 Patches are listed in series order within each theme. Full rationale lives in each
 patch's commit message; this is the map.
@@ -247,6 +247,13 @@ patch's commit message; this is the map.
   completion is dropped) — the QEMU "transfers in flight" rough edge, done right.
   Class/vendor GET_DESCRIPTOR now forwards to the gadget. Adds `hid.rs`, a full-speed HID
   echo gadget (0x1d6b:0x0f11) exercising held-IN + deferred completion + both directions.
+- **0098 — usb/xhci: generic HID report-pipe gadget (Stage C mechanism).** `report_pipe.rs`:
+  `HidReportPipe`, a full-speed HID gadget whose fixed-size IN/OUT reports are shuttled
+  verbatim over a caller-supplied `ReportSink` (guest→host) + `push_in` (host→guest), with no
+  knowledge of what the frames mean. `HidMockDevice` generalised into reusable mechanism —
+  limina wires it to the CTAPHID/Secure-Enclave authenticator (policy) to present the
+  stock-tier FIDO key. Held set stays bounded (one outstanding IN; a new IN supersedes a stale
+  hold, `reset()` drops it) across the hidraw open/close churn FIDO clients cause.
 
 ### Observability / logging
 

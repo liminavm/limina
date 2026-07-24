@@ -224,6 +224,11 @@ pub struct VmSpec {
     /// default-off; a stock guest binds it with its own xhci-plat driver (no guest
     /// components). The controller is a stub data path today (Stage A bring-up).
     pub usb: bool,
+    /// UNIX-socket path for the stock-tier FIDO USB gadget (M14 Stage C). When set (and
+    /// `usb` is true) the worker cold-plugs a HID report-pipe gadget with the FIDO identity
+    /// and bridges its CTAPHID frames to the supervisor's authenticator over this socket.
+    /// `None` = no FIDO gadget (the controller still comes up).
+    pub fido_socket: Option<PathBuf>,
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest. **Default false**: a
     /// stock Linux guest with page-reporting enabled crashes on suspend-to-idle (upstream
     /// `virtballoon_freeze` frees the reporting vq while its worker is still live). Enable only for

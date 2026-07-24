@@ -960,6 +960,18 @@ fn run_vm(cli: Cli) -> Result<()> {
     //    control socket, wire the worker's vsock device at the well-known CONTROL_PORT,
     //    and serve HELLO/WELCOME/heartbeats. Guests without an agent simply never connect;
     //    guests with one get orderly SHUTDOWN on window-close/SIGTERM.
+    // FIDO passkey store: shared by BOTH transports — the control-plane uhid/agent path and
+    // the stock-tier USB gadget (M14 Stage C) — so a guest with either (or both) speaks to one
+    // store. `Some` only where a Secure Enclave (or the test-approve knob) can back the
+    // authenticator (stock-degrade rule). Persist in the managed VM's bundle dir (next to
+    // state.toml) so passkeys survive boots; ad-hoc/flat VMs fall back to in-memory.
+    let fido_store = fido::store_if_capable(
+        cli.suspend_state_file
+            .as_ref()
+            .and_then(|s| s.parent())
+            .map(|dir| dir.join("fido-credentials.json")),
+    );
+
     let control = if let (Some(port), Some(socket)) = (&cli.vsock_port, &cli.vsock_socket) {
         args.push("--vsock-port".into());
         args.push(port.to_string());
@@ -970,14 +982,7 @@ fn run_vm(cli: Cli) -> Result<()> {
         let socket = cli.control_socket.clone().unwrap_or_else(|| {
             std::env::temp_dir().join(format!("limina-ctrl-{}.sock", std::process::id()))
         });
-        // Persist FIDO passkeys in the managed VM's bundle dir (next to state.toml), so a
-        // VM's credentials survive across boots. Ad-hoc/flat VMs have no bundle → None.
-        let fido_store_path = cli
-            .suspend_state_file
-            .as_ref()
-            .and_then(|s| s.parent())
-            .map(|dir| dir.join("fido-credentials.json"));
-        match control::ControlPlane::start(&socket, balloon_policy, fido_store_path) {
+        match control::ControlPlane::start(&socket, balloon_policy, fido_store.clone()) {
             Ok(cp) => {
                 args.push("--vsock-port".into());
                 args.push(limina_proto::CONTROL_PORT.to_string());
@@ -1035,6 +1040,18 @@ fn run_vm(cli: Cli) -> Result<()> {
     }
     if cli.usb {
         args.push("--usb".into());
+        // Stock-tier FIDO USB gadget (M14 Stage C): only when we can back it with a passkey
+        // store (SEP present, or the test knob). Hand the worker a socket to bind for the
+        // gadget; the supervisor serves CTAPHID on it with an authenticator sharing `fido_store`.
+        // The path rides `args`/`base_args`, so a reboot relaunch re-binds it and our serve
+        // thread reconnects. Additive: the uhid/agent path is untouched.
+        if let Some(store) = &fido_store {
+            let fido_socket =
+                std::env::temp_dir().join(format!("limina-fido-usb-{}.sock", std::process::id()));
+            args.push("--fido-socket".into());
+            args.push(path_arg(&fido_socket)?);
+            fido::usb::serve(fido_socket, store.clone());
+        }
     }
     if let Some(policy) = &cli.on_host_sleep {
         args.push("--on-host-sleep".into());
