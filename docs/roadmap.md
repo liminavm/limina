@@ -1443,9 +1443,9 @@ device forwarding.
 4. ✅ **Productize (mostly done 2026-07-24):** per-VM store wired to the bundle dir
    (`<bundle>/fido-credentials.json`); app-bundle ships `liblimina_sep.dylib` in Frameworks with
    the supervisor rpath (`build-app.sh`); agent bumped to 0.3.0; browser oracle GREEN (webauthn.io
-   in guest Firefox); `pam_u2f` recipe verified + documented (`docs/fido-authenticator.md`).
-   **Remaining:** refresh the enhanced images with the 0.3.0 agent (both still carry 0.2.0 → no
-   FIDO on a fresh boot until delivered — see `docs/images.md`); an L2 FIDO guard.
+   in guest Firefox); `pam_u2f` recipe verified + documented (`docs/fido-authenticator.md`); both
+   F44 enhanced images refreshed to agent 0.3.0 (agent-only pass + reclone). **Remaining:** an L2
+   FIDO guard (fido2-assert round-trip with a test-only Touch-ID bypass).
 5. **PAM recipe** + L2 guard (`fido2-assert` round-trip; test-only auto-approve knob for CI since
    the prompt needs a finger).
 6. **Stock wave:** xHCI device model + the two gadgets; pick the MOC target from libfprint

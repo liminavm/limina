@@ -102,12 +102,13 @@ marker strings present). Delivery: the six installed subpackages scp'd + dnf-upg
 **`fido`** cap and, when the host has a Secure Enclave, creates a `/dev/uhid` FIDO2 HID device
 and bridges CTAP over the vsock control plane (M14; the guest gets WebAuthn passkeys + Touch-ID
 `pam_u2f` login, backed by enclave-bound keys). Feature doc + recipes: `docs/fido-authenticator.md`.
-⚠️ **IMAGE REFRESH PENDING:** both enhanced images still carry **0.2.0**, so a fresh boot of
-`enhanced.raw` / `enhanced.test.raw` has NO FIDO device until the 0.3.0 agent is delivered. Refresh
-= rebuild the guest-tools payload (`build-all.sh` picks up 0.3.0 from source) + install pass over
-both images (or, agent-only: boot each image in place, `scripts/install-guest-agent.sh`-style swap
-of `/usr/local/bin/limina-agent` + `restorecon` + clean poweroff). The **app-bundle** side ships
-already (`liblimina_sep.dylib` in Frameworks, per-VM store). See the "stale images cost a day" rule.
+**Both F44 enhanced images carry 0.3.0 (refreshed 2026-07-24):** `enhanced.raw` took an
+agent-only pass (booted in place, 0.3.0 binary installed to `/usr/local/bin/limina-agent` +
+`restorecon` + `virtual FIDO device up` verified + clean poweroff); `enhanced.test.raw` recloned
+from it (`cp -c`). A fresh boot of either now presents the FIDO device. The **app-bundle** side
+ships too (`liblimina_sep.dylib` in Frameworks, per-VM store). Kernel/mesa/extension unchanged, so
+no full payload respin was needed; the guest-tools tarball still rebuilds 0.3.0 from source via
+`build-all.sh` when next repackaged.
 
 **limina-agent 0.2.0 — guest-clock TimeSync (2026-07-20, same-day follow-up #2)** — the agent
 now advertises the **`timesync`** cap and steps the guest `CLOCK_REALTIME` to the host's
