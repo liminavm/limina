@@ -183,8 +183,16 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     // Mic capture is opt-in (default off, privacy); only acts when snd is also on.
     vmr.snd_capture = spec.mic;
     // Emulated xHCI USB controller (opt-in, default off). A stock guest binds it via
-    // its own xhci-plat driver; Stage A is a bring-up skeleton (no devices yet).
+    // its own xhci-plat driver and enumerates any cold-plugged device models.
     vmr.usb = spec.usb;
+    // Test hook (not a user feature): with --usb and LIMINA_USB_MOCK=1, cold-plug a
+    // minimal vendor-specific full-speed mock so a stock guest enumerates a device.
+    // The real gadgets (FIDO HID, fingerprint reader) land in later waves.
+    if spec.usb && std::env::var_os("LIMINA_USB_MOCK").is_some() {
+        vmr.usb_devices
+            .push(std::sync::Arc::new(devices::usb::MockUsbDevice::new()));
+        log::info!("USB: cold-plugging the mock device (LIMINA_USB_MOCK)");
+    }
 
     Ok(vmr)
 }
