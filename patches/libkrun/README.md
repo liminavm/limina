@@ -220,6 +220,17 @@ patch's commit message; this is the map.
   sbs-battery modules expose it as a native power_supply — the host battery mirrors
   into the guest desktop with zero guest-side components.
 
+### USB (xHCI)
+
+- **0095 — usb/xhci: emulated xHCI controller bring-up.** A native platform xHCI
+  controller (`compatible = "generic-xhci"`), feature-gated `usb` and off by default, so
+  a stock Fedora guest binds it with its own `xhci-plat` driver and brings the HCD up with
+  the root hub registered. Wave 1 of `docs/design/usb-xhci.md`: a functional register file
+  (capability / operational / runtime / doorbell regs + one USB 2.0 Supported Protocol
+  extended cap) with a stub data path — no ring/TRB processing yet. `DeviceType::Xhci` +
+  `create_xhci_node` (FDT, one edge SPI, dma-coherent) + a 64 KiB MMIO window via
+  `register_mmio_xhci` in `device_manager/{hvf,kvm}/mmio.rs` + `VmResources::usb`.
+
 ### Observability / logging
 
 - **0009 — log renderer-init failure instead of swallowing it.** `create_rutabaga` used
