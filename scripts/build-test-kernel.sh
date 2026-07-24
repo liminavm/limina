@@ -122,6 +122,11 @@ CONFIG_USB_SERIAL_FTDI_SIO=y
 CONFIG_USB_SERIAL_CP210X=y
 CONFIG_HID=y
 CONFIG_USB_HID=y
+# hidraw: the userspace raw-HID node (/dev/hidrawN) the emulated-xHCI HID gadget L1 test
+# (l1_xhci_hid_echo) reads/writes to prove held-IN + deferred completion + OUT delivery
+# end-to-end. arm64 defconfig does NOT enable it, so without this the HID gadget binds
+# usbhid but exposes no hidraw node and the echo test has nothing to open.
+CONFIG_HIDRAW=y
 # Emulated xHCI controller (M7∩M14, docs/design/usb-xhci.md): the guest binds the
 # limina VMM's `generic-xhci` platform controller via xhci-plat (the Fedora symbol is
 # USB_XHCI_PLATFORM, not _PLAT). =y because the L1 test kernel is all-builtin. Lets
@@ -189,7 +194,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         ./scripts/kconfig/merge_config.sh -m .config /out/limina.fragment
         make ARCH=arm64 olddefconfig
         echo '--- verifying key options survived'
-        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS CONFIG_DRM_VIRTIO_GPU CONFIG_FRAMEBUFFER_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_INPUT_EVDEV CONFIG_BTRFS_FS CONFIG_VIRTIO_NET CONFIG_OVERLAY_FS CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM CONFIG_USB CONFIG_USBIP_VHCI_HCD CONFIG_USB_ACM CONFIG_USB_HID CONFIG_USB_STORAGE CONFIG_USB_XHCI_HCD CONFIG_USB_XHCI_PLATFORM CONFIG_INPUT_UINPUT; do
+        for opt in CONFIG_VIRTIO_FS CONFIG_BLK_DEV_INITRD CONFIG_SERIAL_AMBA_PL011_CONSOLE CONFIG_VIRTIO_VSOCKETS CONFIG_DRM_VIRTIO_GPU CONFIG_FRAMEBUFFER_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_INPUT_EVDEV CONFIG_BTRFS_FS CONFIG_VIRTIO_NET CONFIG_OVERLAY_FS CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM CONFIG_USB CONFIG_USBIP_VHCI_HCD CONFIG_USB_ACM CONFIG_USB_HID CONFIG_HIDRAW CONFIG_USB_STORAGE CONFIG_USB_XHCI_HCD CONFIG_USB_XHCI_PLATFORM CONFIG_INPUT_UINPUT; do
             grep -q \"^\$opt=y\" .config || { echo \"MISSING \$opt\" >&2; exit 1; }
         done
         grep -q '^$PAGE_CONFIG' .config || { echo 'MISSING $PAGE_CONFIG' >&2; exit 1; }

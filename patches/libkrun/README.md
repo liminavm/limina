@@ -230,6 +230,23 @@ patch's commit message; this is the map.
   extended cap) with a stub data path — no ring/TRB processing yet. `DeviceType::Xhci` +
   `create_xhci_node` (FDT, one edge SPI, dma-coherent) + a 64 KiB MMIO window via
   `register_mmio_xhci` in `device_manager/{hvf,kvm}/mmio.rs` + `VmResources::usb`.
+- **0096 — usb/xhci: Stage B1 — rings, command set, EP0 control transfers, gadgets.**
+  The data path: command/event/transfer ring walkers (cycle-bit + Link-TRB, hostile-input
+  bounded), 32-byte contexts, the command set (enable/disable slot, address device,
+  configure/evaluate endpoint, stop/reset/set-TR-dequeue, reset device), the EP0
+  control-transfer state machine, port enumeration, and the `UsbDeviceModel` trait
+  (mechanism seam) with a ring worker thread that calls gadgets **with the controller lock
+  released** (deferred completion from any thread). A stock guest now *enumerates* an
+  attached device model.
+- **0097 — usb/xhci: Stage B2 — non-EP0 data flow + mock HID echo gadget.** Interrupt/bulk
+  endpoints: Configure Endpoint stands up per-DCI transfer rings the worker walks on their
+  doorbells; IN transfers with no data are *held* (the NAK analogue) until the gadget
+  completes them, OUT transfers deliver the guest's bytes. A per-endpoint **generation
+  counter** captured in each completion closure makes cancellation safe (Stop / Reset
+  Endpoint, Set TR Dequeue, Disable Slot / Reset Device bump/tear-down it; a stale
+  completion is dropped) — the QEMU "transfers in flight" rough edge, done right.
+  Class/vendor GET_DESCRIPTOR now forwards to the gadget. Adds `hid.rs`, a full-speed HID
+  echo gadget (0x1d6b:0x0f11) exercising held-IN + deferred completion + both directions.
 
 ### Observability / logging
 

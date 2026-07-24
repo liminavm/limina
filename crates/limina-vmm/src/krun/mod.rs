@@ -185,13 +185,28 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     // Emulated xHCI USB controller (opt-in, default off). A stock guest binds it via
     // its own xhci-plat driver and enumerates any cold-plugged device models.
     vmr.usb = spec.usb;
-    // Test hook (not a user feature): with --usb and LIMINA_USB_MOCK=1, cold-plug a
-    // minimal vendor-specific full-speed mock so a stock guest enumerates a device.
-    // The real gadgets (FIDO HID, fingerprint reader) land in later waves.
-    if spec.usb && std::env::var_os("LIMINA_USB_MOCK").is_some() {
-        vmr.usb_devices
-            .push(std::sync::Arc::new(devices::usb::MockUsbDevice::new()));
-        log::info!("USB: cold-plugging the mock device (LIMINA_USB_MOCK)");
+    // Test hook (not a user feature): with --usb, LIMINA_USB_MOCK selects a cold-plugged
+    // mock gadget so a stock guest enumerates a device. `enum` (or the legacy `1`) is the
+    // vendor-specific enumeration-only mock; `hid` is the full-speed HID echo gadget that
+    // exercises the non-EP0 (interrupt IN/OUT) data path. The real gadgets (FIDO HID,
+    // fingerprint reader) land in later waves.
+    if spec.usb {
+        match std::env::var("LIMINA_USB_MOCK").ok().as_deref() {
+            Some("hid") => {
+                vmr.usb_devices
+                    .push(std::sync::Arc::new(devices::usb::HidMockDevice::new()));
+                log::info!("USB: cold-plugging the HID echo mock (LIMINA_USB_MOCK=hid)");
+            }
+            Some("enum") | Some("1") => {
+                vmr.usb_devices
+                    .push(std::sync::Arc::new(devices::usb::MockUsbDevice::new()));
+                log::info!("USB: cold-plugging the enumeration mock (LIMINA_USB_MOCK=enum)");
+            }
+            Some(other) => {
+                log::warn!("USB: unknown LIMINA_USB_MOCK={other:?}; no mock attached");
+            }
+            None => {}
+        }
     }
 
     Ok(vmr)

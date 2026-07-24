@@ -47,6 +47,22 @@ fn main() {
         }
         power_off();
     }
+    // `limina.xhci_probe`: assert the emulated xHCI controller (libkrun `--usb`) came up —
+    // the guest's own `xhci-plat` driver bound the `generic-xhci` node and the root hub
+    // registered — and enumerate any cold-plugged device model (its VID/PID/class). Emits
+    // RESULT markers for the L1 xhci tests, then powers off. (M7∩M14, docs/design/usb-xhci.md.)
+    if cmdline_has("limina.xhci_probe") {
+        run_xhci_probe();
+        power_off();
+    }
+    // `limina.hid_echo`: the B2 end-to-end oracle. With the HID echo gadget cold-plugged,
+    // find the hidraw node it binds, write a 64-byte report to it and read the echo back —
+    // proving held interrupt-IN + deferred completion + interrupt-OUT delivery through the
+    // emulated controller. Emits RESULT markers; powers off.
+    if cmdline_has("limina.hid_echo") {
+        run_hid_echo();
+        power_off();
+    }
     // `limina.blob_probe`: create + mmap a host-visible virtio-gpu blob whose size is
     // 4 KiB- but NOT 16 KiB-aligned — the deterministic guest-side repro for the 16 KiB-host
     // hv_vm_map blob alignment bug (see tests/l1_blob_map.rs). Emits RESULT markers; powers off.
@@ -911,6 +927,173 @@ fn run_usb_attach(port: u32) {
     }
     klog(b"[limina-init] usb_attach: done");
     // Leave `fd` open: the kernel holds its own reference, but PID 1 closing it early is needless.
+}
+
+// --- emulated xHCI controller probe (B2) ------------------------------------------------
+//
+// The guest side is 100% upstream: `xhci-plat` binds the FDT `generic-xhci` node the libkrun
+// controller exposes, and usbcore enumerates whatever device model the host cold-plugged.
+// This proves the controller comes up and reports the enumerated device's identity.
+
+/// Enumerate `/sys/bus/usb/devices/*` and emit `RESULT: usbdev <vid>:<pid>` for every
+/// non-hub device (root hubs are `bDeviceClass == 09` and skipped). Returns the count.
+fn emit_usb_devices() -> usize {
+    let mut n = 0;
+    let Ok(entries) = std::fs::read_dir("/sys/bus/usb/devices") else {
+        return 0;
+    };
+    for e in entries.filter_map(|e| e.ok()) {
+        let p = e.path();
+        let rd = |f: &str| {
+            std::fs::read_to_string(p.join(f))
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default()
+        };
+        let vid = rd("idVendor");
+        let pid = rd("idProduct");
+        if vid.is_empty() || pid.is_empty() {
+            continue; // an interface node (e.g. `1-1:1.0`), not a device
+        }
+        if rd("bDeviceClass") == "09" {
+            continue; // a hub / root hub
+        }
+        klog(format!("[limina-init] RESULT: usbdev {vid}:{pid}").as_bytes());
+        n += 1;
+    }
+    n
+}
+
+fn run_xhci_probe() {
+    klog(b"[limina-init] xhci_probe: begin");
+    // The controller binds + enumerates asynchronously after boot; poll briefly.
+    let driver_dir = std::path::Path::new("/sys/bus/platform/drivers/xhci-hcd");
+    let mut bound = false;
+    for _ in 0..250 {
+        // A bound platform device appears as a symlink under the driver dir, named
+        // `<addr>.usb` by the OF core (the driver dir's own files are bind/unbind/uevent —
+        // none contain "usb").
+        if let Ok(entries) = std::fs::read_dir(driver_dir) {
+            if entries
+                .filter_map(|e| e.ok())
+                .any(|e| e.file_name().to_string_lossy().contains("usb"))
+            {
+                bound = true;
+                break;
+            }
+        }
+        unsafe { sleep_ms(20) };
+    }
+    let driver = driver_dir.exists();
+    klog(if driver {
+        b"[limina-init] RESULT: xhci_hcd PRESENT" as &[u8]
+    } else {
+        b"[limina-init] RESULT: xhci_hcd MISSING"
+    });
+    klog(if bound {
+        b"[limina-init] RESULT: xhci_bound PRESENT" as &[u8]
+    } else {
+        b"[limina-init] RESULT: xhci_bound MISSING"
+    });
+    // Give a cold-plugged device a moment to finish enumerating, then report it.
+    let mut count = 0;
+    for _ in 0..100 {
+        count = emit_usb_devices();
+        if count > 0 {
+            break;
+        }
+        unsafe { sleep_ms(20) };
+    }
+    klog(format!("[limina-init] xhci_probe: done ({count} device(s))").as_bytes());
+}
+
+// --- HID echo end-to-end (B2 oracle) ----------------------------------------------------
+
+/// Find the `/dev/hidrawN` node bound to the HID echo gadget (VID 1D6B, PID 0F11), open it,
+/// write a 64-byte report and read the echo back. Proves held-IN + deferred completion +
+/// OUT delivery through the emulated controller end-to-end.
+fn run_hid_echo() {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::OpenOptionsExt;
+
+    klog(b"[limina-init] hid_echo: begin");
+
+    // Locate the hidraw node by VID/PID (the gadget's HID_ID in its uevent). Poll: usbhid
+    // binds + creates the node a beat after enumeration.
+    let mut node: Option<String> = None;
+    'find: for _ in 0..250 {
+        if let Ok(entries) = std::fs::read_dir("/sys/class/hidraw") {
+            for e in entries.filter_map(|e| e.ok()) {
+                let name = e.file_name().to_string_lossy().to_string(); // hidrawN
+                let uevent = e.path().join("device/uevent");
+                if let Ok(txt) = std::fs::read_to_string(&uevent) {
+                    // HID_ID=0003:00001D6B:00000F11
+                    if txt.contains("1D6B") && txt.contains("0F11") {
+                        node = Some(format!("/dev/{name}"));
+                        break 'find;
+                    }
+                }
+            }
+        }
+        unsafe { sleep_ms(20) };
+    }
+    let Some(node) = node else {
+        klog(b"[limina-init] RESULT: hid_echo FAIL (no hidraw node)");
+        klog(b"[limina-init] hid_echo: done");
+        return;
+    };
+    klog(format!("[limina-init] hid_echo: using {node}").as_bytes());
+
+    // Non-blocking so a missing echo fails via the retry loop rather than wedging PID 1.
+    let mut dev = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&node)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            klog(format!("[limina-init] RESULT: hid_echo FAIL (open {node}: {e})").as_bytes());
+            klog(b"[limina-init] hid_echo: done");
+            return;
+        }
+    };
+
+    // hidraw write: first byte is the report number (0 for unnumbered reports), then the
+    // 64-byte report → the gadget receives the 64 bytes on its interrupt-OUT endpoint.
+    let mut payload = [0u8; 64];
+    for (i, b) in payload.iter_mut().enumerate() {
+        *b = (i as u8) ^ 0xA5;
+    }
+    let mut wbuf = [0u8; 65];
+    wbuf[1..].copy_from_slice(&payload);
+    if let Err(e) = dev.write_all(&wbuf) {
+        klog(format!("[limina-init] RESULT: hid_echo FAIL (write: {e})").as_bytes());
+        klog(b"[limina-init] hid_echo: done");
+        return;
+    }
+
+    // The gadget echoes the report back on the interrupt-IN endpoint; usbhid delivers it and
+    // hidraw read returns the 64 report bytes. Read with a short retry (the round-trip and
+    // interrupt take a beat).
+    let mut rbuf = [0u8; 64];
+    let mut ok = false;
+    for _ in 0..250 {
+        match dev.read(&mut rbuf) {
+            Ok(n) if n >= 64 => {
+                ok = rbuf[..64] == payload;
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        unsafe { sleep_ms(20) };
+    }
+    klog(if ok {
+        b"[limina-init] RESULT: hid_echo OK" as &[u8]
+    } else {
+        b"[limina-init] RESULT: hid_echo FAIL (mismatch/no data)"
+    });
+    klog(b"[limina-init] hid_echo: done");
 }
 
 // --- virtio-gpu blob-map probe (the 16 KiB-host alignment repro) ---------------------------

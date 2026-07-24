@@ -113,3 +113,138 @@ fn mock_cdc_acm_device_enumerates_in_guest_via_usbip() {
         "expected clean power-off: {outcome:?}"
     );
 }
+
+// ---- Emulated xHCI controller (M7∩M14, docs/design/usb-xhci.md) ------------------------
+//
+// These boot the L1 kernel with `--usb`, so libkrun's own `generic-xhci` controller comes up
+// and the guest's stock `xhci-plat` driver binds it — no USB/IP, no real hardware. The mock
+// gadget is selected with `LIMINA_USB_MOCK` (a test hook, inherited by the worker). Requires
+// the USB-enabled test kernel (`CONFIG_USB_XHCI_HCD/PLATFORM`, and `CONFIG_HIDRAW` for the
+// echo test) — `scripts/build-test-kernel.sh`.
+
+/// Bare bring-up: `--usb` with no gadget → the guest sees the xHCI HCD and root hub, no errors.
+#[test]
+fn l1_xhci_enumerates() {
+    if !limina_test::require_hvf_or_skip("l1_xhci_enumerates") {
+        return;
+    }
+
+    let cfg = GuestConfig::l1_from_env()
+        .expect("resolving L1 guest config")
+        .with_supervisor_arg("--usb")
+        .with_cmdline_token("limina.xhci_probe");
+    eprintln!("booting L1 xHCI-probe guest: {:?}", cfg.boot);
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+
+    guest
+        .wait_for("xhci_probe: begin", Duration::from_secs(15))
+        .expect("guest did not start the xHCI probe");
+    // The controller's own xhci-plat driver bound the generic-xhci node (the root hub is up).
+    guest
+        .wait_for("RESULT: xhci_hcd PRESENT", Duration::from_secs(10))
+        .expect("xhci-hcd driver did not register in the guest");
+    guest
+        .wait_for("RESULT: xhci_bound PRESENT", Duration::from_secs(10))
+        .expect("the generic-xhci controller did not bind (no root hub)");
+    guest
+        .wait_for("xhci_probe: done", Duration::from_secs(5))
+        .expect("xHCI probe did not finish");
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(10))
+        .expect("supervisor did not stop");
+    assert!(
+        !outcome.forced,
+        "harness had to force teardown: {outcome:?}"
+    );
+    assert_eq!(
+        outcome.code,
+        Some(0),
+        "expected clean power-off: {outcome:?}"
+    );
+}
+
+/// A cold-plugged enumeration-only mock enumerates with its distinctive VID/PID.
+#[test]
+fn l1_xhci_mock_device() {
+    if !limina_test::require_hvf_or_skip("l1_xhci_mock_device") {
+        return;
+    }
+
+    let cfg = GuestConfig::l1_from_env()
+        .expect("resolving L1 guest config")
+        .with_supervisor_arg("--usb")
+        .with_env("LIMINA_USB_MOCK", "enum")
+        .with_cmdline_token("limina.xhci_probe");
+    eprintln!("booting L1 xHCI mock-device guest: {:?}", cfg.boot);
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+
+    guest
+        .wait_for("xhci_probe: begin", Duration::from_secs(15))
+        .expect("guest did not start the xHCI probe");
+    // The enumeration mock is 0x1d6b:0x0f10 (see devices/src/usb/mock.rs).
+    guest
+        .wait_for("RESULT: usbdev 1d6b:0f10", Duration::from_secs(15))
+        .expect("the cold-plugged mock did not enumerate with the expected VID/PID");
+    guest
+        .wait_for("xhci_probe: done", Duration::from_secs(5))
+        .expect("xHCI probe did not finish");
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(10))
+        .expect("supervisor did not stop");
+    assert!(
+        !outcome.forced,
+        "harness had to force teardown: {outcome:?}"
+    );
+    assert_eq!(
+        outcome.code,
+        Some(0),
+        "expected clean power-off: {outcome:?}"
+    );
+}
+
+/// The crown-jewel B2 oracle: the HID echo gadget cold-plugged, usbhid binds it, a hidraw node
+/// appears, and a 64-byte report written to `/dev/hidrawN` comes back byte-identical — proving
+/// held interrupt-IN + deferred completion (fired from the OUT path) + OUT delivery end-to-end.
+#[test]
+fn l1_xhci_hid_echo() {
+    if !limina_test::require_hvf_or_skip("l1_xhci_hid_echo") {
+        return;
+    }
+
+    let cfg = GuestConfig::l1_from_env()
+        .expect("resolving L1 guest config")
+        .with_supervisor_arg("--usb")
+        .with_env("LIMINA_USB_MOCK", "hid")
+        .with_cmdline_token("limina.hid_echo");
+    eprintln!("booting L1 xHCI HID-echo guest: {:?}", cfg.boot);
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+
+    guest
+        .wait_for("hid_echo: begin", Duration::from_secs(15))
+        .expect("guest did not start the HID echo probe");
+    // usbhid binds the gadget and creates a hidraw node (VID 1D6B, PID 0F11).
+    guest
+        .wait_for("hid_echo: using /dev/hidraw", Duration::from_secs(20))
+        .expect("no hidraw node appeared for the HID gadget");
+    guest
+        .wait_for("RESULT: hid_echo OK", Duration::from_secs(20))
+        .expect("the 64-byte report did not echo back through the emulated controller");
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(10))
+        .expect("supervisor did not stop");
+    assert!(
+        !outcome.forced,
+        "harness had to force teardown: {outcome:?}"
+    );
+    assert_eq!(
+        outcome.code,
+        Some(0),
+        "expected clean power-off: {outcome:?}"
+    );
+}
