@@ -105,6 +105,33 @@ bundle_dylib "$VIRGL"
 bundle_dylib "$EPOXY"
 for r in "${DLOPEN_ROOTS[@]}"; do bundle_dylib "$r"; done
 
+# The M14 FIDO Secure-Enclave shim: the supervisor links liblimina_sep.dylib (built by
+# crates/limina/build.rs into its OUT_DIR). Dev/test bakes an rpath to that OUT_DIR; in the
+# bundle we ship the dylib in Frameworks and add the Frameworks rpath to the supervisor
+# below. Its Swift-runtime deps live in /usr/lib/swift (an rpath build.rs already baked).
+SEP_DYLIB="$(ls -t "$ROOT"/target/$PROFILE/build/limina-*/out/liblimina_sep.dylib 2>/dev/null | head -1)"
+if [ -n "$SEP_DYLIB" ] && [ -e "$SEP_DYLIB" ]; then
+  bundle_dylib "$SEP_DYLIB"
+else
+  echo "==> WARNING: liblimina_sep.dylib not found under target/$PROFILE/build — FIDO/Touch ID" >&2
+  echo "    will fail to load in the bundle. Did 'cargo build --release -p limina' run?" >&2
+fi
+
+# ---- relocate the supervisor's SEP-dylib link ------------------------------------
+# The supervisor links @rpath/liblimina_sep.dylib (install_name set by build.rs). Add the
+# Frameworks rpath so it resolves inside the bundle (the OUT_DIR rpath build.rs baked points
+# at the build tree, absent on a user's Mac — harmless, dyld just tries the next rpath).
+echo "==> adding Frameworks rpath to the supervisor (FIDO SEP dylib)"
+install_name_tool -add_rpath "@loader_path/../Frameworks" "$MACOS/limina"
+# Drop the dev-only OUT_DIR rpath build.rs baked (points into target/.../build/); it exists
+# on THIS machine so dyld would resolve the SEP dylib from the build tree, not the bundle.
+# Removing it makes the .app truly self-contained (Frameworks + /usr/lib/swift only).
+otool -l "$MACOS/limina" | awk '/LC_RPATH/{g=1;next} g&&/ path /{print $2;g=0}' | while read -r rp; do
+  case "$rp" in
+    */target/*/build/*) install_name_tool -delete_rpath "$rp" "$MACOS/limina" || true ;;
+  esac
+done
+
 # ---- relocate the worker binary's own links --------------------------------------
 echo "==> relocating limina-vmm links to @rpath"
 install_name_tool -add_rpath "@loader_path/../Frameworks" "$MACOS/limina-vmm"
