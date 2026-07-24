@@ -962,7 +962,14 @@ fn run_vm(cli: Cli) -> Result<()> {
         let socket = cli.control_socket.clone().unwrap_or_else(|| {
             std::env::temp_dir().join(format!("limina-ctrl-{}.sock", std::process::id()))
         });
-        match control::ControlPlane::start(&socket, balloon_policy) {
+        // Persist FIDO passkeys in the managed VM's bundle dir (next to state.toml), so a
+        // VM's credentials survive across boots. Ad-hoc/flat VMs have no bundle → None.
+        let fido_store_path = cli
+            .suspend_state_file
+            .as_ref()
+            .and_then(|s| s.parent())
+            .map(|dir| dir.join("fido-credentials.json"));
+        match control::ControlPlane::start(&socket, balloon_policy, fido_store_path) {
             Ok(cp) => {
                 args.push("--vsock-port".into());
                 args.push(limina_proto::CONTROL_PORT.to_string());

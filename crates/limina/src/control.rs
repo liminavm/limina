@@ -124,9 +124,12 @@ impl ControlPlane {
     /// Bind `socket_path` and start the accept thread (which spawns a serve thread per
     /// connection). The returned handle is what shutdown paths use; the threads run for
     /// the process's lifetime.
+    /// `fido_store_path` is where per-VM passkeys persist (a JSON file in the managed
+    /// VM's bundle dir); `None` for ad-hoc VMs falls back to `LIMINA_FIDO_STORE` / in-memory.
     pub fn start(
         socket_path: &Path,
         balloon_policy: Option<crate::balloon_policy::BalloonPolicy>,
+        fido_store_path: Option<PathBuf>,
     ) -> Result<ControlPlane> {
         let _ = std::fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path)
@@ -134,8 +137,14 @@ impl ControlPlane {
         *CLEANUP_PATH.lock().unwrap() = Some(socket_path.to_path_buf());
 
         // Only stand up the FIDO authenticator where the Secure Enclave can back it.
+        // Persist passkeys in the VM's bundle dir when we have one, so they survive a
+        // restart; ad-hoc VMs fall back to LIMINA_FIDO_STORE / in-memory.
         let fido_store = if crate::sep::available() {
-            Some(Arc::new(crate::fido::store::FidoStore::from_env()))
+            let store = match fido_store_path {
+                Some(path) => crate::fido::store::FidoStore::with_path(path),
+                None => crate::fido::store::FidoStore::from_env(),
+            };
+            Some(Arc::new(store))
         } else {
             log::info!("control: no Secure Enclave; FIDO authenticator disabled");
             None
@@ -581,7 +590,7 @@ mod tests {
         std::env::set_var("LIMINA_CONTROL_WRITE_TIMEOUT_MS", "200");
         let path =
             std::env::temp_dir().join(format!("limina-ctl-test-{}.sock", std::process::id()));
-        let plane = ControlPlane::start(&path, None).unwrap();
+        let plane = ControlPlane::start(&path, None, None).unwrap();
         // HELLO, then never read again: the socket buffers fill and stay full.
         let wedged = connect_agent(&path, &["shutdown"]);
 
