@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Entitlement probe for test [4] (SEP key persistence in the
+	     data-protection keychain). These are normally provisioning-profile
+	     backed; the spike tests whether a bare Apple Development signature
+	     carrying them (a) launches at all and (b) unlocks SecItem storage. -->
+	<key>com.apple.application-identifier</key>
+	<string>WDNHP64H9G.eti.noronha.limina.spike</string>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>WDNHP64H9G.eti.noronha.limina.spike</string>
+	</array>
+</dict>
+</plist>

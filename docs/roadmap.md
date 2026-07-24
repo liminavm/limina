@@ -1377,6 +1377,81 @@ control plane (`limina-proto` `SHUTDOWN`/`TIME_SYNC`) + `limina-agent` (M5); dis
 
 ---
 
+## Milestone 14 — Biometric auth: host Touch ID → guest passkeys + fingerprint login
+
+**Status: 🟡 Spike A GREEN (2026-07-24, `spikes/touchid-fido/RESULTS.md`); Spike B (guest uhid
+transport) next.**
+
+**Goal:** the guest uses the Mac's Touch ID as (a) a WebAuthn/passkey authenticator in browsers
+(and `sk-*` SSH keys), and (b) fingerprint login/sudo/GDM. **Raw sensor passthrough is impossible
+at any privilege level** — the sensor is hardwired to the Secure Enclave; no macOS API or
+entitlement (public or grantable) exposes images/templates — so this is an *auth service*, not a
+device forwarding.
+
+### Load-bearing decisions (2026-07-24)
+
+1. **Host = a CTAP2 authenticator backed by the Secure Enclave.** `makeCredential` creates a
+   SEP P-256 key (ES256 — WebAuthn's mandatory alg); `getAssertion` shows the Touch ID sheet
+   (per-RP reason string: "VM 'x' wants to sign in to github.com") and signs via
+   `SecKeyCreateSignature`. Key material never exists in the guest; a compromised guest cannot
+   sign without a finger on the physical sensor. Credentials are **device-bound** (like a hardware
+   key), **namespaced per VM**; attestation = self/none (no cert chain); the restricted
+   `com.apple.developer.web-browser.public-key-credential` entitlement is NOT needed (only gates
+   iCloud/Apple-Passwords passkeys, which we don't touch).
+2. **Spike A facts (all empirical):** LAContext prompt + userPresence-gated SEP ES256 signing work
+   from a terminal-launched, Apple-Development-signed CLI with **zero entitlements**. The
+   data-protection keychain needs profile-backed entitlements — plain `codesign --entitlements`
+   gets the binary **AMFI-SIGKILLed at spawn** (exit 137). Persistence therefore uses **CryptoKit
+   `SecureEnclave.P256` `dataRepresentation` blobs** (~284 B, encrypted to this Mac's enclave,
+   useless off-machine) stored in per-VM state — no keychain, no provisioning profile, ever.
+3. **The CTAP core is transport-agnostic, with two transports:**
+   - **Interim (enhanced tier, ship first):** `limina-agent` creates a `/dev/uhid` FIDO HID device
+     (usage page 0xF1D0); CTAP HID frames ride a new vsock control-plane channel. Weeks, not
+     months; later remains the fallback where USB is off.
+   - **FINAL (productized, stock-tier coverage): VMM-emulated xHCI** (`xhci-platform` MMIO — stock
+     aarch64 Fedora has the driver built in) presenting **two USB gadget devices**:
+     a. an **honest FIDO HID key** — vendor-neutral (browsers/udev detect by usage page, not
+        VID/PID); browser passkeys + SSH keys work on an unmodified stock guest, zero config;
+     b. an **impersonated, well-supported match-on-chip fingerprint reader** (Route A — decided
+        over shipping our own libfprint driver): protocol implemented from the open-source
+        libfprint driver of the chosen device (the driver source is the spec), so stock fprintd /
+        GNOME Settings / GDM light up natively. **fwupd is neutralized by advertising an
+        impossibly high firmware version** so it never offers an update. Match-on-chip, never
+        match-on-host: verify = host Touch ID → match/no-match; no synthetic fingerprint images.
+        Advertise the minimum enroll-stage count; enrollment stays a manual per-user GNOME
+        Settings step (accepted — same UX as macOS itself).
+4. **xHCI emulation is shared infrastructure with M7** — real USB passthrough wants a guest-visible
+   controller anyway; biometrics adds two device models behind it. Biometrics alone would not
+   justify the controller; the combination does.
+5. **PAM side on stock:** Fedora's authselect `with-fingerprint` + fprintd take over once a
+   "supported reader" exists (verify the F44 default-enabled state during the spike); `pam_u2f`
+   becomes optional (FIDO device is then mainly for WebAuthn). `hmac-secret`
+   (systemd-cryptenroll) can't live in the SEP — software-key fallback is a separate decision.
+
+**Key tasks:**
+1. ✅ **Spike A** — host SEP/LAContext primitive (`spikes/touchid-fido/`).
+2. **Spike B** — agent uhid FIDO device + vsock channel + host CTAPHID (INIT/PING) stub; oracle
+   ladder: `fido2-token -L` → `fido2-cred`/`fido2-assert` → webauthn.io in Firefox on the enhanced
+   image.
+3. **CTAP2 core** — evaluate `passkey-rs` vs hand-rolled state machine; SEP backend behind a
+   trait; per-VM credential store (blob + RP ID + user handle + credential ID).
+4. **PAM recipe** + L2 guard (`fido2-assert` round-trip; test-only auto-approve knob for CI since
+   the prompt needs a finger).
+5. **Stock wave:** xHCI device model + the two gadgets; pick the MOC target from libfprint
+   sources (simplest protocol, no pairing/TLS if avoidable); fwupd-neutralization verify.
+
+**Done test:** on a **stock** F44 guest (USB build): Firefox registers + asserts a passkey on
+webauthn.io with Touch ID prompts appearing on the host; GNOME Settings shows Fingerprint Login;
+enrollment + GDM/sudo fingerprint work via host Touch ID. On the **enhanced** image (uhid build):
+the same passkey flow, plus the L2 guard green.
+
+**Risks / spike first:** MOC protocol fidelity (some drivers do pairing/PSK — choose the target
+by protocol simplicity); fwupd's actual probe behavior vs the version bluff; enroll-stage UX
+(each "touch" = a host prompt); LAContext prompt from all launch modes (terminal proven; Dock
+launch to verify — cf. the fd-limit and TCC launch-env traps); multi-VM prompt attribution.
+
+---
+
 ## Summary of net-new code vs libkrun patches
 
 | Milestone | Net-new limina code | libkrun (or fw/virgl) patches |
@@ -1393,6 +1468,7 @@ control plane (`limina-proto` `SHUTDOWN`/`TIME_SYNC`) + `limina-agent` (M5); dis
 | M9 suspend/resume + snapshots 📐 designed | host-side VMM snapshot (file format/CRC, `--restore` wiring, device schema + mapped-blob set, named-snapshot manager + clone + APFS `clonefile` disk, agent freeze bracket, proto `Snapshot`/`Restore`/`TimeSet`, capability probe, UX); Mesa-venus object-graph replay + **device-local content readback** + blob copy-back (venus tier) | multi-vCPU HVF pause/quiesce (incl. WFE-parked wakeup) + vCPU save/restore (wrappers, FFI exists) + GIC state (spike #2 green) + `CNTVOFF` set + `--restore` mode + device (de)serialize + virtio freeze/thaw hardening + snapshot-time GPU quiesce (restore = fresh worker, no in-process renderer reset; `reset_session` rutabaga-context fix already shipped, 0035); carry `patches/linux` Dongwon-Kim drm/virtio freeze-restore (virgl) |
 | M12 SPICE agent 📋 planned | host vdagent broker (framing + clipboard, then client→guest file transfer), NSPasteboard bridge reuse (M5), native-vs-SPICE arbitration; display-resize deliberately excluded (native EDID already covers it) | virtio-serial named multiport port `com.redhat.spice.0` (wakes stock `spice-vdagentd`); no crate reuse |
 | M13 visibility/power render adaptation 📋 planned | front-end occlusion/Space/power signal + hysteresis policy, `vm.toml [power]/[render]` config, host present cap/pause (reuse s2idle), agent frame-rate throttle message | present pause/cap knob (extends s2idle 0089) + fence-feedback pacing knob; relax deep-idle bias on occlusion |
+| M14 biometric auth 🟡 spiked | host CTAP2 authenticator (SEP ES256 + LAContext, CryptoKit blob store per VM), agent uhid FIDO bridge + vsock channel, later xHCI + FIDO/MOC-fingerprint gadgets, pam_u2f/authselect recipe | none for uhid transport (vsock exists); stock wave = xHCI controller + gadget device models in libkrun (shared with M7) |
 
 ## First three things to spike
 
