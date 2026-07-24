@@ -1379,8 +1379,10 @@ control plane (`limina-proto` `SHUTDOWN`/`TIME_SYNC`) + `limina-agent` (M5); dis
 
 ## Milestone 14 — Biometric auth: host Touch ID → guest passkeys + fingerprint login
 
-**Status: 🟡 Spike A GREEN (2026-07-24, `spikes/touchid-fido/RESULTS.md`); Spike B (guest uhid
-transport) next.**
+**Status: 🟡 Spikes A **and** B GREEN (2026-07-24, `spikes/touchid-fido/RESULTS.md`): the SEP/Touch ID
+primitive is proven, and the uhid↔vsock transport is live end-to-end — a guest `fido2-token -I`
+completes CTAPHID INIT + CTAP2 getInfo against the host stub, with systemd fido-id detecting the
+vendor-neutral device. Next: the CTAP2 core (makeCredential/getAssertion on SEP keys).**
 
 **Goal:** the guest uses the Mac's Touch ID as (a) a WebAuthn/passkey authenticator in browsers
 (and `sk-*` SSH keys), and (b) fingerprint login/sudo/GDM. **Raw sensor passthrough is impossible

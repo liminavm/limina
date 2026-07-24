@@ -52,10 +52,28 @@ credential *persistence* require, entitlement-wise?
    `evaluatePolicy` reason), so per-RP prompts ("'dogfood-guest' wants to sign in
    to github.com") will work.
 
-## Next (Spike B)
+## Spike B — GREEN (2026-07-24, same day)
 
-Guest side: `limina-agent` creates a `/dev/uhid` FIDO HID device (usage page
-0xF1D0), bridges CTAP frames over a new vsock control-plane channel. Oracle
-ladder: `fido2-token -L` → `fido2-cred`/`fido2-assert` → webauthn.io in
-Firefox/Chromium on the enhanced image. Then join the halves (evaluate
-`passkey-rs` for the CTAP2 state machine).
+The uhid transport shipped as real code, not spike scratch: `limina-proto`
+`CHANNEL_FIDO`/`FIDO_REPORT`, agent `guest/limina-agent/src/fido.rs` (uhid FIDO
+device, created on host WELCOME `fido` cap, connection-scoped so a dead bridge
+never leaves a zombie device), host `crates/limina/src/fido.rs` (complete
+CTAPHID framing + minimal CTAP2 getInfo; 6 unit tests).
+
+Verified on a live F44 enhanced-image boot (EFI+venus, `cargo xtask run`),
+new agent delivered over SSH:
+
+- agent log: `virtual FIDO device up`
+- guest `/dev/hidraw0`: `HID_NAME=limina Touch ID FIDO`, uaccess ACL applied —
+  **systemd's fido-id detected the device by usage page** (vendor-neutral
+  VID/PID 0x1d6b:0x0f1d, exactly the stock-zero-config premise)
+- `fido2-token -L` lists the device; `fido2-token -I` completes CTAPHID INIT
+  (proto 0x02, caps `cbor,nomsg`) **and a CTAP2 getInfo round-trip**
+  (`FIDO_2_0`, aaguid `6c…2121` = "limina-touchid!!") through the full chain:
+  hidraw → uhid → agent → vsock → host state machine → back.
+
+## Next
+
+CTAP2 core: makeCredential/getAssertion (evaluate `passkey-rs`) on the Spike A
+SEP primitives, per-VM credential blob store, then `fido2-cred`/`fido2-assert`
+and webauthn.io in a guest browser as the next oracle rungs.

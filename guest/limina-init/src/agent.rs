@@ -129,6 +129,7 @@ fn serve(stream: &mut File) -> std::io::Result<AgentEnd> {
             Ok((_, Message::ClipOffer(_)))
             | Ok((_, Message::ClipRequest(_)))
             | Ok((_, Message::ClipData(_)))
+            | Ok((_, Message::FidoReport(_)))
             | Ok((_, Message::TimeSync(_)))
             | Ok((_, Message::Hello(_)))
             | Ok((_, Message::ShutdownAck)) => {}

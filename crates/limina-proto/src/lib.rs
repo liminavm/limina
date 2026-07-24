@@ -50,6 +50,10 @@ pub const MAX_PAYLOAD: u32 = 1 << 20;
 pub const CHANNEL_CONTROL: u32 = 0;
 /// The clipboard channel (CLIP_OFFER/CLIP_REQUEST/CLIP_DATA live here).
 pub const CHANNEL_CLIPBOARD: u32 = 1;
+
+/// Channel for the virtual FIDO authenticator bridge (M14): raw CTAP HID reports
+/// between the guest's uhid device (agent side) and the host authenticator.
+pub const CHANNEL_FIDO: u32 = 2;
 /// The well-known guest vsock port of the control plane (`b"LIMI"` big-endian — vsock
 /// ports are a flat u32 space, so a distinctive value just avoids collisions). The
 /// supervisor listens here by default; agents connect to `CID_HOST:CONTROL_PORT`.
@@ -81,6 +85,8 @@ pub mod msg_type {
     pub const CLIP_OFFER: u8 = 16;
     pub const CLIP_REQUEST: u8 = 17;
     pub const CLIP_DATA: u8 = 18;
+
+    pub const FIDO_REPORT: u8 = 32;
 }
 
 /// Guest → host greeting: who the agent is, what it can do, and cheap boot-time facts.
@@ -239,6 +245,18 @@ pub struct ClipData {
     pub data: Vec<u8>,
 }
 
+/// Either direction: one CTAP HID report for the virtual FIDO authenticator (M14).
+/// Guest→host carries what an application wrote to the uhid device (an OUTPUT
+/// report); host→guest carries the authenticator's reply (delivered as an INPUT
+/// report). Always a full 64-byte HID frame — CTAPHID framing (channel ids,
+/// sequencing, reassembly) lives inside `data`, owned by the host authenticator
+/// and the guest's CTAP stack, never by this transport.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct FidoReport {
+    #[cbor(n(0), with = "minicbor::bytes")]
+    pub data: Vec<u8>,
+}
+
 /// Either direction: a non-fatal protocol error report.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct ErrorMsg {
@@ -268,6 +286,7 @@ pub enum Message {
     ClipOffer(ClipOffer),
     ClipRequest(ClipRequest),
     ClipData(ClipData),
+    FidoReport(FidoReport),
     Error(ErrorMsg),
     Unknown {
         msg_type: u8,
@@ -289,6 +308,7 @@ impl Message {
             Message::ClipOffer(_) => msg_type::CLIP_OFFER,
             Message::ClipRequest(_) => msg_type::CLIP_REQUEST,
             Message::ClipData(_) => msg_type::CLIP_DATA,
+            Message::FidoReport(_) => msg_type::FIDO_REPORT,
             Message::Error(_) => msg_type::ERROR,
             Message::Unknown { msg_type, .. } => *msg_type,
         }
@@ -318,6 +338,7 @@ impl Message {
             Message::ClipOffer(m) => cbor(m),
             Message::ClipRequest(m) => cbor(m),
             Message::ClipData(m) => cbor(m),
+            Message::FidoReport(m) => cbor(m),
             Message::Error(m) => cbor(m),
             Message::Unknown { payload, .. } => Ok(payload.clone()),
         }
@@ -338,6 +359,7 @@ impl Message {
             msg_type::CLIP_OFFER => Message::ClipOffer(cbor(&payload)?),
             msg_type::CLIP_REQUEST => Message::ClipRequest(cbor(&payload)?),
             msg_type::CLIP_DATA => Message::ClipData(cbor(&payload)?),
+            msg_type::FIDO_REPORT => Message::FidoReport(cbor(&payload)?),
             msg_type::ERROR => Message::Error(cbor(&payload)?),
             other => Message::Unknown {
                 msg_type: other,

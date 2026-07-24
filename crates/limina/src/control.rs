@@ -359,7 +359,11 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
         &mut stream,
         CHANNEL_CONTROL,
         &Message::Welcome(Welcome {
-            caps: vec!["shutdown".to_string(), "clipboard".to_string()],
+            caps: vec![
+                "shutdown".to_string(),
+                "clipboard".to_string(),
+                "fido".to_string(),
+            ],
         }),
     )?;
 
@@ -387,7 +391,10 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
     }
     inner.peers.lock().unwrap().push(peer);
 
-    let result = serve_loop(&mut stream, &writer, inner, &last_seen);
+    // Per-peer CTAPHID state: the agent creates one uhid FIDO device per connection,
+    // so channel ids and reassembly are connection-scoped by construction.
+    let mut fido = crate::fido::FidoAuthenticator::new();
+    let result = serve_loop(&mut stream, &writer, inner, &last_seen, &mut fido);
     inner.peers.lock().unwrap().retain(|p| p.id != id);
     log::info!("control: guest agent disconnected: {}", hello.agent);
     result
@@ -400,6 +407,7 @@ fn serve_loop(
     writer: &Mutex<UnixStream>,
     inner: &Inner,
     last_seen: &Mutex<Instant>,
+    fido: &mut crate::fido::FidoAuthenticator,
 ) -> std::io::Result<()> {
     let reply = |msg: &Message, channel: u32| -> std::io::Result<()> {
         write_message(&mut *writer.lock().unwrap(), channel, msg)
@@ -427,6 +435,18 @@ fn serve_loop(
                 }
             }
             Ok((_, Message::ClipData(d))) => inner.clipboard.on_data(d),
+            // M14: one CTAP HID report from the guest's uhid FIDO device; the CTAPHID
+            // state machine may answer with zero or more reports.
+            Ok((_, Message::FidoReport(r))) => {
+                for resp in fido.on_report(&r.data) {
+                    reply(
+                        &Message::FidoReport(limina_proto::FidoReport {
+                            data: resp.to_vec(),
+                        }),
+                        limina_proto::CHANNEL_FIDO,
+                    )?;
+                }
+            }
             // M6: feed guest memory-pressure reports to the autoballoon policy (if configured).
             Ok((_, Message::MemPressure(p))) => {
                 if let Some(policy) = &inner.balloon_policy {

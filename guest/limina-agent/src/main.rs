@@ -25,9 +25,11 @@ use std::os::fd::FromRawFd;
 use std::time::Duration;
 
 use limina_proto::{
-    read_message, write_message, Heartbeat, Hello, MemPressure, Message, CHANNEL_CONTROL,
-    CONTROL_PORT,
+    read_message, write_message, FidoReport, Heartbeat, Hello, MemPressure, Message,
+    CHANNEL_CONTROL, CHANNEL_FIDO, CONTROL_PORT,
 };
+
+mod fido;
 
 /// How often the agent emits a HEARTBEAT while the channel is idle.
 const HEARTBEAT_EVERY: Duration = Duration::from_millis(1000);
@@ -179,14 +181,27 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
                 "shutdown".to_string(),
                 "mempressure".to_string(),
                 "timesync".to_string(),
+                "fido".to_string(),
             ],
             pagesize,
         }),
     )?;
 
+    // The virtual FIDO device (M14): created only once the host's WELCOME confirms it
+    // runs an authenticator (an old host would answer every report ERR_UNSUPPORTED —
+    // better to present no device than a dead one). Connection-scoped: dropping the
+    // bridge on disconnect destroys the guest-visible device, so no app can talk to
+    // an authenticator that has no host behind it.
+    let mut fido_bridge: Option<fido::FidoBridge> = None;
+
     let mut seq: u64 = 0;
     loop {
-        if !readable_within(stream, HEARTBEAT_EVERY)? {
+        let (stream_ready, uhid_ready) = readable_within2(
+            stream,
+            fido_bridge.as_ref().map(|b| b.fd()),
+            HEARTBEAT_EVERY,
+        )?;
+        if !stream_ready && !uhid_ready {
             seq += 1;
             write_message(
                 stream,
@@ -200,17 +215,61 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
             }
             continue;
         }
+        if uhid_ready {
+            if let Some(bridge) = fido_bridge.as_mut() {
+                match bridge.read_event() {
+                    Ok(Some(report)) => write_message(
+                        stream,
+                        CHANNEL_FIDO,
+                        &Message::FidoReport(FidoReport {
+                            data: report.to_vec(),
+                        }),
+                    )?,
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!("limina-agent: uhid error ({e}); dropping the FIDO device");
+                        fido_bridge = None;
+                    }
+                }
+            }
+        }
+        if !stream_ready {
+            continue;
+        }
         match read_message(stream) {
             Ok((_, Message::Shutdown(_))) => {
                 let _ = write_message(stream, CHANNEL_CONTROL, &Message::ShutdownAck);
                 return Ok(End::Shutdown);
             }
             Ok((_, Message::TimeSync(ts))) => apply_time_sync(ts.unix_ns),
+            Ok((_, Message::Welcome(w))) => {
+                if w.caps.iter().any(|c| c == "fido") && fido_bridge.is_none() {
+                    match fido::FidoBridge::create() {
+                        Ok(b) => {
+                            eprintln!("limina-agent: virtual FIDO device up");
+                            fido_bridge = Some(b);
+                        }
+                        // Non-fatal: no /dev/uhid (CONFIG_UHID off) just means no
+                        // authenticator in this guest.
+                        Err(e) => eprintln!("limina-agent: FIDO device unavailable ({e})"),
+                    }
+                }
+            }
+            // A host authenticator reply: hand it to the device as an INPUT report.
+            Ok((_, Message::FidoReport(r))) => {
+                if let Some(bridge) = fido_bridge.as_mut() {
+                    if let Err(e) = bridge.deliver(&r.data) {
+                        eprintln!(
+                            "limina-agent: uhid deliver failed ({e}); dropping the FIDO device"
+                        );
+                        fido_bridge = None;
+                    }
+                }
+            }
             Ok((_, Message::Unknown { msg_type, .. })) => {
                 write_message(stream, CHANNEL_CONTROL, &Message::unsupported(msg_type))?;
             }
-            Ok((_, Message::Welcome(_)))
-            | Ok((_, Message::Heartbeat(_)))
+            Ok((_, Message::Heartbeat(_)))
             | Ok((_, Message::MemPressure(_)))
             | Ok((_, Message::Error(_))) => {}
             // Clipboard frames belong to the session helper (this daemon never
@@ -279,22 +338,38 @@ fn read_mem_pressure() -> Option<MemPressure> {
     Some(MemPressure::from_proc(&pressure, &meminfo))
 }
 
-/// `poll(2)` the socket for readability, up to `timeout`. `Ok(false)` = idle tick.
-fn readable_within(stream: &File, timeout: Duration) -> std::io::Result<bool> {
+/// `poll(2)` the socket (and, when present, the uhid fd) for readability, up to
+/// `timeout`. `(false, false)` = idle tick.
+fn readable_within2(
+    stream: &File,
+    extra_fd: Option<i32>,
+    timeout: Duration,
+) -> std::io::Result<(bool, bool)> {
     use std::os::fd::AsRawFd;
-    let mut pfd = libc::pollfd {
-        fd: stream.as_raw_fd(),
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    let r = unsafe { libc::poll(&mut pfd, 1, timeout.as_millis() as libc::c_int) };
+    let mut pfds = [
+        libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            // poll(2) ignores negative fds — a "no uhid device" slot costs nothing.
+            fd: extra_fd.unwrap_or(-1),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+    ];
+    let r = unsafe { libc::poll(pfds.as_mut_ptr(), 2, timeout.as_millis() as libc::c_int) };
     match r {
-        0 => Ok(false),
-        n if n > 0 => Ok(true),
+        0 => Ok((false, false)),
+        n if n > 0 => Ok((
+            pfds[0].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0,
+            pfds[1].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0,
+        )),
         _ => {
             let err = std::io::Error::last_os_error();
             if err.kind() == ErrorKind::Interrupted {
-                Ok(false)
+                Ok((false, false))
             } else {
                 Err(err)
             }

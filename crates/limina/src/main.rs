@@ -12,6 +12,7 @@ mod balloon_policy;
 mod center;
 mod clipboard;
 mod control;
+mod fido;
 mod gateway;
 mod session;
 mod supervisor;
