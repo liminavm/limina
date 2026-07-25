@@ -19,8 +19,13 @@ LOG=/tmp/enhanced-efi-kk-worker.log
 WORK="${LIMINA_DISK:?set LIMINA_DISK to the enhanced .raw}"
 FW="${LIMINA_FIRMWARE:-target/krun-efi/KRUN_EFI.gop.fd}"
 [ -f "$FW" ] || { echo "GOP firmware not found at $FW (build with GOP=1 scripts/build-krun-efi.sh)"; exit 1; }
-ICD=$(ls /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/kosmickrisp_mesa_devenv_icd.*.json 2>/dev/null | head -1)
+# LIMINA_KK_ICD pins a specific KosmicKrisp ICD json instead of the devenv build — use it to boot
+# against the KK that a packaged limina.app actually ships, so a "works here, fails on the dogfood
+# Mac" split can be tested without touching that Mac (the app's KK is a different build from the
+# devenv one). Its library_path must be absolute, or relative to the json.
+ICD="${LIMINA_KK_ICD:-$(ls /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/kosmickrisp_mesa_devenv_icd.*.json 2>/dev/null | head -1)}"
 [ -n "$ICD" ] || { echo "no KosmicKrisp ICD under /Volumes/mesa-cs/build-kk"; exit 1; }
+[ -f "$ICD" ] || { echo "KosmicKrisp ICD not found: $ICD"; exit 1; }
 rm -f "$LOG"
 # Host KK + zink-on-KK env (matches boot-seated-kk.sh): venus render server -> KK; the coexist
 # device's vrend half gets host GL via zink-on-KK (needs the zink-kk Mesa libEGL by bare name on the

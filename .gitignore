@@ -32,3 +32,9 @@ Cargo.lock.orig
 .env
 .env.local
 __pycache__/
+
+# spikes/kk-timestamp-probe build artifacts
+spikes/kk-timestamp-probe/probe
+spikes/kk-timestamp-probe/probe.dSYM/
+spikes/kk-timestamp-probe/mtlprobe
+spikes/kk-timestamp-probe/mtlprobe.dSYM/
