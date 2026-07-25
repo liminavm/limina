@@ -165,6 +165,56 @@ fn l1_xhci_enumerates() {
     );
 }
 
+/// Stock-tier fingerprint reader over USB (M14 wave 3): `--fingerprint` cold-plugs the
+/// impersonated elanmoc gadget, and the guest enumerates it with the byte-exact Elan identity
+/// `04f3:0c7d`. This guards the descriptor set + cold-plug end-to-end; enumeration answers from the
+/// gadget's descriptors alone (no supervisor protocol / Touch ID needed), so it is deterministic in
+/// CI. `LIMINA_FP_TEST_APPROVE=1` makes the supervisor advertise the `fingerprint` capability on a
+/// host without a usable Touch ID sensor, so the gadget always attaches. The full fprintd
+/// enroll/verify flow (which the reused generic probe can't drive — it needs stock userspace) is
+/// covered by the engine's unit tests + a golden pcapng replay and by one-time live validation
+/// (docs/fingerprint-reader.md); the worker↔supervisor bulk-transport seam under a real guest
+/// driver has no automated guard until the planned L2 (stock image + fprintd + test-approve).
+#[test]
+fn l1_xhci_fingerprint_reader() {
+    if !limina_test::require_hvf_or_skip("l1_xhci_fingerprint_reader") {
+        return;
+    }
+
+    let cfg = GuestConfig::l1_from_env()
+        .expect("resolving L1 guest config")
+        .with_supervisor_arg("--fingerprint")
+        .with_env("LIMINA_FP_TEST_APPROVE", "1")
+        .with_cmdline_token("limina.xhci_probe");
+    eprintln!("booting L1 xHCI fingerprint-reader guest: {:?}", cfg.boot);
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+
+    guest
+        .wait_for("xhci_probe: begin", Duration::from_secs(15))
+        .expect("guest did not start the xHCI probe");
+    // The impersonated elanmoc reader is 0x04f3:0x0c7d (see crates/limina-vmm/src/moc_usb.rs).
+    guest
+        .wait_for("RESULT: usbdev 04f3:0c7d", Duration::from_secs(20))
+        .expect("the cold-plugged fingerprint gadget did not enumerate as 04f3:0c7d");
+    guest
+        .wait_for("xhci_probe: done", Duration::from_secs(5))
+        .expect("xHCI probe did not finish");
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(10))
+        .expect("supervisor did not stop");
+    assert!(
+        !outcome.forced,
+        "harness had to force teardown: {outcome:?}"
+    );
+    assert_eq!(
+        outcome.code,
+        Some(0),
+        "expected clean power-off: {outcome:?}"
+    );
+}
+
 /// A cold-plugged enumeration-only mock enumerates with its distinctive VID/PID.
 #[test]
 fn l1_xhci_mock_device() {
