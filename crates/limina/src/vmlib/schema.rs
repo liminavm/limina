@@ -104,6 +104,14 @@ pub struct Hardware {
     /// Touch ID sensor (else silently absent — stock-degrade). See `--no-fingerprint`.
     #[serde(default = "default_true")]
     pub fingerprint: bool,
+    /// Offer the guest a Touch-ID-backed FIDO2/WebAuthn authenticator (default true). Unlike the
+    /// reader above this is **transport-independent**: it covers both the stock-tier USB gadget and
+    /// the enhanced-tier uhid device the agent creates, so setting it false leaves the guest with
+    /// no passkey surface at all — which is the point, since this VM's passkeys live in the host
+    /// keychain. Only advertised where a Secure Enclave can back it (else silently absent —
+    /// stock-degrade). See `--no-fido`.
+    #[serde(default = "default_true")]
+    pub fido: bool,
     /// Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` to the guest (default false; M6 addendum
     /// 2026-07-20). The bit makes Linux keep ballooned pages inside `MemTotal`, so an inflated
     /// dynamic VM reads as nearly out of memory and systemd-oomd fires; without it accounting
@@ -157,6 +165,7 @@ impl Default for Hardware {
             mic: false,
             usb: true,
             fingerprint: true,
+            fido: true,
             balloon_deflate_on_oom: false,
         }
     }

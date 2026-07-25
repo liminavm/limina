@@ -82,7 +82,7 @@ silently absent (stock-degrade), so leaving it on is harmless. To turn it off:
 
 ```sh
 limina --no-fingerprint         # keep USB, drop just the reader
-limina --no-usb                 # drop the whole USB controller (also removes FIDO + the reader)
+limina --no-usb                 # drop the whole USB controller (removes the reader too)
 # managed VMs: set [hardware] fingerprint = false (or usb = false) in vm.toml
 ```
 

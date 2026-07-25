@@ -51,6 +51,26 @@ they persist in the managed VM's bundle dir (`<bundle>/fido-credentials.json`).
 
 ## Recipes
 
+### Turning it off (`--no-fido`)
+
+The authenticator is **on by default** wherever a Secure Enclave can back it (on a Mac without
+one it is silently absent — stock-degrade). Because the passkeys it mints live in the *host*
+keychain, a VM you don't want reaching them shouldn't be handed a door:
+
+```sh
+limina --no-fido                # no authenticator on EITHER transport
+# managed VMs: set [hardware] fido = false in vm.toml
+```
+
+The switch is deliberately transport-wide: it drops the passkey store itself, so the control
+plane never advertises the `fido` capability (the agent creates no uhid device) *and* the USB
+gadget is never wired. Half a credential surface is not a disabled one.
+
+It is also independent of `--no-usb` in both directions. `--no-usb` removes the USB gadget but
+leaves the agent/uhid transport working, so it is **not** a way to deny passkeys to an
+enhanced-tier guest; `--no-fido` removes the authenticator but leaves the controller (and the
+fingerprint reader, a separate surface) alone.
+
 ### Browser passkeys (zero guest config)
 
 Just browse. On webauthn.io (or any WebAuthn site), choose the **security key** /

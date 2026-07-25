@@ -350,3 +350,59 @@ fn l1_xhci_fido_authenticator() {
         "expected clean power-off: {outcome:?}"
     );
 }
+
+/// `--no-fido` must remove the FIDO authenticator **without** taking the USB controller with it.
+///
+/// The interesting half is what stays: `--no-usb` and `--no-fido` are deliberately independent, so
+/// a VM that opts out of passkeys keeps its controller (and could still carry the fingerprint
+/// reader, a separate surface). `LIMINA_FIDO_TEST_APPROVE=1` is load-bearing here — it makes the
+/// passkey store *capable*, so the gadget would certainly be attached if the flag were ignored,
+/// which is what makes this test fail without the gate rather than pass for the wrong reason.
+#[test]
+fn l1_xhci_no_fido_drops_the_gadget_but_keeps_the_controller() {
+    if !limina_test::require_hvf_or_skip(
+        "l1_xhci_no_fido_drops_the_gadget_but_keeps_the_controller",
+    ) {
+        return;
+    }
+
+    let cfg = GuestConfig::l1_from_env()
+        .expect("resolving L1 guest config")
+        .with_supervisor_arg("--usb")
+        .with_supervisor_arg("--no-fido")
+        // The reader is on by default and this dev Mac may have a Touch ID sensor; drop it so the
+        // device count below is about FIDO alone.
+        .with_supervisor_arg("--no-fingerprint")
+        .with_env("LIMINA_FIDO_TEST_APPROVE", "1")
+        .with_cmdline_token("limina.xhci_probe");
+    eprintln!("booting L1 xHCI --no-fido guest: {:?}", cfg.boot);
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+
+    // The controller itself is untouched: still bound, root hub up.
+    guest
+        .wait_for("RESULT: xhci_bound PRESENT", Duration::from_secs(20))
+        .expect("--no-fido must not remove the xHCI controller");
+    // ...and nothing cold-plugged onto it. The probe scans its full window before reporting, so a
+    // zero count here is "no gadget ever appeared", not "we looked too early".
+    guest
+        .wait_for("xhci_probe: done (0 device(s))", Duration::from_secs(30))
+        .expect("a USB gadget was attached despite --no-fido --no-fingerprint");
+    assert!(
+        !guest.console().contains("usbdev 1d6b:0f1d"),
+        "the FIDO gadget enumerated despite --no-fido"
+    );
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(10))
+        .expect("supervisor did not stop");
+    assert!(
+        !outcome.forced,
+        "harness had to force teardown: {outcome:?}"
+    );
+    assert_eq!(
+        outcome.code,
+        Some(0),
+        "expected clean power-off: {outcome:?}"
+    );
+}

@@ -169,8 +169,10 @@ the vendored tree and requiring the corresponding test to fail.
 - Drive-by: `VmResources`' test initializer was missing the `usb` fields, so the vmm crate's unit
   tests did not build with `--features usb` at all.
 
-**Still open:** FIDO has no `--no-fido` opt-out (it rides `--usb` + a live Secure Enclave) — a
-product-parity gap, filed in `docs/hardening-backlog.md` §M14, deliberately not coupled to this work.
+The `--no-fido` parity gap this work surfaced (FIDO had no opt-out while USB and the fingerprint
+reader did) was closed straight after, deliberately as a separate change: `--no-fido` /
+`[hardware] fido`, cutting the passkey store so **both** transports go with it. See
+`docs/fido-authenticator.md` §"Turning it off".
 
 ## Related
 

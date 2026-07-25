@@ -281,6 +281,20 @@ struct Cli {
     #[arg(long, overrides_with = "fingerprint")]
     no_fingerprint: bool,
 
+    /// Offer the guest a Touch-ID-backed FIDO2/WebAuthn authenticator. This is the **default**, on
+    /// both transports (the stock-tier USB gadget and the enhanced-tier uhid device the agent
+    /// creates). Advertised only where a Secure Enclave can back it (else silently absent). The
+    /// flag is kept to override an earlier `--no-fido`.
+    #[arg(long, overrides_with = "no_fido")]
+    fido: bool,
+
+    /// Do NOT offer the FIDO authenticator — on **either** transport, so the guest gets no passkey
+    /// surface at all. The point of the switch: this VM's passkeys would live in the host keychain,
+    /// and a guest that shouldn't reach them shouldn't be handed a door. FIDO is on by default; if
+    /// both flags appear the last one wins.
+    #[arg(long, overrides_with = "fido")]
+    no_fido: bool,
+
     /// What to do with the guest when the HOST goes to sleep: `s2idle` (default) suspends
     /// the guest first (sleep-button pulse, held until it quiesces) and wakes it on host
     /// wake, so its wall clock and timers come back correct on every tier; `ignore` leaves
@@ -503,6 +517,17 @@ impl Cli {
     /// sensor, so a Mac without one silently omits the reader regardless.
     fn fingerprint_enabled(&self) -> bool {
         self.fingerprint || !self.no_fingerprint
+    }
+
+    /// Effective FIDO-authenticator policy. On by default (`--no-fido` opts out); same last-wins
+    /// idiom as [`Self::usb_enabled`]. Gated further at runtime on a usable Secure Enclave.
+    ///
+    /// Deliberately NOT implied by `--no-usb`: FIDO has two transports and the uhid one (via
+    /// `limina-agent`) needs no controller, so dropping USB must not silently take passkeys with
+    /// it. Conversely this flag covers *both*, because a half-disabled credential surface is not
+    /// a disabled one.
+    fn fido_enabled(&self) -> bool {
+        self.fido || !self.no_fido
     }
 }
 
@@ -839,12 +864,14 @@ fn cli_from_definition(
         no_battery: !cfg.hardware.battery,
         no_snd: !cfg.hardware.snd,
         mic: cfg.hardware.mic,
-        // Encode the definition's usb/fingerprint policy as the equivalent flag pair, so
-        // usb_enabled()/fingerprint_enabled() resolve to exactly cfg.hardware.{usb,fingerprint}.
+        // Encode the definition's usb/fingerprint/fido policy as the equivalent flag pairs, so
+        // usb_enabled()/fingerprint_enabled()/fido_enabled() resolve to exactly cfg.hardware.*.
         usb: cfg.hardware.usb,
         no_usb: !cfg.hardware.usb,
         fingerprint: cfg.hardware.fingerprint,
         no_fingerprint: !cfg.hardware.fingerprint,
+        fido: cfg.hardware.fido,
+        no_fido: !cfg.hardware.fido,
         on_host_sleep: Some(cfg.power.on_host_sleep.as_flag().to_string()),
         net,
         net_log: None,
@@ -874,6 +901,8 @@ fn run_vm(cli: Cli) -> Result<()> {
     // the reader rides the controller, so --no-usb also suppresses it (no orphan gadget).
     let usb = cli.usb_enabled();
     let fingerprint = usb && cli.fingerprint_enabled();
+    // FIDO is NOT gated on `usb`: its uhid transport rides the agent, not the controller.
+    let fido = cli.fido_enabled();
     let vmm_bin = resolve_vmm_bin(cli.vmm_bin).context("locating the limina-vmm worker binary")?;
 
     // Dynamic memory (M6): --memory MIN..MAX overrides --ram-mib with MAX (what libkrun allocates)
@@ -1010,12 +1039,19 @@ fn run_vm(cli: Cli) -> Result<()> {
     // store. `Some` only where a Secure Enclave (or the test-approve knob) can back the
     // authenticator (stock-degrade rule). Persist in the managed VM's bundle dir (next to
     // state.toml) so passkeys survive boots; ad-hoc/flat VMs fall back to in-memory.
-    let fido_store = fido::store_if_capable(
-        cli.suspend_state_file
-            .as_ref()
-            .and_then(|s| s.parent())
-            .map(|dir| dir.join("fido-credentials.json")),
-    );
+    // `--no-fido` cuts it off here, at the store — which is what makes the opt-out cover BOTH
+    // transports at once: with no store the control plane serves no uhid authenticator and the USB
+    // gadget below is never wired.
+    let fido_store = if fido {
+        fido::store_if_capable(
+            cli.suspend_state_file
+                .as_ref()
+                .and_then(|s| s.parent())
+                .map(|dir| dir.join("fido-credentials.json")),
+        )
+    } else {
+        None
+    };
 
     // Fingerprint reader template store (M14 wave 3): the single enrolled `user_id`, persisted next
     // to state.toml so it survives boots. `Some` only where a Touch ID sensor is present (or the
@@ -2088,6 +2124,10 @@ mod tests {
             cli.fingerprint_enabled(),
             "the fingerprint reader is on by default; runtime still gates it on a Touch ID sensor"
         );
+        assert!(
+            cli.fido_enabled(),
+            "the FIDO authenticator is on by default; runtime still gates it on a Secure Enclave"
+        );
         assert_eq!(cli.shutdown_grace_secs, 20, "flat default");
         assert_eq!(cli.window_title.as_deref(), Some("Fedora"));
         assert_eq!(cli.display_resolution, DisplayResolution::Fixed(1600, 1000));
@@ -2345,17 +2385,18 @@ mod tests {
     /// `--no-usb` / `--no-fingerprint` opt-outs that override the positive flag last-wins. Parses
     /// real argv so the `overrides_with` wiring is exercised.
     #[test]
-    fn usb_and_fingerprint_are_default_on_with_opt_out() {
+    fn usb_fingerprint_and_fido_are_default_on_with_opt_out() {
         let parse = |extra: &[&str]| {
             let mut argv = vec!["limina"];
             argv.extend_from_slice(extra);
-            Cli::try_parse_from(argv).expect("parsing usb/fingerprint flags")
+            Cli::try_parse_from(argv).expect("parsing usb/fingerprint/fido flags")
         };
 
-        // Bare invocation: both on out of the box.
+        // Bare invocation: all three on out of the box.
         let c = parse(&[]);
         assert!(c.usb_enabled(), "USB should default ON");
         assert!(c.fingerprint_enabled(), "fingerprint should default ON");
+        assert!(c.fido_enabled(), "FIDO should default ON");
 
         // Opt-outs turn each off independently.
         assert!(!parse(&["--no-usb"]).usb_enabled(), "--no-usb disables");
@@ -2363,10 +2404,17 @@ mod tests {
             !parse(&["--no-fingerprint"]).fingerprint_enabled(),
             "--no-fingerprint disables"
         );
+        assert!(!parse(&["--no-fido"]).fido_enabled(), "--no-fido disables");
 
         // --no-usb leaves the fingerprint flag on (though run_vm skips the reader without USB);
         // the two knobs are orthogonal at parse time.
         assert!(parse(&["--no-usb"]).fingerprint_enabled());
+        // FIDO is likewise orthogonal, and stays that way at RUNTIME too: its uhid transport rides
+        // the agent, not the controller, so --no-usb must not take passkeys with it.
+        assert!(parse(&["--no-usb"]).fido_enabled());
+        // And --no-fido leaves the controller alone — the fingerprint reader is a separate surface.
+        assert!(parse(&["--no-fido"]).usb_enabled());
+        assert!(parse(&["--no-fido"]).fingerprint_enabled());
 
         // Last flag on the line wins (clap overrides_with).
         assert!(
@@ -2376,6 +2424,14 @@ mod tests {
         assert!(
             parse(&["--no-usb", "--usb"]).usb_enabled(),
             "last flag (--usb) wins"
+        );
+        assert!(
+            !parse(&["--fido", "--no-fido"]).fido_enabled(),
+            "last flag (--no-fido) wins"
+        );
+        assert!(
+            parse(&["--no-fido", "--fido"]).fido_enabled(),
+            "last flag (--fido) wins"
         );
     }
 }
