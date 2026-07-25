@@ -358,6 +358,18 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   reproduce; the F44 enhanced desktop was validated end-to-end (16k + venus + patched mutter 50.1,
   pixel-verified; see `docs/images.md` §Component versions and [[limina-enh-delivery]]).
 
+## M14 USB / auth
+
+- **No `--no-fido` opt-out (product-parity gap, 2026-07-25).** `--usb` / `[hardware] usb` now
+  default to true, and `--fingerprint` has `--no-fingerprint` + `[hardware] fingerprint`, but the
+  FIDO authenticator has neither: it rides the USB controller unconditionally whenever the host has
+  a usable Secure Enclave. Every other host-mirroring device we ship (snd, mic, battery,
+  fingerprint) can be turned off per VM, and this one exposes a *credential* surface, so it is the
+  one that most deserves the switch. Wants: a `--no-fido` flag, a `[hardware] fido` key, and the
+  empty-gadget-list handling that `--no-usb` already has (a controller with no gadgets is fine —
+  `lsusb` is simply empty). Deliberately **not** coupled to the suspend/resume work
+  (`docs/design/usb-xhci-snapshot/`), which had to stay a bug fix.
+
 ## M9 snapshot hardening (from the 2026-07-18 transport-restore removal)
 
 - **FIXED 2026-07-20 (virglrenderer 0040): the vkmark-on-resume crash — journal create-arg

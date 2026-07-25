@@ -93,15 +93,16 @@ pub struct Hardware {
     /// See `--mic`.
     #[serde(default)]
     pub mic: bool,
-    /// Attach the emulated xHCI USB controller (platform `generic-xhci`; default false).
-    /// A stock guest binds it with its own xhci-plat driver (no guest components). Opt-in;
-    /// the controller is a bring-up skeleton today (no devices yet). See `--usb`.
-    #[serde(default)]
+    /// Attach the emulated xHCI USB controller (platform `generic-xhci`; default true).
+    /// A stock guest binds it with its own xhci-plat driver (no guest components); it also
+    /// carries the FIDO authenticator gadget. Harmless on a guest that ignores it. See `--no-usb`.
+    #[serde(default = "default_true")]
     pub usb: bool,
-    /// Present an impersonated Touch-ID-backed fingerprint reader to the guest (default false).
-    /// Opt-in — it changes the guest's login/sudo surface. Implies the USB controller. Stock
-    /// libfprint/fprintd bind it with no guest components. See `--fingerprint`.
-    #[serde(default)]
+    /// Present an impersonated Touch-ID-backed fingerprint reader to the guest (default true).
+    /// Implies the USB controller. Stock libfprint/fprintd bind it with no guest components; it is
+    /// inert until the guest wires `pam_fprintd` in, and only advertised on a Mac with a usable
+    /// Touch ID sensor (else silently absent — stock-degrade). See `--no-fingerprint`.
+    #[serde(default = "default_true")]
     pub fingerprint: bool,
     /// Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` to the guest (default false; M6 addendum
     /// 2026-07-20). The bit makes Linux keep ballooned pages inside `MemTotal`, so an inflated
@@ -154,8 +155,8 @@ impl Default for Hardware {
             battery: true,
             snd: true,
             mic: false,
-            usb: false,
-            fingerprint: false,
+            usb: true,
+            fingerprint: true,
             balloon_deflate_on_oom: false,
         }
     }

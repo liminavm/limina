@@ -124,7 +124,18 @@ set-TR-dequeue (fprintd and error paths need them honest).
 Deliberately deferred (each returns the spec'd error until needed): **streams**
 (only UAS uses them), **isochronous** (webcams someday, behind passthrough),
 secondary interrupters, MSI (n/a on sysbus), scratchpads, 64-byte contexts,
-bandwidth negotiation (report success), power management beyond PORTSC basics.
+bandwidth negotiation (report success).
+
+**Power management is NOT deferred** (it was, until default-on met a suspending
+VM). A guest suspends its USB stack through xHCI's own save/restore feature —
+`USBCMD.CSS` on the way down, a light resume on the way back that assumes the
+controller kept everything — and a limina snapshot-suspend tears the whole
+worker down underneath that assumption. The controller therefore implements the
+PM register semantics honestly (`CSS`/`CRS` strobes, `CNR`, `PORTSC.PLC` on the
+link resume, an idempotent run-edge port scan, `CRCR` stop/abort) and its
+host-side state rides along in the VM snapshot, so devices survive a
+suspend/resume transparently. Full diagnosis + design:
+`docs/design/usb-xhci-snapshot/`.
 
 QEMU's own FIXME list flags "endpoint stopped/reset with transfers in flight" as
 its acknowledged rough edge; our HID-first scope keeps the in-flight set to at
@@ -216,6 +227,16 @@ trait is deliberately the same shape as `limina-usbip::UsbDevice`.
   functions over `GuestMemoryMmap` — property-test the cycle-bit/link-TRB
   handling (this is where xHCI implementations historically break, and where
   QEMU's guest-triggerable CVEs lived — treat ring pointers as hostile input).
+- **L2 suspend/resume:** `managed_vm_suspends_and_resumes` (snapshot path, worker
+  torn down) and `usb_device_survives_inplace_s2idle` (in-place path, same
+  worker) both assert the device survives with its `devnum` intact **and** a live
+  `GET_DESCRIPTOR` control transfer through `guest/usbprobe.py` — "still listed"
+  is not "still working", and `lsusb` cannot tell them apart. The in-place guard
+  additionally asserts on the host PM register trace, because on that path every
+  guest-visible signal is identical whether or not the port resume was handled
+  correctly. See `docs/design/usb-xhci-snapshot/` §4.
+- **`scripts/xhci-red-check.py`** re-verifies that each PM/snapshot fix is still
+  pinned by a test that fails without it. Run it after touching the controller.
 
 ## 6. Wave plan
 

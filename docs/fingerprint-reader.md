@@ -76,11 +76,14 @@ Live-validated end-to-end on a stock Fedora 44 guest, including with **real host
 
 ## Recipes
 
-Start the VM with the reader attached:
+The reader is **on by default** (like audio/battery) — a bare `limina` already attaches it, and
+managed VMs get it unless `vm.toml` opts out. On a Mac with no usable Touch ID sensor it is
+silently absent (stock-degrade), so leaving it on is harmless. To turn it off:
 
 ```sh
-limina --fingerprint            # ad-hoc; add --net etc. as usual
-# managed VMs: set [hardware] fingerprint = true in vm.toml
+limina --no-fingerprint         # keep USB, drop just the reader
+limina --no-usb                 # drop the whole USB controller (also removes FIDO + the reader)
+# managed VMs: set [hardware] fingerprint = false (or usb = false) in vm.toml
 ```
 
 **Persistence caveat:** the enrolled finger's host-side record lives in the **managed VM's

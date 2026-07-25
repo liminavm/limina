@@ -24,7 +24,7 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
 2. Re-export: `git -C third_party/libkrun format-patch <base>.. -o "$PWD/patches/libkrun"`.
 3. Commit the regenerated `.patch` files to the limina repo.
 
-## The series (43 patches) — by theme
+## The series (105 patches) — by theme
 
 Patches are listed in series order within each theme. Full rationale lives in each
 patch's commit message; this is the map.
@@ -254,7 +254,49 @@ patch's commit message; this is the map.
   limina wires it to the CTAPHID/Secure-Enclave authenticator (policy) to present the
   stock-tier FIDO key. Held set stays bounded (one outstanding IN; a new IN supersedes a stale
   hold, `reset()` drops it) across the hidraw open/close churn FIDO clients cause.
-
+- **0099 — usb/xhci: generic bulk-pipe gadget (MOC fingerprint mechanism).** `bulk_pipe.rs`:
+  a variable-length, multi-IN-endpoint bulk gadget shuttling opaque byte frames over a
+  caller-supplied sink — the mechanism limina gives the impersonated Elan match-on-chip
+  fingerprint reader's identity and protocol (policy).
+- **0100 — usb/xhci: handle Immediate Data (IDT) on Normal TRBs.** Linux packs SMALL bulk-OUT
+  payloads INLINE in the TRB parameter field (xHCI §4.11.7) rather than at a DMA pointer.
+  `read_data_td` treated the parameter as a guest address unconditionally, so the 2–4 byte
+  elanmoc commands read garbage from wherever those bytes happened to address and the engine
+  stalled. FIDO/HID never hit it — their transfers are large enough to use DMA buffers.
+- **0101 — usb/xhci: bound work TRBs per data TD (hostile-ring DoS guard).** A TD whose Chain
+  bit never clears would grow the collected buffers without bound; refuse after `MAX_TD_TRBS`.
+- **0102 — usb/xhci: PM-correct register semantics (suspend/resume).** Seven register-file bugs
+  that between them broke a guest's USB stack across a system suspend, found by reading Linux's
+  `xhci_suspend`/`xhci_resume` and `xhci_bus_suspend`/`xhci_bus_resume` against ours: `CRCR`
+  stop/abort must not rebase the ring (Linux's watchdog writes `0x4`, and `CRCR` reads back as 0,
+  so rebasing pointed the walker at guest address 0 — a permanent brick reachable from any
+  command timeout) and must be acknowledged with a Command Ring Stopped event; never walk a null
+  command ring; rebuild the event ring only when `ERSTBA`'s base actually changes (a resume
+  rewrites the same value, and resetting the producer desynced it from the guest's mid-ring
+  consumer); an idempotent run-edge port scan; `PORTSC.PLC` latched when the link reaches U0 (the
+  guest polls it for 10 ms and skips `xhci_ring_device` on timeout); `USBCMD.CSS`/`CRS` self-clear.
+- **0103 — usb/xhci: carry controller state across a VM snapshot.** A snapshot-suspend tears the
+  worker down, so the controller is reborn blank — while the guest suspended through xHCI's own
+  `USBCMD.CSS` and light-resumes assuming its state survived; its first step is a `USBSTS.CNR`
+  handshake with a **10-second** timeout that a fresh controller can never satisfy, so the HCD is
+  declared dead and USB is gone for the session. Adds `devices::usb_state::XhciState` (registers,
+  ring positions, slots/endpoints, per-port gadget identity) and a snapshot v7 section restored
+  into the fresh controller before the guest resumes. Design invariant: after restore the fresh
+  controller must be indistinguishable from the in-place one.
+- **0104 — usb/xhci: trace the PM register writes (suspend/resume oracle).** Unconditional debug
+  logging of USBCMD and PORTSC writes. Load-bearing rather than cosmetic: Linux is defensive
+  enough that a mishandled port resume produces no guest-side signal at all (same dmesg, same
+  devnum, working device), so this trace is the only thing that distinguishes broken from fixed —
+  and the L2 guard asserts on it. Read with `RUST_LOG=krun_devices=debug`.
+- **0105 — usb/xhci: an abort cancels a command doorbell queued before it.** `run_worker_pass` took
+  `cmd_abort` but left `cmd_doorbell` set, so one pass could post Command Ring Stopped and then
+  still execute the aborted commands. `xhci_handle_stopped_cmd_ring` rewrites each of them to a
+  no-op and only then re-rings, so running them ran commands the guest had cancelled. Also
+  strengthens the save/restore round-trip so every carried field is individually pinned — the
+  capture now holds an in-flight `CRCR` stop, an undrained work queue, and both ring cycle-bit
+  polarities (a fresh ring starts at `true`, so without a `false` one a restore that hardcoded the
+  default would round-trip clean). 46 RED cases via `scripts/xhci-red-check.py`, which also gained a
+  baseline pre-pass so a renamed guard test can no longer report RED while guarding nothing.
 ### Observability / logging
 
 - **0009 — log renderer-init failure instead of swallowing it.** `create_rutabaga` used

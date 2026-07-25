@@ -288,6 +288,47 @@ fn ssh_exec(port: &str, cmd: &str) -> Option<String> {
 }
 
 /// Poll until the guest answers SSH or the timeout expires.
+/// The live USB probe (`guest/usbprobe.py`) — reports the device's `devnum` *and* issues a real
+/// `GET_DESCRIPTOR` control transfer through usbfs, so it distinguishes "still listed" from
+/// "still working". See its module docs.
+const USBPROBE: &str = include_str!("../guest/usbprobe.py");
+/// The impersonated Elan fingerprint reader (`crates/limina-vmm/src/moc_usb.rs`), attached to
+/// every managed VM now that USB is on by default.
+const MOC_VID_PID: &str = "04f3:0c7d";
+
+fn stage_usbprobe(port: &str) {
+    ssh_exec(
+        port,
+        &format!("cat > /tmp/usbprobe.py <<'USBPROBE_PY_EOF'\n{USBPROBE}\nUSBPROBE_PY_EOF"),
+    )
+    .expect("staging usbprobe.py in the guest");
+}
+
+/// Run the probe, returning its `USBPROBE:` line. Retries: the gadget needs a beat to enumerate
+/// after boot, and after a restore the first control transfer can land while the guest still
+/// thaws.
+fn usbprobe(port: &str, what: &str) -> String {
+    let mut last = String::new();
+    for _ in 0..15 {
+        if let Some(out) = ssh_exec(
+            port,
+            &format!("sudo python3 /tmp/usbprobe.py {MOC_VID_PID}"),
+        ) {
+            last = out
+                .lines()
+                .find(|l| l.starts_with("USBPROBE:"))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if last.starts_with("USBPROBE: ok") {
+                return last;
+            }
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    panic!("live USB probe never succeeded {what}: {last:?}");
+}
+
 fn wait_ssh(port: &str, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -353,6 +394,10 @@ fn managed_vm_suspends_and_resumes() {
         .arg(firmware)
         .arg("--vmm-bin")
         .arg(&cfg.vmm_bin)
+        // USB is on by default now, so this managed VM carries the FIDO + fingerprint gadgets.
+        // Test-approve makes the fingerprint reader attach on a host with no usable Touch ID
+        // sensor too, so the USB survival assertions below are deterministic in CI.
+        .env("LIMINA_FP_TEST_APPROVE", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -371,6 +416,17 @@ fn managed_vm_suspends_and_resumes() {
     // Silence NTP for the wallclock guard below: the clock must come out right via the RTC
     // path alone (PL031 → rtc-efi → kernel sleeptime injection), not because chrony fixed it.
     let _ = ssh_exec(PORT, "sudo systemctl stop chronyd || true");
+
+    // USB baseline. `limina suspend` tears the WORKER down and the restore builds a fresh one, so
+    // the emulated xHCI controller is reborn — while the guest suspended through xHCI's own
+    // USBCMD.CSS save-restore and light-resumes expecting its rings, slots and ports intact. If
+    // the controller state is not carried in the snapshot, xhci_resume's very first step (a
+    // handshake on USBSTS.CNR, which only HCRST clears and a light resume never issues) spins for
+    // its full TEN-SECOND timeout and then declares the HCD dead — USB gone for the session, and
+    // the guest can no longer quiesce for the NEXT suspend. See docs/design/usb-xhci-snapshot/.
+    stage_usbprobe(PORT);
+    let usb_before = usbprobe(PORT, "before the suspend");
+    eprintln!("pre-suspend USB: {usb_before}");
 
     // --- suspend: `limina suspend` relays SIGTSTP → the supervisor runs the bracket (snapshot +
     // teardown), persists [suspended], and the start #1 supervisor exits 126. cmd_suspend blocks
@@ -418,6 +474,22 @@ fn managed_vm_suspends_and_resumes() {
         pre, post,
         "boot_id changed → the VM REBOOTED instead of resuming from the snapshot"
     );
+    // The USB devices came back on the FRESH worker's controller: the same device (a differing
+    // devnum would mean it re-enumerated) and a live control transfer through the restored rings,
+    // slots and event ring.
+    let usb_after = usbprobe(PORT, "after the restore");
+    eprintln!("post-restore USB: {usb_after}");
+    assert_eq!(
+        usb_after, usb_before,
+        "the USB device did not survive the snapshot restore unchanged"
+    );
+    let xhci = ssh_exec(PORT, "sudo dmesg | grep -Ei 'xhci|usb' | tail -40").unwrap_or_default();
+    for bad in ["HC died", "Controller not ready", "command ring"] {
+        assert!(
+            !xhci.contains(bad),
+            "the guest's xHCI controller reported {bad:?} after the restore:\n{xhci}"
+        );
+    }
     // Wallclock guard (M9.4 "stock resume clock-step", verified closed 2026-07-20): a STOCK
     // guest — no limina-agent, NTP stopped above — must resume with a correct CLOCK_REALTIME
     // purely via the kernel's s2idle thaw re-reading the RTC and injecting the slept duration.

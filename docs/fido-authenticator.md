@@ -103,13 +103,13 @@ use prompts Touch ID. Resident variant: `-t ecdsa-sk -O resident`.
 
 ## Stock-tier USB path: what's automated vs. manual
 
-**Automated (L1, `l1_xhci_fido_authenticator`):** with `--usb`, the gadget cold-plugs, the
-stock guest binds it as `/dev/hidrawN` with usage page 0xF1D0 (fido-id-style detection), and
-a raw CTAPHID probe drives **INIT + authenticatorGetInfo** end-to-end through the whole proxy
-path — both presence-free, so no Touch ID. `LIMINA_FIDO_TEST_APPROVE=1` lets CI advertise the
-capability on a host without a usable enclave (getInfo touches no enclave key). Run a stock
-guest yourself with `limina --usb`: `fido2-token -L` sees the device and `fido2-token -I`
-completes.
+**Automated (L1, `l1_xhci_fido_authenticator`):** the USB controller is on by default, so the
+gadget cold-plugs and the stock guest binds it as `/dev/hidrawN` with usage page 0xF1D0
+(fido-id-style detection); a raw CTAPHID probe drives **INIT + authenticatorGetInfo** end-to-end
+through the whole proxy path — both presence-free, so no Touch ID. `LIMINA_FIDO_TEST_APPROVE=1`
+lets CI advertise the capability on a host without a usable enclave (getInfo touches no enclave
+key). Run a stock guest yourself with a bare `limina` (add `--no-usb` to drop the controller):
+`fido2-token -L` sees the device and `fido2-token -I` completes.
 
 **Left for a human to validate (real Touch ID):** `makeCredential` / `getAssertion` — i.e.
 `fido2-cred`, `fido2-assert`, browser passkey registration/login, and `pam_u2f` — all block

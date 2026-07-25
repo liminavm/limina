@@ -418,10 +418,12 @@ presents.* Never ship a state where `40 19` is unanswered.
 
 ## 7. Enable surface & gating
 
-- New `[hardware] fingerprint = false` (default off) in the VM schema + a `--fingerprint` CLI
-  flag, parallel to `[hardware] usb`. **Opt-in on purpose:** a fingerprint reader changes the
-  guest's login/unlock/`sudo` surface (GDM starts offering a fingerprint prompt), which the user
-  should choose.
+- `[hardware] fingerprint` in the VM schema + a `--fingerprint` / `--no-fingerprint` CLI flag
+  pair, parallel to `[hardware] usb` / `--usb` / `--no-usb`. **On by default (revised 2026-07-25),
+  like audio/battery** — the reader is inert until the guest wires `pam_fprintd` in (GNOME hides
+  its fingerprint UI until then), and it is silently absent on a Mac with no Touch ID sensor, so
+  default-on is safe and matches the dogfood expectation. `--no-fingerprint` drops just the reader;
+  `--no-usb` drops the whole controller (and thus the reader + FIDO).
 - `--fingerprint` **implies the xHCI controller** (it cannot work without the bus), the same way
   the reader rides the controller FIDO already uses. When both `fingerprint` and `usb`/FIDO are
   on, **both gadgets cold-plug** onto the one controller (ports 1 and 2) — additive, no conflict.

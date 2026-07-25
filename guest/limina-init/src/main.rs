@@ -945,10 +945,12 @@ fn run_usb_attach(port: u32) {
 
 /// Enumerate `/sys/bus/usb/devices/*` and emit `RESULT: usbdev <vid>:<pid>` for every
 /// non-hub device (root hubs are `bDeviceClass == 09` and skipped). Returns the count.
-fn emit_usb_devices() -> usize {
-    let mut n = 0;
+/// Emit a `RESULT: usbdev <vid>:<pid>` line for every USB device not already in `seen` (which it
+/// extends). Called repeatedly while polling: cold-plugged gadgets enumerate a beat apart, so a
+/// scan that reported whatever it found and stopped let the fastest one hide the others.
+fn emit_usb_devices(seen: &mut Vec<String>) {
     let Ok(entries) = std::fs::read_dir("/sys/bus/usb/devices") else {
-        return 0;
+        return;
     };
     for e in entries.filter_map(|e| e.ok()) {
         let p = e.path();
@@ -965,10 +967,13 @@ fn emit_usb_devices() -> usize {
         if rd("bDeviceClass") == "09" {
             continue; // a hub / root hub
         }
-        klog(format!("[limina-init] RESULT: usbdev {vid}:{pid}").as_bytes());
-        n += 1;
+        let key = format!("{vid}:{pid}");
+        if seen.contains(&key) {
+            continue;
+        }
+        klog(format!("[limina-init] RESULT: usbdev {key}").as_bytes());
+        seen.push(key);
     }
-    n
 }
 
 fn run_xhci_probe() {
@@ -1002,16 +1007,22 @@ fn run_xhci_probe() {
     } else {
         b"[limina-init] RESULT: xhci_bound MISSING"
     });
-    // Give a cold-plugged device a moment to finish enumerating, then report it.
-    let mut count = 0;
-    for _ in 0..100 {
-        count = emit_usb_devices();
-        if count > 0 {
+    // Report every cold-plugged device, not just the first one to show up. Gadgets enumerate one
+    // port at a time (~120 ms apart), so scan the whole window and stop only once nothing new has
+    // appeared for ~1 s: the old "break on the first device" made a two-gadget boot report
+    // whichever one won the race and silently drop the other.
+    let mut seen: Vec<String> = Vec::new();
+    let mut quiet = 0;
+    for _ in 0..150 {
+        let before = seen.len();
+        emit_usb_devices(&mut seen);
+        quiet = if seen.len() == before { quiet + 1 } else { 0 };
+        if !seen.is_empty() && quiet >= 50 {
             break;
         }
         unsafe { sleep_ms(20) };
     }
-    klog(format!("[limina-init] xhci_probe: done ({count} device(s))").as_bytes());
+    klog(format!("[limina-init] xhci_probe: done ({} device(s))", seen.len()).as_bytes());
 }
 
 // --- HID echo end-to-end (B2 oracle) ----------------------------------------------------

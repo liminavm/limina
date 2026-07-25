@@ -1,209 +1,179 @@
-# xHCI USB state across VM snapshot-suspend/resume (M14 follow-up)
+# xHCI USB across suspend/resume
 
-**Status:** OPEN — root-caused, decided, NOT YET IMPLEMENTED. Picking this up in a fresh
-session. This directory is the handoff: the diagnosis, the trace evidence, the design decision,
-and the concrete fix plan. Author date: 2026-07-25.
+**Status:** SHIPPED 2026-07-25. This directory is the design + diagnosis record; `PLAN.md` is the
+implementation plan it was built from (kept for its Linux-source citations and the phase/test
+mapping), and `default-on.patch` is the default-on change this work unblocked (now applied).
 
 ## TL;DR
 
-Making the USB controller + FIDO + fingerprint reader **on by default** (like snd/battery)
-exposed a **real, deterministic bug**: a managed VM (or any snapshot-suspending VM) with USB
-attached **wedges on snapshot-resume** — the guest's USB stack dies and the guest can't quiesce
-for the next suspend. The decided fix (user's call) is to **serialize the xHCI controller's
-host-side state into the VM snapshot** so the fresh restore-worker rebuilds it and USB devices
-survive suspend/resume transparently (no re-enumeration).
+Making the USB controller + FIDO + fingerprint reader **on by default** exposed a real,
+deterministic bug: a managed VM with USB attached **wedged on snapshot-resume** — the guest's USB
+stack died and it could no longer quiesce for the next suspend. Root cause: a snapshot-suspend
+tears the VMM worker down, so the emulated controller is reborn blank, while the guest suspended
+through xHCI's *own* save/restore feature and light-resumes expecting its state intact.
 
-The default-on change itself is written, unit-tested, and validated in isolation; it is
-**parked** (uncommitted working tree + `default-on.patch` here) because it must not ship until
-this fix lands — otherwise every default-on managed VM breaks on suspend/resume.
+The fix carries the controller's host-side state in the snapshot, plus eight register-semantics
+corrections found by reading Linux's PM paths against our implementation. Both are in the libkrun
+fork (`patches/libkrun/0102`–`0105`).
 
-## 1. What was done (the default-on change — parked, not shipped)
+## 1. What the guest actually does (Linux v7.1, verified against source)
 
-Mirroring `snd`/`battery`: `[hardware] usb` and `fingerprint` now default **true**; flat CLI
-gained `--no-usb`/`--no-fingerprint` opt-outs (kept `--usb`/`--fingerprint`, `overrides_with`
-last-wins, like `swap_cmd_opt`); `run_vm` treats USB as the master switch
-(`fingerprint = usb && cli.fingerprint_enabled()`); `cli_from_definition` sets both pos+neg
-fields per hardware bool. Wiring: `crates/limina/src/vmlib/schema.rs` (`default_true` + Default
-impl), `crates/limina/src/main.rs` (Cli fields `no_usb`/`no_fingerprint`, `usb_enabled()` /
-`fingerprint_enabled()` helpers, run_vm consumers, 2 new unit tests). 148 unit tests green.
+`drivers/usb/host/xhci.c` and `xhci-hub.c` — read, not recalled; every claim below was re-checked
+against upstream source, and one round of this work shipped a fix for a path that a *remembered*
+bitmask said existed and the real macro said did not (see §3, "Reviewed and deliberately not
+changed"). **Suspend** — `xhci_bus_suspend` issues Stop Endpoint
+on every live endpoint and parks each connected port at `PLS = U3`; `xhci_suspend` then clears
+`USBCMD.RS`, calls `xhci_clear_command_ring` (which rewrites `CRCR` at the segment base), saves
+USBCMD/DNCTRL/DCBAAP/CONFIG + the interrupter's ERSTSZ/ERSTBA/ERDP/IMAN/IMOD, and sets
+`USBCMD.CSS`.
 
-Answering the original dogfood question ("`lsusb` empty in the guest, do we need control-center
-changes?"): **no code change was ever needed** — the control center just runs `limina start
-<bundle>` → `cli_from_definition` reads `cfg.hardware`. The empty `lsusb` was purely the old
-default-off. (A **GUI toggle** for usb/fingerprint, like snd/mic/battery which are vm.toml-only
-today, is a deferred nicety.)
+**Resume** — `xhci_resume` with `power_lost == false` (our case; nothing tells the guest otherwise):
 
-**The change is captured in `default-on.patch` (in this dir) and also lives in the working tree
-uncommitted.** Re-apply with `git apply docs/design/usb-xhci-snapshot/default-on.patch` if the
-tree gets cleaned. Do NOT `cargo xtask app` for dogfood from a tree with default-on active until
-the fix below lands — managed-VM suspend/resume will break.
+1. handshakes `USBSTS.CNR → 0` **with a 10-second timeout**, and on expiry logs
+   `"Controller not ready at resume"` and **returns an error — the USB stack is dead from here on**;
+2. `xhci_restore_registers` writes everything back; `xhci_set_cmd_ring_deq` rewrites `CRCR`;
+3. sets `USBCMD.CRS`, handshakes `USBSTS.RSS → 0`, then checks `SRE`/`HCE` — **either one set turns
+   the resume into a full reset + re-enumeration of everything**;
+4. sets `USBCMD.RS`.
 
-The `limina → Limina` app-support dir rename is a SEPARATE, already-committed change (`1078fe1`),
-unaffected by any of this.
+Then `xhci_bus_resume`, for each port it suspended: only if it still reads `PLS == U3` does it
+drive `U3 → RESUME → U0`, and it then **polls `PORTSC.PLC` for 10 ms** — on timeout it logs
+`"port N-M resume PLC timeout"` and skips `xhci_ring_device`, the doorbell ring that restarts every
+endpoint the bus suspend stopped.
 
-## 2. The failures (full HVF suite after default-on)
+## 2. The bugs
 
-4 tests failed. Two root causes:
+| # | Bug | Effect | Path |
+|---|---|---|---|
+| **A** | `XhciDevice::new()` sets `USBSTS.CNR` and only `HCRST` clears it, so a restore worker's controller is born `CNR = 1`. | `xhci_resume` step 1 spins **10 s** and fails. The USB stack is dead before a single register is restored. | snapshot |
+| **B** | A `CRCR` write stored the value and rebased the walker unconditionally. Linux's command watchdog writes `CRCR = readl(CRCR) \| CMD_RING_ABORT`, and `CRCR` reads back as 0 per spec — so the value written is `0x4`, pointer bits zero. | `crcr_ptr() == 0` → the next doorbell walks guest address 0 → `command ring walk error: BadAccess(0)` every 5 s forever. A brick reachable from **any** command timeout. | both |
+| **B2** | Nothing acknowledged the abort. | `xhci_handle_stopped_cmd_ring` never runs, `cmd_ring_state` stays `ABORTED`, every later command is refused. Fixing only B silences the log spam and leaves USB just as dead. | both |
+| **C** | An `ERSTBA` write always dropped the event ring, rebuilding the producer at index 0 / PCS 1. `xhci_restore_registers` rewrites ERSTBA with the **same** value on every resume, while the guest's consumer (which it does not reset on this path) sits mid-ring. | Producer/consumer desync: events land in already-consumed slots and stay invisible until the producer wraps around. Lost completions → command timeouts → (B). | both |
+| **D** | `scan_ports_on_run` re-latched `CCS \| CSC` and forced `PLS = Polling` on every populated port at each `USBCMD.RS` 0→1 edge — including `xhci_resume`'s. | `xhci_bus_resume` reads a port no longer in U3, drops it from `bus_suspended`, and never drives the link resume or reaches `xhci_ring_device`. | both |
+| **E** | `write_portsc` honoured LWS but never latched `PLC`. | `bus_resume`'s 10 ms handshake always timed out → same skipped `xhci_ring_device`, plus a stall per port per resume. | both |
+| **F** | `USBCMD.CSS`/`CRS` were stored as ordinary RW bits. | Sticky strobes ride back into the guest's `USBCMD` reads on resume. | both |
+| **G** | A command doorbell queued before an abort was still executed in the same worker pass, after the Stopped event. | `xhci_handle_stopped_cmd_ring` rewrites every aborted command to a no-op and *then* re-rings the doorbell — so we would run commands the guest had already cancelled. Narrow race; one line. | both |
 
-| Test | Verdict | Cause |
-|---|---|---|
-| `l1_xhci_fingerprint_reader` (usb.rs:196) | **test artifact** | probe race (see §6) |
-| `stock_guest_survives_inplace_s2idle_with_correct_clock` | **FLAKY** | passed on isolated re-run; load-induced timeout, not a hang |
-| `seated_gnome_session_survives_snapshot_restore` (venus_session_preserved.rs:504) | **REAL, deterministic** | the xHCI-snapshot bug |
-| `managed_vm_suspends_and_resumes` (vmdef.rs:464) | **REAL, deterministic** | same bug (its `limina start` child has `stderr(Stdio::null())`, so worker logs are invisible, but it goes through the managed default-on path → USB attached) |
+**Honest scoping of D and E.** They are equally wrong on the in-place s2idle path, but **Linux
+survives them there**: the hub thread finds the port still enabled and resuscitates the device with
+no re-enumeration, nothing in dmesg and the same `devnum`, and the class drivers re-submit their
+URBs. Measured, not assumed — see §4. So on that path they are a correctness and fragility floor
+(a mishandled port resume, a 10 ms stall, and breakage waiting for any driver that holds a URB
+across suspend), not a reproduction of a user-visible failure. The user-visible failure is **A**,
+on the snapshot path, which these same semantics feed.
 
-Determinism confirmed by isolated re-runs: the two snapshot-based tests fail every time (312s /
-261s); in-place s2idle passed alone. The in-place path (same worker, no teardown) is at most
-flaky and is NOT the target of this fix.
+`SRE`/`HCE` are never set by our controller, which matters: setting either is the switch that turns
+a resume into a full re-enumeration.
 
-## 3. Root cause (register-trace ground truth)
+## 3. The fix
 
-Instrumented the xHCI register writes (env-free `log::warn!("xhci-pm: …")` in `handle_usbcmd`
-and the CRCR_LO / ERSTBA_LO write arms — see §7 to re-add) and ran the venus snapshot test at
-default log level. The sequence:
+### Design invariant
 
-- **Cold boot:** guest HCRST → programs `CRCR=0x84004000` + `ERSTBA=0x84008000` → `USBCMD.RS=1`.
-- **Gen-1 suspend:** guest clears RS (stop), re-writes CRCR (same value), then issues
-  **`USBCMD.CSS` (Controller Save State, bit 8)** — the guest genuinely uses the xHCI
-  save/restore feature and expects the controller to preserve its state. Then it quiesces;
-  limina snapshots and **tears the worker down**.
-- **Gen-1 restore (FRESH worker, `usbsts=0x801` = CNR|HCH):** the guest does a **light resume** —
-  writes `USBCMD=0x0` then `USBCMD=0x4` (INTE only). It does **NOT** re-program CRCR/ERSTBA/DCBAAP,
-  does **NOT** issue HCRST, does **NOT** issue CRS. It assumes the controller kept everything. But
-  the fresh worker's `crcr=0`, so the first command doorbell makes the engine walk guest address 0
-  → **`xhci: command ring walk error: BadAccess(0)` looping every ~5s forever** (Linux's 5s command
-  watchdog + retry) → `xhci_hc_died` → USB wedged → the guest can't quiesce for the gen-2 suspend →
-  the 120s bracket timeout.
+> **After restore, the fresh controller must be indistinguishable from the in-place one.**
 
-**Precise root cause — an impedance mismatch:** the guest sees **s2idle** (state-preserving) and
-light-resumes assuming the controller retained its state; limina actually does **hibernate**
-(worker torn down, controller reborn blank). Nothing in the guest's light-resume path
-re-establishes controller state, so fable's "set SRE on CRS" idea can't fire — **the guest never
-issues CRS on this path** (confirmed by the trace).
+That reduces the snapshot work to a mechanical question — which fields of `XhciDevice` are neither
+reconstructible from guest RAM nor re-established by the fresh worker? — and makes the in-place
+path the reference implementation. `devices::usb_state::XhciState` carries: the register file, the
+command-ring walker, the event-ring producer (all four of base/size/index/PCS), every slot (with
+`config_value`, which exists nowhere in guest RAM) and its EP0 + data-endpoint ring positions,
+`next_address`, and any undrained worker work. Not carried, because the fresh worker re-establishes
+them: `intc`, `irq_line`, `interrupt_evt`, `worker_kick`, `port_models`.
 
-## 4. Fable review (key corrections to the initial diagnosis)
+Deliberately **not** re-derived from the DCBAA the way virtio transport state is derived from its
+rings: the carried bytes are host-authoritative, whereas a DCBAA walk is a parse of hostile guest
+RAM whose failure modes are all silent (a bad pointer yields a plausible-looking empty slot).
 
-A fable subagent verified against libkrun source + Linux v6.12 xhci. Corrections it caught:
+### Port identity
 
-- The initial "guest polls a status bit we never settle" theory was **wrong**: every xHCI
-  handshake polls for a bit to be clear/already-satisfied, so suspend *entry* works (gen-1
-  suspend succeeds).
-- It reconstructed the resume kill chain (event-ring desync on an ERSTBA rewrite → lost command
-  completion → abort → CRCR-abort misparse → BadAccess loop). The live trace then showed the
-  guest doesn't even do the register-restore dance on this path — it light-resumes — which is an
-  even simpler and more fundamental mismatch than the register-desync chain, but the endpoint
-  (BadAccess loop on a blank `crcr`) is the same.
-- It flagged a real product-parity gap: `fingerprint` has `--no-fingerprint` but **FIDO has no
-  `--no-fido`** (FIDO rides `--usb` + a live Secure Enclave). File separately; don't couple.
+The restore worker cold-plugs gadgets in a fixed order, but each `build()` can fail independently,
+which would **shift** the rest onto other ports and bind a slot to the wrong device. So each
+populated port's `(idVendor, idProduct)` rides along and the restore compares. On a mismatch the
+port is presented as a real unplug (`PORTSC_DEFAULT | CSC` + a queued port-change event) and its
+slots are dropped — the guest cleanly disconnects what went away, and because `CCS` stays clear,
+fix **D**'s scan enumerates whatever is there now.
 
-## 5. DECISION: serialize xHCI host-side state into the snapshot
+### What is deliberately lost
 
-User chose **transparent resume** (devices survive suspend/resume, no re-enumeration) over the
-alternatives:
+Gadget-held transfers and queued host→guest frames live in the worker's gadget objects and die with
+them. Sound because `xhci_bus_suspend` stops every live endpoint first (bumping our generation
+counter, which drops those completions) and the class drivers kill + resubmit their URBs. Residual,
+accepted: a reply already queued at capture is gone, and a URB that survived suspend un-killed has
+no TD left on our side (our walker commits past a dispatched TD). Not a wedge; that operation
+retries.
 
-- **Rejected — detach-then-reattach** (post USB disconnects before the freeze, re-cold-plug on
-  restore → guest re-enumerates). Less work, mirrors real-hardware hibernate, but devices blink
-  out/in across resume.
-- **Rejected — scope default-on** (managed VMs keep USB off until the fix). Interim only.
-- **CHOSEN — serialize the controller state.** Best UX.
+Gadget **protocol** state is unaffected — the elanmoc engine + template store and the FIDO
+authenticator + passkey store live in the *supervisor*, which is never torn down, and both serve
+loops already reconnect to the fresh worker's socket.
 
-### Fix plan (all in libkrun `usb/xhci/` + the snapshot infra)
+### Reviewed and deliberately not changed
 
-The snapshot mechanism (M9.3, `third_party/libkrun/src/vmm/src/snapshot.rs`): `SnapshotHead`
-already carries per-device state (`DeviceTransportState` for virtio-mmio, `gpio`, `gpu`) restored
-onto the fresh worker before the guest resumes; virtio deliberately *derives* what it can from
-drained guest RAM (e.g. `next_avail`/`next_used` are NOT carried — they come from the restored
-rings). Apply the same philosophy to xHCI: **carry the small host-only register file; derive the
-rest from restored guest RAM.**
+- **Latching `PORTSC.PEC` when a `PED` write disables a port** — proposed in review to stop
+  `xhci_bus_resume` silently killing the port of a device that was already runtime-suspended at U3,
+  then **withdrawn against the source**. `PORT_RWC_BITS` *includes* `PORT_PE` (xhci-hub.c:21-22), so
+  the resume write-back **clears** PE rather than asserting it — the path does not exist. Worse, the
+  only two places Linux writes `PED = 1` are `xhci_disable_port` and the `SS_DISABLED` link-state
+  write, both *deliberate* disables, and the latter sets `PORT_PEC` in the very same word "so that
+  we get a new connection event" (xhci-hub.c:1338). Latching a change there would fight the driver:
+  the hub thread would see `PED = 0` with `CCS` still set and re-enable a port the guest had just
+  disabled. The lesson is the older one — a mask's contents are worth reading, not recalling.
+- **The Command Ring Stopped event's dequeue pointer may point at a Link TRB.** Harmless:
+  `handle_cmd_completion` (`xhci-ring.c`) tests `COMP_COMMAND_RING_STOPPED` *first* and returns
+  before it computes `cmd_dequeue_dma` — the pointer we report is never read on that path.
+- **Restoring a snapshot that has USB state into a worker started `--no-usb`.** The restore warns
+  and continues, leaving the guest's USB stack pointing at an unbacked MMIO window. Failing the
+  resume outright would be worse: it turns a user's config edit into an unresumable VM. Config drift
+  degrades one device; it does not lose the machine.
 
-1. **Capture (at quiesce):** a new snapshot section holding the xHCI **register file** —
-   `usbcmd, usbsts, dnctrl, crcr, dcbaap, config, ports[], iman, imod, erstsz, erstba, erdp,
-   next_address` (all small; `device.rs` `XhciDevice`). These are host-side registers not present
-   in guest RAM, so they must be carried. Plus the **event-ring producer** (`EventRing.enqueue_idx`
-   + `pcs`, `trb.rs`) IF the ring isn't guaranteed drained at quiesce — prefer to **drain the event
-   ring at quiesce** (guest has consumed all events before it froze) so the producer is derivable
-   from `erdp` + cycle, mirroring the virtio drain trick. Decide during implementation which is
-   simpler/robust.
+## 4. Evidence
 
-2. **Restore (fresh worker, before guest resumes):** write the captured registers back into the
-   freshly-built `XhciDevice`, then **rebuild the derived state from restored guest RAM**:
-   - `cmd_ring` (RingWalker) from `crcr` (+ RCS).
-   - `event_ring` (EventRing) from `erstba` (+ restored/derived producer).
-   - `slots` (`Vec<Option<SlotCtx>>`): walk the **DCBAA** (`dcbaap` → guest RAM), and for each
-     configured slot read its device context + endpoint contexts (`context.rs`: `ep_tr_dequeue`,
-     `ep_state`, `set_slot_address`, `slot_context_addr`) to rebuild `SlotCtx` and the per-endpoint
-     ring walkers. Generation counters reset to 0 (fine — no in-flight completions survive a
-     teardown). Re-associate each slot's `Arc<dyn UsbDeviceModel>` with the **re-cold-plugged**
-     `port_models` by port index (the fresh worker re-cold-plugs fido→port1, moc→port2 at startup;
-     match slot→port→model).
-   - `CNR` clear (the restored `usbsts` should reflect ready) so a guest that *does* poll CNR
-     doesn't stall 10s.
+Everything below was RED-verified by breaking the fix and re-running, not by inspection.
 
-3. **Restore hook:** parallel to how `gpio`/virtio state is threaded through
-   `builder.rs`/`device_manager/hvf/mmio.rs` (`register_mmio_usb`) into the device after
-   creation, before vCPUs go live. Follow the existing GPIO restore path as the template.
+- **L0, `device.rs`/`engine.rs`** — the register-semantics tests plus a lived-in-controller
+  save/restore round-trip. Every carried field was individually broken and confirmed to fail the
+  round-trip (`scripts/xhci-red-check.py`). For that claim to be literal the capture has to *hold*
+  a non-default value for each one, so it carries a latched `PLC`, an in-flight `CRCR` stop, and an
+  undrained work queue (doorbell + abort + an EP doorbell + a port event) as well as the registers.
+- **L2 snapshot path, `managed_vm_suspends_and_resumes`** — the primary oracle. With the carry
+  disabled: `USBPROBE: fail control transfer to 04f3:0c7d: [Errno 19] No such device`. With it:
+  same `devnum`, live control transfer, no controller errors in the guest's dmesg.
+- **L2 in-place path, `usb_device_survives_inplace_s2idle`** — new. Every *guest-side* signal is
+  identical with and without fixes D/E (same dmesg, same devnum, working device), so the oracle is
+  the **host** PM register trace:
 
-4. **Defense-in-depth (do regardless, small + upstreamable):**
-   - CRCR write with **CS (bit1) / CA (bit2)** set must NOT rebase the ring (the pointer field is 0
-     in such a write) — today it zeros `cmd_ring` → walk address 0 → brick. Treat as stop/abort.
-   - `process_command_ring` guard: if `crcr_ptr()==0` and no live `cmd_ring`, skip the walk (never
-     walk address 0). Turns any future hiccup from "bricked controller" into a no-op.
-   - Idempotent `scan_ports_on_run`: skip ports already `CCS` (no spurious re-latch/re-enum churn).
+  ```text
+  broken: USBCMD <- 0x5 [RS INTE] / PORTSC[1] <- 0x6e1 was 0x206e3   PLS=Polling, CSC latched
+                                                                     -> port abandoned
+  fixed:  USBCMD <- 0x5 [RS INTE] / PORTSC[1] <- 0x661 was 0x663     PLS=U3 preserved
+                                    PORTSC[1] <- 0x107e1 LWS pls=15  XDEV_RESUME
+                                    PORTSC[1] <- 0x10601 LWS pls=0   U0
+                                    PORTSC[1] <- 0x400601 was 0x400603  PLC latched -> the
+                                                                     guest's 10ms handshake won
+  ```
 
-### RED-first oracle (suspend-free, fast — write this first)
+- **L1, `l1_xhci_fingerprint_reader`** — the probe race: with two gadgets attached the guest's
+  `run_xhci_probe` reported whichever enumerated first and dropped the other. Fixed to scan the
+  full window with a dedupe set.
 
-An L0 unit test in `device.rs`'s existing test module: program a command ring, then write the
-abort value `0x4` to `CRCR_LO` (what Linux's `xhci_abort_cmd_ring` does), ring DB0 → today the
-engine walks address 0 (`BadAccess(0)`); after the CRCR-abort fix it must not. This captures the
-brick half without a boot. The full transparent-restore behavior is validated by the two HVF
-tests going RED→GREEN (`seated_gnome_session_survives_snapshot_restore`,
-`managed_vm_suspends_and_resumes`).
+### Reproducing / instrumenting
 
-## 6. Also fix: the L1 probe race (independent, small)
+The PM trace is permanent and unconditional at debug level. Read it with
+`RUST_LOG=krun_devices=debug` — **not** `limina_vmm=debug`, which suppresses the `krun_devices`
+logger entirely. `scripts/xhci-red-check.py` re-verifies every L0 guard by reverting each fix in
+the vendored tree and requiring the corresponding test to fail.
 
-`l1_xhci_fingerprint_reader` fails only because default-on now also attaches the **FIDO** gadget
-(`fido_store` is `Some` whenever a real Secure Enclave exists — this dev Mac has one — regardless
-of the fingerprint knob), so the guest enumerates **two** USB devices. The probe
-(`guest/limina-init/src/main.rs`, `run_xhci_probe`) polls up to 2s but **`break`s on the first
-device seen**, so FIDO (port 1) wins and `04f3:0c7d` (port 2, +120ms) misses. Fix the probe:
-scan the full window, emit each newly-seen VID:PID once (dedupe set), stop only after ~1s with no
-new device (or run the full window). ~10 lines. Same latent race now affects
-`l1_xhci_mock_device`/`l1_xhci_hid_echo` on a SEP host — the probe fix covers all.
+## 5. Also in this work
 
-## 7. Reproduce / instrument (for the next session)
+- `--no-usb` / `--no-fingerprint` and `[hardware] usb`/`fingerprint` defaulting to true
+  (`default-on.patch`, now applied). The control center needed no change: it runs `limina start`,
+  and `cli_from_definition` reads `cfg.hardware`. A GUI toggle stays deferred.
+- Drive-by: `VmResources`' test initializer was missing the `usb` fields, so the vmm crate's unit
+  tests did not build with `--features usb` at all.
 
-- **Run a single HVF test:** `scripts/test-boot.sh` forwards trailing args as the cargo-test
-  name filter, e.g. `scripts/test-boot.sh debug seated_gnome_session_survives_snapshot_restore`.
-  Needs `dangerouslyDisableSandbox`. **Do NOT pass `RUST_LOG=limina_vmm=debug`** for the PM trace
-  — it suppresses the `krun_devices` warnings; use the default level (unset) so `krun_devices`
-  warns (BadAccess + the `xhci-pm:` trace) show. Note: `managed_vm_suspends_and_resumes` nulls its
-  child's stderr, so use `venus_session_preserved` as the log-capturing vehicle.
-- **Re-add the PM trace** (temporary, reverted from the tree): in
-  `third_party/libkrun/src/devices/src/usb/xhci/device.rs` add `const CMD_CSS: u32 = 1 << 8;
-  const CMD_CRS: u32 = 1 << 9;`, a `log::warn!("xhci-pm: USBCMD …")` at the top of `handle_usbcmd`
-  logging RS/HCRST/CSS/CRS/INTE + `self.usbsts`, and `log::warn!` in the `CRCR_LO` and `ERSTBA_LO`
-  write arms. (These are gitignored vendored sources; the change won't show in `git status`.)
-- The captured trace from 2026-07-25 is in §3.
-
-## 8. Test status snapshot (2026-07-25)
-
-Baseline (USB opt-in, before default-on): full HVF suite green. With default-on: 4 red
-(2 real snapshot-suspend, 1 flaky s2idle, 1 probe race). Unit tests: 148 green with default-on.
-
-## 9. Validation plan for the fix
-
-1. RED-first L0 CRCR-abort test (device.rs) → implement CRCR/guard fixes → green.
-2. Implement the serialize/restore path → the two snapshot HVF tests RED→GREEN with debug trace
-   confirming the restored controller resumes without BadAccess.
-3. Fix the probe race → `l1_xhci_fingerprint_reader` green.
-4. Re-apply `default-on.patch`; run the **full** `cargo xtask test` suite green.
-5. fable review of the implementation (per the established workflow).
-6. Re-export the libkrun patch series (`patches/libkrun/`, branch `limina/usb-xhci`) — see
-   `patches/libkrun/README.md`. Refresh docs (this dir → shipped feature docs) + memory.
-7. Only then commit default-on as shippable + rebuild the dogfood app.
+**Still open:** FIDO has no `--no-fido` opt-out (it rides `--usb` + a live Secure Enclave) — a
+product-parity gap, filed in `docs/hardening-backlog.md` §M14, deliberately not coupled to this work.
 
 ## Related
 
-`docs/design/usb-xhci.md` (controller), `docs/design/usb-moc-fingerprint.md` (fingerprint),
-`docs/fido-authenticator.md`, `docs/design/host-sleep-s2idle.md` + M9 suspend design (the snapshot
-bracket). Memory: `limina-usb-xhci`, `limina-m9-suspend-resume`, `limina-host-sleep-s2idle`.
+`docs/design/usb-xhci.md` (controller), `docs/design/usb-moc-fingerprint.md`,
+`docs/fido-authenticator.md`, `docs/design/host-sleep-s2idle.md`, `docs/design/m9-suspend-resume.md`.
+Memory: `limina-usb-xhci`, `limina-m9-suspend-resume`, `limina-host-sleep-s2idle`.

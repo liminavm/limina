@@ -254,20 +254,32 @@ struct Cli {
     #[arg(long)]
     mic: bool,
 
-    /// Attach the emulated xHCI USB controller (platform `generic-xhci`). Opt-in and OFF
-    /// by default; a stock guest binds it with its own xhci-plat driver and brings the USB
-    /// root hub up with no guest-side components. Stage A bring-up: the controller
-    /// enumerates but carries no devices yet.
-    #[arg(long)]
+    /// Attach the emulated xHCI USB controller (platform `generic-xhci`). This is the **default**;
+    /// a stock guest binds it with its own xhci-plat driver and brings the USB root hub up with no
+    /// guest-side components, and it carries the FIDO authenticator gadget. The flag is kept for
+    /// explicitness / to override an earlier `--no-usb`.
+    #[arg(long, overrides_with = "no_usb")]
     usb: bool,
 
+    /// Do NOT attach the emulated USB controller (and thus no FIDO/fingerprint gadgets). USB is on
+    /// by default; this is the opt-out. If both `--usb` and `--no-usb` appear the last one wins.
+    #[arg(long, overrides_with = "usb")]
+    no_usb: bool,
+
     /// Present an impersonated match-on-chip fingerprint reader (Touch-ID-backed) to the guest.
-    /// Opt-in and OFF by default; it changes the guest's login/sudo surface (GDM starts offering a
-    /// fingerprint prompt). Implies `--usb` (it rides the emulated controller). Stock Fedora's
-    /// libfprint/fprintd bind it with zero guest components; every match is a host Touch ID prompt.
-    /// Advertised only on a Mac with a usable Touch ID sensor (else silently absent).
-    #[arg(long)]
+    /// This is the **default**; it rides the emulated controller (so it implies USB) and stock
+    /// Fedora's libfprint/fprintd bind it with zero guest components — every match is a host Touch
+    /// ID prompt. Advertised only on a Mac with a usable Touch ID sensor (else silently absent), and
+    /// inert until the guest enables `pam_fprintd`. The flag is kept to override an earlier
+    /// `--no-fingerprint`.
+    #[arg(long, overrides_with = "no_fingerprint")]
     fingerprint: bool,
+
+    /// Do NOT present the fingerprint reader (leaves the guest's login/sudo surface unchanged). The
+    /// reader is on by default; this is the opt-out. If both flags appear the last one wins. The USB
+    /// controller still attaches unless `--no-usb` is also given.
+    #[arg(long, overrides_with = "fingerprint")]
+    no_fingerprint: bool,
 
     /// What to do with the guest when the HOST goes to sleep: `s2idle` (default) suspends
     /// the guest first (sleep-button pulse, held until it quiesces) and wakes it on host
@@ -477,6 +489,20 @@ impl Cli {
     /// reads both fields (no dead-code on the back-compat flag).
     fn swap_cmd_opt_enabled(&self) -> bool {
         self.swap_cmd_opt || !self.no_swap_cmd_opt
+    }
+
+    /// Effective USB-controller policy. On by default (`--no-usb` opts out); `--usb`/`--no-usb`
+    /// override each other last-wins (clap `overrides_with`), so this OR is exact and reads both
+    /// fields. The FIDO gadget rides this, and `--fingerprint` implies it.
+    fn usb_enabled(&self) -> bool {
+        self.usb || !self.no_usb
+    }
+
+    /// Effective fingerprint-reader policy. On by default (`--no-fingerprint` opts out); same
+    /// last-wins idiom as [`Self::usb_enabled`]. Gated further at runtime on a usable Touch ID
+    /// sensor, so a Mac without one silently omits the reader regardless.
+    fn fingerprint_enabled(&self) -> bool {
+        self.fingerprint || !self.no_fingerprint
     }
 }
 
@@ -813,8 +839,12 @@ fn cli_from_definition(
         no_battery: !cfg.hardware.battery,
         no_snd: !cfg.hardware.snd,
         mic: cfg.hardware.mic,
+        // Encode the definition's usb/fingerprint policy as the equivalent flag pair, so
+        // usb_enabled()/fingerprint_enabled() resolve to exactly cfg.hardware.{usb,fingerprint}.
         usb: cfg.hardware.usb,
+        no_usb: !cfg.hardware.usb,
         fingerprint: cfg.hardware.fingerprint,
+        no_fingerprint: !cfg.hardware.fingerprint,
         on_host_sleep: Some(cfg.power.on_host_sleep.as_flag().to_string()),
         net,
         net_log: None,
@@ -839,6 +869,11 @@ fn run_vm(cli: Cli) -> Result<()> {
     // Resolve the Command/Option swap policy up front (default ON; --no-swap-cmd-opt opts out)
     // before any field of `cli` is moved out below, so the windowed path can use it freely.
     let swap_cmd_opt = cli.swap_cmd_opt_enabled();
+    // USB controller + fingerprint reader: on by default (--no-usb / --no-fingerprint opt out).
+    // Resolved up front, before any field of `cli` is moved out below. USB is the master switch —
+    // the reader rides the controller, so --no-usb also suppresses it (no orphan gadget).
+    let usb = cli.usb_enabled();
+    let fingerprint = usb && cli.fingerprint_enabled();
     let vmm_bin = resolve_vmm_bin(cli.vmm_bin).context("locating the limina-vmm worker binary")?;
 
     // Dynamic memory (M6): --memory MIN..MAX overrides --ram-mib with MAX (what libkrun allocates)
@@ -987,7 +1022,7 @@ fn run_vm(cli: Cli) -> Result<()> {
     // test-approve knob) — gated on `has_touchid` (sensor presence), NOT bare SEP presence, so a
     // Mac with no Touch ID never advertises the reader. Momentary unavailability (clamshell/locked)
     // is the verify prompt's problem, not the gate's.
-    let moc_store = if cli.fingerprint {
+    let moc_store = if fingerprint {
         moc::store_if_capable(
             cli.suspend_state_file
                 .as_ref()
@@ -1064,12 +1099,10 @@ fn run_vm(cli: Cli) -> Result<()> {
     if cli.mic {
         args.push("--mic".into());
     }
-    // The emulated USB controller is enabled by --usb OR implied by --fingerprint (the reader rides
-    // the controller). Push --usb to the worker once; the gadgets below cold-plug additively.
-    if cli.usb || cli.fingerprint {
+    // The emulated USB controller (on by default). Push --usb to the worker once; the FIDO and
+    // fingerprint gadgets below cold-plug onto it additively. `fingerprint` already implies `usb`.
+    if usb {
         args.push("--usb".into());
-    }
-    if cli.usb {
         // Stock-tier FIDO USB gadget (M14 Stage C): only when we can back it with a passkey
         // store (SEP present, or the test knob). Hand the worker a socket to bind for the
         // gadget; the supervisor serves CTAPHID on it with an authenticator sharing `fido_store`.
@@ -1086,7 +1119,7 @@ fn run_vm(cli: Cli) -> Result<()> {
     // Stock-tier fingerprint reader gadget (M14 wave 3): the same proxy shape as FIDO. Gated on a
     // usable Touch ID sensor (or the test knob) via `moc_store`. The worker binds the socket and
     // presents the elanmoc identity; the supervisor runs the protocol + Touch ID here.
-    if cli.fingerprint {
+    if fingerprint {
         if let Some(store) = &moc_store {
             let moc_socket =
                 std::env::temp_dir().join(format!("limina-moc-usb-{}.sock", std::process::id()));
@@ -2047,6 +2080,14 @@ mod tests {
             Some(PathBuf::from("/lib/Fedora.liminavm/fw/KRUN_EFI.fd"))
         );
         assert!(!cli.swap_cmd_opt_enabled(), "definition's swap=false wins");
+        assert!(
+            cli.usb_enabled(),
+            "USB is on by default (like snd/battery) — the definition's default reaches the flag"
+        );
+        assert!(
+            cli.fingerprint_enabled(),
+            "the fingerprint reader is on by default; runtime still gates it on a Touch ID sensor"
+        );
         assert_eq!(cli.shutdown_grace_secs, 20, "flat default");
         assert_eq!(cli.window_title.as_deref(), Some("Fedora"));
         assert_eq!(cli.display_resolution, DisplayResolution::Fixed(1600, 1000));
@@ -2297,6 +2338,44 @@ mod tests {
         assert!(
             swap_for(&["--no-swap-cmd-opt", "--swap-cmd-opt"]),
             "last flag (--swap) wins"
+        );
+    }
+
+    /// The USB controller and fingerprint reader are ON by default (like snd/battery), with
+    /// `--no-usb` / `--no-fingerprint` opt-outs that override the positive flag last-wins. Parses
+    /// real argv so the `overrides_with` wiring is exercised.
+    #[test]
+    fn usb_and_fingerprint_are_default_on_with_opt_out() {
+        let parse = |extra: &[&str]| {
+            let mut argv = vec!["limina"];
+            argv.extend_from_slice(extra);
+            Cli::try_parse_from(argv).expect("parsing usb/fingerprint flags")
+        };
+
+        // Bare invocation: both on out of the box.
+        let c = parse(&[]);
+        assert!(c.usb_enabled(), "USB should default ON");
+        assert!(c.fingerprint_enabled(), "fingerprint should default ON");
+
+        // Opt-outs turn each off independently.
+        assert!(!parse(&["--no-usb"]).usb_enabled(), "--no-usb disables");
+        assert!(
+            !parse(&["--no-fingerprint"]).fingerprint_enabled(),
+            "--no-fingerprint disables"
+        );
+
+        // --no-usb leaves the fingerprint flag on (though run_vm skips the reader without USB);
+        // the two knobs are orthogonal at parse time.
+        assert!(parse(&["--no-usb"]).fingerprint_enabled());
+
+        // Last flag on the line wins (clap overrides_with).
+        assert!(
+            !parse(&["--usb", "--no-usb"]).usb_enabled(),
+            "last flag (--no-usb) wins"
+        );
+        assert!(
+            parse(&["--no-usb", "--usb"]).usb_enabled(),
+            "last flag (--usb) wins"
         );
     }
 }

@@ -172,6 +172,232 @@ fn stock_guest_survives_inplace_s2idle_with_correct_clock() {
     eprintln!("teardown outcome: {outcome:?}");
 }
 
+// ---- USB across suspend/resume (docs/design/usb-xhci-snapshot/) -------------------------
+
+/// The live USB probe (`guest/usbprobe.py`): reports `devnum` from sysfs *and* issues a real
+/// `GET_DESCRIPTOR` control transfer through usbfs. See its module docs for why both halves
+/// are needed.
+const USBPROBE: &str = include_str!("../guest/usbprobe.py");
+
+/// The impersonated Elan match-on-chip fingerprint reader (`crates/limina-vmm/src/moc_usb.rs`).
+/// Chosen as the vehicle because `--fingerprint` attaches it on a stock guest with zero limina
+/// components, and `LIMINA_FP_TEST_APPROVE=1` makes it attach on any host.
+const MOC_VID_PID: &str = "04f3:0c7d";
+
+fn stage_usbprobe(guest: &Guest) {
+    guest
+        .ssh_exec(&format!(
+            "cat > /tmp/usbprobe.py <<'USBPROBE_PY_EOF'\n{USBPROBE}\nUSBPROBE_PY_EOF"
+        ))
+        .expect("staging usbprobe.py in the guest");
+}
+
+/// Run the probe and return its `USBPROBE:` line. Retries: the device needs a beat to enumerate
+/// after boot, and a resume's first control transfer can land while the guest is still thawing.
+fn usbprobe(guest: &Guest, what: &str) -> String {
+    let mut last = String::new();
+    for _ in 0..10 {
+        if let Ok(out) = guest.ssh_exec(&format!("sudo python3 /tmp/usbprobe.py {MOC_VID_PID}")) {
+            last = out
+                .lines()
+                .find(|l| l.starts_with("USBPROBE:"))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if last.starts_with("USBPROBE: ok") {
+                return last;
+            }
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    panic!("live USB probe never succeeded {what}: {last:?}");
+}
+
+/// Drop a unique token into the guest's kernel log so [`usb_dmesg_since`] can anchor to it.
+///
+/// A line *count* taken before the cycle would be the obvious way to do this, and it is wrong: the
+/// kernel ring buffer can rotate between the two reads, and then `skip(count)` silently swallows
+/// exactly the post-resume lines this test exists to inspect — a false GREEN.
+fn mark_kmsg(guest: &Guest, tag: &str) {
+    ssh_retry(guest, &format!("echo '{tag}' | sudo tee /dev/kmsg"));
+}
+
+/// Every guest kernel line about USB or the xHCI controller since `tag` was planted.
+fn usb_dmesg_since(guest: &Guest, tag: &str) -> String {
+    let all = ssh_retry(guest, "sudo dmesg");
+    let tail = match all.rsplit_once(tag) {
+        Some((_, after)) => after,
+        // The marker itself rotated out — everything we can still see is fair game (and a delta
+        // that big is a failure signal in its own right, not something to quietly trim).
+        None => &all,
+    };
+    tail.lines()
+        .filter(|l| {
+            let l = l.to_ascii_lowercase();
+            l.contains("usb") || l.contains("xhci")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The guest's own verdict on the resume — each pattern is a symptom the *kernel* prints when the
+/// controller misbehaved across a suspend:
+///
+/// - `resume PLC timeout` — `xhci_bus_resume` wrote `LWS | U0` and then polled `PORTSC.PLC` for
+///   10 ms in vain, so it skipped `xhci_ring_device`, the doorbell ring that restarts every
+///   endpoint the bus suspend stopped.
+/// - `reset ... USB device` / `new ... USB device` — the hub thread decided the device had been
+///   re-plugged and resuscitated or re-enumerated it. (A resuscitated device keeps its `devnum`,
+///   which is why `devnum` equality alone is not a sufficient oracle.)
+/// - `HC died` / `command ring` / `Controller not ready` — the controller itself went down.
+fn assert_usb_resume_was_clean(delta: &str) {
+    for bad in [
+        "resume PLC timeout",
+        "HC died",
+        "command ring",
+        "Controller not ready",
+        "Timeout while waiting",
+    ] {
+        assert!(
+            !delta.contains(bad),
+            "the guest kernel reported {bad:?} across the suspend/resume:\n{delta}"
+        );
+    }
+    for bad in ["reset full-speed USB device", "new full-speed USB device"] {
+        assert!(
+            !delta.contains(bad),
+            "the device was {bad:?} across the suspend — it should simply have resumed:\n{delta}"
+        );
+    }
+}
+
+/// The host-side counterpart: the guest must have actually *completed* its port link resume.
+///
+/// This is the sharp oracle for the port half of the fix, and it needs the host trace because the
+/// guest is silent either way (Linux is defensive enough that a device on a mishandled port still
+/// survives — it just never gets resumed properly). `xhci_bus_resume` only drives a port through
+/// `U3 → RESUME → U0` if it still reads `PLS == U3`; a controller that re-latched the port on the
+/// resume's `USBCMD.RS` edge shows `PLS = Polling` instead and the whole sequence is skipped:
+///
+/// ```text
+/// broken: USBCMD <- 0x5 [RS INTE] / PORTSC[1] <- 0x6e1 was 0x206e3   (PLS=Polling, CSC latched)
+/// fixed:  USBCMD <- 0x5 [RS INTE] / PORTSC[1] <- 0x661 was 0x663     (PLS=U3 preserved)
+///                                   PORTSC[1] <- 0x107e1 LWS pls=15  (XDEV_RESUME)
+///                                   PORTSC[1] <- 0x10601 LWS pls=0   (U0)
+///                                   PORTSC[1] <- 0x400601 was 0x400603 (PLC was latched)
+/// ```
+fn assert_link_resume_completed(trace: &str) {
+    // The resume is uniquely marked by the CRS strobe (Controller Restore State); everything
+    // after it is the guest's resume. Match the trace's flag spelling `CRS ` with its trailing
+    // space — a bare "CRS" also matches inside "HCRST", which would anchor on a *reset* instead.
+    let resume = trace
+        .rsplit_once("CRS ")
+        .map(|(_, after)| after)
+        .unwrap_or_else(|| {
+            panic!("the guest never issued USBCMD.CRS — it did not resume:\n{trace}")
+        });
+    assert!(
+        resume.contains("LWS pls=0"),
+        "the guest never drove its port back to U0 after the resume — it read a link state other \
+         than U3 and abandoned the port resume (so `xhci_ring_device` never ran):\n{resume}"
+    );
+}
+
+/// An attached USB device must **survive an in-place s2idle**: same identity, a working data path
+/// afterwards, and — the part only the host trace can see — a port link resume the guest actually
+/// completed.
+///
+/// Before the M14 register-semantics fixes the resume's `USBCMD.RS` edge re-latched `PORTSC.CSC`
+/// and forced `PLS` back to Polling on every populated port, so `xhci_bus_resume` read a port that
+/// was no longer in U3, abandoned it, and never reached `xhci_ring_device`; and `PORTSC.PLC` was
+/// never latched, so the 10 ms handshake that gates that call could not have succeeded anyway.
+/// Measured honestly: **Linux survives both** in the configuration we ship — the hub thread finds
+/// the port still enabled and resuscitates the device with no re-enumeration and nothing in dmesg,
+/// and the class drivers re-submit their URBs. So this is a correctness/fragility floor, not a
+/// reproduction of a user-visible failure; the user-visible one is on the snapshot path
+/// (`vmdef.rs`), which the two paths' shared register semantics feed.
+///
+/// [`assert_link_resume_completed`] is what makes it RED before the fix — verified by A/B trace
+/// capture, since every guest-side signal is identical either way.
+#[test]
+fn usb_device_survives_inplace_s2idle() {
+    if !limina_test::require_hvf_or_skip("usb_device_survives_inplace_s2idle") {
+        return;
+    }
+
+    let cfg = match GuestConfig::fedora_from_env() {
+        Ok(cfg) => cfg
+            .with_net()
+            .with_supervisor_log()
+            .with_supervisor_arg("--fingerprint")
+            .with_env("LIMINA_FP_TEST_APPROVE", "1")
+            .with_env("RUST_LOG", "krun_devices=debug"),
+        Err(e) => {
+            eprintln!("SKIPPED usb_device_survives_inplace_s2idle: {e}");
+            return;
+        }
+    };
+
+    eprintln!("booting the stock Fedora image with the fingerprint gadget attached");
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    let banner = guest
+        .wait_for_ssh_banner(Duration::from_secs(240))
+        .expect("guest sshd never became reachable");
+    eprintln!("guest SSH up: {banner}");
+
+    stage_usbprobe(&guest);
+    let before = usbprobe(&guest, "before the suspend");
+    eprintln!("pre-suspend:  {before}");
+    const KMSG_MARK: &str = "limina-test: pre-suspend usb baseline";
+    mark_kmsg(&guest, KMSG_MARK);
+    let worker = guest.worker_pid().expect("resolving the worker pid");
+
+    suspend_in_guest_and_wait_dark(&guest);
+    eprintln!("guest is asleep; holding a {SLEEP_GAP:?} gap");
+    std::thread::sleep(SLEEP_GAP);
+
+    assert_eq!(
+        unsafe { libc::kill(worker, libc::SIGWINCH) },
+        0,
+        "SIGWINCH to the worker failed — did the worker die?"
+    );
+    guest
+        .ssh_poll("true", Duration::from_secs(90))
+        .expect("guest never came back on SSH after the wake pulse");
+    assert_eq!(
+        guest.worker_pid().expect("post-wake worker pid"),
+        worker,
+        "worker pid changed — this test must be in-place"
+    );
+
+    // The data path still works (a real control transfer), AND the device is the same one:
+    // a re-enumeration would have handed it a fresh devnum.
+    let after = usbprobe(&guest, "after the resume");
+    eprintln!("post-resume: {after}");
+    assert_eq!(
+        after, before,
+        "the USB device did not survive the s2idle unchanged — a differing devnum means it \
+         silently disconnected and re-enumerated"
+    );
+
+    let delta = usb_dmesg_since(&guest, KMSG_MARK);
+    eprintln!("--- guest USB/xHCI dmesg across the suspend ---\n{delta}\n---");
+    assert_usb_resume_was_clean(&delta);
+    let log = guest.supervisor_log();
+    let pm = log
+        .lines()
+        .filter(|l| l.contains("xhci-pm"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    eprintln!("--- host xhci-pm trace ---\n{pm}\n---");
+    assert_link_resume_completed(&pm);
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(20))
+        .expect("shutting down the woken guest");
+    eprintln!("teardown outcome: {outcome:?}");
+}
+
 /// The seated GNOME session must survive an **in-place** s2idle round-trip — same worker,
 /// no snapshot, no replay. The transport survives (0072 sticky re-arm, proven above), and
 /// the host GPU world never went anywhere — the only thing that destroys it is the
