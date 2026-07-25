@@ -52,7 +52,7 @@ Fedora.liminavm/
 └─ logs/                # supervisor + worker + gvproxy logs for the last N runs
 ```
 
-- **Default library location:** `~/Library/Application Support/limina/VMs/` (macOS-native;
+- **Default library location:** `~/Library/Application Support/Limina/VMs/` (macOS-native;
   the app's VM library enumerates this dir). A `.liminavm` dir is **self-contained and
   relocatable** — Finder-copyable like Parallels' `.pvm`, double-clickable later when the
   app registers the extension. `limina` accepts either a library name (`limina start

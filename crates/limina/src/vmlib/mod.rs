@@ -6,7 +6,7 @@
 //! Implements Phase 1 of `docs/design/vm-definitions.md`: a VM definition is a
 //! directory `<name>.liminavm/` holding a single `vm.toml` plus everything the VM
 //! owns (`disks/`, `run/`, `logs/`). The library lives at
-//! `~/Library/Application Support/limina/VMs/` and is enumerated by both the CLI
+//! `~/Library/Application Support/Limina/VMs/` and is enumerated by both the CLI
 //! (`limina ls`) and the control-center UI — one store, no daemon.
 //!
 //! The definition layer is pure supervisor-side policy: resolving a definition

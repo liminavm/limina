@@ -98,7 +98,7 @@ impl VmBundle {
 }
 
 /// The default VM library. `$LIMINA_VM_LIBRARY` overrides it (tests, portable setups);
-/// otherwise `~/Library/Application Support/limina/VMs`.
+/// otherwise `~/Library/Application Support/Limina/VMs`.
 pub fn library_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("LIMINA_VM_LIBRARY") {
         return PathBuf::from(dir);
@@ -106,7 +106,7 @@ pub fn library_dir() -> PathBuf {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    home.join("Library/Application Support/limina/VMs")
+    home.join("Library/Application Support/Limina/VMs")
 }
 
 /// Resolve a VM spec to a bundle: a path if it looks like one (contains a separator or
