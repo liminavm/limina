@@ -173,3 +173,33 @@ KK_ICD=/path/to/icd.json ./run.sh
 
 Needs `/Volumes/mesa-cs` mounted (or `KK_ICD` pointed elsewhere). `0xABAB…` in the B/C output
 would mean the copy never ran; `0` with `avail=1` is the guest symptom.
+
+## Fixed — `patches/kosmickrisp/0010`
+
+`mtl_device_needs_split_counter_resolve` (`bridge/mtl_device.m`) probes the failing shape once at
+first use — sample a blit encoder that carries real work, resolve it in the same command buffer,
+check for zero — and where that fails `kk_encoder_write_timestamp` retires the current
+`MTLCommandBuffer` and encodes the resolve into the next one. `struct kk_encoder` gained an
+`extra_cmd_buffers` list, committed ahead of `main` (command buffers execute in commit order, so
+the in-stream ordering the same-command-buffer design exists to guarantee is preserved) and
+released with it. The fence signalled by the last encoder before a split is waited on by the first
+after it — the same fence-across-command-buffers chaining `kk_queue_submit` already uses between
+consecutive submissions.
+
+Detected by measurement, not by GPU family: a zero is indistinguishable from a real result to
+every caller, so there is nothing to allowlist against.
+
+Validated on M1 Max with `LIMINA_KK_SPLIT_COUNTER_RESOLVE=1` forcing the path on hardware that
+does not need it — so this exercises the new code, not the workaround:
+
+| | auto (no split) | split forced |
+|---|---|---|
+| `probe` A/B/C, natively | pass | **pass** |
+| `probe` A/B/C, in-guest through venus | pass | **pass** |
+| `gnome-shell-rs` reproducer, in-guest | pass | **pass** |
+| `vkmark` (no timestamps → no splits) | — | 2001, no crash |
+
+**Still outstanding: confirm on M4 Pro.** Needs a KK + app rebuild deployed there. Expected result
+is that `mtlprobe`'s "GPU resolveCounters, same cmd buffer" row stays ZERO (the hardware behaviour
+is unchanged) while `probe` and the compositor's `NIRI_FRAME_LOG=1,gpu` start reporting real GPU
+times.
