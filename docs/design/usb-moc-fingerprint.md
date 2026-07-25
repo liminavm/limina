@@ -174,12 +174,14 @@ correctness fix**, not fingerprint-specific — any future small-bulk-OUT gadget
 Today `SepKey::sign(msg, reason)` prompts Touch ID and returns an ECDSA signature. A fingerprint
 *match* needs no crypto the guest checks — just a boolean "a finger the enclave trusts was
 presented." So we add **two** cdecls to `crates/limina/swift/fido_sep.swift` and wrappers in
-`sep.rs`: `limina_sep_verify` (prompt) and `limina_sep_can_verify` (the capability gate).
+`sep.rs`: `limina_sep_verify` (prompt) and `limina_sep_has_touchid` (the capability gate).
 
 ```swift
-@_cdecl("limina_sep_can_verify")   // 1 = a usable Touch ID sensor with an enrolled finger
-public func limina_sep_can_verify() -> Int32 {
-    LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) ? 1 : 0
+@_cdecl("limina_sep_has_touchid")  // 1 = a Touch ID sensor is present (hardware, not availability)
+public func limina_sep_has_touchid() -> Int32 {
+    let ctx = LAContext()
+    _ = ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) // primes biometryType
+    return ctx.biometryType == .touchID ? 1 : 0
 }
 
 @_cdecl("limina_sep_verify")       // 1 = matched, 0 = declined/failed/error
@@ -200,14 +202,21 @@ Two corrections validation surfaced, both baked in above:
 
 - **`evaluatePolicy` is asynchronous.** It returns immediately and fires a completion handler;
   `sign()`'s blocking shape does *not* transfer. A `DispatchSemaphore.wait()` is mandatory.
-- **The capability gate is `canEvaluatePolicy`, not `sep::available()`.** `available()` only
-  tests `SecureEnclave.isAvailable`. But an Apple-Silicon **desktop** (Mac mini/Studio — SEP
-  present, *no Touch ID sensor*), or any Mac with no enrolled finger, would then enumerate a
-  reader whose login/`sudo` prompt can never succeed (biometrics-only has no passcode fallback).
-  The `fingerprint` capability therefore gates on `limina_sep_can_verify()` — a real Touch ID
-  sensor with an enrolled finger — so on those hosts the reader simply isn't advertised (graceful
-  degrade, the FIDO precedent). `.deviceOwnerAuthenticationWithBiometrics` (not the `...OrWatch`
-  or passcode variants) is the honest mapping: only an actual fingerprint counts as a match.
+- **The capability gate is Touch ID sensor PRESENCE (`biometryType`), not `sep::available()` and
+  not `canEvaluatePolicy`.** `available()` only tests `SecureEnclave.isAvailable`, which is true on
+  an Apple-Silicon **desktop** (Mac mini/Studio — SEP present, *no Touch ID sensor*) that could
+  never back a fingerprint match — so we don't gate on it. The first design gated on
+  `canEvaluatePolicy(.biometrics)`, but **live validation proved that wrong**: `canEvaluatePolicy`
+  answers "can a prompt succeed *right now*" and returns `systemCancel` when Touch ID is
+  transiently unavailable — a **closed lid/clamshell**, or a Mac that needs a fresh password unlock
+  to re-arm Touch ID — even though the real `evaluatePolicy` prompt works fine (verified: the same
+  host returned `canEvaluatePolicy = false` but `evaluatePolicy success = true`). Gating on it hid
+  the reader on a perfectly capable Mac. So we gate on **`biometryType == .touchID`** (sensor
+  present, unaffected by momentary availability), mirroring how FIDO gates on hardware presence.
+  Availability at verify time is the prompt's job: a failed `evaluatePolicy` degrades to a clean
+  no-match, exactly like a real reader whose finger didn't match.
+  `.deviceOwnerAuthenticationWithBiometrics` (not the `...OrWatch` or passcode variants) is the
+  honest mapping: only an actual fingerprint counts as a match.
 
 ## 3. The USB device (descriptors)
 
@@ -416,8 +425,8 @@ presents.* Never ship a state where `40 19` is unanswered.
 - `--fingerprint` **implies the xHCI controller** (it cannot work without the bus), the same way
   the reader rides the controller FIDO already uses. When both `fingerprint` and `usb`/FIDO are
   on, **both gadgets cold-plug** onto the one controller (ports 1 and 2) — additive, no conflict.
-- Gated on **`limina_sep_can_verify()`** (a real Touch ID sensor with an enrolled finger), *not*
-  bare `sep::available()` — see §2.2: a SEP-but-no-Touch-ID desktop must not advertise a reader
+- Gated on **`limina_sep_has_touchid()`** (a Touch ID sensor is present, `biometryType`), *not*
+  bare `sep::available()` and *not* `canEvaluatePolicy` — see §2.2: a SEP-but-no-Touch-ID desktop must not advertise a reader
   whose prompt can never succeed. A `LIMINA_FP_TEST_APPROVE` knob forces the capability on (and
   makes `sep::verify` return match without a sheet) for CI. No usable sensor → no reader advertised,
   graceful degrade, exactly like the FIDO capability.
@@ -474,7 +483,7 @@ already work — no new kernel symbols. PAM integration is stock `authselect wit
 ## 11. Open questions / decisions to confirm
 
 The four **blocking** issues an adversarial validation pass raised are already resolved in this
-doc (all policy-layer): enroll-decline `STALL` encoding (§5), the `limina_sep_can_verify` capability
+doc (all policy-layer): enroll-decline `STALL` encoding (§5), the `limina_sep_has_touchid` capability
 gate (§2.2/§7), `resp_len==0` reply suppression (§4), and the shape-normalized pcapng oracle (§8).
 **Resolved by the user (2026-07-24):** enroll = **one Touch ID prompt** per enrollment (§5); the
 reader holds a **single logical finger** (§5.1) — since `LAContext` only reports *that* a trusted

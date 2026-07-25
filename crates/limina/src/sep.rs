@@ -13,7 +13,7 @@ use anyhow::{bail, Result};
 // negative error (-1 access-control, -2 buffer too small, -3 enclave/CryptoKit).
 extern "C" {
     fn limina_sep_available() -> i32;
-    fn limina_sep_can_verify() -> i32;
+    fn limina_sep_has_touchid() -> i32;
     fn limina_sep_verify(reason: *const std::os::raw::c_char) -> i32;
     fn limina_sep_create(out: *mut u8, cap: isize) -> isize;
     fn limina_sep_pubkey(blob: *const u8, blob_len: isize, out: *mut u8, cap: isize) -> isize;
@@ -41,13 +41,15 @@ pub fn available() -> bool {
     unsafe { limina_sep_available() == 1 }
 }
 
-/// Can this host satisfy a biometric (Touch ID) prompt right now — a sensor present
-/// AND an enrolled finger? The control plane gates the `fingerprint` capability on
-/// this, NOT on [`available`]: a SEP-but-no-Touch-ID desktop (Mac mini/Studio) or a
-/// Mac with no enrolled finger must not advertise a reader whose prompt can never
-/// succeed (biometrics-only has no passcode fallback). See `sep_verify`.
-pub fn can_verify() -> bool {
-    unsafe { limina_sep_can_verify() == 1 }
+/// Does this host have a Touch ID sensor? The control plane gates the `fingerprint`
+/// capability on sensor PRESENCE — NOT on [`available`] (a SEP-but-no-Touch-ID
+/// desktop like a Mac mini/Studio must not advertise a fingerprint reader), and NOT on
+/// whether a biometric prompt can succeed *right now*: that transient check
+/// (`canEvaluatePolicy`) reports `systemCancel` on a clamshell/locked Mac even though
+/// the real prompt works, which wrongly hides the reader. Availability at verify time
+/// is the prompt's job — a momentary failure is a clean no-match. See `sep_verify`.
+pub fn has_touchid() -> bool {
+    unsafe { limina_sep_has_touchid() == 1 }
 }
 
 /// Prompt a biometrics-only Touch ID sheet showing `reason` and return whether a

@@ -25,13 +25,15 @@ pub mod usb;
 
 use store::MocStore;
 
-/// Build the per-VM template store iff this host can back the reader — a usable Touch ID sensor
-/// (`sep::can_verify`), or the `LIMINA_FP_TEST_APPROVE` knob. `None` on a Mac that can never satisfy
-/// a biometric prompt (no sensor / no enrolled finger), so the reader is simply not advertised
-/// (graceful degrade). Persists to `path` (the managed VM's bundle dir) so the enrolled finger
-/// survives restarts, matching fprintd's own on-disk print.
+/// Build the per-VM template store iff this host can back the reader — a Touch ID sensor is present
+/// (`sep::has_touchid`), or the `LIMINA_FP_TEST_APPROVE` knob. `None` on a Mac with no Touch ID
+/// hardware (e.g. a Mac mini/Studio), so the reader is simply not advertised (graceful degrade). We
+/// gate on sensor *presence*, not on whether a prompt can succeed this instant — a clamshell/locked
+/// Mac still has the sensor, and momentary unavailability degrades to a clean no-match at verify
+/// time. Persists to `path` (the managed VM's bundle dir) so the enrolled finger survives restarts,
+/// matching fprintd's own on-disk print.
 pub fn store_if_capable(path: Option<PathBuf>) -> Option<Arc<MocStore>> {
-    if crate::sep::can_verify() || usb::test_approve() {
+    if crate::sep::has_touchid() || usb::test_approve() {
         let store = match path {
             Some(p) => MocStore::with_path(p),
             None => MocStore::in_memory(),

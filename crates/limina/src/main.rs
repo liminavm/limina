@@ -983,9 +983,10 @@ fn run_vm(cli: Cli) -> Result<()> {
     );
 
     // Fingerprint reader template store (M14 wave 3): the single enrolled `user_id`, persisted next
-    // to state.toml so it survives boots. `Some` only where a usable Touch ID sensor (or the
-    // test-approve knob) can back a match — gated on `can_verify`, NOT SEP presence, so a Mac with
-    // no sensor never advertises a reader whose prompt can't succeed.
+    // to state.toml so it survives boots. `Some` only where a Touch ID sensor is present (or the
+    // test-approve knob) — gated on `has_touchid` (sensor presence), NOT bare SEP presence, so a
+    // Mac with no Touch ID never advertises the reader. Momentary unavailability (clamshell/locked)
+    // is the verify prompt's problem, not the gate's.
     let moc_store = if cli.fingerprint {
         moc::store_if_capable(
             cli.suspend_state_file

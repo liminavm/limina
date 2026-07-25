@@ -75,14 +75,24 @@ public func limina_sep_pubkey(
     }
 }
 
-/// Can this host perform a biometric verification right now? True only when a Touch
-/// ID sensor is present AND has an enrolled finger (`canEvaluatePolicy` fails on a
-/// SEP-but-no-Touch-ID desktop, or with no enrolled finger). The Rust side gates the
-/// `fingerprint` capability on this — NOT on `limina_sep_available()` (SEP presence),
-/// so a Mac that can never satisfy a biometric prompt never advertises the reader.
-@_cdecl("limina_sep_can_verify")
-public func limina_sep_can_verify() -> Int32 {
-    LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) ? 1 : 0
+/// Does this host have a Touch ID sensor? The Rust side gates the `fingerprint`
+/// capability on sensor PRESENCE — deliberately NOT on `canEvaluatePolicy`. The latter
+/// answers "can a biometric prompt succeed *right now*", which reports transient
+/// UNavailability (a closed lid / clamshell, or a Mac that needs a fresh password
+/// unlock to re-arm Touch ID) as `false` with `systemCancel`, even though the actual
+/// `evaluatePolicy` prompt would work — wrongly hiding the reader. `biometryType`
+/// (populated after a priming `canEvaluatePolicy` call — an Apple API quirk) reflects
+/// hardware presence regardless of the current availability, mirroring how the FIDO
+/// authenticator gates on `SecureEnclave.isAvailable`. Momentary unavailability is then
+/// the verify prompt's problem: a failed `evaluatePolicy` just degrades to a clean
+/// no-match, exactly like a real reader whose finger didn't match.
+@_cdecl("limina_sep_has_touchid")
+public func limina_sep_has_touchid() -> Int32 {
+    let ctx = LAContext()
+    // biometryType is only populated after a canEvaluatePolicy call; ignore the bool
+    // (it tracks momentary availability) and read the sensor type it leaves behind.
+    _ = ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+    return ctx.biometryType == .touchID ? 1 : 0
 }
 
 /// Prompt a biometrics-only Touch ID sheet (`reason` is the sheet text) and report

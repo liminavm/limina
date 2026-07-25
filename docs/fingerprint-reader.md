@@ -42,13 +42,17 @@ print, so the two stay consistent across reboots.
 
 ## What works today
 
-Live-validated end-to-end on a stock Fedora 44 guest (with `LIMINA_FP_TEST_APPROVE` standing
-in for the finger):
+Live-validated end-to-end on a stock Fedora 44 guest, including with **real host Touch ID**
+(user-confirmed the biometric sheet on the Mac):
 
-- **`libfprint` binds `04f3:0c7d`** as *Elan MOC Sensors*; `fprintd-list` sees the device.
+- **`libfprint` binds `04f3:0c7d`** as *Elan MOC Sensors*; `fprintd-list` sees the device
+  (`fprintd` auto-detects it — socket/D-Bus-activated, no manual start).
 - **Enroll → list → verify → delete** all round-trip: `fprintd-enroll` drives the full 9-stage
-  enrollment to `enroll-completed`, `fprintd-verify` reports `verify-match`, `fprintd-delete`
-  clears it.
+  enrollment to `enroll-completed` behind one real Touch ID tap, `fprintd-verify` reports
+  `verify-match`, `fprintd-delete` clears it.
+- **Full GNOME integration** — with `pam_fprintd` enabled (see Recipes), the Settings enrollment
+  panel, the lock screen, and the GDM login prompt all offer fingerprint, each raising a host
+  Touch ID sheet.
 - **Single-finger policy holds** — a second distinct enroll is refused (not silently
   overwritten).
 - **fwupd does not claim the device** — the chosen PID isn't in fwupd's `elanfp` quirk, so no
@@ -57,10 +61,13 @@ in for the finger):
 
 ## Requirements
 
-- A Mac with **Touch ID and at least one finger enrolled in macOS**. limina gates the
-  `fingerprint` capability on `LAContext.canEvaluatePolicy(...biometrics)` — a Mac with no
-  sensor or no enrolled finger simply never advertises the reader (graceful degrade), so the
-  guest has none.
+- A Mac with a **Touch ID sensor** (and a finger enrolled in macOS to actually match). limina
+  gates the `fingerprint` capability on **sensor presence** (`LAContext.biometryType == .touchID`)
+  — a Mac with no Touch ID (e.g. a Mac mini/Studio) never advertises the reader (graceful degrade).
+  It deliberately does **not** gate on `canEvaluatePolicy`, which reports transient unavailability
+  (a closed lid/clamshell, or a Mac that needs a password unlock to re-arm Touch ID) as failure even
+  when the real prompt works — that would wrongly hide the reader. Momentary unavailability at verify
+  time just yields a clean no-match.
 - The app / supervisor must be **Apple-Development-signed** (ad-hoc signing can't reach the
   enclave — same class as the TCC accessibility / FIDO trap). The shipped `.app` satisfies
   this.
@@ -82,15 +89,32 @@ only in memory, so it's lost on restart — after which the guest's `fprintd` st
 print but a verify is an immediate no-match (no Touch ID prompt). Use a managed VM to persist
 enrollment, or `fprintd-delete` + re-enroll after an ad-hoc restart.
 
-### GNOME Fingerprint Login (zero config)
+### Enable fingerprint auth first — the key step (`pam_fprintd`)
 
-**Settings → Users → Fingerprint Login → Add** walks the enrollment. It takes a **single Touch
-ID tap** on the Mac — the enclave only answers once, so we prompt on the first capture stage
-and let GNOME's swipe progress bar race to done on its own (don't wait for nine taps).
-Afterwards the login screen, screen-unlock, and `sudo` (once PAM is enabled, below) accept a
-fingerprint.
+```sh
+# Fedora: wire fprintd into the PAM stack (system-auth → login / GDM / sudo / screen-unlock)
+sudo authselect enable-feature with-fingerprint
+```
 
-### fprintd directly
+This is the step that lights everything up. GNOME deliberately **hides its fingerprint UI until
+`pam_fprintd` is in the auth stack** — with no PAM leg using the reader, Settings shows no
+"Fingerprint Login" row, and neither the lock screen nor GDM offer a fingerprint. It is *not* a
+missing-device bug: `fprintd` auto-detects the reader regardless (it's socket/D-Bus-activated), but
+GNOME won't offer enrollment for a reader nothing authenticates against. Once this feature is on,
+**all three surfaces appear**: the Settings enrollment panel, the lock screen, and the GDM login
+prompt — each tap raising a host Touch ID sheet. (Verified end-to-end on a stock Fedora 44 guest.)
+
+### GNOME Fingerprint Login
+
+With the feature enabled, **Settings → Users → Fingerprint Login → Add** walks the enrollment. It
+takes a **single Touch ID tap** on the Mac — the enclave only answers once, so we prompt on the
+first capture stage and let GNOME's swipe progress bar race to done on its own (don't wait for nine
+taps). Afterwards GDM login, screen-unlock, and `sudo` all accept a fingerprint.
+
+### fprintd directly (no GNOME needed)
+
+`fprintd` drives the reader with no desktop and without `pam_fprintd` — useful for headless guests
+or scripting:
 
 ```sh
 fprintd-enroll        # enroll the current user's finger (prompts Touch ID)
@@ -98,16 +122,6 @@ fprintd-verify        # verify  (prompts Touch ID → match / no-match)
 fprintd-list "$USER"  # show the enrolled finger
 fprintd-delete "$USER"
 ```
-
-### Fingerprint for sudo / login (`pam_fprintd`)
-
-```sh
-# Fedora: enable the fprintd PAM leg for system-auth (login / sudo / GDM / unlock)
-sudo authselect enable-feature with-fingerprint
-```
-
-Now `sudo` (and GDM / console login / screen unlock) offers a fingerprint — each tap raises a
-Touch ID prompt on the Mac. Enroll first (above) or PAM has nothing to match.
 
 ## Implementation notes / gotchas
 
