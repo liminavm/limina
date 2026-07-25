@@ -262,6 +262,144 @@ main(void)
          }
       }
 
+      /* 6b. KK's shape WITH the split-command-buffer fix (patches/kosmickrisp/0010).
+       *
+       * Case 5 established that a split fixes the count=2 shape, and the fix was shipped on
+       * that basis — but the shipped code emits the count=1 shape of case 6, and those were
+       * never tested together. They have to be: the fix is deployed on an M4 Pro and the guest
+       * still reads [0, 0], so either the split is not being taken or it does not help HERE.
+       * This case answers the second half. */
+      {
+         id<MTLCounterSampleBuffer> sb = make_sample_buffer(dev, ts, MTLStorageModeShared, 1);
+         id<MTLBuffer> dst = [dev newBufferWithLength:2 * sizeof(uint64_t)
+                                              options:MTLResourceStorageModeShared];
+         if (sb) {
+            id<MTLCommandBuffer> cb = [q commandBuffer];
+            MTLBlitPassDescriptor *bp = [MTLBlitPassDescriptor blitPassDescriptor];
+            bp.sampleBufferAttachments[0].sampleBuffer = sb;
+            bp.sampleBufferAttachments[0].startOfEncoderSampleIndex = 0;
+            bp.sampleBufferAttachments[0].endOfEncoderSampleIndex = MTLCounterDontSample;
+            id<MTLBlitCommandEncoder> enc = [cb blitCommandEncoderWithDescriptor:bp];
+            [enc fillBuffer:scratch range:NSMakeRange(0, scratch.length) value:0x5a];
+            [enc endEncoding];
+            [cb commit];
+
+            id<MTLCommandBuffer> cb2 = [q commandBuffer];
+            id<MTLBlitCommandEncoder> res = [cb2 blitCommandEncoder];
+            [res resolveCounters:sb
+                         inRange:NSMakeRange(0, 1)
+               destinationBuffer:dst
+               destinationOffset:0];
+            [res endEncoding];
+            [cb2 commit];
+            [cb2 waitUntilCompleted];
+            const uint64_t *v = dst.contents;
+            report("KK shape, GPU resolve, separate cb", v[0], v[1]);
+         }
+      }
+
+      /* 6e. KK's shape, separate command buffer, but WAITING for the sampling buffer to
+       * COMPLETE before encoding the resolve.
+       *
+       * This is the discriminator between case 5 (which passes) and case 6b (the shipped fix,
+       * which does not): case 5 waits, 6b only commits. If the sample materialises at
+       * command-buffer completion rather than at commit, then being in a later command buffer
+       * on the same queue is not enough — and "command buffers run in commit order", which is
+       * what the shipped fix's comment relies on, is the wrong guarantee. */
+      {
+         id<MTLCounterSampleBuffer> sb = make_sample_buffer(dev, ts, MTLStorageModeShared, 1);
+         id<MTLBuffer> dst = [dev newBufferWithLength:2 * sizeof(uint64_t)
+                                              options:MTLResourceStorageModeShared];
+         if (sb) {
+            id<MTLCommandBuffer> cb = [q commandBuffer];
+            MTLBlitPassDescriptor *bp = [MTLBlitPassDescriptor blitPassDescriptor];
+            bp.sampleBufferAttachments[0].sampleBuffer = sb;
+            bp.sampleBufferAttachments[0].startOfEncoderSampleIndex = 0;
+            bp.sampleBufferAttachments[0].endOfEncoderSampleIndex = MTLCounterDontSample;
+            id<MTLBlitCommandEncoder> enc = [cb blitCommandEncoderWithDescriptor:bp];
+            [enc fillBuffer:scratch range:NSMakeRange(0, scratch.length) value:0x5a];
+            [enc endEncoding];
+            [cb commit];
+            [cb waitUntilCompleted];
+
+            id<MTLCommandBuffer> cb2 = [q commandBuffer];
+            id<MTLBlitCommandEncoder> res = [cb2 blitCommandEncoder];
+            [res resolveCounters:sb
+                         inRange:NSMakeRange(0, 1)
+               destinationBuffer:dst
+               destinationOffset:0];
+            [res endEncoding];
+            [cb2 commit];
+            [cb2 waitUntilCompleted];
+            const uint64_t *v = dst.contents;
+            report("KK shape, separate cb + WAIT", v[0], v[1]);
+         }
+      }
+
+      /* 6c. KK's shape, same command buffer, but resolving into a PRIVATE destination — the
+       * other workaround case 4 hinted at. If this works it is a smaller change than splitting
+       * the command buffer, since it does not perturb submission boundaries at all. */
+      {
+         id<MTLCounterSampleBuffer> sb = make_sample_buffer(dev, ts, MTLStorageModeShared, 1);
+         id<MTLBuffer> priv = [dev newBufferWithLength:2 * sizeof(uint64_t)
+                                               options:MTLResourceStorageModePrivate];
+         id<MTLBuffer> dst = [dev newBufferWithLength:2 * sizeof(uint64_t)
+                                              options:MTLResourceStorageModeShared];
+         if (sb) {
+            id<MTLCommandBuffer> cb = [q commandBuffer];
+            MTLBlitPassDescriptor *bp = [MTLBlitPassDescriptor blitPassDescriptor];
+            bp.sampleBufferAttachments[0].sampleBuffer = sb;
+            bp.sampleBufferAttachments[0].startOfEncoderSampleIndex = 0;
+            bp.sampleBufferAttachments[0].endOfEncoderSampleIndex = MTLCounterDontSample;
+            id<MTLBlitCommandEncoder> enc = [cb blitCommandEncoderWithDescriptor:bp];
+            [enc fillBuffer:scratch range:NSMakeRange(0, scratch.length) value:0x5a];
+            [enc endEncoding];
+            id<MTLBlitCommandEncoder> res = [cb blitCommandEncoder];
+            [res resolveCounters:sb
+                         inRange:NSMakeRange(0, 1)
+               destinationBuffer:priv
+               destinationOffset:0];
+            [res copyFromBuffer:priv
+                   sourceOffset:0
+                       toBuffer:dst
+              destinationOffset:0
+                           size:2 * sizeof(uint64_t)];
+            [res endEncoding];
+            [cb commit];
+            [cb waitUntilCompleted];
+            const uint64_t *v = dst.contents;
+            report("KK shape, GPU resolve -> private, same cb", v[0], v[1]);
+         }
+      }
+
+      /* 6d. KK's shape with a PRIVATE sample buffer, same command buffer — case 3's workaround
+       * applied to the shipped shape. */
+      {
+         id<MTLCounterSampleBuffer> sb = make_sample_buffer(dev, ts, MTLStorageModePrivate, 1);
+         id<MTLBuffer> dst = [dev newBufferWithLength:2 * sizeof(uint64_t)
+                                              options:MTLResourceStorageModeShared];
+         if (sb) {
+            id<MTLCommandBuffer> cb = [q commandBuffer];
+            MTLBlitPassDescriptor *bp = [MTLBlitPassDescriptor blitPassDescriptor];
+            bp.sampleBufferAttachments[0].sampleBuffer = sb;
+            bp.sampleBufferAttachments[0].startOfEncoderSampleIndex = 0;
+            bp.sampleBufferAttachments[0].endOfEncoderSampleIndex = MTLCounterDontSample;
+            id<MTLBlitCommandEncoder> enc = [cb blitCommandEncoderWithDescriptor:bp];
+            [enc fillBuffer:scratch range:NSMakeRange(0, scratch.length) value:0x5a];
+            [enc endEncoding];
+            id<MTLBlitCommandEncoder> res = [cb blitCommandEncoder];
+            [res resolveCounters:sb
+                         inRange:NSMakeRange(0, 1)
+               destinationBuffer:dst
+               destinationOffset:0];
+            [res endEncoding];
+            [cb commit];
+            [cb waitUntilCompleted];
+            const uint64_t *v = dst.contents;
+            report("KK shape, PRIVATE sample buffer, same cb", v[0], v[1]);
+         }
+      }
+
       /* 7. The CPU/GPU timestamp pair, as a control: this is the clock itself, and the guest
        * already sees it working through VK_EXT_calibrated_timestamps. */
       {

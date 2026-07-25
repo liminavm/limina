@@ -203,3 +203,66 @@ does not need it — so this exercises the new code, not the workaround:
 is that `mtlprobe`'s "GPU resolveCounters, same cmd buffer" row stays ZERO (the hardware behaviour
 is unchanged) while `probe` and the compositor's `NIRI_FRAME_LOG=1,gpu` start reporting real GPU
 times.
+
+---
+
+## CORRECTION (2026-07-25, on the deployed M4 Pro): the defect is INTERMITTENT, and `0010` is not a fix
+
+The M4 Pro confirmation above ran, and it fails. `gnome-shell-rs` still reads `[0, 0]` on dogfood-mac
+with `0010` deployed — verified present in the bundle (`nm` shows
+`_mtl_device_needs_split_counter_resolve` at the same address as the local build) and running
+(the VMM started 20:22, after the 20:20 deploy).
+
+The reason is that **the original root cause was over-fitted to a single run.** Repeating
+`mtlprobe` 50 times on that machine:
+
+| shape | ok | zero | failure |
+|---|---|---|---|
+| KK shape, same command buffer (pre-fix) | 3 | 47 | **94%** |
+| **KK shape, separate command buffer — what `0010` ships** | 41 | 9 | **18%** |
+| KK shape, separate command buffer **+ waitUntilCompleted** | 50 | 0 | **0%** |
+| KK shape, **CPU** `resolveCounterRange` | 50 | 0 | **0%** |
+| the detection probe's own shape (count=2, same cb) | 2 | 48 | 96% |
+
+Three things follow, and each was invisible from a single sample:
+
+1. **It is not deterministic.** Two back-to-back runs disagreed on three separate rows — the
+   first reported `private + GPU resolveCounters` and `resolve -> private` as working and the KK
+   shape as broken; the second reported the exact opposite. Everything here is a rate, not a
+   property, and "measured on M4 Pro" in the §ROOT CAUSE heading above should be read as "usually
+   fails on M4 Pro".
+2. **`0010` helps but does not fix**: 94% → 18% failure. Shipping it on the strength of one clean
+   M1 Max run with the path forced was not enough evidence, and the shape it was validated
+   against (count=2, case 5) is not the shape it emits (count=1, case 6) — those were never
+   tested together until now. That gap is the direct cause of this correction.
+3. **Commit order is the wrong guarantee.** `0010`'s comment argues the resolve is safe because
+   command buffers run in commit order. They do, and it still fails 18% of the time: the sample
+   becomes visible at command-buffer **completion**, not at execution. Only waiting for
+   completion (0/50) or resolving on the CPU (0/50) is reliable.
+
+### Why the guest sees 100% failure rather than 18%
+
+8/8 guest runs read `[0, 0]`. At an 18% per-sample failure rate that is ~1e-6, so the split is
+almost certainly **not being taken at all** on that VM. The detection is the suspect: it took
+**one** sample and defaulted to "unaffected", and its own shape passes 4% of the time — so ~4% of
+boots cache "healthy" for the process lifetime. Every setup failure (nil counter set, refused
+allocation) landed on the same default, silently. That is consistent with 0.94^8 = 0.61 for the
+observed run of guest zeros.
+
+Fixed in **`patches/kosmickrisp/0011`**: start at "affected", take up to 8 samples, and let only
+an unbroken clean run clear the flag. Verified no regression on M1 Max (probe A/B/C still pass,
+detection still resolves to "unaffected" there).
+
+### What still needs doing
+
+`0011` restores the *intended* behaviour of `0010`, which is an 18% failure rate — better than
+94%, not good enough. The real fix is to **replace the GPU `resolveCounters:` with a CPU
+`resolveCounterRange` at command-buffer completion** (0/50 failures, and unlike the completion
+wait it does not stall). It is a design change, not a patch: it moves the report write out of GPU
+command order, so it has to be reconciled with an in-stream `CmdResetQueryPool` /
+`CmdCopyQueryPoolResults`. Deliberately not bundled here — shipping a second workaround validated
+against the wrong shape is the mistake this correction exists to record.
+
+Until that lands, `timestampValidBits = 0` remains the honest fallback for affected devices;
+`gnome-shell-rs` already handles it silently, and it is strictly better than reporting support
+and returning zeros.
