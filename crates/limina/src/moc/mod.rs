@@ -134,6 +134,12 @@ impl Engine {
             }
             (0x40, 0xff, 0x14) => data(EP_CMD_IN, vec![0x40, ELAN_MSG_OK]), // set mode → ACK
             (0x40, 0xff, 0x02) => None, // finger-lift → NO reply
+            // remove-all: the current elanmoc driver never sends it (no clear_storage vfunc), but a
+            // future libfprint that wires STORAGE_CLEAR should get a benign ACK, not a device error.
+            (0x40, 0xff, 0x98) => {
+                self.store.clear();
+                data(EP_CMD_IN, vec![0x40, ELAN_MSG_OK])
+            }
             (0x40, 0xff, 0x22) => data(EP_CMD_IN, vec![0x40, ELAN_MSG_OK]), // reenroll check → "new finger"
 
             // Enroll capture (finger-wait, 0x84): prompt Touch ID once on the first stage.
@@ -467,6 +473,24 @@ mod tests {
                 ),
             }
         }
+    }
+
+    /// A user_id longer than the 71-byte reply's 66-byte body grows the response to `5 + len` so it
+    /// still fits libfprint's `userid_len <= length_in - 5` check (never truncated). Exercises the
+    /// grow branch the golden corpus (short ids) doesn't.
+    #[test]
+    fn long_userid_grows_the_response_without_truncating() {
+        let e = engine();
+        let uid = vec![b'x'; 80]; // > 66-byte body, <= 92 max
+        e.store.set(uid.clone());
+        let r = expect_data(e.handle(&[0x43, 0x21, 0x00], &AlwaysApprove), EP_CMD_IN);
+        assert_eq!(r.len(), 85, "response grew to 5 + 80");
+        assert_eq!(r[4] as usize, 80, "userid_len");
+        assert_eq!(&r[5..85], &uid[..], "full user_id, not truncated");
+        assert!(
+            r[4] as usize <= r.len() - 5,
+            "libfprint's length check holds"
+        );
     }
 
     #[test]

@@ -104,7 +104,11 @@ public func limina_sep_verify(_ reason: UnsafePointer<CChar>?) -> Int32 {
         matched = success
         sem.signal()
     }
-    sem.wait()
+    // Fail safe: if the completion never fires (should be impossible), treat it as a decline after
+    // a generous timeout rather than wedging the serve thread — and thus the reader — forever.
+    if sem.wait(timeout: .now() + 120) == .timedOut {
+        return 0
+    }
     return matched ? 1 : 0
 }
 

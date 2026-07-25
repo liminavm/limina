@@ -88,6 +88,15 @@ impl MocStore {
         }
     }
 
+    /// Clear the enrolled finger unconditionally (remove-all).
+    pub fn clear(&self) {
+        let mut g = self.inner.lock().unwrap();
+        if g.user_id.is_some() {
+            g.user_id = None;
+            self.persist(&g);
+        }
+    }
+
     fn persist(&self, p: &Persisted) {
         if let Some(path) = &self.path {
             if let Ok(json) = serde_json::to_vec_pretty(p) {

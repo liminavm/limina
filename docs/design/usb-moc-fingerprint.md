@@ -343,7 +343,11 @@ whole mapping clean.
 The store holds **one** `user_id`. The device still advertises the elan protocol's normal
 capacity, but the policy caps enrollment at one, cleanly and without silent breakage:
 
-- **Enrolled count (`40 ff 04`)** returns `0` before enrollment, `1` after.
+- **Enrolled count (`40 ff 04`)** returns `0` before enrollment and **`FULL_COUNT` (10) after** —
+  *not* `1`. The count is what arms the driver's `DATA_FULL` (which fires only at
+  `curr_enrolled == ELAN_MAX_ENROLL_NUM + 1 == 10`, `elanmoc.c:346`), so reporting 10 when the one
+  slot is occupied is exactly what makes a second enroll be refused. (Reporting `1` would *not*
+  reject it — a second finger would enroll and silently overwrite. Do not "simplify" this to 1.)
 - **Reenroll check (`40 ff 22`) when a slot is already occupied** returns the `DATA_FULL`
   condition (the reply that makes `elanmoc_enroll` fail with "device full" —
   `elanmoc.c:346-351`), so GNOME/`fprintd-enroll` reports "no space for a new fingerprint"
