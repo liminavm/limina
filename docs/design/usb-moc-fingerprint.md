@@ -156,6 +156,19 @@ and to stay robust against open/close churn. Two facts the map must still handle
 can arrive **before** the guest posts its read (queue it — the FIFO drains on the next read), and
 a superseding read stalls a stale hold (the `HidReportPipe` rule, reused).
 
+**Transport dependency — Immediate Data (IDT) on Normal TRBs (found in live validation).** The
+elanmoc commands are tiny (2–4 bytes for the open sequence), and Linux's `xhci-hcd` carries such
+small bulk-OUT payloads **inline in the TRB parameter field** (`IDT=1`, xHCI §4.11.7) instead of
+pointing at a DMA buffer. Our xHCI's data-TD reader originally ignored the IDT bit and always
+treated `parameter` as a guest address — so the very first open command (`40 ff 00`) was read as
+garbage from whatever address the immediate bytes happened to form, the engine saw an unknown
+command and stalled, and `elanmoc_open` failed with *"endpoint stalled or request not supported"*.
+The BulkPipe/HID gadgets never hit this because CTAPHID/HID transfers are large enough to use DMA
+buffers. Fixed in `patches/libkrun/0100-*` (gather the ≤8 immediate bytes from the parameter field
+when `IDT` is set; IN transfers never set it), regression-guarded by the
+`immediate_data_out_delivers_inline_bytes_not_a_dma_read` xHCI unit test. This is a **general xHCI
+correctness fix**, not fingerprint-specific — any future small-bulk-OUT gadget depends on it.
+
 ### 2.2 The Touch ID primitive — a new biometric-only SEP shim
 
 Today `SepKey::sign(msg, reason)` prompts Touch ID and returns an ECDSA signature. A fingerprint

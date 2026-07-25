@@ -77,8 +77,26 @@ fn serve_conn(stream: UnixStream, engine: &Engine, verifier: &dyn Verifier) {
             Err(_) => return, // EOF/error: worker gone
         };
         let Some(reply) = engine.handle(&cmd, verifier) else {
+            log::debug!("moc: cmd {:02x?} -> (no reply)", &cmd[..cmd.len().min(4)]);
             continue; // zero-length command (finger-lift): no reply frame
         };
+        // Per-command trace (RUST_LOG=limina=debug) — the field oracle for the elanmoc flow; it was
+        // what pinned the IDT transport bug (see docs/design/usb-moc-fingerprint.md §2.1).
+        match &reply {
+            Reply::Data { ep, bytes } => log::debug!(
+                "moc: cmd {:02x?} -> DATA ep {:#x} len {}",
+                &cmd[..cmd.len().min(4)],
+                ep,
+                bytes.len()
+            ),
+            Reply::Stall { ep } => {
+                log::debug!(
+                    "moc: cmd {:02x?} -> STALL ep {:#x}",
+                    &cmd[..cmd.len().min(4)],
+                    ep
+                )
+            }
+        }
         let res = match reply {
             Reply::Data { ep, bytes } => write_frame(&mut writer, ep, KIND_DATA, &bytes),
             Reply::Stall { ep } => write_frame(&mut writer, ep, KIND_STALL, &[]),
