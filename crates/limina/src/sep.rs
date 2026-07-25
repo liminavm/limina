@@ -13,6 +13,8 @@ use anyhow::{bail, Result};
 // negative error (-1 access-control, -2 buffer too small, -3 enclave/CryptoKit).
 extern "C" {
     fn limina_sep_available() -> i32;
+    fn limina_sep_can_verify() -> i32;
+    fn limina_sep_verify(reason: *const std::os::raw::c_char) -> i32;
     fn limina_sep_create(out: *mut u8, cap: isize) -> isize;
     fn limina_sep_pubkey(blob: *const u8, blob_len: isize, out: *mut u8, cap: isize) -> isize;
     fn limina_sep_sign(
@@ -37,6 +39,24 @@ const SIG_CAP: usize = 80;
 /// capability on this — no SEP, no authenticator advertised (stock-degrade rule).
 pub fn available() -> bool {
     unsafe { limina_sep_available() == 1 }
+}
+
+/// Can this host satisfy a biometric (Touch ID) prompt right now — a sensor present
+/// AND an enrolled finger? The control plane gates the `fingerprint` capability on
+/// this, NOT on [`available`]: a SEP-but-no-Touch-ID desktop (Mac mini/Studio) or a
+/// Mac with no enrolled finger must not advertise a reader whose prompt can never
+/// succeed (biometrics-only has no passcode fallback). See `sep_verify`.
+pub fn can_verify() -> bool {
+    unsafe { limina_sep_can_verify() == 1 }
+}
+
+/// Prompt a biometrics-only Touch ID sheet showing `reason` and return whether a
+/// trusted finger matched. This is the fingerprint reader's "match" primitive — it
+/// produces no crypto (the guest verifies none), just the boolean "an authorized
+/// finger was presented." A user cancel / no-match / no-sensor returns `false`.
+pub fn sep_verify(reason: &str) -> bool {
+    let creason = std::ffi::CString::new(reason).unwrap_or_default();
+    unsafe { limina_sep_verify(creason.as_ptr()) == 1 }
 }
 
 /// A Secure-Enclave P-256 signing key, represented by its persistable blob. The

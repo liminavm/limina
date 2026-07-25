@@ -14,6 +14,7 @@ mod clipboard;
 mod control;
 mod fido;
 mod gateway;
+mod moc;
 mod sep;
 mod session;
 mod supervisor;
@@ -259,6 +260,14 @@ struct Cli {
     /// enumerates but carries no devices yet.
     #[arg(long)]
     usb: bool,
+
+    /// Present an impersonated match-on-chip fingerprint reader (Touch-ID-backed) to the guest.
+    /// Opt-in and OFF by default; it changes the guest's login/sudo surface (GDM starts offering a
+    /// fingerprint prompt). Implies `--usb` (it rides the emulated controller). Stock Fedora's
+    /// libfprint/fprintd bind it with zero guest components; every match is a host Touch ID prompt.
+    /// Advertised only on a Mac with a usable Touch ID sensor (else silently absent).
+    #[arg(long)]
+    fingerprint: bool,
 
     /// What to do with the guest when the HOST goes to sleep: `s2idle` (default) suspends
     /// the guest first (sleep-button pulse, held until it quiesces) and wakes it on host
@@ -805,6 +814,7 @@ fn cli_from_definition(
         no_snd: !cfg.hardware.snd,
         mic: cfg.hardware.mic,
         usb: cfg.hardware.usb,
+        fingerprint: cfg.hardware.fingerprint,
         on_host_sleep: Some(cfg.power.on_host_sleep.as_flag().to_string()),
         net,
         net_log: None,
@@ -972,6 +982,21 @@ fn run_vm(cli: Cli) -> Result<()> {
             .map(|dir| dir.join("fido-credentials.json")),
     );
 
+    // Fingerprint reader template store (M14 wave 3): the single enrolled `user_id`, persisted next
+    // to state.toml so it survives boots. `Some` only where a usable Touch ID sensor (or the
+    // test-approve knob) can back a match — gated on `can_verify`, NOT SEP presence, so a Mac with
+    // no sensor never advertises a reader whose prompt can't succeed.
+    let moc_store = if cli.fingerprint {
+        moc::store_if_capable(
+            cli.suspend_state_file
+                .as_ref()
+                .and_then(|s| s.parent())
+                .map(|dir| dir.join("moc-templates.json")),
+        )
+    } else {
+        None
+    };
+
     let control = if let (Some(port), Some(socket)) = (&cli.vsock_port, &cli.vsock_socket) {
         args.push("--vsock-port".into());
         args.push(port.to_string());
@@ -1038,8 +1063,12 @@ fn run_vm(cli: Cli) -> Result<()> {
     if cli.mic {
         args.push("--mic".into());
     }
-    if cli.usb {
+    // The emulated USB controller is enabled by --usb OR implied by --fingerprint (the reader rides
+    // the controller). Push --usb to the worker once; the gadgets below cold-plug additively.
+    if cli.usb || cli.fingerprint {
         args.push("--usb".into());
+    }
+    if cli.usb {
         // Stock-tier FIDO USB gadget (M14 Stage C): only when we can back it with a passkey
         // store (SEP present, or the test knob). Hand the worker a socket to bind for the
         // gadget; the supervisor serves CTAPHID on it with an authenticator sharing `fido_store`.
@@ -1051,6 +1080,22 @@ fn run_vm(cli: Cli) -> Result<()> {
             args.push("--fido-socket".into());
             args.push(path_arg(&fido_socket)?);
             fido::usb::serve(fido_socket, store.clone());
+        }
+    }
+    // Stock-tier fingerprint reader gadget (M14 wave 3): the same proxy shape as FIDO. Gated on a
+    // usable Touch ID sensor (or the test knob) via `moc_store`. The worker binds the socket and
+    // presents the elanmoc identity; the supervisor runs the protocol + Touch ID here.
+    if cli.fingerprint {
+        if let Some(store) = &moc_store {
+            let moc_socket =
+                std::env::temp_dir().join(format!("limina-moc-usb-{}.sock", std::process::id()));
+            args.push("--moc-socket".into());
+            args.push(path_arg(&moc_socket)?);
+            moc::usb::serve(
+                moc_socket,
+                store.clone(),
+                fingerprint_vm_label(cli.suspend_state_file.as_deref()),
+            );
         }
     }
     if let Some(policy) = &cli.on_host_sleep {
@@ -1346,6 +1391,19 @@ fn path_arg(p: &std::path::Path) -> Result<String> {
     p.to_str()
         .map(str::to_string)
         .with_context(|| format!("path is not valid UTF-8: {p:?}"))
+}
+
+/// A human label for the fingerprint Touch ID sheet: the managed VM's bundle name (the parent dir
+/// of the state file, minus the `.liminavm` suffix), else a generic fallback. So a multi-VM user
+/// sees which VM asked for a fingerprint.
+fn fingerprint_vm_label(state_file: Option<&std::path::Path>) -> String {
+    state_file
+        .and_then(|s| s.parent())
+        .and_then(|dir| dir.file_name())
+        .and_then(|n| n.to_str())
+        .map(|n| n.strip_suffix(".liminavm").unwrap_or(n).to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "your VM".to_string())
 }
 
 /// clap value-parser for `--net-mac`: validate + normalize `aa:bb:cc:dd:ee:ff` to lowercase.

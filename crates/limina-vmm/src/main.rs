@@ -15,6 +15,7 @@ mod bracket;
 mod config;
 mod fido_usb;
 mod krun;
+mod moc_usb;
 mod power;
 mod restart;
 mod shutdown;
@@ -189,6 +190,13 @@ struct Cli {
     /// there). Only meaningful with `--usb`; absent → no FIDO gadget.
     #[arg(long, requires = "usb")]
     fido_socket: Option<PathBuf>,
+
+    /// UNIX-socket path the worker binds for the stock-tier fingerprint reader gadget (M14 wave 3).
+    /// The worker cold-plugs a bulk-pipe gadget with the elanmoc identity and shuttles bulk packets
+    /// over this socket to the supervisor's protocol engine (Touch ID / template store live there).
+    /// Only meaningful with `--usb`; absent → no fingerprint gadget.
+    #[arg(long, requires = "usb")]
+    moc_socket: Option<PathBuf>,
 
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (free-page-reporting fast reclaim) to the guest.
     /// OFF by default: a stock Linux guest with page-reporting enabled crashes on suspend-to-idle
@@ -529,6 +537,7 @@ fn main() -> Result<()> {
         mic: cli.mic,
         usb: cli.usb,
         fido_socket: cli.fido_socket,
+        moc_socket: cli.moc_socket,
         free_page_reporting: cli.balloon_free_page_reporting,
         deflate_on_oom: cli.balloon_deflate_on_oom,
         snapshot_file: cli.snapshot_file,

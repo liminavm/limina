@@ -98,6 +98,11 @@ pub struct Hardware {
     /// the controller is a bring-up skeleton today (no devices yet). See `--usb`.
     #[serde(default)]
     pub usb: bool,
+    /// Present an impersonated Touch-ID-backed fingerprint reader to the guest (default false).
+    /// Opt-in — it changes the guest's login/sudo surface. Implies the USB controller. Stock
+    /// libfprint/fprintd bind it with no guest components. See `--fingerprint`.
+    #[serde(default)]
+    pub fingerprint: bool,
     /// Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` to the guest (default false; M6 addendum
     /// 2026-07-20). The bit makes Linux keep ballooned pages inside `MemTotal`, so an inflated
     /// dynamic VM reads as nearly out of memory and systemd-oomd fires; without it accounting
@@ -150,6 +155,7 @@ impl Default for Hardware {
             snd: true,
             mic: false,
             usb: false,
+            fingerprint: false,
             balloon_deflate_on_oom: false,
         }
     }

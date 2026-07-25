@@ -220,6 +220,19 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
                 Err(e) => log::warn!("USB: FIDO gadget disabled: {e:#}"),
             }
         }
+        // Fingerprint reader gadget (M14 wave 3): the supervisor gates this on a usable Touch ID
+        // sensor + template store, so if it handed us a socket we cold-plug the elanmoc identity and
+        // bridge its bulk protocol to the supervisor. Additive: coexists with the FIDO gadget and any
+        // mock above (a guest can have both a FIDO key and a fingerprint reader).
+        if let Some(socket) = &spec.moc_socket {
+            match crate::moc_usb::build(socket) {
+                Ok(gadget) => {
+                    vmr.usb_devices.push(gadget);
+                    log::info!("USB: cold-plugging the fingerprint reader gadget ({socket:?})");
+                }
+                Err(e) => log::warn!("USB: fingerprint gadget disabled: {e:#}"),
+            }
+        }
     }
 
     Ok(vmr)

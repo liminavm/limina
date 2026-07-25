@@ -229,6 +229,10 @@ pub struct VmSpec {
     /// and bridges its CTAPHID frames to the supervisor's authenticator over this socket.
     /// `None` = no FIDO gadget (the controller still comes up).
     pub fido_socket: Option<PathBuf>,
+    /// UNIX-socket path for the stock-tier fingerprint reader gadget (M14 wave 3). When set (and
+    /// `usb` is true) the worker cold-plugs a bulk-pipe gadget with the elanmoc identity and bridges
+    /// its bulk packets to the supervisor's protocol engine over this socket. `None` = no reader.
+    pub moc_socket: Option<PathBuf>,
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest. **Default false**: a
     /// stock Linux guest with page-reporting enabled crashes on suspend-to-idle (upstream
     /// `virtballoon_freeze` frees the reporting vq while its worker is still live). Enable only for

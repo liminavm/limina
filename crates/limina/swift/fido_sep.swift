@@ -75,6 +75,39 @@ public func limina_sep_pubkey(
     }
 }
 
+/// Can this host perform a biometric verification right now? True only when a Touch
+/// ID sensor is present AND has an enrolled finger (`canEvaluatePolicy` fails on a
+/// SEP-but-no-Touch-ID desktop, or with no enrolled finger). The Rust side gates the
+/// `fingerprint` capability on this — NOT on `limina_sep_available()` (SEP presence),
+/// so a Mac that can never satisfy a biometric prompt never advertises the reader.
+@_cdecl("limina_sep_can_verify")
+public func limina_sep_can_verify() -> Int32 {
+    LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) ? 1 : 0
+}
+
+/// Prompt a biometrics-only Touch ID sheet (`reason` is the sheet text) and report
+/// whether a trusted finger matched: 1 = matched, 0 = declined / failed / no sensor.
+/// This is the fingerprint reader's "match" primitive — it produces no crypto (the
+/// guest checks none), just the boolean "an authorized finger was presented."
+/// `.deviceOwnerAuthenticationWithBiometrics` has NO passcode fallback, the honest
+/// mapping of a fingerprint sensor. `evaluatePolicy` is asynchronous (completion
+/// handler), unlike the synchronous CryptoKit `signature(for:)`, so we block on a
+/// semaphore until the sheet resolves.
+@_cdecl("limina_sep_verify")
+public func limina_sep_verify(_ reason: UnsafePointer<CChar>?) -> Int32 {
+    let ctx = LAContext()
+    let reasonText = reason.map { String(cString: $0) } ?? "Verify your fingerprint"
+    let sem = DispatchSemaphore(value: 0)
+    var matched = false
+    ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reasonText) {
+        success, _ in
+        matched = success
+        sem.signal()
+    }
+    sem.wait()
+    return matched ? 1 : 0
+}
+
 /// Sign `msg` with the blob's key behind a Touch ID prompt (`reason` is the sheet
 /// text). Writes the ASN.1 DER ECDSA signature to `out`. Returns its length; a
 /// user cancel / no-match surfaces as -3.

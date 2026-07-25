@@ -1,0 +1,187 @@
+[
+ {
+  "cmd": "40ff00",
+  "in_ep": 131,
+  "resp": "4003"
+ },
+ {
+  "cmd": "40ff1403",
+  "in_ep": 131,
+  "resp": "4000"
+ },
+ {
+  "cmd": "4019",
+  "in_ep": 131,
+  "resp": "8004"
+ },
+ {
+  "cmd": "000c",
+  "in_ep": 131,
+  "resp": "57006b00"
+ },
+ {
+  "cmd": "40ff04",
+  "in_ep": 131,
+  "resp": "4001"
+ },
+ {
+  "cmd": "40ff04",
+  "in_ep": 131,
+  "resp": "4001"
+ },
+ {
+  "cmd": "40ff2200001e4650312d30303030303030302d302d30303030303030302d6e6f626f64790000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  "in_ep": 131,
+  "resp": "4001"
+ },
+ {
+  "cmd": "40ff0101090000",
+  "in_ep": 132,
+  "resp": "4000"
+ },
+ {
+  "cmd": "40ff0101090100",
+  "in_ep": 132,
+  "resp": "4000"
+ },
+ {
+  "cmd": "40ff0101090200",
+  "in_ep": 132,
+  "resp": "4000"
+ },
+ {
+  "cmd": "40ff0101090300",
+  "in_ep": 132,
+  "resp": "4000"
+ },
+ {
+  "cmd": "40ff0101090400",
+  "in_ep": 132,
+  "resp": "4000"
+ },
+ {
+  "cmd": "40ff0101090500",
+  "in_ep": 132,
+  "resp": "4000"
+ },
+ {
+  "cmd": "40ff0101090600",
+  "in_ep": 132,
+  "resp": "4000"
+ },
+ {
+  "cmd": "40ff0101090700",
+  "in_ep": 132,
+  "resp": "4043"
+ },
+ {
+  "cmd": "40ff0101090700",
+  "in_ep": 132,
+  "resp": "4000"
+ },
+ {
+  "cmd": "40ff0101090800",
+  "in_ep": 132,
+  "resp": "4044"
+ },
+ {
+  "cmd": "40ff0101090800",
+  "in_ep": 132,
+  "resp": "4000"
+ },
+ {
+  "cmd": "40ff11000000001e4650312d30303030303030302d302d30303030303030302d6e6f626f6479000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  "in_ep": 131,
+  "resp": "4000"
+ },
+ {
+  "cmd": "40ff04",
+  "in_ep": 131,
+  "resp": "4001"
+ },
+ {
+  "cmd": "432100",
+  "in_ep": 131,
+  "resp": "430000001e4650312d30303030303030302d302d30303030303030302d6e6f626f6479000000000000000000000000000000000000000000000000000000000000000000000000"
+ },
+ {
+  "cmd": "432101",
+  "in_ep": 131,
+  "resp": "43feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+ },
+ {
+  "cmd": "432102",
+  "in_ep": 131,
+  "resp": "43feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+ },
+ {
+  "cmd": "432103",
+  "in_ep": 131,
+  "resp": "43feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+ },
+ {
+  "cmd": "432104",
+  "in_ep": 131,
+  "resp": "43feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+ },
+ {
+  "cmd": "432105",
+  "in_ep": 131,
+  "resp": "43feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+ },
+ {
+  "cmd": "432106",
+  "in_ep": 131,
+  "resp": "43feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+ },
+ {
+  "cmd": "432107",
+  "in_ep": 131,
+  "resp": "43feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+ },
+ {
+  "cmd": "432108",
+  "in_ep": 131,
+  "resp": "43feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+ },
+ {
+  "cmd": "432109",
+  "in_ep": 131,
+  "resp": "43feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+ },
+ {
+  "cmd": "40ff1403",
+  "in_ep": 131,
+  "resp": "4000"
+ },
+ {
+  "cmd": "40ff730000",
+  "in_ep": 132,
+  "resp": "4000"
+ },
+ {
+  "cmd": "432100",
+  "in_ep": 131,
+  "resp": "430000001e4650312d30303030303030302d302d30303030303030302d6e6f626f6479000000000000000000000000000000000000000000000000000000000000000000000000"
+ },
+ {
+  "cmd": "40ff1403",
+  "in_ep": 131,
+  "resp": "4000"
+ },
+ {
+  "cmd": "40ff730000",
+  "in_ep": 132,
+  "resp": "4000"
+ },
+ {
+  "cmd": "432100",
+  "in_ep": 131,
+  "resp": "430000001e4650312d30303030303030302d302d30303030303030302d6e6f626f6479000000000000000000000000000000000000000000000000000000000000000000000000"
+ },
+ {
+  "cmd": "40ff1300001e4650312d30303030303030302d302d30303030303030302d6e6f626f64790000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  "in_ep": 131,
+  "resp": "4000"
+ }
+]
