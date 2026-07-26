@@ -266,3 +266,65 @@ against the wrong shape is the mistake this correction exists to record.
 Until that lands, `timestampValidBits = 0` remains the honest fallback for affected devices;
 `gnome-shell-rs` already handles it silently, and it is strictly better than reporting support
 and returning zeros.
+
+---
+
+## ACTUAL ROOT CAUSE (2026-07-25): the sampling encoder is empty, so the sample is never taken
+
+The correction above said `0010` was a partial fix for an intermittent resolve defect. That was
+still wrong about the *primary* cause. Instrumenting the driver settled it.
+
+`mtl_counter_sample_buffer_cpu_peek` (a CPU `resolveCounterRange:`) reads the sample buffer
+directly — the one path that cannot be blamed on the GPU resolve. Run against the **deployed**
+driver on dogfood-mac's M4 Pro, with `LIMINA_KK_TS_TRACE=1`:
+
+```
+[KKTS] write_timestamp sb=0x957404930 dst=0x9570dd180 off=0 split=0
+[KKTS] release      sb=0x957404930 cpu_peek=0
+```
+
+**`cpu_peek=0`.** The sample is not lost by the resolve — it is *never taken*.
+
+`kk_encoder_write_timestamp` creates the sampling blit encoder, optionally waits a fence, signals
+a fence, and ends. It encodes **no data movement**. Metal elides a blit encoder that encodes
+nothing, and an elided encoder never samples. `mtlprobe` isolates it exactly:
+
+| shape | ok | zero |
+|---|---|---|
+| KK shape, **empty** sampling encoder, CPU resolve | 0 | **20** |
+| KK shape, sampling encoder with a `fillBuffer`, CPU resolve | **20** | 0 |
+
+Same shape, same CPU resolve, same machine — the only difference is whether the encoder carries
+work.
+
+This is the trap `mtlprobe.m` has warned about in a comment since it was written — *"the sampling
+encoder MUST carry real work"* — dutifully applied to every probe case and **never checked against
+KK's own encoder**. M1 Max does not elide it, which is why it went unnoticed there, and why
+forcing the split on M1 Max "validated" a fix for a defect that machine does not have.
+
+Fixed in **`patches/kosmickrisp/0012`**: fill the 8 bytes at `dst_offset` inside the sampling
+encoder. Free in effect — the resolve overwrites exactly that slot immediately after.
+
+### There are two bugs, not one
+
+With the fill in place, `cpu_peek` is nonzero for **every** sample — sampling is completely fixed
+— and the query report is still 0 much of the time. So the GPU `resolveCounters:` defect is real
+too; it was simply masked by the fact that there was never a sample to resolve. Post-fix on M4 Pro:
+
+```
+A  vkGetQueryPoolResults -> q0=0 avail=1  q1=999520408044583 avail=1
+```
+
+Real timestamps appear where there were none, but partially. M1 Max passes A/B/C cleanly (no
+regression).
+
+**Still to do:** replace the GPU resolve with the CPU one. The mechanism is now known-good — the
+`cpu_peek` added for diagnosis returns a correct timestamp on every sample, 0 failures observed —
+but wiring it into the report moves the write out of GPU command order, so it has to be reconciled
+with an in-stream `CmdResetQueryPool` / `CmdCopyQueryPoolResults`. That is its own change.
+
+### Method note
+
+Three fixes were proposed for this defect before the driver was instrumented, and all three aimed
+at the resolve because the resolve was the only thing anyone had looked at. One `fprintf` of a CPU
+read — twenty minutes of work — falsified all of them. Instrument the stack you own *first*.

@@ -298,6 +298,39 @@ main(void)
          }
       }
 
+      /* 6f. KK's shape with an EMPTY sampling encoder — which is what KK actually emits.
+       *
+       * Every case above gives the sampling encoder a fillBuffer, because an empty blit encoder
+       * is elided before it reaches the GPU. But KK's own `kk_encoder_write_timestamp` creates
+       * the sampling encoder, optionally waits a fence, signals a fence, and ends — it encodes
+       * no data movement at all. The instrumented driver on this machine reports
+       * `cpu_peek=0`, i.e. the sample is not merely lost by the resolve, it is NEVER TAKEN.
+       *
+       * So this case removes the fillBuffer and reads the sample back on the CPU, which is the
+       * one path that cannot be blamed on the resolve. If it is zero here and nonzero in case 6,
+       * the defect is the empty encoder and every workaround aimed at the resolve — including
+       * the one already shipped — was aimed at the wrong thing. */
+      {
+         id<MTLCounterSampleBuffer> sb = make_sample_buffer(dev, ts, MTLStorageModeShared, 1);
+         if (sb) {
+            id<MTLCommandBuffer> cb = [q commandBuffer];
+            MTLBlitPassDescriptor *bp = [MTLBlitPassDescriptor blitPassDescriptor];
+            bp.sampleBufferAttachments[0].sampleBuffer = sb;
+            bp.sampleBufferAttachments[0].startOfEncoderSampleIndex = 0;
+            bp.sampleBufferAttachments[0].endOfEncoderSampleIndex = MTLCounterDontSample;
+            id<MTLBlitCommandEncoder> enc = [cb blitCommandEncoderWithDescriptor:bp];
+            /* deliberately no work — this is KK's shape */
+            [enc endEncoding];
+            [cb commit];
+            [cb waitUntilCompleted];
+
+            NSData *data = [sb resolveCounterRange:NSMakeRange(0, 1)];
+            const MTLCounterResultTimestamp *r = data.bytes;
+            uint64_t v = (data.length >= sizeof(*r)) ? r[0].timestamp : 0;
+            report("KK shape, EMPTY encoder, CPU resolve", v, v);
+         }
+      }
+
       /* 6e. KK's shape, separate command buffer, but WAITING for the sampling buffer to
        * COMPLETE before encoding the resolve.
        *
