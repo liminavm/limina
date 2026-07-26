@@ -323,6 +323,26 @@ regression).
 but wiring it into the report moves the write out of GPU command order, so it has to be reconciled
 with an in-stream `CmdResetQueryPool` / `CmdCopyQueryPoolResults`. That is its own change.
 
+### Deployment state (2026-07-25 evening)
+
+`0012` is **in the `.app` bundle rebuilt this evening**. It was *not* in the one before it: that
+bundle's `libvulkan_kosmickrisp.dylib` was stamped 20:51 and `0012` was committed at 21:12 — which
+is the entire reason the compositor session "still couldn't get timing information" after the
+earlier deploy. **Check the artifact, not the commit:**
+
+```sh
+nm -a <bundle>/Contents/Frameworks/libvulkan_kosmickrisp.dylib | grep -E 'mtl_blit_fill_buffer|cpu_peek'
+```
+
+Absent ⇒ pre-`0012`. `build-app.sh` bundles `/Volumes/mesa-cs/build-kk/.../libvulkan_kosmickrisp.dylib`
+directly, so an unrebuilt KK ships stale and silent.
+
+**Set expectations at ~82%, not 100%.** With `0012` fixing the sampling and `0011` engaging the
+split, what remains is bug #2's 18% per-timestamp resolve failure — so roughly **0.82² ≈ two thirds
+of frame pairs** are usable and consumers must discard zero samples. That 82% comes from mtlprobe's
+isolated shape, **not** from KK in situ post-`0012`; a 50× in-guest probe loop would replace the
+prediction with a measurement, and is the cheapest next step here.
+
 ### Method note
 
 Three fixes were proposed for this defect before the driver was instrumented, and all three aimed
