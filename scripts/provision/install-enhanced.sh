@@ -502,10 +502,14 @@ mkdir -p /etc/environment.d
   # return -- unsurprising in hindsight, since only the FENCE flag was still set while the path
   # that actually hung was the SEMAPHORE one, and that has been running enabled for a long time.
   #
-  # WATCH OUT on a mesa bump: upstream deleted fence feedback outright in 4c1938c8adb
-  # (2026-07-12), so 26.2+ has neither the mechanism nor the flag and is permanently on the slow
-  # path. If we move past 26.1.x we lose this and there is no env var to get it back -- carrying
-  # a revert is the likely answer. Check the INSTALLED driver, not a source tree:
+  # CHECK ON A MESA BUMP: upstream's 4c1938c8adb "venus: deprecate fence feedback" (2026-07-12)
+  # changes this area, and we have NOT established which way. Two readings, opposite consequences:
+  # if the FLAG went and feedback is now unconditional, 26.2+ hands us the fast path for free; if
+  # the MECHANISM went, 26.2+ is permanently on the synchronous path with no way back and we need
+  # to carry a revert. The mesa-cs tree cannot settle it (its venus history stops at 2026-04-03),
+  # so read the commit before bumping past 26.1.x. Either way removing the flag here is correct --
+  # it is dead config under one reading and aligned with upstream under the other.
+  # Check the INSTALLED driver, not a source tree:
   #   strings /usr/lib64/libvulkan_virtio.so | grep '^no_'
 } > /etc/environment.d/90-limina-zink.conf
 sed 's/^/   /' /etc/environment.d/90-limina-zink.conf
