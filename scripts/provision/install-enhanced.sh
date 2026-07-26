@@ -481,7 +481,32 @@ mkdir -p /etc/environment.d
   echo "GALLIUM_DRIVER=zink"
   echo "MESA_LOADER_DRIVER_OVERRIDE=zink"
   [ -n "$VENUS_ICD" ] && echo "VK_DRIVER_FILES=$VENUS_ICD"
-  echo "VN_PERF=no_fence_feedback"
+  # No VN_PERF here. `no_fence_feedback` used to be set and was RETIRED 2026-07-25.
+  #
+  # It was a workaround from the MoltenVK era: venus's feedback buffers are a host-written
+  # counter in a host-visible blob, and that blob was not coherent on the 16 KiB hv_vm_map path,
+  # so venus's poll loop spun forever (spikes/venus-render-server, Finding 6). The coherency bug
+  # was fixed 2026-07-03 (libkrun 0043 + virglrenderer 0023 + patches/linux/0004), which removed
+  # the reason for the flag; it just outlived it.
+  #
+  # Keeping it was not free. Without feedback every fence status check is a synchronous
+  # driver<->renderer round trip (vn_queue.c: NO_FENCE_FEEDBACK skips the feedback slot, so
+  # vn_GetFenceStatus falls through to vn_call_vkGetFenceStatus); with it, the check is a plain
+  # guest-memory read. gnome-shell-rs measured the difference on submits carrying real work:
+  # 13.6-15.3 ms for eight blur submits with feedback vs 17.7-22.1 ms without, i.e. 25-30% of the
+  # wall clock, while a batched one-submit control is identical either way -- so it is the wait,
+  # not the work.
+  #
+  # Verified before removal: with the flag gone the guest reboots, gnome-shell comes up on
+  # zink->venus, and vkmark scores 1985 against 1929 with the workaround. The old hang does not
+  # return -- unsurprising in hindsight, since only the FENCE flag was still set while the path
+  # that actually hung was the SEMAPHORE one, and that has been running enabled for a long time.
+  #
+  # WATCH OUT on a mesa bump: upstream deleted fence feedback outright in 4c1938c8adb
+  # (2026-07-12), so 26.2+ has neither the mechanism nor the flag and is permanently on the slow
+  # path. If we move past 26.1.x we lose this and there is no env var to get it back -- carrying
+  # a revert is the likely answer. Check the INSTALLED driver, not a source tree:
+  #   strings /usr/lib64/libvulkan_virtio.so | grep '^no_'
 } > /etc/environment.d/90-limina-zink.conf
 sed 's/^/   /' /etc/environment.d/90-limina-zink.conf
 

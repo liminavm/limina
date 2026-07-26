@@ -148,7 +148,7 @@ pristine F43 (2026-06-25).
   retired sysext builders live in `scripts/archive/`.)
 - **Trigger / upgrade:** install the three RPMs → write the zink-selection env
   (`/etc/environment.d/90-limina-zink.conf`: `GALLIUM_DRIVER=zink`,
-  `MESA_LOADER_DRIVER_OVERRIDE=zink`, `VK_DRIVER_FILES=<venus ICD>`, `VN_PERF=no_fence_feedback`)
+  `MESA_LOADER_DRIVER_OVERRIDE=zink`, `VK_DRIVER_FILES=<venus ICD>`)
   → GRUB default to the 16k kernel → reboot. venus then enumerates as
   `Virtio-GPU Venus (Apple M1 Max)`.
 - **Degradation:** on a 4 KiB kernel or with venus mesa absent, venus init fails → GL falls back
