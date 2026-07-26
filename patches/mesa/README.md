@@ -23,6 +23,34 @@ in `patches/kosmickrisp/`.
 | `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM) | Fedora F44 `mesa-26.1.4` SRPM (repo-current) | 0001 + 0015 + 0010–0014 + 0016 + 0017 |
 | `scripts/build-mesa-rpm.sh` (the SHIPPING F43 RPM) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`) | 0001 + 0009 + 0010 + 0014 + 0016-pre + 0016 + 0017 |
 
+### BACKLOG (2026-07-25, not a priority): repoint the F43 RPM at the F44 SRPM base
+
+F43 exists **on purpose** — it is the "how well does the enhanced tier support an older distro"
+track, and the intent is to carry ~3 Fedora releases (F43 drops when F45 joins). But building it
+from a pinned Mesa *main* snapshot defeats that: it routes around the friction the track exists to
+expose, and it makes F43 ship a **different patch subset** than F44 (no 0011/0012/0013 — including
+0012, the venus stub-instance degrade that guards the stock-4k GRUB fallback) plus `0016-pre`,
+a backport whose only job is to make an old base accept our patches. So F43 currently tests "a June
+main snapshot on an older distro", not "our enhanced tier on an older distro".
+
+Fix: point `scripts/build-mesa-rpm.sh` at the **same 26.1.4 SRPM base F44 uses** (via the existing
+`MESA_SRPM_URL` pin) instead of `MESA_COMMIT=3515c52e8cf3`. That keeps every old-distro stress that
+matters (GNOME 49 vs 50, older kernel, older glibc/llvm/libdrm at build time, the older
+mutter/shell ABI) while collapsing this table from three bases to two and giving both families the
+identical patch set: **0009 and 0016-pre retire**, F43 gains 0015 + 0011–0014.
+
+Deliberately NOT "rebuild F43 from its own 25.2.4 SRPM" (the F44 method applied literally): that
+stresses "do our patches apply to an old mesa", an axis we never ship on — given the choice we
+would not deliver a 25.2.4-based mesa to an F43 guest when a 26.1.4-based one swaps in cleanly and
+is versionlocked. The soname-swap machinery in `build-mesa-rpm.sh` already handles 25.x→26.x, so
+this is a base change, not a new mechanism.
+
+Main unknown: mesa 26.1.4 has to *build* in an F43 container — old llvm/rust/libdrm could bite.
+That is itself an old-version signal worth having explicitly. Validation pass = build → installer
+pass over `Fedora-Workstation-43.enhanced.raw` → venus live in the seated session → reclone
+`.test`. Note retiring the F43 RPM base does **not** free the `3515c52e8cf3` pin —
+`build-mesa-zink.sh` shares it.
+
 **0009 vs 0015 — same fix, two bases.** Fedora's 26.1.4 stable backported an equivalent of
 0009's `vn_wsi_clone_present_info` rectangle deep-copy, so 0009 no longer applies there.
 `0015-venus-wsi-present-fix-post-rect-clone.diff` is 0009 minus those three hunks — use it on
