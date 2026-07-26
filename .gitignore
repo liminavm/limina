@@ -38,4 +38,6 @@ spikes/kk-timestamp-probe/probe
 spikes/kk-timestamp-probe/probe.dSYM/
 spikes/kk-timestamp-probe/mtlprobe
 spikes/kk-timestamp-probe/mtlprobe.dSYM/
+spikes/kk-timestamp-probe/tsbench
+spikes/kk-timestamp-probe/tsbench.dSYM/
 spikes/venus-blob-fault/probe

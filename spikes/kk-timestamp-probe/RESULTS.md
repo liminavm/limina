@@ -386,9 +386,16 @@ lost value.
 | A′ same read + `WAIT_BIT` | 10/10 | 40/40 |
 | B/C `vkCmdCopyQueryPoolResults` (venus's shape) | pass | pass |
 | `timerprobe` real `glQueryCounter` / `GL_TIME_ELAPSED` on zink-on-KK | pass | pass, sane monotonic ns |
+| F44 enhanced desktop, EFI+venus windowed, on this KK | — | boots to GDM, **user-eyeballed normal** |
 
 The single A miss is an honest `VK_NOT_READY` — never a zero presented as available, which was the
 whole disease.
+
+The desktop row matters because `0013` changes command-buffer *structure*, not just where a value is
+read: a timestamp followed by a consumer now retires the sampling command buffer and makes the next
+one wait on a CPU-signalled event. Under venus that fires on every submission that carries a
+timestamp, so "the probes pass" would not have covered it — the F44 enhanced image booted EFI+venus
+on this KK build reaches GDM with no software-2D degradation and renders normally.
 
 ### And the probe is gone
 
@@ -398,8 +405,81 @@ shape passes 4% of the time on affected hardware is worse than a mechanism that 
 everywhere, and a single path means **the machine we develop on exercises the code we ship** —
 which is the assumption whose absence broke `0010`.
 
-**Still unmeasured: M4 Pro.** Everything above is M1 Max, which never had either defect. The
-prediction is that `0013` removes the ~18% residual entirely (the CPU resolve was 50/50 there), so
-`gnome-shell-rs` should report real GPU times for *every* frame rather than the ~⅔ that `0012`
-alone predicted. That needs a KK + `.app` rebuild deployed to dogfood-mac to confirm — and per the
-lessons above, deploy-then-measure, do not assume.
+### CONFIRMED on the affected hardware — M4 Pro, 100/100
+
+Measured on dogfood-mac (Apple M4 Pro, macOS 26.5.2), against this KK build, **no VM**, via
+`./run-remote-m4.sh dogfood-mac 100`:
+
+```
+A  real=100  not_ready=0  ZERO-as-available=0  / 100
+B  real=100  ZERO-as-available=0  / 100
+C  real=100  ZERO-as-available=0  / 100
+```
+
+Against the same probe on the same machine before any of this: **A/B/C all `q0=0 avail=1`, every
+run.** The disease — a zero presented as an available result — does not occur once in 300 samples.
+
+The 100/100 also settles the earlier estimate. `0012` alone was predicted to leave ~82% per
+timestamp (bug #2's 18% resolve failure) ⇒ ~⅔ of frame *pairs* usable, and the guidance written
+into `venus-cost.md` was that consumers must discard zeros. **That residual is gone**: the 18% was
+the GPU resolve, and there is no GPU resolve any more. Expect real GPU times for every frame.
+
+The traced run shows the design working end to end on the hardware that breaks:
+
+```
+[KKTS] write_timestamp seq=1 sb=… off=0
+[KKTS] write_timestamp seq=1 sb=… off=8
+[KKTS] resolve seq=1 … value=1038806716893666      <- published by the poll
+[KKTS] resolve seq=1 … value=1038806716893666      <- again by the completion handler, same value
+[KKTS] write_timestamp seq=2 …
+[KKTS] barrier seq=2 (signalled=1)                 <- B's copy waits for seq 1's report
+```
+
+Both halves are visible: the idempotent double-publish (poll first, handler after, identical value)
+and the barrier firing for the `vkCmdCopyQueryPoolResults` cases — which is venus's every-frame path.
+
+**Not yet measured:** `gnome-shell-rs` in a guest on that machine. The host driver is proven; the
+guest-visible end of it needs a KK + `.app` rebuild deployed there, which is a separate step.
+
+## What it costs — `tsbench`, `0012` vs `0013`
+
+Moving the resolve to the CPU is not free: a timestamp followed by an in-stream consumer now
+retires the sampling command buffer and makes the next one wait, on the GPU, for an event the CPU
+signals from the completion handler. That is a GPU→CPU→GPU hop in the frame. `tsbench.c` measures
+it against the pre-`0013` driver rather than arguing about it. Median of 3000 submits, 3 runs on
+M1 Max and 2 on M4 Pro, all rows stable to the last digit shown:
+
+| shape | M1 Max `0012` | M1 Max `0013` | M4 Pro `0012` | M4 Pro `0013` |
+|---|---|---|---|---|
+| **none** — no timestamps (control) | 0.263 ms | 0.263 ms | 0.156 ms | 0.158 ms |
+| **ts** — 2 timestamps, read after the fence | 0.357 ms | **0.316 ms** | 0.206 ms | **0.199 ms** |
+| **tscp** — 2 timestamps + in-stream copy (venus) | 0.419 ms | **0.503 ms** | 0.221 ms | **0.286 ms** |
+
+Per-submit throughput (32 deep, one wait per batch) moves the same way: `ts` 0.139 → 0.103 ms on
+M1 Max, `tscp` 0.160 → 0.237 ms.
+
+Three things to read out of that:
+
+- **An app that does not use timestamp queries pays nothing.** The `none` row is identical on both
+  machines — that path is not touched, and it is the control that says the rest is signal.
+- **Timestamps without an in-stream consumer got *faster*** (−11% M1 Max, −3% M4 Pro): `0013`
+  deletes two GPU resolve encoders per frame and adds no barrier, because nothing observes the
+  report before the completion handler runs.
+- **The barrier costs ~0.08 ms (M1 Max) / ~0.065 ms (M4 Pro) per submission** that carries both a
+  timestamp and an in-stream consumer. Under venus that is every frame, since the query-feedback
+  command buffer rides in the same submission — but it is **~0.4% of a 16.7 ms frame at 60 Hz**,
+  ~0.8% at 120 Hz, and it is per *submission*, not per timestamp (a compositor's two timestamps
+  share one batch and one barrier). It is not an FPS-visible cost for a desktop; it would only
+  matter to something submitting thousands of timestamp-querying command buffers a second.
+
+Note the M4 Pro `0012` column is a driver that returns **zeros** on that machine, so its numbers
+are "fast but wrong" — there, the delta is the price of getting an answer at all.
+
+**If it ever does matter**, the barrier is avoidable for exactly venus's shape: a
+`vkCmdCopyQueryPoolResults` from a timestamp-only pool into host-visible memory could be serviced
+by the CPU in the same completion handler that resolves the samples, with no GPU kernel and no
+event wait. Deliberately not done here — it is a second special case, and 0.4% of a frame does not
+buy one.
+
+Run it with `./tsbench.sh [iters]` locally, or `./tsbench-remote.sh dogfood-mac 3000 <baseline.dylib>`
+for the A/B on the M4 Pro.

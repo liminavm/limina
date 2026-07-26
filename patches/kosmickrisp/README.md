@@ -156,6 +156,10 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
     `VK_NOT_READY` rather than a zero presented as available.
 
   One path on every GPU, so the machine we develop on exercises what we ship. Upstreamable.
+  **Confirmed on the affected hardware**: 100/100 real timestamps for all three probe cases on
+  dogfood-mac's M4 Pro (`spikes/kk-timestamp-probe/run-remote-m4.sh`), where every case read
+  `0 / avail=1` before. The ~82%-per-timestamp expectation `0012` alone left behind is gone with
+  the GPU resolve that caused it.
 
 ## Apply / rebuild
 The `/Volumes/mesa-cs/mesa` tree is on the `limina/kosmickrisp` branch with these committed.
