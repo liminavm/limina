@@ -348,3 +348,58 @@ prediction with a measurement, and is the cheapest next step here.
 Three fixes were proposed for this defect before the driver was instrumented, and all three aimed
 at the resolve because the resolve was the only thing anyone had looked at. One `fprintf` of a CPU
 read — twenty minutes of work — falsified all of them. Instrument the stack you own *first*.
+
+---
+
+## FIXED (2026-07-26) — the resolve is on the CPU now: `patches/kosmickrisp/0013`
+
+Bug #2 is closed by doing what the correction above said was needed: **replace the GPU
+`resolveCounters:` with a CPU `resolveCounterRange:` at command-buffer completion** (0/50 on both
+machines, versus 94% failure same-cb and 18% later-cb for the GPU resolve). The reason that was a
+design change and not a patch is that it moves the report write out of GPU command order — which is
+exactly the objection `0008` raised when it chose the GPU resolve in the first place. That
+objection is answered, not sidestepped:
+
+| observer of a timestamp report | how it is ordered against the CPU write |
+|---|---|
+| the window before the write | sampling encoder fills the report `0xff` = **unavailable**, in GPU command order at the sample point |
+| in-stream `vkCmdResetQueryPool` | `encodeWaitForEvent:` on the retired-prefix shared event |
+| in-stream `vkCmdCopyQueryPoolResults` — **venus's path, every frame** | same; the sampling command buffer is retired first, since waiting for it from inside itself would deadlock |
+| `vkResetQueryPool`, `vkDestroyQueryPool`, `vkGetQueryPoolResults`+`WAIT_BIT` | CPU `waitUntilSignaledValue:` |
+| a bare `vkGetQueryPoolResults` poll | publishes already-materialised in-flight samples, non-blocking |
+
+That last row was a real hole worth recording. The completion handler runs *after* the event
+`vkQueueWaitIdle` waits on, so an app that synchronises and then polls once loses the race
+**every time** — measured 0 successes in 10 runs, not a flake. Publishing in-flight samples on
+demand fixes it and cannot invent a value: a counter sample buffer is freshly allocated per
+timestamp and resolves to 0 until the GPU takes its sample, so a nonzero read is necessarily real.
+
+### Measured, M1 Max, this build
+
+`probe` gained an **A′** leg (the same read with `WAIT_BIT`) precisely because A is a bare poll and
+the spec lets that answer `VK_NOT_READY` — without both legs you cannot tell a lost race from a
+lost value.
+
+| case | before `0013` | after `0013` |
+|---|---|---|
+| A `vkGetQueryPoolResults`, bare poll | **0/10** (`VK_NOT_READY`) | **39/40** |
+| A′ same read + `WAIT_BIT` | 10/10 | 40/40 |
+| B/C `vkCmdCopyQueryPoolResults` (venus's shape) | pass | pass |
+| `timerprobe` real `glQueryCounter` / `GL_TIME_ELAPSED` on zink-on-KK | pass | pass, sane monotonic ns |
+
+The single A miss is an honest `VK_NOT_READY` — never a zero presented as available, which was the
+whole disease.
+
+### And the probe is gone
+
+`mtl_device_needs_split_counter_resolve` (`0010`/`0011`) is **deleted**, along with the GPU resolve
+it existed to schedule. There is now one path on every GPU. That is deliberate: detection whose own
+shape passes 4% of the time on affected hardware is worse than a mechanism that is correct
+everywhere, and a single path means **the machine we develop on exercises the code we ship** —
+which is the assumption whose absence broke `0010`.
+
+**Still unmeasured: M4 Pro.** Everything above is M1 Max, which never had either defect. The
+prediction is that `0013` removes the ~18% residual entirely (the CPU resolve was 50/50 there), so
+`gnome-shell-rs` should report real GPU times for *every* frame rather than the ~⅔ that `0012`
+alone predicted. That needs a KK + `.app` rebuild deployed to dogfood-mac to confirm — and per the
+lessons above, deploy-then-measure, do not assume.

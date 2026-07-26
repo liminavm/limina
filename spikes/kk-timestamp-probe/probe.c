@@ -124,6 +124,26 @@ case_a(void)
           (unsigned long long)out[2], (unsigned long long)out[3]);
    if (out[0] && out[2])
       printf("   delta = %lld ns\n", (long long)(out[2] - out[0]));
+
+   /* A' — the same read with WAIT_BIT.
+    *
+    * A is a bare poll: it asks for whatever is there right now, and the spec
+    * lets that answer VK_NOT_READY. That distinction matters here because the
+    * timestamp value is written by the CPU when the sampling command buffer
+    * completes, which is strictly after the event vkQueueWaitIdle waits on --
+    * so a poll issued the instant the queue goes idle can legitimately lose the
+    * race. Printing both says which of the two we are looking at: A NOT_READY
+    * with A' resolving is a race, A' zero or empty is a real failure. */
+   memset(out, 0, sizeof(out));
+   VkResult rw = vkGetQueryPoolResults(
+      dev, pool, 0, 2, sizeof(out), out, 2 * sizeof(uint64_t),
+      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT |
+         VK_QUERY_RESULT_WAIT_BIT);
+   printf("A' +WAIT_BIT                  -> %d  q0=%llu avail=%llu  q1=%llu avail=%llu\n",
+          rw, (unsigned long long)out[0], (unsigned long long)out[1],
+          (unsigned long long)out[2], (unsigned long long)out[3]);
+   if (out[0] && out[2])
+      printf("   delta = %lld ns\n", (long long)(out[2] - out[0]));
    vkDestroyQueryPool(dev, pool, NULL);
 }
 

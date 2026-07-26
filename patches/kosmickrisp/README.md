@@ -121,6 +121,41 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
   `mtl_new_timestamp_sample_buffer`, `mtl_new_blit_command_encoder_timestamp`,
   `mtl_blit_resolve_timestamp`. Design + Metal probes + validation in `spikes/kk-timestamp/`;
   real-timer exercise in `spikes/virgl-zink-kk/timerprobe.c`. Upstreamable (fills an upstream TODO).
+  **The GPU resolve described above is gone as of `0013`** — see below; the parenthetical about a
+  CPU write racing `CmdCopyQueryPoolResults` was the right worry and is now answered with explicit
+  ordering rather than by avoiding the CPU.
+- **`0009-vk-meta-skip-empty-rects-in-vk_meta_clear_attachments.patch`** — guest-triggerable VMM
+  abort: an empty clear rect trips a KK `vk_meta` assert.
+- **`0010` / `0011` — timestamp resolve, superseded by `0013`.** `0010` probed for GPUs that cannot
+  resolve a counter sample from the command buffer that took it and split the command buffer there;
+  `0011` made that probe fail-safe and multi-sample after a single-sample probe cached "healthy" on
+  ~4% of boots. Both narrowed the M4 Pro failure (94% → 18%) without closing it, because the real
+  rule is that a sample materialises at command-buffer **completion**, which no amount of GPU-side
+  scheduling can wait for. `0013` deletes the probe and the GPU resolve entirely.
+- **`0012-kk-the-timestamp-sampling-encoder-must-carry-work-th.patch`** — the sampling blit encoder
+  encoded no data movement, and Metal **elides an empty blit encoder**, so the sample was never
+  taken (M4 Pro: CPU peek reads 0 in 20 runs of 20; with a `fillBuffer` it reads a real timestamp 20
+  of 20). M1 Max does not elide it, which is why it went unnoticed there — and why `0010` was
+  "validated" on hardware that has neither defect. `0013` keeps the fill and gives it a second job.
+- **`0013-kk-resolve-timestamp-queries-on-the-CPU-and-order-th.patch`** — replaces the GPU
+  `resolveCounters:` with a CPU `resolveCounterRange:` at command-buffer completion (50/50 runs
+  correct on both M1 Max and M4 Pro, vs 94%/18% failure for the GPU resolve), and supplies the
+  ordering that moving the write out of GPU command order costs:
+  - the sampling encoder's fill is now `0xff`, so the report reads **unavailable** in GPU command
+    order from the moment the clock is sampled until the CPU value lands;
+  - every command buffer carrying samples takes a sequence number, retired by its completion
+    handler, and a shared event tracks the contiguous retired prefix. `vkCmdResetQueryPool` and
+    `vkCmdCopyQueryPoolResults` wait on it with `encodeWaitForEvent:` (retiring the sampling command
+    buffer first — waiting for it from inside itself would deadlock); `vkResetQueryPool`,
+    `vkDestroyQueryPool` and `vkGetQueryPoolResults`+`WAIT_BIT` wait on the CPU. **venus goes
+    through the copy path for every guest `vkGetQueryPoolResults`** (its query-feedback command
+    buffer is appended to the same submission), so this is the steady state, not a corner;
+  - a bare (no-`WAIT_BIT`) poll publishes any already-materialised in-flight sample instead of
+    blocking, which it needs because the completion handler runs *after* the event `vkQueueWaitIdle`
+    waits on — 0 of 10 polls succeeded without this, 39 of 40 with it, the remainder an honest
+    `VK_NOT_READY` rather than a zero presented as available.
+
+  One path on every GPU, so the machine we develop on exercises what we ship. Upstreamable.
 
 ## Apply / rebuild
 The `/Volumes/mesa-cs/mesa` tree is on the `limina/kosmickrisp` branch with these committed.
