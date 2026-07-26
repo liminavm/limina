@@ -236,29 +236,48 @@ policy can branch on these (today mostly informational).
 
 ## Performance
 
-Three-tier head-to-head, measured 2026-06-25 (commit `284b758`). Workload: `glmark2-es2-wayland
--b build -b shading -b texture`, run **on-display** (seated wayland window through the full
-compositor → scanout → host Metal present path, *not* offscreen/headless — verified by capturing
-the scanout mid-run). Each tier on its as-deployed config. Trend rows in `perf/ledger.csv`
-(`glmark2-display-*`).
+Three-tier head-to-head. Workload: `glmark2-es2-wayland -b build -b shading -b texture`, run
+**on-display** (seated wayland window through the full compositor → scanout → host Metal present
+path, *not* offscreen/headless — verified by capturing the scanout mid-run). Each tier on its
+as-deployed config. Trend rows in `perf/ledger.csv` (`glmark2-display-*`).
 
-| Tier | Guest | `GL_RENDERER` | glmark2 score |
-|---|---|---|---|
-| **venus** | enhanced 16k | `zink Vulkan 1.3(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))` | **2784** |
-| **software-2D** | stock 4k | `llvmpipe (LLVM 21.1.2, 128 bits)` | **454** |
-| **virgl** | stock 4k | `virgl (zink Vulkan 1.3(Apple M1 Max (MESA_KOSMICKRISP)))` | **56** |
+Re-measured **2026-07-26** (commit `183f1cb`), 4 vCPU / 4 GiB, **display pinned 1280x800 @ scale
+1.0** (see the geometry trap below — the 2026-06-25 column predates `match-host` and was taken at
+the same effective geometry, so the two are comparable):
 
-**venus ≫ llvmpipe ≫ virgl** — two findings worth carrying:
+| Tier | Guest | `GL_RENDERER` | 2026-06-25 | 2026-07-26 |
+|---|---|---|---|---|
+| **venus** (F44 enh) | enhanced 16k, mesa 26.1.4-3 | `zink Vulkan 1.3(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))` | — | **2019** |
+| **venus** (F43 enh) | enhanced 16k, mesa 26.2.0-3 | same | **2784** | **1790** |
+| **software-2D** | stock 4k | `llvmpipe (LLVM 21.1.2, 128 bits)` | **454** | **342** |
+| **virgl** | stock 4k | `virgl (zink Vulkan 1.3(Apple M1 Max (MESA_KOSMICKRISP)))` | **56** | **57** ⚠ |
 
-1. **venus is ~6× the software floor and the clear winner** — zink→venus reaches the M1 Max with
-   zero-copy blob scanout. This is the tier to be on.
-2. **virgl reaches the GPU but underperforms the CPU floor (~8× slower than llvmpipe) on this
-   workload.** The renderer string proves it runs on the M1 Max (not a fallback), so it is
-   *functional*; but its per-frame **copy/transfer** model (vrend reads back the rendered buffer
-   and transfers it through the virgl protocol each frame) dominates a geometry-uploading scene
-   like glmark2-build, where venus's blob scanout does not. So virgl is a *compatibility* path
-   (accelerated GL on a bone-stock guest, no install), **not** a performance middle-tier as-is.
-   Whether a transfer/present optimization can lift it is an open question — see the open items.
+**⚠ THE VIRGL NUMBER IS VSYNC-LIMITED, NOT THROUGHPUT-LIMITED — and this retires the old
+conclusion.** The 2026-06-25 note here claimed virgl "underperforms the CPU floor (~8× slower than
+llvmpipe)" and blamed its copy/transfer model. That was wrong, or at least unfounded: on 2026-07-26
+a **64x64** build scene — a workload with essentially no fill or upload cost — returned *exactly the
+same* 58 fps as the 800x600 one. A workload whose score does not move when you shrink it 150× is
+not measuring the renderer; it is measuring the frame clock. virgl on this path is pinned at the
+display refresh (~58–60 fps), so **on-display glmark2 cannot rank virgl against the other tiers at
+all** — venus (2019) and llvmpipe (342) are *not* frame-throttled here, so the three numbers are not
+commensurable. `vblank_mode=0` does not lift it (that is a GLX/DRI knob the wayland winsys ignores).
+Use the aquarium numbers below, which run under the refresh ceiling and therefore do measure
+throughput. Whether virgl's ceiling is the compositor's frame callbacks or something in vrend's
+present path is **open** and worth a look, since it caps stock-tier GL at 60 fps regardless of load.
+
+The surviving finding: **venus is the tier to be on** — ~6× the software floor, and the only tier
+that is not frame-capped.
+
+**Two caveats on the venus column.** (a) The F43 enhanced image is *unstable* on this workload —
+repeat runs spread 1487/1769/1774/1827 (the first is cold-cache) and its 512x512 sibling spread
+1048–1495, ~20%. F44 is rock-steady by comparison (2013/2019/2030, <1%). Prefer F44 for anything
+you intend to compare. (b) The vehicle changed: 2026-06-25 used `boot-seated-kk.sh` (injected
+kernel, `selinux=0`), 2026-07-26 uses the EFI boot with SELinux **enforcing** — though `setenforce 0`
+was measured and accounts for none of the difference.
+
+**The venus `gl-replay`/`vk-replay` drop is a known, accepted open regression** — see
+`perf/2026-07-26-remeasure.md`. KosmicKrisp, `VN_PERF` and SELinux have each been A/B'd and cleared;
+the leading remaining hypothesis is the venus ring relax/park path.
 
 ### WebGL aquarium (a second workload — and it inverts the virgl story)
 
@@ -266,18 +285,32 @@ the scanout mid-run). Each tier on its as-deployed config. Trend rows in `perf/l
 own counter from the captured scanout. Static scene geometry, draw/fill-bound (the opposite shape
 to glmark2-build's per-frame geometry upload). Trend rows in `perf/ledger.csv` (`aquarium-*`).
 
+2026-06-25 → **2026-07-26** (F43 images both times; 4 vCPU / 4 GiB; display pinned 1280x800 @ 1.0):
+
 | numFish | software-2D (llvmpipe) | virgl | venus |
 |---|---|---|---|
-| 5 000 | 17 | 37 | **60** (vsync-capped) |
-| 10 000 | — | 28 | 57 |
-| 15 000 | — | 22 | 45 |
+| 5 000 | 17 → **16** | 37 → **45** | 60 → **71** |
+| 10 000 | — | 28 → **33** | 57 → **61** |
+| 15 000 | — | 22 → **29** | 45 → **46** |
 
-**The ranking flips for virgl: here virgl (37) *beats* the llvmpipe floor (17), ~2.2×.** Because the
-scene's geometry is static, virgl isn't re-uploading/transferring vertex data every frame the way
-glmark2-build forces it to — so its GPU acceleration shows through instead of being eaten by the
-copy/transfer model. **Takeaway: tier ordering is workload-dependent** — virgl < software on
-upload-heavy GL (glmark2-build) but virgl > software on draw-heavy WebGL (aquarium). venus wins
-both decisively and is the only tier that holds ~vsync (60→57→45 as fish scale 5k→15k).
+**This is the workload that actually measures throughput, and both GPU tiers improved on it** —
+virgl +22/+18/+32% and venus +18/+7/+2%, while the CPU floor is flat (17→16). Note venus at 5 000
+now reads **71 fps, above the ~62 Hz mode**, so it is no longer sitting on the refresh ceiling the
+2026-06-25 run described as "vsync-capped".
+
+**The ranking flips for virgl versus glmark2: here virgl (45) beats the llvmpipe floor (16), ~2.8×.**
+Given the vsync finding above, the honest reading is no longer "virgl loses on upload-heavy GL and
+wins on draw-heavy GL" — it is that **the aquarium is the only one of the two workloads that ranks
+virgl at all**, and on it virgl is a genuine ~2.8× win over software. venus still wins both
+decisively.
+
+**How these fps were read (no human required).** The aquarium prints its fps only on screen. The
+sweep is automated end to end by `scripts/perf/aquarium-run.sh`, which drives Firefox per fish
+count, harvests the supervisor's own frame dump (`LIMINA_WINDOW_CAPTURE`, overwritten every ~2 s),
+and crops the counter to a legible PNG via `scripts/perf/crop-fps.py`. It retries on the two real
+failure modes — a half-written PNG, and a frame captured before the page painted (blank-crop guard)
+— because both otherwise read as legitimate data points. Evidence:
+`perf/evidence/aquarium-2026-07-26/`.
 
 **Exact launch command (over ssh) — this is the proven, non-flailing recipe (see
 [[limina-profiling-playbook]] for the why):**
@@ -297,6 +330,33 @@ systemd-run --user --unit=ff-bench \
 can't reach the virtio-gpu device and **no window ever maps** (it cost a long debugging session;
 on the software tier it isn't needed, which is exactly what masked the cause). `procs=1` is normal
 with it. Change fish count = `systemctl --user stop ff-bench` then relaunch a new `numFish`.
+
+### ⚠ The display-geometry trap (any future measurement must control for this)
+
+`match-host` display mode shipped **2026-07-03**, *after* the 2026-06-25 numbers. It drives the
+guest to the host screen's resolution, and GNOME then picks a **fractional** scale — on the M1 Max,
+2560x1440 @ 2.5, which mutter hands to wayland clients as **`buffer_scale 3`**. Two ways that
+silently corrupts a benchmark:
+
+- A client asking for a WxH window gets a **3W × 3H buffer** — ~9× the pixels. Any score compared
+  against a pre-2026-07-03 number is then comparing different workloads.
+- glmark2's default 512x512 is not a multiple of 3, so the compositor **rejects the buffer**
+  (`Buffer size (512x512) must be an integer multiple of the buffer_scale (3)`) and the run reports
+  garbage — it produced **97 and 274 on back-to-back identical runs** before this was caught.
+
+A stock guest is not exempt: it came up at scale **1.3333** on its own. So **pin the display before
+measuring anything**, with `scripts/perf/set-guest-display.py`:
+
+```bash
+limina --display-resolution 1280x800 …                    # supervisor drives the mode
+ssh guest '~/bin/set-guest-display.py --write-config 1280x800 1.0' && reboot the guest
+ssh guest '~/bin/set-guest-display.py --verify 1280x800 1.0'   # read-only, never prompts
+```
+
+Use `--write-config` + reboot, **not** the live D-Bus apply: the live path pops GNOME's "Keep
+changes?" dialog, which **reverts after ~20 s if nobody clicks** — it will block an unattended run
+or, worse, un-pin the display mid-measurement. `scripts/perf-ledger.sh` now `--verify`s and aborts
+rather than measuring an unpinned display.
 
 **Caveats:** one workload (glmark2), one host (M1 Max, 32 GB), dev-machine variance applies —
 these are directional, not gospel (`perf/README.md`: the ledger is a trend, not a gate). The
