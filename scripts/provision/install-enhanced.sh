@@ -502,13 +502,17 @@ mkdir -p /etc/environment.d
   # return -- unsurprising in hindsight, since only the FENCE flag was still set while the path
   # that actually hung was the SEMAPHORE one, and that has been running enabled for a long time.
   #
-  # CHECK ON A MESA BUMP: upstream's 4c1938c8adb "venus: deprecate fence feedback" (2026-07-12)
-  # changes this area, and we have NOT established which way. Two readings, opposite consequences:
-  # if the FLAG went and feedback is now unconditional, 26.2+ hands us the fast path for free; if
-  # the MECHANISM went, 26.2+ is permanently on the synchronous path with no way back and we need
-  # to carry a revert. The mesa-cs tree cannot settle it (its venus history stops at 2026-04-03),
-  # so read the commit before bumping past 26.1.x. Either way removing the flag here is correct --
+  # CHECK ON A MESA BUMP PAST 26.2.x: upstream's 4c1938c8adb "venus: deprecate fence feedback"
+  # (2026-07-12) changes this area, and we have NOT established which way. Two readings, opposite
+  # consequences: if the FLAG went and feedback is now unconditional, the bump hands us the fast
+  # path for free; if the MECHANISM went, we land permanently on the synchronous path with no way
+  # back and need to carry a revert. The mesa-cs tree cannot settle it (its venus history stops at
+  # 2026-04-03), so read the commit before bumping. Either way removing the flag here is correct --
   # it is dead config under one reading and aligned with upstream under the other.
+  #
+  # Measured 2026-07-25, which moves the trigger: the F43 enhanced image's mesa 26.2.0-3.limina
+  # STILL ships no_fence_feedback (checked with the strings command below, in-guest), so the
+  # deprecation is not in 26.2.0 and lands in a later release. 26.1.x and 26.2.x are both fine.
   # Check the INSTALLED driver, not a source tree:
   #   strings /usr/lib64/libvulkan_virtio.so | grep '^no_'
 } > /etc/environment.d/90-limina-zink.conf

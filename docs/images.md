@@ -82,6 +82,37 @@ ALL user extensions — on such guests the helper stamps its one-time enable, pa
 the RemoteDesktop tier. Consider `gsettings set org.gnome.shell disable-user-extensions false` in
 `make-accessible.sh` at the next image respin.
 
+**`VN_PERF=no_fence_feedback` RETIRED from the guest env — ALL FOUR enhanced images (2026-07-25)**
+— the flag was a MoltenVK-era workaround for the 16 KiB `hv_vm_map` blob-coherency bug
+(`spikes/venus-render-server` Finding 6); that root cause was fixed 2026-07-03 (libkrun 0043 +
+virglrenderer 0023 + `patches/linux/0004`) and the flag simply outlived it. Keeping it forced every
+fence check onto a synchronous driver↔renderer round trip: `gnome-shell-rs` measured **25–30% of
+wall clock** on submits carrying real work (eight blur submits, 13.6–15.3 ms with feedback vs
+17.7–22.1 ms without), while a batched one-submit control was identical either way — so it is the
+wait, not the work. Source-side removal = `1542acc`/`937eb7c` in `install-enhanced.sh`.
+
+**Delivered to all four enhanced images** (`Fedora-Workstation-4{3,4}.enhanced{,.test}.raw`): each
+`enhanced.raw` was booted in place, took the two current installer config deltas (rewrite
+`/etc/environment.d/90-limina-zink.conf` without `VN_PERF`; remove the retired
+`90-limina-pointer.gschema.override` + recompile schemas), rebooted, and was verified seated on the
+16k kernel with `libvulkan_virtio` mapped into `gnome-shell` and the new env in its `/proc/PID/environ`
+— then a clean poweroff; each `.test.raw` was recloned (`cp -c`) from it. Backups kept as
+`*.enhanced.raw.pre-vnperf.bak`. No RPM work: kernel/mesa NEVRAs were already current
+(F44 `7.1.4-limina16k` + mesa `26.1.4-3`, F43 `6.12.0-limina16k+` + mesa `26.2.0-3`), so this was a
+config-delta pass rather than a full installer run. Tarball respun as
+**`target/guest-tools-7.1.4-vnperf/limina-guest-tools-f44.tar.zst`** — same RPMs as `mesa2614r3`,
+with the current `install-enhanced.sh` swapped in (the packaged one was three installer changes
+behind: the VN_PERF removal, the retired flat-pointer override, and the stale-overlay mixed-mesa
+guard). Hardlinks between `repo/` and the top-level RPMs restored before packing, so it stays the
+same size as the payload it derives from. **NOT yet on dogfood-guest** — the deployed guest still
+carries the flag.
+
+*Settles half of the mesa-bump question:* the F43 image's **mesa `26.2.0-3.limina` still ships
+`no_fence_feedback`** (`strings /usr/lib64/libvulkan_virtio.so | grep '^no_'`, in-guest), so
+upstream's `4c1938c8adb` "venus: deprecate fence feedback" (2026-07-12) is not in 26.2.0. The
+"read the commit before bumping" trigger therefore moves from *past 26.1.x* to **past 26.2.x**;
+what the commit removed — the flag or the mechanism — is still unestablished.
+
 **F43 guest-mesa 26.2.0-3 ring-loss + submit free-list respin (2026-07-21)** — F43 guest mesa
 `26.2.0-2.limina` → **`26.2.0-3.limina.fc43`**, catching the F43 family up to the F44 26.1.4-3
 patch level: **mesa 0016** (venus ring loss → `VK_ERROR_DEVICE_LOST` instead of `abort()`) +

@@ -294,23 +294,6 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<std::proce
             }
         }
     }
-    // TEMPORARY (2026-07-25, venus wake-chain instrumentation) — remove once the data is in.
-    //
-    // Turns the GPUWAKE + RINGWAKE probes on by default so a dogfood run collects the venus
-    // wake-chain timings without the user having to launch from a shell (a Dock/Finder launch
-    // inherits no env). The tables land in the worker's stderr, which is the supervisor's,
-    // which for a managed VM is `<bundle>/logs/supervisor.log`.
-    //
-    // Explicitly set values win, so `LIMINA_WAKE_PROBE=0` / `LIMINA_RING_WAKE_PROFILE=0` turn
-    // them off, and `LIMINA_WAKE_PROBE=calib` opts into the fixed-work control (which costs
-    // ~0.12 ms of the gpu worker's critical section per doorbell, so it is not the default).
-    //
-    // See spikes/venus-wake-chain/RESULTS.md.
-    for key in ["LIMINA_WAKE_PROBE", "LIMINA_RING_WAKE_PROFILE"] {
-        if std::env::var_os(key).is_none() {
-            cmd.env(key, "1");
-        }
-    }
     if !inherit_fds.is_empty() {
         let fds = inherit_fds.to_vec();
         // SAFETY: only async-signal-safe fcntl calls between fork and exec.
