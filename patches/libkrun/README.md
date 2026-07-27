@@ -161,7 +161,10 @@ patch's commit message; this is the map.
   Ack-less sinks (headless capture, GTK) keep the off default — deferred presents are
   unsupported there and the no-ack fallback serializes compositors. **0112** swaps the
   live A/B marker for the default-on world: `touch /tmp/disable-limina-fence-present`
-  force-OFFs at runtime (rm to re-arm); the old force-on marker is gone.
+  force-OFFs at runtime (rm to re-arm); the old force-on marker is gone. **0113** moves
+  the marker check off the flush path — a 500 ms poller thread mirrors it into an
+  atomic (per-flush stat = a sync-I/O stall source on the commit-critical present
+  path); toggle latency ≤500 ms.
 
 ### virtio-gpu: device reset lifecycle
 
