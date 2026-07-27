@@ -59,3 +59,36 @@ date,commit,workload,metric,value,notes
 2026-07-26,183f1cb,glmark2-512-kk-old,score,2154,KK A/B (2026-07-26): host KosmicKrisp built at af708c37f69 = the exact 2026-06-25 tip, same F44 guest/envelope/pinned display; old KK is ~5%% FASTER on glmark2 (2120/2157/2154 vs 2007/2056/2027) but cannot meet zink base reqs (no EXT_custom_border_color) so is not shippable
 2026-07-26,183f1cb,gl-replay-venus-vnperf-on,fps,48.0333,2026-07-26 hypothesis test: VN_PERF=no_fence_feedback restored on the current stack — 48.0 vs 47.4, only +1.3%%, does NOT explain the regression
 2026-07-26,183f1cb,gl-replay-venus-selinux-permissive,fps,47.18,2026-07-26 hypothesis test: setenforce 0 (historical vehicle ran selinux=0) — 46.7/47.0/47.2, no gain, does NOT explain the regression
+2026-07-27,aaa362e,gl-replay-venus,fps,47.8653,venus-replay-regression A/B baseline: current stack (virgl @ cd5e356 with relax 0041/0043/0044), F44 enh clone, 4vcpu/4GiB, EFI enforcing
+2026-07-27,aaa362e,gl-replay-llvmpipe,fps,757.292,venus-replay-regression A/B baseline: current stack (virgl @ cd5e356 with relax 0041/0043/0044), F44 enh clone, 4vcpu/4GiB, EFI enforcing
+2026-07-27,aaa362e,glmark2-wayland-venus,score,1994,venus-replay-regression A/B baseline: current stack (virgl @ cd5e356 with relax 0041/0043/0044), F44 enh clone, 4vcpu/4GiB, EFI enforcing
+2026-07-27,aaa362e,gl-replay-venus,fps,47.6629,venus-replay-regression A/B arm B r1: virgl @ 83d9a3c (PRE-relax, upstream per-iter ladder), same clone/envelope as baseline
+2026-07-27,aaa362e,gl-replay-llvmpipe,fps,763.516,venus-replay-regression A/B arm B r1: virgl @ 83d9a3c (PRE-relax, upstream per-iter ladder), same clone/envelope as baseline
+2026-07-27,aaa362e,glmark2-wayland-venus,score,2274,venus-replay-regression A/B arm B r1: virgl @ 83d9a3c (PRE-relax, upstream per-iter ladder), same clone/envelope as baseline
+2026-07-27,aaa362e,gl-replay-venus,fps,47.9336,venus-replay-regression A/B arm B r2: virgl @ 83d9a3c (PRE-relax), repeat
+2026-07-27,aaa362e,gl-replay-llvmpipe,fps,765.303,venus-replay-regression A/B arm B r2: virgl @ 83d9a3c (PRE-relax), repeat
+2026-07-27,aaa362e,glmark2-wayland-venus,score,2353,venus-replay-regression A/B arm B r2: virgl @ 83d9a3c (PRE-relax), repeat
+2026-07-27,aaa362e,gl-replay-venus,fps,47.8883,venus-replay-regression A/B arm C r1: current virgl, VKR_JOURNAL=0 (M9.3 create-journal recording disabled)
+2026-07-27,aaa362e,gl-replay-llvmpipe,fps,763.321,venus-replay-regression A/B arm C r1: current virgl, VKR_JOURNAL=0 (M9.3 create-journal recording disabled)
+2026-07-27,aaa362e,glmark2-wayland-venus,score,2175,venus-replay-regression A/B arm C r1: current virgl, VKR_JOURNAL=0 (M9.3 create-journal recording disabled)
+2026-07-27,aaa362e,gl-replay-venus,fps,47.9512,venus-replay-regression A/B arm C r2: VKR_JOURNAL=0, repeat
+2026-07-27,aaa362e,gl-replay-llvmpipe,fps,765.372,venus-replay-regression A/B arm C r2: VKR_JOURNAL=0, repeat
+2026-07-27,aaa362e,glmark2-wayland-venus,score,2196,venus-replay-regression A/B arm C r2: VKR_JOURNAL=0, repeat
+2026-07-27,aaa362e,gl-replay-venus,fps,47.5251,venus-replay-regression A/B arm D r1: current host stack, guest mesa DOWNGRADED to 26.1.3-4.limina (pre-26.1.4 respin)
+2026-07-27,aaa362e,gl-replay-llvmpipe,fps,757.371,venus-replay-regression A/B arm D r1: current host stack, guest mesa DOWNGRADED to 26.1.3-4.limina (pre-26.1.4 respin)
+2026-07-27,aaa362e,glmark2-wayland-venus,score,2058,venus-replay-regression A/B arm D r1: current host stack, guest mesa DOWNGRADED to 26.1.3-4.limina (pre-26.1.4 respin)
+2026-07-27,aaa362e,gl-replay-venus,fps,47.7072,venus-replay-regression A/B arm D r2: guest mesa 26.1.3-4, repeat
+2026-07-27,aaa362e,gl-replay-llvmpipe,fps,763.379,venus-replay-regression A/B arm D r2: guest mesa 26.1.3-4, repeat
+2026-07-27,aaa362e,glmark2-wayland-venus,score,2072,venus-replay-regression A/B arm D r2: guest mesa 26.1.3-4, repeat
+2026-07-27,aaa362e,gl-replay-venus,fps,54.4764,venus-replay-regression A/B arm F r1: JULY-13 era host (repo 288f105 + virgl 4900245 + era libkrun), F44 guest (mesa 26.1.3-4)
+2026-07-27,aaa362e,gl-replay-llvmpipe,fps,751.919,venus-replay-regression A/B arm F r1: JULY-13 era host (repo 288f105 + virgl 4900245 + era libkrun), F44 guest (mesa 26.1.3-4)
+2026-07-27,aaa362e,glmark2-wayland-venus,score,1845,venus-replay-regression A/B arm F r1: JULY-13 era host (repo 288f105 + virgl 4900245 + era libkrun), F44 guest (mesa 26.1.3-4)
+2026-07-27,aaa362e,gl-replay-venus,fps,54.7297,venus-replay-regression A/B arm F r2: July-13 era host, repeat
+2026-07-27,aaa362e,gl-replay-llvmpipe,fps,758.37,venus-replay-regression A/B arm F r2: July-13 era host, repeat
+2026-07-27,aaa362e,glmark2-wayland-venus,score,2123,venus-replay-regression A/B arm F r2: July-13 era host, repeat
+2026-07-27,aaa362e,gl-replay-venus,fps,55.0012,venus-replay-regression A/B arm G r1: JULY-13 worker + CURRENT virgl dylib (cd5e356), F44 guest
+2026-07-27,aaa362e,gl-replay-llvmpipe,fps,759.639,venus-replay-regression A/B arm G r1: JULY-13 worker + CURRENT virgl dylib (cd5e356), F44 guest
+2026-07-27,aaa362e,glmark2-wayland-venus,score,1924,venus-replay-regression A/B arm G r1: JULY-13 worker + CURRENT virgl dylib (cd5e356), F44 guest
+2026-07-27,aaa362e,gl-replay-venus,fps,54.7914,venus-replay-regression A/B arm H r1: CURRENT stack at 6vcpu/8GiB (envelope-confound check vs arm F)
+2026-07-27,aaa362e,gl-replay-llvmpipe,fps,759.139,venus-replay-regression A/B arm H r1: CURRENT stack at 6vcpu/8GiB (envelope-confound check vs arm F)
+2026-07-27,aaa362e,glmark2-wayland-venus,score,1886,venus-replay-regression A/B arm H r1: CURRENT stack at 6vcpu/8GiB (envelope-confound check vs arm F)
