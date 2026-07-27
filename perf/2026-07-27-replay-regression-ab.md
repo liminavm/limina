@@ -95,3 +95,22 @@ The vkmark-grounded truth (F44, 4 vCPU, dylib-swap verified):
    comparing rows; the 4-vs-6 vCPU trap ate half of this campaign. And **never attribute
    from single-boot glmark2 deltas** — ±10% between boots on F44; vkmark 3-scene is the
    stable venus-throughput instrument (±0.2% within boot).
+
+## Addendum (same day, later): the two-lane journal resolves the attribution
+
+virgl **0051** moved ALL journal retention off the decode path (per-journal consumer
+thread; transient commands = one atomic, no lock/alloc — see the patch). vkmark
+3-scene at the same 4-vcpu envelope: **2639/2462/2484 (median 2484), +7.8% over 0049
+alone (2304) and above the old relax-off "ceiling" 2365** (which was measured with the
+inline journal, so the ceiling itself carried journal cost).
+
+Read together with the norecord run (2307 ≈ 2304), this corrects the journal
+attribution: vkmark's journal cost was **not** the RECORDING lane — it was the
+per-command overhead the old design paid on *every* command: `j->mutex` (taken even
+for transients, if only for `stats.transient_cmds++`, and contended across the context
++ ring decode threads) plus the per-dispatch frame calloc/free. `norecord` couldn't
+see it because it only skipped the RECORDING inserts while keeping the mutex+frame
+tax. Follow-up 3's "no measured cost" verdict is therefore superseded: the journal
+had a real, measurable decode-path cost (~7-8% on vkmark), just not in the lane
+norecord could isolate. The compositor-shaped question (does it move KMS misses on
+draw-heavy frames, per present-misses.md §17.3) still needs the dogfood deploy.
