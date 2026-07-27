@@ -35,7 +35,22 @@ This checks out `third_party/virglrenderer` at `UPSTREAM_BASE` and `git am`s the
    --force /tmp/vg`.
 4. Commit the regenerated `.patch` files to the limina repo.
 
-## The series (21 patches) — themes
+## The series — themes
+
+(Theme list below covers the 2026-07-01 shape; the series has since grown through 0050 —
+themes for the later spans:)
+
+- **Ring wakeup/latency (0041, 0043-0044, 0049):** one-sleep-per-rung relax backoff, the
+  adaptive plateau + per-ring regime classifier, and the graduated responsive ladder
+  (0049: 12x10 → 8x20 → 8x40 → hold 80 µs, never a 640 µs sleep in the responsive regime;
+  vkmark 2148 → 2304 vs 2365 relax-off ceiling, idle wakes unchanged).
+- **Wake diagnostics + attribution (0042, 0046-0048, 0050):** `LIMINA_WAKE_TRACE`,
+  `LIMINA_RING_WAKE_PROFILE`, and `VKR_JOURNAL=norecord` (skip the per-vkCmd RECORDING
+  lane — measurement mode only, snapshots deliberately broken under it).
+- **M9.3/M9.4 snapshot journal (0033-0040):** re-creation journal, device-memory content
+  capture, sync fast-forward, create-arg closure pinning.
+
+### The 2026-07-01 series shape (21 patches) — themes
 
 - **macOS/venus enablement (0001-0002):** `shm_open` O_CLOEXEC + host-unsupported-ext filtering +
   `get_map_ptr`; kqueue eventfd emulation + fence-eventfd-by-value in same-process mode.
