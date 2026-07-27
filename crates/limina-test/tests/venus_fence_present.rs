@@ -17,10 +17,10 @@
 //! (by design) and deferred presents take the 0111 readback fallback. The shipping
 //! (windowed + shown-ack) leg stays covered by the seated A/B in `spikes/present-miss/`.
 //!
-//! Oracles: the `[FENCEPRESENT]` deferred-present trace line (fires on the first parked
-//! present — proves the path is LIVE, not silently fallen back to immediate presents),
-//! no deferred-present/readback errors in the worker log, and the session surviving —
-//! gnome-shell still up and SSH still responsive after frames have flowed.
+//! Oracles: the INFO "fence-accurate presents ENGAGED" line (fires on the first parked
+//! present, libkrun 0114 — proves the path is LIVE, not silently fallen back to
+//! immediate presents), no deferred-present/readback errors in the worker log, and the
+//! session surviving — gnome-shell still up and SSH still responsive after frames flowed.
 //!
 //! Same prereqs as the other seated L2s: 16 KiB kernel + `enhanced.test` disk +
 //! KosmicKrisp; SKIPs cleanly if missing. Gated behind LIMINA_HVF_TESTS; run via
@@ -51,11 +51,12 @@ fn fence_present_chain_presents_and_never_wedges() {
             // Force the chain on: the capture sink has no ack channel, so the 0110
             // default (ack-gated) would leave it off — the point here is the chain's
             // mechanics, not the default policy (that's unit-tested in libkrun).
-            .with_env("LIMINA_FENCE_PRESENT", "1")
-            // The [FENCEPRESENT] oracle is a trace-level line in the gpu module; scope
-            // the filter so the log stays readable (FLUSH2 et al. are boot-console 2D
-            // volume, bounded on a direct-kernel boot).
-            .with_env("RUST_LOG", "krun_devices::virtio::gpu=trace"),
+            // The engagement oracle logs at INFO (libkrun 0114) and the harness
+            // defaults the spawned supervisor to RUST_LOG=info, so no extra logging
+            // env is needed — deliberately NOT debug/trace: the per-fence firehose
+            // adds ~2k sync writes/s under load and destabilizes the very pacing
+            // this guard watches.
+            .with_env("LIMINA_FENCE_PRESENT", "1"),
         Err(e) => {
             eprintln!("SKIPPED fence_present_chain_presents_and_never_wedges: {e}");
             return;
@@ -92,17 +93,14 @@ fn fence_present_chain_presents_and_never_wedges() {
              zink→venus (autologin flake or image problem; not a fence-present failure)",
         );
 
-    // Liveness oracle: the first parked frame logs [FENCEPRESENT] deferred presents=0.
-    // Without it the chain silently degraded to immediate presents and this guard
-    // would be testing nothing.
+    // Liveness oracle: the first parked frame logs the INFO engagement line. Without
+    // it the chain silently degraded to immediate presents and this guard would be
+    // testing nothing.
     guest
-        .wait_for_supervisor_log(
-            "[FENCEPRESENT] deferred presents=",
-            Duration::from_secs(120),
-        )
+        .wait_for_supervisor_log("fence-accurate presents ENGAGED", Duration::from_secs(120))
         .expect(
-            "the [FENCEPRESENT] deferred-present oracle never fired — fence-present did not \
-             engage (chain regressed to immediate presents?)",
+            "the fence-present engagement oracle never fired — the chain did not engage \
+             (regressed to immediate presents?)",
         );
 
     // Wedge guard: a stuck hold starves the guest's whole scanout pipeline within one
