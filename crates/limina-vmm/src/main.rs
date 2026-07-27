@@ -381,13 +381,63 @@ fn raise_fd_limit() {
     }
 }
 
+/// Worker logging. Default filter is warn-and-up so a production run is quiet (the
+/// per-frame GPU device chatter lives at trace/debug); RUST_LOG overrides it — e.g.
+/// RUST_LOG=debug for venus host-init, RUST_LOG=trace for the present-path DIAGs.
+///
+/// The sink is NON-BLOCKING by default: log writes land in a large bounded channel
+/// drained by a writer thread, and when the channel is full new lines are DROPPED
+/// (and counted) instead of stalling the emitter. Synchronous stderr writes from the
+/// GPU worker/fence threads measurably destabilize frame pacing — RUST_LOG=trace
+/// benchmarking produced ~2k blocking writes/s and a 40–60 fps ping-pong
+/// (2026-07-27); with log-heavy debugging the *logging* must not become the stall
+/// under investigation. Drops are reported to stderr (directly, bypassing the
+/// channel) by a watcher thread, so a lossy capture is always self-identifying.
+/// `LIMINA_LOG_BLOCKING=1` restores the plain synchronous logger for the runs where
+/// every line matters more than pacing.
+fn init_worker_logging() {
+    let env = env_logger::Env::default().default_filter_or("warn");
+    if std::env::var_os("LIMINA_LOG_BLOCKING").is_some() {
+        env_logger::Builder::from_env(env).init();
+        return;
+    }
+    let (writer, guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
+        .lossy(true)
+        .buffered_lines_limit(128_000)
+        .finish(std::io::stderr());
+    // Worker-lifetime logger: the guard's Drop would flush the channel tail at exit,
+    // but the worker's exit paths are process-terminal (PSCI teardown / exec) and a
+    // static guard is simpler than threading it through. Tail lines at exit may drop.
+    std::mem::forget(guard);
+    let errors = writer.error_counter();
+    let _ = std::thread::Builder::new()
+        .name("log-drop-watch".into())
+        .spawn(move || {
+            let mut last = 0usize;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                let now = errors.dropped_lines();
+                if now > last {
+                    // Direct stderr, NOT the logger: the report must get out exactly
+                    // when the channel is the thing that's full.
+                    eprintln!(
+                        "worker log: {} lines dropped by the non-blocking logger \
+                         (total {now}); set LIMINA_LOG_BLOCKING=1 if every line matters",
+                        now - last
+                    );
+                    last = now;
+                }
+            }
+        });
+    env_logger::Builder::from_env(env)
+        .target(env_logger::Target::Pipe(Box::new(writer)))
+        .init();
+}
+
 fn main() -> Result<()> {
     raise_fd_limit();
 
-    // Default to warn-and-up so a production run is quiet (the per-frame GPU device chatter
-    // lives at trace/debug). RUST_LOG overrides it — e.g. RUST_LOG=debug for venus host-init,
-    // RUST_LOG=trace for the present-path DIAGs ([FLUSH2]/[FENCEPRESENT]).
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    init_worker_logging();
 
     let cli = Cli::parse();
 
