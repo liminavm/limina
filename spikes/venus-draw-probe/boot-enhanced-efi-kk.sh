@@ -40,7 +40,13 @@ export GALLIUM_DRIVER=zink
 export LIBGL_DRIVERS_PATH="$MESA_PREFIX/lib"
 export EGL_PLATFORM=surfaceless
 export VIRGL_LOG_LEVEL=info
-export LIMINA_PRESENT_COPY=1   # round-21 flicker mitigation (private scanout copy), default on
+# Present config: since libkrun 0110 the windowed worker defaults to fence-accurate
+# presents (the June round-27 "FENCE_PRESENT=1 COPY=0" config) — the round-21 copy
+# mitigation is redundant with honest flip pacing, so this script no longer forces it.
+# Both stay caller-overridable for A/B (LIMINA_PRESENT_COPY=1 / LIMINA_FENCE_PRESENT=0).
+for v in LIMINA_PRESENT_COPY LIMINA_FENCE_PRESENT; do
+  [ -n "$(eval echo "\${$v:-}")" ] && export "$v"
+done
 # Profiling passthrough (see memory limina-profiling-playbook): forward stats/capture/knob env to the
 # worker so the KK dylib + scanout publisher see them. LIMINA_KK_STATS=1 → once/sec [LIMINA-KK-STATS]
 # draws line in the worker log; LIMINA_GLOBAL_SCANOUT=1 → iosdump can read the scanout; MESA_KK_DEBUG,

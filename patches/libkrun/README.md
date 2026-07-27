@@ -152,6 +152,15 @@ patch's commit message; this is the map.
   fence (roll it all the way back), and a 500 ms unconditional-completion ceiling — a
   display fence held that long is pathological, but killing the guest's display over it
   is never right.
+- **0110 — default fence-accurate presents ON when the shown-ack channel exists.** The
+  chain above shipped opt-in and the arming env only ever lived in spike scripts — the
+  productized windowed supervisor never set it, so deployed VMs presented
+  fire-and-forget (guest flip events pace against pure emulated vblank; see limina
+  `spikes/present-miss/`). Policy: unset → on iff `LIMINA_SHOWN_ACK_FD` (windowed
+  workers only); `LIMINA_FENCE_PRESENT=0`/`off` forces off; any other value forces on;
+  the `/tmp` marker stays a live force-on. Ack-less sinks (headless capture, GTK) keep
+  the off default — deferred presents are unsupported there and the no-ack fallback
+  serializes compositors.
 
 ### virtio-gpu: device reset lifecycle
 

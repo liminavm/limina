@@ -1634,13 +1634,21 @@ impl Guest {
         }
 
         // Supervisor/worker logs: flow to the test's stderr by default (visible with
-        // --nocapture); captured to a scratch file when the test asserts on them.
+        // --nocapture); captured to a scratch file when the test asserts on them. Capture
+        // BOTH streams: worker-side log lines have been observed on the supervisor's stdout
+        // (not just stderr) in capture-display boots, and an assertion needle that lands on
+        // the un-captured stream times out invisibly (venus_fence_present found this —
+        // its [FENCEPRESENT] worker oracle fired on stdout while the file got stderr only).
         cmd.stdin(Stdio::null());
         let supervisor_log = if cfg.supervisor_log {
             let path = scratch.join("supervisor.log");
             let file = fs::File::create(&path)
                 .with_context(|| format!("creating supervisor log {path:?}"))?;
+            let stdout_file = file
+                .try_clone()
+                .with_context(|| format!("cloning supervisor log handle {path:?}"))?;
             cmd.stderr(Stdio::from(file));
+            cmd.stdout(Stdio::from(stdout_file));
             Some(path)
         } else {
             None
