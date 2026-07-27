@@ -37,7 +37,7 @@ This checks out `third_party/virglrenderer` at `UPSTREAM_BASE` and `git am`s the
 
 ## The series — themes
 
-(Theme list below covers the 2026-07-01 shape; the series has since grown through 0051 —
+(Theme list below covers the 2026-07-01 shape; the series has since grown through 0052 —
 themes for the later spans:)
 
 - **Ring wakeup/latency (0041, 0043-0044, 0049):** one-sleep-per-rung relax backoff, the
@@ -52,7 +52,9 @@ themes for the later spans:)
   retention (hash/list/pin/prune + the shared mutex) moves to a per-journal consumer thread,
   the decode path keeps only classify + one payload copy (transient commands: one atomic, no
   lock/alloc). Motivated by the compositor's draws-predict-misses finding
-  (present-misses.md §17.3); snapshot readers quiesce the queue first.
+  (present-misses.md §17.3); snapshot readers quiesce the queue first. 0052 = the
+  queue-depth gauge (`q_peak=/q_now=/dropped_oom=` in the dump line — the backlog
+  oracle; q_now should be ~0 after the quiesce, q_peak is the corner-case signal).
 
 ### The 2026-07-01 series shape (21 patches) — themes
 
