@@ -92,3 +92,20 @@ date,commit,workload,metric,value,notes
 2026-07-27,aaa362e,gl-replay-venus,fps,54.7914,venus-replay-regression A/B arm H r1: CURRENT stack at 6vcpu/8GiB (envelope-confound check vs arm F)
 2026-07-27,aaa362e,gl-replay-llvmpipe,fps,759.139,venus-replay-regression A/B arm H r1: CURRENT stack at 6vcpu/8GiB (envelope-confound check vs arm F)
 2026-07-27,aaa362e,glmark2-wayland-venus,score,1886,venus-replay-regression A/B arm H r1: CURRENT stack at 6vcpu/8GiB (envelope-confound check vs arm F)
+2026-07-27,646ac5f,gl-replay-venus,fps,48.9183,relax-tune arm R1 r1: fine plateau DEFAULT (FINE_RUNGS=12), journal on
+2026-07-27,646ac5f,gl-replay-llvmpipe,fps,761.171,relax-tune arm R1 r1: fine plateau DEFAULT (FINE_RUNGS=12), journal on
+2026-07-27,646ac5f,glmark2-wayland-venus,score,2156,relax-tune arm R1 r1: fine plateau DEFAULT (FINE_RUNGS=12), journal on
+2026-07-27,646ac5f,gl-replay-venus,fps,47.7259,relax-tune arm R1 r2: fine plateau default, repeat
+2026-07-27,646ac5f,gl-replay-llvmpipe,fps,763.526,relax-tune arm R1 r2: fine plateau default, repeat
+2026-07-27,646ac5f,glmark2-wayland-venus,score,2168,relax-tune arm R1 r2: fine plateau default, repeat
+2026-07-27,646ac5f,gl-replay-venus,fps,48.1254,relax-tune arm R2: FINE_RUNGS=0 control (old 40us plateau on the same build/boot-day)
+2026-07-27,646ac5f,gl-replay-llvmpipe,fps,762.333,relax-tune arm R2: FINE_RUNGS=0 control (old 40us plateau on the same build/boot-day)
+2026-07-27,646ac5f,glmark2-wayland-venus,score,2151,relax-tune arm R2: FINE_RUNGS=0 control (old 40us plateau on the same build/boot-day)
+2026-07-27,646ac5f,gl-replay-venus,fps,47.7475,relax-tune arm R3: ladder v2 (10/20/40/80 graduated responsive, coarsened+park unchanged); vkmark 2301/2331/2304 vs shipping 2148 vs relax-off ceiling 2365
+2026-07-27,646ac5f,gl-replay-llvmpipe,fps,767.132,relax-tune arm R3: ladder v2 (10/20/40/80 graduated responsive, coarsened+park unchanged); vkmark 2301/2331/2304 vs shipping 2148 vs relax-off ceiling 2365
+2026-07-27,646ac5f,glmark2-wayland-venus,score,2310,relax-tune arm R3: ladder v2 (10/20/40/80 graduated responsive, coarsened+park unchanged); vkmark 2301/2331/2304 vs shipping 2148 vs relax-off ceiling 2365
+2026-07-27,d892f91,vkmark-3scene-venus,score,2148,relax-tune: SHIPPING ladder (0041+0043+0044) — 2151/2148/2144; F44 enh 4vcpu 1280x800@1.0; vkmark = the stable ladder instrument (±0.2% within boot)
+2026-07-27,d892f91,vkmark-3scene-venus,score,2206,relax-tune: fine 10us tier v1 (FINE_RUNGS=12) — 2186/2210/2206; +2.7% only
+2026-07-27,d892f91,vkmark-3scene-venus,score,2304,relax-tune: graduated ladder v2 = virgl 0049 SHIPPED — 2301/2331/2304; +7.3% over shipping; idle WAKETRACE gpu_worker 0/s
+2026-07-27,d892f91,vkmark-3scene-venus,score,2365,relax-tune: relax fully OFF ceiling (dylib @ 83d9a3c) — 2311/2365/2399; upstream per-iter ladder; the idle-wakeup disaster config
+2026-07-27,d892f91,vkmark-3scene-venus,score,2307,journal attribution: VKR_JOURNAL=norecord (virgl 0050) — 2296/2307/2308 vs 2304 full journal; RECORDING lane not measurable; glmark2 'journal 9%' VOIDED (±10% between-boot variance)

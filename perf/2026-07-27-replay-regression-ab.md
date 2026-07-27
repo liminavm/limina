@@ -50,19 +50,35 @@ A full June-25 host build (repo worktree @ c3f5138, virgl @ 7d9e406, June libkru
 needs the 2026-07-03 blob fixes), and on the F43 image (6.12 kernel) today's mutter 49.6
 crash-loops. The June pairing is extinct on both sides.
 
-## What IS real and actionable (glmark2, interactive-shaped workloads)
+## What IS real and actionable — CORRECTED same-day by the vkmark rounds
 
-- **The relax ladder (virgl 0041+0043+0044) costs glmark2 ~13–16%** (arm B: 1994 → 2313
-  avg with relax reverted). This is the same residual 0043 measured on vkmark (~2360 vs
-  ~2760 relax-off) and never fully recovered. The wakeup win is real but the price on
-  submit-latency-bound work is real too — worth a finer-early-rungs iteration (e.g.
-  10/10/20/40 one-per-rung before the plateau), re-measuring BOTH fps and wakeups/s.
-- **The vkr journal (M9.3, recording ON by default) costs glmark2 ~9%** (arm C: 1994 →
-  2185 avg with `VKR_JOURNAL=0`). A product decision is available: default recording off
-  until a VM has snapshots enabled, or cheapen the create-path recording.
-- The two taxes were only measured separately; the both-off combination is untested.
-- Neither tax moves gl-replay at 4 vCPU — its bottleneck sits elsewhere in the guest
-  round-trip path (it also barely notices the VN_PERF quartet, +0.7).
+⚠ **The glmark2 magnitudes first published in this section were boot-noise.** The evening
+control (same build, fine-tier env off, fresh boot) reproduced the "improved" score, and
+lining up all of the day's glmark2 runs shows **~±10% between-boot variance on F44**
+(1886–2353 across boots; ±1–3% within a boot). Single-boot glmark2 A/Bs cannot support a
+9–16% attribution. vkmark 3-scene is the right ladder instrument: **±0.2% within boot,
+~1% across boots**.
+
+The vkmark-grounded truth (F44, 4 vCPU, dylib-swap verified):
+
+| relax config | vkmark 3-scene |
+|---|---|
+| shipping ladder (0041+0043+0044) | 2144–2151 |
+| + fine 10 µs tier (v1) | 2186–2210 |
+| **graduated ladder v2 (virgl 0049, SHIPPED)** | **2301–2331** |
+| relax fully OFF (upstream per-iter, the ceiling) | 2311–2399 |
+
+- **The relax residual is real: ~9% on vkmark**, and the dominant cost was NOT the 40 µs
+  plateau granularity but the **640 µs cliff** after ~280 µs of idle in the *responsive*
+  regime. **virgl 0049** grades the responsive ladder 12×10 → 8×20 → 8×40 → hold 80 µs
+  (one sleep per rung), recovering ~72% of the headroom; the coarsened/idle regime and
+  parking are untouched — WAKETRACE shows gpu_worker 0/s at the idle desktop.
+- **The journal RECORDING lane costs nothing measurable on vkmark** (`VKR_JOURNAL=norecord`,
+  virgl 0050: 2296–2308 vs 2301–2331 full). The "journal 9%" glmark2 attribution is
+  **voided**. The per-command decode-cost hypothesis for compositor frames (many creates /
+  descriptor updates per frame → KMS-deadline pressure on complex frames) remains open but
+  needs a compositor-shaped instrument — the gsrs `retiring − gpu` split, not glmark2.
+- Neither knob moves gl-replay at 4 vCPU (also insensitive to the VN_PERF quartet, +0.7).
 
 ## Follow-ups
 
@@ -72,7 +88,10 @@ crash-loops. The June pairing is extinct on both sides.
    worth it if some *other* evidence points at the guest venus driver again.)
 2. vk-replay was not re-measured today (gfxrecon-replay absent on this clone) — same
    campaign applies if it's ever worth it; expectation: same story.
-3. The relax-rung iteration and the journal default (above) — real wins available on
-   interactive workloads.
+3. ~~The relax-rung iteration~~ **DONE same day: virgl 0049** (see the corrected section
+   above). The journal default stays as-is — no measured cost; re-open only with a
+   compositor-shaped measurement (`VKR_JOURNAL=norecord` is the ready-made A/B knob).
 4. Tooling: perf-ledger PROVENANCE now records vcpus/ram — always read it before
-   comparing rows; the 4-vs-6 vCPU trap ate half of this campaign.
+   comparing rows; the 4-vs-6 vCPU trap ate half of this campaign. And **never attribute
+   from single-boot glmark2 deltas** — ±10% between boots on F44; vkmark 3-scene is the
+   stable venus-throughput instrument (±0.2% within boot).
