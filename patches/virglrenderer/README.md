@@ -37,7 +37,7 @@ This checks out `third_party/virglrenderer` at `UPSTREAM_BASE` and `git am`s the
 
 ## The series — themes
 
-(Theme list below covers the 2026-07-01 shape; the series has since grown through 0050 —
+(Theme list below covers the 2026-07-01 shape; the series has since grown through 0051 —
 themes for the later spans:)
 
 - **Ring wakeup/latency (0041, 0043-0044, 0049):** one-sleep-per-rung relax backoff, the
@@ -47,8 +47,12 @@ themes for the later spans:)
 - **Wake diagnostics + attribution (0042, 0046-0048, 0050):** `LIMINA_WAKE_TRACE`,
   `LIMINA_RING_WAKE_PROFILE`, and `VKR_JOURNAL=norecord` (skip the per-vkCmd RECORDING
   lane — measurement mode only, snapshots deliberately broken under it).
-- **M9.3/M9.4 snapshot journal (0033-0040):** re-creation journal, device-memory content
-  capture, sync fast-forward, create-arg closure pinning.
+- **M9.3/M9.4 snapshot journal (0033-0040, 0051):** re-creation journal, device-memory content
+  capture, sync fast-forward, create-arg closure pinning; 0051 = the two-lane journal — all
+  retention (hash/list/pin/prune + the shared mutex) moves to a per-journal consumer thread,
+  the decode path keeps only classify + one payload copy (transient commands: one atomic, no
+  lock/alloc). Motivated by the compositor's draws-predict-misses finding
+  (present-misses.md §17.3); snapshot readers quiesce the queue first.
 
 ### The 2026-07-01 series shape (21 patches) — themes
 
