@@ -99,14 +99,34 @@ standard EFI+venus path, gdm stopped for the master probes.
   guest-side "miss" mostly poisons the compositor's frame clock / animation timing, which
   is its own real (if softer) user-visible cost.
 
-## What we can do (assessment, not yet implemented)
+## What we can do (assessment; item 1 IMPLEMENTED 2026-07-27)
 
-1. **Arm the fence-present chain in the product** (policy flip; mechanism is shipped and
-   validated in rounds 27–29 + the ack leg). Suggested shape: worker defaults
-   fence-present ON when `LIMINA_SHOWN_ACK_FD` is present (windowed runs with a live ack
-   channel), env override to force off. Then the guest's flip event lands at the first
-   guest tick ≥ the true CA latch — honest, at the cost of ~½ host frame of reported
-   latency and a (real) increase in reported misses until the frame clock adapts.
+1. **Arm the fence-present chain in the product** — **DONE** (libkrun 0110/0111 + repo
+   92d3890): the worker defaults fence-present ON exactly when `LIMINA_SHOWN_ACK_FD`
+   is present (windowed runs with a live ack channel); `LIMINA_FENCE_PRESENT=0`/`off`
+   forces off, the `/tmp` marker stays a live force-on, and deferred presents got the
+   immediate path's readback fallback so a forced-on run is correct on ack-less sinks.
+   Guarded by the new L2 `venus_fence_present` (seated boot, chain forced on, the
+   `[FENCEPRESENT]` oracle + no-wedge + no-dropped-frames asserts) and a libkrun unit
+   test on the policy. Two side discoveries along the way: the deployed .app had been
+   running with NEITHER flip pacing NOR the round-21 present-copy mitigation (both
+   env-gated, neither set — the #31 stale-sampling race was live on dogfood), and the
+   test harness's `with_supervisor_log` captured only stderr while worker log lines
+   land on the supervisor's stdout in capture boots (both captured now).
+   `boot-enhanced-efi-kk.sh` no longer forces `LIMINA_PRESENT_COPY=1` — the windowed
+   default is now the June round-27 validated `FENCE=1 COPY=0` config.
+   With this, the guest's flip event lands at the first guest tick ≥ the true CA
+   latch — honest, at the cost of ~½ host frame of reported latency and a (real)
+   increase in reported misses until the frame clock adapts.
+   **Validation (2026-07-27):** full HVF suite green (36 test binaries, including the
+   new guard twice); seated windowed A/B on the enhanced image — A (default, no env):
+   chain engages on its own right at the venus gnome-shell handoff, 152/152 zero-copy
+   flushes parked with a 1:1 injected ring-63 fence, 0 injection failures, 0 dropped
+   frames, overview-animation storms clean, idle ~110 wakes/s, 2.5–3.5% CPU (trace
+   logging on, post-animation); B (`LIMINA_FENCE_PRESENT=0`): override honored (0
+   oracle lines), ~128 wakes/s, 1.2–1.8% CPU. No regression signal either direction;
+   the June glmark/vkmark parity stands as the throughput reference. Deploying to the
+   dogfood Mac (a fresh .app build) is the user's step.
 2. **Stable-phase vblank timer (guest kernel patch, upstreamable to drm core).** Re-arm
    with `hrtimer_forward(timer, expiry, interval)` instead of `forward_now`, and on
    re-enable anchor to the previous grid (`last_expiry + k·interval`) instead of
