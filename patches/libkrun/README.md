@@ -157,10 +157,11 @@ patch's commit message; this is the map.
   productized windowed supervisor never set it, so deployed VMs presented
   fire-and-forget (guest flip events pace against pure emulated vblank; see limina
   `spikes/present-miss/`). Policy: unset → on iff `LIMINA_SHOWN_ACK_FD` (windowed
-  workers only); `LIMINA_FENCE_PRESENT=0`/`off` forces off; any other value forces on;
-  the `/tmp` marker stays a live force-on. Ack-less sinks (headless capture, GTK) keep
-  the off default — deferred presents are unsupported there and the no-ack fallback
-  serializes compositors.
+  workers only); `LIMINA_FENCE_PRESENT=0`/`off` forces off; any other value forces on.
+  Ack-less sinks (headless capture, GTK) keep the off default — deferred presents are
+  unsupported there and the no-ack fallback serializes compositors. **0112** swaps the
+  live A/B marker for the default-on world: `touch /tmp/disable-limina-fence-present`
+  force-OFFs at runtime (rm to re-arm); the old force-on marker is gone.
 
 ### virtio-gpu: device reset lifecycle
 
