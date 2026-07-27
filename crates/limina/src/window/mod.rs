@@ -647,6 +647,13 @@ pub fn run(
     // it (the SURFACE_RING reuse race). Do not enable; use LIMINA_PRESENT_COPY. COPY wins if
     // both are set.
     let present_lock_env = std::env::var_os("LIMINA_PRESENT_LOCK").is_some();
+    // The live /tmp marker toggles are re-stat'ed at most every 500 ms, NOT per frame:
+    // a synchronous /tmp stat on the main-thread frame apply is a present-path stall
+    // source of exactly the hard-to-attribute kind (same class as libkrun 0113; the
+    // worker's fence-present toggle got the same treatment).
+    let marker_poll_at: Cell<std::time::Instant> = Cell::new(std::time::Instant::now());
+    let copy_marker = Cell::new(std::fs::metadata("/tmp/limina-present-copy").is_ok());
+    let lock_marker = Cell::new(std::fs::metadata("/tmp/limina-present-lock").is_ok());
     let copy_ring: RefCell<Vec<CFRetained<IOSurfaceRef>>> = RefCell::new(Vec::new());
     let copy_geom = Cell::new((0u32, 0u32));
     let copy_idx = Cell::new(0usize);
@@ -919,8 +926,12 @@ pub fn run(
             // it presented); the sender thread targets whichever worker is current after a relaunch.
             let ack_for_frame = Some((ack_tx.clone(), id));
             // Distinct object each frame (the worker alternates ids) → CA re-reads.
-            let present_copy =
-                present_copy_env || std::fs::metadata("/tmp/limina-present-copy").is_ok();
+            if marker_poll_at.get().elapsed() >= std::time::Duration::from_millis(500) {
+                marker_poll_at.set(std::time::Instant::now());
+                copy_marker.set(std::fs::metadata("/tmp/limina-present-copy").is_ok());
+                lock_marker.set(std::fs::metadata("/tmp/limina-present-lock").is_ok());
+            }
+            let present_copy = present_copy_env || copy_marker.get();
             if present_copy {
                 if copy_geom.get() != (width, height) {
                     copy_geom.set((width, height));
@@ -942,8 +953,7 @@ pub fn run(
                     set_layer_surface(&layer, surface, ack_for_frame);
                 }
             } else {
-                let present_lock =
-                    present_lock_env || std::fs::metadata("/tmp/limina-present-lock").is_ok();
+                let present_lock = present_lock_env || lock_marker.get();
                 if present_lock {
                     sync_surface(surface);
                 }
