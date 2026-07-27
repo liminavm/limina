@@ -142,24 +142,12 @@ standard EFI+venus path, gdm stopped for the master probes.
    to timestamp render-fence retire → guest ISR → sync_file signal, correlate with ring
    relax/park state. This is the piece our recent ring changes could have made worse.
 
-## OPEN (separate issue): aquarium FPS instability on the dev Mac — NOT from this session
+## OPEN (separate issue): aquarium FPS instability — moved to its own memo
 
-Found during fence-present validation (2026-07-27): WebGL aquarium at 500 fish
-ping-pongs 40–60 fps (seconds-long dips) where the user remembers locked-60. A/B'd to
-exoneration of everything from this session — unstable in ALL of: (a) new build +
-gpu-module trace logging (~2k sync log writes/s — a real perturbation, fixed by the
-INFO oracle + non-blocking logger, but not THE cause), (b) new build, info-only
-logging, fence-present on AND off (runtime marker), (c) **the pre-session baseline
-worker** (virtio_gpu.rs @ 8d2e68f, `COPY=1`, the exact pre-session config). Same
-window, same image clone, same host session for all three.
-
-Leads for the follow-up, in order: (1) the display-pinning trap — the historical
-locked-60 runs' guest mode/scale vs these boots' (match-host → fractional scale →
-multiplied workload; see `limina-perf-display-pinning`); (2) host state — this
-followed a full day of suites/benchmarks on this machine (thermals, WindowServer);
-(3) the mesa-cs devenv KK ICD build vs the one those historical runs used; (4) guest
-image drift (the enhanced.raw lineage vs the runs remembered). The baseline worker
-binary is stashed at `/tmp/limina-vmm-baseline` (transient).
+Found during this validation, exonerated from this session's changes, and now tracked
+outside the spike: **`docs/perf/aquarium-fps-instability.md`** (symptom per host — the
+M4 Pro barely wobbles where the M1 Max dives to the 30s — the full A/B exoneration
+record, and the ordered leads, display-pinning trap first).
 
 ## §7 (bimodal vkCreateImage) — scoped, not yet chased
 

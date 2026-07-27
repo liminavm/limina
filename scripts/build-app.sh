@@ -8,8 +8,9 @@
 # to @rpath so it resolves relative to the app (no /Volumes/mesa-cs, no third_party
 # prefixes, no Homebrew). Generates a relative-path KosmicKrisp ICD, copies the GOP
 # firmware and the gvproxy NAT helper (so `--net` works on a Mac without Homebrew),
-# writes Info.plist, and codesigns inside-out (Apple Development identity when one is
-# in the keychain — keeps TCC grants stable across redeploys — ad-hoc otherwise). The
+# writes Info.plist, and codesigns inside-out with an Apple Development identity from
+# the keychain (keeps TCC grants stable across redeploys; ad-hoc only by explicit
+# opt-in — LIMINA_SIGN_IDENTITY="-" or LIMINA_ALLOW_ADHOC=1 — otherwise abort). The
 # supervisor sets the
 # remaining bundle-relative venus env (VK_ICD_FILENAMES + the zink-on-KK Mesa selectors)
 # when it detects it's running from the bundle — see crates/limina/src/venus_env.rs.
@@ -57,6 +58,66 @@ GVPROXY="${LIMINA_GVPROXY_BIN:-/opt/homebrew/bin/gvproxy}"
 for f in "$VIRGL" "$EPOXY" "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$GOP_FD" "$GVPROXY"; do
   [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(build KK/zink on the mesa-cs volume, build the GOP firmware, or 'brew install gvproxy' / set LIMINA_GVPROXY_BIN)" >&2; exit 1; }
 done
+
+# ---- signing identity (resolved FIRST so a locked keychain fails in seconds, ------
+#      not after the whole build) ---------------------------------------------------
+# Prefer a REAL identity over ad-hoc: TCC pins an ad-hoc app's Accessibility grant to
+# the build's CDHash, so key-combo capture silently breaks on EVERY redeploy (System
+# Settings keeps showing the checkbox ON). With an identity we additionally pin the
+# app's designated requirement to identifier+team (subject.OU) instead of codesign's
+# default leaf-CN pin, so grants also survive certificate reissue.
+# LIMINA_SIGN_IDENTITY overrides autodetection; set it to "-" to force ad-hoc.
+# Ad-hoc is NEVER a silent fallback: without an explicit "-" (or LIMINA_ALLOW_ADHOC=1)
+# a missing/unusable identity ABORTS the build — a warning that scrolls past has
+# already shipped an undeployable bundle once.
+SIGN_ID="${LIMINA_SIGN_IDENTITY:-}"
+if [ -z "$SIGN_ID" ]; then
+  SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+             | sed -n 's/.*\([0-9A-F]\{40\}\) "Apple Development.*/\1/p' | head -1)"
+fi
+if [ -n "$SIGN_ID" ] && [ "$SIGN_ID" != "-" ]; then
+  # Probe the identity before committing to it: keychain signing is context-dependent —
+  # the usual failure is a LOCKED login keychain in this security session (fresh ssh
+  # logins start locked; sessions descending from an unlocked one — GUI login, a
+  # long-lived mux server — keep working). Session type alone doesn't matter: a
+  # Background session with the keychain unlocked signs fine (verified 2026-07-27).
+  PROBE="$(mktemp)" && cp /bin/ls "$PROBE"
+  if ! codesign -s "$SIGN_ID" --force "$PROBE" >/dev/null 2>&1; then
+    echo "==> WARNING: identity '$SIGN_ID' found but UNUSABLE from this shell —" >&2
+    echo "    most likely the login keychain is LOCKED in this session. Try:" >&2
+    echo "      security unlock-keychain ~/Library/Keychains/login.keychain-db" >&2
+    echo "    (key-ACL denial is the rarer cause; see security set-key-partition-list)." >&2
+    SIGN_ID=""
+  else
+    # Read the team (cert subject.OU) off the probe now — the worker signature needs
+    # the team-pinned DR, and computing it here avoids a chicken-and-egg re-sign of
+    # the sealed bundle.
+    TEAM="$(codesign -dvv "$PROBE" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+  fi
+  rm -f "$PROBE"
+fi
+
+# The team-pinned designated requirement, shared by the app AND the worker so both satisfy
+# the same TCC grants (see the codesign section below). Empty when signing ad-hoc.
+DR=""
+if [ "$SIGN_ID" != "-" ] && [ -n "${TEAM:-}" ] && [ "$TEAM" != "not set" ]; then
+  DR="designated => identifier \"eti.noronha.limina\" and anchor apple generic and certificate leaf[subject.OU] = \"$TEAM\""
+fi
+if [ -z "$SIGN_ID" ]; then
+  if [ "${LIMINA_ALLOW_ADHOC:-0}" != "1" ]; then
+    echo "==> ERROR: no usable signing identity, refusing to build an AD-HOC bundle." >&2
+    echo "    Ad-hoc TCC grants pin to the CDHash, so key-combo capture (and the mic" >&2
+    echo "    grant) break on EVERY redeploy — an ad-hoc bundle must never reach the" >&2
+    echo "    dogfood Mac. Fix the identity (unlock the keychain, or Xcode → Settings →" >&2
+    echo "    Accounts → Manage Certificates), or explicitly opt in to ad-hoc with" >&2
+    echo "    LIMINA_ALLOW_ADHOC=1 (or LIMINA_SIGN_IDENTITY='-')." >&2
+    exit 1
+  fi
+  SIGN_ID="-"
+  echo "==> WARNING: signing AD-HOC (LIMINA_ALLOW_ADHOC=1). The Accessibility grant" >&2
+  echo "    (key-combo capture) will break on every redeploy (TCC pins the CDHash)." >&2
+  echo "    DO NOT deploy this bundle to the dogfood Mac." >&2
+fi
 
 echo "==> building limina + limina-vmm ($PROFILE)"
 cargo build ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} -p limina -p limina-vmm
@@ -222,49 +283,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 # ---- codesign inside-out ----------------------------------------------------------
-# Prefer a REAL identity over ad-hoc: TCC pins an ad-hoc app's Accessibility grant to
-# the build's CDHash, so key-combo capture silently breaks on EVERY redeploy (System
-# Settings keeps showing the checkbox ON). With an identity we additionally pin the
-# app's designated requirement to identifier+team (subject.OU) instead of codesign's
-# default leaf-CN pin, so grants also survive certificate reissue.
-# LIMINA_SIGN_IDENTITY overrides autodetection; set it to "-" to force ad-hoc.
-SIGN_ID="${LIMINA_SIGN_IDENTITY:-}"
-if [ -z "$SIGN_ID" ]; then
-  SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
-             | sed -n 's/.*\([0-9A-F]\{40\}\) "Apple Development.*/\1/p' | head -1)"
-fi
-if [ -n "$SIGN_ID" ] && [ "$SIGN_ID" != "-" ]; then
-  # Probe the identity before committing to it: keychain signing is context-dependent —
-  # a shell without SecurityAgent access (CI, agent-driven sessions) gets
-  # errSecInternalComponent even though the identity is valid. Run deploy builds from a
-  # normal terminal to get the identity-signed artifact.
-  PROBE="$(mktemp)" && cp /bin/ls "$PROBE"
-  if ! codesign -s "$SIGN_ID" --force "$PROBE" >/dev/null 2>&1; then
-    echo "==> WARNING: identity '$SIGN_ID' found but UNUSABLE from this shell (keychain" >&2
-    echo "    denied — locked, key ACL, or no SecurityAgent in this session)." >&2
-    SIGN_ID=""
-  else
-    # Read the team (cert subject.OU) off the probe now, before signing anything real —
-    # the worker signature (below) needs the team-pinned DR, and computing it here avoids
-    # a chicken-and-egg re-sign of the sealed bundle.
-    TEAM="$(codesign -dvv "$PROBE" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
-  fi
-  rm -f "$PROBE"
-fi
-
-# The team-pinned designated requirement, shared by the app AND the worker so both satisfy
-# the same TCC grants (see below). Empty when signing ad-hoc.
-DR=""
-if [ "$SIGN_ID" != "-" ] && [ -n "${TEAM:-}" ] && [ "$TEAM" != "not set" ]; then
-  DR="designated => identifier \"eti.noronha.limina\" and anchor apple generic and certificate leaf[subject.OU] = \"$TEAM\""
-fi
-if [ -z "$SIGN_ID" ]; then
-  SIGN_ID="-"
-  echo "==> WARNING: signing AD-HOC. The Accessibility grant (key-combo capture) will" >&2
-  echo "    break on every redeploy (TCC pins the CDHash). DO NOT deploy this bundle to" >&2
-  echo "    the dogfood Mac; rebuild from a terminal with an Apple Development identity" >&2
-  echo "    (Xcode → Settings → Accounts → Manage Certificates), or set LIMINA_SIGN_IDENTITY." >&2
-fi
+# $SIGN_ID and $DR were resolved (and the identity probed) at the top of the script,
+# before the build — see "signing identity" up there for the TCC rationale.
 echo "==> codesigning as '$SIGN_ID' (dylibs → worker → supervisor → app)"
 find "$FW" -type f -name '*.dylib' -exec codesign -s "$SIGN_ID" --force {} \;
 # The worker (limina-vmm), not the app main, is the process that opens CoreAudio for `--mic`.
