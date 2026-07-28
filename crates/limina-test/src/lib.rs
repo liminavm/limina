@@ -2548,7 +2548,12 @@ impl Drop for Guest {
         // bounded window, then the forced path nets everything.
         let grace = Duration::from_secs(8);
         let _ = self.terminate(grace);
-        let _ = fs::remove_dir_all(&self.scratch);
+        // LIMINA_TEST_KEEP_SCRATCH=1 preserves the scratch dir (console/supervisor
+        // logs, snapshot) for post-mortem — the logs are otherwise unrecoverable
+        // when a multi-generation test fails past its first restore.
+        if std::env::var_os("LIMINA_TEST_KEEP_SCRATCH").is_none() {
+            let _ = fs::remove_dir_all(&self.scratch);
+        }
         if let Some(sock) = &self.vsock_socket {
             let _ = fs::remove_file(sock);
         }

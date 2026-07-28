@@ -110,3 +110,21 @@ date,commit,workload,metric,value,notes
 2026-07-27,d892f91,vkmark-3scene-venus,score,2365,relax-tune: relax fully OFF ceiling (dylib @ 83d9a3c) — 2311/2365/2399; upstream per-iter ladder; the idle-wakeup disaster config
 2026-07-27,d892f91,vkmark-3scene-venus,score,2307,journal attribution: VKR_JOURNAL=norecord (virgl 0050) — 2296/2307/2308 vs 2304 full journal; RECORDING lane not measurable; glmark2 'journal 9%' VOIDED (±10% between-boot variance)
 2026-07-27,5b89118,vkmark-3scene-venus,score,2484,two-lane journal (virgl 0051) + ladder v2 — 2639/2462/2484; +7.8% over 0049 alone (2304) and ABOVE the old relax-off ceiling 2365 (ceiling was measured with the inline journal); idle 246-317 intr/s; F44 enh 4vcpu 1280x800@1.0
+2026-07-28,12e7fd9,gl-replay-venus,fps,48.2219,tier-battery vs virgl zero-copy (12e7fd9): same-day A/B, F44 enh, 4vcpu 1280x800@1.0
+2026-07-28,12e7fd9,gl-replay-llvmpipe,fps,762.316,tier-battery vs virgl zero-copy (12e7fd9): same-day A/B, F44 enh, 4vcpu 1280x800@1.0
+2026-07-28,12e7fd9,glmark2-wayland-venus,score,2157,tier-battery vs virgl zero-copy (12e7fd9): same-day A/B, F44 enh, 4vcpu 1280x800@1.0
+2026-07-28,12e7fd9,gl-replay-virgl,fps,47.1315,tier-battery vs virgl zero-copy (12e7fd9): same-day A/B, stock F44 virglprobe clone, 4vcpu 1280x800@1.0
+2026-07-28,12e7fd9,gl-replay-llvmpipe-stockguest,fps,752.952,tier-battery vs virgl zero-copy (12e7fd9): same-day A/B, stock F44 virglprobe clone, 4vcpu 1280x800@1.0
+2026-07-28,12e7fd9,glmark2-wayland-virgl,score,5325,tier-battery vs virgl zero-copy (12e7fd9): same-day A/B, stock F44 virglprobe clone, 4vcpu 1280x800@1.0 — runs 5258/5325/5378
+2026-07-28,12e7fd9,vkmark-default-venus,score,2140,tier-battery vs virgl zero-copy (12e7fd9): same-day A/B, stock F44 virglprobe clone, 4vcpu 1280x800@1.0 — 2140/2132 dnf vkmark (NOT the ledger 3-scene binary; version confound possible)
+2026-07-28,12e7fd9,aquarium-1000-virgl,fps,60,tier-battery heavy-frame leg: WebGL aquarium 1024x1024 canvas, stock F44 virglprobe clone, 4vcpu 1280x800@1.0 — crop perf/evidence/aquarium-2026-07-28/virgl-zerocopy-1000-fps.png
+2026-07-28,12e7fd9,aquarium-5000-virgl,fps,60,tier-battery heavy-frame leg: stock F44 virglprobe clone
+2026-07-28,12e7fd9,aquarium-10000-virgl,fps,57,tier-battery heavy-frame leg: stock F44 virglprobe clone
+2026-07-28,12e7fd9,aquarium-1000-venus,fps,60,tier-battery heavy-frame leg: F44 enh clone, 4vcpu 1280x800@1.0 — crop perf/evidence/aquarium-2026-07-28/venus-1000-fps.png
+2026-07-28,12e7fd9,aquarium-5000-venus,fps,60,tier-battery heavy-frame leg: F44 enh clone
+2026-07-28,12e7fd9,aquarium-10000-venus,fps,53,tier-battery heavy-frame leg: F44 enh clone — virgl 57 vs venus 53 at 10k fish; virgl ahead even on the heaviest frame
+2026-07-28,052bae4,drawstorm-10k-venus,ms-frame,8.970,BASELINE venus cmdstream probe (spikes/venus-cmdstream-probe) 10k draw+push pairs/frame offscreen; F44 enh probe clone 4vcpu; host-native KK same workload = 3.676
+2026-07-28,052bae4,drawstorm-10k-venus,ms-frame,6.977,AFTER virgl 0054 (rtlog cache + journal msg-inline + batched push, create-drain): +29% fps; venus tax over native 5.29->3.30ms (-38%); pin MISS 0
+2026-07-28,a9648f1,drawstorm-10k-venus,ms-frame,6.672,AFTER virgl 0055 (journal recording block lane: zero-alloc near-lockless capture + consumer batch-pop) — fresh-boot; decode lane clear of journal/allocator in profile; remaining = KK descriptor-root/heap churn + lookup mutex (Phase 2)
+2026-07-28,d9d1a72,drawstorm-10k-native,ms-frame,2.557,AFTER kk 0015 (cmd-pool BO cache default 512): host-native KK 3.676->2.557 (+44% fps); mtl_new_heap gone from profile
+2026-07-28,d9d1a72,drawstorm-10k-venus,ms-frame,5.922,AFTER kk 0015 stacked on virgl 0054+0055: guest 6.67->5.92 (169fps, +51% cumulative over 8.97 baseline); replay branch now dominated by real AGX encode

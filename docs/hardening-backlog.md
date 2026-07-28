@@ -369,6 +369,23 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
 
 ## M9 snapshot hardening (from the 2026-07-18 transport-restore removal)
 
+- **OPEN 2026-07-28: gen-2 restore loses buffer creates → `seated_gnome_session_survives_snapshot_restore`
+  FAILS INTERMITTENTLY (pre-existing, NOT the virgl-0054/0055 journal batching).** Failed
+  3 consecutive runs on 2026-07-28 (including once on the pre-0054 baseline dylib), then
+  passed the same evening's full-suite run with 0055 — timing-dependent, not deterministic.
+  Failure shape: the gen-1 restore's replay logs ~7 tolerated `replay: entry failed` drops (buffer ids,
+  `failed to look up object N of type 9`, gnome-shell ctx), meaning the FIRST live-recorded
+  journal is already missing those `vkCreateBuffer` entries; the journal re-baselined during
+  gen-1 replay inherits the holes, and after the SECOND restore the parked `vkpipeline.py`
+  client's queue dies (`vkQueueWaitIdle` → -13 at beat 29). Bisect evidence: reproduces
+  identically on the pre-0054 dylib (0053 tip) — three runs, same shape. The suite was
+  reported 40/40 at 12e7fd9 the same day, so either that run's pass was environmental or the
+  gen-2 leg silently skipped; treat TODAY's failure as the ground truth. Repro:
+  `LIMINA_TEST_KEEP_SCRATCH=1 scripts/test-boot.sh debug seated_gnome_session_survives_snapshot_restore`
+  (keep-scratch preserves all three generations' supervisor logs). Attack: find why live
+  recording misses consecutive buffer creates (orphan_adds? dropped_fatal? check
+  `vkr_journal_get_stats` counters at first export) before suspecting the replay side.
+
 - **FIXED 2026-07-20 (virglrenderer 0040): the vkmark-on-resume crash — journal create-arg
   closure.** Root cause was neither candidate shape: the journal pruned a destroyed object's
   create entry even when a retained CREATE referenced the id in its wire args (pipeline ←
