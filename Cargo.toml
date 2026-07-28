@@ -63,5 +63,14 @@ ciborium          = "0.2"
 # the workspace root that actually builds the graph (third_party is excluded from the workspace,
 # so libkrun's crates are path deps in *our* build). Vendor/patch with scripts/apply-imago-patch.sh;
 # rationale in patches/imago/README.md + spikes/m10-disk-durability/RESULTS.md.
+# The present path converts full frames per-pixel (readback presents: RGBA→BGRA swizzle
+# into the canvas). Unoptimized + debug-assert'd, that's ~60-100 ms per 2560×1440 frame —
+# it made every debug boot of the virgl tier look "slower than software-2D" (2026-07-28)
+# and cost a day of regression-hunting. Optimize just this crate in dev builds so dev
+# boots show representative present performance; its logic is covered by tests, and
+# debugging the swizzle itself is the rare case (comment this out for that).
+[profile.dev.package.limina-display]
+opt-level = 3
+
 [patch.crates-io]
 imago = { path = "third_party/imago" }

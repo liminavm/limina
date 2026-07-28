@@ -411,39 +411,40 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   fail soft on a not-ready/invalid ring.
 
 ## GPU / rendering perf
-- **Stock-tier virgl (vrend GL) desktop is far slower than expected — suspected regression.** Observed
-  2026-07-24 on a pristine stock **F44 accessible** guest (venus coexist, `--usb`): GNOME is very
-  sluggish and a WebGL "blob" demo runs at **~17 fps**. This is NOT software-2D (worker log:
-  `virtio-gpu virgl_flags = 0x35b, software_2d = false (coexist = true)`; the worker links our
-  `third_party/virgl-prefix`, not Homebrew) — the guest brings up an accelerated context
-  (`virgl: gl_version 31 - es profile enabled`, `GLSL feature level 310`). vrend GL is the *degraded*
-  stock tier by design (venus/Vulkan is the enhanced fast path), but ~17 fps on a trivial WebGL scene
-  is worse than "degraded" should be, so **treat as a possible regression in the virgl/vrend→zink→KK
-  path**, not expected behavior.
-  - **Decisive signal (2026-07-24, user):** even basic GNOME window/overview **animations are slow —
-    and those are smooth under software-2D**. So the "accelerated" path is *slower than the CPU 2D
-    path*. That points squarely at **per-frame present/transfer overhead, not GL/shader throughput** —
-    every composited frame pays a cost software-2D doesn't. The prime lead below (>100 copy boxes)
-    most likely fires on the per-frame scanout/framebuffer copy: each frame fragmented into 100+ Metal
-    copies fits the symptom. Localize by comparing the present/copy path against the (fast) software-2D
-    path.
-  - **Prime lead:** repeating `MESA: warning: zink: PERF WARNING! > 100 copy boxes detected for 0x…`
-    in the worker log — zink-on-KK (which backs the GL path) is fragmenting each resource transfer
-    into 100+ individual copies, a classic zink pathological slow path. Start here: why are transfers
-    hitting the >100-copy-box path (tiling/format mismatch forcing per-box copies?), and did a recent
-    virgl/zink/KK change introduce it.
-  - **To confirm regression:** bisect against a known-good stock-guest GL baseline (was stock virgl
-    perf ever measured — check `docs/perf/`, `spikes/virgl-zink-kk/`, git history of `patches/virglrenderer`
-    + `patches/kosmickrisp`). The recent clear-rect fixes (`patches/virglrenderer/0045`,
-    `patches/kosmickrisp/0009`) are on the **venus/vkr + vk_meta** paths, not vrend GL — unlikely the
-    cause, but rule them out.
-  - **Benign, ruled out as the cause:** the `Mesa: error GL_INVALID_ENUM in glTexImage2D(...)` lines are
-    one-time startup format-capability probing (36 total, not per-frame); the
-    `vrend_decode_ctx_submit_cmd: … "gst-plugin-scan" Illegal command buffer` errors are gst-plugin-scan
-    GL probing at startup (the clear-rect-sibling zero-area class).
-  - Repro vehicle for a later session: `LIMINA_DISK=<stock-clone> LIMINA_EXTRA_ARGS="--usb"
-    spikes/venus-draw-probe/boot-enhanced-efi-kk.sh`, then a WebGL demo in guest Firefox (seated).
-    Memory: `limina-virgl-vrend-perf`.
+- **Stock-tier virgl (vrend GL) desktop slowness — ROOT-CAUSED 2026-07-28: a DEBUG-build present-path
+  artifact, NOT a virgl regression.** The virgl present path is readback-per-frame (only venus blobs are
+  IOSurface-backed; `flush_resource` falls back to `transfer_read` → staging → per-pixel RGBA→BGRA
+  convert → canvas upload, `virtio_gpu.rs` / `limina-display::iosurface`). In a debug build that
+  per-pixel convert (with debug asserts) costs ~60-100 ms per 2560×1440 frame → ~8-9 presents/s —
+  *slower than software-2D* because sw-2D's guest framebuffer is already canvas-ordered (plain memcpy,
+  cheap even unoptimized). Both sightings (2026-07-24 and 2026-07-28) were debug boots
+  (`cargo xtask run` builds debug). **On a release worker the same guest animates at 60 fps** (median
+  FLUSH2 gap 16.8 ms during overview animation; the apparent "repeating ~0.5/1 s stalls" were the drive
+  loop's own idle gaps — user eyeball confirms "night and day").
+  - **Fixed for dev boots:** `[profile.dev.package.limina-display] opt-level = 3` in the root
+    `Cargo.toml`, so debug boots present at representative speed.
+  - **Remaining, by design but worth fixing — zero-copy vrend scanout.** virgl presents pay
+    readback (~2 ms) + convert (~4 ms release) + upload every frame, and the readback path bypasses
+    the fence-accurate present (`FENCEPRESENT` never fires there). Residual jank on release (user,
+    2026-07-28) is the expected symptom. The venus zero-copy chain (KK IOSurface-backed VkImage →
+    `rutabaga.iosurface_id()` → `present_surface`) has a natural vrend analogue, all in layers we own:
+    zink allocates `PIPE_BIND_SCANOUT` resources IOSurface-backed on KK → vrend exposes a
+    resource→IOSurface query → rutabaga extends `iosurface_id()` to vrend resources → the worker's
+    plain `set_scanout` resolves it exactly like `set_scanout_blob` already does. Spike first: prove
+    zink-on-KK can export an IOSurface-backed scanout texture. This also puts virgl on the
+    fence-accurate present path.
+  - **Unverified leftover:** the 07-24 "~17 fps WebGL blob" was measured on a debug boot too — re-bench
+    GL throughput on release before treating vrend shader/draw perf as a problem. The
+    `>100 copy boxes` zink warning was a red herring for presents (it's upload-side, latches once per
+    resource); revisit only if release GL throughput still disappoints.
+  - **Benign, ruled out:** the `Mesa: error GL_INVALID_ENUM in glTexImage2D(...)` lines are one-time
+    startup format probing; `vrend_decode_ctx_submit_cmd … "gst-plugin-scan" Illegal command buffer`
+    (guest kernel `SUBMIT_3D → RESP_ERR_UNSPEC` at session start) is startup GL probing.
+  - Probe recipe that cracked it: boot the stock clone with
+    `RUST_LOG=info,limina_vmm=debug,krun_devices=trace` (worker logs now carry **µs timestamps**),
+    drive the overview via `busctl --user set-property … OverviewActive b true|false` over ssh, take
+    `sample <worker-pid>` during animation, and read FLUSH2 gap distributions. Memory:
+    `limina-virgl-vrend-perf`.
 
 ---
 

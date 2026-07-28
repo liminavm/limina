@@ -398,7 +398,11 @@ fn raise_fd_limit() {
 fn init_worker_logging() {
     let env = env_logger::Env::default().default_filter_or("warn");
     if std::env::var_os("LIMINA_LOG_BLOCKING").is_some() {
-        env_logger::Builder::from_env(env).init();
+        // Microsecond timestamps: per-frame work (present, fences) is sub-millisecond —
+        // second-resolution stamps make inter-event timing unreadable in trace captures.
+        env_logger::Builder::from_env(env)
+            .format_timestamp_micros()
+            .init();
         return;
     }
     let (writer, guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
@@ -431,6 +435,7 @@ fn init_worker_logging() {
         });
     env_logger::Builder::from_env(env)
         .target(env_logger::Target::Pipe(Box::new(writer)))
+        .format_timestamp_micros()
         .init();
 }
 
