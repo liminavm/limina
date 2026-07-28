@@ -196,3 +196,36 @@ Remaining (deferred per user — "first make it work, then add features to KK"):
   no `VK_ICD_FILENAMES` at runtime) — the dev path uses `boot-virgl-guest.sh`'s env exports.
 - **Characterize the venus→virgl→sw selection** more fully (host advertises all capsets; guest Mesa
   picks per its kernel page size / driver support).
+
+---
+
+## 2026-07-28 — iosurfpbo: vrend→IOSurface pinned-PBO scanout (design plan A1) — PASS
+
+Probe: `iosurfpbo.c` (`run-probe.sh iosurfpbo`). Question: on the exact vrend host config
+(surfaceless EGL, GLES 3.1, zink-on-KK) can glReadPixels into a `GL_AMD_pinned_memory`
+PBO whose client memory is `IOSurfaceGetBaseAddress` land pixels in the IOSurface, and
+what does it cost? (docs/design/vrend-iosurface-scanout.md)
+
+```
+GL_AMD_pinned_memory : EXPOSED     (after patches/kosmickrisp/0014 — mesa gated it
+                                    to desktop GL; the gallium path is API-agnostic)
+EGL_ANDROID_native_fence_sync : ADVERTISED, create OK, wait SATISFIED
+glFenceSync                   : OK, wait SATISFIED
+pixel corner(8,8)  = (255,26,26,255)  OK   ← scissored region, via IOSurfaceLock readback
+pixel body(504,504)= (51,102,153,255) OK
+A1 blit 2560x1440 (draw + glReadPixels + glFinish): 0.65 ms/frame (60 frames)
+RESULT: PASS
+```
+
+Findings:
+- **A1 is viable and cheap**: 0.65 ms/frame *worst-case* (full glFinish per frame) vs the
+  ~6 ms/frame release-build CPU chain (readback+convert+upload) it replaces — and the new
+  cost is GPU-side, freeing the CPU entirely. RGBA IOSurface + GL_RGBA readback avoids
+  any swizzle.
+- **The suspected-broken EGL native fence path works** for create+wait on zink-on-KK
+  (`vrend_state.use_egl_fence` will be true and functional). `eglDupNativeFenceFDANDROID`
+  export was NOT probed — vrend's `do_wait` prefers dup+poll and falls back to
+  `eglClientWaitSync`; verify the fallback engages cleanly during wiring.
+- `GL_PACK_ROW_LENGTH` handles IOSurface `bytesPerRow` ≠ tight rows; the 512-wide test
+  surface got bpr=2048 (tight) — 2560-wide also tight (10240). Non-tight cases remain
+  covered by the row-length pixelstore.

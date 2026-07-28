@@ -26,6 +26,7 @@ LIBDIR="$(find "$PREFIX" -name 'libEGL*.dylib' -maxdepth 3 2>/dev/null | head -1
 # (+ libGLESv2 for eglprobe's direct ES calls). No libGL — glx/glvnd are disabled in the build.
 EXTRA_LIBS="-lGLESv2"
 [ "$PROBE" = glprobe ] && EXTRA_LIBS=""
+[ "$PROBE" = iosurfpbo ] && EXTRA_LIBS="-lGLESv2 -framework IOSurface -framework CoreFoundation"
 cc -o "$HERE/$PROBE" "$HERE/$PROBE.c" \
   -I"$PREFIX/include" -L"$LIBDIR" -lEGL $EXTRA_LIBS \
   -Wl,-rpath,"$LIBDIR"
