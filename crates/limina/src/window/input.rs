@@ -31,7 +31,7 @@ use objc2_foundation::{NSPoint, NSRect};
 
 use limina_input::constants::{
     ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
-    REL_WHEEL, REL_X, REL_Y,
+    REL_HWHEEL_HI_RES, REL_WHEEL, REL_WHEEL_HI_RES, REL_X, REL_Y,
 };
 use limina_input::keymap::{
     capslock_on, macos_keycode_to_linux_remapped, modifier_emit, CapsLockSync, KeyRemap, ModEmit,
@@ -237,6 +237,46 @@ impl HostCursor {
 
 /// Main-thread input translator. Tracks which modifier keys are currently held so
 /// `flagsChanged` (which carries no up/down) can be turned into press/release pairs.
+/// Finger travel (in view points) that scrolls as far as one wheel detent in the guest.
+/// GTK apps scroll ~3 lines (~50-60 px) per detent, so ~53 makes guest content track the
+/// finger roughly 1:1, matching the native macOS feel (Chromium uses the same 53 px/tick).
+const SCROLL_POINTS_PER_DETENT: f64 = 53.0;
+
+/// Per-axis scroll accumulator: converts continuous macOS scrolling deltas into evdev's
+/// dual-rate wheel — hi-res "v120" events (1/120th of a detent) for every input, plus a
+/// legacy detent event whenever the accumulated hi-res motion crosses ±120, exactly like
+/// the kernel's HID core. `carry` keeps the sub-unit rounding residue so slow drags never
+/// lose motion; `detent_acc` is the v120 progress toward the next legacy notch.
+#[derive(Clone, Copy, Default)]
+struct ScrollAxis {
+    carry: f64,
+    detent_acc: i32,
+}
+
+impl ScrollAxis {
+    /// Advance the axis by one event's delta and return `(v120, detents)` to emit. Precise
+    /// deltas (trackpad / Magic Mouse, in points) map through [`SCROLL_POINTS_PER_DETENT`];
+    /// non-precise ones (a physical wheel, line-based units with device-dependent scaling)
+    /// keep the legacy one-notch-per-event behavior, expressed in both rates.
+    fn step(&mut self, delta: f64, precise: bool) -> (i32, i32) {
+        if delta == 0.0 {
+            return (0, 0);
+        }
+        let v120 = if precise {
+            let exact = delta * (120.0 / SCROLL_POINTS_PER_DETENT) + self.carry;
+            let rounded = exact.round();
+            self.carry = exact - rounded;
+            rounded as i32
+        } else {
+            delta.signum() as i32 * 120
+        };
+        self.detent_acc += v120;
+        let detents = self.detent_acc / 120;
+        self.detent_acc -= detents * 120;
+        (v120, detents)
+    }
+}
+
 pub struct InputState {
     /// The current worker's input sink fds (swapped on a reboot relaunch). Read fresh per event.
     conn: Arc<WorkerConn>,
@@ -281,6 +321,9 @@ pub struct InputState {
     /// letterboxed fit rect). The absolute-pointer transform and the inside-gate go through
     /// it, so the pointer can never disagree with the pixels. Same main thread → `Rc<Cell>`.
     fit: Rc<Cell<super::fit::FitRect>>,
+    /// Hi-res scroll accumulators (vertical, horizontal) — see [`ScrollAxis`].
+    scroll_y: Cell<ScrollAxis>,
+    scroll_x: Cell<ScrollAxis>,
 }
 
 impl InputState {
@@ -304,6 +347,8 @@ impl InputState {
             ungrab_armed: Cell::new(false),
             capture_pos,
             fit,
+            scroll_y: Cell::new(ScrollAxis::default()),
+            scroll_x: Cell::new(ScrollAxis::default()),
         }
     }
 
@@ -670,23 +715,43 @@ impl InputState {
 
     fn emit_scroll(&self, event: &NSEvent) {
         self.cancel_ungrab_chord();
-        // macOS deltas are continuous; emit one wheel notch per event in the delta's
-        // direction (crude but usable; precise pixel scrolling is a later refinement).
+        // Trackpads and Magic Mice report precise point deltas (momentum-phase events
+        // included, so guest kinetic decay comes free); those flow through the v120
+        // accumulators for pixel-smooth guest scrolling. Physical wheels don't, and keep
+        // the legacy one-notch-per-event mapping inside `ScrollAxis::step`.
+        let precise = event.hasPreciseScrollingDeltas();
         let dy = event.scrollingDeltaY();
-        let dx = event.scrollingDeltaX();
-        let mut any = false;
-        if dy.abs() > 0.0 {
-            self.send_ptr(InputEvent::new(EV_REL, REL_WHEEL, dy.signum() as i32));
-            any = true;
-        }
-        if dx.abs() > 0.0 {
-            // Natural macOS scroll: right swipe = negative dx; REL_HWHEEL right = +1.
-            self.send_ptr(InputEvent::new(EV_REL, REL_HWHEEL, (-dx.signum()) as i32));
-            any = true;
-        }
+        // Natural macOS scroll: right swipe = negative dx; REL_HWHEEL right = +1.
+        let dx = -event.scrollingDeltaX();
+        let mut any =
+            self.emit_scroll_axis(&self.scroll_y, dy, precise, REL_WHEEL_HI_RES, REL_WHEEL);
+        any |= self.emit_scroll_axis(&self.scroll_x, dx, precise, REL_HWHEEL_HI_RES, REL_HWHEEL);
         if any {
             self.send_ptr(InputEvent::syn());
         }
+    }
+
+    /// Step one scroll axis and emit its dual-rate wheel events: the hi-res v120 delta for
+    /// every input, and the legacy detent event whenever the accumulation crosses a notch
+    /// (libinput ignores the latter on a hi-res device; older guest stacks need it).
+    fn emit_scroll_axis(
+        &self,
+        axis: &Cell<ScrollAxis>,
+        delta: f64,
+        precise: bool,
+        hi_res_code: u16,
+        detent_code: u16,
+    ) -> bool {
+        let mut a = axis.get();
+        let (v120, detents) = a.step(delta, precise);
+        axis.set(a);
+        if v120 != 0 {
+            self.send_ptr(InputEvent::new(EV_REL, hi_res_code, v120));
+        }
+        if detents != 0 {
+            self.send_ptr(InputEvent::new(EV_REL, detent_code, detents));
+        }
+        v120 != 0 || detents != 0
     }
 
     fn send_kbd(&self, ev: InputEvent) {
@@ -840,5 +905,69 @@ mod tests {
     fn ungrab_chord_rearms_after_a_disarm_once_exactly_ctrl_opt_again() {
         // Cmd joined (disarmed), then Cmd lifted leaving exactly Ctrl+Opt: armed again.
         assert_eq!(ungrab_chord_step(false, CONTROL | OPTION), (true, false));
+    }
+
+    #[test]
+    fn precise_scroll_maps_one_detents_worth_of_points_to_exactly_120() {
+        let mut a = ScrollAxis::default();
+        let (v120, detents) = a.step(SCROLL_POINTS_PER_DETENT, true);
+        assert_eq!((v120, detents), (120, 1));
+        // And the accumulators are back at zero: no residue after an exact detent.
+        assert_eq!(a.step(SCROLL_POINTS_PER_DETENT, true), (120, 1));
+    }
+
+    #[test]
+    fn precise_scroll_carries_rounding_residue_so_slow_drags_lose_nothing() {
+        // 53 one-point steps must add up to exactly one detent's worth of v120 despite
+        // each step rounding to an integer (120/53 ≈ 2.264 per point).
+        let mut a = ScrollAxis::default();
+        let mut total_v120 = 0;
+        let mut total_detents = 0;
+        for _ in 0..53 {
+            let (v120, detents) = a.step(1.0, true);
+            total_v120 += v120;
+            total_detents += detents;
+        }
+        assert_eq!(total_v120, 120);
+        assert_eq!(total_detents, 1);
+    }
+
+    #[test]
+    fn precise_scroll_negative_direction_mirrors_positive() {
+        let mut a = ScrollAxis::default();
+        assert_eq!(a.step(-SCROLL_POINTS_PER_DETENT, true), (-120, -1));
+        // Partial negative motion: v120 flows, no detent until -120 accumulates.
+        let mut b = ScrollAxis::default();
+        let (v120, detents) = b.step(-10.0, true);
+        assert!(v120 < 0);
+        assert_eq!(detents, 0);
+    }
+
+    #[test]
+    fn direction_reversal_drains_the_detent_accumulator_without_a_phantom_notch() {
+        // Scroll almost a notch down, then back up the same amount: net zero, and no
+        // detent may fire in either direction.
+        let mut a = ScrollAxis::default();
+        let (_, d1) = a.step(20.0, true);
+        let (_, d2) = a.step(-20.0, true);
+        assert_eq!((d1, d2), (0, 0));
+        assert_eq!(a.detent_acc, 0);
+    }
+
+    #[test]
+    fn wheel_scroll_keeps_one_notch_per_event_in_both_rates() {
+        // Non-precise (physical wheel) deltas are device-scaled line counts; the legacy
+        // behavior — one notch per event in the delta's direction — is preserved, now
+        // expressed as ±120 hi-res plus the ±1 detent.
+        let mut a = ScrollAxis::default();
+        assert_eq!(a.step(0.1, false), (120, 1));
+        assert_eq!(a.step(-3.0, false), (-120, -1));
+    }
+
+    #[test]
+    fn zero_delta_is_inert() {
+        let mut a = ScrollAxis::default();
+        assert_eq!(a.step(0.0, true), (0, 0));
+        assert_eq!(a.step(0.0, false), (0, 0));
     }
 }

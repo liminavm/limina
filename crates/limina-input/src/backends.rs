@@ -167,7 +167,10 @@ impl InputQueryConfig for PointerConfig {
         Ok(match event_type as u16 {
             EV_KEY => write_bitmap(bitmap_buf, &[BTN_LEFT, BTN_RIGHT, BTN_MIDDLE]),
             EV_ABS => write_bitmap(bitmap_buf, &[ABS_X, ABS_Y]),
-            EV_REL => write_bitmap(bitmap_buf, &[REL_WHEEL, REL_HWHEEL]),
+            EV_REL => write_bitmap(
+                bitmap_buf,
+                &[REL_WHEEL, REL_HWHEEL, REL_WHEEL_HI_RES, REL_HWHEEL_HI_RES],
+            ),
             _ => 0,
         })
     }
@@ -234,7 +237,17 @@ impl InputQueryConfig for RelPointerConfig {
     ) -> Result<u8, InputBackendError> {
         Ok(match event_type as u16 {
             EV_KEY => write_bitmap(bitmap_buf, &[BTN_LEFT, BTN_RIGHT, BTN_MIDDLE]),
-            EV_REL => write_bitmap(bitmap_buf, &[REL_X, REL_Y, REL_WHEEL, REL_HWHEEL]),
+            EV_REL => write_bitmap(
+                bitmap_buf,
+                &[
+                    REL_X,
+                    REL_Y,
+                    REL_WHEEL,
+                    REL_HWHEEL,
+                    REL_WHEEL_HI_RES,
+                    REL_HWHEEL_HI_RES,
+                ],
+            ),
             _ => 0,
         })
     }

@@ -1,7 +1,7 @@
 # Trackpad gestures: a guest-side multitouch device with strict contact ownership
 
-Status: DESIGN 2026-07-28. Not implemented. Companion quick win (hi-res scroll) can land
-independently and first.
+Status: DESIGN 2026-07-28. MT device not implemented. The companion quick win SHIPPED
+same day: hi-res scroll (f1a8e56) — see §Independent quick win.
 
 ## Why
 
@@ -122,13 +122,19 @@ tablet is a generic pointer and can never engage it. The answer is layered by mo
 - macOS *three-finger drag* is fine under the ownership rule: 3 physical fingers are
   never forwarded, and the host-synthesized button+motion flows through the tablet.
 
-## Independent quick win: hi-res scroll
+## Independent quick win: hi-res scroll (SHIPPED f1a8e56, 2026-07-28)
 
-Regardless of the MT device: switch `emit_scroll` to `REL_WHEEL_HI_RES` /
-`REL_HWHEEL_HI_RES` carrying the actual pixel deltas. Fixes the quantized-scroll feel
-gap on its own; macOS momentum-phase events provide kinetic for free. (The MT device
-supersedes it for trackpad scrolls but hi-res still serves mice and any swallowed-path
-fallback.) Land this first.
+`emit_scroll` now feeds precise macOS deltas through per-axis v120 accumulators
+(`ScrollAxis` in `crates/limina/src/window/input.rs`): `REL_WHEEL_HI_RES` /
+`REL_HWHEEL_HI_RES` events for every input (53 pt of finger travel = one detent = 120
+units, rounding carry preserved), plus legacy detent events on ±120 boundaries for
+pre-hi-res guest stacks — libinput ignores those when hi-res is present, per its
+wheel-API contract; the trap to never hit is advertising HI_RES without sending it
+(libinput then drops wheel scroll entirely). Both pointer devices advertise the HI_RES
+codes. Physical wheels (non-precise deltas) keep the legacy one-notch-per-event mapping
+in both rates. Momentum-phase events flow through the same path, so guest kinetic decay
+comes free. (The MT device supersedes this for trackpad scrolls but hi-res still serves
+mice and any swallowed-path fallback.)
 
 ## Open questions / verification list
 

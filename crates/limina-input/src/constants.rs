@@ -14,11 +14,17 @@ pub const EV_ABS: u16 = 0x03;
 pub const SYN_REPORT: u16 = 0x00;
 
 // EV_REL codes. REL_X/REL_Y are relative pointer motion (capture/relative mode — mouselook
-// in games, guest-warped cursors); REL_*WHEEL are scroll detents (one notch = value ±1).
+// in games, guest-warped cursors); REL_*WHEEL are scroll detents (one notch = value ±1);
+// REL_*WHEEL_HI_RES are high-resolution scroll in 1/120ths of a detent ("v120" units, one
+// notch = ±120). A device advertising HI_RES must send hi-res for every scroll — libinput
+// ignores the plain REL_*WHEEL events from such a device — so limina emits both, hi-res
+// always and the detent events on accumulated ±120 boundaries, like the kernel's HID core.
 pub const REL_X: u16 = 0x00;
 pub const REL_Y: u16 = 0x01;
 pub const REL_HWHEEL: u16 = 0x06;
 pub const REL_WHEEL: u16 = 0x08;
+pub const REL_WHEEL_HI_RES: u16 = 0x0b;
+pub const REL_HWHEEL_HI_RES: u16 = 0x0c;
 
 // EV_ABS codes (absolute pointer position).
 pub const ABS_X: u16 = 0x00;
