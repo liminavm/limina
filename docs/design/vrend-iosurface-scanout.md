@@ -1,11 +1,17 @@
 # vrend zero-copy scanout: IOSurface-backed presents for the stock (virgl) tier
 
-Status: DESIGN 2026-07-28. Follows the virgl-perf root-cause (`docs/hardening-backlog.md`
-§GPU/rendering perf, memory `limina-virgl-vrend-perf`): virgl presents are
-readback-per-frame + CPU convert; venus got zero-copy (`tier2-iosurface-zerocopy-present.md`)
-and vrend was left on the fallback. Goal: stock-tier presents with no CPU pixel work and
-fence-accurate pacing — the two-tier guarantee's "degraded" floor should degrade in GPU
-throughput, not in present mechanics.
+Status: **B + A1 SHIPPED 2026-07-28** (same day as the design): virglrenderer 0053 +
+libkrun 0115 + kosmickrisp 0014. Verified live on stock F44: session presents fully
+zero-copy (readback `FLUSH2` stops at GDM and never returns, 0 sync failures through a
+driven overview animation), colors + smoothness human-confirmed, full HVF suite green
+(40/40 — venus untouched). Remaining (open): fence-accurate present for vrend (today the
+sync blit ends in `glFinish` — correct but unpaced; `try_park_present` needs a vrend
+fence keying since non-blob resources have `ctx_id == 0`), and the A2/C escalations
+below if the 0.65 ms blit ever matters.
+
+Original goal: virgl presents were readback-per-frame + CPU convert; venus got zero-copy
+(`tier2-iosurface-zerocopy-present.md`) and vrend was left on the fallback. The two-tier
+guarantee's "degraded" floor should degrade in GPU throughput, not in present mechanics.
 
 ## Where the two chains stand today (mapped 2026-07-28, citations verified by exploration)
 
@@ -91,6 +97,23 @@ Teach KK `VK_EXT_external_memory_metal` a texture/IOSurface handle backed by
 `newTextureWithDescriptor:iosurface:plane:` (choke point `kk_image.c:835`), letting
 *tiled* images be IOSurface-backed and making zink `resource_get_handle` wireable. Blast
 radius: KK device memory + image + zink screen caps.
+
+## Implementation facts settled during the spike (2026-07-28)
+
+- **Spike PASSED** (`spikes/virgl-zink-kk/iosurfpbo.c`, RESULTS.md): pixels land, 0.65 ms/frame
+  at 2560×1440 worst-case; needed `patches/kosmickrisp/0014` (AMD_pinned_memory was
+  desktop-GL-gated in mesa's table; the gallium path is API-agnostic). EGL native fence
+  create+wait WORKS on zink-on-KK (suspicion not borne out; fd-dup half unprobed).
+- **The window consumes IOSurfaces via `CALayer.contents`** (`present.rs` — `frame <id>` just
+  swaps `show_id`), so the IOSurface's own pixel format is authoritative: 'RGBA' and 'BGRA'
+  surfaces both display without supervisor changes.
+- **`EXT_read_format_bgra` is always-on for ES in mesa** (`dummy_true`), so BGRA readback is
+  available; but vrend stores BGRA textures with channel swizzles on GLES — the sync-blit's
+  format/swizzle decisions must mirror vrend's `do_readpixels` (the readback path that renders
+  correct colors today), and get pixel-verified (golden-image discipline).
+- **`vkr_mtl_iosurface_alloc` requires an MTLDevice** (it builds the venus MTLTexture); vrend
+  needs an `_alloc_plain` variant (IOSurface + registry + Mach-publish, no Metal texture) —
+  the scope/registry/publish helpers are shared.
 
 ## Spike (task #2, before any wiring)
 Extend `spikes/virgl-zink-kk/`:
