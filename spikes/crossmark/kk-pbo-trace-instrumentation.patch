@@ -1,0 +1,561 @@
+diff --git a/src/gallium/drivers/zink/zink_context.c b/src/gallium/drivers/zink/zink_context.c
+index 41bc1b6932a..cc645cf8119 100644
+--- a/src/gallium/drivers/zink/zink_context.c
++++ b/src/gallium/drivers/zink/zink_context.c
+@@ -1008,6 +1008,9 @@ get_buffer_view(struct zink_context *ctx, struct zink_resource *res, enum pipe_f
+    simple_mtx_lock(&res->obj->surface_mtx);
+    bool found = false;
+    struct set_entry *he = _mesa_set_search_or_add_pre_hashed(&res->obj->surface_cache, hash, &key, &found);
++   if (res->base.b.width0 >= 4096 && getenv("LIMINA_PBO_TRACE"))
++      fprintf(stderr, "[PBOTRACE] buffer_view res=%p obj=%p vkbuf=%p off=%u size=%u cached=%d\n",
++              (void *)res, (void *)res->obj, (void *)bvci.buffer, offset, size, found);
+    if (found) {
+       buffer_view = (void*)he->key;
+    } else {
+@@ -3065,6 +3068,12 @@ begin_rendering(struct zink_context *ctx, bool check_attachment_shadow)
+ {
+    unsigned clear_buffers = 0;
+    struct zink_screen *screen = zink_screen(ctx->base.screen);
++   if (getenv("LIMINA_PBO_TRACE")) {
++      struct zink_resource *r0 = ctx->fb_state.nr_cbufs ? zink_resource(ctx->fb_state.cbufs[0].texture) : NULL;
++      fprintf(stderr, "[PBOTRACE] begin_rendering ncb=%d cbuf0=%p w=%u valid=%d rp_changed=%d loadop_changed=%d in_rp=%d\n",
++              ctx->fb_state.nr_cbufs, (void *)r0, r0 ? r0->base.b.width0 : 0,
++              r0 ? r0->valid : -1, ctx->rp_changed, ctx->rp_loadop_changed, ctx->in_rp);
++   }
+    if (screen->base.caps.programmable_sample_locations)
+       ctx->sample_locations_changed = true;
+    if (ctx->has_swapchain)
+@@ -3092,6 +3101,10 @@ begin_rendering(struct zink_context *ctx, bool check_attachment_shadow)
+             ctx->dynamic_fb.attachments[i].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+          else
+             ctx->dynamic_fb.attachments[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
++         if (res->base.b.width0 <= 64 && getenv("LIMINA_PBO_TRACE"))
++            fprintf(stderr, "[PBOTRACE] begin_rendering cbuf%d res=%p %ux%u valid=%d loadOp=%d\n",
++                    i, (void *)res, res->base.b.width0, res->base.b.height0,
++                    res->valid, ctx->dynamic_fb.attachments[i].loadOp);
+          if (use_tc_info) {
+             if (very_legal_and_conformant_msaa_opt || ctx->dynamic_fb.tc_info.cbuf_invalidate & BITFIELD_BIT(i))
+                ctx->dynamic_fb.attachments[i].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+diff --git a/src/gallium/drivers/zink/zink_resource.c b/src/gallium/drivers/zink/zink_resource.c
+index 783289935f9..ecb9e74cb2f 100644
+--- a/src/gallium/drivers/zink/zink_resource.c
++++ b/src/gallium/drivers/zink/zink_resource.c
+@@ -191,6 +191,15 @@ zink_transfer_flush_region(struct pipe_context *pctx,
+                            struct pipe_transfer *ptrans,
+                            const struct pipe_box *box);
+ 
++static inline bool
++limina_pbo_trace(void)
++{
++   static int on = -1;
++   if (on < 0)
++      on = getenv("LIMINA_PBO_TRACE") != NULL;
++   return on;
++}
++
+ void
+ debug_describe_zink_resource_object(char *buf, const struct zink_resource_object *ptr)
+ {
+@@ -2032,6 +2041,10 @@ add_resource_bind(struct zink_context *ctx, struct zink_resource *res, unsigned
+    struct zink_resource staging = *res;
+    staging.obj = old_obj;
+    staging.all_binds = 0;
++   if (limina_pbo_trace())
++      fprintf(stderr, "[PBOTRACE] add_resource_bind res=%p bind=0x%x obj %p -> %p w=%u h=%u\n",
++              (void *)res, bind, (void *)old_obj, (void *)new_obj,
++              res->base.b.width0, res->base.b.height0);
+    res->layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    res->obj = new_obj;
+    res->queue = VK_QUEUE_FAMILY_IGNORED;
+@@ -2453,6 +2466,10 @@ invalidate_buffer(struct zink_context *ctx, struct zink_resource *res)
+    struct zink_screen *screen = zink_screen(ctx->base.screen);
+ 
+    assert(res->base.b.target == PIPE_BUFFER);
++   if (limina_pbo_trace() && res->base.b.width0 >= 4096)
++      fprintf(stderr, "[PBOTRACE] invalidate_buffer res=%p w=%u obj=%p usage=%d\n",
++              (void *)res, res->base.b.width0, (void *)res->obj,
++              zink_resource_has_usage(res));
+ 
+    if (res->base.b.flags & PIPE_RESOURCE_FLAG_SPARSE)
+       return false;
+@@ -2484,6 +2501,9 @@ invalidate_buffer(struct zink_context *ctx, struct zink_resource *res)
+    bool needs_bda = !!res->obj->bda;
+    /* this ref must be transferred before rebind or else BOOM */
+    zink_batch_reference_resource_move(ctx, res);
++   if (limina_pbo_trace() && res->base.b.width0 >= 4096)
++      fprintf(stderr, "[PBOTRACE] invalidate_buffer res=%p SWAP obj %p -> %p\n",
++              (void *)res, (void *)res->obj, (void *)new_obj);
+    res->obj = new_obj;
+    res->queue = VK_QUEUE_FAMILY_IGNORED;
+    if (needs_bda)
+@@ -2513,6 +2533,9 @@ zink_resource_invalidate(struct pipe_context *pctx, struct pipe_resource *pres)
+          }
+          ctx->rp_loadop_changed |= found;
+       }
++      if (limina_pbo_trace())
++         fprintf(stderr, "[PBOTRACE] image_invalidate res=%p %ux%u valid was %d\n",
++                 (void *)res, pres->width0, pres->height0, res->valid);
+       res->valid = false;
+    }
+ }
+@@ -2626,6 +2649,9 @@ zink_buffer_map(struct pipe_context *pctx,
+    struct zink_transfer *trans = create_transfer(ctx, pres, usage, box);
+    if (!trans)
+       return NULL;
++   if (limina_pbo_trace() && pres->width0 >= 4096)
++      fprintf(stderr, "[PBOTRACE] buffer_map res=%p obj=%p usage=0x%x box=%d+%d\n",
++              (void *)res, (void *)res->obj, usage, box->x, box->width);
+ 
+    void *ptr = NULL;
+ 
+@@ -3086,6 +3112,13 @@ zink_transfer_flush_region(struct pipe_context *pctx,
+       if (trans->staging_res) {
+          struct zink_resource *staging_res = zink_resource(trans->staging_res);
+ 
++         if (limina_pbo_trace() && res->base.b.width0 >= 4096)
++            fprintf(stderr,
++                    "[PBOTRACE] flush res=%p obj=%p staging=%p stobj=%p dst=%u src=%u "
++                    "size=%u unsync=%d\n",
++                    (void *)res, (void *)res->obj, (void *)staging_res,
++                    (void *)staging_res->obj, (unsigned)dst_offset,
++                    (unsigned)src_offset, (unsigned)size, trans->unsync_upload);
+          if (ptrans->resource->target == PIPE_BUFFER)
+             zink_copy_buffer(ctx, res, staging_res, dst_offset, src_offset, size, trans->unsync_upload);
+          else
+diff --git a/src/gallium/drivers/zink/zink_synchronization.cpp b/src/gallium/drivers/zink/zink_synchronization.cpp
+index c38a1051017..ccf59ba5ea1 100644
+--- a/src/gallium/drivers/zink/zink_synchronization.cpp
++++ b/src/gallium/drivers/zink/zink_synchronization.cpp
+@@ -429,6 +429,10 @@ zink_resource_image_barrier(struct zink_context *ctx, struct zink_resource *res,
+                             update_unordered_access_and_get_cmdbuf<UNSYNCHRONIZED>::apply(ctx, res, usage_matches, is_write);
+ 
+    assert(new_layout);
++   if (res->base.b.width0 <= 64 && res->base.b.target != PIPE_BUFFER && getenv("LIMINA_PBO_TRACE"))
++      fprintf(stderr, "[PBOTRACE] img_barrier res=%p layout %d->%d cmdbuf=%p reordered=%d unsync=%d\n",
++              (void *)res, res->layout, new_layout, (void *)cmdbuf,
++              cmdbuf == ctx->bs->reordered_cmdbuf, (int)UNSYNCHRONIZED);
+    bool marker = zink_cmd_debug_marker_begin(ctx, cmdbuf, "image_barrier(%s->%s)", vk_ImageLayout_to_str(res->layout), vk_ImageLayout_to_str(new_layout));
+    bool queue_import = false;
+    emit_memory_barrier<BARRIER_API>::for_image(ctx, res, new_layout, flags, pipeline, completed, cmdbuf, &queue_import);
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.h b/src/kosmickrisp/bridge/mtl_command_buffer.h
+index 6567c0a278e..abacac3f4fc 100644
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.h
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.h
+@@ -21,6 +21,9 @@ void mtl_add_completed_handler(mtl_command_buffer *cmd,
+                                void (*callback)(void *data), void *data);
+ 
+ void mtl_command_buffer_commit(mtl_command_buffer *cmd_buf);
++/* limina TEMP instrumentation */
++void mtl_command_buffer_wait_until_completed(mtl_command_buffer *cmd_buf);
++int mtl_command_buffer_status(mtl_command_buffer *cmd_buf);
+ 
+ void mtl_present_drawable(mtl_command_buffer *cmd_buf, void *drawable);
+ 
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.m b/src/kosmickrisp/bridge/mtl_command_buffer.m
+index c13db598fa5..b3282aceac3 100644
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.m
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.m
+@@ -74,6 +74,26 @@
+    }
+ }
+ 
++/* limina TEMP instrumentation */
++void
++mtl_command_buffer_wait_until_completed(mtl_command_buffer *cmd_buffer)
++{
++   @autoreleasepool {
++      id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>)cmd_buffer;
++      [cmd_buf waitUntilCompleted];
++   }
++}
++
++/* limina TEMP instrumentation */
++int
++mtl_command_buffer_status(mtl_command_buffer *cmd_buffer)
++{
++   @autoreleasepool {
++      id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>)cmd_buffer;
++      return (int)[cmd_buf status];
++   }
++}
++
+ void
+ mtl_present_drawable(mtl_command_buffer *cmd_buf, void *drawable_ptr)
+ {
+diff --git a/src/kosmickrisp/bridge/mtl_encoder.m b/src/kosmickrisp/bridge/mtl_encoder.m
+index 74922f3108d..b1dfe9c06fb 100644
+--- a/src/kosmickrisp/bridge/mtl_encoder.m
++++ b/src/kosmickrisp/bridge/mtl_encoder.m
+@@ -97,6 +97,8 @@
+    @autoreleasepool {
+       id<MTLBlitCommandEncoder> enc = (id<MTLBlitCommandEncoder>)encoder;
+       id<MTLFence> f = (id<MTLFence>)fence;
++      if (getenv("LIMINA_KK_TRACE"))
++         fprintf(stderr, "[KKTRACE] %s enc=%p fence=%p\n", "blit-update-fence", (void *)enc, (void *)f);
+       [enc updateFence:f];
+    }
+ }
+@@ -108,6 +110,8 @@
+    @autoreleasepool {
+       id<MTLBlitCommandEncoder> enc = (id<MTLBlitCommandEncoder>)encoder;
+       id<MTLFence> f = (id<MTLFence>)fence;
++      if (getenv("LIMINA_KK_TRACE"))
++         fprintf(stderr, "[KKTRACE] %s enc=%p fence=%p\n", "blit-wait-fence", (void *)enc, (void *)f);
+       [enc waitForFence:f];
+    }
+ }
+@@ -248,6 +252,8 @@
+    @autoreleasepool {
+       id<MTLComputeCommandEncoder> enc = (id<MTLComputeCommandEncoder>)encoder;
+       id<MTLFence> f = (id<MTLFence>)fence;
++      if (getenv("LIMINA_KK_TRACE"))
++         fprintf(stderr, "[KKTRACE] %s enc=%p fence=%p\n", "compute-update-fence", (void *)enc, (void *)f);
+       [enc updateFence:f];
+    }
+ }
+@@ -258,6 +264,8 @@
+    @autoreleasepool {
+       id<MTLComputeCommandEncoder> enc = (id<MTLComputeCommandEncoder>)encoder;
+       id<MTLFence> f = (id<MTLFence>)fence;
++      if (getenv("LIMINA_KK_TRACE"))
++         fprintf(stderr, "[KKTRACE] %s enc=%p fence=%p\n", "compute-wait-fence", (void *)enc, (void *)f);
+       [enc waitForFence:f];
+    }
+ }
+@@ -425,6 +433,8 @@
+    @autoreleasepool {
+       id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+       id<MTLFence> f = (id<MTLFence>)fence;
++      if (getenv("LIMINA_KK_TRACE"))
++         fprintf(stderr, "[KKTRACE] %s enc=%p fence=%p\n", "render-update-fence", (void *)enc, (void *)f);
+       [enc updateFence:f afterStages:MTLRenderStageFragment];
+    }
+ }
+@@ -435,6 +445,8 @@
+    @autoreleasepool {
+       id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+       id<MTLFence> f = (id<MTLFence>)fence;
++      if (getenv("LIMINA_KK_TRACE"))
++         fprintf(stderr, "[KKTRACE] %s enc=%p fence=%p\n", "render-wait-fence", (void *)enc, (void *)f);
+       [enc waitForFence:f beforeStages:MTLRenderStageVertex];
+    }
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
+index 6926326969e..03249955f5f 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.c
++++ b/src/kosmickrisp/vulkan/kk_bo.c
+@@ -60,6 +60,12 @@ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
+ 
+    kk_device_add_heap_to_residency_set(dev, handle);
+ 
++   /* limina TEMP instrumentation */
++   if (getenv("LIMINA_KK_TRACE"))
++      fprintf(stderr, "[KKTRACE] alloc-bo heap=%p map=%p size=%llu gpu=%llx\n",
++              (void *)handle, (void *)map, (unsigned long long)size_B,
++              (unsigned long long)bo->gpu);
++
+    *bo_out = bo;
+    return result;
+ 
+@@ -74,6 +80,11 @@ fail_heap:
+ void
+ kk_destroy_bo(struct kk_device *dev, struct kk_bo *bo)
+ {
++   /* limina TEMP instrumentation */
++   if (getenv("LIMINA_KK_TRACE"))
++      fprintf(stderr, "[KKTRACE] destroy-bo heap=%p map=%p size=%llu gpu=%llx\n",
++              (void *)bo->mtl_handle, (void *)bo->map,
++              (unsigned long long)bo->size_B, (unsigned long long)bo->gpu);
+    /* We may only have a mapped buffer, for example if the memory was imported
+     * from a host pointer */
+    if (bo->mtl_handle)
+diff --git a/src/kosmickrisp/vulkan/kk_buffer_view.c b/src/kosmickrisp/vulkan/kk_buffer_view.c
+index c67ac82ed15..dc01e6ceb24 100644
+--- a/src/kosmickrisp/vulkan/kk_buffer_view.c
++++ b/src/kosmickrisp/vulkan/kk_buffer_view.c
+@@ -108,6 +108,22 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
+    view->texel_buffer_gpu_id =
+       mtl_texture_get_gpu_resource_id(view->mtl_texel_buffer_handle);
+ 
++   /* limina TEMP experiment: make the texture-from-buffer itself resident */
++   if (getenv("LIMINA_KK_BUFVIEW_RESIDENT"))
++      kk_device_add_buffer_to_residency_set(
++         dev, (mtl_buffer *)view->mtl_texel_buffer_handle);
++
++   /* limina TEMP instrumentation */
++   if (getenv("LIMINA_KK_TRACE"))
++      fprintf(stderr,
++              "[KKTRACE] bufview-create view=%p mtlbuf=%p handle=%p id=%llx "
++              "elems=%u off=%llu\n",
++              (void *)view, (void *)buffer->mtl_handle,
++              (void *)view->mtl_texel_buffer_handle,
++              (unsigned long long)view->texel_buffer_gpu_id,
++              (unsigned)view->vk.elements,
++              (unsigned long long)view->vk.offset);
++
+    *pBufferView = kk_buffer_view_to_handle(view);
+ 
+    return VK_SUCCESS;
+@@ -123,6 +139,11 @@ kk_DestroyBufferView(VkDevice _device, VkBufferView bufferView,
+    if (!view)
+       return;
+ 
++   /* limina TEMP instrumentation */
++   if (getenv("LIMINA_KK_TRACE"))
++      fprintf(stderr, "[KKTRACE] bufview-destroy view=%p handle=%p id=%llx\n",
++              (void *)view, (void *)view->mtl_texel_buffer_handle,
++              (unsigned long long)view->texel_buffer_gpu_id);
+    mtl_release(view->mtl_texel_buffer_handle);
+    vk_buffer_view_destroy(&dev->vk, pAllocator, &view->vk);
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_copy.c b/src/kosmickrisp/vulkan/kk_cmd_copy.c
+index 9e51190f53f..2806e18f786 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_copy.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_copy.c
+@@ -19,6 +19,15 @@
+ 
+ #include "util/format/u_format.h"
+ 
++/* limina TEMP instrumentation */
++static void
++kk_limina_copy_probe(void *data)
++{
++   uint32_t *p = data;
++   fprintf(stderr, "[KKTRACE] copy-complete dst[0..3]=%08x %08x %08x %08x\n",
++           p[0], p[1], p[2], p[3]);
++}
++
+ VKAPI_ATTR void VKAPI_CALL
+ kk_CmdCopyBuffer2(VkCommandBuffer commandBuffer,
+                   const VkCopyBufferInfo2 *pCopyBufferInfo)
+@@ -137,6 +146,23 @@ kk_CmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
+       {
+          info.mtl_data.image_slice = slice;
+          info.mtl_data.buffer_offset_B = buffer_offset;
++         /* limina TEMP instrumentation */
++         if (getenv("LIMINA_KK_TRACE")) {
++            fprintf(stderr,
++                    "[KKTRACE] img->buf blit=%p srcimg=%p dstbuf=%p off=%zu "
++                    "%ux%u\n",
++                    (void *)blit, (void *)plane->mtl_handle,
++                    (void *)buffer->mtl_handle, buffer_offset,
++                    region->imageExtent.width, region->imageExtent.height);
++            /* Read the staging bytes when the copy's cmd buffer completes:
++             * nonzero => the GPU wrote real data (loss is CPU-side mapping);
++             * zero => the copy source was already zero. */
++            uint32_t *probe =
++               (uint32_t *)((char *)mtl_get_contents(buffer->mtl_handle) +
++                            buffer_offset);
++            mtl_add_completed_handler(
++               cmd->encoder->main.cmd_buffer, kk_limina_copy_probe, probe);
++         }
+          mtl_copy_from_texture_to_buffer(blit, &info.mtl_data);
+          buffer_offset += info.buffer_slice_size_B;
+       }
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index 5513a7648c9..daebefe2c81 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -169,6 +169,18 @@ kk_merge_render_iview(VkExtent2D *extent, struct kk_image_view *iview)
+    }
+ }
+ 
++/* limina TEMP instrumentation */
++static bool
++kk_limina_trace(void)
++{
++   static int on = -1;
++   if (on < 0) {
++      const char *v = getenv("LIMINA_KK_TRACE");
++      on = v && v[0] != '0';
++   }
++   return on > 0;
++}
++
+ static void
+ kk_fill_common_attachment_description(
+    mtl_render_pass_attachment_descriptor *descriptor,
+@@ -177,6 +189,16 @@ kk_fill_common_attachment_description(
+ {
+    assert(iview->plane_count ==
+           1); /* TODO_KOSMICKRISP Handle multiplanar images? */
++   if (kk_limina_trace())
++      fprintf(stderr,
++              "[KKTRACE] attach iview=%p render=%p sampled=%p sampled_id=%llx "
++              "%ux%u load=%d(force=%d) is_view=%d\n",
++              (void *)iview, (void *)iview->planes[0].mtl_handle_render,
++              (void *)iview->planes[0].mtl_handle_sampled,
++              (unsigned long long)iview->planes[0].sampled_gpu_resource_id,
++              iview->vk.image->extent.width, iview->vk.image->extent.height,
++              info->loadOp, force_attachment_load,
++              iview->planes[0].render_is_view);
+    mtl_render_pass_attachment_descriptor_set_texture(
+       descriptor, iview->planes[0].mtl_handle_render);
+    /* If a view is being used e.g. for format change, it already points to the
+@@ -2394,6 +2416,10 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+ 
+       if (tess)
+          draw_data = kk_launch_tess(cmd, draw_data);
++      /* limina TEMP instrumentation */
++      if (kk_limina_trace())
++         fprintf(stderr, "[KKTRACE] draw enc=%p verts=%u\n",
++                 (void *)kk_render_encoder(cmd), data->draws[i].vertexCount);
+       kk_dispatch_draw(kk_render_encoder(cmd), draw_data);
+ 
+       if (xfb_track)
+diff --git a/src/kosmickrisp/vulkan/kk_descriptor_set.c b/src/kosmickrisp/vulkan/kk_descriptor_set.c
+index 570d4eeb85b..d1556730e68 100644
+--- a/src/kosmickrisp/vulkan/kk_descriptor_set.c
++++ b/src/kosmickrisp/vulkan/kk_descriptor_set.c
+@@ -74,6 +74,15 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
+             assert(view->planes[plane].sampled_gpu_resource_id);
+             desc[plane].image_gpu_resource_id =
+                view->planes[plane].sampled_gpu_resource_id;
++            /* limina TEMP instrumentation */
++            if (getenv("LIMINA_KK_TRACE"))
++               fprintf(stderr,
++                       "[KKTRACE] desc-sampled view=%p handle=%p id=%llx %ux%u\n",
++                       (void *)view, (void *)view->planes[plane].mtl_handle_sampled,
++                       (unsigned long long)
++                          view->planes[plane].sampled_gpu_resource_id,
++                       view->vk.image->extent.width,
++                       view->vk.image->extent.height);
+          }
+       }
+    }
+@@ -213,6 +222,13 @@ write_buffer_view_desc(struct kk_descriptor_set *set,
+       assert(view->texel_buffer_gpu_id);
+ 
+       desc.image_gpu_resource_id = view->texel_buffer_gpu_id;
++      /* limina TEMP instrumentation */
++      if (getenv("LIMINA_KK_TRACE"))
++         fprintf(stderr,
++                 "[KKTRACE] desc-texelbuf set=%p view=%p handle=%p id=%llx\n",
++                 (void *)set, (void *)view,
++                 (void *)view->mtl_texel_buffer_handle,
++                 (unsigned long long)view->texel_buffer_gpu_id);
+    }
+    write_desc(set, binding, elem, &desc, sizeof(desc));
+ }
+@@ -579,6 +595,13 @@ kk_descriptor_set_create(struct kk_device *dev, struct kk_descriptor_pool *pool,
+          vk_object_free(&dev->vk, NULL, set);
+          return result;
+       }
++      /* limina TEMP instrumentation */
++      if (getenv("LIMINA_KK_TRACE"))
++         fprintf(stderr,
++                 "[KKTRACE] set-create set=%p pool-bo-map=%p addr=%llx "
++                 "mapped=%p size=%u\n",
++                 (void *)set, (void *)pool->bo->map,
++                 (unsigned long long)set->addr, set->mapped_ptr, set->size);
+    }
+ 
+    vk_descriptor_set_layout_ref(&layout->vk);
+diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
+index a08595528e5..415337f2588 100644
+--- a/src/kosmickrisp/vulkan/kk_device.c
++++ b/src/kosmickrisp/vulkan/kk_device.c
+@@ -478,6 +478,16 @@ void
+ kk_device_make_resources_resident(struct kk_device *dev)
+ {
+    simple_mtx_lock(&dev->residency_set.mutex);
++   /* limina TEMP experiment: force the set dirty so commit never no-ops */
++   if (getenv("LIMINA_KK_FORCE_COMMIT")) {
++      if (!dev->residency_set.dirty_probe)
++         dev->residency_set.dirty_probe =
++            mtl_new_heap(dev->mtl_handle, 16384, KK_MTL_RESOURCE_OPTIONS);
++      mtl_residency_set_remove_allocation(dev->residency_set.handle,
++                                          dev->residency_set.dirty_probe);
++      mtl_residency_set_add_allocation(dev->residency_set.handle,
++                                       dev->residency_set.dirty_probe);
++   }
+    mtl_residency_set_commit(dev->residency_set.handle);
+    mtl_residency_set_request_residency(dev->residency_set.handle);
+    simple_mtx_unlock(&dev->residency_set.mutex);
+diff --git a/src/kosmickrisp/vulkan/kk_device.h b/src/kosmickrisp/vulkan/kk_device.h
+index 67080f08002..f07aa96c689 100644
+--- a/src/kosmickrisp/vulkan/kk_device.h
++++ b/src/kosmickrisp/vulkan/kk_device.h
+@@ -32,6 +32,8 @@ struct vk_pipeline_cache;
+ struct kk_residency_set {
+    simple_mtx_t mutex;
+    mtl_residency_set *handle;
++   /* limina TEMP experiment: scratch heap to force-dirty the set per commit */
++   mtl_heap *dirty_probe;
+ };
+ 
+ struct mtl_sampler_packed {
+diff --git a/src/kosmickrisp/vulkan/kk_encoder.c b/src/kosmickrisp/vulkan/kk_encoder.c
+index 38c64ab5b99..6b9c0170b37 100644
+--- a/src/kosmickrisp/vulkan/kk_encoder.c
++++ b/src/kosmickrisp/vulkan/kk_encoder.c
+@@ -92,6 +92,11 @@ kk_encoder_start_render(struct kk_cmd_buffer *cmd,
+ 
+       encoder->main.encoder = mtl_new_render_command_encoder_with_descriptor(
+          encoder->main.cmd_buffer, descriptor);
++      /* limina TEMP instrumentation */
++      if (getenv("LIMINA_KK_TRACE"))
++         fprintf(stderr, "[KKTRACE] render-encoder %p cb=%p wait_fence=%d\n",
++                 (void *)encoder->main.encoder, (void *)encoder->main.cmd_buffer,
++                 encoder->main.wait_fence);
+       if (encoder->main.wait_fence) {
+          mtl_render_wait_for_fence(
+             encoder->main.encoder,
+@@ -354,6 +359,13 @@ kk_encoder_submit(struct kk_encoder *encoder)
+    mtl_add_completed_handler(encoder->main.cmd_buffer,
+                              kk_post_execution_release, encoder);
+ 
++   /* limina TEMP instrumentation */
++   if (getenv("LIMINA_KK_TRACE"))
++      fprintf(stderr, "[KKTRACE] submit pre_gfx=%p main=%p extra=%zu\n",
++              (void *)encoder->pre_gfx.cmd_buffer,
++              (void *)encoder->main.cmd_buffer,
++              util_dynarray_num_elements(&encoder->extra_cmd_buffers,
++                                         mtl_command_buffer *));
+    mtl_command_buffer_commit(encoder->pre_gfx.cmd_buffer);
+    /* Command buffers execute in commit order on a queue, so committing the
+     * retired ones first keeps a split transparent to command order. `main` is
+@@ -362,6 +374,9 @@ kk_encoder_submit(struct kk_encoder *encoder)
+    util_dynarray_foreach(&encoder->extra_cmd_buffers, mtl_command_buffer *, cb)
+       mtl_command_buffer_commit(*cb);
+    mtl_command_buffer_commit(encoder->main.cmd_buffer);
++   /* limina TEMP experiment: full serialization at submit */
++   if (getenv("LIMINA_KK_SYNC_SUBMIT"))
++      mtl_command_buffer_wait_until_completed(encoder->main.cmd_buffer);
+ }
+ 
+ mtl_render_encoder *
+@@ -427,6 +442,12 @@ kk_blit_encoder(struct kk_cmd_buffer *cmd)
+    upload_queue_writes(cmd);
+    kk_encoder_signal_fence_and_end(cmd);
+    encoder->encoder = mtl_new_blit_command_encoder(encoder->cmd_buffer);
++   /* limina TEMP instrumentation */
++   if (getenv("LIMINA_KK_TRACE"))
++      fprintf(stderr, "[KKTRACE] blit-encoder %p cb=%p status=%d wait_fence=%d\n",
++              (void *)encoder->encoder, (void *)encoder->cmd_buffer,
++              mtl_command_buffer_status(encoder->cmd_buffer),
++              encoder->wait_fence);
+    if (encoder->wait_fence) {
+       mtl_compute_wait_for_fence(
+          encoder->encoder, util_dynarray_top(&encoder->fences, mtl_fence *));
+diff --git a/src/mesa/state_tracker/st_cb_texture.c b/src/mesa/state_tracker/st_cb_texture.c
+index 159dff16af6..916aecfa21f 100644
+--- a/src/mesa/state_tracker/st_cb_texture.c
++++ b/src/mesa/state_tracker/st_cb_texture.c
+@@ -2252,9 +2252,13 @@ st_TexSubImage(struct gl_context *ctx, GLuint dims,
+    }
+ 
+    if (unpack->BufferObj) {
+-      if (try_pbo_upload(ctx, dims, texImage, format, type, dst_format,
+-                         xoffset, yoffset, zoffset,
+-                         width, height, depth, pixels, unpack))
++      bool pbo_ok = try_pbo_upload(ctx, dims, texImage, format, type, dst_format,
++                                   xoffset, yoffset, zoffset,
++                                   width, height, depth, pixels, unpack);
++      if (getenv("LIMINA_PBO_TRACE"))
++         fprintf(stderr, "[PBOTRACE] st try_pbo_upload %dx%d -> %s\n", width, height,
++                 pbo_ok ? "GPU path" : "REJECTED (fallback)");
++      if (pbo_ok)
+          return;
+    }
+ 

@@ -3,3 +3,7 @@ crossmark-gl
 *.spv
 xdg-shell-client-protocol.h
 xdg-shell-protocol.c
+pbotest
+kkload
+kktexel
+*.dSYM/

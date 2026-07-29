@@ -54,7 +54,71 @@ Host zink-on-KK (mesa 26.2-devel, zink-kk branch): PBO texture upload (orphan
 the FIRST frame's upload; the texture is frozen afterward (hash constant
 across f=2/5/60; `CM_GL_NO_PBO=1` client-pointer path tracks VK bit-for-bit).
 **Guest zink-on-venus and vrend both do this correctly** — the bug is only in
-the host zink-kk build. Filed; repro is `-S upload` on the host GL cell.
+the host zink-kk build. Repro is `-S upload` on the host GL cell, or the
+dedicated oracle `pbotest.c` (below).
+
+### Root-cause hunt (2026-07-28 night session, unresolved — narrowed to KK/Metal)
+
+Oracles in this directory: `pbotest.c` (GL, per-frame verify + variant knobs),
+`kkload.c` (pure-VK load-op probes), `kktexel.c` (pure-VK replica of the
+st_pbo texel-fetch loop, with fresh-view / fresh-mem / fresh-pool /
+one-submit axes). KK-side tracing: `kk-pbo-trace-instrumentation.patch`
+(env-gated `LIMINA_KK_TRACE` prints, applies to /Volumes/mesa-cs/mesa; left
+applied in the tree, harmless without the env var).
+
+What is PROVEN (each by direct observation, frame 0 works / frames 1+ zeros):
+
+- zink's command stream is correct and was exonerated end-to-end: barriers,
+  load/store ops (KK forces LOAD+STORE), fences all verified in traces;
+  `ZINK_DEBUG=sync` (maximal barriers) does not help; `noreorder`, `norp`,
+  descriptor modes, `GALLIUM_THREAD=0` all no-ops on the symptom.
+- The readback pipeline is innocent: a completion-handler probe on KK's
+  image→buffer copy shows the GPU itself writes zeros into the staging
+  buffer on frames 1+ (frame 0 writes the real pattern).
+- The main-draw pipeline is innocent: `PT_NEW_TEX` passes, and the failing
+  frames read back **zeros**, not the previous pattern — so the upload RP
+  did execute and wrote zeros over the old content (a skipped upload would
+  leave the previous frame's pattern).
+- Therefore the poison is the **texel fetch through the fresh VkBufferView**
+  (KK: linear MTLTexture created from the placement MTLBuffer, accessed
+  bindlessly by gpuResourceID): it returns zeros on frames 1+ even though
+  the underlying buffer memory demonstrably holds the data (`PT_CHECK_BUF`
+  GPU-copies it back correctly, and frame 0 fetches the same buffer fine).
+- Same-frame vertex fetches from an even *fresher* BO (zink's per-frame
+  131k stream buffer) work — so post-first-commit heap allocations DO
+  become GPU-visible in general; it is not a blanket residency failure.
+- Exonerated by direct experiment: residency-set commit no-op-ing
+  (force-dirty probe), adding the texel-buffer texture itself to the
+  residency set, the kk 0015 cmd-pool BO cache (`LIMINA_KK_BOCACHE=0`),
+  per-frame descriptor-pool churn, per-frame VkDeviceMemory churn,
+  BO frees mid-stream (zink frees nothing during the run), premature
+  fence signal (a 200 ms sleep after glFinish changes nothing), and
+  cross-submit fence chaining (queue->wait_fence steal chain verified
+  fence-by-fence in the trace — the copy provably runs after the RP that
+  feeds it).
+- `kktexel` with **fresh view + fresh memory + fresh descriptor pool +
+  one-submit-no-wait** still PASSES — the minimal trigger is some
+  yet-unreplicated zink-specific ingredient.
+- TRAP for future sessions: `MTL_SHADER_VALIDATION=1` zeroes **all** KK
+  bindless texture accesses ("MTLResourceUsage flags mismatch or missing")
+  including known-good kktexel runs — the validation layer does not
+  understand queue-attached MTLResidencySets. Do not treat it as evidence.
+
+Remaining suspects for next session, in order: (1) the placement-heap
+aliasing shape — zink's PBO VkBuffer is bound into a 2 MB slab whose heap
+also carries KK's whole-heap `map` buffer, and the texel texture is created
+from that placement buffer (`kk_bind_buffer_memory` →
+`mtl_new_texture_with_descriptor_linear`); kktexel uses dedicated little
+allocations. (2) GENERAL/unified image layouts (kktexel uses legacy
+transitions). (3) The systematic Metal cmd-buffer address aliasing visible
+in traces (each submit's main cb pointer == the previous submit's pre_gfx
+pointer) — verify it is dealloc/realloc recycling, not a live double-commit.
+(4) Xcode GPU capture of frame 1 would answer "what did the fetch actually
+read" definitively.
+
+Impact check: limina's shipping tiers are unaffected (guest zink→venus→KK
+does PBO uploads correctly — crossmark guest upload cell verified; vrend
+correct). Host zink-on-KK is a dev reference config only.
 
 ## Present axis (2026-07-28, same day)
 
