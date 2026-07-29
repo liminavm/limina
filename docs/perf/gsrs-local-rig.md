@@ -70,11 +70,33 @@ ledger = their `present-misses-runs.md`.
   smithay pin `e1c10415`) vs `d4c7a61d` (main). Both are in the clone's
   history; build either.
 
+## 2026-07-29 evening: ask #1 ANSWERED — the deployed KK was the instrumented build
+
+Read-only strings check on dogfood-mac's `/Applications/Limina.app` (deployed 12:18):
+
+- `libvirglrenderer.1.dylib` **has** `vkr-journal` + the `q_peak` gauge —
+  0049/0051/0052 are in; the stale-build theory is dead.
+- `libvulkan_kosmickrisp.dylib` **carries the uncommitted PBO-hunt
+  instrumentation** (`LIMINA_KK_DRAWPROBE`, `LIMINA_KK_BUFVIEW_FROM_MAP`,
+  `[KKTRACE] desc-sampled NULL-VIEW`): the bundle was built while the mesa-cs
+  tree still had it applied. Measured on the 10k-draw storm, the per-draw
+  getenv alone is ~10% of wall on the encode path — sitting exactly between
+  "flip queued early" and "render fence signals". **Their §21 "VMM axis" A/B
+  was old-VMM-with-clean-KK vs new-VMM-with-instrumented-KK.**
+
+**Clean bundle built: `target/Limina.app`** — KK rebuilt pristine at the 0016
+commit (deliberately WITHOUT kk 0017 threaded submit, to avoid stacking a
+second present-path change into their A/B; verified 0 instrumentation strings),
+virgl/worker at current repo HEAD (delta vs the morning deploy: libkrun 0116 +
+virgl 0057 vrend fence honesty — inert for a venus-only guest). Deploying to
+dogfood-mac is the user's step. After it lands, ask the compositor side to re-run the
+§21.2 matched-scale cell; scale-1 + episodes only stay on the list if they
+survive the clean build.
+
 ## Order of attack (queued behind the streamlining wrap-up)
 
-1. Read-only on dogfood-mac: confirm what the deployed VMM build contains (their
-   ask #1) — if it predates 0049/0051 the "5x" may mostly be a stale-build
-   artifact, which reshapes everything else.
+1. ~~Read-only on dogfood-mac: confirm what the deployed build contains~~ DONE, see
+   above — deployed KK was instrumented; clean bundle awaiting deploy.
 2. Fix the §22 fence leak (vkr context destroy → retire in-flight fences) —
    RED-first; likely reproducible with an L2 test that kills a venus client
    holding an in-flight fence and asserts the fence still retires.
