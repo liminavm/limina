@@ -21,7 +21,51 @@ included, render bit-identical frames. The workloads are exactly comparable.
 | upload | 0.75 (1326) | 1.03 (969) | **0.49** (2031) | 0.50 (2015) | 0.60 (1672) |
 | desktop | 0.58 (1711) | 0.65 (1532) | **0.23** (4392) | 0.38 (2605) | 0.46 (2174) |
 
-## Reading
+## RESOLVED 2026-07-29: the vrend small-frame "win" was loose fencing — OURS
+
+The loose-fence suspicion below is confirmed and fixed, and it was limina's,
+not vrend/zink's: **libkrun sync-completed every Global-ring fence at decode**
+(a coexist-venus firmware-wedge fix that swept classic vrend guests, whose
+fences all ride the Global ring), so a stock guest's `glFinish` waited for
+host *decode*, never GL/Metal completion. Fixes (suite 70/70, RED-first L2
+guard `crates/limina-test/tests/virgl_fence.rs`):
+
+- **libkrun 0116**: once a vrend context exists, Global-ring fences route
+  through `virgl_renderer_create_fence` (one GL timeline keeps per-ring
+  retirement ordered; sync-mark kept pre-vrend and as never-wedge fallback) +
+  the gpu worker now pumps virglrenderer's poll eventfd (vrend's sync thread
+  parks on pending GL queries until the VMM runs `virgl_renderer_poll()`).
+- **virgl 0057**: force the GLsync wait on macOS — Mesa's EGL-on-zink
+  advertises `EGL_ANDROID_native_fence_sync`, but exporting the fd hits
+  mesa's no-sync_file fallback which blocks until signaled; the sync thread
+  wedged forever in `kk_timeline_wait` (sampled live: the whole stock GNOME
+  session froze at its first fenced submission).
+
+**Honest vrend cells (same probe guest, same binaries, hashes identical):**
+
+| shape | vrend 07-28 (loose) | vrend HONEST | venus VK | host zink-KK GL |
+|---|---|---|---|---|
+| desktop | 0.23 (4392) | **0.55** (1809) | 0.58 (1711) | 0.46 (2174) |
+| upload | 0.49 (2031) | **0.97** (1028) | 0.75 (1326) | 0.60 (1672) |
+| draws 1k | 1.11 (900) | **1.46** (687) | 0.79 (1273) | 1.13 (883) |
+| draws 10k | 8.83 (113) | **8.83** (113) | 5.89 (170) | 6.91 (145) |
+| state 1k | 2.16 (462) | **3.43** (291) | 1.68 (597) | 2.19 (457) |
+
+- The 10k cell is bit-identical pre/post (GPU-bound; sync was negligible) —
+  the predicted consistency check. And no guest cell beats its host
+  reference anymore; physics restored.
+- **venus now wins or ties EVERY guest cell.** The "vrend small-frame
+  champion" reading below is DEAD: desktop is a tie (0.55 vs 0.58), and
+  venus wins upload/draws/state outright. There is no vrend fixed-cost
+  advantage left to chase — the remaining venus attack surface is the
+  decode+replay 2x at scale, not small-frame overhead.
+- The present-axis vrend smalls below (desktop 0.26 etc.) predate the fix
+  and are loose — re-measure before quoting them.
+- Honest fences are also the foundation vrend presents/vsync were missing:
+  display flush fences now retire at real GL completion, composing with
+  fence-present parking.
+
+## Reading (2026-07-28, pre-fence-fix — vrend small-frame cells are LOOSE, see above)
 
 - **The 2.4x virgl-beats-venus-GL verdict is DEAD at command scale.** At 10k
   draws zink-on-venus GL (154 fps) now beats vrend (113) by 36%, and native
