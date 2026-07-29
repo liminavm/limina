@@ -127,9 +127,12 @@ via the compositor side's own `cargo test -p niri-vk explicit_sync_bridge`:
   fdtruth probe (venus fence chain honest).
 - knob default ON (= dogfood): **FAIL** — fence exported unsignaled then
   signaled in 0.1 ms with ~200 ms of GPU work queued. **The fence lies early
-  under threaded submit** (vkr retires fences via an empty QueueSubmit(fence);
-  the threaded path completes it without ordering behind prior submissions).
-  Early flip fences under zero-copy scanout = the overview-animation tearing.
+  under threaded submit.** Mechanism STILL OPEN: the obvious theory (empty
+  QueueSubmit(fence) not ordering behind prior submissions) is DISPROVEN —
+  `spikes/venus-fence-truth/emptysub.c` and fdtruth are both GREEN knob-ON;
+  only the bridge test's multi-stage sequence triggers it (see the RED
+  inventory in spikes/venus-fence-truth/RESULTS.md). Early flip fences under
+  zero-copy scanout = the overview-animation tearing.
   Also their §-report "export blocks ~240 ms, emulated/serialized" (the ~240 ms
   is their calibrated busy-work D seen through the always-blocking semaphore
   export — see finding below).
