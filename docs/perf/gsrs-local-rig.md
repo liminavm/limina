@@ -1,5 +1,15 @@
 # Local gnome-shell-rs rig (dev-mac) — prep for the 2026-07-29 regression hunt
 
+> **Status 2026-07-30: KEPT as a standing dev tool.** `nirirepro.tear.raw` is the
+> rig image (user's call): gsrs autologin (password `gg`), current gsrs main +
+> smithay synced under `/home/claude/{gnome-shell-rs,smithay}` (rsync from the
+> host clones + `cargo build` to update), test-session drop-in installed, grim +
+> vulkan-loader-devel present. Boot:
+> `LIMINA_DISK=$PWD/nirirepro.tear.raw LIMINA_NET=1 LIMINA_RAM_MIB=8192 LIMINA_EXTRA_ARGS="--display-resolution 3840x2160" spikes/venus-draw-probe/boot-enhanced-efi-kk.sh`
+> (ssh claude@127.0.0.1, auto-port from 2222). Quick compositor checks:
+> `cargo test -p niri-vk explicit_sync_bridge` in-guest;
+> `scripts/drive-workload.sh $(id -u gsrs) 1 mixed|heavy` against the seat.
+
 2026-07-29. The compositor side's §21/§22 (dogfood-guest
 `~/Projects/gnome-shell-rs/docs/fork/present-misses.md`) reports regressions on
 the VMM deployed to the dogfood that day. Rather than ping-ponging measurement
