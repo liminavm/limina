@@ -129,3 +129,6 @@ date,commit,workload,metric,value,notes
 2026-07-28,d9d1a72,drawstorm-10k-native,ms-frame,2.557,AFTER kk 0015 (cmd-pool BO cache default 512): host-native KK 3.676->2.557 (+44% fps); mtl_new_heap gone from profile
 2026-07-28,d9d1a72,drawstorm-10k-venus,ms-frame,5.922,AFTER kk 0015 stacked on virgl 0054+0055: guest 6.67->5.92 (169fps, +51% cumulative over 8.97 baseline); replay branch now dominated by real AGX encode
 2026-07-28,dde020e,drawstorm-10k-venus,ms-frame,5.35,"AFTER virgl 0056 (object-lookup generation cache, 4-entry per-decoder, gen bumped under object_mutex): 5.92->5.35-5.7 best-of-3; 1k draws 0.924->0.818; lookup mutex gone from storm profile; suite 69/69"
+2026-07-28,3d9d6a2,crossmark-draws10k-venus-vk,ms-frame,5.891,"crossmark matrix (spikes/crossmark/RESULTS.md): venus VK 170fps vs zink-on-venus GL 154 vs vrend 113 at 10k draws — old 2.4x virgl-beats-venus-GL verdict inverted post 0049-0056+kk0014/0015"
+2026-07-28,3d9d6a2,crossmark-draws10k-zinkvenus-gl,ms-frame,6.482,"same matrix; guest zink even beats host zink-KK (6.91) — venus ring batches the encode"
+2026-07-28,3d9d6a2,crossmark-draws10k-vrend-gl,ms-frame,8.829,"same matrix; vrend still wins small-frame shapes (desktop 0.23, upload 0.49) but those may be flattered by loose glFinish fencing"
