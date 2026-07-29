@@ -59,6 +59,25 @@ for f in "$VIRGL" "$EPOXY" "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$GOP_FD" "$GVPROXY
   [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(build KK/zink on the mesa-cs volume, build the GOP firmware, or 'brew install gvproxy' / set LIMINA_GVPROXY_BIN)" >&2; exit 1; }
 done
 
+# ---- KK provenance tripwire (2026-07-29): a bundle silently shipped whatever ------
+#      dylib sat in build-kk — once with a day of uncommitted instrumentation,
+#      once with the unvalidated kk 0017 threaded submit (early-signaling fences
+#      → dogfood tearing). Print what we ship, and refuse experimental KK unless
+#      explicitly allowed.
+kk_git="$(strings "$KK_DRIVER" | grep -m1 'git-' || true)"
+echo "KK driver: $KK_DRIVER"
+echo "KK version: ${kk_git:-<no git stamp>}"
+if strings "$KK_DRIVER" | grep -q "LIMINA_KK_SUBMIT_THREAD" && [ "${LIMINA_ALLOW_THREADED_KK:-0}" != "1" ]; then
+  echo "REFUSING to bundle: KK dylib carries LIMINA_KK_SUBMIT_THREAD (kk 0017 threaded submit," >&2
+  echo "not validated for deployment). Rebuild KK at the deployable commit, or set" >&2
+  echo "LIMINA_ALLOW_THREADED_KK=1 to ship it deliberately." >&2
+  exit 1
+fi
+if strings "$KK_DRIVER" | grep -qE "LIMINA_KK_DRAWPROBE|KKTRACE"; then
+  echo "REFUSING to bundle: KK dylib carries debug instrumentation (LIMINA_KK_DRAWPROBE/KKTRACE)." >&2
+  exit 1
+fi
+
 # ---- signing identity (resolved FIRST so a locked keychain fails in seconds, ------
 #      not after the whole build) ---------------------------------------------------
 # Prefer a REAL identity over ad-hoc: TCC pins an ad-hoc app's Accessibility grant to

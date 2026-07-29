@@ -111,6 +111,44 @@ overview animation (incl. syncobj wait-for-submit handing back a null/signaled
 fence), and the scale-1 identity-mapping present branch (§21.2 — the artifact
 appeared in exactly that cell). Both are rig work below.
 
+## RESOLVED 2026-07-29 night: the tearing + bridge-test failure = kk 0017 shipped by accident
+
+The 16:42 "clean" bundle's KK dylib was NOT the 0016 build it was declared to be:
+`strings` on the deployed artifact shows `LIMINA_KK_SUBMIT_THREAD` and the git
+stamp `git-70ead9445f` (the 0017 commit). **kk 0017 threaded submit rode the
+dogfood deploy with the knob default-ON** — the exact stacking the deploy-caution
+note forbade; the earlier "verified 0 SUBMIT_THREAD strings" check was wrong.
+
+Local rig A/B (same repo-HEAD worker/virgl both arms, only the KK env flipped),
+via the compositor side's own `cargo test -p niri-vk explicit_sync_bridge`:
+
+- `LIMINA_KK_SUBMIT_THREAD=0`: PASS — fence→sync_file pipelined, export 0.05 ms,
+  waits track the ~200 ms busy-work. Matches their healthy baseline AND our
+  fdtruth probe (venus fence chain honest).
+- knob default ON (= dogfood): **FAIL** — fence exported unsignaled then
+  signaled in 0.1 ms with ~200 ms of GPU work queued. **The fence lies early
+  under threaded submit** (vkr retires fences via an empty QueueSubmit(fence);
+  the threaded path completes it without ordering behind prior submissions).
+  Early flip fences under zero-copy scanout = the overview-animation tearing.
+  Also their §-report "export blocks ~240 ms, emulated/serialized" (the ~240 ms
+  is their calibrated busy-work D seen through the always-blocking semaphore
+  export — see finding below).
+
+This also exonerates libkrun 0116 / virgl 0057 (identical in both arms).
+
+**Remediation:** true-0016 bundle rebuilt from a fresh worktree
+(`git-ac5fccbe84`, 0 SUBMIT_THREAD/instrumentation strings verified ON THE
+BUNDLE ARTIFACT) — awaiting user deploy. `build-app.sh` now refuses to bundle a
+KK carrying SUBMIT_THREAD/instrumentation strings unless
+`LIMINA_ALLOW_THREADED_KK=1`. kk 0017 stays local until its empty-submit fence
+ordering is fixed and the bridge test + fdtruth + a seated-tearing eyeball all
+pass with the knob ON.
+
+Standing guest-mesa finding (pre-existing, NOT deploy-related):
+`vn_GetSemaphoreFdKHR` CPU-blocks until GPU completion (`vn_wsi_sync_wait`; no
+implicit fencing on our renderer). For per-frame IN_FENCE export the FENCE
+export is the pipelined path — their spike already encodes this.
+
 ## Order of attack (queued behind the streamlining wrap-up)
 
 1. ~~Read-only on dogfood-mac: confirm what the deployed build contains~~ DONE, see
