@@ -99,3 +99,53 @@ under `vn_cs_decoder_lookup_object`; the decode lane is now vk_cmd_enqueue_* (re
 KK record) + the journal note_lookup TLS append. **Cumulative: 8.97 → ~5.5 ms, venus
 tax over native +5.29 → ~+2.9 ms with native itself 44% faster** — see
 docs/perf/venus-cmdstream-overhead.md for what (little) remains.
+
+## 2026-07-29: frames-in-flight axis (`-i`) + KK threaded submit (kk 0017)
+
+Two findings, one fix.
+
+**1. The instrumentation-tax trap (again).** The first fresh profile of the
+storm showed `kk_draw → getenv` at 10.6% of wall — yesterday's *uncommitted*
+PBO-hunt instrumentation (`LIMINA_KK_DRAWPROBE`) still applied in the mesa-cs
+tree, taxing every draw in the deployed KK, host references included. Reverted
+(snapshot preserved as `spikes/crossmark/kk-pbo-trace-instrumentation.patch`),
+both builds redone pristine. Clean re-baseline: host 10k i=1 3.06→2.70 ms,
+i=2 1.89→1.55; guest i=1 6.59→6.12, i=2 2.91→2.30. Lesson repeated: profile
+with a *pristine* tree, and grep the profile for `getenv`/`findenv` first.
+
+**2. The pipelined gap was a thread-topology artifact.** New `-i N`
+(frames in flight; 1 = the original fully-serialized probe). Both ends
+saturate at 2-deep pre-fix: the ring thread runs decode+enqueue (~0.9 ms) and
+the vkQueueSubmit Metal replay (~1.3-1.4 ms) *serialized*, so pipelined venus
+threw ~2.30 ms/frame against host-native 1.55 (1.49x). Fix = **kk 0017**:
+`VK_QUEUE_SUBMIT_MODE_THREADED` (LIMINA_KK_SUBMIT_THREAD, default on) + the
+move-capable native binary sync type it requires (dzn-pattern shared-event
+swap; sync_file shims so zink's SYNC_FD-export semaphores still select it).
+The replay moves to the vk_queue submit thread; the ring thread goes back to
+decoding the next frame.
+
+10k draws + push constants, 300 frames, per-frame ms (fps):
+
+| in-flight | guest venus (immediate) | guest venus (threaded) | host KK (threaded) |
+|---|---|---|---|
+| 1 | 6.12 (163) | 6.06 (165) | 2.74 (365) |
+| 2 | 2.30 (434) | 2.60 (385) | 1.52 (656) |
+| 3 | 2.30 (431) | **1.39 (717)** | 1.52 (—) |
+
+- **The pipelined venus tax is GONE**: at 3-deep the guest throughput
+  (1.39 ms) sits at the host-native replay floor (submit-thread replay
+  ~1.3 ms is the whole pipeline's bottleneck stage, wherever it runs).
+  Saturation moved 2-deep → 3-deep (three overlapped stages now: guest
+  encode | ring decode | Metal replay).
+- Host-native is unchanged at saturation (1.52-1.55) and its vkQueueSubmit
+  call drops to ~4 µs (fence absorbs the replay).
+- The serialized (i=1) path is unchanged — its ~6 ms is latency, not
+  throughput; the remaining levers there are the wake chain (sync path) and
+  Phase-3 fused decode (docs/perf/venus-cmdstream-overhead.md).
+- i=2 threaded reads ~0.3 ms worse than immediate (2.60 vs 2.30): with three
+  stages, two frames in flight can't fill the pipe and the extra handoff
+  shows. Real draw-heavy apps run 2-3+; compositors are 1-in-flight and
+  unaffected.
+- Correctness gates: guest crossmark pixel hashes bit-match all cross-tier
+  references; vkmark 2778 (post-arc median was 2674); full HVF suite run
+  with the threaded KK — see the ledger.

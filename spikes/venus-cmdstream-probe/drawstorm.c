@@ -15,9 +15,14 @@
  * (VK_ICD_FILENAMES -> kosmickrisp json), so guest-vs-host is a direct A/B of
  * the virtualization tax on the same workload.
  *
- * Usage: drawstorm [-n draws] [-f frames] [-w warmup-frames] [-P] [-s]
+ * Usage: drawstorm [-n draws] [-f frames] [-w warmup-frames] [-P] [-s] [-i N]
  *   -P  disable per-draw push constants (draws only)
  *   -s  single draw call per frame (fixed-cost floor)
+ *   -i  frames in flight (default 1 = fully serialized, the original probe;
+ *       2-3 = the realistic app pattern, where decode/replay of frame N can
+ *       overlap the guest encoding frame N+1 — measures how much of the venus
+ *       tax pipelining hides. The fence section becomes the pre-record wait on
+ *       the slot's previous submission; steady-state totals are comparable.)
  */
 
 #include <vulkan/vulkan.h>
@@ -64,7 +69,7 @@ read_file(const char *path, size_t *size)
 int
 main(int argc, char **argv)
 {
-   int ndraws = 1000, nframes = 300, warmup = 30, push = 1, single = 0;
+   int ndraws = 1000, nframes = 300, warmup = 30, push = 1, single = 0, inflight = 1;
    for (int i = 1; i < argc; i++) {
       if (!strcmp(argv[i], "-n"))
          ndraws = atoi(argv[++i]);
@@ -76,7 +81,13 @@ main(int argc, char **argv)
          push = 0;
       else if (!strcmp(argv[i], "-s"))
          single = 1;
+      else if (!strcmp(argv[i], "-i"))
+         inflight = atoi(argv[++i]);
    }
+   if (inflight < 1)
+      inflight = 1;
+   if (inflight > 8)
+      inflight = 8;
    if (single)
       ndraws = 1;
 
@@ -284,19 +295,31 @@ main(int argc, char **argv)
                                            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
                                         .commandPool = cpool,
                                         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-                                        .commandBufferCount = 1 };
-   VkCommandBuffer cmd;
-   CHECK(vkAllocateCommandBuffers(dev, &cbai, &cmd));
+                                        .commandBufferCount = (uint32_t)inflight };
+   VkCommandBuffer cmds[8];
+   CHECK(vkAllocateCommandBuffers(dev, &cbai, cmds));
 
-   VkFenceCreateInfo fenci = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-   VkFence fence;
-   CHECK(vkCreateFence(dev, &fenci, NULL, &fence));
+   /* Created signaled so the first wait on every slot is uniform (a no-op). */
+   VkFenceCreateInfo fenci = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+                               .flags = VK_FENCE_CREATE_SIGNALED_BIT };
+   VkFence fences[8];
+   for (int i = 0; i < inflight; i++)
+      CHECK(vkCreateFence(dev, &fenci, NULL, &fences[i]));
 
    double t_record = 0, t_submit = 0, t_fence = 0, t_total = 0;
    int measured = 0;
 
    for (int frame = 0; frame < nframes + warmup; frame++) {
+      VkCommandBuffer cmd = cmds[frame % inflight];
+      VkFence fence = fences[frame % inflight];
       double t0 = now_ms();
+
+      /* Wait-first (on this slot's previous submission): with inflight=1 this
+       * is the same serialization as the original probe in steady state; with
+       * inflight>1 the wait only lands when the pipeline is genuinely full. */
+      CHECK(vkWaitForFences(dev, 1, &fence, VK_TRUE, UINT64_MAX));
+      CHECK(vkResetFences(dev, 1, &fence));
+      double t0b = now_ms();
 
       VkCommandBufferBeginInfo cbbi = {
          .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -334,22 +357,19 @@ main(int argc, char **argv)
       CHECK(vkQueueSubmit(queue, 1, &si, fence));
       double t2 = now_ms();
 
-      CHECK(vkWaitForFences(dev, 1, &fence, VK_TRUE, UINT64_MAX));
-      CHECK(vkResetFences(dev, 1, &fence));
-      double t3 = now_ms();
-
       if (frame >= warmup) {
-         t_record += t1 - t0;
+         t_fence += t0b - t0;
+         t_record += t1 - t0b;
          t_submit += t2 - t1;
-         t_fence += t3 - t2;
-         t_total += t3 - t0;
+         t_total += t2 - t0;
          measured++;
       }
    }
+   vkDeviceWaitIdle(dev);
 
    double per = measured ? 1.0 / measured : 0;
-   printf("drawstorm n=%d push=%d frames=%d device=\"%s\"\n", ndraws, push, measured,
-          props.deviceName);
+   printf("drawstorm n=%d push=%d frames=%d inflight=%d device=\"%s\"\n", ndraws, push,
+          measured, inflight, props.deviceName);
    printf("per-frame ms: record=%.3f submit=%.3f fence=%.3f total=%.3f (%.1f fps)\n",
           t_record * per, t_submit * per, t_fence * per, t_total * per,
           measured / (t_total / 1e3));

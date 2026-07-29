@@ -105,6 +105,32 @@ Phase 2 re-measurement.
 **Not planned**: protocol coarsening (gallium-style stateful protocol for Vulkan) —
 wrong shape, loses Vulkan semantics, and the measurements say serdes isn't the cost.
 
+## Phase 2.5 — the pipelined gap was thread topology, not decode cost (DONE 2026-07-29, kk 0017)
+
+The frames-in-flight axis (drawstorm `-i N`, added 2026-07-29) reframed the residual
+2x: at 2+ frames in flight the guest encode fully overlaps, and the bottleneck is the
+vkr ring thread running decode (~0.9 ms) and the vkQueueSubmit Metal replay
+(~1.3-1.4 ms) back-to-back on one thread. **kk 0017** moves the replay to mesa's
+vk_queue submit thread (`VK_QUEUE_SUBMIT_MODE_THREADED`, `LIMINA_KK_SUBMIT_THREAD`
+default on), which required a move-capable native binary sync type (dzn-pattern
+shared-event swap + sync_file shims — see the patch). Result at 10k draws:
+
+| in-flight | guest venus | host KK native |
+|---|---|---|
+| 1 | 6.06 ms (165 fps) | 2.74 (365) |
+| 2 | 2.60 (385) | 1.52 (656) |
+| 3 | **1.39 (717)** | 1.52 (—) |
+
+**The pipelined venus tax is gone** — the guest saturates at the host's own
+submit-thread replay floor; the boundary costs nothing at throughput. Saturation
+moved to 3-deep (three overlapped stages). Correctness: crossmark hashes bit-match,
+vkmark 2778, HVF suite 70/70. Caveats: the serialized (1-in-flight) path is
+unchanged — that ~6 ms is latency (wake chain + serial decode+replay), where Phase 3
+fusion remains the only cmdstream-side lever; and exactly-2-in-flight reads ~0.3 ms
+worse than immediate (can't fill three stages). En route the fresh profile also
+caught `LIMINA_KK_DRAWPROBE`'s per-draw getenv still applied uncommitted in the
+mesa-cs tree, taxing every KK user 10% — reverted; numbers above are pristine-tree.
+
 ## For the compositor specifically
 
 A compositor frame is few-draws/one-submit/one-present: its costs are the **sync
