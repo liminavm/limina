@@ -269,14 +269,84 @@ index 6926326969e..03249955f5f 100644
     /* We may only have a mapped buffer, for example if the memory was imported
      * from a host pointer */
     if (bo->mtl_handle)
+diff --git a/src/kosmickrisp/vulkan/kk_buffer.c b/src/kosmickrisp/vulkan/kk_buffer.c
+index 54a6be25404..fb9d6fe76fa 100644
+--- a/src/kosmickrisp/vulkan/kk_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_buffer.c
+@@ -165,6 +165,10 @@ kk_bind_buffer_memory(struct kk_device *dev, const VkBindBufferMemoryInfo *info)
+       mtl_retain(buffer->mtl_handle);
+    }
+ 
++   /* limina TEMP experiment: remember the whole-heap map buffer + offset */
++   buffer->limina_map_handle = mem->bo->map;
++   buffer->limina_bind_offset = info->memoryOffset;
++
+    buffer->vk.device_address = mtl_buffer_get_gpu_address(buffer->mtl_handle);
+    /* We need Metal to give us a CPU mapping so it correctly captures the
+     * data in the GPU debugger... */
+diff --git a/src/kosmickrisp/vulkan/kk_buffer.h b/src/kosmickrisp/vulkan/kk_buffer.h
+index 1d9744678b6..5ee8dd781d0 100644
+--- a/src/kosmickrisp/vulkan/kk_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_buffer.h
+@@ -18,6 +18,11 @@
+ struct kk_buffer {
+    struct vk_buffer vk;
+    mtl_buffer *mtl_handle;
++   /* limina TEMP experiment: whole-heap map buffer + bind offset so
++    * kk_CreateBufferView can rebase the texel texture off the placement
++    * buffer (LIMINA_KK_BUFVIEW_FROM_MAP). */
++   mtl_buffer *limina_map_handle;
++   uint64_t limina_bind_offset;
+ };
+ 
+ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_buffer, vk.base, VkBuffer,
 diff --git a/src/kosmickrisp/vulkan/kk_buffer_view.c b/src/kosmickrisp/vulkan/kk_buffer_view.c
-index c67ac82ed15..dc01e6ceb24 100644
+index c67ac82ed15..040e48ca64a 100644
 --- a/src/kosmickrisp/vulkan/kk_buffer_view.c
 +++ b/src/kosmickrisp/vulkan/kk_buffer_view.c
-@@ -108,6 +108,22 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
+@@ -20,6 +20,9 @@
+ 
+ #include "vk_format.h"
+ 
++/* limina TEMP experiment: latest texel texture, for the draw-time probe */
++mtl_texture *limina_last_texel_tex = NULL;
++
+ VkFormatFeatureFlags2
+ kk_get_buffer_format_features(struct kk_physical_device *pdev,
+                               VkFormat vk_format)
+@@ -99,8 +102,21 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
+    };
+    struct kk_buffer *buffer =
+       container_of(view->vk.buffer, struct kk_buffer, vk);
+-   view->mtl_texel_buffer_handle = mtl_new_texture_with_descriptor_linear(
+-      buffer->mtl_handle, &layout, view->vk.offset);
++   /* limina TEMP experiment: create the texel texture from the WHOLE-HEAP
++    * map buffer at (bind offset + view offset) instead of from the placement
++    * buffer — A/B for the placement-buffer-parent suspect. */
++   if (getenv("LIMINA_KK_BUFVIEW_FROM_MAP") && buffer->limina_map_handle) {
++      view->mtl_texel_buffer_handle = mtl_new_texture_with_descriptor_linear(
++         buffer->limina_map_handle, &layout,
++         buffer->limina_bind_offset + view->vk.offset);
++      if (getenv("LIMINA_KK_TRACE"))
++         fprintf(stderr, "[KKTRACE] bufview FROM-MAP map=%p off=%llu\n",
++                 (void *)buffer->limina_map_handle,
++                 (unsigned long long)(buffer->limina_bind_offset +
++                                      view->vk.offset));
++   } else
++      view->mtl_texel_buffer_handle = mtl_new_texture_with_descriptor_linear(
++         buffer->mtl_handle, &layout, view->vk.offset);
+    if (!view->mtl_texel_buffer_handle) {
+       vk_buffer_view_destroy(&dev->vk, pAllocator, &view->vk);
+       return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+@@ -108,6 +124,27 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
     view->texel_buffer_gpu_id =
        mtl_texture_get_gpu_resource_id(view->mtl_texel_buffer_handle);
  
++   /* limina TEMP experiment: expose the latest texel texture for the
++    * draw-time useResource probe in kk_cmd_draw.c */
++   extern mtl_texture *limina_last_texel_tex;
++   limina_last_texel_tex = view->mtl_texel_buffer_handle;
++
 +   /* limina TEMP experiment: make the texture-from-buffer itself resident */
 +   if (getenv("LIMINA_KK_BUFVIEW_RESIDENT"))
 +      kk_device_add_buffer_to_residency_set(
@@ -296,7 +366,7 @@ index c67ac82ed15..dc01e6ceb24 100644
     *pBufferView = kk_buffer_view_to_handle(view);
  
     return VK_SUCCESS;
-@@ -123,6 +139,11 @@ kk_DestroyBufferView(VkDevice _device, VkBufferView bufferView,
+@@ -123,6 +160,11 @@ kk_DestroyBufferView(VkDevice _device, VkBufferView bufferView,
     if (!view)
        return;
  
@@ -353,7 +423,7 @@ index 9e51190f53f..2806e18f786 100644
           buffer_offset += info.buffer_slice_size_B;
        }
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
-index 5513a7648c9..daebefe2c81 100644
+index 5513a7648c9..cd03b870399 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
 +++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
 @@ -169,6 +169,18 @@ kk_merge_render_iview(VkExtent2D *extent, struct kk_image_view *iview)
@@ -392,7 +462,7 @@ index 5513a7648c9..daebefe2c81 100644
     mtl_render_pass_attachment_descriptor_set_texture(
        descriptor, iview->planes[0].mtl_handle_render);
     /* If a view is being used e.g. for format change, it already points to the
-@@ -2394,6 +2416,10 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+@@ -2394,6 +2416,36 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
  
        if (tess)
           draw_data = kk_launch_tess(cmd, draw_data);
@@ -400,14 +470,54 @@ index 5513a7648c9..daebefe2c81 100644
 +      if (kk_limina_trace())
 +         fprintf(stderr, "[KKTRACE] draw enc=%p verts=%u\n",
 +                 (void *)kk_render_encoder(cmd), data->draws[i].vertexCount);
++      /* limina TEMP experiment: dump bound-set descriptor memory and
++       * useResource the pool BOs + latest texel texture into the encoder */
++      if (getenv("LIMINA_KK_DRAWPROBE")) {
++         struct kk_descriptor_state *dstate = &cmd->state.gfx.descriptors;
++         mtl_render_encoder *enc = kk_render_encoder(cmd);
++         for (unsigned s = 0; s < KK_MAX_SETS; s++) {
++            struct kk_descriptor_set *set = dstate->sets[s];
++            if (!set || !set->limina_pool_bo)
++               continue;
++            const uint64_t *q = set->mapped_ptr;
++            fprintf(stderr,
++                    "[KKPROBE] set%u addr=%llx root=%llx desc[0..1]=%llx %llx\n",
++                    s, (unsigned long long)set->addr,
++                    (unsigned long long)dstate->root.sets[s],
++                    (unsigned long long)q[0],
++                    (unsigned long long)(set->size >= 16 ? q[1] : 0));
++            mtl_resource *res = (mtl_resource *)set->limina_pool_bo->map;
++            mtl_render_use_resources(enc, &res, 1, MTL_RESOURCE_USAGE_READ);
++            mtl_render_use_heaps(enc, &set->limina_pool_bo->mtl_handle, 1);
++         }
++         extern mtl_texture *limina_last_texel_tex;
++         if (limina_last_texel_tex) {
++            mtl_resource *res = (mtl_resource *)limina_last_texel_tex;
++            mtl_render_use_resources(enc, &res, 1, MTL_RESOURCE_USAGE_READ);
++         }
++      }
        kk_dispatch_draw(kk_render_encoder(cmd), draw_data);
  
        if (xfb_track)
 diff --git a/src/kosmickrisp/vulkan/kk_descriptor_set.c b/src/kosmickrisp/vulkan/kk_descriptor_set.c
-index 570d4eeb85b..d1556730e68 100644
+index 570d4eeb85b..f0b64b4b5d2 100644
 --- a/src/kosmickrisp/vulkan/kk_descriptor_set.c
 +++ b/src/kosmickrisp/vulkan/kk_descriptor_set.c
-@@ -74,6 +74,15 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
+@@ -60,6 +60,13 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
+    struct kk_sampled_image_descriptor desc[3] = {};
+    uint8_t plane_count = 1;
+ 
++   /* limina TEMP instrumentation */
++   if (getenv("LIMINA_KK_TRACE") &&
++       descriptor_type != VK_DESCRIPTOR_TYPE_SAMPLER &&
++       (!info || info->imageView == VK_NULL_HANDLE))
++      fprintf(stderr, "[KKTRACE] desc-sampled NULL-VIEW type=%d\n",
++              descriptor_type);
++
+    if (descriptor_type != VK_DESCRIPTOR_TYPE_SAMPLER && info &&
+        info->imageView != VK_NULL_HANDLE) {
+       VK_FROM_HANDLE(kk_image_view, view, info->imageView);
+@@ -74,6 +81,15 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
              assert(view->planes[plane].sampled_gpu_resource_id);
              desc[plane].image_gpu_resource_id =
                 view->planes[plane].sampled_gpu_resource_id;
@@ -423,7 +533,7 @@ index 570d4eeb85b..d1556730e68 100644
           }
        }
     }
-@@ -213,6 +222,13 @@ write_buffer_view_desc(struct kk_descriptor_set *set,
+@@ -213,6 +229,13 @@ write_buffer_view_desc(struct kk_descriptor_set *set,
        assert(view->texel_buffer_gpu_id);
  
        desc.image_gpu_resource_id = view->texel_buffer_gpu_id;
@@ -437,11 +547,26 @@ index 570d4eeb85b..d1556730e68 100644
     }
     write_desc(set, binding, elem, &desc, sizeof(desc));
  }
-@@ -579,6 +595,13 @@ kk_descriptor_set_create(struct kk_device *dev, struct kk_descriptor_pool *pool,
+@@ -302,6 +325,13 @@ kk_UpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount,
+       VK_FROM_HANDLE(kk_descriptor_set, src, copy->srcSet);
+       VK_FROM_HANDLE(kk_descriptor_set, dst, copy->dstSet);
+ 
++      /* limina TEMP instrumentation */
++      if (getenv("LIMINA_KK_TRACE"))
++         fprintf(stderr,
++                 "[KKTRACE] desc-copy src=%p dst=%p bind %u->%u count=%u\n",
++                 (void *)src, (void *)dst, copy->srcBinding, copy->dstBinding,
++                 copy->descriptorCount);
++
+       const struct kk_descriptor_set_binding_layout *src_binding_layout =
+          &src->layout->binding[copy->srcBinding];
+       const struct kk_descriptor_set_binding_layout *dst_binding_layout =
+@@ -579,6 +609,14 @@ kk_descriptor_set_create(struct kk_device *dev, struct kk_descriptor_pool *pool,
           vk_object_free(&dev->vk, NULL, set);
           return result;
        }
 +      /* limina TEMP instrumentation */
++      set->limina_pool_bo = pool->bo;
 +      if (getenv("LIMINA_KK_TRACE"))
 +         fprintf(stderr,
 +                 "[KKTRACE] set-create set=%p pool-bo-map=%p addr=%llx "
@@ -451,6 +576,20 @@ index 570d4eeb85b..d1556730e68 100644
     }
  
     vk_descriptor_set_layout_ref(&layout->vk);
+diff --git a/src/kosmickrisp/vulkan/kk_descriptor_set.h b/src/kosmickrisp/vulkan/kk_descriptor_set.h
+index f75c513dd22..e5309765b98 100644
+--- a/src/kosmickrisp/vulkan/kk_descriptor_set.h
++++ b/src/kosmickrisp/vulkan/kk_descriptor_set.h
+@@ -45,6 +45,9 @@ struct kk_descriptor_set {
+    uint64_t addr;
+    uint32_t size;
+ 
++   /* limina TEMP experiment: pool BO backpointer for draw-time useResource */
++   struct kk_bo *limina_pool_bo;
++
+    struct kk_buffer_address dynamic_buffers[];
+ };
+ 
 diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
 index a08595528e5..415337f2588 100644
 --- a/src/kosmickrisp/vulkan/kk_device.c
@@ -538,24 +677,3 @@ index 38c64ab5b99..6b9c0170b37 100644
     if (encoder->wait_fence) {
        mtl_compute_wait_for_fence(
           encoder->encoder, util_dynarray_top(&encoder->fences, mtl_fence *));
-diff --git a/src/mesa/state_tracker/st_cb_texture.c b/src/mesa/state_tracker/st_cb_texture.c
-index 159dff16af6..916aecfa21f 100644
---- a/src/mesa/state_tracker/st_cb_texture.c
-+++ b/src/mesa/state_tracker/st_cb_texture.c
-@@ -2252,9 +2252,13 @@ st_TexSubImage(struct gl_context *ctx, GLuint dims,
-    }
- 
-    if (unpack->BufferObj) {
--      if (try_pbo_upload(ctx, dims, texImage, format, type, dst_format,
--                         xoffset, yoffset, zoffset,
--                         width, height, depth, pixels, unpack))
-+      bool pbo_ok = try_pbo_upload(ctx, dims, texImage, format, type, dst_format,
-+                                   xoffset, yoffset, zoffset,
-+                                   width, height, depth, pixels, unpack);
-+      if (getenv("LIMINA_PBO_TRACE"))
-+         fprintf(stderr, "[PBOTRACE] st try_pbo_upload %dx%d -> %s\n", width, height,
-+                 pbo_ok ? "GPU path" : "REJECTED (fallback)");
-+      if (pbo_ok)
-          return;
-    }
- 

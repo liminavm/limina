@@ -458,11 +458,58 @@ main(void)
     * propagation). Deliberately leaks; the run is a few frames. */
    int fresh_mem = getenv("KKT_FRESH_MEM") != NULL;
 
+   /* KKT_SLAB: zink's suballocator shape — ONE 2 MB VkDeviceMemory slab,
+    * and each frame a FRESH VkBuffer bound into it at a rolling offset
+    * (KKT_SLAB_SAME pins offset 0, the orphan-reuse degenerate case). In KK
+    * every bind mints a placement MTLBuffer from the heap that already
+    * carries the whole-heap `map` buffer, and the texel MTLTexture is
+    * created from that placement buffer — the exact aliasing shape the real
+    * PBO path uses. Deliberately leaks like KKT_FRESH_MEM. */
+   int slab = getenv("KKT_SLAB") != NULL;
+   int slab_same = getenv("KKT_SLAB_SAME") != NULL;
+   VkDeviceMemory slab_mem = VK_NULL_HANDLE;
+   uint8_t *slab_ptr = NULL;
+   VkDeviceSize slab_align = 256, slab_size = 2u << 20;
+   if (slab) {
+      VkBufferCreateInfo probe_ci = { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                                      .size = BYTES,
+                                      .usage =
+                                         VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT };
+      VkBuffer probe;
+      CHECK(vkCreateBuffer(dev, &probe_ci, NULL, &probe));
+      VkMemoryRequirements preq;
+      vkGetBufferMemoryRequirements(dev, probe, &preq);
+      vkDestroyBuffer(dev, probe, NULL);
+      slab_align = preq.alignment > slab_align ? preq.alignment : slab_align;
+      VkMemoryAllocateInfo smai = { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                    .allocationSize = slab_size,
+                                    .memoryTypeIndex = mem_type(
+                                       preq.memoryTypeBits,
+                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) };
+      CHECK(vkAllocateMemory(dev, &smai, NULL, &slab_mem));
+      CHECK(vkMapMemory(dev, slab_mem, 0, VK_WHOLE_SIZE, 0, (void **)&slab_ptr));
+      fprintf(stderr, "slab: 2MB, align %llu, %s offsets\n",
+              (unsigned long long)slab_align, slab_same ? "pinned" : "rolling");
+   }
+
    for (int frame = 0; frame < frames; frame++) {
       fill(expected, frame);
 
       VkBuffer frame_pbo = pbo;
-      if (fresh_mem) {
+      if (slab) {
+         VkBufferCreateInfo fci = { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                                    .size = BYTES,
+                                    .usage =
+                                       VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT };
+         CHECK(vkCreateBuffer(dev, &fci, NULL, &frame_pbo));
+         VkDeviceSize stride = (BYTES + slab_align - 1) & ~(slab_align - 1);
+         VkDeviceSize off = slab_same ? 0 : (VkDeviceSize)frame * stride;
+         if (off + BYTES > slab_size)
+            off = 0;
+         CHECK(vkBindBufferMemory(dev, frame_pbo, slab_mem, off));
+         memcpy(slab_ptr + off, expected, BYTES);
+      } else if (fresh_mem) {
          VkBufferCreateInfo fci = { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                                     .size = BYTES,
                                     .usage =

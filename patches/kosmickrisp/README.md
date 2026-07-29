@@ -161,6 +161,18 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
   `0 / avail=1` before. The ~82%-per-timestamp expectation `0012` alone left behind is gone with
   the GPU resolve that caused it.
 
+- **`0014-mesa-expose-GL_AMD_pinned_memory-on-ES2-contexts.patch`** / **`0015-kk-default-the-cmd-pool-BO-cache-to-512-heap-churn-w.patch`** —
+  the venus-cmdstream perf arc (2026-07-28): 0014 unlocks the pinned-memory upload path for the
+  host-zink reference, 0015 defaults KK's cmd-pool BO cache to 512 entries (heap churn was the top
+  draw-time cost; opt-out `LIMINA_KK_BOCACHE=0`). See `docs/perf/venus-cmdstream-overhead.md`.
+- **`0016-mesa-st-re-dirty-FS-sampler-views-after-PBO-upload-d.patch`** — fixes an **upstream
+  mesa/st regression** (62efee186073, 2026-03-25): the PBO upload/download meta-ops unbind every
+  fragment sampler view at the pipe level but the refactored invalidate mask forgot
+  `ST_INVALIDATE_FS_SAMPLER_VIEWS`, so the next draw samples null descriptors (zeros) unless
+  something else re-dirties texture state. Found by crossmark's upload shape on host zink-KK
+  (guest mesa predates the regression); full forensics in `spikes/crossmark/RESULTS.md`.
+  **Upstream candidate** with a clean `Fixes:` tag.
+
 ## Apply / rebuild
 The `/Volumes/mesa-cs/mesa` tree is on the `limina/kosmickrisp` branch with these committed.
 To re-create from a fresh checkout: `git checkout 178a3d73968 && git am

@@ -57,7 +57,58 @@ across f=2/5/60; `CM_GL_NO_PBO=1` client-pointer path tracks VK bit-for-bit).
 the host zink-kk build. Repro is `-S upload` on the host GL cell, or the
 dedicated oracle `pbotest.c` (below).
 
-### Root-cause hunt (2026-07-28 night session, unresolved — narrowed to KK/Metal)
+### RESOLVED 2026-07-29: upstream mesa/st regression, fixed as patches/kosmickrisp/0016
+
+The bug was **not** in KK, Metal, or zink proper — it was an **upstream mesa
+state-tracker regression**, and the "zero texel fetch" framing was a decoy.
+The chain, established by a draw-time descriptor-memory probe
+(`LIMINA_KK_DRAWPROBE` in kk_cmd_draw.c):
+
+- The st_pbo upload draw was always CORRECT (its texel-buffer descriptor
+  carries the right gpuResourceID every frame; the upload lands in X).
+- The poisoned draw was the app's **sampling draw**: frames 1+ bind a
+  combined-image-sampler descriptor whose image gpuResourceID is **0**
+  (sampler half populated) — KK faithfully writes a null descriptor because
+  **zink is handed imageView = VK_NULL_HANDLE**, and sampling a null bindless
+  handle returns zeros. That mimicked "the texel fetch reads zeros" one draw
+  downstream.
+- zink writes NULL because its `di` state was never repopulated: after every
+  PBO upload, `try_pbo_upload_common` → `cso_restore_state(cso,
+  CSO_UNBIND_FS_SAMPLERVIEWS)` unbinds ALL fragment sampler views at the pipe
+  level and zeroes `st->state.num_sampler_views[FRAGMENT]`, relying on the
+  `st_update_fragment_textures` atom to rebind before the next draw.
+- Upstream commit **62efee186073** ("mesa/st: Convert st_cb_texture to use
+  st_context_invalidate_state", 2026-03-25, MR 40592) replaced the old
+  explicit `ST_SET_STATE3(..., ST_NEW_FS_SAMPLER_VIEWS)` with an
+  `st_context_invalidate_state()` mask that covers every clobbered state
+  **except the fragment sampler views**. The atom never fires; the next draw
+  runs with all fragment sampler views unbound. Frame 0 only worked because
+  the first draw validates everything.
+- Why only host zink-KK: the guest mesa branch predates the refactor, and the
+  bug needs a null-descriptor-capable driver + a workload that does
+  TexSubImage(PBO)+draw with no other texture-state churn in between (real
+  apps usually rebind textures per frame, masking it — which is how it
+  survived upstream since March).
+
+**Fix**: add `ST_INVALIDATE_FS_SAMPLER_VIEWS` to both meta-op invalidate
+masks (upload + download) — `patches/kosmickrisp/0016-mesa-st-re-dirty-FS-
+sampler-views-after-PBO-upload-d.patch`, committed on `limina/kosmickrisp`.
+Verified: pbotest 10/10 PASS (plus NO_PBO/SUBDATA/NEW_PBO variants; PT_HALF
+now shows correct half-upload retention), and `crossmark-gl -S upload -f 300`
+produces `3394eba3524c31b3` — the exact cross-tier reference hash. **Worth
+upstreaming**: it's a genuine upstream regression with a clean Fixes: tag.
+
+Session-2 exonerations that funneled to the answer (kept for the record):
+placement-heap aliasing (KKT_SLAB/KKT_SLAB_SAME replicas pass; rebasing the
+texel texture onto the whole-heap map buffer via `LIMINA_KK_BUFVIEW_FROM_MAP`
+changes nothing), cb-pointer-recycling over-release (NSZombieEnabled run:
+no zombie hit, bug persists → address reuse is benign dealloc/realloc),
+LIMINA_KK_SLIMROOT=0 / LIMINA_KK_SLIMPUSH=0 (both no-ops on the symptom).
+The decisive instrument was reading the bound sets' CPU-mapped descriptor
+memory at draw-record time — pixels lie one draw downstream; descriptors
+don't.
+
+### Root-cause hunt (2026-07-28 night session — the pre-resolution ledger)
 
 Oracles in this directory: `pbotest.c` (GL, per-frame verify + variant knobs),
 `kkload.c` (pure-VK load-op probes), `kktexel.c` (pure-VK replica of the
