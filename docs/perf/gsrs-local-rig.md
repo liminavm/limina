@@ -93,6 +93,24 @@ dogfood-mac is the user's step. After it lands, ask the compositor side to re-ru
 §21.2 matched-scale cell; scale-1 + episodes only stay on the list if they
 survive the clean build.
 
+## 2026-07-29 late: tearing report → fence truthfulness MEASURED (spike venus-fence-truth)
+
+The user saw background bleeding through windows mid-overview-animation on the
+dogfood re-run (mixed animation frames in bands = tearing). Under
+`NIRI_VK_ASYNC_SCANOUT=1` that means the buffer hit glass before its render
+finished. Measured (spikes/venus-fence-truth/): the venus **fence sync_file is
+truthful** (exported pending at 0.02 ms, signals at GPU completion), and the
+flip/release side is engineered honest (guest kernel fences blob-scanout flush;
+host holds it to the CA-latch ack). Two host-side suspects ELIMINATED. Also
+found: `vn_GetSemaphoreFdKHR` **CPU-blocks until GPU completion** on our stack
+(no implicit fencing → `vn_wsi_sync_wait`) — if gsrs exports the render
+*semaphore* per frame for IN_FENCE, their compositor thread serializes on the
+GPU every frame (latency/misses, not tearing); the *fence* export is the async
+path. Tearing suspects remaining: gsrs buffer/fence pairing or damage in the
+overview animation (incl. syncobj wait-for-submit handing back a null/signaled
+fence), and the scale-1 identity-mapping present branch (§21.2 — the artifact
+appeared in exactly that cell). Both are rig work below.
+
 ## Order of attack (queued behind the streamlining wrap-up)
 
 1. ~~Read-only on dogfood-mac: confirm what the deployed build contains~~ DONE, see
