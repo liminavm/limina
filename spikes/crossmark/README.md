@@ -47,13 +47,28 @@ especially — so a mismatch is a *flag*, not automatically a bug). Trap: guest
 glReadPixels has returned black before (#28) — the GL backend warns on an
 all-zero readback rather than trusting it.
 
-## Present axis
+## Present axis (`-p` windowed, `-F` fullscreen)
 
 Offscreen isolates command-stream + render cost, but skips the
 scanout/present path (venus fence-present, vrend timer present, zero-copy
-IOSurface) — a `-present` mode (Wayland surface, swap interval 0 /
-mailbox-immediate, windowed + fullscreen) is the planned second axis so those
-get scored too. Not implemented yet.
+IOSurface) — `-p`/`-F` render the same shapes to a Wayland xdg-toplevel
+instead, uncapped: the GL leg uses `wl_egl_window` + `eglSwapInterval(0)`,
+the Vulkan leg a `VK_KHR_wayland_surface` swapchain preferring mailbox then
+immediate (it logs the mode it got — fifo means VSYNC-CAPPED, distrust the
+number). Timing gains a `present` section (acquire + queue-present / swap);
+`sync` is 0 in present mode (present-paced, no glFinish). The pixel hash is
+disabled (no swapchain readback; content is validated offscreen).
+
+Present legs are guest-only (macOS has no Wayland; present *is* the
+guest→host scanout path). Run them inside the seated GNOME session
+(`WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000` over ssh), PIN
+the display mode first (`scripts/perf/set-guest-display.py --write-config
+1280x800 1.0` + reboot — the perf-display-pinning rule), and confirm which
+scanout path engaged via the worker's `[FLUSH2]`/`[FENCEPRESENT]` DIAGs.
+v1 limitation: no swapchain recreate — a resize mid-run exits(2); rerun.
+
+Env knob: `CM_GL_NO_PBO=1` switches the GL upload shape to client-pointer
+`glTexSubImage2D` (diagnostic for PBO-path driver bugs; see RESULTS.md).
 
 ## Run recipes
 

@@ -2,9 +2,15 @@
 // Copyright © 2026 Gustavo Noronha Silva
 
 /* crossmark Vulkan backend — see crossmark.h for the scene contract.
- * Derived from spikes/venus-cmdstream-probe/drawstorm.c. */
+ * Derived from spikes/venus-cmdstream-probe/drawstorm.c.
+ * -p/-F (HAVE_WAYLAND builds): render to a Wayland swapchain, uncapped
+ * (mailbox > immediate > fifo), timing the acquire+present separately. */
 
 #include <vulkan/vulkan.h>
+#ifdef HAVE_WAYLAND
+#include <vulkan/vulkan_wayland.h>
+#include "cmwin.h"
+#endif
 #include "crossmark.h"
 
 #define CHECK(x)                                                                \
@@ -15,6 +21,8 @@
          exit(1);                                                               \
       }                                                                         \
    } while (0)
+
+#define MAX_SWAP_IMAGES 8
 
 static void *
 read_file(const char *path, size_t *size)
@@ -91,6 +99,21 @@ make_image(uint32_t w, uint32_t h, VkImageUsageFlags usage, VkImage *img,
    CHECK(vkBindImageMemory(dev, *img, *mem, 0));
 }
 
+static VkImageView
+make_view(VkImage img, VkFormat format)
+{
+   VkImageViewCreateInfo ivci = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+      .image = img,
+      .viewType = VK_IMAGE_VIEW_TYPE_2D,
+      .format = format,
+      .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 }
+   };
+   VkImageView view;
+   CHECK(vkCreateImageView(dev, &ivci, NULL, &view));
+   return view;
+}
+
 static void
 image_barrier(VkCommandBuffer cmd, VkImage img, VkImageLayout from, VkImageLayout to,
               VkAccessFlags src, VkAccessFlags dst, VkPipelineStageFlags srcStage,
@@ -115,12 +138,26 @@ main(int argc, char **argv)
    struct cm_opts o;
    if (cm_parse_args(&o, argc, argv))
       return 1;
+#ifndef HAVE_WAYLAND
+   if (o.present) {
+      fprintf(stderr, "-p/-F need a wayland-enabled build (Linux guest)\n");
+      return 1;
+   }
+#endif
 
+   const char *inst_exts[2];
+   uint32_t n_inst_exts = 0;
+   if (o.present) {
+      inst_exts[n_inst_exts++] = "VK_KHR_surface";
+      inst_exts[n_inst_exts++] = "VK_KHR_wayland_surface";
+   }
    VkApplicationInfo app = { .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
                              .pApplicationName = "crossmark",
                              .apiVersion = VK_API_VERSION_1_1 };
    VkInstanceCreateInfo ici = { .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-                                .pApplicationInfo = &app };
+                                .pApplicationInfo = &app,
+                                .enabledExtensionCount = n_inst_exts,
+                                .ppEnabledExtensionNames = inst_exts };
    VkInstance inst;
    CHECK(vkCreateInstance(&ici, NULL, &inst));
 
@@ -147,34 +184,118 @@ main(int argc, char **argv)
       }
 
    float prio = 1.0f;
+   const char *dev_exts[1] = { "VK_KHR_swapchain" };
    VkDeviceQueueCreateInfo qci = { .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
                                    .queueFamilyIndex = qfi,
                                    .queueCount = 1,
                                    .pQueuePriorities = &prio };
    VkDeviceCreateInfo dci = { .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
                               .queueCreateInfoCount = 1,
-                              .pQueueCreateInfos = &qci };
+                              .pQueueCreateInfos = &qci,
+                              .enabledExtensionCount = o.present ? 1u : 0u,
+                              .ppEnabledExtensionNames = dev_exts };
    CHECK(vkCreateDevice(phys, &dci, NULL, &dev));
    VkQueue queue;
    vkGetDeviceQueue(dev, qfi, 0, &queue);
 
-   /* offscreen color target */
-   VkImage target;
+   /* ---- render target(s): offscreen image, or a Wayland swapchain ---- */
+   uint32_t width = CM_WIDTH, height = CM_HEIGHT;
+   VkFormat color_format = VK_FORMAT_R8G8B8A8_UNORM;
+   VkImage target = VK_NULL_HANDLE;
    VkDeviceMemory target_mem;
-   make_image(CM_WIDTH, CM_HEIGHT,
-              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-              &target, &target_mem);
-   VkImageViewCreateInfo ivci = {
-      .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-      .image = target,
-      .viewType = VK_IMAGE_VIEW_TYPE_2D,
-      .format = VK_FORMAT_R8G8B8A8_UNORM,
-      .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 }
-   };
-   VkImageView view;
-   CHECK(vkCreateImageView(dev, &ivci, NULL, &view));
+   VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+   (void)swapchain; /* referenced only in HAVE_WAYLAND blocks */
+   VkImage swap_images[MAX_SWAP_IMAGES];
+   uint32_t n_swap = 0;
+#ifdef HAVE_WAYLAND
+   struct cm_win *win = NULL;
+   VkSurfaceKHR surface = VK_NULL_HANDLE;
+   if (o.present) {
+      win = cm_win_create(CM_WIDTH, CM_HEIGHT, o.fullscreen, "crossmark");
+      if (!win)
+         return 1;
+      width = win->width;
+      height = win->height;
+      VkWaylandSurfaceCreateInfoKHR wsci = {
+         .sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
+         .display = win->dpy,
+         .surface = win->surface
+      };
+      CHECK(vkCreateWaylandSurfaceKHR(inst, &wsci, NULL, &surface));
+      VkBool32 supported = VK_FALSE;
+      vkGetPhysicalDeviceSurfaceSupportKHR(phys, qfi, surface, &supported);
+      if (!supported) {
+         fprintf(stderr, "queue family has no present support\n");
+         return 1;
+      }
 
-   VkAttachmentDescription att = { .format = VK_FORMAT_R8G8B8A8_UNORM,
+      VkSurfaceFormatKHR fmts[32];
+      uint32_t nfmt = 32;
+      vkGetPhysicalDeviceSurfaceFormatsKHR(phys, surface, &nfmt, fmts);
+      color_format = fmts[0].format;
+      VkColorSpaceKHR color_space = fmts[0].colorSpace;
+      for (uint32_t i = 0; i < nfmt; i++)
+         if (fmts[i].format == VK_FORMAT_B8G8R8A8_UNORM ||
+             fmts[i].format == VK_FORMAT_R8G8B8A8_UNORM) {
+            color_format = fmts[i].format;
+            color_space = fmts[i].colorSpace;
+            break;
+         }
+
+      VkPresentModeKHR modes[8];
+      uint32_t nmode = 8;
+      vkGetPhysicalDeviceSurfacePresentModesKHR(phys, surface, &nmode, modes);
+      VkPresentModeKHR want = VK_PRESENT_MODE_FIFO_KHR;
+      for (uint32_t i = 0; i < nmode; i++)
+         if (modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR &&
+             want != VK_PRESENT_MODE_MAILBOX_KHR)
+            want = VK_PRESENT_MODE_IMMEDIATE_KHR;
+         else if (modes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
+            want = VK_PRESENT_MODE_MAILBOX_KHR;
+      fprintf(stderr, "present mode: %s\n",
+              want == VK_PRESENT_MODE_MAILBOX_KHR     ? "mailbox"
+              : want == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate"
+                                                      : "fifo (VSYNC-CAPPED)");
+
+      VkSurfaceCapabilitiesKHR caps;
+      vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys, surface, &caps);
+      if (caps.currentExtent.width != 0xffffffffu) {
+         width = caps.currentExtent.width;
+         height = caps.currentExtent.height;
+      }
+      uint32_t min_images = caps.minImageCount + 1;
+      if (caps.maxImageCount && min_images > caps.maxImageCount)
+         min_images = caps.maxImageCount;
+      VkSwapchainCreateInfoKHR scci = {
+         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+         .surface = surface,
+         .minImageCount = min_images,
+         .imageFormat = color_format,
+         .imageColorSpace = color_space,
+         .imageExtent = { width, height },
+         .imageArrayLayers = 1,
+         .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+         .preTransform = caps.currentTransform,
+         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+         .presentMode = want,
+         .clipped = VK_TRUE
+      };
+      CHECK(vkCreateSwapchainKHR(dev, &scci, NULL, &swapchain));
+      n_swap = MAX_SWAP_IMAGES;
+      CHECK(vkGetSwapchainImagesKHR(dev, swapchain, &n_swap, swap_images));
+      fprintf(stderr, "swapchain: %ux%u x%u images\n", width, height, n_swap);
+   }
+#endif
+   if (!o.present) {
+      make_image(width, height,
+                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                 &target, &target_mem);
+      swap_images[0] = target;
+      n_swap = 1;
+   }
+
+   VkAttachmentDescription att = { .format = color_format,
                                    .samples = VK_SAMPLE_COUNT_1_BIT,
                                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                                    .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -182,7 +303,9 @@ main(int argc, char **argv)
                                    .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
                                    .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
                                    .finalLayout =
-                                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL };
+                                      o.present
+                                         ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+                                         : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL };
    VkAttachmentReference attref = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
    VkSubpassDescription sub = { .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 .colorAttachmentCount = 1,
@@ -195,15 +318,20 @@ main(int argc, char **argv)
    VkRenderPass rp;
    CHECK(vkCreateRenderPass(dev, &rpci, NULL, &rp));
 
-   VkFramebufferCreateInfo fbci = { .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-                                    .renderPass = rp,
-                                    .attachmentCount = 1,
-                                    .pAttachments = &view,
-                                    .width = CM_WIDTH,
-                                    .height = CM_HEIGHT,
-                                    .layers = 1 };
-   VkFramebuffer fb;
-   CHECK(vkCreateFramebuffer(dev, &fbci, NULL, &fb));
+   VkImageView fb_views[MAX_SWAP_IMAGES];
+   VkFramebuffer fbs[MAX_SWAP_IMAGES];
+   for (uint32_t i = 0; i < n_swap; i++) {
+      fb_views[i] = make_view(swap_images[i], color_format);
+      VkFramebufferCreateInfo fbci = { .sType =
+                                          VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                                       .renderPass = rp,
+                                       .attachmentCount = 1,
+                                       .pAttachments = &fb_views[i],
+                                       .width = width,
+                                       .height = height,
+                                       .layers = 1 };
+      CHECK(vkCreateFramebuffer(dev, &fbci, NULL, &fbs[i]));
+   }
 
    size_t vsz, ffsz, tfsz;
    void *vspv = read_file("cm.vert.spv", &vsz);
@@ -221,7 +349,6 @@ main(int argc, char **argv)
    smci.pCode = tfspv;
    CHECK(vkCreateShaderModule(dev, &smci, NULL, &tex_fs));
 
-   /* descriptor set layout: one combined image sampler (tex pipeline) */
    VkDescriptorSetLayoutBinding dslb = { .binding = 0,
                                          .descriptorType =
                                             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -248,7 +375,6 @@ main(int argc, char **argv)
    VkPipelineLayout tex_layout;
    CHECK(vkCreatePipelineLayout(dev, &plci, NULL, &tex_layout));
 
-   /* pipelines: CM_NVARIANTS flat variants (spec-constant factor) + tex */
    VkPipelineVertexInputStateCreateInfo vin = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
    };
@@ -256,14 +382,19 @@ main(int argc, char **argv)
       .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
       .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
    };
-   VkViewport vp = { 0, 0, CM_WIDTH, CM_HEIGHT, 0, 1 };
-   VkRect2D sc = { { 0, 0 }, { CM_WIDTH, CM_HEIGHT } };
+   /* dynamic viewport/scissor so the same pipelines serve the offscreen and
+    * arbitrary-size present paths */
    VkPipelineViewportStateCreateInfo vps = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
       .viewportCount = 1,
-      .pViewports = &vp,
-      .scissorCount = 1,
-      .pScissors = &sc
+      .scissorCount = 1
+   };
+   VkDynamicState dyn_states[2] = { VK_DYNAMIC_STATE_VIEWPORT,
+                                    VK_DYNAMIC_STATE_SCISSOR };
+   VkPipelineDynamicStateCreateInfo dyn = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+      .dynamicStateCount = 2,
+      .pDynamicStates = dyn_states
    };
    VkPipelineRasterizationStateCreateInfo rs = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
@@ -308,6 +439,7 @@ main(int argc, char **argv)
          .pRasterizationState = &rs,
          .pMultisampleState = &ms,
          .pColorBlendState = &cb,
+         .pDynamicState = &dyn,
          .layout = flat_layout,
          .renderPass = rp,
          .subpass = 0
@@ -336,6 +468,7 @@ main(int argc, char **argv)
          .pRasterizationState = &rs,
          .pMultisampleState = &ms,
          .pColorBlendState = &cb,
+         .pDynamicState = &dyn,
          .layout = tex_layout,
          .renderPass = rp,
          .subpass = 0
@@ -351,14 +484,7 @@ main(int argc, char **argv)
       uint32_t d = CM_UPLOAD_TEX;
       make_image(d, d, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                  &tex_img[i], &tex_mem[i]);
-      VkImageViewCreateInfo tvci = {
-         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-         .image = tex_img[i],
-         .viewType = VK_IMAGE_VIEW_TYPE_2D,
-         .format = VK_FORMAT_R8G8B8A8_UNORM,
-         .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 }
-      };
-      CHECK(vkCreateImageView(dev, &tvci, NULL, &tex_view[i]));
+      tex_view[i] = make_view(tex_img[i], VK_FORMAT_R8G8B8A8_UNORM);
    }
    VkSamplerCreateInfo sci = { .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
                                .magFilter = VK_FILTER_NEAREST,
@@ -398,7 +524,6 @@ main(int argc, char **argv)
       vkUpdateDescriptorSets(dev, 1, &wds, 0, NULL);
    }
 
-   /* staging buffer: streaming texel source, persistently mapped */
    const VkDeviceSize stream_size = CM_UPLOAD_TEX * CM_UPLOAD_TEX * 4;
    VkBuffer staging;
    VkDeviceMemory staging_mem;
@@ -408,8 +533,7 @@ main(int argc, char **argv)
    void *staging_ptr;
    CHECK(vkMapMemory(dev, staging_mem, 0, stream_size, 0, &staging_ptr));
 
-   /* readback buffer for the pixel hash */
-   const VkDeviceSize rb_size = CM_WIDTH * CM_HEIGHT * 4;
+   const VkDeviceSize rb_size = (VkDeviceSize)width * height * 4;
    VkBuffer rb_buf = VK_NULL_HANDLE;
    VkDeviceMemory rb_mem = VK_NULL_HANDLE;
    void *rb_ptr = NULL;
@@ -438,6 +562,12 @@ main(int argc, char **argv)
    VkFenceCreateInfo fenci = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
    VkFence fence;
    CHECK(vkCreateFence(dev, &fenci, NULL, &fence));
+   VkSemaphore acq_sem = VK_NULL_HANDLE, done_sem = VK_NULL_HANDLE;
+   if (o.present) {
+      VkSemaphoreCreateInfo semci = { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+      CHECK(vkCreateSemaphore(dev, &semci, NULL, &acq_sem));
+      CHECK(vkCreateSemaphore(dev, &semci, NULL, &done_sem));
+   }
 
    /* one-time init upload: fill the two static textures */
    {
@@ -484,6 +614,23 @@ main(int argc, char **argv)
       int last = frame == o.nframes + o.warmup - 1;
       double t0 = cm_now_ms();
 
+      uint32_t img_idx = 0;
+      double t_acq = 0;
+      if (o.present) {
+#ifdef HAVE_WAYLAND
+         double a0 = cm_now_ms();
+         VkResult ar = vkAcquireNextImageKHR(dev, swapchain, UINT64_MAX, acq_sem,
+                                             VK_NULL_HANDLE, &img_idx);
+         if (ar == VK_ERROR_OUT_OF_DATE_KHR) {
+            fprintf(stderr, "swapchain out of date (resize?) — rerun; v1 does "
+                            "not recreate\n");
+            exit(2);
+         }
+         t_acq = cm_now_ms() - a0;
+         t0 = cm_now_ms(); /* draw section starts after acquire */
+#endif
+      }
+
       VkCommandBufferBeginInfo cbbi = {
          .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
          .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
@@ -491,7 +638,6 @@ main(int argc, char **argv)
       CHECK(vkBeginCommandBuffer(cmd, &cbbi));
 
       if (o.shape == CM_SHAPE_UPLOAD) {
-         /* stream 1 MiB of texels through the staging buffer into tex 2 */
          cm_fill_stream(stream_src, frame);
          memcpy(staging_ptr, stream_src, stream_size);
          image_barrier(cmd, tex_img[2],
@@ -519,12 +665,15 @@ main(int argc, char **argv)
       VkClearValue clear = { .color = { { 0.05f, 0.05f, 0.1f, 1.0f } } };
       VkRenderPassBeginInfo rpbi = { .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
                                      .renderPass = rp,
-                                     .framebuffer = fb,
-                                     .renderArea = { { 0, 0 },
-                                                     { CM_WIDTH, CM_HEIGHT } },
+                                     .framebuffer = fbs[img_idx],
+                                     .renderArea = { { 0, 0 }, { width, height } },
                                      .clearValueCount = 1,
                                      .pClearValues = &clear };
       vkCmdBeginRenderPass(cmd, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+      VkViewport vp = { 0, 0, (float)width, (float)height, 0, 1 };
+      VkRect2D sc = { { 0, 0 }, { width, height } };
+      vkCmdSetViewport(cmd, 0, 1, &vp);
+      vkCmdSetScissor(cmd, 0, 1, &sc);
 
       int tex_shape = o.shape == CM_SHAPE_UPLOAD || o.shape == CM_SHAPE_DESKTOP;
       VkPipelineLayout layout = tex_shape ? tex_layout : flat_layout;
@@ -561,19 +710,25 @@ main(int argc, char **argv)
       }
       vkCmdEndRenderPass(cmd);
 
-      if (last && o.hash) {
+      if (last && o.hash && !o.present) {
          VkBufferImageCopy bic = { .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0,
                                                          0, 1 },
-                                   .imageExtent = { CM_WIDTH, CM_HEIGHT, 1 } };
+                                   .imageExtent = { width, height, 1 } };
          vkCmdCopyImageToBuffer(cmd, target, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                 rb_buf, 1, &bic);
       }
       CHECK(vkEndCommandBuffer(cmd));
       double t1 = cm_now_ms();
 
+      VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
       VkSubmitInfo si = { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                          .waitSemaphoreCount = o.present ? 1u : 0u,
+                          .pWaitSemaphores = &acq_sem,
+                          .pWaitDstStageMask = &wait_stage,
                           .commandBufferCount = 1,
-                          .pCommandBuffers = &cmd };
+                          .pCommandBuffers = &cmd,
+                          .signalSemaphoreCount = o.present ? 1u : 0u,
+                          .pSignalSemaphores = &done_sem };
       CHECK(vkQueueSubmit(queue, 1, &si, fence));
       double t2 = cm_now_ms();
 
@@ -581,11 +736,32 @@ main(int argc, char **argv)
       CHECK(vkResetFences(dev, 1, &fence));
       double t3 = cm_now_ms();
 
+      double t_present = t_acq;
+      if (o.present) {
+#ifdef HAVE_WAYLAND
+         double p0 = cm_now_ms();
+         VkPresentInfoKHR pi = { .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                                 .waitSemaphoreCount = 1,
+                                 .pWaitSemaphores = &done_sem,
+                                 .swapchainCount = 1,
+                                 .pSwapchains = &swapchain,
+                                 .pImageIndices = &img_idx };
+         VkResult pr = vkQueuePresentKHR(queue, &pi);
+         if (pr == VK_ERROR_OUT_OF_DATE_KHR) {
+            fprintf(stderr, "swapchain out of date at present — rerun\n");
+            exit(2);
+         }
+         cm_win_pump(win);
+         t_present += cm_now_ms() - p0;
+#endif
+      }
+
       if (frame >= o.warmup) {
          t.draw += t1 - t0;
          t.flush += t2 - t1;
          t.sync += t3 - t2;
-         t.total += t3 - t0;
+         t.present += t_present;
+         t.total += (t3 - t0) + t_present;
          t.frames++;
       }
    }

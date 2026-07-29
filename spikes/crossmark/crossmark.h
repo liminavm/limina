@@ -54,7 +54,9 @@ struct cm_opts {
    int ndraws; /* draws/state only; upload/desktop have fixed counts */
    int nframes;
    int warmup;
-   int hash; /* readback + FNV hash after the last frame */
+   int hash;       /* readback + FNV hash after the last frame */
+   int present;    /* -p: render to a Wayland window, uncapped, per-frame present */
+   int fullscreen; /* -F: fullscreen toplevel (implies -p) */
 };
 
 static inline const char *
@@ -75,6 +77,7 @@ cm_shape_name(enum cm_shape s)
 static inline int
 cm_parse_args(struct cm_opts *o, int argc, char **argv)
 {
+   memset(o, 0, sizeof(*o));
    o->shape = CM_SHAPE_DRAWS;
    o->ndraws = 1000;
    o->nframes = 300;
@@ -103,14 +106,21 @@ cm_parse_args(struct cm_opts *o, int argc, char **argv)
          o->warmup = atoi(argv[++i]);
       else if (!strcmp(argv[i], "-H"))
          o->hash = 0;
+      else if (!strcmp(argv[i], "-p"))
+         o->present = 1;
+      else if (!strcmp(argv[i], "-F"))
+         o->present = o->fullscreen = 1;
       else {
          fprintf(stderr,
                  "usage: %s [-S draws|state|upload|desktop] [-n draws] "
-                 "[-f frames] [-w warmup] [-H (skip hash)]\n",
+                 "[-f frames] [-w warmup] [-H (skip hash)] [-p (present to a "
+                 "Wayland window)] [-F (fullscreen, implies -p)]\n",
                  argv[0]);
          return -1;
       }
    }
+   if (o->present)
+      o->hash = 0; /* no swapchain readback; content validated offscreen */
    if (o->shape == CM_SHAPE_UPLOAD)
       o->ndraws = CM_UPLOAD_DRAWS;
    else if (o->shape == CM_SHAPE_DESKTOP)
@@ -224,7 +234,7 @@ cm_hash_pixels(const uint8_t *rgba, size_t n)
 }
 
 struct cm_times {
-   double draw, flush, sync, total;
+   double draw, flush, sync, present, total;
    int frames;
 };
 
@@ -233,11 +243,14 @@ cm_report(const char *api, const struct cm_opts *o, const char *device,
           const struct cm_times *t, uint64_t hash)
 {
    double per = t->frames ? 1.0 / t->frames : 0;
-   printf("crossmark api=%s shape=%s n=%d frames=%d device=\"%s\"\n", api,
-          cm_shape_name(o->shape), o->ndraws, t->frames, device);
-   printf("per-frame ms: draw=%.3f flush=%.3f sync=%.3f total=%.3f (%.1f fps)\n",
-          t->draw * per, t->flush * per, t->sync * per, t->total * per,
-          t->frames / (t->total / 1e3));
+   printf("crossmark api=%s shape=%s n=%d frames=%d mode=%s device=\"%s\"\n", api,
+          cm_shape_name(o->shape), o->ndraws, t->frames,
+          o->present ? (o->fullscreen ? "fullscreen" : "windowed") : "offscreen",
+          device);
+   printf("per-frame ms: draw=%.3f flush=%.3f sync=%.3f present=%.3f total=%.3f "
+          "(%.1f fps)\n",
+          t->draw * per, t->flush * per, t->sync * per, t->present * per,
+          t->total * per, t->frames / (t->total / 1e3));
    if (o->hash)
       printf("pixel-hash: %016llx\n", (unsigned long long)hash);
 }

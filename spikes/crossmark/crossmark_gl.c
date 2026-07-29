@@ -10,6 +10,10 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
+#ifdef HAVE_WAYLAND
+#include <wayland-egl.h>
+#include "cmwin.h"
+#endif
 #include "crossmark.h"
 
 #define GLCHECK()                                                     \
@@ -103,11 +107,31 @@ main(int argc, char **argv)
    struct cm_opts o;
    if (cm_parse_args(&o, argc, argv))
       return 1;
+#ifndef HAVE_WAYLAND
+   if (o.present) {
+      fprintf(stderr, "-p/-F need a wayland-enabled build (Linux guest)\n");
+      return 1;
+   }
+#endif
 
+   int width = CM_WIDTH, height = CM_HEIGHT;
    EGLDisplay dpy = EGL_NO_DISPLAY;
+   EGLSurface wsurf = EGL_NO_SURFACE;
+#ifdef HAVE_WAYLAND
+   struct cm_win *win = NULL;
+   struct wl_egl_window *egl_win = NULL;
+   if (o.present) {
+      win = cm_win_create(CM_WIDTH, CM_HEIGHT, o.fullscreen, "crossmark");
+      if (!win)
+         return 1;
+      width = win->width;
+      height = win->height;
+      dpy = eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, win->dpy, NULL);
+   }
+#endif
    PFNEGLGETPLATFORMDISPLAYEXTPROC get_platform_display =
       (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
-   if (get_platform_display)
+   if (dpy == EGL_NO_DISPLAY && !o.present && get_platform_display)
       dpy = get_platform_display(EGL_PLATFORM_SURFACELESS_MESA, NULL, NULL);
    if (dpy == EGL_NO_DISPLAY)
       dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
@@ -117,11 +141,24 @@ main(int argc, char **argv)
    }
    eglBindAPI(EGL_OPENGL_ES_API);
 
-   const EGLint cfg_attrs[] = { EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
-                                EGL_SURFACE_TYPE, 0, EGL_NONE };
+   const EGLint cfg_attrs[] = { EGL_RENDERABLE_TYPE,
+                                EGL_OPENGL_ES3_BIT,
+                                EGL_SURFACE_TYPE,
+                                o.present ? EGL_WINDOW_BIT : 0,
+                                EGL_RED_SIZE,
+                                8,
+                                EGL_GREEN_SIZE,
+                                8,
+                                EGL_BLUE_SIZE,
+                                8,
+                                EGL_NONE };
    EGLConfig cfg;
    EGLint ncfg = 0;
    eglChooseConfig(dpy, cfg_attrs, &cfg, 1, &ncfg);
+   if (o.present && !ncfg) {
+      fprintf(stderr, "no window-capable EGL config\n");
+      return 1;
+   }
    const EGLint ctx_attrs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
    EGLContext ctx =
       eglCreateContext(dpy, ncfg ? cfg : EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, ctx_attrs);
@@ -129,28 +166,44 @@ main(int argc, char **argv)
       fprintf(stderr, "eglCreateContext failed (0x%x)\n", eglGetError());
       return 1;
    }
-   if (!eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
-      fprintf(stderr, "surfaceless eglMakeCurrent failed (0x%x)\n", eglGetError());
+#ifdef HAVE_WAYLAND
+   if (o.present) {
+      egl_win = wl_egl_window_create(win->surface, width, height);
+      wsurf = eglCreateWindowSurface(dpy, cfg, (EGLNativeWindowType)egl_win, NULL);
+      if (wsurf == EGL_NO_SURFACE) {
+         fprintf(stderr, "eglCreateWindowSurface failed (0x%x)\n", eglGetError());
+         return 1;
+      }
+   }
+#endif
+   if (!eglMakeCurrent(dpy, wsurf, wsurf, ctx)) {
+      fprintf(stderr, "eglMakeCurrent failed (0x%x)\n", eglGetError());
       return 1;
    }
+   if (o.present)
+      eglSwapInterval(dpy, 0); /* uncapped */
 
    const char *renderer = (const char *)glGetString(GL_RENDERER);
    fprintf(stderr, "device: %s\n", renderer);
+   if (o.present)
+      fprintf(stderr, "window: %dx%d swap-interval 0\n", width, height);
 
-   /* offscreen target */
-   GLuint fbo, target;
-   glGenTextures(1, &target);
-   glBindTexture(GL_TEXTURE_2D, target);
-   glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, CM_WIDTH, CM_HEIGHT);
-   glGenFramebuffers(1, &fbo);
-   glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target,
-                          0);
-   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-      fprintf(stderr, "FBO incomplete\n");
-      return 1;
+   /* offscreen target (present mode renders to the window's default FB) */
+   GLuint fbo = 0, target = 0;
+   if (!o.present) {
+      glGenTextures(1, &target);
+      glBindTexture(GL_TEXTURE_2D, target);
+      glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, CM_WIDTH, CM_HEIGHT);
+      glGenFramebuffers(1, &fbo);
+      glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                             target, 0);
+      if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+         fprintf(stderr, "FBO incomplete\n");
+         return 1;
+      }
    }
-   glViewport(0, 0, CM_WIDTH, CM_HEIGHT);
+   glViewport(0, 0, width, height);
    glDisable(GL_DITHER); /* determinism for the pixel hash */
 
    GLuint vao;
@@ -266,14 +319,26 @@ main(int argc, char **argv)
       glFlush();
       double t2 = cm_now_ms();
 
-      glFinish();
-      double t3 = cm_now_ms();
+      double t3 = t2, t4 = t2;
+      if (o.present) {
+#ifdef HAVE_WAYLAND
+         /* present-paced: no glFinish; eglSwapBuffers is the throttle */
+         eglSwapBuffers(dpy, wsurf);
+         cm_win_pump(win);
+         t4 = cm_now_ms();
+#endif
+      } else {
+         glFinish();
+         t3 = cm_now_ms();
+         t4 = t3;
+      }
 
       if (frame >= o.warmup) {
          t.draw += t1 - t0;
          t.flush += t2 - t1;
          t.sync += t3 - t2;
-         t.total += t3 - t0;
+         t.present += t4 - t3;
+         t.total += t4 - t0;
          t.frames++;
       }
    }
