@@ -83,3 +83,24 @@ seen in exactly that re-run). Both belong to the local gsrs rig
   IMMEDIATELY at each export (the semaphore export blocking ~26 ms silently pushed
   the first fence-fd poll past GPU completion in probe v2, masking the one number
   that mattered).
+
+## 2026-07-29 late night: RED inventory for the kk 0017 early-fence bug
+
+The deploy-accident bug (kk 0017 threaded submit → gsrs bridge test FAIL + dogfood
+tearing) turned out NOT to be the obvious mechanism. Distilled repros are GREEN:
+
+- `emptysub.c` (host, vkr's retirement pattern distilled: work submit + empty
+  `QueueSubmit(0, fence)`): fence orders behind prior work on BOTH knob settings.
+- `fdtruth.c` through the full guest stack on a knob-ON host: truthful.
+
+The one reliable RED is the compositor side's test, run in a guest on a knob-ON
+host — deterministic, ~2s:
+
+    cargo test -p niri-vk explicit_sync_bridge   # in their repo; FAILS knob-ON
+
+Its failing signature: the fence-stage workload/wait completes in ~0.1 ms where
+~200 ms of busy-work was queued (semaphore stage before it behaved normally).
+Suspects for the real trigger, in order: vn fence FEEDBACK interplay, vkr's
+pooled/recycled VkFences meeting `kk_timeline_reset` with a late in-flight Metal
+signal, multi-stage object reuse, the timeline-syncobj stage. Root-cause by
+deleting stages from their test until the minimal trigger remains.
