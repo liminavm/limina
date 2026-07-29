@@ -81,16 +81,21 @@ root per draw (123 samples); descriptor-pool BO allocation goes through
 
 ## After
 
-| n | baseline | 0054 (msg-inline+batch) | 0055 (block lane) |
-|---|---|---|---|
-| 1000 | 1.065 ms | 0.91-0.95 ms | 0.924 ms |
-| 10000 | 8.970 ms (111.5 fps) | 6.98 ms (143 fps) | **6.67 ms (150 fps)** |
+| n | baseline | 0054 (msg-inline+batch) | 0055 (block lane) | +kk 0015 (BO cache) | +0056 (lookup gen-cache) |
+|---|---|---|---|---|---|
+| 1000 | 1.065 ms | 0.91-0.95 ms | 0.924 ms | — | 0.818 ms |
+| 10000 | 8.970 ms (111.5 fps) | 6.98 ms (143 fps) | 6.67 ms (150 fps) | 5.92 ms (169 fps) | **5.35-5.7 ms (175-187 fps)** |
 
 (0054/0055 numbers from fresh-boot sessions; the settled-session 0054 run read 6.60.)
 Venus host tax at 10k draws: **+5.29ms → ~+3.0ms (−43%)**. virgl 0055 replaced the
 per-command message entirely: pure vkCmd* captures append into a 256KB thread-local
 block (one memcpy, no alloc, no lock), one message per block, consumer batch-pops.
-The post-0055 profile shows the decode lane clear of journal/allocator cost; the
-remaining gap = KK descriptor-root memmove + descriptor-pool Metal-heap churn (now
-the top host cost) + the object-table lookup mutex — see
-docs/perf/venus-cmdstream-overhead.md for the ranked backlog.
+kk 0015 (cmd-pool BO cache default 512) then took host-native 3.68 → 2.56 ms and
+guest 6.67 → 5.92. virgl 0056 (object-lookup generation cache: 4-entry per-decoder
+cache gated on a ctx-wide table generation, bumped under the object mutex on every
+insert/remove) removed the last per-handle mutex traffic: guest 5.92 → 5.35-5.7 ms
+(175-187 fps), 1k draws 0.924 → 0.818 ms. Post-0056 profile: zero mutex/hash-search
+under `vn_cs_decoder_lookup_object`; the decode lane is now vk_cmd_enqueue_* (real
+KK record) + the journal note_lookup TLS append. **Cumulative: 8.97 → ~5.5 ms, venus
+tax over native +5.29 → ~+2.9 ms with native itself 44% faster** — see
+docs/perf/venus-cmdstream-overhead.md for what (little) remains.

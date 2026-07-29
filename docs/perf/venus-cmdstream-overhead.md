@@ -75,12 +75,20 @@ journal).
    the churn gone, `kk_upload_descriptor_root` is ~2% of the storm profile; the
    per-draw root snapshot is semantically required when push constants change per
    draw. No further action unless a real workload shows it.
-3. **Object-lookup mutex per handle** (~10% of decode, now the top decode residue):
-   every command in a recording stream looks up the same VkCommandBuffer under the
-   ctx object-table mutex. A 1-entry per-decoder cache keyed by (id, table
-   generation) — generation bumped under the existing mutex on insert/remove, read
-   with acquire — removes ~all of it. Small, subtle (memory ordering); needs a
-   torture test around create/destroy.
+3. **DONE (virgl 0056, 2026-07-28): object-lookup mutex per handle** (~10% of
+   decode, was the top decode residue): every command in a recording stream looks
+   up the same VkCommandBuffer (and layout) under the ctx object-table mutex.
+   Fixed with a **4-entry per-decoder cache** gated by a table generation counter
+   (`ctx->object_gen`, bumped under object_mutex on every insert/remove, read
+   relaxed on the fast path — staleness only diverts to the locked path, and a
+   use of a just-created/reused id is ordered after its create's gen bump by the
+   ring transport itself; entries are tagged with the generation captured *under*
+   the mutex so a tag can never be newer than its lookup). 4 entries, not 1,
+   because vkCmdPushConstants alternates cmd-buffer and layout lookups — a
+   1-entry cache would thrash every command. Result: guest 10k-draw 5.92 →
+   5.35-5.7 ms; the storm profile shows zero mutex/hash-search traffic under
+   `vn_cs_decoder_lookup_object`; the residue inside lookup is now the journal's
+   note_lookup TLS append.
 4. **Journal residue**: gone (virgl 0055 block lane); nothing further indicated.
 
 ## Phase 3 — structural (only if 1+2 leave a real gap)
