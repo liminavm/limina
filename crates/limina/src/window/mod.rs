@@ -747,10 +747,30 @@ pub fn run(
                 if onglass_env && !latch_marker {
                     if let Some(prev) = prev {
                         let t0 = std::time::Instant::now();
+                        let gated = prev.is_in_use();
                         while prev.is_in_use()
                             && t0.elapsed() < std::time::Duration::from_millis(50)
                         {
                             std::thread::sleep(std::time::Duration::from_micros(500));
+                        }
+                        if gated {
+                            // Engagement oracle (the 0114 lesson): the FIRST gated ack logs
+                            // at INFO — one line per run confirms the mode without any
+                            // per-frame firehose; the periodic wait sample stays at trace.
+                            static GATED: std::sync::atomic::AtomicU64 =
+                                std::sync::atomic::AtomicU64::new(0);
+                            let n = GATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if n == 0 {
+                                log::info!(
+                                    "window: off-glass ack gating ENGAGED (first gated ack waited {:?})",
+                                    t0.elapsed()
+                                );
+                            } else if n % 512 == 0 {
+                                log::trace!(
+                                    "window: off-glass ack gate n={n}, last wait {:?}",
+                                    t0.elapsed()
+                                );
+                            }
                         }
                     }
                 }
