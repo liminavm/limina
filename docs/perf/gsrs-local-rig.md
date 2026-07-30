@@ -228,7 +228,23 @@ sustained heavy protocol + the §26 park-the-mouse oracle):
   debug logs) — so this arm SHOULD measure identical to current. If it doesn't, the
   inertness reading is wrong and 0116 is the bug.
 
-Verification performed on the artifacts (the fd03b33 lesson): KK git stamp + zero
+**RESULT 2026-07-30 morning — the baseline arm KILLS the regression theory.** The user
+deployed `Limina-0727-baseline.app` on dogfood-mac, booted dogfood-guest, and reported the sluggish
+workspace switch visually unchanged. Scored run in the dogfood-guest gsrs session (their §26
+protocol: 8 gnome-terminals, heavy ×2, their correlate-frame-log.py): **15.11%** overall
+(2146/14200 aim-1 flips, 28 qualifying windows, draws p50 161, gpu p50 10.07 ms) — the same
+band as their current-deploy runs (§25 16.28%, §26 7.17%; ~2× run-to-run variance). The
+§19-era VMM build cannot reproduce the §19-era punctuality, so **nothing in the 07-27→07-29
+VMM delta caused this** (and `Limina-no0116.app` is moot — 0116 was a subset of what this
+arm reverted — no need to run it). What the §19-vs-now comparison still spans: the COMPOSITOR build and the
+workload/scorer themselves evolved since 07-27 — their side's ledger, flagged to them.
+Secondary structure in the run: gpu-p50 12 ms+ windows miss 65.4%, 6-12 ms miss 10.9%,
+draws 200+ miss 34.6% — frame cost is the dominant lever (rho elements +0.845, draws +0.780).
+Prime dogfood-mac-vs-rig suspect: the dogfood seat runs 4K at **fractional scale 1.5** (the
+`limina-perf-display-pinning` trap: fractional scale multiplies the render workload), where
+the rig ran integer scale — likely why dogfood-mac's compositor frames sit at 10-12 ms against a
+16.7 ms budget while the rig idles at ~2 ms. Next: reproduce the band on the rig by pinning
+4K + scale 1.5 (task #19), then attack venus per-frame cost, not a phantom regression.
 `LIMINA_KK_SUBMIT_THREAD`/instrumentation strings; worker grep for the 0116 oracle string
 (absent in both arms) and fence-present (present in both). `scripts/build-app.sh` now takes
 `LIMINA_KK_BUILD` to pin the KK build dir per arm. Era build recipes: mesa worktree
