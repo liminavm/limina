@@ -37,7 +37,7 @@ CARGO_FLAGS=()
 # ---- dev source locations (the things we vendor into the bundle) -----------------
 VIRGL="$ROOT/third_party/virgl-prefix/lib/libvirglrenderer.1.dylib"
 EPOXY="$ROOT/third_party/epoxy-egl-prefix/lib/libepoxy.0.dylib"
-KK_BUILD="/Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan"
+KK_BUILD="${LIMINA_KK_BUILD:-/Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan}"
 ZINK="/Volumes/mesa-cs/zink-kk-prefix/lib"
 KK_DRIVER="$KK_BUILD/libvulkan_kosmickrisp.dylib"
 # dlopen'd-by-env roots (not in the worker's link closure):
