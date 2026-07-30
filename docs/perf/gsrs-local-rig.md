@@ -171,3 +171,35 @@ export is the pipelined path — their spike already encodes this.
    holding an in-flight fence and asserts the fence still retires.
 3. Local rig up; reproduce their §21.2 table shape on dev-mac (no interference)
    before chasing the scale-1 and episode signals.
+
+## 2026-07-30: #18 verdict — NO virgl regression for the real workload; the "regression" was kitty + a contaminated baseline
+
+Rig A/B campaign (measure-arm.sh, their driver + correlator, 4K@59.996):
+
+| arm | workload | overall miss rate |
+|---|---|---|
+| virgl 0052 / 0055 / current | ptyxis windows, idle GPU | 0.01% / — / 0.06% |
+| virgl 0052 / 0055 / current | ptyxis + 3×drawstorm hogs | 0.01% / 0.03% / **4.43%** |
+| virgl 0052 / current / current−0056 | **kitty** windows, no hog | 5.21% / ~5.4% / ~5.6% |
+
+- **The dogfood "present regression" table does not indict the VMM delta.** With the
+  real trigger (kitty — a GPU-rendered terminal; the user isolated it: kitty sluggish,
+  gnome-terminal fast), §19-era virgl scores the SAME ~5% as current. Their comparison
+  baseline ("§23 clean deploy" 0.04%) was the accidental kk-0017 build: threaded submit
+  is genuinely faster AND its early fences fake punctuality. Honest-vs-honest, nothing
+  regressed for real sessions.
+- **kitty performance on this stack is its own real issue**: gpu p50 4.5ms/max 10.7ms at
+  4K for terminal windows drives honest ~5% miss rates during animations. Likely what
+  §21's "episodes" measured all along (bursty GPU terminals in the seat). Follow-up
+  candidate: why kitty frames cost so much through venus.
+- **UNRESOLVED anomaly**: under 3×drawstorm contention, current virgl scored 608 misses
+  vs 0055's 4 and 0052's 1 — implicating 0056 (lookup cache) — but current−0056 did NOT
+  fix the kitty case, and the drawstorm arms' draws-coverage diverged (130-200-draw
+  windows only in the bad arm). Needs a repeat with pinned comparability before trusting;
+  parked in task #18.
+- Protocol lesson for both sides: **pin the terminal app** in workload arms — the
+  element/bake comparability guard does not catch terminal-type divergence.
+- Rig traps: replace prefix dylibs with `rm` + `cp` (in-place overwrite of a signed dylib
+  → the worker dies by SIGKILL at load: stale vnode signature cache); wait ~25 s after
+  guest `poweroff` before relaunching (teardown race kills the new worker); pull guest
+  /tmp logs IMMEDIATELY (tmpfs, wiped per boot — two arms' logs were lost).
