@@ -203,3 +203,36 @@ Rig A/B campaign (measure-arm.sh, their driver + correlator, 4K@59.996):
   → the worker dies by SIGKILL at load: stale vnode signature cache); wait ~25 s after
   guest `poweroff` before relaunching (teardown race kills the new worker); pull guest
   /tmp logs IMMEDIATELY (tmpfs, wiped per boot — two arms' logs were lost).
+
+## 2026-07-30: the dogfood-mac A/B arms (their §25/§26 — client-independent misses, mouse-motion masking)
+
+Their §25 (client A/B: 8× gnome-terminal shm-only misses MORE than 8× kitty, identical
+all-queued-early signature) and §26 (fresh-boot shm-only 7.17%; mouse motion MASKS the lag →
+suspect = completion-feedback delivery, episodic) overturned the kitty-as-mechanism reading:
+kitty is only a frame generator plus a second symptom (dmabuf commits gate on fence polls).
+The rig does not reproduce their magnitude (ptyxis 0.06% vs their shm 7-16%), so the A/B
+moves to dogfood-mac: we build, the user deploys/tests, then we diff dogfood-mac-vs-dev-mac directly.
+
+Two artifact-verified arms under `target/ab-bundles/` (user deploys; score with their
+sustained heavy protocol + the §26 park-the-mouse oracle):
+
+- **`Limina-0727-baseline.app`** — the §19-era punctual deploy, rebuilt from repo `8b22694`
+  (07-27: fence-present 0110-0114, virgl @0052, KK @kk-0013 `git-ebc07301ba`, worker built in
+  the `limina-0727` worktree from era-vendored sources). Brackets the ENTIRE 07-27→07-29 delta.
+  If it scores like current → no regression ever; the honest costs were always there and the
+  §23 punctuality was the kk-0017 lie. If it's punctual → real regression inside the delta
+  (then bisect: kk 0015/0016, libkrun 0115, virgl 0053-0057 — 0116 unlikely, see below).
+- **`Limina-no0116.app`** — current deploy minus libkrun 0116 only (KK = true-0016
+  `git-ac5fccbe84`, virgl @0057). Sanity arm: 0116's fence routing only arms on a vrend
+  (non-venus) context (`vrend_ctx_seen`), and a seated niri desktop creates none (rig oracle,
+  debug logs) — so this arm SHOULD measure identical to current. If it doesn't, the
+  inertness reading is wrong and 0116 is the bug.
+
+Verification performed on the artifacts (the fd03b33 lesson): KK git stamp + zero
+`LIMINA_KK_SUBMIT_THREAD`/instrumentation strings; worker grep for the 0116 oracle string
+(absent in both arms) and fence-present (present in both). `scripts/build-app.sh` now takes
+`LIMINA_KK_BUILD` to pin the KK build dir per arm. Era build recipes: mesa worktree
+`/Volumes/mesa-cs/mesa-0013` + `build-kk-0013` (meson needs `/opt/homebrew/opt/llvm/bin` on
+PATH — llvm-ar is baked into the ninja rules); limina worktree `limina-0727` vendored via the
+three apply scripts directly (`cargo xtask vendor` chicken-and-eggs on the missing imago path;
+`mkdir third_party` first, clone libkrun/virgl locally from the main checkouts).
