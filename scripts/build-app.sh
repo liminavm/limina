@@ -61,16 +61,21 @@ done
 
 # ---- KK provenance tripwire (2026-07-29): a bundle silently shipped whatever ------
 #      dylib sat in build-kk — once with a day of uncommitted instrumentation,
-#      once with the unvalidated kk 0017 threaded submit (early-signaling fences
-#      → dogfood tearing). Print what we ship, and refuse experimental KK unless
-#      explicitly allowed.
+#      once with the 0017 threaded submit before its fence fix existed
+#      (early-signaling fences → dogfood tearing). Print what we ship, and
+#      refuse known-bad combinations.
 kk_git="$(strings "$KK_DRIVER" | grep -m1 'git-' || true)"
 echo "KK driver: $KK_DRIVER"
 echo "KK version: ${kk_git:-<no git stamp>}"
-if strings "$KK_DRIVER" | grep -q "LIMINA_KK_SUBMIT_THREAD" && [ "${LIMINA_ALLOW_THREADED_KK:-0}" != "1" ]; then
-  echo "REFUSING to bundle: KK dylib carries LIMINA_KK_SUBMIT_THREAD (kk 0017 threaded submit," >&2
-  echo "not validated for deployment). Rebuild KK at the deployable commit, or set" >&2
-  echo "LIMINA_ALLOW_THREADED_KK=1 to ship it deliberately." >&2
+# 0017 threaded submit is deployable ONLY together with the 0018 recycled-fence
+# fix (validated 2026-07-30: bridge test, crossmark hashes, drawstorm, suite,
+# seated eyeball). 0018's LIMINA_KK_SYNCTRACE gate is the marker: a dylib with
+# SUBMIT_THREAD but no SYNCTRACE is the exact build that tore on dogfood.
+if strings "$KK_DRIVER" | grep -q "LIMINA_KK_SUBMIT_THREAD" &&
+   ! strings "$KK_DRIVER" | grep -q "LIMINA_KK_SYNCTRACE"; then
+  echo "REFUSING to bundle: KK dylib carries kk 0017 threaded submit WITHOUT the kk 0018" >&2
+  echo "recycled-fence fix (no LIMINA_KK_SYNCTRACE marker) — that exact build caused the" >&2
+  echo "2026-07-29 dogfood tearing. Rebuild KK at or past the 0018 commit." >&2
   exit 1
 fi
 if strings "$KK_DRIVER" | grep -qE "LIMINA_KK_DRAWPROBE|KKTRACE"; then

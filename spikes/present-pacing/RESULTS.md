@@ -43,3 +43,27 @@ and is acked at latch as before — pacing can't protect single buffering.
 Expected side effect: guest flip-completion moves to the true off-glass boundary, so
 miss scores that counted the early ack as punctual will read higher-but-honest;
 async-vs-sync score convergence is the validation instrument.
+
+## useprobe2 (2026-07-30): fence-point probe for the ack split (§29 queued-early class)
+
+Steady-state, 3 surfaces round-robin at ~60 fps, 240 measured swaps, per-swap times
+relative to the commit:
+
+| signal | p10 | p50 | p90 | max |
+|---|---|---|---|---|
+| latch (completion block) | 0.13 | 0.51 | 1.62 | 12.62 |
+| rise (isInUse(new) → true) | 0.13 | 0.44 | 1.53 | 12.67 |
+| clear (isInUse(prev) → false) | 8.11 | 16.18 | 23.61 | 39.73 |
+
+Findings:
+- **rise(new) is a COMMIT signal, not an on-glass signal** (it precedes the latch in
+  173/240 swaps): the render server takes its use count when it picks the transaction up,
+  ~one frame before glass. Useless as a present fence point.
+- **clear(prev) p50 ≈ one refresh after commit = the swap vblank**; its spread beyond that
+  (p90 +7 ms, max +24 ms ≈ 1.5 frames past the swap) is WindowServer holding the replaced
+  surface after it is off glass — the over-hold tail. That tail is what the §29 queued-early
+  class measures: a fence gated on clear reports "presented" late by the tail.
+- Consequence for the split: the honest present point is **clear(prev) capped at
+  latch + refresh + slack** — identical to the proven-safe gate in the common case, and in
+  tail cases the cap fires post-swap (the replaced surface is off glass, only over-held).
+  No display-link machinery needed.

@@ -151,11 +151,15 @@ This also exonerates libkrun 0116 / virgl 0057 (identical in both arms).
 
 **Remediation:** true-0016 bundle rebuilt from a fresh worktree
 (`git-ac5fccbe84`, 0 SUBMIT_THREAD/instrumentation strings verified ON THE
-BUNDLE ARTIFACT) — awaiting user deploy. `build-app.sh` now refuses to bundle a
-KK carrying SUBMIT_THREAD/instrumentation strings unless
-`LIMINA_ALLOW_THREADED_KK=1`. kk 0017 stays local until its empty-submit fence
-ordering is fixed and the bridge test + fdtruth + a seated-tearing eyeball all
-pass with the knob ON.
+BUNDLE ARTIFACT). The root cause was then found and fixed as kk 0018
+(recycled-binary-fence reset raced the in-flight GPU signal — see
+`patches/kosmickrisp/README.md`), and the full battery passed 2026-07-30
+(bridge test knob-ON, crossmark hashes, drawstorm A/B, seated eyeball, HVF
+suite 72/72), so 0017+0018 threaded KK is now the shipping configuration.
+`build-app.sh`'s tripwire was retargeted: it refuses a dylib carrying
+SUBMIT_THREAD *without* the 0018 fix (marker: `LIMINA_KK_SYNCTRACE`) — the
+exact build that tore on dogfood — and still refuses debug instrumentation
+(`LIMINA_ALLOW_THREADED_KK` gate removed).
 
 Standing guest-mesa finding (pre-existing, NOT deploy-related):
 `vn_GetSemaphoreFdKHR` CPU-blocks until GPU completion (`vn_wsi_sync_wait`; no

@@ -728,31 +728,70 @@ pub fn run(
         // never per ack (no sync I/O on the frame-pacing path; same treatment as the
         // present-copy markers and libkrun 0113).
         let onglass_env = std::env::var("LIMINA_ACK_ONGLASS").map_or(true, |v| v != "0");
+        // §29/§30 ack SPLIT: one supervisor message conflated two host events — "the new
+        // frame is presented" and "the replaced buffer is off glass". They differ by
+        // WindowServer's over-hold tail (useprobe2: clear-of-prev p50 16.2 ms after commit
+        // = the swap vblank, but p90 +7 ms / max +24 ms PAST the swap), and the guest's
+        // flip fence — its present timestamp AND its buffer-release gate — rode the late
+        // edge, which is the §29 "queued early, presented a cycle late" miss class.
+        // Split: "shown <id>" (completes the guest flush fence) is sent at the off-glass
+        // gate CAPPED at ~one refresh + slack past the latch — identical to the proven
+        // tear-safe timing whenever the clear is punctual, and in tail cases the cap fires
+        // post-swap (the replaced surface is off glass, merely over-held). "free <id>" is
+        // sent at the actually-observed clear (informational to the worker today; the
+        // release-truth signal on the wire). LIMINA_PRESENT_FENCE=free restores the
+        // old single-edge behavior (fence at full clear, 50 ms cap).
+        let fence_capped = std::env::var("LIMINA_PRESENT_FENCE").map_or(true, |v| v != "free");
+        let cap_ms = std::env::var("LIMINA_PRESENT_FENCE_CAP_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(20);
         std::thread::spawn(move || {
             let mut marker_at = std::time::Instant::now();
             let mut latch_marker = std::fs::metadata("/tmp/limina-ack-latch").is_ok();
+            let send_line = |line: String| {
+                // Snapshot the current worker's endpoints and hold the Arc across the send:
+                // the ack fd can't be closed (nor its number reused) mid-send even if a
+                // relaunch retires this worker concurrently. Blocking is fine here — a
+                // wedged/booting worker only stalls this thread.
+                let io = conn.io();
+                unsafe {
+                    libc::send(
+                        io.ack_fd(),
+                        line.as_ptr() as *const libc::c_void,
+                        line.len(),
+                        0,
+                    );
+                }
+            };
             while let Ok((id, prev)) = ack_rx.recv() {
                 // #24: the completion block (latch) fires ~one refresh BEFORE WindowServer
                 // stops sampling the surface this frame replaced (measured p50 17 ms / max
                 // 33 ms, spikes/present-pacing/). Acking at latch hands the guest its
                 // flip-completion while the old buffer is still being read — it repaints it
                 // and the mid-repaint state reaches glass (the zero-copy tear). Hold the ack
-                // until the replaced surface leaves window-server use; the cap bounds a
+                // until the replaced surface leaves window-server use; the caps bound a
                 // stuck count (occlusion oddities), and the worker's 150 ms fallback stands
                 // behind that.
                 if marker_at.elapsed() >= std::time::Duration::from_millis(500) {
                     marker_at = std::time::Instant::now();
                     latch_marker = std::fs::metadata("/tmp/limina-ack-latch").is_ok();
                 }
-                if onglass_env && !latch_marker {
-                    if let Some(prev) = prev {
+                let gate = onglass_env && !latch_marker;
+                let mut freed = true;
+                if gate {
+                    if let Some(prev) = &prev {
                         let t0 = std::time::Instant::now();
                         let gated = prev.is_in_use();
-                        while prev.is_in_use()
-                            && t0.elapsed() < std::time::Duration::from_millis(50)
-                        {
+                        let shown_cap = std::time::Duration::from_millis(if fence_capped {
+                            cap_ms
+                        } else {
+                            50
+                        });
+                        while prev.is_in_use() && t0.elapsed() < shown_cap {
                             std::thread::sleep(std::time::Duration::from_micros(500));
                         }
+                        freed = !prev.is_in_use();
                         if gated {
                             // Engagement oracle (the 0114 lesson): the FIRST gated ack logs
                             // at INFO — one line per run confirms the mode without any
@@ -762,8 +801,9 @@ pub fn run(
                             let n = GATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             if n == 0 {
                                 log::info!(
-                                    "window: off-glass ack gating ENGAGED (first gated ack waited {:?})",
-                                    t0.elapsed()
+                                    "window: off-glass ack gating ENGAGED (first gated ack waited {:?}, fence cap {:?})",
+                                    t0.elapsed(),
+                                    shown_cap
                                 );
                             } else if n % 512 == 0 {
                                 log::trace!(
@@ -774,20 +814,30 @@ pub fn run(
                         }
                     }
                 }
-                // Snapshot the current worker's endpoints and hold the Arc across the send: the
-                // ack fd can't be closed (nor its number reused) mid-send even if a relaunch
-                // retires this worker concurrently.
-                let io = conn.io();
-                let line = format!("shown {id}\n");
-                // Blocking is fine here — a wedged/booting worker only stalls this thread.
-                unsafe {
-                    libc::send(
-                        io.ack_fd(),
-                        line.as_ptr() as *const libc::c_void,
-                        line.len(),
-                        0,
-                    );
+                send_line(format!("shown {id}\n"));
+                // Release truth: keep polling the replaced surface past the fence cap (up
+                // to the old 50 ms total) and report the observed clear as "free <id>".
+                // The worker ignores unknown verbs today; this is the wire's release
+                // signal for any future reuse-safety bookkeeping, and it keeps the
+                // over-hold tail observable (trace) without moving the fence.
+                if !freed {
+                    if let Some(prev) = &prev {
+                        let t0 = std::time::Instant::now();
+                        while prev.is_in_use()
+                            && t0.elapsed() < std::time::Duration::from_millis(50)
+                        {
+                            std::thread::sleep(std::time::Duration::from_micros(500));
+                        }
+                        freed = !prev.is_in_use();
+                        if freed {
+                            log::trace!(
+                                "window: over-hold tail on frame {id}: replaced surface cleared {:?} after the fence cap",
+                                t0.elapsed()
+                            );
+                        }
+                    }
                 }
+                send_line(format!("free {id}\n"));
             }
         });
     }
