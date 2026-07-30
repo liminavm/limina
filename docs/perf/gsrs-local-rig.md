@@ -352,3 +352,51 @@ scanout via `NIRI_VK_ASYNC_SCANOUT` in the override.conf.
   windows are coarser, rates hold.
 - Journals on dev-mac /tmp: `rig-21-{release,release-sync,debug-sync,debug-async-eyeball}-journal.log`
   (transient; scores + tables are the record).
+
+## 2026-07-30 late: #24 off-glass ack gating — the fix, the probe, and an A/B that measured its cost as zero
+
+The zero-copy reuse tear got its mechanism fix. Ground truth first
+(`spikes/present-pacing/`, host-only probes, no VM): **WindowServer holds an IOSurface
+use count on plain `CALayer.contents` surfaces, and the surface a frame REPLACES stays
+in use p50 17.1 ms / p90 24.3 ms / max 32.9 ms past the CATransaction completion
+block** (in-use at completion-block time in 19/20 single-shot rounds). Our shown-ack
+fired from that completion block, and the worker completes the guest's held flush
+fence on the ack — so the guest got flip-completion ~one refresh before WindowServer
+stopped sampling the buffer it was now free to repaint. That window is the tear.
+
+Fix (supervisor-only, commits c569129 + 6c28e76): the ack message now carries the
+surface each frame replaced; the dedicated ack-sender thread holds `shown <id>` until
+`IOSurfaceIsInUse(replaced)` clears (500 µs poll, 50 ms cap; worker's 150 ms fallback
+behind it). Kill switches: `LIMINA_ACK_ONGLASS=0` (run-scoped) and
+`touch /tmp/limina-ack-latch` (live, 500 ms-cached stat). Engagement oracle: first
+gated ack logs `off-glass ack gating ENGAGED` at INFO.
+
+Rig validation (new bundle, KK true-0016 vendored + verified, same rig-21.raw seat,
+release niri + async=1 + 4K@1.5 + 8 gnome-terminals, heavy ×2 per arm, marker as the
+within-boot lever; marker efficacy PROVEN by `sample`: gate-on = ack thread ~100% in
+the poll sleep, marker-on = parked in recv):
+
+| arm | overall miss | cheap band | draws-200+ band | gpu p50 range |
+|---|---|---|---|---|
+| gate ON (off-glass) | 30.38% (3840/12639) | 0.11% | 86.71% | 6.10–17.11 ms |
+| gate OFF (latch-only) | 32.07% (4083/12731) | 0.07% | 89.90% | 6.11–17.35 ms |
+
+- **The gate costs nothing measurable**: flip counts, gpu ranges, and miss rates are
+  arm-identical (Δ1.7 pts ≈ run noise). The +~17 ms ack delay does NOT reduce guest
+  frame throughput — niri's pacing isn't serialized on our flip-completion at 60 Hz.
+- **Both arms score in the honest sync band** (28.58–32.00%), i.e. no async flattery
+  was present in this boot at all — and correspondingly the tear did NOT reproduce
+  today even in the latch-only arm (user eyeball: gate-on clean, gate-off clean).
+  Yesterday's tearing/flattered cells could not be re-provoked, so the eyeball A/B is
+  one-sided; the conviction rests on the probe + the June copy-mode A/B (copy kills
+  the tear ⇒ reuse-while-sampled is the mechanism, and the gate closes exactly that
+  window). The async-score instability (13.1%/6.6%/28.7% across matrix cells) remains
+  episodic — consistent with the tear/flattery firing only under WindowServer timing
+  states that today's boot didn't enter.
+- Logs on dev-mac /tmp (transient): `rig-24-arm{A-onglass,B-latchonly}.log`,
+  `rig-21-onglass-supervisor.log`, `sample-gate{ON,OFF}.txt`.
+
+Follow-ups: watch the dogfood after the next bundle deploy (dogfood-guest's niri miss
+counters now include the true off-glass wait — expect no step, per the A/B); their
+doc §27 correction still owed (their syncobj pairing was the wrong half — the lie was
+our release pacing; the gate closes it).
