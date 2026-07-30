@@ -258,6 +258,8 @@ kosmickrisp`. Tearing gone (user eyeball). (b) The rig display had never been pi
 dogfood shape; at `--display-resolution 3840x2160` niri auto-picks scale **2.25** (no output
 stanza in the synced config — worth asking how dogfood-guest gets 1.5); pinned via an
 `output "Virtual-1" { mode "3840x2160@59.996"; scale 1.5 }` stanza (niri live-reloads config,
+**NOTE: the stanza lives only in booted clones, NOT in `nirirepro.tear.raw` itself** — every
+fresh clone comes up at auto-scale 2.25 and needs the stanza re-appended before measuring,
 no mutter dialog trap; gnome-terminal installed for terminal-pinning parity).
 
 Honest run (0016 KK, 4K @ 1.5, 8 gnome-terminals, heavy ×2, their scorer): **31.93%**
@@ -272,6 +274,36 @@ the compositor render at scale 1.5 (12-17 ms for 8 terminal windows in a debug n
 thing to attack) — and their side may want to reconsider render-scale choices. Trap repeat:
 the knob-ON scale-1.5 log was lost to the guest-/tmp-tmpfs wipe on reboot (pull immediately).
 
+## 2026-07-30 evening: the host A/B (task #23) — the machine axis is REAL and INVERTED
+
+One artifact (the 0118 bundle: libkrun 0117+0118, virgl @0057, KK true-0016 `git-ac5fccbe84`,
+artifact-verified), one image (fresh clones of `nirirepro.tear.raw` on each host), one protocol
+(4K@1.5 pinned, 8 gnome-terminals on ws 1, heavy ×2, their correlate-frame-log.py). Dogfood-mac ran
+/tmp-confined (image + bundle shipped to `/tmp`, dogfood-guest untouched), quiesced (the user's
+disk-move finished + external unplugged before the drive; verified via iostat).
+
+| arm | overall | cheap band | draws-200+ band | gpu p50 min–max |
+|---|---|---|---|---|
+| dev-mac (M1 Max, idle) | **28.73%** (3626/12619) | 0.02% | **83.31%** | 3.42–**17.19 ms** |
+| dogfood-mac (M4 Pro, daily driver) | **16.28%** (2326/14291) | 0.00% | **38.40%** | 5.76–**10.71 ms** |
+
+- **The rig transplant is faithful: dogfood-mac-rig 16.28% ≈ dogfood-guest's own §25/§26 numbers**
+  (15.11% / 16.28% / 7.17%). The dogfood miss rate is a property of the machine + stack at this
+  workload, not of dogfood-guest's guest, their compositor build, or GNOME-vs-niri.
+- **The "daily-driven M4 vs idle M1" theory is DEAD — inverted.** The idle M1 Max misses ~1.8×
+  MORE. The lever is raw GPU throughput: the M4 Pro keeps the expensive transition frames at
+  ≤10.7 ms (under the 16.7 ms budget, misses when compounded), while the M1 Max pushes the same
+  frames to 17.2 ms (over budget → 83–85% missing). No load/interference residual left to
+  attribute to daily-driving; dogfood-mac idle already reproduces its dogfood band.
+- Confirms **#21 (venus per-frame GPU cost) as the one lever that matters** — and explains why
+  dev-mac historically "couldn't reproduce" the dogfood feel: earlier rig runs used a smaller
+  effective workload + the lying KK; at the matched workload dev-mac is *worse*, not better.
+- **Comparability caveat, recorded honestly:** the cheap-phase draw counts differ (p50 76 on
+  dev-mac vs 193 on dogfood-mac) at identical element counts (p50 91/90) — same scene, different
+  damage/draw splitting, mechanism unexplained. The headline comparison leans on the overlapping
+  heavy band (draws 200+, both arms span to ~360) and the gpu-time story, which agree.
+- Journals: `/tmp/rig-ab-{dev-mac,dogfood-mac}-journal.log` on dev-mac (transient scratch).
+
 Arm verification performed on the artifacts (the fd03b33 lesson): KK git stamp + zero
 `LIMINA_KK_SUBMIT_THREAD`/instrumentation strings; worker grep for the 0116 oracle string
 (absent in both arms) and fence-present (present in both). `scripts/build-app.sh` now takes
@@ -280,3 +312,43 @@ Arm verification performed on the artifacts (the fd03b33 lesson): KK git stamp +
 PATH — llvm-ar is baked into the ninja rules); limina worktree `limina-0727` vendored via the
 three apply scripts directly (`cargo xtask vendor` chicken-and-eggs on the missing imago path;
 `mkdir third_party` first, clone libkrun/virgl locally from the main checkouts).
+
+## 2026-07-30 night: the build × scanout matrix (task #21 opening) — ASYNC-SCANOUT SCORES ARE LIES
+
+Kicking off #21 (attack the 12-17 ms venus compositor frames) with a debug-vs-release axis
+exposed something bigger. All cells: same 0118 bundle, fresh `nirirepro.tear.raw` clones on
+dev-mac (M1 Max), 4K@1.5 pinned, 8 gnome-terminals, heavy ×2 (eyeball cell = heavy ×1), their
+scorer. Build flipped via the session drop-in ExecStart (`target/{debug,release}/niri`),
+scanout via `NIRI_VK_ASYNC_SCANOUT` in the override.conf.
+
+| cell | tearing (human oracle) | overall miss | draws-200+ band | gpu p50 range |
+|---|---|---|---|---|
+| debug + async (morning) | "none" (unwatched?) | 28.73% | 83% | 3.4–17.2 ms |
+| debug + async (eyeball, ×1) | **YES** | **6.63%** | — | — |
+| release + async | **YES (heavy)** | 13.10% | 29% | 5.5–18.8 ms |
+| **debug + sync** | no | **32.00%** | **99.53%** | 6.1–21.3 ms |
+| **release + sync** | no | **28.58%** | **95.25%** | 6.1–21.2 ms |
+
+- **The async-scanout fence race is real, guest-side, and poisons the metric itself.** Same
+  binary tears with `NIRI_VK_ASYNC_SCANOUT=1`, is clean with 0; venus fence export is measured
+  truthful (spikes/venus-fence-truth) — so the bad fence is minted in gsrs (their §21 syncobj /
+  buffer-pairing suspect). A flip queued with a pre-signaled fence tears AND lands "on time",
+  so an async arms score tracks **lie frequency, not punctuality**: the two debug+async runs
+  scored 28.73% and 6.63% on the same day/machine/config — the watched one tore. The race fires
+  in debug AND release (user eyeballs both; release tears more), and **on dogfood-mac too** (release
+  gsrs + async on the freshly-deployed app) — machine-independent. Repro recipe: release build,
+  async=1, heavy driver; flip async=0 → clean.
+- **Every historical async-arm number carries unknown flattery** — todays host A/B absolutes
+  (28.73/16.28), their §19 "1.11%" baseline, §25/§26 (7-16%). Qualitative structure survives
+  (client-independence, frame-cost dominance — the sync cells show the same gpu-band cliff),
+  but cross-era magnitude comparisons through async cells are void. Sync cells are the
+  only honest instrument until their fence pairing is fixed.
+- **The honest #21 baseline (M1 Max)**: debug 32.00% / release 28.58% — the build axis is real
+  but small (~3.4 points). The dominant fact is unchanged and now clean: heavy transition
+  windows run **12–21 ms of GPU** against the 16.7 ms budget and miss ~95-100%; the cheap-band
+  floor is ~6 ms. The GPU cost of compositing 8 terminals at 4K@1.5 is THE lever. Beautiful
+  reproducibility across sync cells (gpu ranges 6.07–21.16 vs 6.08–21.33).
+- Sync-cell caveat: sync gating roughly halves the flip count (5.8k vs 14k aim-1 per ×2 run) —
+  windows are coarser, rates hold.
+- Journals on dev-mac /tmp: `rig-21-{release,release-sync,debug-sync,debug-async-eyeball}-journal.log`
+  (transient; scores + tables are the record).
