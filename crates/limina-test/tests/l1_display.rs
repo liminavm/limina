@@ -100,12 +100,24 @@ fn wait_for_pattern(guest: &Guest, timeout: Duration) -> Option<CapturedFrame> {
     let deadline = Instant::now() + timeout;
     loop {
         if let Ok(frame) = guest.read_capture() {
-            if frame.distinct_colors() >= 2 {
-                return Some(frame);
+            // Wait for the init's ACTUAL red/blue bands, not merely "more than one
+            // color": under suite load the capture can catch an earlier boot-console
+            // frame (text on black — 187 distinct colors, 99% black dominant), which
+            // passed the old >=2-colors predicate and then failed the band asserts
+            // (the flake that hit the 2026-07-30 suite runs twice). The guest powers
+            // off ~0.5 s after drawing, so the pattern frame is the LAST one — keep
+            // polling until it appears.
+            if frame.width == WIDTH && frame.height == HEIGHT {
+                let top = frame.pixel(WIDTH / 2, HEIGHT / 4);
+                let bottom = frame.pixel(WIDTH / 2, HEIGHT * 3 / 4);
+                if top[0] > 200 && bottom[2] > 200 {
+                    return Some(frame);
+                }
             }
         }
         if Instant::now() >= deadline {
-            return None;
+            // Return whatever is there so the caller's asserts print the real pixels.
+            return guest.read_capture().ok();
         }
         std::thread::sleep(Duration::from_millis(50));
     }
