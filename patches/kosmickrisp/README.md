@@ -173,6 +173,20 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
   (guest mesa predates the regression); full forensics in `spikes/crossmark/RESULTS.md`.
   **Upstream candidate** with a clean `Fixes:` tag.
 
+- **`0017-kosmickrisp-threaded-queue-submission-move-capable-b.patch`** — threaded queue
+  submission (`LIMINA_KK_SUBMIT_THREAD`, default on): moves the deferred-command replay off the
+  caller (the vkr ring thread) onto the runtime submit thread; kills the pipelined venus tax
+  (drawstorm 10k 2.30→1.39 ms/frame). Serves binary semaphores/fences with the move-capable
+  `kk_sync_type_binary`. **Was LOCAL-ONLY (deploy-blocked) until 0018** — see below.
+- **`0018-kosmickrisp-fresh-event-on-binary-reset-recycled-fen.patch`** — fixes 0017's
+  early-fence bug: binary VkFences (unlike semaphores) are never *moved*, and vkr's sync path
+  pools + `vkResetFences`-recycles them, so the CPU reset (event := 0) raced the previous use's
+  in-flight GPU `signal := 1` → a self-sustaining off-by-one where every recycled-fence wait was
+  satisfied by the PREVIOUS cycle's signal (guest fences retired one submit early → gsrs
+  `explicit_sync_bridge` RED, dogfood tearing). Reset now swaps in a fresh event (the move
+  pattern). Also adds the `LIMINA_KK_SYNCTRACE=1` sync-transition trace that caught it.
+  RED→GREEN: `cargo test -p niri-vk explicit_sync_bridge` knob-ON: FAIL→PASS.
+
 ## Apply / rebuild
 The `/Volumes/mesa-cs/mesa` tree is on the `limina/kosmickrisp` branch with these committed.
 To re-create from a fresh checkout: `git checkout 178a3d73968 && git am

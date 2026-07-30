@@ -119,3 +119,36 @@ locally. #16 pivots to mechanism-level fixes: retire-as-lost on the
 vkr_queue_sync_submit failure branch (RED via an injectable failure knob) + a
 generous deadline backstop for venus fence retirement (dma-fence "must
 eventually signal"; PresentFenceState's wedge-proof ceiling as precedent).
+
+## 2026-07-30 late: kk-0017 early-fence ROOT-CAUSED and FIXED (KK 0018)
+
+Stage deletion on `explicit_sync_bridge` (env knobs added to their sync_spike.rs:
+SYNC_SPIKE_SKIP_SEM / SYNC_SPIKE_SKIP_SYNCOBJ / SYNC_SPIKE_FENCE_REPEAT / SYNC_SPIKE_ITERS):
+the fence stage ALONE is Pipelined even knob-ON; add the semaphore stage first and every
+subsequent fence stage signals early (waits 0.2/0.9/11.8 ms vs D=173 ms — progressive
+"healing"). The killer instrument was host-side: `LIMINA_KK_SYNCTRACE=1` (new, KK 0018)
+traces every sync transition; with the seat stopped, the trace showed a fence WAIT
+satisfied (cur=1) BEFORE its own cycle's empty-submit ENC-SIG was even encoded, then
+RESET consuming the stale 1, then the late GPU signal landing after the reset and
+pre-signaling the NEXT cycle — a self-sustaining off-by-one.
+
+ROOT CAUSE: kk_sync_type_binary (kk 0017) = raw 0/1 MTLSharedEvent with CPU reset. The
+commit's safety argument ("every binary wait moves the payload to a fresh event") covers
+SEMAPHORES only; VkFences are never moved, and vkr pools + vkResetFences-recycles them
+per submit. Under threaded submit the reset races the previous use's in-flight GPU
+signal; one late signal locks in the off-by-one. Explains everything: fresh-fence repros
+(emptysub.c, fdtruth.c) GREEN; the sem stage triggers it (its ~166 ms host CPU-block
+export widens the in-flight window while the pool recycles); dogfood tearing = guest
+IN_FENCE retiring one submit early; §23-era fake punctuality.
+
+FIX (patches/kosmickrisp/0018, mesa commit d2aeced7eb6): binary reset swaps in a FRESH
+event (the kk_timeline_move pattern) — the stale signal lands on the orphaned event
+harmlessly; binary fences are CPU-waited only, so no encoded GPU wait dangles. Cost: one
+MTLSharedEvent alloc per fence reset (same churn class as move; monotonic scheme later
+if it profiles). RED→GREEN on the knob-ON rig host: fence→sync_file wait 0.2 ms/FAIL →
+176.5 ms/PASS, all three bridge stages Pipelined.
+
+0017+0018 together are now candidates for re-validation toward deploy (crossmark,
+vkmark, suite, tearing eyeball) — 0017 alone stays deploy-blocked. NOTE: the guest tree
+/home/claude/gnome-shell-rs on the rig image carries the (uncommitted) sync_spike.rs
+stage-deletion knobs.
