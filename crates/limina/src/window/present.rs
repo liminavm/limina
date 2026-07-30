@@ -24,10 +24,29 @@ use limina_surfaceport::SurfacePortReceiver;
 /// atomically refcounted and designed for cross-process/-thread scanout sharing — but objc2
 /// conservatively leaves `CFRetained<IOSurfaceRef>` `!Send`/`!Sync`. The recv thread stores
 /// surfaces here and the main thread reads them, so we assert the safety explicitly.
-struct SendSurface(CFRetained<IOSurfaceRef>);
+#[derive(Clone)]
+pub(crate) struct SendSurface(CFRetained<IOSurfaceRef>);
 // SAFETY: IOSurface refcounting + access is thread-safe (Apple's cross-process scanout primitive).
 unsafe impl Send for SendSurface {}
 unsafe impl Sync for SendSurface {}
+
+impl SendSurface {
+    pub(crate) fn new(surface: CFRetained<IOSurfaceRef>) -> Self {
+        Self(surface)
+    }
+    /// Whether any process (here: the window server compositing it) holds the surface in use.
+    pub(crate) fn is_in_use(&self) -> bool {
+        self.0.is_in_use()
+    }
+}
+
+/// Shown-ack message: the presented frame's surface id + the surface this frame REPLACED on
+/// the layer (`None` on the first frame or a same-surface re-flush). The ack sender holds the
+/// ack until the replaced surface leaves window-server use — the true off-glass boundary the
+/// worker's fence completion stands on (#24: the CATransaction completion block alone fires
+/// ~one refresh BEFORE WindowServer stops sampling the old buffer; see
+/// spikes/present-pacing/).
+pub(crate) type AckMsg = (u32, Option<SendSurface>);
 
 /// Scanout/cursor IOSurfaces the worker handed us by Mach port, keyed by `IOSurfaceGetID`. The
 /// present + cursor paths resolve ids here first (the non-global, capability-scoped surfaces),
@@ -301,7 +320,7 @@ fn parse_cursor_coord(s: &str) -> Option<i32> {
 pub(crate) fn set_layer_surface(
     layer: &CALayer,
     surface: &CFRetained<IOSurfaceRef>,
-    ack: Option<(std::sync::mpsc::SyncSender<u32>, u32)>,
+    ack: Option<(std::sync::mpsc::SyncSender<AckMsg>, AckMsg)>,
 ) {
     let obj: &AnyObject = unsafe { &*(&**surface as *const IOSurfaceRef as *const AnyObject) };
     unsafe {
@@ -314,9 +333,9 @@ pub(crate) fn set_layer_surface(
         // socket write (which can block on a booting/wedged worker) must never run on the
         // AppKit main thread. A dropped ack (channel full) is covered by the worker's fallback
         // deadline.
-        if let Some((tx, id)) = ack {
+        if let Some((tx, msg)) = ack {
             let cb = RcBlock::new(move || {
-                let _ = tx.try_send(id);
+                let _ = tx.try_send(msg.clone());
             });
             CATransaction::setCompletionBlock(Some(&cb));
         }

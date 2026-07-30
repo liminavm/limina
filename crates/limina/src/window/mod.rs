@@ -660,6 +660,11 @@ pub fn run(
     // Cache looked-up surfaces by id (the worker reuses a small fixed set, its double buffer).
     let cache: RefCell<std::collections::HashMap<u32, CFRetained<IOSurfaceRef>>> =
         RefCell::new(std::collections::HashMap::new());
+    // The surface last handed to Core Animation (copy-ring or guest, whichever actually became
+    // layer contents). Each frame's shown-ack carries the surface it REPLACED so the ack sender
+    // can hold the ack until WindowServer stops sampling it (#24 off-glass gating; see the ack
+    // thread above).
+    let last_ca: RefCell<Option<CFRetained<IOSurfaceRef>>> = RefCell::new(None);
     // Guest-cursor per-timer state: the last applied cursor gen and the (IOSurface id,
     // content scale) of the shape the host pointer currently wears (so we rebuild only on
     // an actual shape or window-scale change).
@@ -714,11 +719,41 @@ pub fn run(
     // thread and beachball the whole UI. The completion block only `try_send`s the id (bounded,
     // best-effort — drop if full); this thread sends it to whichever worker is current (conn is
     // swapped on relaunch). A dropped ack is covered by the worker's fallback deadline.
-    let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel::<u32>(64);
+    let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel::<present::AckMsg>(64);
     {
         let conn = conn.clone();
+        // #24 off-glass gating kill switch: LIMINA_ACK_ONGLASS=0 reverts to latch-only acks
+        // (the pre-fix behavior); `touch /tmp/limina-ack-latch` does the same LIVE for
+        // within-session A/B (rm re-arms). The marker is re-stat'ed at most every 500 ms —
+        // never per ack (no sync I/O on the frame-pacing path; same treatment as the
+        // present-copy markers and libkrun 0113).
+        let onglass_env = std::env::var("LIMINA_ACK_ONGLASS").map_or(true, |v| v != "0");
         std::thread::spawn(move || {
-            while let Ok(id) = ack_rx.recv() {
+            let mut marker_at = std::time::Instant::now();
+            let mut latch_marker = std::fs::metadata("/tmp/limina-ack-latch").is_ok();
+            while let Ok((id, prev)) = ack_rx.recv() {
+                // #24: the completion block (latch) fires ~one refresh BEFORE WindowServer
+                // stops sampling the surface this frame replaced (measured p50 17 ms / max
+                // 33 ms, spikes/present-pacing/). Acking at latch hands the guest its
+                // flip-completion while the old buffer is still being read — it repaints it
+                // and the mid-repaint state reaches glass (the zero-copy tear). Hold the ack
+                // until the replaced surface leaves window-server use; the cap bounds a
+                // stuck count (occlusion oddities), and the worker's 150 ms fallback stands
+                // behind that.
+                if marker_at.elapsed() >= std::time::Duration::from_millis(500) {
+                    marker_at = std::time::Instant::now();
+                    latch_marker = std::fs::metadata("/tmp/limina-ack-latch").is_ok();
+                }
+                if onglass_env && !latch_marker {
+                    if let Some(prev) = prev {
+                        let t0 = std::time::Instant::now();
+                        while prev.is_in_use()
+                            && t0.elapsed() < std::time::Duration::from_millis(50)
+                        {
+                            std::thread::sleep(std::time::Duration::from_micros(500));
+                        }
+                    }
+                }
                 // Snapshot the current worker's endpoints and hold the Arc across the send: the
                 // ack fd can't be closed (nor its number reused) mid-send even if a relaunch
                 // retires this worker concurrently.
@@ -924,7 +959,17 @@ pub fn run(
             // blocking socket write never touches the AppKit main thread. The ack identifies the
             // frame by the GUEST's surface id even in copy mode (the worker tracks holds by the id
             // it presented); the sender thread targets whichever worker is current after a relaunch.
-            let ack_for_frame = Some((ack_tx.clone(), id));
+            // The message also carries the surface this frame replaces as layer contents (the one
+            // WindowServer may still be sampling) so the sender can hold the ack until it's truly
+            // off glass (#24). A same-surface re-flush carries None — there's nothing replaced to
+            // wait on (and the guest is single-buffering, which pacing can't protect).
+            let ack_for = |shown: &CFRetained<IOSurfaceRef>| {
+                let prev = last_ca
+                    .borrow_mut()
+                    .replace(shown.clone())
+                    .filter(|p| !std::ptr::eq::<IOSurfaceRef>(&**p, &**shown));
+                Some((ack_tx.clone(), (id, prev.map(present::SendSurface::new))))
+            };
             // Distinct object each frame (the worker alternates ids) → CA re-reads.
             if marker_poll_at.get().elapsed() >= std::time::Duration::from_millis(500) {
                 marker_poll_at.set(std::time::Instant::now());
@@ -948,16 +993,16 @@ pub fn run(
                     let dst = &ring[copy_idx.get() % 3];
                     copy_idx.set(copy_idx.get().wrapping_add(1));
                     copy_surface(surface, dst);
-                    set_layer_surface(&layer, dst, ack_for_frame);
+                    set_layer_surface(&layer, dst, ack_for(dst));
                 } else {
-                    set_layer_surface(&layer, surface, ack_for_frame);
+                    set_layer_surface(&layer, surface, ack_for(surface));
                 }
             } else {
                 let present_lock = present_lock_env || lock_marker.get();
                 if present_lock {
                     sync_surface(surface);
                 }
-                set_layer_surface(&layer, surface, ack_for_frame);
+                set_layer_surface(&layer, surface, ack_for(surface));
             }
 
             // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
