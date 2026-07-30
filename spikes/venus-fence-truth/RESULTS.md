@@ -152,3 +152,9 @@ if it profiles). RED→GREEN on the knob-ON rig host: fence→sync_file wait 0.2
 vkmark, suite, tearing eyeball) — 0017 alone stays deploy-blocked. NOTE: the guest tree
 /home/claude/gnome-shell-rs on the rig image carries the (uncommitted) sync_spike.rs
 stage-deletion knobs.
+
+PERF RECHECK (same session): drawstorm 10k -i 3, seat stopped, 3 runs/arm on the rig —
+fixed KK 605/612/615 fps vs pre-fix 675/640/599 fps: the arms OVERLAP (pre-fix run 3
+below all fixed runs), so the alloc-per-reset costs nothing measurable; the 07-29
+"717 fps" reference was a different boot/build state, not a bar this boot clears in
+either arm. Monotonic-value scheme stays a someday-optimization only.
