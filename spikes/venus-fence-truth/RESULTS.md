@@ -104,3 +104,18 @@ Suspects for the real trigger, in order: vn fence FEEDBACK interplay, vkr's
 pooled/recycled VkFences meeting `kk_timeline_reset` with a late in-flight Metal
 signal, multi-stage object reuse, the timeline-syncobj stage. Root-cause by
 deleting stages from their test until the minimal trigger remains.
+
+## 2026-07-30: §22 wedge hunt — NOT reproducible with mid-animation exits (160 rounds)
+
+`wedge-hunt.sh` on the gsrs rig (autologin loop, 4 windows, sustained overview
+toggles, exit at a random mid-animation point, NIRI_VK_ASYNC_SCANOUT=1,
+LIMINA_GPU_TRACE=1 host-side): 30×SIGKILL + 30×quit + 100×quit-with-windows =
+**no wedge; the outstanding-fence oracle stayed empty throughout** — both the
+hard-kill and orderly-quit retirement paths are solid on the current stack.
+The dogfood §22 hit ran the instrumented-KK morning deploy (per-draw getenv →
+much longer GPU tails → far wider unsignaled windows), their monitor config,
+and one logout out of a day's use — a low-probability window we can't brute-force
+locally. #16 pivots to mechanism-level fixes: retire-as-lost on the
+vkr_queue_sync_submit failure branch (RED via an injectable failure knob) + a
+generous deadline backstop for venus fence retirement (dma-fence "must
+eventually signal"; PresentFenceState's wedge-proof ceiling as precedent).
