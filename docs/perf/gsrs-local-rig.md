@@ -245,6 +245,34 @@ Prime dogfood-mac-vs-rig suspect: the dogfood seat runs 4K at **fractional scale
 the rig ran integer scale — likely why dogfood-mac's compositor frames sit at 10-12 ms against a
 16.7 ms budget while the rig idles at ~2 ms. Next: reproduce the band on the rig by pinning
 4K + scale 1.5 (task #19), then attack venus per-frame cost, not a phantom regression.
+
+**2026-07-30 late morning — the rig reproduces the dogfood-mac band; the story closes.** Two rig
+corrections first: (a) the rig had been booting the `build-kk` ICD rebuilt at the kk 0017
+commit, whose threaded submit **defaults ON** (`debug_get_bool_option(..., true)`) — the user
+saw tearing live in the first 4K run, and every rig number since that rebuild was
+fence-lie-flattered (the virgl A/B *deltas* stand — all arms shared the KK — but absolutes
+were low). Rig boots now pin
+`LIMINA_KK_ICD=/Volumes/mesa-cs/build-kk-0016/.../kosmickrisp_0016_icd.json` (hand-written
+ICD json; the 0016 build dir has no devenv json) — verify with `lsof -p <worker> | grep
+kosmickrisp`. Tearing gone (user eyeball). (b) The rig display had never been pinned to the
+dogfood shape; at `--display-resolution 3840x2160` niri auto-picks scale **2.25** (no output
+stanza in the synced config — worth asking how dogfood-guest gets 1.5); pinned via an
+`output "Virtual-1" { mode "3840x2160@59.996"; scale 1.5 }` stanza (niri live-reloads config,
+no mutter dialog trap; gnome-terminal installed for terminal-pinning parity).
+
+Honest run (0016 KK, 4K @ 1.5, 8 gnome-terminals, heavy ×2, their scorer): **31.93%**
+(4074/12761 aim-1 flips), perfectly bimodal — draws 90-130 / gpu ≤12 ms windows **1.43%**;
+draws 200+ / gpu-p50 12 ms+ windows **92.06%** (gpu p50 6.25 ms, max 16.96 ms). Dogfood-mac same
+protocol scored 15.11%. The rig (M1 Max) overshoots dogfood-mac (M4 Pro) once the workload shape
+matches — pure GPU frame cost against the 16.7 ms budget. VERDICT for their §25/§26: no
+delivery bug required; honest fences + 4K-fractional-scale frame cost + episodic contention
+explain the misses, the mouse-motion masking, and the old dogfood-mac-vs-rig split (earlier rig
+runs = smaller effective workload + the lying KK). Next lever: venus per-frame GPU cost of
+the compositor render at scale 1.5 (12-17 ms for 8 terminal windows in a debug niri is the
+thing to attack) — and their side may want to reconsider render-scale choices. Trap repeat:
+the knob-ON scale-1.5 log was lost to the guest-/tmp-tmpfs wipe on reboot (pull immediately).
+
+Arm verification performed on the artifacts (the fd03b33 lesson): KK git stamp + zero
 `LIMINA_KK_SUBMIT_THREAD`/instrumentation strings; worker grep for the 0116 oracle string
 (absent in both arms) and fence-present (present in both). `scripts/build-app.sh` now takes
 `LIMINA_KK_BUILD` to pin the KK build dir per arm. Era build recipes: mesa worktree
