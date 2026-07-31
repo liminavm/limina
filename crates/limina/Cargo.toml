@@ -36,6 +36,9 @@ limina-input = { workspace = true }
 # Receive guest scanout IOSurfaces from the worker over a Mach port (no global ids).
 limina-surfaceport = { workspace = true }
 
+# Display-control socket wire format, shared with the worker (no libkrun types).
+limina-displayctl = { workspace = true }
+
 # The host<->guest control-plane wire protocol (M5/D8): the supervisor owns the host side
 # of the guest-agent channel (HELLO/WELCOME, heartbeats, orderly SHUTDOWN).
 limina-proto = { workspace = true }

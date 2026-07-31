@@ -34,6 +34,9 @@ krun_input   = { package = "krun-input",   path = "third_party/libkrun/src/input
 
 # --- our crates ---
 limina-display     = { path = "crates/limina-display" }
+# Display-control socket wire format, shared by the supervisor (which emits) and the worker
+# (which applies). Dependency-free on purpose — see the crate docs.
+limina-displayctl  = { path = "crates/limina-displayctl" }
 limina-input       = { path = "crates/limina-input" }
 limina-proto       = { path = "crates/limina-proto" }
 limina-surfaceport = { path = "crates/limina-surfaceport" }

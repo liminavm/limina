@@ -837,6 +837,7 @@ dependencies = [
  "clap",
  "env_logger",
  "libc",
+ "limina-displayctl",
  "limina-input",
  "limina-proto",
  "limina-surfaceport",
@@ -870,6 +871,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "limina-displayctl"
+version = "0.1.0"
+
+[[package]]
 name = "limina-input"
 version = "0.1.0"
 dependencies = [
@@ -900,6 +905,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "libc",
+ "limina-displayctl",
  "limina-proto",
  "limina-usbip",
  "objc2",
@@ -930,6 +936,7 @@ dependencies = [
  "krun-vmm",
  "libc",
  "limina-display",
+ "limina-displayctl",
  "limina-input",
  "log",
  "pkg-config",

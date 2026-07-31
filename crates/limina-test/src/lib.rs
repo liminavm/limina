@@ -33,6 +33,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
+// Re-exported so tests can build display commands without depending on the crate directly.
+pub use limina_displayctl::{DisplayCommand, DisplayControl, EdidSpec, RangeSpec};
 
 /// Stable location of the krunkit EFI firmware blob (an EDK2 `.fd`). Overridable with
 /// `LIMINA_FIRMWARE`. This is the same firmware the M1 boot spikes used. It is "silent" — no
@@ -1720,11 +1722,22 @@ impl Guest {
     /// a few seconds because the worker binds the socket partway through boot. Requires a
     /// display in the [`GuestConfig`]. See `docs/design/runtime-display-resize.md`.
     pub fn resize_display(&self, width: u32, height: u32) -> Result<()> {
+        self.send_display_command(&DisplayCommand::Resize { width, height })
+    }
+
+    /// Push a full display update — identity, mode list, refresh range, connection state — the
+    /// way the supervisor does when the window moves to another host display. See
+    /// `docs/design/stable-edid-hotplug.md`.
+    pub fn update_display(&self, control: DisplayControl) -> Result<()> {
+        self.send_display_command(&DisplayCommand::Display(control))
+    }
+
+    fn send_display_command(&self, command: &DisplayCommand) -> Result<()> {
         use std::io::Write;
         let path = self
             .resize_socket
             .as_ref()
-            .context("resize_display requires a display in the GuestConfig")?;
+            .context("display commands require a display in the GuestConfig")?;
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut stream = loop {
             match UnixStream::connect(path) {
@@ -1741,8 +1754,8 @@ impl Guest {
                 }
             }
         };
-        writeln!(stream, "resize {width} {height}")
-            .with_context(|| format!("sending resize to {path:?}"))?;
+        let line = command.to_wire();
+        writeln!(stream, "{line}").with_context(|| format!("sending {line:?} to {path:?}"))?;
         stream.flush().ok();
         Ok(())
     }

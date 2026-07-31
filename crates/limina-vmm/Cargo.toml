@@ -20,6 +20,8 @@ utils   = { workspace = true }
 
 # Our virtio-gpu display backends (the capture sink; window/zero-copy later).
 limina-display = { workspace = true }
+# Display-control socket commands (resize / display identity + modes + connection state).
+limina-displayctl = { workspace = true }
 # Our virtio-input backends (keyboard + absolute pointer), worker side.
 limina-input   = { workspace = true, features = ["backends"] }
 

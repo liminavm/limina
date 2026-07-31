@@ -43,6 +43,7 @@ mod capture_tap;
 mod cursor;
 mod diag;
 pub(crate) mod fit;
+mod hostdisplay;
 mod input;
 mod lifecycle;
 mod overlay;
@@ -64,6 +65,8 @@ use diag::{
 };
 use lifecycle::{kill_worker_group, should_initiate_quit};
 use present::{register_apply_hook, set_layer_surface};
+
+use limina_displayctl::{DisplayCommand, DisplayControl};
 
 use crate::vmlib::schema::DisplayResolution;
 use crate::vmlib::state::WindowState;
@@ -231,22 +234,28 @@ fn ask_close_action(
     }
 }
 
-/// Push a window-resize to the worker over its display-control socket (off the AppKit main
-/// thread — a brief connect/write must never beachball the UI). Best-effort: a failure just
-/// means this gesture's resize is dropped; the next one retries.
+/// Push a window-resize to the worker over its display-control socket.
 fn send_resize(path: &Path, width: u32, height: u32) {
+    send_display_command(path, DisplayCommand::Resize { width, height });
+}
+
+/// Push a display command to the worker over its display-control socket (off the AppKit main
+/// thread — a brief connect/write must never beachball the UI). Best-effort: a failure just
+/// means this gesture's update is dropped; the next one retries.
+fn send_display_command(path: &Path, command: DisplayCommand) {
     let path = path.to_path_buf();
+    let line = command.to_wire();
     std::thread::spawn(move || {
         use std::io::Write;
         match std::os::unix::net::UnixStream::connect(&path) {
             Ok(mut stream) => {
-                if let Err(e) = writeln!(stream, "resize {width} {height}") {
-                    log::warn!("window resize: send {width}x{height} failed: {e}");
+                if let Err(e) = writeln!(stream, "{line}") {
+                    log::warn!("display-control: send {line:?} failed: {e}");
                 } else {
-                    log::info!("window resize: pushed {width}x{height} to the guest");
+                    log::info!("display-control: pushed {line:?} to the guest");
                 }
             }
-            Err(e) => log::warn!("window resize: connect {path:?} failed: {e}"),
+            Err(e) => log::warn!("display-control: connect {path:?} failed: {e}"),
         }
     });
 }
@@ -608,11 +617,13 @@ pub fn run(
     // matches it — including the guest-driven setContentSize echo — sends nothing. See
     // docs/design/runtime-display-resize.md.
     let resize_sent: Cell<(u32, u32)> = Cell::new((0, 0));
-    // Host mode's screen tracker: the screen size the guest was last driven to. Seeded with
-    // the boot size (derived from the same screen), so startup pushes nothing; a poll that
-    // sees a different screen size (window moved to another display, display reconfigured)
-    // pushes exactly once.
-    let screen_sent: Cell<(u32, u32)> = Cell::new(initial_size);
+    // Host mode's screen tracker: the screen size the guest was last driven to, plus the
+    // identity key of the display it came from. Seeded with the boot size (derived from the
+    // same screen) and a zero key, so the first poll pushes the full identity once and every
+    // later poll is a no-op until something actually changes. Tracking the identity — not just
+    // the size — is what catches a move between two same-sized displays, which the size-only
+    // check missed entirely.
+    let screen_sent: Cell<((u32, u32), u64)> = Cell::new((initial_size, 0));
     // The scanout layer's current placement inside the content view, recomputed every tick
     // (dynamic: the full view — CA stretches the stale surface during a live drag exactly as
     // before; host/fixed: the guest resolution aspect-fit onto the black background). Shared
@@ -917,14 +928,16 @@ pub fn run(
                     // is None mid-transition, which simply skips the tick.
                     DisplayResolution::Host => {
                         if let Some(screen) = window.screen() {
-                            let sf = screen.frame().size;
-                            let want = (sf.width.round() as u32, sf.height.round() as u32);
+                            let host = hostdisplay::describe(&screen);
+                            let want = host.size;
+                            let key = host.identity_key();
                             if geom.get() != (0, 0)
                                 && want.0 >= 64
                                 && want.1 >= 64
-                                && want != screen_sent.get()
+                                && (want, key) != screen_sent.get()
                             {
-                                screen_sent.set(want);
+                                let migrated = screen_sent.get().1 != key;
+                                screen_sent.set((want, key));
                                 // Migrated to a differently-shaped display: re-lock resize to
                                 // the new screen's aspect so the constraint tracks the screen.
                                 apply_aspect_lock(&window, want);
@@ -949,7 +962,27 @@ pub fn run(
                                     crate::session::pack_size(want.0, want.1),
                                     std::sync::atomic::Ordering::Relaxed,
                                 );
-                                send_resize(sock, want.0, want.1);
+                                // On a migration, hand the guest the new display's whole
+                                // identity — name, serial, refresh rate, density, VRR range —
+                                // together with the size, so its compositor recognizes the
+                                // monitor and applies that monitor's remembered configuration
+                                // rather than treating it as the same panel resized. A plain
+                                // size change (the host reconfigured this display) carries no
+                                // EDID, leaving the identity exactly where it was.
+                                let command = if migrated {
+                                    DisplayCommand::Display(DisplayControl {
+                                        display_id: 0,
+                                        size: Some(want),
+                                        connected: None,
+                                        edid: Some(host.edid),
+                                    })
+                                } else {
+                                    DisplayCommand::Resize {
+                                        width: want.0,
+                                        height: want.1,
+                                    }
+                                };
+                                send_display_command(sock, command);
                             }
                         }
                     }

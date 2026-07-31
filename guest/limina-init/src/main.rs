@@ -504,6 +504,30 @@ unsafe fn run_builtin(fd: libc::c_int, cmd: &str) -> i32 {
                 1
             }
         },
+        // xxd a guest file as one line of lowercase hex. `cat` is useless for binary sysfs
+        // attributes — the EDID blob is full of control bytes (and 0x0A, which the console
+        // protocol delimits on), so it has to be escaped to survive the serial line.
+        "xxd" => match parts.next() {
+            Some(path) => match std::fs::read(path) {
+                Ok(bytes) => {
+                    let mut hex = String::with_capacity(bytes.len() * 2 + 1);
+                    for byte in &bytes {
+                        hex.push_str(&format!("{byte:02x}"));
+                    }
+                    hex.push('\n');
+                    write_all(fd, hex.as_bytes());
+                    0
+                }
+                Err(_) => {
+                    write_all(fd, format!("xxd: {path}: cannot read\n").as_bytes());
+                    1
+                }
+            },
+            None => {
+                write_all(fd, b"xxd: missing path\n");
+                1
+            }
+        },
         // ls a directory (names only, newline-separated) — lets tests discover dynamic sysfs
         // paths (e.g. the virtio-gpu DRM connector under /sys/class/drm) without a shell binary.
         "ls" => match parts.next() {

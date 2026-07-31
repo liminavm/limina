@@ -12,6 +12,7 @@
 
 mod battery;
 mod console;
+mod display_update;
 
 use anyhow::{anyhow, Context, Result};
 use crossbeam_channel::unbounded;
@@ -19,6 +20,7 @@ use devices::virtio::block::{CacheType, ImageType, SyncMode};
 use devices::virtio::display::DisplayInfo;
 use devices::virtio::{BalloonControlHandle, DisplayResizeHandle};
 use limina_display::{CaptureConfig, WindowConfig};
+use limina_displayctl::DisplayCommand;
 use polly::event_manager::EventManager;
 use vmm::resources::VmResources;
 use vmm::vmm_config::block::BlockDeviceConfig;
@@ -31,6 +33,7 @@ use vmm::vmm_config::vsock::VsockDeviceConfig;
 
 use devices::virtio::net::device::VirtioNetBackend;
 
+use self::display_update::display_update_from;
 use crate::config::{
     BootSource, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec, NetSpec,
     VmSpec, VsockSpec,
@@ -707,10 +710,13 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     }
 }
 
-/// Bind a UNIX-socket listener that applies newline-delimited `resize <w> <h>` commands to the
-/// live GPU via `handle` (display 0). Each accepted connection is read to EOF — the supervisor
-/// keeps one long-lived connection; the test harness connects per call. Runs on a detached
-/// thread for the VMM's lifetime. See docs/design/runtime-display-resize.md.
+/// Bind a UNIX-socket listener that applies newline-delimited display commands to the live GPU
+/// via `handle`: `resize <w> <h>` (display 0) and the general `display id=… …` form carrying
+/// identity, mode list, refresh range and connection state. Each accepted connection is read to
+/// EOF — the supervisor keeps one long-lived connection; the test harness connects per call.
+/// Runs on a detached thread for the VMM's lifetime. The wire format lives in
+/// `limina-displayctl`. See docs/design/runtime-display-resize.md and
+/// docs/design/stable-edid-hotplug.md.
 fn install_resize_listener(path: std::path::PathBuf, handle: DisplayResizeHandle) -> Result<()> {
     use std::io::BufRead;
     use std::os::unix::net::UnixListener;
@@ -733,29 +739,22 @@ fn install_resize_listener(path: std::path::PathBuf, handle: DisplayResizeHandle
                 };
                 for line in std::io::BufReader::new(stream).lines() {
                     let Ok(line) = line else { break };
-                    match parse_resize(&line) {
-                        Some((w, h)) => {
-                            log::info!("display-resize: request {w}x{h}");
-                            handle.request(0, w, h);
+                    match DisplayCommand::parse(&line) {
+                        Some(DisplayCommand::Resize { width, height }) => {
+                            log::info!("display-control: resize {width}x{height}");
+                            handle.request(0, width, height);
                         }
-                        None => log::warn!("display-resize: ignoring control line {line:?}"),
+                        Some(DisplayCommand::Display(control)) => {
+                            log::info!("display-control: {control:?}");
+                            handle.update(display_update_from(control));
+                        }
+                        None => log::warn!("display-control: ignoring control line {line:?}"),
                     }
                 }
             }
         })
         .context("spawning the display-resize listener thread")?;
     Ok(())
-}
-
-/// Parse a `resize <w> <h>` control line into `(width, height)`.
-fn parse_resize(line: &str) -> Option<(u32, u32)> {
-    let mut parts = line.split_whitespace();
-    if parts.next()? != "resize" {
-        return None;
-    }
-    let w = parts.next()?.parse::<u32>().ok()?;
-    let h = parts.next()?.parse::<u32>().ok()?;
-    Some((w, h))
 }
 
 /// Bind a UNIX-socket listener that drives the live virtio-balloon via `handle` (M6 dynamic

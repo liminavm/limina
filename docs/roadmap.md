@@ -1488,6 +1488,17 @@ exposing real display timing to the guest is now meaningful rather than cosmetic
 
 ### Wave 1 — per-hardware-display virtual displays with native refresh (incl. VRR)
 
+**Part 1 (stable EDID identity + connector events) ✅ SHIPPED 2026-07-31** — libkrun `0119`-`0121`,
+`crates/limina-displayctl`, `crates/limina/src/window/hostdisplay.rs`, L1-verified by
+`crates/limina-test/tests/l1_edid.rs`. The guest now gets the *identity* (vendor/product/serial/
+name from the panel's own EDID numbers), density and refresh of the host display the window is on,
+re-pushed when the window migrates; the range descriptor lands in the exact form
+`drm_get_monitor_range` accepts. Real connector disconnect/reconnect works too (it's the scanout's
+`enabled` flag, which was hardcoded true). Design + what's still open (windowed human verification,
+boot-time EDID, a CTA extension block for a real mode list and >655 MHz clocks, `vrr_capable`
+plumbing): `docs/design/stable-edid-hotplug.md`.
+
+
 One virtual display per host display, each advertising **what that panel actually supports**:
 120 Hz ProMotion/VRR on the dev/dogfood MacBook panels, 60 Hz on external monitors. The mode
 list/EDID is ours (krun-display, libkrun patches); the honest-pacing prerequisite already shipped.

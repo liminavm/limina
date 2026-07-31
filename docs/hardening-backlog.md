@@ -13,6 +13,9 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   + windowed-VM log-verified, guest re-modesets with no oscillation). Resizing the limina window
   reflows the guest resolution, no reboot. Design + as-built notes:
   `docs/design/runtime-display-resize.md`; memory `limina-display-resize`. libkrun patches 0025/0026.
+  **Extended 2026-07-31** with stable EDID identity + real connector events (libkrun 0119-0121):
+  the guest sees the identity/density/refresh of the host display the window is on, and a pushed
+  disconnect genuinely disconnects the connector. `docs/design/stable-edid-hotplug.md`.
 - **Capability-scope the scanout IOSurfaces** (security) — ✅ **DONE 2026-06-23 (sw2d + venus)**.
   The worker used to export each scanout as a machine-global `IOSurfaceID` any same-user process
   could brute-force-read (`spikes/venus-draw-probe/iosdump.swift` PoC). Now **both** display paths

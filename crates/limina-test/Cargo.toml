@@ -12,6 +12,8 @@ license.workspace = true
 # LIMINA_HVF_TESTS env var and need the signed `limina-vmm` worker on disk — see README.md
 # and scripts/test-boot.sh.
 [dependencies]
+# Display-control socket wire format (resize / display identity + hotplug commands).
+limina-displayctl = { workspace = true }
 anyhow = { workspace = true }
 libc   = { workspace = true }
 # Decode captured scanout PNGs for display assertions (the M2 display oracle). Still a

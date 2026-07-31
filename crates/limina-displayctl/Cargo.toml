@@ -1,0 +1,9 @@
+[package]
+name = "limina-displayctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Deliberately dependency-free: the supervisor (which has no libkrun deps by design) and the
+# worker (which does) both need this wire format, so it can't pull either side's types in.
+[dependencies]

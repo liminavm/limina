@@ -24,7 +24,7 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
 2. Re-export: `git -C third_party/libkrun format-patch <base>.. -o "$PWD/patches/libkrun"`.
 3. Commit the regenerated `.patch` files to the limina repo.
 
-## The series (105 patches) — by theme
+## The series (121 patches) — by theme
 
 Patches are listed in series order within each theme. Full rationale lives in each
 patch's commit message; this is the map.
@@ -193,6 +193,27 @@ patch's commit message; this is the map.
   policy (when/what size) lives in limina. See `docs/design/runtime-display-resize.md`.
 - **0026 — expose the GPU `DisplayResizeHandle` to the host VMM.** Carry the handle on
   `Vmm` (`gpu_resize_handle()`) so limina-vmm reaches it without downcasting bus devices.
+- **0119 — stable EDID identity, real mode list and monitor range limits.** The generated
+  EDID had an anonymous identity (`RHT`/product 1/serial 1/`krun-display`) shared by every
+  display of every VM, and one detailed timing built from the current size — enough to
+  modeset, not enough for a guest compositor to recognize a monitor or key its remembered
+  per-monitor config on it. `EdidParams` gains an optional identity, standard-timing list,
+  second detailed timing and range descriptor (emitted "range limits only" + the
+  continuous-frequency bit, the only form Linux accepts for a refresh range). Defaults are
+  byte-identical to before. Fixes two bugs found on the way: standard timings wrote the
+  aspect code unshifted into the refresh field (1600x900 was advertised as 1600x1000 @
+  63 Hz), and the detailed-timing pixel clock could wrap its 16-bit field (3024x1964 @
+  120 Hz decoded back as 30 Hz — it now saturates and warns). Unit-tested against an
+  independent decoder. See `docs/design/stable-edid-hotplug.md`.
+- **0120 — runtime display updates carry EDID and connection state.** The pending-resize
+  slot becomes a queue of `DisplayUpdate {size, edid, connected}`. `GET_DISPLAY_INFO`'s
+  `enabled` flag was hardcoded true; the guest turns it straight into connector status, so
+  driving it is a genuine unplug. Consecutive mode/EDID updates merge (a window drag still
+  costs one modeset); connectivity changes never merge and the worker applies one update
+  per wake, so a disconnect→reconnect reaches the guest as two events rather than
+  collapsing into "nothing happened".
+- **0121 — log when descriptor slots overflow the base EDID block.** Four descriptors fit;
+  a fifth (typically the serial string) is dropped by priority. Say so.
 
 ### Balloon / dynamic memory (M6)
 
