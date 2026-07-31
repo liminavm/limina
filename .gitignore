@@ -52,3 +52,11 @@ spikes/venus-blob-fault/probe
 # spikes/fn-key-probe build artifact (source + RESULTS.md are kept)
 spikes/fn-key-probe/fnprobe
 spikes/fn-key-probe/fnprobe.dSYM/
+
+# spikes/venus-draw-probe + spikes/virgl-zink-kk build artifacts (sources are kept)
+spikes/venus-draw-probe/xfb-oob-probe
+spikes/virgl-zink-kk/iosurfpbo
+spikes/virgl-zink-kk/timerprobe
+
+# Debug bundles are always build output, wherever clang leaves them.
+*.dSYM/
