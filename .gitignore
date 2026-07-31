@@ -1,9 +1,16 @@
-# Disk images (large; kept locally, backup is the .xz)
+# Disk images (large; kept locally, backup is the .xz). The suffixed forms matter:
+# a bare `*.raw` does NOT cover the `.raw.pre-<something>.bak` snapshots we take before
+# a risky in-place bake, and a `git add -A` at the repo root then tries to stage tens of
+# gigabytes (this really happened, 2026-07-31).
 *.raw
+*.raw.*
 *.raw.xz
 *.qcow2
+*.qcow2.*
 *.img
+*.img.*
 *.iso
+*.bak
 
 # Regenerable trace fixtures for the replay tests (like the .raw images:
 # kept locally; regenerate via spikes/trace-replay/capture-replay*.sh)

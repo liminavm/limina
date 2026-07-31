@@ -178,6 +178,16 @@ tracks claims still needing verification.
 - **Commit early and often for bisectability**, but only meaningful commits — the
   user has authorized committing without asking. End commit messages with the
   `Co-Authored-By` trailer.
+- **Stage files individually. NEVER `git add -A` / `git add .` / `git add -u` at the repo
+  root.** The working tree routinely holds multi-gigabyte untracked disk images and their
+  `.bak` snapshots, half-built spike binaries, and scratch notes — a blanket add sweeps them
+  in. On 2026-07-31 that stalled two commits for >12 minutes each trying to stage ~27 GB of
+  `*.raw.pre-vnperf.bak` (the `.gitignore` has since been broadened, but the next
+  not-yet-ignored artifact will be just as invisible). Name the paths you actually changed:
+  `git add crates/limina/src/window/mod.rs docs/design/foo.md`. Run `git status --short`
+  first and `git diff --cached --stat` before committing — if the file count or the diff
+  size surprises you, something got swept in. A scoped `git add -A <dir>` is acceptable only
+  when you have just looked at `git status` for that directory and every entry belongs.
 - **When guest components change, refresh the deliverables AND the enhanced images.** Any
   rebuild of a guest-side component (16k kernel, mesa, limina-agent, the clipboard@limina
   shell extension — guest mutter is stock since 2026-07-11) must flow into
