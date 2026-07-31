@@ -1,0 +1,295 @@
+fnprobe: listening (listen-only, nothing is consumed). Ctrl-C to stop.
+
+Press, in order, and watch which class each lands in:
+  1. F1 and F2 BARE
+  2. F1 and F2 with fn HELD
+  3. the volume and mute keys (bare, then with fn)
+  4. play/pause, next, previous
+  5. fn ALONE (tap and release)
+
+keyDown/keyUp with a keycode  -> limina already forwards this (keymap.rs function row)
+SYSDEF NX=…                   -> the aux class; routed by bucket (media/brightness/volume)
+
+keyDown  keycode=0x63 ( 99)  flags=[FN]
+keyUp    keycode=0x63 ( 99)  flags=[FN]
+keyDown  keycode=0x76 (118)  flags=[FN]
+keyUp    keycode=0x76 (118)  flags=[FN]
+keyDown  keycode=0x60 ( 96)  flags=[FN]
+keyUp    keycode=0x60 ( 96)  flags=[FN]
+keyDown  keycode=0x61 ( 97)  flags=[FN]
+keyUp    keycode=0x61 ( 97)  flags=[FN]
+flagsChg keycode=0x3F ( 63)  flags=[FN]
+keyDown  keycode=0xA0 (160)  flags=[FN]
+keyUp    keycode=0xA0 (160)  flags=[FN]
+keyDown  keycode=0xA0 (160)  flags=[FN]
+keyUp    keycode=0xA0 (160)  flags=[FN]
+keyDown  keycode=0xB1 (177)  flags=[FN]
+keyUp    keycode=0xB1 (177)  flags=[FN]
+flagsChg keycode=0x3F ( 63)  flags=[-]
+keyDown  keycode=0x35 ( 53)  flags=[-]
+keyUp    keycode=0x35 ( 53)  flags=[-]
+flagsChg keycode=0x3F ( 63)  flags=[FN]
+keyDown  keycode=0xB0 (176)  flags=[FN]
+keyUp    keycode=0xB0 (176)  flags=[FN]
+flagsChg keycode=0x3F ( 63)  flags=[-]
+keyDown  keycode=0x35 ( 53)  flags=[-]
+keyUp    keycode=0x35 ( 53)  flags=[-]
+flagsChg keycode=0x3F ( 63)  flags=[FN]
+keyDown  keycode=0xB2 (178)  flags=[FN]
+keyUp    keycode=0xB2 (178)  flags=[FN]
+flagsChg keycode=0x3F ( 63)  flags=[-]
+flagsChg keycode=0x3F ( 63)  flags=[FN]
+keyDown  keycode=0xB2 (178)  flags=[FN]
+keyUp    keycode=0xB2 (178)  flags=[FN]
+flagsChg keycode=0x3F ( 63)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyDown  keycode=0x24 ( 36)  flags=[-]  (autorepeat)
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x24 ( 36)  flags=[-]
+keyUp    keycode=0x24 ( 36)  flags=[-]
+keyDown  keycode=0x08 (  8)  flags=[-]
+keyUp    keycode=0x08 (  8)  flags=[-]
+keyDown  keycode=0x00 (  0)  flags=[-]
+keyDown  keycode=0x11 ( 17)  flags=[-]
+keyUp    keycode=0x00 (  0)  flags=[-]
+keyUp    keycode=0x11 ( 17)  flags=[-]
+keyDown  keycode=0x31 ( 49)  flags=[-]
+keyUp    keycode=0x31 ( 49)  flags=[-]
+keyDown  keycode=0x01 (  1)  flags=[-]
+keyUp    keycode=0x01 (  1)  flags=[-]
+keyDown  keycode=0x23 ( 35)  flags=[-]
+keyDown  keycode=0x22 ( 34)  flags=[-]
+keyUp    keycode=0x23 ( 35)  flags=[-]
+keyUp    keycode=0x22 ( 34)  flags=[-]
+keyDown  keycode=0x30 ( 48)  flags=[-]
+keyUp    keycode=0x30 ( 48)  flags=[-]
+keyDown  keycode=0x30 ( 48)  flags=[-]
+keyUp    keycode=0x30 ( 48)  flags=[-]
+keyDown  keycode=0x03 (  3)  flags=[-]
+keyUp    keycode=0x03 (  3)  flags=[-]
+keyDown  keycode=0x2D ( 45)  flags=[-]
+keyUp    keycode=0x2D ( 45)  flags=[-]
+keyDown  keycode=0x30 ( 48)  flags=[-]
+keyUp    keycode=0x30 ( 48)  flags=[-]
+keyDown  keycode=0x30 ( 48)  flags=[-]
+keyUp    keycode=0x30 ( 48)  flags=[-]
+keyDown  keycode=0x1F ( 31)  flags=[-]
+keyDown  keycode=0x20 ( 32)  flags=[-]
+keyUp    keycode=0x1F ( 31)  flags=[-]
+keyUp    keycode=0x20 ( 32)  flags=[-]
+keyDown  keycode=0x30 ( 48)  flags=[-]
+keyUp    keycode=0x30 ( 48)  flags=[-]
+keyDown  keycode=0x1D ( 29)  flags=[-]
+keyUp    keycode=0x1D ( 29)  flags=[-]
+keyDown  keycode=0x03 (  3)  flags=[-]
+keyUp    keycode=0x03 (  3)  flags=[-]
+keyDown  keycode=0x30 ( 48)  flags=[-]
+keyUp    keycode=0x30 ( 48)  flags=[-]
+keyDown  keycode=0x33 ( 51)  flags=[-]
+keyUp    keycode=0x33 ( 51)  flags=[-]
+keyDown  keycode=0x33 ( 51)  flags=[-]
+keyUp    keycode=0x33 ( 51)  flags=[-]
+keyDown  keycode=0x1B ( 27)  flags=[-]
+keyUp    keycode=0x1B ( 27)  flags=[-]
+keyDown  keycode=0x03 (  3)  flags=[-]
+keyUp    keycode=0x03 (  

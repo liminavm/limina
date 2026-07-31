@@ -286,6 +286,10 @@ pub struct InputState {
     /// so a focus loss mid-press (Cmd-Tab) can release them — the local monitor stops delivering
     /// events the instant focus leaves, so the key-up would be lost and the key would stick down.
     pressed_keys: RefCell<HashSet<u16>>,
+    /// evdev codes of *held* aux keys (media/volume — see [`InputState::tap_aux_key`]). Kept
+    /// apart from `pressed_keys` because those are macOS virtual keycodes that get mapped on
+    /// release; these are already-resolved evdev codes from a different namespace.
+    pressed_aux: RefCell<HashSet<u16>>,
     /// Caps Lock is a *lock* key, not a held modifier: kept in sync with the host LED on every
     /// event (see [`InputState::sync_capslock`]), separate from `pressed_mods`.
     caps: RefCell<CapsLockSync>,
@@ -339,6 +343,7 @@ impl InputState {
             conn,
             pressed_mods: RefCell::new(HashSet::new()),
             pressed_keys: RefCell::new(HashSet::new()),
+            pressed_aux: RefCell::new(HashSet::new()),
             caps: RefCell::new(CapsLockSync::new()),
             guest_buttons: Cell::new(0),
             host_cursor,
@@ -390,6 +395,13 @@ impl InputState {
     /// Force-release every held-modifier key in the guest and reset the believed-pressed
     /// sets. Called on capture release: whatever the tap left pressed (the ungrab chord at
     /// minimum) must not stay wedged down in the guest.
+    ///
+    /// Held **aux** keys (media/volume) go with them: an ungrab can change which side owns a
+    /// key mid-press, and a stranded press is worse for these than for modifiers — GNOME
+    /// repeats a held volume key, so a stuck one ramps the guest to max. (The tap also
+    /// forwards any straggling release for a key it already pressed — see
+    /// [`limina_input::auxkey::route_aux_event_key`] — so this is the belt to that's braces:
+    /// it covers the case where no release ever arrives.)
     fn release_all_modifiers(&self) {
         for &kc in &MODIFIER_KEYCODES {
             if let Some(code) = macos_keycode_to_linux_remapped(kc, &self.remap) {
@@ -398,6 +410,36 @@ impl InputState {
             }
         }
         self.pressed_mods.borrow_mut().clear();
+        self.release_all_aux();
+    }
+
+    /// Release every aux key we forwarded as held, and forget them.
+    fn release_all_aux(&self) {
+        let mut aux = self.pressed_aux.borrow_mut();
+        for &code in aux.iter() {
+            self.send_kbd(InputEvent::new(EV_KEY, code, 0));
+            self.send_kbd(InputEvent::syn());
+        }
+        aux.clear();
+    }
+
+    /// Whether we've forwarded a press for this aux evdev code that hasn't been released —
+    /// the tap's "a release always follows its press" check.
+    pub(crate) fn is_aux_pressed(&self, code: u16) -> bool {
+        self.pressed_aux.borrow().contains(&code)
+    }
+
+    /// Whether this macOS keycode has any guest equivalent at all. The tap uses it to decide
+    /// between consuming a key and handing it back to macOS: a key we cannot express in the
+    /// guest is not ours to swallow.
+    pub(crate) fn maps_to_guest(&self, macos_keycode: u16) -> bool {
+        macos_keycode_to_linux_remapped(macos_keycode, &self.remap).is_some()
+    }
+
+    /// Whether *any* aux key is held. Lets the tap skip the NSEvent bridge entirely for the
+    /// common ungrabbed-and-nothing-held event.
+    pub(crate) fn any_aux_pressed(&self) -> bool {
+        !self.pressed_aux.borrow().is_empty()
     }
 
     /// Tap-side key forwarding: same bookkeeping as the local monitor (caps-lock sync,
@@ -406,6 +448,22 @@ impl InputState {
     pub(crate) fn tap_key(&self, macos_keycode: u16, down: bool, flags: u64) {
         self.sync_capslock(flags);
         self.emit_key(macos_keycode, down);
+    }
+
+    /// Tap-side **aux key** forwarding (media/volume from the `NX_SYSDEFINED` class — see
+    /// [`limina_input::auxkey`]). These carry no macOS virtual keycode, so they can't go
+    /// through [`InputState::emit_key`]'s keycode map; the caller has already resolved the
+    /// evdev code via the bucket policy. Held aux keys are tracked separately so a focus-loss
+    /// flush releases them too (a media key held across a Cmd-Tab would otherwise stick down
+    /// in the guest, and its key-up is never delivered to us).
+    pub(crate) fn tap_aux_key(&self, code: u16, down: bool) {
+        self.send_kbd(InputEvent::new(EV_KEY, code, i32::from(down)));
+        self.send_kbd(InputEvent::syn());
+        if down {
+            self.pressed_aux.borrow_mut().insert(code);
+        } else {
+            self.pressed_aux.borrow_mut().remove(&code);
+        }
     }
 
     /// Tap-side `flagsChanged` forwarding — the modifier twin of [`InputState::tap_key`].
@@ -549,7 +607,8 @@ impl InputState {
     pub fn release_all_held(&self) {
         let mut mods = self.pressed_mods.borrow_mut();
         let mut keys = self.pressed_keys.borrow_mut();
-        if mods.is_empty() && keys.is_empty() {
+        let mut aux = self.pressed_aux.borrow_mut();
+        if mods.is_empty() && keys.is_empty() && aux.is_empty() {
             return;
         }
         for &macos_keycode in mods.iter().chain(keys.iter()) {
@@ -558,12 +617,19 @@ impl InputState {
                 self.send_kbd(InputEvent::syn());
             }
         }
+        // Aux keys are already evdev codes (no keycode map, no remap — the Cmd/Option swap
+        // has nothing to say about a media key).
+        for &code in aux.iter() {
+            self.send_kbd(InputEvent::new(EV_KEY, code, 0));
+            self.send_kbd(InputEvent::syn());
+        }
         log::debug!(
             "input: released {} held key(s) on focus loss",
-            mods.len() + keys.len()
+            mods.len() + keys.len() + aux.len()
         );
         mods.clear();
         keys.clear();
+        aux.clear();
     }
 
     /// `flagsChanged` reports which modifier key changed but not the direction. [`modifier_emit`]

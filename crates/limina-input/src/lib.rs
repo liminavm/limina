@@ -9,6 +9,7 @@
 //! feature) read those triples and feed them to the guest. Both sides share the evdev
 //! [`constants`] and the [`keymap`] so the wire stays consistent.
 
+pub mod auxkey;
 pub mod constants;
 pub mod keymap;
 
@@ -121,6 +122,24 @@ mod tests {
 
         // Non-modifier keycodes aren't handled here.
         assert_eq!(modifier_is_down(0x00, 0xffff_ffff), None);
+    }
+
+    #[test]
+    fn macos_special_action_keycodes_have_no_guest_mapping() {
+        // Mission Control, Spotlight, Dictation, Do Not Disturb (fn+F3–F6) and the Globe key
+        // arrive as ordinary keyDowns with these keycodes — observed in
+        // `spikes/fn-key-probe/output-f3f6.txt`, NOT as the NX_SYSDEFINED aux class. They have
+        // no guest equivalent, so a grab drops them (`InputState::maps_to_guest`) rather than
+        // letting macOS act on a key the user aimed at the guest. If someone later maps one of
+        // these to a guest key, this test fails — which is the moment to decide that routing
+        // deliberately rather than discovering it from a changed behavior.
+        for kc in [0xA0, 0xB0, 0xB1, 0xB2, 0xB3] {
+            assert_eq!(
+                macos_keycode_to_linux(kc),
+                None,
+                "keycode {kc:#x} now maps to the guest — the tap will stop passing it to macOS"
+            );
+        }
     }
 
     #[test]

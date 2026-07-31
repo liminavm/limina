@@ -41,3 +41,7 @@ spikes/kk-timestamp-probe/mtlprobe.dSYM/
 spikes/kk-timestamp-probe/tsbench
 spikes/kk-timestamp-probe/tsbench.dSYM/
 spikes/venus-blob-fault/probe
+
+# spikes/fn-key-probe build artifact (source + RESULTS.md are kept)
+spikes/fn-key-probe/fnprobe
+spikes/fn-key-probe/fnprobe.dSYM/

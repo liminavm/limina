@@ -173,9 +173,15 @@ pub const KEY_F16: u16 = 186;
 pub const KEY_F17: u16 = 187;
 pub const KEY_F18: u16 = 188;
 pub const KEY_F19: u16 = 189;
+// Media transport (the `Media` bucket of [`crate::auxkey`]). These have no macOS *virtual*
+// keycode: they arrive as NX_SYSDEFINED aux-key events, so only `nx_key_to_linux` emits them.
+pub const KEY_NEXTSONG: u16 = 163;
+pub const KEY_PLAYPAUSE: u16 = 164;
+pub const KEY_PREVIOUSSONG: u16 = 165;
 
 /// The full set of keys the virtual keyboard advertises in its EV_KEY capability bitmap.
-/// (Anything `macos_keycode_to_linux` can emit must be in here, or the guest drops it.)
+/// (Anything `macos_keycode_to_linux` or `nx_key_to_linux` can emit must be in here, or the
+/// guest drops it — the bitmap is read once at device init.)
 pub const SUPPORTED_KEYBOARD_KEYS: &[u16] = &[
     KEY_ESC,
     KEY_1,
@@ -289,4 +295,7 @@ pub const SUPPORTED_KEYBOARD_KEYS: &[u16] = &[
     KEY_F17,
     KEY_F18,
     KEY_F19,
+    KEY_NEXTSONG,
+    KEY_PLAYPAUSE,
+    KEY_PREVIOUSSONG,
 ];

@@ -252,6 +252,28 @@ Two classes already landed as targeted fixes: the empty-clear-rect vk_meta asser
   `limina-m3-networking`.
 
 ## M2 / M8 polish wins (cheap, host-side)
+- **fn/aux-key buckets: settings UI + the Accessibility cliff** (added 2026-07-31, with the
+  bucket policy in `crates/limina-input/src/auxkey.rs`). Two follow-ups the design review raised.
+  **(a)** The buckets (`Media` soft-grab, `Volume` full-grab-only, `Brightness`/`Other` host-only)
+  are meant to become per-key runtime settings; shape that config as `nx_key -> Option<GrabMode>`
+  with buckets as defaults, not per-bucket overrides, or the first split *within* a bucket forces
+  a refactor. **(b) The settings UI must render these toggles disabled with a "requires
+  Accessibility" note when the tap isn't installed** (`TAP_PORT` null). Aux keys are delivered
+  *only* to a CGEventTap — never to a local NSEvent monitor — so without the grant the whole
+  feature is inert while ordinary keys keep working: a *partially* working keyboard, which reads
+  as a limina bug rather than a permission problem. There is also no way to detect the press
+  without the tap, so no just-in-time prompt is possible; the UI is the only place to say it.
+  **(c) ANSWERED 2026-07-31 — fn+F3–F6 are not aux keys at all.** Mission Control, Spotlight,
+  Dictation and Do Not Disturb arrive as **ordinary keyDowns with keycodes 0xA0/0xB1/0xB0/0xB2**
+  (Globe = 0xB3), not as NX_SYSDEFINED — a third mechanism, unrelated to the buckets. So
+  promoting one (Mission Control → GNOME overview) is a **`keymap.rs` entry**, not an `auxkey`
+  bucket edit; `macos_special_action_keycodes_have_no_guest_mapping` fails the moment someone
+  maps one, which is the point to decide the routing deliberately. These keys are **inert under a
+  grab by design**: the tap drops any keycode with no guest mapping rather than handing it to
+  macOS, because forwarding a key blind can fire a destructive host action (reboot/sleep/eject on
+  keyboards that have one) that a grabbed user can't cancel — "classify and route on purpose, or
+  drop; never forward blind". Ctrl-Opt reaches them meanwhile. Evidence + the rejected
+  pass-through alternative: `spikes/fn-key-probe/RESULTS.md`, `output-f3f6.txt`.
 - ~~**Pointer warps / pointer capture**~~ — **DONE** (2026-06-27). `Cmd-Ctrl-G` capture mode feeds
   the guest a separate relative-mouse virtio-input device; closes the guest-warp gap. Host cursor
   pinned by warp-to-centre (CGAssociate-false alone insufficient on macOS 26).

@@ -32,9 +32,14 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Arc;
 
 use objc2::rc::Retained;
-use objc2_app_kit::NSView;
+use objc2_app_kit::{NSEvent, NSView};
+use objc2_core_graphics::CGEvent;
 use objc2_foundation::{NSPoint, NSRect};
 
+use limina_input::auxkey::{
+    decode_aux_data1, nx_key_bucket, nx_key_to_linux, route_aux_event_key, AuxBucket, GrabMode,
+    NX_SUBTYPE_AUX_CONTROL_BUTTONS,
+};
 use limina_input::constants::{
     ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
     REL_WHEEL,
@@ -114,6 +119,9 @@ const RMB_DRAG: u32 = 7;
 const KEY_DOWN: u32 = 10;
 const KEY_UP: u32 = 11;
 const FLAGS_CHANGED: u32 = 12;
+/// `NX_SYSDEFINED` — the class the special/media top row arrives in (see
+/// [`limina_input::auxkey`]); its subtype-8 events carry the key in `NSEvent.data1`.
+const SYS_DEFINED: u32 = 14;
 const SCROLL: u32 = 22;
 const OMB_DOWN: u32 = 25;
 const OMB_UP: u32 = 26;
@@ -237,6 +245,19 @@ extern "C" fn tap_callback(
     // the host with no chord needed.
     let soft = !captured && ctx.soft_enabled && is_key && !ctx.soft_muted.get();
 
+    // Aux keys (the special/media top row, which arrives as NX_SYSDEFINED rather than as a
+    // keycode — see `limina_input::auxkey`). Ownership is per BUCKET, not per grab mode alone:
+    // media follows either grab, volume needs the full grab, brightness never leaves the host.
+    // Anything the policy doesn't claim is returned untouched, so macOS still dims the screen.
+    if etype == SYS_DEFINED {
+        let mode = match (captured, soft) {
+            (true, _) => GrabMode::Full,
+            (false, true) => GrabMode::Soft,
+            (false, false) => GrabMode::None,
+        };
+        return route_aux_event(ctx, event, mode);
+    }
+
     // Keyboard: while captured (or soft-grabbed), system combos (Cmd-Tab, Cmd-Space,
     // Ctrl-arrows, fn keys, …) go to the GUEST, not macOS — forward through the shared
     // input translator (same remap, caps sync, and pressed-set bookkeeping as the local
@@ -253,6 +274,12 @@ extern "C" fn tap_callback(
                 // Let our host shortcuts reach the local monitor (it toggles fullscreen/capture).
                 if match_host_shortcut(keycode, flags).is_some() {
                     return event;
+                }
+                // A keycode with no guest mapping is dropped, NOT handed to macOS — see
+                // `why_unmapped_keys_die_in_the_grab` below.
+                if !ctx.input.maps_to_guest(keycode) {
+                    log::debug!("input: dropped unmapped keycode {keycode:#04x} (grabbed)");
+                    return std::ptr::null_mut();
                 }
                 // Skip autorepeat: the guest compositor generates its own key repeat from one press.
                 if geti(FIELD_KEYBOARD_AUTOREPEAT) == 0 {
@@ -364,6 +391,97 @@ extern "C" fn tap_callback(
     std::ptr::null_mut() // consume — nothing escapes to host windows
 }
 
+// `why_unmapped_keys_die_in_the_grab` (the rule applied in the KEY_DOWN arm above)
+//
+// A grabbed tap drops a key it has no guest mapping for, rather than handing it back to macOS.
+// That is deliberate and it is the *safe* direction, not merely the simple one.
+//
+// The tempting alternative — "we can't use it, so let the host have it" — is fail-dangerous. We
+// cannot enumerate what an unknown key does on an arbitrary keyboard, and some of them are
+// destructive: a keyboard with a reboot/sleep/eject key, pressed by a user who is aiming it at
+// the *guest*, would act on the host instead. The user is grabbed at that moment and cannot
+// ungrab fast enough to cancel it. A dropped key costs one keystroke and a retry; a host reboot
+// costs the session. Note also that the genuine "recapture control" combos (force-quit, lock,
+// power) run through secure-input paths a session tap never sees, so nothing safety-critical
+// depends on our passing keys through.
+//
+// This is consistent with the aux buckets rather than in tension with them: those hand macOS
+// only keys we have *identified and deliberately classified* (brightness stays host because we
+// know it's brightness). The rule is knowledge-based — classify a key and route it on purpose,
+// or drop it. Never forward blind.
+//
+// The cost is real and accepted: `spikes/fn-key-probe` found Mission Control, Spotlight,
+// Dictation and Do Not Disturb (fn+F3–F6) arrive as ordinary keyDowns with keycodes
+// 0xA0/0xB1/0xB0/0xB2 — a third mechanism, neither the NX_SYSDEFINED aux class nor anything in
+// our keymap — and the Globe key (0xB3) is the same shape. All of them are inert while the VM
+// window is focused. Ctrl-Opt (mute the soft grab) is the way to reach them. Promoting one to
+// the guest later is a `keymap.rs` entry, NOT an `auxkey` bucket edit.
+
+/// Say once per run that a media key went to the VM *under the soft grab*. That's the case
+/// worth explaining: the soft grab engages on mere focus, with no gesture from the user, and
+/// the failure mode is silent in both directions — if the guest has no media player listening,
+/// the key does nothing there AND the host player never sees it, which reads as a dead key
+/// rather than as a routing choice. Under a full grab the user explicitly took the keyboard
+/// (and Ctrl-Opt means something else there — it drops capture entirely), so the message would
+/// be both unsurprising and wrong about the way out.
+fn warn_once_on_media_capture(nx_key: u16, mode: GrabMode) {
+    static SAID: AtomicBool = AtomicBool::new(false);
+    if mode != GrabMode::Soft
+        || nx_key_bucket(nx_key) != AuxBucket::Media
+        || SAID.swap(true, Ordering::Relaxed)
+    {
+        return;
+    }
+    log::info!(
+        "media keys are going to the VM while its window is focused (Ctrl-Opt mutes the soft \
+         keyboard grab if you want them back on the host)"
+    );
+}
+
+/// Decide one `NX_SYSDEFINED` event: forward it to the guest as an evdev key and consume it, or
+/// hand it back for macOS to act on. Returning the event is the safe default at every step —
+/// a subtype we don't understand, a `data1` shape we can't decode, or a key whose bucket the
+/// current grab doesn't claim all keep working exactly as they do outside the VM.
+fn route_aux_event(ctx: &TapCtx, event: CGEventRef, mode: GrabMode) -> CGEventRef {
+    // Ungrabbed with nothing held is the overwhelmingly common case (every aux key pressed
+    // while the VM isn't focused) — take it without bridging to NSEvent. It is NOT the same as
+    // `mode == None`: a key pressed under a grab and released after focus moved away still has
+    // to reach the guest, or it stays down there (the release-follows-press rule below). The
+    // focus-loss flush would clean that up within a frame, but correctness shouldn't lean on a
+    // 60 Hz poll when the check is one `is_empty`.
+    if mode == GrabMode::None && !ctx.input.any_aux_pressed() {
+        return event;
+    }
+    // SAFETY: inside a tap callback `event` is a live `CGEventRef`; `CGEvent` is the same
+    // opaque CF type, borrowed only for this call (NSEvent copies what it needs).
+    let cg: &CGEvent = unsafe { &*(event as *const CGEvent) };
+    // The key lives in `NSEvent.data1`, which CoreGraphics exposes no field for — bridging to
+    // NSEvent is the documented way to read it.
+    let Some(ns) = NSEvent::eventWithCGEvent(cg) else {
+        return event;
+    };
+    if ns.subtype().0 != NX_SUBTYPE_AUX_CONTROL_BUTTONS {
+        return event; // window-server bookkeeping (screen changed, app activated, …), not a key
+    }
+    let Some(aux) = decode_aux_data1(ns.data1() as i64) else {
+        return event;
+    };
+    // Policy, plus "a release always follows its press": a grab released mid-press must not
+    // strand the key down in the guest (see `route_aux_event_key`).
+    let held = nx_key_to_linux(aux.nx_key).is_some_and(|c| ctx.input.is_aux_pressed(c));
+    let Some(code) = route_aux_event_key(aux.nx_key, mode, aux.down, held) else {
+        return event; // wrong bucket for this grab, or no guest equivalent — macOS keeps it
+    };
+    warn_once_on_media_capture(aux.nx_key, mode);
+    // Consume repeats without forwarding: the guest kernel repeats from the held-down state,
+    // exactly as for ordinary keys. Still consumed, or macOS would act on the repeats alone.
+    if !aux.repeat {
+        ctx.input.cancel_ungrab_chord();
+        ctx.input.tap_aux_key(code, aux.down);
+    }
+    std::ptr::null_mut()
+}
+
 thread_local! {
     /// A failed install's context, kept so [`retry_install`] can re-attempt the tap when
     /// Accessibility is granted mid-run. Main-thread only (like everything else here).
@@ -382,6 +500,7 @@ fn try_create(ctx: *mut TapCtx) -> bool {
         | (1 << KEY_DOWN)
         | (1 << KEY_UP)
         | (1 << FLAGS_CHANGED)
+        | (1 << SYS_DEFINED)
         | (1 << SCROLL)
         | (1 << OMB_DOWN)
         | (1 << OMB_UP)
