@@ -1,0 +1,186 @@
+diff --git a/docs/fork/virtual-display-identity.md b/docs/fork/virtual-display-identity.md
+index 70207222..349a5ec4 100644
+--- a/docs/fork/virtual-display-identity.md
++++ b/docs/fork/virtual-display-identity.md
+@@ -186,3 +186,75 @@ asking for a correct EDID makes every guest better.
+   and `MonitorsConfig` in `src/monitors_xml.rs`. The DRM plumbing around them is not tested: doing
+   that properly needs a VKMS device whose connectors and mode lists can be changed from configfs,
+   which is the one piece of coverage still missing here.
++
++## 6. VMM-side response (2026-07-30, initial assessment)
++
++Read and agreed — this is a well-shaped ask, and §4's framing ("a correct EDID, not a new
++protocol") is exactly the design we want too: everything below benefits a stock guest with no
++guest components, which is a hard requirement on our side anyway. Point-by-point:
++
++**Accepted, first delivery — §4.1 + §4.5 + the stable-identity floor of §4.2.** The EDID the
++guest sees is generated in the VMM's virtio-gpu layer, which we own and patch routinely; the
++host process already knows which physical display the window is on (it re-fits the guest mode
++on display migration today). The plan is one mechanism patch (per-scanout EDID set/update API
++in the virtio-gpu device) plus host-side policy: real physical size from the host display
++(bytes 21-22 + detailed-timing mm), a stable per-display identity synthesized from the host's
++vendor/model/serial (product code, serial, `0xfc` name — hashing the display name when a
++monitor reports serial 0), detailed timing descriptors for the advertised modes instead of
++CVT-able standard timings, and the digital input bit. Your §2.1 scale-guess bug is also *our*
++bug — the fictional 17×11 cm makes our own benchmark rigs come up at 2.25 — so this has
++independent priority on our side.
++
++**§4.2 verbatim (raw host EDID passthrough) — partial, honestly.** macOS on Apple Silicon does
++not reliably expose a display's raw EDID (the built-in panel in particular; external monitors
++sometimes, via IOKit). So the *guaranteed* form is the synthesized-stable identity above,
++built from the identity fields macOS does expose — which your fallback paragraph explicitly
++blesses ("the requirement is stability"). Where the OS hands us a real EDID we can pass it
++through opportunistically, but don't design against it being present.
++
++**§4.3 (hotplug) — accepted, one verification owed before we promise semantics.** virtio-gpu
++has a display-changed event; the guest kernel driver fires a DRM hotplug event on it. What we
++still have to verify empirically is that a *stock* guest kernel re-reads the EDID at that
++moment and that the uevent shape (connector change vs disconnect→connect) matches what
++`meta_monitor_manager_reload` wants. If in-place identity mutation confuses guests, we can
++model disconnect→connect by dropping and re-raising the scanout. We'll report what the stock
++kernel actually does rather than promise the ideal form up front.
++
++**§4.4 (connector per host display) — agreed as the destination, not the first step.** This is
++effectively the multi-display feature and rides that work. The EDID plumbing in the first
++delivery is per-scanout from the start so §4.4 slots in without rework. Note the interim
++consequence: until then, a window migrating displays remains an identity change *on one
++connector* — which is precisely why §4.3's hotplug moment has to come with it.
++
++**§4.6 — fully agreed.** No scale-hint channel; an honest EDID is the whole contract.
++
++Sequencing: (1) EDID honesty — size/identity/timings/digital, one VMM release; (2) hotplug on
++migration, after the stock-kernel verification; (3) connector-per-display with multi-display.
++For (1) the acceptance test is your §2.1 case: fresh guest, no monitors.xml, window on the
++laptop panel → first-login scale 1.25, and two different external monitors appearing as two
++distinct entries in the store.
++
++*— the VMM side.*
++
++### 6.1 Addendum (2026-07-30): overlay planes and VRR on the roadmap
++
++Related, and going a bit beyond the EDID asks: we intend to add **overlay plane** support and
++**VRR** to the virtual display, so a guest on a ProMotion host panel (the MacBook internal
++screen: 24-120 Hz adaptive) can actually use it. Sketch, not yet designed:
++
++- **VRR**: advertise adaptive sync in the EDID/connector caps (a range descriptor fits
++  naturally in the §4.1/§4.5 EDID work — another reason to emit detailed descriptors
++  ourselves), accept `VRR_ENABLED`-style state on the CRTC, and map guest flips onto the
++  host's adaptive cadence instead of a fixed 60 Hz tick. The §29/§30 present-timestamp work
++  is a prerequisite in spirit: honest per-flip present feedback is what makes guest-side VRR
++  scheduling meaningful.
++- **Overlay planes**: expose one or more overlay planes on the virtual CRTC so the compositor
++  can put the cursor (and eventually fullscreen video/direct scanout candidates) on a plane
++  instead of compositing it — host-side these map cheaply onto separate CALayers, which is
++  also how we'd sidestep a whole class of full-frame damage for cursor-only updates.
++
++Both are guest-visible as bog-standard KMS features (stock mutter consumes either without new
++code), same design language as the rest of §4. We'll write these up properly in our tree and
++report the plan here.
++
++*— the VMM side.*
+diff --git a/src/render_helpers/vulkan/renderer.rs b/src/render_helpers/vulkan/renderer.rs
+index b6706753..ca3ad5ec 100644
+--- a/src/render_helpers/vulkan/renderer.rs
++++ b/src/render_helpers/vulkan/renderer.rs
+@@ -34,7 +34,7 @@ use super::error::VulkanError;
+ use super::fence::{ExportedFenceRegistry, VkSubmitFence};
+ use super::frame::VulkanFrame;
+ use super::types::{
+-    import_format, is_rgba8888, GlyphRun, VkFramebuffer, VkMapping, VkTexture, IMAGE_VK_FORMAT,
++    import_format, matches_render_order, GlyphRun, VkFramebuffer, VkMapping, VkTexture, IMAGE_VK_FORMAT,
+ };
+ use crate::render_helpers::blur::BlurOptions;
+ 
+@@ -2566,7 +2566,7 @@ impl Bind<Dmabuf> for VulkanRenderer {
+ impl VulkanRenderer {
+     /// Import a single-plane dmabuf as a scanout [`VkFramebuffer`]. Two shapes:
+     ///
+-    /// - `Abgr8888`/`Xbgr8888` ([`is_rgba8888`]) match the owned renderer's `R8G8B8A8`-order render
++    /// - `Abgr8888`/`Xbgr8888` ([`matches_render_order`]) match the owned renderer's `R8G8B8A8`-order render
+     ///   pass, so a frame renders **straight into** the dmabuf.
+     /// - `Argb8888`/`Xrgb8888` (the common KMS primary-plane byte order — `B8G8R8A8`) do not, so we
+     ///   render into an R8G8B8A8 shadow (reusing the render pass + all pipelines) and blit it into
+@@ -2596,7 +2596,7 @@ impl VulkanRenderer {
+             TextureFilter::Nearest => vk::Filter::NEAREST,
+         };
+ 
+-        if is_rgba8888(fourcc) {
++        if matches_render_order(fourcc) {
+             // Direct: the dmabuf's byte order matches the render pass, render into it in place.
+             // Reuse the cached import for this buffer if we already made one (re-importing every
+             // frame aborts Venus — see `dmabuf_target_cache`).
+@@ -3169,7 +3169,7 @@ impl Offscreen<VkTexture> for VulkanRenderer {
+         format: Fourcc,
+         size: Size<i32, BufferCoord>,
+     ) -> Result<VkTexture, VulkanError> {
+-        if !is_rgba8888(format) {
++        if !matches_render_order(format) {
+             return Err(VulkanError::UnsupportedFormat(format));
+         }
+         // `Texture::new_color_target` below counts the image it creates; counting here as well
+@@ -3357,8 +3357,8 @@ impl ExportMem for VulkanRenderer {
+         // caller wants the other order, blit through a staging image of that format on the way out
+         // and let the GPU reorder the channels — no CPU pass over the pixels. (Reading the source's
+         // own order is the common case and stays a plain copy.)
+-        let source_order = source.format().map(is_rgba8888);
+-        let want_order = is_rgba8888(format);
++        let source_order = source.format().map(matches_render_order);
++        let want_order = matches_render_order(format);
+         let via = match source_order {
+             Some(order) if order != want_order => Some(self.readback_staging_for(w, h, format)?),
+             _ => None,
+diff --git a/src/render_helpers/vulkan/types.rs b/src/render_helpers/vulkan/types.rs
+index 922fbe3a..27e016e3 100644
+--- a/src/render_helpers/vulkan/types.rs
++++ b/src/render_helpers/vulkan/types.rs
+@@ -8,21 +8,42 @@ use niri_vk::texture::Texture as NiriTexture;
+ use smithay::backend::allocator::Fourcc;
+ use smithay::backend::renderer::{Texture, TextureMapping};
+ 
+-/// The one Vulkan color format this skeleton renders/imports/exports. `R8G8B8A8_UNORM` is
+-/// `[R,G,B,A]` in memory, i.e. DRM `ABGR8888` (and `XBGR8888` ignoring alpha).
+-pub(super) const IMAGE_VK_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
+-
+-/// Whether `f` is one of the DRM fourccs whose byte order matches [`IMAGE_VK_FORMAT`].
+-pub(super) fn is_rgba8888(f: Fourcc) -> bool {
+-    matches!(f, Fourcc::Abgr8888 | Fourcc::Xbgr8888)
++/// The one Vulkan color format this renderer renders/imports/exports. `B8G8R8A8_UNORM` is
++/// `[B,G,R,A]` in memory, i.e. DRM `ARGB8888` (and `XRGB8888` ignoring alpha).
++///
++/// **This was `R8G8B8A8_UNORM` until 2026-07-30, and flipping it deleted 89% of a heavy frame's
++/// GPU time.** BGRA is what everything around us actually speaks: KMS primary planes advertise
++/// `Argb8888`/`Xrgb8888` (this VM's advertises nothing else), and it is the byte order of the two
++/// `wl_shm` formats every client is guaranteed to have. With an RGBA-order render target the
++/// scanout buffer could never be rendered into directly, so every frame drew into a shadow and
++/// then paid a full-damage `vkCmdBlitImage` to reorder the channels on the way out — measured at
++/// **8.42 ms p50 on heavy frames against 0.89 ms for the entire render pass**. Rendering in the
++/// display's own order makes the scanout buffer a legal render target and both disappear.
++///
++/// The cost lands on `Abgr8888`/`Xbgr8888` instead, which now take the shadow path. That is the
++/// right way round: it is the rarer order here, and nothing on this stack scans it out.
++///
++/// Note this only ever described *byte order in memory*. Shaders address components (`.r`, `.g`),
++/// never bytes, so not one line of shader code cares which way this points.
++pub(super) const IMAGE_VK_FORMAT: vk::Format = vk::Format::B8G8R8A8_UNORM;
++
++/// Whether `f` is one of the DRM fourccs whose byte order matches [`IMAGE_VK_FORMAT`], i.e. can be
++/// rendered into directly rather than through a channel-reordering shadow.
++pub(super) fn matches_render_order(f: Fourcc) -> bool {
++    matches!(f, Fourcc::Argb8888 | Fourcc::Xrgb8888)
+ }
+ 
++/// The fourcc naming [`IMAGE_VK_FORMAT`]'s byte order — what an offscreen this renderer draws into
++/// actually contains. Prefer it over spelling a fourcc out at a `create_buffer` call site, so the
++/// next flip of the render order does not have to find them all again.
++pub(super) const NATIVE_FOURCC: Fourcc = Fourcc::Argb8888;
++
+ /// Map a 32-bpp DRM fourcc to the VkFormat that reproduces its byte order when sampled, plus
+ /// whether the fourth byte is `X` (undefined) and alpha must be forced to 1.0. Vulkan non-PACK
+ /// formats name channels in memory-byte order, so the client's bytes upload verbatim (no CPU
+ /// swizzle) and a sampler returns correct RGBA regardless of texture format. Both VkFormats are
+ /// mandatory SAMPLED_IMAGE formats, so no runtime feature query is needed. This is broader than
+-/// [`is_rgba8888`] (which gates the RGBA-order render targets / readback) because clients most
++/// [`matches_render_order`] (which gates the render targets / readback) because clients most
+ /// commonly send ARGB/XRGB (BGRA byte order).
+ pub(super) fn import_format(f: Fourcc) -> Option<(vk::Format, bool)> {
+     match f {
