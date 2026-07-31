@@ -20,6 +20,14 @@ these only sharpen the enhanced path.
   `patches/libkrun/0017-0018`) can pace compositor flips honestly. Argued
   behavior-unchanged on QEMU/crosvm (their fences complete at execution). **Pairs with
   libkrun 0018** — the host holds the fence this patch attaches.
+  **Status on 7.1.x: SKIPS, and that is verified-safe (2026-07-30).** Upstream refactored
+  prepare_fb to a per-plane-state fence allocated for `bo->dumb || drm_gem_is_imported(obj)`
+  (v7.1.5 `virtgpu_plane.c:369-379`), and a compositor's scanout FBs arrive as imported
+  dmabufs — so their flushes are fenced upstream without our host3d_blob condition. Proof it
+  holds in practice: the deployed `7.1.4-limina16k` was built with 0001 equally skipped, and
+  the fence-present measurements of 2026-07-27..30 (present-misses.md §12/§29/§31) show the
+  chain pacing that guest. Keep the patch for pre-refactor KVERs; the residual theoretical
+  gap (a host3d-blob primary FB that is *not* imported) has no known real instance.
 - **`0002-drm-virtio-allow-argb8888-on-primary-plane.patch`** — accept ARGB8888 on the
   primary plane so compositors can direct-scanout alpha client buffers (mutter's AR24
   scanout test). Assumes the host treats the topmost scanout as opaque (limina's presenter

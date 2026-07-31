@@ -1506,6 +1506,14 @@ compositing our window already does. Feature-flag gated / capset-negotiated: sto
 today's two planes (two-tier guarantee holds). The guest consumer already exists (their
 `tty.rs` implements primary/overlay/cursor direct scanout with nothing to bind to).
 
+Fold into the same protocol extension: **device-advertised plane formats/modifiers.** The
+guest driver hardcodes its plane format list (`virtgpu_plane.c`) — there is no virtio-gpu
+mechanism for the device to say what it can scan out, which is why every format we enable
+(ARGB8888 = linux 0002, XBGR/ABGR = 0006, 10-bit/fp16 later) costs a kernel patch. A
+device→driver format/modifier query makes the hardcoded list the fallback and future formats
+config, not patches — genuine virtio-spec/dri-devel material, and overlay planes need new
+device→driver plumbing anyway.
+
 ### Wave 3 — NV12/P010 + `COLOR_ENCODING`/`COLOR_RANGE` on those planes
 
 Bundled with wave 2 rather than planes-for-RGBA alone: the payoff is video (scanning out decoder
