@@ -27,6 +27,14 @@ these only sharpen the enhanced path.
 - **`0003-drm-virtio-advertise-linear-modifier.patch`** — advertise `DRM_FORMAT_MOD_LINEAR`
   via the plane modifier list (and drop `fb_modifiers_not_supported`) so LINEAR-tagged
   `ADDFB2` works; the device's only layout *is* linear.
+- **`0006-drm-virtio-allow-xbgr8888-abgr8888-on-primary-plane.patch`** — accept the RGBA
+  byte orders on the primary plane (+ their `translate_format` cases), so Vulkan clients'
+  `R8G8B8A8` buffers and a Vulkan compositor rendering directly into its scanout buffer can
+  hit the plane. Host side verified end-to-end first (WindowServer displays `'RGBA'`
+  IOSurfaces natively — `spikes/scanout-modifiers/`; vkr + the software-2D swizzles already
+  handle all eight orders). LE-only fourccs (no `HOST_` alias exists); applies on top of 0002.
+  Upstream note: the durable fix is device-advertised plane formats (a virtio-gpu protocol
+  gap — planned with the M15 overlay-plane extension) so drivers stop hardcoding these.
 
 ## Upstreaming
 
