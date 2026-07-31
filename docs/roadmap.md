@@ -1471,6 +1471,84 @@ launch to verify — cf. the fd-limit and TCC launch-env traps); multi-VM prompt
 
 ---
 
+## Milestone 15 — Virtual display pipeline v2: native refresh, hardware planes, scanout modifiers
+
+**Status: 📋 planned (booked 2026-07-30 from the compositor-side asks in
+`dogfood-guest:Projects/gnome-shell-rs/docs/fork/present-misses.md` §30–§31; scanout-modifier spike
+started same day).** The present-miss investigation closed with GPU frame *cost* as the one lever
+(their §30: with the instrument off the frame path, misses are 0.00% at 60 Hz), and the guest side
+is now targeting 120 Hz (8.33 ms) / 144 Hz (6.94 ms) budgets. These waves are the host-side half
+of that: give the guest real refresh targets, cheaper scanout, and hardware planes for video.
+
+Context that shapes all of it: fence feedback is now **truthful end-to-end** — the fence-present
+chain is default-on, §28's Bug A/B are fixed, and the shown-ack split (c33d9a0) separates
+"new frame at glass" (fence) from "old buffer free" (release). The old "guest hrtimer grid"
+framing of flip completion is obsolete: the guest's flip completion rides the real CA latch, so
+exposing real display timing to the guest is now meaningful rather than cosmetic.
+
+### Wave 1 — per-hardware-display virtual displays with native refresh (incl. VRR)
+
+One virtual display per host display, each advertising **what that panel actually supports**:
+120 Hz ProMotion/VRR on the dev/dogfood MacBook panels, 60 Hz on external monitors. The mode
+list/EDID is ours (krun-display, libkrun patches); the honest-pacing prerequisite already shipped.
+Guest side confirms there is no 120/144 Hz mode today and flags that the frame-budget work
+cannot be acceptance-tested without one — this wave unblocks it. VRR/ProMotion is the interesting
+design half: CA latch cadence is variable, and the guest should see that (EDID VRR range /
+`vrr_capable`) rather than a fixed grid. Rides on the per-hw-display work already planned for
+multi-display (M8 remainder).
+
+### Wave 2 — overlay planes on virtio-gpu (protocol extension, both sides)
+
+virtio-gpu KMS exposes primary+cursor only; overlay planes need a device+guest-kernel protocol
+extension — we own both ends (enhanced kernel + libkrun/virgl), and the mechanism is
+upstreamable. Host side is genuinely cheap: a plane maps naturally onto a CALayer, which is the
+compositing our window already does. Feature-flag gated / capset-negotiated: stock guests keep
+today's two planes (two-tier guarantee holds). The guest consumer already exists (their
+`tty.rs` implements primary/overlay/cursor direct scanout with nothing to bind to).
+
+### Wave 3 — NV12/P010 + `COLOR_ENCODING`/`COLOR_RANGE` on those planes
+
+Bundled with wave 2 rather than planes-for-RGBA alone: the payoff is video (scanning out decoder
+output with no conversion pass), and CA scans out biplanar YUV IOSurfaces natively. Schedule
+coupled to the VA-API/Vulkan Video work — the guest side is starting multi-planar sampling in
+their renderer ahead of it either way. Expectation set on both sides: overlay planes are an
+adjunct for video/fullscreen, not a general compositing speedup.
+
+### Wave 4 — non-LINEAR scanout on the primary plane (spike first — running now)
+
+The highest-leverage ask against the guest's frame budget: LINEAR-only primary is why the
+compositor shadow-renders and pays a full-damage 4K present blit + RGBA→BGRA reorder inside every
+frame's GPU bracket. Spike = `spikes/scanout-modifiers/`. Questions it must answer:
+(a) can the guest render **directly into** the scanout buffer — note CAMetalLayer drawables are
+IOSurface-backed render targets, so "renderable linear/IOSurface scanout" may be the real win and
+tiled modifiers moot; (b) does KK/venus plumbing support `VK_EXT_image_drm_format_modifier` or
+renderable-LINEAR feature bits today, and what's missing; (c) where the LINEAR-only advertisement
+comes from (guest KMS vs our device) and what modifier negotiation needs; (d) the cheap partial
+win regardless: advertise `XBGR8888`/`ABGR8888` on the primary plane so the swizzle half of the
+blit dies (host Metal/IOSurface handles either byte order for free). A "no" on (a)/(b) is a
+useful answer — it makes the guest's blit permanent and turns it into their optimisation target.
+
+### Wave 5 — small/parked items
+
+- **Cursor larger than 64×64** (HiDPI + accessibility sizes): protocol-size lift, we own both
+  sides — **booked low-priority**; their bigger cursor win is guest-side anyway (setting
+  `DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT` to leave the software cursor, which also kills the
+  §26 pointer-motion repaint storm).
+- **Price WindowServer's GPU share while the guest composites 4K** — profiling task
+  (Metal counters / `powermetrics`, see `docs/` profiling playbook); discriminates their
+  leading candidate for the ~1.5× frame-time spread. Cheap for us, decisive for them.
+- ✅ **already done, recorded for the ledger:** the §22 never-signaling-fence-on-context-death
+  wedge is fixed (libkrun 0117, `f809201`: refused context fences retire as lost, plus the
+  `venus_fence_lost` L2 guard) — the guest-side doc's "queued as a host-side fix" predates it.
+
+**Done test:** wave 1 — a seated guest on the dogfood/dev panel enumerates a 120 Hz (VRR-capable)
+mode, runs at it, and the guest frame clock tracks real latches; wave 2/3 — a fullscreen NV12
+surface reaches a CALayer with no guest-side conversion pass, stock guest unaffected; wave 4 —
+spike RESULTS.md answers (a)–(d) with measurements, and whichever of direct-render/modifier/format
+wins ships with a before/after on the guest's heavy-band `gpu p50`.
+
+---
+
 ## Summary of net-new code vs libkrun patches
 
 | Milestone | Net-new limina code | libkrun (or fw/virgl) patches |
@@ -1488,6 +1566,7 @@ launch to verify — cf. the fd-limit and TCC launch-env traps); multi-VM prompt
 | M12 SPICE agent 📋 planned | host vdagent broker (framing + clipboard, then client→guest file transfer), NSPasteboard bridge reuse (M5), native-vs-SPICE arbitration; display-resize deliberately excluded (native EDID already covers it) | virtio-serial named multiport port `com.redhat.spice.0` (wakes stock `spice-vdagentd`); no crate reuse |
 | M13 visibility/power render adaptation 📋 planned | front-end occlusion/Space/power signal + hysteresis policy, `vm.toml [power]/[render]` config, host present cap/pause (reuse s2idle), agent frame-rate throttle message | present pause/cap knob (extends s2idle 0089) + fence-feedback pacing knob; relax deep-idle bias on occlusion |
 | M14 biometric auth 🟡 spiked | host CTAP2 authenticator (SEP ES256 + LAContext, CryptoKit blob store per VM), agent uhid FIDO bridge + vsock channel, later xHCI + FIDO/MOC-fingerprint gadgets, pam_u2f/authselect recipe | none for uhid transport (vsock exists); stock wave = xHCI controller + gadget device models in libkrun (shared with M7) |
+| M15 display pipeline v2 📋 planned | per-hw-display window/present policy (native refresh + VRR pacing), CALayer-per-plane compositing, WindowServer GPU-share profiling | krun-display EDID/modes per host display (incl. VRR range), virtio-gpu overlay-plane + YUV(NV12/P010)+color-props protocol extension (device + guest kernel, capset-gated), primary-plane format/modifier advertisement (XBGR/ABGR now; non-LINEAR per `spikes/scanout-modifiers/`), cursor-size lift (low-prio) |
 
 ## First three things to spike
 
