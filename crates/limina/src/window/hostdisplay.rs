@@ -16,7 +16,7 @@
 //! Everything here that is arithmetic lives in free functions so it can be tested without a
 //! screen; the AppKit/CoreGraphics reads are the thin part.
 
-use limina_displayctl::{EdidSpec, RangeSpec};
+use limina_displayctl::{DisplayCommand, DisplayControl, EdidSpec, RangeSpec};
 use objc2_app_kit::NSScreen;
 use objc2_foundation::{NSNumber, NSString};
 
@@ -52,6 +52,22 @@ impl HostDisplay {
             | (u64::from(self.edid.product_id) << 16)
             | u64::from(self.edid.refresh_hz.min(u32::from(u16::MAX)) as u16)
     }
+}
+
+/// The command to push when the window has migrated to this display.
+///
+/// `drives_size` is whether the *display mode* lets the host screen decide the guest's
+/// resolution — true only for match-host. The identity half is pushed in **every** mode:
+/// which physical panel the window is on is not a sizing policy, and a dynamic or fixed VM
+/// that never learns it keeps a flat 300 DPI on every display it is dragged to, so an ordinary
+/// external monitor reads as Retina and the guest picks the wrong scale.
+pub fn migration_command(host: &HostDisplay, drives_size: bool) -> DisplayCommand {
+    DisplayCommand::Display(DisplayControl {
+        display_id: 0,
+        size: drives_size.then_some(host.size),
+        connected: None,
+        edid: Some(host.edid.clone()),
+    })
 }
 
 /// Describe the screen a window currently sits on. `None` when AppKit has no screen for it
@@ -397,6 +413,36 @@ mod tests {
         };
         assert_ne!(make(1).identity_key(), make(2).identity_key());
         assert_eq!(make(7).identity_key(), make(7).identity_key());
+    }
+
+    /// Every mode hands over the identity; only match-host also drives the resolution.
+    #[test]
+    fn identity_travels_in_every_mode_but_size_only_in_host_mode() {
+        let host = HostDisplay {
+            size: (1512, 982),
+            edid: EdidSpec {
+                serial: 42,
+                name: "Built-in".into(),
+                ..EdidSpec::default()
+            },
+        };
+
+        let DisplayCommand::Display(host_mode) = migration_command(&host, true) else {
+            panic!("expected a display command");
+        };
+        assert_eq!(host_mode.size, Some((1512, 982)));
+        assert_eq!(host_mode.edid.expect("edid").serial, 42);
+
+        // Dynamic/fixed: the guest's resolution is theirs to decide, but it still must learn
+        // which display it is on.
+        let DisplayCommand::Display(other_mode) = migration_command(&host, false) else {
+            panic!("expected a display command");
+        };
+        assert_eq!(
+            other_mode.size, None,
+            "must not override the mode's own size"
+        );
+        assert_eq!(other_mode.edid.expect("edid").serial, 42);
     }
 
     /// ...and to a refresh-rate change on the same display (a mode switch on the host).

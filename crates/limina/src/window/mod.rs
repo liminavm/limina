@@ -66,7 +66,7 @@ use diag::{
 use lifecycle::{kill_worker_group, should_initiate_quit};
 use present::{register_apply_hook, set_layer_surface};
 
-use limina_displayctl::{DisplayCommand, DisplayControl};
+use limina_displayctl::DisplayCommand;
 
 use crate::vmlib::schema::DisplayResolution;
 use crate::vmlib::state::WindowState;
@@ -624,6 +624,11 @@ pub fn run(
     // the size — is what catches a move between two same-sized displays, which the size-only
     // check missed entirely.
     let screen_sent: Cell<((u32, u32), u64)> = Cell::new((initial_size, 0));
+    // The display identity the guest was last told about, tracked for ALL modes (host folds
+    // its push into the size push; dynamic and fixed send identity on its own). Seeded to 0,
+    // which no real display hashes to, so the first poll after the guest presents a frame
+    // hands over the identity of whichever display it booted on.
+    let identity_sent: Cell<u64> = Cell::new(0);
     // The scanout layer's current placement inside the content view, recomputed every tick
     // (dynamic: the full view — CA stretches the stale surface during a live drag exactly as
     // before; host/fixed: the guest resolution aspect-fit onto the black background). Shared
@@ -890,6 +895,18 @@ pub fn run(
 
             // Resolution pushes to the guest, by display mode.
             if let Some(sock) = &resize_socket {
+                // Which physical display the window sits on, and therefore the identity,
+                // density and refresh the guest should see. This is deliberately computed for
+                // EVERY mode: those are properties of the *host display*, and only the policy
+                // that decides the guest's *resolution* differs between modes. Host mode folds
+                // the identity into its size push so a migration costs one modeset; dynamic and
+                // fixed have no size push to fold it into, so they send it on its own below.
+                // `screen()` is None mid-transition, which simply skips the tick.
+                let host = window.screen().map(|s| hostdisplay::describe(&s));
+                let migrated = host
+                    .as_ref()
+                    .is_some_and(|h| h.identity_key() != identity_sent.get());
+
                 match mode {
                     // Dynamic: push the window's content size ONCE the resize gesture ENDS —
                     // never during the drag. `inLiveResize()` is true for the whole drag;
@@ -927,8 +944,7 @@ pub fn run(
                     // timer — the established pattern (no NSWindowDelegate), and `screen()`
                     // is None mid-transition, which simply skips the tick.
                     DisplayResolution::Host => {
-                        if let Some(screen) = window.screen() {
-                            let host = hostdisplay::describe(&screen);
+                        if let (Some(screen), Some(host)) = (window.screen(), host.as_ref()) {
                             let want = host.size;
                             let key = host.identity_key();
                             if geom.get() != (0, 0)
@@ -936,8 +952,8 @@ pub fn run(
                                 && want.1 >= 64
                                 && (want, key) != screen_sent.get()
                             {
-                                let migrated = screen_sent.get().1 != key;
                                 screen_sent.set((want, key));
+                                identity_sent.set(key);
                                 // Migrated to a differently-shaped display: re-lock resize to
                                 // the new screen's aspect so the constraint tracks the screen.
                                 apply_aspect_lock(&window, want);
@@ -970,12 +986,7 @@ pub fn run(
                                 // size change (the host reconfigured this display) carries no
                                 // EDID, leaving the identity exactly where it was.
                                 let command = if migrated {
-                                    DisplayCommand::Display(DisplayControl {
-                                        display_id: 0,
-                                        size: Some(want),
-                                        connected: None,
-                                        edid: Some(host.edid),
-                                    })
+                                    hostdisplay::migration_command(host, true)
                                 } else {
                                     DisplayCommand::Resize {
                                         width: want.0,
@@ -986,9 +997,22 @@ pub fn run(
                             }
                         }
                     }
-                    // Fixed: never pushed — the boot --display-size carries the resolution;
-                    // a divergent guest (in-guest xrandr) just letterboxes differently.
+                    // Fixed: the resolution is never pushed — the boot --display-size carries
+                    // it, and a divergent guest (in-guest xrandr) just letterboxes differently.
+                    // The display *identity* still is, below.
                     DisplayResolution::Fixed(..) => {}
+                }
+
+                // Identity-only push, for the modes whose size policy has nothing to fold it
+                // into. Without this, a dynamic or fixed VM keeps the anonymous boot identity
+                // and a flat 300 DPI on every display it is ever dragged to — so an ordinary
+                // external monitor reads as Retina to the guest and it picks the wrong scale.
+                // Gated on the guest having presented a frame, like every other push here.
+                if migrated && !matches!(mode, DisplayResolution::Host) && geom.get() != (0, 0) {
+                    if let Some(host) = host.as_ref() {
+                        identity_sent.set(host.identity_key());
+                        send_display_command(sock, hostdisplay::migration_command(host, false));
+                    }
                 }
             }
 
