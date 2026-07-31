@@ -82,6 +82,26 @@ after 20 warmup, M1 Max. `blit` = 1 fullscreen textured draw (their present blit
   format map, killing the RGBA→BGRA shader reorder. If they go direct-render, the ROP
   swizzles for free and this matters less.
 
+## Addendum: the XBGR/ABGR gate is OPEN — WindowServer displays 'RGBA' IOSurfaces correctly
+
+The one unknown blocking (d) was whether WindowServer correctly interprets an
+`'RGBA'`-fourcc IOSurface set directly as `CALayer.contents` (limina's presenter is
+layer-hosting — WindowServer, not our code, reads the pixels). Probed 2026-07-30
+(`rgbaprobe.swift`): a window with the same test pattern (green strip / red left / blue
+right) in a `'BGRA'` reference panel and an `'RGBA'` probe panel, both as opaque layer
+contents. **Human oracle: identical.** No channel swap, no garbage — WindowServer handles
+RGBA-order natively on macOS 26.5 / M1 Max.
+
+So advertising `XBGR8888`/`ABGR8888` on the primary plane is a go, end to end:
+guest-kernel format-list one-liners (patch-0002 shape) + whatever the host presenter's
+format map needs; vkr already emits `'RGBA'` IOSurfaces for `VK_FORMAT_R8G8B8A8_*`
+scanout images (`vkr_image.c` `gkvm_vkformat_to_iosurface`). Besides killing the guest
+compositor's swizzle wherever a blit survives, this enables fullscreen direct scanout of
+Vulkan clients' `R8G8B8A8` swapchain buffers, which can never hit the plane today.
+Remaining small consumers if/when it ships: the software-2D fallback path and the
+BGRA-assuming capture oracles (`vkr_metal_helpers.m:453`, iosdump). Re-confirm the
+WindowServer behavior on the shipping macOS when it lands (OS-specific behavior rule).
+
 ## Caveats / follow-ups
 
 - Numbers are raw host Metal; through venus→KK the *relative* result is what transfers.
