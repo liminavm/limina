@@ -37,11 +37,34 @@ a *dev's test suite in a guest*, which this product must survive.
 4. Worker aborts within minutes; oracle = the assert line in the worker log
    (`/tmp/enhanced-efi-kk-worker.log`) + supervisor "worker terminated by signal 6".
 
-## The host-side work this motivates (booked, not yet done)
+## FIXED 2026-07-31 — log-only (user's pick): `patches/kosmickrisp/0019`
 
-A guest's invalid Vulkan usage must never abort the VMM — this is the second
+A guest's invalid Vulkan usage must never abort the VMM — this was the second
 guest-triggerable abort class (first: the empty-clear-rect vk_meta assert,
-`limina-kk-empty-clear-rect`). Fix directions to weigh: ship the bundle's KK without
-asserts (NDEBUG) so invalid usage degrades to undefined-but-contained rendering; and/or
-sanitize/validate at the vkr decode boundary; and/or convert this specific class in the
-vk_common runtime to skip-and-log. Whichever lands, this spike's recipe is the RED test.
+`limina-kk-empty-clear-rect`, fixed by kk 0009). Decision: **log-only** — keep the
+signal in the worker log, don't crash. `patches/kosmickrisp/0019` converts the three
+guest-fed VU asserts at render-pass begin (view format / samples / multiview layer count
+vs the pass) to capped `mesa_logw` warnings (8 per site, then suppressed) and continues
+with undefined-but-contained rendering.
+
+### The fast RED vehicle: `probe.c` (direct KK ICD, no VM)
+
+`./build.sh && ./run.sh` — RGBA8 image+view, render pass declaring BGRA8, legacy
+framebuffer, begin/end with loadOp=CLEAR red, readback. Same shape as the guest trigger,
+fires in seconds.
+
+- **RED** (KK @0018): `Assertion failed: (image_view->format == pass_att->format),
+  vk_render_pass.c:2708` → SIGABRT at submit (KK replays there) — the exact dogfood-mac crash.
+- **GREEN** (KK @0019): `MESA: warning: render-pass begin VU violation
+  (vk_render_pass.c:2728): attachment 0: image view format (37) != render pass attachment
+  format (44)`, submit completes, readback = red (the clear even landed correctly —
+  format only differed in channel order). Exit 0.
+
+The full-VM recipe above remains the end-to-end guard (real venus→vkr→KK path).
+
+### Still open (hardening backlog)
+
+The pass-vs-framebuffer attachment COUNT asserts in the same function (fewer framebuffer
+attachments than the pass declares → OOB read of `framebuffer->attachments`) need
+**clamping**, not just logging — deliberately left out of 0019. Plus the broader
+"no guest-reachable aborts" audit (59 asserts in vkr, 178 in KK vulkan/, 71 in vk_meta*).

@@ -186,6 +186,17 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
   `explicit_sync_bridge` RED, dogfood tearing). Reset now swaps in a fresh event (the move
   pattern). Also adds the `LIMINA_KK_SYNCTRACE=1` sync-transition trace that caught it.
   RED→GREEN: `cargo test -p niri-vk explicit_sync_bridge` knob-ON: FAIL→PASS.
+- **`0019-vulkan-runtime-log-only-render-pass-begin-VU-mismatc.patch`** — a guest app's
+  invalid usage must never abort the VMM: converts the three guest-fed VU asserts at
+  render-pass begin (attachment view format / samples / multiview layer count vs the pass,
+  `vk_render_pass.c` `begin_render_pass`) to capped `mesa_logw` warnings + continue
+  (undefined-but-contained rendering). Trigger: the compositor's half-applied RGBA→BGRA
+  format flip under in-guest `cargo test` killed the dogfood-mac VM four times on 2026-07-30
+  (`assert(image_view->format == pass_att->format)`, line 2708). RED→GREEN probe:
+  `spikes/kk-format-mismatch-abort/` (direct-ICD, seconds). Second abort class after 0009;
+  NOT upstream material as-is (upstream wants asserts) — carry it. Remaining in the same
+  function: the pass-vs-framebuffer attachment COUNT asserts need clamping (OOB read risk),
+  not just logging — on the hardening backlog.
 
 ## Apply / rebuild
 The `/Volumes/mesa-cs/mesa` tree is on the `limina/kosmickrisp` branch with these committed.
