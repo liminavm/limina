@@ -50,6 +50,24 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   these arms (L1 boot still green). RED-first: `spikes/hvf-trap-probe` (96-byte bare-metal arm64
   Image) + `crates/limina-test/tests/hvf_graceful.rs` — verified RED (SIGABRT) before, GREEN after.
 
+## Guest-reachable aborts (a guest must never kill the VMM)
+
+Two classes already landed as targeted fixes: the empty-clear-rect vk_meta assert
+(kk 0009 + virgl 0045) and the render-pass-begin VU asserts, log-only per the user's call
+(kk 0019, `spikes/kk-format-mismatch-abort/`). Remaining:
+
+- **Clamp (don't just log) the pass-vs-framebuffer attachment COUNT asserts** in
+  `vk_render_pass.c` `begin_render_pass` (`attach_begin->attachmentCount ==
+  pass->attachment_count`, `framebuffer->attachment_count >= pass->attachment_count`):
+  with asserts off these are an OOB read of the attachment array, not merely undefined
+  rendering — the loop must bound `a` by the *actual* array length. Deliberately left out
+  of kk 0019.
+- **The full "no guest-reachable aborts" audit** (scoped 2026-07-24): per-layer policy —
+  asserts = internal invariants only; drivers TOLERATE (clamp/skip; `vkCmd*` can't return
+  errors); vkr = THE trust boundary (validate → poison context); libkrun Rust decoders =
+  error returns, not unwrap. Surface: 59 asserts in hand-written vkr, 178 in KK vulkan/,
+  71 in vk_meta* (compiled into KK), 89 unwrap/panic/assert! in libkrun virtio-gpu.
+
 ## M4 venus residue
 - **~~Concurrent VM makes NEW venus instance creation fail in another guest~~ ROOT-CAUSED + FIXED
   2026-07-20 — it was never a GPU bug: the TEST HARNESS ssh'ed into the WRONG VM.** With a second
