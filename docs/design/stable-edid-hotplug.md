@@ -165,13 +165,74 @@ Three things came out differently from the plan, all for reasons worth keeping:
   the window entirely.
 - **A real mode list.** `modes` is wired end to end but the supervisor sends none: the
   standard-timing encoding can't express most real Mac point sizes (widths must be a multiple
-  of 8 below 2288, in four aspect ratios). A genuine mode list needs a CTA-861 extension block —
-  which is also what an honest 120 Hz mode above 655 MHz of pixel clock needs (the generator
-  currently saturates and warns). `GET_EDID` already has room for it.
+  of 8 below 2288, in four aspect ratios). The DisplayID extension block (below) is the vehicle;
+  it currently carries only the timings the base block cannot express.
 - **VRR itself.** The range descriptor now reaches the guest in the exact form
   `drm_get_monitor_range` accepts, which is the prerequisite — but virtio-gpu has no
   `vrr_capable` plumbing at all. That is protocol + kernel work, tracked with the M15 wave-2
   extension.
+
+## The DisplayID extension block, and HiDPI
+
+**Correction to an earlier note in this doc: a CTA-861 extension would not have helped.** Its
+detailed timings are the same 18-byte descriptor as the base block's, with the same 16-bit pixel
+clock in 10 kHz steps — the same 655.35 MHz ceiling. The vehicle that lifts it is **DisplayID 2.0**
+(EDID extension tag `0x70`), whose **type VII** timing block (tag `0x22`) stores a 24-bit clock in
+**kHz**. Verified against `drm_displayid.c` and `drm_mode_displayid_detailed` in `drm_edid.c`, not
+recalled.
+
+The base block cannot simply stop carrying an over-ceiling mode: `virtio_gpu_conn_mode_valid`
+prunes any *preferred* mode whose active size differs from the rect pushed through
+`GET_DISPLAY_INFO`, so the preferred timing has to stay at the size the guest is driven to. So the
+generator emits both — the base detailed timing at the driven size with a clamped refresh, and a
+DisplayID type VII timing at the same size with the real one, flagged preferred. Same active size,
+so it survives the same pruning check; `drm_mode_sort` orders equal-priority modes by descending
+clock, so the honest rate lands first. Only over-ceiling timings move; a mode the base block can
+express produces no extension at all, byte for byte as before.
+
+Parser rules that the encoder has to satisfy (all asserted by the tests, which decode the block
+independently rather than calling back into the encoder):
+
+- The DisplayID structure spans extension bytes `[1, 127)` — the kernel says outright that "EDID
+  extensions block checksum isn't for us" — and carries **its own** checksum covering the 4-byte
+  header, every block, and itself.
+- A type VII block whose `num_bytes` is not a multiple of 20 is **dropped whole**, silently.
+- Every field in a timing is stored as `value - 1`; the sync fields carry polarity in bit 15.
+- One 128-byte extension therefore holds at most five timings.
+
+**HiDPI** (`[display] hidpi`, default on; `--no-hidpi`) is what makes this matter. ✅ **Human-verified
+2026-07-31** on the 14" Retina panel: the guest is driven at 3024×1964, the desktop is sharp rather
+than soft, and GNOME offers the 200% scale it previously could not. A guest pixel is
+now a *device* pixel rather than a point: on a 2× panel the guest is driven to 3024×1964 instead of
+1512×982, renders at the panel's native resolution, and — given the density we report — picks the
+2× scale itself, instead of rendering at half resolution for Core Animation to upscale. It costs
+4× the guest framebuffer and 4× the fill, which is what the opt-out is for.
+
+The conversion lives in exactly one place, `window::fit::Scale`, and only four sites cross the two
+unit systems: the boot-time size in `main.rs`, `hostdisplay::describe`, the dynamic-mode
+window→guest push, and the dynamic-mode guest→window follow. Everything else — the letterbox fit,
+the pointer mapping, the layer frame — stays in points and needed no change, because CA maps the
+larger surface onto the same point-sized layer 1:1 in device pixels.
+
+Two consequences worth recording:
+
+- The advertised **density is the panel's**, not the framebuffer's, in both modes: it describes the
+  glass. Under HiDPI that happens to also be the framebuffer's density, which is why GNOME then
+  offers 2×.
+- The range descriptor's horizontal-rate fields are bytes, and 4K at 120 Hz is 265 kHz. EDID 1.4's
+  **+255 offset flags** (byte 4, bits 2/3) carry the excess; understating the bound would have the
+  guest prune the very mode we advertise.
+
+### An L1 limitation worth remembering
+
+`l1_edid` asserts the extension arrives byte for byte and satisfies every framing rule the kernel
+checks — both checksums, the `0x70`/`0x22` tags, the multiple-of-20 length — but **not** that the
+guest builds a mode from it. The minimal L1 guest does not surface large detailed timings in
+`<connector>/modes` at all: a 2560×1440 @ 60 Hz push, comfortably inside the base block's clock
+ceiling and touching none of the extension code, collapses the list the same way. So that is a
+property of the L1 vehicle, not of the extension, and the end-to-end mode selection is verified on
+a real desktop guest instead. Worth chasing separately if the L1 vehicle ever needs to assert on
+mode lists.
 
 ## Layers
 

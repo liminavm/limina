@@ -43,6 +43,8 @@ pub struct SessionConfig {
     /// Display mode policy: host (match the window's screen), dynamic (guest follows the
     /// window — the original behavior), or a fixed resolution. See `vmlib::schema`.
     pub mode: crate::vmlib::schema::DisplayResolution,
+    /// Drive the guest at device pixels rather than points (`[display] hidpi`, default on).
+    pub hidpi: bool,
     /// Where to persist window state (the bundle's state.toml); None = no persistence.
     pub state_path: Option<PathBuf>,
     /// Remembered NSWindow frame to restore (screen points, Cocoa bottom-left origin).
@@ -212,6 +214,7 @@ pub struct WindowedSession {
     soft_kbd_grab: bool,
     title: String,
     mode: crate::vmlib::schema::DisplayResolution,
+    hidpi: bool,
     state_path: Option<PathBuf>,
     restore_frame: Option<[f64; 4]>,
     initial_size: (u32, u32),
@@ -248,6 +251,7 @@ impl WindowedSession {
             on_window_close,
             splash_save_path,
             restore_splash,
+            hidpi,
         } = config;
 
         // Close-to-suspend needs somewhere to persist the suspend and a snapshot path for the
@@ -411,6 +415,7 @@ impl WindowedSession {
         });
 
         Ok(Self {
+            hidpi,
             conn,
             shared,
             surface_map,
@@ -445,6 +450,7 @@ impl WindowedSession {
             self.control,
             self.surface_map,
             window::WindowOptions {
+                hidpi: self.hidpi,
                 resize_socket: self.resize_socket,
                 remap: self.remap,
                 soft_kbd_grab: self.soft_kbd_grab,

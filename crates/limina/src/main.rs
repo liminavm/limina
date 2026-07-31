@@ -350,6 +350,18 @@ struct Cli {
     #[arg(long, overrides_with = "swap_cmd_opt")]
     no_swap_cmd_opt: bool,
 
+    /// Drive the guest at the host display's device pixels rather than its points, so a Retina
+    /// panel renders at its native resolution and the guest picks a 2x scale. This is the
+    /// **default**; the flag is kept for explicitness and to override an earlier --no-hidpi.
+    #[arg(long, overrides_with = "no_hidpi")]
+    hidpi: bool,
+
+    /// Drive the guest point-for-pixel instead, halving a Retina panel's resolution and letting
+    /// Core Animation upscale. Softer, but a quarter of the guest framebuffer and fill — the
+    /// opt-out for --hidpi; if both appear the last one on the command line wins.
+    #[arg(long, overrides_with = "hidpi")]
+    no_hidpi: bool,
+
     /// Disable the soft keyboard grab. By default, while the VM window is focused, system
     /// key combos (Cmd-Tab, Cmd-Space, …) go to the guest — the mouse stays free, clicking
     /// another window (or Ctrl-Opt) returns the keyboard to the host.
@@ -503,6 +515,12 @@ impl Cli {
     /// reads both fields (no dead-code on the back-compat flag).
     fn swap_cmd_opt_enabled(&self) -> bool {
         self.swap_cmd_opt || !self.no_swap_cmd_opt
+    }
+
+    /// Effective HiDPI policy. On by default; `--no-hidpi` opts out. Same last-wins
+    /// `overrides_with` pairing as the swap flags, so this OR is exact for every combination.
+    fn hidpi_enabled(&self) -> bool {
+        self.hidpi || !self.no_hidpi
     }
 
     /// Effective USB-controller policy. On by default (`--no-usb` opts out); `--usb`/`--no-usb`
@@ -883,6 +901,8 @@ fn cli_from_definition(
         // swap_cmd_opt_enabled() resolves to exactly cfg.input.swap_cmd_opt.
         swap_cmd_opt: cfg.input.swap_cmd_opt,
         no_swap_cmd_opt: !cfg.input.swap_cmd_opt,
+        hidpi: cfg.display.hidpi,
+        no_hidpi: !cfg.display.hidpi,
         no_soft_kbd_grab: false,
         window_title: Some(cfg.identity.name.clone()),
     })
@@ -896,6 +916,9 @@ fn run_vm(cli: Cli) -> Result<()> {
     // Resolve the Command/Option swap policy up front (default ON; --no-swap-cmd-opt opts out)
     // before any field of `cli` is moved out below, so the windowed path can use it freely.
     let swap_cmd_opt = cli.swap_cmd_opt_enabled();
+    // HiDPI: whether a guest pixel is a device pixel or a point (default ON). Resolved here for
+    // the same reason — the windowed path below moves fields out of `cli`.
+    let hidpi = cli.hidpi_enabled();
     // USB controller + fingerprint reader: on by default (--no-usb / --no-fingerprint opt out).
     // Resolved up front, before any field of `cli` is moved out below. USB is the master switch —
     // the reader rides the controller, so --no-usb also suppresses it (no orphan gadget).
@@ -1253,24 +1276,31 @@ fn run_vm(cli: Cli) -> Result<()> {
         // Dynamic first-boot (nothing remembered): the half-area default at the SCREEN's
         // aspect — the same rule that sizes the first window, so window == guest with no
         // early re-modeset. --display-size only backstops a screen-less host.
+        // Points to guest pixels for the screen this boot targets. Everything derived from the
+        // *screen* or from a remembered *window* size is in points and goes through it; an
+        // explicit --display-size and a fixed resolution are already pixel counts and do not.
+        let scale = window::fit::Scale::new(screen.as_ref().map_or(1.0, |s| s.backing), hidpi);
+        let to_guest = |(w, h): (u32, u32)| scale.to_guest((f64::from(w), f64::from(h)));
         let fallback = screen
             .as_ref()
             .map(|s| {
-                window::fit::default_window_content(
+                to_guest(window::fit::default_window_content(
                     s.frame,
                     (f64::from(s.frame.0), f64::from(s.frame.1)),
                     s.visible,
-                )
+                ))
             })
             .unwrap_or(parse_display_size(&cli.display_size)?);
         let (width, height) = initial_display_size(
             cli.display_resolution,
-            win_state.map(|w| w.content),
-            screen.as_ref().map(|s| s.frame),
+            win_state.map(|w| to_guest(w.content)),
+            screen.as_ref().map(|s| to_guest(s.frame)),
             fallback,
         );
         // First-appearance window: half the display's area at the guest's aspect, so the
         // window is neither tiny, nor screen-filling, nor letterboxed on first show.
+        // ...but the first-appearance *window* size stays in points. Only the aspect of
+        // (width, height) matters here, and scaling both axes leaves that untouched.
         let default_content = screen
             .as_ref()
             .map(|s| {
@@ -1280,8 +1310,12 @@ fn run_vm(cli: Cli) -> Result<()> {
                     s.visible,
                 )
             })
-            .unwrap_or((width, height));
+            .unwrap_or_else(|| {
+                let (w, h) = scale.to_points((width, height));
+                (w.round() as u32, h.round() as u32)
+            });
         return session::run_windowed(session::SessionConfig {
+            hidpi,
             vmm_bin,
             base_args: args,
             grace,
@@ -2069,6 +2103,7 @@ mod tests {
                 gpu: GpuMode::Software2d,
                 resolution: DisplayResolution::Fixed(1600, 1000),
                 on_window_close: vmlib::schema::WindowCloseAction::Suspend,
+                hidpi: true,
             },
             input: InputCfg {
                 swap_cmd_opt: false,

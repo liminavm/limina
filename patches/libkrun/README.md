@@ -219,6 +219,23 @@ patch's commit message; this is the map.
   left zero, which every EDID parser reads as an analog input — `monitor-edid` in a guest
   duly reported "Analog signal" for a display that has never been anything but digital, and
   the guest got no colour depth either. Now digital / 8 bpc / DisplayPort.
+- **0123 — carry over-ceiling modes in a DisplayID type VII extension block.** A base
+  detailed timing's pixel clock is 16 bits of 10 kHz, so it stops at 655.35 MHz; a Retina
+  panel at device pixels (3024x1964 @ 120 Hz) needs ~866 and was being clamped to ~90.
+  The base block can't stop carrying the mode — `virtio_gpu_conn_mode_valid` prunes any
+  *preferred* mode whose size differs from the rect pushed through `GET_DISPLAY_INFO` — so
+  the honest timing goes in a DisplayID 2.0 extension (tag `0x70`) as a type VII block
+  (tag `0x22`), whose clock is 24 bits of kHz, at the same size and flagged preferred:
+  it survives the same pruning check, and `drm_mode_sort` puts the higher clock first. A
+  **CTA-861** extension would not have worked — its detailed timings are the same 18-byte
+  descriptor with the same 16-bit field. Modes the base block can express are emitted
+  exactly as before with no extension appended. Tested against an independent decoder that
+  mirrors `drm_displayid.c` (including the DisplayID structure checksum, which is distinct
+  from the EDID extension checksum the kernel explicitly ignores).
+- **0124 — carry a range descriptor's horizontal rate past 255 kHz.** The field is one byte
+  of kHz and 4K @ 120 Hz is 265, so the bound was clamped — the harmful direction, since the
+  guest prunes modes above the advertised range and would prune the mode we advertise
+  alongside it. Emit EDID 1.4's "+255" offset flags (byte 4) and widen the field to u16.
 
 ### Balloon / dynamic memory (M6)
 

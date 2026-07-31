@@ -100,8 +100,10 @@ impl Default for EdidSpec {
 pub struct RangeSpec {
     pub min_vertical_hz: u8,
     pub max_vertical_hz: u8,
-    pub min_horizontal_khz: u8,
-    pub max_horizontal_khz: u8,
+    /// Horizontal rates are u16: a 4K panel at 120 Hz needs 265 kHz, past what the EDID
+    /// range descriptor's byte holds on its own (the generator emits the +255 offset flags).
+    pub min_horizontal_khz: u16,
+    pub max_horizontal_khz: u16,
     pub max_pixel_clock_mhz: u32,
 }
 

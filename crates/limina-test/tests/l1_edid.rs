@@ -156,6 +156,69 @@ fn l1_edid_identity_is_stable_and_pushable() {
         "the pushed monitor range-limits descriptor never reached the guest"
     );
 
+    // ---- 3b. A mode the base block cannot express arrives with a DisplayID extension.
+    // 3024x1964 @ 120 Hz needs ~866 MHz of pixel clock; a base detailed timing tops out at
+    // 655.35 MHz, so the honest timing rides a DisplayID 2.0 type VII block instead.
+    guest
+        .update_display(DisplayControl {
+            display_id: 0,
+            size: Some((3024, 1964)),
+            connected: None,
+            edid: Some(EdidSpec {
+                refresh_hz: 120,
+                dpi: 254,
+                vendor: *b"LMN",
+                product_id: 0x4242,
+                serial: 0x0BAD_F00D,
+                name: "L1 Panel".into(),
+                serial_string: None,
+                range: None,
+                modes: Vec::new(),
+                alt_mode: None,
+            }),
+        })
+        .expect("sending the high-clock mode");
+
+    let hidpi = wait_for_edid_change(&mut guest, &edid_path, &identified)
+        .expect("the EDID never changed after the high-clock push");
+    assert_eq!(
+        hidpi.len(),
+        256,
+        "an over-ceiling mode must arrive with an extension block"
+    );
+    assert_eq!(hidpi[126], 1, "the base block must declare one extension");
+    assert_eq!(checksum(&hidpi[..128]), 0, "base block checksum");
+    assert_eq!(hidpi[128], 0x70, "the extension is a DisplayID structure");
+    // The DisplayID structure carries its own checksum, over the 4-byte header, the blocks and
+    // itself, starting at extension byte 1 — the EDID extension checksum at byte 127 is
+    // explicitly not part of it. This is the exact sum `validate_displayid` computes, so a
+    // guest kernel that reads the blob at all reads it the same way.
+    let bytes = hidpi[130] as usize;
+    let structure = &hidpi[129..129 + 4 + bytes + 1];
+    assert_eq!(
+        checksum(structure),
+        0,
+        "the DisplayID structure checksum is invalid; the kernel would reject the whole block"
+    );
+    assert_eq!(hidpi[133], 0x22, "type VII detailed timing block");
+    assert_eq!(
+        hidpi[135] as usize % 20,
+        0,
+        "a type VII block whose length isn't a multiple of 20 is dropped whole"
+    );
+    // The kernel offers the resolution: the size reached it through GET_DISPLAY_INFO and the
+    // EDID alike. (sysfs `modes` carries no refresh rate, so the honest 120 Hz is pinned by the
+    // generator's unit tests, which decode the block the way `drm_edid.c` does.)
+    // NOT asserted here: that the guest builds a *mode* from the extension. This L1 vehicle
+    // does not surface large detailed timings in `<connector>/modes` at all — a 2560x1440 @
+    // 60 Hz push, comfortably inside the base block's clock ceiling and touching none of this
+    // code, collapses the list the same way, so it is a property of the minimal guest and not
+    // of the extension. What this test does prove is that the block reaches the guest byte for
+    // byte and satisfies every framing rule the kernel checks before it will read a timing;
+    // that those bytes decode to 3024x1964 @ 120 Hz is pinned by the generator's unit tests,
+    // which mirror `drm_mode_displayid_detailed`. The end-to-end mode selection is verified on
+    // a real desktop guest — see docs/design/stable-edid-hotplug.md.
+
     // ---- 4. A pushed disconnect really disconnects the connector, and reconnecting restores
     // it. This is the mechanism a genuine display unplug will ride on.
     assert_eq!(

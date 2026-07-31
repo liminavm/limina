@@ -276,6 +276,14 @@ pub struct DisplayCfg {
     /// What closing the VM window does. See [`WindowCloseAction`]; default = suspend
     /// (the M9.4 UX: closing the window parks the VM, reopening resumes it).
     pub on_window_close: WindowCloseAction,
+    /// Drive the guest at the host display's **device pixels** rather than its points, so a
+    /// Retina panel renders at its native resolution and the guest picks a 2x scale, instead of
+    /// rendering at half resolution and letting Core Animation upscale it.
+    ///
+    /// Default on: without it a 2x display is visibly soft, which is the whole reason the mode
+    /// exists. It costs 4x the guest framebuffer and 4x the fill, so `hidpi = false` restores
+    /// the point-for-pixel behavior on a machine where that trade is wrong.
+    pub hidpi: bool,
 }
 
 impl Default for DisplayCfg {
@@ -285,6 +293,7 @@ impl Default for DisplayCfg {
             gpu: GpuMode::Auto,
             resolution: DisplayResolution::default(),
             on_window_close: WindowCloseAction::default(),
+            hidpi: true,
         }
     }
 }

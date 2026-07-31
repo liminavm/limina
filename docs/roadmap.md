@@ -1495,8 +1495,17 @@ name from the panel's own EDID numbers), density and refresh of the host display
 re-pushed when the window migrates; the range descriptor lands in the exact form
 `drm_get_monitor_range` accepts. Real connector disconnect/reconnect works too (it's the scanout's
 `enabled` flag, which was hardcoded true). Design + what's still open (windowed human verification,
-boot-time EDID, a CTA extension block for a real mode list and >655 MHz clocks, `vrr_capable`
+boot-time EDID, a fuller DisplayID mode list, `vrr_capable`
 plumbing): `docs/design/stable-edid-hotplug.md`.
+
+**Part 2 (DisplayID extension + HiDPI) ✅ SHIPPED 2026-07-31** — libkrun `0123`. A base EDID
+detailed timing tops out at 655.35 MHz of pixel clock, so a Retina panel at device pixels
+(3024x1964 @ 120 Hz, ~866 MHz) could not be advertised honestly; a **DisplayID 2.0 type VII**
+block now carries the real timing alongside the clamped base one. (A *CTA-861* block would not
+have worked — its detailed timings share the base block's 16-bit clock field.) On top of that,
+`[display] hidpi` (default on, `--no-hidpi` opts out) drives the guest at the host display's
+**device pixels** instead of its points, so a 2x panel renders natively and the guest picks the
+2x scale itself rather than having Core Animation upscale a half-resolution scanout.
 
 
 One virtual display per host display, each advertising **what that panel actually supports**:

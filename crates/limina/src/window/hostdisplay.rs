@@ -16,6 +16,7 @@
 //! Everything here that is arithmetic lives in free functions so it can be tested without a
 //! screen; the AppKit/CoreGraphics reads are the thin part.
 
+use super::fit;
 use limina_displayctl::{DisplayCommand, DisplayControl, EdidSpec, RangeSpec};
 use objc2_app_kit::NSScreen;
 use objc2_foundation::{NSNumber, NSString};
@@ -72,9 +73,15 @@ pub fn migration_command(host: &HostDisplay, drives_size: bool) -> DisplayComman
 
 /// Describe the screen a window currently sits on. `None` when AppKit has no screen for it
 /// (which happens mid-transition — the caller simply skips that tick).
-pub fn describe(screen: &NSScreen) -> HostDisplay {
+///
+/// `scale` decides whether the reported size is the screen's points or its device pixels; see
+/// [`fit::Scale`]. The advertised *density* is the panel's real device density either way — it
+/// describes the glass, not the framebuffer — which is what lets the guest pick a 2x scale once
+/// the framebuffer is big enough to carry one.
+pub fn describe(screen: &NSScreen, scale: fit::Scale) -> HostDisplay {
     let frame = screen.frame().size;
-    let size = (frame.width.round() as u32, frame.height.round() as u32);
+    let points = (frame.width.round() as u32, frame.height.round() as u32);
+    let size = scale.to_guest((frame.width, frame.height));
     let backing = screen.backingScaleFactor();
     let display_id = display_id_of(screen);
     let (millimeters_wide, _) = screen_size_millimeters(display_id);
@@ -87,7 +94,7 @@ pub fn describe(screen: &NSScreen) -> HostDisplay {
     HostDisplay {
         edid: EdidSpec {
             refresh_hz,
-            dpi: dpi_from(size.0, millimeters_wide, backing),
+            dpi: dpi_from(points.0, millimeters_wide, backing),
             vendor: LIMINA_VENDOR,
             product_id,
             serial,
@@ -97,7 +104,7 @@ pub fn describe(screen: &NSScreen) -> HostDisplay {
             // The advertised extra modes are left to the generator's built-in list for now:
             // the standard-timing encoding can't express most real Mac point sizes (widths
             // must be a multiple of 8 below 2288, in four aspect ratios), so a "real" mode
-            // list needs the CTA extension block tracked in the design doc.
+            // list needs a DisplayID extension block tracked in the design doc.
             modes: Vec::new(),
             alt_mode: alt_mode_for(size, refresh_hz),
         },
@@ -133,11 +140,15 @@ fn identity_from(vendor: u32, model: u32, serial: u32, name: &str) -> (u16, u32)
 
 /// Pixels-per-inch to advertise.
 ///
-/// The guest's framebuffer is sized in *points*, and each point covers `backing` device pixels,
-/// so the density the guest should reason about is the panel's point density scaled by the
-/// backing factor. That keeps a Retina panel at the 2× guest scale it already gets, while an
-/// ordinary external monitor now correctly reports ~110 DPI instead of the flat 300 that made
-/// every display look Retina to the guest.
+/// This is the **panel's** density — points per inch scaled by the backing factor, i.e. device
+/// pixels per inch — and it does not depend on the display mode: it describes the glass, not the
+/// framebuffer. Under HiDPI the guest's framebuffer is that many pixels across, so the number is
+/// literally its own density and GNOME offers the 2× scale. Without HiDPI the framebuffer is half
+/// that, and the same number keeps the guest reasoning about the size things appear at rather
+/// than the count of pixels it happens to be drawing into.
+///
+/// Either way it replaced a flat 300 DPI that made every ordinary external monitor look Retina;
+/// a 27" 1440p panel now correctly reports ~109.
 fn dpi_from(points_wide: u32, millimeters_wide: f64, backing: f64) -> u32 {
     if millimeters_wide <= 0.0 || points_wide == 0 || backing <= 0.0 {
         return FALLBACK_DPI;
@@ -194,8 +205,8 @@ fn range_from_intervals(
     Some(RangeSpec {
         min_vertical_hz: min_hz.min(255) as u8,
         max_vertical_hz: max_advertised_hz.min(255) as u8,
-        min_horizontal_khz: horizontal_khz(min_hz).clamp(1, 255) as u8,
-        max_horizontal_khz: horizontal_khz(max_advertised_hz).min(255) as u8,
+        min_horizontal_khz: horizontal_khz(min_hz).clamp(1, u32::from(u16::MAX)) as u16,
+        max_horizontal_khz: horizontal_khz(max_advertised_hz).min(u32::from(u16::MAX)) as u16,
         max_pixel_clock_mhz: max_pixel_clock_mhz(size, max_advertised_hz),
     })
 }

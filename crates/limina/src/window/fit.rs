@@ -6,6 +6,51 @@
 //! the math unit-tests headless, and the window/input code shares one `FitRect` per
 //! tick (via an `Rc<Cell<_>>`) so the pixels and the pointer can never disagree.
 
+/// How guest pixels relate to screen points.
+///
+/// AppKit works in *points*; a Retina display draws each point as 2x2 device pixels. limina
+/// historically drove the guest 1:1 with points, so a 2x panel handed the guest half its real
+/// resolution and Core Animation upscaled the scanout — visibly soft, and the guest could never
+/// offer a 2x scale because its framebuffer was already the logical size.
+///
+/// HiDPI mode makes a guest pixel a *device* pixel: the guest is driven to points x backing,
+/// renders at the panel's native resolution, and (given the EDID density we now report) picks
+/// the 2x scale itself. The compositing path needs no change — the layer frame stays in points
+/// and CA maps the larger surface onto it 1:1 in device pixels.
+///
+/// Everything that has to cross the two unit systems goes through here, so the conversion is one
+/// tested thing rather than a scattering of `* backing`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Scale(f64);
+
+impl Scale {
+    /// `backing` is `NSScreen.backingScaleFactor`. A non-positive or non-finite value (never
+    /// seen, but it comes from AppKit) falls back to 1, which is the historical behavior.
+    pub(crate) fn new(backing: f64, hidpi: bool) -> Self {
+        if !hidpi || !backing.is_finite() || backing <= 0.0 {
+            return Self(1.0);
+        }
+        Self(backing)
+    }
+
+    /// The point-for-pixel scale — what every non-HiDPI path uses.
+    pub(crate) fn none() -> Self {
+        Self(1.0)
+    }
+
+    /// Screen/view points to guest pixels. Rounded, and floored at 1 so a degenerate view
+    /// never asks the guest for a zero-sized mode.
+    pub(crate) fn to_guest(self, points: (f64, f64)) -> (u32, u32) {
+        let px = |v: f64| ((v * self.0).round().max(1.0)) as u32;
+        (px(points.0), px(points.1))
+    }
+
+    /// Guest pixels back to points, for sizing the window to a guest-chosen mode.
+    pub(crate) fn to_points(self, guest: (u32, u32)) -> (f64, f64) {
+        (f64::from(guest.0) / self.0, f64::from(guest.1) / self.0)
+    }
+}
+
 /// The fitted content rect, in view points, bottom-left origin (AppKit convention).
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub(crate) struct FitRect {
@@ -424,5 +469,33 @@ mod tests {
         assert!(!point_in_fit(901.0, 300.0, fit), "right bar");
         let degenerate = FitRect::default();
         assert!(!point_in_fit(0.0, 0.0, degenerate));
+    }
+
+    #[test]
+    fn scale_converts_points_and_pixels_round_trip() {
+        let two = Scale::new(2.0, true);
+        assert_eq!(two.to_guest((1512.0, 982.0)), (3024, 1964));
+        assert_eq!(two.to_points((3024, 1964)), (1512.0, 982.0));
+
+        // A 1x display is unaffected even with HiDPI on.
+        let one = Scale::new(1.0, true);
+        assert_eq!(one.to_guest((2560.0, 1440.0)), (2560, 1440));
+
+        // HiDPI off pins the historical point-for-pixel behavior on any panel.
+        assert_eq!(Scale::new(2.0, false), Scale::none());
+        assert_eq!(
+            Scale::new(2.0, false).to_guest((1512.0, 982.0)),
+            (1512, 982)
+        );
+    }
+
+    /// AppKit is the source of the backing factor, so a nonsense value must degrade to the
+    /// historical behavior rather than produce a zero- or NaN-sized guest mode.
+    #[test]
+    fn a_degenerate_backing_factor_falls_back_to_one() {
+        for bad in [0.0, -2.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(Scale::new(bad, true), Scale::none(), "backing {bad}");
+        }
+        assert_eq!(Scale::new(2.0, true).to_guest((0.0, 0.0)), (1, 1));
     }
 }

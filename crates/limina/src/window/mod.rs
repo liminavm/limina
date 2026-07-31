@@ -106,6 +106,19 @@ pub struct WindowOptions {
     pub restore_splash: Option<PathBuf>,
     /// The VM-menu context (Suspend gating, Show in Finder, Copy SSH Command).
     pub menu_ctx: MenuCtx,
+    /// Drive the guest at the window's screen in device pixels rather than points, so a Retina
+    /// panel renders natively (`[display] hidpi`, default on). See [`fit::Scale`].
+    pub hidpi: bool,
+}
+
+/// The point-to-guest-pixel scale for the screen a window is currently on. Recomputed per use
+/// rather than cached: dragging between a Retina and a 1x display changes it, and AppKit reports
+/// no screen at all mid-transition (there, the historical 1:1 is the safe answer).
+fn scale_for(window: &NSWindow, hidpi: bool) -> fit::Scale {
+    match window.screen() {
+        Some(screen) => fit::Scale::new(screen.backingScaleFactor(), hidpi),
+        None => fit::Scale::none(),
+    }
 }
 
 /// Point geometry of the screen a windowed boot targets: `frame` is the full screen size
@@ -114,6 +127,9 @@ pub struct WindowOptions {
 pub struct ScreenInfo {
     pub frame: (u32, u32),
     pub visible: (f64, f64),
+    /// `NSScreen.backingScaleFactor` — 2.0 on Retina. Match-host multiplies `frame` by it to
+    /// get the boot resolution under HiDPI; window sizing stays in points.
+    pub backing: f64,
 }
 
 /// The screen a remembered window frame lands on (by its midpoint), or the main screen
@@ -138,6 +154,7 @@ pub fn screen_info_for_frame(frame: Option<[f64; 4]>) -> Option<ScreenInfo> {
     Some(ScreenInfo {
         frame: (sz.width.round() as u32, sz.height.round() as u32),
         visible: (vis.width, vis.height),
+        backing: screen.backingScaleFactor(),
     })
 }
 
@@ -510,6 +527,7 @@ pub fn run(
         splash_save_path,
         restore_splash,
         menu_ctx,
+        hidpi,
     } = opts;
 
     // The VM menu reads this when install_main_menu (below) builds it — set it first.
@@ -902,7 +920,9 @@ pub fn run(
                 // the identity into its size push so a migration costs one modeset; dynamic and
                 // fixed have no size push to fold it into, so they send it on its own below.
                 // `screen()` is None mid-transition, which simply skips the tick.
-                let host = window.screen().map(|s| hostdisplay::describe(&s));
+                let host = window
+                    .screen()
+                    .map(|s| hostdisplay::describe(&s, scale_for(&window, hidpi)));
                 let migrated = host
                     .as_ref()
                     .is_some_and(|h| h.identity_key() != identity_sent.get());
@@ -922,7 +942,8 @@ pub fn run(
                         let size = view
                             .map(|v| v.frame().size)
                             .unwrap_or(NSSize::new(0.0, 0.0));
-                        let want = (size.width.round() as u32, size.height.round() as u32);
+                        // The window is measured in points; the guest is driven in pixels.
+                        let want = scale_for(&window, hidpi).to_guest((size.width, size.height));
                         if base != (0, 0)
                             && !in_live
                             && want.0 >= 64
@@ -1031,7 +1052,8 @@ pub fn run(
                 if mode == DisplayResolution::Dynamic {
                     // Guest-follow (dynamic only): the window tracks guest modesets, as
                     // originally shipped.
-                    window.setContentSize(NSSize::new(width as f64, height as f64));
+                    let (pw, ph) = scale_for(&window, hidpi).to_points((width, height));
+                    window.setContentSize(NSSize::new(pw, ph));
                     let full = fit::FitRect::full(width as f64, height as f64);
                     fit_cell.set(full);
                     set_layer_frame(&layer, full);
