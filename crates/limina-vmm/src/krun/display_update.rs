@@ -66,15 +66,32 @@ fn edid_params_from(spec: EdidSpec) -> EdidParams {
 /// Pack a name into an EDID string descriptor: 13 bytes, `0x0A`-terminated when it fits, space
 /// padded. Non-ASCII is dropped rather than truncated mid-codepoint — the field is defined as
 /// ASCII, and a lone continuation byte would render as garbage in the guest's monitor list.
+///
+/// Over-long names are cut at a **word boundary** where one exists in the second half of the
+/// field: macOS's "Built-in Retina Display" hard-truncated to `Built-in Reti`, which is how it
+/// then appeared in the guest's monitor list. `Built-in` is both shorter and legible.
 fn descriptor_text(text: &str) -> [u8; 13] {
     let mut out = [0x20u8; 13];
-    let ascii: Vec<u8> = text
+    let ascii: String = text
         .chars()
         .filter(|c| c.is_ascii() && !c.is_ascii_control())
-        .map(|c| c as u8)
         .collect();
-    let len = ascii.len().min(13);
-    out[..len].copy_from_slice(&ascii[..len]);
+    let ascii = ascii.trim();
+
+    let kept: &str = if ascii.len() <= 13 {
+        ascii
+    } else {
+        // Prefer the last word boundary at or before the field width, as long as it doesn't
+        // throw away more than half the field; otherwise a hard cut is the lesser evil.
+        match ascii[..13].rfind(' ') {
+            Some(boundary) if boundary >= 7 => ascii[..boundary].trim_end(),
+            _ => &ascii[..13],
+        }
+    };
+
+    let bytes = kept.as_bytes();
+    let len = bytes.len();
+    out[..len].copy_from_slice(bytes);
     // The terminator is only required when there's room for it; a full 13-byte name has none,
     // which the spec allows.
     if len < 13 {
@@ -185,11 +202,28 @@ mod tests {
         let full = descriptor_text("ABCDEFGHIJKLM");
         assert_eq!(&full[..], b"ABCDEFGHIJKLM");
 
-        // Longer names truncate to the field width.
+        // A single over-long word has no boundary to cut at, so it truncates hard.
         assert_eq!(
             &descriptor_text("ABCDEFGHIJKLMNOPQRS")[..],
             b"ABCDEFGHIJKLM"
         );
+    }
+
+    /// macOS's real display names are longer than the field, and a hard cut produced
+    /// "Built-in Reti" in the guest's monitor list. Cut at a word boundary instead.
+    #[test]
+    fn over_long_names_are_cut_at_a_word_boundary() {
+        let packed = descriptor_text("Built-in Retina Display");
+        assert_eq!(&packed[..8], b"Built-in");
+        assert_eq!(packed[8], 0x0A, "the shortened name is terminated");
+
+        // Names that already fit are untouched.
+        assert_eq!(&descriptor_text("BenQ LCD")[..8], b"BenQ LCD");
+
+        // A boundary too early in the field would throw away most of the name, so the hard
+        // cut wins there.
+        let packed = descriptor_text("DELL UltraSharp U2720Q");
+        assert_eq!(&packed[..13], b"DELL UltraSha");
     }
 
     /// A localized display name must not put a half-codepoint in the guest's monitor list.

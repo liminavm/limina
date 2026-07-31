@@ -6,10 +6,15 @@ configuration, and moving the limina window from the MacBook panel to an externa
 the guest see that monitor (its refresh rate, its physical size, its identity) instead of one
 size-of-the-moment mode that never changes name.
 
-Status: ✅ **mechanism + host policy SHIPPED 2026-07-31**, L1-verified end to end (identity
-survives a resize, a pushed identity lands in the guest's `/sys/class/drm/*/edid`, and a pushed
-disconnect really moves the connector to `disconnected` and back). Windowed human verification
-of a real drag between two physical displays is still pending — see "What is not done" below.
+Status: ✅ **SHIPPED and human-verified 2026-07-31.** L1-verified end to end (identity survives a
+resize, a pushed identity lands in the guest's `/sys/class/drm/*/edid`, and a pushed disconnect
+really moves the connector to `disconnected` and back), then confirmed on two physical displays:
+dragging the window moves the guest between two *remembered* monitors and GNOME restores each
+one's own resolution and scale in both directions.
+
+**The open design question is answered: the in-place EDID identity swap is sufficient — mutter
+re-applies per-monitor configuration without a connector cycle.** The cycle path stays
+implemented and L1-tested as the fallback (and for genuine attach/detach later).
 
 Builds on the shipped runtime-resize mechanism
 (`docs/design/runtime-display-resize.md`) and its policy layer (`docs/design/display-modes.md`);
@@ -121,7 +126,7 @@ Four layers, all landed:
 
 | layer | where | what |
 |---|---|---|
-| EDID generator | libkrun `0119` (`gpu/edid.rs`, `gpu/display.rs`) | optional identity / standard timings / second detailed timing / range limits; defaults byte-identical |
+| EDID generator | libkrun `0119` (`gpu/edid.rs`, `gpu/display.rs`) | optional identity / standard timings / second detailed timing / range limits; defaults unchanged apart from the digital-input fix below |
 | runtime push | libkrun `0120` (`gpu/{device,worker,virtio_gpu}.rs`) | `DisplayUpdate {size, edid, connected}` queue; `enabled` now drives connector status |
 | wire format | `crates/limina-displayctl` | `resize W H` (unchanged) + `display id=… …`; dependency-free so both sides share one definition |
 | host policy | `crates/limina/src/window/hostdisplay.rs` + the match-host tracker | host display → identity/DPI/refresh/VRR range; pushes on migration |
@@ -138,6 +143,14 @@ Three things came out differently from the plan, all for reasons worth keeping:
   external now correctly reports ~109 DPI and gets 1×. Displays that report no physical size
   (projectors, some capture devices) fall back to the old 300, so nothing that worked before
   can regress.
+- **The EDID claimed to be an *analog* display.** Byte 20 (video input definition) was left
+  zero, which every parser reads as analog — visible in `monitor-edid`'s output as "Analog
+  signal" for a display that has never been anything but digital. It now declares digital,
+  8 bits per colour, DisplayPort. This is the one respect in which the default output is no
+  longer byte-identical to what libkrun produced before.
+- **macOS display names don't fit.** The EDID name field is 13 bytes and "Built-in Retina
+  Display" hard-truncated to `Built-in Reti` in the guest's monitor list. Over-long names are
+  now cut at a word boundary when there is one in the second half of the field.
 - **The serial-string descriptor is the one that gets dropped.** A base EDID block holds four
   descriptors; a ProMotion panel wants five (timing, name, range, alternate timing, serial
   string). Priority order drops the serial string — the numeric serial in bytes 12-15 already
@@ -145,11 +158,6 @@ Three things came out differently from the plan, all for reasons worth keeping:
 
 ## What is not done
 
-- **Windowed human verification.** Drag the window between the built-in panel and an external
-  monitor and confirm GNOME reports the right monitor name/refresh and keeps per-monitor scale.
-  The L1 test proves the bytes arrive; only a human can confirm the compositor *acts* on them
-  the way we want, and specifically whether an in-place identity swap is enough for mutter to
-  re-apply per-monitor config or whether the connector cycle is needed (see the table above).
 - **Boot-time EDID.** The identity is pushed at runtime, on the first poll after the guest
   presents a frame — so the guest briefly sees the anonymous `krun-display` identity first. In
   practice that first frame is EFI/GRUB output, long before a compositor starts, so nothing

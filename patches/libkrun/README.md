@@ -200,7 +200,8 @@ patch's commit message; this is the map.
   per-monitor config on it. `EdidParams` gains an optional identity, standard-timing list,
   second detailed timing and range descriptor (emitted "range limits only" + the
   continuous-frequency bit, the only form Linux accepts for a refresh range). Defaults are
-  byte-identical to before. Fixes two bugs found on the way: standard timings wrote the
+  byte-identical to before (0122 later makes the one deliberate exception). Fixes two bugs
+  found on the way: standard timings wrote the
   aspect code unshifted into the refresh field (1600x900 was advertised as 1600x1000 @
   63 Hz), and the detailed-timing pixel clock could wrap its 16-bit field (3024x1964 @
   120 Hz decoded back as 30 Hz — it now saturates and warns). Unit-tested against an
@@ -214,6 +215,10 @@ patch's commit message; this is the map.
   collapsing into "nothing happened".
 - **0121 — log when descriptor slots overflow the base EDID block.** Four descriptors fit;
   a fifth (typically the serial string) is dropped by priority. Say so.
+- **0122 — declare the display digital, not analog.** Byte 20 (video input definition) was
+  left zero, which every EDID parser reads as an analog input — `monitor-edid` in a guest
+  duly reported "Analog signal" for a display that has never been anything but digital, and
+  the guest got no colour depth either. Now digital / 8 bpc / DisplayPort.
 
 ### Balloon / dynamic memory (M6)
 
