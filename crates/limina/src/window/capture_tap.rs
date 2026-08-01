@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Arc;
 
 use objc2::rc::Retained;
-use objc2_app_kit::{NSEvent, NSView};
+use objc2_app_kit::{NSEvent, NSView, NSWindowStyleMask};
 use objc2_core_graphics::CGEvent;
 use objc2_foundation::{NSPoint, NSRect};
 
@@ -171,6 +171,9 @@ struct TapCtx {
     pos: Rc<Cell<Option<(f64, f64)>>>,
     /// The guest view, for mapping the virtual cursor back to screen coordinates on release.
     view: Retained<NSView>,
+    /// Fullscreen edge resistance for the UNCAPTURED pointer (`[display] edge-resistance`).
+    /// Disabled (threshold 0) unless configured; see [`fit::EdgeResist`].
+    resist: Cell<fit::EdgeResist>,
 }
 
 /// Centre of the main display in global (points) coordinates — where we keep the hidden cursor
@@ -321,7 +324,15 @@ extern "C" fn tap_callback(
     }
 
     if !captured {
-        return event; // not captured → let it through; the local monitor drives absolute mode
+        // Uncaptured: the local monitor drives absolute mode from the real host cursor, so the
+        // event passes through — EXCEPT that in fullscreen we make the guest's edges resist.
+        // Without this the cursor reaching the top edge instantly reveals the macOS menu bar and
+        // title bar, and a side edge silently hands the pointer to the next display; both are one
+        // flick away and make a fullscreen guest feel leaky. See [`fit::EdgeResist`].
+        if matches!(etype, MOUSE_MOVED | LMB_DRAG | RMB_DRAG | OMB_DRAG) {
+            return resist_edges(ctx, event);
+        }
+        return event;
     }
 
     // Same snapshot rule as the keyboard path above: the Arc keeps the fd open across the sends.
@@ -527,10 +538,65 @@ fn try_create(ctx: *mut TapCtx) -> bool {
     true
 }
 
+/// Apply fullscreen edge resistance to one uncaptured motion event.
+///
+/// Returns the event to pass through, or NULL to consume it. Consuming is what makes the
+/// resistance real: we swallow the motion that would have crossed the edge and warp the host
+/// cursor back to the boundary, which itself generates a motion event that the local monitor
+/// turns into the guest's pointer position — so the guest still tracks the cursor exactly, it
+/// just cannot be pushed out of the guest's own screen by accident.
+///
+/// Resistance applies ONLY while fullscreen and key. Windowed, the pointer must be free to leave
+/// (it is a window), and an unfocused window has no business holding the pointer at all.
+fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
+    let mut resist = ctx.resist.get();
+    if !resist.enabled() {
+        return event;
+    }
+    let fullscreen_and_key = ctx
+        .view
+        .window()
+        .is_some_and(|w| w.styleMask().contains(NSWindowStyleMask::FullScreen) && w.isKeyWindow());
+    if !fullscreen_and_key {
+        // Drop any half-earned push: a shove accumulated in fullscreen must not let the pointer
+        // out of the *next* fullscreen session on its first twitch.
+        resist.reset();
+        ctx.resist.set(resist);
+        return event;
+    }
+
+    // The virtual cursor is where the pointer was BEFORE this event — the tap runs ahead of the
+    // app, so `pos` still holds what the local monitor recorded for the previous motion. That is
+    // exactly the origin the resistance step wants. With nothing recorded yet (no motion over the
+    // content since the window came up) there is no edge to defend, so let the event through and
+    // let the monitor seed it.
+    let fit = ctx.fit.get();
+    let Some(prev) = ctx.pos.get() else {
+        return event;
+    };
+    let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
+    let step = resist.step(prev, getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y), fit);
+    ctx.resist.set(resist);
+    if step.free {
+        return event;
+    }
+
+    // Held at the edge: pin the host cursor there and hand the guest the motion we ate, so
+    // mutter's pressure barriers (GNOME hot corner, a guest panel's reveal edge) still fire.
+    if let Some(p) = super::input::view_point_to_cg_global(&ctx.view, step.pos) {
+        unsafe { CGWarpMouseCursorPosition(p) };
+    }
+    send_edge_overflow(&ctx.conn, step.overflow);
+    std::ptr::null_mut()
+}
+
 /// Install the capture tap on the main run loop. Returns `true` if the tap was created; `false`
 /// if Accessibility permission is missing (capture then falls back to the local-monitor warp
 /// path — leaky, but it still does *something* — and [`retry_install`] can pick the tap up
 /// later). Call once, on the main thread, before the app run loop starts.
+// Eight plumbing parameters, each a distinct shared handle the callback needs for the app's
+// lifetime; bundling them into a struct would just move the same list one line up.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn install(
     conn: Arc<WorkerConn>,
     captured: Arc<AtomicBool>,
@@ -539,6 +605,7 @@ pub(crate) fn install(
     fit: Rc<Cell<FitRect>>,
     pos: Rc<Cell<Option<(f64, f64)>>>,
     view: Retained<NSView>,
+    edge_resistance: f64,
 ) -> bool {
     let ctx = Box::into_raw(Box::new(TapCtx {
         captured,
@@ -550,6 +617,7 @@ pub(crate) fn install(
         fit,
         pos,
         view,
+        resist: Cell::new(fit::EdgeResist::new(edge_resistance)),
     }));
     if try_create(ctx) {
         log::info!("pointer capture: CGEventTap installed (session-level, consuming)");

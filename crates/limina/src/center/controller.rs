@@ -1030,24 +1030,24 @@ impl CenterController {
         alert.addButtonWithTitle(&NSString::from_str("Save"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
 
-        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 182.0));
+        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 242.0));
         let cpus_field = labeled_field(
             mtm,
             &accessory,
-            152.0,
+            212.0,
             "vCPUs:",
             &cfg.hardware.cpus.to_string(),
         );
         self.row_help(
             &accessory,
-            152.0,
+            212.0,
             &cpus_field,
             "How many virtual CPUs the guest sees.",
         );
-        let mem_field = labeled_field(mtm, &accessory, 122.0, "Memory:", &mem_now);
+        let mem_field = labeled_field(mtm, &accessory, 182.0, "Memory:", &mem_now);
         self.row_help(
             &accessory,
-            122.0,
+            182.0,
             &mem_field,
             "The maximum guest RAM — \"4G\", \"8GiB\", or a bare MiB count. Idle guest \
              memory is returned to the Mac according to Reclaim.",
@@ -1055,23 +1055,23 @@ impl CenterController {
         let reclaim_popup = labeled_popup(
             mtm,
             &accessory,
-            92.0,
+            152.0,
             "Reclaim:",
             &RECLAIM_CHOICES,
             reclaim_index(cfg.hardware.reclaim),
         );
         self.row_help(
             &accessory,
-            92.0,
+            152.0,
             &reclaim_popup,
             "How hard idle guest memory is returned to the Mac. Moderate keeps some \
              guest disk cache unless the Mac is under memory pressure; Light engages \
              only when the Mac is; Aggressive always squeezes; Disabled never reclaims.",
         );
-        let ssh_field = labeled_field(mtm, &accessory, 62.0, "SSH port:", &ssh_now.to_string());
+        let ssh_field = labeled_field(mtm, &accessory, 122.0, "SSH port:", &ssh_now.to_string());
         self.row_help(
             &accessory,
-            62.0,
+            122.0,
             &ssh_field,
             "The host port forwarded to the guest's SSH. 0 picks a free port \
              automatically at each start.",
@@ -1080,7 +1080,7 @@ impl CenterController {
         let display_popup = labeled_popup(
             mtm,
             &accessory,
-            32.0,
+            92.0,
             "Display:",
             &DISPLAY_CHOICES,
             display_index(cfg.display.resolution),
@@ -1092,7 +1092,7 @@ impl CenterController {
         }
         self.row_help(
             &accessory,
-            32.0,
+            92.0,
             &display_popup,
             "Match Host drives the guest to the resolution of the screen the window is \
              on, letterboxing the window as needed (fullscreen fits exactly). Dynamic \
@@ -1125,18 +1125,60 @@ impl CenterController {
             }
         };
         let resolution_popup =
-            labeled_popup(mtm, &accessory, 2.0, "Resolution:", &title_refs, selected);
+            labeled_popup(mtm, &accessory, 62.0, "Resolution:", &title_refs, selected);
         resolution_popup.setEnabled(matches!(
             cfg.display.resolution,
             vmlib::schema::DisplayResolution::Fixed(..)
         ));
         self.row_help(
             &accessory,
-            2.0,
+            62.0,
             &resolution_popup,
             "The fixed guest resolution — the sizes this Mac offers for its display. \
              Only used with Fixed Size.",
         );
+
+        let notch_popup = labeled_popup(
+            mtm,
+            &accessory,
+            32.0,
+            "Notch:",
+            &NOTCH_CHOICES,
+            notch_index(cfg.display.notch),
+        );
+        self.row_help(
+            &accessory,
+            32.0,
+            &notch_popup,
+            "What a full-screen guest does with the camera housing on a MacBook's \
+             built-in display. Avoid keeps the guest below it and leaves that strip \
+             black; Use Full Screen gives the guest the whole panel, with the housing \
+             covering part of its top edge. No effect on an external display.",
+        );
+
+        // Presets, plus a "Custom" entry when the VM carries a hand-edited value — so
+        // opening this sheet and pressing Save can never silently round someone's
+        // vm.toml down to the nearest preset.
+        let resistance_titles = resistance_titles(cfg.display.edge_resistance);
+        let resistance_refs: Vec<&str> = resistance_titles.iter().map(String::as_str).collect();
+        let resistance_popup = labeled_popup(
+            mtm,
+            &accessory,
+            2.0,
+            "Edge resist:",
+            &resistance_refs,
+            resistance_index(cfg.display.edge_resistance),
+        );
+        self.row_help(
+            &accessory,
+            2.0,
+            &resistance_popup,
+            "How hard the pointer sticks at a full-screen guest's edges, so a stray \
+             flick doesn't reveal the Mac's menu bar or jump to the next display. A \
+             deliberate push still crosses, and the guest's own top bar and hot corner \
+             keep working. Needs Accessibility permission, like pointer capture.",
+        );
+
         alert.setAccessoryView(Some(&accessory));
 
         // Published so configureDisplayModeChanged: can toggle it while the sheet runs.
@@ -1169,6 +1211,11 @@ impl CenterController {
             cfg.hardware.memory = memory;
             cfg.hardware.reclaim = reclaim_from_index(reclaim_popup.indexOfSelectedItem());
             cfg.display.resolution = resolution;
+            cfg.display.notch = notch_from_index(notch_popup.indexOfSelectedItem());
+            cfg.display.edge_resistance = resistance_from_index(
+                resistance_popup.indexOfSelectedItem(),
+                cfg.display.edge_resistance,
+            );
             if let Some(net) = cfg.networks.first_mut() {
                 net.ssh_port = ssh_port;
             } else if ssh_port != 0 {
@@ -1274,6 +1321,56 @@ fn reclaim_from_index(index: isize) -> ReclaimMode {
         3 => ReclaimMode::Aggressive,
         _ => ReclaimMode::Moderate,
     }
+}
+
+/// Popup titles for the camera-housing policy, in `NotchPolicy` order.
+const NOTCH_CHOICES: [&str; 2] = ["Avoid", "Use Full Screen"];
+
+fn notch_index(policy: vmlib::schema::NotchPolicy) -> isize {
+    match policy {
+        vmlib::schema::NotchPolicy::Avoid => 0,
+        vmlib::schema::NotchPolicy::Extend => 1,
+    }
+}
+
+fn notch_from_index(index: isize) -> vmlib::schema::NotchPolicy {
+    match index {
+        1 => vmlib::schema::NotchPolicy::Extend,
+        _ => vmlib::schema::NotchPolicy::Avoid,
+    }
+}
+
+/// Edge-resistance presets (points of push), in popup order. A VM whose configured value is not
+/// one of these gets a fifth "Custom" entry — see [`resistance_titles`].
+const RESISTANCE_PRESETS: [f64; 4] = [0.0, 50.0, 100.0, 200.0];
+const RESISTANCE_CHOICES: [&str; 4] = ["Off", "Light", "Standard", "Firm"];
+
+/// The popup titles for a VM's current resistance: the presets, plus `Custom (N pt)` appended
+/// when the configured value isn't a preset, so a hand-edited `vm.toml` survives a Save.
+fn resistance_titles(current: f64) -> Vec<String> {
+    let mut titles: Vec<String> = RESISTANCE_CHOICES
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    if !RESISTANCE_PRESETS.contains(&current) {
+        titles.push(format!("Custom ({} pt)", current.round()));
+    }
+    titles
+}
+
+fn resistance_index(current: f64) -> isize {
+    RESISTANCE_PRESETS
+        .iter()
+        .position(|p| *p == current)
+        .unwrap_or(RESISTANCE_PRESETS.len()) as isize
+}
+
+/// The chosen preset, or `current` when the "Custom" entry (index past the presets) is selected.
+fn resistance_from_index(index: isize, current: f64) -> f64 {
+    usize::try_from(index)
+        .ok()
+        .and_then(|i| RESISTANCE_PRESETS.get(i).copied())
+        .unwrap_or(current)
 }
 
 /// Popup titles for the display mode, in a fixed order the index helpers share.
@@ -1408,4 +1505,59 @@ fn labeled_field(
     f.setFrame(rect(90.0, y, 200.0, 24.0));
     parent.addSubview(&f);
     f
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notch_popup_round_trips_both_policies() {
+        for policy in [
+            vmlib::schema::NotchPolicy::Avoid,
+            vmlib::schema::NotchPolicy::Extend,
+        ] {
+            assert_eq!(notch_from_index(notch_index(policy)), policy);
+        }
+    }
+
+    #[test]
+    fn an_unknown_notch_index_falls_back_to_avoid() {
+        // Defensive: AppKit returns -1 for "no selection".
+        assert_eq!(
+            notch_from_index(-1),
+            vmlib::schema::NotchPolicy::Avoid,
+            "the safe default is the one that matches pre-notch-option behavior"
+        );
+    }
+
+    #[test]
+    fn resistance_popup_round_trips_every_preset() {
+        for preset in RESISTANCE_PRESETS {
+            let titles = resistance_titles(preset);
+            assert_eq!(titles.len(), RESISTANCE_CHOICES.len(), "no Custom entry");
+            assert_eq!(
+                resistance_from_index(resistance_index(preset), preset),
+                preset
+            );
+        }
+    }
+
+    #[test]
+    fn a_hand_edited_resistance_survives_opening_and_saving_the_sheet() {
+        // The bug this guards: a vm.toml with `edge-resistance = 137` must not be silently
+        // rounded to a preset just because someone opened Configure and pressed Save.
+        let custom = 137.0;
+        let titles = resistance_titles(custom);
+        assert_eq!(titles.last().map(String::as_str), Some("Custom (137 pt)"));
+        let selected = resistance_index(custom);
+        assert_eq!(selected, RESISTANCE_PRESETS.len() as isize);
+        assert_eq!(resistance_from_index(selected, custom), custom);
+    }
+
+    #[test]
+    fn picking_a_preset_over_a_custom_value_takes_the_preset() {
+        assert_eq!(resistance_from_index(0, 137.0), 0.0);
+        assert_eq!(resistance_from_index(2, 137.0), 100.0);
+    }
 }

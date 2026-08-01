@@ -123,6 +123,23 @@ fn content_for_area(area: f64, aspect: f64, visible: (f64, f64)) -> (u32, u32) {
     (w.round().max(64.0) as u32, h.round().max(64.0) as u32)
 }
 
+/// Trim the camera-housing strip off the top of a content area.
+///
+/// On a notched built-in display the app gets the **whole** panel in fullscreen (the
+/// `NSPrefersDisplaySafeAreaCompatibilityMode` key in the bundle — see [`NotchPolicy`]), so it
+/// falls to us to decide whether the guest uses that strip. `inset` is the notch height in
+/// points, already zero unless the policy is `avoid` AND the window is fullscreen on a notched
+/// screen. Trimming from the *top* is all that's needed: the view's origin is bottom-left, so a
+/// shorter height leaves the housing strip uncovered without moving anything.
+///
+/// [`NotchPolicy`]: crate::vmlib::schema::NotchPolicy
+pub(crate) fn usable_content(vw: f64, vh: f64, inset: f64) -> (f64, f64) {
+    if !inset.is_finite() || inset <= 0.0 {
+        return (vw, vh);
+    }
+    (vw, (vh - inset).max(0.0))
+}
+
 /// Aspect-fit a `gw`×`gh` guest resolution into a `vw`×`vh` view, centered.
 ///
 /// An exact match short-circuits to the full view so float rounding can never
@@ -198,6 +215,117 @@ pub(crate) fn capture_step(pos: Option<(f64, f64)>, dx: f64, dy: f64, fit: FitRe
     }
 }
 
+/// One edge-resistance step: where the host cursor belongs, the pressure to hand the guest,
+/// and whether the pointer is free to leave.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct ResistStep {
+    /// The host cursor position (view points, bottom-left origin) after resistance.
+    pub pos: (f64, f64),
+    /// Motion the resistance ate, in AppKit **delta** convention — forwarded to the guest's
+    /// relative-mouse device so mutter's barriers (the GNOME hot corner, a guest panel's
+    /// reveal edge) still see the shove, exactly as in captured mode.
+    pub overflow: (f64, f64),
+    /// True when this event needs no intervention: the pointer is inside the content, or it has
+    /// pushed hard enough to break out. The caller passes the event through untouched.
+    pub free: bool,
+}
+
+/// Fullscreen edge resistance: the pointer sticks at the guest's edge until *pushed* through.
+///
+/// In fullscreen the host cursor reaching the top edge instantly reveals the macOS menu bar and
+/// title bar, and reaching a side edge leaves for the next display. Both are one careless flick
+/// away, which makes a fullscreen guest feel leaky. Resistance makes leaving *deliberate*: motion
+/// past an edge is absorbed (and forwarded to the guest as edge pressure, so the guest's own top
+/// bar and hot corner keep working) until the accumulated outward push crosses `threshold`
+/// points, at which point the pointer breaks through and behaves normally until it comes back
+/// inside.
+///
+/// This is the uncaptured counterpart to pointer capture (Cmd-Ctrl-G), which prevents the same
+/// escapes absolutely by parking the host cursor at screen centre.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EdgeResist {
+    /// Points of accumulated outward push needed to break out. Zero (or negative) disables
+    /// resistance entirely — every step comes back `free`.
+    threshold: f64,
+    /// Outward push accumulated at the current edge, per axis, as magnitudes.
+    acc: (f64, f64),
+    /// Broken through: stay out of the way until the pointer re-enters the content.
+    through: bool,
+}
+
+impl EdgeResist {
+    pub(crate) fn new(threshold: f64) -> Self {
+        Self {
+            threshold: if threshold.is_finite() {
+                threshold
+            } else {
+                0.0
+            },
+            acc: (0.0, 0.0),
+            through: false,
+        }
+    }
+
+    pub(crate) fn enabled(&self) -> bool {
+        self.threshold > 0.0
+    }
+
+    /// Forget any accumulated push and any breakthrough. Called when resistance stops applying
+    /// (leaving fullscreen, losing key, entering capture) so a stale half-push can't let the
+    /// next single twitch out.
+    pub(crate) fn reset(&mut self) {
+        self.acc = (0.0, 0.0);
+        self.through = false;
+    }
+
+    /// Advance by one motion delta from `pos` (view points, bottom-left origin; AppKit deltas,
+    /// so positive `dy` is downward).
+    pub(crate) fn step(&mut self, pos: (f64, f64), dx: f64, dy: f64, fit: FitRect) -> ResistStep {
+        let unclamped = (pos.0 + dx, pos.1 - dy);
+        let free = |pos| ResistStep {
+            pos,
+            overflow: (0.0, 0.0),
+            free: true,
+        };
+        if !self.enabled() {
+            return free(unclamped);
+        }
+        if self.through {
+            // Already out. Re-arm only once the pointer is genuinely back inside the content —
+            // re-arming at the boundary would fight the user on the way out.
+            if point_in_fit(unclamped.0, unclamped.1, fit) {
+                self.reset();
+            } else {
+                return free(unclamped);
+            }
+        }
+
+        let step = capture_step(Some(pos), dx, dy, fit);
+        if step.overflow == (0.0, 0.0) {
+            // Not pushing against any edge: the accumulator is about a *sustained* shove, so an
+            // event that doesn't push drains it. Without this, a hundred unrelated nudges over a
+            // session would eventually add up to a breakthrough.
+            self.acc = (0.0, 0.0);
+            return free(unclamped);
+        }
+
+        self.acc = (
+            self.acc.0 + step.overflow.0.abs(),
+            self.acc.1 + step.overflow.1.abs(),
+        );
+        if self.acc.0.max(self.acc.1) >= self.threshold {
+            self.through = true;
+            self.acc = (0.0, 0.0);
+            return free(unclamped);
+        }
+        ResistStep {
+            pos: step.pos,
+            overflow: step.overflow,
+            free: false,
+        }
+    }
+}
+
 /// Is a view point inside the fitted content (as opposed to the letterbox bars)?
 pub(crate) fn point_in_fit(px: f64, py: f64, fit: FitRect) -> bool {
     fit.w > 0.0
@@ -213,6 +341,167 @@ mod tests {
     use super::*;
 
     const ABS_MAX: i32 = 32767;
+
+    /// The measured geometry of a 14" MacBook Pro built-in display (`spikes/notch-fullscreen/`):
+    /// the fullscreen content view is the full panel under the compatibility key, and the
+    /// camera housing eats 33 pt of it.
+    const PANEL: (f64, f64) = (1512.0, 982.0);
+    const NOTCH: f64 = 33.0;
+
+    #[test]
+    fn notch_avoid_trims_the_housing_strip_off_the_top() {
+        assert_eq!(
+            usable_content(PANEL.0, PANEL.1, NOTCH),
+            (1512.0, 949.0),
+            "avoid must hand back exactly the below-the-notch area AppKit used to give us"
+        );
+    }
+
+    #[test]
+    fn notch_extend_and_notchless_screens_keep_the_whole_panel() {
+        assert_eq!(usable_content(PANEL.0, PANEL.1, 0.0), PANEL);
+        // A negative or NaN inset is a bad read from AppKit, not a reason to shrink the guest.
+        assert_eq!(usable_content(PANEL.0, PANEL.1, -5.0), PANEL);
+        assert_eq!(usable_content(PANEL.0, PANEL.1, f64::NAN), PANEL);
+    }
+
+    #[test]
+    fn a_notch_taller_than_the_view_clamps_to_zero_not_negative() {
+        // Degenerate (a tiny window on a notched screen); must not produce a negative height
+        // that would flip the fit rect inside out.
+        assert_eq!(usable_content(400.0, 20.0, NOTCH), (400.0, 0.0));
+    }
+
+    #[test]
+    fn avoiding_the_notch_fits_the_guest_exactly_with_no_side_bars() {
+        // The bug this closes: host mode drove the guest to the full panel (982 pt) while the
+        // fullscreen content view was only 949 pt tall, so aspect_fit letterboxed on ALL sides.
+        // Sizing the guest to the usable area makes fullscreen an exact fit again.
+        let (uw, uh) = usable_content(PANEL.0, PANEL.1, NOTCH);
+        let fit = aspect_fit(uw as u32, uh as u32, uw, uh);
+        assert_eq!(fit, FitRect::full(uw, uh));
+        assert_eq!(
+            (fit.x, fit.y),
+            (0.0, 0.0),
+            "the strip is trimmed from the TOP"
+        );
+    }
+
+    /// A fullscreen-sized content area for the resistance tests.
+    fn screen_fit() -> FitRect {
+        FitRect::full(1512.0, 949.0)
+    }
+
+    #[test]
+    fn resistance_pins_the_cursor_at_the_top_edge_and_reports_pressure() {
+        let mut r = EdgeResist::new(100.0);
+        // Sitting on the top edge, shoving up 10 pt (AppKit deltas: up is NEGATIVE dy).
+        let step = r.step((700.0, 949.0), 0.0, -10.0, screen_fit());
+        assert!(!step.free, "a 10 pt nudge must not reveal the menu bar");
+        assert_eq!(
+            step.pos,
+            (700.0, 949.0),
+            "the cursor stays pinned at the edge"
+        );
+        assert_eq!(
+            step.overflow,
+            (0.0, -10.0),
+            "the eaten motion goes to the guest as edge pressure (hot corner / top bar)"
+        );
+    }
+
+    #[test]
+    fn a_sustained_shove_breaks_through() {
+        let mut r = EdgeResist::new(100.0);
+        let fit = screen_fit();
+        for _ in 0..9 {
+            assert!(!r.step((700.0, 949.0), 0.0, -10.0, fit).free);
+        }
+        // 10 x 10 pt reaches the threshold: the pointer is released and the chrome may appear.
+        let out = r.step((700.0, 949.0), 0.0, -10.0, fit);
+        assert!(out.free, "100 pt of push must break out");
+        assert_eq!(out.pos, (700.0, 959.0), "and the cursor leaves the content");
+        // Still out on the next event, without re-earning it.
+        assert!(r.step((700.0, 959.0), 0.0, -10.0, fit).free);
+    }
+
+    #[test]
+    fn sliding_along_an_edge_does_not_accumulate_a_breakthrough() {
+        // The failure this guards: a purely horizontal drag along the top edge should never
+        // trip the menu bar, no matter how long it goes on.
+        let mut r = EdgeResist::new(100.0);
+        let fit = screen_fit();
+        for _ in 0..50 {
+            let step = r.step((700.0, 949.0), 12.0, 0.0, fit);
+            assert!(
+                step.free,
+                "moving inside/along the content is never resisted"
+            );
+        }
+        // ...and the accumulator is clean, so a fresh nudge is still resisted.
+        assert!(!r.step((700.0, 949.0), 0.0, -10.0, fit).free);
+    }
+
+    #[test]
+    fn pushes_separated_by_inward_motion_do_not_add_up() {
+        let mut r = EdgeResist::new(100.0);
+        let fit = screen_fit();
+        for _ in 0..9 {
+            assert!(!r.step((700.0, 949.0), 0.0, -10.0, fit).free);
+        }
+        // Move back into the content: that drains the accumulator.
+        assert!(r.step((700.0, 949.0), 0.0, 40.0, fit).free);
+        // So the next nudge starts from zero rather than tipping over the edge.
+        assert!(!r.step((700.0, 949.0), 0.0, -10.0, fit).free);
+    }
+
+    #[test]
+    fn breaking_out_re_arms_only_after_returning_inside() {
+        let mut r = EdgeResist::new(20.0);
+        let fit = screen_fit();
+        assert!(
+            r.step((700.0, 949.0), 0.0, -25.0, fit).free,
+            "one big shove is enough"
+        );
+        // Well outside, still free.
+        assert!(r.step((700.0, 980.0), 0.0, -5.0, fit).free);
+        // Back inside re-arms: the very next outward nudge is resisted again.
+        assert!(r.step((700.0, 900.0), 0.0, 0.0, fit).free);
+        assert!(!r.step((700.0, 949.0), 0.0, -5.0, fit).free);
+    }
+
+    #[test]
+    fn resistance_also_holds_the_side_edges_for_multi_display_escapes() {
+        let mut r = EdgeResist::new(100.0);
+        let fit = screen_fit();
+        let step = r.step((1512.0, 400.0), 15.0, 0.0, fit);
+        assert!(
+            !step.free,
+            "drifting right must not spill onto the next display"
+        );
+        assert_eq!(step.pos, (1512.0, 400.0));
+        assert_eq!(step.overflow, (15.0, 0.0));
+    }
+
+    #[test]
+    fn a_zero_threshold_disables_resistance_entirely() {
+        let mut r = EdgeResist::new(0.0);
+        assert!(!r.enabled());
+        let step = r.step((700.0, 949.0), 0.0, -10.0, screen_fit());
+        assert!(step.free);
+        assert_eq!(step.pos, (700.0, 959.0), "the pointer leaves immediately");
+    }
+
+    #[test]
+    fn reset_drops_a_half_earned_breakthrough() {
+        let mut r = EdgeResist::new(100.0);
+        let fit = screen_fit();
+        for _ in 0..9 {
+            r.step((700.0, 949.0), 0.0, -10.0, fit);
+        }
+        r.reset(); // e.g. left fullscreen, or the window lost key
+        assert!(!r.step((700.0, 949.0), 0.0, -10.0, fit).free);
+    }
 
     #[test]
     fn exact_match_is_the_full_view() {

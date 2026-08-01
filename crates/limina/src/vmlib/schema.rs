@@ -284,6 +284,17 @@ pub struct DisplayCfg {
     /// exists. It costs 4x the guest framebuffer and 4x the fill, so `hidpi = false` restores
     /// the point-for-pixel behavior on a machine where that trade is wrong.
     pub hidpi: bool,
+    /// What fullscreen does with the camera-housing strip on a notched built-in display.
+    /// See [`NotchPolicy`].
+    pub notch: NotchPolicy,
+    /// How hard the pointer sticks at a **fullscreen** guest's edges, in points of accumulated
+    /// push (0 disables). In fullscreen the host cursor touching the top edge instantly reveals
+    /// the macOS menu bar and title bar, and a side edge hands the pointer to the next display;
+    /// resistance makes both deliberate instead of accidental, while forwarding the absorbed
+    /// motion to the guest as edge pressure so the guest's own top bar and hot corner still work.
+    /// Ignored windowed, and needs the Accessibility grant the capture tap already asks for.
+    #[serde(rename = "edge-resistance")]
+    pub edge_resistance: f64,
 }
 
 impl Default for DisplayCfg {
@@ -294,6 +305,53 @@ impl Default for DisplayCfg {
             resolution: DisplayResolution::default(),
             on_window_close: WindowCloseAction::default(),
             hidpi: true,
+            notch: NotchPolicy::default(),
+            edge_resistance: DEFAULT_EDGE_RESISTANCE,
+        }
+    }
+}
+
+/// Default `[display] edge-resistance`: enough push that a flick toward the edge is absorbed,
+/// little enough that a deliberate move to the next display or the menu bar is one gesture.
+pub const DEFAULT_EDGE_RESISTANCE: f64 = 100.0;
+
+/// The `[display] notch` key — what a fullscreen VM does with the camera-housing strip on a
+/// notched built-in display (MacBook Pro / Air).
+///
+/// The app ships `NSPrefersDisplaySafeAreaCompatibilityMode = true`, which — despite the name —
+/// is what makes AppKit hand a fullscreen window the **whole** panel (measured on a 1512x982
+/// built-in Retina display: the key absent gives a 949 pt-tall fullscreen window, the key true
+/// gives 982; `spikes/notch-fullscreen/`). limina then applies the policy itself, per VM, so the
+/// choice is not an app-wide build-time constant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NotchPolicy {
+    /// Keep the guest below the housing: the scanout is inset by the notch height and that
+    /// strip stays black. The default, and what limina did before the key existed.
+    #[default]
+    Avoid,
+    /// Give the guest the full panel. It gains the notch height in usable rows, at the cost of
+    /// the housing physically covering the middle of the guest's top edge.
+    Extend,
+}
+
+impl std::fmt::Display for NotchPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Avoid => "avoid",
+            Self::Extend => "extend",
+        })
+    }
+}
+
+impl std::str::FromStr for NotchPolicy {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.trim() {
+            "avoid" => Ok(Self::Avoid),
+            "extend" => Ok(Self::Extend),
+            other => anyhow::bail!("display notch must be \"avoid\" or \"extend\": got {other:?}"),
         }
     }
 }

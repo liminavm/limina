@@ -1,0 +1,3 @@
+# Build artifacts — `./build.sh` recreates both from probe.swift.
+probe
+NotchProbe.app/

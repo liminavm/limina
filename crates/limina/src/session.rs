@@ -45,6 +45,12 @@ pub struct SessionConfig {
     pub mode: crate::vmlib::schema::DisplayResolution,
     /// Drive the guest at device pixels rather than points (`[display] hidpi`, default on).
     pub hidpi: bool,
+    /// Fullscreen policy for the camera housing on a notched built-in display
+    /// (`[display] notch`, default `avoid`).
+    pub notch: crate::vmlib::schema::NotchPolicy,
+    /// Points of push needed to take the pointer out of a fullscreen guest
+    /// (`[display] edge-resistance`; 0 disables).
+    pub edge_resistance: f64,
     /// Where to persist window state (the bundle's state.toml); None = no persistence.
     pub state_path: Option<PathBuf>,
     /// Remembered NSWindow frame to restore (screen points, Cocoa bottom-left origin).
@@ -215,6 +221,8 @@ pub struct WindowedSession {
     title: String,
     mode: crate::vmlib::schema::DisplayResolution,
     hidpi: bool,
+    notch: crate::vmlib::schema::NotchPolicy,
+    edge_resistance: f64,
     state_path: Option<PathBuf>,
     restore_frame: Option<[f64; 4]>,
     initial_size: (u32, u32),
@@ -252,6 +260,8 @@ impl WindowedSession {
             splash_save_path,
             restore_splash,
             hidpi,
+            notch,
+            edge_resistance,
         } = config;
 
         // Close-to-suspend needs somewhere to persist the suspend and a snapshot path for the
@@ -416,6 +426,8 @@ impl WindowedSession {
 
         Ok(Self {
             hidpi,
+            notch,
+            edge_resistance,
             conn,
             shared,
             surface_map,
@@ -451,6 +463,8 @@ impl WindowedSession {
             self.surface_map,
             window::WindowOptions {
                 hidpi: self.hidpi,
+                notch: self.notch,
+                edge_resistance: self.edge_resistance,
                 resize_socket: self.resize_socket,
                 remap: self.remap,
                 soft_kbd_grab: self.soft_kbd_grab,

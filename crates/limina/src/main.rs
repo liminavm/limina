@@ -362,6 +362,18 @@ struct Cli {
     #[arg(long, overrides_with = "hidpi")]
     no_hidpi: bool,
 
+    /// What fullscreen does with the camera housing ("notch") on a built-in Retina display:
+    /// `avoid` (default) keeps the guest below it, leaving that strip black; `extend` gives the
+    /// guest the full panel and lets the housing overlap its top edge.
+    #[arg(long, value_name = "avoid|extend", default_value_t = crate::vmlib::schema::NotchPolicy::Avoid)]
+    notch: crate::vmlib::schema::NotchPolicy,
+
+    /// How hard the pointer sticks at a fullscreen guest's edges, in points of push (0 disables).
+    /// Keeps a flick toward the top edge from revealing the macOS menu bar, and a flick sideways
+    /// from landing on the next display, without preventing either deliberately.
+    #[arg(long, value_name = "POINTS", default_value_t = crate::vmlib::schema::DEFAULT_EDGE_RESISTANCE)]
+    edge_resistance: f64,
+
     /// Disable the soft keyboard grab. By default, while the VM window is focused, system
     /// key combos (Cmd-Tab, Cmd-Space, …) go to the guest — the mouse stays free, clicking
     /// another window (or Ctrl-Opt) returns the keyboard to the host.
@@ -903,6 +915,8 @@ fn cli_from_definition(
         no_swap_cmd_opt: !cfg.input.swap_cmd_opt,
         hidpi: cfg.display.hidpi,
         no_hidpi: !cfg.display.hidpi,
+        notch: cfg.display.notch,
+        edge_resistance: cfg.display.edge_resistance,
         no_soft_kbd_grab: false,
         window_title: Some(cfg.identity.name.clone()),
     })
@@ -919,6 +933,10 @@ fn run_vm(cli: Cli) -> Result<()> {
     // HiDPI: whether a guest pixel is a device pixel or a point (default ON). Resolved here for
     // the same reason — the windowed path below moves fields out of `cli`.
     let hidpi = cli.hidpi_enabled();
+    // Camera-housing policy and fullscreen edge resistance, read before the windowed path moves
+    // fields out of `cli`.
+    let notch = cli.notch;
+    let edge_resistance = cli.edge_resistance;
     // USB controller + fingerprint reader: on by default (--no-usb / --no-fingerprint opt out).
     // Resolved up front, before any field of `cli` is moved out below. USB is the master switch —
     // the reader rides the controller, so --no-usb also suppresses it (no orphan gadget).
@@ -1272,7 +1290,7 @@ fn run_vm(cli: Cli) -> Result<()> {
             .and_then(vmlib::state::load)
             .and_then(|s| s.window);
         let restore_frame = win_state.map(|w| w.frame);
-        let screen = window::screen_info_for_frame(restore_frame);
+        let screen = window::screen_info_for_frame(restore_frame, cli.notch);
         // Dynamic first-boot (nothing remembered): the half-area default at the SCREEN's
         // aspect — the same rule that sizes the first window, so window == guest with no
         // early re-modeset. --display-size only backstops a screen-less host.
@@ -1316,6 +1334,8 @@ fn run_vm(cli: Cli) -> Result<()> {
             });
         return session::run_windowed(session::SessionConfig {
             hidpi,
+            notch,
+            edge_resistance,
             vmm_bin,
             base_args: args,
             grace,
@@ -2104,6 +2124,8 @@ mod tests {
                 resolution: DisplayResolution::Fixed(1600, 1000),
                 on_window_close: vmlib::schema::WindowCloseAction::Suspend,
                 hidpi: true,
+                notch: vmlib::schema::NotchPolicy::Extend,
+                edge_resistance: 0.0,
             },
             input: InputCfg {
                 swap_cmd_opt: false,

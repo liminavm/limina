@@ -71,6 +71,52 @@ pub fn migration_command(host: &HostDisplay, drives_size: bool) -> DisplayComman
     })
 }
 
+/// The camera-housing ("notch") height of a screen in points, or 0 on a screen without one.
+///
+/// **Cached per display, because the live read is not always available.** With the bundle's
+/// `NSPrefersDisplaySafeAreaCompatibilityMode` key — the key that gets a fullscreen window the
+/// whole panel — AppKit reports the housing only while the window is *not* fullscreen. Measured
+/// on a built-in Retina display (`spikes/notch-fullscreen/`): windowed gives
+/// `safeAreaInsets.top = 32` and a 32 pt-tall `auxiliaryTopLeftArea`; fullscreen zeroes the
+/// insets and empties the auxiliary rect. Fullscreen is exactly when the policy needs the
+/// number, so learn it whenever it *is* readable and remember it against the display id.
+///
+/// A screen we have never seen unfullscreened reports 0 — i.e. the guest gets the whole panel.
+/// That is the safe way to be wrong: it wastes no rows, and the window is on a notched built-in
+/// display for at least one non-fullscreen tick in every path that can reach fullscreen.
+pub fn notch_inset(screen: &NSScreen) -> f64 {
+    use std::cell::RefCell;
+    thread_local! {
+        /// (display id, housing height). A handful of screens at most, so a Vec beats a map.
+        static SEEN: RefCell<Vec<(u32, f64)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    let id = display_id_of(screen);
+    // `safeAreaInsets` is the direct answer; `auxiliaryTopLeftArea` (the menu-bar region beside
+    // the housing) is the corroborating read, and non-empty only on a notched panel.
+    let live = screen.safeAreaInsets().top.max({
+        let aux = screen.auxiliaryTopLeftArea();
+        if aux.size.width > 0.0 {
+            aux.size.height
+        } else {
+            0.0
+        }
+    });
+
+    SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        let known = seen.iter_mut().find(|(seen_id, _)| *seen_id == id);
+        if live > 0.0 && live.is_finite() {
+            match known {
+                Some(entry) => entry.1 = live,
+                None => seen.push((id, live)),
+            }
+            return live;
+        }
+        known.map_or(0.0, |(_, height)| *height)
+    })
+}
+
 /// Describe the screen a window currently sits on. `None` when AppKit has no screen for it
 /// (which happens mid-transition — the caller simply skips that tick).
 ///
@@ -78,10 +124,16 @@ pub fn migration_command(host: &HostDisplay, drives_size: bool) -> DisplayComman
 /// [`fit::Scale`]. The advertised *density* is the panel's real device density either way — it
 /// describes the glass, not the framebuffer — which is what lets the guest pick a 2x scale once
 /// the framebuffer is big enough to carry one.
-pub fn describe(screen: &NSScreen, scale: fit::Scale) -> HostDisplay {
+///
+/// `notch_inset` is the housing height to withhold from the guest (0 unless the VM's policy is
+/// `avoid` and this screen has a housing). It is subtracted here — where the guest's *resolution*
+/// is decided — rather than only at fit time, so that entering fullscreen never modesets: the
+/// guest is already exactly as tall as the area fullscreen will give it.
+pub fn describe(screen: &NSScreen, scale: fit::Scale, notch_inset: f64) -> HostDisplay {
     let frame = screen.frame().size;
-    let points = (frame.width.round() as u32, frame.height.round() as u32);
-    let size = scale.to_guest((frame.width, frame.height));
+    let (usable_w, usable_h) = fit::usable_content(frame.width, frame.height, notch_inset);
+    let points = (usable_w.round() as u32, usable_h.round() as u32);
+    let size = scale.to_guest((usable_w, usable_h));
     let backing = screen.backingScaleFactor();
     let display_id = display_id_of(screen);
     let (millimeters_wide, _) = screen_size_millimeters(display_id);

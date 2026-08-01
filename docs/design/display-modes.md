@@ -156,6 +156,61 @@ aspect, so a 4:3 fixed guest gets a 4:3 half-area window.
 Ad-hoc `--window` runs have no bundle: they persist nothing unless given
 `--window-state-file <path>`.
 
+## Fullscreen on a notched display (`[display] notch`, 2026-08-01)
+
+On a MacBook Pro/Air built-in panel the camera housing splits the top of the screen. AppKit's
+default is to inset a fullscreen window **below** it: measured on a `1512x982` panel, the
+fullscreen window is `1512x949` and that 33 pt strip is unusable. Two apparent levers are not
+levers — `setFrame(screen.frame)` while fullscreen is ignored, and
+`window(_:willUseFullScreenContentSize:)` is consulted and then overridden. The only thing that
+changes it is the bundle's `NSPrefersDisplaySafeAreaCompatibilityMode`, which reads backwards:
+**`true` gives the fullscreen window the whole panel.** Full A/B in
+`spikes/notch-fullscreen/RESULTS.md`.
+
+So `scripts/build-app.sh` sets that key and limina owns the policy per VM:
+
+| `[display] notch` | fullscreen guest | the strip |
+|---|---|---|
+| `avoid` (default) | inset below the housing | black |
+| `extend` | the full panel | guest content, housing overlapping |
+
+`fit::usable_content` does the trim; `hostdisplay::notch_inset` supplies the height. That height
+has to be **cached per display**: under the compatibility key AppKit reports `safeAreaInsets` and
+`auxiliaryTopLeftArea` only while the window is *not* fullscreen, which is exactly when the policy
+needs them.
+
+The inset is applied in two places, deliberately at different times. `hostdisplay::describe`
+subtracts it **always**, so the guest's resolution already matches what fullscreen will hand it
+and entering fullscreen never modesets. The per-tick fit subtracts it **only while fullscreen**,
+because a windowed window is never under the housing. This also fixed a latent bug: host mode used
+to drive the guest to the full `screen.frame` while the fullscreen view was 33 pt shorter, so
+`aspect_fit` letterboxed the guest on all four sides.
+
+Caveat: the key is in the app bundle, so a bare `target/debug/limina` (what `cargo xtask run`
+launches) still gets the 949 pt window. `avoid` looks identical there; `extend` must be validated
+from a built `Limina.app`.
+
+## Fullscreen edge resistance (`[display] edge-resistance`, 2026-08-01)
+
+In fullscreen the host cursor touching the top edge instantly reveals the macOS menu bar and title
+bar, and a side edge silently hands the pointer to the next display. Both are one flick away, which
+makes a fullscreen guest feel leaky — the Parallels behavior is that leaving takes a deliberate
+push. `fit::EdgeResist` implements that: outward motion at an edge is absorbed until the
+accumulated push crosses the threshold (default 100 pt), then the pointer breaks through and stays
+free until it re-enters the content. The absorbed motion is forwarded to the guest's relative-mouse
+device as edge pressure — the same `send_edge_overflow` captured mode uses — so mutter's barriers
+(GNOME hot corner, a guest panel's reveal edge) still fire while the cursor is held.
+
+The accumulator drains on any event that isn't pushing outward, so sliding *along* an edge never
+adds up to a breakthrough and two nudges separated by inward motion don't either.
+
+Mechanically this lives in the capture tap's uncaptured path (`capture_tap::resist_edges`): the
+motion event is consumed and the host cursor warped back to the boundary, and the warp's own event
+is what re-drives the guest's pointer. It therefore needs the same Accessibility grant as pointer
+capture, and applies **only** while fullscreen and key — windowed, the pointer must be free to
+leave. `edge-resistance = 0` disables it; pointer capture (Cmd-Ctrl-G) remains the absolute
+version, parking the host cursor at screen centre.
+
 ## Files
 
 `crates/limina/src/window/fit.rs` (pure letterbox math + inverse input mapping),

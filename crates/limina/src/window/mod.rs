@@ -109,6 +109,12 @@ pub struct WindowOptions {
     /// Drive the guest at the window's screen in device pixels rather than points, so a Retina
     /// panel renders natively (`[display] hidpi`, default on). See [`fit::Scale`].
     pub hidpi: bool,
+    /// What fullscreen does with the camera housing on a notched built-in display
+    /// (`[display] notch`, default `avoid`). See [`crate::vmlib::schema::NotchPolicy`].
+    pub notch: crate::vmlib::schema::NotchPolicy,
+    /// Points of push needed to move the pointer past a fullscreen guest's edge
+    /// (`[display] edge-resistance`; 0 disables). See [`fit::EdgeResist`].
+    pub edge_resistance: f64,
 }
 
 /// The point-to-guest-pixel scale for the screen a window is currently on. Recomputed per use
@@ -136,7 +142,14 @@ pub struct ScreenInfo {
 /// when there is no frame / no match. `None` off the main thread or on a screen-less
 /// host — callers fall back to configured sizes. This is how match-host mode derives the
 /// initial guest resolution BEFORE any window exists.
-pub fn screen_info_for_frame(frame: Option<[f64; 4]>) -> Option<ScreenInfo> {
+///
+/// `notch` decides whether `frame` withholds the camera-housing strip on a notched built-in
+/// display; the boot resolution has to agree with what the running window will do, or host mode
+/// would modeset the guest on the first tick.
+pub fn screen_info_for_frame(
+    frame: Option<[f64; 4]>,
+    notch: crate::vmlib::schema::NotchPolicy,
+) -> Option<ScreenInfo> {
     let mtm = MainThreadMarker::new()?;
     let by_midpoint = frame.and_then(|f| {
         let (mx, my) = (f[0] + f[2] / 2.0, f[1] + f[3] / 2.0);
@@ -151,11 +164,21 @@ pub fn screen_info_for_frame(frame: Option<[f64; 4]>) -> Option<ScreenInfo> {
     let screen = by_midpoint.or_else(|| NSScreen::mainScreen(mtm))?;
     let sz = screen.frame().size;
     let vis = screen.visibleFrame().size;
+    let (sw, sh) = fit::usable_content(sz.width, sz.height, notch_inset_for(&screen, notch));
     Some(ScreenInfo {
-        frame: (sz.width.round() as u32, sz.height.round() as u32),
+        frame: (sw.round() as u32, sh.round() as u32),
         visible: (vis.width, vis.height),
         backing: screen.backingScaleFactor(),
     })
+}
+
+/// The housing height to withhold from the guest on this screen: the screen's real notch under
+/// the `avoid` policy, nothing under `extend` (and nothing on a screen with no housing).
+fn notch_inset_for(screen: &NSScreen, notch: crate::vmlib::schema::NotchPolicy) -> f64 {
+    match notch {
+        crate::vmlib::schema::NotchPolicy::Avoid => hostdisplay::notch_inset(screen),
+        crate::vmlib::schema::NotchPolicy::Extend => 0.0,
+    }
 }
 
 /// Does this window frame (screen points) intersect any current screen? Guards restoring
@@ -528,6 +551,8 @@ pub fn run(
         restore_splash,
         menu_ctx,
         hidpi,
+        notch: cfg_notch,
+        edge_resistance,
     } = opts;
 
     // The VM menu reads this when install_main_menu (below) builds it — set it first.
@@ -742,6 +767,7 @@ pub fn run(
         fit_cell.clone(),
         capture_pos.clone(),
         view.clone(),
+        edge_resistance,
     );
 
     // Shown-ack channel (#8 leg 2): after Core Animation latches a frame, tell the worker
@@ -897,12 +923,24 @@ pub fn run(
             // background; the guest never re-modesets for a window resize in those modes.
             if let Some(v) = window.contentView() {
                 let sz = v.frame().size;
-                if sz.width > 0.0 && sz.height > 0.0 {
+                // The camera housing is only ours to dodge in FULLSCREEN: that is the one state
+                // where AppKit hands us the whole panel (the compatibility key), and a windowed
+                // window is never under the housing anyway. Zero in every other case, so this is
+                // a no-op on external displays, in windowed mode, and under `extend`.
+                let inset = if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
+                    window
+                        .screen()
+                        .map_or(0.0, |s| notch_inset_for(&s, cfg_notch))
+                } else {
+                    0.0
+                };
+                let (sz_w, sz_h) = fit::usable_content(sz.width, sz.height, inset);
+                if sz_w > 0.0 && sz_h > 0.0 {
                     let g = geom.get();
                     let target = if mode == DisplayResolution::Dynamic {
-                        fit::FitRect::full(sz.width, sz.height)
+                        fit::FitRect::full(sz_w, sz_h)
                     } else {
-                        fit::aspect_fit(g.0, g.1, sz.width, sz.height)
+                        fit::aspect_fit(g.0, g.1, sz_w, sz_h)
                     };
                     if target != fit_cell.get() {
                         fit_cell.set(target);
@@ -920,9 +958,10 @@ pub fn run(
                 // the identity into its size push so a migration costs one modeset; dynamic and
                 // fixed have no size push to fold it into, so they send it on its own below.
                 // `screen()` is None mid-transition, which simply skips the tick.
-                let host = window
-                    .screen()
-                    .map(|s| hostdisplay::describe(&s, scale_for(&window, hidpi)));
+                let host = window.screen().map(|s| {
+                    let inset = notch_inset_for(&s, cfg_notch);
+                    hostdisplay::describe(&s, scale_for(&window, hidpi), inset)
+                });
                 let migrated = host
                     .as_ref()
                     .is_some_and(|h| h.identity_key() != identity_sent.get());
