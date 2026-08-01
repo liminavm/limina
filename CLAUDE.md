@@ -222,6 +222,16 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   line (`depth_clip_enable`, then `primitive restart`). Before acting on a warning, read its emission
   site in the (owned) source to see whether it's even fatal — then confirm by observation. Never
   conclude from the message text alone.
+- **"Out of memory" in the graphics stack is almost never about memory.** `VK_ERROR_OUT_OF_HOST_MEMORY`,
+  `ENOMEM`, and `ResourceCreateBlob -> ComponentError(-1)` are the *one* error code the venus transport
+  has for "could not get a buffer" — `vn_call_*` returns OOM whenever `vn_ring_get_command_reply` is
+  NULL, whatever the reason. Three incidents so far, three unrelated causes, no RAM shortage in any:
+  a poisoned context from a slow ring wait (2026-08-01), a host address-space leak (vm regions
+  3.5k→23.6k, RSS flat), and launchd's 256-fd limit on Dock-launched apps. Note the last two shared
+  an identical downstream signature, so it is a *symptom class*, never a diagnosis. Ask **what refused
+  the allocation** — read the host worker log at the timestamp of the guest symptom (the cause is
+  usually an earlier, different line there) and check the exhaustible resource that isn't RAM
+  (vm regions, fds, mappings). Consider real memory pressure last.
 - **Pixel-verify; proxies lie.** FPS counters, "no GL error", "18/18 scenes", exit-0 — none prove
   anything actually rendered. Read the real pixels: the IOSurface scanout via
   `spikes/venus-draw-probe/iosdump.swift` (cross-process, any global IOSurface id), or the window
