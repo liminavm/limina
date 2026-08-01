@@ -506,6 +506,27 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
     `sample <worker-pid>` during animation, and read FLUSH2 gap distributions. Memory:
     `limina-virgl-vrend-perf`.
 
+## Clipboard (M5)
+- **Whose clipboard wins when a guest has several sessions?** — 📋 open design question, raised
+  2026-07-31. A guest routinely runs one `limina-agent-session` per graphical session (dogfood-guest had
+  three: a GNOME session, a niri session, and the gdm greeter). All of them are clipboard-capable
+  peers, so with per-peer serials (the fix for the offer-drop bug below) **any** session can push to
+  the host pasteboard and the last write wins.
+  - **This is not obviously wrong — it's a trade-off.** Copying in one session and pasting in another
+    is a genuinely nice property, and sharing with the **greeter** is desirable too (user, 2026-07-31:
+    "it's good to share clipboard with the greeter if possible"). So do *not* reflexively restrict
+    peers by session class.
+  - The alternative — bind guest→host to the seat's **active** session — is more predictable when a
+    background session copies something the user never meant to send, but it costs the cross-session
+    paste and needs new protocol: the agent would have to report its session's id/active state (the
+    host cannot see `loginctl` from outside).
+  - Weigh before building. Possible middle ground: keep last-write-wins, but have the host log which
+    peer/session a copy came from so surprises are explainable.
+  - Related, already fixed: the host used to ratchet ONE `guest_serial` across all peers while each
+    agent numbers its offers from 1, so a long-lived session permanently silenced newer ones
+    (dogfood-guest: the niri session's copies never arrived). Serials are now per-connection —
+    `crates/limina-test/tests/l1_clipboard_multi_session.rs`.
+
 ---
 
 When a milestone's loose ends are all closed, fold the remainder back into the roadmap milestone

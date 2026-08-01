@@ -427,6 +427,8 @@ fn serve_loop(
     let reply = |msg: &Message, channel: u32| -> std::io::Result<()> {
         write_message(&mut *writer.lock().unwrap(), channel, msg)
     };
+    // This peer's guest→host offer high-water mark (see the ClipOffer arm below).
+    let mut guest_serial: u64 = 0;
     loop {
         let msg = read_message(stream);
         if msg.is_ok() {
@@ -439,8 +441,11 @@ fn serve_loop(
                 log::info!("control: agent acknowledged shutdown");
             }
             // The clipboard conversation (see crate::clipboard for the protocol rules).
+            // `guest_serial` is deliberately a local: each guest session's helper numbers
+            // its offers from 1, so the ratchet must be per-connection. Sharing one across
+            // peers let the session with the highest count silence all the others.
             Ok((_, Message::ClipOffer(o))) => {
-                if let Some(msg) = inner.clipboard.on_offer(o) {
+                if let Some(msg) = inner.clipboard.on_offer(o, &mut guest_serial) {
                     reply(&msg, CHANNEL_CLIPBOARD)?;
                 }
             }
@@ -449,7 +454,7 @@ fn serve_loop(
                     reply(&msg, CHANNEL_CLIPBOARD)?;
                 }
             }
-            Ok((_, Message::ClipData(d))) => inner.clipboard.on_data(d),
+            Ok((_, Message::ClipData(d))) => inner.clipboard.on_data(d, guest_serial),
             // M14: one CTAP HID report from the guest's uhid FIDO device. Only reachable
             // when a Secure Enclave is present (the guest was told `fido`), so `fido` is
             // Some. Transport frames (INIT/PING/errors) answer immediately; a CTAP2 CBOR

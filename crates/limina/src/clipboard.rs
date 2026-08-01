@@ -13,8 +13,15 @@
 //!   their REQUESTs from the cache.
 //!
 //! Only the **newest serial** in each direction is honored, so a stale in-flight
-//! exchange can never resurrect an older clipboard. M5 scope is text-only; richer
-//! formats ride the same OFFER/REQUEST/DATA shape later.
+//! exchange can never resurrect an older clipboard. Host→guest serials come from one
+//! counter here, but **guest→host serials are per-peer**: a guest runs one
+//! `limina-agent-session` per graphical session, each numbering its own offers from 1, so
+//! serials from different peers are unrelated. Ratcheting them together let a long-lived
+//! session's high-water mark silently swallow every offer from a newer one — that session's
+//! clipboard simply never arrived (dogfood-guest, 2026-07-31). The ratchet therefore lives
+//! with the peer's serve loop ([`crate::control`]), one per connection.
+//!
+//! M5 scope is text-only; richer formats ride the same OFFER/REQUEST/DATA shape later.
 //!
 //! Tests point this at a private NAMED pasteboard via `LIMINA_PASTEBOARD` (the general
 //! pasteboard is the product default) — see `crates/limina-test/tests/l1_clipboard.rs`.
@@ -40,8 +47,6 @@ pub struct Clipboard {
     host_serial: AtomicU64,
     /// The text backing the host's current offer, served on peer REQUESTs.
     host_text: Mutex<Option<String>>,
-    /// Newest guest offer serial we've requested; stale DATA is dropped.
-    guest_serial: AtomicU64,
 }
 
 impl Clipboard {
@@ -50,7 +55,6 @@ impl Clipboard {
             pasteboard: Mutex::new(Pasteboard::new()),
             host_serial: AtomicU64::new(0),
             host_text: Mutex::new(None),
-            guest_serial: AtomicU64::new(0),
         }
     }
 
@@ -89,7 +93,11 @@ impl Clipboard {
 
     /// A peer announced new guest clipboard content: request the text (if it has a
     /// format we speak).
-    pub fn on_offer(&self, offer: ClipOffer) -> Option<Message> {
+    ///
+    /// `peer_serial` is **that peer's** high-water mark, owned by its serve loop — never a
+    /// shared one. Peers number their offers independently, so comparing across them would
+    /// mute whichever session started later (see the module docs).
+    pub fn on_offer(&self, offer: ClipOffer, peer_serial: &mut u64) -> Option<Message> {
         if !offer
             .mime_types
             .iter()
@@ -97,11 +105,12 @@ impl Clipboard {
         {
             return None; // nothing we can represent yet
         }
-        // Only ratchet forward: an offer older than one we've already requested is stale.
-        let newest = self.guest_serial.fetch_max(offer.serial, Ordering::Relaxed);
-        if offer.serial < newest {
+        // Only ratchet forward: an offer older than one we've already requested *from this
+        // peer* is stale.
+        if offer.serial < *peer_serial {
             return None;
         }
+        *peer_serial = offer.serial;
         Some(Message::ClipRequest(ClipRequest {
             serial: offer.serial,
             mime_type: TEXT_MIME.to_string(),
@@ -138,8 +147,10 @@ impl Clipboard {
 
     /// A peer delivered the guest clipboard content we requested: put it on the
     /// pasteboard (self-change suppressed inside).
-    pub fn on_data(&self, data: ClipData) {
-        if data.serial != self.guest_serial.load(Ordering::Relaxed) {
+    ///
+    /// `peer_serial` is the same per-connection high-water mark [`Self::on_offer`] advanced.
+    pub fn on_data(&self, data: ClipData, peer_serial: u64) {
+        if data.serial != peer_serial {
             return; // stale delivery for a superseded offer
         }
         let text = String::from_utf8_lossy(&data.data).into_owned();

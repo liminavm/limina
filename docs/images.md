@@ -50,7 +50,7 @@ memories before anyone noticed. Verified 2026-06-27 by reading each image's rpmd
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-3.limina.fc43` *(respun 2026-07-21: -3 adds mesa 0016 ring-loss DEVICE_LOST + 0017 venus submit free-list fix [via the 0016-pre upstream free-list-scan backport — the 26.2.0 base predates it]; -2 [2026-07-19] added mesa 0014)* | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
 | **F44 stock** (`*.raw`, `*.boot.raw`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.4` *(respun 2026-07-20: latest stable + linux 0005 balloon-suspend fix; co-installed beside `7.1.2-limina16k` [fallback] + stock `6.19.10-300`)* | 16 KiB | `26.1.4-3.limina.fc44` *(respun 2026-07-21: -3 adds mesa 0017 venus submit free-list fix [quadratic CPU creep in long-running venus apps]; -1 caught the base up to stock 26.1.4 [venus fix as patch 0015]; -2 added mesa 0016 ring-loss DEVICE_LOST hardening)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
-| **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools; r3 install pass 2026-07-23)* | `limina-kernel-16k-7.1.4` *(7.0.13/7.1.2 kept as fallbacks; NO stock `kernel-core` installed)* | 16 KiB | `26.1.4-3.limina.fc44` *(current: -2 adds 0016 ring-loss hardening, -3 adds 0017 submit-freelist fix; versionlock re-armed; running session picks the new mesa up at next login)* | **stock** `50.3-2.fc44` *(since 2026-07-11: distro update displaced the patched build; clipboard rides the clipboard@limina extension at `/usr/share/gnome-shell/extensions` — bridge backend confirmed up 2026-07-23)* | `50.3` *(stock)* |
+| **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools; r3 install pass 2026-07-23, agent refresh 2026-08-01)* | `limina-kernel-16k-7.1.5` *(7.0.13/7.1.2/7.1.4 kept as fallbacks; NO stock `kernel-core` installed)* | 16 KiB | `26.1.4-3.limina.fc44` *(current: -2 adds 0016 ring-loss hardening, -3 adds 0017 submit-freelist fix; versionlock re-armed; running session picks the new mesa up at next login)* | **stock** `50.3-3.fc44` *(since 2026-07-11: distro update displaced the patched build; clipboard rides the clipboard@limina extension at `/usr/share/gnome-shell/extensions` — bridge backend confirmed up 2026-08-01)* | `50.3` *(stock)* |
 
 Notes: enhanced **mesa + kernel** are pinned to *our* version and `dnf versionlock`ed; enhanced
 **mutter** is rebuilt from the target distro's mutter SRPM carrying our patches over the stock GNOME
@@ -128,6 +128,22 @@ marker strings present). Delivery: the six installed subpackages scp'd + dnf-upg
 `libvulkan_virtio.so` sha256-matched the RPM payload, reboot came back seated on
 `6.12.0-limina16k+` with venus enumerating (`Virtio-GPU Venus`), clean poweroff;
 `enhanced.test.raw` recloned.
+
+**Dogfood guest-tools refresh — agent binaries only (2026-08-01, user-requested)** — dogfood-guest's
+guest components were audited against HEAD and only the two binaries were stale (installed
+2026-07-23): `limina-agent` `0.2.0` → **`0.3.0`** (FIDO, below) and `limina-agent-session` (a
+`limina-proto` rebuild — no behaviour change). Everything else was already current and byte-identical
+to the tree: kernel `7.1.5-limina16k` (running), mesa `26.1.4-3.limina`, the `clipboard@limina`
+extension, both systemd units, and `/etc/environment.d/90-limina-zink.conf` (no `VN_PERF`); the
+retired pointer gschema override was already gone. So this was a **per-file install**, not a payload
+respin — the 2026-07-11 precedent, and the honest one when no RPM changed. Old binaries kept beside
+the new ones as `*.bak-20260723` for rollback. Verified after restart: agent logs
+`limina-agent 0.3.0` + `virtual FIDO device up` (so the deployed host bundle already advertises the
+`fido` cap), helper logs `extension-bridge backend up` + `connected to host`, and both `/proc/PID/exe`
+hashes match the shipped build. **Not restarted:** the `gsrs` and gdm-greeter session helpers still
+run the old binary until their next login — functionally identical, so restarting another user's
+session was not worth the disruption. The host-side per-peer clipboard serial fix (`583030a`) is
+**not** deployed here; the user deploys the app bundle separately.
 
 **limina-agent 0.3.0 — Touch ID FIDO authenticator (2026-07-24)** — the agent advertises the
 **`fido`** cap and, when the host has a Secure Enclave, creates a `/dev/uhid` FIDO2 HID device

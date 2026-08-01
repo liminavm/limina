@@ -37,18 +37,29 @@ scripts/build-hvf-trap-probe.sh >/dev/null
 echo "==> running boot tests (LIMINA_HVF_TESTS=1)"
 # Build the test crate with the same profile; limina-test doesn't depend on the worker so
 # this won't rebuild/unsign it. --test-threads=1: one VM at a time.
-# `venus` is the enhanced-tier (16 KiB kernel) 3D test; it SKIPs instantly unless
-# `Image-16k` exists (build with `scripts/build-test-kernel.sh PAGESIZE=16k`), and when it
-# does it runs a full Fedora-on-custom-kernel boot (~minutes) to confirm venus enumerates.
-# `venus_replay` is the tier-2 RENDERING test (seated dev-enh boot + GL trace replay,
-# venus vs llvmpipe pixel compare); it SKIPs without the dev-enh golden, the KK ICD, or
-# the trace fixture (fixtures/traces/ — regenerate via spikes/trace-replay/).
-# `l2_share_71` is the ≥7.1-kernel virtiofs --share guard (libkrun 0090); it SKIPs unless a
-# ≥7.1 16 KiB test kernel exists (build with
-# `KVER=v7.1 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 PATCHES_OPTIONAL=1 scripts/build-test-kernel.sh`).
+# `--tests` runs EVERY test target in the crate — cargo discovers them, so a new
+# `tests/*.rs` file is picked up with no edit here. This replaced an explicit
+# `--test a --test b …` list that had to be hand-maintained and silently skipped whatever
+# wasn't on it (two regression tests, l1_port_reopen and l1_clipboard_multi_session, were
+# added and never ran in the suite until this changed — the failure mode is invisible:
+# a green run that simply didn't execute your test). It also picks up the harness crate's
+# own unit tests, which the old list excluded. Targets run in cargo's order, not ours.
+#
+# Several tests SKIP themselves instead of failing when their fixture is absent, so a
+# machine without them still gets a green, honest run:
+# - `venus` is the enhanced-tier (16 KiB kernel) 3D test; it SKIPs instantly unless
+#   `Image-16k` exists (build with `scripts/build-test-kernel.sh PAGESIZE=16k`), and when it
+#   does it runs a full Fedora-on-custom-kernel boot (~minutes) to confirm venus enumerates.
+# - `venus_replay` is the tier-2 RENDERING test (seated dev-enh boot + GL trace replay,
+#   venus vs llvmpipe pixel compare); it SKIPs without the dev-enh golden, the KK ICD, or
+#   the trace fixture (fixtures/traces/ — regenerate via spikes/trace-replay/).
+# - `l2_share_71` is the ≥7.1-kernel virtiofs --share guard (libkrun 0090); it SKIPs unless a
+#   ≥7.1 16 KiB test kernel exists (build with
+#   `KVER=v7.1 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 PATCHES_OPTIONAL=1 scripts/build-test-kernel.sh`).
+#
 # --no-fail-fast is load-bearing: cargo test fail-fasts ACROSS test binaries, so without it the
 # first failing binary (e.g. boot) silently stops the run and every later binary (net, venus,
 # venus_replay, …) never executes — masking their status. With it, every binary runs and reports.
 LIMINA_HVF_TESTS=1 cargo test --no-fail-fast ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina-test \
-    --test l1_boot --test l1_agent --test l1_shutdown --test l1_real_agent --test l1_multi_agent --test l1_clipboard --test l1_session_helper --test l1_share --test l1_liveness --test l1_display --test l1_blob_map --test l1_console --test l1_serial --test l1_command --test l1_resize --test l1_edid --test l1_snapshot --test boot --test net --test reboot --test disks --test vmdef --test inplace_s2idle --test l2_share_71 --test l2_vcpu_hotplug --test venus --test venus_reset --test venus_replay --test venus_fallback --test venus_fd_census --test venus_session_preserved --test venus_clear_rect --test virgl --test virgl_fence --test balloon --test balloon_inflate --test balloon_psi --test balloon_burst --test usb --test battery --test hvf_graceful --test venus_fence_present --test venus_fence_lost --test venus_park_on_busy_reset \
+    --tests \
     -- --nocapture --test-threads=1 "$@"
