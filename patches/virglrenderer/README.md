@@ -56,6 +56,16 @@ themes for the later spans:)
   queue-depth gauge (`q_peak=/q_now=/dropped_oom=` in the dump line — the backlog
   oracle; q_now should be ~0 after the quiesce, q_peak is the corner-case signal).
 
+- **Correctness (0058):** a ring wait slower than the diagnostic threshold is no longer treated as
+  a failed wait. `vkr_context_wait_ring_seqno` tested `thrd_timeout`, but the vendored c11 shim
+  returns **`thrd_busy`** for ETIMEDOUT — so the "STUCK >500ms" branch was dead and every slow wait
+  fell into the failure arm, marking the context FATAL. The guest then saw a *completely different*
+  symptom (blob creates refused → venus cannot grow its reply shmem →
+  `VK_ERROR_OUT_OF_HOST_MEMORY` from the next reply-bearing call → GTK4 aborting in `g_malloc` on
+  its unchecked pipeline-cache size query), which is why it read as a KosmicKrisp bug.
+  `LIMINA_RING_WAIT_WARN_MS` (default 500) makes the path testable; full write-up and probe in
+  `spikes/venus-ring-fatal-timeout/`.
+
 ### The 2026-07-01 series shape (21 patches) — themes
 
 - **macOS/venus enablement (0001-0002):** `shm_open` O_CLOEXEC + host-unsupported-ext filtering +

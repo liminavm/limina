@@ -60,3 +60,7 @@ spikes/virgl-zink-kk/timerprobe
 
 # Debug bundles are always build output, wherever clang leaves them.
 *.dSYM/
+
+# spikes/venus-ring-fatal-timeout build artifacts
+spikes/venus-ring-fatal-timeout/probe
+spikes/venus-ring-fatal-timeout/probe.dSYM/

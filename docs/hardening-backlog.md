@@ -73,33 +73,20 @@ Two classes already landed as targeted fixes: the empty-clear-rect vk_meta asser
 
 ## Guest app crashes (venus/KK correctness)
 
-- **`vkGetPipelineCacheData` returns `VK_ERROR_OUT_OF_HOST_MEMORY`, and GTK4 aborts on it.**
-  Found 2026-08-01 on `Fedora-Workstation-44.enhanced.test.raw` (EFI+venus+KK), while eyeballing
-  something unrelated. `gnome-control-center` died with SIGABRT from a *timer*, not from anything
-  the user did:
+- **~~`vkGetPipelineCacheData` returns `VK_ERROR_OUT_OF_HOST_MEMORY`, and GTK4 aborts on it~~ —
+  ROOT-CAUSED + FIXED the same day (virglrenderer 0058).** It was never a KosmicKrisp or
+  pipeline-cache bug. `vkr_context_wait_ring_seqno` tested `thrd_timeout` while the c11 shim
+  returns `thrd_busy` for ETIMEDOUT, so its "STUCK >500ms" branch was dead and **any ring wait
+  over the threshold marked the context FATAL** — a diagnostic manufacturing the wedge it was
+  added to observe. The poisoned context then refused blob creates, venus could not grow its
+  reply-shmem pool, and the next reply-bearing call returned `VK_ERROR_OUT_OF_HOST_MEMORY`; GTK4,
+  which never checks its pipeline-cache size query, aborted in `g_malloc` on the uninitialised
+  size. A/B at a 1 ms threshold: 1 FATAL before, 0 after (3 STUCK diagnostics instead, every wait
+  completing). Write-up + probe: `spikes/venus-ring-fatal-timeout/`.
 
-  ```
-  #7  g_malloc ()                            ← ../glib/gmem.c:106: failed to allocate 281474368445232 bytes
-  #8  gdk_vulkan_save_pipeline_cache.isra ()   libgtk-4.so.1
-  #9  gdk_vulkan_save_pipeline_cache_cb ()
-  #10 g_timeout_dispatch ()
-  ```
-
-  GTK4 periodically saves its Vulkan pipeline cache: it calls
-  `vkGetPipelineCacheData(dev, cache, &size, NULL)` for the size, our stack answers
-  `VK_ERROR_OUT_OF_HOST_MEMORY`, GTK **does not check the result**, so `size` keeps stack garbage
-  (281474368445232 ≈ 0xFFFF…) and `g_malloc` aborts. zink hit the same call three times in the
-  seconds before (`MESA: error: ZINK: vkGetPipelineCacheData failed (VK_ERROR_OUT_OF_HOST_MEMORY)`),
-  so the failure is in the call itself, not in one client.
-
-  Where it comes from is still open, and worth pinning before fixing: Mesa's common
-  `vk_common_GetPipelineCacheData` only ever returns `VK_SUCCESS` / `VK_INCOMPLETE`
-  (`/Volumes/mesa-cs/mesa/src/vulkan/runtime/vk_pipeline_cache.c:725`), so the OOM is coming from
-  **guest venus's own `vn_GetPipelineCacheData`** (reply-shmem sizing is the obvious suspect) or
-  from a KK-side path — instrument both ends before theorising. Two fixes likely, one each side:
-  make the call succeed, and report GTK's unchecked size query upstream (a Vulkan driver is allowed
-  to fail that call; aborting the process on it is GTK's bug). Any GTK4 app is exposed, so this is
-  a live dogfood crash, not a curiosity.
+  **Still open, upstream:** GTK4 aborting the process when `vkGetPipelineCacheData` fails is its
+  bug — a driver is allowed to fail that call. Worth reporting; low priority now the trigger is
+  gone.
 
 ## M4 venus residue
 - **~~Concurrent VM makes NEW venus instance creation fail in another guest~~ ROOT-CAUSED + FIXED
