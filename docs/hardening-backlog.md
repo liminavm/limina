@@ -522,6 +522,11 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
     host cannot see `loginctl` from outside).
   - Weigh before building. Possible middle ground: keep last-write-wins, but have the host log which
     peer/session a copy came from so surprises are explainable.
+  - **M12 now depends on this same seam** (2026-08-01). SPICE `vdagentd` serves only the logind-ACTIVE
+    session, so "which session does vdagent cover" is the *same* active-session question wearing a
+    different hat — and the per-session native-vs-SPICE arbitration (roadmap M12 task 4) has to answer
+    it. Current lean: native always claims **inactive** sessions and SPICE serves only the active one,
+    which keeps cross-session paste. Decide both together rather than twice.
   - Related, already fixed: the host used to ratchet ONE `guest_serial` across all peers while each
     agent numbers its offers from 1, so a long-lived session permanently silenced newer ones
     (dogfood-guest: the niri session's copies never arrived). Serials are now per-connection —

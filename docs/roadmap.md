@@ -1199,9 +1199,59 @@ limina speaks the vdagent protocol.
    the vdagent channel, and `vdagentd` writes into the guest user's Downloads. Respect the xfer status
    handshake (guest can decline / cancel). Chunk-size + flow-control caution mirrors M5's large-vsock
    transfer risks. After clipboard is proven.
-4. **Arbitration with the native path.** When `limina-agent` (enhanced tier) is present, it wins;
-   SPICE is the fallback when only stock `spice-vdagent` is there. Detect granularly/additively (per
-   the cross-cutting rule) — a guest may have one, both, or neither.
+4. **Arbitration with the native path — SPICE is the DEFAULT, native is the per-session patch
+   (user-decided 2026-08-01; this reverses the earlier "native always wins", which was also wrong
+   about the granularity).** vdagent is stock and free, so where it works we should just use it and
+   stop carrying the expensive alternative. Where it *doesn't* work, the native helper plugs the hole
+   — and that is a **per-session** question, not a per-VM one: different logind sessions on one guest
+   run different compositors with different capabilities (verified on dogfood-guest 2026-08-01: `kov` on
+   gnome-shell, `gsrs` on niri, same VM).
+   - **The dependency is XWayland.** F44's `spice-vdagent-0.23.0` links `libX11.so.6` and no Wayland
+     library — its clipboard is X11-only (`src/vdagent/x11.c`), so on Wayland it rides XWayland +
+     mutter's X11↔Wayland selection bridging, exactly as Boxes does. No XWayland ⇒ no SPICE clipboard
+     in that session.
+   - **This makes the tiers fit together well:** the compositors vdagent *can't* serve (niri, wlroots,
+     KDE) are the ones that ship **ext-data-control**, our cheapest native tier; and the rung that
+     costs us the most maintenance — the `clipboard@limina` shell extension — exists only for GNOME,
+     which always has XWayland available. So the ladder collapses to *ext-data-control where the
+     compositor has it, vdagent on GNOME*, and the extension becomes the vestigial rung for
+     GNOME-without-XWayland. Retiring it is the prize here (it is what breaks on GNOME updates —
+     see the mutter-left-the-delivery history in `limina-enh-delivery`).
+   - **The decision must be made IN THE GUEST, per session, and merely honored by the host.** The
+     facts it needs (which compositor, is there an XWayland, did vdagent actually get the selection)
+     exist only inside a session; the host sees one vdagent channel plus N helper connections and
+     cannot tell which is which. So each `limina-agent-session` probes its own session and either
+     **claims** the clipboard (advertises the cap, takes a quiet tier) or **stands by** because vdagent
+     covers it; the host keeps its single `crates/limina/src/clipboard.rs` pasteboard owner and routes
+     to the SPICE transport plus whichever peers claimed. No host-side policy.
+   - **Probe positively, don't infer.** The test is "is `spice-vdagent` alive in *this* session and
+     holding the selection", NOT "is XWayland installed" — GNOME starts XWayland **on demand** (none
+     was running on dogfood-guest at all), so the inference is wrong in both directions. Note the cost
+     while we are at it: vdagent autostart is itself an X client, so adopting SPICE keeps an XWayland
+     resident in every GNOME session that would otherwise never start one.
+   - **The wrinkle that does not decompose: `vdagentd` serves only the logind-ACTIVE session.** SPICE
+     coverage is therefore per-session *and* time-varying — gsrs is covered while active and uncovered
+     the moment you switch to kov. Two options, and the choice is deliberate: (a) the helper watches
+     logind `ActiveSession` and re-claims when its session goes inactive (tighter, but races a session
+     switch mid-copy), or (b) **native always claims in inactive sessions and SPICE only ever serves
+     the active one** (simpler, and preserves the cross-session copy/paste the user values). Leaning
+     (b). Same seam as the "active session" trade-off in `docs/hardening-backlog.md` §Clipboard.
+   - **Two-tier floor unchanged:** a stock guest with neither XWayland nor `limina-agent` has no
+     clipboard. That is a degraded baseline, not a broken one.
+   - **Where the switch is thrown:** capability negotiation, not the port. Expose the port always (it
+     must exist at VM start for the udev rule) and answer `VD_AGENT_ANNOUNCE_CAPABILITIES` **without**
+     the clipboard bits when no session wants SPICE to have them, so vdagent never grabs and no
+     two-owners fight can start. Withdraw/restore **event-driven, exactly once** — never on a timer:
+     spike #1 found vdagentd reads every announce as a *new SPICE client* and resets clipboard state,
+     which makes a repeating announce a clipboard suppressor (usable as a deliberate withdrawal
+     signal, lethal as a heartbeat).
+   - **Why not de-duplicate downstream:** the host pasteboard is safe either way (`set_text` records
+     the resulting `changeCount`, so a duplicated guest copy cannot echo), but the guest side is not.
+     Two clients claiming CLIPBOARD in one session, tied together by mutter's X11↔Wayland bridging,
+     fight over ownership and re-report each other's sets as fresh copies. Arbitration therefore has
+     to mean *not enabling the SPICE clipboard for that session*, never merging afterwards.
+   - Build this **with** task 2, not after it: the announce path is where the decision lives, and
+     bolting it on later means writing the clipboard message set twice.
 
 **libkrun patches:** the virtio-serial named-multiport device (task 1) — the one real patch. Broker +
 clipboard bridge are pure limina code.
@@ -1209,6 +1259,10 @@ clipboard bridge are pure limina code.
 **Done test:** boot an **unmodified** stock Fedora image (no `install-enhanced.sh`, no `limina-agent`)
 under limina; `spice-vdagentd` comes up against `/dev/virtio-ports/com.redhat.spice.0`; copy text in
 the host and paste it in the guest and vice-versa. Baseline-tier compatibility floor (L2) stays green.
+**Second done test (task 4, the mixed guest):** one guest running two sessions on different
+compositors — GNOME (XWayland-capable, SPICE-covered) and niri (no XWayland, ext-data-control) —
+copies and pastes in **both**, with exactly one clipboard owner per session and no ownership
+ping-pong. dogfood-guest is already shaped like this, so it is a real configuration, not a contrived one.
 
 **Risks / spike first:**
 - ~~**Spike #1 (gating):** does exposing a named `com.redhat.spice.0` virtio-serial port actually wake
@@ -1614,7 +1668,7 @@ wins ships with a before/after on the guest's heavy-band `gpu p50`.
 | M7 USB | host claim/attach, usbip plumbing | our-kernel config edit (USB+uinput); later native virtio-usb + krun_add_usb* |
 | M8 audio/x86/polish | fullscreen, keymap, multi-display, pointer capture, IOSurface mach-port scoping, FEX wiring | native virtio-snd; runtime resize/EDID; LED parity |
 | M9 suspend/resume + snapshots 📐 designed | host-side VMM snapshot (file format/CRC, `--restore` wiring, device schema + mapped-blob set, named-snapshot manager + clone + APFS `clonefile` disk, agent freeze bracket, proto `Snapshot`/`Restore`/`TimeSet`, capability probe, UX); Mesa-venus object-graph replay + **device-local content readback** + blob copy-back (venus tier) | multi-vCPU HVF pause/quiesce (incl. WFE-parked wakeup) + vCPU save/restore (wrappers, FFI exists) + GIC state (spike #2 green) + `CNTVOFF` set + `--restore` mode + device (de)serialize + virtio freeze/thaw hardening + snapshot-time GPU quiesce (restore = fresh worker, no in-process renderer reset; `reset_session` rutabaga-context fix already shipped, 0035); carry `patches/linux` Dongwon-Kim drm/virtio freeze-restore (virgl) |
-| M12 SPICE agent 📋 planned | host vdagent broker (framing + clipboard, then client→guest file transfer), NSPasteboard bridge reuse (M5), native-vs-SPICE arbitration; display-resize deliberately excluded (native EDID already covers it) | virtio-serial named multiport port `com.redhat.spice.0` (wakes stock `spice-vdagentd`); no crate reuse |
+| M12 SPICE agent 📋 planned | host vdagent broker (framing + clipboard, then client→guest file transfer), NSPasteboard bridge reuse (M5), **per-session** native-vs-SPICE arbitration (SPICE default; the helper claims only sessions vdagent can't cover — no XWayland — and the decision is made in-guest); display-resize deliberately excluded (native EDID already covers it) | virtio-serial named multiport port `com.redhat.spice.0` (wakes stock `spice-vdagentd`); no crate reuse |
 | M13 visibility/power render adaptation 📋 planned | front-end occlusion/Space/power signal + hysteresis policy, `vm.toml [power]/[render]` config, host present cap/pause (reuse s2idle), agent frame-rate throttle message | present pause/cap knob (extends s2idle 0089) + fence-feedback pacing knob; relax deep-idle bias on occlusion |
 | M14 biometric auth 🟡 spiked | host CTAP2 authenticator (SEP ES256 + LAContext, CryptoKit blob store per VM), agent uhid FIDO bridge + vsock channel, later xHCI + FIDO/MOC-fingerprint gadgets, pam_u2f/authselect recipe | none for uhid transport (vsock exists); stock wave = xHCI controller + gadget device models in libkrun (shared with M7) |
 | M15 display pipeline v2 📋 planned | per-hw-display window/present policy (native refresh + VRR pacing), CALayer-per-plane compositing, WindowServer GPU-share profiling | krun-display EDID/modes per host display (incl. VRR range), virtio-gpu overlay-plane + YUV(NV12/P010)+color-props protocol extension (device + guest kernel, capset-gated), primary-plane format/modifier advertisement (XBGR/ABGR now; non-LINEAR per `spikes/scanout-modifiers/`), cursor-size lift (low-prio) |
