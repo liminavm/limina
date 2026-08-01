@@ -201,15 +201,51 @@ free until it re-enters the content. The absorbed motion is forwarded to the gue
 device as edge pressure — the same `send_edge_overflow` captured mode uses — so mutter's barriers
 (GNOME hot corner, a guest panel's reveal edge) still fire while the cursor is held.
 
-The accumulator drains on any event that isn't pushing outward, so sliding *along* an edge never
-adds up to a breakthrough and two nudges separated by inward motion don't either.
+The accumulator drains when the pointer retreats more than `RELEASE_MARGIN` back inside the held
+edge, so sliding *along* an edge never adds up to a breakthrough and two nudges separated by real
+inward motion don't either.
 
 Mechanically this lives in the capture tap's uncaptured path (`capture_tap::resist_edges`): the
-motion event is consumed and the host cursor warped back to the boundary, and the warp's own event
-is what re-drives the guest's pointer. It therefore needs the same Accessibility grant as pointer
-capture, and applies **only** while fullscreen and key — windowed, the pointer must be free to
-leave. `edge-resistance = 0` disables it; pointer capture (Cmd-Ctrl-G) remains the absolute
+motion event is consumed and the host cursor warped back inside the boundary, and the warp's own
+event is what re-drives the guest's pointer. It therefore needs the same Accessibility grant as
+pointer capture, and applies **only** while fullscreen and key — windowed, the pointer must be free
+to leave. `edge-resistance = 0` disables it; pointer capture (Cmd-Ctrl-G) remains the absolute
 version, parking the host cursor at screen centre.
+
+### Three things the first cut got wrong (dogfood, 2026-08-01)
+
+Worth keeping, because each is a trap the obvious implementation walks into.
+
+**Pinning the cursor *on* the top edge does not stop the chrome.** macOS reveals the menu bar and
+title bar the moment the cursor touches the top row of the screen — the reveal has already happened
+by the time resistance could push back, so the top edge felt like it had no resistance at all while
+the sides felt strong. The fix is a `KEEPOUT` band (2 pt): while resistance holds, the cursor parks
+*short* of the edge on all four sides, so the trigger is never touched (the Dock's auto-hide reveal
+on whichever edge it lives gets the same protection for free). The guest doesn't notice, because
+while we hold, its pointer is driven by the forwarded pressure rather than by the host cursor's
+position. Related: the top and bottom hold the full threshold while the sides take `SIDE_FACTOR`
+(half) of it — crossing to another display is a thing you mean to do; macOS chrome dropping over
+the guest never is.
+
+**A warp opens a 0.25 s local-events suppression interval.** During it, real mouse movement stops
+moving the cursor. Resistance warps on every held event, so pushing at an edge and then coming back
+felt like the barrier had *eaten* the travel — you had to move a long way before the cursor
+unstuck. `CGAssociateMouseAndMouseCursorPosition(true)` immediately after the warp ends the
+interval (`input::end_warp_suppression`); it is a no-op for association itself, since the
+uncaptured path is associated by definition.
+
+**Do not integrate the position yourself.** The first cut advanced a position kept by the window's
+own motion handler — which sees nothing while the tap is consuming events, and nothing *at all*
+once the pointer has left the window for another display. It froze on the edge, so small moves made
+over on the neighbouring display computed as re-entering the content, re-armed the resistance, and
+warped the pointer home: "sometimes the mouse crosses to a separate workspace and then gets thrown
+back". `EdgeResist::step` now takes the event's own `CGEventGetLocation` (via
+`input::cg_global_to_view_point`, which happily answers with coordinates outside the view) and uses
+the deltas only for pressure — which is the right split anyway, since at a real screen edge the
+position stops changing while the deltas keep coming. Re-arming likewise needs a genuine retreat
+inside the content, not mere boundary contact: once through the top, the cursor rests *on* the
+content's own top boundary, and a boundary-inclusive test re-arms instantly and drags the pointer
+off the menu bar it just earned.
 
 ## Files
 

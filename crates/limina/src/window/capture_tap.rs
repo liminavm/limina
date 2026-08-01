@@ -83,6 +83,10 @@ extern "C" {
     fn CFRunLoopGetMain() -> CFRunLoopRef;
     fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
     fn CGWarpMouseCursorPosition(point: NSPoint) -> i32;
+    /// Where the event says the cursor is, in CG global coordinates (top-left origin), *after*
+    /// this motion was applied — the authoritative position, including the window server's own
+    /// clamping to the union of the displays.
+    fn CGEventGetLocation(event: CGEventRef) -> NSPoint;
     fn CGMainDisplayID() -> u32;
     fn CGDisplayBounds(display: u32) -> NSRect;
     fn CFDictionaryCreate(
@@ -565,26 +569,30 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
         return event;
     }
 
-    // The virtual cursor is where the pointer was BEFORE this event — the tap runs ahead of the
-    // app, so `pos` still holds what the local monitor recorded for the previous motion. That is
-    // exactly the origin the resistance step wants. With nothing recorded yet (no motion over the
-    // content since the window came up) there is no edge to defend, so let the event through and
-    // let the monitor seed it.
+    // Where the cursor actually IS, read off the event. Not `ctx.pos`: that is maintained by the
+    // window's own motion handler, which sees nothing while we are consuming events and nothing
+    // at all once the pointer has left the window for another display — so it freezes on the
+    // edge, and steering by it used to drag an escaped pointer back into the guest.
     let fit = ctx.fit.get();
-    let Some(prev) = ctx.pos.get() else {
+    let Some(cur) =
+        super::input::cg_global_to_view_point(&ctx.view, unsafe { CGEventGetLocation(event) })
+    else {
         return event;
     };
     let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
-    let step = resist.step(prev, getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y), fit);
+    let step = resist.step(cur, getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y), fit);
     ctx.resist.set(resist);
     if step.free {
         return event;
     }
 
-    // Held at the edge: pin the host cursor there and hand the guest the motion we ate, so
-    // mutter's pressure barriers (GNOME hot corner, a guest panel's reveal edge) still fire.
-    if let Some(p) = super::input::view_point_to_cg_global(&ctx.view, step.pos) {
-        unsafe { CGWarpMouseCursorPosition(p) };
+    // Held at the edge: park the host cursor just inside it and hand the guest the motion we ate,
+    // so mutter's pressure barriers (GNOME hot corner, a guest panel's reveal edge) still fire.
+    if step.pos != cur {
+        if let Some(p) = super::input::view_point_to_cg_global(&ctx.view, step.pos) {
+            unsafe { CGWarpMouseCursorPosition(p) };
+            super::input::end_warp_suppression();
+        }
     }
     send_edge_overflow(&ctx.conn, step.overflow);
     std::ptr::null_mut()

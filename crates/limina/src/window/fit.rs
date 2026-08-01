@@ -215,6 +215,48 @@ pub(crate) fn capture_step(pos: Option<(f64, f64)>, dx: f64, dy: f64, fit: FitRe
     }
 }
 
+/// How far inside the guest's edge the resistance parks the host cursor while it holds.
+///
+/// Pinning *on* the edge is not enough at the top: macOS reveals the menu bar and the window's
+/// title bar the instant the cursor touches the top row of the screen, and a fullscreen guest's
+/// top edge IS that row — so the chrome is already down before any amount of resistance could
+/// push back. The same is true of an auto-hidden Dock on whichever edge it lives. Holding a
+/// couple of points short of the edge keeps the cursor off those triggers; the guest is
+/// unaffected because while we hold, its pointer is driven by the forwarded pressure (below)
+/// rather than by the host cursor's position.
+const KEEPOUT: f64 = 2.0;
+
+/// How far back inside the held edge the pointer must travel before the accumulated push is
+/// forgotten. Must exceed [`KEEPOUT`], or the cursor we park ourselves would read as a retreat
+/// and drain the accumulator we just filled.
+const RELEASE_MARGIN: f64 = 6.0;
+
+/// Fraction of the configured threshold the *side* edges resist with.
+///
+/// The two escapes are not equally unwelcome. Leaving sideways is usually deliberate — it is how
+/// you reach another display, the thing this feature exists to keep possible — while the top
+/// edge's reward is macOS chrome dropping over the guest, which is never what you meant. So the
+/// sides yield sooner than the configured threshold and the top holds the full amount.
+const SIDE_FACTOR: f64 = 0.5;
+
+/// Coordinate slop for "is the pointer against this edge". Positions arrive as f64 points that
+/// have been through two affine conversions; an exact compare would miss by ulps.
+const EPS: f64 = 0.001;
+
+/// One axis of a rectangle inset by `inset` on both sides, as `(low, high)`.
+///
+/// Content thinner than two insets collapses to its own centre rather than producing an
+/// inside-out range — `f64::clamp` panics when min > max, and a mid-resize tick can get there.
+fn band(origin: f64, extent: f64, inset: f64) -> (f64, f64) {
+    let extent = extent.max(0.0);
+    if extent <= 2.0 * inset {
+        let mid = origin + extent / 2.0;
+        (mid, mid)
+    } else {
+        (origin + inset, origin + extent - inset)
+    }
+}
+
 /// One edge-resistance step: where the host cursor belongs, the pressure to hand the guest,
 /// and whether the pointer is free to leave.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -238,14 +280,17 @@ pub(crate) struct ResistStep {
 /// past an edge is absorbed (and forwarded to the guest as edge pressure, so the guest's own top
 /// bar and hot corner keep working) until the accumulated outward push crosses `threshold`
 /// points, at which point the pointer breaks through and behaves normally until it comes back
-/// inside.
+/// inside. The threshold is the *top* edge's; the sides take [`SIDE_FACTOR`] of it, and while
+/// resistance holds, the cursor is parked [`KEEPOUT`] points short of the edge so macOS's own
+/// reveals never fire in the first place.
 ///
 /// This is the uncaptured counterpart to pointer capture (Cmd-Ctrl-G), which prevents the same
 /// escapes absolutely by parking the host cursor at screen centre.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EdgeResist {
-    /// Points of accumulated outward push needed to break out. Zero (or negative) disables
-    /// resistance entirely — every step comes back `free`.
+    /// Points of accumulated outward push needed to break out at the **top or bottom**; the
+    /// sides need [`SIDE_FACTOR`] of it. Zero (or negative) disables resistance entirely —
+    /// every step comes back `free`.
     threshold: f64,
     /// Outward push accumulated at the current edge, per axis, as magnitudes.
     acc: (f64, f64),
@@ -278,49 +323,103 @@ impl EdgeResist {
         self.through = false;
     }
 
-    /// Advance by one motion delta from `pos` (view points, bottom-left origin; AppKit deltas,
-    /// so positive `dy` is downward).
-    pub(crate) fn step(&mut self, pos: (f64, f64), dx: f64, dy: f64, fit: FitRect) -> ResistStep {
-        let unclamped = (pos.0 + dx, pos.1 - dy);
+    /// Advance by one motion event.
+    ///
+    /// `cur` is where the window server has **already put** the cursor (view points, bottom-left
+    /// origin) — the event's own location, after this motion was applied. It is deliberately not
+    /// a position we integrate ourselves: the caller consumes the events it resists, so any
+    /// position maintained downstream of the tap stops updating exactly while resistance is
+    /// engaged, and goes stale the moment the pointer leaves the window for another display.
+    /// Steering by a stale origin is what used to yank a pointer that had legitimately escaped
+    /// back into the guest.
+    ///
+    /// `dx`/`dy` are the event's deltas in AppKit convention (positive `dy` is *downward*). They
+    /// are what the pressure is measured in, and they must be: at a real screen edge the cursor
+    /// stops moving but the deltas keep coming, so position alone cannot tell a shove from a
+    /// rest.
+    pub(crate) fn step(&mut self, cur: (f64, f64), dx: f64, dy: f64, fit: FitRect) -> ResistStep {
         let free = |pos| ResistStep {
             pos,
             overflow: (0.0, 0.0),
             free: true,
         };
         if !self.enabled() {
-            return free(unclamped);
+            return free(cur);
         }
         if self.through {
             // Already out. Re-arm only once the pointer is genuinely back inside the content —
-            // re-arming at the boundary would fight the user on the way out.
-            if point_in_fit(unclamped.0, unclamped.1, fit) {
+            // and *inside* means clear of the boundary by the same retreat margin a push is
+            // forgiven at. Re-arming at the boundary would fight the user on the way out, and at
+            // the top it is worse than that: once through, the cursor rests against the screen
+            // edge and reports that same position forever, so a boundary-inclusive test re-arms
+            // instantly and the next twitch drags it back off the menu bar it just earned.
+            let (rx_lo, rx_hi) = band(fit.x, fit.w, RELEASE_MARGIN);
+            let (ry_lo, ry_hi) = band(fit.y, fit.h, RELEASE_MARGIN);
+            let back_inside = fit.w > 0.0
+                && fit.h > 0.0
+                && (rx_lo..=rx_hi).contains(&cur.0)
+                && (ry_lo..=ry_hi).contains(&cur.1);
+            if back_inside {
                 self.reset();
             } else {
-                return free(unclamped);
+                return free(cur);
             }
         }
 
-        let step = capture_step(Some(pos), dx, dy, fit);
-        if step.overflow == (0.0, 0.0) {
-            // Not pushing against any edge: the accumulator is about a *sustained* shove, so an
-            // event that doesn't push drains it. Without this, a hundred unrelated nudges over a
-            // session would eventually add up to a breakthrough.
-            self.acc = (0.0, 0.0);
-            return free(unclamped);
+        // The area the held cursor is allowed to occupy: the content, minus the keep-out band
+        // that stops it triggering macOS's own edge reveals.
+        let (lo_x, hi_x) = band(fit.x, fit.w, KEEPOUT);
+        let (lo_y, hi_y) = band(fit.y, fit.h, KEEPOUT);
+
+        // Is this event pushing *outward* at an edge the pointer is already against? Both halves
+        // matter: against-the-edge alone is just resting there, and outward motion alone is the
+        // ordinary business of crossing the content.
+        // `out_high` says which sign of the delta points *away* from the content at that axis's
+        // high edge — the axes differ only there, because view y grows up while deltas grow down,
+        // so leaving over the TOP is a negative dy.
+        let push = |p: f64, lo: f64, hi: f64, d: f64, out_high: f64| {
+            let against = if d * out_high > 0.0 {
+                p >= hi - EPS
+            } else {
+                p <= lo + EPS
+            };
+            if d != 0.0 && against {
+                d
+            } else {
+                0.0
+            }
+        };
+        let push_x = push(cur.0, lo_x, hi_x, dx, 1.0);
+        let push_y = push(cur.1, lo_y, hi_y, dy, -1.0);
+
+        // A genuine retreat forgets the push — the accumulator is about a *sustained* shove, and
+        // without this a hundred unrelated nudges over a session would eventually add up to a
+        // breakthrough. Measured as distance back inside rather than as inward motion, because
+        // the keep-out warp is itself an inward move and must not drain what it is holding.
+        let inside_x = (cur.0 - lo_x).min(hi_x - cur.0);
+        let inside_y = (cur.1 - lo_y).min(hi_y - cur.1);
+        if inside_x > RELEASE_MARGIN {
+            self.acc.0 = 0.0;
+        }
+        if inside_y > RELEASE_MARGIN {
+            self.acc.1 = 0.0;
+        }
+        if (push_x, push_y) == (0.0, 0.0) {
+            // Not pushing at an edge: nothing to hold, and nothing to charge for. Passing the
+            // event through untouched is what keeps the letterbox bars and the content itself
+            // freely traversable.
+            return free(cur);
         }
 
-        self.acc = (
-            self.acc.0 + step.overflow.0.abs(),
-            self.acc.1 + step.overflow.1.abs(),
-        );
-        if self.acc.0.max(self.acc.1) >= self.threshold {
+        self.acc = (self.acc.0 + push_x.abs(), self.acc.1 + push_y.abs());
+        if self.acc.0 >= self.threshold * SIDE_FACTOR || self.acc.1 >= self.threshold {
             self.through = true;
             self.acc = (0.0, 0.0);
-            return free(unclamped);
+            return free(cur);
         }
         ResistStep {
-            pos: step.pos,
-            overflow: step.overflow,
+            pos: (cur.0.clamp(lo_x, hi_x), cur.1.clamp(lo_y, hi_y)),
+            overflow: (push_x, push_y),
             free: false,
         }
     }
@@ -392,16 +491,22 @@ mod tests {
         FitRect::full(1512.0, 949.0)
     }
 
+    /// The top edge of [`screen_fit`], where the window server pins the cursor once it has
+    /// reached the top of the screen: every further upward event reports this same location and
+    /// a fresh negative delta.
+    const TOP: f64 = 949.0;
+
     #[test]
-    fn resistance_pins_the_cursor_at_the_top_edge_and_reports_pressure() {
+    fn resistance_holds_the_cursor_clear_of_the_top_edge_and_reports_pressure() {
         let mut r = EdgeResist::new(100.0);
-        // Sitting on the top edge, shoving up 10 pt (AppKit deltas: up is NEGATIVE dy).
-        let step = r.step((700.0, 949.0), 0.0, -10.0, screen_fit());
+        // Against the top of the screen, still shoving up (AppKit deltas: up is NEGATIVE dy).
+        let step = r.step((700.0, TOP), 0.0, -10.0, screen_fit());
         assert!(!step.free, "a 10 pt nudge must not reveal the menu bar");
         assert_eq!(
             step.pos,
-            (700.0, 949.0),
-            "the cursor stays pinned at the edge"
+            (700.0, TOP - KEEPOUT),
+            "held SHORT of the edge — pinning it ON the edge is what dropped the macOS chrome, \
+             which fires on contact and cannot be pushed back up"
         );
         assert_eq!(
             step.overflow,
@@ -415,14 +520,54 @@ mod tests {
         let mut r = EdgeResist::new(100.0);
         let fit = screen_fit();
         for _ in 0..9 {
-            assert!(!r.step((700.0, 949.0), 0.0, -10.0, fit).free);
+            assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
         }
         // 10 x 10 pt reaches the threshold: the pointer is released and the chrome may appear.
-        let out = r.step((700.0, 949.0), 0.0, -10.0, fit);
+        let out = r.step((700.0, TOP), 0.0, -10.0, fit);
         assert!(out.free, "100 pt of push must break out");
-        assert_eq!(out.pos, (700.0, 959.0), "and the cursor leaves the content");
         // Still out on the next event, without re-earning it.
-        assert!(r.step((700.0, 959.0), 0.0, -10.0, fit).free);
+        assert!(r.step((700.0, TOP), 0.0, -10.0, fit).free);
+    }
+
+    #[test]
+    fn a_pointer_that_broke_through_the_top_can_stay_on_the_menu_bar() {
+        // Having earned the chrome, you get to use it. Once through, the cursor rests against
+        // the top of the screen — which is the content's own boundary — so a re-arm test that
+        // merely asks "is it inside the content" fires immediately and hauls the pointer back
+        // off the menu bar it just paid for.
+        let mut r = EdgeResist::new(100.0);
+        let fit = screen_fit();
+        assert!(r.step((700.0, TOP), 0.0, -200.0, fit).free, "through");
+        for x in [700.0, 640.0, 900.0, 300.0] {
+            let step = r.step((x, TOP), 12.0, -1.0, fit);
+            assert!(step.free, "still free to track along the top at x={x}");
+            assert_eq!(step.pos, (x, TOP), "and never yanked downward");
+        }
+        // Coming properly back down into the guest re-arms it.
+        assert!(r.step((700.0, TOP - 200.0), 0.0, 200.0, fit).free);
+        assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
+    }
+
+    #[test]
+    fn the_sides_yield_sooner_than_the_top() {
+        // Deliberate asymmetry: crossing to another display is a thing you mean to do, while
+        // the top edge's reward is macOS chrome over the guest.
+        let fit = screen_fit();
+        let mut side = EdgeResist::new(100.0);
+        for _ in 0..4 {
+            assert!(!side.step((1512.0, 400.0), 10.0, 0.0, fit).free);
+        }
+        assert!(
+            side.step((1512.0, 400.0), 10.0, 0.0, fit).free,
+            "half the threshold is enough sideways"
+        );
+        let mut top = EdgeResist::new(100.0);
+        for _ in 0..5 {
+            assert!(
+                !top.step((700.0, TOP), 0.0, -10.0, fit).free,
+                "the same 50 pt upward is still held"
+            );
+        }
     }
 
     #[test]
@@ -431,28 +576,46 @@ mod tests {
         // trip the menu bar, no matter how long it goes on.
         let mut r = EdgeResist::new(100.0);
         let fit = screen_fit();
-        for _ in 0..50 {
-            let step = r.step((700.0, 949.0), 12.0, 0.0, fit);
+        for x in 0..50 {
+            let step = r.step((100.0 + f64::from(x) * 12.0, TOP), 12.0, 0.0, fit);
             assert!(
                 step.free,
-                "moving inside/along the content is never resisted"
+                "moving along the content is never resisted (no outward component)"
             );
         }
         // ...and the accumulator is clean, so a fresh nudge is still resisted.
-        assert!(!r.step((700.0, 949.0), 0.0, -10.0, fit).free);
+        assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
     }
 
     #[test]
-    fn pushes_separated_by_inward_motion_do_not_add_up() {
+    fn pushes_separated_by_a_retreat_do_not_add_up() {
         let mut r = EdgeResist::new(100.0);
         let fit = screen_fit();
         for _ in 0..9 {
-            assert!(!r.step((700.0, 949.0), 0.0, -10.0, fit).free);
+            assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
         }
-        // Move back into the content: that drains the accumulator.
-        assert!(r.step((700.0, 949.0), 0.0, 40.0, fit).free);
+        // Back into the content, well clear of the edge: that drains the accumulator.
+        assert!(r.step((700.0, TOP - 40.0), 0.0, 40.0, fit).free);
         // So the next nudge starts from zero rather than tipping over the edge.
-        assert!(!r.step((700.0, 949.0), 0.0, -10.0, fit).free);
+        assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
+    }
+
+    #[test]
+    fn the_keepout_warp_does_not_drain_the_push_it_is_holding() {
+        // The cursor we park sits KEEPOUT inside the edge, and the warp itself surfaces as an
+        // inward-looking event. If that counted as a retreat, resistance could never accumulate
+        // and the top edge would be free to cross on the first flick.
+        let mut r = EdgeResist::new(100.0);
+        let fit = screen_fit();
+        for _ in 0..9 {
+            assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
+            // The warp's own event: lands at the parked position, moving inward.
+            assert!(r.step((700.0, TOP - KEEPOUT), 0.0, KEEPOUT, fit).free);
+        }
+        assert!(
+            r.step((700.0, TOP), 0.0, -10.0, fit).free,
+            "the tenth push still breaks through — the warps did not reset the count"
+        );
     }
 
     #[test]
@@ -460,14 +623,33 @@ mod tests {
         let mut r = EdgeResist::new(20.0);
         let fit = screen_fit();
         assert!(
-            r.step((700.0, 949.0), 0.0, -25.0, fit).free,
+            r.step((700.0, TOP), 0.0, -25.0, fit).free,
             "one big shove is enough"
         );
         // Well outside, still free.
         assert!(r.step((700.0, 980.0), 0.0, -5.0, fit).free);
         // Back inside re-arms: the very next outward nudge is resisted again.
         assert!(r.step((700.0, 900.0), 0.0, 0.0, fit).free);
-        assert!(!r.step((700.0, 949.0), 0.0, -5.0, fit).free);
+        assert!(!r.step((700.0, TOP), 0.0, -5.0, fit).free);
+    }
+
+    #[test]
+    fn a_pointer_that_escaped_sideways_is_never_pulled_back() {
+        // The dogfood bug (2026-08-01): after breaking out onto the next display, the pointer
+        // would sometimes get thrown back into the guest. The old step integrated deltas from a
+        // position the window kept — and the window stops seeing motion the moment the pointer
+        // leaves it, so that position froze on the edge. Small moves *on the other display* then
+        // computed as re-entering the content, re-armed the resistance, and warped the cursor
+        // home. Judging by the event's real location cannot make that mistake.
+        let mut r = EdgeResist::new(100.0);
+        let fit = screen_fit();
+        assert!(r.step((1512.0, 400.0), 200.0, 0.0, fit).free, "broken out");
+        // Wandering around the neighbouring display, including back towards the guest.
+        for x in [1600.0, 1900.0, 2400.0, 1700.0, 1560.0] {
+            let step = r.step((x, 400.0), -20.0, 5.0, fit);
+            assert!(step.free, "at x={x} the pointer is still off the guest");
+            assert_eq!(step.pos, (x, 400.0), "and is left exactly where it is");
+        }
     }
 
     #[test]
@@ -479,7 +661,7 @@ mod tests {
             !step.free,
             "drifting right must not spill onto the next display"
         );
-        assert_eq!(step.pos, (1512.0, 400.0));
+        assert_eq!(step.pos, (1512.0 - KEEPOUT, 400.0));
         assert_eq!(step.overflow, (15.0, 0.0));
     }
 
@@ -487,9 +669,9 @@ mod tests {
     fn a_zero_threshold_disables_resistance_entirely() {
         let mut r = EdgeResist::new(0.0);
         assert!(!r.enabled());
-        let step = r.step((700.0, 949.0), 0.0, -10.0, screen_fit());
+        let step = r.step((700.0, TOP), 0.0, -10.0, screen_fit());
         assert!(step.free);
-        assert_eq!(step.pos, (700.0, 959.0), "the pointer leaves immediately");
+        assert_eq!(step.pos, (700.0, TOP), "the pointer is left untouched");
     }
 
     #[test]
@@ -497,10 +679,19 @@ mod tests {
         let mut r = EdgeResist::new(100.0);
         let fit = screen_fit();
         for _ in 0..9 {
-            r.step((700.0, 949.0), 0.0, -10.0, fit);
+            r.step((700.0, TOP), 0.0, -10.0, fit);
         }
         r.reset(); // e.g. left fullscreen, or the window lost key
-        assert!(!r.step((700.0, 949.0), 0.0, -10.0, fit).free);
+        assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
+    }
+
+    #[test]
+    fn a_content_area_thinner_than_the_keepout_does_not_panic() {
+        // Degenerate but reachable mid-resize: the keep-out band would invert the clamp range.
+        let mut r = EdgeResist::new(100.0);
+        let fit = FitRect::full(3.0, 1.0);
+        let step = r.step((3.0, 1.0), 5.0, -5.0, fit);
+        assert_eq!(step.pos, (1.5, 0.5), "collapsed to the centre");
     }
 
     #[test]

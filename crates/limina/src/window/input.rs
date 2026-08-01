@@ -116,6 +116,34 @@ pub(crate) fn view_point_to_cg_global(view: &NSView, p: (f64, f64)) -> Option<NS
     Some(NSPoint::new(scr.x, h - scr.y))
 }
 
+/// Re-attach the hardware mouse to the cursor.
+///
+/// Called right after a warp, for a reason that has nothing to do with association: a warp also
+/// opens a **local events suppression interval** — 0.25 s by default — during which real mouse
+/// movement no longer moves the cursor. Re-associating ends it immediately. Without this, edge
+/// resistance felt like it ate travel: after pushing against an edge you had to move a long way
+/// back before the cursor unstuck, because a quarter-second of your motion was being discarded
+/// by the window server. Harmless when the mouse is already associated, which is the only state
+/// the uncaptured path can be in (capture disassociates, and resistance does not run captured).
+pub(crate) fn end_warp_suppression() {
+    unsafe { CGAssociateMouseAndMouseCursorPosition(1) };
+}
+
+/// The inverse of [`view_point_to_cg_global`]: a CG *global* point (top-left origin) as a view
+/// point (bottom-left origin, view coordinates).
+///
+/// Unlike the forward direction this is routinely asked about points **outside** the view — a
+/// cursor that has crossed onto another display — and answers with coordinates outside the
+/// view's bounds, which is exactly what the caller needs to tell "off the guest" from "at its
+/// edge". `None` when the view isn't in a window.
+pub(crate) fn cg_global_to_view_point(view: &NSView, p: NSPoint) -> Option<(f64, f64)> {
+    let window = view.window()?;
+    let h = unsafe { CGDisplayBounds(CGMainDisplayID()) }.size.height;
+    let base = window.convertPointFromScreen(NSPoint::new(p.x, h - p.y));
+    let local = view.convertPoint_fromView(base, None);
+    Some((local.x, local.y))
+}
+
 /// Whether we currently have the host cursor hidden for capture — keeps `NSCursor::hide`/`unhide`
 /// (a reference count) balanced no matter how the toggle is driven.
 static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
