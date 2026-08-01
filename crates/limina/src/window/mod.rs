@@ -943,6 +943,33 @@ pub fn run(
                         fit::aspect_fit(g.0, g.1, sz_w, sz_h)
                     };
                     if target != fit_cell.get() {
+                        // Letterboxing in FULLSCREEN means the guest's mode and the panel
+                        // disagree, and the black bars alone don't say which side is wrong.
+                        // Log both numbers: bars on the SIDES mean the guest is on a mode of the
+                        // wrong *aspect* (it settled on a DMT entry rather than the preferred
+                        // timing), bars top and bottom mean the right aspect at a stale *size*,
+                        // and a short view with a matching guest means the housing strip never
+                        // reached us. Diagnosing this on dogfood otherwise costs a round of ssh
+                        // archaeology (2026-08-01).
+                        if window.styleMask().contains(NSWindowStyleMask::FullScreen)
+                            && (target.w < sz_w - 1.0 || target.h < sz_h - 1.0)
+                        {
+                            log::debug!(
+                                "fullscreen letterbox: guest {}x{} into {:.0}x{:.0} pt usable \
+                                 (view {:.0}x{:.0}, notch inset {inset:.0}) -> {:.0}x{:.0} \
+                                 at +{:.0}+{:.0}",
+                                g.0,
+                                g.1,
+                                sz_w,
+                                sz_h,
+                                sz.width,
+                                sz.height,
+                                target.w,
+                                target.h,
+                                target.x,
+                                target.y,
+                            );
+                        }
                         fit_cell.set(target);
                         set_layer_frame(&layer, target);
                     }
