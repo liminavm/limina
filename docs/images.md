@@ -140,7 +140,10 @@ respin — the 2026-07-11 precedent, and the honest one when no RPM changed. Old
 the new ones as `*.bak-20260723` for rollback. Verified after restart: agent logs
 `limina-agent 0.3.0` + `virtual FIDO device up` (so the deployed host bundle already advertises the
 `fido` cap), helper logs `extension-bridge backend up` + `connected to host`, and both `/proc/PID/exe`
-hashes match the shipped build. **Not restarted:** the `gsrs` and gdm-greeter session helpers still
+hashes match the shipped build. A **second pass the same day** shipped the `--version`/`--help`
+handling both binaries had been missing (the probe trap above), verified on the guest before
+installing: the musl unit-test binaries run there green (3+3) and the real binaries answer
+`--version` and exit 2 on an unknown argument. **Not restarted:** the `gsrs` and gdm-greeter session helpers still
 run the old binary until their next login — functionally identical, so restarting another user's
 session was not worth the disruption. The host-side per-peer clipboard serial fix (`583030a`) is
 **not** deployed here; the user deploys the app bundle separately.

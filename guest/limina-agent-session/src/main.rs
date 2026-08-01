@@ -101,6 +101,10 @@ enum Event {
 }
 
 fn main() {
+    if let Some(code) = handle_cli(std::env::args().skip(1)) {
+        std::process::exit(code);
+    }
+
     let port = std::env::var("LIMINA_AGENT_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -206,6 +210,50 @@ fn main() {
 
 fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+const USAGE: &str = "\
+Usage: limina-agent-session [--version|--help]
+
+The per-session guest clipboard helper. Takes no arguments — it is run by the
+limina-agent-session.service user unit and configured through the environment:
+
+  LIMINA_AGENT_PORT   host vsock control port (default: the well-known port)
+  LIMINA_CLIPBOARD_RD =1 opts into the RemoteDesktop fallback tier (screen-share
+                      indicator); unset keeps the quiet tiers only
+";
+
+/// Handle `--version`/`--help`; reject anything else. `Some(code)` means exit now.
+///
+/// Same contract as `limina-agent`'s: an unrecognized argument EXITS rather than
+/// falling through into the daemon, so a deploy-audit probe can never accidentally
+/// start a second helper (see that binary's `handle_cli` for the incident).
+fn handle_cli<I: Iterator<Item = String>>(args: I) -> Option<i32> {
+    let args: Vec<String> = args.collect();
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [] => None,
+        ["--version"] | ["-V"] => {
+            println!("limina-agent-session {}", version());
+            Some(0)
+        }
+        ["--help"] | ["-h"] => {
+            print!("{USAGE}");
+            Some(0)
+        }
+        other => {
+            eprintln!(
+                "limina-agent-session: unrecognized arguments: {}",
+                other.join(" ")
+            );
+            eprint!("{USAGE}");
+            Some(2)
+        }
+    }
 }
 
 /// The clipboard backend behind the bridge: same [`Event`] vocabulary each way.
@@ -748,5 +796,34 @@ fn write_ignoring_epipe(file: &mut File, data: &[u8]) -> std::io::Result<()> {
     match file.write_all(data) {
         Err(e) if e.kind() == ErrorKind::BrokenPipe => Ok(()),
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::handle_cli;
+
+    fn run(args: &[&str]) -> Option<i32> {
+        handle_cli(args.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn no_arguments_runs_the_helper() {
+        assert_eq!(run(&[]), None);
+    }
+
+    #[test]
+    fn version_and_help_exit_zero() {
+        assert_eq!(run(&["--version"]), Some(0));
+        assert_eq!(run(&["-V"]), Some(0));
+        assert_eq!(run(&["--help"]), Some(0));
+        assert_eq!(run(&["-h"]), Some(0));
+    }
+
+    /// THE regression: an unknown argument must exit, never start the helper.
+    #[test]
+    fn unknown_arguments_exit_nonzero_instead_of_daemonizing() {
+        assert_eq!(run(&["--nope"]), Some(2));
+        assert_eq!(run(&["serve"]), Some(2));
     }
 }

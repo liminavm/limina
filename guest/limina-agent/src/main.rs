@@ -37,6 +37,10 @@ const HEARTBEAT_EVERY: Duration = Duration::from_millis(1000);
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 
 fn main() {
+    if let Some(code) = handle_cli(std::env::args().skip(1)) {
+        std::process::exit(code);
+    }
+
     let port = std::env::var("LIMINA_AGENT_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -80,6 +84,48 @@ fn main() {
 
 fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+const USAGE: &str = "\
+Usage: limina-agent [--version|--help]
+
+The guest end of the limina control plane. Takes no arguments — it is run by
+limina-agent.service and configured through the environment:
+
+  LIMINA_AGENT_PORT   host vsock control port (default: the well-known port)
+";
+
+/// Handle `--version`/`--help`; reject anything else. `Some(code)` means exit now.
+///
+/// **Unknown arguments must FAIL, not be ignored.** Until 2026-08-01 this daemon never
+/// looked at argv, so a probe like `limina-agent --version` printed nothing and silently
+/// *started a second agent*: the ssh running it hung forever and left a stray agent
+/// connected to the host control plane (it took a `ps` sweep on the dogfood guest to
+/// spot it). A daemon that answers `--version` with a daemon is a trap for exactly the
+/// people doing a deploy audit, which is when it hurts most.
+fn handle_cli<I: Iterator<Item = String>>(args: I) -> Option<i32> {
+    let args: Vec<String> = args.collect();
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [] => None,
+        ["--version"] | ["-V"] => {
+            println!("limina-agent {}", version());
+            Some(0)
+        }
+        ["--help"] | ["-h"] => {
+            print!("{USAGE}");
+            Some(0)
+        }
+        other => {
+            eprintln!("limina-agent: unrecognized arguments: {}", other.join(" "));
+            eprint!("{USAGE}");
+            Some(2)
+        }
+    }
 }
 
 /// Auto-mount `limina-`-tagged virtiofs shares at `/media/<name>` (same convention as
@@ -405,4 +451,35 @@ fn power_off() -> ! {
 
 fn sleep(d: Duration) {
     std::thread::sleep(d);
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::handle_cli;
+
+    fn run(args: &[&str]) -> Option<i32> {
+        handle_cli(args.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn no_arguments_runs_the_daemon() {
+        assert_eq!(run(&[]), None);
+    }
+
+    #[test]
+    fn version_and_help_exit_zero() {
+        assert_eq!(run(&["--version"]), Some(0));
+        assert_eq!(run(&["-V"]), Some(0));
+        assert_eq!(run(&["--help"]), Some(0));
+        assert_eq!(run(&["-h"]), Some(0));
+    }
+
+    /// THE regression: an unknown argument must exit, never fall through into the
+    /// daemon loop (which is what hung an ssh probe on the dogfood guest).
+    #[test]
+    fn unknown_arguments_exit_nonzero_instead_of_daemonizing() {
+        assert_eq!(run(&["--nope"]), Some(2));
+        assert_eq!(run(&["serve"]), Some(2));
+        assert_eq!(run(&["--version=1"]), Some(2));
+    }
 }
