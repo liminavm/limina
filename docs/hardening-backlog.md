@@ -471,6 +471,32 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   fail soft on a not-ready/invalid ring.
 
 ## GPU / rendering perf
+- **Should the enhanced tier stop forcing zink? (i.e. delete `/etc/environment.d/90-limina-zink.conf`)**
+  — 📋 open, raised by the user 2026-08-01 now that vrend is well supported. Attractive for the right
+  reasons: they are blunt globals hitting every process in the guest, and the baseline tier already
+  runs vrend without them. **But it is not a "stop forcing" — it is a TIER SWITCH**, so measure before
+  believing:
+  - **Where it lands:** not llvmpipe. The guest ships both `virtio_gpu_dri.so` and `zink_dri.so`, and
+    the host advertises both capsets in coexist (`GPU_COEXIST_FLAGS` in `crates/limina-vmm/src/krun/mod.rs`
+    — `VENUS` plus the vrend EGL/GLES trio, `NO_VIRGL` deliberately off). Unset ⇒ GL runs on **vrend**.
+  - **Our own honest numbers say venus still wins.** Post fence-honesty (`f0fe78a` + `98777bf`),
+    crossmark has venus winning or tying **every** guest cell; the vrend small-frame advantage was
+    fences retiring at decode (`glFinish` waited for nothing). That belief died on measurement — the
+    reverse belief has to clear the same bar. See `limina-virgl-vrend-perf`.
+  - **The real blocker is pacing, not throughput:** fence-accurate present for vrend is still OPEN
+    (`docs/design/vrend-iosurface-scanout.md`) — vrend's flush path never reaches `try_park_present`,
+    so `FENCEPRESENT` never fires and the whole #24 tear/pacing arc (`c569129`, `c33d9a0`) does not
+    apply. Moving the desktop to vrend today gives that up, and tearing is a human-eyeball verdict.
+  - **`VK_DRIVER_FILES` is a SEPARATE knob and should stay regardless.** Unset, the loader enumerates
+    `lvp_icd` beside `virtio_icd`, so a client that takes device 0 without checking silently lands on
+    lavapipe. Our venus-specific guest mesa patches (0015 WSI present, 0016 ring-loss, 0017 submit
+    free-list) also only pay off on venus.
+  - **How to settle it:** A/B on a **clone** of an enhanced image (never in place), env file present vs
+    removed. PIN display mode + scale first or the run is void (`limina-perf-display-pinning`); use
+    `vkmark` as the control (Vulkan — it should not move at all), judge on the crossmark trio +
+    aquarium via `scripts/perf-ledger.sh` (glmark2 swings ±10% between boots), and eyeball for tearing
+    since no counter reports it. Revisit after vrend gets fence-accurate present — that is what would
+    make removal a genuine simplification rather than a downgrade.
 - **Stock-tier virgl (vrend GL) desktop slowness — ROOT-CAUSED 2026-07-28: a DEBUG-build present-path
   artifact, NOT a virgl regression.** The virgl present path is readback-per-frame (only venus blobs are
   IOSurface-backed; `flush_resource` falls back to `transfer_read` → staging → per-pixel RGBA→BGRA
@@ -483,6 +509,10 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   loop's own idle gaps — user eyeball confirms "night and day").
   - **Fixed for dev boots:** `[profile.dev.package.limina-display] opt-level = 3` in the root
     `Cargo.toml`, so debug boots present at representative speed.
+  - **UPDATE: zero-copy vrend scanout SHIPPED 2026-07-28** (virglrenderer 0053, plan B+A1) — the
+    readback-per-frame description below is history for the scanout path. **Fence-accurate present for
+    vrend is still open**, which is what the entry above turns on. Original text kept for the
+    reasoning:
   - **Remaining, by design but worth fixing — zero-copy vrend scanout.** virgl presents pay
     readback (~2 ms) + convert (~4 ms release) + upload every frame, and the readback path bypasses
     the fence-accurate present (`FENCEPRESENT` never fires there). Residual jank on release (user,
