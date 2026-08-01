@@ -149,19 +149,20 @@ pub fn attach_spice_probe_port(vmr: &mut VmResources) -> Result<()> {
     // Play the SPICE server's role just far enough to prove the transport: announce our
     // capabilities to the agent and see whether it announces back. `vdagentd` speaks first
     // only in reply, so a silent read would prove nothing — we have to open the dialogue.
-    // Writer: re-announce forever, every 3s. A real broker would announce once per port
-    // open; announcing on a timer keeps the probe usable across guest-side daemon restarts
-    // (a restarted `vdagentd` that never hears an announce treats no client as connected,
-    // and silently forwards no clipboard at all — which reads exactly like a broken path).
+    // A real broker announces once per port open, so the probe does too. Announcing on a *repeating* timer looks to `vdagentd`
+    // like a new SPICE client connecting over and over ("sent client disconnected" / "New
+    // client connected" every interval in its debug log), which resets its clipboard state
+    // continuously and suppresses the very grabs we're trying to observe. So: retry only
+    // until the agent first speaks, then stay quiet and answer its greeting on demand.
+    let greeted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer_greeted = greeted.clone();
     std::thread::Builder::new()
         .name("limina-spice-announce".into())
         .spawn(move || {
-            let msg = announce_capabilities();
-            loop {
-                // SAFETY: writing a buffer we own, length passed correctly.
-                let n =
-                    unsafe { libc::write(host_fd, msg.as_ptr() as *const libc::c_void, msg.len()) };
-                log::warn!("spice-probe: sent ANNOUNCE_CAPABILITIES ({n} bytes written)");
+            // Retry covers the race where the guest hasn't opened the port yet; it stops as
+            // soon as the agent says anything, so a live session sees exactly one announce.
+            while !writer_greeted.load(std::sync::atomic::Ordering::Relaxed) {
+                send_announce(host_fd);
                 std::thread::sleep(std::time::Duration::from_secs(3));
             }
         })
@@ -181,6 +182,7 @@ pub fn attach_spice_probe_port(vmr: &mut VmResources) -> Result<()> {
                     log::warn!("spice-probe: host end closed (read returned {n})");
                     return;
                 }
+                greeted.store(true, std::sync::atomic::Ordering::Relaxed);
                 let got = &buf[..n as usize];
                 let hex: Vec<String> = got.iter().map(|b| format!("{b:02x}")).collect();
                 log::warn!("spice-probe: guest sent {n} bytes: {}", hex.join(" "));
@@ -189,14 +191,22 @@ pub fn attach_spice_probe_port(vmr: &mut VmResources) -> Result<()> {
                     let u32at = |o: usize| {
                         u32::from_le_bytes([got[o], got[o + 1], got[o + 2], got[o + 3]])
                     };
+                    let (msg_type, payload) = (u32at(12), u32at(28));
                     log::warn!(
                         "spice-probe:   chunk{{port={}, size={}}} msg{{protocol={}, type={}, size={}}}",
                         u32at(0),
                         u32at(4),
                         u32at(8),
-                        u32at(12),
+                        msg_type,
                         u32at(24),
                     );
+                    // A fresh `vdagentd` greets us with ANNOUNCE_CAPABILITIES(request=1);
+                    // answering that (and only that) is how a restarted daemon re-learns a
+                    // client is connected, without the reconnect churn of a blind timer.
+                    if msg_type == VD_AGENT_ANNOUNCE_CAPABILITIES && payload == 1 {
+                        log::warn!("spice-probe: agent requested an announce — replying once");
+                        send_announce(host_fd);
+                    }
                 }
             }
         })
@@ -206,6 +216,17 @@ pub fn attach_spice_probe_port(vmr: &mut VmResources) -> Result<()> {
     Ok(())
 }
 
+/// `VD_AGENT_ANNOUNCE_CAPABILITIES` — the message type both sides greet each other with.
+const VD_AGENT_ANNOUNCE_CAPABILITIES: u32 = 6;
+
+/// Write one announce to the agent, logging what went out.
+fn send_announce(fd: RawFd) {
+    let msg = announce_capabilities();
+    // SAFETY: writing a buffer we own, length passed correctly.
+    let n = unsafe { libc::write(fd, msg.as_ptr() as *const libc::c_void, msg.len()) };
+    log::warn!("spice-probe: sent ANNOUNCE_CAPABILITIES ({n} bytes written)");
+}
+
 /// A `VD_AGENT_ANNOUNCE_CAPABILITIES` from the server (us) to the guest agent, on the wire:
 /// `VDIChunkHeader{port, size}` + `VDAgentMessage{protocol, type, opaque, size}` + payload
 /// `VDAgentAnnounceCapabilities{request, caps[]}` (see `spice/vd_agent.h`). `request = 1`
@@ -213,7 +234,6 @@ pub fn attach_spice_probe_port(vmr: &mut VmResources) -> Result<()> {
 fn announce_capabilities() -> Vec<u8> {
     const VDP_CLIENT_PORT: u32 = 1;
     const VD_AGENT_PROTOCOL: u32 = 1;
-    const VD_AGENT_ANNOUNCE_CAPABILITIES: u32 = 6;
     // One 32-bit cap word is enough for the clipboard bits; the agent derives caps_size
     // from the message size, so a short word count is legal.
     const CAP_CLIPBOARD: u32 = 3;

@@ -71,7 +71,41 @@ Decoded caps the stock agent offers: `MOUSE_STATE`, `MONITORS_CONFIG`, `REPLY`,
 **Legacy `VD_AGENT_CAP_CLIPBOARD` (bit 3) is NOT offered** — the broker must speak the
 by-demand + selection protocol, not the legacy one.
 
-## Blocking bug found: reopening any virtio-console port panics the VMM 🔴
+### 4. The guest clipboard reaches us — the Wayland risk is CLOSED ✅
+
+With the port-reopen crash fixed (below) and the probe's announce made protocol-faithful, a
+copy in the guest produced a real grab on the host:
+
+```
+guest → host, 36 bytes:
+  01 00 00 00  1c 00 00 00   VDIChunkHeader{port=VDP_CLIENT_PORT, size=28}
+  01 00 00 00  07 00 00 00   VDAgentMessage{protocol=1, type=7 = VD_AGENT_CLIPBOARD_GRAB}
+  00 00 00 00 00 00 00 00    opaque
+  08 00 00 00                size=8
+  00 00 00 00                selection = 0 (VD_AGENT_CLIPBOARD_SELECTION_CLIPBOARD)
+  01 00 00 00                types[0]  = 1 (VD_AGENT_CLIPBOARD_UTF8_TEXT)
+```
+
+So stock `spice-vdagent` on a **GNOME/Wayland** session does forward guest clipboard grabs to
+us, through XWayland + mutter's X11↔Wayland selection bridging. Matches Boxes shipping this
+on Wayland today.
+
+**Two confounders had to be killed to get a trustworthy answer — both produced false
+negatives first:**
+
+1. **`wl-copy` over ssh does not set the clipboard.** It runs and stays resident (so it
+   *looks* like it worked), but an unfocused Wayland client has no input-event serial to
+   pass to `set_selection`, so mutter ignores it — `wl-paste` comes back empty. Verifying
+   the copy actually took is what exposed this; the differential that worked was **`xclip`
+   on `DISPLAY=:0`**, which goes through mutter's X11 selection path.
+2. **A repeating announce timer suppresses clipboard traffic.** The probe originally
+   re-announced every 3 s; `vdagentd -d -d` showed that as `sent client disconnected` /
+   `New client connected` on every tick — each announce reads as a *new SPICE client*,
+   resetting clipboard state continuously. Fixed by announcing until the agent first speaks,
+   then answering its `request=1` greeting on demand — which is what a real broker does. **A
+   broker must not re-announce on a timer.**
+
+## Blocking bug found: reopening any virtio-console port panics the VMM 🔴 (FIXED)
 
 A **guest-triggerable VMM abort**, pre-existing in libkrun and unrelated to SPICE:
 
@@ -98,29 +132,30 @@ daemon's own `Restart=on-failure` would each kill the guest. It also affects the
 (`krun-stdin`/`krun-stdout`/`krun-stderr`, `hvc0`) — any reopen, so this is worth fixing and
 upstreaming regardless of M12.
 
-**Fix shape:** return the queues to `self.queues[idx]` when the port stops (guest close), or don't
-`take()` at all — keep the queues in the device and lend them to the port. Wants a RED test first
-(open/close/open a named port; assert the VM survives), per the project's fix discipline.
+**FIXED — libkrun patch 0125**, RED-first: `crates/limina-test/tests/l1_port_reopen.rs` +
+`limina.port_reopen` in the L1 init reproduced it in ~1 s (first open OK, second killed the VM), and
+goes green with the fix. The io threads now take their queue by `&mut` and return it when they stop,
+so `Port::shutdown()` hands both queues back and the device restores them; a port with no input (or
+output) parks its unowned queue rather than dropping it. The guest-driven `expect()` is gone too —
+a missing queue now logs and declines to start that port instead of aborting.
 
-## Still open — the Wayland clipboard risk got *sharper*, not resolved 🟡
+Re-validated on the real scenario: two `systemctl restart spice-vdagentd` in a row (each fatal
+before) leave the VM healthy, and the agent still round-trips announces afterwards — so the port is
+functionally reusable, not merely non-fatal.
 
-F43's `spice-vdagent` 0.23.0 clipboard is **X11-only**: it links `libX11`, its clipboard code is
-`src/vdagent/x11.c`, and strings show no `zwlr_data_control`, no `RemoteDesktop`. The only
-Wayland-aware piece is `org.gnome.Mutter.DisplayConfig` — used for *resolutions* (the display path
-M12 explicitly excludes).
+## Notes for the broker (task 2)
 
-In the session it does run on XWayland (`DISPLAY=:0`, `Xwayland :0 -rootless` present,
-`loginctl Type=wayland Active=yes`), so clipboard would have to ride **mutter's Wayland↔X11 selection
-bridging**. That is the same wall our own guest agent hit and solved with three tiers
-(ext-data-control → extension bridge → RemoteDesktop; see `docs/images.md`).
-
-A `wl-copy` in the guest produced **no** `VD_AGENT_CLIPBOARD_GRAB` on the host — but that run is
-**not** a clean verdict: the attempt to enable agent debug logging is what tripped the reopen panic
-above, so no instrumented run completed. **Re-test after the libkrun fix**, with
-`spice-vdagentd -d -d` + `spice-vdagent -d` logging, before committing to the broker.
+- **Announce once per port open, never on a timer** — see confounder 2 above.
+- Speak **by-demand + selection**, not legacy `CLIPBOARD` (the agent doesn't offer bit 3).
+- Answer the agent's `ANNOUNCE_CAPABILITIES(request=1)` greeting: that is how a *restarted*
+  `vdagentd` re-learns a client is connected.
+- Chunk everything: `VD_AGENT_MAX_DATA_SIZE` is 2048, so even modest clipboard text arrives
+  in pieces and must be reassembled.
+- Feed the existing `crates/limina/src/clipboard.rs` owner — one pasteboard owner, two transports.
 
 ## Cost implication
 
-M12's estimate should move: task 1 (the "gating unknown, one real libkrun patch") is mostly *done* —
-replaced by a much smaller, independently-valuable libkrun fix. The remaining cost is the host-side
-vdagent broker (task 2), which is unchanged.
+M12's estimate should move: task 1 (the "gating unknown, one real libkrun patch") is **done** — the
+device already existed, and what it actually needed was a small, independently-valuable libkrun fix
+(0125, now landed). Both named risks are retired: the port wakes stock vdagent, and the guest
+clipboard reaches the host. The remaining cost is the host-side vdagent broker (task 2), unchanged.

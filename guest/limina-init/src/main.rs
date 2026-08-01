@@ -55,6 +55,14 @@ fn main() {
         run_xhci_probe();
         power_off();
     }
+    // `limina.port_reopen`: RED oracle for the virtio-console port-reopen crash found by the
+    // M12 spike — the device moves a port's queues out of itself on VIRTIO_CONSOLE_PORT_OPEN
+    // and never gives them back on close, so a *second* open panics the VMM and kills the VM.
+    // Open a data port, close it, open it again; surviving to print the marker is the test.
+    if cmdline_has("limina.port_reopen") {
+        run_port_reopen_probe();
+        power_off();
+    }
     // `limina.hid_echo`: the B2 end-to-end oracle. With the HID echo gadget cold-plugged,
     // find the hidraw node it binds, write a 64-byte report to it and read the echo back —
     // proving held interrupt-IN + deferred completion + interrupt-OUT delivery through the
@@ -1047,6 +1055,64 @@ fn run_xhci_probe() {
         unsafe { sleep_ms(20) };
     }
     klog(format!("[limina-init] xhci_probe: done ({} device(s))", seen.len()).as_bytes());
+}
+
+/// Open a virtio-console **data** port (`/dev/vportNpM`) twice, with a close in between.
+///
+/// The Linux `virtio_console` driver sends `VIRTIO_CONSOLE_PORT_OPEN=1` on the first opener
+/// and `=0` on the last closer, so open→close→open produces two OPEN control messages — the
+/// exact sequence that used to abort the VMM. Every step emits a RESULT marker so a failure
+/// says *where* it stopped; if the VM dies, the harness sees no `reopened` marker at all.
+fn run_port_reopen_probe() {
+    use std::os::unix::fs::OpenOptionsExt;
+    klog(b"[limina-init] port_reopen: begin");
+
+    // devtmpfs names data ports vportNpM (the console port itself is hvcN, not a vport).
+    let mut ports: Vec<String> = std::fs::read_dir("/dev")
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("vport"))
+        .collect();
+    ports.sort();
+    let Some(name) = ports.first() else {
+        klog(b"[limina-init] RESULT: port_reopen NO_DATA_PORT");
+        return;
+    };
+    let path = format!("/dev/{name}");
+    klog(format!("[limina-init] port_reopen: using {path}").as_bytes());
+
+    // O_NONBLOCK so an input port with nothing queued doesn't park the probe in open().
+    let open_once = |which: &str| -> bool {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)
+        {
+            Ok(f) => {
+                klog(format!("[limina-init] RESULT: port_reopen {which} OK").as_bytes());
+                drop(f); // last closer -> PORT_OPEN=0 back to the device
+                true
+            }
+            Err(e) => {
+                klog(format!("[limina-init] RESULT: port_reopen {which} FAILED: {e}").as_bytes());
+                false
+            }
+        }
+    };
+
+    if !open_once("opened") {
+        return;
+    }
+    // Give the device time to process the close before re-opening, so the two OPEN events
+    // are unambiguously sequential rather than racing in one control-queue batch.
+    unsafe { sleep_ms(200) };
+    if !open_once("reopened") {
+        return;
+    }
+    klog(b"[limina-init] RESULT: port_reopen SURVIVED");
 }
 
 // --- HID echo end-to-end (B2 oracle) ----------------------------------------------------

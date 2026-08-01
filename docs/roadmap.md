@@ -1102,10 +1102,12 @@ onboarding doc shipped: `docs/dev-onboarding.md`.
 
 ## Milestone 12 — SPICE guest-agent support (baseline-tier clipboard first)
 
-**Status: 📋 planned — spike #1 done 2026-07-31 (`spikes/m12-spice-port/RESULTS.md`), broker not started.**
-Research done (2026-07-17). **Spike #1 came back GREEN on the gating question and corrected task 1
-below: libkrun already has named multiport ports, so no new device is needed.** It also uncovered a
-blocking, pre-existing, guest-triggerable VMM panic on port *reopen* — see task 1.
+**Status: 📋 spike #1 DONE + GREEN 2026-07-31 (`spikes/m12-spice-port/RESULTS.md`); broker not started.**
+Research done (2026-07-17). **Both named risks are retired.** libkrun already has named multiport
+ports, so no new device is needed (task 1 corrected below); the stock agent wakes on the port and
+answers our capability announce; and a guest clipboard copy reaches the host as a real
+`CLIPBOARD_GRAB`. The one blocker the spike uncovered — a pre-existing, guest-triggerable VMM panic
+on port *reopen* — is **fixed** (libkrun 0125). What remains is task 2, the host-side broker.
 
 **Goal:** light up SPICE's `spice-vdagent` in an **unmodified** guest so a stock Fedora VM gets
 integration features **with zero limina guest components installed** — starting with **clipboard
@@ -1178,13 +1180,14 @@ limina speaks the vdagent protocol.
    `VD_AGENT_ANNOUNCE_CAPABILITIES`** — protocol round-trip proven with zero guest components.
    (Caveat: vdagentd is socket-activated by the *session* agent, so it needs a graphical session —
    headless it exits with `Error getting active session`.)
-   **What replaces this task: fix a guest-triggerable VMM panic on port reopen.**
-   `console/device.rs:263` `take()`s the port queues on `PORT_OPEN` and never returns them on close,
-   so the *second* open of any port aborts the worker (`port rx queue should exist`) and kills the VM.
-   Repro: `sudo dd if=/dev/vport5p0 of=/dev/null bs=1 count=1 iflag=nonblock` after the port has been
-   opened once. This blocks M12 (`systemctl restart spice-vdagentd` would kill the guest) but is
-   **not SPICE-specific** — it hits `hvc0` and the `krun-std*` ports too, so fix + upstream it
-   regardless. RED test first: open/close/open a named port, assert the VM survives.
+   **What replaced this task — a guest-triggerable VMM panic on port reopen — is FIXED**
+   (libkrun 0125). The console device `take()`d the port queues on `PORT_OPEN` and never returned
+   them on close, so the *second* open of any port aborted the worker (`port rx queue should exist`)
+   and killed the VM — `systemctl restart spice-vdagentd`, a package update, or a plain `dd` on
+   `/dev/vportNpM`, and it hit `hvc0` and the `krun-std*` ports too. Fixed RED-first
+   (`crates/limina-test/tests/l1_port_reopen.rs` + `limina.port_reopen` in the L1 init) and
+   re-validated on the real thing: two `vdagentd` restarts now leave the VM healthy and the port
+   still round-trips. Still worth upstreaming — it is not a SPICE bug.
 2. **Host vdagent broker (`limina-vdagent`-ish crate).** De-frame `VDIChunkHeader`/`VDAgentMessage`,
    do capability negotiation (`VD_AGENT_ANNOUNCE_CAPABILITIES`), and implement the **clipboard**
    message set (`VD_AGENT_CLIPBOARD_GRAB`/`_REQUEST`/`_RELEASE`/`_CLIPBOARD`) end-to-end. Bridge it to
@@ -1211,18 +1214,16 @@ the host and paste it in the guest and vice-versa. Baseline-tier compatibility f
 - ~~**Spike #1 (gating):** does exposing a named `com.redhat.spice.0` virtio-serial port actually wake
   stock `vdagentd`…~~ **DONE 2026-07-31, GREEN** — `spikes/m12-spice-port/RESULTS.md`. Yes, and the
   libkrun device change is zero (the port-reopen panic above is what needs fixing instead).
-- **Wayland reality — now the #1 open risk, and sharper than before.** Spike #1 found F43's
-  `spice-vdagent` 0.23.0 clipboard is **X11-only**: links `libX11`, clipboard code is
-  `src/vdagent/x11.c`, no `zwlr_data_control` and no `RemoteDesktop` in the binary. Its only
-  Wayland-aware piece is `org.gnome.Mutter.DisplayConfig`, used for *resolutions* — the display path
-  M12 excludes. In session it does run on XWayland (`DISPLAY=:0`), so clipboard must ride **mutter's
-  Wayland↔X11 selection bridging** — the same wall our own guest agent hit and answered with three
-  tiers. A guest `wl-copy` produced no `CLIPBOARD_GRAB`, but that run was confounded (enabling agent
-  debug tripped the reopen panic), so it is **not** a verdict. **Re-test with `spice-vdagentd -d -d`
-  + `spice-vdagent -d` once the reopen panic is fixed, before building the broker.** Fallback
-  unchanged: if the Wayland clipboard genuinely fails, file transfer — compositor-agnostic — becomes
-  the *primary* SPICE win instead. (GNOME Boxes shipping this on Wayland remains the reason to expect
-  it can work; see `docs/research/prior-art-gnome-boxes.md`.)
+- ~~**Wayland reality.**~~ **CLOSED 2026-07-31 — the guest clipboard reaches us.** A copy in a
+  GNOME/**Wayland** session produced a real `VD_AGENT_CLIPBOARD_GRAB` (selection=CLIPBOARD,
+  types=[UTF8_TEXT]) on the host. F43's `spice-vdagent` 0.23.0 clipboard is X11-only (links
+  `libX11`, `src/vdagent/x11.c`), so it rides XWayland + mutter's X11↔Wayland selection bridging —
+  exactly how Boxes ships it. **Two traps produced false negatives first** (see the spike RESULTS):
+  `wl-copy` over ssh silently does *not* set the clipboard (an unfocused Wayland client has no
+  input serial for `set_selection`; verify with `wl-paste`, and use `xclip` on `DISPLAY=:0`
+  instead), and a *repeating* announce timer reads to `vdagentd` as a new client connecting every
+  tick, resetting clipboard state — **the broker must announce once per port open, not on a
+  timer.**
 - ~~**Confirm the default-install assumption on the actual base image.**~~ **DONE 2026-07-17** — a
   stock F43 boot confirmed `spice-vdagent-0.23.0-1.fc43` present + dormant + udev-triggered on the
   named port (see the load-bearing facts above). The "$0 guest install" case holds.

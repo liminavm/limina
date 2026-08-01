@@ -24,7 +24,7 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
 2. Re-export: `git -C third_party/libkrun format-patch <base>.. -o "$PWD/patches/libkrun"`.
 3. Commit the regenerated `.patch` files to the limina repo.
 
-## The series (121 patches) — by theme
+## The series (125 patches) — by theme
 
 Patches are listed in series order within each theme. Full rationale lives in each
 patch's commit message; this is the map.
@@ -55,6 +55,15 @@ patch's commit message; this is the map.
   that wires non-tty fds (file + FIFO) as a real *console* port (guest sees `hvcN`, not a
   `/dev/vport` data port) — how the test harness drives a bidirectional console. Also
   demotes the raw-mode ENOTTY on a non-tty fd from error to debug.
+- **0125 — virtio-console: return a port's queues on close so it can be reopened.** The
+  device moved a port's rx/tx queues out of itself on `VIRTIO_CONSOLE_PORT_OPEN` and never
+  returned them on close, so the *second* open of any port unwrapped a `None` and aborted
+  the VMM (`port rx queue should exist`) — guest-triggerable by anything that reopens a port
+  (`systemctl restart spice-vdagentd`, a package update, `dd` on `/dev/vportNpM`), fatal to
+  the whole VM. The io threads now hand their queue back when they stop and the device
+  restores it; a guest-driven path no longer `expect()`s. Regression test:
+  `crates/limina-test/tests/l1_port_reopen.rs`. Found by the M12 SPICE spike
+  (`spikes/m12-spice-port/RESULTS.md`).
 - **0005 — FDT: mark the PL011 serial node `arm,primecell`.** Lets the guest AMBA layer
   bind `amba-pl011` and expose a real bidirectional `/dev/ttyAMA0` (the interactive serial
   debug console) instead of an output-only earlycon. Safe given 0004.
