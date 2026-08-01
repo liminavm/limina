@@ -178,6 +178,36 @@ pub(crate) fn ungrab_chord_step(armed: bool, flags: u64) -> (bool, bool) {
     (false, armed && chord_broke && nothing_else_held)
 }
 
+/// What a `flagsChanged` edge means to the ungrab chord — see [`ungrab_chord_action`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UngrabAction {
+    /// The chord broke cleanly: drop the grab (or mute the soft one) and consume the event.
+    Fire,
+    /// The chord is ARMED, so this edge is ambiguous — it may be the start of an ungrab or of a
+    /// guest combo. Withhold it from the guest (consume the event); it is replayed verbatim if
+    /// the chord is later cancelled.
+    Withhold,
+    /// Not chord business: replay anything withheld, then forward this edge to the guest.
+    Forward,
+}
+
+/// The chord step plus what to do with the edge that caused it. Withholding the *arming* edge is
+/// what keeps the ungrab gesture out of the guest: without it, the Option press that arms the
+/// chord is forwarded before we can know it was an ungrab, so a guest that has no Control held
+/// (the usual case — Control was already down before our window took focus, so the guest never
+/// saw its press) receives a LONE Alt press, which apps read as "focus the menu bar". Holding the
+/// edge until the chord resolves costs nothing: if it resolves into a guest combo instead
+/// (Ctrl-Alt-T), [`InputState::cancel_ungrab_chord`] replays it before the key that cancelled it.
+pub(crate) fn ungrab_chord_action(armed_before: bool, flags: u64) -> (bool, UngrabAction) {
+    let (armed, fire) = ungrab_chord_step(armed_before, flags);
+    let action = match (fire, armed) {
+        (true, _) => UngrabAction::Fire,
+        (false, true) => UngrabAction::Withhold,
+        (false, false) => UngrabAction::Forward,
+    };
+    (armed, action)
+}
+
 /// The macOS virtual keycodes of every held-modifier key (left/right pairs of
 /// Command/Shift/Option/Control) — the set force-released at an ungrab boundary.
 const MODIFIER_KEYCODES: [u16; 8] = [0x37, 0x36, 0x38, 0x3C, 0x3A, 0x3D, 0x3B, 0x3E];
@@ -313,6 +343,10 @@ pub struct InputState {
     /// `flagsChanged` (the tap while captured, this monitor in degraded capture) — see
     /// [`ungrab_chord_step`]. Main thread only.
     ungrab_armed: Cell<bool>,
+    /// `flagsChanged` edges withheld from the guest while the chord is armed, oldest first —
+    /// each the `(keycode, flags)` we would have forwarded. Replayed in order if the chord is
+    /// cancelled, dropped if it fires. See [`ungrab_chord_action`].
+    ungrab_withheld: RefCell<Vec<(u16, u64)>>,
     /// The virtual cursor position in view points (bottom-left origin, the fit rect's space).
     /// Uncaptured motion keeps it at the pointer's last position over the content, so a grab
     /// starts exactly where the cursor was; captured motion integrates deltas into it
@@ -350,6 +384,7 @@ impl InputState {
             remap,
             captured,
             ungrab_armed: Cell::new(false),
+            ungrab_withheld: RefCell::new(Vec::new()),
             capture_pos,
             fit,
             scroll_y: Cell::new(ScrollAxis::default()),
@@ -377,6 +412,9 @@ impl InputState {
         self.captured.store(now, Ordering::Release);
         apply_capture_cursor(now, &self.host_cursor, release_to);
         self.ungrab_armed.set(false);
+        // Anything the chord withheld dies here rather than being replayed: both branches below
+        // force-release modifiers, so replaying a press would strand it down in the guest.
+        self.ungrab_withheld.borrow_mut().clear();
         // Reconcile modifier bookkeeping across the boundary: while captured the TAP forwards
         // modifier edges, so this monitor's believed-pressed sets go stale — and stale state
         // makes `modifier_emit` swallow a later edge (a stuck or missed modifier in the guest).
@@ -479,18 +517,46 @@ impl InputState {
         self.release_all_modifiers();
     }
 
-    /// Feed a captured-mode `flagsChanged` bitmask to the ungrab chord. Returns `true` when
-    /// the chord fired (the caller should release capture and consume the event).
-    pub(crate) fn observe_ungrab_flags(&self, flags: u64) -> bool {
-        let (armed, fire) = ungrab_chord_step(self.ungrab_armed.get(), flags);
+    /// Feed a grabbed-mode `flagsChanged` to the ungrab chord and get the verdict for that edge:
+    /// [`UngrabAction::Fire`] (release/mute the grab, consume), [`UngrabAction::Withhold`]
+    /// (consume without forwarding — the chord is armed and the edge is still ambiguous), or
+    /// [`UngrabAction::Forward`] (forward it to the guest as usual).
+    pub(crate) fn observe_ungrab_flags(&self, macos_keycode: u16, flags: u64) -> UngrabAction {
+        let (armed, action) = ungrab_chord_action(self.ungrab_armed.get(), flags);
         self.ungrab_armed.set(armed);
-        fire
+        match action {
+            // The gesture was an ungrab after all: the withheld edges were never the guest's.
+            UngrabAction::Fire => self.ungrab_withheld.borrow_mut().clear(),
+            UngrabAction::Withhold => self
+                .ungrab_withheld
+                .borrow_mut()
+                .push((macos_keycode, flags)),
+            UngrabAction::Forward => self.replay_withheld_mods(),
+        }
+        action
     }
 
     /// Disarm the ungrab chord — any non-modifier activity (key, button, scroll) between the
-    /// chord press and its break means the user was typing a combo, not ungrabbing.
+    /// chord press and its break means the user was typing a combo, not ungrabbing. Whatever the
+    /// chord withheld belongs to the guest after all, so it goes out first: callers run this
+    /// *before* forwarding the key/button that cancelled the chord, keeping the order the user
+    /// typed (Alt down, then T).
     pub(crate) fn cancel_ungrab_chord(&self) {
         self.ungrab_armed.set(false);
+        self.replay_withheld_mods();
+    }
+
+    /// Forward, in order, the modifier edges the armed chord held back, then forget them.
+    fn replay_withheld_mods(&self) {
+        // Drain first: `emit_modifier` must not see a borrow of the queue (and re-entrancy here
+        // would double-send).
+        let withheld: Vec<(u16, u64)> = self.ungrab_withheld.borrow_mut().drain(..).collect();
+        for (keycode, flags) in withheld {
+            // The *stored* flags, not the live ones: they are what the guest would have been
+            // told at the moment of the press, so the replayed edge is byte-identical (including
+            // which physical side of the modifier went down).
+            self.emit_modifier(keycode, flags);
+        }
     }
 
     /// Handle one captured event. Returns `true` if it should be swallowed (not passed on
@@ -519,11 +585,19 @@ impl InputState {
             NSEventType::FlagsChanged => {
                 // Degraded (tap-less) capture consumes flagsChanged here — give the ungrab
                 // chord (Ctrl+Option) the same meaning it has under the tap.
-                if self.is_captured() && self.observe_ungrab_flags(event.modifierFlags().0 as u64) {
-                    self.toggle_capture(view);
-                    return true;
+                let flags = event.modifierFlags().0 as u64;
+                if self.is_captured() {
+                    match self.observe_ungrab_flags(event.keyCode(), flags) {
+                        UngrabAction::Fire => {
+                            self.toggle_capture(view);
+                            return true;
+                        }
+                        // Armed: swallow the edge so the ungrab gesture never reaches the guest.
+                        UngrabAction::Withhold => return true,
+                        UngrabAction::Forward => {}
+                    }
                 }
-                self.emit_modifier(event.keyCode(), event.modifierFlags().0 as u64);
+                self.emit_modifier(event.keyCode(), flags);
                 true
             }
             NSEventType::MouseMoved => {
@@ -971,6 +1045,37 @@ mod tests {
     fn ungrab_chord_rearms_after_a_disarm_once_exactly_ctrl_opt_again() {
         // Cmd joined (disarmed), then Cmd lifted leaving exactly Ctrl+Opt: armed again.
         assert_eq!(ungrab_chord_step(false, CONTROL | OPTION), (true, false));
+    }
+
+    #[test]
+    fn arming_edge_is_withheld_so_the_ungrab_gesture_never_reaches_the_guest() {
+        // The reported bug: Control is already held (Ctrl-arrow workspace switching) when the
+        // window takes focus and soft-grabs, so the guest never saw Control go down. Pressing
+        // Option to free the grab used to forward a LONE Alt press to the guest.
+        assert_eq!(
+            ungrab_chord_action(false, CONTROL | OPTION),
+            (true, UngrabAction::Withhold)
+        );
+        // Releasing either key fires the ungrab; the withheld Option press is dropped, not sent.
+        assert_eq!(
+            ungrab_chord_action(true, CONTROL),
+            (false, UngrabAction::Fire)
+        );
+    }
+
+    #[test]
+    fn a_non_chord_modifier_edge_still_forwards() {
+        // Control alone (nothing armed) goes straight to the guest...
+        assert_eq!(
+            ungrab_chord_action(false, CONTROL),
+            (false, UngrabAction::Forward)
+        );
+        // ...as does the edge that disarms an armed chord (Cmd joining Ctrl+Opt): the withheld
+        // Option press is replayed by the caller before this one, so Cmd-Ctrl-Alt-<key> is intact.
+        assert_eq!(
+            ungrab_chord_action(true, CONTROL | OPTION | COMMAND),
+            (false, UngrabAction::Forward)
+        );
     }
 
     #[test]

@@ -47,7 +47,9 @@ use limina_input::constants::{
 use limina_input::InputEvent;
 
 use super::fit::{self, FitRect};
-use super::input::{match_host_shortcut, send_edge_overflow, send_event, HostShortcut, InputState};
+use super::input::{
+    match_host_shortcut, send_edge_overflow, send_event, HostShortcut, InputState, UngrabAction,
+};
 use super::WorkerConn;
 
 type CFMachPortRef = *mut c_void;
@@ -294,20 +296,25 @@ extern "C" fn tap_callback(
                 // the grab (toggle_capture force-releases all guest modifiers, so the edges
                 // this chord already forwarded can't stay wedged down). Soft: mute the soft
                 // grab until the window regains key status, flushing modifiers the same way.
-                if ctx.input.observe_ungrab_flags(flags) {
-                    if captured {
-                        ctx.input.toggle_capture(&ctx.view);
-                    } else {
-                        ctx.soft_muted.set(true);
-                        ctx.input.flush_modifiers();
-                        log::info!(
-                            "soft keyboard grab: muted (Ctrl-Opt) — host combos return \
-                             until the window regains focus"
-                        );
+                match ctx.input.observe_ungrab_flags(keycode, flags) {
+                    UngrabAction::Fire => {
+                        if captured {
+                            ctx.input.toggle_capture(&ctx.view);
+                        } else {
+                            ctx.soft_muted.set(true);
+                            ctx.input.flush_modifiers();
+                            log::info!(
+                                "soft keyboard grab: muted (Ctrl-Opt) — host combos return \
+                                 until the window regains focus"
+                            );
+                        }
+                        return std::ptr::null_mut();
                     }
-                    return std::ptr::null_mut();
+                    // The chord is armed: this edge is withheld from the guest until we know
+                    // whether it was an ungrab or the head of a guest combo. Consume it.
+                    UngrabAction::Withhold => return std::ptr::null_mut(),
+                    UngrabAction::Forward => ctx.input.tap_flags(keycode, flags),
                 }
-                ctx.input.tap_flags(keycode, flags);
             }
         }
         return std::ptr::null_mut(); // consume — the combo went to the guest
