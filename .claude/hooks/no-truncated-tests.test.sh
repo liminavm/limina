@@ -55,6 +55,15 @@ decide allow "plain tail of a file"       "tail -40 /tmp/limina-suite.log"
 # quotes the pipeline it forbids, which is prose, not an invocation.
 decide allow "heredoc body quotes it"     "$(printf 'git commit -F - <<%sEOF%s\nfix: stop doing\n\n    %s 2>&1 | tail -45\n\nEOF' "'" "'" "$SUITE")"
 decide allow "unquoted heredoc body"      "$(printf 'cat > /tmp/n.md <<EOF\nrun: cargo test | tail -5\nEOF')"
+# The runner and the truncating pipe must be in the SAME pipeline. These are the false denials
+# from matching the two patterns independently across a whole command line: the suite's status
+# and output go to a log, and the pipe belongs to some unrelated later command.
+decide allow "redirected run, later pipe" "cargo xtask test > /tmp/x.log 2>&1; pgrep -f 'xtask test' $HEAD -3"
+decide allow "run then tail the log"      "$SUITE > /tmp/x.log 2>&1; echo done $TAIL -1"
+decide allow "run, then && an echo"       "cargo test > /tmp/x.log; echo ok $TAIL -1"
+# ...but a runner anywhere on the left of that pipe still swallows its status.
+decide deny  "runner upstream in a pipe"  "cargo test 2>&1 | grep -v warning $TAIL -20"
+decide deny  "second statement truncated" "echo starting; cargo test 2>&1 $TAIL -5"
 
 echo
 if ((fails)); then

@@ -44,10 +44,28 @@ scan=$(printf '%s\n' "$command" | awk '
 
 # Does this command run the test suite? Covers the cargo runners and the boot-suite script.
 runs_tests='(^|[;&|[:space:]])(cargo([[:space:]]+\+[^[:space:]]+)?[[:space:]]+(test|nextest)|cargo([[:space:]]+\+[^[:space:]]+)?[[:space:]]+xtask[[:space:]]+test|(bash[[:space:]]+)?[^[:space:]]*scripts/test-boot\.sh)'
-# ...and is it piped into a truncating pager? `|&` is bash's shorthand for `2>&1 |`.
-truncates='\|&?[[:space:]]*(head|tail)([[:space:]]|$)'
+# ...piped into a truncating pager? `|&` is bash's shorthand for `2>&1 |`. The greedy prefix means
+# the LAST such pipe wins, so an upstream runner in the same pipeline (`cargo test | grep x | tail`)
+# is still caught.
+truncated_pipeline='^(.*)\|&?[[:space:]]*(head|tail)([[:space:]]|$)'
 
-if [[ $scan =~ $runs_tests ]] && [[ $scan =~ $truncates ]]; then
+# Both conditions must hold *in the same pipeline*, with the runner on the LEFT of the pipe.
+# Matching them independently across the whole command line is what produced false denials: a
+# properly redirected run followed by an unrelated pipe — `cargo xtask test > log 2>&1; pgrep -f
+# "xtask test" | head -3` — has neither the suite's status nor its output going through `head`,
+# but tripped both patterns. So split into statements first (`;`, `&&`, `||`, newline — never a
+# bare `|`, which builds a pipeline rather than ending one) and judge each on its own.
+verdict=allow
+while IFS= read -r stmt; do
+  [[ $stmt =~ $truncated_pipeline ]] || continue
+  # BASH_REMATCH[1] is everything left of the truncating pipe: that, and only that, is what
+  # would have its exit status and output swallowed.
+  [[ ${BASH_REMATCH[1]} =~ $runs_tests ]] || continue
+  verdict=deny
+  break
+done < <(printf '%s\n' "$scan" | awk '{ gsub(/\|\||&&|;/, "\n"); print }')
+
+if [[ $verdict == deny ]]; then
   jq -n --arg cmd "$command" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
