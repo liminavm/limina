@@ -141,6 +141,10 @@ discipline, `reset()` clearing held/queued — is reused as-is. The FIDO `HidRep
   `{ep, kind: STALL, len: 0}` to **error a held IN** (no data). `BulkPipe` completes the
   matching endpoint's held IN with the bytes (or a stall), or queues DATA if the guest hasn't
   issued the read yet.
+- Host→supervisor (2026-08-01): `{ep, kind: CANCEL, len: 0}` — the *guest* cancelled that
+  endpoint's outstanding read (xHCI Stop Endpoint). It is a notification, never answered; the
+  supervisor uses it to take a live Touch ID sheet down and to drop the reply that read was
+  waiting for. See §5.0.
 
 The `kind` byte is a correction from the bare FIDO socket (a fixed-64-byte data-only stream):
 the fingerprint policy genuinely needs to **stall** a transfer — an enroll Touch-ID decline and
@@ -359,6 +363,47 @@ whole mapping clean.
   Touch ID never reports which finger, so we sidestep it by holding exactly one). Both `identify`
   (login/GDM/`pam_fprintd`, gallery-wide) and a specific `verify` (`fprintd-verify <finger>`, GNOME
   Settings' post-enroll test) resolve to the same one slot, so both always work.
+
+### 5.0 Cancellation, both directions (2026-08-01)
+
+A Touch ID sheet has *two* parties who can walk away, and conflating either with "wrong finger"
+produced the two annoyances this section now specifies away.
+
+**The host user dismisses the sheet → STALL, not `40 fd`.** `40 fd` is a clean no-match, and the
+guest answers a no-match by starting *another* verify — which re-summons the very sheet the human
+just waved away, until the retry budget runs out. This is not a guess: `pam_fprintd`'s loop
+(`pam/pam_fprintd.c`, `do_auth`) treats `verify-no-match` as "nothing to do at this point",
+decrements `max_tries` (default 3) and **starts verification again**, whereas
+`verify-unknown-error` / `verify-disconnected` return `PAM_AUTHINFO_UNAVAIL` immediately — no
+retry, and PAM falls through to the password module. So `LAContext`'s outcome is read as a **three**-way result, not a boolean
+(`crates/limina/src/sep.rs::VerifyOutcome`): a match, a genuine no-match (`authenticationFailed`
+— retryable, still `40 fd`), and a *cancellation* — `userCancel` / `appCancel` / `systemCancel` /
+`userFallback`, plus the states biometry cannot succeed from at all (`biometryLockout`,
+`biometryNotAvailable`, `biometryNotEnrolled`). A cancellation replies **STALL on `0x84`**:
+`elanmoc_identify_cb` marks the SSM failed, the identify completes with an error, and nothing
+retries — the guest falls back to a password, which is what "I don't want to use my fingerprint"
+should mean. The codes are matched symbolically against `LAError.Code`, never by number.
+
+**The guest cancels the request → dismiss the sheet.** libfprint's finger-wait read is submitted
+with the device's `GCancellable` (`elanmoc.c:181-185`); when fprintd stops the verify (the user
+cancelled GNOME's own auth dialog), libusb cancels that bulk-IN transfer and **nothing is sent on
+the wire** — the driver has no cancel command, and `class_init` wires no `cancel` vfunc. The only
+evidence is the xHCI **Stop Endpoint** the guest's HCD issues, so that is what we plumb:
+libkrun patch 0126 adds `UsbDeviceModel::endpoint_stopped`, `BulkPipe` forwards it through a
+`BulkCancelSink`, the worker sends a `KIND_CANCEL` frame (§2.1), and the supervisor invalidates
+the live `LAContext` — which cancels the pending `evaluatePolicy` and takes the sheet down.
+
+Three consequences worth keeping:
+
+- **The supervisor's serve loop is two threads.** The reader must service a cancel frame *while*
+  a prompt blocks the engine; one thread doing both means the cancel sits unread until the sheet
+  resolves, i.e. exactly never.
+- **A reply produced after a cancel is dropped**, both in the supervisor (it knows the command was
+  cancelled) and in `BulkPipe` (the stop clears that endpoint's queue). The guest's read is gone,
+  and a *queued* stall would fail its next, unrelated request.
+- **Prompts are tokened.** `sep_verify` takes a caller-allocated token and `cancel_verify` names
+  it, so a cancel that races its own prompt's completion is inert instead of dismissing the next
+  prompt (tokens are never reused).
 
 ### 5.1 Presenting a single slot to the guest
 

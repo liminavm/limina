@@ -14,7 +14,8 @@ use anyhow::{bail, Result};
 extern "C" {
     fn limina_sep_available() -> i32;
     fn limina_sep_has_touchid() -> i32;
-    fn limina_sep_verify(reason: *const std::os::raw::c_char) -> i32;
+    fn limina_sep_verify(token: u64, reason: *const std::os::raw::c_char) -> i32;
+    fn limina_sep_cancel(token: u64);
     fn limina_sep_create(out: *mut u8, cap: isize) -> isize;
     fn limina_sep_pubkey(blob: *const u8, blob_len: isize, out: *mut u8, cap: isize) -> isize;
     fn limina_sep_sign(
@@ -52,13 +53,46 @@ pub fn has_touchid() -> bool {
     unsafe { limina_sep_has_touchid() == 1 }
 }
 
-/// Prompt a biometrics-only Touch ID sheet showing `reason` and return whether a
-/// trusted finger matched. This is the fingerprint reader's "match" primitive — it
-/// produces no crypto (the guest verifies none), just the boolean "an authorized
-/// finger was presented." A user cancel / no-match / no-sensor returns `false`.
-pub fn sep_verify(reason: &str) -> bool {
+/// How a Touch ID prompt ended. The [`Cancelled`](VerifyOutcome::Cancelled) /
+/// [`NoMatch`](VerifyOutcome::NoMatch) split is the whole point: a real reader's "that finger
+/// didn't match" invites another try (and the guest's PAM stack duly retries), whereas a human
+/// who dismissed the sheet — or a locked-out sensor — must not be asked again, or the prompt
+/// simply reappears until the retry budget runs out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerifyOutcome {
+    /// A trusted finger was presented.
+    Matched,
+    /// The sheet ran and rejected the finger — retryable.
+    NoMatch,
+    /// Nobody is going to authenticate: the user dismissed the sheet, [`cancel_verify`]
+    /// invalidated it, the system pulled it, or biometry is locked out / unavailable.
+    Cancelled,
+}
+
+/// Prompt a biometrics-only Touch ID sheet showing `reason` and report how it ended. This is
+/// the fingerprint reader's "match" primitive — it produces no crypto (the guest verifies
+/// none), just "an authorized finger was presented" plus the cancel/no-match distinction.
+///
+/// `token` names *this* prompt so [`cancel_verify`] can only ever dismiss the prompt it meant
+/// to: pass a value no other in-flight or future prompt uses (a monotonic counter). A cancel
+/// that arrives before the sheet is up is remembered against its token and returns
+/// [`VerifyOutcome::Cancelled`] immediately, and a cancel for a prompt that already finished
+/// matches nothing — so a lost race can never eat somebody else's prompt.
+pub fn sep_verify(token: u64, reason: &str) -> VerifyOutcome {
     let creason = std::ffi::CString::new(reason).unwrap_or_default();
-    unsafe { limina_sep_verify(creason.as_ptr()) == 1 }
+    // 1 = matched, -2 = cancelled, anything else (0, or an unexpected code) = no match.
+    match unsafe { limina_sep_verify(token, creason.as_ptr()) } {
+        1 => VerifyOutcome::Matched,
+        -2 => VerifyOutcome::Cancelled,
+        _ => VerifyOutcome::NoMatch,
+    }
+}
+
+/// Dismiss the Touch ID sheet [`sep_verify`] put up for `token`, making it return
+/// [`VerifyOutcome::Cancelled`]. Call this when whoever asked for the prompt has gone away —
+/// the guest cancelling its fingerprint request — so the Mac stops asking on behalf of nobody.
+pub fn cancel_verify(token: u64) {
+    unsafe { limina_sep_cancel(token) }
 }
 
 /// A Secure-Enclave P-256 signing key, represented by its persistable blob. The

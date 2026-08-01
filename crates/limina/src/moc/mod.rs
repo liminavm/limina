@@ -18,12 +18,15 @@
 //! shuttles frames over a UNIX socket into this engine — the FIDO Stage-C proxy split reused.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub mod store;
 pub mod usb;
 
 use store::MocStore;
+
+pub use crate::sep::VerifyOutcome;
 
 /// Build the per-VM template store iff this host can back the reader — a Touch ID sensor is present
 /// (`sep::has_touchid`), or the `LIMINA_FP_TEST_APPROVE` knob. `None` on a Mac with no Touch ID
@@ -77,15 +80,63 @@ pub enum Reply {
 
 /// The Touch ID primitive, abstracted so the engine stays a pure function for tests/the oracle.
 pub trait Verifier: Send + Sync {
-    /// Prompt for a fingerprint and return whether a trusted finger matched.
-    fn verify(&self, reason: &str) -> bool;
+    /// Prompt for a fingerprint and report how the prompt ended.
+    fn verify(&self, reason: &str) -> VerifyOutcome;
 }
 
 /// Production verifier: a biometrics-only `LAContext` prompt via the Secure-Enclave shim.
-pub struct SepVerifier;
+///
+/// It publishes the token of the prompt currently on screen into a shared cell so a
+/// [`PromptCanceller`] on another thread can dismiss it (the guest cancelled the request that
+/// opened it). Tokens are allocated from a counter and never reused, so a cancel that races the
+/// prompt's own completion is inert rather than eating the next one.
+pub struct SepVerifier {
+    /// Token of the prompt in flight; 0 = none.
+    inflight: Arc<AtomicU64>,
+    next: AtomicU64,
+}
+
+impl SepVerifier {
+    /// Build a verifier publishing into `inflight`; pair it with
+    /// [`PromptCanceller::new`] over the same cell.
+    pub fn new(inflight: Arc<AtomicU64>) -> SepVerifier {
+        SepVerifier {
+            inflight,
+            next: AtomicU64::new(1),
+        }
+    }
+}
+
 impl Verifier for SepVerifier {
-    fn verify(&self, reason: &str) -> bool {
-        crate::sep::sep_verify(reason)
+    fn verify(&self, reason: &str) -> VerifyOutcome {
+        let token = self.next.fetch_add(1, Ordering::Relaxed);
+        // Publish *before* prompting: a cancel arriving in the window before the sheet is up
+        // still names this prompt, and the shim honours it the moment the prompt starts.
+        self.inflight.store(token, Ordering::SeqCst);
+        let outcome = crate::sep::sep_verify(token, reason);
+        self.inflight.store(0, Ordering::SeqCst);
+        outcome
+    }
+}
+
+/// Dismisses whatever Touch ID prompt a [`SepVerifier`] has on screen. Cheap and safe to call
+/// with nothing in flight (it does nothing), and safe to call from any thread — which is the
+/// point: the prompt is put up on the serve thread, which is blocked inside it.
+pub struct PromptCanceller {
+    inflight: Arc<AtomicU64>,
+}
+
+impl PromptCanceller {
+    pub fn new(inflight: Arc<AtomicU64>) -> PromptCanceller {
+        PromptCanceller { inflight }
+    }
+
+    /// Dismiss the in-flight prompt, if any.
+    pub fn cancel(&self) {
+        let token = self.inflight.load(Ordering::SeqCst);
+        if token != 0 {
+            crate::sep::cancel_verify(token);
+        }
     }
 }
 
@@ -93,8 +144,8 @@ impl Verifier for SepVerifier {
 /// `LIMINA_FIDO_TEST_APPROVE`). Lets an L2 exercise enroll/verify without a live finger.
 pub struct AlwaysApprove;
 impl Verifier for AlwaysApprove {
-    fn verify(&self, _reason: &str) -> bool {
-        true
+    fn verify(&self, _reason: &str) -> VerifyOutcome {
+        VerifyOutcome::Matched
     }
 }
 
@@ -167,7 +218,11 @@ impl Engine {
     /// stalls the held finger-wait read → the driver fails enrollment cleanly (no retry loop).
     fn enroll_capture(&self, cmd: &[u8], verifier: &dyn Verifier) -> Option<Reply> {
         let frame_idx = cmd.get(5).copied().unwrap_or(0);
-        if frame_idx == 0 && !verifier.verify(&self.reason("Enroll your fingerprint")) {
+        if frame_idx == 0
+            && verifier.verify(&self.reason("Enroll your fingerprint")) != VerifyOutcome::Matched
+        {
+            // Both a no-match and a cancel end the enrollment: there is no partial-progress
+            // encoding the driver would accept without looping (see the doc-comment).
             return Some(Reply::Stall { ep: EP_MOC_IN });
         }
         data(EP_MOC_IN, vec![0x40, ELAN_MSG_OK])
@@ -187,16 +242,25 @@ impl Engine {
     }
 
     /// `40 ff 73`: verify/identify. Nothing enrolled → immediate no-match (no prompt). Otherwise
-    /// Touch ID → matched slot 0 (the single finger) or a clean no-match `0xfd`. The driver then
-    /// reads slot 0's user_id via `get_userid` and compares it to its gallery.
+    /// Touch ID → matched slot 0 (the single finger), a clean no-match `0xfd`, or — if the human
+    /// *dismissed* the sheet — a stall. The driver then reads slot 0's user_id via `get_userid`
+    /// and compares it to its gallery.
+    ///
+    /// The cancel→stall mapping is what stops the sheet from reappearing. A `40 fd` no-match is a
+    /// clean "wrong finger" completion, and the guest's PAM stack answers it by starting *another*
+    /// verify (pam_fprintd retries), which re-prompts Touch ID — so reporting a dismissal as a
+    /// no-match loops the sheet until the retry budget runs out. A stall is a transfer error →
+    /// `fpi_ssm_mark_failed` → the identify completes with an error and nothing retries, which is
+    /// what "I don't want to use my fingerprint" should do (the guest falls back to a password).
     fn verify(&self, verifier: &dyn Verifier) -> Option<Reply> {
         if !self.store.is_enrolled() {
             return data(EP_MOC_IN, vec![0x40, ELAN_MSG_VERIFY_ERR]);
         }
-        if verifier.verify(&self.reason("Verify your fingerprint")) {
-            data(EP_MOC_IN, vec![0x40, 0x00]) // matched slot index 0
-        } else {
-            data(EP_MOC_IN, vec![0x40, ELAN_MSG_VERIFY_ERR]) // no match (clean completion, not a stall)
+        match verifier.verify(&self.reason("Verify your fingerprint")) {
+            VerifyOutcome::Matched => data(EP_MOC_IN, vec![0x40, 0x00]), // matched slot index 0
+            // No match (clean completion, not a stall) — the guest may sensibly try again.
+            VerifyOutcome::NoMatch => data(EP_MOC_IN, vec![0x40, ELAN_MSG_VERIFY_ERR]),
+            VerifyOutcome::Cancelled => Some(Reply::Stall { ep: EP_MOC_IN }),
         }
     }
 
@@ -261,8 +325,16 @@ mod tests {
 
     struct Decline;
     impl Verifier for Decline {
-        fn verify(&self, _: &str) -> bool {
-            false
+        fn verify(&self, _: &str) -> VerifyOutcome {
+            VerifyOutcome::NoMatch
+        }
+    }
+
+    /// The human dismissed the Touch ID sheet (or it was cancelled for them).
+    struct Dismissed;
+    impl Verifier for Dismissed {
+        fn verify(&self, _: &str) -> VerifyOutcome {
+            VerifyOutcome::Cancelled
         }
     }
 
@@ -390,13 +462,37 @@ mod tests {
         );
     }
 
+    /// A *dismissed* sheet must not come back as a no-match: the guest answers a no-match by
+    /// retrying the verify, which re-summons the sheet the human just waved away. A stall ends
+    /// the operation with an error instead, so nothing retries.
+    #[test]
+    fn verify_dismissed_stalls_so_the_sheet_is_not_re_summoned() {
+        let e = engine();
+        e.store.set(b"FP1-alice".to_vec());
+        assert_eq!(
+            e.handle(&[0x40, 0xff, 0x73], &Dismissed),
+            Some(Reply::Stall { ep: EP_MOC_IN })
+        );
+    }
+
+    #[test]
+    fn enroll_dismissed_stalls_like_a_decline() {
+        let e = engine();
+        let cmd = [0x40, 0xff, 0x01, 0, 9, 0, 0];
+        assert_eq!(
+            e.handle(&cmd, &Dismissed),
+            Some(Reply::Stall { ep: EP_MOC_IN })
+        );
+        assert!(!e.store.is_enrolled());
+    }
+
     #[test]
     fn verify_with_nothing_enrolled_is_no_match_without_a_prompt() {
         let e = engine();
         // A verifier that would panic if called — proves no prompt happens on an empty store.
         struct Never;
         impl Verifier for Never {
-            fn verify(&self, _: &str) -> bool {
+            fn verify(&self, _: &str) -> VerifyOutcome {
                 panic!("must not prompt when nothing is enrolled");
             }
         }

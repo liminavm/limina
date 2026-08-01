@@ -25,7 +25,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use devices::usb::{BulkPipe, BulkSink, DeviceDescriptors, UsbDeviceModel, UsbSpeed};
+use devices::usb::{
+    BulkCancelSink, BulkPipe, BulkSink, DeviceDescriptors, UsbDeviceModel, UsbSpeed,
+};
 
 /// Elan match-on-chip identity libfprint's `elanmoc` binds (VID/PID matched exactly). `0x0c7d`
 /// takes the default 9 enroll stages and is NOT in fwupd's `elanfp` quirk today (dodge PID).
@@ -35,6 +37,8 @@ const PID: u16 = 0x0c7d;
 /// Frame kinds on the worker↔supervisor socket.
 const KIND_DATA: u8 = 0;
 const KIND_STALL: u8 = 1;
+/// Host-ward only: the guest cancelled `ep`'s outstanding read (xHCI Stop Endpoint). No payload.
+const KIND_CANCEL: u8 = 2;
 
 /// Build the fingerprint reader gadget: a [`BulkPipe`] with the elanmoc descriptors wired to
 /// `socket_path`, where the supervisor runs the protocol. Binds the listener and spawns the pump
@@ -60,7 +64,25 @@ pub fn build(socket_path: &Path) -> Result<Arc<dyn UsbDeviceModel>> {
         }
     });
 
-    let pipe = BulkPipe::new(elanmoc_descriptors(), UsbSpeed::Full, out_sink);
+    // The guest cancelling a finger-wait read (fprintd's verify being stopped because the user
+    // dismissed the guest's own auth dialog) leaves nothing on the wire — the xHCI Stop Endpoint
+    // is the only evidence. Forward it so the supervisor can take the Touch ID sheet down.
+    let cancel_conn = conn.clone();
+    let cancel_sink: BulkCancelSink = Arc::new(move |ep: u8| {
+        let mut guard = cancel_conn.lock().unwrap();
+        if let Some(stream) = guard.as_mut() {
+            if write_frame(stream, ep, KIND_CANCEL, &[]).is_err() {
+                *guard = None;
+            }
+        }
+    });
+
+    let pipe = BulkPipe::with_cancel_sink(
+        elanmoc_descriptors(),
+        UsbSpeed::Full,
+        out_sink,
+        Some(cancel_sink),
+    );
 
     let reader_pipe = pipe.clone();
     let reader_conn = conn.clone();

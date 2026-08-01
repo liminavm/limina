@@ -95,23 +95,57 @@ public func limina_sep_has_touchid() -> Int32 {
     return ctx.biometryType == .touchID ? 1 : 0
 }
 
-/// Prompt a biometrics-only Touch ID sheet (`reason` is the sheet text) and report
-/// whether a trusted finger matched: 1 = matched, 0 = declined / failed / no sensor.
-/// This is the fingerprint reader's "match" primitive — it produces no crypto (the
-/// guest checks none), just the boolean "an authorized finger was presented."
-/// `.deviceOwnerAuthenticationWithBiometrics` has NO passcode fallback, the honest
-/// mapping of a fingerprint sensor. `evaluatePolicy` is asynchronous (completion
-/// handler), unlike the synchronous CryptoKit `signature(for:)`, so we block on a
-/// semaphore until the sheet resolves.
+/// The in-flight verify's context and the caller's token for it, so `limina_sep_cancel` can
+/// dismiss exactly the prompt it meant to. `cancelledToken` remembers a cancel that arrived
+/// before its sheet existed; because tokens are never reused, a cancel that loses the race
+/// against its own prompt finishing simply matches nothing later.
+private let verifyLock = NSLock()
+private var verifyContext: LAContext?
+private var verifyToken: UInt64 = 0
+private var cancelledToken: UInt64 = 0
+
+/// Prompt a biometrics-only Touch ID sheet (`reason` is the sheet text) and report the
+/// outcome: 1 = a trusted finger matched, 0 = no match / unusable sensor, -2 = the prompt was
+/// *cancelled* (the user dismissed the sheet, `limina_sep_cancel` invalidated it, the system
+/// pulled it away, or biometry is locked out / unavailable).
+///
+/// The cancel/no-match split is load-bearing for the fingerprint reader: a no-match is the
+/// "wrong finger, try again" a caller SHOULD retry, while a cancel means the human chose not
+/// to authenticate this way — retrying just re-summons a sheet they dismissed. The caller maps
+/// the two onto different guest-visible outcomes (`crates/limina/src/moc/mod.rs`).
+///
+/// `.deviceOwnerAuthenticationWithBiometrics` has NO passcode fallback, the honest mapping of a
+/// fingerprint sensor. `evaluatePolicy` is asynchronous (completion handler), unlike the
+/// synchronous CryptoKit `signature(for:)`, so we block on a semaphore until the sheet resolves.
 @_cdecl("limina_sep_verify")
-public func limina_sep_verify(_ reason: UnsafePointer<CChar>?) -> Int32 {
+public func limina_sep_verify(_ token: UInt64, _ reason: UnsafePointer<CChar>?) -> Int32 {
     let ctx = LAContext()
+    verifyLock.lock()
+    if cancelledToken == token {
+        // Cancelled before the sheet existed — honour it rather than opening one nobody wants.
+        cancelledToken = 0
+        verifyLock.unlock()
+        return LIMINA_SEP_CANCELLED
+    }
+    verifyContext = ctx
+    verifyToken = token
+    verifyLock.unlock()
+
+    defer {
+        verifyLock.lock()
+        verifyContext = nil
+        verifyToken = 0
+        verifyLock.unlock()
+    }
+
     let reasonText = reason.map { String(cString: $0) } ?? "Verify your fingerprint"
     let sem = DispatchSemaphore(value: 0)
     var matched = false
+    var failure: Error?
     ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reasonText) {
-        success, _ in
+        success, error in
         matched = success
+        failure = error
         sem.signal()
     }
     // Fail safe: if the completion never fires (should be impossible), treat it as a decline after
@@ -119,7 +153,45 @@ public func limina_sep_verify(_ reason: UnsafePointer<CChar>?) -> Int32 {
     if sem.wait(timeout: .now() + 120) == .timedOut {
         return 0
     }
-    return matched ? 1 : 0
+    if matched {
+        return 1
+    }
+    return isCancellation(failure) ? LIMINA_SEP_CANCELLED : 0
+}
+
+/// The `-2` the Rust side reads as "cancelled" (see `crates/limina/src/sep.rs`).
+private let LIMINA_SEP_CANCELLED: Int32 = -2
+
+/// Does this `evaluatePolicy` failure mean "don't ask again", as opposed to "that finger
+/// didn't match"? Cancels (by the user, by us via `invalidate()`, or by the system) and the
+/// states where biometry simply cannot succeed — locked out, not available, not enrolled —
+/// are all pointless to retry; `authenticationFailed` is the genuine no-match. Matched
+/// symbolically against `LAError.Code`, never by raw code number.
+private func isCancellation(_ error: Error?) -> Bool {
+    guard let code = (error as? LAError)?.code else { return false }
+    switch code {
+    case .userCancel, .appCancel, .systemCancel, .userFallback,
+        .biometryLockout, .biometryNotAvailable, .biometryNotEnrolled:
+        return true
+    default:
+        return false
+    }
+}
+
+/// Dismiss the in-flight Touch ID sheet, if any: `invalidate()` cancels a pending
+/// `evaluatePolicy` (its completion fires with `LAError.appCancel`). Called when the *guest*
+/// abandons the request that opened the sheet — a fingerprint verify whose USB transfer the
+/// guest cancelled — so the Mac stops asking for something nobody is waiting for.
+@_cdecl("limina_sep_cancel")
+public func limina_sep_cancel(_ token: UInt64) {
+    verifyLock.lock()
+    if verifyContext != nil, verifyToken == token {
+        verifyContext?.invalidate()
+    } else {
+        // Its sheet is not up (yet): leave the cancel for the prompt with that token to find.
+        cancelledToken = token
+    }
+    verifyLock.unlock()
 }
 
 /// Sign `msg` with the blob's key behind a Touch ID prompt (`reason` is the sheet

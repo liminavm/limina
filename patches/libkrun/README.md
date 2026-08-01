@@ -24,7 +24,7 @@ This checks out `third_party/libkrun` at `UPSTREAM_BASE` and `git am`s the serie
 2. Re-export: `git -C third_party/libkrun format-patch <base>.. -o "$PWD/patches/libkrun"`.
 3. Commit the regenerated `.patch` files to the limina repo.
 
-## The series (125 patches) — by theme
+## The series (126 patches) — by theme
 
 Patches are listed in series order within each theme. Full rationale lives in each
 patch's commit message; this is the map.
@@ -362,6 +362,16 @@ patch's commit message; this is the map.
   polarities (a fresh ring starts at `true`, so without a `false` one a restore that hardcoded the
   default would round-trip clean). 46 RED cases via `scripts/xhci-red-check.py`, which also gained a
   baseline pre-pass so a renamed guard test can no longer report RED while guarding nothing.
+- **0126 — usb: tell a gadget when the guest cancels an endpoint's transfer.** A guest driver
+  cancelling an in-flight URB (`usb_kill_urb` / a libusb transfer cancel) puts *nothing* on the
+  wire — the xHCI Stop Endpoint command is the only evidence — so a gadget doing long-running work
+  for a held IN could not learn the guest had walked away. Adds
+  `UsbDeviceModel::endpoint_stopped(EpAddr)` (default no-op), called deferred from the Stop
+  Endpoint path; `BulkPipe` drops that endpoint's held read and pending events (they answer an
+  abandoned transaction and would be handed to the next, unrelated read) and forwards the cancel to
+  the policy via a new optional `BulkCancelSink`. This is what lets the fingerprint reader take its
+  Touch ID sheet down when the guest cancels the authentication.
+
 ### Observability / logging
 
 - **0009 — log renderer-init failure instead of swallowing it.** `create_rutabaga` used
