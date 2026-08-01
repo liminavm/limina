@@ -178,6 +178,11 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
         console::attach_virtio(&mut vmr, vc).context("attaching virtio-console")?;
     }
 
+    // SPIKE (M12 #1): opt-in named `com.redhat.spice.0` port — see `attach_spice_probe_port`.
+    if std::env::var("LIMINA_SPICE_PORT").is_ok_and(|v| v == "1") {
+        console::attach_spice_probe_port(&mut vmr).context("attaching the spice probe port")?;
+    }
+
     // Native virtio-snd audio device (device ID 25). On by default; the guest's stock
     // virtio_snd driver binds it and exposes an ALSA card with no guest components.
     vmr.balloon_free_page_reporting = spec.free_page_reporting;

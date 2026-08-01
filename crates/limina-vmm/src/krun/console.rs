@@ -106,6 +106,140 @@ pub fn attach_virtio(vmr: &mut VmResources, spec: &VirtioConsoleSpec) -> Result<
     Ok(())
 }
 
+/// SPIKE (M12 #1, `spikes/m12-spice-port/`): expose a **named** virtio-serial data port
+/// called `com.redhat.spice.0`, which is the exact trigger stock Fedora's
+/// `/usr/lib/udev/rules.d/70-spice-vdagentd.rules` matches on to start `spice-vdagentd`.
+///
+/// Gated behind `LIMINA_SPICE_PORT=1` so it can never perturb a normal boot. The point is
+/// to answer the gating M12 question empirically: is a named multiport enough to wake a
+/// **stock** guest's dormant spice-vdagent, with zero libkrun changes?
+///
+/// The host end is a socketpair whose bytes we hex-dump — `vdagentd` announces its
+/// capabilities as soon as it opens the port, so *receiving anything at all* is the
+/// positive oracle (not just the device node existing).
+pub fn attach_spice_probe_port(vmr: &mut VmResources) -> Result<()> {
+    // socketpair, not pipes: one fd is both readable and writable, and libkrun dups it
+    // for input and output separately (`create_explicit_ports` -> `input_to_raw_fd_dup`),
+    // so there's no double-close to worry about.
+    let mut fds = [0 as RawFd; 2];
+    // SAFETY: standard socketpair; the return value is checked.
+    if unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("socketpair for the spice probe port");
+    }
+    let (host_fd, guest_fd) = (fds[0], fds[1]);
+
+    let port = PortConfig::InOut {
+        name: "com.redhat.spice.0".to_string(),
+        input_fd: guest_fd,
+        output_fd: guest_fd,
+    };
+
+    // Append to the existing explicit console device if there is one (so our port lands as
+    // port 1 = /dev/vport0p1 alongside hvc0); otherwise stand up a device just for it.
+    match vmr.virtio_consoles.iter_mut().find_map(|c| match c {
+        VirtioConsoleConfigMode::Explicit(ports) => Some(ports),
+        _ => None,
+    }) {
+        Some(ports) => ports.push(port),
+        None => vmr
+            .virtio_consoles
+            .push(VirtioConsoleConfigMode::Explicit(vec![port])),
+    }
+
+    // Play the SPICE server's role just far enough to prove the transport: announce our
+    // capabilities to the agent and see whether it announces back. `vdagentd` speaks first
+    // only in reply, so a silent read would prove nothing — we have to open the dialogue.
+    // Writer: re-announce forever, every 3s. A real broker would announce once per port
+    // open; announcing on a timer keeps the probe usable across guest-side daemon restarts
+    // (a restarted `vdagentd` that never hears an announce treats no client as connected,
+    // and silently forwards no clipboard at all — which reads exactly like a broken path).
+    std::thread::Builder::new()
+        .name("limina-spice-announce".into())
+        .spawn(move || {
+            let msg = announce_capabilities();
+            loop {
+                // SAFETY: writing a buffer we own, length passed correctly.
+                let n =
+                    unsafe { libc::write(host_fd, msg.as_ptr() as *const libc::c_void, msg.len()) };
+                log::warn!("spice-probe: sent ANNOUNCE_CAPABILITIES ({n} bytes written)");
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        })
+        .context("spawning the spice probe announce thread")?;
+
+    // Reader: drain (so the guest never blocks) and decode whatever the agent says.
+    std::thread::Builder::new()
+        .name("limina-spice-probe".into())
+        .spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                // SAFETY: reading into a buffer we own, length passed correctly.
+                let n = unsafe {
+                    libc::read(host_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+                };
+                if n <= 0 {
+                    log::warn!("spice-probe: host end closed (read returned {n})");
+                    return;
+                }
+                let got = &buf[..n as usize];
+                let hex: Vec<String> = got.iter().map(|b| format!("{b:02x}")).collect();
+                log::warn!("spice-probe: guest sent {n} bytes: {}", hex.join(" "));
+                // Decode the chunk + message header if it's there (8 + 20 bytes).
+                if got.len() >= 28 {
+                    let u32at = |o: usize| {
+                        u32::from_le_bytes([got[o], got[o + 1], got[o + 2], got[o + 3]])
+                    };
+                    log::warn!(
+                        "spice-probe:   chunk{{port={}, size={}}} msg{{protocol={}, type={}, size={}}}",
+                        u32at(0),
+                        u32at(4),
+                        u32at(8),
+                        u32at(12),
+                        u32at(24),
+                    );
+                }
+            }
+        })
+        .context("spawning the spice probe drain thread")?;
+
+    log::warn!("spice-probe: exposed named virtio-serial port com.redhat.spice.0");
+    Ok(())
+}
+
+/// A `VD_AGENT_ANNOUNCE_CAPABILITIES` from the server (us) to the guest agent, on the wire:
+/// `VDIChunkHeader{port, size}` + `VDAgentMessage{protocol, type, opaque, size}` + payload
+/// `VDAgentAnnounceCapabilities{request, caps[]}` (see `spice/vd_agent.h`). `request = 1`
+/// asks the agent to announce back, which is the reply we're looking for.
+fn announce_capabilities() -> Vec<u8> {
+    const VDP_CLIENT_PORT: u32 = 1;
+    const VD_AGENT_PROTOCOL: u32 = 1;
+    const VD_AGENT_ANNOUNCE_CAPABILITIES: u32 = 6;
+    // One 32-bit cap word is enough for the clipboard bits; the agent derives caps_size
+    // from the message size, so a short word count is legal.
+    const CAP_CLIPBOARD: u32 = 3;
+    const CAP_CLIPBOARD_BY_DEMAND: u32 = 5;
+    const CAP_CLIPBOARD_SELECTION: u32 = 6;
+    let caps: u32 =
+        (1 << CAP_CLIPBOARD) | (1 << CAP_CLIPBOARD_BY_DEMAND) | (1 << CAP_CLIPBOARD_SELECTION);
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&1u32.to_le_bytes()); // request an announce back
+    payload.extend_from_slice(&caps.to_le_bytes());
+
+    let mut msg = Vec::new();
+    msg.extend_from_slice(&VD_AGENT_PROTOCOL.to_le_bytes());
+    msg.extend_from_slice(&VD_AGENT_ANNOUNCE_CAPABILITIES.to_le_bytes());
+    msg.extend_from_slice(&0u64.to_le_bytes()); // opaque
+    msg.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    msg.extend_from_slice(&payload);
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&VDP_CLIENT_PORT.to_le_bytes());
+    out.extend_from_slice(&(msg.len() as u32).to_le_bytes());
+    out.extend_from_slice(&msg);
+    out
+}
+
 /// Allocate a pseudo-terminal master and return `(input_fd, output_fd)` for the guest
 /// serial, both referring to the master (separate fds so the builder can own each without
 /// a double close). The master is non-blocking: the guest writes serial bytes from the
