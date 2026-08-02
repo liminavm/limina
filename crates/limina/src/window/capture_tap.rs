@@ -549,10 +549,10 @@ fn try_create(ctx: *mut TapCtx) -> bool {
     true
 }
 
-/// Slack when deciding the pointer has left the view: a point or two of rounding through two
-/// affine conversions must not read as an escape while the cursor is legitimately pinned at the
-/// edge.
-const EPS_OUT: f64 = 1.0;
+/// Slack when deciding the pointer was already gone: rounding through two affine conversions, and
+/// the fact that the reported delta and the reported position are not always exactly consistent,
+/// must not turn a fresh boundary crossing into an "already escaped".
+const EPS_OUT: f64 = 8.0;
 
 /// Apply fullscreen edge resistance to one uncaptured motion event.
 ///
@@ -625,15 +625,28 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
         return event;
     }
 
-    // "Has the pointer left our window entirely" — measured against the VIEW, not the fit: a
-    // letterboxed guest's bars are still ours and still worth resisting past. Fullscreen makes
-    // the view the screen, so this is "the pointer is on another display", which is precisely
-    // when resistance must keep its hands off it.
+    // "Was the pointer ALREADY gone before this event" — not merely "is it outside now".
+    //
+    // The distinction is the whole feature. Crossing to another display never produces an event
+    // *at* the boundary: the window server moves the cursor 50-70 pt in one step, so the pointer
+    // goes from inside to well past the edge in a single event, and resistance at the sides IS
+    // the act of pulling it back from there. Treating any outside position as escaped therefore
+    // deletes side resistance altogether — measured on dev-mac 2026-08-02, and it also makes the
+    // guest's own right-edge UI and top-right hot corner unreachable, because the cursor sails
+    // past instead of parking.
+    //
+    // So ask whether this motion could have put it there, the same test `fit::is_reflow` uses:
+    // an overshoot bigger than the delta that supposedly caused it means the pointer was already
+    // out (parked on the other display while we were unfocused, typically) and is not ours to
+    // haul back.
     let bounds = ctx.view.bounds();
-    let escaped = cur.0 < bounds.origin.x - EPS_OUT
-        || cur.0 > bounds.origin.x + bounds.size.width + EPS_OUT
-        || cur.1 < bounds.origin.y - EPS_OUT
-        || cur.1 > bounds.origin.y + bounds.size.height + EPS_OUT;
+    let overshoot = |p: f64, lo: f64, len: f64| (lo - p).max(p - (lo + len)).max(0.0);
+    let out_by = overshoot(cur.0, bounds.origin.x, bounds.size.width).max(overshoot(
+        cur.1,
+        bounds.origin.y,
+        bounds.size.height,
+    ));
+    let escaped = out_by > dx.abs().max(dy.abs()) + EPS_OUT;
     let step = resist.step(cur, dx, dy, fit, escaped);
     ctx.resist.set(resist);
     if edge_trace() {

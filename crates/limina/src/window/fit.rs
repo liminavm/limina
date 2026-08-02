@@ -1086,6 +1086,29 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_boundary_crossing_is_still_resisted() {
+        // The regression the first cut of the escape guard caused (dev-mac, 2026-08-02): crossing
+        // to another display never lands ON the edge — the window server moves the cursor 50-70 pt
+        // in one step — so "outside now" is true for the very first event of an ordinary exit.
+        // Reading that as escaped deleted side resistance entirely and made the guest's own
+        // right-edge UI unreachable. The caller now asks whether the motion could have put the
+        // pointer there; a 60 pt event landing 40 pt out could.
+        let fit = screen_fit();
+        let mut r = EdgeResist::new(100.0);
+        r.set_keepout(false);
+        let step = r.step((fit.x + fit.w + 40.0, 400.0), 60.0, 0.0, fit, false);
+        assert!(
+            !step.free,
+            "one step past the edge is a crossing, not an escape"
+        );
+        assert_eq!(
+            step.pos.0,
+            fit.x + fit.w,
+            "held at the edge so guest edge UI is reachable"
+        );
+    }
+
+    #[test]
     fn a_pointer_on_another_display_is_left_alone() {
         // The reported symptom (2026-08-02): "the mouse jumps around while I test focus
         // changes". `resist_edges` resets on every focus loss, which clears `through`; when the
