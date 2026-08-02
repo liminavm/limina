@@ -49,6 +49,40 @@ Also visible in the same trace: the chrome reveal firing on two events of `d=(0,
 tap's reveal path was still distance-based after the monitor's had become a hold. Two owners of
 one gesture; only one had been reworked.
 
+## Round 2 (2026-08-02): tuning the chrome ask from a recording
+
+The gesture that asks for the macOS chrome back was tuned the same way, and every constant that
+had been guessed turned out to be guarding against the wrong thing. `analyze-trace.py` groups a
+trace into gestures and reports what the model charged each one.
+
+What the recording said, in order of how much it mattered:
+
+1. **A zero vertical delta was cancelling the push.** All 46 `not-pushing` events in a recorded
+   lean had `dy == 0.0` — not a downward move, but the normal report once the cursor is pinned at
+   the edge. Charge plateaued at 0.384 s against a 0.45 s bar: unperformable, exactly as reported.
+2. **The threshold was about as long as a whole stroke.** Longest unbroken push run: 43 events over
+   0.655 s, median 8.3 ms apart, worth ~0.36 s of charge.
+3. **The corner and the lean separate by 50x.** Corner pushes peaked at charge 0.021, a chrome lean
+   reached 1.046. The threshold only has to sit somewhere sane in between; 0.25 s was picked at the
+   felt end, and since charge accrues in real time it is also the delay the user experiences.
+4. **The same physical event was arriving twice.** Consecutive lines, identical `dy`, identical
+   `x`, 6 ms apart, one reporting `y = 982` and the other `y = 65`. The capture tap and the local
+   monitor both fed the gesture and disagreed; the tap granted the ask, the monitor released it.
+   The monitor was wrong — `locationInWindow` is relative to the window the event was *delivered*
+   to, which stops being the view's window once the overlay re-parents it. This one is why the
+   trace grew a `src=` tag: three rounds of inferring which path was which got it backwards once.
+
+Traps this round, worth not repeating:
+
+- **Don't re-simulate the model in the analyzer.** The first version did, and disagreed with the
+  app because only some early-return branches reset the charge. The trace's own `push=`/`charge=`
+  fields are ground truth and cost nothing.
+- **A guard can be worse than the bug.** The first fix for the oscillation discarded events whose
+  position disagreed with their delta — sound in principle, but with two producers poisoning each
+  other's state it fired on **91% of events** and starved the gesture to one fire in a session.
+- **`tail -f` on this log goes deaf.** The boot script `rm -f`s it every run, so a live monitor
+  keeps following a dead inode and silently reports nothing. Use `tail -F`.
+
 ## Tools
 
 | file | what it does |
@@ -56,7 +90,8 @@ one gesture; only one had been reworked.
 | `guest-corner-control.py` | uinput mouse into the corner, from inside the guest. **Run this first** — it is the control. |
 | `push.swift` | repeatable synthetic shove posted to the session tap. Needs Accessibility *for the calling shell*, which an agent shell may not have. |
 | `guest-watch.sh` | polls GNOME's `OverviewActive` and dumps the guest's relative-device traffic. |
-| `LIMINA_EDGE_TRACE=1` | in-process log of every resistance decision and the overflow forwarded. |
+| `LIMINA_EDGE_TRACE=1` | in-process log of every resistance decision (`[EDGE]`) and every chrome-ask decision (`[REVEAL]`), timestamped and tagged with which input path produced it. |
+| `analyze-trace.py` | groups a trace into gestures and reports charge, push, strokes and why each event did not count. |
 
 GNOME's own `OverviewActive` D-Bus property is the authoritative "did it fire" — no human
 eyeballing a screen, no screenshot heuristics.

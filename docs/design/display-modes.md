@@ -226,12 +226,21 @@ windows too, and it hid the Accessibility grant dialog behind the very app that 
   can never trip it — puts the overlay down until the pointer returns to the guest, `REVEAL_MARGIN`
   (40 pt) clear of the top.
 
-  The ask has **one** implementation, `InputState::reveal_step`, which both input paths call — the
-  local monitor directly, and the capture tap in place of its own resistance breakthrough. It must
-  work with *and* without the Accessibility grant (any freshly compiled binary lacks it, since TCC
-  keys on the code hash), and those are different code paths, so a single owner is the only way
-  they can agree. It briefly had two, and reworking one silently left the other in force: with the
-  tap installed it consumes the edge events, so the monitor's version never ran at all.
+  The ask has **one** implementation, `InputState::reveal_step`. It must work with *and* without
+  the Accessibility grant (any freshly compiled binary lacks it, since TCC keys on the code hash),
+  and those are different code paths, so a single owner is the only way they can agree. It briefly
+  had two, and reworking one silently left the other in force.
+
+  One implementation is not enough, though — it also needs **one caller at a time**. The tap is
+  session-wide, so when it is installed it sees every pointer event and *is* the feed; the local
+  monitor drives the gesture only when there is no tap. Running both fed the same physical motion
+  in twice, and they disagreed: a trace caught one event, same `x`, same `dy`, 6 ms apart, reported
+  at `y = 982` by the tap and `y = 65` by the monitor. The tap granted the ask and the monitor
+  released it, over and over. The monitor was the wrong one, for a reason worth knowing:
+  `locationInWindow` is relative to *the window the event was delivered to*, while
+  `convertPoint_fromView(_, None)` decodes it in *the view's current window* — normally the same
+  window, but not once the overlay re-parents the guest view. `event_point_in_view` routes through
+  screen coordinates when they differ. (That bug also fed the guest's absolute pointer.)
 
   Ways to get this wrong, each found by dogfooding it:
   - **The release must not be gated on the overlay being up.** It was, and the overlay is down
@@ -247,11 +256,35 @@ windows too, and it hid the Accessibility grant dialog behind the very app that 
   - **An unbroken hold is a *mouse* gesture.** A trackpad stroke ends when the finger runs out of
     glass; every lift reset the run and the chrome became unsummonable on the hardware the app is
     actually used on.
+  - **A zero vertical delta is not "stopped pushing".** It is what the edge reports once the cursor
+    is pinned there — the normal state of a push that is working. Treating it as a lapse made the
+    gesture unperformable: a recorded lean contained 46 of them, each wiping the charge, so it
+    plateaued at 0.384 s against a 0.45 s bar and could never fire however long the user leaned.
+    It is neutral now: it neither charges (that would bank stillness, reopening the shove-then-
+    linger hole) nor lapses. Only a genuinely downward move gives the gesture up.
+  - **Granting the ask moves the content out from under the pointer.** The overlay drops, the view
+    re-parents into the shorter carrier, and for a few frames the reported position says "back
+    inside the guest" while nothing moved — releasing the ask that was just granted, restoring the
+    geometry, and letting the still-leaning pointer re-arm it. Two guards, because one was not
+    enough: `fit::is_reflow` discards any event whose position change disagrees with its own delta,
+    and `REVEAL_SETTLE` (200 ms) ignores releases right after a grant. Note the reflow arrives
+    wearing a *plausible* delta — one measured sample carried exactly the notch inset — so a
+    delta-sign test does not catch it.
+  - **A release must leave nothing behind.** Charge used to survive one, so a later lean inherited
+    it and fired instantly while a fresh one took the full hold. Worse, each spurious release
+    zeroed the accumulated *push*, so the lean had to be re-earned — the invisible cause of the
+    "sometimes it takes a lot of pushing" this gesture kept being reported for.
 
   What it settles on: a **charge** — time actually spent pushing, capped per event so silence
   cannot be banked as motion, decaying after `REVEAL_DECAY` of idle, with a small distance floor
   to rule out jitter. Repeated strokes add up; a single shove does not. And it never arms within
   `fit::CORNER_ZONE` of a side edge, because corners belong to the guest.
+
+  `REVEAL_HOLD` is **measured, not chosen**: in a recording of the intended gestures
+  (`LIMINA_EDGE_TRACE=1` + `spikes/edge-pressure/analyze-trace.py`) the corner pushes peaked at a
+  charge of 0.021 and a chrome lean reached 1.046, so 0.25 s sits with wide margin on both sides —
+  and, since the charge accrues in real time, it is also the delay the user feels. Dogfooding it
+  afterwards fired at 0.251–0.263 across eight consecutive leans, against 0.25–3.5 before.
 
 Two knock-on simplifications. `NSWindowStyleMask::FullScreen` is meaningful again, since fullscreen
 is always native; only the capture tap needs the overlay flag, because a guest hosted in the
