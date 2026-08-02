@@ -554,6 +554,13 @@ impl ExtendOverlay {
         // FullScreenAuxiliary is what lets the window join the carrier's Space rather than
         // yanking the user out of it.
         overlay.setCollectionBehavior(NSWindowCollectionBehavior::FullScreenAuxiliary);
+        // MUST be false. `isReleasedWhenClosed` defaults to TRUE for a programmatically created
+        // NSWindow, so `close()` releases it out from under the `Retained` we are holding — an
+        // over-release that segfaults in the next autorelease-pool drain, i.e. inside
+        // `NSApplication::run`, nowhere near the code that caused it. Cost a crash on the first
+        // Cmd-Tab out of the overlay (2026-08-01).
+        // SAFETY: plain property setter on a window we own and have not yet shown.
+        unsafe { overlay.setReleasedWhenClosed(false) };
         overlay.setLevel(OVERLAY_LEVEL);
         overlay.setOpaque(true);
         overlay.setBackgroundColor(Some(NSColor::blackColor().as_ref()));
@@ -952,6 +959,8 @@ pub fn run(
         captured.clone(),
         fit_cell.clone(),
         capture_pos.clone(),
+        overlay_flag.clone(),
+        reveal_chrome.clone(),
     ));
     let _capture_tap = capture_tap::install(
         conn.clone(),

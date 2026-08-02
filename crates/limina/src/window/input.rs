@@ -390,9 +390,30 @@ pub struct InputState {
     /// Hi-res scroll accumulators (vertical, horizontal) — see [`ScrollAxis`].
     scroll_y: Cell<ScrollAxis>,
     scroll_x: Cell<ScrollAxis>,
+    /// Whether the guest is hosted in the `notch = extend` overlay, and the flag that asks for it
+    /// to stand down so the menu bar and the window's controls are reachable. See
+    /// [`InputState::reveal_step`].
+    overlay_active: Arc<AtomicBool>,
+    reveal_chrome: Arc<AtomicBool>,
+    /// Upward push accumulated against the guest's top edge, in points.
+    reveal_push: Cell<f64>,
 }
 
+/// Points of sustained upward push at the top edge that ask for the chrome back.
+///
+/// Deliberately its own constant rather than the edge-resistance threshold: under the overlay
+/// resistance has nothing left to protect at the top, and may well be switched off entirely
+/// (`edge-resistance = 0`) — but the way out to the menu bar must still exist.
+const REVEAL_PUSH: f64 = 80.0;
+
+/// How far back below the top edge the pointer must come before the overlay is taken back. Wide
+/// enough that using the revealed menu bar doesn't flicker it away, narrow enough to feel prompt.
+const REVEAL_MARGIN: f64 = 40.0;
+
 impl InputState {
+    // Eight shared handles, each a distinct thing the translator needs for the window's lifetime;
+    // bundling them into a struct would move the same list one line up.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         conn: Arc<WorkerConn>,
         host_cursor: Rc<HostCursor>,
@@ -400,6 +421,8 @@ impl InputState {
         captured: Arc<AtomicBool>,
         fit: Rc<Cell<super::fit::FitRect>>,
         capture_pos: Rc<Cell<Option<(f64, f64)>>>,
+        overlay_active: Arc<AtomicBool>,
+        reveal_chrome: Arc<AtomicBool>,
     ) -> Self {
         Self {
             conn,
@@ -417,6 +440,9 @@ impl InputState {
             fit,
             scroll_y: Cell::new(ScrollAxis::default()),
             scroll_x: Cell::new(ScrollAxis::default()),
+            overlay_active,
+            reveal_chrome,
+            reveal_push: Cell::new(0.0),
         }
     }
 
@@ -840,6 +866,7 @@ impl InputState {
         // `None` source view = the point is in window base coordinates.
         let p = view.convertPoint_fromView(event.locationInWindow(), None);
         let fit = self.fit.get();
+        self.reveal_step((p.x, p.y), event.deltaY(), fit);
         self.capture_pos.set(Some(
             super::fit::capture_step(Some((p.x, p.y)), 0.0, 0.0, fit).pos,
         ));
@@ -847,6 +874,40 @@ impl InputState {
         self.send_ptr(InputEvent::new(EV_ABS, ABS_X, x));
         self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, y));
         self.send_ptr(InputEvent::syn());
+    }
+
+    /// Ask for the macOS chrome back, or give it up again.
+    ///
+    /// Under the `notch = extend` overlay nothing can appear over the guest — that is the point of
+    /// it — so the menu bar and the window's own controls need a deliberate way in for the VM's
+    /// menu actions. Sustained upward push at the guest's top edge is the ask; coming back into
+    /// the guest is the release.
+    ///
+    /// This lives in the **local monitor**, not the capture tap, on purpose. The tap needs an
+    /// Accessibility grant, and a build without one (any freshly-compiled dev binary, since TCC
+    /// keys on the code hash) would otherwise have no way to reach the menu bar at all — found
+    /// the hard way on the first dogfood run of this feature. The monitor only sees events over
+    /// our own window, which is all this needs. Uncaptured only: a grabbed pointer must never
+    /// trip it.
+    fn reveal_step(&self, p: (f64, f64), delta_y: f64, fit: super::fit::FitRect) {
+        if !self.overlay_active.load(Ordering::Relaxed) || self.captured.load(Ordering::Relaxed) {
+            self.reveal_push.set(0.0);
+            return;
+        }
+        const EDGE: f64 = 2.0;
+        let top = fit.y + fit.h;
+        // AppKit deltas grow downward, so upward push is negative.
+        if p.1 >= top - EDGE && delta_y < 0.0 {
+            let pushed = self.reveal_push.get() - delta_y;
+            self.reveal_push.set(pushed);
+            if pushed >= REVEAL_PUSH {
+                self.reveal_chrome.store(true, Ordering::Relaxed);
+            }
+        } else if p.1 < top - REVEAL_MARGIN {
+            // Genuinely back in the guest: forget the push and take the overlay back.
+            self.reveal_push.set(0.0);
+            self.reveal_chrome.store(false, Ordering::Relaxed);
+        }
     }
 
     /// Capture mode: integrate the event's motion delta into the virtual cursor and drive the
