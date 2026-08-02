@@ -242,6 +242,27 @@ const SIDE_FACTOR: f64 = 0.5;
 /// How close to a corner counts as being *at* it, where the pointer is never released.
 pub(crate) const CORNER_ZONE: f64 = 32.0;
 
+/// Slack allowed between a reported position change and the delta that claims to explain it,
+/// before [`is_reflow`] calls the event a layout artifact rather than motion.
+const REFLOW_SLACK: f64 = 8.0;
+
+/// Whether this pointer event is the *content moving under the pointer* rather than the pointer
+/// moving — a re-layout reported through the same channel as a mouse move.
+///
+/// Real motion displaces the pointer by its own delta. A reflow does not, and the mismatch is the
+/// only signal that does not require knowing which reflow happened or how big the inset is.
+///
+/// This exists because granting the `notch = extend` chrome ask drops the overlay, re-parenting
+/// the guest view into the shorter carrier — and the resulting event claims the pointer moved. Two
+/// samples measured in one boot: `y` 982.0 -> 31.9 carrying `dy = +33.0` (exactly the notch
+/// inset), and `y` 947.9 -> 30.6 carrying `dy = +1.0`, a 917-point jump attributed to a one-point
+/// move. Both read as "the pointer went back into the guest", which released the ask, restored the
+/// geometry, and let the still-leaning pointer re-arm it — the chrome oscillated for as long as
+/// the user kept pushing.
+pub(crate) fn is_reflow(prev: Option<(f64, f64)>, cur: (f64, f64), delta_y: f64) -> bool {
+    prev.is_some_and(|p| (cur.1 - p.1).abs() > delta_y.abs() + REFLOW_SLACK)
+}
+
 // A corner used to merely hold *longer* than the rest of the edge (a CORNER_FACTOR multiplier on
 // the threshold). Right diagnosis, wrong layer: whatever multiple was chosen, breaking through
 // ended the forwarded pressure, and a barrier that wants sustained push cannot be served by a
@@ -532,6 +553,29 @@ mod tests {
     /// camera housing eats 33 pt of it.
     const PANEL: (f64, f64) = (1512.0, 982.0);
     const NOTCH: f64 = 33.0;
+
+    /// Both samples are verbatim from one `LIMINA_EDGE_TRACE=1` boot, at the moment granting the
+    /// chrome ask dropped the overlay. Neither is motion; the pointer never moved. Before this
+    /// check they both read as "back inside the guest" and released the ask that had just been
+    /// granted, so the chrome oscillated for as long as the user leaned on the edge.
+    #[test]
+    fn the_overlay_dropping_under_a_still_pointer_is_not_pointer_motion() {
+        // The reflow arrives wearing a plausible delta — exactly the notch inset, downward.
+        assert!(is_reflow(Some((1464.6, 982.0)), (1462.4, 31.9), 33.0));
+        // And sometimes an implausible one: a 917-point jump claiming to be a one-point move.
+        assert!(is_reflow(Some((1455.0, 947.9)), (1454.0, 30.6), 1.0));
+    }
+
+    #[test]
+    fn real_motion_moves_the_pointer_by_its_own_delta_and_is_never_a_reflow() {
+        // A hard push at the edge: the position tracks the delta.
+        assert!(!is_reflow(Some((443.8, 982.0)), (443.8, 940.0), -42.0));
+        // Sub-pixel drift and rounding stay inside the slack.
+        assert!(!is_reflow(Some((443.8, 982.0)), (443.8, 982.0), -1.0));
+        assert!(!is_reflow(Some((100.0, 500.0)), (100.0, 493.0), 0.0));
+        // The very first event has nothing to compare against and must not be discarded.
+        assert!(!is_reflow(None, (1462.4, 31.9), 33.0));
+    }
 
     #[test]
     fn notch_avoid_trims_the_housing_strip_off_the_top() {

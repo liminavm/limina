@@ -1004,7 +1004,6 @@ pub fn run(
         view.clone(),
         edge_resistance,
         overlay_flag,
-        reveal_chrome.clone(),
     );
 
     // Shown-ack channel (#8 leg 2): after Core Animation latches a frame, tell the worker

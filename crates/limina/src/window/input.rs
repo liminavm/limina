@@ -144,6 +144,28 @@ pub(crate) fn cg_global_to_view_point(view: &NSView, p: NSPoint) -> Option<(f64,
     Some((local.x, local.y))
 }
 
+/// The event's cursor position in `view` coordinates.
+///
+/// `locationInWindow` is relative to **the window the event was delivered to**, while
+/// `convertPoint_fromView(_, None)` decodes a point in **the view's current window**. Those are
+/// normally the same window and the distinction never shows — until `notch = extend` re-parents
+/// the guest view into the overlay, after which events still delivered to the carrier are decoded
+/// in the wrong space. Measured: one event reported at `y = 982` by the tap came through here as
+/// `y = 65`, same `x`, same delta, 6 ms apart. Going via screen coordinates when the windows
+/// differ costs two conversions and removes the whole class.
+fn event_point_in_view(event: &NSEvent, view: &NSView) -> NSPoint {
+    let loc = event.locationInWindow();
+    let ev_win = objc2::MainThreadMarker::new().and_then(|mtm| event.window(mtm));
+    let base = match (ev_win, view.window()) {
+        (Some(ev_win), Some(view_win)) if !std::ptr::eq(&*ev_win, &*view_win) => {
+            view_win.convertPointFromScreen(ev_win.convertPointToScreen(loc))
+        }
+        // `None` source window = the point is already in the view's window base coordinates.
+        _ => loc,
+    };
+    view.convertPoint_fromView(base, None)
+}
+
 /// Whether we currently have the host cursor hidden for capture — keeps `NSCursor::hide`/`unhide`
 /// (a reference count) balanced no matter how the toggle is driven.
 static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
@@ -400,6 +422,37 @@ pub struct InputState {
     reveal_push: Cell<f64>,
     reveal_charge: Cell<f64>,
     reveal_last: Cell<Option<std::time::Instant>>,
+    /// When the ask was last granted, for the settle window in [`InputState::reveal_step`].
+    reveal_granted: Cell<Option<std::time::Instant>>,
+    /// Where the pointer was on the previous reveal event **from each source**, to tell real
+    /// motion from a reflow — see the discontinuity check in [`InputState::reveal_step`], and
+    /// [`RevealSrc`] for why this cannot be one shared slot.
+    reveal_pos: [Cell<Option<(f64, f64)>>; 2],
+}
+
+/// Which path fed a reveal event. Both can be live at once and they do NOT agree about where
+/// the pointer is — traces caught them reporting `y = 982` and `y = 40` for one stationary
+/// pointer, same delta, same fit. Until that is explained, each keeps its own continuity state so
+/// neither makes the other look like it teleported, and the trace says which one spoke.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RevealSrc {
+    /// The session event tap (`capture_tap`), via CG global coordinates.
+    Tap,
+    /// The local `NSEvent` monitor, via `locationInWindow` — plain AppKit, no global round trip.
+    Monitor,
+}
+
+impl RevealSrc {
+    fn idx(self) -> usize {
+        self as usize
+    }
+
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Tap => "tap",
+            Self::Monitor => "mon",
+        }
+    }
 }
 
 /// How much *pushing* the pointer must do at the top edge to ask for the chrome back, measured as
@@ -415,13 +468,24 @@ pub struct InputState {
 /// 700 ms of continuous motion is a *mouse* gesture. A trackpad stroke ends when the finger runs
 /// out of glass, so every lift reset the run and the gesture became unperformable on the hardware
 /// the app is used on. Charging makes repeated strokes add up while leaving the shove ineffective.
-const REVEAL_HOLD: f64 = 0.45;
+///
+/// 0.25 s is measured, not guessed: in a recording of the intended gestures
+/// (`spikes/edge-pressure/analyze-trace.py`) the corner pushes reached a peak charge of 0.021
+/// while a chrome lean reached 1.046 — a 50x separation, so the threshold only has to sit
+/// somewhere sane inside it. It is chosen at the *felt* end of that range: once the lean is
+/// under way the chrome arrives after almost exactly this long.
+const REVEAL_HOLD: f64 = 0.25;
 
 /// Per-event cap on the charge, so a long quiet interval can't be banked as pushing.
 const REVEAL_TICK_CAP: f64 = 0.05;
 
 /// Idle longer than this and the charge is gone — the strokes have to belong to one gesture.
 const REVEAL_DECAY: f64 = 0.4;
+
+/// How long after granting the ask a release is ignored, to let the overlay's teardown settle.
+/// Long enough to cover the re-layout, far too short to cover a deliberate move back into the
+/// guest across [`REVEAL_MARGIN`].
+const REVEAL_SETTLE: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// A floor on the push, so jitter against the top row can't satisfy [`REVEAL_HOLD`] by resting.
 /// Small: the hold is what makes the gesture deliberate, this only rules out noise.
@@ -473,6 +537,8 @@ impl InputState {
             reveal_push: Cell::new(0.0),
             reveal_charge: Cell::new(0.0),
             reveal_last: Cell::new(None),
+            reveal_granted: Cell::new(None),
+            reveal_pos: [Cell::new(None), Cell::new(None)],
         }
     }
 
@@ -893,10 +959,16 @@ impl InputState {
     /// the legacy full-bounds mapping, bit for bit. Also remembers the (clamped) position
     /// as the capture seed, so a grab starts exactly where the cursor was.
     fn emit_motion(&self, event: &NSEvent, view: &NSView) {
-        // `None` source view = the point is in window base coordinates.
-        let p = view.convertPoint_fromView(event.locationInWindow(), None);
+        let p = event_point_in_view(event, view);
         let fit = self.fit.get();
-        self.reveal_step((p.x, p.y), event.deltaY(), fit);
+        // Only when the tap is NOT installed. The tap is session-wide, so when it is up it sees
+        // every one of these events and is the gesture's real feed; running both makes the same
+        // physical motion arrive twice and the two fight — one granting the ask, the other
+        // releasing it on the same event, 6 ms apart. One owner, chosen by which mechanism is
+        // actually live: the tap when there is a grant, this when there is not.
+        if !super::capture_tap::installed() {
+            self.reveal_step((p.x, p.y), event.deltaY(), fit, RevealSrc::Monitor);
+        }
         self.capture_pos.set(Some(
             super::fit::capture_step(Some((p.x, p.y)), 0.0, 0.0, fit).pos,
         ));
@@ -933,13 +1005,57 @@ impl InputState {
     /// the hard way on the first dogfood run of this feature. The monitor only sees events over
     /// our own window, which is all this needs. Uncaptured only: a grabbed pointer must never
     /// trip it.
-    pub(crate) fn reveal_step(&self, p: (f64, f64), delta_y: f64, fit: super::fit::FitRect) {
+    pub(crate) fn reveal_step(
+        &self,
+        p: (f64, f64),
+        delta_y: f64,
+        fit: super::fit::FitRect,
+        src: RevealSrc,
+    ) {
         if self.captured.load(Ordering::Relaxed) {
             self.reveal_push.set(0.0);
             return;
         }
         const EDGE: f64 = 2.0;
         let top = fit.y + fit.h;
+        // The recording instrument for this gesture. Every constant below was guessed once and
+        // wrong once; `[REVEAL]` exists so the next value comes from a trace of the movement the
+        // user actually intends instead. Emitted for the whole top band, tagged with why the call
+        // ended, since a gesture that does not fire is exactly the interesting case.
+        let trace = |s: &Self, why: &str| {
+            if super::capture_tap::edge_trace() {
+                eprintln!(
+                    "[REVEAL] t={:.1} src={} p=({:.1},{:.1}) dy={delta_y:.1} top={top:.1} \
+                     overlaid={} push={:.1} charge={:.3} ask={} {why}",
+                    super::capture_tap::trace_ms(),
+                    src.tag(),
+                    p.0,
+                    p.1,
+                    s.overlay_active.load(Ordering::Relaxed),
+                    s.reveal_push.get(),
+                    s.reveal_charge.get(),
+                    s.reveal_chrome.load(Ordering::Relaxed),
+                );
+            }
+        };
+        // Ignore the event where the *content moved under the pointer* rather than the pointer
+        // moving. Granting the ask drops the overlay, which re-parents the view into the inset
+        // carrier, and the reflow is reported as pointer motion — badly. Two measured samples
+        // from one boot: `p.y` 982.0 -> 31.9 carrying `dy=+33.0` (exactly the notch inset), and
+        // `p.y` 947.9 -> 30.6 carrying `dy=+1.0`, a 917-point jump attributed to a one-point
+        // move. Either reads as "back inside the guest", which released the ask, restored the
+        // geometry, and let the still-leaning pointer re-arm it: the chrome oscillated for as
+        // long as the user kept pushing (seen near the right-hand system menus, where the lean
+        // naturally lingers).
+        //
+        // Real motion moves the pointer by its own delta, so the inconsistency is the tell —
+        // and it needs no knowledge of *which* transition happened or what the inset is. The
+        // event is dropped, not lapsed: a warp from edge resistance trips this too, and losing
+        // a gesture's charge to the app's own cursor bookkeeping would be its own bug.
+        if super::fit::is_reflow(self.reveal_pos[src.idx()].replace(Some(p)), p, delta_y) {
+            trace(self, "reflow");
+            return;
+        }
         if p.1 < top - REVEAL_MARGIN {
             // Genuinely back in the guest: forget the push and take the overlay back.
             //
@@ -948,7 +1064,31 @@ impl InputState {
             // set — gating this on `overlay_active` makes the state unreachable and the guest
             // stays inset below the housing forever, across fullscreen toggles included. Cost a
             // dogfood round; the release condition must always be live.
+            if self.reveal_chrome.load(Ordering::Relaxed) {
+                // Not within the settle window. Granting the ask drops the overlay, which moves
+                // the guest content out from under a stationary pointer; for a few frames the
+                // reported position says "back inside the guest" when nothing moved. The user
+                // cannot have crossed the whole reveal margin deliberately in that time, so a
+                // release this soon is layout, not intent. Without it the ask was granted and
+                // withdrawn repeatedly — invisible at speed, but each withdrawal zeroed the
+                // accumulated push, so the lean had to be re-earned over and over. That is the
+                // "sometimes it takes a lot of pushing" this gesture kept being reported for.
+                if self
+                    .reveal_granted
+                    .get()
+                    .is_some_and(|t| t.elapsed() < REVEAL_SETTLE)
+                {
+                    return;
+                }
+                trace(self, "release");
+            }
+            // A finished gesture leaves nothing behind. Charge used to survive a release, so a
+            // later lean inherited it and fired at once while a fresh one took the full hold —
+            // the same gesture feeling different every time.
             self.reveal_push.set(0.0);
+            self.reveal_charge.set(0.0);
+            self.reveal_last.set(None);
+            self.reveal_granted.set(None);
             self.reveal_chrome.store(false, Ordering::Relaxed);
             return;
         }
@@ -959,6 +1099,7 @@ impl InputState {
         };
         if !self.overlay_active.load(Ordering::Relaxed) {
             // Nothing to ask for: the chrome is already reachable.
+            trace(self, "no-overlay");
             lapse(self);
             return;
         }
@@ -968,12 +1109,30 @@ impl InputState {
         let in_corner =
             p.0 - fit.x <= REVEAL_CORNER_KEEPOUT || fit.x + fit.w - p.0 <= REVEAL_CORNER_KEEPOUT;
         if p.1 < top - EDGE || in_corner {
+            trace(self, if in_corner { "corner" } else { "band" });
             return;
         }
         // AppKit deltas grow downward, so upward push is negative.
-        if delta_y >= 0.0 {
-            // At the edge but not pushing up. The lean has to be unbroken — otherwise travelling
-            // along the top row, or resting against it, satisfies the hold by accident.
+        //
+        // A delta of exactly zero is NOT "stopped pushing" — it is what the edge reports once the
+        // cursor is already pinned there, which is to say the normal state of a push that is
+        // working. Lapsing on it made the gesture unperformable: a recorded chrome lean contained
+        // 46 of them, every one with `dy == 0.0`, each wiping the charge, so it plateaued at 0.384
+        // against a 0.45 s bar and could never fire however long the user leaned.
+        //
+        // Neutral, though — not charging. Letting a zero delta charge would bank *stillness* as
+        // pushing again, which is the shove-then-linger hole that the charge model was introduced
+        // to close: a flick worth `REVEAL_PUSH` followed by resting would satisfy the hold with no
+        // lean at all. So it neither charges nor lapses, and does not count as recent motion.
+        if delta_y == 0.0 {
+            trace(self, "pinned");
+            return;
+        }
+        // Only a genuine downward move — the user pulling away — gives up the gesture.
+        if delta_y > 0.0 {
+            // Moving back into the guest. Travelling along the top row or resting against it must
+            // not satisfy the hold by accident, and this is what rules that out.
+            trace(self, "not-pushing");
             lapse(self);
             return;
         }
@@ -994,9 +1153,13 @@ impl InputState {
         }
         self.reveal_last.set(Some(now));
         self.reveal_push.set(self.reveal_push.get() - delta_y);
-        if self.reveal_charge.get() >= REVEAL_HOLD && self.reveal_push.get() >= REVEAL_PUSH {
-            self.reveal_chrome.store(true, Ordering::Relaxed);
+        if self.reveal_charge.get() >= REVEAL_HOLD
+            && self.reveal_push.get() >= REVEAL_PUSH
+            && !self.reveal_chrome.swap(true, Ordering::Relaxed)
+        {
+            self.reveal_granted.set(Some(std::time::Instant::now()));
         }
+        trace(self, "push");
     }
 
     /// Capture mode: integrate the event's motion delta into the virtual cursor and drive the

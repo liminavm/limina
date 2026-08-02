@@ -49,7 +49,7 @@ use limina_input::InputEvent;
 use super::fit::{self, FitRect};
 use super::input::{
     match_host_shortcut, send_abs_position, send_edge_overflow, send_event, HostShortcut,
-    InputState, UngrabAction,
+    InputState, RevealSrc, UngrabAction,
 };
 use super::WorkerConn;
 
@@ -185,12 +185,6 @@ struct TapCtx {
     /// has to hold there too: it is the mode most in need of it, being the one that owns the
     /// whole panel. Shared handle onto `window::PanelFullscreen`'s own flag.
     panel_fs: Arc<AtomicBool>,
-    /// Set when the user shoves at the top edge hard enough to break through while the overlay
-    /// is up: the deliberate "let me at the menu bar" gesture. Nothing can reveal over the
-    /// overlay, so the only way to reach the chrome (and the VM's own menu) is to put the overlay
-    /// down — which `ExtendOverlay::reconcile` does while this is set. Cleared as soon as the
-    /// pointer is back inside the guest. Uncaptured only, so a grabbed pointer can never trip it.
-    reveal_chrome: Arc<AtomicBool>,
 }
 
 /// Centre of the main display in global (points) coordinates — where we keep the hidden cursor
@@ -598,14 +592,13 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
     // which is where its top bar and top-left hot corner want it.
     let overlaid = ctx.panel_fs.load(Ordering::Relaxed);
     resist.set_keepout(!overlaid);
-    // Back inside the guest: whatever the chrome was doing, we want the overlay again. The same
-    // margin the local monitor uses, not mere containment — `point_in_fit` includes the top row,
-    // so re-entering there would snap the overlay back over the very menu the user reached for.
-    if fit::point_in_fit(cur.0, cur.1, fit) && cur.1 < fit.y + fit.h - super::input::REVEAL_MARGIN {
-        ctx.reveal_chrome.store(false, Ordering::Relaxed);
-    }
     let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
     let (dx, dy) = (getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y));
+    // Granting the chrome ask AND releasing it both belong to `InputState::reveal_step`, which the
+    // tap calls below. The tap used to release on its own here, and a second owner of one gesture
+    // is the same mistake that had to be undone on the granting side: this copy did not have the
+    // reflow guard, so it kept releasing the ask on the very event that granted it and the chrome
+    // oscillated even after `reveal_step` had stopped doing so.
     let step = resist.step(cur, dx, dy, fit);
     ctx.resist.set(resist);
     if edge_trace() {
@@ -614,8 +607,9 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
         // guest-side barrier won't fire: did we absorb the push and forward it, or did we let go
         // first? Reasoning about it from the outside got the corner threshold wrong twice.
         eprintln!(
-            "[EDGE] cur=({:.1},{:.1}) d=({dx:.1},{dy:.1}) fit=({:.1},{:.1} {:.1}x{:.1}) \
+            "[EDGE] t={:.1} cur=({:.1},{:.1}) d=({dx:.1},{dy:.1}) fit=({:.1},{:.1} {:.1}x{:.1}) \
              overlaid={overlaid} free={} overflow=({:.1},{:.1}) revealed={}",
+            trace_ms(),
             cur.0,
             cur.1,
             fit.x,
@@ -633,9 +627,18 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
     // distance-based after the monitor's became a hold, so with the tap installed (i.e. whenever
     // Accessibility *is* granted) a two-event flick still summoned the menu bar. Two owners of one
     // gesture is how that happens; now there is one.
-    if overlaid {
-        ctx.input.reveal_step(cur, dy, fit);
-    }
+    //
+    // Above the `step.free` return: the tap is the gesture's PRIMARY feed, not a supplement.
+    // Moving this below it — so only consumed events counted — looked like it merely removed a
+    // duplicate, and instead starved the gesture from 833 charging events in a boot to 17. The
+    // local monitor sees far fewer of these than it appears to.
+    // Unconditional. NOT `if overlaid` — releasing the ask is the only thing that brings the
+    // overlay back, so skipping the call while it is down strands the guest below the housing
+    // forever. That trap has now been walked into twice from opposite directions: once by gating
+    // the release *inside* `reveal_step` on the overlay, and once here, by gating the whole call
+    // and then making this the sole feed. `reveal_step` tests the overlay itself, where arming
+    // needs it and releasing must not.
+    ctx.input.reveal_step(cur, dy, fit, RevealSrc::Tap);
     if step.free {
         return event;
     }
@@ -660,10 +663,30 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
     std::ptr::null_mut()
 }
 
+/// Whether the session event tap is live. The tap is session-wide, so when it is up it sees every
+/// pointer event and the local monitor must not *also* drive anything stateful — see the reveal
+/// call in `InputState::emit_motion`.
+pub(crate) fn installed() -> bool {
+    !TAP_PORT.load(Ordering::Relaxed).is_null()
+}
+
 /// Whether to log every resistance decision to stderr (`LIMINA_EDGE_TRACE=1`).
-fn edge_trace() -> bool {
+pub(crate) fn edge_trace() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LIMINA_EDGE_TRACE").is_some_and(|v| v != "0"))
+}
+
+/// Milliseconds since the first traced event, stamped on every trace line.
+///
+/// The trace is the recording instrument for gesture tuning, and the gestures are *timed* —
+/// charge accumulates per unit of motion time. A stream of positions with no clock cannot say
+/// whether two events are one stroke or two, so nothing in it can be used to pick a constant.
+pub(crate) fn trace_ms() -> f64 {
+    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    T0.get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f64()
+        * 1000.0
 }
 
 /// Install the capture tap on the main run loop. Returns `true` if the tap was created; `false`
@@ -683,7 +706,6 @@ pub(crate) fn install(
     view: Retained<NSView>,
     edge_resistance: f64,
     panel_fs: Arc<AtomicBool>,
-    reveal_chrome: Arc<AtomicBool>,
 ) -> bool {
     let ctx = Box::into_raw(Box::new(TapCtx {
         captured,
@@ -697,7 +719,6 @@ pub(crate) fn install(
         view,
         resist: Cell::new(fit::EdgeResist::new(edge_resistance)),
         panel_fs,
-        reveal_chrome,
     }));
     if try_create(ctx) {
         log::info!("pointer capture: CGEventTap installed (session-level, consuming)");
