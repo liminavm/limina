@@ -270,6 +270,11 @@ pub(crate) struct ResistStep {
     /// True when this event needs no intervention: the pointer is inside the content, or it has
     /// pushed hard enough to break out. The caller passes the event through untouched.
     pub free: bool,
+    /// This event is the one that broke out **upward**. Under the `extend` overlay that is the
+    /// deliberate gesture for "let me at the menu bar": nothing can reveal over the overlay, so
+    /// the only way to reach the chrome is to put the overlay down, and shoving at the top edge
+    /// is the ask. Ignored elsewhere.
+    pub revealed: bool,
 }
 
 /// Fullscreen edge resistance: the pointer sticks at the guest's edge until *pushed* through.
@@ -296,6 +301,11 @@ pub(crate) struct EdgeResist {
     acc: (f64, f64),
     /// Broken through: stay out of the way until the pointer re-enters the content.
     through: bool,
+    /// Whether to hold the cursor short of the edge (see [`KEEPOUT`]). Off under the `extend`
+    /// overlay, where nothing can reveal over the guest and the keep-out would only stop the
+    /// pointer reaching the guest's own top edge — the top bar and the top-left hot corner want
+    /// it at the true corner.
+    keepout: bool,
 }
 
 impl EdgeResist {
@@ -308,7 +318,14 @@ impl EdgeResist {
             },
             acc: (0.0, 0.0),
             through: false,
+            keepout: true,
         }
+    }
+
+    /// Turn the keep-out band on or off. Set per event by the caller from whether the guest is
+    /// hosted in the `extend` overlay.
+    pub(crate) fn set_keepout(&mut self, on: bool) {
+        self.keepout = on;
     }
 
     pub(crate) fn enabled(&self) -> bool {
@@ -342,6 +359,7 @@ impl EdgeResist {
             pos,
             overflow: (0.0, 0.0),
             free: true,
+            revealed: false,
         };
         if !self.enabled() {
             return free(cur);
@@ -368,8 +386,9 @@ impl EdgeResist {
 
         // The area the held cursor is allowed to occupy: the content, minus the keep-out band
         // that stops it triggering macOS's own edge reveals.
-        let (lo_x, hi_x) = band(fit.x, fit.w, KEEPOUT);
-        let (lo_y, hi_y) = band(fit.y, fit.h, KEEPOUT);
+        let inset = if self.keepout { KEEPOUT } else { 0.0 };
+        let (lo_x, hi_x) = band(fit.x, fit.w, inset);
+        let (lo_y, hi_y) = band(fit.y, fit.h, inset);
 
         // Is this event pushing *outward* at an edge the pointer is already against? Both halves
         // matter: against-the-edge alone is just resting there, and outward motion alone is the
@@ -415,12 +434,18 @@ impl EdgeResist {
         if self.acc.0 >= self.threshold * SIDE_FACTOR || self.acc.1 >= self.threshold {
             self.through = true;
             self.acc = (0.0, 0.0);
-            return free(cur);
+            // Upward, i.e. against the top edge: the chrome-reveal gesture.
+            let up = push_y < 0.0;
+            return ResistStep {
+                revealed: up,
+                ..free(cur)
+            };
         }
         ResistStep {
             pos: (cur.0.clamp(lo_x, hi_x), cur.1.clamp(lo_y, hi_y)),
             overflow: (push_x, push_y),
             free: false,
+            revealed: false,
         }
     }
 }
@@ -683,6 +708,38 @@ mod tests {
         }
         r.reset(); // e.g. left fullscreen, or the window lost key
         assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
+    }
+
+    #[test]
+    fn without_the_keepout_the_cursor_reaches_the_true_top_edge() {
+        // Under the `extend` overlay nothing can reveal over the guest, so the keep-out band has
+        // no job — and holding the cursor short of the edge would stop the guest's own top bar
+        // and top-left hot corner getting the pointer where they expect it.
+        let mut r = EdgeResist::new(100.0);
+        r.set_keepout(false);
+        let step = r.step((0.0, TOP), -10.0, -10.0, screen_fit());
+        assert!(!step.free, "still resisted — it is still an outward shove");
+        assert_eq!(
+            step.pos,
+            (0.0, TOP),
+            "but held AT the corner, not two points inside it"
+        );
+    }
+
+    #[test]
+    fn breaking_out_upward_asks_for_the_chrome_but_sideways_does_not() {
+        // The reveal gesture: with the overlay up, the only way to reach the menu bar and the
+        // window's own controls is to put the overlay down, and a deliberate shove at the top
+        // edge is the ask. Leaving sideways must not trigger it — that is just going to another
+        // display.
+        let fit = screen_fit();
+        let mut up = EdgeResist::new(100.0);
+        assert!(up.step((700.0, TOP), 0.0, -200.0, fit).revealed);
+
+        let mut side = EdgeResist::new(100.0);
+        let out = side.step((1512.0, 400.0), 200.0, 0.0, fit);
+        assert!(out.free, "sideways still breaks out");
+        assert!(!out.revealed, "...without asking for the chrome");
     }
 
     #[test]

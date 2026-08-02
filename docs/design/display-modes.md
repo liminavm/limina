@@ -183,32 +183,50 @@ automatically positions the window's contents within the safe area", and offers 
 — it names "a custom full-screen experience" as the alternative. The HIG agrees that the system
 full-screen support "automatically accommodates" the housing.
 
-That custom experience is what works: a **borderless** window covering `screen.frame` with the
-menu bar and Dock hidden. So the policy picks the *mechanism*:
+That custom experience is what works — but a borderless window on its own is **not a Space**, so
+it costs Mission Control, the swipe and the fullscreen animation. The shipped design keeps both:
+**native fullscreen as a carrier, with the borderless window floating over it** as a
+`.fullScreenAuxiliary` window above menu-bar level (`ExtendOverlay`). Measured (round 5): the
+overlay paints beside the housing, takes keyboard focus, and the menu bar cannot appear over it.
 
-| `[display] notch` | fullscreen mechanism | fullscreen guest | the strip |
+| `[display] notch` | fullscreen | guest gets | the strip |
 |---|---|---|---|
-| `avoid` (default) | native Spaces fullscreen | inset below the housing, by AppKit | black |
-| `extend` | `PanelFullscreen` — borderless at `screen.frame` | the full panel | guest content, housing overlapping it |
+| `avoid` (default) | native, AppKit insets it | the safe area | black |
+| `extend` | native carrier + full-panel overlay | the whole panel | guest content, housing overlapping it |
 
-### What `extend` costs
+Both policies use `toggleFullScreen:`, so the green title-bar button and Cmd-Ctrl-F finally do the
+same thing.
 
-Panel fullscreen is a window pretending to be fullscreen, so it is **not a Space**: no Mission
-Control slot, no fullscreen animation, and standard Cmd-Tab behaviour differs. Two consequences
-inside limina, both handled but easy to reintroduce:
+### What the overlay costs, and the four rules that pay for it
 
-- `NSWindowStyleMask::FullScreen` is never set, and `Borderless` is *zero* so it cannot be tested
-  for. Anything asking "are we fullscreen" must go through `window::is_fullscreen`, which checks
-  both mechanisms — edge resistance, the windowed-frame snapshot and the letterbox diagnostic all
-  do. The capture tap can't reach the `Rc` graph, so it holds a clone of `PanelFullscreen`'s own
-  `AtomicBool` rather than a mirror of it.
-- A borderless `NSWindow` refuses key status, which would leave the VM window unable to take
-  keyboard focus. The window is therefore a `LiminaWindow` — an `NSWindow` subclass overriding
-  `canBecomeKeyWindow`/`canBecomeMainWindow` — from creation, and panel fullscreen restyles that
-  window in place rather than making a new one.
+The overlay gets **no view of its own**: the same `NSView` — scanout layer, cursor sublayer, every
+input binding — is re-parented into it and back out, so nothing that holds the view knows it moved.
+Sizing reads `ExtendOverlay::active_view` rather than the carrier's content view.
 
-Known wart: the green title-bar button still enters **native** fullscreen under `extend`, so there
-are two doors to two different fullscreens. Cmd-Ctrl-F is the one that honours the policy.
+It is up only while *all* of these hold, each for its own reason:
+
+- **The carrier is natively fullscreen.** The overlay needs a Space to float over.
+- **The screen has a camera housing.** On an external display native fullscreen already covers
+  everything, so an overlay would be risk for no pixels.
+- **The app is active.** A window above menu-bar level would otherwise float over whatever the user
+  Cmd-Tabbed to. Dropping it returns the view to the carrier, so the Space still shows the guest —
+  the right look for a background app anyway.
+- **The user is not asking for the chrome.** Nothing can reveal over the overlay, which is the
+  point of it; but the menu bar and the window's own controls still have to be reachable for the
+  VM's menu actions. A deliberate shove at the top edge — the edge-resistance breakthrough,
+  **uncaptured only**, so a grabbed pointer can never trip it — puts the overlay down until the
+  pointer returns to the guest.
+
+Two knock-on simplifications. `NSWindowStyleMask::FullScreen` is meaningful again, since fullscreen
+is always native; only the capture tap needs the overlay flag, because a guest hosted in the
+overlay is fullscreen for resistance purposes while the overlay carries no fullscreen bit. And the
+resistance **keep-out band is switched off** under the overlay: it exists only because macOS
+reveals chrome on contact, and holding the cursor two points short would otherwise stop the guest's
+top bar and top-left hot corner getting the pointer at the true corner.
+
+Because a borderless `NSWindow` refuses key status — and the overlay carries the guest — the window
+is a `LiminaWindow`, an `NSWindow` subclass overriding
+`canBecomeKeyWindow`/`canBecomeMainWindow`, from creation.
 
 ### Sizing the guest
 

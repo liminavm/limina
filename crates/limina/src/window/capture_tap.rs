@@ -184,6 +184,12 @@ struct TapCtx {
     /// has to hold there too: it is the mode most in need of it, being the one that owns the
     /// whole panel. Shared handle onto `window::PanelFullscreen`'s own flag.
     panel_fs: Arc<AtomicBool>,
+    /// Set when the user shoves at the top edge hard enough to break through while the overlay
+    /// is up: the deliberate "let me at the menu bar" gesture. Nothing can reveal over the
+    /// overlay, so the only way to reach the chrome (and the VM's own menu) is to put the overlay
+    /// down — which `ExtendOverlay::reconcile` does while this is set. Cleared as soon as the
+    /// pointer is back inside the guest. Uncaptured only, so a grabbed pointer can never trip it.
+    reveal_chrome: Arc<AtomicBool>,
 }
 
 /// Centre of the main display in global (points) coordinates — where we keep the hidden cursor
@@ -586,9 +592,21 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
     else {
         return event;
     };
+    // Under the overlay there is nothing to protect the top edge FROM — the chrome cannot appear
+    // over it — so drop the keep-out band and let the pointer reach the guest's own top edge,
+    // which is where its top bar and top-left hot corner want it.
+    let overlaid = ctx.panel_fs.load(Ordering::Relaxed);
+    resist.set_keepout(!overlaid);
+    // Back inside the guest: whatever the chrome was doing, we want the overlay again.
+    if fit::point_in_fit(cur.0, cur.1, fit) {
+        ctx.reveal_chrome.store(false, Ordering::Relaxed);
+    }
     let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
     let step = resist.step(cur, getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y), fit);
     ctx.resist.set(resist);
+    if step.revealed && overlaid {
+        ctx.reveal_chrome.store(true, Ordering::Relaxed);
+    }
     if step.free {
         return event;
     }
@@ -622,6 +640,7 @@ pub(crate) fn install(
     view: Retained<NSView>,
     edge_resistance: f64,
     panel_fs: Arc<AtomicBool>,
+    reveal_chrome: Arc<AtomicBool>,
 ) -> bool {
     let ctx = Box::into_raw(Box::new(TapCtx {
         captured,
@@ -635,6 +654,7 @@ pub(crate) fn install(
         view,
         resist: Cell::new(fit::EdgeResist::new(edge_resistance)),
         panel_fs,
+        reveal_chrome,
     }));
     if try_create(ctx) {
         log::info!("pointer capture: CGEventTap installed (session-level, consuming)");
