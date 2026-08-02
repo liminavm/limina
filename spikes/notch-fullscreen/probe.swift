@@ -48,6 +48,22 @@ final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// housing is the actual question.
     let band = CALayer()
 
+    /// `NOTCH_AUX=1`: enter NATIVE fullscreen (so we keep the Space, the Mission Control slot
+    /// and the swipe), then float a borderless `.fullScreenAuxiliary` window over the camera
+    /// housing strip. If that window paints there, we can have the Space *and* the whole panel
+    /// — the scanout's top rows would be drawn by a second layer over the same IOSurface.
+    /// Private Space APIs are not an option: CGSSpaceCreate is a no-op for an unprivileged
+    /// WindowServer connection (only Dock.app's is a universal owner), so a real Mission
+    /// Control desktop needs SIP off and code injected into Dock.
+    let auxMode = ProcessInfo.processInfo.environment["NOTCH_AUX"] ?? ""
+    var auxArm: Bool { !auxMode.isEmpty }
+    /// `NOTCH_AUX=full`: the overlay covers the WHOLE panel rather than just the housing strip —
+    /// native fullscreen as a *carrier* for the Space, with all the pixels coming from an
+    /// auxiliary window floating above menu-bar level. If that holds, the menu bar cannot appear
+    /// over the guest at all, and top-edge resistance stops being needed.
+    var auxFull: Bool { auxMode == "full" }
+    var auxWindow: NSWindow?
+
     /// Keep the band pinned to the top of the content view (the layer is `.never`-redrawing and
     /// has no autoresizing, so every geometry change has to move it by hand).
     func layoutBand() {
@@ -184,6 +200,45 @@ final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 self.layoutBand()
                 self.dump("fullscreen (default)")
+                if self.auxArm {
+                    let scr = self.window.screen ?? screen
+                    let strip = self.auxFull ? scr.frame : NSRect(
+                        x: scr.frame.origin.x,
+                        y: scr.frame.origin.y + scr.frame.height - 80,
+                        width: scr.frame.width, height: 80)
+                    let a = KeyableWindow(contentRect: strip, styleMask: [.borderless],
+                                          backing: .buffered, defer: false)
+                    a.collectionBehavior = [.fullScreenAuxiliary]
+                    a.level = .mainMenu + 1
+                    a.isOpaque = true
+                    a.backgroundColor = self.auxFull ? .systemGreen : .systemPink
+                    if self.auxFull {
+                        // Same marker band, so "does the overlay reach the housing" is still the
+                        // question the eye answers. And it must take key: an overlay carrying the
+                        // whole guest has to receive the keyboard.
+                        let l = CALayer()
+                        l.isOpaque = true
+                        l.backgroundColor = NSColor.systemGreen.cgColor
+                        a.contentView!.layer = l
+                        a.contentView!.wantsLayer = true
+                        let b = CALayer()
+                        b.backgroundColor = NSColor.systemPink.cgColor
+                        b.frame = CGRect(x: 0, y: scr.frame.height - 80,
+                                         width: scr.frame.width, height: 80)
+                        l.addSublayer(b)
+                        a.makeKeyAndOrderFront(nil)
+                        NSApp.activate(ignoringOtherApps: true)
+                    } else {
+                        a.ignoresMouseEvents = true
+                        a.orderFrontRegardless()
+                    }
+                    self.auxWindow = a
+                    print("AUX(\(self.auxMode)) window at \(a.frame) canBecomeKey=\(a.canBecomeKey) isKey=\(a.isKeyWindow)")
+                    print("LOOK: pink BESIDE the housing? and does the menu bar appear OVER it?")
+                    fflush(stdout)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) { NSApp.terminate(nil) }
+                    return
+                }
                 // Does asking for the full frame explicitly change anything?
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     let s = self.window.screen!

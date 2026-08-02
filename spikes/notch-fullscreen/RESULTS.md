@@ -235,3 +235,98 @@ the strip out from under `extend`. `false` means never, and removes the checkbox
 Native fullscreen cannot use the housing strip: measured four ways on two Macs, and documented by
 Apple twice. `notch = "avoid"` uses the system experience and lets it do the inset; `extend` is
 the custom full-screen experience Apple's own wording contemplates.
+
+---
+
+# Round 4 — you can have the Space AND the strip
+
+**Date:** 2026-08-01, last round. Prompted by: "wouldn't we be able to reserve a space somehow?"
+
+## Private Space APIs are a dead end
+
+`CGSSpaceCreate` / `CGSAddWindowsToSpaces` / `CGSShowSpaces` exist in the private CGS/SkyLight
+surface, but an ordinary app cannot use them to make a real Mission Control desktop. yabai's
+maintainer, on why yabai needs SIP off:
+
+> The function itself is not protected, but the target of the function (e.g the window to modify)
+> is protected, so the function results in a no-op, because you are not authorized to modify that
+> window. […] The Dock.app connection to the WindowServer is flagged as a universal owner for all
+> windows and is allowed to pass that access restriction.
+
+So a genuine Space needs SIP disabled plus code injected into Dock.app. Off the table.
+
+## But an auxiliary window paints where the fullscreen window cannot
+
+Arm `NOTCH_AUX=1`: enter **native** fullscreen normally, then float a borderless window with
+`collectionBehavior = [.fullScreenAuxiliary]` over the camera-housing strip.
+
+**Result (dev-mac, human oracle): pink beside the housing.**
+
+Public API only. The mask that stops a fullscreen window using the strip does not stop an
+auxiliary window floating over the same Space from doing it.
+
+So the two are separable after all:
+
+| | Space / Mission Control / swipe | housing strip |
+|---|---|---|
+| native fullscreen alone | yes | no |
+| borderless full-panel (round 2) | **no** | yes |
+| native fullscreen + aux strip window | **yes** | **yes** |
+
+## What building on it would take
+
+The guest is driven to the full panel height. The main fullscreen window shows the bottom
+`frame.height - inset` rows and the strip window shows the top `inset`. The clean way to split it
+is **not** `contentsRect` unit-coordinate arithmetic (easy to get flipped by one strip) but giving
+both windows a layer at the *same* geometry in screen space and letting each window clip: the
+strip window's layer frame is simply offset by `-(frame.height - inset)`.
+
+The real risk is **input, not pixels**. An `ignoresMouseEvents` strip leaves the guest's top rows
+visible but dead — and on a GNOME guest those rows are the top bar, so the clock and menus would
+be visible and unclickable, which is worse than not having them. The uncaptured pointer path
+would have to stop deriving position from the main view's `locationInWindow` and use the event's
+global location instead (`input::cg_global_to_view_point`, already added for edge resistance),
+so the pointer maps to guest pixels regardless of which of the two windows it is over.
+
+---
+
+# Round 5 — carrier + overlay: the design that gives up nothing
+
+**Date:** 2026-08-01. The user's idea, and it beats both of mine: use native fullscreen as a
+*carrier* for the Space, and float the borderless full-panel window **on top of it** as an
+auxiliary window, rather than choosing between them.
+
+Arm `NOTCH_AUX=full`: native `toggleFullScreen:`, then a borderless `KeyableWindow` with
+`collectionBehavior = [.fullScreenAuxiliary]` at `screen.frame`, level `.mainMenu + 1`.
+
+Measured (dev-mac, human oracle for the pixels, printed for the rest):
+
+- **Pink reaches beside the camera housing.** A full-panel overlay is not masked, same as the
+  80 pt strip.
+- **The menu bar does not appear over it**, even shoving the pointer at the top edge. The overlay
+  is above menu-bar level, so the reveal happens *behind* it.
+- **`canBecomeKey=true isKey=true`** — it takes keyboard focus (it is a `KeyableWindow`).
+
+| | Space / Mission Control | housing strip | chrome at the top edge |
+|---|---|---|---|
+| native fullscreen alone | yes | no | reveals over the guest |
+| borderless full-panel (round 2) | **no** | yes | cannot reveal |
+| native carrier + full-panel overlay | **yes** | **yes** | **cannot reveal** |
+
+## What this retires
+
+**Top-edge resistance becomes unnecessary** — and so does the `KEEPOUT` band that exists only
+because macOS reveals the menu bar on contact. Nothing can appear over the overlay, so the cursor
+may sit on the top row harmlessly, which also means the guest's own top bar and top-left hot
+corner get the pointer at their true edge instead of two points short.
+
+Resistance stays worth keeping **at the sides**, where the pointer can still slip to another
+display while aiming for a guest edge. That is the half of `EdgeResist` the user asked to keep.
+
+## Aside: macOS has pointer *lock*, not pointer *confine*
+
+Wayland has both `locked_pointer` (freeze, keep deltas) and `confined_pointer` (keep inside a
+region, still moving). macOS has only the first: `CGAssociateMouseAndMouseCursorPosition(false)`,
+which capture mode already uses. There is no `ClipCursor`/`XGrabPointer` equivalent, so confining
+to a rect has to be emulated with warp-clamping — which is what `fit::capture_step` and
+`fit::EdgeResist` do. The resistance code is the standard workaround, not a reinvention.
