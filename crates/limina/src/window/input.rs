@@ -409,7 +409,10 @@ pub struct InputState {
 /// overlay there is no keep-out band: the pointer sits *on* the top row, where every stray upward
 /// twitch of ordinary use lands another delta. At 80 pt with no reset, merely moving to the top of
 /// the guest tripped it instantly — first dogfood run of the overlay.
-const REVEAL_PUSH: f64 = 300.0;
+///
+/// The reset is what makes it safe, not the size: at 300 pt the gesture was reliable but a chore,
+/// so this is the smallest value that still reads as deliberate.
+const REVEAL_PUSH: f64 = 150.0;
 
 /// How far back below the top edge the pointer must come before the overlay is taken back. Wide
 /// enough that using the revealed menu bar doesn't flicker it away, narrow enough to feel prompt.

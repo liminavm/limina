@@ -597,10 +597,16 @@ impl ExtendOverlay {
     /// - the carrier is natively fullscreen (the overlay needs a Space to float over);
     /// - the screen actually **has** a camera housing — on an external display native fullscreen
     ///   already covers everything, so an overlay would be risk for no pixels;
-    /// - **the app is active.** An overlay above menu-bar level would otherwise float over
-    ///   whatever the user switched to, so Cmd-Tabbing away has to put it down. Dropping it
-    ///   returns the view to the carrier, so the Space still shows the guest (inset below the
-    ///   housing) — the right look for a background app anyway.
+    /// - **the carrier's Space is the one on screen.** An overlay above menu-bar level would
+    ///   otherwise float over whatever the user switched to, so switching away has to put it
+    ///   down. Dropping it returns the view to the carrier, so the Space still shows the guest
+    ///   (inset below the housing) — the right look for a background app anyway.
+    ///
+    ///   The test is `isOnActiveSpace`, **not** `isActive`: activating an app on *another*
+    ///   display leaves limina's Space perfectly visible on its own, and dropping the overlay
+    ///   there shrank a still-on-screen guest back below the housing for no reason. Activation
+    ///   is about which app has the keyboard; what the overlay actually cares about is whether
+    ///   its Space is showing, which is exactly what this asks.
     /// - **the user is not asking for the chrome.** Nothing can reveal over the overlay, which is
     ///   the point of it, but the menu bar and the window's controls still have to be reachable
     ///   for the VM's own menu actions. A deliberate shove at the top edge (the edge-resistance
@@ -610,7 +616,6 @@ impl ExtendOverlay {
         &self,
         carrier: &NSWindow,
         notch: crate::vmlib::schema::NotchPolicy,
-        app: &NSApplication,
         reveal_chrome: bool,
     ) {
         let Some(mtm) = MainThreadMarker::new() else {
@@ -620,7 +625,7 @@ impl ExtendOverlay {
         let want = notch == crate::vmlib::schema::NotchPolicy::Extend
             && !reveal_chrome
             && carrier.styleMask().contains(NSWindowStyleMask::FullScreen)
-            && app.isActive()
+            && carrier.isOnActiveSpace()
             && screen
                 .as_ref()
                 .is_some_and(|s| hostdisplay::notch_inset(s) > 0.0);
@@ -1139,7 +1144,6 @@ pub fn run(
             apply_overlay.reconcile(
                 &window,
                 cfg_notch,
-                &NSApplication::sharedApplication(mtm),
                 apply_reveal.load(std::sync::atomic::Ordering::Relaxed),
             );
             if let Some(v) = apply_overlay.active_view(&window) {

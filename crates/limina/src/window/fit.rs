@@ -239,6 +239,27 @@ const RELEASE_MARGIN: f64 = 6.0;
 /// sides yield sooner than the configured threshold and the top holds the full amount.
 const SIDE_FACTOR: f64 = 0.5;
 
+/// How close to a corner counts as being *at* it, for [`CORNER_FACTOR`].
+const CORNER_ZONE: f64 = 32.0;
+
+/// Multiplier on the threshold while the pointer is in a corner.
+///
+/// A corner is not an exit — it is a target. mutter's pressure barriers, the GNOME hot corner
+/// included, want **100 px** of accumulated push before they fire, and we forward exactly the
+/// motion we absorb. At the plain side threshold (50 pt of the default 100) we hand the pointer
+/// its freedom at *half* the pressure the guest needs, so the corner can essentially never charge
+/// — it fires only when a flick happens to front-load enough motion into the first few events,
+/// which is precisely the "worked once, can't do it again" the first dogfood round found. Holding
+/// corners to double the threshold puts our release comfortably after the guest's trigger.
+///
+/// Nothing is lost: leaving sideways still costs [`SIDE_FACTOR`] anywhere along the edge that
+/// isn't the last [`CORNER_ZONE`] points of it.
+///
+/// Three, not two: at two the side threshold lands on exactly mutter's 100, and since the event
+/// that crosses is the one we let through, the guest would see only 90 pt — a hair short, every
+/// time. The trigger has to clear comfortably, not photo-finish.
+const CORNER_FACTOR: f64 = 3.0;
+
 /// Coordinate slop for "is the pointer against this edge". Positions arrive as f64 points that
 /// have been through two affine conversions; an exact compare would miss by ulps.
 const EPS: f64 = 0.001;
@@ -431,7 +452,14 @@ impl EdgeResist {
         }
 
         self.acc = (self.acc.0 + push_x.abs(), self.acc.1 + push_y.abs());
-        if self.acc.0 >= self.threshold * SIDE_FACTOR || self.acc.1 >= self.threshold {
+        // In a corner both edges hold harder, so the guest's own corner trigger gets its pressure
+        // before we let go. `inside_*` are the distances to the nearest edge on each axis, already
+        // computed above — near a corner both are small.
+        let corner = inside_x <= CORNER_ZONE && inside_y <= CORNER_ZONE;
+        let scale = if corner { CORNER_FACTOR } else { 1.0 };
+        if self.acc.0 >= self.threshold * SIDE_FACTOR * scale
+            || self.acc.1 >= self.threshold * scale
+        {
             self.through = true;
             self.acc = (0.0, 0.0);
             // Upward, i.e. against the top edge: the chrome-reveal gesture.
@@ -593,6 +621,36 @@ mod tests {
                 "the same 50 pt upward is still held"
             );
         }
+    }
+
+    #[test]
+    fn a_corner_holds_past_the_guests_own_hot_corner_trigger() {
+        // The bug: at the plain side threshold we released the pointer after 50 pt of push, but
+        // mutter's pressure barriers — the GNOME hot corner among them — want 100 px before they
+        // fire. We handed over freedom at half the pressure the guest needed, so the hot corner
+        // only ever triggered when a flick happened to front-load the deltas.
+        let fit = screen_fit();
+        let mut r = EdgeResist::new(100.0);
+        let corner = (0.0, TOP);
+        let mut delivered = 0.0;
+        for _ in 0..14 {
+            let step = r.step(corner, -10.0, 0.0, fit);
+            assert!(!step.free, "the corner still holds at {delivered} pt");
+            delivered += step.overflow.0.abs();
+        }
+        assert!(
+            delivered >= 100.0,
+            "the guest got its 100 px of pressure before we let go (got {delivered})"
+        );
+        // And it is only the corner: the same push mid-edge yields at the usual 50.
+        let mut mid = EdgeResist::new(100.0);
+        for _ in 0..4 {
+            assert!(!mid.step((0.0, 400.0), -10.0, 0.0, fit).free);
+        }
+        assert!(
+            mid.step((0.0, 400.0), -10.0, 0.0, fit).free,
+            "mid-edge yields"
+        );
     }
 
     #[test]
