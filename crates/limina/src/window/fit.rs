@@ -263,6 +263,33 @@ pub(crate) fn is_reflow(prev: Option<(f64, f64)>, cur: (f64, f64), delta_y: f64)
     prev.is_some_and(|p| (cur.1 - p.1).abs() > delta_y.abs() + REFLOW_SLACK)
 }
 
+/// What the uncaptured fullscreen pointer path owes one motion event.
+///
+/// Two duties share that path and are otherwise unrelated: holding the pointer at the guest's
+/// edges (`[display] edge-resistance`, a preference) and running the `notch = extend` chrome ask
+/// (`InputState::reveal_step`, the only way back to the menu bar under the overlay). Sharing a
+/// function made the second silently inherit the first's enable check, so `Edge resist: Off` left
+/// an `extend` guest with no way to ask for the chrome — the third time the ask has been lost by
+/// riding on a code path that exists for another reason. Deciding both here, from named inputs,
+/// is what makes the independence testable.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct EdgeDuties {
+    /// Feed this event to the chrome ask.
+    pub ask: bool,
+    /// Run it through [`EdgeResist`].
+    pub resist: bool,
+}
+
+/// Decide both duties for one event. See [`EdgeDuties`].
+pub(crate) fn edge_duties(fullscreen_and_key: bool, resistance_enabled: bool) -> EdgeDuties {
+    EdgeDuties {
+        // Not conditioned on resistance: the ask is a `notch = extend` feature, and the overlay is
+        // up (or not) regardless of what the preference says.
+        ask: fullscreen_and_key,
+        resist: fullscreen_and_key && resistance_enabled,
+    }
+}
+
 // A corner used to merely hold *longer* than the rest of the edge (a CORNER_FACTOR multiplier on
 // the threshold). Right diagnosis, wrong layer: whatever multiple was chosen, breaking through
 // ended the forwarded pressure, and a barrier that wants sustained push cannot be served by a
@@ -299,12 +326,13 @@ pub(crate) struct ResistStep {
     /// True when this event needs no intervention: the pointer is inside the content, or it has
     /// pushed hard enough to break out. The caller passes the event through untouched.
     pub free: bool,
-    /// This event is the one that broke out **upward**. Under the `extend` overlay that is the
-    /// deliberate gesture for "let me at the menu bar": nothing can reveal over the overlay, so
-    /// the only way to reach the chrome is to put the overlay down, and shoving at the top edge
-    /// is the ask. Ignored elsewhere.
-    pub revealed: bool,
 }
+
+// This struct used to carry a `revealed` flag — "the event that broke out upward", once the
+// `notch = extend` chrome ask. It stopped being the ask when the gesture became a timed charge in
+// `InputState::reveal_step` (a breakthrough is a *distance*, and a two-event flick summoned the
+// menu bar), and lingered afterwards as a field only the trace read: a retired mechanism still
+// looking like the live one, which is exactly how the ask acquired two owners in the first place.
 
 /// The outward component of this motion, if the pointer is against an edge of `fit`.
 ///
@@ -424,7 +452,6 @@ impl EdgeResist {
             pos,
             overflow: (0.0, 0.0),
             free: true,
-            revealed: false,
         };
         if !self.enabled() {
             return free(cur);
@@ -510,24 +537,17 @@ impl EdgeResist {
                 pos: (cur.0.clamp(lo_x, hi_x), cur.1.clamp(lo_y, hi_y)),
                 overflow: (push_x, push_y),
                 free: false,
-                revealed: false,
             };
         }
         if self.acc.0 >= self.threshold * SIDE_FACTOR || self.acc.1 >= self.threshold {
             self.through = true;
             self.acc = (0.0, 0.0);
-            // Upward, i.e. against the top edge: the chrome-reveal gesture.
-            let up = push_y < 0.0;
-            return ResistStep {
-                revealed: up,
-                ..free(cur)
-            };
+            return free(cur);
         }
         ResistStep {
             pos: (cur.0.clamp(lo_x, hi_x), cur.1.clamp(lo_y, hi_y)),
             overflow: (push_x, push_y),
             free: false,
-            revealed: false,
         }
     }
 }
@@ -881,19 +901,39 @@ mod tests {
     }
 
     #[test]
-    fn breaking_out_upward_asks_for_the_chrome_but_sideways_does_not() {
-        // The reveal gesture: with the overlay up, the only way to reach the menu bar and the
-        // window's own controls is to put the overlay down, and a deliberate shove at the top
-        // edge is the ask. Leaving sideways must not trigger it — that is just going to another
-        // display.
-        let fit = screen_fit();
-        let mut up = EdgeResist::new(100.0);
-        assert!(up.step((700.0, TOP), 0.0, -200.0, fit).revealed);
+    fn turning_edge_resistance_off_does_not_take_the_chrome_ask_with_it() {
+        // `Edge resist: Off` + `notch = extend` + Accessibility granted used to leave no way to
+        // reach the menu bar at all: the tap's resistance path returned early on the disabled
+        // threshold, above its `reveal_step` call, and the local monitor stands down whenever the
+        // tap is installed. The gesture worked only for users who had *not* granted Accessibility.
+        assert_eq!(
+            edge_duties(true, false),
+            EdgeDuties {
+                ask: true,
+                resist: false
+            },
+        );
+        assert_eq!(
+            edge_duties(true, true),
+            EdgeDuties {
+                ask: true,
+                resist: true
+            },
+        );
+    }
 
-        let mut side = EdgeResist::new(100.0);
-        let out = side.step((1512.0, 400.0), 200.0, 0.0, fit);
-        assert!(out.free, "sideways still breaks out");
-        assert!(!out.revealed, "...without asking for the chrome");
+    #[test]
+    fn neither_duty_applies_to_a_window_that_is_not_fullscreen_and_key() {
+        // Windowed, the pointer must be free to leave, and there is no overlay to ask out of.
+        for enabled in [true, false] {
+            assert_eq!(
+                edge_duties(false, enabled),
+                EdgeDuties {
+                    ask: false,
+                    resist: false
+                },
+            );
+        }
     }
 
     #[test]

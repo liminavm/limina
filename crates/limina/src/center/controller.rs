@@ -1175,8 +1175,10 @@ impl CenterController {
             &resistance_popup,
             "How hard the pointer sticks at a full-screen guest's edges, so a stray \
              flick doesn't reveal the Mac's menu bar or jump to the next display. A \
-             deliberate push still crosses, and the guest's own top bar and hot corner \
-             keep working. Needs Accessibility permission, like pointer capture.",
+             deliberate push still crosses; the sides yield at half this, and a corner \
+             holds indefinitely so the guest's hot corner can charge. Holding the \
+             pointer needs Accessibility permission, like pointer capture — the guest's \
+             own top bar and hot corner work either way.",
         );
 
         alert.setAccessoryView(Some(&accessory));

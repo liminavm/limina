@@ -561,15 +561,13 @@ fn try_create(ctx: *mut TapCtx) -> bool {
 /// (it is a window), and an unfocused window has no business holding the pointer at all.
 fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
     let mut resist = ctx.resist.get();
-    if !resist.enabled() {
-        return event;
-    }
     let fullscreen_and_key = ctx.view.window().is_some_and(|w| {
         (ctx.panel_fs.load(Ordering::Relaxed)
             || w.styleMask().contains(NSWindowStyleMask::FullScreen))
             && w.isKeyWindow()
     });
-    if !fullscreen_and_key {
+    let duties = fit::edge_duties(fullscreen_and_key, resist.enabled());
+    if !duties.ask {
         // Drop any half-earned push: a shove accumulated in fullscreen must not let the pointer
         // out of the *next* fullscreen session on its first twitch.
         resist.reset();
@@ -594,11 +592,34 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
     resist.set_keepout(!overlaid);
     let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
     let (dx, dy) = (getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y));
-    // Granting the chrome ask AND releasing it both belong to `InputState::reveal_step`, which the
-    // tap calls below. The tap used to release on its own here, and a second owner of one gesture
-    // is the same mistake that had to be undone on the granting side: this copy did not have the
-    // reflow guard, so it kept releasing the ask on the very event that granted it and the chrome
-    // oscillated even after `reveal_step` had stopped doing so.
+
+    // The chrome ask has exactly one implementation, in `InputState::reveal_step`, and the tap
+    // defers to it. It used to have its own — the resistance breakthrough — which stayed
+    // distance-based after the monitor's became a hold, so with the tap installed (i.e. whenever
+    // Accessibility *is* granted) a two-event flick still summoned the menu bar. Granting the ask
+    // AND releasing it both belong there too; the tap used to release on its own, and that copy
+    // had no reflow guard, so it kept releasing the ask on the very event that granted it and the
+    // chrome oscillated even after `reveal_step` had stopped doing so. Two owners of one gesture
+    // is how all of that happens; now there is one.
+    //
+    // Placement is load-bearing three times over, each learned by breaking it:
+    //   - ABOVE the `duties.resist` return, so `Edge resist: Off` still leaves a way out of the
+    //     overlay (see `fit::edge_duties`);
+    //   - ABOVE the `step.free` return, because the tap is the gesture's PRIMARY feed, not a
+    //     supplement — counting only consumed events starved it from 833 charging events in a boot
+    //     to 17, the local monitor seeing far fewer of them than it appears to;
+    //   - UNCONDITIONAL, never `if overlaid`, because releasing the ask is the only thing that
+    //     brings the overlay back, so skipping the call while it is down strands the guest below
+    //     the camera housing. `reveal_step` tests the overlay itself, where arming needs it and
+    //     releasing must not.
+    ctx.input.reveal_step(cur, dy, fit, RevealSrc::Tap);
+    if !duties.resist {
+        // Resistance off: the pointer is free at every edge, and nothing below applies. The
+        // guest's own barriers still get their pressure — `emit_motion` forwards it, since the
+        // event passes through to the window untouched.
+        return event;
+    }
+
     let step = resist.step(cur, dx, dy, fit);
     ctx.resist.set(resist);
     if edge_trace() {
@@ -608,7 +629,7 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
         // first? Reasoning about it from the outside got the corner threshold wrong twice.
         eprintln!(
             "[EDGE] t={:.1} cur=({:.1},{:.1}) d=({dx:.1},{dy:.1}) fit=({:.1},{:.1} {:.1}x{:.1}) \
-             overlaid={overlaid} free={} overflow=({:.1},{:.1}) revealed={}",
+             overlaid={overlaid} free={} overflow=({:.1},{:.1})",
             trace_ms(),
             cur.0,
             cur.1,
@@ -619,26 +640,8 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
             step.free,
             step.overflow.0,
             step.overflow.1,
-            step.revealed,
         );
     }
-    // The chrome ask has exactly one implementation, in `InputState::reveal_step`, and the tap
-    // defers to it. It used to have its own — the resistance breakthrough — which stayed
-    // distance-based after the monitor's became a hold, so with the tap installed (i.e. whenever
-    // Accessibility *is* granted) a two-event flick still summoned the menu bar. Two owners of one
-    // gesture is how that happens; now there is one.
-    //
-    // Above the `step.free` return: the tap is the gesture's PRIMARY feed, not a supplement.
-    // Moving this below it — so only consumed events counted — looked like it merely removed a
-    // duplicate, and instead starved the gesture from 833 charging events in a boot to 17. The
-    // local monitor sees far fewer of these than it appears to.
-    // Unconditional. NOT `if overlaid` — releasing the ask is the only thing that brings the
-    // overlay back, so skipping the call while it is down strands the guest below the housing
-    // forever. That trap has now been walked into twice from opposite directions: once by gating
-    // the release *inside* `reveal_step` on the overlay, and once here, by gating the whole call
-    // and then making this the sole feed. `reveal_step` tests the overlay itself, where arming
-    // needs it and releasing must not.
-    ctx.input.reveal_step(cur, dy, fit, RevealSrc::Tap);
     if step.free {
         return event;
     }

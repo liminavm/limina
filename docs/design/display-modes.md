@@ -333,7 +333,24 @@ motion event is consumed and the host cursor warped back inside the boundary, an
 event is what re-drives the guest's pointer. It therefore needs the same Accessibility grant as
 pointer capture, and applies **only** while fullscreen and key — windowed, the pointer must be free
 to leave. `edge-resistance = 0` disables it; pointer capture (Cmd-Ctrl-G) remains the absolute
-version, parking the host cursor at screen centre.
+version, parking the host cursor at screen centre. The control center exposes 0/50/100/200 pt as
+Off/Light/Standard/Firm, plus a `Custom (N pt)` entry when the VM's `vm.toml` carries something
+else, so opening the sheet and pressing Save can never round a hand-edited value down.
+
+**The chrome ask is not part of this, and must not be gated on it** (`fit::edge_duties`). Two
+unrelated duties share `resist_edges` — holding the pointer, which is a preference, and feeding
+`reveal_step`, which is the only way out of the `notch = extend` overlay. The ask sat below the
+`enabled()` early return, so `Edge resist: Off` silently removed it: the tap consumed nothing and
+the local monitor stands down whenever the tap is installed, leaving an `extend` guest with no way
+to reach the menu bar unless the user had *declined* Accessibility. That is the third time the ask
+has been lost by riding on a path that exists for another reason (the other two: gating the release
+on the overlay, and gating the tap's whole call on it). `edge_duties` decides both from named
+inputs so the independence is a unit test rather than a comment.
+
+For the same reason `ResistStep` no longer carries `revealed`. Breaking out upward *was* the ask
+before it became a timed charge; afterwards the field survived as something only the trace read — a
+retired mechanism still shaped like the live one, which is precisely how the gesture acquired two
+owners.
 
 ### Three things the first cut got wrong (dogfood, 2026-08-01)
 
