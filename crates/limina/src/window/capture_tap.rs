@@ -549,6 +549,11 @@ fn try_create(ctx: *mut TapCtx) -> bool {
     true
 }
 
+/// Slack when deciding the pointer has left the view: a point or two of rounding through two
+/// affine conversions must not read as an escape while the cursor is legitimately pinned at the
+/// edge.
+const EPS_OUT: f64 = 1.0;
+
 /// Apply fullscreen edge resistance to one uncaptured motion event.
 ///
 /// Returns the event to pass through, or NULL to consume it. Consuming is what makes the
@@ -620,7 +625,16 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
         return event;
     }
 
-    let step = resist.step(cur, dx, dy, fit);
+    // "Has the pointer left our window entirely" — measured against the VIEW, not the fit: a
+    // letterboxed guest's bars are still ours and still worth resisting past. Fullscreen makes
+    // the view the screen, so this is "the pointer is on another display", which is precisely
+    // when resistance must keep its hands off it.
+    let bounds = ctx.view.bounds();
+    let escaped = cur.0 < bounds.origin.x - EPS_OUT
+        || cur.0 > bounds.origin.x + bounds.size.width + EPS_OUT
+        || cur.1 < bounds.origin.y - EPS_OUT
+        || cur.1 > bounds.origin.y + bounds.size.height + EPS_OUT;
+    let step = resist.step(cur, dx, dy, fit, escaped);
     ctx.resist.set(resist);
     if edge_trace() {
         // The host half of the edge oracle. The guest half is its own evdev stream — see
@@ -638,7 +652,7 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
             "[EDGE] t={:.1} cur=({:.1},{:.1}) d=({dx:.1},{dy:.1}) fit=({:.1},{:.1} {:.1}x{:.1}) \
              overlaid={overlaid} free={} overflow=({:.1},{:.1}) \
              acc=({ax:.1},{ay:.1}) through={through} thr={thr:.0} warp={warp:.1} \
-             outside={}",
+             outside={} escaped={escaped}",
             trace_ms(),
             cur.0,
             cur.1,

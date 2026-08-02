@@ -242,6 +242,20 @@ const SIDE_FACTOR: f64 = 0.5;
 /// How close to a corner counts as being *at* it, where the pointer is never released.
 pub(crate) const CORNER_ZONE: f64 = 32.0;
 
+/// The most outward push a **single event** can contribute to the accumulator.
+///
+/// Without this, breakthrough is pure distance and the deltas are post-ballistics, so a flick
+/// arrives as one 100+ pt event and is through on first contact while a slow deliberate push
+/// pays ten events for the same nominal distance — resistance strongest against the motion you
+/// mean, weakest against the careless flick it exists to stop. Capping per event makes it a test
+/// of *sustained* motion, which is independently where the chrome ask ended up
+/// (`input::REVEAL_TICK_CAP`). At 60 Hz a 100 pt threshold is then ~10 events, ~0.17 s of
+/// pushing.
+///
+/// Caps only what is ACCUMULATED. The overflow forwarded to the guest stays the full delta —
+/// that is real motion the guest's own barriers are entitled to.
+const PUSH_EVENT_CAP: f64 = 10.0;
+
 /// Slack allowed between a reported position change and the delta that claims to explain it,
 /// before [`is_reflow`] calls the event a layout artifact rather than motion.
 const REFLOW_SLACK: f64 = 8.0;
@@ -454,13 +468,34 @@ impl EdgeResist {
     /// are what the pressure is measured in, and they must be: at a real screen edge the cursor
     /// stops moving but the deltas keep coming, so position alone cannot tell a shove from a
     /// rest.
-    pub(crate) fn step(&mut self, cur: (f64, f64), dx: f64, dy: f64, fit: FitRect) -> ResistStep {
+    /// `escaped` is "the pointer is no longer on our window at all" — on another display, in
+    /// practice, since resistance only runs fullscreen. It must be decided by the caller against
+    /// the *view*, not this `fit`: a letterboxed guest has bars that are still our own window and
+    /// still worth resisting past.
+    pub(crate) fn step(
+        &mut self,
+        cur: (f64, f64),
+        dx: f64,
+        dy: f64,
+        fit: FitRect,
+        escaped: bool,
+    ) -> ResistStep {
         let free = |pos| ResistStep {
             pos,
             overflow: (0.0, 0.0),
             free: true,
         };
         if !self.enabled() {
+            return free(cur);
+        }
+        if escaped {
+            // Already gone. Every position out there reads as "hard against the edge" (`against`
+            // is `p >= hi - EPS`, and the pointer may be hundreds of points past it), so without
+            // this the next outward twitch is absorbed and the cursor warped back off the display
+            // the user just moved to. Reported as "the mouse jumps around while I change focus",
+            // because only outward motion is caught and inward motion is not.
+            self.through = true;
+            self.acc = (0.0, 0.0);
             return free(cur);
         }
         if self.through {
@@ -529,7 +564,6 @@ impl EdgeResist {
             return free(cur);
         }
 
-        self.acc = (self.acc.0 + push_x.abs(), self.acc.1 + push_y.abs());
         // In a corner both edges hold harder, so the guest's own corner trigger gets its pressure
         // before we let go. `inside_*` are the distances to the nearest edge on each axis, already
         // computed above — near a corner both are small.
@@ -540,13 +574,24 @@ impl EdgeResist {
             // lets the push continue indefinitely, which is what a pressure barrier expects.
             // Nothing is trapped: sliding a few points along either edge leaves the zone and the
             // ordinary thresholds apply again.
+            //
+            // Deliberately does NOT accumulate. A corner never releases, so charge banked here
+            // can only ever be spent on a *different* edge later: a second of hot-corner dwell
+            // used to bank 600 pt, and sliding out along the top drained only the x accumulator,
+            // so the next 1 pt nudge broke through. A breakthrough disconnected from the motion
+            // that caused it is unattributable by construction.
             return ResistStep {
                 pos: (cur.0.clamp(lo_x, hi_x), cur.1.clamp(lo_y, hi_y)),
                 overflow: (push_x, push_y),
                 free: false,
             };
         }
-        if self.acc.0 >= self.threshold * SIDE_FACTOR || self.acc.1 >= self.threshold {
+        // Cap what one event may contribute (see `PUSH_EVENT_CAP`), and cap the accumulator at
+        // what its own axis actually requires so dwelling can never bank spendable charge.
+        let side = self.threshold * SIDE_FACTOR;
+        self.acc.0 = (self.acc.0 + push_x.abs().min(PUSH_EVENT_CAP)).min(side);
+        self.acc.1 = (self.acc.1 + push_y.abs().min(PUSH_EVENT_CAP)).min(self.threshold);
+        if self.acc.0 >= side || self.acc.1 >= self.threshold {
             self.through = true;
             self.acc = (0.0, 0.0);
             return free(cur);
@@ -643,6 +688,18 @@ mod tests {
         );
     }
 
+    /// Push at `cur` until resistance lets go, returning the number of events it took.
+    /// Breakthrough is a *sustained*-motion test now (see `PUSH_EVENT_CAP`), so tests that need
+    /// to get out cannot do it with one big delta.
+    fn push_until_free(r: &mut EdgeResist, cur: (f64, f64), d: (f64, f64), fit: FitRect) -> u32 {
+        for n in 1..=200 {
+            if r.step(cur, d.0, d.1, fit, false).free {
+                return n;
+            }
+        }
+        panic!("never broke through");
+    }
+
     /// A fullscreen-sized content area for the resistance tests.
     fn screen_fit() -> FitRect {
         FitRect::full(1512.0, 949.0)
@@ -657,7 +714,7 @@ mod tests {
     fn resistance_holds_the_cursor_clear_of_the_top_edge_and_reports_pressure() {
         let mut r = EdgeResist::new(100.0);
         // Against the top of the screen, still shoving up (AppKit deltas: up is NEGATIVE dy).
-        let step = r.step((700.0, TOP), 0.0, -10.0, screen_fit());
+        let step = r.step((700.0, TOP), 0.0, -10.0, screen_fit(), false);
         assert!(!step.free, "a 10 pt nudge must not reveal the menu bar");
         assert_eq!(
             step.pos,
@@ -677,13 +734,13 @@ mod tests {
         let mut r = EdgeResist::new(100.0);
         let fit = screen_fit();
         for _ in 0..9 {
-            assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
+            assert!(!r.step((700.0, TOP), 0.0, -10.0, fit, false).free);
         }
         // 10 x 10 pt reaches the threshold: the pointer is released and the chrome may appear.
-        let out = r.step((700.0, TOP), 0.0, -10.0, fit);
+        let out = r.step((700.0, TOP), 0.0, -10.0, fit, false);
         assert!(out.free, "100 pt of push must break out");
         // Still out on the next event, without re-earning it.
-        assert!(r.step((700.0, TOP), 0.0, -10.0, fit).free);
+        assert!(r.step((700.0, TOP), 0.0, -10.0, fit, false).free);
     }
 
     #[test]
@@ -694,15 +751,15 @@ mod tests {
         // off the menu bar it just paid for.
         let mut r = EdgeResist::new(100.0);
         let fit = screen_fit();
-        assert!(r.step((700.0, TOP), 0.0, -200.0, fit).free, "through");
+        push_until_free(&mut r, (700.0, TOP), (0.0, -20.0), fit);
         for x in [700.0, 640.0, 900.0, 300.0] {
-            let step = r.step((x, TOP), 12.0, -1.0, fit);
+            let step = r.step((x, TOP), 12.0, -1.0, fit, false);
             assert!(step.free, "still free to track along the top at x={x}");
             assert_eq!(step.pos, (x, TOP), "and never yanked downward");
         }
         // Coming properly back down into the guest re-arms it.
-        assert!(r.step((700.0, TOP - 200.0), 0.0, 200.0, fit).free);
-        assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
+        assert!(r.step((700.0, TOP - 200.0), 0.0, 200.0, fit, false).free);
+        assert!(!r.step((700.0, TOP), 0.0, -10.0, fit, false).free);
     }
 
     #[test]
@@ -712,16 +769,16 @@ mod tests {
         let fit = screen_fit();
         let mut side = EdgeResist::new(100.0);
         for _ in 0..4 {
-            assert!(!side.step((1512.0, 400.0), 10.0, 0.0, fit).free);
+            assert!(!side.step((1512.0, 400.0), 10.0, 0.0, fit, false).free);
         }
         assert!(
-            side.step((1512.0, 400.0), 10.0, 0.0, fit).free,
+            side.step((1512.0, 400.0), 10.0, 0.0, fit, false).free,
             "half the threshold is enough sideways"
         );
         let mut top = EdgeResist::new(100.0);
         for _ in 0..5 {
             assert!(
-                !top.step((700.0, TOP), 0.0, -10.0, fit).free,
+                !top.step((700.0, TOP), 0.0, -10.0, fit, false).free,
                 "the same 50 pt upward is still held"
             );
         }
@@ -760,7 +817,7 @@ mod tests {
         let corner = (0.0, TOP);
         let mut delivered = 0.0;
         for i in 0..60 {
-            let step = r.step(corner, -10.0, 0.0, fit);
+            let step = r.step(corner, -10.0, 0.0, fit, false);
             assert!(!step.free, "still holding after {i} events");
             delivered += step.overflow.0.abs();
         }
@@ -768,10 +825,10 @@ mod tests {
         // It is only the corner: the same push mid-edge yields at the usual half-threshold.
         let mut mid = EdgeResist::new(100.0);
         for _ in 0..4 {
-            assert!(!mid.step((0.0, 400.0), -10.0, 0.0, fit).free);
+            assert!(!mid.step((0.0, 400.0), -10.0, 0.0, fit, false).free);
         }
         assert!(
-            mid.step((0.0, 400.0), -10.0, 0.0, fit).free,
+            mid.step((0.0, 400.0), -10.0, 0.0, fit, false).free,
             "mid-edge still yields"
         );
     }
@@ -783,14 +840,14 @@ mod tests {
         let mut r = EdgeResist::new(100.0);
         let fit = screen_fit();
         for x in 0..50 {
-            let step = r.step((100.0 + f64::from(x) * 12.0, TOP), 12.0, 0.0, fit);
+            let step = r.step((100.0 + f64::from(x) * 12.0, TOP), 12.0, 0.0, fit, false);
             assert!(
                 step.free,
                 "moving along the content is never resisted (no outward component)"
             );
         }
         // ...and the accumulator is clean, so a fresh nudge is still resisted.
-        assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
+        assert!(!r.step((700.0, TOP), 0.0, -10.0, fit, false).free);
     }
 
     #[test]
@@ -798,12 +855,12 @@ mod tests {
         let mut r = EdgeResist::new(100.0);
         let fit = screen_fit();
         for _ in 0..9 {
-            assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
+            assert!(!r.step((700.0, TOP), 0.0, -10.0, fit, false).free);
         }
         // Back into the content, well clear of the edge: that drains the accumulator.
-        assert!(r.step((700.0, TOP - 40.0), 0.0, 40.0, fit).free);
+        assert!(r.step((700.0, TOP - 40.0), 0.0, 40.0, fit, false).free);
         // So the next nudge starts from zero rather than tipping over the edge.
-        assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
+        assert!(!r.step((700.0, TOP), 0.0, -10.0, fit, false).free);
     }
 
     #[test]
@@ -814,12 +871,15 @@ mod tests {
         let mut r = EdgeResist::new(100.0);
         let fit = screen_fit();
         for _ in 0..9 {
-            assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
+            assert!(!r.step((700.0, TOP), 0.0, -10.0, fit, false).free);
             // The warp's own event: lands at the parked position, moving inward.
-            assert!(r.step((700.0, TOP - KEEPOUT), 0.0, KEEPOUT, fit).free);
+            assert!(
+                r.step((700.0, TOP - KEEPOUT), 0.0, KEEPOUT, fit, false)
+                    .free
+            );
         }
         assert!(
-            r.step((700.0, TOP), 0.0, -10.0, fit).free,
+            r.step((700.0, TOP), 0.0, -10.0, fit, false).free,
             "the tenth push still breaks through — the warps did not reset the count"
         );
     }
@@ -828,15 +888,14 @@ mod tests {
     fn breaking_out_re_arms_only_after_returning_inside() {
         let mut r = EdgeResist::new(20.0);
         let fit = screen_fit();
-        assert!(
-            r.step((700.0, TOP), 0.0, -25.0, fit).free,
-            "one big shove is enough"
-        );
+        // Two capped events, not one 25 pt shove: no single event can buy a breakthrough now
+        // (`PUSH_EVENT_CAP`).
+        push_until_free(&mut r, (700.0, TOP), (0.0, -25.0), fit);
         // Well outside, still free.
-        assert!(r.step((700.0, 980.0), 0.0, -5.0, fit).free);
+        assert!(r.step((700.0, 980.0), 0.0, -5.0, fit, false).free);
         // Back inside re-arms: the very next outward nudge is resisted again.
-        assert!(r.step((700.0, 900.0), 0.0, 0.0, fit).free);
-        assert!(!r.step((700.0, TOP), 0.0, -5.0, fit).free);
+        assert!(r.step((700.0, 900.0), 0.0, 0.0, fit, false).free);
+        assert!(!r.step((700.0, TOP), 0.0, -5.0, fit, false).free);
     }
 
     #[test]
@@ -849,10 +908,10 @@ mod tests {
         // home. Judging by the event's real location cannot make that mistake.
         let mut r = EdgeResist::new(100.0);
         let fit = screen_fit();
-        assert!(r.step((1512.0, 400.0), 200.0, 0.0, fit).free, "broken out");
+        push_until_free(&mut r, (1512.0, 400.0), (20.0, 0.0), fit);
         // Wandering around the neighbouring display, including back towards the guest.
         for x in [1600.0, 1900.0, 2400.0, 1700.0, 1560.0] {
-            let step = r.step((x, 400.0), -20.0, 5.0, fit);
+            let step = r.step((x, 400.0), -20.0, 5.0, fit, false);
             assert!(step.free, "at x={x} the pointer is still off the guest");
             assert_eq!(step.pos, (x, 400.0), "and is left exactly where it is");
         }
@@ -862,7 +921,7 @@ mod tests {
     fn resistance_also_holds_the_side_edges_for_multi_display_escapes() {
         let mut r = EdgeResist::new(100.0);
         let fit = screen_fit();
-        let step = r.step((1512.0, 400.0), 15.0, 0.0, fit);
+        let step = r.step((1512.0, 400.0), 15.0, 0.0, fit, false);
         assert!(
             !step.free,
             "drifting right must not spill onto the next display"
@@ -875,7 +934,7 @@ mod tests {
     fn a_zero_threshold_disables_resistance_entirely() {
         let mut r = EdgeResist::new(0.0);
         assert!(!r.enabled());
-        let step = r.step((700.0, TOP), 0.0, -10.0, screen_fit());
+        let step = r.step((700.0, TOP), 0.0, -10.0, screen_fit(), false);
         assert!(step.free);
         assert_eq!(step.pos, (700.0, TOP), "the pointer is left untouched");
     }
@@ -885,10 +944,10 @@ mod tests {
         let mut r = EdgeResist::new(100.0);
         let fit = screen_fit();
         for _ in 0..9 {
-            r.step((700.0, TOP), 0.0, -10.0, fit);
+            r.step((700.0, TOP), 0.0, -10.0, fit, false);
         }
         r.reset(); // e.g. left fullscreen, or the window lost key
-        assert!(!r.step((700.0, TOP), 0.0, -10.0, fit).free);
+        assert!(!r.step((700.0, TOP), 0.0, -10.0, fit, false).free);
     }
 
     #[test]
@@ -898,7 +957,7 @@ mod tests {
         // and top-left hot corner getting the pointer where they expect it.
         let mut r = EdgeResist::new(100.0);
         r.set_keepout(false);
-        let step = r.step((0.0, TOP), -10.0, -10.0, screen_fit());
+        let step = r.step((0.0, TOP), -10.0, -10.0, screen_fit(), false);
         assert!(!step.free, "still resisted — it is still an outward shove");
         assert_eq!(
             step.pos,
@@ -952,59 +1011,58 @@ mod tests {
     // ---------------------------------------------------------------------------------------
 
     #[test]
-    fn today_a_single_flick_event_breaks_through_but_the_same_travel_split_up_does_not() {
-        // Breakthrough is pure distance, and a flick arrives as ONE post-ballistics delta while
-        // a deliberate push arrives as ten small ones. Same nominal 100 pt, opposite feel: the
-        // careless motion resistance exists to stop is the one that sails through.
+    fn a_flick_and_a_deliberate_push_now_cost_the_same_number_of_events() {
+        // Was the reverse: breakthrough was pure distance, and a flick arrives as ONE
+        // post-ballistics delta of 100+ pt while a careful push arrives as ten small ones — so
+        // resistance was strongest against the motion you mean and absent for the careless one
+        // it exists to stop. Capping the per-event contribution makes it a test of sustained
+        // motion instead, which is where the chrome ask independently landed.
         let fit = screen_fit();
         let top = fit.y + fit.h;
 
         let mut flick = EdgeResist::new(100.0);
         flick.set_keepout(false);
         assert!(
-            flick.step((700.0, top), 0.0, -100.0, fit).free,
-            "one 100 pt event is already through — no resistance felt at all"
+            !flick.step((700.0, top), 0.0, -100.0, fit, false).free,
+            "one huge delta no longer buys the whole threshold"
         );
+        let flick_events = 1 + push_until_free(&mut flick, (700.0, top), (0.0, -100.0), fit);
 
         let mut push = EdgeResist::new(100.0);
         push.set_keepout(false);
-        for i in 1..10 {
-            assert!(
-                !push.step((700.0, top), 0.0, -10.0, fit).free,
-                "event {i} of a deliberate push is still held"
-            );
-        }
-        assert!(
-            push.step((700.0, top), 0.0, -10.0, fit).free,
-            "held for ten events"
+        let push_events = push_until_free(&mut push, (700.0, top), (0.0, -10.0), fit);
+
+        assert_eq!(
+            flick_events, push_events,
+            "a 100 pt/event flick and a 10 pt/event push both take the same sustained effort"
         );
     }
 
     #[test]
-    fn today_dwelling_in_a_corner_banks_charge_that_fires_the_adjacent_edge_later() {
-        // The corner arm accumulates but never releases, and sliding along the top drains only
-        // the x accumulator (`inside_y` never clears the release margin). The banked push then
-        // breaks the top edge on a nudge the user cannot perceive as a shove — a breakthrough
-        // causally disconnected from the motion that triggered it.
+    fn dwelling_in_a_corner_banks_nothing_for_the_adjacent_edge() {
+        // It used to: the corner arm accumulated but never released, and sliding out along the
+        // top drained only the x accumulator (`inside_y` never clears the release margin), so a
+        // second of hot-corner dwell banked 600 pt and the next 1 pt nudge cashed it. A
+        // breakthrough disconnected from the motion that caused it is unattributable by
+        // construction — which is what "weird, can't say why" sounds like.
         let fit = screen_fit();
         let top = fit.y + fit.h;
         let mut r = EdgeResist::new(100.0);
         r.set_keepout(false);
         for _ in 0..60 {
-            r.step((0.0, top), -10.0, -10.0, fit);
+            r.step((0.0, top), -10.0, -10.0, fit, false);
         }
         assert_eq!(
             r.acc,
-            (600.0, 600.0),
-            "a second in the corner banks 600 pt on both axes"
+            (0.0, 0.0),
+            "a corner never releases, so it banks nothing"
         );
         for x in [40.0, 80.0, 120.0, 200.0] {
-            r.step((x, top), 20.0, 0.0, fit);
+            r.step((x, top), 20.0, 0.0, fit, false);
         }
-        assert_eq!(r.acc.1, 600.0, "sliding out drains x, never y");
         assert!(
-            r.step((200.0, top), 0.0, -1.0, fit).free,
-            "one 1 pt nudge cashes the banked charge"
+            !r.step((200.0, top), 0.0, -1.0, fit, false).free,
+            "and a 1 pt nudge afterwards buys 1 pt, not a breakthrough"
         );
     }
 
@@ -1017,10 +1075,10 @@ mod tests {
         let mut r = EdgeResist::new(100.0);
         r.set_keepout(false);
         for _ in 0..20 {
-            r.step((700.0, top), 0.0, -30.0, fit);
+            r.step((700.0, top), 0.0, -30.0, fit, false);
         }
         assert!(r.through, "broke out of the top");
-        r.step((2.0, top - 400.0), 0.0, 0.0, fit);
+        r.step((2.0, top - 400.0), 0.0, 0.0, fit, false);
         assert!(
             r.through,
             "still disarmed: x=2 is inside the left edge's release margin"
@@ -1028,7 +1086,7 @@ mod tests {
     }
 
     #[test]
-    fn today_a_pointer_on_another_display_is_dragged_back_to_the_guest() {
+    fn a_pointer_on_another_display_is_left_alone() {
         // The reported symptom (2026-08-02): "the mouse jumps around while I test focus
         // changes". `resist_edges` resets on every focus loss, which clears `through`; when the
         // window becomes key again with the pointer parked on the other display, that pointer is
@@ -1039,7 +1097,7 @@ mod tests {
         let outside = fit.x + fit.w + 800.0;
         let mut r = EdgeResist::new(100.0);
         r.set_keepout(false);
-        let step = r.step((outside, 400.0), 20.0, 0.0, fit);
+        let step = r.step((outside, 400.0), 20.0, 0.0, fit, false);
         assert!(!step.free, "resisted, 800 pt outside the content");
         assert_eq!(
             step.pos.0,
@@ -1053,7 +1111,7 @@ mod tests {
         // Degenerate but reachable mid-resize: the keep-out band would invert the clamp range.
         let mut r = EdgeResist::new(100.0);
         let fit = FitRect::full(3.0, 1.0);
-        let step = r.step((3.0, 1.0), 5.0, -5.0, fit);
+        let step = r.step((3.0, 1.0), 5.0, -5.0, fit, false);
         assert_eq!(step.pos, (1.5, 0.5), "collapsed to the centre");
     }
 
