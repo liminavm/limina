@@ -208,6 +208,11 @@ It is up only while *all* of these hold, each for its own reason:
 - **The carrier is natively fullscreen.** The overlay needs a Space to float over.
 - **The screen has a camera housing.** On an external display native fullscreen already covers
   everything, so an overlay would be risk for no pixels.
+The overlay's *level* is separate from whether it is up: `OVERLAY_LEVEL` (above the menu bar)
+while limina is active, ordinary otherwise. Height above the menu bar is only worth anything while
+the pointer is in the guest, and it costs something real — a window at that level covers **system**
+windows too, and it hid the Accessibility grant dialog behind the very app that needed the grant.
+
 - **The carrier's Space is the one on screen** (`isOnActiveSpace`). A window above menu-bar level
   would otherwise float over whatever the user Cmd-Tabbed to. Dropping it returns the view to the
   carrier, so the Space still shows the guest — the right look for a background app anyway.
@@ -221,23 +226,32 @@ It is up only while *all* of these hold, each for its own reason:
   can never trip it — puts the overlay down until the pointer returns to the guest, `REVEAL_MARGIN`
   (40 pt) clear of the top.
 
-  The ask has **two** implementations, because it must survive with and without the Accessibility
-  grant. With the tap, the edge-resistance breakthrough at the top sets it. Without one — any
-  freshly compiled dev binary, since TCC keys on the code hash — the local monitor accumulates
-  `REVEAL_PUSH` (150 pt) of continuous upward push in `InputState::reveal_step`. The first cut had
-  only the tap path, which left an unbundled build with no way to reach the menu bar at all.
+  The ask has **one** implementation, `InputState::reveal_step`, which both input paths call — the
+  local monitor directly, and the capture tap in place of its own resistance breakthrough. It must
+  work with *and* without the Accessibility grant (any freshly compiled binary lacks it, since TCC
+  keys on the code hash), and those are different code paths, so a single owner is the only way
+  they can agree. It briefly had two, and reworking one silently left the other in force: with the
+  tap installed it consumes the edge events, so the monitor's version never ran at all.
 
-  Two ways to get this wrong, both found by dogfooding it:
-  - **The accumulator must reset on any lapse.** Under the overlay there is no keep-out band, so
-    the pointer rests *on* the top row where every stray upward twitch lands another delta. At
-    80 pt with no reset, merely moving to the top of the guest tripped it instantly. Any pause,
-    sideways travel or downward twitch now zeroes it; the reset, not the size, is what makes it
-    safe.
+  Ways to get this wrong, each found by dogfooding it:
   - **The release must not be gated on the overlay being up.** It was, and the overlay is down
     *precisely because* the ask is set — an unreachable state, so the guest stayed inset below the
     housing forever, across fullscreen toggles included. The release condition has to be live at
     all times. (Leaving fullscreen clears the ask outright too, so entering it always starts from
     the overlay.)
+  - **Distance is the wrong currency.** It rewards a hard shove, and a hard shove is exactly what
+    throwing the pointer at the top-left hot corner looks like, so the menu bar kept appearing
+    while the user reached for the GNOME overview.
+  - **Wall-clock runs through silence.** Resting against the top produces no events at all, so a
+    quick shove followed by a linger satisfied a "hold" nobody performed.
+  - **An unbroken hold is a *mouse* gesture.** A trackpad stroke ends when the finger runs out of
+    glass; every lift reset the run and the chrome became unsummonable on the hardware the app is
+    actually used on.
+
+  What it settles on: a **charge** — time actually spent pushing, capped per event so silence
+  cannot be banked as motion, decaying after `REVEAL_DECAY` of idle, with a small distance floor
+  to rule out jitter. Repeated strokes add up; a single shove does not. And it never arms within
+  `fit::CORNER_ZONE` of a side edge, because corners belong to the guest.
 
 Two knock-on simplifications. `NSWindowStyleMask::FullScreen` is meaningful again, since fullscreen
 is always native; only the capture tap needs the overlay flag, because a guest hosted in the
@@ -303,16 +317,20 @@ position. Related: the top and bottom hold the full threshold while the sides ta
 (half) of it — crossing to another display is a thing you mean to do; macOS chrome dropping over
 the guest never is.
 
-**A corner is a target, not an exit.** mutter's pressure barriers — the GNOME hot corner among
-them — want **100 px** of accumulated push before they fire, and we forward exactly the motion we
-absorb. At the plain side threshold we released the pointer after 50 pt, handing over freedom at
-*half* the pressure the guest needed, so the hot corner fired only when a flick happened to
-front-load enough motion into the first few events: "I managed it once, can't figure out how to do
-it again". Within `CORNER_ZONE` (32 pt) of a corner both axes now hold `CORNER_FACTOR` times as
-long. Three, not two: at two the side threshold lands on exactly mutter's 100 and — since the event
-that crosses is the one we let through — the guest would see 90, a hair short every time. Nothing
-is lost, because leaving sideways still costs half a threshold anywhere along the edge that isn't
-its last 32 points.
+**A corner is a target, not an exit — and it never releases.** mutter's pressure barriers (the
+GNOME hot corner among them) want ~100 px of accumulated push, and we forward exactly the motion we
+absorb; at the plain side threshold we let the pointer go after 50 pt, so the corner charged
+part-way and stopped. Raising the corner's threshold was the right diagnosis at the wrong layer:
+whatever the multiple, *breaking through ends the pressure*, and a barrier wanting sustained motion
+cannot be served by a bounded burst. Within `CORNER_ZONE` (32 pt) of a corner the pointer is
+therefore held indefinitely, so the push can continue as long as the user pushes. Nothing is
+trapped — sliding a few points along either edge leaves the zone and the ordinary thresholds apply.
+
+**While resisting, pin the guest's pointer to the clamped position** (`send_abs_position`). The
+local monitor is the only other thing driving the absolute device and it never runs while the tap
+consumes, so the guest's cursor sat tens of points short of the corner and spent the first part of
+the forwarded push *travelling* there rather than charging the barrier: 142 px measured arriving as
+~90 px of pressure, just under the 100 needed. That was the entire "works one time in three".
 
 **A warp opens a 0.25 s local-events suppression interval.** During it, real mouse movement stops
 moving the cursor. Resistance warps on every held event, so pushing at an edge and then coming back
