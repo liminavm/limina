@@ -491,9 +491,20 @@ define_class!(
     }
 );
 
-/// Window level for the `extend` overlay: above the menu bar, so the chrome cannot reveal over
-/// the guest. `NSMainMenuWindowLevel` is 24.
+/// Window level for the `extend` overlay while limina is the active app: above the menu bar, so
+/// the chrome cannot reveal over the guest. `NSMainMenuWindowLevel` is 24.
 const OVERLAY_LEVEL: isize = 25;
+
+/// Window level for the overlay while limina is **not** the active app: ordinary.
+///
+/// Above the menu bar is only worth anything while the pointer is in the guest, and it costs
+/// something real: a window at that level covers *system* windows too. It hid the Accessibility
+/// grant dialog — the app sat there full-panel over a prompt the user could not click, which is a
+/// particularly bad trap given that prompt is how limina earns its own capture tap. Dropping to
+/// the normal level when another app takes over keeps the guest full-panel (the point of staying
+/// up at all when focus moves to another display) while letting anything the system needs to show
+/// come out in front of it.
+const OVERLAY_LEVEL_INACTIVE: isize = 0;
 
 /// The `notch = extend` overlay: native fullscreen as a **carrier** for the Space, with the guest
 /// drawn by a borderless window floating on top of it.
@@ -592,7 +603,12 @@ impl ExtendOverlay {
     /// Keep the overlay in step with the carrier, from the tick that already runs — polled rather
     /// than delegate-driven, like every other window-state read here.
     ///
-    /// Up only while all of these hold:
+    /// The overlay's *level* is separate from whether it is up: above the menu bar while limina is
+    /// active, ordinary otherwise (see [`OVERLAY_LEVEL_INACTIVE`]) — a window above menu-bar level
+    /// covers system dialogs, and it hid the Accessibility prompt behind the very app that needed
+    /// the grant.
+    ///
+    /// It is up only while all of these hold:
     /// - the policy is `extend`;
     /// - the carrier is natively fullscreen (the overlay needs a Space to float over);
     /// - the screen actually **has** a camera housing — on an external display native fullscreen
@@ -622,6 +638,17 @@ impl ExtendOverlay {
             return;
         };
         let screen = carrier.screen();
+        // Re-assert every tick: activation changes without any of the up/down conditions moving.
+        if let Some(overlay) = self.window.borrow().as_ref() {
+            let level = if NSApplication::sharedApplication(mtm).isActive() {
+                OVERLAY_LEVEL
+            } else {
+                OVERLAY_LEVEL_INACTIVE
+            };
+            if overlay.level() != level {
+                overlay.setLevel(level);
+            }
+        }
         let want = notch == crate::vmlib::schema::NotchPolicy::Extend
             && !reveal_chrome
             && carrier.styleMask().contains(NSWindowStyleMask::FullScreen)
