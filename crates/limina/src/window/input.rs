@@ -882,6 +882,20 @@ impl InputState {
         self.send_ptr(InputEvent::new(EV_ABS, ABS_X, x));
         self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, y));
         self.send_ptr(InputEvent::syn());
+        // Hand the guest any push *into* an edge as relative motion, so its own pressure
+        // barriers charge. The absolute tablet can only report a position, and a barrier needs
+        // motion against it, so without this the GNOME hot corner is unreachable — which it was:
+        // the only code forwarding pressure lived in the capture tap, quietly making a core
+        // guest interaction depend on the Accessibility grant. Proven by driving a uinput mouse
+        // into the guest's corner directly, where the overview opened instantly
+        // (`spikes/edge-pressure/`).
+        //
+        // Harmless when the tap *is* installed: while resistance holds it consumes the event, so
+        // this never runs for the same motion.
+        let over = super::fit::edge_overflow((p.x, p.y), event.deltaX(), event.deltaY(), fit);
+        if over != (0.0, 0.0) {
+            send_edge_overflow(&self.conn, over);
+        }
     }
 
     /// Ask for the macOS chrome back, or give it up again.

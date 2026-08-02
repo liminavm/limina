@@ -298,6 +298,42 @@ pub(crate) struct ResistStep {
     pub revealed: bool,
 }
 
+/// The outward component of this motion, if the pointer is against an edge of `fit`.
+///
+/// Guest-side pressure barriers — mutter's hot corner, a guest panel's reveal edge — charge on
+/// *motion into* the barrier, not on the pointer merely being there. Our uncaptured pointer is
+/// driven by the absolute tablet, which can only ever say "the cursor is at (0,0)", so unless the
+/// push is forwarded separately on the relative device the guest's barriers never accumulate
+/// anything and the hot corner is simply unreachable. Edge resistance forwards it while it holds,
+/// which quietly made a core guest interaction depend on the Accessibility grant the tap needs;
+/// this is the same measurement for the path that has no tap.
+///
+/// Returns AppKit deltas (positive `dy` is downward), zero on any axis not pushing outward at an
+/// edge — so it is silent everywhere except exactly where a barrier could be.
+pub(crate) fn edge_overflow(cur: (f64, f64), dx: f64, dy: f64, fit: FitRect) -> (f64, f64) {
+    if fit.w <= 0.0 || fit.h <= 0.0 {
+        return (0.0, 0.0);
+    }
+    // `out_high` is the sign of the delta that points away from the content at that axis's high
+    // edge; the axes differ only there, because view y grows up while deltas grow down.
+    let out = |p: f64, lo: f64, hi: f64, d: f64, out_high: f64| {
+        let against = if d * out_high > 0.0 {
+            p >= hi - EPS
+        } else {
+            p <= lo + EPS
+        };
+        if d != 0.0 && against {
+            d
+        } else {
+            0.0
+        }
+    };
+    (
+        out(cur.0, fit.x, fit.x + fit.w, dx, 1.0),
+        out(cur.1, fit.y, fit.y + fit.h, dy, -1.0),
+    )
+}
+
 /// Fullscreen edge resistance: the pointer sticks at the guest's edge until *pushed* through.
 ///
 /// In fullscreen the host cursor reaching the top edge instantly reveals the macOS menu bar and
@@ -621,6 +657,28 @@ mod tests {
                 "the same 50 pt upward is still held"
             );
         }
+    }
+
+    #[test]
+    fn pushing_into_an_edge_is_forwarded_as_pressure_but_resting_there_is_not() {
+        // The bug this guards: the guest's pressure barriers charge on motion *into* them, and
+        // the absolute tablet can only ever report a position. Without this the hot corner was
+        // unreachable whenever the capture tap was missing — i.e. whenever Accessibility was
+        // ungranted, which is any freshly built binary.
+        let fit = screen_fit();
+        // Against the top-left corner, pushing further into it: both axes count.
+        assert_eq!(edge_overflow((0.0, TOP), -8.0, -6.0, fit), (-8.0, -6.0));
+        // Resting against it with no motion charges nothing.
+        assert_eq!(edge_overflow((0.0, TOP), 0.0, 0.0, fit), (0.0, 0.0));
+        // At the corner but moving *away* on one axis: only the axis still pushing counts.
+        assert_eq!(edge_overflow((0.0, TOP), 8.0, -6.0, fit), (0.0, -6.0));
+        // Mid-content motion is ordinary pointer movement, never pressure.
+        assert_eq!(edge_overflow((700.0, 400.0), -8.0, -6.0, fit), (0.0, 0.0));
+        // A degenerate fit (mid-resize) must not report phantom pressure.
+        assert_eq!(
+            edge_overflow((0.0, 0.0), -8.0, -6.0, FitRect::full(0.0, 0.0)),
+            (0.0, 0.0)
+        );
     }
 
     #[test]

@@ -604,8 +604,29 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
         ctx.reveal_chrome.store(false, Ordering::Relaxed);
     }
     let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
-    let step = resist.step(cur, getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y), fit);
+    let (dx, dy) = (getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y));
+    let step = resist.step(cur, dx, dy, fit);
     ctx.resist.set(resist);
+    if edge_trace() {
+        // The host half of the edge oracle. The guest half is its own evdev stream — see
+        // `spikes/edge-pressure/`. Together they answer the only question that matters when a
+        // guest-side barrier won't fire: did we absorb the push and forward it, or did we let go
+        // first? Reasoning about it from the outside got the corner threshold wrong twice.
+        eprintln!(
+            "[EDGE] cur=({:.1},{:.1}) d=({dx:.1},{dy:.1}) fit=({:.1},{:.1} {:.1}x{:.1}) \
+             overlaid={overlaid} free={} overflow=({:.1},{:.1}) revealed={}",
+            cur.0,
+            cur.1,
+            fit.x,
+            fit.y,
+            fit.w,
+            fit.h,
+            step.free,
+            step.overflow.0,
+            step.overflow.1,
+            step.revealed,
+        );
+    }
     if step.revealed && overlaid {
         ctx.reveal_chrome.store(true, Ordering::Relaxed);
     }
@@ -623,6 +644,12 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
     }
     send_edge_overflow(&ctx.conn, step.overflow);
     std::ptr::null_mut()
+}
+
+/// Whether to log every resistance decision to stderr (`LIMINA_EDGE_TRACE=1`).
+fn edge_trace() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LIMINA_EDGE_TRACE").is_some_and(|v| v != "0"))
 }
 
 /// Install the capture tap on the main run loop. Returns `true` if the tap was created; `false`
