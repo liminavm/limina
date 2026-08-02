@@ -398,7 +398,7 @@ pub struct InputState {
     /// Upward push accumulated against the guest's top edge, in points, and when the current
     /// unbroken run of it started.
     reveal_push: Cell<f64>,
-    reveal_since: Cell<Option<std::time::Instant>>,
+    reveal_since: Cell<Option<(std::time::Instant, std::time::Instant)>>,
 }
 
 /// How long the pointer must push upward, without a break, to ask for the chrome back.
@@ -414,6 +414,10 @@ const REVEAL_HOLD: std::time::Duration = std::time::Duration::from_millis(700);
 /// A floor on the push, so jitter against the top row can't satisfy [`REVEAL_HOLD`] by resting.
 /// Small: the hold is what makes the gesture deliberate, this only rules out noise.
 const REVEAL_PUSH: f64 = 40.0;
+
+/// The longest gap between motion events that still counts as one unbroken push. Generous
+/// relative to a mouse's event rate, tight enough that a pause reads as a pause.
+const REVEAL_GAP: std::time::Duration = std::time::Duration::from_millis(120);
 
 /// How close to a side edge counts as "in a corner", where the reveal never arms at all.
 ///
@@ -920,7 +924,7 @@ impl InputState {
     /// the hard way on the first dogfood run of this feature. The monitor only sees events over
     /// our own window, which is all this needs. Uncaptured only: a grabbed pointer must never
     /// trip it.
-    fn reveal_step(&self, p: (f64, f64), delta_y: f64, fit: super::fit::FitRect) {
+    pub(crate) fn reveal_step(&self, p: (f64, f64), delta_y: f64, fit: super::fit::FitRect) {
         if self.captured.load(Ordering::Relaxed) {
             self.reveal_push.set(0.0);
             return;
@@ -963,16 +967,20 @@ impl InputState {
             lapse(self);
             return;
         }
-        self.reveal_push.set(self.reveal_push.get() - delta_y);
+        let now = std::time::Instant::now();
+        // A gap in the event stream ends the run. Without this the clock keeps ticking through
+        // silence, so a quick shove followed by resting against the top satisfies a "hold" the
+        // user never performed — which is exactly what it still felt like.
         let since = match self.reveal_since.get() {
-            Some(t) => t,
-            None => {
-                let now = std::time::Instant::now();
-                self.reveal_since.set(Some(now));
+            Some((start, last)) if now.duration_since(last) <= REVEAL_GAP => start,
+            _ => {
+                self.reveal_push.set(0.0);
                 now
             }
         };
-        if since.elapsed() >= REVEAL_HOLD && self.reveal_push.get() >= REVEAL_PUSH {
+        self.reveal_since.set(Some((since, now)));
+        self.reveal_push.set(self.reveal_push.get() - delta_y);
+        if now.duration_since(since) >= REVEAL_HOLD && self.reveal_push.get() >= REVEAL_PUSH {
             self.reveal_chrome.store(true, Ordering::Relaxed);
         }
     }
@@ -1074,6 +1082,21 @@ impl InputState {
 /// overflow is zero and the device stays silent; when it does fire, the resulting relative
 /// motion cannot drift the guest cursor, because the compositor clamps it at the same screen
 /// edge the absolute position is already pinned to.
+/// Put the guest's pointer exactly at `pos` (view points) on the absolute tablet.
+///
+/// Needed by the resistance path, which consumes the events it holds — so the local monitor, the
+/// only other thing that drives the absolute device, never sees them and the guest's cursor stays
+/// where it was when the clamp began. A pressure barrier the guest cursor has not reached cannot
+/// charge, and the forwarded push gets spent travelling to it instead.
+pub(crate) fn send_abs_position(conn: &Arc<WorkerConn>, pos: (f64, f64), fit: super::fit::FitRect) {
+    let (x, y) = super::fit::abs_through_fit(pos.0, pos.1, fit, ABS_MAX as i32);
+    let io = conn.io();
+    let fd = io.ptr_fd();
+    send_event(fd, InputEvent::new(EV_ABS, ABS_X, x));
+    send_event(fd, InputEvent::new(EV_ABS, ABS_Y, y));
+    send_event(fd, InputEvent::syn());
+}
+
 pub(crate) fn send_edge_overflow(conn: &Arc<WorkerConn>, overflow: (f64, f64)) {
     let dx = overflow.0.round() as i32;
     let dy = overflow.1.round() as i32;

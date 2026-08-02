@@ -48,7 +48,8 @@ use limina_input::InputEvent;
 
 use super::fit::{self, FitRect};
 use super::input::{
-    match_host_shortcut, send_edge_overflow, send_event, HostShortcut, InputState, UngrabAction,
+    match_host_shortcut, send_abs_position, send_edge_overflow, send_event, HostShortcut,
+    InputState, UngrabAction,
 };
 use super::WorkerConn;
 
@@ -627,11 +628,13 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
             step.revealed,
         );
     }
-    // Same corner rule as the monitor's path: a corner belongs to the guest, and pushing into the
-    // top-left one to reach the GNOME overview pushes upward too.
-    let in_corner = cur.0 - fit.x <= fit::CORNER_ZONE || fit.x + fit.w - cur.0 <= fit::CORNER_ZONE;
-    if step.revealed && overlaid && !in_corner {
-        ctx.reveal_chrome.store(true, Ordering::Relaxed);
+    // The chrome ask has exactly one implementation, in `InputState::reveal_step`, and the tap
+    // defers to it. It used to have its own — the resistance breakthrough — which stayed
+    // distance-based after the monitor's became a hold, so with the tap installed (i.e. whenever
+    // Accessibility *is* granted) a two-event flick still summoned the menu bar. Two owners of one
+    // gesture is how that happens; now there is one.
+    if overlaid {
+        ctx.input.reveal_step(cur, dy, fit);
     }
     if step.free {
         return event;
@@ -639,6 +642,14 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
 
     // Held at the edge: park the host cursor just inside it and hand the guest the motion we ate,
     // so mutter's pressure barriers (GNOME hot corner, a guest panel's reveal edge) still fire.
+    //
+    // Pin the guest's pointer to the clamped position first. While we are consuming events the
+    // monitor never runs, so the last absolute position the guest saw is the one from *before*
+    // the clamp — several tens of points short of the edge. The guest then spends the first part
+    // of the forwarded push walking its cursor to the corner instead of charging the barrier
+    // there, and a shove measured at 142 px arrived as ~90 px of pressure: just under mutter's
+    // 100, which is why the hot corner worked one time in three.
+    send_abs_position(&ctx.conn, step.pos, fit);
     if step.pos != cur {
         if let Some(p) = super::input::view_point_to_cg_global(&ctx.view, step.pos) {
             unsafe { CGWarpMouseCursorPosition(p) };
