@@ -404,11 +404,16 @@ pub struct InputState {
 /// Deliberately its own constant rather than the edge-resistance threshold: under the overlay
 /// resistance has nothing left to protect at the top, and may well be switched off entirely
 /// (`edge-resistance = 0`) — but the way out to the menu bar must still exist.
-const REVEAL_PUSH: f64 = 80.0;
+///
+/// Large, and reset by any lapse in the push (see [`InputState::reveal_step`]), because under the
+/// overlay there is no keep-out band: the pointer sits *on* the top row, where every stray upward
+/// twitch of ordinary use lands another delta. At 80 pt with no reset, merely moving to the top of
+/// the guest tripped it instantly — first dogfood run of the overlay.
+const REVEAL_PUSH: f64 = 300.0;
 
 /// How far back below the top edge the pointer must come before the overlay is taken back. Wide
 /// enough that using the revealed menu bar doesn't flicker it away, narrow enough to feel prompt.
-const REVEAL_MARGIN: f64 = 40.0;
+pub(crate) const REVEAL_MARGIN: f64 = 40.0;
 
 impl InputState {
     // Eight shared handles, each a distinct thing the translator needs for the window's lifetime;
@@ -890,23 +895,43 @@ impl InputState {
     /// our own window, which is all this needs. Uncaptured only: a grabbed pointer must never
     /// trip it.
     fn reveal_step(&self, p: (f64, f64), delta_y: f64, fit: super::fit::FitRect) {
-        if !self.overlay_active.load(Ordering::Relaxed) || self.captured.load(Ordering::Relaxed) {
+        if self.captured.load(Ordering::Relaxed) {
             self.reveal_push.set(0.0);
             return;
         }
         const EDGE: f64 = 2.0;
         let top = fit.y + fit.h;
-        // AppKit deltas grow downward, so upward push is negative.
-        if p.1 >= top - EDGE && delta_y < 0.0 {
-            let pushed = self.reveal_push.get() - delta_y;
-            self.reveal_push.set(pushed);
-            if pushed >= REVEAL_PUSH {
-                self.reveal_chrome.store(true, Ordering::Relaxed);
-            }
-        } else if p.1 < top - REVEAL_MARGIN {
+        if p.1 < top - REVEAL_MARGIN {
             // Genuinely back in the guest: forget the push and take the overlay back.
+            //
+            // Deliberately NOT gated on the overlay being up. Releasing the ask is the only way
+            // the overlay ever returns, and the overlay is down *precisely because* the ask is
+            // set — gating this on `overlay_active` makes the state unreachable and the guest
+            // stays inset below the housing forever, across fullscreen toggles included. Cost a
+            // dogfood round; the release condition must always be live.
             self.reveal_push.set(0.0);
             self.reveal_chrome.store(false, Ordering::Relaxed);
+            return;
+        }
+        if !self.overlay_active.load(Ordering::Relaxed) {
+            // Nothing to ask for: the chrome is already reachable.
+            self.reveal_push.set(0.0);
+            return;
+        }
+        if p.1 >= top - EDGE {
+            // AppKit deltas grow downward, so upward push is negative.
+            if delta_y < 0.0 {
+                let pushed = self.reveal_push.get() - delta_y;
+                self.reveal_push.set(pushed);
+                if pushed >= REVEAL_PUSH {
+                    self.reveal_chrome.store(true, Ordering::Relaxed);
+                }
+            } else {
+                // At the edge but not pushing up. The shove has to be one continuous motion —
+                // otherwise travelling along the top row, or resting there, accumulates it by
+                // accident and the chrome appears out of nowhere.
+                self.reveal_push.set(0.0);
+            }
         }
     }
 

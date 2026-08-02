@@ -1130,6 +1130,12 @@ pub fn run(
             // background; the guest never re-modesets for a window resize in those modes.
             // Bring the `extend` overlay up or down before measuring anything: it decides
             // which view the guest lives in, and therefore what the fit is computed against.
+            if !window.styleMask().contains(NSWindowStyleMask::FullScreen) {
+                // Out of fullscreen the chrome is there for the taking, so the ask is moot —
+                // and clearing it here means entering fullscreen always starts from the
+                // overlay, whatever happened in the last session of it.
+                apply_reveal.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
             apply_overlay.reconcile(
                 &window,
                 cfg_notch,

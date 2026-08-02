@@ -59,7 +59,16 @@ NET_FLAG=--net
 [ "${LIMINA_NET:-1}" = "0" ] && NET_FLAG=
 EXTRA_ARGS=()
 [ -n "${LIMINA_EXTRA_ARGS:-}" ] && read -ra EXTRA_ARGS <<<"$LIMINA_EXTRA_ARGS"
-target/debug/limina --vmm-bin target/debug/limina-vmm \
+# LIMINA_BIN runs a different supervisor binary with this same env — in practice the one inside a
+# built app bundle (target/limina.app/Contents/MacOS/limina). That matters for anything TCC-gated:
+# Accessibility is keyed on the code hash, so a freshly-compiled `target/debug/limina` never has
+# the grant and silently loses the capture tap (and with it edge resistance, edge pressure for the
+# GNOME hot corner, and — before it moved to the local monitor — the `notch = extend` chrome
+# reveal). The bundle keeps its grant across rebuilds because it is signed with a stable identity.
+# It is also the only way to test anything that depends on Info.plist. Found the hard way,
+# 2026-08-01.
+BIN="${LIMINA_BIN:-target/debug/limina}"
+"$BIN" --vmm-bin target/debug/limina-vmm \
   --firmware "$FW" \
   --disk "$WORK" --cpus "${LIMINA_CPUS:-6}" --ram-mib "${LIMINA_RAM_MIB:-8192}" $NET_FLAG --window \
   ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \

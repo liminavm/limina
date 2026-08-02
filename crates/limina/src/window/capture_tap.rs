@@ -597,8 +597,10 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
     // which is where its top bar and top-left hot corner want it.
     let overlaid = ctx.panel_fs.load(Ordering::Relaxed);
     resist.set_keepout(!overlaid);
-    // Back inside the guest: whatever the chrome was doing, we want the overlay again.
-    if fit::point_in_fit(cur.0, cur.1, fit) {
+    // Back inside the guest: whatever the chrome was doing, we want the overlay again. The same
+    // margin the local monitor uses, not mere containment — `point_in_fit` includes the top row,
+    // so re-entering there would snap the overlay back over the very menu the user reached for.
+    if fit::point_in_fit(cur.0, cur.1, fit) && cur.1 < fit.y + fit.h - super::input::REVEAL_MARGIN {
         ctx.reveal_chrome.store(false, Ordering::Relaxed);
     }
     let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
