@@ -401,6 +401,20 @@ Three consequences worth keeping:
 - **A reply produced after a cancel is dropped**, both in the supervisor (it knows the command was
   cancelled) and in `BulkPipe` (the stop clears that endpoint's queue). The guest's read is gone,
   and a *queued* stall would fail its next, unrelated request.
+
+  "It knows the command was cancelled" has to be per **transaction**, not a flag. The first cut was
+  an `AtomicBool` set on cancel and cleared as each new command was forwarded, and the clear is the
+  bug: a reply belongs to one particular command, so the guest's *retry* ended up vouching for the
+  command it was replacing. Repeated denials at the sheet — cancel, retry, cancel, retry — walk
+  straight into it, and the abandoned `Reply::Stall` gets written after all.
+
+  It surfaces a long way from its cause. The guest sees a STALL roughly 133 ms after every
+  `libusb_reset_device`, before a finger could have touched the sensor, which reads as a device
+  halting its own endpoint on open (`dogfood-guest:fingerprint-usb-stall.md`, 2026-08-02: 12 stalls to
+  3 successes). 133 ms is simply how long the driver's init takes to reach the verify and post its
+  `0x84` read — a stall already waiting completes it the instant it exists. `ReplyGate` stamps each
+  command with the epoch it was accepted under and a cancel bumps it, so a later command cannot
+  speak for an earlier one, and a cancel arriving while a command is still queued still kills it.
 - **Prompts are tokened.** `sep_verify` takes a caller-allocated token and `cancel_verify` names
   it, so a cancel that races its own prompt's completion is inert instead of dismissing the next
   prompt (tokens are never reused).

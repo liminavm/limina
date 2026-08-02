@@ -20,7 +20,7 @@
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
@@ -32,6 +32,58 @@ const KIND_STALL: u8 = 1;
 /// Worker→supervisor only: the guest cancelled the endpoint named in the frame's `ep` (xHCI Stop
 /// Endpoint — see `crates/limina-vmm/src/moc_usb.rs`). Carries no payload.
 const KIND_CANCEL: u8 = 2;
+
+/// Whether the reply to a command the guest issued is still wanted.
+///
+/// The question looks boolean — "did the guest cancel?" — and was implemented as one: a flag set on
+/// cancel and cleared as each new command was forwarded. That is wrong, because a reply belongs to
+/// a *particular* command, and the guest's next command would clear the flag out from under the
+/// one still being worked on. The sequence that broke it, all of it ordinary use:
+///
+/// 1. the guest issues a finger-wait read; the executor blocks on the Touch ID sheet;
+/// 2. the user puts a wrong finger on the sensor, or waves the sheet away; the guest cancels;
+/// 3. the guest immediately retries — and forwarding that retry cleared the flag;
+/// 4. the abandoned sheet finally resolves `Cancelled`, sees `false`, and writes its STALL.
+///
+/// That STALL is then delivered to the retry — or, if the driver has given up and reopened the
+/// device, to the *next session's* first read. Which is what the guest reported: a stall ~133 ms
+/// after every `libusb_reset_device`, long before a finger could have touched the sensor, looking
+/// for all the world like a device that halts its own endpoint on open.
+///
+/// An epoch answers the real question. Each command carries the epoch it was accepted under; a
+/// cancel bumps it; a reply is written only if the epoch has not moved since. A later command
+/// cannot vouch for an earlier one, and a cancel that arrives while a command is merely *queued*
+/// still invalidates it.
+#[derive(Default)]
+struct ReplyGate {
+    epoch: AtomicU64,
+}
+
+impl ReplyGate {
+    /// Accept a command; the returned token is what decides its reply's fate.
+    fn accept(&self) -> u64 {
+        self.epoch.load(Ordering::SeqCst)
+    }
+
+    /// The guest abandoned the read in flight: every command accepted so far is now moot.
+    fn cancel(&self) {
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn wanted(&self, token: u64) -> bool {
+        self.epoch.load(Ordering::SeqCst) == token
+    }
+
+    /// How many cancels have been processed. Only the tests read it, to wait until the reader has
+    /// actually *seen* a cancel before letting the prompt resolve — writing the frame and
+    /// releasing the sheet in the next statement is a race, and it is the one that made
+    /// `a_cancel_is_serviced_mid_prompt_and_the_stale_reply_is_dropped` flaky under load long
+    /// before this gate existed.
+    #[cfg(test)]
+    fn epoch(&self) -> u64 {
+        self.epoch.load(Ordering::SeqCst)
+    }
+}
 
 /// Spawn the fingerprint serve thread: connect to the worker's gadget socket and run the elanmoc
 /// engine backed by `store`, prompting Touch ID (labelled with `vm_label`) on verify/enroll.
@@ -60,7 +112,13 @@ fn serve_loop(socket_path: &Path, store: Arc<MocStore>, vm_label: String) {
     loop {
         if let Ok(stream) = UnixStream::connect(socket_path) {
             log::info!("moc: connected to the worker gadget at {socket_path:?}");
-            serve_conn(stream, &engine, verifier.as_ref(), &canceller);
+            serve_conn(
+                stream,
+                &engine,
+                verifier.as_ref(),
+                &canceller,
+                &ReplyGate::default(),
+            );
             log::info!("moc: worker gadget connection ended; retrying");
         }
         // Worker not up yet, or relaunching across a guest reboot — retry.
@@ -82,6 +140,7 @@ fn serve_conn(
     engine: &Engine,
     verifier: &dyn Verifier,
     canceller: &PromptCanceller,
+    gate: &ReplyGate,
 ) {
     set_nosigpipe(&stream);
     let mut reader = match stream.try_clone() {
@@ -92,14 +151,10 @@ fn serve_conn(
         }
     };
     let writer = stream;
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
-    // Set when the guest cancels, cleared as each new command is forwarded: the executor reads it
-    // to decide whether its reply is still wanted (see `run_commands`).
-    let cancelled = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel::<(u64, Vec<u8>)>();
 
     std::thread::scope(|scope| {
-        let exec_cancelled = cancelled.clone();
-        scope.spawn(move || run_commands(rx, engine, verifier, writer, &exec_cancelled));
+        scope.spawn(move || run_commands(rx, engine, verifier, writer, gate));
         // Reads until EOF/error (the worker is gone).
         while let Ok((ep, kind, cmd)) = read_frame(&mut reader) {
             if kind == KIND_CANCEL {
@@ -111,13 +166,14 @@ fn serve_conn(
                     // The guest dropped the read this command was answering. Take the sheet down
                     // and mark the in-flight reply unwanted: delivering it would answer a
                     // transaction the guest has forgotten.
-                    cancelled.store(true, Ordering::SeqCst);
+                    gate.cancel();
                     canceller.cancel();
                 }
                 continue;
             }
-            cancelled.store(false, Ordering::SeqCst);
-            if tx.send(cmd).is_err() {
+            // Stamped at accept time, not at dequeue: a cancel arriving while this sits in the
+            // queue has to invalidate it too.
+            if tx.send((gate.accept(), cmd)).is_err() {
                 break; // executor gone
             }
         }
@@ -131,13 +187,13 @@ fn serve_conn(
 /// Run commands from `rx` through the engine in order, writing each reply back. Exits when the
 /// reader hangs up.
 fn run_commands(
-    rx: mpsc::Receiver<Vec<u8>>,
+    rx: mpsc::Receiver<(u64, Vec<u8>)>,
     engine: &Engine,
     verifier: &dyn Verifier,
     mut writer: UnixStream,
-    cancelled: &AtomicBool,
+    gate: &ReplyGate,
 ) {
-    for cmd in rx {
+    for (token, cmd) in rx {
         let Some(reply) = engine.handle(&cmd, verifier) else {
             log::debug!("moc: cmd {:02x?} -> (no reply)", &cmd[..cmd.len().min(4)]);
             continue; // zero-length command (finger-lift): no reply frame
@@ -159,7 +215,7 @@ fn run_commands(
                 )
             }
         }
-        if cancelled.load(Ordering::SeqCst) {
+        if !gate.wanted(token) {
             // The guest cancelled while we were working. Its read is gone, so this reply has no
             // recipient — and a stall left queued would fail the guest's *next*, unrelated read.
             log::debug!(
@@ -258,9 +314,10 @@ mod tests {
         // Nothing in flight in the shared cell, so cancel() is a no-op here: this test is about
         // the socket/threading behaviour, not the LAContext call.
         let canceller = PromptCanceller::new(Arc::new(AtomicU64::new(0)));
+        let gate = ReplyGate::default();
 
         std::thread::scope(|scope| {
-            scope.spawn(|| serve_conn(supervisor, &engine, &verifier, &canceller));
+            scope.spawn(|| serve_conn(supervisor, &engine, &verifier, &canceller, &gate));
 
             // Guest asks to verify; the prompt goes up and the engine thread parks in it.
             write_frame(&mut worker, 0x01, KIND_DATA, &[0x40, 0xff, 0x73]).unwrap();
@@ -269,6 +326,11 @@ mod tests {
             // Guest walks away (its read was cancelled). This must be read *now*, not after the
             // prompt resolves — otherwise nothing could ever take the sheet down.
             write_frame(&mut worker, EP_MOC_IN, KIND_CANCEL, &[]).unwrap();
+            // Only release once the reader has *processed* it: writing the frame does not mean it
+            // has been seen, and releasing into that window is what made this test flaky.
+            while gate.epoch() == 0 {
+                std::thread::yield_now();
+            }
             // The prompt then ends as cancelled, as a dismissed sheet does.
             release_tx.send(VerifyOutcome::Cancelled).unwrap();
 
@@ -286,6 +348,103 @@ mod tests {
         });
     }
 
+    /// The bug behind the guest's "endpoint stalled ~133 ms after every device reset" report
+    /// (`dogfood-guest:fingerprint-usb-stall.md`, 2026-08-02): a wrong finger or a dismissed sheet
+    /// makes the guest cancel and immediately retry, and the retry used to vouch for the
+    /// abandoned command — so its STALL was written anyway and landed on the retry, or on the
+    /// next session's first read after libfprint reopened the device.
+    #[test]
+    fn a_later_command_cannot_vouch_for_an_abandoned_one() {
+        let gate = ReplyGate::default();
+        let abandoned = gate.accept();
+        gate.cancel();
+        let retry = gate.accept();
+        assert!(
+            !gate.wanted(abandoned),
+            "the abandoned command's reply survived the guest's retry — this is the stall that \
+             reaches the next session"
+        );
+        assert!(
+            gate.wanted(retry),
+            "the retry's own reply must still be delivered"
+        );
+    }
+
+    /// A cancel can arrive while the command it kills is still sitting in the queue, never having
+    /// reached the engine. Stamping at accept time rather than dequeue time is what covers it.
+    #[test]
+    fn a_cancel_while_a_command_is_still_queued_invalidates_it() {
+        let gate = ReplyGate::default();
+        let queued = gate.accept();
+        gate.cancel();
+        assert!(!gate.wanted(queued));
+    }
+
+    /// The same thing end to end, through the real reader/executor threads: after a cancel the
+    /// guest retries, and the only frame it may ever see is the answer to the retry. A STALL here
+    /// is the wedge — libfprint reports `LIBUSB_ERROR_PIPE` and fails the verify.
+    ///
+    /// Deterministic only because it waits for the reader to have *seen* the cancel before going
+    /// on. Without that wait it passed about half the time with the bug reintroduced — which is
+    /// exactly why the guest saw an intermittent stall rather than a reliable one.
+    #[test]
+    fn a_retry_after_a_cancel_is_never_answered_with_the_abandoned_stall() {
+        let (mut worker, supervisor) = UnixStream::pair().unwrap();
+        let store = Arc::new(MocStore::in_memory());
+        // Must be enrolled, or `verify` short-circuits to "nothing enrolled" and never prompts —
+        // and the test then waits forever for a sheet that was never going up.
+        store.set(b"FP1-alice".to_vec());
+        let engine = Engine::new(store, "test-vm".into());
+        let (up_tx, up_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let verifier = ParkedPrompt {
+            up: up_tx,
+            release: Mutex::new(release_rx),
+        };
+        let canceller = PromptCanceller::new(Arc::new(AtomicU64::new(0)));
+        let gate = ReplyGate::default();
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| serve_conn(supervisor, &engine, &verifier, &canceller, &gate));
+
+            // Verify; the sheet goes up and the executor parks in it.
+            write_frame(&mut worker, 0x01, KIND_DATA, &[0x40, 0xff, 0x73]).unwrap();
+            up_rx.recv().unwrap();
+            // Wrong finger / sheet dismissed: the guest gives up on this read and retries at once.
+            write_frame(&mut worker, EP_MOC_IN, KIND_CANCEL, &[]).unwrap();
+            while gate.epoch() == 0 {
+                std::thread::yield_now();
+            }
+            write_frame(&mut worker, 0x01, KIND_DATA, &[0x40, 0x19]).unwrap(); // FW version
+                                                                               // Only now does the abandoned sheet resolve, as a dismissed one does.
+            release_tx.send(VerifyOutcome::Cancelled).unwrap();
+
+            worker
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let (ep, kind, payload) = read_frame(&mut worker).unwrap();
+            assert_eq!(
+                (ep, kind),
+                (EP_CMD_IN, KIND_DATA),
+                "the retry was answered with the abandoned command's reply"
+            );
+            assert_eq!(payload, vec![0xff, 0xff]);
+
+            // ...and nothing else follows it.
+            worker
+                .set_read_timeout(Some(Duration::from_millis(300)))
+                .unwrap();
+            let extra = read_frame(&mut worker);
+            assert!(
+                extra.is_err(),
+                "a stale frame trailed the retry's reply: {:02x?}",
+                extra.ok()
+            );
+
+            drop(worker);
+        });
+    }
+
     /// The ordinary path is untouched: a command still gets its reply back on the right endpoint.
     #[test]
     fn a_command_still_gets_its_reply() {
@@ -294,9 +453,10 @@ mod tests {
         let engine = Engine::new(store, "test-vm".into());
         let verifier = AlwaysApprove;
         let canceller = PromptCanceller::new(Arc::new(AtomicU64::new(0)));
+        let gate = ReplyGate::default();
 
         std::thread::scope(|scope| {
-            scope.spawn(|| serve_conn(supervisor, &engine, &verifier, &canceller));
+            scope.spawn(|| serve_conn(supervisor, &engine, &verifier, &canceller, &gate));
             write_frame(&mut worker, 0x01, KIND_DATA, &[0x40, 0x19]).unwrap(); // FW version
             worker
                 .set_read_timeout(Some(Duration::from_secs(5)))
