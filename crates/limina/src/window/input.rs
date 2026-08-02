@@ -395,13 +395,15 @@ pub struct InputState {
     /// [`InputState::reveal_step`].
     overlay_active: Arc<AtomicBool>,
     reveal_chrome: Arc<AtomicBool>,
-    /// Upward push accumulated against the guest's top edge, in points, and when the current
-    /// unbroken run of it started.
+    /// Upward push accumulated against the guest's top edge (points), the charge it has built
+    /// (seconds of actual pushing), and when the last pushing event arrived.
     reveal_push: Cell<f64>,
-    reveal_since: Cell<Option<(std::time::Instant, std::time::Instant)>>,
+    reveal_charge: Cell<f64>,
+    reveal_last: Cell<Option<std::time::Instant>>,
 }
 
-/// How long the pointer must push upward, without a break, to ask for the chrome back.
+/// How much *pushing* the pointer must do at the top edge to ask for the chrome back, measured as
+/// time actually spent in motion rather than wall-clock since the gesture began.
 ///
 /// **Time, not distance, is the currency here.** Distance rewards a hard shove, and a hard shove
 /// is exactly what throwing the pointer at the top-left hot corner looks like — so the menu bar
@@ -409,15 +411,21 @@ pub struct InputState {
 /// cleanly: flinging into a corner is over in a moment, while asking for the chrome is a deliberate
 /// lean. It also makes the gesture feel the same whether the mouse is fast or slow, which
 /// accumulated points never did.
-const REVEAL_HOLD: std::time::Duration = std::time::Duration::from_millis(700);
+/// It charges across strokes and decays between them, instead of demanding one unbroken push:
+/// 700 ms of continuous motion is a *mouse* gesture. A trackpad stroke ends when the finger runs
+/// out of glass, so every lift reset the run and the gesture became unperformable on the hardware
+/// the app is used on. Charging makes repeated strokes add up while leaving the shove ineffective.
+const REVEAL_HOLD: f64 = 0.45;
+
+/// Per-event cap on the charge, so a long quiet interval can't be banked as pushing.
+const REVEAL_TICK_CAP: f64 = 0.05;
+
+/// Idle longer than this and the charge is gone — the strokes have to belong to one gesture.
+const REVEAL_DECAY: f64 = 0.4;
 
 /// A floor on the push, so jitter against the top row can't satisfy [`REVEAL_HOLD`] by resting.
 /// Small: the hold is what makes the gesture deliberate, this only rules out noise.
 const REVEAL_PUSH: f64 = 40.0;
-
-/// The longest gap between motion events that still counts as one unbroken push. Generous
-/// relative to a mouse's event rate, tight enough that a pause reads as a pause.
-const REVEAL_GAP: std::time::Duration = std::time::Duration::from_millis(120);
 
 /// How close to a side edge counts as "in a corner", where the reveal never arms at all.
 ///
@@ -463,7 +471,8 @@ impl InputState {
             overlay_active,
             reveal_chrome,
             reveal_push: Cell::new(0.0),
-            reveal_since: Cell::new(None),
+            reveal_charge: Cell::new(0.0),
+            reveal_last: Cell::new(None),
         }
     }
 
@@ -945,7 +954,8 @@ impl InputState {
         }
         let lapse = |s: &Self| {
             s.reveal_push.set(0.0);
-            s.reveal_since.set(None);
+            s.reveal_charge.set(0.0);
+            s.reveal_last.set(None);
         };
         if !self.overlay_active.load(Ordering::Relaxed) {
             // Nothing to ask for: the chrome is already reachable.
@@ -967,20 +977,24 @@ impl InputState {
             lapse(self);
             return;
         }
+        // Charge by the time actually spent pushing, capped per event so silence cannot be banked
+        // as motion — resting against the top produces no events at all, and an earlier cut that
+        // measured wall-clock let a shove plus a linger satisfy a hold nobody performed.
         let now = std::time::Instant::now();
-        // A gap in the event stream ends the run. Without this the clock keeps ticking through
-        // silence, so a quick shove followed by resting against the top satisfies a "hold" the
-        // user never performed — which is exactly what it still felt like.
-        let since = match self.reveal_since.get() {
-            Some((start, last)) if now.duration_since(last) <= REVEAL_GAP => start,
-            _ => {
-                self.reveal_push.set(0.0);
-                now
-            }
-        };
-        self.reveal_since.set(Some((since, now)));
+        let idle = self
+            .reveal_last
+            .get()
+            .map_or(f64::INFINITY, |t| now.duration_since(t).as_secs_f64());
+        if idle > REVEAL_DECAY {
+            self.reveal_push.set(0.0);
+            self.reveal_charge.set(0.0);
+        } else {
+            self.reveal_charge
+                .set(self.reveal_charge.get() + idle.min(REVEAL_TICK_CAP));
+        }
+        self.reveal_last.set(Some(now));
         self.reveal_push.set(self.reveal_push.get() - delta_y);
-        if now.duration_since(since) >= REVEAL_HOLD && self.reveal_push.get() >= REVEAL_PUSH {
+        if self.reveal_charge.get() >= REVEAL_HOLD && self.reveal_push.get() >= REVEAL_PUSH {
             self.reveal_chrome.store(true, Ordering::Relaxed);
         }
     }
