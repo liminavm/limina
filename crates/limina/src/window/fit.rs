@@ -240,7 +240,7 @@ const RELEASE_MARGIN: f64 = 6.0;
 const SIDE_FACTOR: f64 = 0.5;
 
 /// How close to a corner counts as being *at* it, for [`CORNER_FACTOR`].
-const CORNER_ZONE: f64 = 32.0;
+pub(crate) const CORNER_ZONE: f64 = 32.0;
 
 /// Multiplier on the threshold while the pointer is in a corner.
 ///

@@ -627,7 +627,10 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
             step.revealed,
         );
     }
-    if step.revealed && overlaid {
+    // Same corner rule as the monitor's path: a corner belongs to the guest, and pushing into the
+    // top-left one to reach the GNOME overview pushes upward too.
+    let in_corner = cur.0 - fit.x <= fit::CORNER_ZONE || fit.x + fit.w - cur.0 <= fit::CORNER_ZONE;
+    if step.revealed && overlaid && !in_corner {
         ctx.reveal_chrome.store(true, Ordering::Relaxed);
     }
     if step.free {

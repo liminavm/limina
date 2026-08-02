@@ -395,24 +395,32 @@ pub struct InputState {
     /// [`InputState::reveal_step`].
     overlay_active: Arc<AtomicBool>,
     reveal_chrome: Arc<AtomicBool>,
-    /// Upward push accumulated against the guest's top edge, in points.
+    /// Upward push accumulated against the guest's top edge, in points, and when the current
+    /// unbroken run of it started.
     reveal_push: Cell<f64>,
+    reveal_since: Cell<Option<std::time::Instant>>,
 }
 
-/// Points of sustained upward push at the top edge that ask for the chrome back.
+/// How long the pointer must push upward, without a break, to ask for the chrome back.
 ///
-/// Deliberately its own constant rather than the edge-resistance threshold: under the overlay
-/// resistance has nothing left to protect at the top, and may well be switched off entirely
-/// (`edge-resistance = 0`) — but the way out to the menu bar must still exist.
+/// **Time, not distance, is the currency here.** Distance rewards a hard shove, and a hard shove
+/// is exactly what throwing the pointer at the top-left hot corner looks like — so the menu bar
+/// kept appearing while the user was reaching for the GNOME overview. Duration separates them
+/// cleanly: flinging into a corner is over in a moment, while asking for the chrome is a deliberate
+/// lean. It also makes the gesture feel the same whether the mouse is fast or slow, which
+/// accumulated points never did.
+const REVEAL_HOLD: std::time::Duration = std::time::Duration::from_millis(700);
+
+/// A floor on the push, so jitter against the top row can't satisfy [`REVEAL_HOLD`] by resting.
+/// Small: the hold is what makes the gesture deliberate, this only rules out noise.
+const REVEAL_PUSH: f64 = 40.0;
+
+/// How close to a side edge counts as "in a corner", where the reveal never arms at all.
 ///
-/// Large, and reset by any lapse in the push (see [`InputState::reveal_step`]), because under the
-/// overlay there is no keep-out band: the pointer sits *on* the top row, where every stray upward
-/// twitch of ordinary use lands another delta. At 80 pt with no reset, merely moving to the top of
-/// the guest tripped it instantly — first dogfood run of the overlay.
-///
-/// The reset is what makes it safe, not the size: at 300 pt the gesture was reliable but a chore,
-/// so this is the smallest value that still reads as deliberate.
-const REVEAL_PUSH: f64 = 150.0;
+/// Corners belong to the guest — the top-left one is the GNOME overview trigger, and pushing into
+/// it necessarily pushes upward too. Matching `fit::CORNER_ZONE` keeps the two gestures from
+/// overlapping by construction rather than by tuning.
+const REVEAL_CORNER_KEEPOUT: f64 = super::fit::CORNER_ZONE;
 
 /// How far back below the top edge the pointer must come before the overlay is taken back. Wide
 /// enough that using the revealed menu bar doesn't flicker it away, narrow enough to feel prompt.
@@ -451,6 +459,7 @@ impl InputState {
             overlay_active,
             reveal_chrome,
             reveal_push: Cell::new(0.0),
+            reveal_since: Cell::new(None),
         }
     }
 
@@ -930,25 +939,41 @@ impl InputState {
             self.reveal_chrome.store(false, Ordering::Relaxed);
             return;
         }
+        let lapse = |s: &Self| {
+            s.reveal_push.set(0.0);
+            s.reveal_since.set(None);
+        };
         if !self.overlay_active.load(Ordering::Relaxed) {
             // Nothing to ask for: the chrome is already reachable.
-            self.reveal_push.set(0.0);
+            lapse(self);
             return;
         }
-        if p.1 >= top - EDGE {
-            // AppKit deltas grow downward, so upward push is negative.
-            if delta_y < 0.0 {
-                let pushed = self.reveal_push.get() - delta_y;
-                self.reveal_push.set(pushed);
-                if pushed >= REVEAL_PUSH {
-                    self.reveal_chrome.store(true, Ordering::Relaxed);
-                }
-            } else {
-                // At the edge but not pushing up. The shove has to be one continuous motion —
-                // otherwise travelling along the top row, or resting there, accumulates it by
-                // accident and the chrome appears out of nowhere.
-                self.reveal_push.set(0.0);
+        // Corners are the guest's. Pushing into the top-left one — the GNOME overview trigger —
+        // necessarily pushes upward as well, and while the reveal armed there the menu bar kept
+        // appearing when the user was reaching for the overview.
+        let in_corner =
+            p.0 - fit.x <= REVEAL_CORNER_KEEPOUT || fit.x + fit.w - p.0 <= REVEAL_CORNER_KEEPOUT;
+        if p.1 < top - EDGE || in_corner {
+            return;
+        }
+        // AppKit deltas grow downward, so upward push is negative.
+        if delta_y >= 0.0 {
+            // At the edge but not pushing up. The lean has to be unbroken — otherwise travelling
+            // along the top row, or resting against it, satisfies the hold by accident.
+            lapse(self);
+            return;
+        }
+        self.reveal_push.set(self.reveal_push.get() - delta_y);
+        let since = match self.reveal_since.get() {
+            Some(t) => t,
+            None => {
+                let now = std::time::Instant::now();
+                self.reveal_since.set(Some(now));
+                now
             }
+        };
+        if since.elapsed() >= REVEAL_HOLD && self.reveal_push.get() >= REVEAL_PUSH {
+            self.reveal_chrome.store(true, Ordering::Relaxed);
         }
     }
 
