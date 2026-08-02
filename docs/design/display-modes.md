@@ -169,12 +169,22 @@ Things that look like levers and are not:
 - `NSPrefersDisplaySafeAreaCompatibilityMode = true` — **the trap.** It really does hand the
   fullscreen window a frame covering the whole panel and really does zero `safeAreaInsets`, and
   the compositor masks the housing strip anyway. It buys no pixels and destroys the only signal
-  that would have said so. We do not ship it.
+  that would have said so. It is not a fullscreen key at all: compatibility mode is the system
+  changing the display's *active area*, triggered by "an app that requires it plac[ing] a window
+  behind the camera housing". We ship it **`false`** — present, not omitted, because panel
+  fullscreen is exactly that trigger and `false` is what says *never*, while omitting it leaves
+  the decision to a Finder Get Info checkbox we do not control.
 - `.titled` + `.fullSizeContentView` at `screen.frame` — also masked. The mask keys on the style
   mask, not just the frame.
 
-What does work is a **borderless** window covering `screen.frame` with the menu bar and Dock
-hidden. So the policy picks the *mechanism*:
+Apple documents the same conclusion from the other side, which is worth knowing before anyone
+tries again: `NSScreen.safeAreaInsets` says that when you call `toggleFullScreen(_:)` "the system
+automatically positions the window's contents within the safe area", and offers no way to decline
+— it names "a custom full-screen experience" as the alternative. The HIG agrees that the system
+full-screen support "automatically accommodates" the housing.
+
+That custom experience is what works: a **borderless** window covering `screen.frame` with the
+menu bar and Dock hidden. So the policy picks the *mechanism*:
 
 | `[display] notch` | fullscreen mechanism | fullscreen guest | the strip |
 |---|---|---|---|

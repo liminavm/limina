@@ -264,15 +264,22 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>LSArchitecturePriority</key><array><string>arm64</string></array>
   <key>NSHighResolutionCapable</key><true/>
-  <!-- NO NSPrefersDisplaySafeAreaCompatibilityMode key here, deliberately. It looks like the
-       lever for the camera housing and is not: with it, AppKit hands the fullscreen window a
-       frame covering the whole panel AND zeroes safeAreaInsets, while the compositor masks the
-       housing strip anyway — so it buys no pixels and destroys the only signal that would say
-       so. Without it the numbers are honest (the fullscreen window is inset below the housing
-       and safeAreaInsets keeps reporting its height, even while fullscreen).
-       Reaching the strip needs a borderless window instead of a Space, which is what
-       `[display] notch = "extend"` does. Measured both ways on two Macs:
-       spikes/notch-fullscreen/RESULTS.md, round 2. -->
+  <!-- FALSE, and deliberately present rather than omitted.
+       "Set the value of the key to true to always run your app in compatibility mode, and set
+       it to false to never run your app in compatibility mode." Compatibility mode is the
+       system "changing the active area of the display to avoid the camera housing", and it is
+       activated "when an app that requires it places a window behind the camera housing" —
+       which is exactly what `[display] notch = "extend"` does. Omitting the key leaves that
+       decision to a Finder Get Info checkbox we do not control; false removes the checkbox and
+       guarantees the strip is never masked out from under us.
+       It is NOT a fullscreen lever, whatever the name suggests. Setting it true gives a
+       fullscreen window a frame covering the whole panel and zeroes safeAreaInsets while the
+       compositor masks the strip regardless — no pixels gained, and the only signal that would
+       have said so destroyed. Reaching the strip needs a window that is not a Space; Apple says
+       the same thing from the other direction ("the system automatically positions the window's
+       contents within the safe area" when you use toggleFullScreen:, NSScreen.safeAreaInsets).
+       Measured four ways on two Macs: spikes/notch-fullscreen/RESULTS.md, round 2. -->
+  <key>NSPrefersDisplaySafeAreaCompatibilityMode</key><false/>
   <key>CFBundleIconFile</key><string>Limina</string>
   <!-- Mic capture (opt-in `--mic` / `[hardware] mic`): the guest's virtio-snd input
        stream records the host microphone via CoreAudio. macOS gates that behind the

@@ -178,3 +178,60 @@ NOTCH_LEGACY=1 /tmp/notch-probe/NotchLegacy.app/Contents/MacOS/NotchLegacy
 ```
 
 Watch the pink band, not the numbers.
+
+---
+
+# Round 3 — what Apple actually documents (and it agrees)
+
+**Date:** 2026-08-01, later still. Prompted by a fair challenge: was there an opt-in that makes
+*native* fullscreen use the strip, registered in the plist and in code? Apple's own pages answer
+it, and they line up with round 2 rather than against it. (`developer.apple.com` is
+JS-rendered — `WebFetch` returns only the page title. Read it in a real browser.)
+
+**`NSScreen.safeAreaInsets`** — the decisive one:
+
+> If your app offers a **custom full-screen experience**, apply the specified insets to the
+> screen's frame rectangle to obtain the area within which it is safe to display your content.
+> […] If your app uses the system's full-screen experience, you don't need to account for the
+> safe area in your window. When you call your window's `toggleFullScreen(_:)` method to enter
+> full-screen mode, **the system automatically positions the window's contents within the safe
+> area.**
+
+Unconditional, with no opt-out offered. The alternative Apple names — "a custom full-screen
+experience" — is precisely the borderless full-panel window round 2 arrived at empirically.
+
+**HIG, Going full screen › macOS:**
+
+> Use the system-provided full-screen experience. […] some Mac models include a camera housing
+> that occupies an area at the top-center of the screen. Using the system's full-screen support
+> **automatically accommodates** this area.
+
+**`NSPrefersDisplaySafeAreaCompatibilityMode`** — read properly, it is not a fullscreen key at
+all. Compatibility mode is the system "changing the active area of the display to avoid the
+camera housing", and:
+
+> The system activates this compatibility mode when an app that requires it **places a window
+> behind the camera housing** in the current desktop or full-screen space.
+> […] Set the value of the key to true to always run your app in compatibility mode, and set it
+> to **false to never** run your app in compatibility mode.
+> […] If your app's `Info.plist` file includes the key, the Finder doesn't add that checkbox.
+
+So the round-2 measurement of `true` was not AppKit being perverse — placing our window behind
+the housing is the documented *trigger*, and compatibility mode then blacks the strip. The frame
+still reading 1330 with zeroed insets is the part that misleads, and is why the geometry dump
+lied.
+
+## The one thing this changes
+
+Round 2 concluded "drop the key". That is half right: the key must be **present and `false`**,
+not absent. Panel fullscreen places a window behind the camera housing — the documented trigger —
+so leaving the decision to a Finder Get Info checkbox we do not control risks the system masking
+the strip out from under `extend`. `false` means never, and removes the checkbox.
+
+`scripts/build-app.sh` ships `<false/>`.
+
+## Status
+
+Native fullscreen cannot use the housing strip: measured four ways on two Macs, and documented by
+Apple twice. `notch = "avoid"` uses the system experience and lets it do the inset; `extend` is
+the custom full-screen experience Apple's own wording contemplates.
