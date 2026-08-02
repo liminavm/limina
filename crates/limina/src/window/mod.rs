@@ -20,6 +20,7 @@ use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use block2::RcBlock;
 use objc2::rc::Retained;
@@ -495,16 +496,82 @@ define_class!(
 /// the chrome cannot reveal over the guest. `NSMainMenuWindowLevel` is 24.
 const OVERLAY_LEVEL: isize = 25;
 
-/// Window level for the overlay while limina is **not** the active app: ordinary.
+/// Window level for the overlay while something on **our own screen** has focus and it isn't us:
+/// ordinary.
 ///
-/// Above the menu bar is only worth anything while the pointer is in the guest, and it costs
-/// something real: a window at that level covers *system* windows too. It hid the Accessibility
-/// grant dialog — the app sat there full-panel over a prompt the user could not click, which is a
-/// particularly bad trap given that prompt is how limina earns its own capture tap. Dropping to
-/// the normal level when another app takes over keeps the guest full-panel (the point of staying
-/// up at all when focus moves to another display) while letting anything the system needs to show
-/// come out in front of it.
+/// Above the menu bar costs something real: a window at that level covers *system* windows too. It
+/// hid the Accessibility grant dialog — the app sat there full-panel over a prompt the user could
+/// not click, which is a particularly bad trap given that prompt is how limina earns its own
+/// capture tap.
 const OVERLAY_LEVEL_INACTIVE: isize = 0;
+
+/// One tick's worth of overlay stacking state, compared to suppress repeats in the trace.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct OverlaySnapshot {
+    active: bool,
+    ours: u32,
+    focused: u32,
+    want: isize,
+    have: isize,
+}
+
+/// Where the overlay belongs in the window order.
+///
+/// Dropping the level whenever limina was merely *inactive* had a symptom we only ever see with a
+/// second display attached: focus a window over there and the guest's top strip goes black, hiding
+/// the guest's own panel, while the rest of it stays full-panel. That strip is the fullscreen
+/// Space's camera-housing backdrop, which the system draws at `NSMainMenuWindowLevel` (24) — below
+/// 25 we are simply behind it. There is no level in between that shows the strip without covering
+/// system windows, so the level cannot be the thing that decides this.
+///
+/// What distinguishes the two cases is *where the focused window is*. The Accessibility prompt
+/// opens on our screen, so dropping there still lets it come forward; a window focused on another
+/// display leaves our Space showing untouched and has no claim on our stacking at all.
+///
+/// `settled` is why this takes a duration rather than a bool. `NSScreen::mainScreen` **lags the
+/// activation change**: for a tick or two after focus leaves for the other display, `isActive` is
+/// already false while `mainScreen` still names ours, which reads exactly like a dialog opening
+/// here. Measured on dev-mac 2026-08-02 — 8 such transients in one switching session, each
+/// resolving within a tick or two, and (almost certainly) the same stale read held longer is the
+/// black strip that survived the first cut of this fix. Dropping the level is therefore only done
+/// once the condition has *held*: a dialog stays covered for [`OVERLAY_SETTLE`] and no longer,
+/// while a stale sample never gets the chance.
+fn overlay_level(app_active: bool, focus_on_our_screen: bool, settled: Option<Duration>) -> isize {
+    let drop =
+        !app_active && focus_on_our_screen && settled.is_some_and(|held| held >= OVERLAY_SETTLE);
+    if drop {
+        OVERLAY_LEVEL_INACTIVE
+    } else {
+        OVERLAY_LEVEL
+    }
+}
+
+/// How long "inactive, and the focus is on our screen" must hold before the overlay gives up its
+/// place above the menu bar. Long enough to outlast `mainScreen`'s lag behind activation, short
+/// enough that a system dialog is not meaningfully delayed.
+const OVERLAY_SETTLE: Duration = Duration::from_millis(400);
+
+/// Whether the window with keyboard focus is on the same display as `screen`.
+///
+/// `NSScreen::mainScreen` is "the screen with the key window", and it follows focus system-wide
+/// rather than within our app — which is what makes it answerable while we are inactive, i.e.
+/// exactly when [`overlay_level`] needs it.
+///
+/// Unknown answers conservatively as `true`: that yields the old always-drop behavior, so a
+/// missing screen can only cost the black strip, never a covered system dialog.
+/// Whether to log overlay level/space transitions to stderr (`LIMINA_OVERLAY_TRACE=1`).
+fn overlay_trace() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LIMINA_OVERLAY_TRACE").is_some_and(|v| v != "0"))
+}
+
+fn focus_is_on_screen(screen: Option<&NSScreen>, mtm: MainThreadMarker) -> bool {
+    let (Some(screen), Some(main)) = (screen, NSScreen::mainScreen(mtm)) else {
+        return true;
+    };
+    let ours = hostdisplay::display_id_of(screen);
+    ours != 0 && ours == hostdisplay::display_id_of(&main)
+}
 
 /// The `notch = extend` overlay: native fullscreen as a **carrier** for the Space, with the guest
 /// drawn by a borderless window floating on top of it.
@@ -524,6 +591,12 @@ pub(crate) struct ExtendOverlay {
     window: RefCell<Option<Retained<NSWindow>>>,
     /// Read by the capture tap, which has no access to the `Rc` graph. One fact, one owner.
     active: Arc<std::sync::atomic::AtomicBool>,
+    /// Last state logged by `LIMINA_OVERLAY_TRACE`, so a 60 Hz tick reports transitions rather
+    /// than a flood.
+    traced: Cell<Option<OverlaySnapshot>>,
+    /// When "inactive, and the focus is on our screen" started holding — see [`overlay_level`].
+    /// Cleared the moment it stops, so only a sustained condition ever drops the level.
+    yielding_since: Cell<Option<std::time::Instant>>,
 }
 
 impl ExtendOverlay {
@@ -603,10 +676,9 @@ impl ExtendOverlay {
     /// Keep the overlay in step with the carrier, from the tick that already runs — polled rather
     /// than delegate-driven, like every other window-state read here.
     ///
-    /// The overlay's *level* is separate from whether it is up: above the menu bar while limina is
-    /// active, ordinary otherwise (see [`OVERLAY_LEVEL_INACTIVE`]) — a window above menu-bar level
-    /// covers system dialogs, and it hid the Accessibility prompt behind the very app that needed
-    /// the grant.
+    /// The overlay's *level* is separate from whether it is up, and is decided by
+    /// [`overlay_level`] — above the menu bar unless something on our own screen has focus, in
+    /// which case it drops so system dialogs can come forward.
     ///
     /// It is up only while all of these hold:
     /// - the policy is `extend`;
@@ -639,14 +711,48 @@ impl ExtendOverlay {
         };
         let screen = carrier.screen();
         // Re-assert every tick: activation changes without any of the up/down conditions moving.
+        let active = NSApplication::sharedApplication(mtm).isActive();
         if let Some(overlay) = self.window.borrow().as_ref() {
-            let level = if NSApplication::sharedApplication(mtm).isActive() {
-                OVERLAY_LEVEL
-            } else {
-                OVERLAY_LEVEL_INACTIVE
+            let yielding = !active && focus_is_on_screen(screen.as_deref(), mtm);
+            let since = match (yielding, self.yielding_since.get()) {
+                (false, _) => None,
+                (true, Some(t)) => Some(t),
+                (true, None) => Some(std::time::Instant::now()),
             };
+            self.yielding_since.set(since);
+            let level = overlay_level(active, yielding, since.map(|t| t.elapsed()));
             if overlay.level() != level {
                 overlay.setLevel(level);
+            }
+            // `LIMINA_OVERLAY_TRACE=1`: the oracle for "why is the notch strip black". It reports
+            // the level we asked for AND the one the window actually carries, plus both display
+            // ids, so a wrong *decision* (we chose to drop) is distinguishable from a wrong
+            // *model* (we are at 25 and the system still paints over us) without another round of
+            // swapping mechanisms. Transitions only — this runs at 60 Hz.
+            if overlay_trace() {
+                let ours = screen
+                    .as_deref()
+                    .map(hostdisplay::display_id_of)
+                    .unwrap_or(0);
+                let focused = NSScreen::mainScreen(mtm)
+                    .map(|s| hostdisplay::display_id_of(&s))
+                    .unwrap_or(0);
+                let now = OverlaySnapshot {
+                    active,
+                    ours,
+                    focused,
+                    want: level,
+                    have: overlay.level(),
+                };
+                if self.traced.get() != Some(now) {
+                    self.traced.set(Some(now));
+                    eprintln!(
+                        "[OVERLAY] active={active} ours={ours} focused={focused} \
+                         want_level={level} have_level={} on_active_space={}",
+                        overlay.level(),
+                        carrier.isOnActiveSpace(),
+                    );
+                }
             }
         }
         let want = notch == crate::vmlib::schema::NotchPolicy::Extend
@@ -1898,4 +2004,51 @@ pub fn run(
     crate::gateway::cleanup();
     crate::control::cleanup();
     std::process::exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Longer than `OVERLAY_SETTLE`: the condition has held.
+    const HELD: Option<Duration> = Some(Duration::from_millis(600));
+
+    #[test]
+    fn a_window_focused_on_another_display_does_not_push_the_overlay_under_the_notch_backdrop() {
+        // The dogfood symptom, 2026-08-02: click something on the external display and the guest's
+        // top strip goes black on the internal one, hiding its panel, while the rest stays
+        // full-panel. The overlay was still up — it had merely dropped below the fullscreen
+        // Space's camera-housing backdrop, which the system draws at menu-bar level.
+        assert_eq!(overlay_level(false, false, None), OVERLAY_LEVEL);
+    }
+
+    #[test]
+    fn a_stale_focus_reading_never_drops_the_overlay() {
+        // `mainScreen` lags `isActive`, so every deactivation briefly claims the focus is still
+        // here. Traced on dev-mac: 8 of these in one switching session. Held for a tick or two they
+        // are invisible; held longer they are the black strip that survived the first fix.
+        assert_eq!(
+            overlay_level(false, true, Some(Duration::from_millis(16))),
+            OVERLAY_LEVEL,
+            "one tick of 'focus is here' is a stale sample, not a dialog"
+        );
+        assert_eq!(overlay_level(false, true, None), OVERLAY_LEVEL);
+    }
+
+    #[test]
+    fn focus_settling_on_our_own_screen_still_yields_to_system_windows() {
+        // The reason the drop exists at all: the Accessibility prompt opens on our screen and
+        // limina resigns active, and an overlay above menu-bar level covers the very dialog that
+        // grants limina its capture tap.
+        assert_eq!(overlay_level(false, true, HELD), OVERLAY_LEVEL_INACTIVE);
+    }
+
+    #[test]
+    fn our_own_windows_never_push_the_overlay_down() {
+        // While limina is active the overlay is always on top, wherever the focus sits — our own
+        // sheets and dialogs are children of the carrier and order above it regardless.
+        for focus_here in [true, false] {
+            assert_eq!(overlay_level(true, focus_here, HELD), OVERLAY_LEVEL);
+        }
+    }
 }

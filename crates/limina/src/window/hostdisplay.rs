@@ -343,7 +343,7 @@ fn refresh_of(screen: &NSScreen) -> u32 {
 
 /// The `CGDirectDisplayID` behind an `NSScreen`, from its device description. Zero when the key
 /// is missing, which the CoreGraphics queries below all tolerate by returning zeros.
-fn display_id_of(screen: &NSScreen) -> u32 {
+pub(crate) fn display_id_of(screen: &NSScreen) -> u32 {
     let description = screen.deviceDescription();
     let key = NSString::from_str("NSScreenNumber");
     let Some(value) = description.objectForKey(&key) else {

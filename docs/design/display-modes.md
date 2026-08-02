@@ -297,6 +297,35 @@ Because a borderless `NSWindow` refuses key status — and the overlay carries t
 is a `LiminaWindow`, an `NSWindow` subclass overriding
 `canBecomeKeyWindow`/`canBecomeMainWindow`, from creation.
 
+### Where the overlay sits in the window order (2026-08-02)
+
+Separate question from whether it is up, and it has its own dogfood scar. The overlay must be
+above `NSMainMenuWindowLevel` (24) or the fullscreen Space's camera-housing backdrop — which the
+system draws at that level — paints over its top strip: the guest stays full-panel but its own
+panel disappears behind black. There is no level in between that clears the backdrop without also
+covering *system* windows, and covering those is not academic: at 25 the overlay hid the
+Accessibility prompt, i.e. the dialog that grants limina the capture tap.
+
+So the level cannot be decided by activation, which is what the first cut did (25 active, 0
+inactive). With a second display attached, focusing a window over there leaves our Space perfectly
+visible and drops us under the backdrop — reported from dogfood as "the limina space loses the
+notch area". `overlay_level` instead asks **where the focused window is**: a dialog opens on our
+screen and still gets its drop; a window focused on another display has no claim on our stacking.
+
+The input is `NSScreen::mainScreen` (the screen with the key window, which tracks focus
+system-wide rather than within our app — that is what makes it answerable while we are inactive).
+It has one property that cost a whole extra round: **it lags `isActive`.** For a tick or two after
+focus leaves, `isActive` is already false while `mainScreen` still names our display, which is
+indistinguishable from a dialog opening here. Traced on dev-mac: 8 such transients in one switching
+session. Hence `OVERLAY_SETTLE` — the condition must *hold* 400 ms before the level drops, so a
+stale sample never gets there and a real dialog waits 400 ms and no longer.
+
+`LIMINA_OVERLAY_TRACE=1` logs each transition with the level we asked for **and** the one the
+window carries, plus our display id and the focused one. That distinction is what kept this
+honest: it separates "we decided to drop" from "we are at 25 and something painted over us
+anyway", which no amount of swapping mechanisms would have. One drop that outlived the settle
+window remains in the log unexplained, with no visible black to go with it.
+
 ### Sizing the guest
 
 `hostdisplay::describe` decides the guest's resolution from `screen.frame` minus the policy's
