@@ -32,6 +32,24 @@ Two false starts worth remembering, both of which look like AppKit bugs and are 
 
 ("key" = `NSPrefersDisplaySafeAreaCompatibilityMode` in the bundle's `Info.plist`.)
 
+> **RESOLVED — see "Round 2" below. The table is accurate and its conclusion (2) is wrong:
+> `contentView.frame` is not what gets drawn.** Keep reading before acting on anything here.
+
+> **⚠️ DISPUTED, 2026-08-01 (same day).** Dogfood on **dogfood-mac** (14" M4 Pro, panel at "More
+> Space" — `screen.frame` 2048x1330) contradicts row 3 of this table. With the key shipped
+> `true`, `notch = "extend"`, and the guest correctly driven to the full 2048x1330, the guest
+> still does **not** reach under the camera housing — the housing does not overlap the GNOME
+> panel clock, and the content is inset. Apple's own documentation reads the same way as the key's
+> name and the opposite of row 3: compatibility mode "changes the active area of the display to
+> avoid the camera housing".
+>
+> A methodological hole that could explain it: every arm below was built to the **same path with
+> the same bundle identifier**. macOS keeps notch policy *per app* (that is what the Finder
+> "Scale to fit below built-in camera" checkbox writes) and LaunchServices caches a bundle id's
+> registration, so the arms may not have been independent. `build.sh` now takes `APP_NAME` /
+> `BUNDLE_ID`, and `run-remote.sh` builds three separately-identified arms (absent / false /
+> true) on another Mac. **Do not act on row 3 until that re-measurement lands.**
+
 ### What this settles
 
 1. **The cut is AppKit insetting the fullscreen window below the camera housing**, not anything
@@ -80,3 +98,83 @@ is driven to 982 into a 949 view, so it letterboxes. Validate `extend` from a bu
 
 Needs the lid open (the internal panel must be an attached screen — the probe picks the first
 screen with a non-zero top safe-area inset).
+
+---
+
+# Round 2 — measured on dogfood-mac, and with the *pixels* this time
+
+**Date:** 2026-08-01, later the same day.
+**Host:** dogfood-mac, 14" M4 Pro, macOS 26.5.1. Built-in panel at "More Space":
+`screen.frame = 2048x1330`, `safeAreaInsets.top = 43`, external DELL 3840x2160 as main.
+**Trigger:** shipping the round-1 conclusion produced a fullscreen guest that still does not
+reach under the camera housing — the housing does not overlap the GNOME panel clock.
+
+## The arms actually were independent this time
+
+`build.sh` now takes `APP_NAME`/`BUNDLE_ID` and `run-remote.sh` builds each arm as its own app,
+because macOS keeps notch policy per app. Round 1's shared bundle id was a real methodological
+hole — it just wasn't the one that mattered.
+
+| arm | fullscreen `contentView` | `screen.safeAreaInsets.top` (fullscreen) | `auxiliaryTopLeftArea` |
+|---|---|---|---|
+| key absent | 2048x**1286** | 43 | non-nil |
+| key `false` | 2048x**1286** | 43 | non-nil |
+| key `true`  | 2048x**1330** | **0** | **nil** |
+
+Round 1 reproduces exactly. `NSPrefersDisplaySafeAreaCompatibilityMode = true` really does hand
+the fullscreen window a frame covering the whole panel, and really does zero the insets.
+
+## ...and it means nothing, because the strip is masked anyway
+
+The human oracle: with the `true` arm fullscreen and its content filled green, **the strip beside
+the camera housing was black**. Not green. The window's frame says it owns those 44 points; the
+screen says otherwise.
+
+So compatibility mode is worse than the name suggests. It does not grant the housing area — it
+grants a *frame* that includes it, zeroes `safeAreaInsets` so nothing can tell, and lets the
+system mask the strip regardless. The honest arms (absent/`false`) at least report 1286 and a
+43 pt inset, so a caller can see what it is getting.
+
+**Round 1's conclusion (2) — "the key hands the fullscreen window the whole panel" — was drawn
+from `contentView.frame` alone and is wrong.** A frame is a proxy. The repo already knows this
+(`CLAUDE.md`, "Pixel-verify; proxies lie"); it cost a day anyway. The lesson is narrower and
+sharper than the existing one: *AppKit geometry can disagree with the compositor*, so a geometry
+dump is not evidence about pixels even when the geometry is what you are asking about.
+
+## What can reach the strip: a borderless window, not a Space
+
+Fourth arm (`NOTCH_LEGACY=1`): skip `toggleFullScreen:` entirely, take a `.borderless` window,
+`setFrame(screen.frame)`, `NSApp.presentationOptions = [.hideMenuBar, .hideDock]`, raise the
+window level. Both arms paint a pink band across their top 80 pt so the eye has something
+unambiguous to look for.
+
+- **native Spaces fullscreen (key `true`): band black beside the housing.**
+- **borderless at `screen.frame`: band PINK beside the housing.**
+
+That is the whole answer. Native fullscreen can never draw beside the camera housing on this
+macOS; a borderless full-panel window can.
+
+## Consequences for limina
+
+1. **The shipped `NSPrefersDisplaySafeAreaCompatibilityMode = true` is actively harmful** and
+   should come out. It buys nothing (the strip is masked either way) and costs the truth: with
+   it, `screen.safeAreaInsets` reads 0 in fullscreen — which is why `hostdisplay::notch_inset`
+   needs a per-display cache at all — and the fullscreen `contentView` is 44 pt taller than what
+   is visible, so a guest sized to it has its top rows hidden under the mask.
+2. **Without the key, `avoid` needs no work from us**: AppKit already insets the fullscreen
+   window to 1286, and `safeAreaInsets` stays readable *while fullscreen*, so the cache can go.
+3. **`extend` cannot be done with native fullscreen at all.** Delivering it means a borderless
+   full-panel window — which is not a Space: no Mission Control slot, no fullscreen animation,
+   different Cmd-Tab and green-button behaviour, and `styleMask.contains(.fullScreen)` goes
+   false, which the edge-resistance gate currently keys on.
+
+## Reproducing round 2
+
+```sh
+./run-remote.sh user@dogfood-mac          # builds absent/false/true arms, each its own bundle id
+# on that Mac, lid open:
+/tmp/notch-probe/NotchTrue.app/Contents/MacOS/NotchTrue
+NOTCH_LEGACY=1 /tmp/notch-probe/NotchLegacy.app/Contents/MacOS/NotchLegacy
+```
+
+Watch the pink band, not the numbers.

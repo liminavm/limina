@@ -12,11 +12,19 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP="NotchProbe.app"
+# Each arm MUST get its own name and bundle identifier. macOS keeps the notch policy per app —
+# that is what the Finder "Scale to fit below built-in camera" checkbox writes — and
+# LaunchServices caches a bundle id's registration, so rebuilding the same id at the same path
+# with a different Info.plist can leave the *previous* arm's policy in force. An A/B that reuses
+# one identity is not an A/B. Defaults keep the single-arm case unchanged.
+APP_NAME="${APP_NAME:-NotchProbe}"
+BUNDLE_ID="${BUNDLE_ID:-eti.noronha.limina.notchprobe}"
+
+APP="$APP_NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 
-swiftc -O probe.swift -o "$APP/Contents/MacOS/NotchProbe"
+swiftc -O probe.swift -o "$APP/Contents/MacOS/$APP_NAME"
 
 # SAFE_AREA_COMPAT=true|false injects NSPrefersDisplaySafeAreaCompatibilityMode; unset omits
 # the key entirely (the shipping limina default).
@@ -30,9 +38,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>NotchProbe</string>
-  <key>CFBundleIdentifier</key><string>eti.noronha.limina.notchprobe</string>
-  <key>CFBundleExecutable</key><string>NotchProbe</string>
+  <key>CFBundleName</key><string>$APP_NAME</string>
+  <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
+  <key>CFBundleExecutable</key><string>$APP_NAME</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>

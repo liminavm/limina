@@ -30,6 +30,22 @@ final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// ignored, so this delegate callback — consulted during the transition — is the lever.
     let wantFull = ProcessInfo.processInfo.environment["NOTCH_FULL"] == "1"
 
+    /// With NOTCH_LEGACY=1, skip the Spaces fullscreen transition entirely and cover the panel
+    /// with a borderless window instead. See the arm in `applicationDidFinishLaunching`.
+    let legacy = ProcessInfo.processInfo.environment["NOTCH_LEGACY"] == "1"
+
+    /// Marker band drawn across the top of the content; its visibility beside the camera
+    /// housing is the actual question.
+    let band = CALayer()
+
+    /// Keep the band pinned to the top of the content view (the layer is `.never`-redrawing and
+    /// has no autoresizing, so every geometry change has to move it by hand).
+    func layoutBand() {
+        guard let v = window?.contentView else { return }
+        let h: CGFloat = 80
+        band.frame = CGRect(x: 0, y: v.bounds.height - h, width: v.bounds.width, height: h)
+    }
+
     func window(_ window: NSWindow, willUseFullScreenContentSize proposedSize: NSSize) -> NSSize {
         let full = (window.screen ?? NSScreen.main!).frame.size
         print("  [delegate] willUseFullScreenContentSize proposed=\(proposedSize) "
@@ -92,6 +108,36 @@ final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // the notched one). Re-seat it explicitly, after it is on screen.
         window.setFrame(rect, display: true)
 
+        // A magenta band across the top 80 pt of the content, so the eye can answer what the
+        // geometry cannot: whether anything we draw actually LANDS beside the camera housing.
+        // Under native fullscreen the window's frame can be the whole panel while the system
+        // still masks that strip — frames are a proxy, pixels are the fact (dogfood-mac, 2026-08-01).
+        band.backgroundColor = NSColor.systemPink.cgColor
+        layer.addSublayer(band)
+        layoutBand()
+
+        if legacy {
+            // "Legacy" fullscreen: a borderless window covering screen.frame with the menu bar
+            // and Dock hidden, instead of a Spaces fullscreen transition. This is the only
+            // remaining candidate for reaching the housing strip.
+            print("LEGACY fullscreen arm")
+            window.styleMask = [.borderless]
+            NSApp.presentationOptions = [.hideMenuBar, .hideDock]
+            window.level = .mainMenu + 1
+            window.setFrame(screen.frame, display: true)
+            window.makeKeyAndOrderFront(nil)
+            layoutBand()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.layoutBand()
+                self.dump("legacy fullscreen (borderless at screen.frame)")
+                print("LOOK NOW: is the pink band visible BESIDE the camera housing?")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) {
+                    NSApp.terminate(nil)
+                }
+            }
+            return
+        }
+
         dump("windowed")
         // Activation is asynchronous, and `toggleFullScreen:` on a not-yet-active app is a
         // no-op (the first run left styleMask.fullScreen false) — give it room to land.
@@ -101,6 +147,7 @@ final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.window.toggleFullScreen(nil)
             // The transition animates; sample well after it settles.
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                self.layoutBand()
                 self.dump("fullscreen (default)")
                 // Does asking for the full frame explicitly change anything?
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
