@@ -30,9 +30,19 @@ final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// ignored, so this delegate callback — consulted during the transition — is the lever.
     let wantFull = ProcessInfo.processInfo.environment["NOTCH_FULL"] == "1"
 
-    /// With NOTCH_LEGACY=1, skip the Spaces fullscreen transition entirely and cover the panel
-    /// with a borderless window instead. See the arm in `applicationDidFinishLaunching`.
-    let legacy = ProcessInfo.processInfo.environment["NOTCH_LEGACY"] == "1"
+    /// Skip the Spaces fullscreen transition entirely and cover the panel with an ordinary
+    /// window instead. `NOTCH_LEGACY=1` (or `=borderless`) uses a `.borderless` window;
+    /// `NOTCH_LEGACY=titled` keeps `.titled` and adds `.fullSizeContentView` with the title bar
+    /// hidden.
+    ///
+    /// The distinction is not cosmetic and limina cannot use the borderless one: a borderless
+    /// `NSWindow` returns false from `canBecomeKeyWindow`, so it never takes keyboard focus —
+    /// fatal for a VM window. The titled variant stays key-eligible. Whether the *compositor*
+    /// treats them the same for the camera-housing mask is exactly the thing to measure rather
+    /// than assume.
+    let legacyMode = ProcessInfo.processInfo.environment["NOTCH_LEGACY"] ?? ""
+    var legacy: Bool { !legacyMode.isEmpty }
+    var legacyTitled: Bool { legacyMode == "titled" }
 
     /// Marker band drawn across the top of the content; its visibility beside the camera
     /// housing is the actual question.
@@ -72,6 +82,7 @@ final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
         print("  contentView.safeAreaInsets  \(cv.safeAreaInsets)")
         print("  contentView.bounds          \(cv.bounds)")
         print("  presentationOptions         \(NSApp.presentationOptions.rawValue)")
+        print("  window.canBecomeKey/isKey   \(window.canBecomeKey) / \(window.isKeyWindow)")
         fflush(stdout)
     }
 
@@ -86,9 +97,12 @@ final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let rect = NSRect(x: screen.frame.origin.x + 100,
                           y: screen.frame.origin.y + 100,
                           width: 900, height: 600)
-        window = NSWindow(contentRect: rect,
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                          backing: .buffered, defer: false)
+        // Always the subclass: limina's window is one from creation, and the `keyable` arm
+        // restyles THAT window rather than making a new one — which is the case that matters,
+        // since the question is whether a key window survives the switch to borderless.
+        window = KeyableWindow(contentRect: rect,
+                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                               backing: .buffered, defer: false)
         window.title = "notch probe"
         window.collectionBehavior = [.fullScreenPrimary]
         // Same layer-hosting setup as limina's window (window/mod.rs): we own the layer.
@@ -120,12 +134,33 @@ final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // "Legacy" fullscreen: a borderless window covering screen.frame with the menu bar
             // and Dock hidden, instead of a Spaces fullscreen transition. This is the only
             // remaining candidate for reaching the housing strip.
-            print("LEGACY fullscreen arm")
-            window.styleMask = [.borderless]
+            print("LEGACY fullscreen arm: \(legacyMode)")
+            if legacyMode == "keyable" {
+                // What limina must actually ship. Borderless is the only style the compositor
+                // lets draw beside the housing (titled + fullSizeContentView is masked, measured
+                // 2026-08-01), but a stock borderless NSWindow refuses key status. The window
+                // being a subclass that overrides canBecomeKey/canBecomeMain keeps focus
+                // available without giving up borderless.
+                window.styleMask = [.borderless]
+            } else if legacyTitled {
+                // The shippable recipe: still titled (so it can become key), title bar folded
+                // into the content area and made invisible.
+                window.styleMask = [.titled, .closable, .miniaturizable, .resizable,
+                                    .fullSizeContentView]
+                window.titlebarAppearsTransparent = true
+                window.titleVisibility = .hidden
+                for b: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
+                    window.standardWindowButton(b)?.isHidden = true
+                }
+                window.isMovable = false
+            } else {
+                window.styleMask = [.borderless]
+            }
             NSApp.presentationOptions = [.hideMenuBar, .hideDock]
             window.level = .mainMenu + 1
             window.setFrame(screen.frame, display: true)
             window.makeKeyAndOrderFront(nil)
+            print("  canBecomeKey=\(window.canBecomeKey) isKey=\(window.isKeyWindow)")
             layoutBand()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 self.layoutBand()
@@ -161,6 +196,12 @@ final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
     }
+}
+
+/// Borderless windows refuse key status by default; overriding these two is the whole fix.
+final class KeyableWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
 }
 
 let app = NSApplication.shared

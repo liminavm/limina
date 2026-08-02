@@ -27,10 +27,10 @@ use objc2::runtime::NSObjectProtocol;
 use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSApplication,
-    NSApplicationActivationPolicy, NSApplicationDelegate, NSApplicationTerminateReply,
-    NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSEventType, NSMenu, NSMenuItem, NSScreen,
-    NSViewLayerContentsRedrawPolicy, NSWindow, NSWindowCollectionBehavior, NSWindowDelegate,
-    NSWindowStyleMask,
+    NSApplicationActivationPolicy, NSApplicationDelegate, NSApplicationPresentationOptions,
+    NSApplicationTerminateReply, NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSEventType,
+    NSMenu, NSMenuItem, NSScreen, NSViewLayerContentsRedrawPolicy, NSWindow,
+    NSWindowCollectionBehavior, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_core_foundation::CFRetained;
 use objc2_foundation::{
@@ -176,7 +176,10 @@ pub fn screen_info_for_frame(
 /// the `avoid` policy, nothing under `extend` (and nothing on a screen with no housing).
 fn notch_inset_for(screen: &NSScreen, notch: crate::vmlib::schema::NotchPolicy) -> f64 {
     match notch {
-        crate::vmlib::schema::NotchPolicy::Avoid => hostdisplay::notch_inset(screen),
+        // Not the housing height but the height AppKit's own fullscreen inset costs, which is
+        // the thing the guest has to match under `avoid` — they differ by a point. See
+        // [`hostdisplay::fullscreen_inset`].
+        crate::vmlib::schema::NotchPolicy::Avoid => hostdisplay::fullscreen_inset(screen),
         crate::vmlib::schema::NotchPolicy::Extend => 0.0,
     }
 }
@@ -216,10 +219,11 @@ fn set_layer_frame(layer: &CALayer, r: fit::FitRect) {
     CATransaction::commit();
 }
 
-/// Snapshot the window's frame + content size for state.toml. `None` while fullscreen
-/// (the *windowed* frame is what we remember) or before the window has a real size.
-fn window_state_snapshot(window: &NSWindow) -> Option<WindowState> {
-    if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
+/// Snapshot the window's frame + content size for state.toml. `None` while fullscreen — by
+/// either mechanism; panel fullscreen would otherwise persist the whole panel as the
+/// *windowed* frame — or before the window has a real size.
+fn window_state_snapshot(window: &NSWindow, panel: &PanelFullscreen) -> Option<WindowState> {
+    if is_fullscreen(window, panel) {
         return None;
     }
     let f = window.frame();
@@ -236,8 +240,8 @@ fn window_state_snapshot(window: &NSWindow) -> Option<WindowState> {
 
 /// Best-effort synchronous state save for the exit paths (the periodic saver is async,
 /// so a close right after a move could otherwise lose the final position).
-fn save_state_final(path: Option<&Path>, window: &NSWindow) {
-    let (Some(path), Some(snap)) = (path, window_state_snapshot(window)) else {
+fn save_state_final(path: Option<&Path>, window: &NSWindow, panel: &PanelFullscreen) {
+    let (Some(path), Some(snap)) = (path, window_state_snapshot(window, panel)) else {
         return;
     };
     // Merge, never whole-save: on a windowed suspend the monitor thread has just written
@@ -458,6 +462,122 @@ thread_local! {
 }
 
 define_class!(
+    // SAFETY: NSWindow tolerates subclassing; no Drop; no ivars. The only overrides are the
+    // two key-eligibility predicates, and they return the value a titled window would return
+    // anyway — so this class behaves exactly like NSWindow until the window goes borderless.
+    #[unsafe(super = NSWindow)]
+    #[thread_kind = MainThreadOnly]
+    #[name = "LiminaWindow"]
+    pub(crate) struct LiminaWindow;
+
+    unsafe impl NSObjectProtocol for LiminaWindow {}
+
+    impl LiminaWindow {
+        /// A **borderless** `NSWindow` refuses key status, and panel fullscreen
+        /// ([`PanelFullscreen::enter`]) needs borderless — it is the only style the compositor
+        /// will let draw beside the camera housing (titled + `fullSizeContentView` is masked;
+        /// measured in `spikes/notch-fullscreen/` round 2). A VM window that cannot take
+        /// keyboard focus is useless, so override the refusal.
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn can_become_key_window(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(canBecomeMainWindow))]
+        fn can_become_main_window(&self) -> bool {
+            true
+        }
+    }
+);
+
+/// Window level for panel fullscreen: above the menu bar, so hiding the menu bar actually
+/// leaves nothing on top of us. `NSMainMenuWindowLevel` is 24.
+const PANEL_FS_LEVEL: isize = 25;
+
+/// State for panel ("borderless full-panel") fullscreen — the `notch = extend` fullscreen.
+///
+/// Native Spaces fullscreen cannot draw beside the camera housing under any style mask or plist
+/// key we could find; a borderless window covering `screen.frame` can. So `extend` trades the
+/// Space for the strip: no Mission Control slot and no fullscreen animation, in exchange for the
+/// guest actually owning the whole panel. See `docs/design/display-modes.md`.
+#[derive(Default)]
+pub(crate) struct PanelFullscreen {
+    /// An `AtomicBool` rather than a `Cell` for one reason: the capture tap needs to read it and
+    /// has no access to this crate's `Rc` graph, so it holds a clone of exactly this handle.
+    /// One fact, one owner — a parallel mirror flag would drift the first time a path forgot it.
+    active: Arc<std::sync::atomic::AtomicBool>,
+    /// The windowed frame and style to put back on exit.
+    saved: Cell<Option<(NSRect, NSWindowStyleMask)>>,
+}
+
+impl PanelFullscreen {
+    pub(crate) fn is_active(&self) -> bool {
+        self.active.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// A handle on the same flag, for code that can't hold the whole state (the capture tap).
+    pub(crate) fn flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.active.clone()
+    }
+
+    /// Cover the window's screen edge to edge. No-op if already in panel fullscreen, or if
+    /// AppKit has no screen for the window (mid-transition).
+    fn enter(&self, window: &NSWindow) {
+        if self.is_active() {
+            return;
+        }
+        let Some(screen) = window.screen() else {
+            return;
+        };
+        self.saved.set(Some((window.frame(), window.styleMask())));
+        self.active
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        window.setStyleMask(NSWindowStyleMask::Borderless);
+        window.setLevel(PANEL_FS_LEVEL);
+        NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"))
+            .setPresentationOptions(
+                NSApplicationPresentationOptions::HideMenuBar
+                    | NSApplicationPresentationOptions::HideDock,
+            );
+        window.setFrame_display(screen.frame(), true);
+        // Restyling can drop key status even with the override in place; take it back.
+        window.makeKeyAndOrderFront(None);
+    }
+
+    fn exit(&self, window: &NSWindow) {
+        let Some((frame, style)) = self.saved.take() else {
+            return;
+        };
+        self.active
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"))
+            .setPresentationOptions(NSApplicationPresentationOptions::empty());
+        window.setLevel(0); // NSNormalWindowLevel
+        window.setStyleMask(style);
+        window.setFrame_display(frame, true);
+        window.makeKeyAndOrderFront(None);
+    }
+
+    pub(crate) fn toggle(&self, window: &NSWindow) {
+        if self.is_active() {
+            self.exit(window);
+        } else {
+            self.enter(window);
+        }
+    }
+}
+
+/// Is this window showing the guest edge to edge — by either mechanism?
+///
+/// Native fullscreen and panel fullscreen are both "fullscreen" to everything that cares
+/// (edge resistance, the windowed-frame snapshot, the letterbox diagnostic), and neither test
+/// finds the other: panel fullscreen never sets `NSWindowStyleMask::FullScreen`, and
+/// `Borderless` is zero so it cannot be tested for.
+fn is_fullscreen(window: &NSWindow, panel: &PanelFullscreen) -> bool {
+    panel.is_active() || window.styleMask().contains(NSWindowStyleMask::FullScreen)
+}
+
+define_class!(
     // SAFETY: NSObject has no subclassing requirements; no Drop; only
     // `windowShouldClose:` is implemented, so every other delegate behavior keeps its
     // AppKit default (the window otherwise stays on its deliberate no-delegate diet).
@@ -576,19 +696,27 @@ pub fn run(
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
         | NSWindowStyleMask::Resizable;
-    let window = unsafe {
-        NSWindow::initWithContentRect_styleMask_backing_defer(
-            NSWindow::alloc(mtm),
-            rect,
-            style,
-            NSBackingStoreType::Buffered,
-            false,
-        )
+    // `LiminaWindow`, not a plain NSWindow: panel fullscreen goes borderless, and only a
+    // subclass can stay key-eligible there. Identical to NSWindow in every other respect.
+    let window: Retained<NSWindow> = unsafe {
+        let w: Retained<LiminaWindow> = msg_send![
+            LiminaWindow::alloc(mtm),
+            initWithContentRect: rect,
+            styleMask: style,
+            backing: NSBackingStoreType::Buffered,
+            defer: false,
+        ];
+        Retained::cast_unchecked(w)
     };
     window.setTitle(&NSString::from_str(&title));
     // Allow native (Spaces) full screen: the green title-bar button becomes Enter Full Screen
     // and `toggleFullScreen:` (our Cmd-Ctrl-F host shortcut, below) works. Going fullscreen
     // resizes the window, which the existing resize path reflows into the guest resolution.
+    //
+    // Under `notch = extend` the green button is deliberately left on the NATIVE path even
+    // though Cmd-Ctrl-F does panel fullscreen: native fullscreen still works, it just cannot
+    // use the housing strip. Two doors to two different fullscreens is worse than one door to
+    // the good one, so this is a wart to revisit — noted in docs/design/display-modes.md.
     window.setCollectionBehavior(NSWindowCollectionBehavior::FullScreenPrimary);
     let view = window.contentView().expect("content view");
     // Layer-HOSTING (not layer-backed): we own the layer, so AppKit never draws over the
@@ -741,6 +869,12 @@ pub fn run(
     // captured movement feels exactly like the host cursor. Shared between the input translator
     // and the capture tap (both main thread).
     let capture_pos: std::rc::Rc<Cell<Option<(f64, f64)>>> = std::rc::Rc::new(Cell::new(None));
+    // Panel ("borderless full-panel") fullscreen state — the `notch = extend` fullscreen. Shared
+    // by the fullscreen shortcut, the per-tick fit/geometry code, the state snapshot and (via
+    // `panel_fs_flag`) the capture tap, all of which need "are we fullscreen" to mean either
+    // mechanism. See [`PanelFullscreen`].
+    let panel_fs = std::rc::Rc::new(PanelFullscreen::default());
+    let panel_fs_flag = panel_fs.flag();
     // Reliable capture container: a session-level CGEventTap that *consumes* mouse events while
     // captured (so clicks/motion can't escape to host windows) and integrates them into the
     // virtual cursor driving the absolute tablet. Needs Accessibility permission; if absent,
@@ -768,6 +902,7 @@ pub fn run(
         capture_pos.clone(),
         view.clone(),
         edge_resistance,
+        panel_fs_flag,
     );
 
     // Shown-ack channel (#8 leg 2): after Core Animation latches a frame, tell the worker
@@ -913,6 +1048,7 @@ pub fn run(
         let surface_map = surface_map.clone();
         let fit_cell = fit_cell.clone();
         let desired_size = desired_size.clone();
+        let apply_panel_fs = panel_fs.clone();
         move || {
             // Track the scanout layer to the window every tick — INCLUDING mid live-resize
             // (the timer fires in common modes, so this runs during the drag). Dynamic mode
@@ -923,18 +1059,32 @@ pub fn run(
             // background; the guest never re-modesets for a window resize in those modes.
             if let Some(v) = window.contentView() {
                 let sz = v.frame().size;
-                // The camera housing is only ours to dodge in FULLSCREEN: that is the one state
-                // where AppKit hands us the whole panel (the compatibility key), and a windowed
-                // window is never under the housing anyway. Zero in every other case, so this is
-                // a no-op on external displays, in windowed mode, and under `extend`.
-                let inset = if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
-                    window
-                        .screen()
-                        .map_or(0.0, |s| notch_inset_for(&s, cfg_notch))
-                } else {
-                    0.0
-                };
-                let (sz_w, sz_h) = fit::usable_content(sz.width, sz.height, inset);
+                // Panel fullscreen has no AppKit machinery keeping it on the screen: nothing
+                // re-lays it out when the display is reconfigured (resolution changed, lid
+                // closed, monitor unplugged), so it would silently stop covering the panel.
+                // Re-assert it from the tick that already runs.
+                if apply_panel_fs.is_active() {
+                    if let Some(s) = window.screen() {
+                        if window.frame() != s.frame() {
+                            window.setFrame_display(s.frame(), true);
+                        }
+                    }
+                }
+                // Native fullscreen is the only state that reveals what AppKit's own housing
+                // inset actually costs; record it so `avoid` can size the guest to the point.
+                if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
+                    if let Some(s) = window.screen() {
+                        hostdisplay::learn_fullscreen_inset(&s, s.frame().size.height - sz.height);
+                    }
+                }
+                // No housing arithmetic here any more. Under `avoid` AppKit insets the native
+                // fullscreen window below the housing itself (we no longer ship the
+                // compatibility plist key, which only ever bought a *frame* covering the strip
+                // while the compositor masked it anyway); under `extend` the panel-fullscreen
+                // window is exactly the panel and every point of it is ours. Either way the
+                // content view we are handed is already the usable area, and subtracting the
+                // housing again would letterbox the guest by that much a second time.
+                let (sz_w, sz_h) = (sz.width, sz.height);
                 if sz_w > 0.0 && sz_h > 0.0 {
                     let g = geom.get();
                     let target = if mode == DisplayResolution::Dynamic {
@@ -951,12 +1101,12 @@ pub fn run(
                         // and a short view with a matching guest means the housing strip never
                         // reached us. Diagnosing this on dogfood otherwise costs a round of ssh
                         // archaeology (2026-08-01).
-                        if window.styleMask().contains(NSWindowStyleMask::FullScreen)
+                        if is_fullscreen(&window, &apply_panel_fs)
                             && (target.w < sz_w - 1.0 || target.h < sz_h - 1.0)
                         {
                             log::debug!(
                                 "fullscreen letterbox: guest {}x{} into {:.0}x{:.0} pt usable \
-                                 (view {:.0}x{:.0}, notch inset {inset:.0}) -> {:.0}x{:.0} \
+                                 (view {:.0}x{:.0}, panel-fs {}) -> {:.0}x{:.0} \
                                  at +{:.0}+{:.0}",
                                 g.0,
                                 g.1,
@@ -964,6 +1114,7 @@ pub fn run(
                                 sz_h,
                                 sz.width,
                                 sz.height,
+                                apply_panel_fs.is_active(),
                                 target.w,
                                 target.h,
                                 target.x,
@@ -1280,6 +1431,7 @@ pub fn run(
     // Clone a window handle for the input monitor's fullscreen shortcut BEFORE the timer block
     // below moves `window` in.
     let shortcut_window = window.clone();
+    let shortcut_panel_fs = panel_fs.clone();
 
     let timer_cursor = host_cursor.clone();
     let timer_fit = fit_cell.clone();
@@ -1323,7 +1475,7 @@ pub fn run(
                     }
                 }
             }
-            save_state_final(timer_state_path.as_deref(), &window);
+            save_state_final(timer_state_path.as_deref(), &window, &panel_fs);
             kill_worker_group(timer_conn.pid());
             crate::gateway::cleanup();
             crate::control::cleanup();
@@ -1396,7 +1548,7 @@ pub fn run(
                 .map(|v| v.inLiveResize())
                 .unwrap_or(false);
             if !in_live {
-                if let Some(snap) = window_state_snapshot(&window) {
+                if let Some(snap) = window_state_snapshot(&window, &panel_fs) {
                     if pending_state.get() != Some(snap) {
                         pending_state.set(Some(snap));
                         stable_ticks.set(0);
@@ -1500,7 +1652,7 @@ pub fn run(
                             Some(d) => std::time::Instant::now() >= d,
                         };
                     if force_now {
-                        save_state_final(timer_state_path.as_deref(), &window);
+                        save_state_final(timer_state_path.as_deref(), &window, &panel_fs);
                         kill_worker_group(timer_conn.pid());
                         crate::gateway::cleanup();
                         crate::control::cleanup();
@@ -1578,7 +1730,24 @@ pub fn run(
             {
                 match sc {
                     input::HostShortcut::ToggleFullScreen => {
-                        shortcut_window.toggleFullScreen(None);
+                        // `extend` wants the camera-housing strip, and native Spaces fullscreen
+                        // cannot draw there under any style mask or plist key (measured, see
+                        // spikes/notch-fullscreen/ round 2) — only a borderless window covering
+                        // the panel can. So the policy picks the mechanism.
+                        //
+                        // Already in a Space takes priority over the policy, because the green
+                        // title-bar button can put us there under `extend` too. Restyling a
+                        // Space's window borderless would save the fullscreen frame as the
+                        // "windowed" one to restore later and leave the Space behind; leaving it
+                        // is both the safe reading of the key and the useful one.
+                        let native = shortcut_window
+                            .styleMask()
+                            .contains(NSWindowStyleMask::FullScreen);
+                        if !native && cfg_notch == crate::vmlib::schema::NotchPolicy::Extend {
+                            shortcut_panel_fs.toggle(&shortcut_window);
+                        } else {
+                            shortcut_window.toggleFullScreen(None);
+                        }
                     }
                     input::HostShortcut::ToggleCapture => {
                         // An installed tap consumes this combo itself, so reaching the local

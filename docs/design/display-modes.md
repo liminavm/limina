@@ -158,37 +158,63 @@ Ad-hoc `--window` runs have no bundle: they persist nothing unless given
 
 ## Fullscreen on a notched display (`[display] notch`, 2026-08-01)
 
-On a MacBook Pro/Air built-in panel the camera housing splits the top of the screen. AppKit's
-default is to inset a fullscreen window **below** it: measured on a `1512x982` panel, the
-fullscreen window is `1512x949` and that 33 pt strip is unusable. Two apparent levers are not
-levers — `setFrame(screen.frame)` while fullscreen is ignored, and
-`window(_:willUseFullScreenContentSize:)` is consulted and then overridden. The only thing that
-changes it is the bundle's `NSPrefersDisplaySafeAreaCompatibilityMode`, which reads backwards:
-**`true` gives the fullscreen window the whole panel.** Full A/B in
-`spikes/notch-fullscreen/RESULTS.md`.
+On a MacBook Pro/Air built-in panel the camera housing splits the top of the screen, and macOS
+will not let a **Space** draw beside it. That is the finding, and it took two rounds to get right;
+the full measurement is in `spikes/notch-fullscreen/RESULTS.md`.
 
-So `scripts/build-app.sh` sets that key and limina owns the policy per VM:
+Things that look like levers and are not:
 
-| `[display] notch` | fullscreen guest | the strip |
-|---|---|---|
-| `avoid` (default) | inset below the housing | black |
-| `extend` | the full panel | guest content, housing overlapping |
+- `setFrame(screen.frame)` while fullscreen — ignored, AppKit re-imposes its own height.
+- `window(_:willUseFullScreenContentSize:)` — consulted, then overridden.
+- `NSPrefersDisplaySafeAreaCompatibilityMode = true` — **the trap.** It really does hand the
+  fullscreen window a frame covering the whole panel and really does zero `safeAreaInsets`, and
+  the compositor masks the housing strip anyway. It buys no pixels and destroys the only signal
+  that would have said so. We do not ship it.
+- `.titled` + `.fullSizeContentView` at `screen.frame` — also masked. The mask keys on the style
+  mask, not just the frame.
 
-`fit::usable_content` does the trim; `hostdisplay::notch_inset` supplies the height. That height
-has to be **cached per display**: under the compatibility key AppKit reports `safeAreaInsets` and
-`auxiliaryTopLeftArea` only while the window is *not* fullscreen, which is exactly when the policy
-needs them.
+What does work is a **borderless** window covering `screen.frame` with the menu bar and Dock
+hidden. So the policy picks the *mechanism*:
 
-The inset is applied in two places, deliberately at different times. `hostdisplay::describe`
-subtracts it **always**, so the guest's resolution already matches what fullscreen will hand it
-and entering fullscreen never modesets. The per-tick fit subtracts it **only while fullscreen**,
-because a windowed window is never under the housing. This also fixed a latent bug: host mode used
-to drive the guest to the full `screen.frame` while the fullscreen view was 33 pt shorter, so
-`aspect_fit` letterboxed the guest on all four sides.
+| `[display] notch` | fullscreen mechanism | fullscreen guest | the strip |
+|---|---|---|---|
+| `avoid` (default) | native Spaces fullscreen | inset below the housing, by AppKit | black |
+| `extend` | `PanelFullscreen` — borderless at `screen.frame` | the full panel | guest content, housing overlapping it |
 
-Caveat: the key is in the app bundle, so a bare `target/debug/limina` (what `cargo xtask run`
-launches) still gets the 949 pt window. `avoid` looks identical there; `extend` must be validated
-from a built `Limina.app`.
+### What `extend` costs
+
+Panel fullscreen is a window pretending to be fullscreen, so it is **not a Space**: no Mission
+Control slot, no fullscreen animation, and standard Cmd-Tab behaviour differs. Two consequences
+inside limina, both handled but easy to reintroduce:
+
+- `NSWindowStyleMask::FullScreen` is never set, and `Borderless` is *zero* so it cannot be tested
+  for. Anything asking "are we fullscreen" must go through `window::is_fullscreen`, which checks
+  both mechanisms — edge resistance, the windowed-frame snapshot and the letterbox diagnostic all
+  do. The capture tap can't reach the `Rc` graph, so it holds a clone of `PanelFullscreen`'s own
+  `AtomicBool` rather than a mirror of it.
+- A borderless `NSWindow` refuses key status, which would leave the VM window unable to take
+  keyboard focus. The window is therefore a `LiminaWindow` — an `NSWindow` subclass overriding
+  `canBecomeKeyWindow`/`canBecomeMainWindow` — from creation, and panel fullscreen restyles that
+  window in place rather than making a new one.
+
+Known wart: the green title-bar button still enters **native** fullscreen under `extend`, so there
+are two doors to two different fullscreens. Cmd-Ctrl-F is the one that honours the policy.
+
+### Sizing the guest
+
+`hostdisplay::describe` decides the guest's resolution from `screen.frame` minus the policy's
+inset — always, not only while fullscreen, so entering fullscreen never modesets. Under `extend`
+the inset is zero (the panel-fullscreen window *is* the panel). Under `avoid` it is
+`hostdisplay::fullscreen_inset`, which is subtly **not** the housing height: the housing measures
+43 pt on dogfood-mac and 32 pt on dev-mac while the native fullscreen window comes up 44 and 33 pt
+shorter. Rather than fit a constant to two data points, the real figure is observed the first time
+the window is natively fullscreen on a display and cached against its id; until then the housing
+height stands in, at the cost of one 1 pt modeset. Being exact matters because the guest is driven
+to this number — a point of error rescales every frame by 0.08% instead of landing 1:1.
+
+The per-tick fit subtracts **nothing**. Under `avoid` AppKit has already inset the content view;
+under `extend` every point of it is ours. (An earlier cut subtracted the housing here too, which
+double-counted it once the plist key came out.)
 
 ## Fullscreen edge resistance (`[display] edge-resistance`, 2026-08-01)
 

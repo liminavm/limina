@@ -264,14 +264,15 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>LSArchitecturePriority</key><array><string>arm64</string></array>
   <key>NSHighResolutionCapable</key><true/>
-  <!-- Camera-housing ("notch") handling on built-in Retina displays. The name reads backwards:
-       WITHOUT this key a fullscreen window is inset BELOW the housing (measured on a 1512x982
-       panel: 1512x949, and the strip is simply unusable); WITH it AppKit hands the fullscreen
-       window the whole 1512x982 panel. See spikes/notch-fullscreen/ for the A/B.
-       We take the full panel here so the choice can be made per VM instead of per build:
-       `[display] notch` / --notch (default "avoid") re-insets the guest below the housing
-       itself, and "extend" lets the guest use the strip. -->
-  <key>NSPrefersDisplaySafeAreaCompatibilityMode</key><true/>
+  <!-- NO NSPrefersDisplaySafeAreaCompatibilityMode key here, deliberately. It looks like the
+       lever for the camera housing and is not: with it, AppKit hands the fullscreen window a
+       frame covering the whole panel AND zeroes safeAreaInsets, while the compositor masks the
+       housing strip anyway — so it buys no pixels and destroys the only signal that would say
+       so. Without it the numbers are honest (the fullscreen window is inset below the housing
+       and safeAreaInsets keeps reporting its height, even while fullscreen).
+       Reaching the strip needs a borderless window instead of a Space, which is what
+       `[display] notch = "extend"` does. Measured both ways on two Macs:
+       spikes/notch-fullscreen/RESULTS.md, round 2. -->
   <key>CFBundleIconFile</key><string>Limina</string>
   <!-- Mic capture (opt-in `--mic` / `[hardware] mic`): the guest's virtio-snd input
        stream records the host microphone via CoreAudio. macOS gates that behind the

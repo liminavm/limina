@@ -117,6 +117,58 @@ pub fn notch_inset(screen: &NSScreen) -> f64 {
     })
 }
 
+/// Remember how much shorter than the panel AppKit actually made a NATIVE fullscreen window on
+/// this display, and hand that number back later.
+///
+/// [`notch_inset`] is *nearly* the answer for the `avoid` policy but not exactly: the housing is
+/// 43 pt on dogfood-mac and 32 pt on dev-mac, while the fullscreen window comes up 44 and 33 pt shorter
+/// than the panel respectively. One point, consistently, on both machines — plausibly a
+/// separator AppKit draws, but a constant fitted to two data points is a guess. Observing the
+/// real figure costs a subtraction on a tick we already run, and being exact matters here: the
+/// guest is driven to this size, so a point of error means every frame is rescaled by 0.08%
+/// instead of landing 1:1.
+///
+/// Until a display has been seen fullscreen once, [`fullscreen_inset`] falls back to the housing
+/// height — off by that one point for exactly one modeset.
+pub fn learn_fullscreen_inset(screen: &NSScreen, observed: f64) {
+    // Bounds: a mid-transition tick can report nonsense, and a *negative* or huge value would
+    // poison the cache for the session.
+    if !observed.is_finite() || observed <= 0.0 || observed > 200.0 {
+        return;
+    }
+    FULLSCREEN_INSETS.with(|seen| {
+        let id = display_id_of(screen);
+        let mut seen = seen.borrow_mut();
+        match seen.iter_mut().find(|(seen_id, _)| *seen_id == id) {
+            Some(entry) => entry.1 = observed,
+            None => seen.push((id, observed)),
+        }
+    });
+}
+
+/// The height a native fullscreen window loses to the camera housing on this display: the
+/// learned figure if we have one, else the housing height itself. Zero on a notchless display.
+pub fn fullscreen_inset(screen: &NSScreen) -> f64 {
+    let id = display_id_of(screen);
+    let learned = FULLSCREEN_INSETS.with(|seen| {
+        seen.borrow()
+            .iter()
+            .find(|(seen_id, _)| *seen_id == id)
+            .map(|(_, inset)| *inset)
+    });
+    match learned {
+        Some(inset) => inset,
+        // No housing means no inset to learn — don't invent one.
+        None => notch_inset(screen),
+    }
+}
+
+thread_local! {
+    /// (display id, observed native-fullscreen inset). See [`learn_fullscreen_inset`].
+    static FULLSCREEN_INSETS: std::cell::RefCell<Vec<(u32, f64)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Describe the screen a window currently sits on. `None` when AppKit has no screen for it
 /// (which happens mid-transition — the caller simply skips that tick).
 ///

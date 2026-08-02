@@ -178,6 +178,12 @@ struct TapCtx {
     /// Fullscreen edge resistance for the UNCAPTURED pointer (`[display] edge-resistance`).
     /// Disabled (threshold 0) unless configured; see [`fit::EdgeResist`].
     resist: Cell<fit::EdgeResist>,
+    /// Whether the window is in PANEL fullscreen (`notch = extend`). That mechanism is a
+    /// borderless window, not a Space, so it never sets `NSWindowStyleMask::FullScreen` — and
+    /// `Borderless` is zero, so there is nothing to test for on the window itself. Resistance
+    /// has to hold there too: it is the mode most in need of it, being the one that owns the
+    /// whole panel. Shared handle onto `window::PanelFullscreen`'s own flag.
+    panel_fs: Arc<AtomicBool>,
 }
 
 /// Centre of the main display in global (points) coordinates — where we keep the hidden cursor
@@ -557,10 +563,11 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
     if !resist.enabled() {
         return event;
     }
-    let fullscreen_and_key = ctx
-        .view
-        .window()
-        .is_some_and(|w| w.styleMask().contains(NSWindowStyleMask::FullScreen) && w.isKeyWindow());
+    let fullscreen_and_key = ctx.view.window().is_some_and(|w| {
+        (ctx.panel_fs.load(Ordering::Relaxed)
+            || w.styleMask().contains(NSWindowStyleMask::FullScreen))
+            && w.isKeyWindow()
+    });
     if !fullscreen_and_key {
         // Drop any half-earned push: a shove accumulated in fullscreen must not let the pointer
         // out of the *next* fullscreen session on its first twitch.
@@ -614,6 +621,7 @@ pub(crate) fn install(
     pos: Rc<Cell<Option<(f64, f64)>>>,
     view: Retained<NSView>,
     edge_resistance: f64,
+    panel_fs: Arc<AtomicBool>,
 ) -> bool {
     let ctx = Box::into_raw(Box::new(TapCtx {
         captured,
@@ -626,6 +634,7 @@ pub(crate) fn install(
         pos,
         view,
         resist: Cell::new(fit::EdgeResist::new(edge_resistance)),
+        panel_fs,
     }));
     if try_create(ctx) {
         log::info!("pointer capture: CGEventTap installed (session-level, consuming)");
