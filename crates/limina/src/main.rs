@@ -1290,7 +1290,16 @@ fn run_vm(cli: Cli) -> Result<()> {
             .and_then(vmlib::state::load)
             .and_then(|s| s.window);
         let restore_frame = win_state.map(|w| w.frame);
-        let screen = window::screen_info_for_frame(restore_frame, cli.notch);
+        // The VM comes back in the mode it stopped in, on the panel it stopped on (best-effort —
+        // see `screen_info_for_restore`). Both halves are needed before the worker spawns: the
+        // guest must boot at the size it will actually be displayed at, or fullscreen lands a
+        // moment later and re-modesets in front of the user.
+        let start_fullscreen = win_state.is_some_and(|w| w.fullscreen);
+        let screen = window::screen_info_for_restore(
+            restore_frame,
+            win_state.and_then(|w| w.fullscreen_display),
+            cli.notch,
+        );
         // Dynamic first-boot (nothing remembered): the half-area default at the SCREEN's
         // aspect — the same rule that sizes the first window, so window == guest with no
         // early re-modeset. --display-size only backstops a screen-less host.
@@ -1309,9 +1318,18 @@ fn run_vm(cli: Cli) -> Result<()> {
                 ))
             })
             .unwrap_or(parse_display_size(&cli.display_size)?);
+        // Restoring fullscreen, the remembered *window* content is the wrong target: what the
+        // guest will occupy is this screen's fullscreen content area, which is what `screen`
+        // already carries (host mode uses it unconditionally; this makes dynamic agree for the
+        // one boot where the window is about to fill the screen).
+        let remembered_content = if start_fullscreen {
+            screen.as_ref().map(|s| to_guest(s.frame))
+        } else {
+            win_state.map(|w| to_guest(w.content))
+        };
         let (width, height) = initial_display_size(
             cli.display_resolution,
-            win_state.map(|w| to_guest(w.content)),
+            remembered_content,
             screen.as_ref().map(|s| to_guest(s.frame)),
             fallback,
         );
@@ -1350,6 +1368,7 @@ fn run_vm(cli: Cli) -> Result<()> {
             mode: cli.display_resolution,
             state_path: cli.window_state_file.clone(),
             restore_frame,
+            start_fullscreen,
             default_content,
             suspend_state_file: cli.suspend_state_file.clone(),
             snapshot_file: cli.snapshot_file.clone(),

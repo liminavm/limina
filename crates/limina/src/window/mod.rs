@@ -91,6 +91,10 @@ pub struct WindowOptions {
     pub default_content: (u32, u32),
     /// Remembered NSWindow frame to restore, if it still lands on a screen.
     pub restore_frame: Option<[f64; 4]>,
+    /// Go fullscreen once the window is on screen — the VM was fullscreen when it last stopped.
+    /// Deferred to the first tick rather than done at creation: `toggleFullScreen:` on a window
+    /// that has not finished appearing is silently dropped.
+    pub start_fullscreen: bool,
     /// Persist window state here (managed VMs: the bundle's state.toml); None = off.
     pub state_path: Option<PathBuf>,
     /// Shared with the reboot-relaunch monitor: every resolution push records itself here
@@ -147,11 +151,24 @@ pub struct ScreenInfo {
 /// `notch` decides whether `frame` withholds the camera-housing strip on a notched built-in
 /// display; the boot resolution has to agree with what the running window will do, or host mode
 /// would modeset the guest on the first tick.
-pub fn screen_info_for_frame(
+/// A remembered fullscreen display wins over the remembered frame.
+///
+/// They disagree exactly when it matters: the frame is the last *windowed* placement, which may
+/// predate the move to the display the VM was fullscreen on. When that panel is no longer
+/// attached we fall through to the frame and then to the main screen — "was fullscreen" is the
+/// stronger memory, so undocking relocates the VM rather than quietly windowing it.
+pub fn screen_info_for_restore(
     frame: Option<[f64; 4]>,
+    fullscreen_display: Option<u64>,
     notch: crate::vmlib::schema::NotchPolicy,
 ) -> Option<ScreenInfo> {
     let mtm = MainThreadMarker::new()?;
+    let by_identity = fullscreen_display.and_then(|key| {
+        NSScreen::screens(mtm)
+            .into_iter()
+            .find(|s| hostdisplay::identity_key_of(s) == key)
+    });
+    let frame = if by_identity.is_some() { None } else { frame };
     let by_midpoint = frame.and_then(|f| {
         let (mx, my) = (f[0] + f[2] / 2.0, f[1] + f[3] / 2.0);
         NSScreen::screens(mtm).into_iter().find(|s| {
@@ -162,7 +179,9 @@ pub fn screen_info_for_frame(
                 && my < sf.origin.y + sf.size.height
         })
     });
-    let screen = by_midpoint.or_else(|| NSScreen::mainScreen(mtm))?;
+    let screen = by_identity
+        .or(by_midpoint)
+        .or_else(|| NSScreen::mainScreen(mtm))?;
     let sz = screen.frame().size;
     let vis = screen.visibleFrame().size;
     let (sw, sh) = fit::usable_content(sz.width, sz.height, notch_inset_for(&screen, notch));
@@ -224,26 +243,46 @@ fn set_layer_frame(layer: &CALayer, r: fit::FitRect) {
 /// *windowed* frame is what we remember) or before the window has a real size. The `extend`
 /// overlay needs no case of its own: it exists only while the carrier is natively fullscreen,
 /// and the carrier is what is asked here.
-fn window_state_snapshot(window: &NSWindow) -> Option<WindowState> {
-    if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
-        return None;
-    }
+/// One window-placement reading, or `None` when the window is too small to be worth remembering.
+///
+/// `prev` is the last placement we persisted. It matters only in fullscreen, where this window's
+/// own frame IS the screen: overwriting the remembered frame with it would lose the windowed
+/// placement the VM should come back to on the way *out* of fullscreen. So fullscreen keeps the
+/// previous frame and records the mode plus which panel it is on; only a windowed reading updates
+/// the geometry. (First-ever session that goes fullscreen before any save has no `prev` — it then
+/// remembers the screen-sized frame, which is harmless: it is only ever a starting point that is
+/// immediately fullscreened.)
+fn window_state_snapshot(window: &NSWindow, prev: Option<WindowState>) -> Option<WindowState> {
     let f = window.frame();
     let c = window.contentView()?.frame().size;
     let (cw, ch) = (c.width.round() as u32, c.height.round() as u32);
     if cw < 64 || ch < 64 {
         return None;
     }
-    Some(WindowState {
+    let windowed = WindowState {
         frame: [f.origin.x, f.origin.y, f.size.width, f.size.height],
         content: (cw, ch),
+        fullscreen: false,
+        fullscreen_display: None,
+    };
+    if !window.styleMask().contains(NSWindowStyleMask::FullScreen) {
+        return Some(windowed);
+    }
+    Some(WindowState {
+        fullscreen: true,
+        fullscreen_display: window.screen().map(|s| hostdisplay::identity_key_of(&s)),
+        ..prev.unwrap_or(windowed)
     })
 }
 
 /// Best-effort synchronous state save for the exit paths (the periodic saver is async,
 /// so a close right after a move could otherwise lose the final position).
 fn save_state_final(path: Option<&Path>, window: &NSWindow) {
-    let (Some(path), Some(snap)) = (path, window_state_snapshot(window)) else {
+    let Some(path) = path else { return };
+    // The on-disk record is `prev`: the fullscreen branch needs the windowed frame it must not
+    // clobber, and disk always holds the last periodic save.
+    let prev = crate::vmlib::state::load(path).and_then(|s| s.window);
+    let Some(snap) = window_state_snapshot(window, prev) else {
         return;
     };
     // Merge, never whole-save: on a windowed suspend the monitor thread has just written
@@ -867,6 +906,7 @@ pub fn run(
         initial_size,
         default_content,
         restore_frame,
+        start_fullscreen,
         state_path,
         desired_size,
         on_window_close,
@@ -976,6 +1016,11 @@ pub fn run(
     app.activate();
 
     // Per-timer state (main thread only).
+    // Restore the fullscreen the VM stopped in, on the first tick rather than here:
+    // `toggleFullScreen:` before the window has finished appearing is silently dropped, and the
+    // guest is already sized for this screen's fullscreen content (`initial_display_size`), so
+    // the transition costs no re-modeset.
+    let pending_fullscreen = Cell::new(start_fullscreen);
     let last_gen = Cell::new(0u64);
     let geom = Cell::new((0u32, 0u32));
     // Diagnostic: dump the presented IOSurface to a PNG (no screen-record perm). LIMINA_WINDOW_CAPTURE.
@@ -1663,6 +1708,15 @@ pub fn run(
     // Seeded with the current state (the window was just made key), so the first tick is a no-op.
     let was_key = Cell::new(window.isKeyWindow());
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
+        // One-shot: the remembered fullscreen, taken on the first tick the window is actually on
+        // screen. Not gated on the first frame — the guest is already sized for it, and waiting
+        // for pixels would make the transition visible instead of the window simply appearing
+        // fullscreen.
+        if pending_fullscreen.replace(false)
+            && !window.styleMask().contains(NSWindowStyleMask::FullScreen)
+        {
+            window.toggleFullScreen(None);
+        }
         let (exited, worker_suspended, show_id, frames) = {
             let s = shared.lock().unwrap();
             (s.worker_exited, s.worker_suspended, s.show_id, s.frames)
@@ -1762,7 +1816,7 @@ pub fn run(
                 .map(|v| v.inLiveResize())
                 .unwrap_or(false);
             if !in_live {
-                if let Some(snap) = window_state_snapshot(&window) {
+                if let Some(snap) = window_state_snapshot(&window, saved_state.get()) {
                     if pending_state.get() != Some(snap) {
                         pending_state.set(Some(snap));
                         stable_ticks.set(0);

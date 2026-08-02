@@ -28,10 +28,28 @@ pub struct VmState {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct WindowState {
     /// NSWindow frame in screen points, Cocoa bottom-left origin: `[x, y, w, h]`.
+    ///
+    /// Always the last **windowed** frame, even when the VM exits fullscreen-mode: it is what
+    /// leaving fullscreen restores to, so a fullscreen exit must not overwrite it with a
+    /// screen-sized rectangle.
     pub frame: [f64; 4],
     /// Content size in points — the guest resolution dynamic mode boots back into.
     /// Stored directly so restore needs no style-mask metrics math.
     pub content: (u32, u32),
+    /// The VM was **fullscreen** when it last stopped (or was suspended), and should come back
+    /// that way. Separate from [`Self::frame`] because the two answer different questions:
+    /// where the window goes, and whether it then goes fullscreen.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fullscreen: bool,
+    /// Stable identity of the display it was fullscreen on — `hostdisplay`'s vendor/model/serial
+    /// hash, **not** a `CGDirectDisplayID`. Display ids are reassigned across reboots and
+    /// hotplugs, which is the exact situation this record exists to survive.
+    ///
+    /// Absent (or no longer attached) restores fullscreen on the main display: "was fullscreen"
+    /// is the stronger memory and the display is best-effort, so undocking never silently leaves
+    /// the VM windowed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fullscreen_display: Option<u64>,
 }
 
 /// A durable "this VM is suspended" record (M9.2). See [`VmState::suspended`].
@@ -103,6 +121,8 @@ mod tests {
             window: Some(WindowState {
                 frame: [100.0, 200.0, 1280.0, 828.0],
                 content: (1280, 800),
+                fullscreen: true,
+                fullscreen_display: Some(0x1234_5678_9abc_def0),
             }),
             suspended: None,
         };
@@ -119,6 +139,8 @@ mod tests {
         let win = WindowState {
             frame: [10.0, 20.0, 640.0, 480.0],
             content: (640, 480),
+            fullscreen: false,
+            fullscreen_display: None,
         };
         save(
             &path,
@@ -165,6 +187,8 @@ mod tests {
         let win = WindowState {
             frame: [1.0, 2.0, 800.0, 600.0],
             content: (800, 600),
+            fullscreen: true,
+            fullscreen_display: None,
         };
         set_window(&path, Some(win)).unwrap();
         let loaded = load(&path).unwrap();
@@ -174,6 +198,47 @@ mod tests {
             "suspend record survives a window save"
         );
         assert_eq!(loaded.window, Some(win));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_state_file_written_before_fullscreen_memory_still_loads() {
+        // Every existing managed VM has one of these on disk. The new fields must default rather
+        // than make the whole record unreadable — losing it would silently reset the window
+        // placement of every VM on the machine at the first launch after an upgrade.
+        let dir = scratch("compat");
+        let path = dir.join("state.toml");
+        std::fs::write(
+            &path,
+            "[window]\nframe = [10.0, 20.0, 1280.0, 828.0]\ncontent = [1280, 800]\n",
+        )
+        .unwrap();
+        let win = load(&path).unwrap().window.unwrap();
+        assert_eq!(win.frame, [10.0, 20.0, 1280.0, 828.0]);
+        assert_eq!(win.content, (1280, 800));
+        assert!(!win.fullscreen, "absent means windowed");
+        assert_eq!(win.fullscreen_display, None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_windowed_vm_writes_no_fullscreen_keys_at_all() {
+        // `skip_serializing_if` keeps the common record identical to what shipped before, so a
+        // downgrade reads it too and nobody is puzzled by `fullscreen = false` in every file.
+        let dir = scratch("skip");
+        let path = dir.join("state.toml");
+        set_window(
+            &path,
+            Some(WindowState {
+                frame: [0.0, 0.0, 800.0, 600.0],
+                content: (800, 600),
+                fullscreen: false,
+                fullscreen_display: None,
+            }),
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("fullscreen"), "got: {text}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

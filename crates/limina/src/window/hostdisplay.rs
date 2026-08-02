@@ -181,6 +181,14 @@ thread_local! {
 /// `avoid` and this screen has a housing). It is subtracted here — where the guest's *resolution*
 /// is decided — rather than only at fit time, so that entering fullscreen never modesets: the
 /// guest is already exactly as tall as the area fullscreen will give it.
+/// [`HostDisplay::identity_key`] for a screen, without needing the caller to know the scale or
+/// notch policy — neither feeds the identity fields (vendor/model/serial and refresh), only the
+/// size ones. Used to remember *which panel* a VM was fullscreen on across restarts, where a
+/// `CGDirectDisplayID` would be worthless: those are reassigned on reboot and hotplug.
+pub fn identity_key_of(screen: &NSScreen) -> u64 {
+    describe(screen, fit::Scale::new(1.0, false), 0.0).identity_key()
+}
+
 pub fn describe(screen: &NSScreen, scale: fit::Scale, notch_inset: f64) -> HostDisplay {
     let frame = screen.frame().size;
     let (usable_w, usable_h) = fit::usable_content(frame.width, frame.height, notch_inset);

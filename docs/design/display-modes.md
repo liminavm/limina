@@ -129,19 +129,52 @@ disposable — missing/corrupt reads as "no state", deleting it just forgets the
 [window]
 frame = [x, y, w, h]   # NSWindow frame, screen points, Cocoa bottom-left origin
 content = [w, h]       # content size in points — dynamic mode's remembered resolution
+fullscreen = true      # optional — the VM was fullscreen when it stopped (2026-08-02)
+fullscreen_display = 3591582501783339128   # optional — which panel it was fullscreen on
 ```
+
+Both fullscreen keys are `skip_serializing_if`, so a windowed VM's file is byte-identical to
+what shipped before and old files still load (`serde(default)`) — a schema change that made
+them unreadable would silently reset the window placement of every VM on the machine at the
+first launch after an upgrade, which is a test.
 
 Why not the alternatives: NSUserDefaults frame-autosave doesn't travel with the
 Finder-copyable bundle and can't be read (sanely) before the window exists — and the
 supervisor must know the remembered size *before spawning the worker* to derive
 `--display-size`; a vm.toml key would make every window drag rewrite user-editable config.
 
-Saved from the render timer once the frame settles (~0.5 s stable, not mid-drag, never
-the fullscreen frame — the windowed frame is what we remember), off-thread; plus a final
-synchronous save on the quit paths. Restored at window creation when the frame still
-intersects a live screen (else `center()`); in host mode the *screen holding the
+Saved from the render timer once the frame settles (~0.5 s stable, not mid-drag), off-thread;
+plus a final synchronous save on the quit paths. Restored at window creation when the frame
+still intersects a live screen (else `center()`); in host mode the *screen holding the
 remembered frame's midpoint* is the one whose size seeds the boot resolution
-(`window::screen_info_for_frame`, queried on the main thread pre-spawn).
+(`window::screen_info_for_restore`, queried on the main thread pre-spawn).
+
+### Restoring fullscreen (2026-08-02)
+
+A VM stopped or suspended fullscreen comes back that way, on the panel it was on. Three
+things this needs beyond a bool:
+
+- **`frame` still means the last *windowed* rectangle.** In fullscreen the window's own frame
+  IS the screen, so recording it would destroy the placement the VM returns to on leaving
+  fullscreen. `window_state_snapshot` therefore takes the previously-persisted record and, in
+  fullscreen, keeps its frame while updating only the mode and the display.
+- **The display key is the EDID identity hash** (`hostdisplay::identity_key_of`), never a
+  `CGDirectDisplayID` — those are reassigned across reboots and hotplugs, i.e. exactly the
+  events this record exists to survive. Identity beats the remembered frame when both are
+  present, because the frame is the *windowed* one and may predate the move.
+- **The guest must boot at the size it will occupy.** Restoring fullscreen substitutes the
+  target screen's fullscreen content area for the remembered window content, so dynamic mode
+  does not boot small and re-modeset into fullscreen a moment later in front of the user.
+  (Match-host already derives from the screen, so this changes nothing there.)
+
+`toggleFullScreen:` runs on the **first render tick**, not at window creation: before the
+window has finished appearing it is silently dropped. A consequence worth knowing: the Space
+is claimed before the guest has drawn anything, so a restored VM shows a black fullscreen
+Space for the boot rather than a small ignorable window.
+
+A remembered display that is no longer attached falls through to the frame and then to the
+main screen — "was fullscreen" is the stronger memory, so undocking relocates the VM rather
+than quietly windowing it (user-decided 2026-08-02).
 
 ## First-appearance default size
 
