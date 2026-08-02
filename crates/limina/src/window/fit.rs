@@ -402,6 +402,13 @@ pub(crate) struct EdgeResist {
 }
 
 impl EdgeResist {
+    /// The model's own state, for the trace. Logging what the model *decided* alongside what it
+    /// was *told* is what keeps an analyzer from re-deriving it — the trap that made the first
+    /// `analyze-trace.py` disagree with the app (`spikes/edge-pressure/RESULTS.md`).
+    pub(crate) fn state(&self) -> (f64, f64, bool, f64) {
+        (self.acc.0, self.acc.1, self.through, self.threshold)
+    }
+
     pub(crate) fn new(threshold: f64) -> Self {
         Self {
             threshold: if threshold.is_finite() {
@@ -934,6 +941,111 @@ mod tests {
                 },
             );
         }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Characterization of the CURRENT resistance model, 2026-08-02. Every assertion below
+    // records behavior we intend to change: when the model is fixed these flip, and flipping
+    // them is the point — do not "repair" one by relaxing it. Findings written up in
+    // `spikes/edge-pressure/RESULTS.md` round 3. Produced headlessly in about a minute, which
+    // is why no synthetic-event harness was needed: `step` is pure.
+    // ---------------------------------------------------------------------------------------
+
+    #[test]
+    fn today_a_single_flick_event_breaks_through_but_the_same_travel_split_up_does_not() {
+        // Breakthrough is pure distance, and a flick arrives as ONE post-ballistics delta while
+        // a deliberate push arrives as ten small ones. Same nominal 100 pt, opposite feel: the
+        // careless motion resistance exists to stop is the one that sails through.
+        let fit = screen_fit();
+        let top = fit.y + fit.h;
+
+        let mut flick = EdgeResist::new(100.0);
+        flick.set_keepout(false);
+        assert!(
+            flick.step((700.0, top), 0.0, -100.0, fit).free,
+            "one 100 pt event is already through — no resistance felt at all"
+        );
+
+        let mut push = EdgeResist::new(100.0);
+        push.set_keepout(false);
+        for i in 1..10 {
+            assert!(
+                !push.step((700.0, top), 0.0, -10.0, fit).free,
+                "event {i} of a deliberate push is still held"
+            );
+        }
+        assert!(
+            push.step((700.0, top), 0.0, -10.0, fit).free,
+            "held for ten events"
+        );
+    }
+
+    #[test]
+    fn today_dwelling_in_a_corner_banks_charge_that_fires_the_adjacent_edge_later() {
+        // The corner arm accumulates but never releases, and sliding along the top drains only
+        // the x accumulator (`inside_y` never clears the release margin). The banked push then
+        // breaks the top edge on a nudge the user cannot perceive as a shove — a breakthrough
+        // causally disconnected from the motion that triggered it.
+        let fit = screen_fit();
+        let top = fit.y + fit.h;
+        let mut r = EdgeResist::new(100.0);
+        r.set_keepout(false);
+        for _ in 0..60 {
+            r.step((0.0, top), -10.0, -10.0, fit);
+        }
+        assert_eq!(
+            r.acc,
+            (600.0, 600.0),
+            "a second in the corner banks 600 pt on both axes"
+        );
+        for x in [40.0, 80.0, 120.0, 200.0] {
+            r.step((x, top), 20.0, 0.0, fit);
+        }
+        assert_eq!(r.acc.1, 600.0, "sliding out drains x, never y");
+        assert!(
+            r.step((200.0, top), 0.0, -1.0, fit).free,
+            "one 1 pt nudge cashes the banked charge"
+        );
+    }
+
+    #[test]
+    fn today_hugging_any_edge_keeps_resistance_disarmed_everywhere() {
+        // Re-arm demands clearance from all four edges at once, so ordinary guest work along a
+        // side panel leaves every edge unresisted for as long as it lasts — silently.
+        let fit = screen_fit();
+        let top = fit.y + fit.h;
+        let mut r = EdgeResist::new(100.0);
+        r.set_keepout(false);
+        for _ in 0..20 {
+            r.step((700.0, top), 0.0, -30.0, fit);
+        }
+        assert!(r.through, "broke out of the top");
+        r.step((2.0, top - 400.0), 0.0, 0.0, fit);
+        assert!(
+            r.through,
+            "still disarmed: x=2 is inside the left edge's release margin"
+        );
+    }
+
+    #[test]
+    fn today_a_pointer_on_another_display_is_dragged_back_to_the_guest() {
+        // The reported symptom (2026-08-02): "the mouse jumps around while I test focus
+        // changes". `resist_edges` resets on every focus loss, which clears `through`; when the
+        // window becomes key again with the pointer parked on the other display, that pointer is
+        // 800 pt past an edge and `against` is trivially true, so outward motion is absorbed and
+        // the cursor warped home. Leftward motion is unaffected, which is why it reads as
+        // erratic jumping rather than a wall.
+        let fit = screen_fit();
+        let outside = fit.x + fit.w + 800.0;
+        let mut r = EdgeResist::new(100.0);
+        r.set_keepout(false);
+        let step = r.step((outside, 400.0), 20.0, 0.0, fit);
+        assert!(!step.free, "resisted, 800 pt outside the content");
+        assert_eq!(
+            step.pos.0,
+            fit.x + fit.w,
+            "and yanked back to the guest's edge"
+        );
     }
 
     #[test]

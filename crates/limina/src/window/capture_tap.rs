@@ -627,9 +627,18 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
         // `spikes/edge-pressure/`. Together they answer the only question that matters when a
         // guest-side barrier won't fire: did we absorb the push and forward it, or did we let go
         // first? Reasoning about it from the outside got the corner threshold wrong twice.
+        // The model's own state travels with every line: `acc`/`through`/`thr` are what an
+        // analyzer would otherwise have to re-derive (and get wrong — the drain rules, the
+        // corner arm and the zero-delta early return all skip different steps). `warp` is the
+        // distance the cursor was moved against the user, which is the felt part of resistance
+        // and was invisible until now.
+        let (ax, ay, through, thr) = resist.state();
+        let warp = ((step.pos.0 - cur.0).powi(2) + (step.pos.1 - cur.1).powi(2)).sqrt();
         eprintln!(
             "[EDGE] t={:.1} cur=({:.1},{:.1}) d=({dx:.1},{dy:.1}) fit=({:.1},{:.1} {:.1}x{:.1}) \
-             overlaid={overlaid} free={} overflow=({:.1},{:.1})",
+             overlaid={overlaid} free={} overflow=({:.1},{:.1}) \
+             acc=({ax:.1},{ay:.1}) through={through} thr={thr:.0} warp={warp:.1} \
+             outside={}",
             trace_ms(),
             cur.0,
             cur.1,
@@ -640,6 +649,7 @@ fn resist_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
             step.free,
             step.overflow.0,
             step.overflow.1,
+            !fit::point_in_fit(cur.0, cur.1, fit),
         );
     }
     if step.free {

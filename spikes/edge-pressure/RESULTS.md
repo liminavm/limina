@@ -83,6 +83,55 @@ Traps this round, worth not repeating:
 - **`tail -f` on this log goes deaf.** The boot script `rm -f`s it every run, so a live monitor
   keeps following a dead inode and silently reports nothing. Use `tail -F`.
 
+## Round 3 (2026-08-02): edge resistance itself, measured before touching it
+
+The user's report was "the cursor resistance feels really weird", later narrowed to **the side
+edges, while changing focus between displays**. Four faults, all confirmed *headlessly in about a
+minute* — `EdgeResist::step` is pure, so the synthetic-event harness (`push.swift`, which needs
+Accessibility for the posting shell) was unnecessary for every structural question. The
+characterization tests live in `window/fit.rs` and are written to **flip** when the model is
+fixed.
+
+1. **A pointer on another display gets dragged back.** This is the reported symptom.
+   `resist_edges` calls `resist.reset()` on every focus loss, which clears `through`. When the
+   window becomes key again with the pointer parked on the external display, that pointer is
+   hundreds of points past an edge — and `against` is `p >= hi - EPS`, trivially true — so
+   outward motion is absorbed and the cursor warped home. Inward motion is unaffected, which is
+   why it reads as erratic *jumping* rather than a wall. The design doc claims this class was
+   fixed; the fix addressed the stale-position route, and focus churn reopens a second one.
+2. **A flick breaks through; a deliberate push does not.** Breakthrough is pure distance with no
+   per-event bound, and a flick arrives as ONE post-ballistics delta of 100+ pt while a careful
+   push arrives as ten small ones. Same nominal 100 pt, opposite felt experience — and the
+   careless motion the feature exists to stop is the one that sails through. `capture_step`
+   already bounds overflow to the past-the-edge component; `EdgeResist` never learned that.
+3. **A corner banks charge that fires the adjacent edge later.** One second of hot-corner dwell
+   accumulates 600 pt on both axes (the corner arm accumulates but never releases). Sliding out
+   along the top drains only `acc.0` — `inside_y` never clears the release margin — so a
+   subsequent 1 pt nudge cashes 600 pt of charge from a gesture that ended seconds ago. A
+   breakthrough causally disconnected from the motion that caused it is unattributable by
+   definition, which is what "weird, can't say why" sounds like.
+4. **Hugging any edge disarms every edge.** Re-arm requires clearance from all four edges at
+   once, so ordinary guest work along a side panel leaves resistance off until the pointer
+   moves away — silently.
+
+Method notes worth carrying:
+
+- **A pure model is its own oracle.** Two rounds of this spike drove real hardware to answer
+  questions that `step` could have answered offline. Reach for the synthetic harness only for
+  what genuinely needs the event stream (what deltas a real flick *produces* — still open).
+- **Instrument before recording, and log the model's state, not just its inputs.** `[EDGE]` now
+  carries `acc`, `through`, `thr`, `warp` and `outside` alongside the event. Without those an
+  analyzer must re-derive them and will get the drain rules, the corner arm and the zero-delta
+  early return wrong — the same trap round 2 hit.
+- **Fix structure before tuning constants.** The 50/100/200 presets are denominated in
+  post-ballistics points; bounding per-event push changes what all three mean, so any recording
+  taken first would have to be thrown away.
+- A fable agent reviewed the instrumentation plan and found (2) and (3), and killed two proposed
+  metrics: "wasted travel" is unmeasurable (deltas are post-ballistics, and the post-warp
+  suppression interval emits no events at all), and host-vs-guest cursor divergence is by design
+  (the guest cursor is re-pinned every held event), so the meaningful guest-side measure is
+  barrier charge delivered, not displacement.
+
 ## Tools
 
 | file | what it does |
