@@ -177,7 +177,7 @@ instead of reading it, I got it wrong.
   y ∈ [879, 1861] — left of *and below* the main display. So the park was **on the other screen**,
   the grab warp was 1400-2400 points long, and a warp posts a motion event carrying its whole
   vector as the delta, which the captured path integrated as guest motion. Now the cursor parks
-  where it already is, pulled 64 pt inside the content (`fit::park_point`), so the warp is
+  where it already is, pulled `PARK_INSET` inside the content (`fit::park_point`), so the warp is
   zero-length. Largest captured delta went from 2400 to 107. **Two earlier attempts to detect and
   subtract the bogus delta were symptom treatment**, and the trace killed the second by showing 5
   of 13 grabs had no matching event at all.
@@ -208,6 +208,62 @@ instead of reading it, I got it wrong.
   was teleporting* — a special case built to serve a symptom, which passed my own review by
   looking like a reasonable accommodation.
 
+## Round six: the residue of the park bug (2026-08-03)
+
+Dogfood, after the fix above shipped: coming back fast from the external display, clicking the
+guest's top-right system menu, then moving toward an item — the pointer skips once. Only the first
+time, which points at the automatic re-grab rather than at anything continuous.
+
+Both remaining sources were in the grab's *seed*, and both are the same fault as the original park
+bug at a smaller scale — a warp whose length becomes guest motion:
+
+- **`PARK_INSET` (64) was larger than `REGRAB_MARGIN` (40)**, so a pointer the policy was willing to
+  re-grab could still be pulled up to 24 pt. Those two numbers were never independent: the re-grab
+  only fires on a pointer already `REGRAB_MARGIN` clear of every edge, so `PARK_INSET =
+  REGRAB_MARGIN` makes every policy grab warp-free *by construction*, and a test asserts the
+  coupling instead of trusting the constants to stay in that order.
+- **The seed was remembered, not observed.** `toggle_capture` derived both the guest's virtual
+  cursor and the park from `capture_pos`, which is fed by the window's motion handling — and the
+  tap that decides the re-grab runs *ahead* of it, so the seed was a whole event stale (a long way
+  at speed), and stale by an entire excursion after a trip to another display, where the content
+  gate stops updating it at all. It now asks the window server where the pointer actually is
+  (`NSEvent::mouseLocation`) whenever that is over the content. Off the content — a keyboard grab
+  taken from another display — the remembered position is still the better answer: clamping the
+  live one would drag the guest cursor to the nearest edge, and the warp is long either way.
+
+The general lesson, third time in this file: **any warp taken while captured is guest motion.** The
+only safe warp is a zero-length one, and the way to get that is to make the geometry guarantee it
+rather than to measure the injection and subtract it.
+
+## How this gets pinned (agreed 2026-08-03, not built yet)
+
+Six rounds of bugs, and **not one of them was in the geometry** — `fit` has been tested from the
+start and has been right. They were all in the policy, which is the one part with no test, because
+it is welded to `CGEventTap` and `NSView`. Adjusting a constant today means re-dogfooding by hand.
+
+A literal injected-input test cannot be a suite test: the policy only runs from a session tap, the
+tap needs Accessibility, and that grant is **per-binary** — a test harness would need its own (see
+`limina-tcc-adhoc-accessibility`). So the plan replays *samples*, not `CGEvent`s:
+
+1. **Lift the policy out of the tap into a pure step function.** `capture_tap` mixes CG plumbing,
+   policy, and effects; split so the middle is `step(&State, Sample) -> Vec<Action>` with
+   `Sample { pos, delta, buttons, mods, fullscreen, key, now }` and
+   `Action::{Grab{seed}, Release{to}, GrantChrome, Consume, Pass}`. Take the display arrangement as
+   a **parameter** instead of calling `CGGetDisplaysWithPoint` inline, so a two-display layout is
+   test data and the dead-edge rule is checkable headlessly.
+2. **Replay recorded gestures as fixtures.** `LIMINA_EDGE_TRACE` already emits everything a `Sample`
+   needs. Each dogfood round becomes a recorded trace with an asserted verdict — the re-entry
+   gesture, the corner lean, the top-edge chrome ask, the press at a dead edge. Then changing a
+   constant shows you *which* gesture changed its mind.
+3. **The invariant that would have caught all three park bugs at once: the guest cursor moves only
+   by host motion.** Every one of them was a warp injecting its own vector. Assert
+   `Δguest_abs == Σ host deltas` per event window, excluding the deliberate discontinuities (the
+   release warp, the content clamp). Cheap enough to ship as a runtime check behind an env var, so
+   dogfood *reports* a skip instead of the user having to notice one.
+
+Order matters: (1) is a refactor of the file that changed all week, so it lands after a dogfood
+validation, never bundled with a behaviour fix. (2) and (3) are small once (1) exists.
+
 ## Still open
 
 - Does `Firm` at 0.6 s feel like control or like a stuck pointer? Only `Standard` has had real use.
@@ -217,3 +273,7 @@ instead of reading it, I got it wrong.
   costs a deliberate press.
 - `RELEASE_OFFSET` (8 pt past the edge) was chosen to clear `REGRAB_MARGIN`, not from any
   measurement of where a released pointer should appear. It reads fine; it is not tuned.
+- An **explicit** grab (Cmd-Ctrl-G) taken with the pointer within `PARK_INSET` of an edge, or off
+  the content entirely, still warps — and so still injects that distance as guest motion. The
+  policy re-grab cannot reach either state, so this is rare and user-initiated; the honest fix is a
+  park that does not have to be inside our own content, which nothing needs yet.

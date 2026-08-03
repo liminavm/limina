@@ -159,6 +159,23 @@ pub(crate) fn cg_global_to_view_point(view: &NSView, p: NSPoint) -> Option<(f64,
     Some((local.x, local.y))
 }
 
+/// Where the pointer is **right now**, in view coordinates — asked of the window server rather
+/// than remembered from an event. `None` when the view isn't in a window.
+///
+/// [`NSEvent::mouseLocation`] is a query, not an event, so it is current even when no motion event
+/// reached us: while the pointer is over another display our window gets no usable motion (the
+/// gate in [`InputState::emit_motion`]'s caller drops points outside the content), and the tap runs
+/// *ahead* of the window's monitor, so at the instant a grab is decided our remembered position can
+/// be a whole event stale — a long way at speed. See [`InputState::toggle_capture`].
+fn live_pointer_in_view(view: &NSView) -> Option<(f64, f64)> {
+    let window = view.window()?;
+    // `mouseLocation` is NS *screen* space (bottom-left origin), which is what
+    // `convertPointFromScreen` decodes — no CG flip here, unlike `cg_global_to_view_point`.
+    let base = window.convertPointFromScreen(NSEvent::mouseLocation());
+    let local = view.convertPoint_fromView(base, None);
+    Some((local.x, local.y))
+}
+
 /// The event's cursor position in `view` coordinates.
 ///
 /// `locationInWindow` is relative to **the window the event was delivered to**, while
@@ -573,7 +590,25 @@ impl InputState {
                 .and_then(|p| view_point_to_cg_global(view, p))
         };
         if now {
-            let park = super::fit::park_point(self.capture_pos.get(), self.fit.get());
+            let fit = self.fit.get();
+            // Seed the virtual cursor from where the pointer REALLY is before deriving the park,
+            // so both the guest cursor and the (zero-length) grab warp start from the truth. Our
+            // remembered position lags: the capture tap decides the automatic re-grab *before* the
+            // window's monitor has processed the same event, and while the pointer was on another
+            // display it was not being updated at all. A stale seed shows up twice over — the guest
+            // cursor appears where the pointer *was*, and the park warp covers the difference,
+            // injecting it as another jump.
+            //
+            // Only when the pointer is over the content. Off it (a keyboard grab taken while the
+            // pointer is on another display) the remembered virtual position is the better answer:
+            // clamping the live one would drag the guest cursor to whichever edge happens to be
+            // nearest, and the warp is unavoidably long either way.
+            if let Some(live) = live_pointer_in_view(view) {
+                if super::fit::point_in_fit(live.0, live.1, fit) {
+                    self.capture_pos.set(Some(live));
+                }
+            }
+            let park = super::fit::park_point(self.capture_pos.get(), fit);
             self.park.set(view_point_to_cg_global(view, park));
         }
         self.captured.store(now, Ordering::Release);

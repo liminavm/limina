@@ -781,10 +781,13 @@ fn uncaptured_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
     if !ctx.user_released.get() && fit::may_regrab(cur, fit, inside_for, ctx.buttons.get() != 0) {
         ctx.reset_grab_gesture();
         ctx.fullscreen_grab.set(true);
-        // The virtual cursor the grab is about to hand the guest, BEFORE the toggle: if it
-        // disagrees with `cur` (where the tap says the pointer is) the guest's cursor visibly
-        // teleports at the instant of the grab, which is what dogfood saw on re-entry from the
-        // other display. Logging both is the only way to tell a stale `pos` from a bad `cur`.
+        // `pos` is the virtual cursor as last remembered, BEFORE the toggle, and it routinely
+        // disagrees with `cur` here — this tap runs ahead of the window's own motion handling, so
+        // it is normally one event behind, and a whole excursion behind after a trip to another
+        // display. That disagreement used to *be* the bug (the guest cursor appeared at the stale
+        // point and the park warp injected the difference); `toggle_capture` now re-seeds from the
+        // live pointer, so the two lines differing is expected. What must stay true is that the
+        // pointer does not move at the grab: watch the `[CAP]` deltas that follow, not this.
         if edge_trace() {
             eprintln!(
                 "[GRAB] t={:.1} grabbing: cur=({:.1},{:.1}) pos={:?} \

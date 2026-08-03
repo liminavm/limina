@@ -218,7 +218,14 @@ pub(crate) fn capture_step(pos: Option<(f64, f64)>, dx: f64, dy: f64, fit: FitRe
 /// How far inside the content the captured cursor is parked. Clear of any screen-edge trigger
 /// (menu bar, Dock, hot corner) with room to spare, and small enough that the park point is a
 /// short hop from wherever the pointer already was.
-const PARK_INSET: f64 = 64.0;
+///
+/// **Tied to [`REGRAB_MARGIN`], not chosen independently.** The automatic re-grab only fires on a
+/// pointer that is already that margin clear of every edge, so an inset no larger than it leaves
+/// nothing to pull and makes every policy grab a zero-length warp *by construction*. When this was
+/// the larger of the two (64 against 40) a re-grab could still warp up to 24 points, and a warp's
+/// whole vector arrives as guest motion — the cursor skipping the instant the grab took hold. See
+/// `a_pointer_the_policy_may_regrab_is_already_its_own_park_point`.
+const PARK_INSET: f64 = REGRAB_MARGIN;
 
 /// Where to park the hidden host cursor while captured: where it already is, pulled far enough
 /// inside the content that no screen-edge trigger can reach it.
@@ -713,6 +720,31 @@ mod tests {
         let far = (99_999.0, -99_999.0);
         assert!(deep_inside(park_point(Some(far), fit), fit));
         assert!(deep_inside(park_point(None, fit), fit));
+    }
+
+    #[test]
+    fn a_pointer_the_policy_may_regrab_is_already_its_own_park_point() {
+        // The coupling that makes the automatic re-grab warp-free BY CONSTRUCTION rather than by
+        // luck: the policy only re-grabs a pointer that is `REGRAB_MARGIN` clear of every edge, so
+        // if the park inset is no larger than that margin, `park_point` has nothing to pull and the
+        // grab warp is exactly zero length. When the inset was the larger of the two (64 vs 40) an
+        // automatic re-grab could still warp up to 24 points — and a warp's whole vector arrives as
+        // guest motion, which is the cursor jumping the instant the grab took hold. Dogfood found it
+        // on re-entry from another display: reach the guest's top-right menu, start moving toward an
+        // item, and the pointer skips (2026-08-03).
+        let fit = screen_fit();
+        let long = Some(REGRAB_DWELL);
+        for p in [
+            (fit.x + REGRAB_MARGIN, fit.y + REGRAB_MARGIN),
+            (fit.x + fit.w - REGRAB_MARGIN, fit.y + REGRAB_MARGIN),
+            (fit.x + REGRAB_MARGIN, fit.y + fit.h - REGRAB_MARGIN),
+            (fit.x + fit.w - REGRAB_MARGIN, fit.y + fit.h - REGRAB_MARGIN),
+            (fit.x + fit.w - REGRAB_MARGIN, 400.0),
+            (700.0, 400.0),
+        ] {
+            assert!(may_regrab(p, fit, long, false), "{p:?} is not regrabbable");
+            assert_eq!(park_point(Some(p), fit), p, "{p:?} would warp on re-grab");
+        }
     }
 
     #[test]
