@@ -4,8 +4,8 @@
 
 limina is a native macOS app (Apple Silicon) that runs **Linux** desktop guests on
 **libkrun + Hypervisor.framework**, built in Rust, aiming to **replace Parallels**.
-First milestone: boot a local stock Fedora image to a usable desktop (current base
-`Fedora-Workstation-43.accessible.raw`; canonical image inventory in `docs/images.md`).
+First milestone: boot a local stock Fedora image to a usable desktop (current dogfood/dev
+family: the **F44 enhanced** images; canonical image inventory in `docs/images.md`).
 
 Target features (most deferrable; all must be considered in the design from the
 start): great 3D acceleration, first-class fullscreen, mouse capture, macOS
@@ -25,7 +25,8 @@ right tool — not treat upstream as immutable:
   `git format-patch` series under `patches/libkrun/` (with `UPSTREAM_BASE`); apply with
   `scripts/apply-libkrun-patches.sh`. We add devices, APIs, and behavior it lacks (e.g.
   software 2D scanout for GL-less hosts [shipped], balloon target/inflate control, runtime
-  display resize, zero-copy scanout, USB). To change libkrun: edit the checkout, commit on
+  display resize, zero-copy scanout, snapshot/restore machinery, an emulated xHCI controller +
+  USB gadgets). To change libkrun: edit the checkout, commit on
   a `limina/*` branch, re-export the series (see `patches/libkrun/README.md`).
   - **`cargo xtask vendor`** is the one-command bootstrap: it clones libkrun and virglrenderer if
     absent, applies each one's series, and vendors+patches `imago` — i.e. recreates every gitignored
@@ -43,7 +44,8 @@ right tool — not treat upstream as immutable:
   `git format-patch` series under `patches/virglrenderer/` (with `UPSTREAM_BASE`); apply with
   `scripts/apply-virgl-patches.sh`. It's the host renderer for **both** accelerated tiers — venus
   (Vulkan→KosmicKrisp) and vrend (GL via zink-on-KK) — and carries our whole macOS/venus enablement,
-  zero-copy IOSurface scanout, and vrend/vkr fixes. To change it: edit the checkout, commit on the
+  zero-copy IOSurface scanout, the snapshot/restore journal, and vrend/vkr fixes. To change it:
+  edit the checkout, commit on the
   `gkvm/*` branch, re-export the series (see `patches/virglrenderer/README.md`). **rutabaga** — the
   Apple blob `get_map_ptr` delta lives in libkrun's rutabaga against upstream's resource_map API.
 - **The guest Linux kernel** — we control it for the *enhanced* tier. We can change
@@ -122,7 +124,7 @@ Two refinements that are easy to forget:
   time sync, and lifecycle.
 
 See `docs/research/00-overview.md` for the full picture and `docs/roadmap.md` for
-the milestone plan (M1 boot → M8 polish). `docs/research/GAPS-and-verification.md`
+the milestone plan (M1 boot → M15 display pipeline). `docs/research/GAPS-and-verification.md`
 tracks claims still needing verification.
 
 ## Working conventions (learned the hard way)

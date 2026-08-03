@@ -118,8 +118,10 @@ pub struct WindowOptions {
     /// What fullscreen does with the camera housing on a notched built-in display
     /// (`[display] notch`, default `avoid`). See [`crate::vmlib::schema::NotchPolicy`].
     pub notch: crate::vmlib::schema::NotchPolicy,
-    /// Points of push needed to move the pointer past a fullscreen guest's edge
-    /// (`[display] edge-resistance`; 0 disables). See [`fit::EdgeResist`].
+    /// Seconds the pointer must be held against a fullscreen guest's edge before it is
+    /// released to the rest of the desktop (`[display] edge-resistance`; 0 disables the
+    /// grab). This is the top-edge hold; the sides release sooner — see `fit::edge_timing` and
+    /// [`crate::vmlib::schema::DisplayCfg::edge_resistance`].
     pub edge_resistance: f64,
 }
 

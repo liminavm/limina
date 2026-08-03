@@ -727,7 +727,9 @@ Not CI-testable (needs root + the physical device).
 **Goal:** pass a host USB device (initially libusb-claimable: FTDI/CP210x, YubiKey-class) into the
 guest.
 
-**Key tasks (USB is entirely net-new; the bundled/custom guest kernels have USB compiled OUT today):**
+**Key tasks (USB was entirely net-new when written; our test/enhanced kernels have since enabled USB —
+`build-test-kernel.sh:111-132` sets `CONFIG_USB_SUPPORT`/`USBIP_VHCI_HCD`/xHCI + class drivers — and an
+emulated xHCI controller shipped as M14 shared infrastructure, libkrun 0095–0098):**
 1. **PREREQUISITE — enable USB in OUR kernel config (cheap now).** The enhanced tier standardized on
    our own kernel (`scripts/build-test-kernel.sh`, 16 KiB pages, `patches/linux/` auto-applied), so
    this is a config edit in *our* pipeline, not a libkrunfw rebuild: add `CONFIG_USB_SUPPORT=y`,
@@ -771,6 +773,10 @@ works.
 
 ## Milestone 8 — Audio + x86 emulation + polish
 
+**Status: 🟢 the polish half is SHIPPED** (fullscreen, keymap remap, system-combo capture, pointer
+grab, multi-display/display modes; audio shipped 2026-07-17; x86/FEX remains). The gesture follow-on
+work is listed in `docs/design/trackpad-gestures.md`.
+
 **Goal:** sound output/input, x86 binary support, and the desktop polish that makes limina a
 Parallels replacement: fullscreen, keymap remap, multi-display, system-combo capture.
 
@@ -798,7 +804,10 @@ Parallels replacement: fullscreen, keymap remap, multi-display, system-combo cap
      **Limitation:** multi-finger trackpad gestures (Mission Control / Spaces swipe) are processed by
      the WindowServer upstream of a session tap and are NOT interceptable (two-finger scroll is).
      Secure Input (password fields) can still suppress the tap — acceptable.
-   - ~~**Pointer capture:**~~ **DONE** — `Cmd-Ctrl-G`. A **session-level consuming
+   - ~~**Pointer capture:**~~ **DONE** — `Cmd-Ctrl-G`. *(The design described in this paragraph
+     was later superseded by the fullscreen pointer grab —
+     `docs/design/fullscreen-pointer-grab.md`; commits `43bf803`, `02d606b`, `d44f14c`,
+     `ead3520`.)* A **session-level consuming
      CGEventTap** (needs Accessibility permission) intercepts mouse + keyboard while captured.
      Since 2026-07-23 captured motion integrates the macOS-accelerated deltas into a host-side
      **virtual cursor** (seeded where the pointer was grabbed, clamped to the fit rect) and drives
@@ -822,11 +831,10 @@ Parallels replacement: fullscreen, keymap remap, multi-display, system-combo cap
      composited at its reported `cursormove` position (host NSCursor hidden); **closes the M2
      guest-warp gap**. If Accessibility is denied, `CGEventTapCreate` returns NULL and it falls
      back to a leaky local-monitor warp path (same virtual-cursor motion, weaker containment).
-   - **Multi-display:** multiplex all displays through the single `krun_set_display_backend` by
-     `scanout_id` (up to 16), each to its own NSWindow/CAMetalLayer. **The thinnest plan among the
-     named features** — needs a design doc (guest-side mutter multi-monitor via multi-scanout,
-     HiDPI, interaction with runtime resize, and the `frame <id>`-carries-no-scanout-id wire gap
-     flagged in `docs/reviews/2026-07-01-full-review.md`).
+   - ~~**Multi-display:**~~ **DONE** — display modes, per-host-display identity/HiDPI, fullscreen
+     carrier + notch overlay, and mode/display restore shipped (`docs/design/display-modes.md`,
+     `docs/design/display-cutouts.md`; commits `519b3de`, `31f9d4f`, `5c14568`, `49ee225`,
+     `3a4c633`).
    - ~~**Runtime window-follow resize / EDID hotplug**~~ — **✅ DONE (2026-06-23)**: window resize
      reflows the guest resolution live, no reboot (libkrun 0025/0026, the `--display-control-socket`
      transport, 60Hz-debounced window trigger). Design + as-built:
@@ -858,7 +866,11 @@ attaches at runtime, and resizing the window reflows the guest resolution.
 
 ## Milestone 9 — Suspend / resume + full VM snapshots (host-side)
 
-**Status: 🚧 M9.1 + M9.2 DONE (headless); M9.3 = GPU, next.** M9.1 (host-side vCPU+GIC+RAM snapshot
+**Status: ✅ M9.1–M9.4 SHIPPED.** M9.3 (windowed/GPU suspend — snapshot machinery libkrun 0076–0086 +
+the virgl snapshot/restore journal 0033–0040; `bdba55b`, `993d6c0`, `87c2330`) and M9.4 (suspend/resume
+UX + snapshot speed, v6: 6.6s save / 465 MiB / 2.3s restore apply; `460e3df`, `f881807`, `ce97194`)
+landed on top of the headless M9.1+M9.2. The paragraph below is the historical record as of the M9.2
+close. M9.1 (host-side vCPU+GIC+RAM snapshot
 mechanism) and **M9.2 (headless device continuity) are shipped and GREEN** — `limina suspend`/`start`
 suspends a running managed VM (GPIO suspend button → guest s2idle quiesces virtio to INIT → snapshot →
 teardown → next start `--restore`s the same boot_id) with automated happy-path + abort-path L2 guards.
@@ -1084,8 +1096,9 @@ milestone.
   `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh` (which owns the KK/zink env). The disk boots in
   place — clone it first to keep it pristine. Fringe modes (`--kernel-inject`, `--gpu-software-2d`)
   stay as their own scripts, per CLAUDE.md.
-- **`app [--release]`** — assemble the full self-contained `target/Limina.app` (the shipping bundle
-  with the whole host venus/GL closure), wrapping `scripts/build-app.sh`.
+- **`app [--debug]`** — assemble the full self-contained `target/Limina.app` (the shipping bundle
+  with the whole host venus/GL closure), wrapping `scripts/build-app.sh`. Builds **release by
+  default**; `--debug` opts into a debuggable bundle (`xtask/src/main.rs:98-105`).
 - **`bundle [--release] [--open]`** — a *minimal* `Limina.app` that boots the L1 guest; the
   launch-path smoke test (LaunchServices launch → capture PNG). Distinct from `app`: `bundle` proves
   the normal launch path, `app` is the real deliverable.
@@ -1532,9 +1545,10 @@ device forwarding.
    with `limina --usb` binds it as `/dev/hidrawN` (usage page 0xF1D0) with zero guest components.
    Guarded by `l1_xhci_fido_authenticator` (INIT + getInfo, presence-free); Touch-ID credential
    flows (fido2-cred/browser/pam_u2f) are the manual follow-up (same SEP path as the verified uhid
-   transport). **Fingerprint half remains:** the impersonated MOC gadget needs its own design doc —
-   pick the target from libfprint sources (simplest protocol, no pairing/TLS if avoidable),
-   fwupd-neutralization verify. Controller design: `docs/design/usb-xhci.md`.
+   transport). **Fingerprint half ✅ shipped:** the impersonated MOC (elanmoc) gadget landed with
+   its own design doc (`docs/design/usb-moc-fingerprint.md`; commits `3c4eaa4`, `5eb6ab0`,
+   `4124f90`, `f9646d0`, `e32d204`) and a user doc, `docs/fingerprint-reader.md`; USB + fingerprint
+   are default-on since `f9646d0`. Controller design: `docs/design/usb-xhci.md`.
 
 **Done test:** on a **stock** F44 guest (USB build): Firefox registers + asserts a passkey on
 webauthn.io with Touch ID prompts appearing on the host; GNOME Settings shows Fingerprint Login;
@@ -1550,9 +1564,12 @@ launch to verify — cf. the fd-limit and TCC launch-env traps); multi-VM prompt
 
 ## Milestone 15 — Virtual display pipeline v2: native refresh, hardware planes, scanout modifiers
 
-**Status: 📋 planned (booked 2026-07-30 from the compositor-side asks in
+**Status: 🚧 in flight — Wave 1 Parts 1+2 SHIPPED 2026-07-31; Wave 4 spike CLOSED** (`0f4a9d3`,
+`02e13ce` → the XBGR/ABGR partial win shipped as `patches/linux/0006`; non-LINEAR buys nothing,
+render-direct-to-LINEAR is the win). Remaining: wave 1 per-host-display + VRR, waves 2–3.
+(Booked 2026-07-30 from the compositor-side asks in
 `dogfood-guest:Projects/gnome-shell-rs/docs/fork/present-misses.md` §30–§31; scanout-modifier spike
-started same day).** The present-miss investigation closed with GPU frame *cost* as the one lever
+started same day.) The present-miss investigation closed with GPU frame *cost* as the one lever
 (their §30: with the instrument off the frame path, misses are 0.00% at 60 Hz), and the guest side
 is now targeting 120 Hz (8.33 ms) / 144 Hz (6.94 ms) budgets. These waves are the host-side half
 of that: give the guest real refresh targets, cheaper scanout, and hardware planes for video.
@@ -1662,12 +1679,14 @@ wins ships with a before/after on the guest's heavy-band `gpu p50`.
 | M2 display+input ✅ | supervisor IOSurface window, native-Rust display backend, input provider, kVK→KEY table | software-2D scanout (0001); hw-cursor queue (0008); Darwin input worker ran as-is |
 | M2.5 console/serial ✅ | serial command/getty shell (`l1_command` + stock getty), serial pane in window, boot-console-frame test | PL011 tty (0004 HVF halfword-MMIO + 0005 FDT `arm,primecell`); hvc0 (0003), PL011 WouldBlock (0002); KRUN_EFI EDK2 + VirtioGpuDxe GOP (0006/0022 + PlatformBm.c) |
 | M3 networking ✅ (NAT+SSH; bridged deferred) | gvproxy supervision + gateway cleanup; well-known-MAC static lease | none needed (reconnect-on-HANG_UP still optional) |
-| M4 3D 🟢 | coexist routing, zero-copy + fence-accurate present path, KK as host driver | coexist (0010), fence-present series (0017–0022), virglrenderer fork, KK perf/XFB, kernel `patches/linux/0001–0003`, mutter ×2; remaining: upstream queue |
+| M4 3D 🟢 | coexist routing, zero-copy + fence-accurate present path, KK as host driver | coexist (0010), fence-present series (0017–0022), virglrenderer fork, KK perf/XFB, kernel `patches/linux/0001–0006`, mutter ×2; remaining: upstream queue |
 | M5 clipboard/fs/agent 🟢 core | guest agent (from L1 vsock seed), NSPasteboard bridge, ext-data-control + RemoteDesktop clipboard clients, virtiofs share + auto-mount, enhanced-tier installer (remaining) | mutter 0003 (ext-data-control); none for transport (vsock+virtiofs exist) |
 | M6 dynamic memory ✅ | PSI autoballoon policy + `BalloonControlHandle` / `--memory` / control socket (internal Rust API, not a C ABI) | reclaim fix (MADV_FREE_REUSABLE) + 16 KiB align/coalesce + inflate/deflate handlers + DEFLATE_ON_OOM (0033/0034) |
 | M7 USB | host claim/attach, usbip plumbing | our-kernel config edit (USB+uinput); later native virtio-usb + krun_add_usb* |
 | M8 audio/x86/polish | fullscreen, keymap, multi-display, pointer capture, IOSurface mach-port scoping, FEX wiring | native virtio-snd; runtime resize/EDID; LED parity |
-| M9 suspend/resume + snapshots 📐 designed | host-side VMM snapshot (file format/CRC, `--restore` wiring, device schema + mapped-blob set, named-snapshot manager + clone + APFS `clonefile` disk, agent freeze bracket, proto `Snapshot`/`Restore`/`TimeSet`, capability probe, UX); Mesa-venus object-graph replay + **device-local content readback** + blob copy-back (venus tier) | multi-vCPU HVF pause/quiesce (incl. WFE-parked wakeup) + vCPU save/restore (wrappers, FFI exists) + GIC state (spike #2 green) + `CNTVOFF` set + `--restore` mode + device (de)serialize + virtio freeze/thaw hardening + snapshot-time GPU quiesce (restore = fresh worker, no in-process renderer reset; `reset_session` rutabaga-context fix already shipped, 0035); carry `patches/linux` Dongwon-Kim drm/virtio freeze-restore (virgl) |
+| M9 suspend/resume + snapshots ✅ | host-side VMM snapshot (file format/CRC, `--restore` wiring, device schema + mapped-blob set, named-snapshot manager + clone + APFS `clonefile` disk, agent freeze bracket, proto `Snapshot`/`Restore`/`TimeSet`, capability probe, UX); Mesa-venus object-graph replay + **device-local content readback** + blob copy-back (venus tier) | multi-vCPU HVF pause/quiesce (incl. WFE-parked wakeup) + vCPU save/restore (wrappers, FFI exists) + GIC state (spike #2 green) + `CNTVOFF` set + `--restore` mode + device (de)serialize + virtio freeze/thaw hardening + snapshot-time GPU quiesce (restore = fresh worker, no in-process renderer reset; `reset_session` rutabaga-context fix already shipped, 0035); carry `patches/linux` Dongwon-Kim drm/virtio freeze-restore (virgl) |
+| M10 multiple disks + ISO ✅ | repeatable `--disk`, stable virtio serial identity, `--cdrom`, qcow2 sniff, EFI-ISO boot | imago discard→punch-hole fix (`patches/imago/`, `[patch.crates-io]`) |
+| M11 productization ✅ | `cargo xtask` command surface (`setup`/`vendor`/`build`/`sign`/`test`/`run`/`app`/`bundle`) wrapping the tested scripts; `docs/dev-onboarding.md` | none |
 | M12 SPICE agent 📋 planned | host vdagent broker (framing + clipboard, then client→guest file transfer), NSPasteboard bridge reuse (M5), **per-session** native-vs-SPICE arbitration (SPICE default; the helper claims only sessions vdagent can't cover — no XWayland — and the decision is made in-guest); display-resize deliberately excluded (native EDID already covers it) | virtio-serial named multiport port `com.redhat.spice.0` (wakes stock `spice-vdagentd`); no crate reuse |
 | M13 visibility/power render adaptation 📋 planned | front-end occlusion/Space/power signal + hysteresis policy, `vm.toml [power]/[render]` config, host present cap/pause (reuse s2idle), agent frame-rate throttle message | present pause/cap knob (extends s2idle 0089) + fence-feedback pacing knob; relax deep-idle bias on occlusion |
 | M14 biometric auth 🟡 spiked | host CTAP2 authenticator (SEP ES256 + LAContext, CryptoKit blob store per VM), agent uhid FIDO bridge + vsock channel, later xHCI + FIDO/MOC-fingerprint gadgets, pam_u2f/authselect recipe | none for uhid transport (vsock exists); stock wave = xHCI controller + gadget device models in libkrun (shared with M7) |

@@ -20,8 +20,9 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
   host-tree delta (21 files, ~1340 lines) that builds the shipped KK dylib and the host
   zink-on-KK GL stack. **Recovered 2026-06-24**: it had only ever existed as an
   *uncommitted working tree* in `/Volumes/mesa-cs/mesa` — never committed or exported, the
-  enhanced-tier discipline gap (same class of bug as the venus dma-buf patch,
-  `patches/mesa/0008`). Now committed on the `limina/kosmickrisp` branch in that tree.
+  enhanced-tier discipline gap (same class of bug as the venus dma-buf patch — historically
+  `patches/mesa/0008`, since retired and folded into `patches/mesa/0010`). Now committed on
+  the `limina/kosmickrisp` branch in that tree.
   Components (a follow-up **should split these into logical patches**):
   - **kosmickrisp/vulkan** — encoder + render-pass + bind-cache (`kk_encoder.c`,
     `kk_cmd_buffer.*`), draw path (`kk_cmd_draw.c`, +484), transform-feedback NIR lowering
@@ -35,7 +36,7 @@ APFS is case-insensitive and can't even check out mesa). The shipped dylib lives
     host tree, which builds KK not venus).
 - **`0002-kk-lay-out-DRM-format-modifier-attachment-images-as-.patch`** — render a
   DRM-format-modifier image used as a color/depth **attachment** as *tiled* (heap-backed)
-  instead of *linear* (buffer-backed). venus (`patches/mesa/0008`) force-advertises
+  instead of *linear* (buffer-backed). venus (`patches/mesa/0010`; formerly 0008, folded in) force-advertises
   `EXT_image_drm_format_modifier`, so mutter allocates its render targets with
   `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`; KK forced every non-OPTIMAL image linear →
   `newTextureWithDescriptor:offset:bytesPerRow:` buffer-backed texture, which **Metal won't

@@ -309,7 +309,9 @@ Two classes already landed as targeted fixes: the empty-clear-rect vk_meta asser
   new bug worth its own root-cause pass. Diagnostics on dogfood-mac read-only; the re-add/redeploy steps
   are the user's.
   **(b) Grabbed cursor feel** — even where the grab works, captured-mode movement should be
-  indistinguishable from non-grabbed. **(c) Redesign to explore: a *confinement* grab** — keep the
+  indistinguishable from non-grabbed. **(c) — BUILT and dogfooded:** the confinement grab sketched
+  below shipped as the fullscreen pointer grab (`docs/design/fullscreen-pointer-grab.md`; five
+  dogfood rounds recorded in `1021acb`). **(c) Redesign to explore: a *confinement* grab** — keep the
   exact non-grabbed pointer path (absolute coordinates through the fit rect, host cursor wearing
   the guest shape, identical movement/acceleration) and have the grab only (1) clamp the cursor to
   the window's fitted content and (2) capture system combos (Cmd-Tab etc., extending the
@@ -333,23 +335,16 @@ Two classes already landed as targeted fixes: the empty-clear-rect vk_meta asser
   retired: captured motion now integrates the macOS-accelerated deltas into a virtual cursor
   driving the absolute tablet, so no guest profile tweak is needed. The per-event centre re-pin,
   and thus this RD-confound item, is unchanged.)
-- **Non-grabbed guest cursor renders too large in a non-fullscreen window** (open, user-reported
-  2026-07-11) — with match-host the guest renders at ~display resolution and the window shows the
-  scanout shrunken through the fit rect, but the host-pointer shape adoption builds the `NSCursor`
-  at **1 px = 1 pt** (`crates/limina/src/window/cursor.rs` `build_guest_cursor`, which even carries
-  a "revisit for HiDPI" note; `nscursor_from_context` sets `NSImage` size = raw `w,h` and the
-  hotspot unscaled). So the desktop scales with the window while the cursor sprite doesn't —
-  correct only at fullscreen where fit scale ≈ 1. The **captured** path is already right
-  (`update_capture_cursor` scales by the parent scanout layer's bounds), which is why it only shows
-  when not grabbed. Fix shape: scale the `NSImage` point size **and the hotspot** by the shared
-  fit-rect scale (`window/fit.rs` — the same pixels↔points transform pointer mapping uses; don't
-  derive a second one), clamp upscale to 1.0 (blurry bitmap), and include the scale (quantized) in
-  `apply_cursor`'s rebuild cache key — today it caches by IOSurface id alone
-  (`built: Cell<Option<u32>>`), so a window resize would never rebuild the shape.
+- ~~**Non-grabbed guest cursor renders too large in a non-fullscreen window**~~ (user-reported
+  2026-07-11) — **DONE.** The shape cache is now keyed on **(IOSurface id, scale_key)** with
+  `cursor_scale_key(fit_w, guest_w)` and the fit-rect scale applied to the `NSImage` size and
+  hotspot (`crates/limina/src/window/cursor.rs:111,132,140,215`; tests at `:284`), so the sprite
+  tracks the window's fit scale instead of rendering at 1 px = 1 pt.
 - ~~**Fullscreen**~~ (`Cmd-Ctrl-F`) and ~~**keymap remap / Command-Option swap**~~ (`--swap-cmd-opt`)
-  — **DONE** (2026-06-27). Remaining M8 polish: **system-combo capture** (CGEventTap behind a TCC
-  toggle — extends the existing `match_host_shortcut` framework to system combos), **multi-display**
-  (multiplex scanouts by `scanout_id`). Roadmap M8.
+  — **DONE** (2026-06-27). The formerly-remaining M8 polish is done too: ~~**system-combo
+  capture**~~ (the capture/soft-grab CGEventTap) and ~~**multi-display**~~ (display modes +
+  per-host-display identity; `docs/design/display-modes.md`, `docs/design/display-cutouts.md`).
+  Roadmap M8.
 
 ## Dogfooding / Parallels migration
 Surfaced 2026-06-29 while planning the migration of a stock Fedora 44 Parallels VM onto limina on a

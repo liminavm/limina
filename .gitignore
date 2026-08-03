@@ -29,6 +29,10 @@ Cargo.lock.orig
 /third_party/
 /vendor-build
 
+# Screenshots keep landing at the repo root (Limina.HEIC and friends)
+*.HEIC
+*.heic
+
 # Editor / OS cruft
 .DS_Store
 *.swp

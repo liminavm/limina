@@ -1,6 +1,6 @@
-# patches/linux — enhanced-tier guest kernel patches (drm/virtio)
+# patches/linux — enhanced-tier guest kernel patches (drm/virtio + virtio-balloon)
 
-Three small drm/virtio patches applied to the **enhanced-tier guest kernel** (the 16 KiB
+Six small virtio patches applied to the **enhanced-tier guest kernel** (the 16 KiB
 kernel built from kernel.org stable + the target Fedora's config — see
 `scripts/provision/f44/build-kernel-rpm.sh`, which applies `*.patch` from this dir, and the
 `limina-devmac-kernel-build` memory). There is no vendored kernel tree; the base is whatever
@@ -35,6 +35,12 @@ these only sharpen the enhanced path.
 - **`0003-drm-virtio-advertise-linear-modifier.patch`** — advertise `DRM_FORMAT_MOD_LINEAR`
   via the plane modifier list (and drop `fb_modifiers_not_supported`) so LINEAR-tagged
   `ADDFB2` works; the device's only layout *is* linear.
+- **`0004-drm-virtio-align-host-visible-allocations-to-16-KiB.patch`** — align host-visible
+  blob allocations to 16 KiB so a 4 KiB-page guest maps cleanly on the 16 KiB-page host
+  (part of the stock-4k venus enablement; see the `limina-blob-map-16k-alignment` memory).
+- **`0005-virtio-balloon-stop-page-reporting-across-suspend.patch`** — stop free-page
+  reporting across suspend so ballooning survives an s2idle cycle (M9; shipped in the
+  `7.1.4-limina16k` respin, 2026-07-20).
 - **`0006-drm-virtio-allow-xbgr8888-abgr8888-on-primary-plane.patch`** — accept the RGBA
   byte orders on the primary plane (+ their `translate_format` cases), so Vulkan clients'
   `R8G8B8A8` buffers and a Vulkan compositor rendering directly into its scanout buffer can
@@ -46,7 +52,7 @@ these only sharpen the enhanced path.
 
 ## Upstreaming
 
-All three are dri-devel material (0001/0003 near-ready, 0002 needs the opaque-scanout
+The drm/virtio plane/format patches are dri-devel material (0001/0003 near-ready, 0002 needs the opaque-scanout
 question answered, possibly as virtio-gpu spec text) — see the triage in
 `docs/reviews/2026-07-01-full-review.md` Part II. **Before sending, verify none has landed
 upstream already** (`scripts/provision/f44/README.md:71` flags this).

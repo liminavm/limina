@@ -37,7 +37,7 @@ This checks out `third_party/virglrenderer` at `UPSTREAM_BASE` and `git am`s the
 
 ## The series — themes
 
-(Theme list below covers the 2026-07-01 shape; the series has since grown through 0052 —
+(Theme list below covers the 2026-07-01 shape; the series has since grown through 0058 —
 themes for the later spans:)
 
 - **Ring wakeup/latency (0041, 0043-0044, 0049):** one-sleep-per-rung relax backoff, the
