@@ -30,7 +30,8 @@ SERIES = {
     "mesa": "*.diff",
     "linux": "*.patch",
     "imago": "*.patch",
-    "mutter": "*.patch",
+    # mutter: retired 2026-08-03 — limina no longer patches mutter (writing a
+    # drop-in gnome-shell/mutter replacement). ledger/mutter.md kept as history.
 }
 
 SKELETON = dict(need="", checked="", issue="", mr="", sec="", fold="", tier="", disp="", notes="")

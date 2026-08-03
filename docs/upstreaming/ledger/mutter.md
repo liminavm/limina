@@ -1,5 +1,11 @@
 # mutter — patch-audit ledger
 
+> **SERIES RETIRED 2026-08-03.** limina no longer patches mutter — we are writing a
+> drop-in gnome-shell/mutter replacement, so the patch series (`patches/mutter/`) and its
+> experimental build scripts were removed. This file is kept as the historical audit record;
+> the one active patch (0003 ext-data-control) and the two retired robustness fixes it once
+> carried are all moot now that mutter is not a dependency we ship. No upstreaming owed.
+
 1 patches; `UPSTREAM_BASE` `floating — see the series README`. Schema + protocol: `README.md`.
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
 

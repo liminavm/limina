@@ -18,11 +18,11 @@ docs-only.
 | kosmickrisp (KK) | 19 | mesa `84acd848` | gitlab.fd.o (Anubis) |
 | mesa (guest) | 15 | mesa `c9e4f184e593` | gitlab.fd.o (Anubis) |
 | imago | 2 | `hreitz/imago` | gitlab.com |
-| mutter | 1 | mutter `9e9f2bf8abb5` | gitlab.gnome.org |
+| mutter | ~~1~~ RETIRED | — | series removed 2026-08-03 (own compositor) |
 | virglrenderer | 58 | `956b034f` | gitlab.fd.o (Anubis) |
 | libkrun | 126 | `c652b56` (main) | github.com/libkrun/libkrun |
 | edk2 | (script) | — | prose section, no rows |
-| **total** | **227** | | |
+| **total** | **226** | | (was 227; mutter's 1 retired) |
 
 ## Headline: what changes hands, what stays
 
@@ -97,9 +97,10 @@ Ranked roughly by blast radius / reviewer-readiness. None are blocked on disclos
 The macOS GPU coexist/venus/IOSurface stack, the M9.3 GPU snapshot-replay journal (libkrun
 0071–0086), the reset lifecycle, the venus WSI residual (mesa 0010/0011/0015 — shrinks with M15
 device-advertised modifiers, not with MRs), the KK monolith's Metal-bridge core, all log-taste and
-DIAG-probe rows. **mutter 0003** is a hard carry: ext-data-control was **explicitly rejected**
-upstream (work item #3941, closed by swick as "a sandbox hole"; portals are the sanctioned path), so
-the `clipboard@limina` shell-extension bridge is load-bearing for GNOME indefinitely.
+DIAG-probe rows. **mutter is no longer in scope** — the series was retired 2026-08-03 (limina is
+writing a drop-in gnome-shell/mutter replacement), so the ext-data-control patch and its two retired
+robustness fixes are moot. The `clipboard@limina` shell-extension bridge remains the GNOME clipboard
+path until the replacement compositor subsumes it.
 
 ### 5. NEW-FEATURE RFC — no upstream prior art or demand; offer as RFC, expect a passthrough objection
 
