@@ -1172,7 +1172,10 @@ impl InputState {
         self.send_ptr(InputEvent::syn());
     }
 
-    fn emit_scroll(&self, event: &NSEvent) {
+    /// Translate one scroll event for the guest. Shared with the capture tap, which bridges its
+    /// `CGEvent` to an `NSEvent` to get here — captured and uncaptured scrolling must not be two
+    /// different translations.
+    pub(crate) fn emit_scroll(&self, event: &NSEvent) {
         self.cancel_ungrab_chord();
         // Trackpads and Magic Mice report precise point deltas (momentum-phase events
         // included, so guest kinetic decay comes free); those flow through the v120

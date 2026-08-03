@@ -41,8 +41,7 @@ use limina_input::auxkey::{
     NX_SUBTYPE_AUX_CONTROL_BUTTONS,
 };
 use limina_input::constants::{
-    ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
-    REL_WHEEL,
+    ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY,
 };
 use limina_input::InputEvent;
 
@@ -142,8 +141,9 @@ const FIELD_DELTA_X: u32 = 4;
 const FIELD_DELTA_Y: u32 = 5;
 const FIELD_KEYBOARD_AUTOREPEAT: u32 = 8;
 const FIELD_KEYBOARD_KEYCODE: u32 = 9;
-const FIELD_SCROLL_AXIS1: u32 = 11; // vertical, in lines
-const FIELD_SCROLL_AXIS2: u32 = 12; // horizontal, in lines
+// (The two scroll *line* fields used to be read here; scrolling now goes through the shared
+// `InputState::emit_scroll` via the NSEvent bridge, which sees the precise deltas those fields
+// quantize away.)
 
 /// The tap port, so the callback can re-enable itself after the system disables it (there is one
 /// window/tap). Set once in [`install`]; read in the callback.
@@ -402,17 +402,17 @@ extern "C" fn tap_callback(
             }
         }
         SCROLL => {
-            ctx.input.cancel_ungrab_chord();
-            let v = geti(FIELD_SCROLL_AXIS1) as i32;
-            let h = geti(FIELD_SCROLL_AXIS2) as i32;
-            if v != 0 {
-                send(InputEvent::new(EV_REL, REL_WHEEL, v));
-            }
-            if h != 0 {
-                send(InputEvent::new(EV_REL, REL_HWHEEL, h));
-            }
-            if v != 0 || h != 0 {
-                send(InputEvent::syn());
+            // Straight to the shared scroll translator, via the same NSEvent bridge the aux keys
+            // use. The tap used to read the two integer *line* fields directly, which is a legacy
+            // one-notch-per-event mapping: no precise deltas, no v120 hi-res wheel, no momentum
+            // phase. That was tolerable while capture was a short-lived mouselook mode entered on
+            // purpose; the fullscreen grab makes captured scrolling the DEFAULT way a trackpad
+            // scrolls in a fullscreen guest, and shipping the grab over this would have read as
+            // "fullscreen broke scrolling". Bridging (rather than decoding the CG scroll fields
+            // here) is deliberate: two owners of one translation is the mistake this file has
+            // already made with the chrome ask.
+            if let Some(ns) = NSEvent::eventWithCGEvent(unsafe { &*(event as *const CGEvent) }) {
+                ctx.input.emit_scroll(&ns);
             }
         }
         _ => {}
