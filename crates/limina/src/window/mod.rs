@@ -44,6 +44,7 @@ mod capture_tap;
 mod cursor;
 mod diag;
 pub(crate) mod fit;
+mod grab_policy;
 mod hostdisplay;
 mod input;
 mod lifecycle;

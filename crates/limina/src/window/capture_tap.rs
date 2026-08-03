@@ -46,6 +46,7 @@ use limina_input::constants::{
 use limina_input::InputEvent;
 
 use super::fit::{self, FitRect};
+use super::grab_policy::{self, Release};
 use super::input::{
     match_host_shortcut, send_edge_overflow, send_event, HostShortcut, InputState, RevealSrc,
     UngrabAction,
@@ -186,27 +187,18 @@ struct TapCtx {
     /// edge-resistance`, migrated to a duration — see [`crate::vmlib::schema::EdgeHold`]).
     /// Zero means `Off`: never grab, exactly today's free pointer.
     hold: f64,
-    /// Charge built by the current edge press, and which edge it is against. See [`fit::Charge`].
-    grab_charge: Cell<fit::Charge>,
-    grab_edge: Cell<Option<fit::Edge>>,
-    /// When the pointer became [`fit::deep_inside`] the content, for the re-grab dwell.
-    inside_since: Cell<Option<std::time::Instant>>,
-    /// This grab is the FULLSCREEN POLICY's: a sustained edge press releases it, and leaving
-    /// fullscreen ends it.
+    /// Everything the grab policy remembers between events — the press charge and its edge, the
+    /// re-grab dwell, the explicit-release latch, and whether the POLICY is the one holding the
+    /// pointer. One `Cell` because the decisions live in [`grab_policy`], which takes and returns
+    /// the whole state; this file only reads CoreGraphics and performs the verdicts.
     ///
-    /// Set only by the policy — **never** by Cmd-Ctrl-G, even in fullscreen. The two grabs are
-    /// deliberately different tools. The policy grab is a convenience with a way out at every
-    /// edge; the explicit grab is what you reach for when the pointer must not leave the VM *for
-    /// any reason*, which is also why it is not the default. Giving it the edge release would make
-    /// it the same thing as the policy grab wherever it matters most, leaving no way to ask for an
-    /// unconditional hold. Its ways out stay Cmd-Ctrl-G and the Ctrl-Opt chord.
-    fullscreen_grab: Cell<bool>,
-    /// The user let the pointer go on purpose (Cmd-Ctrl-G or the Ctrl-Opt chord), so the policy
-    /// must not take it straight back. Cleared when the window regains key status, exactly like
-    /// [`Self::soft_muted`] — clicking away and back is the way to ask for it again. NOT set by
-    /// the edge-press release, which is the designed way out and whose oscillation guard is
-    /// [`fit::may_regrab`].
-    user_released: Cell<bool>,
+    /// `holding` is set only by the policy — **never** by Cmd-Ctrl-G, even in fullscreen. The two
+    /// grabs are deliberately different tools. The policy grab is a convenience with a way out at
+    /// every edge; the explicit grab is what you reach for when the pointer must not leave the VM
+    /// *for any reason*, which is also why it is not the default. Giving it the edge release would
+    /// make it the same thing as the policy grab wherever it matters most, leaving no way to ask for
+    /// an unconditional hold. Its ways out stay Cmd-Ctrl-G and the Ctrl-Opt chord.
+    grab: Cell<grab_policy::GrabState>,
     /// Which mouse buttons are down (bitmask, [`btn_bit`]). A drag must neither release the grab
     /// (it would drop a guest window on the next display) nor let the policy take it.
     buttons: Cell<u8>,
@@ -239,19 +231,14 @@ impl TapCtx {
                 .is_some_and(|w| w.styleMask().contains(NSWindowStyleMask::FullScreen))
     }
 
-    /// Forget everything about the current edge press and the re-grab dwell.
-    fn reset_grab_gesture(&self) {
-        self.grab_charge.set(fit::Charge::default());
-        self.grab_edge.set(None);
-        self.inside_since.set(None);
+    /// Read-modify-write the policy state — the only way this file touches it.
+    fn with_grab<T>(&self, f: impl FnOnce(&mut grab_policy::GrabState) -> T) -> T {
+        let mut st = self.grab.get();
+        let out = f(&mut st);
+        self.grab.set(st);
+        out
     }
 }
-
-/// A distance floor under the edge-press release, so pointer jitter against a clamped edge cannot
-/// satisfy the hold. Deliberately small: the hold is what makes the gesture deliberate, and a
-/// larger floor would quietly turn `Light` back into a distance gate — the unit this whole design
-/// exists to get away from.
-const GRAB_PUSH: f64 = 24.0;
 
 extern "C" fn tap_callback(
     _proxy: CGEventTapProxy,
@@ -278,7 +265,7 @@ extern "C" fn tap_callback(
     let is_key = ctx.view.window().is_some_and(|w| w.isKeyWindow());
     if is_key && !ctx.was_key.replace(true) {
         ctx.soft_muted.set(false);
-        ctx.user_released.set(false);
+        ctx.with_grab(|st| st.rearm());
     }
     if !is_key {
         ctx.was_key.set(false);
@@ -290,8 +277,7 @@ extern "C" fn tap_callback(
         // claimed this was already handled. It was not.)
         if ctx.captured.load(Ordering::Acquire) {
             log::info!("pointer capture: released — the window lost focus");
-            ctx.fullscreen_grab.set(false);
-            ctx.reset_grab_gesture();
+            ctx.with_grab(|st| st.stop_holding());
             ctx.input.toggle_capture(&ctx.view);
         }
     }
@@ -300,10 +286,9 @@ extern "C" fn tap_callback(
     // down — must hand the pointer back here, because the edge-press release is itself gated on
     // fullscreen: without this the pointer would be held in a windowed VM with no gesture that
     // could free it but the chord. An explicit Cmd-Ctrl-G grab is the user's and survives.
-    if ctx.fullscreen_grab.get() && ctx.captured.load(Ordering::Acquire) && !ctx.fullscreen() {
+    if ctx.grab.get().holding() && ctx.captured.load(Ordering::Acquire) && !ctx.fullscreen() {
         log::info!("pointer capture: released — no longer fullscreen");
-        ctx.fullscreen_grab.set(false);
-        ctx.reset_grab_gesture();
+        ctx.with_grab(|st| st.stop_holding());
         ctx.input.toggle_capture(&ctx.view);
     }
 
@@ -329,7 +314,7 @@ extern "C" fn tap_callback(
             // press one meaning: from soft or policy-held it becomes a hard grab, from a hard grab
             // it lets go. (Ctrl-Opt still always releases.)
             let held = ctx.captured.load(Ordering::Acquire);
-            let hard = held && !ctx.fullscreen_grab.get();
+            let hard = held && !ctx.grab.get().holding();
             // GRAB only when our window is key: this is a SESSION tap, so it sees the combo
             // even while another app (or another VM) is focused — grabbing then steals the
             // user's mouse out from under whatever they were doing. Pass the combo through
@@ -338,12 +323,11 @@ extern "C" fn tap_callback(
             if !hard && !is_key {
                 return event;
             }
-            ctx.reset_grab_gesture();
-            // The user is the other owner of `captured`. Without this latch a level-triggered
+            // The user is the other owner of `captured`. Without the latch a level-triggered
             // fullscreen policy would simply re-grab on the next event — the state the review
-            // flagged as two owners of one flag.
-            ctx.user_released.set(hard);
-            ctx.fullscreen_grab.set(false);
+            // flagged as two owners of one flag. A *promotion* latches nothing: the pointer stays
+            // held, the policy just stops owning it.
+            ctx.with_grab(|st| st.release_by_user(hard));
             if held != hard {
                 // Already held, but by the policy: promote it in place. No capture transition —
                 // the pointer does not move, the guest sees nothing, only the terms change.
@@ -417,9 +401,7 @@ extern "C" fn tap_callback(
                 match ctx.input.observe_ungrab_flags(keycode, flags) {
                     UngrabAction::Fire => {
                         if captured {
-                            ctx.user_released.set(true);
-                            ctx.fullscreen_grab.set(false);
-                            ctx.reset_grab_gesture();
+                            ctx.with_grab(|st| st.release_by_user(true));
                             ctx.input.toggle_capture(&ctx.view);
                         } else {
                             ctx.soft_muted.set(true);
@@ -692,22 +674,22 @@ fn try_create(ctx: *mut TapCtx) -> bool {
 /// has already moved the cursor, so "hold the pointer" could only ever mean "put it back", one
 /// visible flick per event.
 fn uncaptured_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
-    let fullscreen_and_key = ctx.view.window().is_some_and(|w| w.isKeyWindow()) && ctx.fullscreen();
-    let duties = fit::edge_duties(fullscreen_and_key, ctx.hold > 0.0);
-    if !duties.ask {
-        // Not our pointer to think about. Drop any half-earned dwell so the *next* fullscreen
-        // session cannot inherit it and grab on its first twitch.
-        ctx.reset_grab_gesture();
-        return event;
-    }
-
-    let fit = ctx.fit.get();
     let Some(cur) =
         super::input::cg_global_to_view_point(&ctx.view, unsafe { CGEventGetLocation(event) })
     else {
         return event;
     };
     let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
+    let fit = ctx.fit.get();
+    let sample = grab_policy::Free {
+        now: std::time::Instant::now(),
+        pos: cur,
+        fit,
+        fullscreen_and_key: ctx.view.window().is_some_and(|w| w.isKeyWindow()) && ctx.fullscreen(),
+        grab_enabled: ctx.hold > 0.0,
+        buttons_down: ctx.buttons.get() != 0,
+    };
+    let out = ctx.with_grab(|st| grab_policy::free_step(st, &sample));
 
     // The chrome ask has exactly one implementation, in `InputState::reveal_step`, and the tap
     // defers to it. It used to have its own — the resistance breakthrough — which stayed
@@ -715,45 +697,15 @@ fn uncaptured_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
     // Accessibility *is* granted) a two-event flick still summoned the menu bar. Two owners of
     // one gesture is how that happens; now there is one.
     //
-    // Placement is load-bearing twice over, each learned by breaking it:
-    //   - ABOVE the `duties.grab` return, so `Edge resist: Off` still leaves a way out of the
-    //     overlay (see `fit::edge_duties`) — with the grab off there is no edge-press gesture at
-    //     all, and this is the ONLY route to the menu bar;
-    //   - UNCONDITIONAL, never `if overlaid`, because releasing the ask is the only thing that
-    //     brings the overlay back, so skipping the call while it is down strands the guest below
-    //     the camera housing. `reveal_step` tests the overlay itself, where arming needs it and
-    //     releasing must not.
-    ctx.input
-        .reveal_step(cur, getd(FIELD_DELTA_Y), fit, RevealSrc::Tap);
-    if !duties.grab {
-        // `Off`: the pointer is free at every edge and behaves exactly as it does windowed. The
-        // guest's own barriers still get their pressure — `emit_motion` forwards it, since the
-        // event passes through to the window untouched.
-        return event;
+    // `out.ask` is deliberately not conditioned on the grab (see `grab_policy::free_step`), and the
+    // call is unconditional, never `if overlaid`: releasing the ask is the only thing that brings
+    // the overlay back, so skipping it while the overlay is down strands the guest below the camera
+    // housing. `reveal_step` tests the overlay itself, where arming needs it and releasing must not.
+    if out.ask {
+        ctx.input
+            .reveal_step(cur, getd(FIELD_DELTA_Y), fit, RevealSrc::Tap);
     }
-
-    // Re-grab hysteresis. The pointer must come a real margin back INSIDE the content and stay
-    // there, with no button down, before the grab retakes it. On a single display a released
-    // cursor cannot leave the window at all — fullscreen *is* the screen, and the window server
-    // pins it to the top row, which is still window territory — so re-grabbing on mere
-    // containment would take the pointer back on the first inward jitter, warp it to centre and
-    // hide it. That is the likeliest way this design ships worse than what it replaces.
-    let now = std::time::Instant::now();
-    if fit::deep_inside(cur, fit) {
-        if ctx.inside_since.get().is_none() {
-            ctx.inside_since.set(Some(now));
-        }
-    } else {
-        ctx.inside_since.set(None);
-    }
-    let inside_for = ctx.inside_since.get().map(|t| now.duration_since(t));
-    // Taking the pointer out of the guest ends an explicit release. The latch has to persist
-    // while the pointer stays inside — or Cmd-Ctrl-G in fullscreen would be undone by the re-grab
-    // a quarter second later, and could not do the one thing it is for. But keying its *end* only
-    // on a focus round trip made the grab feel permanently broken after one Cmd-Ctrl-G: on a
-    // fullscreen VM there is nothing else on that display to click, so the regain edge never
-    // comes. Leaving and returning is the same intent expressed with the mouse.
-    if !fit::point_in_fit(cur.0, cur.1, fit) && ctx.user_released.replace(false) {
+    if out.left_guest {
         log::info!("pointer capture: the pointer left the guest — the fullscreen grab re-arms");
     }
     if edge_trace() {
@@ -774,21 +726,20 @@ fn uncaptured_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
             fit.w,
             fit.h,
             fit::deep_inside(cur, fit),
-            inside_for.map(|d| d.as_millis()),
-            ctx.user_released.get(),
+            out.inside_for.map(|d| d.as_millis()),
+            ctx.grab.get().user_released(),
         );
     }
-    if !ctx.user_released.get() && fit::may_regrab(cur, fit, inside_for, ctx.buttons.get() != 0) {
-        ctx.reset_grab_gesture();
-        ctx.fullscreen_grab.set(true);
-        // `pos` is the virtual cursor as last remembered, BEFORE the toggle, and it routinely
-        // disagrees with `cur` here — this tap runs ahead of the window's own motion handling, so
-        // it is normally one event behind, and a whole excursion behind after a trip to another
-        // display. That disagreement used to *be* the bug (the guest cursor appeared at the stale
-        // point and the park warp injected the difference); `toggle_capture` now re-seeds from the
-        // live pointer, so the two lines differing is expected. What must stay true is that the
-        // pointer does not move at the grab: watch the `[CAP]` deltas that follow, not this.
+    if out.grab {
         if edge_trace() {
+            // `pos` is the virtual cursor as last remembered, BEFORE the toggle, and it routinely
+            // disagrees with `cur` here — this tap runs ahead of the window's own motion handling,
+            // so it is normally one event behind, and a whole excursion behind after a trip to
+            // another display. That disagreement used to *be* the bug (the guest cursor appeared at
+            // the stale point and the park warp injected the difference); `toggle_capture` now
+            // re-seeds from the live pointer, so the two lines differing is expected. What must stay
+            // true is that the pointer does not move at the grab: watch the `[CAP]` deltas that
+            // follow, not this.
             eprintln!(
                 "[GRAB] t={:.1} grabbing: cur=({:.1},{:.1}) pos={:?} \
                  fit=({:.1},{:.1} {:.1}x{:.1}) overlaid={}",
@@ -823,47 +774,17 @@ fn point_on_a_display(p: NSPoint) -> bool {
     matching > 0
 }
 
-/// What a completed edge press does. Not every press lets the pointer go.
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Release {
-    /// Free the pointer and move it just past the edge, onto the display that is there.
-    Out((f64, f64)),
-    /// Free the pointer where it is, and ask for the macOS chrome. The top edge only — see
-    /// [`release_for`].
-    InPlaceForChrome,
+/// Is there a display at this **view** point — the arrangement, as [`grab_policy::press_step`]'s
+/// `reachable` predicate.
+///
+/// This is the whole reason the policy takes the predicate rather than calling CoreGraphics itself:
+/// `CGGetDisplaysWithPoint` can only be asked about the Mac it is running on, so the release rule
+/// was untestable until the arrangement became a parameter.
+fn display_beyond(ctx: &TapCtx, p: (f64, f64)) -> bool {
+    super::input::view_point_to_cg_global(&ctx.view, p).is_some_and(point_on_a_display)
 }
 
-/// Decide what a sustained press at `edge` earns — **the pointer is only let go where there is
-/// somewhere for it to go**.
-///
-/// This is the rule dogfood asked for after watching the first cut throw the cursor onto a display
-/// that was neither above nor below anything: a press against a dead edge is not a request to
-/// visit whichever screen the arrangement can reach. Three cases, and only one of them is generic:
-///
-///   - **The top is special: it releases in place and asks for the chrome.** A fullscreen window's
-///     top edge IS the top of the screen, so there is never anything above it — but this is the
-///     one edge whose press means something other than "let me out". Under `notch = extend` it is
-///     the ask for the menu bar, and the menu bar is a *host* affordance: it needs the host
-///     pointer, so the grab has to end for it to be usable at all.
-///   - **Every other edge releases only onto a real display**, checked at the exact point of the
-///     press, so an arrangement where the neighbour spans only part of an edge behaves correctly
-///     along its whole length. A press against a dead stretch earns nothing.
-///
-/// The bottom briefly had a special case of its own — release in place, so the pointer could reach
-/// what looked like a guest dash down there. It was the macOS Dock, on the other display, which is
-/// not something a guest edge press should be reaching for; the generic rule is both simpler and
-/// more correct.
-fn release_for(ctx: &TapCtx, pos: (f64, f64), edge: fit::Edge) -> Option<Release> {
-    if edge == fit::Edge::Top {
-        return Some(Release::InPlaceForChrome);
-    }
-    let p = fit::release_point(pos, edge, ctx.fit.get());
-    super::input::view_point_to_cg_global(&ctx.view, p)
-        .filter(|g| point_on_a_display(*g))
-        .map(|_| Release::Out(p))
-}
-
-/// Let the pointer go, per [`release_for`]. At most one warp, and only ever onto a display that
+/// Let the pointer go, per [`grab_policy::Release`]. At most one warp, and only ever onto a display that
 /// exists — `toggle_capture` warps the host cursor to wherever the virtual one ended, so handing
 /// it the release point IS the release warp. No second warp, and no separate code path that could
 /// forget `end_warp_suppression`.
@@ -874,8 +795,7 @@ fn release_grab(ctx: &TapCtx, pos: (f64, f64), edge: fit::Edge, release: Release
         // which the window server then clamps onto a neighbour — see `fit::RELEASE_INSET`.
         Release::InPlaceForChrome => fit::pull_inside(pos, ctx.fit.get(), fit::RELEASE_INSET),
     }));
-    ctx.reset_grab_gesture();
-    ctx.fullscreen_grab.set(false);
+    ctx.with_grab(|st| st.stop_holding());
     // The top edge is ONE gesture: under `notch = extend` the reason to press upward is to reach
     // the menu bar, so the same press that frees the pointer also puts the overlay down. Moving
     // back into the guest releases the ask and brings the overlay back, exactly as before.
@@ -898,74 +818,40 @@ fn release_grab(ctx: &TapCtx, pos: (f64, f64), edge: fit::Edge, release: Release
     ctx.input.toggle_capture(&ctx.view);
 }
 
-/// Charge the edge press this captured motion represents, and answer with the edge if it has now
-/// been held long enough to release the grab.
-///
-/// `pos` is the VIRTUAL cursor after the clamp, which is what makes this simple: it is exactly at
-/// the edge while the deltas keep flowing, so a sustained push is a stream of genuinely-pushing
-/// events with no "pinned, zero delta" case to special-case (the uncaptured chrome ask, driven by
-/// a cursor the window server pins, has to).
+/// Charge the edge press this captured motion represents, and answer with the release it earned.
+/// The decision is [`grab_policy::press_step`]'s; this reads the arrangement and traces.
 fn grab_release_edge(
     ctx: &TapCtx,
     pos: (f64, f64),
     dx: f64,
     dy: f64,
 ) -> Option<(fit::Edge, Release)> {
-    // Only the policy's grab. An explicit Cmd-Ctrl-G is an unconditional hold — see
-    // `fullscreen_grab` — and the chord is its way out.
-    if !ctx.fullscreen_grab.get() || ctx.hold <= 0.0 || !ctx.fullscreen() {
-        return None;
-    }
-    // Mid-drag never releases: dragging a guest window against an edge would otherwise ungrab and
-    // drop it on the next display. A press only counts once it starts after button-up.
-    if ctx.buttons.get() != 0 {
-        ctx.grab_charge.set(fit::Charge::default());
-        return None;
-    }
-    let fit = ctx.fit.get();
-    let Some(edge) = fit::pressed_edge(pos, dx, dy, fit) else {
-        // Inside the content, or travelling along an edge rather than into it.
-        let mut c = ctx.grab_charge.get();
-        c.lapse();
-        ctx.grab_charge.set(c);
-        return None;
+    let sample = grab_policy::Press {
+        now: std::time::Instant::now(),
+        pos,
+        delta: (dx, dy),
+        fit: ctx.fit.get(),
+        buttons_down: ctx.buttons.get() != 0,
+        hold: ctx.hold,
+        side: side_tuning(),
+        fullscreen: ctx.fullscreen(),
     };
-    // Changing edges starts a new gesture rather than inheriting the old one's charge.
-    if ctx.grab_edge.replace(Some(edge)) != Some(edge) {
-        ctx.grab_charge.set(fit::Charge::default());
-    }
-    let push = match edge {
-        fit::Edge::Left | fit::Edge::Right => dx.abs(),
-        fit::Edge::Top | fit::Edge::Bottom => dy.abs(),
-    };
-    // The top edge and the sides are different gestures and are judged differently — see
-    // `fit::edge_timing`.
-    let (hold, decay) = fit::edge_timing(ctx.hold, edge, side_tuning());
-    let mut c = ctx.grab_charge.get();
-    let (charge, pushed) = c.push(std::time::Instant::now(), push, decay);
-    ctx.grab_charge.set(c);
-    if edge_trace() {
+    let out = ctx.with_grab(|st| grab_policy::press_step(st, &sample, |p| display_beyond(ctx, p)));
+    if let (true, Some(p)) = (edge_trace(), out.pressing) {
         eprintln!(
-            "[GRAB] t={:.1} press {edge:?} at ({:.1},{:.1}) d=({dx:.1},{dy:.1}) \
-             charge={charge:.3}/{hold:.2} push={pushed:.1} decay={decay:.2}",
+            "[GRAB] t={:.1} press {:?} at ({:.1},{:.1}) d=({dx:.1},{dy:.1}) \
+             charge={:.3}/{:.2} push={:.1} decay={:.2}",
             trace_ms(),
+            p.edge,
             pos.0,
             pos.1,
+            p.charge,
+            p.hold,
+            p.push,
+            p.decay,
         );
     }
-    if charge < hold || pushed < GRAB_PUSH {
-        return None;
-    }
-    // Earned it — but a press against a dead edge earns nothing, and must not sit there fully
-    // charged waiting to fire the instant the pointer slides somewhere releasable. Lapse instead,
-    // so sliding along an edge into a reachable stretch of it starts a fresh, deliberate press.
-    let Some(release) = release_for(ctx, pos, edge) else {
-        let mut c = ctx.grab_charge.get();
-        c.lapse();
-        ctx.grab_charge.set(c);
-        return None;
-    };
-    Some((edge, release))
+    out.release
 }
 
 /// The side-edge feel, overridable per session so a dogfood run can dial it without a rebuild:
@@ -1060,11 +946,7 @@ pub(crate) fn install(
         // hand-edited vm.toml (or a `--edge-resistance 100` in someone's shell history) can still
         // carry the pre-2026-08 points encoding; `EdgeHold` migrates by preset position.
         hold: crate::vmlib::schema::EdgeHold::from_toml(edge_resistance).seconds(),
-        grab_charge: Cell::new(fit::Charge::default()),
-        grab_edge: Cell::new(None),
-        inside_since: Cell::new(None),
-        fullscreen_grab: Cell::new(false),
-        user_released: Cell::new(false),
+        grab: Cell::new(grab_policy::GrabState::default()),
         buttons: Cell::new(0),
         panel_fs,
     }));
