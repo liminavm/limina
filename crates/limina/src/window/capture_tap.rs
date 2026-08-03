@@ -34,7 +34,7 @@ use std::sync::Arc;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSEvent, NSView, NSWindowStyleMask};
 use objc2_core_graphics::CGEvent;
-use objc2_foundation::{NSPoint, NSRect};
+use objc2_foundation::NSPoint;
 
 use limina_input::auxkey::{
     decode_aux_data1, nx_key_bucket, nx_key_to_linux, route_aux_event_key, AuxBucket, GrabMode,
@@ -87,8 +87,6 @@ extern "C" {
     /// this motion was applied — the authoritative position, including the window server's own
     /// clamping to the union of the displays.
     fn CGEventGetLocation(event: CGEventRef) -> NSPoint;
-    fn CGMainDisplayID() -> u32;
-    fn CGDisplayBounds(display: u32) -> NSRect;
     /// How many displays contain this global point. Zero means the point is nowhere the cursor
     /// can actually be — see [`point_on_a_display`].
     fn CGGetDisplaysWithPoint(
@@ -212,25 +210,6 @@ struct TapCtx {
     /// Which mouse buttons are down (bitmask, [`btn_bit`]). A drag must neither release the grab
     /// (it would drop a guest window on the next display) nor let the policy take it.
     buttons: Cell<u8>,
-    /// The bogus motion delta the grab's park warp is about to inject, and when it was armed.
-    ///
-    /// Taking the grab parks the hidden host cursor at the main display's centre
-    /// ([`super::input::apply_capture_cursor`]), and that warp posts a motion event whose delta is
-    /// the **whole vector of the warp** — which the captured path would otherwise integrate into
-    /// the virtual cursor as if the user had flung the mouse across the desk. Invisible for a
-    /// Cmd-Ctrl-G taken mid-screen (the cursor is already near that centre); glaring when the
-    /// policy re-grabs a pointer returning from another display.
-    ///
-    /// Measured, not assumed: across 20 grabs the injected delta was always exactly
-    /// `park − cursor`, to under a point (`[GRAB]` trace, 2026-08-02).
-    ///
-    /// Dropping merely "the first captured event after a grab" is not enough, and that is why
-    /// this stores the vector rather than a flag. The user is still moving, so real motion events
-    /// are already queued when the warp is issued and the warp's event lands *behind* them — the
-    /// same trace caught first-deltas of `(-3,1)` and `(0,0)`, i.e. a real event dropped and the
-    /// 2790-point one integrated a tick later. Matching the vector is exact: no real event
-    /// resembles it, and if it never arrives nothing is dropped.
-    pending_park: Cell<Option<((f64, f64), std::time::Instant)>>,
     /// Whether the window is in PANEL fullscreen (`notch = extend`). That mechanism is a
     /// borderless window, not a Space, so it never sets `NSWindowStyleMask::FullScreen` — and
     /// `Borderless` is zero, so there is nothing to test for on the window itself. The grab has
@@ -260,44 +239,6 @@ impl TapCtx {
                 .is_some_and(|w| w.styleMask().contains(NSWindowStyleMask::FullScreen))
     }
 
-    /// Arm the park-warp cancellation for a grab about to happen at `cur` (view points).
-    /// See [`Self::pending_park`].
-    fn arm_park_delta(&self, cur: (f64, f64)) {
-        let park = main_display_center();
-        let expect = super::input::view_point_to_cg_global(&self.view, cur)
-            .map(|loc| (park.x - loc.x, park.y - loc.y));
-        self.pending_park
-            .set(expect.map(|d| (d, std::time::Instant::now())));
-    }
-
-    /// Is this delta the park warp we armed? Consumes the arming if so.
-    fn take_park_delta(&self, dx: f64, dy: f64) -> bool {
-        /// Slack between the vector we predict and the one the warp reports. Measured at under a
-        /// point across 20 grabs; 4 is room for the rounding, and nowhere near a real event.
-        const SLACK: f64 = 4.0;
-        /// After this long the warp's event is never coming — stop watching for it, so a later
-        /// real gesture can never be mistaken for one.
-        const WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
-        let Some((expect, armed)) = self.pending_park.get() else {
-            return false;
-        };
-        if armed.elapsed() > WINDOW {
-            self.pending_park.set(None);
-            return false;
-        }
-        if (dx - expect.0).abs() > SLACK || (dy - expect.1).abs() > SLACK {
-            return false;
-        }
-        self.pending_park.set(None);
-        if edge_trace() {
-            eprintln!(
-                "[GRAB] t={:.1} dropped the park warp's delta d=({dx:.1},{dy:.1})",
-                trace_ms()
-            );
-        }
-        true
-    }
-
     /// Forget everything about the current edge press and the re-grab dwell.
     fn reset_grab_gesture(&self) {
         self.grab_charge.set(fit::Charge::default());
@@ -311,16 +252,6 @@ impl TapCtx {
 /// larger floor would quietly turn `Light` back into a distance gate — the unit this whole design
 /// exists to get away from.
 const GRAB_PUSH: f64 = 24.0;
-
-/// Centre of the main display in global (points) coordinates — where we keep the hidden cursor
-/// parked so it can't trip a hot corner or screen-edge action while captured.
-fn main_display_center() -> NSPoint {
-    let b = unsafe { CGDisplayBounds(CGMainDisplayID()) };
-    NSPoint::new(
-        b.origin.x + b.size.width / 2.0,
-        b.origin.y + b.size.height / 2.0,
-    )
-}
 
 extern "C" fn tap_callback(
     _proxy: CGEventTapProxy,
@@ -403,11 +334,6 @@ extern "C" fn tap_callback(
             ctx.user_released.set(!now);
             // An explicit grab is never the policy's, in any mode — see `fullscreen_grab`.
             ctx.fullscreen_grab.set(false);
-            if now {
-                if let Some(p) = ctx.pos.get() {
-                    ctx.arm_park_delta(p);
-                }
-            }
             ctx.reset_grab_gesture();
             ctx.input.toggle_capture(&ctx.view);
             return std::ptr::null_mut(); // consume — the toggle never reaches macOS or the guest
@@ -557,18 +483,24 @@ extern "C" fn tap_callback(
             // Double-valued reads: the integer field truncates, which would eat slow sub-point
             // motion; the f64 position integrates fractions losslessly.
             let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
-            let (mut dx, mut dy) = (getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y));
-            // Swallow the park warp's own delta — see `pending_park`.
-            if ctx.take_park_delta(dx, dy) {
-                (dx, dy) = (0.0, 0.0);
-            }
+            let (dx, dy) = (getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y));
             let pos = send_pos(dx, dy);
+            if edge_trace() {
+                eprintln!(
+                    "[CAP] t={:.1} d=({dx:.1},{dy:.1}) -> pos=({:.1},{:.1})",
+                    trace_ms(),
+                    pos.0,
+                    pos.1
+                );
+            }
             // Park the hidden cursor at centre so it can't reach a hot corner / screen edge.
             // NOTE: re-pinning every event fights any OTHER agent that also moves the macOS cursor
             // — notably a remote-desktop client driving this Mac — which reads as jitter under RD.
             // It works well locally. A cleaner containment scheme (how do VNC/RDP servers solve the
             // same capture problem?) is parked in docs/hardening-backlog.md.
-            unsafe { CGWarpMouseCursorPosition(main_display_center()) };
+            // Re-pin to the park point INSIDE our own window. Zero-length while the cursor is
+            // disassociated, so unlike the old main-display-centre park it injects nothing.
+            unsafe { CGWarpMouseCursorPosition(ctx.input.park_point()) };
             // Strictly AFTER the re-pin: the release does its own single warp, to just outside the
             // edge being pressed, and parking at centre on top of that would throw the pointer to
             // the middle of the screen at the exact moment the user is trying to leave.
@@ -823,7 +755,6 @@ fn uncaptured_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
     if !ctx.user_released.get() && fit::may_regrab(cur, fit, inside_for, ctx.buttons.get() != 0) {
         ctx.reset_grab_gesture();
         ctx.fullscreen_grab.set(true);
-        ctx.arm_park_delta(cur);
         // The virtual cursor the grab is about to hand the guest, BEFORE the toggle: if it
         // disagrees with `cur` (where the tap says the pointer is) the guest's cursor visibly
         // teleports at the instant of the grab, which is what dogfood saw on re-entry from the
@@ -868,8 +799,10 @@ fn point_on_a_display(p: NSPoint) -> bool {
 enum Release {
     /// Free the pointer and move it just past the edge, onto the display that is there.
     Out((f64, f64)),
-    /// Free the pointer where it is, and ask for the macOS chrome. The top edge only.
-    InPlaceForChrome,
+    /// Free the pointer where it is — there is nothing beyond this edge to move onto, but the
+    /// user still wants it back (to reach the guest's own dash at the bottom, say). `chrome` also
+    /// asks for the macOS menu bar, which only the top edge does.
+    InPlace { chrome: bool },
 }
 
 /// Decide what a sustained press at `edge` earns — **the pointer is only let go where there is
@@ -879,9 +812,9 @@ enum Release {
 /// that was neither above nor below anything: a press against a dead edge is not a request to
 /// visit whichever screen the arrangement can reach. Three cases, and only one of them is generic:
 ///
-///   - **Bottom: never releases.** There is nothing below a fullscreen window but the guest's own
-///     dash, and that is served by the clamped overflow the grab already forwards. A press there
-///     is aimed at the guest.
+///   - **Bottom: releases in place.** There is nothing below a fullscreen window to move onto, so
+///     the pointer stays exactly where it is — but it is freed, because the guest's own dash lives
+///     down there and poking at it takes a real cursor.
 ///   - **Top: releases in place, and asks for the chrome.** A fullscreen window's top edge IS the
 ///     top of the screen, so there is never anything above it — but this is the one edge whose
 ///     press means something other than "let me out". Under `notch = extend` it is the ask for the
@@ -891,15 +824,18 @@ enum Release {
 ///     arrangement where the neighbour spans only part of the edge behaves correctly along its
 ///     whole length.
 fn release_for(ctx: &TapCtx, pos: (f64, f64), edge: fit::Edge) -> Option<Release> {
+    let out = |edge| {
+        let p = fit::release_point(pos, edge, ctx.fit.get());
+        super::input::view_point_to_cg_global(&ctx.view, p)
+            .filter(|g| point_on_a_display(*g))
+            .map(|_| Release::Out(p))
+    };
     match edge {
-        fit::Edge::Bottom => None,
-        fit::Edge::Top => Some(Release::InPlaceForChrome),
-        fit::Edge::Left | fit::Edge::Right => {
-            let p = fit::release_point(pos, edge, ctx.fit.get());
-            super::input::view_point_to_cg_global(&ctx.view, p)
-                .filter(|g| point_on_a_display(*g))
-                .map(|_| Release::Out(p))
-        }
+        // Below a fullscreen window there is nothing to move onto, but the pointer is still
+        // wanted back — the guest's dash lives down there and poking at it needs a free cursor.
+        fit::Edge::Bottom => Some(out(edge).unwrap_or(Release::InPlace { chrome: false })),
+        fit::Edge::Top => Some(Release::InPlace { chrome: true }),
+        fit::Edge::Left | fit::Edge::Right => out(edge),
     }
 }
 
@@ -910,14 +846,14 @@ fn release_for(ctx: &TapCtx, pos: (f64, f64), edge: fit::Edge) -> Option<Release
 fn release_grab(ctx: &TapCtx, pos: (f64, f64), edge: fit::Edge, release: Release) {
     ctx.pos.set(Some(match release {
         Release::Out(p) => p,
-        Release::InPlaceForChrome => pos,
+        Release::InPlace { .. } => pos,
     }));
     ctx.reset_grab_gesture();
     ctx.fullscreen_grab.set(false);
     // The top edge is ONE gesture: under `notch = extend` the reason to press upward is to reach
     // the menu bar, so the same press that frees the pointer also puts the overlay down. Moving
     // back into the guest releases the ask and brings the overlay back, exactly as before.
-    if release == Release::InPlaceForChrome {
+    if release == (Release::InPlace { chrome: true }) {
         ctx.input.grant_chrome();
     }
     log::info!("pointer capture: released — sustained press at the {edge:?} edge ({release:?})");
@@ -1068,7 +1004,6 @@ pub(crate) fn install(
         fullscreen_grab: Cell::new(false),
         user_released: Cell::new(false),
         buttons: Cell::new(0),
-        pending_park: Cell::new(None),
         panel_fs,
     }));
     if try_create(ctx) {

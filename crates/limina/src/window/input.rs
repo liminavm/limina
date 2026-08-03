@@ -74,11 +74,15 @@ pub(crate) fn apply_capture_cursor(
     on: bool,
     host_cursor: &HostCursor,
     release_to: Option<NSPoint>,
+    park: Option<NSPoint>,
 ) {
     if on {
         unsafe {
             CGAssociateMouseAndMouseCursorPosition(0);
-            CGWarpMouseCursorPosition(main_display_center());
+            // `park` is a point inside our own window (see `fit::park_point`), so this warp is
+            // zero-length and injects no phantom motion. `None` is the degraded local-monitor
+            // path, which has no view to compute one from.
+            CGWarpMouseCursorPosition(park.unwrap_or_else(main_display_center));
         }
         // Idempotent: NSCursor hide/unhide is a counter — a double-hide (e.g. a stray double
         // toggle) would need a matching double-unhide or the cursor stays gone forever. Only
@@ -89,12 +93,16 @@ pub(crate) fn apply_capture_cursor(
         log::info!("pointer capture: ON (Cmd-Ctrl-G to release)");
     } else {
         unsafe {
-            CGAssociateMouseAndMouseCursorPosition(1);
-            // Warp while still hidden, so the cursor *appears* at the release point rather
-            // than visibly jumping from the parked centre.
+            // Warp BEFORE re-associating, and while still hidden: the cursor *appears* at the
+            // release point rather than visibly jumping there from the park, and — the part that
+            // was a real bug — the hardware cannot move it in between. Associating first made the
+            // mouse live while the cursor was still parked, so motion already in flight was
+            // applied from the park point; with the park on another display that put the pointer
+            // on the wrong screen entirely, raising that screen's Dock instead of the guest's dash.
             if let Some(p) = release_to {
                 CGWarpMouseCursorPosition(p);
             }
+            CGAssociateMouseAndMouseCursorPosition(1);
         }
         // A warp opens a 0.25 s local-events suppression interval, and this one is applied at the
         // exact moment the user gets the pointer back — so every release ate up to a quarter
@@ -416,6 +424,9 @@ pub struct InputState {
     /// letterboxed fit rect). The absolute-pointer transform and the inside-gate go through
     /// it, so the pointer can never disagree with the pixels. Same main thread → `Rc<Cell>`.
     fit: Rc<Cell<super::fit::FitRect>>,
+    /// Where the hidden host cursor is parked while captured, in CG global coordinates — a point
+    /// inside our own window, chosen at grab time. See [`super::fit::park_point`].
+    park: Cell<Option<NSPoint>>,
     /// Hi-res scroll accumulators (vertical, horizontal) — see [`ScrollAxis`].
     scroll_y: Cell<ScrollAxis>,
     scroll_x: Cell<ScrollAxis>,
@@ -527,6 +538,7 @@ impl InputState {
             ungrab_withheld: RefCell::new(Vec::new()),
             capture_pos,
             fit,
+            park: Cell::new(None),
             scroll_y: Cell::new(ScrollAxis::default()),
             scroll_x: Cell::new(ScrollAxis::default()),
             overlay_active,
@@ -535,6 +547,12 @@ impl InputState {
             reveal_granted: Cell::new(None),
             reveal_pos: [Cell::new(None), Cell::new(None)],
         }
+    }
+
+    /// Where the hidden cursor is parked while captured — the tap re-pins to it after every
+    /// motion event, so both paths agree on one point and neither warp moves anything.
+    pub(crate) fn park_point(&self) -> NSPoint {
+        self.park.get().unwrap_or_else(main_display_center)
     }
 
     fn is_captured(&self) -> bool {
@@ -554,8 +572,12 @@ impl InputState {
                 .get()
                 .and_then(|p| view_point_to_cg_global(view, p))
         };
+        if now {
+            let park = super::fit::park_point(self.capture_pos.get(), self.fit.get());
+            self.park.set(view_point_to_cg_global(view, park));
+        }
         self.captured.store(now, Ordering::Release);
-        apply_capture_cursor(now, &self.host_cursor, release_to);
+        apply_capture_cursor(now, &self.host_cursor, release_to, self.park.get());
         self.ungrab_armed.set(false);
         // Anything the chord withheld dies here rather than being replayed: both branches below
         // force-release modifiers, so replaying a press would strand it down in the guest.
@@ -1164,7 +1186,7 @@ impl InputState {
         // Re-pin the (hidden) host cursor to the display centre so it can't drift onto windows
         // behind us — CGAssociate(false) alone doesn't reliably freeze it. The warp doesn't
         // affect `deltaX/deltaY`, so the virtual cursor still integrates clean motion.
-        unsafe { CGWarpMouseCursorPosition(main_display_center()) };
+        unsafe { CGWarpMouseCursorPosition(self.park_point()) };
         let fit = self.fit.get();
         let step =
             super::fit::capture_step(self.capture_pos.get(), event.deltaX(), event.deltaY(), fit);

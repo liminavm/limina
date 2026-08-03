@@ -215,6 +215,38 @@ pub(crate) fn capture_step(pos: Option<(f64, f64)>, dx: f64, dy: f64, fit: FitRe
     }
 }
 
+/// How far inside the content the captured cursor is parked. Clear of any screen-edge trigger
+/// (menu bar, Dock, hot corner) with room to spare, and small enough that the park point is a
+/// short hop from wherever the pointer already was.
+const PARK_INSET: f64 = 64.0;
+
+/// Where to park the hidden host cursor while captured: where it already is, pulled far enough
+/// inside the content that no screen-edge trigger can reach it.
+///
+/// **Not the main display's centre**, which is what this replaces, and the difference is not
+/// cosmetic. A warp posts a motion event whose delta is the whole vector of the warp, and the
+/// captured path integrates deltas into the virtual cursor — so parking somewhere far away
+/// injects that entire distance as phantom guest motion. Measured on a two-display Mac whose VM
+/// was fullscreen on the display *left of and below* the main one: every grab injected 1400-2400
+/// points, flinging the guest cursor into a corner (`[GRAB]` trace, 2026-08-02).
+///
+/// Parking where the cursor already is makes the grab warp zero-length, so there is no delta to
+/// inject and nothing to detect afterwards. The per-event re-pin that follows is zero-length too,
+/// since a disassociated cursor does not move.
+pub(crate) fn park_point(pos: Option<(f64, f64)>, fit: FitRect) -> (f64, f64) {
+    let seed = capture_step(pos, 0.0, 0.0, fit).pos;
+    // Content thinner than two insets collapses to its own centre rather than an inside-out
+    // range — `f64::clamp` panics when min > max, and a mid-resize tick can get there.
+    let pull = |v: f64, lo: f64, len: f64| {
+        if len <= 2.0 * PARK_INSET {
+            lo + len.max(0.0) / 2.0
+        } else {
+            v.clamp(lo + PARK_INSET, lo + len - PARK_INSET)
+        }
+    };
+    (pull(seed.0, fit.x, fit.w), pull(seed.1, fit.y, fit.h))
+}
+
 /// How close to a corner counts as being *at* it — where the grab is never released and the
 /// chrome ask never arms, because corners belong to the guest (the top-left one is the GNOME
 /// overview trigger). Shared by both policies so they cannot overlap by construction rather than
@@ -639,6 +671,47 @@ mod tests {
     }
 
     // --- fullscreen pointer grab (docs/design/fullscreen-pointer-grab.md) ------------------
+
+    #[test]
+    fn the_park_point_is_inside_our_own_content_never_another_display() {
+        let fit = screen_fit();
+        // Deep inside: parked exactly where the cursor already is, so the grab warp is a no-op.
+        let deep = (700.0, 400.0);
+        assert_eq!(park_point(Some(deep), fit), deep);
+        // At an edge or corner: pulled clear of every screen-edge trigger, but only just — the
+        // point of parking here rather than at the main display's centre is that the warp stays
+        // short, because its length is injected as phantom guest motion.
+        for corner in [
+            (fit.x, fit.y),
+            (fit.x + fit.w, fit.y + fit.h),
+            (fit.x, fit.y + fit.h),
+        ] {
+            let p = park_point(Some(corner), fit);
+            assert!(deep_inside(p, fit), "{corner:?} parked at {p:?}");
+            let hop = (p.0 - corner.0).hypot(p.1 - corner.1);
+            assert!(
+                hop <= 2.0 * PARK_INSET,
+                "{corner:?} -> {p:?} is a {hop} hop"
+            );
+        }
+        // Never outside the content, whatever it is handed.
+        let far = (99_999.0, -99_999.0);
+        assert!(deep_inside(park_point(Some(far), fit), fit));
+        assert!(deep_inside(park_point(None, fit), fit));
+    }
+
+    #[test]
+    fn a_content_area_thinner_than_the_park_inset_does_not_panic() {
+        // `f64::clamp` panics when min > max, and a mid-resize tick can produce a fit this thin.
+        let thin = FitRect {
+            x: 10.0,
+            y: 10.0,
+            w: 4.0,
+            h: 4.0,
+        };
+        assert_eq!(park_point(Some((0.0, 0.0)), thin), (12.0, 12.0));
+        assert_eq!(park_point(None, FitRect::default()), (0.0, 0.0));
+    }
 
     #[test]
     fn a_corner_is_never_a_press_however_hard_it_is_pushed() {
