@@ -26,8 +26,15 @@ these only sharpen the enhanced path.
   dmabufs — so their flushes are fenced upstream without our host3d_blob condition. Proof it
   holds in practice: the deployed `7.1.4-limina16k` was built with 0001 equally skipped, and
   the fence-present measurements of 2026-07-27..30 (present-misses.md §12/§29/§31) show the
-  chain pacing that guest. Keep the patch for pre-refactor KVERs; the residual theoretical
-  gap (a host3d-blob primary FB that is *not* imported) has no known real instance.
+  chain pacing that guest. Keep the patch for pre-refactor KVERs.
+  **CORRECTION (2026-08-03 audit): the "superseded" half of the above is WRONG.**
+  `drm_gem_is_imported` is `!!obj->import_attach` — *cross-device* imports only — and the
+  self-import path (`virtgpu_prime.c:301`) returns the original GEM object, so a dmabuf
+  exported and re-imported on the same virtio-gpu device (the mainline single-device venus
+  scanout topology) never registers as imported and its flush is **still unfenced on master**.
+  The "residual theoretical gap" IS the common case; our measured pacing without 0001 comes
+  from the venus WSI fence chain, not KMS. Verdict: needed; rewrite against the vgplane_st
+  refactor before upstreaming. See `docs/upstreaming/ledger/linux.md` §0001.
 - **`0002-drm-virtio-allow-argb8888-on-primary-plane.patch`** — accept ARGB8888 on the
   primary plane so compositors can direct-scanout alpha client buffers (mutter's AR24
   scanout test). Assumes the host treats the topmost scanout as opaque (limina's presenter
@@ -52,7 +59,12 @@ these only sharpen the enhanced path.
 
 ## Upstreaming
 
-The drm/virtio plane/format patches are dri-devel material (0001/0003 near-ready, 0002 needs the opaque-scanout
-question answered, possibly as virtio-gpu spec text) — see the triage in
-`docs/reviews/2026-07-01-full-review.md` Part II. **Before sending, verify none has landed
+Per-patch verdicts now live in **`docs/upstreaming/ledger/linux.md`** (audited against
+master 7.2-rc6, 2026-08-03). Headlines: 0001 needs a rewrite against the vgplane_st
+refactor but its delta is real on tip (see the correction above); 0002+0006 should fold
+into one widen-primary-formats submission (the XRGB-only list is a 2017 expedient, and a
+2024 widening patch carried Gerd's Reviewed-by); **0003 is NOT near-ready** — upstream
+*deliberately removed* LINEAR advertisement (85faca8, 2022) and demands host-negotiated
+modifiers (feature flag + capset + spec text), so 0003 is a carry until the M15
+device-advertised-formats protocol work. **Before sending, verify none has landed
 upstream already** (`scripts/provision/f44/README.md:71` flags this).
