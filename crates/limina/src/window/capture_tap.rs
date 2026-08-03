@@ -319,23 +319,40 @@ extern "C" fn tap_callback(
             match_host_shortcut(keycode, flags),
             Some(HostShortcut::ToggleCapture)
         ) {
-            let now = !ctx.captured.load(Ordering::Acquire);
+            // Cmd-Ctrl-G toggles the HARD grab, not `captured`.
+            //
+            // Toggling `captured` was unusable once the fullscreen policy existed, and dogfood hit
+            // it immediately: in fullscreen the policy holds the pointer nearly all the time, so
+            // the combo always found it grabbed and always released — and by the time a second
+            // press arrived the policy had retaken it, so the two states just alternated and the
+            // hard grab was unreachable. Making the combo mean "hard grab / no grab" gives each
+            // press one meaning: from soft or policy-held it becomes a hard grab, from a hard grab
+            // it lets go. (Ctrl-Opt still always releases.)
+            let held = ctx.captured.load(Ordering::Acquire);
+            let hard = held && !ctx.fullscreen_grab.get();
             // GRAB only when our window is key: this is a SESSION tap, so it sees the combo
             // even while another app (or another VM) is focused — grabbing then steals the
             // user's mouse out from under whatever they were doing. Pass the combo through
             // instead so the focused party (possibly another VM's key-gated tap) handles it.
             // RELEASE is deliberately not gated — the escape hatch must always work.
-            if now && !is_key {
+            if !hard && !is_key {
                 return event;
             }
-            // The user is the other owner of `captured`. Without this latch a level-triggered
-            // fullscreen policy would simply re-grab on the next event and Cmd-Ctrl-G would be a
-            // no-op in fullscreen — the state the review flagged as two owners of one flag.
-            ctx.user_released.set(!now);
-            // An explicit grab is never the policy's, in any mode — see `fullscreen_grab`.
-            ctx.fullscreen_grab.set(false);
             ctx.reset_grab_gesture();
-            ctx.input.toggle_capture(&ctx.view);
+            // The user is the other owner of `captured`. Without this latch a level-triggered
+            // fullscreen policy would simply re-grab on the next event — the state the review
+            // flagged as two owners of one flag.
+            ctx.user_released.set(hard);
+            ctx.fullscreen_grab.set(false);
+            if held != hard {
+                // Already held, but by the policy: promote it in place. No capture transition —
+                // the pointer does not move, the guest sees nothing, only the terms change.
+                log::info!(
+                    "pointer capture: promoted to a hard grab (Ctrl-Opt or Cmd-Ctrl-G to release)"
+                );
+            } else {
+                ctx.input.toggle_capture(&ctx.view);
+            }
             return std::ptr::null_mut(); // consume — the toggle never reaches macOS or the guest
         }
     }
