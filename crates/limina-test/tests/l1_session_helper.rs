@@ -60,6 +60,10 @@ fn l1_real_session_helper_bridges_clipboard_via_mock_mutter() {
     let _ = std::fs::remove_file(&mock_copy);
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    // The guest serves a per-guest CLONE of the rootfs (parallel isolation) — every
+    // post-boot exchange over the rootfs channel goes through the clone, not the source.
+    let mock_log = guest.rootfs_dir().join(format!("mock-{uniq}.log"));
+    let mock_copy = guest.rootfs_dir().join(format!("mock-{uniq}.copy"));
 
     // The REAL helper must come up on the mock compositor and handshake with the
     // supervisor, advertising the clipboard capability.
@@ -144,6 +148,9 @@ fn l1_real_session_helper_prefers_extension_bridge() {
     let _ = std::fs::remove_file(&mock_copy);
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    // Post-boot rootfs-channel traffic goes through the guest's per-guest clone (see above).
+    let mock_log = guest.rootfs_dir().join(format!("mock-{uniq}.log"));
+    let mock_copy = guest.rootfs_dir().join(format!("mock-{uniq}.copy"));
     guest
         .wait_for_supervisor_log(
             "guest agent connected: limina-agent-session/",
@@ -225,6 +232,8 @@ fn l1_real_session_helper_never_takes_remotedesktop_without_optin() {
     let _ = std::fs::remove_file(&mock_log);
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    // Post-boot rootfs-channel traffic goes through the guest's per-guest clone (see above).
+    let mock_log = guest.rootfs_dir().join(format!("mock-{uniq}.log"));
 
     // The helper announces the disabled fallback on its first failed probe round
     // (its stderr reaches the guest console via limina-init).

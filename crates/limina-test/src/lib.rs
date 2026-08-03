@@ -1369,10 +1369,17 @@ impl Guest {
                 rootfs,
                 cmdline,
             } => {
+                // The guest serves this directory rw as its virtio-fs root, so give each guest
+                // its own APFS clone (per-file cow, the tree is small) — concurrent tests must
+                // never share a writable rootfs, and even sequential runs stop dirtying the
+                // built golden. Same philosophy as the disk clones above.
+                let rootfs_clone = scratch.join("rootfs");
+                cow_clone_dir(rootfs, &rootfs_clone)
+                    .with_context(|| format!("cow-cloning rootfs {rootfs:?} for this guest"))?;
                 cmd.arg("--kernel")
                     .arg(kernel)
                     .arg("--rootfs")
-                    .arg(rootfs)
+                    .arg(&rootfs_clone)
                     .arg("--cmdline")
                     .arg(cmdline);
             }
@@ -2268,6 +2275,14 @@ impl Guest {
         self.snapshot_path.as_deref()
     }
 
+    /// The EFFECTIVE virtio-fs rootfs directory this guest serves — the per-guest APFS clone
+    /// inside the scratch dir, NOT the shared tree named in [`GuestConfig`]. Tests that use the
+    /// rootfs as a host↔guest channel must write their fixtures into the config tree BEFORE
+    /// [`Guest::boot`] (the clone captures them) and read the guest's output HERE afterward.
+    pub fn rootfs_dir(&self) -> PathBuf {
+        self.scratch.join("rootfs")
+    }
+
     /// The `limina-vmm` worker's `phys_footprint` in bytes — the page count macOS bills the process
     /// (Activity Monitor's "Memory", `proc_pid_rusage`'s `ri_phys_footprint`). The **worker** owns
     /// the guest-RAM `MAP_ANON` (the supervisor doesn't), so this is the number that must DROP when
@@ -2616,6 +2631,19 @@ pub fn cow_clone(src: &Path, dst: &Path) -> Result<()> {
         .status()
         .with_context(|| format!("running cp -c {src:?} {dst:?}"))?;
     anyhow::ensure!(status.success(), "cp -c {src:?} {dst:?} failed ({status})");
+    Ok(())
+}
+
+/// APFS copy-on-write clone of a whole DIRECTORY (`cp -cR`): per-file clones, so a guest can
+/// get its own writable virtio-fs rootfs tree without copying the bytes. `dst` must not exist.
+fn cow_clone_dir(src: &Path, dst: &Path) -> Result<()> {
+    let status = Command::new("cp")
+        .arg("-cR")
+        .arg(src)
+        .arg(dst)
+        .status()
+        .with_context(|| format!("running cp -cR {src:?} {dst:?}"))?;
+    anyhow::ensure!(status.success(), "cp -cR {src:?} {dst:?} failed ({status})");
     Ok(())
 }
 

@@ -60,6 +60,18 @@ echo "==> running boot tests (LIMINA_HVF_TESTS=1)"
 # --no-fail-fast is load-bearing: cargo test fail-fasts ACROSS test binaries, so without it the
 # first failing binary (e.g. boot) silently stops the run and every later binary (net, venus,
 # venus_replay, …) never executes — masking their status. With it, every binary runs and reports.
-LIMINA_HVF_TESTS=1 cargo test --no-fail-fast ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina-test \
-    --tests \
-    -- --nocapture --test-threads=1 "$@"
+# nextest when available (the default): per-test process isolation + real parallelism — 3
+# boot-wait-dominated tests at once, with the timing/pressure-sensitive set serialized via the
+# `serial` test-group (.config/nextest.toml). Parallel safety is by construction: per-guest
+# scratch, APFS-cloned rw disks/rootfs, PID-suffixed sockets, SSH-port allocation retry.
+# Output is captured per test and replayed for failures (that's what makes parallel output
+# readable); `--no-fail-fast` keeps every binary reporting, same as the cargo-test path.
+if command -v cargo-nextest >/dev/null 2>&1; then
+    LIMINA_HVF_TESTS=1 cargo nextest run --no-fail-fast ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} \
+        -p limina-test "$@"
+else
+    echo "==> cargo-nextest not found (brew install cargo-nextest) — serial cargo test fallback"
+    LIMINA_HVF_TESTS=1 cargo test --no-fail-fast ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina-test \
+        --tests \
+        -- --nocapture --test-threads=1 "$@"
+fi

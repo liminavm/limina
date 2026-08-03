@@ -186,16 +186,47 @@ pub fn start(
     // gvproxy is untouched.
     sweep_orphans(&registry_dir());
 
-    let ssh_port = allocate_ssh_port(ssh_port)?;
     let socket_path = default_socket_path();
-    spawn_gvproxy(&socket_path, debug_log, ssh_port, guest_mac)?;
-    Ok(Gateway {
-        socket_path,
-        debug_log: debug_log.map(Path::to_path_buf),
-        ssh_port,
-        guest_mac: guest_mac.map(str::to_string),
-    })
+    // The free-port probe is inherently TOCTOU (see `port_is_free`): between our scan and
+    // gvproxy binding the forward, a concurrently-starting VM can grab the same port — rare
+    // when VMs start seconds apart, routine when a parallel test runner spawns several at
+    // once. An explicitly `--ssh-port`ed VM still fails fast (the user asked for THAT port);
+    // an auto-allocated one retries the scan from just above the lost port.
+    let requested = ssh_port;
+    let mut scan_base = DEFAULT_SSH_PORT;
+    let mut last_err: Option<anyhow::Error> = None;
+    for _ in 0..GVPROXY_PORT_RETRIES {
+        let ssh_port = match requested {
+            Some(_) => allocate_ssh_port(requested)?,
+            None => first_free_port(scan_base, port_is_free)
+                .with_context(|| format!("no free host port at or above {scan_base}"))?,
+        };
+        match spawn_gvproxy(&socket_path, debug_log, ssh_port, guest_mac) {
+            Ok(()) => {
+                return Ok(Gateway {
+                    socket_path,
+                    debug_log: debug_log.map(Path::to_path_buf),
+                    ssh_port,
+                    guest_mac: guest_mac.map(str::to_string),
+                });
+            }
+            Err(e) if requested.is_none() => {
+                log::warn!(
+                    "gvproxy did not come up on auto-allocated port {ssh_port} \
+                     (lost a port race?): {e:#}; retrying above it"
+                );
+                scan_base = ssh_port.saturating_add(1);
+                last_err = Some(e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("gvproxy failed to start")))
 }
+
+/// How many auto-allocated ports we try before giving up on starting gvproxy. Each retry
+/// rescans from above the port that was lost, so distinct attempts probe distinct ports.
+const GVPROXY_PORT_RETRIES: usize = 5;
 
 /// Spawn (or respawn) gvproxy listening on `socket_path`, recording its pid/socket in the
 /// statics used by [`cleanup`] and a pid-file in the registry used by [`sweep_orphans`].

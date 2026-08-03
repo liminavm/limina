@@ -1,0 +1,32 @@
+# nextest profile for the HVF boot suite (scripts/test-boot.sh runs `cargo nextest run`).
+#
+# Concurrency model (2026-08-03, from the measured per-binary wall times — see
+# spikes/suspend-resume-adhoc/ era suite logs: ~2250s of test time, ~1000s of it in the
+# timing/pressure-sensitive set):
+# - DEFAULT: 3 tests at once. Most tests are boot-wait-dominated (the host idles while a
+#   guest boots), so 3 small guests fit a 32 GB host comfortably. Parallel safety rests on:
+#   per-guest scratch dirs, APFS-cloned rw disks AND rootfs trees (the harness clones by
+#   construction), PID-suffixed sockets, and the supervisor's SSH-port allocation retry.
+# - EXCLUSIVE set: anything whose VERDICT can flip under a co-resident VM's CPU/memory load —
+#   pixel compares, fence/present timing, PSI pressure policy, wakeup accounting, host-sleep
+#   brackets. `threads-required = "num-test-threads"` makes each such test occupy EVERY slot,
+#   so it runs completely alone — exactly the old --test-threads=1 world for these, while the
+#   boot-wait-dominated rest overlaps 3-wide. (A max-threads=1 test-group would NOT suffice:
+#   it only serializes the group against itself, other tests would still run alongside.)
+[profile.default]
+test-threads = 3
+# VM boots are slow; don't let nextest's default slow-timeout warnings spam the run.
+slow-timeout = { period = "120s" }
+
+[[profile.default.overrides]]
+filter = '''
+binary(balloon) | binary(balloon_burst) | binary(balloon_inflate) | binary(balloon_psi)
+| binary(venus_replay) | binary(venus_fence_present) | binary(venus_fence_lost)
+| binary(venus_park_on_busy_reset) | binary(venus_reset) | binary(venus_session_preserved)
+| binary(inplace_s2idle) | binary(hvf_graceful) | binary(l2_vcpu_hotplug)
+| binary(venus_fd_census)
+'''
+# venus_fd_census joined the exclusive set 2026-08-03: its carrier-fd flatness oracle samples
+# after a fixed workload, and under 3-wide load the async fd consumption lags the sample
+# (12 vs baseline 4 — looked exactly like the virgl-0032 leak; solo it is flat).
+threads-required = "num-test-threads"
