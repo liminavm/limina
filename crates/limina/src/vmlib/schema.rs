@@ -287,11 +287,15 @@ pub struct DisplayCfg {
     /// What fullscreen does with the camera-housing strip on a notched built-in display.
     /// See [`NotchPolicy`].
     pub notch: NotchPolicy,
-    /// How hard the pointer sticks at a **fullscreen** guest's edges, in points of accumulated
-    /// push (0 disables). In fullscreen the host cursor touching the top edge instantly reveals
-    /// the macOS menu bar and title bar, and a side edge hands the pointer to the next display;
-    /// resistance makes both deliberate instead of accidental, while forwarding the absorbed
-    /// motion to the guest as edge pressure so the guest's own top bar and hot corner still work.
+    /// How long the pointer must be pressed against a **fullscreen** guest's edge before it is
+    /// released to the rest of the desktop, in **seconds** (0 disables the grab entirely).
+    ///
+    /// **The unit changed in 2026-08 and old values are migrated** — see [`EdgeHold::from_toml`].
+    /// It used to be points of accumulated push, which is a post-ballistics quantity nobody can
+    /// perceive: the same nominal distance was either free or a wall depending on how fast you
+    /// moved (`spikes/edge-pressure/RESULTS.md` round 3). A duration is directly felt, and it is
+    /// the unit the chrome-ask gesture was independently measured into.
+    ///
     /// Ignored windowed, and needs the Accessibility grant the capture tap already asks for.
     #[serde(rename = "edge-resistance")]
     pub edge_resistance: f64,
@@ -311,9 +315,81 @@ impl Default for DisplayCfg {
     }
 }
 
-/// Default `[display] edge-resistance`: enough push that a flick toward the edge is absorbed,
-/// little enough that a deliberate move to the next display or the menu bar is one gesture.
-pub const DEFAULT_EDGE_RESISTANCE: f64 = 100.0;
+/// Default `[display] edge-resistance`: [`EdgeHold::Standard`], in seconds.
+pub const DEFAULT_EDGE_RESISTANCE: f64 = EdgeHold::Standard.seconds();
+
+/// The four presets, as the duration a deliberate edge press must last.
+///
+/// Measured basis (`spikes/edge-pressure/RESULTS.md` round 2): an incidental corner push peaks at
+/// 0.02 s of charge while a deliberate lean reaches 1.0 s, so every value here sits in a 50x gap
+/// — which is what lets a corner *tap* charge the guest's own hot corner without ever releasing
+/// the pointer.
+// Constructed by the policy wiring, which is a later step in
+// `docs/design/fullscreen-pointer-grab.md` §"Order of work" — deliberately landed ahead of it so
+// the migration and the durations are settled and tested before anything behavioral moves.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeHold {
+    /// No grab at all: the pointer behaves exactly as it does outside fullscreen.
+    Off,
+    Light,
+    Standard,
+    Firm,
+}
+
+#[allow(dead_code)]
+impl EdgeHold {
+    pub const ALL: [EdgeHold; 4] = [Self::Off, Self::Light, Self::Standard, Self::Firm];
+
+    pub const fn seconds(self) -> f64 {
+        match self {
+            Self::Off => 0.0,
+            Self::Light => 0.15,
+            Self::Standard => 0.30,
+            Self::Firm => 0.60,
+        }
+    }
+
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Light => "Light",
+            Self::Standard => "Standard",
+            Self::Firm => "Firm",
+        }
+    }
+
+    /// Read a `vm.toml` value, migrating the pre-2026-08 **points** encoding.
+    ///
+    /// The two ranges cannot overlap — a hold is under a second, the old presets were 50/100/200
+    /// — so a number of 10 or more is unambiguously the old unit and is mapped **by preset
+    /// position**, not by arithmetic: the old and new scales measure different things, and
+    /// pretending 100 pt converts to some number of seconds would be false precision. An
+    /// unrecognised old number lands on Standard rather than Off, because silently disabling a
+    /// feature someone configured is the worse failure.
+    pub fn from_toml(value: f64) -> Self {
+        if !value.is_finite() || value <= 0.0 {
+            return Self::Off;
+        }
+        if value >= 10.0 {
+            return match value as u32 {
+                50 => Self::Light,
+                200 => Self::Firm,
+                _ => Self::Standard,
+            };
+        }
+        // Already seconds: snap to the nearest preset so the control centre always has a
+        // selection, while `Self::seconds` stays the single source of the actual durations.
+        Self::ALL
+            .into_iter()
+            .filter(|p| *p != Self::Off)
+            .min_by(|a, b| {
+                let d = |p: &Self| (p.seconds() - value).abs();
+                d(a).partial_cmp(&d(b)).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(Self::Standard)
+    }
+}
 
 /// The `[display] notch` key — what a fullscreen VM does with the camera-housing strip on a
 /// notched built-in display (MacBook Pro / Air).
@@ -538,6 +614,88 @@ fn rfc3339_from_unix(secs: i64) -> String {
 /// [`DYNAMIC_MIN_MIB`] (clamped for tiny VMs).
 pub fn memory_to_cli(memory: &Memory) -> Result<(usize, Option<String>)> {
     Ok((memory.max_mib()?, Some(memory.to_memory_arg()?)))
+}
+
+#[cfg(test)]
+mod edge_hold_tests {
+    use super::*;
+
+    #[test]
+    fn the_old_points_encoding_migrates_by_preset_position() {
+        // Every managed VM on disk carries one of these. The two scales measure different things,
+        // so the mapping is positional — converting 100 pt into "some seconds" would be false
+        // precision.
+        assert_eq!(EdgeHold::from_toml(50.0), EdgeHold::Light);
+        assert_eq!(EdgeHold::from_toml(100.0), EdgeHold::Standard);
+        assert_eq!(EdgeHold::from_toml(200.0), EdgeHold::Firm);
+        assert_eq!(
+            EdgeHold::from_toml(0.0),
+            EdgeHold::Off,
+            "0 always meant off"
+        );
+    }
+
+    #[test]
+    fn a_hand_edited_old_value_lands_on_standard_not_off() {
+        // Silently disabling a feature someone deliberately configured is the worse failure.
+        assert_eq!(EdgeHold::from_toml(137.0), EdgeHold::Standard);
+        assert_eq!(EdgeHold::from_toml(1000.0), EdgeHold::Standard);
+    }
+
+    #[test]
+    fn a_value_already_in_seconds_snaps_to_its_preset() {
+        for p in EdgeHold::ALL {
+            if p == EdgeHold::Off {
+                continue;
+            }
+            assert_eq!(
+                EdgeHold::from_toml(p.seconds()),
+                p,
+                "{} round-trips",
+                p.title()
+            );
+        }
+        assert_eq!(
+            EdgeHold::from_toml(0.31),
+            EdgeHold::Standard,
+            "near-miss snaps"
+        );
+    }
+
+    #[test]
+    fn nonsense_is_off_rather_than_a_panic() {
+        // It comes from a user-editable file.
+        for v in [f64::NAN, f64::INFINITY, -1.0, -0.0] {
+            assert_eq!(EdgeHold::from_toml(v), EdgeHold::Off, "{v} is not a hold");
+        }
+        // ...but a positive infinity is not "off" by accident of sign: it is >= 10, so it would
+        // migrate as an old value. Guard that it does not slip through as a duration.
+        assert!(EdgeHold::from_toml(f64::INFINITY).seconds().is_finite());
+    }
+
+    #[test]
+    fn the_default_is_standard_and_every_preset_sits_in_the_measured_gap() {
+        assert_eq!(
+            EdgeHold::from_toml(DEFAULT_EDGE_RESISTANCE),
+            EdgeHold::Standard
+        );
+        // An incidental corner push peaks at 0.02 s of charge; a deliberate lean reaches 1.0 s.
+        for p in EdgeHold::ALL {
+            if p == EdgeHold::Off {
+                continue;
+            }
+            assert!(
+                p.seconds() > 0.05,
+                "{} must not fire on an incidental push",
+                p.title()
+            );
+            assert!(
+                p.seconds() < 1.0,
+                "{} must be reachable by a deliberate lean",
+                p.title()
+            );
+        }
+    }
 }
 
 #[cfg(test)]

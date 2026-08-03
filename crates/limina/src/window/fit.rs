@@ -327,6 +327,131 @@ fn band(origin: f64, extent: f64, inset: f64) -> (f64, f64) {
     }
 }
 
+// This block is the pure half of the fullscreen pointer grab
+// (`docs/design/fullscreen-pointer-grab.md`). It lands before the policy that calls it, on
+// purpose: the review's likeliest-regression was re-grab oscillation, and the guard against it is
+// only correct-by-construction if it is written and tested headless before anything is wired.
+/// Which edge a press is against. `None` away from the edges.
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Edge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+#[allow(dead_code)]
+impl Edge {
+    /// The direction to place the released cursor, as a unit vector in view space (y grows up).
+    pub(crate) fn outward(self) -> (f64, f64) {
+        match self {
+            Self::Left => (-1.0, 0.0),
+            Self::Right => (1.0, 0.0),
+            Self::Top => (0.0, 1.0),
+            Self::Bottom => (0.0, -1.0),
+        }
+    }
+}
+
+/// How far outside the content the released cursor is placed.
+///
+/// Must clear [`REGRAB_MARGIN`] with room to spare, or the release lands inside the re-grab zone
+/// and the grab takes the pointer straight back.
+#[allow(dead_code)]
+pub(crate) const RELEASE_OFFSET: f64 = 8.0;
+
+/// How far inside the content the pointer must return before the grab may retake it.
+///
+/// The oscillation guard, and the reason it cannot be zero: on a single display a released cursor
+/// **cannot leave the window**, because fullscreen *is* the screen and the window server pins the
+/// pointer to the top row — which is still window territory (same fact as the re-arm rule at
+/// `EdgeResist::step`). Re-grabbing on mere containment would take the pointer back on the first
+/// inward jitter, warp it to centre and hide it: worse than the flicking this design removes.
+#[allow(dead_code)]
+pub(crate) const REGRAB_MARGIN: f64 = 40.0;
+
+/// How long the pointer must sit that far inside before the grab retakes it.
+#[allow(dead_code)]
+pub(crate) const REGRAB_DWELL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Which edge, if any, this position is pressed against, given the outward motion.
+///
+/// Both halves are required: being at an edge is just resting there, and outward motion away from
+/// an edge is the ordinary business of crossing the content. Diagonals resolve to the axis with
+/// the larger outward component, so a corner press cannot release sideways — the guest owns its
+/// corners (see [`CORNER_ZONE`]).
+#[allow(dead_code)]
+pub(crate) fn pressed_edge(cur: (f64, f64), dx: f64, dy: f64, fit: FitRect) -> Option<Edge> {
+    if fit.w <= 0.0 || fit.h <= 0.0 {
+        return None;
+    }
+    let at = |p: f64, lo: f64, hi: f64| (p <= lo + EPS, p >= hi - EPS);
+    let (at_left, at_right) = at(cur.0, fit.x, fit.x + fit.w);
+    let (at_bottom, at_top) = at(cur.1, fit.y, fit.y + fit.h);
+    // View y grows up, deltas grow down: leaving over the top is a negative dy.
+    let x_push = if at_right && dx > 0.0 {
+        dx
+    } else if at_left && dx < 0.0 {
+        -dx
+    } else {
+        0.0
+    };
+    let y_push = if at_top && dy < 0.0 {
+        -dy
+    } else if at_bottom && dy > 0.0 {
+        dy
+    } else {
+        0.0
+    };
+    if x_push <= 0.0 && y_push <= 0.0 {
+        return None;
+    }
+    if x_push >= y_push {
+        Some(if at_right { Edge::Right } else { Edge::Left })
+    } else {
+        Some(if at_top { Edge::Top } else { Edge::Bottom })
+    }
+}
+
+/// Where to put the host cursor when the grab releases at `edge`: just outside the content, on
+/// the axis of the press, keeping the other coordinate. One warp per release, not per event.
+#[allow(dead_code)]
+pub(crate) fn release_point(cur: (f64, f64), edge: Edge, fit: FitRect) -> (f64, f64) {
+    let (ox, oy) = edge.outward();
+    let x = match edge {
+        Edge::Left => fit.x - RELEASE_OFFSET,
+        Edge::Right => fit.x + fit.w + RELEASE_OFFSET,
+        _ => cur.0,
+    };
+    let y = match edge {
+        Edge::Top => fit.y + fit.h + RELEASE_OFFSET,
+        Edge::Bottom => fit.y - RELEASE_OFFSET,
+        _ => cur.1,
+    };
+    let _ = (ox, oy);
+    (x, y)
+}
+
+/// May the grab retake the pointer? Only well inside the content, after a dwell, with no button
+/// held. See [`REGRAB_MARGIN`].
+#[allow(dead_code)]
+pub(crate) fn may_regrab(
+    cur: (f64, f64),
+    fit: FitRect,
+    inside_for: Option<std::time::Duration>,
+    buttons_down: bool,
+) -> bool {
+    if buttons_down || fit.w <= 0.0 || fit.h <= 0.0 {
+        return false;
+    }
+    let inside = cur.0 >= fit.x + REGRAB_MARGIN
+        && cur.0 <= fit.x + fit.w - REGRAB_MARGIN
+        && cur.1 >= fit.y + REGRAB_MARGIN
+        && cur.1 <= fit.y + fit.h - REGRAB_MARGIN;
+    inside && inside_for.is_some_and(|d| d >= REGRAB_DWELL)
+}
+
 /// One edge-resistance step: where the host cursor belongs, the pressure to hand the guest,
 /// and whether the pointer is free to leave.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1000,6 +1125,78 @@ mod tests {
                 },
             );
         }
+    }
+
+    // --- fullscreen pointer grab (docs/design/fullscreen-pointer-grab.md) ------------------
+
+    #[test]
+    fn a_corner_press_resolves_to_its_dominant_axis_and_never_both() {
+        // The guest owns its corners. A diagonal shove into the top-left must not release the
+        // pointer sideways onto another display while the user is aiming at the hot corner.
+        let fit = screen_fit();
+        let top = fit.y + fit.h;
+        assert_eq!(pressed_edge((0.0, top), -30.0, -4.0, fit), Some(Edge::Left));
+        assert_eq!(pressed_edge((0.0, top), -4.0, -30.0, fit), Some(Edge::Top));
+    }
+
+    #[test]
+    fn resting_against_an_edge_is_not_a_press() {
+        // Being there is not pushing; that distinction is what keeps a parked cursor from
+        // releasing itself.
+        let fit = screen_fit();
+        assert_eq!(pressed_edge((0.0, 400.0), 0.0, 0.0, fit), None);
+        assert_eq!(
+            pressed_edge((0.0, 400.0), 30.0, 0.0, fit),
+            None,
+            "inward is not a press"
+        );
+        assert_eq!(
+            pressed_edge((700.0, 400.0), -30.0, 0.0, fit),
+            None,
+            "not at an edge"
+        );
+    }
+
+    #[test]
+    fn the_release_point_clears_the_regrab_zone() {
+        // The oscillation the review predicted: release the cursor 2 pt out, the first inward
+        // jitter re-grabs it, warps to centre and hides it. The release must land outside, and
+        // re-grab must want a real margin inside.
+        let fit = screen_fit();
+        for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+            let p = release_point((700.0, 400.0), edge, fit);
+            assert!(
+                !point_in_fit(p.0, p.1, fit),
+                "{edge:?} release lands outside the content"
+            );
+            assert!(
+                !may_regrab(p, fit, Some(std::time::Duration::from_secs(10)), false),
+                "{edge:?} release point must not immediately satisfy re-grab"
+            );
+        }
+    }
+
+    #[test]
+    fn regrab_needs_margin_dwell_and_no_button() {
+        let fit = screen_fit();
+        let deep = (700.0, 400.0);
+        let long = Some(std::time::Duration::from_secs(1));
+        assert!(may_regrab(deep, fit, long, false));
+        assert!(!may_regrab(deep, fit, long, true), "never mid-drag");
+        assert!(!may_regrab(
+            deep,
+            fit,
+            Some(std::time::Duration::from_millis(50)),
+            false
+        ));
+        assert!(!may_regrab(deep, fit, None, false));
+        // Just inside the boundary is not "inside" — this is the single-display case where the
+        // released cursor is pinned to the content's own top row.
+        let pinned = (700.0, fit.y + fit.h);
+        assert!(
+            !may_regrab(pinned, fit, long, false),
+            "the top row is not a return"
+        );
     }
 
     // ---------------------------------------------------------------------------------------
