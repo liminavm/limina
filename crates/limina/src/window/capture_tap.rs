@@ -730,6 +730,15 @@ fn uncaptured_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
         ctx.inside_since.set(None);
     }
     let inside_for = ctx.inside_since.get().map(|t| now.duration_since(t));
+    // Taking the pointer out of the guest ends an explicit release. The latch has to persist
+    // while the pointer stays inside — or Cmd-Ctrl-G in fullscreen would be undone by the re-grab
+    // a quarter second later, and could not do the one thing it is for. But keying its *end* only
+    // on a focus round trip made the grab feel permanently broken after one Cmd-Ctrl-G: on a
+    // fullscreen VM there is nothing else on that display to click, so the regain edge never
+    // comes. Leaving and returning is the same intent expressed with the mouse.
+    if !fit::point_in_fit(cur.0, cur.1, fit) && ctx.user_released.replace(false) {
+        log::info!("pointer capture: the pointer left the guest — the fullscreen grab re-arms");
+    }
     if edge_trace() {
         // Where the FREE pointer actually is, every event. This is what answers "the release put
         // it somewhere I did not push": compare the first few of these against the release target
@@ -846,7 +855,9 @@ fn release_for(ctx: &TapCtx, pos: (f64, f64), edge: fit::Edge) -> Option<Release
 fn release_grab(ctx: &TapCtx, pos: (f64, f64), edge: fit::Edge, release: Release) {
     ctx.pos.set(Some(match release {
         Release::Out(p) => p,
-        Release::InPlace { .. } => pos,
+        // A point ON the content's boundary can convert to a global pixel one past the display,
+        // which the window server then clamps onto a neighbour — see `fit::RELEASE_INSET`.
+        Release::InPlace { .. } => fit::pull_inside(pos, ctx.fit.get(), fit::RELEASE_INSET),
     }));
     ctx.reset_grab_gesture();
     ctx.fullscreen_grab.set(false);

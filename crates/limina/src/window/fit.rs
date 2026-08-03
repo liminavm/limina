@@ -234,18 +234,33 @@ const PARK_INSET: f64 = 64.0;
 /// inject and nothing to detect afterwards. The per-event re-pin that follows is zero-length too,
 /// since a disassociated cursor does not move.
 pub(crate) fn park_point(pos: Option<(f64, f64)>, fit: FitRect) -> (f64, f64) {
-    let seed = capture_step(pos, 0.0, 0.0, fit).pos;
-    // Content thinner than two insets collapses to its own centre rather than an inside-out
-    // range — `f64::clamp` panics when min > max, and a mid-resize tick can get there.
+    pull_inside(capture_step(pos, 0.0, 0.0, fit).pos, fit, PARK_INSET)
+}
+
+/// Clamp a view point to be at least `inset` inside the content on every side.
+///
+/// Content thinner than two insets collapses to its own centre rather than producing an
+/// inside-out range — `f64::clamp` panics when min > max, and a mid-resize tick can get there.
+pub(crate) fn pull_inside(p: (f64, f64), fit: FitRect, inset: f64) -> (f64, f64) {
     let pull = |v: f64, lo: f64, len: f64| {
-        if len <= 2.0 * PARK_INSET {
+        if len <= 2.0 * inset {
             lo + len.max(0.0) / 2.0
         } else {
-            v.clamp(lo + PARK_INSET, lo + len - PARK_INSET)
+            v.clamp(lo + inset, lo + len - inset)
         }
     };
-    (pull(seed.0, fit.x, fit.w), pull(seed.1, fit.y, fit.h))
+    (pull(p.0, fit.x, fit.w), pull(p.1, fit.y, fit.h))
 }
+
+/// How far inside the content an *in-place* release puts the cursor.
+///
+/// One point, and it is not cosmetic. A view point on the content's own boundary can map to a
+/// global pixel one past the display: the bottom row of a 982-point window at CG y ∈ [879, 1861]
+/// converts to y = 1861, and the display's last row is 1860. `CGWarpMouseCursorPosition` does not
+/// reject that — it clamps into the display union, so a bottom-edge release landed on the
+/// neighbouring screen (measured 2026-08-02, eight times in one session). Releasing a point inside
+/// the content cannot be off it.
+pub(crate) const RELEASE_INSET: f64 = 1.0;
 
 /// How close to a corner counts as being *at* it — where the grab is never released and the
 /// chrome ask never arms, because corners belong to the guest (the top-left one is the GNOME
@@ -698,6 +713,27 @@ mod tests {
         let far = (99_999.0, -99_999.0);
         assert!(deep_inside(park_point(Some(far), fit), fit));
         assert!(deep_inside(park_point(None, fit), fit));
+    }
+
+    #[test]
+    fn an_in_place_release_never_lands_on_the_content_boundary() {
+        // The boundary is where the off-by-one lives: a view point on it can convert to a global
+        // pixel one past the display, and the window server clamps that onto a neighbouring
+        // screen. Every edge, not just the bottom that caught it.
+        let fit = screen_fit();
+        for p in [
+            (400.0, fit.y),
+            (400.0, fit.y + fit.h),
+            (fit.x, 400.0),
+            (fit.x + fit.w, 400.0),
+        ] {
+            let r = pull_inside(p, fit, RELEASE_INSET);
+            assert!(point_in_fit(r.0, r.1, fit));
+            assert!(r.0 > fit.x && r.0 < fit.x + fit.w, "{p:?} -> {r:?}");
+            assert!(r.1 > fit.y && r.1 < fit.y + fit.h, "{p:?} -> {r:?}");
+            // And it stays where the user pushed, to within the inset.
+            assert!((r.0 - p.0).hypot(r.1 - p.1) <= RELEASE_INSET * 1.5);
+        }
     }
 
     #[test]
