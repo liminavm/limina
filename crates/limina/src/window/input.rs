@@ -856,8 +856,32 @@ impl InputState {
         if event.window(mtm).is_none() {
             return false;
         }
-        let p = view.convertPoint_fromView(event.locationInWindow(), None);
-        super::fit::point_in_fit(p.x, p.y, self.fit.get())
+        // The SAME conversion the emitter uses. This gate used to do its own
+        // `view.convertPoint_fromView(event.locationInWindow(), None)` — the exact combination
+        // `event_point_in_view` exists to correct — so under `notch = extend`, where the guest view
+        // lives in the overlay while events are still delivered to the carrier, the gate judged a
+        // point in the wrong window's space and dropped motion the emitter would have mapped
+        // correctly. A gate and its emitter disagreeing about where the pointer is means the guest
+        // cursor silently stops tracking: dogfood saw 350 ms of it, and the freeze only became
+        // visible once the grab stopped inheriting the same stale position (2026-08-03).
+        let p = event_point_in_view(event, view);
+        let inside = super::fit::point_in_fit(p.x, p.y, self.fit.get());
+        if super::capture_tap::edge_trace() {
+            let old = view.convertPoint_fromView(event.locationInWindow(), None);
+            let old_inside = super::fit::point_in_fit(old.x, old.y, self.fit.get());
+            if old_inside != inside || (old.x - p.x).abs() + (old.y - p.y).abs() > 0.5 {
+                eprintln!(
+                    "[MON] t={:.1} gate p=({:.1},{:.1}) inside={inside} | naive=({:.1},{:.1}) \
+                     inside={old_inside}",
+                    super::capture_tap::trace_ms(),
+                    p.x,
+                    p.y,
+                    old.x,
+                    old.y,
+                );
+            }
+        }
+        inside
     }
 
     fn emit_key(&self, macos_keycode: u16, down: bool) {

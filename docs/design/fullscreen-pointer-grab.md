@@ -235,6 +235,35 @@ The general lesson, third time in this file: **any warp taken while captured is 
 only safe warp is a zero-length one, and the way to get that is to make the geometry guarantee it
 rather than to measure the injection and subtract it.
 
+### And what the fix uncovered: the gate disagreed with its emitter
+
+With the seed honest, dogfood reported the teleport gone but a *flicker* — the pointer flashing
+toward the top, then continuing along its path. The trace said the grab was innocent: `[CAP]` deltas
+right after it were ordinary motion, but `[GRAB]` showed `pos` (the remembered virtual cursor)
+sitting **exactly** where the tap had seen the pointer 350 ms earlier. The guest cursor had been
+*frozen* for a third of a second while the tap saw every event; the grab re-seeded from the truth
+and the cursor snapped, which is the flash.
+
+The cause was `pointer_inside`, the gate deciding whether uncaptured motion reaches the guest at
+all. It did its own `view.convertPoint_fromView(event.locationInWindow(), None)` — precisely the
+combination `event_point_in_view` exists to correct. Under `notch = extend` the guest view lives in
+the overlay while events are still delivered to the carrier, so the two spaces differ by the
+carrier's height: measured **949 pt** (`[MON]` trace, corrected y = 959.5 against naive y = 10.5).
+The emitter was fixed when that trap was first found; the gate never was, so the gate judged a point
+in the wrong window's space and dropped motion the emitter would have mapped correctly. One session
+of ordinary use: **24 motion events dropped**, plus 92 more where the position was wrong by that
+offset without flipping the verdict.
+
+Two things worth keeping from this:
+
+- **A gate and its emitter must share one conversion.** Two owners of "where is the pointer" is the
+  same fault as two owners of "pressing at an edge" (see the chrome ask above), and it fails the
+  same way: silently, intermittently, and only in the configuration nobody tests.
+- **The freeze was a second, independent cause of "the cursor teleports".** Before the seed fix the
+  grab inherited the *same* stale position, so the frozen cursor and the grab agreed with each other
+  and motion simply continued from the wrong place. Fixing one made the other visible. When a
+  symptom has been chased this many times, expect more than one producer.
+
 ## How this gets pinned (agreed 2026-08-03, not built yet)
 
 Six rounds of bugs, and **not one of them was in the geometry** — `fit` has been tested from the
