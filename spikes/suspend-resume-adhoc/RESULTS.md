@@ -53,6 +53,31 @@ Operational traps burned into memory ([[limina-github-migration]]):
 - A snapshot taken from a supervisor-orphaned worker is poisoned (window, present-ack
   path, and gvproxy all dead at capture) — discard it.
 
+## RESOLVED (2026-08-03, late session): two stacked causes, neither a product bug
+
+1. **Wrong trigger.** Every wedged resume came from suspending with **raw SIGUSR1 to the
+   worker** — which snapshots IMMEDIATELY, no quiesce — while the restore path assumes an
+   s2idle-bracketed snapshot (injects KEY_WAKEUP, seeds queue regs for the thaw re-arm).
+   Raw-capturing a live guest (one vCPU was in USERSPACE at capture, per the
+   `resumed from snapshot at pc=` lines) and restoring it as-if-suspended = the livelock.
+   The CORRECT ad-hoc trigger is **SIGTSTP to the supervisor** — same suspend bracket as
+   managed `limina suspend` and window-close: pulse sleep button, wait for guest s2idle
+   (bounded, refuses + wakes on holdout), snapshot, exit 126. `adhoc-tstp-cycle.sh` is the
+   disciplined cycle using it.
+2. **Host tccd was SIGSTOPped** (state `T`), discovered when `cargo` itself started
+   hanging: binaries carrying the `com.apple.provenance` xattr (rustup/cargo — but not our
+   own build products) consult TCC at exec, so each exec stalled minutes. This also
+   explains any bracket-refusal noise late in the session (limina's input stack talks to
+   TCC too). `kill -CONT <tccd>` restored it; a reboot followed. HOW it got stopped is
+   unconfirmed (a runaway `kill -TSTP 0` from a shell-quoting bug in a sed-generated
+   script is the suspect).
+
+**CONFIRMED post-reboot (2026-08-03):** clean `adhoc-tstp-cycle.sh` pass — bracket
+suspend quiesced with no holdouts, snapshot, resume, **TRUE-RESUME** (same boot_id).
+The one observed bracket refusal (all-device holdouts at the gdm greeter) was tccd
+collateral; it does not reproduce with tccd healthy. Ad-hoc suspend/resume is fully
+healthy when triggered correctly.
+
 ## Follow-ups (queued, not started)
 
 1. Ad-hoc red-button suspend: honor `on_window_close = Suspend` when `--snapshot-file`

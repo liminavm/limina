@@ -866,6 +866,16 @@ attaches at runtime, and resizing the window reflows the guest resolution.
 
 ## Milestone 9 — Suspend / resume + full VM snapshots (host-side)
 
+**Open hardening item (2026-08-03, from `spikes/suspend-resume-adhoc/`): guard the two
+ad-hoc suspend footguns.** (a) A raw `SIGUSR1` to the worker snapshots WITHOUT the s2idle
+bracket, and the restore path assumes a bracketed snapshot — restoring such a snapshot
+livelocks the guest (one vCPU captured mid-userspace). Make the raw trigger bracket-first
+(or refuse / tag the snapshot as unbracketed and refuse to restore it) so no reachable
+path can produce a poisoned snapshot. (b) An ad-hoc `--disk` run with `--snapshot-file`
+still hard-resolves window-close to Shutdown (`main.rs` `on_window_close` — "nothing to
+persist into" no longer holds); arm close→suspend there, and consider a `--on-window-close`
+flag. Related test gap: no L2 covers snapshot round-trip under dynamic memory + FRQ.
+
 **Status: ✅ M9.1–M9.4 SHIPPED.** M9.3 (windowed/GPU suspend — snapshot machinery libkrun 0076–0086 +
 the virgl snapshot/restore journal 0033–0040; `bdba55b`, `993d6c0`, `87c2330`) and M9.4 (suspend/resume
 UX + snapshot speed, v6: 6.6s save / 465 MiB / 2.3s restore apply; `460e3df`, `f881807`, `ce97194`)
