@@ -608,7 +608,31 @@ impl InputState {
                     self.capture_pos.set(Some(live));
                 }
             }
-            let park = super::fit::park_point(self.capture_pos.get(), fit);
+            let seed = self.capture_pos.get();
+            let park = super::fit::park_point(seed, fit);
+            // Conservation check: a warp taken while captured IS guest motion — the window server
+            // posts a motion event whose delta is the whole vector — so the only safe park warp is
+            // a zero-length one. Three separate bugs on this feature were that same fault at
+            // different scales (the park on another display, 1400-2400 pt; the inset exceeding the
+            // re-grab margin, up to 24; the stale seed, 42x67), and each was found by a human
+            // noticing the cursor move. Measure it here instead, where the geometry is supposed to
+            // guarantee zero: a policy re-grab can only happen `REGRAB_MARGIN` inside the content,
+            // and the inset is tied to that margin, so anything over the inset means a premise
+            // broke. Cheap: one hypot per grab.
+            if let Some(s) = seed {
+                let warp = (park.0 - s.0).hypot(park.1 - s.1);
+                if warp > super::fit::PARK_INSET {
+                    log::warn!(
+                        "pointer capture: park warp is {warp:.1} pt from {s:?} — that distance \
+                         arrives as guest motion; the seed was outside the content or the \
+                         park/re-grab coupling broke"
+                    );
+                } else if warp > 0.5 {
+                    // Expected only for an explicit grab taken near an edge, where the pull is
+                    // real and small. A policy grab must never reach here.
+                    log::debug!("pointer capture: park warp {warp:.1} pt from {s:?}");
+                }
+            }
             self.park.set(view_point_to_cg_global(view, park));
         }
         self.captured.store(now, Ordering::Release);

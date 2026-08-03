@@ -225,7 +225,7 @@ pub(crate) fn capture_step(pos: Option<(f64, f64)>, dx: f64, dy: f64, fit: FitRe
 /// the larger of the two (64 against 40) a re-grab could still warp up to 24 points, and a warp's
 /// whole vector arrives as guest motion — the cursor skipping the instant the grab took hold. See
 /// `a_pointer_the_policy_may_regrab_is_already_its_own_park_point`.
-const PARK_INSET: f64 = REGRAB_MARGIN;
+pub(crate) const PARK_INSET: f64 = REGRAB_MARGIN;
 
 /// Where to park the hidden host cursor while captured: where it already is, pulled far enough
 /// inside the content that no screen-edge trigger can reach it.
