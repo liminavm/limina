@@ -4,7 +4,7 @@
 /*
  * fdtruth — is an exported sync_file fence truthful about GPU completion?
  *
- * venus-explicit-sync-gap.md §6.2: DRM_CAP_SYNCOBJ_TIMELINE=1 proves the API
+ * docs/research/venus-explicit-sync-gap.md §6.2: DRM_CAP_SYNCOBJ_TIMELINE=1 proves the API
  * exists, not that a guest sync_file backed by a venus submission signals at
  * host *GPU completion* rather than at decode/submit. This probe measures it:
  *

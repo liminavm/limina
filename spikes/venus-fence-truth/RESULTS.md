@@ -4,7 +4,7 @@
 mid-overview-animation under `NIRI_VK_ASYNC_SCANOUT=1` — mixed animation frames in
 horizontal bands, screenshot in the session log). Under async scanout the atomic
 commit's `IN_FENCE_FD` is the only thing between a mid-render buffer and the glass,
-so the first premise to verify was `venus-explicit-sync-gap.md` §6.2 — flagged there
+so the first premise to verify was `docs/research/venus-explicit-sync-gap.md` §6.2 — flagged there
 in 2026-07-04 as *"the actual thing that can be broken"* and never measured.
 
 ## Probe
@@ -46,7 +46,7 @@ doesn't advertise it, so **every semaphore sync_fd export CPU-blocks until the G
 finishes**. Fence export does NOT wait (returns a live pending fd).
 
 Consequence for the compositor (gsrs): the wlroots-style explicit-sync recipe
-(§5 of venus-explicit-sync-gap.md) exports the render **semaphore** per frame — on
+(§5 of docs/research/venus-explicit-sync-gap.md) exports the render **semaphore** per frame — on
 this stack that serializes the compositor thread on GPU completion every frame
 (honest-but-late flips; a §21 miss/latency mechanism, NOT tearing). Exporting from
 the **fence** is the async-correct path today. Longer term we can advertise/implement
