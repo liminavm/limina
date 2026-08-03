@@ -264,6 +264,36 @@ Two things worth keeping from this:
   and motion simply continued from the wrong place. Fixing one made the other visible. When a
   symptom has been chased this many times, expect more than one producer.
 
+## Round seven: the top and the sides are not one gesture (2026-08-03)
+
+Dogfood, on the same day: *"the threshold for the push at the top edge to bring the chrome feels
+great — I can trigger it whenever I want and haven't done it accidentally so far; but the sides feel
+a bit too hard for the standard."*
+
+That is not a badly-chosen constant, it is one constant doing two jobs. Pushing **up** asks for the
+macOS chrome: the target is visible, the user is aiming at it, and a firm hold is what keeps it from
+happening by accident. Pushing **sideways** means "let me out onto the other display" during
+ordinary travel — it happens mid-motion, with nothing on screen to aim at, and usually as two or
+three shoves with a hand reset between them rather than one steady lean.
+
+So `fit::edge_timing(hold, edge, tuning)` states the asymmetry once:
+
+- the **top** keeps the configured hold exactly, and the baseline `CHARGE_DECAY` (0.4 s) — that is
+  the number dogfood says is right, and nothing should drift it;
+- the **sides** (including the bottom, ordinary since the day before) ask `SIDE_HOLD_FACTOR` of it
+  (0.6 → 0.18 s at `Standard`) and get `SIDE_DECAY` (0.9 s) of grace between strokes, so a hand
+  reset continues the gesture instead of ending it.
+
+`Charge::push` takes the decay per call rather than reading a constant, which is what lets one
+accumulator serve both feels. The reduction must buy forgiveness and not accidents, so a test
+asserts the *scaled* hold still rejects the measured three-event corner flick at every preset, and
+another asserts stillness is still unbankable however long the grace period is (`CHARGE_TICK_CAP`
+does that job, not the decay).
+
+`LIMINA_SIDE_HOLD_FACTOR` and `LIMINA_SIDE_DECAY` dial both numbers for a session, so the next
+round of this question costs a relaunch instead of a rebuild. They are tuning aids, not interface:
+a value that proves better becomes the default.
+
 ## How this gets pinned (agreed 2026-08-03, not built yet)
 
 Six rounds of bugs, and **not one of them was in the geometry** — `fit` has been tested from the

@@ -499,11 +499,18 @@ impl Charge {
     /// Only genuinely-pushing events belong here. An event that is pinned at the edge with a zero
     /// delta is neither a push nor a lapse — the caller simply does not call — and an event moving
     /// away is [`Self::lapse`].
-    pub(crate) fn push(&mut self, now: std::time::Instant, distance: f64) -> (f64, f64) {
+    /// `decay` is the gesture's own grace period between strokes — [`CHARGE_DECAY`] for the chrome
+    /// ask and the top edge, [`SIDE_DECAY`] for the sides (see [`edge_timing`]).
+    pub(crate) fn push(
+        &mut self,
+        now: std::time::Instant,
+        distance: f64,
+        decay: f64,
+    ) -> (f64, f64) {
         let idle = self
             .last
             .map_or(f64::INFINITY, |t| now.duration_since(t).as_secs_f64());
-        if idle > CHARGE_DECAY {
+        if idle > decay {
             *self = Self::default();
         } else {
             self.charge += idle.min(CHARGE_TICK_CAP);
@@ -525,6 +532,55 @@ impl Charge {
     /// threshold tests.
     pub(crate) fn get(&self) -> (f64, f64) {
         (self.charge, self.push)
+    }
+}
+
+/// What fraction of the configured hold a press against a **side** edge has to earn.
+///
+/// The top edge and the sides are not the same gesture, which is why one number cannot serve both.
+/// Pushing up asks for the macOS chrome and is aimed at a target the user can see; pushing sideways
+/// is "let me out onto the other display" during ordinary travel, so it happens mid-motion with no
+/// destination on screen to aim at. Dogfood, five rounds in: the top hold "feels great — I can
+/// trigger it whenever I want and haven't done it accidentally", while the sides at the same
+/// `Standard` felt "a bit too hard" (2026-08-03). The bottom counts as a side; it stopped being
+/// special the day before.
+pub(crate) const SIDE_HOLD_FACTOR: f64 = 0.6;
+
+/// The grace period between the strokes of a **side** press — more forgiving than
+/// [`CHARGE_DECAY`], for the same reason.
+///
+/// A side press is usually two or three shoves rather than one steady lean (the hand resets between
+/// them), and at 0.4 s a natural reset threw the charge away and started the gesture over. This is
+/// only the gap that may pass between pushes; stillness still cannot be *banked* as pushing, which
+/// is [`CHARGE_TICK_CAP`]'s job.
+pub(crate) const SIDE_DECAY: f64 = 0.9;
+
+/// The side-edge feel, so a dogfood session can dial it without a rebuild (see `side_tuning` in
+/// `capture_tap`). Defaults are [`SIDE_HOLD_FACTOR`] and [`SIDE_DECAY`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SideTuning {
+    pub factor: f64,
+    pub decay: f64,
+}
+
+impl Default for SideTuning {
+    fn default() -> Self {
+        Self {
+            factor: SIDE_HOLD_FACTOR,
+            decay: SIDE_DECAY,
+        }
+    }
+}
+
+/// `(hold seconds, decay seconds)` for a press against `edge`, given the configured hold.
+///
+/// One function so the asymmetry is stated once and testable, rather than living as a `match` in
+/// the middle of the policy. The top keeps the configured hold exactly — that is the number dogfood
+/// says is right — and the sides are scaled and given a longer grace period.
+pub(crate) fn edge_timing(hold: f64, edge: Edge, side: SideTuning) -> (f64, f64) {
+    match edge {
+        Edge::Top => (hold, CHARGE_DECAY),
+        Edge::Left | Edge::Right | Edge::Bottom => (hold * side.factor, side.decay),
     }
 }
 
@@ -885,6 +941,7 @@ mod tests {
     }
 
     /// Feed `n` events `dt` apart, each pushing `dist` points, and answer with the final charge.
+    /// Baseline decay — the side edges' longer grace period has its own tests.
     fn charge_run(c: &mut Charge, t0: std::time::Instant, n: u32, dt_ms: u64, dist: f64) -> f64 {
         let mut charge = 0.0;
         for i in 1..=n {
@@ -892,6 +949,7 @@ mod tests {
                 .push(
                     t0 + std::time::Duration::from_millis(dt_ms * u64::from(i)),
                     dist,
+                    CHARGE_DECAY,
                 )
                 .0;
         }
@@ -904,7 +962,7 @@ mod tests {
         // One enormous shove in a single event: a flick. Nearly no time was spent pushing, so
         // nearly no charge — however far the pointer travelled.
         let mut flick = Charge::default();
-        let (c, push) = flick.push(t0, 400.0);
+        let (c, push) = flick.push(t0, 400.0, CHARGE_DECAY);
         assert_eq!(c, 0.0, "the first event of a gesture charges nothing");
         assert_eq!(push, 400.0, "but the distance floor still sees it");
         // A deliberate lean: many small events over the same distance.
@@ -920,10 +978,14 @@ mod tests {
     fn a_quiet_interval_cannot_be_banked_as_pushing() {
         let t0 = std::time::Instant::now();
         let mut c = Charge::default();
-        c.push(t0, 10.0);
+        c.push(t0, 10.0, CHARGE_DECAY);
         // 300 ms of stillness, then one more event: inside the decay window, so the gesture
         // survives — but it may only bank the per-event cap, not the whole quiet interval.
-        let (charge, _) = c.push(t0 + std::time::Duration::from_millis(300), 10.0);
+        let (charge, _) = c.push(
+            t0 + std::time::Duration::from_millis(300),
+            10.0,
+            CHARGE_DECAY,
+        );
         assert_eq!(charge, CHARGE_TICK_CAP);
     }
 
@@ -933,7 +995,13 @@ mod tests {
         let mut c = Charge::default();
         let before = charge_run(&mut c, t0, 10, 20, 10.0);
         // A trackpad lift: 300 ms, under the decay. The strokes belong to one gesture.
-        let after = c.push(t0 + std::time::Duration::from_millis(500), 10.0).0;
+        let after = c
+            .push(
+                t0 + std::time::Duration::from_millis(500),
+                10.0,
+                CHARGE_DECAY,
+            )
+            .0;
         assert!(after > before, "a lift must not throw the gesture away");
         // A real pause: past the decay, the gesture is over and starts from nothing.
         let fresh = c
@@ -941,6 +1009,7 @@ mod tests {
                 t0 + std::time::Duration::from_millis(500)
                     + std::time::Duration::from_secs_f64(CHARGE_DECAY * 2.0),
                 10.0,
+                CHARGE_DECAY,
             )
             .0;
         assert_eq!(fresh, 0.0);
@@ -955,7 +1024,12 @@ mod tests {
         assert_eq!(c.get(), (0.0, 0.0));
         // And the next event is a first event, not a continuation of the old clock.
         assert_eq!(
-            c.push(t0 + std::time::Duration::from_millis(210), 10.0).0,
+            c.push(
+                t0 + std::time::Duration::from_millis(210),
+                10.0,
+                CHARGE_DECAY
+            )
+            .0,
             0.0
         );
     }
@@ -978,6 +1052,75 @@ mod tests {
             assert!(
                 charge_run(&mut lean, t0, 60, 16, 8.0) >= hold.seconds(),
                 "{hold:?} must be reachable by a one-second lean"
+            );
+        }
+    }
+
+    #[test]
+    fn a_side_press_asks_less_than_a_top_one_and_forgives_a_longer_pause() {
+        // Dogfood's verdict after five rounds: the top hold is right, the sides at the same number
+        // are "a bit too hard". They are different gestures — pushing up aims at a visible target,
+        // pushing sideways happens mid-travel — so one number cannot serve both.
+        let side = SideTuning::default();
+        let hold = crate::vmlib::schema::EdgeHold::Standard.seconds();
+        let (top_hold, top_decay) = edge_timing(hold, Edge::Top, side);
+        assert_eq!((top_hold, top_decay), (hold, CHARGE_DECAY), "top unchanged");
+        for edge in [Edge::Left, Edge::Right, Edge::Bottom] {
+            let (h, d) = edge_timing(hold, edge, side);
+            assert!(h < top_hold, "{edge:?} must ask less than the top: {h}");
+            assert!(d > top_decay, "{edge:?} must forgive longer: {d}");
+        }
+        // The bottom is a side, not a third case — it stopped being special on 2026-08-02.
+        assert_eq!(
+            edge_timing(hold, Edge::Bottom, side),
+            edge_timing(hold, Edge::Left, side)
+        );
+        // And the tuning knob is honoured, so a dogfood session can dial this without a rebuild.
+        let dialled = SideTuning {
+            factor: 0.5,
+            decay: 1.5,
+        };
+        assert_eq!(edge_timing(1.0, Edge::Right, dialled), (0.5, 1.5));
+    }
+
+    #[test]
+    fn the_longer_side_grace_keeps_a_multi_shove_gesture_alive() {
+        // A side press is two or three shoves with a hand reset between them, not one steady lean.
+        // At the baseline decay that reset threw the charge away; at the side decay it survives.
+        let t0 = std::time::Instant::now();
+        let gap = std::time::Duration::from_secs_f64((CHARGE_DECAY + SIDE_DECAY) / 2.0);
+        let mut side = Charge::default();
+        let before = charge_run(&mut side, t0, 10, 16, 8.0);
+        let after = side.push(t0 + gap, 8.0, SIDE_DECAY).0;
+        assert!(
+            after > before,
+            "a hand reset must not end a side press: {before} -> {after}"
+        );
+        // Same gap, baseline decay: the gesture is over. This is the difference, stated as a test.
+        let mut top = Charge::default();
+        charge_run(&mut top, t0, 10, 16, 8.0);
+        assert_eq!(top.push(t0 + gap, 8.0, CHARGE_DECAY).0, 0.0);
+        // Stillness is still not bankable, however long the grace period is.
+        let mut rest = Charge::default();
+        rest.push(t0, 8.0, SIDE_DECAY);
+        assert_eq!(rest.push(t0 + gap, 8.0, SIDE_DECAY).0, CHARGE_TICK_CAP);
+    }
+
+    #[test]
+    fn no_side_preset_becomes_reachable_by_a_flick() {
+        // The reduction must buy forgiveness, not accidents: the scaled hold still has to reject
+        // the three-event corner throw that the full hold rejects.
+        let t0 = std::time::Instant::now();
+        let side = SideTuning::default();
+        for hold in crate::vmlib::schema::EdgeHold::ALL {
+            if hold == crate::vmlib::schema::EdgeHold::Off {
+                continue;
+            }
+            let (scaled, _) = edge_timing(hold.seconds(), Edge::Right, side);
+            let mut flick = Charge::default();
+            assert!(
+                charge_run(&mut flick, t0, 3, 8, 60.0) < scaled,
+                "{hold:?} at the side ({scaled} s) must not fire on a flick"
             );
         }
     }

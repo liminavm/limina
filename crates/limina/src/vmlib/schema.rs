@@ -296,6 +296,12 @@ pub struct DisplayCfg {
     /// moved (`spikes/edge-pressure/RESULTS.md` round 3). A duration is directly felt, and it is
     /// the unit the chrome-ask gesture was independently measured into.
     ///
+    /// **This is the hold for the TOP edge; the sides earn their release sooner** — see
+    /// `fit::edge_timing`. One number cannot serve both gestures: pushing up asks for the macOS
+    /// chrome at a target the user can see, while pushing sideways happens mid-travel with nothing
+    /// on screen to aim at, and dogfood found the top right and the sides too hard at the same
+    /// value (2026-08-03).
+    ///
     /// Ignored windowed, and needs the Accessibility grant the capture tap already asks for.
     #[serde(rename = "edge-resistance")]
     pub edge_resistance: f64,

@@ -938,20 +938,22 @@ fn grab_release_edge(
         fit::Edge::Left | fit::Edge::Right => dx.abs(),
         fit::Edge::Top | fit::Edge::Bottom => dy.abs(),
     };
+    // The top edge and the sides are different gestures and are judged differently — see
+    // `fit::edge_timing`.
+    let (hold, decay) = fit::edge_timing(ctx.hold, edge, side_tuning());
     let mut c = ctx.grab_charge.get();
-    let (charge, pushed) = c.push(std::time::Instant::now(), push);
+    let (charge, pushed) = c.push(std::time::Instant::now(), push, decay);
     ctx.grab_charge.set(c);
     if edge_trace() {
         eprintln!(
             "[GRAB] t={:.1} press {edge:?} at ({:.1},{:.1}) d=({dx:.1},{dy:.1}) \
-             charge={charge:.3}/{:.2} push={pushed:.1}",
+             charge={charge:.3}/{hold:.2} push={pushed:.1} decay={decay:.2}",
             trace_ms(),
             pos.0,
             pos.1,
-            ctx.hold,
         );
     }
-    if charge < ctx.hold || pushed < GRAB_PUSH {
+    if charge < hold || pushed < GRAB_PUSH {
         return None;
     }
     // Earned it — but a press against a dead edge earns nothing, and must not sit there fully
@@ -964,6 +966,40 @@ fn grab_release_edge(
         return None;
     };
     Some((edge, release))
+}
+
+/// The side-edge feel, overridable per session so a dogfood run can dial it without a rebuild:
+/// `LIMINA_SIDE_HOLD_FACTOR` (fraction of the configured hold) and `LIMINA_SIDE_DECAY` (seconds of
+/// grace between strokes). Read once; a bad or absent value keeps the shipped default.
+///
+/// These are tuning aids for exactly this kind of question, not a supported interface — when a value
+/// proves better than the default it becomes the default (or a preset), it does not stay in the
+/// environment.
+fn side_tuning() -> fit::SideTuning {
+    static TUNING: std::sync::OnceLock<fit::SideTuning> = std::sync::OnceLock::new();
+    *TUNING.get_or_init(|| {
+        let read = |name: &str, min: f64, max: f64| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.trim().parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v >= min && *v <= max)
+        };
+        let mut t = fit::SideTuning::default();
+        if let Some(f) = read("LIMINA_SIDE_HOLD_FACTOR", 0.05, 1.0) {
+            t.factor = f;
+        }
+        if let Some(d) = read("LIMINA_SIDE_DECAY", 0.05, 5.0) {
+            t.decay = d;
+        }
+        if t != fit::SideTuning::default() {
+            log::info!(
+                "pointer grab: side edges tuned to factor={:.2} decay={:.2}s",
+                t.factor,
+                t.decay
+            );
+        }
+        t
+    })
 }
 
 /// Whether the session event tap is live. The tap is session-wide, so when it is up it sees every

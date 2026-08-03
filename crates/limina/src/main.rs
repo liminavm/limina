@@ -368,11 +368,12 @@ struct Cli {
     #[arg(long, value_name = "avoid|extend", default_value_t = crate::vmlib::schema::NotchPolicy::Avoid)]
     notch: crate::vmlib::schema::NotchPolicy,
 
-    /// Seconds the pointer must be pressed against a fullscreen guest's edge before it is let
-    /// out (0 disables the grab). In fullscreen the pointer is held inside the guest, so a flick
-    /// toward the top edge cannot reveal the macOS menu bar and a flick sideways cannot land on
-    /// the next display; a deliberate press still leaves. Pre-2026-08 point values (50/100/200)
-    /// are still accepted and migrated. Needs the Accessibility grant pointer capture uses.
+    /// Seconds the pointer must be pressed against a fullscreen guest's TOP edge before it is let
+    /// out (0 disables the grab); the side edges earn their release sooner. In fullscreen the
+    /// pointer is held inside the guest, so a flick toward the top edge cannot reveal the macOS
+    /// menu bar and a flick sideways cannot land on the next display; a deliberate press still
+    /// leaves. Pre-2026-08 point values (50/100/200) are still accepted and migrated. Needs the
+    /// Accessibility grant pointer capture uses.
     #[arg(long, value_name = "SECONDS", default_value_t = crate::vmlib::schema::DEFAULT_EDGE_RESISTANCE)]
     edge_resistance: f64,
 

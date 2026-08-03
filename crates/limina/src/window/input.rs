@@ -1226,7 +1226,14 @@ impl InputState {
         // Charge by the time actually spent pushing — see `fit::Charge` for why that is the unit
         // and why it survives a trackpad lift.
         let mut c = self.reveal.get();
-        let (charge, push) = c.push(std::time::Instant::now(), -delta_y);
+        // The ask keeps the baseline grace period; only the grab's *side* edges are more forgiving
+        // (`fit::edge_timing`). Pushing up at a visible target is not the same gesture as shoving
+        // sideways mid-travel, and dogfood likes this one as it is.
+        let (charge, push) = c.push(
+            std::time::Instant::now(),
+            -delta_y,
+            super::fit::CHARGE_DECAY,
+        );
         self.reveal.set(c);
         if charge >= REVEAL_HOLD
             && push >= REVEAL_PUSH

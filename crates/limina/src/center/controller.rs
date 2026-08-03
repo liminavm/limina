@@ -1176,7 +1176,9 @@ impl CenterController {
             "In full screen the pointer is held inside the guest, so a stray flick \
              can't reveal the Mac's menu bar or land on the next display. Press it \
              against an edge and hold to let it out — this is how long that press has \
-             to last. Off leaves the pointer free, exactly as in a window. Needs \
+             to last at the top edge, where it also brings the Mac's menu bar back; \
+             the sides let go sooner. Off leaves the pointer free, exactly as in a \
+             window. Needs \
              Accessibility permission, like pointer capture; without it the pointer \
              stays free whatever this says.",
         );
