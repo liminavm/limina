@@ -26,7 +26,8 @@ Cargo.lock.orig
 
 # Vendored / built native deps (libkrun, virglrenderer, etc.)
 # For now these are research clones; later they become tracked submodules/patches.
-/third_party/
+/third_party/*
+!/third_party/manifest.toml
 /vendor-build
 
 # Screenshots keep landing at the repo root (Limina.HEIC and friends)

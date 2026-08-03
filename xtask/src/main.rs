@@ -9,8 +9,10 @@
 //!
 //! Bootstrap / build loop:
 //!   `setup`  — one-command fresh-clone bootstrap: `vendor` + enable the git hooks.
-//!   `vendor` — materialize the gitignored `third_party/` source trees (libkrun + virglrenderer
-//!              checkouts + the patched imago) from the committed patch series. Run it first.
+//!   `vendor` — materialize the gitignored `third_party/` source trees: fork-model deps (imago)
+//!              clone from github.com/liminavm at the rev pinned in `third_party/manifest.toml`;
+//!              the rest (libkrun + virglrenderer) still come from the committed patch series.
+//!              Run it first.
 //!   `build`  — build `limina` + `limina-vmm`, verify the worker links our virglrenderer (the
 //!              venus link trap), and codesign the worker (hypervisor entitlement). The inner-loop
 //!              "make a runnable worker" step.
@@ -190,15 +192,15 @@ fn setup() -> Result<()> {
     Ok(())
 }
 
-/// Apply every patch series onto its vendored source tree, so the workspace can build.
+/// Materialize every gitignored `third_party/` source tree, so the workspace can build.
 ///
-/// We consume libkrun's internal crates and override `imago` by path, and link our patched
-/// virglrenderer — all under the gitignored `third_party/`. A fresh clone has none of these trees;
-/// this recreates them from the committed patch series (`patches/libkrun`, `patches/virglrenderer`,
-/// `patches/imago`) via the per-dependency apply scripts. Idempotent — re-running just resets each
-/// tree to its base and re-applies. (The imago step is self-sufficient: it downloads the pristine
-/// crate if the cargo cache is empty, since the `[patch.crates-io]` override would otherwise block
-/// `cargo fetch`.)
+/// Two models coexist during the fork migration (github.com/liminavm):
+/// - **Fork-model deps** (imago, so far): clone our fork and check out the rev pinned in
+///   `third_party/manifest.toml` — the `limina` branch IS the delta, no patch series.
+/// - **Patch-series deps** (libkrun, virglrenderer): clone upstream and apply the committed
+///   series (`patches/<dep>/`) via the per-dependency apply scripts.
+///
+/// Idempotent — re-running resets/refreshes each tree.
 fn vendor() -> Result<()> {
     let repo = repo_root();
 
@@ -229,12 +231,109 @@ fn vendor() -> Result<()> {
     eprintln!("==> applying the virglrenderer patch series");
     bash_script(&repo, "scripts/apply-virgl-patches.sh", &[] as &[&str])?;
 
-    // imago: vendored from crates.io + our discard/vm-memory patches ([patch.crates-io] override).
-    eprintln!("==> vendoring + patching imago");
-    bash_script(&repo, "scripts/apply-imago-patch.sh", &[] as &[&str])?;
+    // imago: the fork-model pilot ([patch.crates-io] path override; the tree is a clone of our
+    // fork pinned by third_party/manifest.toml — no patch series, the `limina` branch IS the delta).
+    vendor_fork(&repo, "imago")?;
 
     eprintln!("==> vendor complete — `cargo xtask build` / `cargo xtask test` are ready");
     Ok(())
+}
+
+/// Materialize a fork-model dependency under `third_party/<name>`: clone the fork recorded in
+/// `third_party/manifest.toml` (adding upstream as a second remote) and check out the pinned rev.
+///
+/// Fresh clone → clone + checkout. Existing tree → fetch only if the pinned rev is absent, then
+/// check out the rev onto the fork's branch. Local work on the branch is left alone when it
+/// already contains the pin (we only force the branch pointer when the pin is missing from it,
+/// i.e. after a `manifest.toml` bump).
+fn vendor_fork(repo: &Path, name: &str) -> Result<()> {
+    let m = manifest_entry(repo, name)?;
+    let dir = repo.join("third_party").join(name);
+    if !dir.join(".git").exists() {
+        eprintln!(
+            "==> cloning {name} fork ({}) — third_party/{name} is absent",
+            m.repo
+        );
+        run(Command::new("git").current_dir(repo).args([
+            "clone",
+            "--branch",
+            &m.branch,
+            &m.repo,
+            &format!("third_party/{name}"),
+        ]))?;
+        run(Command::new("git").current_dir(&dir).args([
+            "remote",
+            "add",
+            "upstream",
+            &m.upstream,
+        ]))?;
+    }
+    let has_rev = Command::new("git")
+        .current_dir(&dir)
+        .args(["cat-file", "-e", &format!("{}^{{commit}}", m.rev)])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !has_rev {
+        eprintln!("==> fetching {name} (pinned rev {} not present)", m.rev);
+        run(Command::new("git")
+            .current_dir(&dir)
+            .args(["fetch", "origin", "--tags"]))?;
+    }
+    let on_pin = Command::new("git")
+        .current_dir(&dir)
+        .args(["merge-base", "--is-ancestor", &m.rev, &m.branch])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if on_pin {
+        run(Command::new("git")
+            .current_dir(&dir)
+            .args(["checkout", &m.branch]))?;
+    } else {
+        eprintln!(
+            "==> {name}: moving {} to the pinned rev {}",
+            m.branch, m.rev
+        );
+        run(Command::new("git")
+            .current_dir(&dir)
+            .args(["checkout", "-B", &m.branch, &m.rev]))?;
+    }
+    Ok(())
+}
+
+struct ForkPin {
+    repo: String,
+    upstream: String,
+    branch: String,
+    rev: String,
+}
+
+/// Read one dependency's pin from `third_party/manifest.toml`.
+fn manifest_entry(repo: &Path, name: &str) -> Result<ForkPin> {
+    let path = repo.join("third_party/manifest.toml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let table: toml::Table = text
+        .parse()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    let entry = table
+        .get(name)
+        .and_then(|v| v.as_table())
+        .with_context(|| format!("manifest has no [{name}] section"))?;
+    let field = |key: &str| -> Result<String> {
+        entry
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .with_context(|| format!("manifest [{name}] missing `{key}`"))
+    };
+    Ok(ForkPin {
+        repo: field("repo")?,
+        upstream: field("upstream")?,
+        branch: field("branch")?,
+        rev: field("rev")?,
+    })
 }
 
 // --- build loop --------------------------------------------------------------------------------

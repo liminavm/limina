@@ -7,10 +7,13 @@
 # of external path dependencies, not a member of this one.
 [workspace]
 resolver = "2"
-members = ["crates/*", "xtask"]
+members = ["crates/*"]
 # guest/ holds aarch64-linux guest binaries (their own workspace, built for a different
 # target); third_party/ is the vendored libkrun workspace; spikes/ are standalone.
-exclude = ["third_party", "spikes", "guest"]
+# xtask is deliberately OUTSIDE the workspace: it must build on a fresh clone BEFORE
+# `xtask vendor` materializes third_party/, and workspace membership would drag it into the
+# [patch.crates-io] imago graph (which points at the not-yet-cloned third_party/imago).
+exclude = ["third_party", "spikes", "guest", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -60,12 +63,14 @@ sha2              = "0.10"
 ciborium          = "0.2"
 
 # Override imago (libkrun's virtio-blk storage backend, a transitive crates.io dep) with our
-# vendored + patched copy. The patch stops a tail-reaching discard from truncating the backing
-# file, which otherwise shrinks a fixed-capacity virtio-blk device's advertised capacity across
-# a reboot and makes a guest filesystem unmountable ("bad geometry"). The [patch] lives here, in
-# the workspace root that actually builds the graph (third_party is excluded from the workspace,
-# so libkrun's crates are path deps in *our* build). Vendor/patch with scripts/apply-imago-patch.sh;
-# rationale in patches/imago/README.md + spikes/m10-disk-durability/RESULTS.md.
+# fork (github.com/liminavm/imago, `limina` branch — the fork model; pinned by
+# third_party/manifest.toml, materialized by `cargo xtask vendor`). The delta stops a
+# tail-reaching discard from truncating the backing file, which otherwise shrinks a
+# fixed-capacity virtio-blk device's advertised capacity across a reboot and makes a guest
+# filesystem unmountable ("bad geometry"), and pins vm-memory to the stack's ^0.17. The [patch]
+# lives here, in the workspace root that actually builds the graph (third_party is excluded from
+# the workspace, so libkrun's crates are path deps in *our* build). Audit status:
+# docs/upstreaming/ledger/imago.md; rationale in spikes/m10-disk-durability/RESULTS.md.
 # The present path converts full frames per-pixel (readback presents: RGBA→BGRA swizzle
 # into the canvas). Unoptimized + debug-assert'd, that's ~60-100 ms per 2560×1440 frame —
 # it made every debug boot of the virgl tier look "slower than software-2D" (2026-07-28)

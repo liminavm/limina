@@ -2,13 +2,16 @@
 # to cargo, the build scripts, and codesign — so it stays light (no libkrun deps) and
 # fast to build. Start with `bundle` (assemble + sign a Limina.app); fold in sign /
 # run-window / build-test-guest as subcommands over time.
+# NOTE: standalone crate, NOT a workspace member — it must build on a fresh clone before
+# `xtask vendor` creates third_party/ (the workspace's [patch.crates-io] imago path).
 [package]
 name = "xtask"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-only WITH LicenseRef-limina-exception"
 publish = false
 
 [dependencies]
-anyhow = { workspace = true }
-clap   = { workspace = true }
+anyhow = "1"
+clap   = { version = "4", features = ["derive"] }
+toml   = "0.8"

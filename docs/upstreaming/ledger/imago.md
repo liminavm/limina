@@ -3,6 +3,12 @@
 2 patches; `UPSTREAM_BASE` `floating — see the series README`. Schema + protocol: `README.md`.
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
 
+**2026-08-03 — PUSHED: github.com/liminavm/imago is live** (public; `limina` = the default
+branch = tip `042b1de` + the 2 rows below; `main` = upstream tip; pin tag `limina/2026-08-03`).
+The local `third_party/imago` is a clone of the fork pinned by `third_party/manifest.toml`
+(`cargo xtask vendor` materializes it); `patches/imago/` + `apply-imago-patch.sh` are retired —
+regenerate a series for upstream submission with `git format-patch main..limina`.
+
 **2026-08-03 — migrated to the fork model (the pilot).** `third_party/imago` is now a real
 clone with upstream history; the `limina` branch = upstream tip `042b1de67dfa` + the two
 rows below cherry-picked (0001 auto-merged over the maybe-async drift exactly as predicted;

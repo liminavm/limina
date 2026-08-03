@@ -1,0 +1,15 @@
+# Pins for the dependency forks under third_party/ (the fork model: github.com/liminavm
+# holds a fork of every project we patch; each carries our work on a `limina` branch, with
+# `main` tracking upstream untouched). `cargo xtask vendor` clones each repo and checks out
+# `rev`. Bumping a dep = push the new fork head, tag the OLD head first (tag-before-rebase:
+# every rev ever pinned here must stay reachable), then update `rev` here in the same commit.
+# Patch-audit status lives in docs/upstreaming/ledger/.
+#
+# Deps not yet migrated to the fork model (libkrun, virglrenderer, kosmickrisp, mesa, linux,
+# edk2) still vendor via their committed patches/<dep>/ series; they move here one at a time.
+
+[imago]
+repo = "https://github.com/liminavm/imago.git"
+upstream = "https://gitlab.com/hreitz/imago.git"
+branch = "limina"
+rev = "5f2c0adba538159282b8941a3f3be61eefbc4769"

@@ -28,17 +28,21 @@ right tool — not treat upstream as immutable:
   display resize, zero-copy scanout, snapshot/restore machinery, an emulated xHCI controller +
   USB gadgets). To change libkrun: edit the checkout, commit on
   a `limina/*` branch, re-export the series (see `patches/libkrun/README.md`).
-  - **`cargo xtask vendor`** is the one-command bootstrap: it clones libkrun and virglrenderer if
-    absent, applies each one's series, and vendors+patches `imago` — i.e. recreates every gitignored
-    `third_party/` source tree from the committed patch series. The **patch series themselves are
-    committed** (`patches/**`); only the from-source clones under `third_party/` are gitignored.
+  - **`cargo xtask vendor`** is the one-command bootstrap: it recreates every gitignored
+    `third_party/` source tree. Two models coexist during the **fork migration to
+    github.com/liminavm**: fork-model deps (imago, so far) clone our fork and check out the rev
+    pinned in the committed `third_party/manifest.toml` (the fork's `limina` branch IS the delta —
+    no patch series; `main` tracks upstream; tag-before-rebase keeps every pinned rev reachable);
+    patch-series deps (the rest) clone upstream and apply their committed `patches/**` series.
     Run it once after a fresh clone, before `cargo build` / `scripts/test-boot.sh`.
-- **imago** (libkrun's virtio-blk storage backend, a crates.io dep) — vendored under
-  `third_party/imago` and overridden via `[patch.crates-io]` in the **root `Cargo.toml`** (the
-  workspace root builds the graph). Series under `patches/imago/`; apply with
-  `scripts/apply-imago-patch.sh`. We patch it so a tail-reaching discard punch-holes instead of
-  truncating the backing file (the truncate shrank a fixed-capacity virtio-blk device across a
-  reboot — see `spikes/m10-disk-durability/`).
+- **imago** (libkrun's virtio-blk storage backend, a crates.io dep) — **fork model** (the pilot):
+  `third_party/imago` is a clone of `github.com/liminavm/imago` (`limina` branch, default; upstream
+  is gitlab.com/hreitz/imago), pinned by `third_party/manifest.toml` and overridden via
+  `[patch.crates-io]` in the **root `Cargo.toml`** (the workspace root builds the graph). Our delta:
+  a tail-reaching discard punch-holes instead of truncating the backing file (the truncate shrank a
+  fixed-capacity virtio-blk device across a reboot — see `spikes/m10-disk-durability/`), plus a
+  vm-memory pin to the stack's ^0.17. To change imago: commit on the fork's `limina` branch, push,
+  update the manifest rev. Audit status: `docs/upstreaming/ledger/imago.md`.
 - **virglrenderer** — vendored under `third_party/virglrenderer` (gitignored), built from source
   into `third_party/virgl-prefix` (the worker links it; see `limina-virgl-link-trap`), carried as a
   `git format-patch` series under `patches/virglrenderer/` (with `UPSTREAM_BASE`); apply with

@@ -28,11 +28,15 @@ done
 for s in spikes/*/Cargo.toml; do
     cargo fmt --manifest-path "$s" --check || fail "rustfmt ($s) — run 'cargo fmt --manifest-path $s'"
 done
+# xtask is standalone (outside the workspace — see Cargo.toml's exclude note), so cover it here.
+cargo fmt --manifest-path xtask/Cargo.toml --check || fail "rustfmt (xtask) — run 'cargo fmt --manifest-path xtask/Cargo.toml'"
 
 # --- clippy on the SHIPPED code (-D warnings). Spikes are experimental and skipped here
 #     to keep commits fast (m1-boot-internal would rebuild the whole libkrun stack). ---
 echo "pre-commit: cargo clippy --workspace (-D warnings)"
 cargo clippy --workspace --all-targets -- -D warnings || fail "clippy (workspace)"
+echo "pre-commit: cargo clippy xtask (-D warnings)"
+cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings || fail "clippy (xtask)"
 echo "pre-commit: cargo clippy guest (-D warnings)"
 cargo clippy --manifest-path guest/Cargo.toml --target aarch64-unknown-linux-musl --all-targets -- -D warnings \
     || fail "clippy (guest)"
