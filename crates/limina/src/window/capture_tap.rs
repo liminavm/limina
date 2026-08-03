@@ -798,6 +798,28 @@ fn uncaptured_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
         ctx.inside_since.set(None);
     }
     let inside_for = ctx.inside_since.get().map(|t| now.duration_since(t));
+    if edge_trace() {
+        // Where the FREE pointer actually is, every event. This is what answers "the release put
+        // it somewhere I did not push": compare the first few of these against the release target
+        // logged by `release_grab`. A pointer that reappears far from that target did not travel
+        // there — something moved it.
+        eprintln!(
+            "[EDGE] t={:.1} cur=({:.1},{:.1}) d=({:.1},{:.1}) fit=({:.1},{:.1} {:.1}x{:.1}) \
+             deep={} inside_for={:?} latched={}",
+            trace_ms(),
+            cur.0,
+            cur.1,
+            getd(FIELD_DELTA_X),
+            getd(FIELD_DELTA_Y),
+            fit.x,
+            fit.y,
+            fit.w,
+            fit.h,
+            fit::deep_inside(cur, fit),
+            inside_for.map(|d| d.as_millis()),
+            ctx.user_released.get(),
+        );
+    }
     if !ctx.user_released.get() && fit::may_regrab(cur, fit, inside_for, ctx.buttons.get() != 0) {
         ctx.reset_grab_gesture();
         ctx.fullscreen_grab.set(true);
@@ -899,6 +921,18 @@ fn release_grab(ctx: &TapCtx, pos: (f64, f64), edge: fit::Edge, release: Release
         ctx.input.grant_chrome();
     }
     log::info!("pointer capture: released — sustained press at the {edge:?} edge ({release:?})");
+    if edge_trace() {
+        let target = ctx.pos.get();
+        eprintln!(
+            "[GRAB] t={:.1} releasing {edge:?} from ({:.1},{:.1}) to view {target:?} = cg {:?}",
+            trace_ms(),
+            pos.0,
+            pos.1,
+            target
+                .and_then(|p| super::input::view_point_to_cg_global(&ctx.view, p))
+                .map(|p| (p.x, p.y)),
+        );
+    }
     ctx.input.toggle_capture(&ctx.view);
 }
 
