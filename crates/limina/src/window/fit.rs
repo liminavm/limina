@@ -452,6 +452,77 @@ pub(crate) fn may_regrab(
     inside && inside_for.is_some_and(|d| d >= REGRAB_DWELL)
 }
 
+/// Per-event cap on the charge, so a long quiet interval cannot be banked as pushing.
+pub(crate) const CHARGE_TICK_CAP: f64 = 0.05;
+
+/// Idle longer than this and the charge is gone — the strokes have to belong to one gesture.
+pub(crate) const CHARGE_DECAY: f64 = 0.4;
+
+/// **Time spent pushing**, accumulated across the strokes of one gesture — the single currency
+/// for every "press against an edge and mean it" decision in the app.
+///
+/// Distance is the wrong unit and this exists to stop it coming back. Distance rewards a hard
+/// shove, and a hard shove is exactly what throwing the pointer at the top-left hot corner looks
+/// like; it is also post-ballistics, so the same nominal push is either free or a wall depending
+/// on how fast the hand moved (`spikes/edge-pressure/RESULTS.md` rounds 2-3). A duration is felt
+/// directly and reads the same on a fast mouse and a slow one.
+///
+/// Charging *across* strokes rather than demanding one unbroken push is not a refinement either:
+/// a trackpad stroke ends when the finger runs out of glass, so a run-based gesture is
+/// unperformable on the hardware this app is used on. Every lift decays instead ([`CHARGE_DECAY`])
+/// and every event is capped ([`CHARGE_TICK_CAP`]) so stillness cannot be banked as motion.
+///
+/// Two policies own instances of this — the `notch = extend` chrome ask
+/// ([`super::input::InputState::reveal_step`]) and the fullscreen grab's edge release. They were
+/// one gesture with two implementations once, and the copies drifted until a two-event flick could
+/// summon the menu bar. One core, two thresholds.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Charge {
+    /// Seconds of motion actually spent pushing.
+    charge: f64,
+    /// Points of outward push accumulated over the same gesture — a floor against jitter, never
+    /// the deciding quantity.
+    push: f64,
+    /// When the last pushing event arrived.
+    last: Option<std::time::Instant>,
+}
+
+impl Charge {
+    /// Account one pushing event: `distance` points of *outward* motion, arriving at `now`.
+    /// Returns `(charge seconds, push points)` after the event.
+    ///
+    /// Only genuinely-pushing events belong here. An event that is pinned at the edge with a zero
+    /// delta is neither a push nor a lapse — the caller simply does not call — and an event moving
+    /// away is [`Self::lapse`].
+    pub(crate) fn push(&mut self, now: std::time::Instant, distance: f64) -> (f64, f64) {
+        let idle = self
+            .last
+            .map_or(f64::INFINITY, |t| now.duration_since(t).as_secs_f64());
+        if idle > CHARGE_DECAY {
+            *self = Self::default();
+        } else {
+            self.charge += idle.min(CHARGE_TICK_CAP);
+        }
+        self.last = Some(now);
+        self.push += distance.max(0.0);
+        (self.charge, self.push)
+    }
+
+    /// Give the gesture up: the pointer moved away, or the policy is no longer interested.
+    /// A finished gesture must leave nothing behind, or the next one inherits its charge and
+    /// fires at once while a fresh one takes the full hold — the same gesture feeling different
+    /// every time.
+    pub(crate) fn lapse(&mut self) {
+        *self = Self::default();
+    }
+
+    /// `(charge seconds, push points)` without accounting anything — for the trace and for
+    /// threshold tests.
+    pub(crate) fn get(&self) -> (f64, f64) {
+        (self.charge, self.push)
+    }
+}
+
 /// One edge-resistance step: where the host cursor belongs, the pressure to hand the guest,
 /// and whether the pointer is free to leave.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1197,6 +1268,104 @@ mod tests {
             !may_regrab(pinned, fit, long, false),
             "the top row is not a return"
         );
+    }
+
+    /// Feed `n` events `dt` apart, each pushing `dist` points, and answer with the final charge.
+    fn charge_run(c: &mut Charge, t0: std::time::Instant, n: u32, dt_ms: u64, dist: f64) -> f64 {
+        let mut charge = 0.0;
+        for i in 1..=n {
+            charge = c
+                .push(
+                    t0 + std::time::Duration::from_millis(dt_ms * u64::from(i)),
+                    dist,
+                )
+                .0;
+        }
+        charge
+    }
+
+    #[test]
+    fn charge_measures_time_pushing_not_distance_pushed() {
+        let t0 = std::time::Instant::now();
+        // One enormous shove in a single event: a flick. Nearly no time was spent pushing, so
+        // nearly no charge — however far the pointer travelled.
+        let mut flick = Charge::default();
+        let (c, push) = flick.push(t0, 400.0);
+        assert_eq!(c, 0.0, "the first event of a gesture charges nothing");
+        assert_eq!(push, 400.0, "but the distance floor still sees it");
+        // A deliberate lean: many small events over the same distance.
+        let mut lean = Charge::default();
+        let charged = charge_run(&mut lean, t0, 20, 20, 20.0);
+        assert!(
+            charged > 0.35,
+            "20 events x 20 ms should charge ~0.4 s: {charged}"
+        );
+    }
+
+    #[test]
+    fn a_quiet_interval_cannot_be_banked_as_pushing() {
+        let t0 = std::time::Instant::now();
+        let mut c = Charge::default();
+        c.push(t0, 10.0);
+        // 300 ms of stillness, then one more event: inside the decay window, so the gesture
+        // survives — but it may only bank the per-event cap, not the whole quiet interval.
+        let (charge, _) = c.push(t0 + std::time::Duration::from_millis(300), 10.0);
+        assert_eq!(charge, CHARGE_TICK_CAP);
+    }
+
+    #[test]
+    fn charge_survives_a_lift_but_not_a_pause() {
+        let t0 = std::time::Instant::now();
+        let mut c = Charge::default();
+        let before = charge_run(&mut c, t0, 10, 20, 10.0);
+        // A trackpad lift: 300 ms, under the decay. The strokes belong to one gesture.
+        let after = c.push(t0 + std::time::Duration::from_millis(500), 10.0).0;
+        assert!(after > before, "a lift must not throw the gesture away");
+        // A real pause: past the decay, the gesture is over and starts from nothing.
+        let fresh = c
+            .push(
+                t0 + std::time::Duration::from_millis(500)
+                    + std::time::Duration::from_secs_f64(CHARGE_DECAY * 2.0),
+                10.0,
+            )
+            .0;
+        assert_eq!(fresh, 0.0);
+    }
+
+    #[test]
+    fn lapsing_leaves_nothing_for_the_next_gesture() {
+        let t0 = std::time::Instant::now();
+        let mut c = Charge::default();
+        charge_run(&mut c, t0, 10, 20, 10.0);
+        c.lapse();
+        assert_eq!(c.get(), (0.0, 0.0));
+        // And the next event is a first event, not a continuation of the old clock.
+        assert_eq!(
+            c.push(t0 + std::time::Duration::from_millis(210), 10.0).0,
+            0.0
+        );
+    }
+
+    #[test]
+    fn the_hold_presets_are_all_reachable_by_a_lean_and_none_by_a_flick() {
+        let t0 = std::time::Instant::now();
+        for hold in crate::vmlib::schema::EdgeHold::ALL {
+            if hold == crate::vmlib::schema::EdgeHold::Off {
+                continue;
+            }
+            // A flick: three events in 24 ms, the shape measured for a corner throw.
+            let mut flick = Charge::default();
+            assert!(
+                charge_run(&mut flick, t0, 3, 8, 60.0) < hold.seconds(),
+                "{hold:?} must not fire on a flick"
+            );
+            // A lean: 60 events at 16 ms (one per frame for a second).
+            let mut lean = Charge::default();
+            assert!(
+                charge_run(&mut lean, t0, 60, 16, 8.0) >= hold.seconds(),
+                "{hold:?} must be reachable by a one-second lean"
+            );
+        }
     }
 
     // ---------------------------------------------------------------------------------------

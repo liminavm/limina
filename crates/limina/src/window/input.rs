@@ -96,6 +96,13 @@ pub(crate) fn apply_capture_cursor(
                 CGWarpMouseCursorPosition(p);
             }
         }
+        // A warp opens a 0.25 s local-events suppression interval, and this one is applied at the
+        // exact moment the user gets the pointer back — so every release ate up to a quarter
+        // second of the motion that followed it. Re-associating closes the interval; the
+        // `CGAssociateMouseAndMouseCursorPosition(1)` above cannot do it, because the warp comes
+        // after. Latent since capture shipped, and load-bearing for the fullscreen grab, whose
+        // whole release story is "the motion continues naturally".
+        end_warp_suppression();
         if CURSOR_HIDDEN.swap(false, Ordering::AcqRel) {
             NSCursor::unhide();
         }
@@ -417,11 +424,9 @@ pub struct InputState {
     /// [`InputState::reveal_step`].
     overlay_active: Arc<AtomicBool>,
     reveal_chrome: Arc<AtomicBool>,
-    /// Upward push accumulated against the guest's top edge (points), the charge it has built
-    /// (seconds of actual pushing), and when the last pushing event arrived.
-    reveal_push: Cell<f64>,
-    reveal_charge: Cell<f64>,
-    reveal_last: Cell<Option<std::time::Instant>>,
+    /// The chrome ask's charge: seconds of actual pushing against the guest's top edge, plus the
+    /// distance floor. See [`super::fit::Charge`], which the grab's edge release shares.
+    reveal: Cell<super::fit::Charge>,
     /// When the ask was last granted, for the settle window in [`InputState::reveal_step`].
     reveal_granted: Cell<Option<std::time::Instant>>,
     /// Where the pointer was on the previous reveal event **from each source**, to tell real
@@ -464,10 +469,8 @@ impl RevealSrc {
 /// cleanly: flinging into a corner is over in a moment, while asking for the chrome is a deliberate
 /// lean. It also makes the gesture feel the same whether the mouse is fast or slow, which
 /// accumulated points never did.
-/// It charges across strokes and decays between them, instead of demanding one unbroken push:
-/// 700 ms of continuous motion is a *mouse* gesture. A trackpad stroke ends when the finger runs
-/// out of glass, so every lift reset the run and the gesture became unperformable on the hardware
-/// the app is used on. Charging makes repeated strokes add up while leaving the shove ineffective.
+/// The accumulation itself is [`super::fit::Charge`], shared with the fullscreen grab's edge
+/// release; only the threshold and the policy around it are here.
 ///
 /// 0.25 s is measured, not guessed: in a recording of the intended gestures
 /// (`spikes/edge-pressure/analyze-trace.py`) the corner pushes reached a peak charge of 0.021
@@ -475,12 +478,6 @@ impl RevealSrc {
 /// somewhere sane inside it. It is chosen at the *felt* end of that range: once the lean is
 /// under way the chrome arrives after almost exactly this long.
 const REVEAL_HOLD: f64 = 0.25;
-
-/// Per-event cap on the charge, so a long quiet interval can't be banked as pushing.
-const REVEAL_TICK_CAP: f64 = 0.05;
-
-/// Idle longer than this and the charge is gone — the strokes have to belong to one gesture.
-const REVEAL_DECAY: f64 = 0.4;
 
 /// How long after granting the ask a release is ignored, to let the overlay's teardown settle.
 /// Long enough to cover the re-layout, far too short to cover a deliberate move back into the
@@ -534,9 +531,7 @@ impl InputState {
             scroll_x: Cell::new(ScrollAxis::default()),
             overlay_active,
             reveal_chrome,
-            reveal_push: Cell::new(0.0),
-            reveal_charge: Cell::new(0.0),
-            reveal_last: Cell::new(None),
+            reveal: Cell::new(super::fit::Charge::default()),
             reveal_granted: Cell::new(None),
             reveal_pos: [Cell::new(None), Cell::new(None)],
         }
@@ -1013,7 +1008,7 @@ impl InputState {
         src: RevealSrc,
     ) {
         if self.captured.load(Ordering::Relaxed) {
-            self.reveal_push.set(0.0);
+            self.reveal.set(super::fit::Charge::default());
             return;
         }
         const EDGE: f64 = 2.0;
@@ -1032,8 +1027,8 @@ impl InputState {
                     p.0,
                     p.1,
                     s.overlay_active.load(Ordering::Relaxed),
-                    s.reveal_push.get(),
-                    s.reveal_charge.get(),
+                    s.reveal.get().get().1,
+                    s.reveal.get().get().0,
                     s.reveal_chrome.load(Ordering::Relaxed),
                 );
             }
@@ -1082,20 +1077,15 @@ impl InputState {
                 }
                 trace(self, "release");
             }
-            // A finished gesture leaves nothing behind. Charge used to survive a release, so a
-            // later lean inherited it and fired at once while a fresh one took the full hold —
-            // the same gesture feeling different every time.
-            self.reveal_push.set(0.0);
-            self.reveal_charge.set(0.0);
-            self.reveal_last.set(None);
+            self.reveal.set(super::fit::Charge::default());
             self.reveal_granted.set(None);
             self.reveal_chrome.store(false, Ordering::Relaxed);
             return;
         }
         let lapse = |s: &Self| {
-            s.reveal_push.set(0.0);
-            s.reveal_charge.set(0.0);
-            s.reveal_last.set(None);
+            let mut c = s.reveal.get();
+            c.lapse();
+            s.reveal.set(c);
         };
         if !self.overlay_active.load(Ordering::Relaxed) {
             // Nothing to ask for: the chrome is already reachable.
@@ -1136,25 +1126,13 @@ impl InputState {
             lapse(self);
             return;
         }
-        // Charge by the time actually spent pushing, capped per event so silence cannot be banked
-        // as motion — resting against the top produces no events at all, and an earlier cut that
-        // measured wall-clock let a shove plus a linger satisfy a hold nobody performed.
-        let now = std::time::Instant::now();
-        let idle = self
-            .reveal_last
-            .get()
-            .map_or(f64::INFINITY, |t| now.duration_since(t).as_secs_f64());
-        if idle > REVEAL_DECAY {
-            self.reveal_push.set(0.0);
-            self.reveal_charge.set(0.0);
-        } else {
-            self.reveal_charge
-                .set(self.reveal_charge.get() + idle.min(REVEAL_TICK_CAP));
-        }
-        self.reveal_last.set(Some(now));
-        self.reveal_push.set(self.reveal_push.get() - delta_y);
-        if self.reveal_charge.get() >= REVEAL_HOLD
-            && self.reveal_push.get() >= REVEAL_PUSH
+        // Charge by the time actually spent pushing — see `fit::Charge` for why that is the unit
+        // and why it survives a trackpad lift.
+        let mut c = self.reveal.get();
+        let (charge, push) = c.push(std::time::Instant::now(), -delta_y);
+        self.reveal.set(c);
+        if charge >= REVEAL_HOLD
+            && push >= REVEAL_PUSH
             && !self.reveal_chrome.swap(true, Ordering::Relaxed)
         {
             self.reveal_granted.set(Some(std::time::Instant::now()));
