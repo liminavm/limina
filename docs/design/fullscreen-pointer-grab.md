@@ -140,16 +140,22 @@ revised order below is what was built.
 
 ## Two policy calls made during implementation
 
+Both are refinements the plan did not settle; the second was got wrong first and corrected on
+review.
+
 - **Corners are never a press** (`pressed_edge` answers `None` inside `CORNER_ZONE`). Not in the
   plan above, which left it as an open question about single-axis presses. Leaning into the
   top-left corner is how the GNOME overview is opened; the clamped overflow keeps charging that
   barrier throughout, so releasing there would hand over the other display at the exact moment the
   user asked for the overview. This is the same conclusion the retired resistance model reached
   from a different direction, which is some evidence it is right.
-- **A Cmd-Ctrl-G grab taken while fullscreen behaves as a fullscreen grab** — the edge press
-  releases it too. The plan implied only policy grabs would have the gesture; there is no reason
-  the same grab should behave differently for having started differently. Windowed, Cmd-Ctrl-G is
-  still plain mouselook, where there are no edges to press and the chord is the way out.
+- **An explicit Cmd-Ctrl-G grab is NOT the policy grab, in any mode.** It gets no edge release and
+  is not ended by leaving fullscreen; Cmd-Ctrl-G and the Ctrl-Opt chord remain its only ways out.
+  (I built the opposite first, reasoning that one grab should not behave two ways. Rejected on
+  review: the two are different tools. The explicit grab is what you reach for when the pointer
+  must not leave the VM *for any reason* — which is also why it is not the default — and giving it
+  an edge release makes it the policy grab exactly where the distinction matters, leaving no way to
+  ask for an unconditional hold at all.)
 
 ## What this deletes
 

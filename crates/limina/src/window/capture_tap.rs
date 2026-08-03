@@ -185,10 +185,15 @@ struct TapCtx {
     grab_edge: Cell<Option<fit::Edge>>,
     /// When the pointer became [`fit::deep_inside`] the content, for the re-grab dwell.
     inside_since: Cell<Option<std::time::Instant>>,
-    /// This grab is a FULLSCREEN grab: a sustained edge press releases it, and leaving fullscreen
-    /// ends it. Set by the policy, and also by an explicit Cmd-Ctrl-G taken while fullscreen —
-    /// there is no reason the same grab should behave differently depending on how it started. A
-    /// windowed Cmd-Ctrl-G is plain mouselook: no edges to press, the chord is the way out.
+    /// This grab is the FULLSCREEN POLICY's: a sustained edge press releases it, and leaving
+    /// fullscreen ends it.
+    ///
+    /// Set only by the policy — **never** by Cmd-Ctrl-G, even in fullscreen. The two grabs are
+    /// deliberately different tools. The policy grab is a convenience with a way out at every
+    /// edge; the explicit grab is what you reach for when the pointer must not leave the VM *for
+    /// any reason*, which is also why it is not the default. Giving it the edge release would make
+    /// it the same thing as the policy grab wherever it matters most, leaving no way to ask for an
+    /// unconditional hold. Its ways out stay Cmd-Ctrl-G and the Ctrl-Opt chord.
     fullscreen_grab: Cell<bool>,
     /// The user let the pointer go on purpose (Cmd-Ctrl-G or the Ctrl-Opt chord), so the policy
     /// must not take it straight back. Cleared when the window regains key status, exactly like
@@ -331,8 +336,8 @@ extern "C" fn tap_callback(
             // fullscreen policy would simply re-grab on the next event and Cmd-Ctrl-G would be a
             // no-op in fullscreen — the state the review flagged as two owners of one flag.
             ctx.user_released.set(!now);
-            ctx.fullscreen_grab
-                .set(now && ctx.hold > 0.0 && ctx.fullscreen());
+            // An explicit grab is never the policy's, in any mode — see `fullscreen_grab`.
+            ctx.fullscreen_grab.set(false);
             ctx.reset_grab_gesture();
             ctx.input.toggle_capture(&ctx.view);
             return std::ptr::null_mut(); // consume — the toggle never reaches macOS or the guest
@@ -743,7 +748,8 @@ fn uncaptured_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
 /// events with no "pinned, zero delta" case to special-case (the uncaptured chrome ask, driven by
 /// a cursor the window server pins, has to).
 fn grab_release_edge(ctx: &TapCtx, pos: (f64, f64), dx: f64, dy: f64) -> Option<fit::Edge> {
-    // Windowed mouselook has no edges to press; the chord is its way out.
+    // Only the policy's grab. An explicit Cmd-Ctrl-G is an unconditional hold — see
+    // `fullscreen_grab` — and the chord is its way out.
     if !ctx.fullscreen_grab.get() || ctx.hold <= 0.0 || !ctx.fullscreen() {
         return None;
     }
