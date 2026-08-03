@@ -825,10 +825,9 @@ fn point_on_a_display(p: NSPoint) -> bool {
 enum Release {
     /// Free the pointer and move it just past the edge, onto the display that is there.
     Out((f64, f64)),
-    /// Free the pointer where it is — there is nothing beyond this edge to move onto, but the
-    /// user still wants it back (to reach the guest's own dash at the bottom, say). `chrome` also
-    /// asks for the macOS menu bar, which only the top edge does.
-    InPlace { chrome: bool },
+    /// Free the pointer where it is, and ask for the macOS chrome. The top edge only — see
+    /// [`release_for`].
+    InPlaceForChrome,
 }
 
 /// Decide what a sustained press at `edge` earns — **the pointer is only let go where there is
@@ -838,31 +837,27 @@ enum Release {
 /// that was neither above nor below anything: a press against a dead edge is not a request to
 /// visit whichever screen the arrangement can reach. Three cases, and only one of them is generic:
 ///
-///   - **Bottom: releases in place.** There is nothing below a fullscreen window to move onto, so
-///     the pointer stays exactly where it is — but it is freed, because the guest's own dash lives
-///     down there and poking at it takes a real cursor.
-///   - **Top: releases in place, and asks for the chrome.** A fullscreen window's top edge IS the
-///     top of the screen, so there is never anything above it — but this is the one edge whose
-///     press means something other than "let me out". Under `notch = extend` it is the ask for the
-///     menu bar, and the menu bar is a *host* affordance: it needs the host pointer, so the grab
-///     has to end for it to be usable at all.
-///   - **Sides: release only onto a real display**, checked at the exact point of the press, so an
-///     arrangement where the neighbour spans only part of the edge behaves correctly along its
-///     whole length.
+///   - **The top is special: it releases in place and asks for the chrome.** A fullscreen window's
+///     top edge IS the top of the screen, so there is never anything above it — but this is the
+///     one edge whose press means something other than "let me out". Under `notch = extend` it is
+///     the ask for the menu bar, and the menu bar is a *host* affordance: it needs the host
+///     pointer, so the grab has to end for it to be usable at all.
+///   - **Every other edge releases only onto a real display**, checked at the exact point of the
+///     press, so an arrangement where the neighbour spans only part of an edge behaves correctly
+///     along its whole length. A press against a dead stretch earns nothing.
+///
+/// The bottom briefly had a special case of its own — release in place, so the pointer could reach
+/// what looked like a guest dash down there. It was the macOS Dock, on the other display, which is
+/// not something a guest edge press should be reaching for; the generic rule is both simpler and
+/// more correct.
 fn release_for(ctx: &TapCtx, pos: (f64, f64), edge: fit::Edge) -> Option<Release> {
-    let out = |edge| {
-        let p = fit::release_point(pos, edge, ctx.fit.get());
-        super::input::view_point_to_cg_global(&ctx.view, p)
-            .filter(|g| point_on_a_display(*g))
-            .map(|_| Release::Out(p))
-    };
-    match edge {
-        // Below a fullscreen window there is nothing to move onto, but the pointer is still
-        // wanted back — the guest's dash lives down there and poking at it needs a free cursor.
-        fit::Edge::Bottom => Some(out(edge).unwrap_or(Release::InPlace { chrome: false })),
-        fit::Edge::Top => Some(Release::InPlace { chrome: true }),
-        fit::Edge::Left | fit::Edge::Right => out(edge),
+    if edge == fit::Edge::Top {
+        return Some(Release::InPlaceForChrome);
     }
+    let p = fit::release_point(pos, edge, ctx.fit.get());
+    super::input::view_point_to_cg_global(&ctx.view, p)
+        .filter(|g| point_on_a_display(*g))
+        .map(|_| Release::Out(p))
 }
 
 /// Let the pointer go, per [`release_for`]. At most one warp, and only ever onto a display that
@@ -874,14 +869,14 @@ fn release_grab(ctx: &TapCtx, pos: (f64, f64), edge: fit::Edge, release: Release
         Release::Out(p) => p,
         // A point ON the content's boundary can convert to a global pixel one past the display,
         // which the window server then clamps onto a neighbour — see `fit::RELEASE_INSET`.
-        Release::InPlace { .. } => fit::pull_inside(pos, ctx.fit.get(), fit::RELEASE_INSET),
+        Release::InPlaceForChrome => fit::pull_inside(pos, ctx.fit.get(), fit::RELEASE_INSET),
     }));
     ctx.reset_grab_gesture();
     ctx.fullscreen_grab.set(false);
     // The top edge is ONE gesture: under `notch = extend` the reason to press upward is to reach
     // the menu bar, so the same press that frees the pointer also puts the overlay down. Moving
     // back into the guest releases the ask and brings the overlay back, exactly as before.
-    if release == (Release::InPlace { chrome: true }) {
+    if release == Release::InPlaceForChrome {
         ctx.input.grant_chrome();
     }
     log::info!("pointer capture: released — sustained press at the {edge:?} edge ({release:?})");

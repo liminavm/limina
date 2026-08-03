@@ -1,6 +1,6 @@
 # Fullscreen pointer grab: hold the cursor, release it on a sustained edge press
 
-Status: **implemented 2026-08-02, not yet exercised on hardware.** Replaces the mechanism in
+Status: **shipped 2026-08-02**, after five rounds of dogfood that changed four of its rules. Replaces the mechanism in
 `display-modes.md` §"Retired: edge resistance", which stays documented as history. Companion:
 `spikes/edge-pressure/RESULTS.md` (rounds 1–3, the measurements this rests on).
 
@@ -164,16 +164,56 @@ the re-arm rule, and the escape ambiguity — the entire distance model. The cha
 `input.rs` becomes the single owner of "pressing at an edge", which is the invariant the last
 three bugs in this area all violated in different ways.
 
-## Open — all of these want hardware
+## What five rounds of dogfood changed
 
-Nothing below can be answered headlessly, and none of it was answered by the build.
+Everything in this section was wrong in the design or in the first implementation, and none of it
+was findable without hardware and a second display. The `[GRAB]` / `[EDGE]` / `[CAP]` trace
+(`LIMINA_EDGE_TRACE=1`) is what turned each one from a theory into a fact; every time I reasoned
+instead of reading it, I got it wrong.
 
-- Does `Firm` at 0.6 s feel like control or like a stuck pointer?
-- Does a side release land where the hand expects? `RELEASE_OFFSET` is 8 pt outside the content,
-  chosen to clear `REGRAB_MARGIN`, not from any measurement of where a pointer "should" appear.
-- Is `REGRAB_DWELL` (250 ms) long enough to never re-grab during a glance at the other display, and
-  short enough not to feel dead on return? The two pull opposite ways and only use settles it.
-- Does the multi-display tax bite? Every glance-and-click on the other display now costs a
-  deliberate press. `Light` has to be genuinely light or the answer is that people set `Off`.
-- The top-edge release grants the chrome ask outright. Under `notch = extend` that should feel like
-  one gesture; if it instead feels like the menu bar appearing by accident, the two should split.
+- **The park point was the bug behind "the cursor teleports".** Capture has always parked the
+  hidden host cursor at `main_display_center()`. The trace logged release targets in CG global
+  coordinates and so incidentally mapped the test Mac: the VM's display sat at x ∈ [-1512, 0],
+  y ∈ [879, 1861] — left of *and below* the main display. So the park was **on the other screen**,
+  the grab warp was 1400-2400 points long, and a warp posts a motion event carrying its whole
+  vector as the delta, which the captured path integrated as guest motion. Now the cursor parks
+  where it already is, pulled 64 pt inside the content (`fit::park_point`), so the warp is
+  zero-length. Largest captured delta went from 2400 to 107. **Two earlier attempts to detect and
+  subtract the bogus delta were symptom treatment**, and the trace killed the second by showing 5
+  of 13 grabs had no matching event at all.
+- **Release re-associated the mouse before warping**, so the hardware was live while the cursor
+  still sat at the park — on the other display — and motion in flight was applied from there. This
+  is why a *left*-leaning push could land on a screen to the right, which no momentum story
+  explains. Warp first, then associate.
+- **A view point on the content's boundary can convert to a pixel one past the display.** The
+  bottom row of a 982-point window at y ∈ [879, 1861] is y = 1861; the display's last row is 1860.
+  `CGWarpMouseCursorPosition` clamps rather than failing, onto whatever screen is nearest. An
+  in-place release now lands `RELEASE_INSET` inside the content.
+- **Release only where there is somewhere to go.** "Just past the edge" is meaningless at an edge
+  with no neighbour, and freeing the pointer there hands it to the window server still travelling.
+  Checked per press against the actual arrangement, so a neighbour spanning part of an edge works
+  along its whole length.
+- **Cmd-Ctrl-G toggles the HARD grab, not `captured`.** Toggling `captured` stopped being coherent
+  the moment the policy existed: in fullscreen the policy holds the pointer nearly always, so the
+  combo always found it grabbed and always released, and by the time a second press arrived the
+  policy had retaken it. The hard grab was simply unreachable. Now: soft or policy-held → hard
+  grab (a promotion in place, no capture transition); hard → release; Ctrl-Opt always releases.
+  User's design.
+- **The `user_released` latch clears when the pointer leaves the guest**, not only on a focus
+  regain. On a fullscreen VM there is nothing else on that display to click, so the regain edge
+  never came and one Cmd-Ctrl-G disabled the grab for good. It must still survive while the
+  pointer stays inside, or the re-grab undoes the release a quarter second later.
+- **The bottom edge is ordinary.** It briefly had a release-in-place special case, to reach what
+  looked like a dash at the bottom. It was the macOS Dock, and it only appeared *while the cursor
+  was teleporting* — a special case built to serve a symptom, which passed my own review by
+  looking like a reasonable accommodation.
+
+## Still open
+
+- Does `Firm` at 0.6 s feel like control or like a stuck pointer? Only `Standard` has had real use.
+- Is `REGRAB_DWELL` (250 ms) right in both directions — long enough never to re-grab during a
+  glance at the other display, short enough not to feel dead on return?
+- Does the multi-display tax bite over a full day? Every glance-and-click on the other display
+  costs a deliberate press.
+- `RELEASE_OFFSET` (8 pt past the edge) was chosen to clear `REGRAB_MARGIN`, not from any
+  measurement of where a released pointer should appear. It reads fine; it is not tuned.
