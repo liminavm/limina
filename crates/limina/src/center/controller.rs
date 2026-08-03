@@ -1159,26 +1159,26 @@ impl CenterController {
         // Presets, plus a "Custom" entry when the VM carries a hand-edited value — so
         // opening this sheet and pressing Save can never silently round someone's
         // vm.toml down to the nearest preset.
-        let resistance_titles = resistance_titles(cfg.display.edge_resistance);
+        let resistance_titles = hold_titles();
         let resistance_refs: Vec<&str> = resistance_titles.iter().map(String::as_str).collect();
         let resistance_popup = labeled_popup(
             mtm,
             &accessory,
             2.0,
-            "Edge resist:",
+            "Edge hold:",
             &resistance_refs,
-            resistance_index(cfg.display.edge_resistance),
+            hold_index(cfg.display.edge_resistance),
         );
         self.row_help(
             &accessory,
             2.0,
             &resistance_popup,
-            "How hard the pointer sticks at a full-screen guest's edges, so a stray \
-             flick doesn't reveal the Mac's menu bar or jump to the next display. A \
-             deliberate push still crosses; the sides yield at half this, and a corner \
-             holds indefinitely so the guest's hot corner can charge. Holding the \
-             pointer needs Accessibility permission, like pointer capture — the guest's \
-             own top bar and hot corner work either way.",
+            "In full screen the pointer is held inside the guest, so a stray flick \
+             can't reveal the Mac's menu bar or land on the next display. Press it \
+             against an edge and hold to let it out — this is how long that press has \
+             to last. Off leaves the pointer free, exactly as in a window. Needs \
+             Accessibility permission, like pointer capture; without it the pointer \
+             stays free whatever this says.",
         );
 
         alert.setAccessoryView(Some(&accessory));
@@ -1214,7 +1214,7 @@ impl CenterController {
             cfg.hardware.reclaim = reclaim_from_index(reclaim_popup.indexOfSelectedItem());
             cfg.display.resolution = resolution;
             cfg.display.notch = notch_from_index(notch_popup.indexOfSelectedItem());
-            cfg.display.edge_resistance = resistance_from_index(
+            cfg.display.edge_resistance = hold_from_index(
                 resistance_popup.indexOfSelectedItem(),
                 cfg.display.edge_resistance,
             );
@@ -1342,37 +1342,32 @@ fn notch_from_index(index: isize) -> vmlib::schema::NotchPolicy {
     }
 }
 
-/// Edge-resistance presets (points of push), in popup order. A VM whose configured value is not
-/// one of these gets a fifth "Custom" entry — see [`resistance_titles`].
-const RESISTANCE_PRESETS: [f64; 4] = [0.0, 50.0, 100.0, 200.0];
-const RESISTANCE_CHOICES: [&str; 4] = ["Off", "Light", "Standard", "Firm"];
-
-/// The popup titles for a VM's current resistance: the presets, plus `Custom (N pt)` appended
-/// when the configured value isn't a preset, so a hand-edited `vm.toml` survives a Save.
-fn resistance_titles(current: f64) -> Vec<String> {
-    let mut titles: Vec<String> = RESISTANCE_CHOICES
+/// The edge-hold presets, in popup order — [`vmlib::schema::EdgeHold`] owns the durations.
+///
+/// There is no "Custom" entry any more. There used to be, so that a hand-edited points value
+/// survived a Save; the unit is a duration now and `EdgeHold::from_toml` snaps anything else onto
+/// the nearest preset, so the popup can always show a real selection.
+fn hold_titles() -> Vec<String> {
+    vmlib::schema::EdgeHold::ALL
         .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    if !RESISTANCE_PRESETS.contains(&current) {
-        titles.push(format!("Custom ({} pt)", current.round()));
-    }
-    titles
+        .map(|p| p.title().to_string())
+        .collect()
 }
 
-fn resistance_index(current: f64) -> isize {
-    RESISTANCE_PRESETS
+fn hold_index(current: f64) -> isize {
+    let hold = vmlib::schema::EdgeHold::from_toml(current);
+    vmlib::schema::EdgeHold::ALL
         .iter()
-        .position(|p| *p == current)
-        .unwrap_or(RESISTANCE_PRESETS.len()) as isize
+        .position(|p| *p == hold)
+        .unwrap_or(0) as isize
 }
 
-/// The chosen preset, or `current` when the "Custom" entry (index past the presets) is selected.
-fn resistance_from_index(index: isize, current: f64) -> f64 {
+/// The chosen preset's duration, or `current` if the index is somehow out of range.
+fn hold_from_index(index: isize, current: f64) -> f64 {
     usize::try_from(index)
         .ok()
-        .and_then(|i| RESISTANCE_PRESETS.get(i).copied())
-        .unwrap_or(current)
+        .and_then(|i| vmlib::schema::EdgeHold::ALL.get(i).copied())
+        .map_or(current, |p| p.seconds())
 }
 
 /// Popup titles for the display mode, in a fixed order the index helpers share.
@@ -1534,32 +1529,36 @@ mod tests {
     }
 
     #[test]
-    fn resistance_popup_round_trips_every_preset() {
-        for preset in RESISTANCE_PRESETS {
-            let titles = resistance_titles(preset);
-            assert_eq!(titles.len(), RESISTANCE_CHOICES.len(), "no Custom entry");
-            assert_eq!(
-                resistance_from_index(resistance_index(preset), preset),
-                preset
-            );
+    fn the_hold_popup_round_trips_every_preset() {
+        for preset in vmlib::schema::EdgeHold::ALL {
+            let secs = preset.seconds();
+            assert_eq!(hold_from_index(hold_index(secs), secs), secs, "{preset:?}");
         }
+        assert_eq!(hold_titles().len(), vmlib::schema::EdgeHold::ALL.len());
     }
 
     #[test]
-    fn a_hand_edited_resistance_survives_opening_and_saving_the_sheet() {
-        // The bug this guards: a vm.toml with `edge-resistance = 137` must not be silently
-        // rounded to a preset just because someone opened Configure and pressed Save.
-        let custom = 137.0;
-        let titles = resistance_titles(custom);
-        assert_eq!(titles.last().map(String::as_str), Some("Custom (137 pt)"));
-        let selected = resistance_index(custom);
-        assert_eq!(selected, RESISTANCE_PRESETS.len() as isize);
-        assert_eq!(resistance_from_index(selected, custom), custom);
+    fn a_pre_migration_points_value_opens_on_its_migrated_preset() {
+        // A vm.toml still carrying the old points encoding must show the preset it maps to, not
+        // fall back to Off — silently disabling a feature someone configured is the worse
+        // failure, and Off is index 0, which is where an unrecognised value would otherwise land.
+        assert_eq!(hold_index(100.0), 2, "old Standard (100 pt) is Standard");
+        assert_eq!(hold_index(50.0), 1);
+        assert_eq!(hold_index(200.0), 3);
+        assert_eq!(
+            hold_index(137.0),
+            2,
+            "an unrecognised old value lands on Standard"
+        );
+        // And saving that sheet writes the duration, retiring the points value for good.
+        assert_eq!(
+            hold_from_index(hold_index(137.0), 137.0),
+            vmlib::schema::EdgeHold::Standard.seconds()
+        );
     }
 
     #[test]
-    fn picking_a_preset_over_a_custom_value_takes_the_preset() {
-        assert_eq!(resistance_from_index(0, 137.0), 0.0);
-        assert_eq!(resistance_from_index(2, 137.0), 100.0);
+    fn picking_off_turns_the_grab_off() {
+        assert_eq!(hold_from_index(0, 0.30), 0.0);
     }
 }

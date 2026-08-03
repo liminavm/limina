@@ -987,6 +987,22 @@ impl InputState {
         }
     }
 
+    /// Grant the chrome ask outright, without a gesture of its own.
+    ///
+    /// The fullscreen grab's top-edge release calls this: pressing upward under `notch = extend`
+    /// means "let me at the menu bar", and making that two separate gestures — press to free the
+    /// pointer, then lean again to drop the overlay — would be asking twice for one intention.
+    /// Releasing it stays [`Self::reveal_step`]'s job, so the overlay comes back the same way it
+    /// always has.
+    pub(crate) fn grant_chrome(&self) {
+        if !self.overlay_active.load(Ordering::Relaxed) {
+            return; // nothing to ask for; the chrome is already reachable
+        }
+        if !self.reveal_chrome.swap(true, Ordering::Relaxed) {
+            self.reveal_granted.set(Some(std::time::Instant::now()));
+        }
+    }
+
     /// Ask for the macOS chrome back, or give it up again.
     ///
     /// Under the `notch = extend` overlay nothing can appear over the guest — that is the point of
@@ -1240,21 +1256,6 @@ impl InputState {
 /// overflow is zero and the device stays silent; when it does fire, the resulting relative
 /// motion cannot drift the guest cursor, because the compositor clamps it at the same screen
 /// edge the absolute position is already pinned to.
-/// Put the guest's pointer exactly at `pos` (view points) on the absolute tablet.
-///
-/// Needed by the resistance path, which consumes the events it holds — so the local monitor, the
-/// only other thing that drives the absolute device, never sees them and the guest's cursor stays
-/// where it was when the clamp began. A pressure barrier the guest cursor has not reached cannot
-/// charge, and the forwarded push gets spent travelling to it instead.
-pub(crate) fn send_abs_position(conn: &Arc<WorkerConn>, pos: (f64, f64), fit: super::fit::FitRect) {
-    let (x, y) = super::fit::abs_through_fit(pos.0, pos.1, fit, ABS_MAX as i32);
-    let io = conn.io();
-    let fd = io.ptr_fd();
-    send_event(fd, InputEvent::new(EV_ABS, ABS_X, x));
-    send_event(fd, InputEvent::new(EV_ABS, ABS_Y, y));
-    send_event(fd, InputEvent::syn());
-}
-
 pub(crate) fn send_edge_overflow(conn: &Arc<WorkerConn>, overflow: (f64, f64)) {
     let dx = overflow.0.round() as i32;
     let dy = overflow.1.round() as i32;

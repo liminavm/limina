@@ -375,50 +375,57 @@ The per-tick fit subtracts **nothing**. Under `avoid` AppKit has already inset t
 under `extend` every point of it is ours. (An earlier cut subtracted the housing here too, which
 double-counted it once the plist key came out.)
 
-## Fullscreen edge resistance (`[display] edge-resistance`, 2026-08-01)
+## Fullscreen pointer: the grab (`[display] edge-resistance`, 2026-08-02)
 
 In fullscreen the host cursor touching the top edge instantly reveals the macOS menu bar and title
 bar, and a side edge silently hands the pointer to the next display. Both are one flick away, which
-makes a fullscreen guest feel leaky — the Parallels behavior is that leaving takes a deliberate
-push. `fit::EdgeResist` implements that: outward motion at an edge is absorbed until the
-accumulated push crosses the threshold (default 100 pt), then the pointer breaks through and stays
-free until it re-enters the content. The absorbed motion is forwarded to the guest's relative-mouse
-device as edge pressure — the same `send_edge_overflow` captured mode uses — so mutter's barriers
-(GNOME hot corner, a guest panel's reveal edge) still fire while the cursor is held.
+makes a fullscreen guest feel leaky.
 
-The accumulator drains when the pointer retreats more than `RELEASE_MARGIN` back inside the held
-edge, so sliding *along* an edge never adds up to a breakthrough and two nudges separated by real
-inward motion don't either.
-
-Mechanically this lives in the capture tap's uncaptured path (`capture_tap::resist_edges`): the
-motion event is consumed and the host cursor warped back inside the boundary, and the warp's own
-event is what re-drives the guest's pointer. It therefore needs the same Accessibility grant as
-pointer capture, and applies **only** while fullscreen and key — windowed, the pointer must be free
-to leave. `edge-resistance = 0` disables it; pointer capture (Cmd-Ctrl-G) remains the absolute
-version, parking the host cursor at screen centre. The control center exposes 0/50/100/200 pt as
-Off/Light/Standard/Firm, plus a `Custom (N pt)` entry when the VM's `vm.toml` carries something
-else, so opening the sheet and pressing Save can never round a hand-edited value down.
+The mechanism that answers this is the **fullscreen pointer grab** — design and rationale in
+`docs/design/fullscreen-pointer-grab.md`, which is the live document. In short: the pointer is
+grabbed (the Cmd-Ctrl-G machinery), so the host cursor never approaches a screen edge and nothing
+needs warping back; a sustained press against an edge, charged in *seconds* by `fit::Charge`,
+releases it with a single warp to just outside that edge. `[display] edge-resistance` is that hold
+in seconds — Off/Light/Standard/Firm = 0/0.15/0.30/0.60 — and pre-2026-08 point values are
+migrated by preset position (`EdgeHold::from_toml`).
 
 **The chrome ask is not part of this, and must not be gated on it** (`fit::edge_duties`). Two
-unrelated duties share `resist_edges` — holding the pointer, which is a preference, and feeding
-`reveal_step`, which is the only way out of the `notch = extend` overlay. The ask sat below the
-`enabled()` early return, so `Edge resist: Off` silently removed it: the tap consumed nothing and
-the local monitor stands down whenever the tap is installed, leaving an `extend` guest with no way
-to reach the menu bar unless the user had *declined* Accessibility. That is the third time the ask
-has been lost by riding on a path that exists for another reason (the other two: gating the release
-on the overlay, and gating the tap's whole call on it). `edge_duties` decides both from named
-inputs so the independence is a unit test rather than a comment.
+unrelated duties share the tap's uncaptured edge path — taking the pointer, which is a preference,
+and feeding `reveal_step`, which is the only way out of the `notch = extend` overlay. The ask sat
+below the enable check, so `Edge resist: Off` silently removed it: the tap consumed nothing and the
+local monitor stands down whenever the tap is installed, leaving an `extend` guest with no way to
+reach the menu bar unless the user had *declined* Accessibility. That is the third time the ask has
+been lost by riding on a path that exists for another reason (the other two: gating the release on
+the overlay, and gating the tap's whole call on it). It matters more under the grab than it did
+under resistance: with the grab off there is no edge-press gesture either, so the ask is the only
+route. `edge_duties` decides both from named inputs so the independence is a unit test rather than
+a comment.
 
-For the same reason `ResistStep` no longer carries `revealed`. Breaking out upward *was* the ask
-before it became a timed charge; afterwards the field survived as something only the trace read — a
-retired mechanism still shaped like the live one, which is precisely how the gesture acquired two
-owners.
+### Retired: edge resistance (2026-08-01 → 2026-08-02)
 
-### Three things the first cut got wrong (dogfood, 2026-08-01)
+The first answer was **resistance**: `fit::EdgeResist` absorbed outward motion at an edge until an
+accumulated push crossed a threshold in points, warping the host cursor back on every held event.
+It shipped, was measured (`spikes/edge-pressure/`, rounds 1-3), and was replaced within a day —
+not for its constants but for its mechanism. A `CGEventTap` sees motion *after* the window server
+has moved the cursor, so "hold the pointer" could only ever mean "put it back": one visible flick
+per event, each opening a 0.25 s input-suppression interval, denominated in post-ballistics points
+nobody can perceive. Its escape guard managed to be wrong in both directions inside one day
+(dragging the pointer off the other display; then deleting side resistance entirely), because "is
+the pointer outside" is genuinely ambiguous at the instant of crossing.
 
-Worth keeping, because each is a trap the obvious implementation walks into.
+What survived the deletion, because the grab needs it too: `edge_overflow` (the guest's own
+pressure barriers charge on *motion into* them, which a pre-clamped absolute stream cannot express
+— without it the GNOME hot corner is simply unreachable), `is_reflow`, and the `CORNER_ZONE` rule.
 
-**Pinning the cursor *on* the top edge does not stop the chrome.** macOS reveals the menu bar and
+### Traps that outlived the mechanism (dogfood, 2026-08-01)
+
+Each is a trap the obvious implementation walks into, and most of them are not about resistance at
+all — they are about what macOS does to a cursor near a screen edge. Marked below where they still
+bind.
+
+**Pinning the cursor *on* the top edge does not stop the chrome.** (Retired with resistance, and
+the reason the grab is a better shape: a grabbed cursor is parked at screen centre, so no keep-out
+band is needed at all.) macOS reveals the menu bar and
 title bar the moment the cursor touches the top row of the screen — the reveal has already happened
 by the time resistance could push back, so the top edge felt like it had no resistance at all while
 the sides felt strong. The fix is a `KEEPOUT` band (2 pt): while resistance holds, the cursor parks
@@ -429,7 +436,9 @@ position. Related: the top and bottom hold the full threshold while the sides ta
 (half) of it — crossing to another display is a thing you mean to do; macOS chrome dropping over
 the guest never is.
 
-**A corner is a target, not an exit — and it never releases.** mutter's pressure barriers (the
+**A corner is a target, not an exit — and it never releases.** (STILL BINDS: `pressed_edge`
+answers `None` inside `CORNER_ZONE`, so no amount of corner pushing releases the grab, while the
+clamped overflow keeps charging the guest's barrier.) mutter's pressure barriers (the
 GNOME hot corner among them) want ~100 px of accumulated push, and we forward exactly the motion we
 absorb; at the plain side threshold we let the pointer go after 50 pt, so the corner charged
 part-way and stopped. Raising the corner's threshold was the right diagnosis at the wrong layer:
@@ -438,25 +447,31 @@ cannot be served by a bounded burst. Within `CORNER_ZONE` (32 pt) of a corner th
 therefore held indefinitely, so the push can continue as long as the user pushes. Nothing is
 trapped — sliding a few points along either edge leaves the zone and the ordinary thresholds apply.
 
-**While resisting, pin the guest's pointer to the clamped position** (`send_abs_position`). The
+**While holding, the guest's pointer must be at the clamped position.** (Retired as a separate
+step: captured mode drives the absolute tablet from the virtual cursor on every event, so the guest
+is never behind. The measurement is why it matters.) Under resistance this needed an explicit
+`send_abs_position`: The
 local monitor is the only other thing driving the absolute device and it never runs while the tap
 consumes, so the guest's cursor sat tens of points short of the corner and spent the first part of
 the forwarded push *travelling* there rather than charging the barrier: 142 px measured arriving as
 ~90 px of pressure, just under the 100 needed. That was the entire "works one time in three".
 
-**A warp opens a 0.25 s local-events suppression interval.** During it, real mouse movement stops
-moving the cursor. Resistance warps on every held event, so pushing at an edge and then coming back
-felt like the barrier had *eaten* the travel — you had to move a long way before the cursor
-unstuck. `CGAssociateMouseAndMouseCursorPosition(true)` immediately after the warp ends the
-interval (`input::end_warp_suppression`); it is a no-op for association itself, since the
-uncaptured path is associated by definition.
+**A warp opens a 0.25 s local-events suppression interval.** (STILL BINDS, and now everywhere a
+warp happens.) During it, real mouse movement stops moving the cursor. Resistance warped on every
+held event, so pushing at an edge and then coming back felt like the barrier had *eaten* the travel.
+`CGAssociateMouseAndMouseCursorPosition(true)` immediately after the warp ends the interval
+(`input::end_warp_suppression`). The grab warps once per release rather than once per event — but
+that one warp is applied at the exact moment the user gets the pointer back, so it needs the same
+treatment; `apply_capture_cursor` had been missing it since capture shipped.
 
-**Do not integrate the position yourself.** The first cut advanced a position kept by the window's
+**Do not integrate the position yourself.** (Half-retired: the grab's release decision reads the
+*virtual* cursor, which we own and which is exactly at the edge while deltas keep flowing — the
+whole class goes away. The uncaptured chrome ask still reads `CGEventGetLocation`.) The first cut advanced a position kept by the window's
 own motion handler — which sees nothing while the tap is consuming events, and nothing *at all*
 once the pointer has left the window for another display. It froze on the edge, so small moves made
 over on the neighbouring display computed as re-entering the content, re-armed the resistance, and
 warped the pointer home: "sometimes the mouse crosses to a separate workspace and then gets thrown
-back". `EdgeResist::step` now takes the event's own `CGEventGetLocation` (via
+back". `EdgeResist::step` was changed to take the event's own `CGEventGetLocation` (via
 `input::cg_global_to_view_point`, which happily answers with coordinates outside the view) and uses
 the deltas only for pressure — which is the right split anyway, since at a real screen edge the
 position stops changing while the deltas keep coming. Re-arming likewise needs a genuine retreat

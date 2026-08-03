@@ -324,10 +324,6 @@ pub const DEFAULT_EDGE_RESISTANCE: f64 = EdgeHold::Standard.seconds();
 /// 0.02 s of charge while a deliberate lean reaches 1.0 s, so every value here sits in a 50x gap
 /// — which is what lets a corner *tap* charge the guest's own hot corner without ever releasing
 /// the pointer.
-// Constructed by the policy wiring, which is a later step in
-// `docs/design/fullscreen-pointer-grab.md` §"Order of work" — deliberately landed ahead of it so
-// the migration and the durations are settled and tested before anything behavioral moves.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeHold {
     /// No grab at all: the pointer behaves exactly as it does outside fullscreen.
@@ -337,7 +333,6 @@ pub enum EdgeHold {
     Firm,
 }
 
-#[allow(dead_code)]
 impl EdgeHold {
     pub const ALL: [EdgeHold; 4] = [Self::Off, Self::Light, Self::Standard, Self::Firm];
 

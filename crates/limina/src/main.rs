@@ -368,10 +368,12 @@ struct Cli {
     #[arg(long, value_name = "avoid|extend", default_value_t = crate::vmlib::schema::NotchPolicy::Avoid)]
     notch: crate::vmlib::schema::NotchPolicy,
 
-    /// How hard the pointer sticks at a fullscreen guest's edges, in points of push (0 disables).
-    /// Keeps a flick toward the top edge from revealing the macOS menu bar, and a flick sideways
-    /// from landing on the next display, without preventing either deliberately.
-    #[arg(long, value_name = "POINTS", default_value_t = crate::vmlib::schema::DEFAULT_EDGE_RESISTANCE)]
+    /// Seconds the pointer must be pressed against a fullscreen guest's edge before it is let
+    /// out (0 disables the grab). In fullscreen the pointer is held inside the guest, so a flick
+    /// toward the top edge cannot reveal the macOS menu bar and a flick sideways cannot land on
+    /// the next display; a deliberate press still leaves. Pre-2026-08 point values (50/100/200)
+    /// are still accepted and migrated. Needs the Accessibility grant pointer capture uses.
+    #[arg(long, value_name = "SECONDS", default_value_t = crate::vmlib::schema::DEFAULT_EDGE_RESISTANCE)]
     edge_resistance: f64,
 
     /// Disable the soft keyboard grab. By default, while the VM window is focused, system
