@@ -3,6 +3,14 @@
 2 patches; `UPSTREAM_BASE` `floating — see the series README`. Schema + protocol: `README.md`.
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
 
+**2026-08-03 — migrated to the fork model (the pilot).** `third_party/imago` is now a real
+clone with upstream history; the `limina` branch = upstream tip `042b1de67dfa` + the two
+rows below cherry-picked (0001 auto-merged over the maybe-async drift exactly as predicted;
+0002 re-resolved onto the real-repo Cargo.toml layout, still `>=0.17, <0.18`). Destination
+repo: `github.com/liminavm/imago` (plain pushed repo — upstream is GitLab, no GitHub-native
+fork possible). This ledger stays the status reference and must be kept current as series
+migrate and rebase.
+
 | ord | subject | files | diag | need | checked | issue | mr | sec | fold | tier | disp | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 0001 | limina: discard preserves the backing file size (no truncate-to-EOF) | `src/file.rs` |  | needed | 042b1de67dfa (tip, 2026-08-03) | none-yet | none-yet | no | standalone | host | upstream-after-cleanup | tip still truncates at EOF; no upstream issue/MR exists — file the issue (see Findings); strip limina-branded comments first |
