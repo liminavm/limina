@@ -237,11 +237,57 @@ bridge `mtl_texture_get_props`, `kk_bo.texture`, texture residency helpers, impo
 (DEDICATED_ONLY), the external-image format query, and `kk_image_plane_bind` adopting the imported
 texture verbatim after validating it against the image.
 
-Remaining: the vkr side. `struct vkr_mtl_iosurface` *already* carries an IOSurface-backed
-`mtl_texture`, so the change is to allocate the IOSurface **before** image create (as the MoltenVK
-branch already does), keep the guest's tiling, and import `surf->mtl_texture` as an MTLTEXTURE
-dedicated allocation instead of host-pointer-importing the IOSurface bytes. Then re-measure —
-and only then may the forced LINEAR be dropped.
+The vkr side is now wired too, behind `LIMINA_KK_MTLTEXTURE_SCANOUT=1`
+(`virgl-kk-mtltexture-scanout.patch`), default off so the shipping path is untouched:
+
+- `vkr_image.c` KK branch: allocate the IOSurface **before** create (no rowPitch needed), leave
+  tiling `OPTIMAL`, strip `INPUT_ATTACHMENT` (it would push KK's layout type to 2DArray), and set
+  `gkvm_surf` so the existing post-create block attaches it to the image. Falls back to forced
+  LINEAR if the allocation fails.
+- `vkr_device_memory.c`: chain `VkImportMemoryMetalHandleInfoEXT{MTLTEXTURE, surf->mtl_texture}`
+  instead of the host-pointer import — the `VkMemoryDedicatedAllocateInfo{image}` linkage that
+  finds the surface already existed.
+- `vkr_metal_helpers.m`: the IOSurface texture gains `MTLTextureUsageShaderWrite`. KK derives its
+  Metal usage from the guest's `VkImageUsageFlags`, and a scanout image carrying `TRANSFER_DST` or
+  `STORAGE` maps to `SHADER_WRITE`; the bind requires the texture's usage to be a superset.
+
+**A warning taken seriously, from `vkr_image.c`'s own comment.** The MoltenVK equivalent of this
+path is recorded there as *proven dangerous*: importing a raw MTLTexture as the bound memory "uses
+our texture verbatim and any usage/format mismatch silently no-ops the render, leaving the IOSurface
+untouched (a magenta-prefilled scanout surface stayed pure magenta — the GPU never wrote it)". My
+first validation checked extent/levels/layers but **not format or usage — the two things that
+actually failed there**. It now checks pixel format, usage superset, sample count and texture type
+as well, and fails the bind loudly, because a wrong texture here is invisible at every later layer.
+
+### First end-to-end run: aborts, loudly (2026-08-04)
+
+Booted `enhanced.test` with the gate on. The session came up seated, but running vkmark killed the
+worker:
+
+```
+Assertion failed: (internal_encoder && internal_encoder->encoder),
+  kk_encoder_internal_end_encoding, kk_encoder.c:226   → SIGABRT
+```
+
+A nil-encoder abort — the *same class* kk 0002 exists for, so the adopted texture is not yielding a
+usable render encoder. Not yet root-caused. Note the vkr `vkr_log` lines are not emitted at the
+default log level (the pre-existing "KK linear scanout" line does not appear either), so the gate
+telemetry needs `VKR_DEBUG`-level logging or an `fprintf` before it can confirm which path ran.
+
+Leads, in order of suspicion:
+
+1. **`plane->addr = 0`.** The normal bind sets `plane->addr = mem->bo->gpu + offset`; a texture
+   import has no buffer and hence no GPU address. If attachment or descriptor setup derives
+   anything from `addr`, zero is wrong — this is the first thing to check.
+2. **Whether the bind validation even ran.** `vk_errorf` may also be swallowed at this log level,
+   so "no mismatch reported" is not evidence the texture matched. Confirm with a temporary
+   unconditional `fprintf` before blaming anything downstream.
+3. `layout.optimized_layout` under `OPTIMAL` tiling, which an IOSurface-backed texture cannot honor.
+
+**Do not judge this by "the desktop came up" or by frame counters** — per the same recorded lesson,
+the characteristic failure is a render that no-ops into an untouched surface. The acceptance test is
+the magenta oracle: prefill the IOSurface with a known colour and prove the GPU overwrites it
+(`spikes/venus-draw-probe/iosdump.swift`).
 
 **Open question inherited from §A, unresolved:** our #28 root-caused upstream's fd double-mmap as
 CPU/GPU-incoherent, yet upstream ships that path at ~1770 FPS on an M4 Max. Probe before

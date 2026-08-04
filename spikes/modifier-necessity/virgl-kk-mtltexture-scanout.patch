@@ -1,0 +1,224 @@
+diff --git a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
+index d330bc1..dd2248c 100644
+--- a/src/venus/vkr_device_memory.c
++++ b/src/venus/vkr_device_memory.c
+@@ -412,6 +412,7 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+    /* gkvm KK path: host-pointer import of the scanout IOSurface bytes (function scope —
+     * chained into alloc_info and must outlive the driver call). */
+    VkImportMemoryHostPointerInfoEXT gkvm_host_import = { 0 };
++   VkImportMemoryMetalHandleInfoEXT gkvm_metal_import = { 0 };
+ 
+    /* gkvm #28: plain HOST_VISIBLE memory is NO LONGER backed by an imported mtl_shm carrier.
+     * The old path allocated a POSIX shm + Metal buffer (newBufferWithBytesNoCopy) and imported
+@@ -582,20 +583,47 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+           * up to the IOSurface's own (page-rounded) alloc size. */
+          struct vkr_mtl_iosurface *gkvm_io =
+             (struct vkr_mtl_iosurface *)gkvm_scanout_surf;
+-         gkvm_host_import.sType =
+-            VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT;
+-         gkvm_host_import.handleType =
+-            VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+-         gkvm_host_import.pHostPointer = gkvm_io->base_addr;
+-         gkvm_host_import.pNext = alloc_info->pNext;
+-         alloc_info->pNext = &gkvm_host_import;
+-         /* Clamp to the IOSurface's backing size: a guest-declared allocationSize
+-          * larger than the backing would import past it (host OOB). See the matching
+-          * clamp on the resource-import path above. */
+-         alloc_info->allocationSize = gkvm_io->alloc_size;
+-         vkr_log("gkvm: KK scanout memory <- host-pointer import of IOSurface id=%u "
+-                 "(base=%p size=%" PRIu64 ")",
+-                 gkvm_io->id, gkvm_io->base_addr, (uint64_t)gkvm_io->alloc_size);
++
++         /* LIMINA_KK_MTLTEXTURE_SCANOUT=1 (paired with the same gate in vkr_image.c):
++          * hand KK the IOSurface's MTLTexture as the memory itself, via
++          * VK_EXT_external_memory_metal. The image bound to this memory adopts that
++          * texture verbatim, so the render lands in the IOSurface with no host-pointer
++          * aliasing and no rowPitch to match. KK validates the texture against the image
++          * at bind and FAILS LOUDLY on a mismatch — deliberately, because the failure
++          * mode this replaces is Metal silently no-op'ing the render (see the MoltenVK
++          * note in vkr_image.c). */
++         static int gkvm_mtltex = -1;
++         if (gkvm_mtltex < 0) {
++            const char *e = getenv("LIMINA_KK_MTLTEXTURE_SCANOUT");
++            gkvm_mtltex = (e && *e == '1') ? 1 : 0;
++         }
++         if (gkvm_mtltex && gkvm_io->mtl_texture) {
++            gkvm_metal_import.sType =
++               VK_STRUCTURE_TYPE_IMPORT_MEMORY_METAL_HANDLE_INFO_EXT;
++            gkvm_metal_import.handleType =
++               VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT;
++            gkvm_metal_import.handle = gkvm_io->mtl_texture;
++            gkvm_metal_import.pNext = alloc_info->pNext;
++            alloc_info->pNext = &gkvm_metal_import;
++            vkr_log("gkvm: KK scanout memory <- MTLTEXTURE import of IOSurface id=%u "
++                    "(tex=%p)",
++                    gkvm_io->id, gkvm_io->mtl_texture);
++         } else {
++            gkvm_host_import.sType =
++               VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT;
++            gkvm_host_import.handleType =
++               VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
++            gkvm_host_import.pHostPointer = gkvm_io->base_addr;
++            gkvm_host_import.pNext = alloc_info->pNext;
++            alloc_info->pNext = &gkvm_host_import;
++            /* Clamp to the IOSurface's backing size: a guest-declared allocationSize
++             * larger than the backing would import past it (host OOB). See the matching
++             * clamp on the resource-import path above. */
++            alloc_info->allocationSize = gkvm_io->alloc_size;
++            vkr_log("gkvm: KK scanout memory <- host-pointer import of IOSurface id=%u "
++                    "(base=%p size=%" PRIu64 ")",
++                    gkvm_io->id, gkvm_io->base_addr, (uint64_t)gkvm_io->alloc_size);
++         }
+       } else {
+          vkr_log("gkvm: scanout memory -> mtl_shm carrier for blob export; image renders "
+                  "into its IOSurface (id=%u) via useIOSurface",
+diff --git a/src/venus/vkr_image.c b/src/venus/vkr_image.c
+index 2f2b643..0890594 100644
+--- a/src/venus/vkr_image.c
++++ b/src/venus/vkr_image.c
+@@ -113,20 +113,48 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+          bool gkvm_is_import = false;
+          VkImageCreateInfo *mci = (VkImageCreateInfo *)ci;
+          VkBaseInStructure *prev = (VkBaseInStructure *)mci;
++         /* LIMINA_VKR_KEEP_MODIFIER_STRUCTS=1 leaves the DRM-format-modifier structs
++          * chained (the external-memory one is still unlinked) — the A/B for whether
++          * this unlink is load-bearing against a host driver that never advertises
++          * VK_EXT_image_drm_format_modifier. */
++         static int gkvm_keep_structs = -1;
++         if (gkvm_keep_structs < 0) {
++            const char *e = getenv("LIMINA_VKR_KEEP_MODIFIER_STRUCTS");
++            gkvm_keep_structs = (e && *e == '1') ? 1 : 0;
++         }
+          for (VkBaseInStructure *s = (VkBaseInStructure *)mci->pNext; s;
+               s = (VkBaseInStructure *)prev->pNext) {
+             const int t = (int)s->sType;
++            const bool is_mod =
++               t == VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT ||
++               t == VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT;
+             if (t == VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT)
+                gkvm_is_import = true;
+             if (t == VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO ||
+-                t == VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT ||
+-                t == VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT)
++                (is_mod && !gkvm_keep_structs))
+                prev->pNext = s->pNext; /* unlink */
+             else
+                prev = s;
+          }
+-         if (mci->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)
+-            mci->tiling = VK_IMAGE_TILING_OPTIMAL;
++         if (mci->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) {
++            /* limina probe (2026-08-04): count how often a guest image actually
++             * arrives with modifier tiling, i.e. how much of this normalization is
++             * live traffic vs MoltenVK-era dead code. */
++            static unsigned gkvm_mod_hits;
++            if (++gkvm_mod_hits <= 4 || (gkvm_mod_hits % 256) == 0)
++               fprintf(stderr, "[LIMINA-VKRMOD] modifier-tiled guest image #%u %s import=%d\n",
++                       gkvm_mod_hits, gkvm_is_import ? "EXPLICIT" : "LIST", gkvm_is_import);
++            /* LIMINA_VKR_KEEP_MODIFIER_TILING=1 leaves the modifier tiling in place so
++             * the image reaches KK as the guest asked — the A/B that tells us whether
++             * kk_image_layout's modifier carve-out is a live guard or dead code. */
++            static int gkvm_keep = -1;
++            if (gkvm_keep < 0) {
++               const char *e = getenv("LIMINA_VKR_KEEP_MODIFIER_TILING");
++               gkvm_keep = (e && *e == '1') ? 1 : 0;
++            }
++            if (!gkvm_keep)
++               mci->tiling = VK_IMAGE_TILING_OPTIMAL;
++         }
+ 
+          if (gkvm_vkformat_to_iosurface(ci->format, &gkvm_mtl, &gkvm_fourcc, &gkvm_bpe)) {
+             struct vkr_device *dev = vkr_device_from_handle(args->device);
+@@ -158,15 +186,62 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+                 * (vkr_device_memory.c) — render lands in the surface, presented zero-copy.
+                 * The IOSurface is allocated AFTER create, with the driver's linear rowPitch
+                 * (vkGetImageSubresourceLayout). */
+-               mci->tiling = VK_IMAGE_TILING_LINEAR;
+-               /* INPUT_ATTACHMENT usage makes KK promote the image layout to
+-                * 2DArray (vk_image_to_mtl_texture_type) — but Metal buffer-backed
+-                * linear textures must be plain 2D, and a layout/texture array-ness
+-                * mismatch makes render passes silently drop every draw (clears
+-                * still land). zink only adds the bit speculatively (fb-fetch);
+-                * scanout buffers are never fb-fetched. */
+-               mci->usage &= ~VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+-               gkvm_kk_linear = true;
++               /* LIMINA_VKR_NO_KK_FORCE_LINEAR=1 leaves the guest's tiling alone, so the
++                * image reaches KK as it was asked for (modifier-tiled, if the guest said
++                * so) and kk_image_layout's carve-out becomes reachable. Costs zero-copy:
++                * without a defined linear rowPitch no IOSurface can alias the image
++                * memory, so the present path falls back to a readback blit. This is the
++                * A/B for "is the forced LINEAR still the only way to scan out on KK". */
++               static int gkvm_no_force = -1;
++               if (gkvm_no_force < 0) {
++                  const char *e = getenv("LIMINA_VKR_NO_KK_FORCE_LINEAR");
++                  gkvm_no_force = (e && *e == '1') ? 1 : 0;
++               }
++               /* LIMINA_KK_MTLTEXTURE_SCANOUT=1: the replacement for the forced LINEAR.
++                * KosmicKrisp now implements VK_EXT_external_memory_metal's MTLTEXTURE
++                * handle type, so instead of contorting the image into a linear layout
++                * whose rowPitch an IOSurface can be made to match, we allocate the
++                * IOSurface up front and hand KK its texture as the image's memory
++                * (vkr_device_memory.c does the import). No pitch to match, so the
++                * "IOSurface pitch != image rowPitch -> no zero-copy" failure mode goes
++                * away, and the guest's own tiling survives. Kept behind a gate until it
++                * is measured against the forced-LINEAR path. */
++               static int gkvm_mtltex = -1;
++               if (gkvm_mtltex < 0) {
++                  const char *e = getenv("LIMINA_KK_MTLTEXTURE_SCANOUT");
++                  gkvm_mtltex = (e && *e == '1') ? 1 : 0;
++               }
++               if (gkvm_mtltex) {
++                  /* OPTIMAL keeps kk_image_layout on the plain-2D, non-linear path that
++                   * matches an IOSurface-backed MTLTexture; INPUT_ATTACHMENT would push
++                   * the layout type to 2DArray and fail KK's bind-time type check. */
++                  mci->tiling = VK_IMAGE_TILING_OPTIMAL;
++                  mci->usage &= ~VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
++                  gkvm_surf = vkr_mtl_iosurface_alloc(dev->mtl_device, ci->extent.width,
++                                                      ci->extent.height, gkvm_mtl,
++                                                      gkvm_fourcc, gkvm_bpe, 0);
++                  vkr_log("gkvm: KK MTLTEXTURE scanout %ux%u -> IOSurface id=%u tex=%p",
++                          ci->extent.width, ci->extent.height,
++                          gkvm_surf ? gkvm_surf->id : 0,
++                          gkvm_surf ? gkvm_surf->mtl_texture : NULL);
++                  /* On failure fall through to the forced-LINEAR path below. */
++               }
++               /* Fall back to forced LINEAR when the import path is off OR its IOSurface
++                * allocation failed — never leave the image with neither backing. */
++               if ((!gkvm_mtltex || !gkvm_surf) && !gkvm_no_force) {
++                  mci->tiling = VK_IMAGE_TILING_LINEAR;
++                  /* INPUT_ATTACHMENT usage makes KK promote the image layout to
++                   * 2DArray (vk_image_to_mtl_texture_type) — but Metal buffer-backed
++                   * linear textures must be plain 2D, and a layout/texture array-ness
++                   * mismatch makes render passes silently drop every draw (clears
++                   * still land). zink only adds the bit speculatively (fb-fetch);
++                   * scanout buffers are never fb-fetched. */
++                  mci->usage &= ~VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
++                  gkvm_kk_linear = true;
++               } else {
++                  vkr_log("LIMINA-NOFORCE: leaving scanout image tiling=%d usage=0x%x",
++                          (int)mci->tiling, mci->usage);
++               }
+             }
+          }
+       }
+diff --git a/src/venus/vkr_metal_helpers.m b/src/venus/vkr_metal_helpers.m
+index 2f91d2e..beb927a 100644
+--- a/src/venus/vkr_metal_helpers.m
++++ b/src/venus/vkr_metal_helpers.m
+@@ -315,8 +315,14 @@
+                                                            height:height
+                                                         mipmapped:NO];
+       /* PixelFormatView: scanout images are MUTABLE_FORMAT with a UNORM+sRGB view list. */
+-      td.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget |
+-                 MTLTextureUsagePixelFormatView;
++      /* ShaderWrite is here for the MTLTEXTURE-import scanout path: KosmicKrisp derives
++       * a Metal usage mask from the guest's VkImageUsageFlags, and a scanout image that
++       * carries TRANSFER_DST or STORAGE maps to MTL_TEXTURE_USAGE_SHADER_WRITE. KK's bind
++       * requires the imported texture's usage to be a SUPERSET of the image's, so a
++       * missing bit fails the bind outright (by design — the alternative is Metal
++       * silently no-op'ing the render into this surface). Extra bits are harmless. */
++      td.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite |
++                 MTLTextureUsageRenderTarget | MTLTextureUsagePixelFormatView;
+       td.storageMode = MTLStorageModeShared;
+       tex = [device newTextureWithDescriptor:td iosurface:io plane:0];
+       if (!tex) {
