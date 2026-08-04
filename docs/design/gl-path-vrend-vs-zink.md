@@ -117,12 +117,32 @@ modifier traffic" — but the middle boot ran **zink-on-venus** and also produce
 arm that should have reproduced it didn't, the probe count is not a trustworthy differential yet.
 Do not cite it as evidence until that is explained.
 
+**BLOCKER found 2026-08-04 — vrend rendering corrupts under sustained GL load.** On the
+virgl/vrend path, content progressively corrupts under load: wrong colors first, then structured
+garbage, and eventually the whole compositor, which stays corrupted after the load stops. Silent —
+no host-side error at onset. Reproduced after a single full glmark2 suite. Full write-up + three
+reference images: `spikes/vrend-texture-corruption/RESULTS.md`. This must be fixed before vrend can
+be considered for the compositor's GL path, and it outweighs any perf number.
+
+*(An earlier revision of this section blamed `--display-resolution`. That was wrong — resolution and
+load-duration had moved together in the observations, and running the same heavy load at the
+supposedly-safe resolution reproduced it immediately. Whether zink-on-venus survives the same load
+is **not yet tested**, so "vrend-specific" is not proven.)*
+
+**The GL A/B numbers below are VOID.** A first pass measured virgl 2498 vs zink 1273 on the full
+glmark2 suite — but every run in both arms was composited through the corrupted virgl pipeline (the
+A/B varied only the *client's* driver, never the compositor's), so it measured a broken envelope.
+Do not cite those figures. (Also correcting an earlier claim in this doc: glmark2 *is* installed on
+this image.)
+
 **Performance is a re-measure, not a lookup.** The record is genuinely mixed:
 `docs/perf/venus-cmdstream-overhead.md:3` says the tier battery showed *virgl/vrend beating
 zink-on-venus GL*, while the 07-29 `limina-virgl-vrend-perf` finding has venus winning or tying
 every guest cell and explicitly flags that loose-era numbers need re-judging. Neither settles it.
-`vkmark` is the wrong instrument here (it is Vulkan → venus on both arms); `glmark2` is not
-installed on this image. A GL A/B needs to be set up deliberately.
+`vkmark` is the wrong instrument here (it is Vulkan → venus on both arms). ~~`glmark2` is not
+installed on this image~~ — it is (`glmark2-es2-wayland`); that earlier claim was wrong. A GL A/B
+needs to be set up deliberately, and must control the **compositor's** GL path, not only the
+client's — the first attempt did not, which is why it produced void numbers.
 
 ## Strategic read
 
