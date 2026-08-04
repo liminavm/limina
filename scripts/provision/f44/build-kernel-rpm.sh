@@ -14,7 +14,10 @@
 # %posttrans `kernel-install add` so dracut writes the initramfs + BLS entry, co-installs beside
 # stock). The 16k kernel is distro-independent: the SAME RPM installs on F43 and F44.
 #
-# THE INTRICATE ONE — most likely to need an in-guest tweak. Knobs: KVER (source tag),
+# Source: the liminavm/linux fork at the rev pinned in third_party/manifest.toml (no patch
+# series any more — see that file and guest/virtio-gpu-dkms/README.md for what moved where).
+#
+# THE INTRICATE ONE — most likely to need an in-guest tweak. Knobs: KREV (fork rev override),
 # CONFIG_BASE (base config). If the Fedora-config build fights you, the validated fallback is the
 # old upstream-defconfig recipe in scripts/build-kernel-rpm.sh.
 #
@@ -23,15 +26,26 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-PATCHES="$REPO/patches/linux"
 OUT="${OUT:-$HOME/limina-build/kernel}"
 BUILD="${BUILD:-$HOME/limina-build/linux}"
 LOCALVERSION="${LOCALVERSION:--limina16k}"
-# Source tag: default to the running kernel's upstream base version (e.g. 7.0.12 -> v7.0.12).
-KVER="${KVER:-v$(uname -r | sed -E 's/-.*$//')}"
 # Base config: the running guest's real Fedora config.
 CONFIG_BASE="${CONFIG_BASE:-/boot/config-$(uname -r)}"
-STABLE_URL="https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+# Source: the liminavm/linux fork's `limina` branch at the rev pinned in
+# third_party/manifest.toml. There is no patch-apply stage any more — our kernel changes ARE
+# the commits on that branch, so what gets built is exactly what the pin names.
+MANIFEST="$REPO/third_party/manifest.toml"
+manifest_field() {
+  awk -v key="$1" '
+      /^\[/ { in_linux = ($0 ~ /^\[linux\]/) }
+      in_linux && $1 == key { gsub(/^[^"]*"|"[^"]*$/, ""); print; exit }
+  ' "$MANIFEST"
+}
+FORK_URL="${FORK_URL:-$(manifest_field repo)}"
+KREV="${KREV:-$(manifest_field rev)}"
+KVER="${KVER:-$(manifest_field base)}"     # informational: the upstream tag the branch sits on
+[ -n "$FORK_URL" ] && [ -n "$KREV" ] || {
+  echo "could not read the [linux] pin from $MANIFEST" >&2; exit 1; }
 mkdir -p "$OUT"
 [ -r "$CONFIG_BASE" ] || { echo "base config $CONFIG_BASE not readable; set CONFIG_BASE" >&2; exit 1; }
 
@@ -41,35 +55,31 @@ sudo dnf -y builddep kernel 2>/dev/null || \
   sudo dnf install -y gcc make flex bison bc elfutils-libelf-devel openssl-devel perl \
     rsync kmod gzip diffutils findutils git dwarves
 
-echo "==> [2/6] source tree ($KVER, shallow)"
+echo "==> [2/6] source tree (fork rev ${KREV:0:12}, base $KVER, shallow)"
+# Fetch the pinned rev EXACTLY (not the branch tip): a moved branch can never silently change
+# what this builds, and the fetch stays a single shallow commit.
 if [ ! -d "$BUILD/.git" ]; then
-  rm -rf "$BUILD"
-  git clone --depth 1 --branch "$KVER" "$STABLE_URL" "$BUILD" \
-    || { echo "could not clone $KVER from the stable tree; set KVER to a real tag" >&2; exit 1; }
+  rm -rf "$BUILD"; mkdir -p "$BUILD"
+  git -C "$BUILD" init -q
+  git -C "$BUILD" remote add origin "$FORK_URL"
 fi
 cd "$BUILD"
 git config --global --add safe.directory "$BUILD" 2>/dev/null || true
-git reset --hard HEAD >/dev/null 2>&1 || true
+if ! git cat-file -e "${KREV}^{commit}" 2>/dev/null; then
+  git fetch -q --depth 1 origin "$KREV" \
+    || { echo "could not fetch $KREV from $FORK_URL — is the manifest pin pushed?" >&2; exit 1; }
+fi
+git checkout -q --detach "$KREV"
+git reset --hard -q "$KREV"
 git clean -qfdx 2>/dev/null || true
+echo "    at $(git log -1 --format='%h %s')"
 
-echo "==> [3/6] limina-patch the source (tolerant — likely already upstream in $KVER)"
-shopt -s nullglob
-for p in "$PATCHES"/*.patch; do
-  case "$(basename "$p")" in 0005-*) continue ;; esac  # mandatory, applied below
-  if git apply --check "$p" 2>/dev/null; then git apply "$p"; echo "    applied $(basename "$p")"
-  else echo "    SKIP $(basename "$p") (does not apply — likely already upstream)"; fi
-done
-shopt -u nullglob
-# 0005 (virtio_balloon: stop page-reporting across suspend) is NOT upstream — a silent skip would
-# ship the s2idle UAF back into the image, so apply it FAIL-LOUD (drop this once it lands upstream).
-git apply "$PATCHES"/0005-virtio-balloon-stop-page-reporting-across-suspend.patch
-echo "    applied 0005-virtio-balloon-stop-page-reporting-across-suspend.patch (mandatory)"
-# We git-apply patches WITHOUT committing, so the tree is "dirty" and scripts/setlocalversion (which
-# in current kernels IGNORES an empty .scmversion) appends `-dirty` to the release even with
-# LOCALVERSION_AUTO=n — e.g. 6.19.10-limina16k-dirty, whose second dash is an INVALID rpm EVR for
-# `Provides: kernel-uname-r`, so packaging fails. Remove the git metadata so setlocalversion finds
-# no SCM and emits NO suffix → clean 6.19.10-limina16k. (Re-runs re-clone via the step-2 guard;
-# a shallow clone is cheap.)
+echo "==> [3/6] (no patch stage — the fork branch IS the patch series)"
+# setlocalversion (which in current kernels IGNORES an empty .scmversion) would append the
+# fork's SCM info to the release — e.g. 7.1.6-limina16k-g8a5647a014f5, whose extra dash is an
+# INVALID rpm EVR for `Provides: kernel-uname-r`, so packaging fails. Remove the git metadata
+# so setlocalversion finds no SCM and emits NO suffix → clean 7.1.6-limina16k. (Re-runs
+# re-fetch via the step-2 guard; a shallow fetch is cheap.)
 rm -rf "$BUILD/.git"
 
 echo "==> [4/6] Fedora config + the 16k delta"
@@ -136,7 +146,7 @@ cat > "$SPEC" <<SPEC
 Name:           limina-kernel-16k
 Version:        $BASE
 Release:        1%{?dist}
-Summary:        limina enhanced-tier 16 KiB-page Linux kernel ($KVER, Fedora config + 16k)
+Summary:        limina enhanced-tier 16 KiB-page Linux kernel ($KVER + limina fork, Fedora config + 16k)
 License:        GPL-2.0-only
 BuildArch:      aarch64
 Provides:       kernel-uname-r = %{krel}

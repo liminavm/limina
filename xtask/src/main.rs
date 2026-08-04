@@ -9,10 +9,11 @@
 //!
 //! Bootstrap / build loop:
 //!   `setup`  — one-command fresh-clone bootstrap: `vendor` + enable the git hooks.
-//!   `vendor` — materialize the gitignored `third_party/` source trees: fork-model deps (imago)
-//!              clone from github.com/liminavm at the rev pinned in `third_party/manifest.toml`;
-//!              the rest (libkrun + virglrenderer) still come from the committed patch series.
-//!              Run it first.
+//!   `vendor` — materialize the gitignored `third_party/` source trees: fork-model deps (imago,
+//!              linux) clone from github.com/liminavm at the rev pinned in
+//!              `third_party/manifest.toml`; the rest (libkrun + virglrenderer) still come from
+//!              the committed patch series. `heavy = true` deps (the kernel) are skipped unless
+//!              `--heavy` — nothing on this host builds them. Run it first.
 //!   `build`  — build `limina` + `limina-vmm`, verify the worker links our virglrenderer (the
 //!              venus link trap), and codesign the worker (hypervisor entitlement). The inner-loop
 //!              "make a runnable worker" step.
@@ -57,7 +58,12 @@ enum Cmd {
     Setup,
     /// Materialize the gitignored `third_party/` source trees by applying the committed patch
     /// series. Run once after a fresh clone (or a libkrun re-clone) before building.
-    Vendor,
+    Vendor {
+        /// Also clone the `heavy = true` fork-model deps (the kernel tree — multi-GB, and this
+        /// host never builds it). Needed only to author kernel commits or export its series.
+        #[arg(long)]
+        heavy: bool,
+    },
     /// Build `limina` + `limina-vmm`, verify the virgl link, and codesign the worker.
     Build {
         /// Build in release mode.
@@ -123,7 +129,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Setup => setup(),
-        Cmd::Vendor => vendor(),
+        Cmd::Vendor { heavy } => vendor(heavy),
         Cmd::Build { release } => build(release),
         Cmd::Sign { release } => sign_worker(&repo_root(), release),
         Cmd::Test { release, args } => test(release, &args),
@@ -185,7 +191,7 @@ const VIRGL_GIT: &str = "https://gitlab.freedesktop.org/virgl/virglrenderer.git"
 
 /// One-command fresh-clone bootstrap: vendor `third_party/`, then point git at the in-repo hooks.
 fn setup() -> Result<()> {
-    vendor()?;
+    vendor(false)?;
     eprintln!("==> enabling git hooks (core.hooksPath = .githooks)");
     bash_script(&repo_root(), "scripts/setup-hooks.sh", &[] as &[&str])?;
     eprintln!("==> setup complete — `cargo xtask build` / `cargo xtask test` are ready");
@@ -201,7 +207,7 @@ fn setup() -> Result<()> {
 ///   series (`patches/<dep>/`) via the per-dependency apply scripts.
 ///
 /// Idempotent — re-running resets/refreshes each tree.
-fn vendor() -> Result<()> {
+fn vendor(heavy: bool) -> Result<()> {
     let repo = repo_root();
 
     // libkrun: a from-source git checkout (path deps in [workspace.dependencies]). Clone if absent.
@@ -235,6 +241,13 @@ fn vendor() -> Result<()> {
     // fork pinned by third_party/manifest.toml — no patch series, the `limina` branch IS the delta).
     vendor_fork(&repo, "imago")?;
 
+    // linux: the enhanced-tier guest kernel fork. Marked `heavy` in the manifest — a multi-GB
+    // tree this host never builds (the kernel builds in a Linux container / build guest, which
+    // fetches the pinned rev itself), so it is opt-in.
+    if heavy {
+        vendor_fork(&repo, "linux")?;
+    }
+
     eprintln!("==> vendor complete — `cargo xtask build` / `cargo xtask test` are ready");
     Ok(())
 }
@@ -254,13 +267,15 @@ fn vendor_fork(repo: &Path, name: &str) -> Result<()> {
             "==> cloning {name} fork ({}) — third_party/{name} is absent",
             m.repo
         );
-        run(Command::new("git").current_dir(repo).args([
-            "clone",
-            "--branch",
-            &m.branch,
-            &m.repo,
-            &format!("third_party/{name}"),
-        ]))?;
+        let mut c = Command::new("git");
+        c.current_dir(repo).args(["clone", "--branch", &m.branch]);
+        // Heavy trees (the kernel) clone blobless: full history, file contents fetched on
+        // demand. A plain clone of linux is several GB before you have touched anything.
+        if m.heavy {
+            c.arg("--filter=blob:none");
+        }
+        c.args([&m.repo, &format!("third_party/{name}")]);
+        run(&mut c)?;
         run(Command::new("git").current_dir(&dir).args([
             "remote",
             "add",
@@ -307,6 +322,9 @@ struct ForkPin {
     upstream: String,
     branch: String,
     rev: String,
+    /// Multi-GB tree this host never builds: skipped by `vendor` unless `--heavy`, and cloned
+    /// blobless when it is materialized.
+    heavy: bool,
 }
 
 /// Read one dependency's pin from `third_party/manifest.toml`.
@@ -333,6 +351,10 @@ fn manifest_entry(repo: &Path, name: &str) -> Result<ForkPin> {
         upstream: field("upstream")?,
         branch: field("branch")?,
         rev: field("rev")?,
+        heavy: entry
+            .get("heavy")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     })
 }
 

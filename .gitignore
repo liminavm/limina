@@ -21,6 +21,7 @@
 /target
 /guest/target
 /guest/*/target
+/xtask/target
 **/*.rs.bk
 Cargo.lock.orig
 

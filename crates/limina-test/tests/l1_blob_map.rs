@@ -106,7 +106,7 @@ fn odd_size_blob_maps_into_a_4k_guest() {
     // Assertion 2 — the OFFSET half: with blob 1's 0x21000-byte node holding the head of the
     // window, blob 2 packs right after it. A guest kernel without 16 KiB-aligned
     // host-visible allocation places it at offset 0x21000 (guest_addr%16k=4096 →
-    // HV_BAD_ARGUMENT regardless of size); the patched kernel (patches/linux/0004, and the
+    // HV_BAD_ARGUMENT regardless of size); the patched kernel (guest/virtio-gpu-dkms/0001, and the
     // limina-virtio-gpu DKMS module for stock kernels) aligns the node to 0x24000 and it
     // maps. RED with an unpatched guest kernel: `RESULT: blob2_map FAIL errno=22`.
     if let Err(e) = guest.wait_for("RESULT: blob2_map OK", Duration::from_secs(20)) {

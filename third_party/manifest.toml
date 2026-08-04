@@ -5,11 +5,25 @@
 # every rev ever pinned here must stay reachable), then update `rev` here in the same commit.
 # Patch-audit status lives in docs/upstreaming/ledger/.
 #
-# Deps not yet migrated to the fork model (libkrun, virglrenderer, kosmickrisp, mesa, linux,
-# edk2) still vendor via their committed patches/<dep>/ series; they move here one at a time.
+# Deps not yet migrated to the fork model (libkrun, virglrenderer, kosmickrisp, mesa, edk2)
+# still vendor via their committed patches/<dep>/ series; they move here one at a time.
+#
+# `heavy = true` means `cargo xtask vendor` SKIPS the clone by default — the tree is huge and
+# this host never builds it (the kernel builds in a Linux container / build guest, which
+# fetches the pinned rev itself). Materialize one on demand with `cargo xtask vendor --heavy`.
+# `base` is the upstream tag the `limina` branch sits on; `scripts/export-linux-patches.sh`
+# derives the patch series from `base..branch` for the consumers that apply it onto other tags.
 
 [imago]
 repo = "https://github.com/liminavm/imago.git"
 upstream = "https://gitlab.com/hreitz/imago.git"
 branch = "limina"
 rev = "5f2c0adba538159282b8941a3f3be61eefbc4769"
+
+[linux]
+repo = "https://github.com/liminavm/linux.git"
+upstream = "https://github.com/gregkh/linux.git"
+branch = "limina"
+rev = "8a5647a014f5b1a4f8dfe1bcf3aefb9759405a1b"
+base = "v7.1.6"
+heavy = true

@@ -6,7 +6,7 @@
 //!
 //! A stock 4 KiB guest on the coexist GPU cannot reliably map venus's host-visible
 //! blobs (16 KiB-misaligned window offsets — memory `limina-blob-map-16k-alignment`;
-//! fixed only by the guest-side alignment: patches/linux/0004 or the
+//! fixed only by the guest-side alignment: guest/virtio-gpu-dkms/0001 or the
 //! limina-virtio-gpu DKMS module). Mesa's venus then fails vkCreateInstance with
 //! VK_ERROR_OUT_OF_HOST_MEMORY, and the Vulkan loader treats OOM as fatal for the
 //! whole instance chain — masking a perfectly healthy lavapipe (observed live

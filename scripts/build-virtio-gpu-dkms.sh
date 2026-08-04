@@ -4,7 +4,8 @@
 
 # Assemble the limina-virtio-gpu DKMS source tree: the in-tree virtio-gpu DRM driver
 # sources for a given stable-kernel series + limina's host-visible window alignment
-# patch (patches/linux/0004), packaged so `dkms add/build/install` on a STOCK Fedora
+# patch (guest/virtio-gpu-dkms/0001, see the README there), packaged so
+# `dkms add/build/install` on a STOCK Fedora
 # guest shadows the in-tree module (depmod prefers extra/) — venus on stock 4 KiB
 # guests, with normal kernel updates still flowing (AUTOINSTALL rebuilds per kernel;
 # a failed build degrades gracefully to the in-tree driver).
@@ -52,11 +53,11 @@ for f in "${FILES[@]}"; do
     head -c 100 "$TREE/$f" | grep -q "<html" && { echo "bad fetch: $f ($KTAG)" >&2; exit 1; }
 done
 
-echo "==> applying the alignment patch (patches/linux/0004)"
+echo "==> applying the alignment patch"
 # Patch paths are in-tree (a/drivers/gpu/drm/virtio/...); the sources sit at the tree
 # root here, so strip 5 components.
 patch -p5 -d "$TREE" --no-backup-if-mismatch \
-    < patches/linux/0004-drm-virtio-align-host-visible-allocations-to-16-KiB.patch
+    < guest/virtio-gpu-dkms/0001-align-host-visible-allocations-to-16-KiB.patch
 
 echo "==> rewriting TRACE_INCLUDE_PATH for the out-of-tree layout"
 # In-tree it's relative to include/trace; out of tree "." resolves via Kbuild's -I$(src).

@@ -1511,7 +1511,7 @@ fn run_blob_probe() {
         // Blob 2 — the OFFSET half: with blob 1's 0x21000-byte node still occupying the head
         // of the window, an unaligned guest kernel packs this node at offset 0x21000
         // (guest_addr%16k=4096 → hv_vm_map HV_BAD_ARGUMENT no matter the size), while a
-        // kernel with 16 KiB-aligned host-visible allocation (patches/linux/0004 / the
+        // kernel with 16 KiB-aligned host-visible allocation (guest/virtio-gpu-dkms/0001 / the
         // limina-virtio-gpu DKMS module) places it at 0x24000 and it maps. The size (0x4000)
         // is itself 16 KiB-aligned so ONLY the offset is under test.
         let two = probe_one_blob(fd, 2, 0x4000, "blob2");

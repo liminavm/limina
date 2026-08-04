@@ -30,11 +30,13 @@ right tool — not treat upstream as immutable:
   a `limina/*` branch, re-export the series (see `patches/libkrun/README.md`).
   - **`cargo xtask vendor`** is the one-command bootstrap: it recreates every gitignored
     `third_party/` source tree. Two models coexist during the **fork migration to
-    github.com/liminavm**: fork-model deps (imago, so far) clone our fork and check out the rev
+    github.com/liminavm**: fork-model deps (imago, linux) clone our fork and check out the rev
     pinned in the committed `third_party/manifest.toml` (the fork's `limina` branch IS the delta —
-    no patch series; `main` tracks upstream; tag-before-rebase keeps every pinned rev reachable);
-    patch-series deps (the rest) clone upstream and apply their committed `patches/**` series.
-    Run it once after a fresh clone, before `cargo build` / `scripts/test-boot.sh`.
+    no patch series; `main`/`master` tracks upstream; tag-before-rebase keeps every pinned rev
+    reachable); patch-series deps (the rest) clone upstream and apply their committed `patches/**`
+    series. A dep marked `heavy = true` (the kernel — multi-GB, never built on this host) is
+    **skipped unless `--heavy`**. Run it once after a fresh clone, before `cargo build` /
+    `scripts/test-boot.sh`.
 - **imago** (libkrun's virtio-blk storage backend, a crates.io dep) — **fork model** (the pilot):
   `third_party/imago` is a clone of `github.com/liminavm/imago` (`limina` branch, default; upstream
   is gitlab.com/hreitz/imago), pinned by `third_party/manifest.toml` and overridden via
@@ -52,7 +54,14 @@ right tool — not treat upstream as immutable:
   edit the checkout, commit on the
   `gkvm/*` branch, re-export the series (see `patches/virglrenderer/README.md`). **rutabaga** — the
   Apple blob `get_map_ptr` delta lives in libkrun's rutabaga against upstream's resource_map API.
-- **The guest Linux kernel** — we control it for the *enhanced* tier. We can change
+- **The guest Linux kernel** — **fork model**: `github.com/liminavm/linux` (a fork of
+  `gregkh/linux`, the stable-tree mirror — stable point releases don't exist in `torvalds/linux`),
+  branch `limina`, pinned by `third_party/manifest.toml`. Our changes ARE the commits on that
+  branch; there is no `patches/linux/` any more. The enhanced kernel RPM builds the pinned rev
+  directly (`scripts/provision/f44/build-kernel-rpm.sh`); the *test* kernels, built at other
+  upstream tags, consume a derived series from `scripts/export-linux-patches.sh`. The one patch
+  that left the series lives with its only consumer, `guest/virtio-gpu-dkms/` (stock-4k venus —
+  read that README before resurrecting it). We control this tier: we can change
   its config (page size, drivers), carry kernel patches, or **build entirely new
   kernel features** when that's the cleanest fix (e.g. host-page-aware free-page
   reporting for the 16 KiB-host / 4 KiB-guest mismatch). Both boot paths

@@ -39,24 +39,33 @@ echo "== [2/4] kernel source reference bundle =="
 tmpd=$(mktemp -d); kdst="$tmpd/limina-kernel-16k-source"; mkdir -p "$kdst"
 KCONFIG="$HOME/limina-build/linux/.config"
 [ -f "$KCONFIG" ] && cp -f "$KCONFIG" "$kdst/config" || echo "  WARN: kernel .config not found at $KCONFIG"
-cp -rf "$REPO/patches/linux" "$kdst/patches-linux"
+cp -f "$REPO/third_party/manifest.toml" "$kdst/manifest.toml"
 cp -f "$REPO/scripts/provision/f44/build-kernel-rpm.sh" "$kdst/"
-# The kernel may be built from a DIFFERENT tag than this build guest's running kernel (e.g. a
-# 7.1.2 enhanced kernel built on a 6.19.10 build guest) — honor an explicit KVER so the source
-# reference matches what was actually built.
-KVER="${KVER:-v$(uname -r | sed -E 's/-.*$//')}"
+# The source is the fork pin, not a tag + loose patches: read the [linux] section so the
+# reference names exactly the rev this kernel was built from.
+manifest_field() {
+  awk -v key="$1" '
+      /^\[/ { in_linux = ($0 ~ /^\[linux\]/) }
+      in_linux && $1 == key { gsub(/^[^"]*"|"[^"]*$/, ""); print; exit }
+  ' "$REPO/third_party/manifest.toml"
+}
+FORK_URL="$(manifest_field repo)"; KREV="$(manifest_field rev)"; KVER="$(manifest_field base)"
 cat > "$kdst/SOURCE.txt" <<TXT
 limina-kernel-16k source reference
 ==================================
-This kernel is NOT built from a Fedora SRPM. It is the upstream STABLE kernel at a
-public tag, with this guest's Fedora config + CONFIG_ARM64_16K_PAGES=y + the linux
-patches here, packaged by build-kernel-rpm.sh. Fully reproducible:
+This kernel is NOT built from a Fedora SRPM. It is the limina kernel fork — upstream
+stable $KVER plus our commits — with this guest's Fedora config +
+CONFIG_ARM64_16K_PAGES=y, packaged by build-kernel-rpm.sh. There is no patch series to
+apply: our changes ARE the commits on the branch. Fully reproducible:
 
-  upstream:  git clone --depth 1 --branch $KVER \\
-             https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+  source:    git init && git fetch --depth 1 $FORK_URL \\
+             $KREV
+  our delta: git log --oneline $KVER..$KREV
   config:    ./config   (also shipped inside the RPM at /lib/modules/<KREL>/config)
-  patches:   ./patches-linux/*.patch  (applied tolerantly; most are already upstream)
+  pin:       ./manifest.toml  ([linux] section — repo/branch/rev/base)
   build:     ./build-kernel-rpm.sh    (run in an F44 guest)
+
+Upstream-facing status of each commit: docs/upstreaming/ledger/linux.md in the limina repo.
 TXT
 tar -czf "$SR/limina-kernel-16k-source.tar.gz" -C "$tmpd" limina-kernel-16k-source
 rm -rf "$tmpd"

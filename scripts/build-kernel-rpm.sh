@@ -81,9 +81,12 @@ container volume create -s 24g "$VOL" >/dev/null 2>&1 || true
 
 echo "==> building limina-kernel-16k RPM ($KVER, 16k, limina-build:fc43, -j$JOBS)"
 scripts/build-image.sh   # ensure the unified limina-build image (kernel build deps baked)
+# Patch series derived from the liminavm/linux fork (see export-linux-patches.sh); this recipe
+# builds at its own KVER, so it applies the series rather than building the fork rev directly.
+scripts/export-linux-patches.sh >/dev/null
 container run --rm --cpus "$JOBS" --memory "$MEM" \
   -v "$(pwd)/$OUT:/out" \
-  -v "$(pwd)/patches/linux:/patches" \
+  -v "$(pwd)/target/linux-patches:/patches" \
   -v "$VOL:/build" \
   limina-build:fc43 bash -euo pipefail -c "
     CACHE=/out/cache/linux-$KVER.git

@@ -217,7 +217,7 @@ struct Cli {
     /// worker. OFF by default: a stock Linux guest that negotiates page reporting crashes on
     /// suspend-to-idle (upstream `virtballoon_freeze` frees the reporting virtqueue while its
     /// non-freezable worker is still live). Enable only for enhanced-tier guests carrying the
-    /// kernel fix (patches/linux/0005); stock guests keep inflate-time reclaim and suspend safely.
+    /// kernel fix (the page-reporting-vs-suspend fix, upstream 0b45f69, on our kernel fork); stock guests keep inflate-time reclaim and suspend safely.
     #[arg(long)]
     balloon_free_page_reporting: bool,
 
