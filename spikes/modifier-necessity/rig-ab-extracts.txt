@@ -1,0 +1,27 @@
+# Decisive extracts from the 2026-08-04 arm C / arm D rig A/B.
+# Full journals were 3.3 MB / 27 MB and are not kept; regenerate per the rig runbook.
+
+## arm C (7.1.6-limina16k, patches IN) — draws + scanout present
+Aug 04 08:14:49.031222 fedora niri[1058]: 2026-08-04T11:14:49.031154Z DEBUG niri::frame_log: frame on Virtual-1 took 0.25ms +1.26ms unwaited GPU = 1.51ms (budget 16.67ms) — elements 0.01ms collect 0.05ms submit 0.13ms queue 0.05ms callbacks 0.01ms captures 0.00ms (gpu 1.26ms); 40 elements, 27 draws covering 0.2x the output, 1 submits in 0.01ms (1 scanout in 0.00ms)
+Aug 04 08:14:49.047063 fedora niri[1058]: 2026-08-04T11:14:49.046997Z DEBUG niri::frame_log: frame on Virtual-1 took 0.29ms +3.96ms unwaited GPU = 4.25ms (budget 16.67ms) — elements 0.01ms collect 0.05ms submit 0.18ms queue 0.04ms callbacks 0.00ms captures 0.00ms (gpu 3.96ms); 41 elements, 55 draws covering 1.8x the output, 1 submits in 0.01ms (1 scanout in 0.00ms), animating
+Aug 04 08:14:49.063713 fedora niri[1058]: 2026-08-04T11:14:49.063655Z DEBUG niri::frame_log: frame on Virtual-1 took 0.24ms +4.05ms unwaited GPU = 4.29ms (budget 16.67ms) — elements 0.01ms collect 0.05ms submit 0.12ms queue 0.05ms callbacks 0.00ms captures 0.00ms (gpu 4.05ms); 41 elements, 57 draws covering 1.8x the output, 1 submits in 0.01ms (1 scanout in 0.00ms), animating
+
+## arm C — missed-vblank lines (111 total / 8351 frames = 1.33%)
+Aug 04 08:16:00.207758 fedora niri[1058]: 2026-08-04T11:16:00.207605Z  WARN niri::frame_log: missed 1 vblank(s) on Virtual-1: presented 16.67ms late, refresh 16.67ms, queued 4.85ms early, 8 cycles since the last flip, aimed 7 cycles after the last flip
+Aug 04 08:16:01.018353 fedora niri[1058]: 2026-08-04T11:16:01.018235Z  WARN niri::frame_log: missed 1 vblank(s) on Virtual-1: presented 16.67ms late, refresh 16.67ms, queued 2.98ms early, 7 cycles since the last flip, aimed 6 cycles after the last flip
+Aug 04 08:16:01.051661 fedora niri[1058]: 2026-08-04T11:16:01.051496Z  WARN niri::frame_log: missed 1 vblank(s) on Virtual-1: presented 16.67ms late, refresh 16.67ms, queued 4.41ms early, 2 cycles since the last flip, aimed at the next cycle
+
+## arm D (7.1.6-limina16knm, patches OUT) — 0 draws, no scanout, no gpu
+Aug 04 08:18:38.395173 fedora niri[1054]: 2026-08-04T11:18:38.395032Z DEBUG niri::frame_log: frame on Virtual-1 took 0.61ms (budget 16.67ms) — elements 0.03ms collect 0.12ms submit 0.44ms callbacks 0.01ms captures 0.01ms; 40 elements, 0 draws
+Aug 04 08:18:38.984896 fedora niri[1054]: 2026-08-04T11:18:38.984840Z DEBUG niri::frame_log: frame on Virtual-1 took 0.28ms (budget 16.67ms) — elements 0.01ms collect 0.05ms submit 0.21ms callbacks 0.00ms captures 0.00ms; 40 elements, 0 draws, animating
+Aug 04 08:18:38.988888 fedora niri[1054]: 2026-08-04T11:18:38.988818Z DEBUG niri::frame_log: frame on Virtual-1 took 0.22ms (budget 16.67ms) — elements 0.01ms collect 0.04ms submit 0.16ms callbacks 0.00ms captures 0.00ms; 40 elements, 0 draws, animating
+
+## arm D — why: MOD_INVALID refused by the Vulkan renderer
+Aug 04 08:18:38.395173 fedora niri[1054]: 2026-08-04T11:18:38.394955Z  WARN niri::backend::tty: error rendering frame: present-blit target (DrmFourcc(XR24)): this device does not support DRM modifier 0x00ffffffffffffff for B8G8R8A8_UNORM (it enumerates others), so an image imported with it would be undefined
+Aug 04 08:18:38.984896 fedora niri[1054]: 2026-08-04T11:18:38.984804Z  WARN niri::backend::tty: error rendering frame: present-blit target (DrmFourcc(XR24)): this device does not support DRM modifier 0x00ffffffffffffff for B8G8R8A8_UNORM (it enumerates others), so an image imported with it would be undefined
+Aug 04 08:18:38.988888 fedora niri[1054]: 2026-08-04T11:18:38.988793Z  WARN niri::backend::tty: error rendering frame: present-blit target (DrmFourcc(XR24)): this device does not support DRM modifier 0x00ffffffffffffff for B8G8R8A8_UNORM (it enumerates others), so an image imported with it would be undefined
+
+## arm E (7.1.6-limina16knm, patches OUT + MOD_INVALID->LINEAR compositor fix)
+## 8339 frames / 88 missed = 1.06%, 0 render errors, scanout on every frame
+Aug 04 08:40:59.003107 fedora niri[1062]: 2026-08-04T11:40:59.002976Z DEBUG niri::frame_log: frame on Virtual-1 took 0.43ms +1.48ms unwaited GPU = 1.90ms (budget 16.67ms) — elements 0.02ms collect 0.08ms submit 0.23ms queue 0.08ms callbacks 0.01ms captures 0.00ms (gpu 1.48ms); 40 elements, 27 draws covering 0.2x the output, 1 submits in 0.01ms (1 scanout in 0.00ms)
+Aug 04 08:40:59.092387 fedora niri[1062]: 2026-08-04T11:40:59.092235Z DEBUG niri::frame_log: frame on Virtual-1 took 0.52ms +1.59ms unwaited GPU = 2.11ms (budget 16.67ms) — elements 0.03ms collect 0.11ms submit 0.26ms queue 0.11ms callbacks 0.01ms captures 0.01ms (gpu 1.59ms); 40 elements, 27 draws covering 0.2x the output, 1 submits in 0.01ms (1 scanout in 0.00ms)

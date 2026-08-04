@@ -1,0 +1,38 @@
+Arm E compositor change — gnome-shell-rs (niri), src/render_helpers/vulkan/renderer.rs.
+
+Applied in the rig guest's checkout at /home/claude/gnome-shell-rs (which trails the host clone,
+so the line number differs: 2410 there, ~2509 in third_party/gnome-shell-rs). ONE site: every
+scanout-target and present-blit check and both dmabuf imports read this single `modifier` binding.
+
+Context: with the LINEAR advertisement gone from the kernel the plane exposes no modifiers, smithay
+allocates through gbm's implicit path, and the dmabuf comes back tagged DRM_FORMAT_MOD_INVALID.
+niri's check_modifier then refuses it — the driver *does* enumerate modifiers for the format, just
+not INVALID, and an absence from a populated list is treated as an answer (correctly). The buffer
+is nonetheless linear in fact: niri already hard-asserts at startup that LINEAR must carry the
+present-blit and direct-scanout format features (niri-vk/src/gpu.rs), because LINEAR is all this
+driver exposes. So the fix is to label it truthfully.
+
+NOT safe in general: only valid where the allocator is known to produce linear buffers. A real
+version should gate on the plane genuinely advertising no modifiers rather than assume it.
+
+--- a/src/render_helpers/vulkan/renderer.rs
++++ b/src/render_helpers/vulkan/renderer.rs
+@@
+         let (w, h) = (dmabuf.width(), dmabuf.height());
+-        let modifier: u64 = dmabuf.format().modifier.into();
++        // limina experiment (2026-08-04, spikes/modifier-necessity arm E): when the KMS plane
++        // advertises no modifiers, smithay allocates via gbm implicit and the dmabuf comes back
++        // tagged DRM_FORMAT_MOD_INVALID. On virtio-gpu that buffer IS linear (this driver exposes
++        // only LINEAR), so label it LINEAR rather than refuse the import. Not safe in general —
++        // only where the allocator is known linear.
++        let modifier: u64 = {
++            let m: u64 = dmabuf.format().modifier.into();
++            if m == 0x00ff_ffff_ffff_ffff { 0 } else { m }
++        };
+         let fd = dmabuf
+             .handles()
+             .next()
+
+Result: on the arm-D kernel (neither format nor modifier patch) this restores a fully working,
+vblank-paced session — 8339 frames, 88 missed (1.06%), zero "error rendering frame", and a scanout
+line on every frame. Rebuild in the guest took 41 s (`cargo build` in /home/claude/gnome-shell-rs).

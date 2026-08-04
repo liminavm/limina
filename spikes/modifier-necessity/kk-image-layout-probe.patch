@@ -1,0 +1,28 @@
+diff --git a/src/kosmickrisp/vulkan/kk_image_layout.c b/src/kosmickrisp/vulkan/kk_image_layout.c
+index 45009a46594..a91258aa9a5 100644
+--- a/src/kosmickrisp/vulkan/kk_image_layout.c
++++ b/src/kosmickrisp/vulkan/kk_image_layout.c
+@@ -225,8 +225,21 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
+     * which must keep its linear layout. */
+    if (image->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT &&
+        (image->usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+-                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)))
+-      layout->linear = false;
++                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))) {
++      /* limina probe (2026-08-04): is this carve-out reached at all, and is it
++       * load-bearing? LIMINA_KK_NO_MODIFIER_TILED=1 turns it off for an A/B. */
++      static int probe = -1;
++      static unsigned hits;
++      if (probe < 0) {
++         const char *e = getenv("LIMINA_KK_NO_MODIFIER_TILED");
++         probe = (e && *e == '1') ? 1 : 0;
++      }
++      if (++hits <= 4 || (hits % 256) == 0)
++         fprintf(stderr, "[LIMINA-KKMOD] modifier attachment #%u usage=0x%x %s\n", hits,
++                 image->usage, probe ? "PASSTHROUGH(linear)" : "tiled");
++      if (!probe)
++         layout->linear = false;
++   }
+    layout->optimized_layout = kk_image_layout_can_optimize(
+       image->usage, image->tiling, image->create_flags, format);
+    layout->usage = vk_image_usage_flags_to_mtl_texture_usage(

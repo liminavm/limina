@@ -68,6 +68,31 @@ host holds it to the CA-latch ack). Two host-side suspects ELIMINATED." That eli
 a patch that was not in the running kernel. The premise was never checked against the built
 artifact.
 
+## 2026-08-04: the KMS format/modifier patches are a FUNCTIONAL dependency, not a perf knob
+
+Pressure test of whether we still need the DRM format/modifier patches (full write-up:
+`spikes/modifier-necessity/RESULTS.md`). Kernel arm D = the `limina` branch minus the plane-format
+widening and the LINEAR advertisement, co-installed with arm C in one clone (`nirirepro.nm.raw`)
+and flipped with `grubby`.
+
+| | arm C (patches in) | arm D (patches out) |
+|---|---|---|
+| frames | 8351 | 47239 |
+| missed vblanks | 111 = **1.33%** | 0 = 0% |
+| elements (median) | 40 | 40 |
+| **draws** | 27–57 | **0** |
+| scanout / gpu | `1 scanout`, 1.26–4.05 ms | absent |
+
+**A 0% miss rate that means the opposite of what it looks like.** Arm D produces 5.6x the frames
+with zero draws and no scanout — empty frames as fast as it can, because every real frame errors
+out on `DRM_FORMAT_MOD_INVALID` (`0x00ffffffffffffff`) with no LINEAR in `IN_FORMATS`. Window
+frozen, confirmed by eye. Arm C reproduces the previous arm-C figure (1.33% vs 1.2%), so the
+baseline is stable.
+
+**Scoring rule this earns:** a miss rate is only comparable between arms that are *drawing*. Read
+the draws and the scanout line before reading the miss column — the scorer's element/bake gate
+passes here (40 elements both) and would not have caught it.
+
 ## RUNBOOK — driving a measurement on this rig (written 2026-08-03, after getting all of it wrong once)
 
 Every step below is a trap that actually fired. The common shape: **the layer above the failure

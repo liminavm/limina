@@ -163,10 +163,51 @@ compositor we control can instead drop the modifier and use legacy `ADDFB2` with
 because it is what keeps *stock* mutter/niri guests on the zero-copy path.
 
 **Enhanced-tier rubric:** (a) completes the zero-copy chain — IN_FORMATS LINEAR lets
-mutter/niri engage direct scanout at all; (b) stock guest composites fullscreen — correct, one
-extra guest-GPU pass per frame; (c) no host-side alternative — the gate is the guest kernel's
+mutter/niri engage direct scanout at all; (b) ~~stock guest composites fullscreen — correct, one
+extra guest-GPU pass per frame~~ **FALSIFIED 2026-08-04 for a Vulkan-renderer compositor — see
+below**; (c) no host-side alternative — the gate is the guest kernel's
 plane property enumeration, which the host cannot inject (patching N compositors would be
 strictly worse than 1 driver); (d) exit = host-negotiated modifiers with M15.
+
+**Measured 2026-08-04 (`spikes/modifier-necessity/`): there is no graceful degradation.** A kernel
+built from this branch minus 0002+0003 (`7.1.6-limina16knm`), A/B'd against arm C on one rig clone
+with `grubby`, does not fall back to compositing — it renders **nothing**: 47239 frames with
+**0 draws** and no scanout, against arm C's 8351 frames at 27–57 draws. The guest names it:
+
+```
+error rendering frame: present-blit target (DrmFourcc(XR24)): this device does not support
+DRM modifier 0x00ffffffffffffff for B8G8R8A8_UNORM (it enumerates others)
+```
+
+`0x00ffffffffffffff` = `DRM_FORMAT_MOD_INVALID`: with nothing in `IN_FORMATS` to name, niri falls
+back to MOD_INVALID and its Vulkan renderer refuses the import. Human oracle: window frozen.
+(The 0% missed-vblank figure is an artifact — you cannot miss a vblank you never aim for.)
+
+Scope it precisely, because it is *not* "no patch, no desktop": stock Fedora kernels lack these
+patches too and stock guests are fine, since stock mutter goes through GL/EGL and never names a
+scanout modifier — the two-tier guarantee holds. Not isolated from 0002 (removed together); the
+error names a modifier, so 0003 is near-certainly the whole cause, but the separating arm was not
+run.
+
+**Arm E, same day: that failure is compositor policy, and one line fixes it — so 0003 is
+droppable.** niri refuses `MOD_INVALID`; every check and import in its Vulkan renderer reads a
+single `modifier` binding, and labelling it LINEAR when the plane advertises no modifiers restores
+a fully working session on the *same* patch-less kernel: 8339 frames, 88 missed (**1.06%**, vs arm
+C's 1.33%), zero render errors, scanout on every frame. Truthful on this stack — niri already
+asserts LINEAR carries the features it needs, because LINEAR is all this driver exposes. Diff:
+`spikes/modifier-necessity/niri-mod-invalid-linear-fallback.patch`.
+
+This row's verdict therefore softens from **carry** to **carry-or-drop, a product call**: dropping
+costs nothing measurable in frame pacing, but means only compositors *we* patch keep the modifier
+path — stock mutter and upstream niri guests lose it. Weigh against "limina runs any Linux desktop
+well".
+
+**0002 is a separate question that none of this settles.** Arm E shows median draws 35 → 45 (+29%)
+and median GPU 3.09 → 3.48 ms (+13%) — the signature of content no longer reaching the plane
+directly, which is exactly what the narrowed format list predicts (niri's own scanout comment: an
+RGBA-order client "falls back to compositing"). The rig never exercises fullscreen *client* direct
+scanout, so 0002 stays unpriced; the test that would settle it is a fullscreen ARGB8888 /
+RGBA-order-swapchain client with 0002 out and 0003 in.
 
 ### 0001 — independently rediscovered and fixed upstream, in a file we never patched
 

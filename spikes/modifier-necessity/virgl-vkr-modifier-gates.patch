@@ -1,0 +1,57 @@
+diff --git a/src/venus/vkr_image.c b/src/venus/vkr_image.c
+index 2f2b643..1d50266 100644
+--- a/src/venus/vkr_image.c
++++ b/src/venus/vkr_image.c
+@@ -113,20 +113,48 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+          bool gkvm_is_import = false;
+          VkImageCreateInfo *mci = (VkImageCreateInfo *)ci;
+          VkBaseInStructure *prev = (VkBaseInStructure *)mci;
++         /* LIMINA_VKR_KEEP_MODIFIER_STRUCTS=1 leaves the DRM-format-modifier structs
++          * chained (the external-memory one is still unlinked) — the A/B for whether
++          * this unlink is load-bearing against a host driver that never advertises
++          * VK_EXT_image_drm_format_modifier. */
++         static int gkvm_keep_structs = -1;
++         if (gkvm_keep_structs < 0) {
++            const char *e = getenv("LIMINA_VKR_KEEP_MODIFIER_STRUCTS");
++            gkvm_keep_structs = (e && *e == '1') ? 1 : 0;
++         }
+          for (VkBaseInStructure *s = (VkBaseInStructure *)mci->pNext; s;
+               s = (VkBaseInStructure *)prev->pNext) {
+             const int t = (int)s->sType;
++            const bool is_mod =
++               t == VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT ||
++               t == VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT;
+             if (t == VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT)
+                gkvm_is_import = true;
+             if (t == VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO ||
+-                t == VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT ||
+-                t == VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT)
++                (is_mod && !gkvm_keep_structs))
+                prev->pNext = s->pNext; /* unlink */
+             else
+                prev = s;
+          }
+-         if (mci->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)
+-            mci->tiling = VK_IMAGE_TILING_OPTIMAL;
++         if (mci->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) {
++            /* limina probe (2026-08-04): count how often a guest image actually
++             * arrives with modifier tiling, i.e. how much of this normalization is
++             * live traffic vs MoltenVK-era dead code. */
++            static unsigned gkvm_mod_hits;
++            if (++gkvm_mod_hits <= 4 || (gkvm_mod_hits % 256) == 0)
++               fprintf(stderr, "[LIMINA-VKRMOD] modifier-tiled guest image #%u %s import=%d\n",
++                       gkvm_mod_hits, gkvm_is_import ? "EXPLICIT" : "LIST", gkvm_is_import);
++            /* LIMINA_VKR_KEEP_MODIFIER_TILING=1 leaves the modifier tiling in place so
++             * the image reaches KK as the guest asked — the A/B that tells us whether
++             * kk_image_layout's modifier carve-out is a live guard or dead code. */
++            static int gkvm_keep = -1;
++            if (gkvm_keep < 0) {
++               const char *e = getenv("LIMINA_VKR_KEEP_MODIFIER_TILING");
++               gkvm_keep = (e && *e == '1') ? 1 : 0;
++            }
++            if (!gkvm_keep)
++               mci->tiling = VK_IMAGE_TILING_OPTIMAL;
++         }
+ 
+          if (gkvm_vkformat_to_iosurface(ci->format, &gkvm_mtl, &gkvm_fourcc, &gkvm_bpe)) {
+             struct vkr_device *dev = vkr_device_from_handle(args->device);

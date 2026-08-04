@@ -1,0 +1,357 @@
+diff --git a/src/kosmickrisp/bridge/mtl_texture.h b/src/kosmickrisp/bridge/mtl_texture.h
+index b32170b226b..cc3285e9900 100644
+--- a/src/kosmickrisp/bridge/mtl_texture.h
++++ b/src/kosmickrisp/bridge/mtl_texture.h
+@@ -17,6 +17,23 @@ struct kk_view_layout;
+ /* Utils*/
+ uint64_t mtl_texture_get_gpu_resource_id(mtl_texture *texture);
+ 
++/* Properties of an externally-created texture (VK_EXT_external_memory_metal
++ * import). The importer must check these against the VkImageCreateInfo it was
++ * handed: Vulkan requires the imported handle to be compatible with the image,
++ * and Metal will not tell us later — a mismatched texture just renders wrong. */
++struct mtl_texture_props {
++   uint64_t width;
++   uint64_t height;
++   uint32_t pixel_format;
++   uint32_t texture_type;
++   uint32_t sample_count;
++   uint32_t mip_levels;
++   uint32_t array_length;
++   uint32_t usage;
++};
++void mtl_texture_get_props(mtl_texture *texture,
++                           struct mtl_texture_props *props);
++
+ /* Texture view creation */
+ mtl_texture *mtl_new_texture_view_with(mtl_texture *texture,
+                                        const struct kk_view_layout *layout);
+diff --git a/src/kosmickrisp/bridge/mtl_texture.m b/src/kosmickrisp/bridge/mtl_texture.m
+index 31841f0f271..65fedc7008b 100644
+--- a/src/kosmickrisp/bridge/mtl_texture.m
++++ b/src/kosmickrisp/bridge/mtl_texture.m
+@@ -34,6 +34,22 @@
+    }
+ }
+ 
++void
++mtl_texture_get_props(mtl_texture *texture, struct mtl_texture_props *props)
++{
++   @autoreleasepool {
++      id<MTLTexture> tex = (id<MTLTexture>)texture;
++      props->width = [tex width];
++      props->height = [tex height];
++      props->pixel_format = (uint32_t)[tex pixelFormat];
++      props->texture_type = (uint32_t)[tex textureType];
++      props->sample_count = (uint32_t)[tex sampleCount];
++      props->mip_levels = (uint32_t)[tex mipmapLevelCount];
++      props->array_length = (uint32_t)[tex arrayLength];
++      props->usage = (uint32_t)[tex usage];
++   }
++}
++
+ /* TODO_KOSMICKRISP This should be part of the mapping */
+ static uint32_t
+ mtl_texture_view_type(uint32_t type, uint8_t sample_count)
+diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
+index 6926326969e..3462da745d9 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.c
++++ b/src/kosmickrisp/vulkan/kk_bo.c
+@@ -74,6 +74,15 @@ fail_heap:
+ void
+ kk_destroy_bo(struct kk_device *dev, struct kk_bo *bo)
+ {
++   /* An imported MTLTexture has neither heap nor buffer — the texture is the
++    * whole allocation. Release it and stop; the paths below would deref NULL. */
++   if (bo->texture) {
++      kk_device_remove_texture_from_residency_set(dev, bo->texture);
++      mtl_release(bo->texture);
++      FREE(bo);
++      return;
++   }
++
+    /* We may only have a mapped buffer, for example if the memory was imported
+     * from a host pointer */
+    if (bo->mtl_handle)
+diff --git a/src/kosmickrisp/vulkan/kk_bo.h b/src/kosmickrisp/vulkan/kk_bo.h
+index 6ea5ca6693d..ea0e5b0b9d3 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.h
++++ b/src/kosmickrisp/vulkan/kk_bo.h
+@@ -19,6 +19,11 @@ struct vk_object_base;
+ struct kk_bo {
+    mtl_heap *mtl_handle;
+    mtl_buffer *map;
++   /* An imported MTLTexture (VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT).
++    * Unlike a heap or buffer import this is not memory we can suballocate from:
++    * the texture IS the storage, so mtl_handle/map/gpu/cpu all stay NULL and the
++    * single image bound to this memory adopts the texture verbatim. */
++   mtl_texture *texture;
+    uint64_t size_B;
+    uint64_t gpu; // GPU address
+    void *cpu;    // CPU address
+diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
+index 4e29399f3c8..200a05c2491 100644
+--- a/src/kosmickrisp/vulkan/kk_device.c
++++ b/src/kosmickrisp/vulkan/kk_device.c
+@@ -487,6 +487,27 @@ kk_device_remove_buffer_from_residency_set(struct kk_device *dev,
+    simple_mtx_unlock(&dev->residency_set.mutex);
+ }
+ 
++/* An imported MTLTexture is its own allocation — it belongs to no heap of ours,
++ * so it must be made resident in its own right or the first submit that samples
++ * or renders to it faults. */
++void
++kk_device_add_texture_to_residency_set(struct kk_device *dev,
++                                       mtl_texture *texture)
++{
++   simple_mtx_lock(&dev->residency_set.mutex);
++   mtl_residency_set_add_allocation(dev->residency_set.handle, texture);
++   simple_mtx_unlock(&dev->residency_set.mutex);
++}
++
++void
++kk_device_remove_texture_from_residency_set(struct kk_device *dev,
++                                            mtl_texture *texture)
++{
++   simple_mtx_lock(&dev->residency_set.mutex);
++   mtl_residency_set_remove_allocation(dev->residency_set.handle, texture);
++   simple_mtx_unlock(&dev->residency_set.mutex);
++}
++
+ void
+ kk_device_make_resources_resident(struct kk_device *dev)
+ {
+diff --git a/src/kosmickrisp/vulkan/kk_device.h b/src/kosmickrisp/vulkan/kk_device.h
+index 67080f08002..a50b739e1c2 100644
+--- a/src/kosmickrisp/vulkan/kk_device.h
++++ b/src/kosmickrisp/vulkan/kk_device.h
+@@ -171,6 +171,10 @@ void kk_device_add_buffer_to_residency_set(struct kk_device *dev,
+                                            mtl_buffer *buffer);
+ void kk_device_remove_buffer_from_residency_set(struct kk_device *dev,
+                                                 mtl_buffer *buffer);
++void kk_device_add_texture_to_residency_set(struct kk_device *dev,
++                                            mtl_texture *texture);
++void kk_device_remove_texture_from_residency_set(struct kk_device *dev,
++                                                 mtl_texture *texture);
+ void kk_device_make_resources_resident(struct kk_device *dev);
+ 
+ /* Take the sequence number for a command buffer that is about to carry
+diff --git a/src/kosmickrisp/vulkan/kk_device_memory.c b/src/kosmickrisp/vulkan/kk_device_memory.c
+index 10566e7106a..3a5e473d410 100644
+--- a/src/kosmickrisp/vulkan/kk_device_memory.c
++++ b/src/kosmickrisp/vulkan/kk_device_memory.c
+@@ -30,6 +30,19 @@ const VkExternalMemoryProperties kk_mtlheap_mem_props = {
+    .compatibleHandleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT,
+ };
+ 
++/* An MTLTexture handle is a *dedicated* allocation: the texture is the storage,
++ * so it can back exactly one image and cannot be suballocated. It is therefore
++ * not interchangeable with the heap handle type — keep the compatible set to
++ * itself alone. */
++const VkExternalMemoryProperties kk_mtltexture_mem_props = {
++   .externalMemoryFeatures = VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT |
++                             VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT |
++                             VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT,
++   .exportFromImportedHandleTypes =
++      VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT,
++   .compatibleHandleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT,
++};
++
+ const VkExternalMemoryProperties kk_host_mem_props = {
+    .externalMemoryFeatures = VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT,
+    .exportFromImportedHandleTypes = 0,
+@@ -48,10 +61,12 @@ kk_GetMemoryMetalHandlePropertiesEXT(
+    VK_FROM_HANDLE(kk_device, dev, device);
+    struct kk_physical_device *pdev = kk_device_physical(dev);
+ 
+-   /* We only support heaps since that's the backing for all our memory and
+-    * simplifies implementation */
++   /* Heaps back all of our own allocations; textures are additionally accepted
++    * as dedicated imports (a texture cannot be suballocated, so it backs exactly
++    * one image). */
+    switch (handleType) {
+    case VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT:
++   case VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT:
+       break;
+    default:
+       return vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+@@ -113,15 +128,33 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
+ 
+    if (import_metal || import_host) {
+       /* limina: metal_info is NULL on a host-pointer-only import — don't deref it. */
+-      assert(!import_metal || metal_info->handleType ==
+-             VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT);
++      const bool import_texture =
++         import_metal && metal_info->handleType ==
++                            VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT;
++      if (import_metal && !import_texture &&
++          metal_info->handleType !=
++             VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT) {
++         result = vk_errorf(&dev->vk.base, VK_ERROR_INVALID_EXTERNAL_HANDLE,
++                            "unsupported Metal handle type 0x%x",
++                            metal_info->handleType);
++         goto fail_alloc;
++      }
+       mem->bo = CALLOC_STRUCT(kk_bo);
+       if (!mem->bo) {
+          result = vk_errorf(&dev->vk.base, VK_ERROR_OUT_OF_DEVICE_MEMORY, "%m");
+          goto fail_alloc;
+       }
+ 
+-      if (import_metal) {
++      if (import_texture) {
++         /* A texture is the storage, not a pool to carve from: there is no heap
++          * and no buffer, so gpu/cpu stay 0 and the image bound to this memory
++          * adopts the texture verbatim (kk_image_plane_bind). Anything that
++          * tries to treat this memory as a buffer — vkMapMemory, a VkBuffer
++          * bind — must fail rather than deref a NULL map. */
++         mem->bo->texture = mtl_retain(metal_info->handle);
++         mem->bo->size_B = mem->vk.size;
++         kk_device_add_texture_to_residency_set(dev, mem->bo->texture);
++      } else if (import_metal) {
+          /* We only support heaps since that's the backing for all our memory
+           * and simplifies implementation */
+          mem->bo->mtl_handle = mtl_retain(metal_info->handle);
+@@ -151,8 +184,11 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
+          kk_device_add_buffer_to_residency_set(dev, mem->bo->map);
+       }
+ 
+-      mem->bo->gpu = mtl_buffer_get_gpu_address(mem->bo->map);
+-      mem->bo->cpu = mtl_get_contents(mem->bo->map);
++      /* A texture import has no buffer to take an address or contents from. */
++      if (mem->bo->map) {
++         mem->bo->gpu = mtl_buffer_get_gpu_address(mem->bo->map);
++         mem->bo->cpu = mtl_get_contents(mem->bo->map);
++      }
+    } else {
+       result =
+          kk_alloc_bo(dev, &dev->vk.base, aligned_size, alignment, &mem->bo);
+@@ -284,12 +320,23 @@ kk_GetMemoryMetalHandleEXT(
+    VkDevice device, const VkMemoryGetMetalHandleInfoEXT *pGetMetalHandleInfo,
+    void **pHandle)
+ {
+-   /* We only support heaps since that's the backing for all our memory and
+-    * simplifies implementation */
+-   assert(pGetMetalHandleInfo->handleType ==
+-          VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT);
+    VK_FROM_HANDLE(kk_device_memory, mem, pGetMetalHandleInfo->memory);
+ 
++   /* A texture-backed allocation can only ever hand back its texture, and a
++    * heap-backed one its heap — asking for the other is an invalid handle, not
++    * an assert: the request comes from the application. */
++   if (pGetMetalHandleInfo->handleType ==
++       VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT) {
++      if (!mem->bo->texture)
++         return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
++      *pHandle = mem->bo->texture;
++      return VK_SUCCESS;
++   }
++
++   if (pGetMetalHandleInfo->handleType !=
++       VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT)
++      return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
++
+    /* In some cases, such as host pointer imports, we don't have a MTLHeap */
+    if (!mem->bo->mtl_handle)
+       return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+diff --git a/src/kosmickrisp/vulkan/kk_device_memory.h b/src/kosmickrisp/vulkan/kk_device_memory.h
+index 6aff54bb5dc..22b92da2b68 100644
+--- a/src/kosmickrisp/vulkan/kk_device_memory.h
++++ b/src/kosmickrisp/vulkan/kk_device_memory.h
+@@ -26,6 +26,7 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_device_memory, vk.base, VkDeviceMemory,
+                                VK_OBJECT_TYPE_DEVICE_MEMORY)
+ 
+ extern const VkExternalMemoryProperties kk_mtlheap_mem_props;
++extern const VkExternalMemoryProperties kk_mtltexture_mem_props;
+ extern const VkExternalMemoryProperties kk_host_mem_props;
+ 
+ #endif // KK_MEMORY_H
+diff --git a/src/kosmickrisp/vulkan/kk_image.c b/src/kosmickrisp/vulkan/kk_image.c
+index a37210eece9..9344590e3fe 100644
+--- a/src/kosmickrisp/vulkan/kk_image.c
++++ b/src/kosmickrisp/vulkan/kk_image.c
+@@ -399,6 +399,17 @@ kk_GetPhysicalDeviceImageFormatProperties2(
+       case VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT:
+          ext_mem_props = &kk_mtlheap_mem_props;
+          break;
++      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT:
++         /* The imported texture supplies the layout, so the tiling the caller
++          * asks for is not ours to choose — but a LINEAR request would make
++          * kk_image_plane_create_texture take the buffer-backed path and ignore
++          * the import entirely, so refuse it rather than silently diverge. */
++         if (pImageFormatInfo->tiling == VK_IMAGE_TILING_LINEAR) {
++            return vk_errorf(pdev, VK_ERROR_FORMAT_NOT_SUPPORTED,
++                             "MTLTexture import image must not be linear");
++         }
++         ext_mem_props = &kk_mtltexture_mem_props;
++         break;
+       case VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT:
+       case VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_MAPPED_FOREIGN_MEMORY_BIT_EXT: {
+          if (pImageFormatInfo->tiling != VK_IMAGE_TILING_LINEAR) {
+@@ -861,6 +872,38 @@ kk_image_plane_bind(struct kk_device *dev, struct kk_image *image,
+                                &plane_align_B);
+    *offset_B = align64(*offset_B, plane_align_B);
+ 
++   /* VK_EXT_external_memory_metal, MTLTEXTURE handle: the imported texture IS
++    * the image's storage, so adopt it instead of creating one. The handle type
++    * is DEDICATED_ONLY, so this binds a single-plane image at offset 0 — a
++    * disjoint/multi-plane image would need one handle per plane, which we do
++    * not accept. Validate against the texture we were actually given: Vulkan
++    * says a mismatched handle is undefined, and Metal will not complain later,
++    * it will just render somewhere unexpected. */
++   if (mem->bo->texture) {
++      struct mtl_texture_props props;
++      mtl_texture_get_props(mem->bo->texture, &props);
++      if (image->plane_count != 1 || *offset_B != 0 ||
++          props.width != plane->layout.width_px ||
++          props.height != plane->layout.height_px ||
++          props.mip_levels != plane->layout.levels ||
++          props.array_length != plane->layout.layers) {
++         return vk_errorf(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE,
++                          "imported MTLTexture %ux%u/%ul/%ua does not match the "
++                          "image %ux%u/%ul/%ua (planes=%u offset=%" PRIu64 ")",
++                          (unsigned)props.width, (unsigned)props.height,
++                          props.mip_levels, props.array_length,
++                          plane->layout.width_px, plane->layout.height_px,
++                          plane->layout.levels, plane->layout.layers,
++                          image->plane_count, *offset_B);
++      }
++      plane->mem = mem;
++      plane->mem_offset_B = 0u;
++      plane->mtl_handle = mtl_retain(mem->bo->texture);
++      plane->addr = 0u;
++      *offset_B += plane_size_B;
++      return VK_SUCCESS;
++   }
++
+    /* limina: venus host-imports some VkDeviceMemory as a plain Metal buffer with NO heap
+     * (mem->bo->mtl_handle == NULL) — observed with wgpu, which maps the only host-visible memory
+     * type, so venus imports the guest pages. A non-linear (tiled) image cannot be textured from a
+diff --git a/src/kosmickrisp/vulkan/kk_image_layout.c b/src/kosmickrisp/vulkan/kk_image_layout.c
+index 45009a46594..a91258aa9a5 100644
+--- a/src/kosmickrisp/vulkan/kk_image_layout.c
++++ b/src/kosmickrisp/vulkan/kk_image_layout.c
+@@ -225,8 +225,21 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
+     * which must keep its linear layout. */
+    if (image->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT &&
+        (image->usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+-                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)))
+-      layout->linear = false;
++                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))) {
++      /* limina probe (2026-08-04): is this carve-out reached at all, and is it
++       * load-bearing? LIMINA_KK_NO_MODIFIER_TILED=1 turns it off for an A/B. */
++      static int probe = -1;
++      static unsigned hits;
++      if (probe < 0) {
++         const char *e = getenv("LIMINA_KK_NO_MODIFIER_TILED");
++         probe = (e && *e == '1') ? 1 : 0;
++      }
++      if (++hits <= 4 || (hits % 256) == 0)
++         fprintf(stderr, "[LIMINA-KKMOD] modifier attachment #%u usage=0x%x %s\n", hits,
++                 image->usage, probe ? "PASSTHROUGH(linear)" : "tiled");
++      if (!probe)
++         layout->linear = false;
++   }
+    layout->optimized_layout = kk_image_layout_can_optimize(
+       image->usage, image->tiling, image->create_flags, format);
+    layout->usage = vk_image_usage_flags_to_mtl_texture_usage(
