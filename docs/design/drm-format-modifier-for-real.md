@@ -303,6 +303,11 @@ weight, and the recommendation they produced — do nothing, or the opaque token
   on a non-IOSurface-backed modifier image) on today's KK — the incident predates the vkr KK
   winsys work, and its result decides whether the carve-out stays scoped or can narrow to
   depth/stencil.
+  **→ RAN, same evening: does not reproduce.** 3 modifier attachments went through KK genuinely
+  linear (carve-out gated off), gnome-shell composited into them all session + a full vkmark
+  suite, zero nil encoders/asserts. The carve-out can narrow; keep depth/stencil out of the
+  modifier tables instead. Full write-up in `spikes/modifier-necessity/RESULTS.md`
+  §"kk 0002 origin-class checkpoint".
 
 ### The opaque-token pivot points backwards
 

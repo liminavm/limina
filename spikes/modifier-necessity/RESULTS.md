@@ -490,6 +490,94 @@ phase marker prints, the script exits 0, and nothing is driven — the tell is `
 windows=` (both empty) instead of `workspace=1 windows=3`. Fix: `rm` the stale socket before
 driving. Always read the BASELINE line before trusting a run.
 
+## The kk 0002 origin-class checkpoint (2026-08-04, evening): the nil-encoder class does NOT reproduce
+
+Pre-code checkpoint from `docs/design/drm-format-modifier-for-real.md` §UNBLOCKED: can today's KK
+produce a *renderable* linear layout for a modifier attachment image, or does the June 2026
+nil-encoder abort (the incident kk 0002 was written for) come back when the carve-out is off?
+
+Arm: `LIMINA_VKR_KEEP_MODIFIER_TILING=1` (modifier tiling reaches KK) +
+`LIMINA_KK_NO_MODIFIER_TILED=1` (carve-out off → attachments go linear) +
+`LIMINA_VKR_NO_KK_FORCE_LINEAR=1`, KK rebuilt with `kk-image-layout-probe.patch`, `modprobe-arm.raw`
+(enhanced.test clone), EFI + venus, seated session.
+
+Gate order matters and bit once: with only `NO_KK_FORCE_LINEAR`, vkr's *normalization*
+(modifier → `OPTIMAL`) still runs and the carve-out is unreachable — `[LIMINA-VKRMOD]` fires,
+`[LIMINA-KKMOD]` never does. `KEEP_MODIFIER_TILING` is what lets the image reach
+`kk_image_layout_init` still modifier-tiled.
+
+Result: 3 modifier attachments (`fmt=44` B8G8R8A8, 2560x1440, `usage=0x80097` incl.
+COLOR_ATTACHMENT) logged `PASSTHROUGH(linear)`; gnome-shell composited into them for the whole
+session; a full vkmark suite (13/13 scenes, score 1814 — inflated, nothing presents in this arm)
+drove continuous compositor redraws. **Zero asserts, zero nil encoders, zero bind rejections,
+worker alive throughout.** Present is broken as expected (no IOSurface aliasing in this arm — the
+window freezes on the boot text; the user confirmed on the glass), which is the arm's known cost,
+not a probe signal.
+
+**Verdict: for the color-attachment class this whole design is about, KK genuinely can lay out and
+render LINEAR.** The June incident's exact trigger remains unidentified (predates the vkr KK winsys
+work; possibly the INPUT_ATTACHMENT→2DArray type interaction, since vkr strips that bit on its
+LINEAR paths), but it does not reproduce for the observed format/usage on today's KK. Consequence
+for `docs/design/drm-format-modifier-for-real.md`: the carve-out can narrow — advertise LINEAR for
+IOSurface-shareable color formats with confidence; keep depth/stencil out of the modifier tables
+entirely rather than keeping the tiled carve-out for them.
+
+## IMPLEMENTED (2026-08-04, evening): KK's VK_EXT_image_drm_format_modifier, LINEAR-only
+
+The design's task #2, written the same evening the checkpoint above unblocked it. On the mesa
+fork's `limina-kk` branch: `0529c9bb766` (vulkan/runtime: compile the extension's runtime support
+on Darwin — the `vk_image.h` guard the BLOCKED memo priced as a blocker is a 4-line widening) +
+`befa0f2731e` (kosmickrisp: the implementation — format-properties modifier lists, image-format
+validation, LIST/EXPLICIT create parsing with explicit-pitch adoption, truthful MEMORY_PLANE_0
+layouts, linear-images-never-array types, and the kk 0002 carve-out retired per the checkpoint).
+
+Acceptance: `kk-modifier-probe.c` (here) drives the ICD directly per the recorded dispatch traps
+(dlopen + `vk_icdGetInstanceProcAddr`; really submits, since KK replays at submit). All green:
+
+- enumeration, `[LINEAR]`×1-plane list with COLOR_ATTACHMENT features, depth offers nothing
+- accept LINEAR+attachment usage; reject a bogus modifier and a depth format
+- LIST create at 250×131 — **reported rowPitch 1008 where the guest-side fabrication (mesa
+  0010(b)) computes 1000**: a live instance of the stride-divergence class that sheared GTK4,
+  eliminated by construction now that the allocator answers the query
+- the June nil-encoder class run for real: a render pass cleared the linear modifier image and
+  the CPU readback **at the reported pitch** saw the clear color in all four corners (memory
+  prefilled 0x77, so a no-op render would have been caught)
+- EXPLICIT create round-trips the adopted pitch; a bogus pitch fails with
+  `VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT`
+
+Regression: same build, EFI+venus seated boot, no gates — no aborts, no `degrading`, vkmark
+13/13, desktop human-confirmed live. (Guest behavior is unchanged by design: 0010(b) still owns
+the extension in-guest until it is deleted; vkr still normalizes tiling until its own change.)
+
+## IMPLEMENTED (2026-08-04, night): vkr passes modifier creates through — the rewrite era ends
+
+Task #3. virgl fork `limina` branch `0cc513fd` + mesa `limina-kk` `d918b98d869`. On the KK path a
+modifier-tiled create now reaches the driver **verbatim** (structs chained, tiling intact,
+INPUT_ATTACHMENT kept — safe because KK keeps linear images non-array now); the old
+normalize/force/strip survives only for MoltenVK and pre-modifier drivers, keyed on the runtime
+`EXT_image_drm_format_modifier` flag vkr now detects. LIST/exports reuse the post-create
+query-pitch → IOSurface-at-exactly-that-pitch machinery; EXPLICIT/imports are validated and
+adopted by KK itself. `EXT_queue_family_foreign` is advertised natively by KK (constant-only,
+honest for one queue family on shared storage), and vkCreateDevice stops stripping both
+extensions when the driver has them — the passthrough plumbing upstream venus needs after 0010
+deletes. The 2026-08-04 probe instrumentation (VKR-HT/VKRMOD/VKRMODLIST prints, the three env
+gates) is retired; this file is its record.
+
+**A transition hazard, predicted then observed.** With mesa 0010(b) still in the guest, EXPLICIT
+imports carry the guest's fabricated tight-packed pitch (`width*4`), wrong whenever it misses
+Metal's 16-byte row alignment. Strict spec-style rejection would have failed every odd-width
+client window until task #4 lands. KK instead defines the invalid-layout UB as
+adopt-the-computed-pitch with a loud `[KK-MODIFIER]` log — coherent by construction (the exporter
+at the same width computes the same pitch), and the queries never echo the lie. First seated boot
+confirmed it live: `EXPLICIT rowPitch 4700 unusable (minimum 4704, alignment 16)` ×4 from a
+1175-px window, absorbed. **The log's disappearance after 0010 deletion is the tripwire that the
+guest went truthful.**
+
+Validation (guest unchanged, still 0010(b)): seated venus session on `modprobe-arm.raw`, zero
+readback fallbacks, zero bind rejections, zero aborts, vkmark 13/13 (1667), gnome-terminal +
+nautilus at odd widths, desktop **human-confirmed pixel-correct — no shear**. The standalone KK
+probe re-run green with the graceful semantics (bogus pitch tolerated, true pitch reported).
+
 ## Caveat on the numbers above
 
 The vkmark scores taken during axis 2 (318 / 298 / 230) ran while a kernel build had all eight
