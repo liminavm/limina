@@ -48,8 +48,30 @@ pub struct WindowState {
     /// Absent (or no longer attached) restores fullscreen on the main display: "was fullscreen"
     /// is the stronger memory and the display is best-effort, so undocking never silently leaves
     /// the VM windowed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Persisted through i64 (`u64_bits_as_i64`): TOML integers are i64 and the identity key is
+    /// a full-width hash, so a key with bit 63 set would otherwise make the whole state save
+    /// fail — fullscreen placement silently never persisted on affected displays.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "u64_bits_as_i64"
+    )]
     pub fullscreen_display: Option<u64>,
+}
+
+/// Bit-preserving u64 ↔ i64 bridge for TOML, which has no unsigned integers. Keys already
+/// saved by older builds were necessarily ≤ `i64::MAX` and load unchanged.
+mod u64_bits_as_i64 {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Option<u64>, s: S) -> Result<S::Ok, S::Error> {
+        v.map(|k| k as i64).serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+        Ok(Option::<i64>::deserialize(d)?.map(|k| k as u64))
+    }
 }
 
 /// A durable "this VM is suspended" record (M9.2). See [`VmState::suspended`].
@@ -129,6 +151,27 @@ mod tests {
         save(&path, &state).unwrap();
         assert_eq!(load(&path), Some(state));
         assert!(!dir.join("state.toml.tmp").exists(), "tmp file cleaned");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn round_trips_a_top_bit_identity_key() {
+        // The display identity_key is an FNV-1a-derived u64 — bit 63 is a coin flip. TOML
+        // integers are i64, so a key > i64::MAX must still save (bit-preserved through i64),
+        // or fullscreen placement silently never persists on affected displays (dogfood-mac, 08-04).
+        let dir = scratch("topbit");
+        let path = dir.join("state.toml");
+        let state = VmState {
+            window: Some(WindowState {
+                frame: [0.0, 0.0, 1512.0, 982.0],
+                content: (1512, 982),
+                fullscreen: true,
+                fullscreen_display: Some(0x9abc_def0_1234_5678),
+            }),
+            suspended: None,
+        };
+        save(&path, &state).expect("a top-bit identity key must be persistable");
+        assert_eq!(load(&path), Some(state));
         std::fs::remove_dir_all(&dir).ok();
     }
 
