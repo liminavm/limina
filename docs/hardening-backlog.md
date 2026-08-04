@@ -598,6 +598,27 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
 
 ---
 
+## Suspected test flake — `l1_real_session_helper_bridges_clipboard_via_mock_mutter`
+
+Seen **once**, 2026-08-04, during the full HVF suite run that validated virgl 0059/0060. Treated as
+a flake by decision, not by analysis — recorded here so a second sighting is recognised as a repeat
+rather than re-investigated from scratch.
+
+```
+mock log never contained "PASTED sess-host-to-guest-42"; current content:
+CLAIMED_NAME / CREATE_SESSION / START / ENABLE_CLIPBOARD
+```
+
+`crates/limina-test/tests/l1_session_helper.rs:277`. The bridge got as far as enabling the
+clipboard and then no paste arrived — consistent with a timing/wait bound rather than a logic
+error, but that is a guess, not a diagnosis. Everything else in the run passed, including
+`venus_desktop_pixel_verifies_through_host_capture`, and nothing connects vkr's external-memory
+advertisement to a mock-mutter clipboard bridge. **If it fires again, stop treating it as noise:**
+the first thing to check is whether the wait for `PASTED` is bounded generously enough under a
+parallel nextest lane, since the suite has run parallel since 2026-08-03.
+
+---
+
 When a milestone's loose ends are all closed, fold the remainder back into the roadmap milestone
 status. Greenfield milestones still ahead: **M7 USB**, **M8 audio + x86**. (**M6 dynamic memory** shipped
 2026-06-26 — see `docs/design/m6-dynamic-memory.md` + memory `limina-m6-dynamic-memory`.)
