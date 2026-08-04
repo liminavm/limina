@@ -14,7 +14,7 @@ docs-only.
 
 | series | patches | upstream (checked SHA) | tracker |
 |---|---|---|---|
-| linux | 3 *(was 6; migrated to the fork model 2026-08-03 — base `v7.1.6`; one patch left for the DKMS tree, one replaced by an upstream backport, and the blob-scanout fence **dropped 2026-08-04** after the rig measured it costing 86% of frames)* | `gregkh/linux` (stable mirror) + dri-devel lore | lore.kernel.org |
+| linux | **1** *(was 6; migrated to the fork model 2026-08-03 — base `v7.1.6`. One patch left for the DKMS tree; one replaced by an upstream backport; the blob-scanout fence **dropped 2026-08-04** after the rig measured it costing 86% of frames; and the two DRM format/modifier patches **dropped 2026-08-04**, punted to the future hardware-planes work — they addressed guest-KMS plane scanout, not the VM-output-to-Mac-display path we actually care about. Tag `limina/2026-08-04-modifiers` recovers them.)* | `gregkh/linux` (stable mirror) + dri-devel lore | lore.kernel.org |
 | kosmickrisp (KK) | 19 | mesa `84acd848` | gitlab.fd.o (Anubis) |
 | mesa (guest) | 15 | mesa `c9e4f184e593` | gitlab.fd.o (Anubis) |
 | imago | 2 | `hreitz/imago` | gitlab.com |

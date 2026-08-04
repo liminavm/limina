@@ -115,6 +115,20 @@ hardlinked). `enhanced.raw` took an `install-enhanced.sh` pass (venus enumerates
 `Virtio-GPU Venus (Apple M1 Max)`, trial boot auto-promoted, clean poweroff);
 `enhanced.test.raw` recloned from it. NOT on dogfood-guest.
 
+**KNOWN DRIFT (2026-08-04): the shipped images are one commit-set AHEAD of the branch pin.** The
+two DRM format/modifier commits were **dropped from `liminavm/linux` `limina`** the same day (the
+branch is now a single commit, rev `07db31df`; tag `limina/2026-08-04-modifiers` recovers them —
+rationale in `docs/upstreaming/ledger/linux.md`). The installed `limina-kernel-16k-7.1.6-2` still
+*contains* them, and no respin was done: nothing is broken, the images keep working exactly as
+measured, but **the next kernel build from the pin will not have them**. Two consequences to carry
+into that respin:
+
+- Bump `RELEASE` to **3** — `7.1.6-2` is taken, and same-NEVRA-different-content is the trap below.
+- **A guest running our Vulkan compositor needs the one-line `MOD_INVALID` → LINEAR fallback first**
+  (`spikes/modifier-necessity/niri-mod-invalid-linear-fallback.patch`), or it will fail to render
+  every frame on the new kernel. Stock mutter guests are unaffected — they never name a scanout
+  modifier.
+
 > **TRAP found here — a Release bump does NOT let two builds of the same KREL coexist.** RPM
 > `Release` is what makes rpm/dnf *see* a content change at the same version, so the bump is
 > necessary; but `limina-kernel-16k` is `installonlypkg(kernel)`, so dnf tries to install `-2`
