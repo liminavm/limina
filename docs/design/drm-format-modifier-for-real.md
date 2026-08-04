@@ -181,6 +181,40 @@ inferred premises:
 Recommended order: (2) then (1) — both are cheap counter/probe work on the existing rig — before
 any KK code.
 
+### MEASURED (2026-08-04): item 2 — the guest negotiates exactly ONE modifier, LINEAR
+
+Probe in `vkr_image.c` logging the modifier structs that ride in on image create
+(`[LIMINA-VKRMODLIST]`), seated F44 enhanced session:
+
+```
+LIST count=1: 0x0 (fmt=44 2560x1440 usage=0x80097)      ×3
+```
+
+`0x0` is `DRM_FORMAT_MOD_LINEAR`. Three per session, all allocation-side (`LIST` form), all
+scanout-sized `B8G8R8A8_UNORM`. No `EXPLICIT` imports and no other consumers appeared.
+
+**The result is partly circular and must not be over-read.** mesa 0010(b) is *what makes* the guest
+ask for one modifier — it answers the extension inside the guest and hardcodes LINEAR ("we only
+support LINEAR which has 1 plane"). So this measures *what the guest asks for under our own patch*,
+not what a stock guest would negotiate against a renderer that advertised a real list. What it does
+establish, and this is the useful part:
+
+- The live traffic is **tiny** — 3 images per session, one format, one usage pattern. Whatever we
+  implement has a very small surface to satisfy.
+- Nothing in the current stack wants a *tiled* modifier. The two-token design proposed above
+  (LINEAR + an opaque Metal-tiling token) is **over-built for observed demand**.
+
+**Design revision: start with a single token.** KK advertises `VK_EXT_image_drm_format_modifier`
+offering exactly `DRM_FORMAT_MOD_LINEAR`, for the formats where it genuinely produces a linear
+layout, and reports subresource layouts truthfully. That is honest, matches observed traffic
+exactly, and is enough for upstream venus's passthrough gate to light up — which is the whole point,
+since that is what deletes 0010(b). A tiled token can be added later if a real consumer appears.
+
+**Consequence worth stating plainly:** with MTLTEXTURE import already solving the *layout* problem
+(the host no longer needs the image to be linear to share it), implementing the modifier extension
+buys **patch deletion, not capability** — 0010(b) and virgl 0005. That is still worth doing, but it
+should be scoped and justified as cleanup, not as a feature.
+
 ## Non-goals
 
 - Reviving the two dropped kernel patches (linux 0002/0003). Those are punted to the "additional

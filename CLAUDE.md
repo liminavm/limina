@@ -58,6 +58,19 @@ right tool — not treat upstream as immutable:
   the manifest must stay reachable. Audit status: `docs/upstreaming/ledger/virglrenderer.md`.
   **rutabaga** — the Apple blob `get_map_ptr` delta lives in libkrun's rutabaga against upstream's
   resource_map API.
+- **Mesa — two builds, one fork.** `github.com/liminavm/mesa` (upstream:
+  `gitlab.freedesktop.org/mesa/mesa`) holds both, on separate branches:
+  - **`limina-kk`** — the **host** KosmicKrisp + zink-on-KK build (fork model since 2026-08-04;
+    `patches/kosmickrisp/` retired). Lives at `/Volumes/mesa-cs/mesa` on a case-sensitive sparse
+    image (Mesa won't build on a case-insensitive FS), so it is **not** vendored by
+    `cargo xtask vendor` — `third_party/manifest.toml` records which rev the checkout should be on,
+    and `scripts/ensure-mesa-cs.sh` only mounts the image.
+  - **`limina-guest`** — the **guest** venus/zink Mesa. **Not migrated yet** (task #24): still the
+    `patches/mesa/` pool, which is deliberately NOT a single-base series (three effective bases,
+    raw context diffs) and is consumed by the guest RPM spec. Migrating waits until the series
+    shrinks (see task #19) and the F43 base repoint collapses the bases.
+
+  Always check *which build* a mesa patch targets — the same directory has served both.
 - **The guest Linux kernel** — **fork model**: `github.com/liminavm/linux` (a fork of
   `gregkh/linux`, the stable-tree mirror — stable point releases don't exist in `torvalds/linux`),
   branch `limina`, pinned by `third_party/manifest.toml`. Our changes ARE the commits on that

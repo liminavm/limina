@@ -20,11 +20,23 @@ upstream = "https://gitlab.com/hreitz/imago.git"
 branch = "limina"
 rev = "5f2c0adba538159282b8941a3f3be61eefbc4769"
 
+# The HOST KosmicKrisp / zink-on-KK Mesa. NOT vendored by `cargo xtask vendor`: this tree lives at
+# /Volumes/mesa-cs/mesa on a case-sensitive sparse image (scripts/ensure-mesa-cs.sh), because Mesa
+# will not build on a case-insensitive filesystem. The pin here is the source of truth for WHICH rev
+# that checkout should be on; the fork is also the off-machine backup the sparse image never was.
+# The guest venus/zink Mesa will join this same repo on a `limina-guest` branch (task #24).
+[kosmickrisp]
+repo = "https://github.com/liminavm/mesa.git"
+upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
+branch = "limina-kk"
+rev = "78ea825558309e795e7bfd9961d95c81e05ab06e"
+base = "178a3d73968"
+
 [virglrenderer]
 repo = "https://github.com/liminavm/virglrenderer.git"
 upstream = "https://gitlab.freedesktop.org/virgl/virglrenderer.git"
 branch = "limina"
-rev = "67715f5ea9f547c7692400459a647d4fc8e844b0"
+rev = "4865ae6a5d7474275ba8f5d1a56e4b424a7be8e7"
 base = "2048dfb7f3550f0873116b38083182b9ef5eb32a"
 
 [linux]

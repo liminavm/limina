@@ -1,7 +1,19 @@
 # kosmickrisp — patch-audit ledger
 
-19 patches; `UPSTREAM_BASE` `178a3d73968`. Schema + protocol: `README.md`.
+20 commits; base `178a3d73968`. Schema + protocol: `README.md`.
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
+
+> **Fork model since 2026-08-04.** There is no `patches/kosmickrisp/` any more — our delta is the
+> commits on the `limina-kk` branch of `github.com/liminavm/mesa`, pinned by
+> `third_party/manifest.toml`. Read a "patch" here as "the commit with this subject". Unlike the
+> other forks this tree is **not** vendored by `cargo xtask vendor`: it lives at
+> `/Volumes/mesa-cs/mesa` on a case-sensitive sparse image (Mesa will not build on a
+> case-insensitive filesystem), so the manifest pin records which rev that checkout *should* be on
+> rather than driving a clone. The fork is also the first off-machine copy this work has ever had.
+> Tag before every branch rewrite — every rev ever pinned must stay reachable.
+> One commit joined at migration and is not yet audited: *"kosmickrisp: implement the MTLTEXTURE
+> handle type of VK_EXT_external_memory_metal"* (paired with the virgl MTLTexture scanout commit;
+> gated off by default).
 
 | ord | subject | files | diag | need | checked | issue | mr | sec | fold | tier | disp | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
