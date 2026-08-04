@@ -61,6 +61,40 @@ The patches that could genuinely collapse are the venus-modifier ones (mesa 0010
 kk 0002's trigger) — but only if the modifier traffic is in fact zink-kopper's, which is **not yet
 established** (see below).
 
+### …but "relocate" is the win, and most of them do not even relocate
+
+Revised the same day, on the point that **we control the host and patching the guest is far more
+troublesome** — so moving a patch guest→host is a gain, not a cost. The rule that follows: do not
+import the zink series wholesale; establish for each whether the host build needs it at all.
+
+The host zink-on-KK build today carries **exactly one** zink change — a driconf guard in
+`zink_screen.c` (`d434b73a2c2`). It has none of 0001/0003/0004/0006/0014, and on it the desktop
+*and* a sustained WebGL aquarium both run correctly on the vrend path (browser pid confirmed with
+`GALLIUM_DRIVER=virgl`, mapping `libgallium` and no libvulkan — i.e. GL through virgl → vrend →
+host zink, not venus). Per-patch, on preconditions rather than on "it works":
+
+| patch | host verdict | basis |
+|---|---|---|
+| 0001 nullDescriptor emulation | **not needed** | KK advertises `.nullDescriptor = true` + `EXT_robustness2`/`KHR_robustness2` (`kk_physical_device.c:146,182,358`). The patch emulates the feature for drivers lacking it. |
+| 0003 / 0004 semaphore-fd guards | **not needed** | KK advertises `.KHR_external_semaphore_fd = true` (`:195`). The patches guard its *absence*. |
+| 0006 kopper surface guard | **not needed** | Host zink is surfaceless (no kopper swapchain), and every `Create*SurfaceKHR` sits behind `VK_USE_PLATFORM_XCB/WAYLAND/WIN32`. |
+| 0014 lost wakeup | **carried host-side** | See below. |
+
+So four of the five simply die with the guest zink deployment rather than moving.
+
+**0014 is carried deliberately, without a reachability proof.** The buggy code is present
+byte-for-byte in the host tree (unlocked `unflushed=false` at `zink_batch.c:657`, un-mutexed
+`cnd_broadcast` at `:846`, and a waiter that neither loops nor rechecks its predicate whose
+timedwait uses an epoch-absolute `{0, 10000}` timespec, so trywait has never actually waited). The
+hazardous branch is `else //multi-context` — one zink context waiting on another's unflushed batch,
+then `cnd_wait` indefinitely. vrend creates a zink context per guest context, so it is structurally
+reachable.
+
+A probe on that branch was built and then abandoned on purpose: **a race cannot be disproven by not
+observing it**, so a quiet probe run would have bought false confidence. The fix is small and
+correct-by-inspection, so it is carried. Applied to the host branch as `47308c0f026` and pinned in
+`third_party/manifest.toml`.
+
 ## Unrelated simplification found for free: the selector file is stale
 
 With **both** zink selectors commented out, Mesa 26.1.4 still resolves to
@@ -100,6 +134,12 @@ the *less* exercised of our two zink deployments and carries a known unfixed dea
 A defensible ordering, if this is pursued:
 
 1. Delete the stale selector lines (independent, zero-risk, do it regardless).
-2. Land mesa 0014 in the host zink-on-KK build — required before host zink carries the desktop.
+2. ~~Land mesa 0014 in the host zink-on-KK build~~ — **DONE** (`47308c0f026`, pinned).
 3. Explain the modifier-probe inconsistency, then re-test which patches actually go quiet.
 4. Only then run a real GL A/B and decide the tier on measured numbers.
+
+Revised strategic read: the earlier framing ("the saving is smaller than it looks") was weighing the
+wrong thing. Guest patches are the expensive kind — they need an RPM respin, an image refresh, and a
+delivery pass; host patches are a rebuild we control end to end. Four of five zink patches retire
+outright with guest zink, and the fifth moves to the tier where carrying it is cheap. The cost side
+of this trade is smaller than first stated.
