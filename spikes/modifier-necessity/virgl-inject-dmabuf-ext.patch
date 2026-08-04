@@ -1,0 +1,47 @@
+diff --git a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
+index c52463e..0f3d8af 100644
+--- a/src/venus/vkr_physical_device.c
++++ b/src/venus/vkr_physical_device.c
+@@ -327,16 +327,35 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev)
+     * TODO: Remove after mesa!40478 has had sufficient distro uptake.
+     */
+    if (physical_dev->EXT_external_memory_metal && !physical_dev->KHR_external_memory_fd) {
+-      VkExtensionProperties *new_exts =
+-         realloc(exts, sizeof(*exts) * (advertised_count + 1));
+-      if (new_exts) {
++      /* limina: ALSO inject VK_EXT_external_memory_dma_buf. Upstream venus sets
++       * external_memory.renderer_handle_type only under EXT_external_memory_dma_buf
++       * (vn_physical_device.c:1042); advertising fd alone leaves it 0, so venus exposes
++       * no external memory to the guest at all (caps.dmabuf=0 -> gbm dumb buffer ->
++       * gnome-shell SIGSEGV). Mesa 0010(a) works around that in the GUEST by adding an
++       * `else if (KHR_external_memory_fd)` branch — but the honest fix is here: the
++       * renderer emulates fd-based external memory already (Metal shared memory, the
++       * injection right above), and the dma-buf handle type is the same emulation under
++       * a name venus recognizes. Our memory paths already accept both handle types
++       * interchangeably (vkr_device_memory.c: the export strip takes OPAQUE_FD|DMA_BUF,
++       * imports come through VkImportMemoryResourceInfoMESA which is handle-agnostic).
++       *
++       * With this, upstream's own dma-buf branch fires and mesa 0010(a) becomes dead
++       * code — the point of the 2026-08-04 probe. */
++      static const char *const inject[] = {
++         VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
++         VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
++      };
++      for (uint32_t i = 0; i < ARRAY_SIZE(inject); i++) {
++         VkExtensionProperties *new_exts =
++            realloc(exts, sizeof(*exts) * (advertised_count + 1));
++         if (!new_exts) {
++            vkr_log("failed to inject %s", inject[i]);
++            break;
++         }
+          exts = new_exts;
+-         strcpy(new_exts[advertised_count].extensionName,
+-                VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
++         strcpy(new_exts[advertised_count].extensionName, inject[i]);
+          new_exts[advertised_count].specVersion = 0;
+          advertised_count++;
+-      } else {
+-         vkr_log("failed to inject VK_KHR_external_memory_fd");
+       }
+    }
+ 

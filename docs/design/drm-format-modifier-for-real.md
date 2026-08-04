@@ -55,12 +55,52 @@ So both halves of 0010 reduce to one principle:
 (b) → vkr/KK advertises the modifier extension, and upstream's passthrough gate does the rest.
 
 Both land in virglrenderer/KK, which we own and are already upstreaming into — a better place for
-the delta than Mesa's guest driver, and it makes (a) upstreamable on its own merits (any non-Linux
-renderer hits this).
+the delta than Mesa's guest driver.
+
+**Terminology, because it is easy to garble:** "(a)" and "(b)" always mean the two halves of
+*mesa 0010*, i.e. guest-side venus patches. The vkr dma-buf advertisement is the **replacement**
+for (a), not (a) itself. So (a) gets **deleted**, and what becomes upstreamable is the new
+virglrenderer patch. An earlier draft of this doc said "(a) is upstreamable on its own merits" —
+that was written while (a) still looked load-bearing, and it no longer holds: fixing this renderer-
+side means upstream venus never needs a branch for a case only non-Linux renderers reach.
 
 **Unconfirmed:** the vkr injection carries `TODO: Remove after mesa!40478 has had sufficient distro
 uptake`. A search of mesa tip found a related *"venus: relax SYNC_FD semaphore export requirement"*
 commit but nothing identifiable as !40478 — do not treat that TODO as ripe without checking.
+
+### 1b. PROVEN (2026-08-04): the (a) half works, and 0010(a) is now dead code
+
+Implemented and measured the same day. vkr's macOS injection block now advertises
+`VK_EXT_external_memory_dma_buf` alongside the `VK_KHR_external_memory_fd` it already injected
+(`spikes/modifier-necessity/virgl-inject-dmabuf-ext.patch`). Nothing else changed — no guest mesa
+rebuild, 0010 still fully applied.
+
+The oracle is direct rather than inferred: venus stamps `renderer_handle_type` into
+`VkExternalMemoryImageCreateInfo::handleTypes`, so a probe at vkr's image-create read it back:
+
+```
+[LIMINA-VKR-HT] image external handleTypes=0x200 (DMA_BUF)
+```
+
+`0x200` is `DMA_BUF`. Before the change it would be `0x2` (`OPAQUE_FD`). Since 0010(a) is an
+`else if` *after* upstream's dma-buf branch, upstream's branch firing means **0010(a) no longer
+executes** — proven without rebuilding guest mesa.
+
+Session verified on the enhanced.test image: venus live in the seated session (`Virtio-GPU Venus`),
+gnome-shell up with **0** segfaults in the boot journal, guest sees
+`VK_EXT_external_memory_dma_buf`, no `degrading to software-2D` / `ComponentError` in the worker,
+and the desktop **human-confirmed correct** (the health checks alone would not have caught a
+shear-class fault, per the same morning's lesson).
+
+That the change was this small is itself evidence for the "advertise honestly" reading: vkr's memory
+paths already accepted both handle types interchangeably (the export strip takes
+`OPAQUE_FD|DMA_BUF`; imports arrive via the handle-agnostic `VkImportMemoryResourceInfoMESA`). Only
+the advertisement was missing.
+
+**Remaining to actually retire 0010(a):** promote the vkr change from spike patch to a real
+`patches/virglrenderer/` entry (minus the probe `fprintf`), delete the (a) hunks from
+`patches/mesa/0010`, rebuild the guest mesa RPM, refresh the enhanced images, and re-validate. The
+ledger row for 0010 should split into (a) and (b) at the same time.
 
 ### 2. Upstream venus is strict passthrough, and that is the whole lever
 
