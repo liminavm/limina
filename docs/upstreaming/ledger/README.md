@@ -117,7 +117,7 @@ Rules block for every research agent prompt, verbatim:
   hard. Prompts should state patch filenames may drift from prompt text (`ls` first) and
   that `curl` to raw.githubusercontent needs the sandbox disabled.
 
-Additions from the linux fork migration (2026-08-04) — all three found by *doing* the
+Additions from the linux fork migration (2026-08-03) — all three found by *doing* the
 migration, which is why a rebase is an audit tool and not just chores:
 
 - **A tolerant apply is a silent-failure machine.** `patches/linux/0001` had stopped

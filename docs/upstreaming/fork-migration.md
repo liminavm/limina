@@ -2,7 +2,7 @@
 
 How a dependency moves from a committed `patches/<dep>/` series to a real fork under
 **github.com/liminavm**, with our work on a `limina` branch. Written down after the imago pilot
-(2026-08-03) and the linux migration (2026-08-04), which between them exercised every wrinkle so
+(2026-08-03) and the linux migration (2026-08-03), which between them exercised every wrinkle so
 far: a crates.io dep, a GitHub-native upstream, a multi-GB tree, a dep with more than one build
 consumer, and a series whose verdicts said drop / rewrite / fold / carry.
 

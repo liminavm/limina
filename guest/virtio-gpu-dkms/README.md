@@ -11,7 +11,7 @@ on the stock tier.
 ## Why the patch lives here and not in a kernel patch series
 
 It used to be `patches/linux/0004`, applied to the **enhanced** 16 KiB kernel as well.
-That series retired on 2026-08-04 when the enhanced kernel moved to the fork model
+That series retired on 2026-08-03 when the enhanced kernel moved to the fork model
 (`liminavm/linux`, branch `limina` — see `third_party/manifest.toml`), and the patch
 did not move with it, for two reasons:
 

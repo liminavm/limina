@@ -14,7 +14,7 @@ docs-only.
 
 | series | patches | upstream (checked SHA) | tracker |
 |---|---|---|---|
-| linux | 4 *(was 6; migrated to the fork model 2026-08-04 — base `v7.1.6`, one patch left for the DKMS tree, one replaced by an upstream backport)* | `gregkh/linux` (stable mirror) + dri-devel lore | lore.kernel.org |
+| linux | 4 *(was 6; migrated to the fork model 2026-08-03 — base `v7.1.6`, one patch left for the DKMS tree, one replaced by an upstream backport)* | `gregkh/linux` (stable mirror) + dri-devel lore | lore.kernel.org |
 | kosmickrisp (KK) | 19 | mesa `84acd848` | gitlab.fd.o (Anubis) |
 | mesa (guest) | 15 | mesa `c9e4f184e593` | gitlab.fd.o (Anubis) |
 | imago | 2 | `hreitz/imago` | gitlab.com |
@@ -33,7 +33,7 @@ wins: delete on rebase, no work owed.
 
 - **linux 0005** — balloon free-page-reporting across suspend → upstream `0b45f69` in
   `mm/page_reporting.c` (a file we don't patch; the fix landed elsewhere — see method lesson).
-  *Resolved 2026-08-04: `0b45f69` had NOT reached our new base `v7.1.6`, so it is carried as a
+  *Resolved 2026-08-03: `0b45f69` had NOT reached our new base `v7.1.6`, so it is carried as a
   cherry-pick rather than simply dropped — "fixed upstream" and "fixed in your base" are
   different questions. Self-retires at the next base bump.*
 - **KK 0008-arc** (timestamp queries, 0008+0010–0013) → LunarG's Metal-4 impl (`ed807097`, MR !42864).

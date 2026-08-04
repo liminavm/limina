@@ -16,6 +16,28 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   **Extended 2026-07-31** with stable EDID identity + real connector events (libkrun 0119-0121):
   the guest sees the identity/density/refresh of the host display the window is on, and a pushed
   disconnect genuinely disconnects the connector. `docs/design/stable-edid-hotplug.md`.
+- **OPEN (found 2026-08-03): the host-derived EDID identity does NOT survive a GUEST reboot.**
+  Observed on a windowed venus VM whose host display never changed (BenQ LCD attached throughout,
+  confirmed via `system_profiler SPDisplaysDataType`): at first boot mutter reported the connector
+  as `('Virtual-1', 'LMN', 'BenQ LCD', '0x6c42fae5')` — correctly mirroring the host display — and
+  after a plain `systemctl reboot` **inside the same VM session** it came back as
+  `('Virtual-1', 'RHT', 'krun-display', '0x00000001')`, libkrun's generic fallback EDID. The host
+  side was not restarted; only the guest was.
+  **Why it matters beyond cosmetics:** GNOME keys `monitors.xml` on the `<monitorspec>`
+  (connector + vendor + product + serial). When the identity changes, mutter silently *discards*
+  the saved configuration and re-picks a default scale — so a user's saved resolution/scale/
+  arrangement is lost on every guest reboot, and it fails silently (no error, just a different
+  display). It cost a perf run here: the run aborted on its display-pin verify because the config
+  written before the reboot no longer matched (`scale=1.3333` instead of the pinned 1.0).
+  Per-VM window/fullscreen restore is keyed on the same identity (`limina-display-modes`), so it
+  is likely affected too — unverified.
+  **Workaround used:** write `monitors.xml` *after* the guest reboot, then `systemctl restart gdm`
+  (a session restart applies it without another reboot, so the identity cannot change underneath).
+  **Not yet investigated:** whether this is specific to an explicit `--display-resolution` boot
+  (mode overridden, so the host-match path may not re-engage), whether the first boot's identity is
+  set once at initial scanout and not recomputed on the guest's re-probe, and whether a host-side
+  window move/display change is needed to restore it. Reproduce before fixing — a one-shot is not
+  yet ruled out, though the host display demonstrably did not change.
 - **Capability-scope the scanout IOSurfaces** (security) — ✅ **DONE 2026-06-23 (sw2d + venus)**.
   The worker used to export each scanout as a machine-global `IOSurfaceID` any same-user process
   could brute-force-read (`spikes/venus-draw-probe/iosdump.swift` PoC). Now **both** display paths

@@ -17,6 +17,132 @@ requests to their side — whose host also runs other workloads, so their runs
 carry interference we can't control — we run the *same* driver + scorer on a
 local VM on the dev Mac (dev-mac), which is otherwise idle.
 
+## 2026-08-03: the KMS blob-scanout flush fence WRECKS async scanout (pending final isolation)
+
+The guest-kernel fence for host3d blob `RESOURCE_FLUSH` — `patches/linux/0001`, which the
+2026-08-03 audit found had silently stopped applying at the 7.1.x bump and was therefore absent
+from every kernel we ever shipped — was rewritten and landed on the `liminavm/linux` `limina`
+branch. Measured on this rig, one kernel flip on one disk (same userspace, same host build, same
+three windows respawned identically), `NIRI_VK_ASYNC_SCANOUT=1`, `heavy` profile:
+
+| | 7.1.4 (fence absent) | 7.1.6 (fence present) |
+|---|---|---|
+| frames | 8730 | **4615** |
+| missed vblanks | 77 = **0.9%** | 3807 = **82.5%** |
+| elements (median) | 41 | 41 |
+| draws (median) | 35 | 35 |
+| gpu median / p90 | 3.00 / 8.05 ms | 2.77 / 7.65 ms |
+
+The comparability check passes: identical elements and draws, and GPU time is *slightly lower* on
+the fence arm — so this is not "rendering got slower". Throughput roughly halves and the frame
+clock collapses.
+
+**Mechanism (from the code, not inferred from the numbers):** `virtio_gpu_resource_flush` does not
+merely attach the fence, it **blocks** — `dma_fence_wait_timeout(..., 50 ms)` inside `commit_tail`.
+Our host completes that flush fence at the CA latch, i.e. at true present time, ~1 vblank later, so
+every flip completes late by construction. Under async scanout the compositor is already doing its
+own explicit fencing (`IN_FENCE_FD`), so the kernel wait is redundant serialization stacked on top
+of it. The independent glmark2 A/B on the same kernel pair moved the same way (composited score
+1608 → 1233, `perf/ledger.csv`).
+
+**Not yet isolated:** that A/B has four variables (fence, two format patches, and the v7.1.4→v7.1.6
+stable delta). A kernel at v7.1.6 with only the fence commit reverted
+(`liminavm/linux` `probe/no-blob-fence`) is building to settle it; if that arm returns to ~1%, the
+fence is confirmed as the cause and 0001 needs a redesign — attach the fence for the host to honor
+without blocking `commit_tail`, or skip it when the client supplies its own IN_FENCE — before it
+can be shipped or offered upstream.
+
+**Method note worth keeping:** the compositor-side hypothesis this overturns is in this very file
+(2026-07-29): "the flip/release side is engineered honest (guest kernel fences blob-scanout flush;
+host holds it to the CA-latch ack). Two host-side suspects ELIMINATED." That elimination rested on
+a patch that was not in the running kernel. The premise was never checked against the built
+artifact.
+
+## RUNBOOK — driving a measurement on this rig (written 2026-08-03, after getting all of it wrong once)
+
+Every step below is a trap that actually fired. The common shape: **the layer above the failure
+reports success**, so a broken run looks like a finished run and produces scoreable-but-empty logs.
+
+**1. Boot the rig** (clone first — it boots in place):
+
+```bash
+cp -c nirirepro.tear.raw nirirepro.work.raw
+LIMINA_DISK=$PWD/nirirepro.work.raw LIMINA_NET=1 LIMINA_RAM_MIB=8192 LIMINA_SSH_PORT=2299 \
+  LIMINA_EXTRA_ARGS="--ssh-port 2299 --display-resolution 3840x2160" \
+  spikes/venus-draw-probe/boot-enhanced-efi-kk.sh
+```
+
+**2. Turn the frame log on — it is a SESSION env, not a shell env.** The compositor is started by
+systemd, so `NIRI_FRAME_LOG` has to be in the unit override, and the session must be restarted
+(`systemctl restart gdm`, or a reboot) for it to take:
+
+```
+/home/gsrs/.config/systemd/user/org.gnome.Shell@user.service.d/override.conf
+  [Service]
+  Environment=NIRI_VK_ASYNC_SCANOUT=1      # already there
+  Environment=NIRI_FRAME_LOG=all,gpu       # add this
+```
+
+**3. Run the driver AS THE SEAT USER, FROM ITS REPO PATH.** Two independent traps:
+
+```bash
+# right:
+sudo -u gsrs XDG_RUNTIME_DIR=/run/user/1001 \
+  /home/claude/gnome-shell-rs/scripts/drive-workload.sh 1001 1 heavy
+```
+
+- As `claude` it fails loudly ("no niri socket under /run/user/1001") — that one is fine.
+- **Copying the script elsewhere fails SILENTLY.** It resolves the binary relative to itself
+  (`NIRI=${NIRI_BIN:-$(dirname "$0")/../target/debug/niri}`), and `msg()`/`act()` redirect stderr
+  to `/dev/null`. Copied to `/usr/local/bin/`, it ran both 70 s loops, printed every phase marker,
+  exited 0 — and sent **nothing**. Set `NIRI_BIN` if you must run it from elsewhere.
+- `gsrs` reaches `/home/claude` through an **ACL** (`user:gsrs:--x`), not group perms — don't
+  "fix" the home directory mode.
+
+**4. THE SESSION MUST HAVE WINDOWS. A fresh rig session has none, and the workload is then a
+no-op** — `focus-workspace 2` with one empty workspace changes nothing visible, and the overview
+of an empty desktop barely animates. Worse, it is not merely invisible, it is *unmeasurable*: the
+miss rate varies ~100x with what is on screen, and `heavy` exists precisely to reach the >60-draw
+region where misses live (§17). A zero-window arm sits at ~27 elements / 44-68 draws — near-idle —
+and an A/B there will show "no difference" for any change, which is a false negative, not a result.
+
+```bash
+SOCK=/run/user/1001/$(sudo ls /run/user/1001 | grep niri | head -1)
+N=/home/claude/gnome-shell-rs/target/debug/niri
+run(){ sudo -u gsrs XDG_RUNTIME_DIR=/run/user/1001 NIRI_SOCKET=$SOCK $N "$@"; }
+for app in gnome-text-editor nautilus gnome-system-monitor; do run msg action spawn -- $app; sleep 6; done
+run msg --json windows | python3 -c 'import json,sys; w=json.load(sys.stdin); print(len(w), [x["app_id"] for x in w])'
+```
+
+Windows do **not** survive a reboot, so **respawn the identical set on every arm** — same apps,
+same order. (The scorer's element/bake gate will catch a mismatch, but only after you have spent
+the run.)
+
+**5. Verify the arm is live BEFORE trusting it.** Two cheap checks, both of which would have
+caught the silent no-op:
+
+```bash
+sudo journalctl _COMM=niri --since '-40s' | grep -c frame_log   # hundreds, not ~0
+```
+and *look at the VM window* — workspace transitions and overview should be visibly firing. On
+this stack the human is the fastest oracle for "is anything happening at all"; ask.
+
+**6. Capture and score.** The driver prints phase boundaries; the log is the journal:
+
+```bash
+sudo journalctl _COMM=niri --since "<PHASE1-START>" -o short-precise > armA.log
+scripts/score-frame-log.py armA.log armB.log --labels A B \
+    --phases <P1> <P2> <DONE> --phases <P1> <P2> <DONE>
+```
+
+`score-frame-log.py` **refuses** phases whose element and bake counts disagree between arms —
+leave that gate alone, it is what makes any of this trustworthy (it caught two contaminated A/Bs
+and forced one retraction, §15/§16).
+
+**For a kernel A/B specifically:** install both kernels into the one clone and flip with
+`sudo grubby --set-default /boot/vmlinuz-<ver>` + reboot. Same disk, same userspace, same host
+build, one variable — far better than two images.
+
 ## What their report gives us (read 2026-07-29)
 
 Three quantified factors from one day of controlled A/Bs, all against the §19
