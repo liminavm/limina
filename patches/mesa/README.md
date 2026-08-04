@@ -19,9 +19,22 @@ in `patches/kosmickrisp/`.
 | Consumer | Base | Applies |
 |---|---|---|
 | `scripts/build-mesa-zink.sh` (guest GL/zink tree, `/opt/mesa-zink`) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`, 2026-06-07) | 0001–0006 (the zink pool) |
-| `scripts/build-venus.sh` (guest venus ICD rebuild) | tag `mesa-26.1.0` (parametric `MESA_TAG`) | 0009 + 0010 |
-| `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM) | Fedora F44 `mesa-26.1.4` SRPM (repo-current) | 0001 + 0015 + 0010–0014 + 0016 + 0017 |
-| `scripts/build-mesa-rpm.sh` (the SHIPPING F43 RPM) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`) | 0001 + 0009 + 0010 + 0014 + 0016-pre + 0016 + 0017 |
+| `scripts/build-venus.sh` (guest venus ICD rebuild) | tag `mesa-26.1.0` (parametric `MESA_TAG`) | 0009 + 0010 *(dev vehicle, not respun — see 0010 retirement below)* |
+| `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM) | Fedora F44 `mesa-26.1.4` SRPM (repo-current) | 0001 + 0015 + 0011–0014 + 0016 + 0017 *(0010 retired 2026-08-04)* |
+| `scripts/build-mesa-rpm.sh` (the SHIPPING F43 RPM) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`) | 0001 + 0009 + 0010 + 0014 + 0016-pre + 0016 + 0017 *(0010 retires at the next F43 respin — same host argument)* |
+
+**0010 RETIRED from the shipping F44 RPM (2026-08-04).** Both halves are dead against the current
+host stack: (a) vkr advertises `VK_EXT_external_memory_dma_buf` itself (virgl `f2f038a3`) so
+upstream venus's own dma-buf branch fires; (b) KosmicKrisp natively implements
+`VK_EXT_image_drm_format_modifier` (LINEAR-only) + `EXT_queue_family_foreign` and vkr passes
+modifier creates through verbatim (mesa-fork `befa0f2731e`/`d918b98d869`, virgl `0cc513fd`), so
+upstream venus's passthrough gate advertises the extension and the host answers the layout
+queries truthfully — where 0010(b) fabricated tight-packed pitches that were wrong whenever
+`width*4` missed Metal's 16-byte row alignment. An enhanced guest by definition runs against our
+host, so no compatibility window exists; a *stale-host* mix is absorbed by KK's graceful
+explicit-pitch handling (`[KK-MODIFIER]` log). Full story:
+`docs/design/drm-format-modifier-for-real.md`, `spikes/modifier-necessity/RESULTS.md`. The file
+stays in the pool for the F43 script until its respin.
 
 ### BACKLOG (2026-07-25, not a priority): repoint the F43 RPM at the F44 SRPM base
 

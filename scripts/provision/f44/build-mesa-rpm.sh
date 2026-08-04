@@ -17,7 +17,13 @@
 #         it the venus desktop never paints. 0015 fits bases >= 26.1.4, whose stable branch
 #         upstreamed 0009's vn_wsi_clone_present_info rectangle deep-copy; 0009 itself is for
 #         older bases (and 26.2.0, which branched before the backport).
-#   0010  venus image physdev native modifier — advertises EXT_image_drm_format_modifier.
+#   [0010 RETIRED 2026-08-04 — both halves are dead against the current host: (a) the renderer
+#         advertises dma-buf itself (virgl f2f038a3), so upstream's own branch fires; (b) the
+#         renderer advertises VK_EXT_image_drm_format_modifier + queue_family_foreign natively
+#         (KK LINEAR-only, mesa-fork befa0f2731e/d918b98d869 + virgl 0cc513fd), so upstream
+#         venus's passthrough gate lights up and answers TRUTHFULLY (host-computed pitches,
+#         where 0010(b) fabricated tight-packed ones). Requires that host; an enhanced guest
+#         never runs against another. See docs/design/drm-format-modifier-for-real.md.]
 #   0012  venus: degrade to the stub instance when ring/version setup fails post-connect —
 #         without it a 4 KiB-kernel boot (the stock-kernel GRUB fallback!) returns
 #         OUT_OF_HOST_MEMORY from vkCreateInstance and the loader kills lavapipe with it.
@@ -81,7 +87,6 @@ cp -f mesa.spec "$HOME/rpmbuild/SPECS/mesa.spec"
 echo "==> [2/5] add OUR venus/zink patches + bump Release"
 cp -f "$PATCHES"/0001-zink-nullDescriptor-emulation-MR37115.diff \
       "$PATCHES"/0015-venus-wsi-present-fix-post-rect-clone.diff \
-      "$PATCHES"/0010-venus-image-physdev-native-modifier.diff \
       "$PATCHES"/0011-venus-wsi-drop-16bit-unorm-swapchain.diff \
       "$PATCHES"/0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff \
       "$PATCHES"/0013-venus-pin-icd-for-tls-destructor.diff \
@@ -92,12 +97,12 @@ cp -f "$PATCHES"/0001-zink-nullDescriptor-emulation-MR37115.diff \
 SPEC="$HOME/rpmbuild/SPECS/mesa.spec"
 LAST_PATCH_LINE=$( { grep -nE "^Patch[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
 [ -n "$LAST_PATCH_LINE" ] || LAST_PATCH_LINE=$( { grep -nE "^Source[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
-ins="Patch9001: 0001-zink-nullDescriptor-emulation-MR37115.diff\nPatch9009: 0015-venus-wsi-present-fix-post-rect-clone.diff\nPatch9010: 0010-venus-image-physdev-native-modifier.diff\nPatch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff\nPatch9012: 0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff\nPatch9013: 0013-venus-pin-icd-for-tls-destructor.diff\nPatch9014: 0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff\nPatch9016: 0016-venus-ring-loss-device-lost-not-abort.diff\nPatch9017: 0017-venus-fix-ring-submit-freelist-capacity.diff"
+ins="Patch9001: 0001-zink-nullDescriptor-emulation-MR37115.diff\nPatch9009: 0015-venus-wsi-present-fix-post-rect-clone.diff\nPatch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff\nPatch9012: 0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff\nPatch9013: 0013-venus-pin-icd-for-tls-destructor.diff\nPatch9014: 0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff\nPatch9016: 0016-venus-ring-loss-device-lost-not-abort.diff\nPatch9017: 0017-venus-fix-ring-submit-freelist-capacity.diff"
 sed -i "${LAST_PATCH_LINE}a ${ins}" "$SPEC"
 # Our patches are plain `git diff` (no mailbox headers); ensure %autosetup uses GNU patch (-p1).
 sed -i -E "s/^%autosetup -S git/%autosetup -p1/" "$SPEC"
 if ! grep -qE "^%autosetup" "$SPEC"; then
-  sed -i "/^%setup/a %patch -P 9001 -p1\n%patch -P 9009 -p1\n%patch -P 9010 -p1\n%patch -P 9011 -p1" "$SPEC"
+  sed -i "/^%setup/a %patch -P 9001 -p1\n%patch -P 9009 -p1\n%patch -P 9011 -p1" "$SPEC"
 fi
 # Release: pin to a deterministic "<N>.limina" (N = LIMINA_REL, default 1) so (a) our build outranks
 # stock, and (b) bumping LIMINA_REL yields a STRICTLY NEWER NEVRA than a prior enhanced build —
@@ -139,7 +144,7 @@ for _ in 1 2 3; do
 done
 
 echo "==> [4/5] rpmbuild"
-# If %prep fails on Patch9009/9010, the venus present-fix needs rebasing onto mesa $MESA_VER —
+# If %prep fails on Patch9009, the venus present-fix needs rebasing onto mesa $MESA_VER —
 # rebase it (it is the black-screen fix) and re-run. Do NOT ship without it.
 rpmbuild -bb "$SPEC"
 

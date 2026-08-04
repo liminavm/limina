@@ -49,7 +49,7 @@ memories before anyone noticed. Verified 2026-06-27 by reading each image's rpmd
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-3.limina.fc43` *(respun 2026-07-21: -3 adds mesa 0016 ring-loss DEVICE_LOST + 0017 venus submit free-list fix [via the 0016-pre upstream free-list-scan backport — the 26.2.0 base predates it]; -2 [2026-07-19] added mesa 0014)* | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
 | **F44 stock** (`*.raw`, `*.boot.raw`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.6-2` *(respun 2026-08-04: the blob-scanout fence DROPPED — 86% of frames under async scanout, see below; respun 2026-08-03: **first fork-model kernel** — built from `liminavm/linux` branch `limina` at the rev pinned in `third_party/manifest.toml`, no patch series; co-installed beside `7.1.4`/`7.1.2-limina16k` [fallbacks] + stock `6.19.10-300`)* | 16 KiB | `26.1.4-3.limina.fc44` *(respun 2026-07-21: -3 adds mesa 0017 venus submit free-list fix [quadratic CPU creep in long-running venus apps]; -1 caught the base up to stock 26.1.4 [venus fix as patch 0015]; -2 added mesa 0016 ring-loss DEVICE_LOST hardening)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
+| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.6-2` *(respun 2026-08-04: the blob-scanout fence DROPPED — 86% of frames under async scanout, see below; respun 2026-08-03: **first fork-model kernel** — built from `liminavm/linux` branch `limina` at the rev pinned in `third_party/manifest.toml`, no patch series; co-installed beside `7.1.4`/`7.1.2-limina16k` [fallbacks] + stock `6.19.10-300`)* | 16 KiB | `26.1.5-6.limina.fc44` *(respun 2026-08-04: base caught up to stock 26.1.5; **mesa 0010 DELETED** — the host advertises `VK_EXT_image_drm_format_modifier` for real now [KK LINEAR-only + vkr verbatim passthrough], guest rides upstream venus's own passthrough with truthful host pitches; **0015 slimmed** — its `vn_wsi_create_image` DRM_MOD→OPTIMAL rewrite SIGSEGVed WSI once 0010's fabricated query stopped masking it [firefox, `spikes/modifier-necessity/RESULTS.md`]; prior: -3 2026-07-21 added 0017)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
 | **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools; r3 install pass 2026-07-23, agent refresh 2026-08-01)* | `limina-kernel-16k-7.1.5` *(7.0.13/7.1.2/7.1.4 kept as fallbacks; NO stock `kernel-core` installed)* | 16 KiB | `26.1.4-3.limina.fc44` *(current: -2 adds 0016 ring-loss hardening, -3 adds 0017 submit-freelist fix; versionlock re-armed; running session picks the new mesa up at next login)* | **stock** `50.3-3.fc44` *(since 2026-07-11: distro update displaced the patched build; clipboard rides the clipboard@limina extension at `/usr/share/gnome-shell/extensions` — bridge backend confirmed up 2026-08-01)* | `50.3` *(stock)* |
 
 Notes: enhanced **mesa + kernel** are pinned to *our* version and `dnf versionlock`ed; enhanced
@@ -59,6 +59,15 @@ Shell of that release (same `libmutter-NN` ABI) — F43 `49.6` over shell `49.1`
 regression" / `kk_encoder.c:299` block did NOT reproduce on the clean stack — F44 16k+venus+mutter-50.1
 boots the seated desktop and runs WebGL at ~60fps on venus→KK→Metal (see `limina-enh-delivery` memory).
 The enhanced 16 KiB kernel ships as RPM `limina-kernel-16k` (BLS entry beside stock).
+**Current shippable tarball (2026-08-04):**
+`target/guest-tools-7.1.6-mesa2615r6/limina-guest-tools-f44.tar.zst` (kernel 7.1.6-2 +
+mesa 26.1.5-6.limina; both F44 enhanced images took its `install-enhanced.sh` pass).
+NOTE the host prerequisite: the 0010-less guest needs a host with KK ≥ `b778250986b`
+(modifier ext + graceful query) and virglrenderer ≥ `0cc513fd` (verbatim passthrough) —
+the revs pinned in `third_party/manifest.toml`. **Update the host app before (or with) the
+guest mesa**: on an older host the guest sees no modifier ext, and without 0010's fabricated
+table the WSI takes the prime-blit fallback — NOT validated, and plausibly the very
+zero-copy breakage 0010(b) existed to avoid. Deploy host-first.
 
 **Mutter left the delivery (2026-07-11).** The guest support package no longer ships a patched
 mutter: the GNOME clipboard tier is now the `clipboard@limina` gnome-shell extension

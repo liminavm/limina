@@ -583,3 +583,44 @@ probe re-run green with the graceful semantics (bogus pitch tolerated, true pitc
 The vkmark scores taken during axis 2 (318 / 298 / 230) ran while a kernel build had all eight
 cores of another guest. They are evidence that venus *works*, not perf data, and must not be
 compared to each other or to the ledger.
+
+## Delivery validation crash (2026-08-04, task #4): two latent bugs the truthful path exposed
+
+The first `enhanced.raw` refresh with the 0010-less guest (mesa 26.1.5-5.limina) seated a
+pixel-correct desktop — and then **starting firefox killed the whole VMM**:
+
+```
+[LIMINA-VKR-HT] export handleTypes=0x200 (DMA_BUF )
+Assertion failed: (image->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT),
+  function vk_common_GetImageDrmFormatModifierPropertiesEXT, vk_image.c:190
+```
+
+(The DMA_BUF handle type is itself the good news: upstream venus's own export branch fired,
+0010(a) confirmed dead code.)
+
+**Bug 1 — host: an assert reachable by guest input.** Guest zink queries
+`vkGetImageDrmFormatModifierPropertiesEXT` on images that were never modifier-created (an
+upstream valid-usage looseness every release-built Linux driver silently tolerates — the
+entrypoint just returns `image->drm_format_mod`). KK's assert-enabled devenv build aborted
+instead, taking the VMM with it. Fixed on `limina-kk` (b778250986b): the common entrypoint now
+returns the field with a loud `[KK-MODIFIER] ... non-modifier image` stderr diagnostic instead of
+asserting. A guest VU slip must degrade, never kill the host. The diagnostic immediately
+identified the caller: firefox's **1×1 BGRA LINEAR WSI test surface** (`tiling=1 format=44
+extent=1x1`).
+
+**Bug 2 — guest: mesa 0015's DRM_MOD→OPTIMAL WSI rewrite, obsolete by its own comment.**
+`vn_wsi_create_image` rewrote modifier-tiled swapchain creates to OPTIMAL because "the renderer
+doesn't speak VK_EXT_image_drm_format_modifier ... which then trips wsi_create_native_image_mem".
+That premise died when KK grew the extension — and the hunk became the crash it once prevented:
+wsi_common still walks the modifier path (`supports_modifiers=true`), but the OPTIMAL-rewritten
+image makes the now-REAL host query return `DRM_FORMAT_MOD_INVALID` (nothing stamped), and
+`wsi_create_native_image_mem` SIGSEGVs dereferencing plane info for a modifier it never
+negotiated. In the 0010(b) era the guest's *fabricated local* query answered LINEAR and masked
+the mismatch — deleting 0010 unmasked it. Fix: the rewrite hunk is REMOVED from 0015 (guest RPM
+respun as 26.1.5-6.limina); swapchain images keep DRM_FORMAT_MODIFIER tiling end-to-end and ride
+vkr's verbatim native path. `treat_invalid_modifier_as_linear` and `block_16f` stay (their own
+measurement arms later; the residual-0015 section above).
+
+Lesson, again: **the masked path is the one that breaks.** 0010(b) didn't just fabricate an
+extension table — it locally answered queries the host was never asked, and every consumer of
+those answers was untested against the real host until the fabrication died.
