@@ -1,7 +1,16 @@
 # virglrenderer — patch-audit ledger
 
-58 patches; `UPSTREAM_BASE` `2048dfb7f355`. Schema + protocol: `README.md`.
+60 commits; base `2048dfb7f355`. Schema + protocol: `README.md`.
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
+
+> **Fork model since 2026-08-04.** There is no `patches/virglrenderer/` any more — our delta is the
+> commits on the `limina` branch of `github.com/liminavm/virglrenderer`, pinned by
+> `third_party/manifest.toml`. Read a "patch" here as "the commit with this subject". The branch is
+> rewritten as patches merge upstream or get dropped, so **tag before every rewrite** — every rev
+> ever pinned in the manifest must stay reachable. Two commits joined at migration and are not yet
+> audited: *"vkr: advertise VK_EXT_external_memory_dma_buf alongside the injected fd extension"*
+> (supersedes mesa 0010(a); upstream-now candidate) and *"vkr: back KK scanout images with the
+> IOSurface's MTLTexture (both ends)"* (gated off by default, needs KK's MTLTEXTURE handle type).
 
 | ord | subject | files | diag | need | checked | issue | mr | sec | fold | tier | disp | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|

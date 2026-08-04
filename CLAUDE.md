@@ -45,15 +45,19 @@ right tool — not treat upstream as immutable:
   fixed-capacity virtio-blk device across a reboot — see `spikes/m10-disk-durability/`), plus a
   vm-memory pin to the stack's ^0.17. To change imago: commit on the fork's `limina` branch, push,
   update the manifest rev. Audit status: `docs/upstreaming/ledger/imago.md`.
-- **virglrenderer** — vendored under `third_party/virglrenderer` (gitignored), built from source
-  into `third_party/virgl-prefix` (the worker links it; see `limina-virgl-link-trap`), carried as a
-  `git format-patch` series under `patches/virglrenderer/` (with `UPSTREAM_BASE`); apply with
-  `scripts/apply-virgl-patches.sh`. It's the host renderer for **both** accelerated tiers — venus
+- **virglrenderer** — **fork model** (migrated 2026-08-04): `third_party/virglrenderer` is a clone of
+  `github.com/liminavm/virglrenderer` (`limina` branch; upstream is
+  `gitlab.freedesktop.org/virgl/virglrenderer`), pinned by `third_party/manifest.toml`. **The branch
+  IS the delta — there is no `patches/virglrenderer/` any more**, and `scripts/apply-virgl-patches.sh`
+  is gone. Built from source into `third_party/virgl-prefix` (the worker links it; see
+  `limina-virgl-link-trap`). It's the host renderer for **both** accelerated tiers — venus
   (Vulkan→KosmicKrisp) and vrend (GL via zink-on-KK) — and carries our whole macOS/venus enablement,
   zero-copy IOSurface scanout, the snapshot/restore journal, and vrend/vkr fixes. To change it:
-  edit the checkout, commit on the
-  `gkvm/*` branch, re-export the series (see `patches/virglrenderer/README.md`). **rutabaga** — the
-  Apple blob `get_map_ptr` delta lives in libkrun's rutabaga against upstream's resource_map API.
+  commit on the fork's `limina` branch, push, update the manifest rev. The branch is **rewritten** as
+  patches merge upstream or get dropped, so **tag before every rewrite** — every rev ever pinned in
+  the manifest must stay reachable. Audit status: `docs/upstreaming/ledger/virglrenderer.md`.
+  **rutabaga** — the Apple blob `get_map_ptr` delta lives in libkrun's rutabaga against upstream's
+  resource_map API.
 - **The guest Linux kernel** — **fork model**: `github.com/liminavm/linux` (a fork of
   `gregkh/linux`, the stable-tree mirror — stable point releases don't exist in `torvalds/linux`),
   branch `limina`, pinned by `third_party/manifest.toml`. Our changes ARE the commits on that

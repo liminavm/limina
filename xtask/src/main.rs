@@ -9,10 +9,10 @@
 //!
 //! Bootstrap / build loop:
 //!   `setup`  — one-command fresh-clone bootstrap: `vendor` + enable the git hooks.
-//!   `vendor` — materialize the gitignored `third_party/` source trees: fork-model deps (imago,
-//!              linux) clone from github.com/liminavm at the rev pinned in
-//!              `third_party/manifest.toml`; the rest (libkrun + virglrenderer) still come from
-//!              the committed patch series. `heavy = true` deps (the kernel) are skipped unless
+//!   `vendor` — materialize the gitignored `third_party/` source trees: fork-model deps
+//!              (virglrenderer, imago, linux) clone from github.com/liminavm at the rev pinned in
+//!              `third_party/manifest.toml`; the rest (libkrun) still comes from its committed
+//!              patch series. `heavy = true` deps (the kernel) are skipped unless
 //!              `--heavy` — nothing on this host builds them. Run it first.
 //!   `build`  — build `limina` + `limina-vmm`, verify the worker links our virglrenderer (the
 //!              venus link trap), and codesign the worker (hypervisor entitlement). The inner-loop
@@ -184,11 +184,6 @@ fn profile_name(release: bool) -> &'static str {
 /// it to `patches/libkrun/UPSTREAM_BASE` and applies our series.
 const LIBKRUN_GIT: &str = "https://github.com/containers/libkrun.git";
 
-/// virglrenderer upstream — cloned into `third_party/virglrenderer` when absent; the apply script
-/// then resets it to `patches/virglrenderer/UPSTREAM_BASE` and applies our series. Built separately
-/// into `third_party/virgl-prefix` by `scripts/build-virglrenderer.sh` (the worker links it).
-const VIRGL_GIT: &str = "https://gitlab.freedesktop.org/virgl/virglrenderer.git";
-
 /// One-command fresh-clone bootstrap: vendor `third_party/`, then point git at the in-repo hooks.
 fn setup() -> Result<()> {
     vendor(false)?;
@@ -225,17 +220,11 @@ fn vendor(heavy: bool) -> Result<()> {
 
     // virglrenderer: a from-source git checkout built into third_party/virgl-prefix (the worker
     // links it — see the limina-virgl-link-trap memory). Clone if absent, then apply our series.
-    let virgl = repo.join("third_party/virglrenderer");
-    if !virgl.join(".git").exists() {
-        eprintln!("==> cloning virglrenderer ({VIRGL_GIT}) — third_party/virglrenderer is absent");
-        run(Command::new("git").current_dir(&repo).args([
-            "clone",
-            VIRGL_GIT,
-            "third_party/virglrenderer",
-        ]))?;
-    }
-    eprintln!("==> applying the virglrenderer patch series");
-    bash_script(&repo, "scripts/apply-virgl-patches.sh", &[] as &[&str])?;
+    // virglrenderer: the host renderer for both accelerated tiers. Fork model since 2026-08-04 —
+    // the `limina` branch IS the delta (60 commits at migration), so there is no patch series to
+    // apply. Built separately into `third_party/virgl-prefix` by `scripts/build-virglrenderer.sh`
+    // (the worker links it — see the virgl-link trap in CLAUDE.md).
+    vendor_fork(&repo, "virglrenderer")?;
 
     // imago: the fork-model pilot ([patch.crates-io] path override; the tree is a clone of our
     // fork pinned by third_party/manifest.toml — no patch series, the `limina` branch IS the delta).

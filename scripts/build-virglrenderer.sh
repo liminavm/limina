@@ -8,9 +8,10 @@
 # `0.10.4e-krunkit` bottle whose vkr only knows VK_KHR_maintenance1..4 and caps the guest at
 # Vulkan 1.2 — too old for zink (which needs maintenance5). Upstream 1.3.0's vkr knows
 # maintenance1..9. This script builds whatever is checked out under third_party/virglrenderer:
-# our macOS/venus enablement + zero-copy IOSurface scanout + the vrend/vkr fixes live as a
-# git format-patch series in patches/virglrenderer/ (apply with scripts/apply-virgl-patches.sh,
-# which `cargo xtask vendor` runs on a fresh clone). See memory limina-tier2-venus / docs/roadmap M4.
+# our macOS/venus enablement + zero-copy IOSurface scanout + the vrend/vkr fixes are the commits on
+# the `limina` branch of github.com/liminavm/virglrenderer, pinned in third_party/manifest.toml and
+# checked out by `cargo xtask vendor` (fork model since 2026-08-04 — there is no patch series to
+# apply any more). See memory limina-tier2-venus / docs/roadmap M4.
 #
 # Output: a prefix at third_party/virgl-prefix whose virglrenderer.pc goes first on
 # PKG_CONFIG_PATH when building limina-vmm (rutabaga_gfx/build.rs probes `virglrenderer`).
