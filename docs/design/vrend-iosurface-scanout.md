@@ -1,13 +1,18 @@
 # vrend zero-copy scanout: IOSurface-backed presents for the stock (virgl) tier
 
-Status: **B + A1 SHIPPED 2026-07-28** (same day as the design): virglrenderer 0053 +
-libkrun 0115 + kosmickrisp 0014. Verified live on stock F44: session presents fully
-zero-copy (readback `FLUSH2` stops at GDM and never returns, 0 sync failures through a
-driven overview animation), colors + smoothness human-confirmed, full HVF suite green
-(40/40 — venus untouched). Remaining (open): fence-accurate present for vrend (today the
-sync blit ends in `glFinish` — correct but unpaced; `try_park_present` needs a vrend
-fence keying since non-blob resources have `ctx_id == 0`), and the A2/C escalations
-below if the 0.65 ms blit ever matters.
+Status: **C SHIPPED 2026-08-04** (virgl fork `d042ed65`): the scanout texture's storage
+IS the display IOSurface, via the `EGL_IOSURFACE_LIMINA` → zink → KK metal-handle chain
+built for the venus-blob import half (`spikes/vrend-iosurface/RESULTS.md`). vrend renders
+straight into the surface; the sync call is only a completion barrier. **A1 (below) is
+now the fallback** when the EGLImage is refused, and the CPU readback tier below that
+stays. Verified live: fbcon/GDM/session 2560×1440 B8G8R8X8 all EGL-backed, zero blits,
+colors human-confirmed; the GLES transfer-upload and GPU-write contracts are probe-proven
+(render-into + texsubimage arms of `eglimport-probe.c`).
+Earlier: **B + A1 SHIPPED 2026-07-28** (virglrenderer 0053 + libkrun 0115 + kosmickrisp
+0014), verified on stock F44 (readback `FLUSH2` stops at GDM, 0 sync failures, suite
+40/40). Remaining (open): fence-accurate present for vrend (the sync ends in `glFinish` —
+correct but unpaced; `try_park_present` needs a vrend fence keying since non-blob
+resources have `ctx_id == 0`).
 
 Original goal: virgl presents were readback-per-frame + CPU convert; venus got zero-copy
 (`tier2-iosurface-zerocopy-present.md`) and vrend was left on the fallback. The two-tier
