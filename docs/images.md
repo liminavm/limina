@@ -49,7 +49,7 @@ memories before anyone noticed. Verified 2026-06-27 by reading each image's rpmd
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.2.0-3.limina.fc43` *(respun 2026-07-21: -3 adds mesa 0016 ring-loss DEVICE_LOST + 0017 venus submit free-list fix [via the 0016-pre upstream free-list-scan backport — the 26.2.0 base predates it]; -2 [2026-07-19] added mesa 0014)* | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
 | **F44 stock** (`*.raw`, `*.boot.raw`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.4` *(respun 2026-07-20: latest stable + linux 0005 balloon-suspend fix; co-installed beside `7.1.2-limina16k` [fallback] + stock `6.19.10-300`)* | 16 KiB | `26.1.4-3.limina.fc44` *(respun 2026-07-21: -3 adds mesa 0017 venus submit free-list fix [quadratic CPU creep in long-running venus apps]; -1 caught the base up to stock 26.1.4 [venus fix as patch 0015]; -2 added mesa 0016 ring-loss DEVICE_LOST hardening)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
+| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.6` *(respun 2026-08-04: **first fork-model kernel** — built from `liminavm/linux` branch `limina` at the rev pinned in `third_party/manifest.toml`, no patch series; co-installed beside `7.1.4`/`7.1.2-limina16k` [fallbacks] + stock `6.19.10-300`)* | 16 KiB | `26.1.4-3.limina.fc44` *(respun 2026-07-21: -3 adds mesa 0017 venus submit free-list fix [quadratic CPU creep in long-running venus apps]; -1 caught the base up to stock 26.1.4 [venus fix as patch 0015]; -2 added mesa 0016 ring-loss DEVICE_LOST hardening)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
 | **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools; r3 install pass 2026-07-23, agent refresh 2026-08-01)* | `limina-kernel-16k-7.1.5` *(7.0.13/7.1.2/7.1.4 kept as fallbacks; NO stock `kernel-core` installed)* | 16 KiB | `26.1.4-3.limina.fc44` *(current: -2 adds 0016 ring-loss hardening, -3 adds 0017 submit-freelist fix; versionlock re-armed; running session picks the new mesa up at next login)* | **stock** `50.3-3.fc44` *(since 2026-07-11: distro update displaced the patched build; clipboard rides the clipboard@limina extension at `/usr/share/gnome-shell/extensions` — bridge backend confirmed up 2026-08-01)* | `50.3` *(stock)* |
 
 Notes: enhanced **mesa + kernel** are pinned to *our* version and `dnf versionlock`ed; enhanced
@@ -81,6 +81,27 @@ GOTCHA found while validating: the accessible-derived images have gsettings
 ALL user extensions — on such guests the helper stamps its one-time enable, parks ~20 s, then rides
 the RemoteDesktop tier. Consider `gsettings set org.gnome.shell disable-user-extensions false` in
 `make-accessible.sh` at the next image respin.
+
+**F44 kernel 7.1.6 respin — the first FORK-MODEL kernel (2026-08-04)** — `limina-kernel-16k-7.1.4-1`
+→ **`7.1.6-1.fc44`** (KREL `7.1.6-limina16k`). Source is no longer "a stable tag + `patches/linux/`":
+it is **`liminavm/linux`** branch **`limina`** (a fork of `gregkh/linux` — the stable mirror, since
+`torvalds/linux` has no point-release tags), base `v7.1.6`, at the rev pinned in
+`third_party/manifest.toml`. `build-kernel-rpm.sh` fetches that exact rev and has **no patch stage
+at all**. Kernel delta (4 commits): the `mm/page_reporting` freezable-workqueue backport (upstream
+`0b45f69` — verified NOT yet in v7.1.6, so still carried, replacing our old driver-side 0005); the
+blob-scanout `RESOURCE_FLUSH` fence, **rewritten** against the `vgplane_st` prepare_fb refactor
+(the old patch had silently stopped applying at the 7.1.x bump — this is the first shipped kernel
+that actually has it); widened primary-plane formats (ARGB/XBGR/ABGR, 0002+0006 folded); the
+LINEAR modifier advertisement. The 16 KiB host-visible alignment patch **left the kernel** (no-op
+at 16k pages) and now lives in `guest/virtio-gpu-dkms/` for the stock-4k tier only. Payload =
+`target/guest-tools-7.1.6/limina-guest-tools-f44.tar.zst` (mesa/agent/extension unchanged from
+`mesa2614r3`, hardlinked; kernel-source reference regenerated around the fork pin). Both
+`enhanced.raw` and `enhanced.test.raw` took an `install-enhanced.sh` pass — one-shot trial boot,
+16384-byte pages, auto-promoted to default, 7.1.4/7.1.2 kept as fallbacks. **Runtime-verified on
+the new kernel** (the check that would have caught the silent skip): the primary plane now
+advertises `XRGB8888/ARGB8888/XBGR8888/ABGR8888` and carries an `IN_FORMATS` blob with
+`DRM_FORMAT_MOD_LINEAR` — neither exists without our commits. Pre-respin snapshots kept as
+`*.pre716.bak`. NOT on dogfood-guest (user's call).
 
 **`VN_PERF=no_fence_feedback` RETIRED from the guest env — ALL FOUR enhanced images (2026-07-25)**
 — the flag was a MoltenVK-era workaround for the 16 KiB `hv_vm_map` blob-coherency bug
@@ -213,7 +234,10 @@ s2idle UAF the host masks with libkrun 0059; the guest-side prerequisite for re-
 `--balloon-free-page-reporting` across suspend/resume). Built in the F44 build guest
 (`f44-kbuild.raw`, stable.git `v7.1.4` + the validated 7.0.13 Fedora config base);
 `build-kernel-rpm.sh` now applies 0005 **fail-loud** (not upstream — a silent skip would ship the
-UAF back). 0001 skipped as already upstream in 7.1.4; 0002–0004 applied. Payload =
+UAF back). 0001 skipped as already upstream in 7.1.4; 0002–0004 applied. *(**Correction,
+2026-08-04:** "0001 skipped as already upstream" was WRONG — it stopped applying because of an
+upstream refactor, and its delta was never upstream, so every kernel from 7.1.2 through 7.1.5
+shipped blob scanout unfenced. Fixed by the rewrite in the 7.1.6 respin above.)* Payload =
 `target/guest-tools-7.1.4/limina-guest-tools-f44.tar.zst` (mesa/agent/extension unchanged from
 2026-07-19; kernel-source reference regenerated). `enhanced.raw` took the installer pass (kernel
 co-installed beside 7.1.2, one-shot trial boot → 16384-byte pages, auto-promoted to default, venus
