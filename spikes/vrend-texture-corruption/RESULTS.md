@@ -165,3 +165,59 @@ localized to that path or to vrend at all.
    one-line `getenv` gives a free A/B of the whole zero-copy scanout).
 3. Only then chase a mechanism — and only then decide whether plan C for vrend is a fix or merely an
    improvement.
+
+## ROOT-CAUSED AND FIXED (2026-08-04, second pass): the trigger is a venus client under a virgl compositor
+
+Picked back up when the "drop guest zink, GL=vrend" proposal made the poison the gating bug.
+The stock tier turned out to be the wrong repro vehicle but the right control, and the real
+trigger fell out of source reading plus one 20-second experiment.
+
+**The emitter, from source.** `virgl_resource_from_handle` (guest mesa,
+`src/gallium/drivers/virgl/virgl_resource.c`) emits `PIPE_RESOURCE_SET_TYPE` when it imports a
+dmabuf whose backing is a **blob resource** ("assign blob resource a type in case it was created
+untyped"), gated on the host advertising UNTYPED_RESOURCE. Same-driver buffers are typed at
+create; the untyped-import case is **cross-driver sharing** — in limina terms: **gnome-shell on
+the virgl driver compositing a venus client's wayland buffer**. That resolves the original
+incident's intermittency: the poisoning A/B session had glmark2-**zink** (a venus client) running
+under the virgl compositor; every pure arm stayed clean.
+
+**Why it poisons, host-side chain (all confirmed in source):**
+1. decode passes (`[LIMINA-SETTYPE]` probe never fired);
+2. `vrend_renderer_pipe_resource_set_type` requires `res->fd_type == VIRGL_RESOURCE_FD_DMABUF` —
+   macOS venus blobs are SHM/OPAQUE (observed: fd_type 2), so it returns EINVAL **silently**;
+3. the dispatcher maps any dispatch error to `vrend_report_buffer_error` →
+   `ctx->in_error = true` — **permanent**, no reset path;
+4. `vrend_hw_switch_context` refuses in_error contexts → every later SUBMIT_3D returns EINVAL →
+   guest `virtio_gpu_dequeue_ctrl_func` 0x1200 spam, desktop rots.
+Note the dispatcher advances by each command's own header length, so framing is never lost on a
+dispatch failure — the permanent poison was policy, not necessity.
+
+**Deterministic repro (20 s).** `vrend-arm.raw` (compositor on virgl via
+`/etc/environment.d/90-limina-zink.conf` → `GALLIUM_DRIVER=virgl` + venus Vulkan ICD), then:
+`vkcube --wsi wayland` in the seat. Before the fix: `failed to dispatch
+PIPE_RESOURCE_SET_TYPE: 22` + `context error reported 2 "gnome-shell"`, dequeue errors 10→54 and
+climbing. The benign gst-plugin-scan CREATE_VIDEO_BUFFER case at boot is the SAME mechanism with
+a throwaway victim — same bullet, disposable target.
+
+**Stock-tier control (stockprobe.raw, clone of F44 accessible).** Boots clean on stock
+kernel/mesa (6.19.10/26.0.3), desktop + firefox fine, health gate green, 10 boot-benign errors
+only. Pure-stock **cannot** trigger the poison: venus doesn't come up on a truly stock guest
+(`vkCreateInstance → ERROR_OUT_OF_HOST_MEMORY`, the ring-setup class — the stock-4k venus
+enabler lives in guest/virtio-gpu-dkms, not delivered), so no venus client can exist. Two-tier
+floor re-validated in passing.
+
+**The fix (virgl `5fdb3bba`, manifest bumped).** Layer 1, policy: an untypeable blob is typed as
+a plain **placeholder texture** (one-time loud warn) instead of EINVAL — every later reference
+stays valid GL, the context lives, only that buffer's contents are wrong (black). Skipping
+without typing would NOT survive: the compositor's next sampler-view bind on the untyped
+resource poisons via ILLEGAL_RESOURCE instead. GREEN: same repro, dequeue 10→10, health gate
+passes, desktop human-confirmed live and responsive.
+
+**What remains — layer 2, and it gates the drop-zink proposal.** The placeholder means a Vulkan
+client's window composites BLACK under a virgl compositor. Fine as crash-hardening; not a
+shippable config. Making GL=vrend the primary tier requires vrend to actually import the venus
+blob's pixels: the exporter's IOSurface (vkr already tracks it per resource) needs to become a
+host-GL texture in vrend's zink-on-KK context — candidate routes: a zink/KK IOSurface external
+image path (KK's MTLTEXTURE handle work from 2026-08-04 is most of the Vulkan half), a
+GL_EXT_memory_object_fd route via the SHM fd, or vrend-side IOSurface byte-sync as a stopgap.
+Separately, CREATE_VIDEO_BUFFER could get the same graceful treatment someday (benign today).
