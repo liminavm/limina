@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 // Copyright © 2026 Gustavo Noronha Silva
 
-//! L2 guard: a guest empty-VkClearRect must not abort the host worker/VMM.
+//! L2 guard: a guest degenerate-VkClearRect must not abort the host worker/VMM.
 //!
-//! A guest `vkCmdClearAttachments` with a zero-extent `VkClearRect`
-//! (`rect.extent = {0,0}`, invalid usage per
-//! VUID-vkCmdClearAttachments-rect-02682/-02683 but guest-controlled) flows
+//! A guest `vkCmdClearAttachments` with a degenerate `VkClearRect` — zero
+//! extent (`{0,0}`), a NEGATIVE offset (`{-8,-8}`, wraps to an inverted u32
+//! rect in the host driver: the 2026-08-04 dogfood-mac crash), or an offset+extent
+//! overflowing i32 — is invalid usage per
+//! VUID-vkCmdClearAttachments-rect-02682/-02683 but guest-controlled. It flows
 //! guest-mesa-venus (encode, no validation) → host virglrenderer vkr (decode) →
 //! KosmicKrisp, which replays it at `vkQueueSubmit` into
 //! `vk_meta_clear_attachments` → `setup_viewport_scissor`, whose
-//! `assert(x0 < x1 && y0 < y1)` aborts the whole worker process — a
-//! guest-triggerable host DoS (the whole VM dies).
+//! `assert(x0 < x1 && y0 < y1)` (or the log2-range asserts) aborts the whole
+//! worker process — a guest-triggerable host DoS (the whole VM dies).
 //!
-//! Two independent host fixes close it: vkr drops the degenerate rect at the
-//! trust boundary (virglrenderer patch 0045), and KK's `vk_meta_clear` skips
-//! empty rects as a backstop (kosmickrisp patch 0009). This guard drives the
+//! Two independent host fixes close it: vkr drops the degenerate rects at the
+//! trust boundary (virgl fork, `vkr_dispatch_vkCmdClearAttachments`), and KK's
+//! `vk_meta_clear` skips them as a backstop. This guard drives the
 //! **real stack** end to end: `guest/vkclearrect.py` (pure python3 + ctypes over
 //! the guest's venus ICD — nothing to install/compile on the guest) issues the
 //! poisoned clear and submits.

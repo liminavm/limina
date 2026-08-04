@@ -14,8 +14,11 @@ worker/VMM process (a guest-triggerable host DoS).
 
 This vehicle reproduces exactly that from inside the guest, over the guest's
 venus ICD: a 64x64 color-attachment render pass, then ONE vkCmdClearAttachments
-with a VALID sub-rect {8,8 16x16} + an EMPTY rect {0,0 0x0} (the poison), then
-submit + wait. It clears no real work otherwise.
+with a VALID sub-rect {8,8 16x16} + three poisons — an EMPTY rect {0,0 0x0}, a
+NEGATIVE-offset rect {-8,-8 16x16} (signed offset wraps to an inverted u32 rect;
+the 2026-08-04 dogfood-mac crash class), and a HUGE rect {8,8 0xFFFF0000x16}
+(offset+extent overflows i32) — then submit + wait. It clears no real work
+otherwise.
 
 Oracle is host-side (crates/limina-test/tests/venus.rs):
   RED  (unfixed host stack): the worker dies with signal 6 during the submit.
@@ -464,16 +467,24 @@ def run_clear(vk, dev):
     rbi.pClearValues = vp(clearv)
     vk.vkCmdBeginRenderPass(cmd, C.byref(rbi), 0)  # CONTENTS_INLINE
 
-    # THE POISON: one valid rect + one empty rect in the same clear call.
+    # THE POISON: one valid rect + three degenerate rects in the same clear call.
+    #   empty    {0,0 0x0}: the original zero-extent class (virgl 0045 / kk 0009).
+    #   negative {-8,-8 16x16}: nonzero extent so it passes the zero-extent
+    #     filters, but the signed offset wraps in the host driver's u32 rect math
+    #     into an inverted rect (the 2026-08-04 dogfood-mac crash class).
+    #   huge     {8,8 0xFFFF0000x16}: offset+width overflows i32; trips the
+    #     viewport-union log2-range asserts instead.
     clear_att = ClearAttachment()
     clear_att.aspectMask = COLOR
     clear_att.colorAttachment = 0
     clear_att.clearValue.color.float32[:] = [1.0, 0.0, 0.0, 1.0]  # red
-    rects = (ClearRect * 2)(
-        ClearRect(Rect2D(Offset2D(8, 8), Extent2D(16, 16)), 0, 1),  # valid
-        ClearRect(Rect2D(Offset2D(0, 0), Extent2D(0, 0)), 0, 1),    # empty
+    rects = (ClearRect * 4)(
+        ClearRect(Rect2D(Offset2D(8, 8), Extent2D(16, 16)), 0, 1),      # valid
+        ClearRect(Rect2D(Offset2D(0, 0), Extent2D(0, 0)), 0, 1),        # empty
+        ClearRect(Rect2D(Offset2D(-8, -8), Extent2D(16, 16)), 0, 1),    # negative
+        ClearRect(Rect2D(Offset2D(8, 8), Extent2D(0xFFFF0000, 16)), 0, 1),  # huge
     )
-    vk.vkCmdClearAttachments(cmd, 1, C.byref(clear_att), 2, rects)
+    vk.vkCmdClearAttachments(cmd, 1, C.byref(clear_att), 4, rects)
 
     vk.vkCmdEndRenderPass(cmd)
     r = vk.vkEndCommandBuffer(cmd)

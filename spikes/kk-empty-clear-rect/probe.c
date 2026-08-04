@@ -255,20 +255,32 @@ main(void)
    };
    vkCmdBeginRendering(cmd, &ri);
 
-   /* THE POISON: one valid rect + one empty rect in the same clear call. */
+   /* THE POISON: one valid rect + three degenerate rects in the same clear call.
+    *  - rect[1] EMPTY {0,0 0x0}: the original zero-extent class (kk 0009).
+    *  - rect[2] NEGATIVE offset {-8,-8 16x16}: nonzero extent, so it passes the
+    *    zero-extent filter, but offset.x is signed i32 and vk_meta_rect.x0/x1 are
+    *    u32 — the conversion wraps to x1 < x0 (the 2026-08-04 dogfood-mac crash class,
+    *    vk_meta_draw_rects.c:163/:167).
+    *  - rect[3] HUGE extent {8,8 0xFFFF0000x16}: offset+width stays < 2^32 so the
+    *    x0 < x1 assert passes, then the union log2 blows the :183 xmax_log2 <= 31
+    *    range assert.
+    */
    VkClearAttachment clear_att = {
       .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
       .colorAttachment = 0,
       .clearValue = {.color = {.float32 = {1, 0, 0, 1}}}, /* red */
    };
-   VkClearRect rects[2] = {
+   VkClearRect rects[4] = {
       {.rect = {{RX, RY}, {RW, RH}}, .baseArrayLayer = 0, .layerCount = 1},
-      {.rect = {{0, 0}, {0, 0}}, .baseArrayLayer = 0, .layerCount = 1}, /* empty */
+      {.rect = {{0, 0}, {0, 0}}, .baseArrayLayer = 0, .layerCount = 1},     /* empty */
+      {.rect = {{-8, -8}, {16, 16}}, .baseArrayLayer = 0, .layerCount = 1}, /* inverted */
+      {.rect = {{8, 8}, {0xFFFF0000u, 16}}, .baseArrayLayer = 0, .layerCount = 1}, /* huge */
    };
-   printf("issuing vkCmdClearAttachments: valid rect {%u,%u %ux%u} + EMPTY rect {0,0 0x0}\n",
+   printf("issuing vkCmdClearAttachments: valid rect {%u,%u %ux%u} + EMPTY {0,0 0x0} "
+          "+ NEGATIVE {-8,-8 16x16} + HUGE {8,8 0xFFFF0000x16}\n",
           RX, RY, RW, RH);
    fflush(stdout);
-   vkCmdClearAttachments(cmd, 1, &clear_att, 2, rects);
+   vkCmdClearAttachments(cmd, 1, &clear_att, 4, rects);
 
    vkCmdEndRendering(cmd);
 

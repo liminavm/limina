@@ -79,7 +79,13 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
 
 Two classes already landed as targeted fixes: the empty-clear-rect vk_meta assert
 (kk 0009 + virgl 0045) and the render-pass-begin VU asserts, log-only per the user's call
-(kk 0019, `spikes/kk-format-mismatch-abort/`). Remaining:
+(kk 0019, `spikes/kk-format-mismatch-abort/`). A THIRD instance of the clear-rect class hit
+dogfood-mac 2026-08-04 (a compositor rect with a NEGATIVE offset wrapped past both shipped filters
+into an inverted u32 rect → `vk_meta_draw_rects.c:163` assert) — **fixed 2026-08-04**: the
+i64-math offset/overflow checks now live in both `vk_meta_clear_rect_is_empty` (mesa
+`limina-kk` f7145c1263c) and the vkr sanitize (virgl `limina` 14c22c40); probe + L2 guard
+extended (`spikes/kk-empty-clear-rect/`, `vkclearrect.py` — valid + empty + negative + huge
+rects). Remaining:
 
 - **Clamp (don't just log) the pass-vs-framebuffer attachment COUNT asserts** in
   `vk_render_pass.c` `begin_render_pass` (`attach_begin->attachmentCount ==

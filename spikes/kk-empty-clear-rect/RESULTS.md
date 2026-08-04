@@ -1,4 +1,25 @@
-# kk-empty-clear-rect — guest-triggerable host VMM abort via empty VkClearRect
+# kk-empty-clear-rect — guest-triggerable host VMM abort via degenerate VkClearRect
+
+> **2026-08-04 update — the INVERTED/OVERFLOW rect class (3rd incident).** A rect with a
+> **negative offset** (`{-8,-8 16x16}`) or an **i32-overflowing extent** (`{8,8 0xFFFF0000x16}`)
+> has a *nonzero* extent, so it passed BOTH shipped filters (virgl 0045 + kk 0009) — the signed
+> `VkClearRect.offset` wraps in `vk_meta_rect`'s u32 coords into `x1 <= x0` → the same
+> `setup_viewport_scissor` asserts (`:163/:167`, or `:183/:184` log2-range for the huge rect) →
+> worker SIGABRT, VM dies. That killed dogfood-mac's dogfood VM 2026-08-04 15:57 (emitter: synoik).
+> The probe now issues all four rects (valid + empty + negative + huge; `rectCount=4`):
+>
+> RED (pre-fix KK @ 7fa2cd97839 + DIAG): `Assertion failed: (rects[r].x0 < rects[r].x1 && …),
+> vk_meta_draw_rects.c:167` → Abort trap 6, exit 134.
+> GREEN (fixed KK): exit 0, readback intact (red inside `{8,8 16x16}`, black outside).
+>
+> Fixes: `vk_meta_clear_rect_is_empty` now also drops rects with `offset < 0` or
+> `offset+extent > INT32_MAX` (i64 math; mesa `limina-kk`), and the vkr sanitize applies the
+> identical i64 filter at the trust boundary (virgl `limina` branch). The L2 guard's guest
+> vehicle (`vkclearrect.py`) carries the same four rects.
+>
+> Lesson re-learned while probing: the first probe run was a false GREEN because the new rects
+> were added to the array but `rectCount` stayed 2 — the poison never left the app. A DIAG
+> `fprintf` in `vk_meta_clear_attachments` (instrument the stack we own) exposed it in one run.
 
 ## The bug
 A guest `vkCmdClearAttachments` with a zero-extent `VkClearRect`
