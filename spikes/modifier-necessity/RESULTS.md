@@ -69,6 +69,14 @@ the vkr KK winsys work. It is dead code. It is also a guard against a guest-trig
 abort, so the honest framing is: **the shadowing is what retired it, and it returns the moment
 vkr stops forcing LINEAR.** Whatever disposition it gets, that condition belongs in the note.
 
+> **That prediction was tested on 2026-08-04 and is wrong** — instructively. The symmetric
+> MTLTEXTURE build *does* stop forcing LINEAR, and kk 0002 still counted **0 hits** against 4
+> modifier images reaching vkr. The reason: vkr now assigns `VK_IMAGE_TILING_OPTIMAL` explicitly
+> on both the export and import branches, so the shadow **moved rather than lifted**. kk 0002
+> becomes reachable only if vkr stops normalizing the tiling *at all*, which no shipping
+> configuration does. Re-read as: the carve-out is dead under any tiling normalization, not
+> specifically under LINEAR.
+
 ### …but only because *our own* forced LINEAR shadows it — and that is load-bearing
 
 The shadowing above rests on `vkr_image.c`'s KK branch forcing LINEAR, which is **our**
@@ -292,6 +300,195 @@ the magenta oracle: prefill the IOSurface with a known colour and prove the GPU 
 **Open question inherited from §A, unresolved:** our #28 root-caused upstream's fd double-mmap as
 CPU/GPU-incoherent, yet upstream ships that path at ~1770 FPS on an M4 Max. Probe before
 committing further.
+
+### Root cause of the abort: sRGB folded onto the UNORM base (2026-08-04)
+
+The `fprintf` probes (leads 2 and 3 above were the right instinct — the validation *was* running,
+its complaint was just swallowed) printed the answer directly:
+
+```
+[LIMINA-KK-IMPORT] REJECTED MTLTexture (geom=1 fmt=0 usage=1): tex fmt=70 | image fmt=71
+```
+
+70 is `MTLPixelFormatRGBA8Unorm`, 71 is `..._sRGB`. vkr allocated the IOSurface through
+`gkvm_vkformat_to_iosurface`, which deliberately folds an sRGB VkFormat onto its UNORM base — fine
+when the surface is only ever aliased as raw bytes, wrong when the texture is adopted *verbatim* by
+an image whose format is the sRGB one. The bind then rejected the texture, the plane kept no usable
+texture, and the nil encoder surfaced two frames later at `kk_encoder.c:226`.
+
+Fix: `gkvm_vkformat_to_mtl_exact()` in `vkr_image.c`, used only on the import path, which preserves
+sRGB. `plane->addr = 0` (lead 1) turned out to be harmless — nothing on this path derives from it.
+
+This is the failure mode the pre-existing `vkr_image.c` warning predicted, and it is worth
+restating: **the adopted texture is used verbatim, so every property must match, not merely be
+compatible.** The bind now checks extent, mip levels, array layers, sample count, texture type,
+pixel format, and a usage superset — the last two being exactly the ones documented to fail
+silently.
+
+### The A/B: the import works, and it is perf-neutral (2026-08-04)
+
+Same disk (`mtltex-arm.raw`, a clone of `enhanced.test`), same 6 vCPU / 8 GiB VM, rebooted between
+arms, vkmark `-s 1280x720` on a quiet seated session:
+
+| arm | scores | mean |
+|---|---|---|
+| `LIMINA_KK_MTLTEXTURE_SCANOUT=1` (adopt MTLTexture, `OPTIMAL` tiling) | 1501, 1514, 1517, 1569, 1495, 1515 | **1518** |
+| gate off (our forced `LINEAR`) | 1535, 1534, 1513 | **1527** |
+
+No direction, well inside run-to-run spread. **The import is a correctness/architecture change, not
+a perf win** — and equally, the forced LINEAR is not costing anything vkmark can see.
+
+Comparability is established rather than assumed: adoption counts went 3 → 16 across the three
+gate-on runs, and the twelve new ones are `1280x720 type=2 fmt=71 usage=0x17 (image usage=0x6)` —
+i.e. **vkmark's own swapchain images took the import path**, so the differential really did reach
+the system under test. The other four are the 2560×1440 `fmt=80 usage=0x17` scanouts, whose image
+usage matches the texture's exactly. Zero rejections, zero nil encoders, session alive throughout;
+the desktop was human-confirmed live and updating, and subsequently ran WebGL aquarium at 20k fish.
+
+**Retracted:** an earlier gate-on score of 1768 read as a 5–7× jump against a remembered "250–390
+baseline". That baseline belongs to a different configuration; against the arm actually measured
+here there is no speedup. Two later repeats (1025, 1792) were taken while the aquarium was running
+and are discarded. The one number that survives is that both arms sit at ~1520.
+
+### The rig arm: the compositing instrument agrees — still no difference (2026-08-04)
+
+vkmark is not a compositing benchmark, so the question went to the gnome-shell-rs rig, which is
+where LINEAR-vs-OPTIMAL scanout tiling would show up if anywhere. One disk (`nirirepro.work.raw`),
+rebooted between arms, `NIRI_VK_ASYNC_SCANOUT=1`, `NIRI_FRAME_LOG=all,gpu`, 3840×2160, the same
+three windows respawned in the same order, `heavy` profile, scored with `score-frame-log.py`:
+
+| phase | arm | gpu p50 | flips | missed | rate |
+|---|---|---|---|---|---|
+| workspace transitions | MTLTEXTURE | 2.14 ms | 4173 | 0 | 0.00% |
+| | forced LINEAR | 2.16 ms | 3866 | 0 | 0.00% |
+| overview transitions | MTLTEXTURE | 7.10 ms | 4110 | 80 | 1.95% |
+| | forced LINEAR | 7.13 ms | 4034 | 69 | 1.71% |
+| **aggregate** | **MTLTEXTURE** | | 8283 | 80 | **0.97%** |
+| | **forced LINEAR** | | 7900 | 69 | **0.87%** |
+
+Both phases pass the scorer's element/bake comparability gate. The 0.10 pp miss-rate difference is
+inside this rig's documented run-to-run spread (arm C reproduced as 1.33% and 1.2% on different
+days), and GPU p50 is marginally *lower* on the MTLTEXTURE arm in both phases — i.e. the two arms
+are indistinguishable at n=1 per arm, with no consistent direction.
+
+Per the scoring rule earned by arm D, the draws were checked before the miss column: both arms
+drew, the gate passed, and the gate-on worker log shows the compositor's 3840×2160 scanout plus all
+three window surfaces adopting (`fmt=80 usage=0x17`, image usage identical), 0 rejections, 0 nil
+encoders.
+
+### The import was only half-done: every GTK4 window sheared (2026-08-04)
+
+Booting the rig with the gate on and *looking at it* — which neither A/B above did — showed every
+GTK4 client window sheared by a per-row offset, the classic stride skew. The compositor's own
+background was pixel-perfect. Gate off: pixel-perfect everywhere. Screenshots via in-guest `grim`.
+
+The asymmetry in the pixels named the bug exactly. The block the gate lives in fires for **every**
+image carrying `VkExternalMemoryImageCreateInfo` — every shared buffer, not just the scanout, the
+env var's name notwithstanding — and it only ever touched the **exporter** half:
+
+- **Exporter** (a client's window buffer; modifier LIST form) got an `OPTIMAL` image whose memory
+  is an adopted `MTLTexture`, i.e. content in the texture's native layout.
+- **Importer** (the compositor sampling that window; modifier EXPLICIT form) is a different branch
+  the gate never reached. It still aliased the same IOSurface bytes as
+  `VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT` (`vkr_device_memory.c:323`) and read
+  them **linearly at the importing image's own rowPitch**.
+
+One end writes in the texture's layout, the other reads flat rows at a stride that no longer
+describes it. The compositor's scanout was spared because it has no guest-side importer — which is
+precisely why the background looked fine and made the bug look format-related rather than layout-related.
+
+**This also corrects the standing understanding of what the forced LINEAR buys.** It is not merely
+"a pitch requirement for aliasing host memory" that an MTLTexture import obviates. It is what keeps
+the guest-visible stride and the host IOSurface rowBytes in agreement across *both* ends of a
+shared buffer. Removing it on one end only is incoherent by construction.
+
+### The symmetric import (2026-08-04)
+
+The importer now adopts the *same* `MTLTexture` instead of aliasing bytes:
+
+- `vkr_metal_helpers.m`: `vkr_mtl_texture_from_iosurface()` builds a retained `id<MTLTexture>` over
+  an **existing** IOSurface, with a descriptor mirroring the alloc path's exactly (usage `0x17`,
+  `MTLStorageModeShared`) so KK's superset-usage check passes.
+- `vkr_image.h/.c`: `vkr_image` remembers its create `VkFormat`. The import is `DEDICATED_ONLY`
+  (KK advertises the handle type that way), so `VkMemoryDedicatedAllocateInfo` names the image, and
+  the image names the format the adopted texture must match — sRGB included.
+  `gkvm_vkformat_to_mtl_exact()` is no longer static.
+- `vkr_device_memory.c`: under the gate, a dedicated import with a resolvable IOSurface and an
+  exactly-mappable format chains `VkImportMemoryMetalHandleInfoEXT{MTLTEXTURE}` instead of the
+  host-pointer import. KK retains the texture, so vkr drops its own reference after the call.
+- `vkr_image.c`: under the gate, an imported image stays `OPTIMAL` rather than being forced
+  `LINEAR` — KK's bind refuses a LINEAR image for a texture import.
+
+Result: pixel-identical to the gate-off capture. Telemetry shows the import half live
+(`dedicated=1 vkfmt=44 mtlfmt=80`), 28 adoptions, 0 rejections, 0 nil encoders.
+
+### The A/B, re-taken with both arms rendering correctly
+
+The earlier numbers are **not** retracted: the compositor performed identical work in both arms, and
+the shear was a read-offset, not a change in what was drawn. But they could not show a difference
+that depends on layout, so the run was repeated on the fixed build — same disk, rebooted between
+arms, same three windows, `heavy`:
+
+| phase | arm | gpu p50 | flips | missed | rate |
+|---|---|---|---|---|---|
+| workspace transitions | MTLTEXTURE | 2.11 ms | 4180 | 0 | 0.00% |
+| | forced LINEAR | 2.14 ms | 3910 | 0 | 0.00% |
+| overview transitions | MTLTEXTURE | **6.47 ms** | 4053 | 51 | **1.26%** |
+| | forced LINEAR | **7.22 ms** | 4035 | 79 | **1.96%** |
+| **aggregate** | **MTLTEXTURE** | | 8233 | 51 | **0.62%** |
+| | **forced LINEAR** | | 7945 | 79 | **0.99%** |
+
+Both phases pass the comparability gate.
+
+Repeated once more per arm (reboot between, same disk, same windows):
+
+| run | MTLTEXTURE | forced LINEAR |
+|---|---|---|
+| #1 | 51 / 8233 = **0.62%** | 79 / 7945 = 0.99% |
+| #2 | 4 / 8003 = **0.05%** | 75 / 7927 = 0.95% |
+| combined | 55 / 16236 = **0.34%** | 154 / 15872 = **0.97%** |
+
+The forced-LINEAR arm is remarkably steady across everything measured today — 0.87%, 0.95%, 0.99%
+— and **both** MTLTEXTURE runs sit below the bottom of that range. The effect is real: roughly a
+third of the misses overall, and in the better run almost none.
+
+**But it is not "rendering got faster."** Overview GPU p50 went 6.47 vs 7.22 ms in run #1 and 7.02
+vs 6.70 ms in run #2 — no consistent direction, so the earlier ~10% reading was noise and should
+not be repeated. What improves is *punctuality*: the flip count barely moves while misses collapse.
+That is consistent with the mechanism — an adopted texture removes the layout mismatch the importer
+otherwise has to reconcile — but the causal chain has not been instrumented, only inferred from the
+miss column, so treat it as the leading explanation rather than an established one.
+
+The MTLTEXTURE arm's own spread is wide (0.62% vs 0.05%), so the *size* of the win is not pinned
+down; its existence is.
+
+### Verdict
+
+The MTLTEXTURE import is **functionally complete on both ends** and renders correctly. The case for
+retiring the forced LINEAR is architectural and strong — it deletes a limina-only customization,
+lets shared images keep `OPTIMAL` tiling, and moves us onto the ratified
+`VK_EXT_external_memory_metal` path §A identified as upstream's convergence direction. On the
+symmetric build it is *also* measurably more punctual — 0.34% missed vs 0.97% over two runs per
+arm, with both import runs below the forced-LINEAR arm's entire observed range — though GPU time
+itself does not move.
+
+Remaining before the forced LINEAR can actually retire:
+
+- The import path is still gated off by default (`LIMINA_KK_MTLTEXTURE_SCANOUT`); flipping the
+  default is a separate, reviewable change.
+- Stock-tier behaviour is unprobed: a guest without our components must still scan out. The import
+  is host-side only, so it *should* be tier-independent, but that is an assumption, not a measurement.
+- Only the KK backend is covered. `vkr_image.c`'s fallback must stay for any non-KK host Vulkan.
+
+### Rig trap: the driver picks the *first* niri socket, not the live one
+
+New, and it fired here. `drive-workload.sh` resolves `SOCK=$(ls "$RUNTIME"/niri.wayland-*.sock |
+head -1)` and then **re-exports `NIRI_SOCKET` itself**, so the env cannot override it. After a
+`systemctl restart gdm` the runtime dir holds the dead session's socket *and* the live one, and
+`head -1` takes the dead one. The run then reproduces the documented silent-no-op exactly: every
+phase marker prints, the script exits 0, and nothing is driven — the tell is `BASELINE workspace=
+windows=` (both empty) instead of `workspace=1 windows=3`. Fix: `rm` the stale socket before
+driving. Always read the BASELINE line before trusting a run.
 
 ## Caveat on the numbers above
 

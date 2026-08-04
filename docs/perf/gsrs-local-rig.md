@@ -133,6 +133,13 @@ sudo -u gsrs XDG_RUNTIME_DIR=/run/user/1001 \
   exited 0 — and sent **nothing**. Set `NIRI_BIN` if you must run it from elsewhere.
 - `gsrs` reaches `/home/claude` through an **ACL** (`user:gsrs:--x`), not group perms — don't
   "fix" the home directory mode.
+- **After a `systemctl restart gdm`, the driver picks the DEAD session's socket** (2026-08-04).
+  It resolves `SOCK=$(ls "$RUNTIME"/niri.wayland-*.sock | head -1)` and then re-exports
+  `NIRI_SOCKET` itself, so setting it in the env does **not** override. The restarted session
+  leaves the old socket behind, `head -1` takes it, and every `msg` gets `Connection refused` —
+  which the script swallows. Same silent-no-op shape: all phase markers printed, exit 0, nothing
+  driven. `sudo rm` the stale socket first, and **read the BASELINE line**: `workspace= windows=`
+  (empty) means the run sent nothing; a real run says `workspace=1 windows=3`.
 
 **4. THE SESSION MUST HAVE WINDOWS. A fresh rig session has none, and the workload is then a
 no-op** — `focus-workspace 2` with one empty workspace changes nothing visible, and the overview

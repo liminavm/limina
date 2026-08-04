@@ -266,8 +266,28 @@ index 6aff54bb5dc..22b92da2b68 100644
  extern const VkExternalMemoryProperties kk_host_mem_props;
  
  #endif // KK_MEMORY_H
+diff --git a/src/kosmickrisp/vulkan/kk_encoder.c b/src/kosmickrisp/vulkan/kk_encoder.c
+index 38c64ab5b99..bc0b2abae89 100644
+--- a/src/kosmickrisp/vulkan/kk_encoder.c
++++ b/src/kosmickrisp/vulkan/kk_encoder.c
+@@ -92,6 +92,15 @@ kk_encoder_start_render(struct kk_cmd_buffer *cmd,
+ 
+       encoder->main.encoder = mtl_new_render_command_encoder_with_descriptor(
+          encoder->main.cmd_buffer, descriptor);
++      /* limina probe: a nil encoder here is Metal refusing the render pass — most
++       * often because an attachment texture is not a valid render target. It is
++       * silent: the crash lands later, in kk_encoder_internal_end_encoding's
++       * assert, with no clue as to which pass. Name it at the source. */
++      if (!encoder->main.encoder)
++         fprintf(stderr, "[LIMINA-KK-ENC] render command encoder is NIL "
++                         "(descriptor=%p view_mask=0x%x) — attachment likely not a "
++                         "valid Metal render target\n",
++                 (void *)descriptor, view_mask);
+       if (encoder->main.wait_fence) {
+          mtl_render_wait_for_fence(
+             encoder->main.encoder,
 diff --git a/src/kosmickrisp/vulkan/kk_image.c b/src/kosmickrisp/vulkan/kk_image.c
-index a37210eece9..6f0e4c615f3 100644
+index a37210eece9..e380655eb28 100644
 --- a/src/kosmickrisp/vulkan/kk_image.c
 +++ b/src/kosmickrisp/vulkan/kk_image.c
 @@ -399,6 +399,17 @@ kk_GetPhysicalDeviceImageFormatProperties2(
@@ -288,7 +308,7 @@ index a37210eece9..6f0e4c615f3 100644
        case VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT:
        case VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_MAPPED_FOREIGN_MEMORY_BIT_EXT: {
           if (pImageFormatInfo->tiling != VK_IMAGE_TILING_LINEAR) {
-@@ -861,6 +872,62 @@ kk_image_plane_bind(struct kk_device *dev, struct kk_image *image,
+@@ -861,6 +872,80 @@ kk_image_plane_bind(struct kk_device *dev, struct kk_image *image,
                                 &plane_align_B);
     *offset_B = align64(*offset_B, plane_align_B);
  
@@ -324,6 +344,17 @@ index a37210eece9..6f0e4c615f3 100644
 +      const bool usage_ok =
 +         (props.usage & (uint32_t)plane->layout.usage) == (uint32_t)plane->layout.usage;
 +      if (!geometry_ok || !format_ok || !usage_ok) {
++         fprintf(stderr,
++                 "[LIMINA-KK-IMPORT] REJECTED MTLTexture (geom=%d fmt=%d usage=%d): "
++                 "tex %ux%u type=%u samples=%u lv=%u ly=%u fmt=%u usage=0x%x | image "
++                 "%ux%u type=%u samples=%u lv=%u ly=%u fmt=%u usage=0x%x\n",
++                 geometry_ok, format_ok, usage_ok, (unsigned)props.width,
++                 (unsigned)props.height, props.texture_type, props.sample_count,
++                 props.mip_levels, props.array_length, props.pixel_format, props.usage,
++                 plane->layout.width_px, plane->layout.height_px,
++                 (unsigned)plane->layout.type, plane->layout.sample_count_sa,
++                 plane->layout.levels, plane->layout.layers, plane->layout.format.mtl,
++                 (unsigned)plane->layout.usage);
 +         return vk_errorf(
 +            dev, VK_ERROR_INVALID_EXTERNAL_HANDLE,
 +            "imported MTLTexture does not match the image it is bound to "
@@ -344,6 +375,13 @@ index a37210eece9..6f0e4c615f3 100644
 +      plane->mem_offset_B = 0u;
 +      plane->mtl_handle = mtl_retain(mem->bo->texture);
 +      plane->addr = 0u;
++      fprintf(stderr,
++              "[LIMINA-KK-IMPORT] adopted MTLTexture %p for image plane: %ux%u "
++              "type=%u fmt=%u usage=0x%x (image usage=0x%x linear=%u optimized=%u)\n",
++              mem->bo->texture, plane->layout.width_px, plane->layout.height_px,
++              props.texture_type, props.pixel_format, props.usage,
++              (unsigned)plane->layout.usage, plane->layout.linear,
++              plane->layout.optimized_layout);
 +      *offset_B += plane_size_B;
 +      return VK_SUCCESS;
 +   }

@@ -1,8 +1,64 @@
 diff --git a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
-index d330bc1..dd2248c 100644
+index d330bc1..c6fe214 100644
 --- a/src/venus/vkr_device_memory.c
 +++ b/src/venus/vkr_device_memory.c
-@@ -412,6 +412,7 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+@@ -284,6 +284,11 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+    VkImportMemoryHostPointerInfoEXT gkvm_res_import = { 0 };
+    void *gkvm_imported_iosurface = NULL;
+    bool gkvm_res_imported = false;
++   /* The IMPORT half of LIMINA_KK_MTLTEXTURE_SCANOUT: when the exporter backed its image
++    * with the IOSurface's MTLTexture, aliasing those bytes as a linear host pointer reads
++    * them at the WRONG layout and shears every row. Adopt the same texture instead. */
++   VkImportMemoryMetalHandleInfoEXT gkvm_metal_res_import = { 0 };
++   void *gkvm_imported_texture = NULL;
+ #endif
+    VkBaseInStructure *prev_of_res_info = vkr_find_prev_struct(
+       alloc_info, VK_STRUCTURE_TYPE_IMPORT_MEMORY_RESOURCE_INFO_MESA);
+@@ -312,7 +317,42 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+             ptr = gkvm_res->u.data;
+             span = gkvm_res->size;
+          }
+-         if (ptr) {
++         /* LIMINA_KK_MTLTEXTURE_SCANOUT=1, import half. The exporter's image adopted this
++          * IOSurface's MTLTexture verbatim, so its contents are in the texture's layout,
++          * not a linear rowPitch — the importer has to adopt the same object or it reads
++          * sheared rows. Requires a DEDICATED import (KK advertises the MTLTEXTURE handle
++          * type as DEDICATED_ONLY), whose image also tells us the exact pixel format. */
++         static int gkvm_mtltex_imp = -1;
++         if (gkvm_mtltex_imp < 0) {
++            const char *e = getenv("LIMINA_KK_MTLTEXTURE_SCANOUT");
++            gkvm_mtltex_imp = (e && *e == '1') ? 1 : 0;
++         }
++         if (gkvm_mtltex_imp && gkvm_imported_iosurface && dev->mtl_device) {
++            const VkMemoryDedicatedAllocateInfo *ded = vkr_find_struct(
++               alloc_info->pNext, VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO);
++            const struct vkr_image *dimg =
++               ded ? vkr_image_from_handle(ded->image) : NULL;
++            uint32_t mtl_fmt = 0;
++            if (dimg && gkvm_vkformat_to_mtl_exact((VkFormat)dimg->gkvm_vk_format, &mtl_fmt))
++               gkvm_imported_texture = vkr_mtl_texture_from_iosurface(
++                  dev->mtl_device, gkvm_imported_iosurface, mtl_fmt);
++            fprintf(stderr,
++                    "[LIMINA-VKR-MTLTEX] import res %u IOSurface id=%u dedicated=%d "
++                    "vkfmt=%u mtlfmt=%u -> tex=%p\n",
++                    res_info->resourceId, gkvm_res->iosurface_id, dimg ? 1 : 0,
++                    dimg ? dimg->gkvm_vk_format : 0, mtl_fmt, gkvm_imported_texture);
++         }
++         if (gkvm_imported_texture) {
++            prev_of_res_info->pNext = res_info->pNext; /* unlink res_info */
++            gkvm_metal_res_import.sType =
++               VK_STRUCTURE_TYPE_IMPORT_MEMORY_METAL_HANDLE_INFO_EXT;
++            gkvm_metal_res_import.handleType =
++               VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT;
++            gkvm_metal_res_import.handle = gkvm_imported_texture;
++            gkvm_metal_res_import.pNext = alloc_info->pNext;
++            alloc_info->pNext = &gkvm_metal_res_import;
++            gkvm_res_imported = true;
++         } else if (ptr) {
+             /* VK_EXT_external_memory_host needs page-aligned ptr + size multiple of
+              * minImportedHostPointerAlignment; blob sizes are guest-page (16K) multiples
+              * and IOSurface alloc sizes page-rounded already — round up defensively. */
+@@ -412,6 +452,7 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
     /* gkvm KK path: host-pointer import of the scanout IOSurface bytes (function scope —
      * chained into alloc_info and must outlive the driver call). */
     VkImportMemoryHostPointerInfoEXT gkvm_host_import = { 0 };
@@ -10,7 +66,7 @@ index d330bc1..dd2248c 100644
  
     /* gkvm #28: plain HOST_VISIBLE memory is NO LONGER backed by an imported mtl_shm carrier.
      * The old path allocated a POSIX shm + Metal buffer (newBufferWithBytesNoCopy) and imported
-@@ -582,20 +583,47 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+@@ -582,20 +623,51 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
            * up to the IOSurface's own (page-rounded) alloc size. */
           struct vkr_mtl_iosurface *gkvm_io =
              (struct vkr_mtl_iosurface *)gkvm_scanout_surf;
@@ -50,6 +106,10 @@ index d330bc1..dd2248c 100644
 +            gkvm_metal_import.handle = gkvm_io->mtl_texture;
 +            gkvm_metal_import.pNext = alloc_info->pNext;
 +            alloc_info->pNext = &gkvm_metal_import;
++            fprintf(stderr,
++                    "[LIMINA-VKR-MTLTEX] scanout memory <- MTLTEXTURE import of IOSurface "
++                    "id=%u (tex=%p)\n",
++                    gkvm_io->id, gkvm_io->mtl_texture);
 +            vkr_log("gkvm: KK scanout memory <- MTLTEXTURE import of IOSurface id=%u "
 +                    "(tex=%p)",
 +                    gkvm_io->id, gkvm_io->mtl_texture);
@@ -72,11 +132,72 @@ index d330bc1..dd2248c 100644
        } else {
           vkr_log("gkvm: scanout memory -> mtl_shm carrier for blob export; image renders "
                   "into its IOSurface (id=%u) via useIOSurface",
+@@ -642,6 +714,7 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+       vkr_mtl_shm_free(mtl_shm);
+ #ifdef __APPLE__
+       vkr_mtl_iosurface_release_ref(gkvm_imported_iosurface);
++      vkr_mtl_texture_release(gkvm_imported_texture);
+ #endif
+       return;
+    }
+@@ -664,6 +737,10 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+       mem->mtl_iosurface = gkvm_scanout_surf;
+    /* gkvm: hold the imported window buffer's IOSurface for this memory's lifetime. */
+    mem->imported_iosurface = gkvm_imported_iosurface;
++   /* KosmicKrisp retains the adopted texture in kk_AllocateMemory, so our +1 from
++    * vkr_mtl_texture_from_iosurface has done its job — drop it. The surviving IOSurface
++    * reference above is what keeps the underlying storage alive either way. */
++   vkr_mtl_texture_release(gkvm_imported_texture);
+ #endif
+ }
+ 
 diff --git a/src/venus/vkr_image.c b/src/venus/vkr_image.c
-index 2f2b643..0890594 100644
+index 2f2b643..85eab8f 100644
 --- a/src/venus/vkr_image.c
 +++ b/src/venus/vkr_image.c
-@@ -113,20 +113,48 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+@@ -15,7 +15,41 @@
+ 
+ /* MTLPixelFormat values (Metal/MTLPixelFormat.h) used for IOSurface backing. */
+ #define GKVM_MTLPixelFormatRGBA8Unorm 70
++#define GKVM_MTLPixelFormatRGBA8Unorm_sRGB 71
+ #define GKVM_MTLPixelFormatBGRA8Unorm 80
++#define GKVM_MTLPixelFormatBGRA8Unorm_sRGB 81
++
++/* EXACT MTLPixelFormat for a VkFormat — sRGB stays sRGB.
++ *
++ * This is deliberately NOT what gkvm_vkformat_to_iosurface() returns. That one folds sRGB onto
++ * its UNORM base, which is right for the MoltenVK path (MVK builds its own view over the
++ * IOSurface, from the image's real format, via a MUTABLE_FORMAT view list). It is fatal for the
++ * MTLTEXTURE-import path, where KosmicKrisp adopts our texture *verbatim*: an sRGB image over an
++ * UNORM texture is a format mismatch that fails the bind — observed 2026-08-04, vkmark's
++ * R8G8B8A8_SRGB swapchain (image fmt 71 vs texture fmt 70). Writes through an sRGB texture also
++ * carry sRGB encoding, which is exactly what the guest asked for and what the forced-LINEAR path
++ * already did (KK built its own texture from the image's format). The IOSurface's fourcc is
++ * unchanged either way, so presentation is unaffected. */
++bool
++gkvm_vkformat_to_mtl_exact(VkFormat fmt, uint32_t *mtl)
++{
++   switch (fmt) {
++   case VK_FORMAT_B8G8R8A8_UNORM:
++      *mtl = GKVM_MTLPixelFormatBGRA8Unorm;
++      return true;
++   case VK_FORMAT_B8G8R8A8_SRGB:
++      *mtl = GKVM_MTLPixelFormatBGRA8Unorm_sRGB;
++      return true;
++   case VK_FORMAT_R8G8B8A8_UNORM:
++      *mtl = GKVM_MTLPixelFormatRGBA8Unorm;
++      return true;
++   case VK_FORMAT_R8G8B8A8_SRGB:
++      *mtl = GKVM_MTLPixelFormatRGBA8Unorm_sRGB;
++      return true;
++   default:
++      return false;
++   }
++}
+ 
+ /* Map a VkFormat to (MTLPixelFormat, IOSurface FourCC, bytes/pixel) for an IOSurface-backed
+  * scanout image. Returns false for formats we don't back (caller forwards unchanged). The
+@@ -113,20 +147,48 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
           bool gkvm_is_import = false;
           VkImageCreateInfo *mci = (VkImageCreateInfo *)ci;
           VkBaseInStructure *prev = (VkBaseInStructure *)mci;
@@ -129,7 +250,29 @@ index 2f2b643..0890594 100644
  
           if (gkvm_vkformat_to_iosurface(ci->format, &gkvm_mtl, &gkvm_fourcc, &gkvm_bpe)) {
              struct vkr_device *dev = vkr_device_from_handle(args->device);
-@@ -158,15 +186,62 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+@@ -135,7 +197,20 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+                /* Import: keep KK's LINEAR/usage normalization below, skip IOSurface
+                 * allocation (the bound memory aliases the exporter's bytes). */
+                if (!dev->physical_device->EXT_metal_objects) {
+-                  mci->tiling = VK_IMAGE_TILING_LINEAR;
++                  /* …unless the MTLTEXTURE path is on, in which case the bound memory is
++                   * the exporter's TEXTURE, not its bytes. Forcing LINEAR here is what
++                   * sheared every GTK4 window on 2026-08-04: the exporter wrote in the
++                   * texture's layout while this side declared a linear rowPitch. Stay
++                   * OPTIMAL so KK's bind can adopt the texture (it refuses LINEAR). */
++                  static int gkvm_mtltex_imp = -1;
++                  if (gkvm_mtltex_imp < 0) {
++                     const char *e = getenv("LIMINA_KK_MTLTEXTURE_SCANOUT");
++                     gkvm_mtltex_imp = (e && *e == '1') ? 1 : 0;
++                  }
++                  if (gkvm_mtltex_imp)
++                     mci->tiling = VK_IMAGE_TILING_OPTIMAL;
++                  else
++                     mci->tiling = VK_IMAGE_TILING_LINEAR;
+                   mci->usage &= ~VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+                }
+             } else if (dev->physical_device->EXT_metal_objects) {
+@@ -158,15 +233,73 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
                  * (vkr_device_memory.c) — render lands in the surface, presented zero-copy.
                  * The IOSurface is allocated AFTER create, with the driver's linear rowPitch
                  * (vkGetImageSubresourceLayout). */
@@ -173,9 +316,20 @@ index 2f2b643..0890594 100644
 +                   * the layout type to 2DArray and fail KK's bind-time type check. */
 +                  mci->tiling = VK_IMAGE_TILING_OPTIMAL;
 +                  mci->usage &= ~VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
++                  /* EXACT format, sRGB included — KK adopts this texture verbatim, so
++                   * the UNORM-base folding used for the MoltenVK path would fail the
++                   * bind on an sRGB image. */
++                  uint32_t gkvm_mtl_exact = gkvm_mtl;
++                  gkvm_vkformat_to_mtl_exact(ci->format, &gkvm_mtl_exact);
 +                  gkvm_surf = vkr_mtl_iosurface_alloc(dev->mtl_device, ci->extent.width,
-+                                                      ci->extent.height, gkvm_mtl,
++                                                      ci->extent.height, gkvm_mtl_exact,
 +                                                      gkvm_fourcc, gkvm_bpe, 0);
++                  fprintf(stderr,
++                          "[LIMINA-VKR-MTLTEX] KK MTLTEXTURE scanout %ux%u -> IOSurface "
++                          "id=%u tex=%p\n",
++                          ci->extent.width, ci->extent.height,
++                          gkvm_surf ? gkvm_surf->id : 0,
++                          gkvm_surf ? gkvm_surf->mtl_texture : NULL);
 +                  vkr_log("gkvm: KK MTLTEXTURE scanout %ux%u -> IOSurface id=%u tex=%p",
 +                          ci->extent.width, ci->extent.height,
 +                          gkvm_surf ? gkvm_surf->id : 0,
@@ -201,8 +355,68 @@ index 2f2b643..0890594 100644
              }
           }
        }
+@@ -176,6 +309,13 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+    struct vkr_image *gkvm_obj = vkr_image_create_and_add(dispatch->data, args);
+ 
+ #ifdef __APPLE__
++   /* Remember the create format for the MTLTEXTURE import path (vkr_device_memory.c):
++    * a dedicated import allocation names this image, and the adopted texture's pixel
++    * format has to match it exactly. Recorded for EVERY image — the import side has no
++    * other way back to the format, and the field is inert otherwise. */
++   if (gkvm_obj && ci)
++      gkvm_obj->gkvm_vk_format = (uint32_t)ci->format;
++
+    if (gkvm_surf) {
+       if (gkvm_obj && args->ret == VK_SUCCESS) {
+          gkvm_obj->mtl_iosurface = gkvm_surf;
+diff --git a/src/venus/vkr_image.h b/src/venus/vkr_image.h
+index cdc999a..8d68208 100644
+--- a/src/venus/vkr_image.h
++++ b/src/venus/vkr_image.h
+@@ -15,9 +15,20 @@ struct vkr_image {
+     * struct vkr_mtl_iosurface that backs this VkImage (IOSurface-imported MTLTexture).
+     * NULL for ordinary images. Lets present resolve image -> IOSurface id. */
+    void *mtl_iosurface;
++
++   /* gkvm: the VkFormat this image was created with. The MTLTEXTURE import path needs it
++    * at vkAllocateMemory time — the importing memory is DEDICATED_ONLY, so the dedicated
++    * image names the format the adopted MTLTexture must match EXACTLY (sRGB included). */
++   uint32_t gkvm_vk_format;
+ };
+ VKR_DEFINE_OBJECT_CAST(image, VK_OBJECT_TYPE_IMAGE, VkImage)
+ 
++/* gkvm: VkFormat -> MTLPixelFormat, preserving sRGB (unlike the IOSurface mapper, which
++ * folds onto the UNORM base). The MTLTEXTURE import path on both ends needs the exact
++ * format: KosmicKrisp's bind compares it verbatim. False for formats we don't back. */
++bool
++gkvm_vkformat_to_mtl_exact(VkFormat fmt, uint32_t *mtl);
++
+ struct vkr_image_view {
+    struct vkr_object base;
+ };
+diff --git a/src/venus/vkr_metal_helpers.h b/src/venus/vkr_metal_helpers.h
+index ec57f1b..14173b5 100644
+--- a/src/venus/vkr_metal_helpers.h
++++ b/src/venus/vkr_metal_helpers.h
+@@ -121,6 +121,16 @@ vkr_mtl_iosurface_lookup(uint32_t id, void **out_base, uint64_t *out_alloc_size)
+ void
+ vkr_mtl_iosurface_release_ref(void *io_surface);
+ 
++/* Create a RETAINED id<MTLTexture> over an EXISTING IOSurface (the import half of the
++ * MTLTEXTURE scanout path — the exporter's surface, looked up by id). The descriptor
++ * mirrors vkr_mtl_iosurface_alloc's, so KosmicKrisp's superset-usage / exact-format bind
++ * check passes. Release with vkr_mtl_texture_release. NULL on failure. */
++void *
++vkr_mtl_texture_from_iosurface(void *mtl_device, void *io_surface, uint32_t mtl_pixel_format);
++
++void
++vkr_mtl_texture_release(void *mtl_texture);
++
+ /* limina: copy a registered scanout IOSurface's pixels into dst (top-down native BGRA, `height`
+  * rows of min(dst_stride, surface bytesPerRow)). Used by the headless capture display sink, which
+  * has no zero-copy present and no CPU transfer_read for venus blobs. Returns 1 on success, 0 on
 diff --git a/src/venus/vkr_metal_helpers.m b/src/venus/vkr_metal_helpers.m
-index 2f91d2e..beb927a 100644
+index 2f91d2e..a46415f 100644
 --- a/src/venus/vkr_metal_helpers.m
 +++ b/src/venus/vkr_metal_helpers.m
 @@ -315,8 +315,14 @@
@@ -222,3 +436,50 @@ index 2f91d2e..beb927a 100644
        td.storageMode = MTLStorageModeShared;
        tex = [device newTextureWithDescriptor:td iosurface:io plane:0];
        if (!tex) {
+@@ -443,6 +449,46 @@
+    return (void *)io;
+ }
+ 
++void *
++vkr_mtl_texture_from_iosurface(void *mtl_device, void *io_surface, uint32_t mtl_pixel_format)
++{
++   if (!mtl_device || !io_surface)
++      return NULL;
++
++   IOSurfaceRef io = (IOSurfaceRef)io_surface;
++   id<MTLTexture> tex = nil;
++   @autoreleasepool {
++      /* The IMPORT half of the MTLTEXTURE scanout path: the exporter already backed its
++       * image with this IOSurface's texture, so the importer must adopt the SAME object
++       * rather than aliasing the bytes as a linear host pointer. A host-pointer import
++       * reads the surface at the importing image's own linear rowPitch, which is not the
++       * layout the exporter's texture writes — the mismatch shears every row (2026-08-04:
++       * every GTK4 window skewed while the compositor's own scanout, which has no guest
++       * importer, stayed correct).
++       *
++       * Descriptor must mirror vkr_mtl_iosurface_alloc's exactly: KosmicKrisp's bind
++       * demands the imported texture's usage be a SUPERSET of the image's, and an exact
++       * pixel-format match (sRGB included — see gkvm_vkformat_to_mtl_exact). */
++      MTLTextureDescriptor *td = [MTLTextureDescriptor
++         texture2DDescriptorWithPixelFormat:(MTLPixelFormat)mtl_pixel_format
++                                      width:IOSurfaceGetWidth(io)
++                                     height:IOSurfaceGetHeight(io)
++                                  mipmapped:NO];
++      td.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite |
++                 MTLTextureUsageRenderTarget | MTLTextureUsagePixelFormatView;
++      td.storageMode = MTLStorageModeShared;
++      tex = [(id<MTLDevice>)mtl_device newTextureWithDescriptor:td iosurface:io plane:0];
++   }
++   return (void *)tex; /* +1 from newTextureWithDescriptor (ARC-retained by the cast) */
++}
++
++void
++vkr_mtl_texture_release(void *mtl_texture)
++{
++   if (mtl_texture)
++      CFRelease(mtl_texture);
++}
++
+ void
+ vkr_mtl_iosurface_release_ref(void *io_surface)
+ {
