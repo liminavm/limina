@@ -58,6 +58,14 @@ sudo dnf -y builddep kernel 2>/dev/null || \
 echo "==> [2/6] source tree (fork rev ${KREV:0:12}, base $KVER, shallow)"
 # Fetch the pinned rev EXACTLY (not the branch tip): a moved branch can never silently change
 # what this builds, and the fetch stays a single shallow commit.
+# A tree left over from the pre-fork recipe points `origin` at kernel.org (which does not have
+# our revs), so re-init unless origin is already the fork — otherwise the fetch below fails with
+# a confusing "not our commit" error.
+if [ -d "$BUILD/.git" ] && \
+   [ "$(git -C "$BUILD" remote get-url origin 2>/dev/null)" != "$FORK_URL" ]; then
+  echo "    existing tree points elsewhere ($(git -C "$BUILD" remote get-url origin 2>/dev/null || echo none)) — re-initialising"
+  rm -rf "$BUILD"
+fi
 if [ ! -d "$BUILD/.git" ]; then
   rm -rf "$BUILD"; mkdir -p "$BUILD"
   git -C "$BUILD" init -q

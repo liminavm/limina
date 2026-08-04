@@ -117,6 +117,24 @@ Rules block for every research agent prompt, verbatim:
   hard. Prompts should state patch filenames may drift from prompt text (`ls` first) and
   that `curl` to raw.githubusercontent needs the sandbox disabled.
 
+Additions from the linux fork migration (2026-08-04) — all three found by *doing* the
+migration, which is why a rebase is an audit tool and not just chores:
+
+- **A tolerant apply is a silent-failure machine.** `patches/linux/0001` had stopped
+  applying at the 7.1.x bump and the build script printed `SKIP …` into logs nobody read,
+  so a patch we believed shipped had been absent from every kernel for months. Under the
+  fork model a change is on the branch or it is not — no third state. Where a tolerant
+  apply must survive (test kernels built at other tags), treat every skip as a finding to
+  chase, not a normal outcome.
+- **"Superseded upstream" is not a licence to drop.** The page-reporting fix was merged,
+  Acked, and Cc: stable — and still absent from our base tag, so dropping our patch would
+  have shipped the UAF back. Check the *base you are actually building*, then backport the
+  upstream commit rather than keeping your own shape (upstream's covered cases ours did not).
+- **A citation is a claim; run `git log` before repeating it.** This ledger attributed the
+  XRGB-only plane list to a 2017 series through several revisions. It is 2018's
+  `42fd9e6c29b3`, and the narrowing is a side note inside a big-endian fix — which changes
+  how the submission should be pitched.
+
 Additions from the kosmickrisp series (2026-08-03):
 
 - **GitLab's `/-/raw/` blobs and `/api/v4/` endpoints are NOT Anubis-gated** — plain curl
