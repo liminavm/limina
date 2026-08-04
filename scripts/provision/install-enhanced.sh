@@ -197,8 +197,16 @@ ARMUNIT
 }
 
 ### 1. 16k kernel RPM -> BLS entry via kernel-install + dracut; versionlock #######
-RPM=$(ls "$PAYLOAD"/limina-kernel-16k-*.rpm 2>/dev/null | head -1)
-[ -n "$RPM" ] || { echo "no kernel RPM in payload"; exit 1; }
+# REFUSE to guess when a payload carries more than one kernel. This used to be `head -1`, whose
+# lexical sort picks the OLDER version — so a payload that accidentally kept a stale kernel
+# installed the stale one and the "successful" install silently ran the wrong kernel (twice on
+# 2026-08-03). One kernel per payload, or stop.
+mapfile -t KRPMS < <(ls "$PAYLOAD"/limina-kernel-16k-*.rpm 2>/dev/null)
+[ "${#KRPMS[@]}" -gt 0 ] || { echo "no kernel RPM in payload"; exit 1; }
+[ "${#KRPMS[@]}" -eq 1 ] || {
+  echo "payload carries ${#KRPMS[@]} kernel RPMs — refusing to guess which is intended:"
+  printf '  %s\n' "${KRPMS[@]}"; exit 1; }
+RPM="${KRPMS[0]}"
 
 # Capture the CURRENT default kernel BEFORE we install the 16k — Fedora's kernel install
 # auto-promotes the newest kernel to default, and step 6 must restore the PREVIOUS default as the

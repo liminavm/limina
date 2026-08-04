@@ -24,6 +24,6 @@ rev = "5f2c0adba538159282b8941a3f3be61eefbc4769"
 repo = "https://github.com/liminavm/linux.git"
 upstream = "https://github.com/gregkh/linux.git"
 branch = "limina"
-rev = "8a5647a014f5b1a4f8dfe1bcf3aefb9759405a1b"
+rev = "74ae69adc6456339856e9ecbf59b903692b42f7f"
 base = "v7.1.6"
 heavy = true

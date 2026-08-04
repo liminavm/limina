@@ -29,6 +29,16 @@ REPO="$(cd "$HERE/../../.." && pwd)"
 OUT="${OUT:-$HOME/limina-build/kernel}"
 BUILD="${BUILD:-$HOME/limina-build/linux}"
 LOCALVERSION="${LOCALVERSION:--limina16k}"
+# The kernel Makefile appends BOTH the make-visible $LOCALVERSION and CONFIG_LOCALVERSION to
+# KERNELRELEASE. We write CONFIG_LOCALVERSION from this variable below, so if the caller EXPORTED
+# it (`LOCALVERSION=-foo build-kernel-rpm.sh`) it lands twice — 7.1.6-foo-foo — and rpmbuild then
+# rejects the double separator at the very end of a ~40-minute build. Un-export it so only the
+# config fragment carries it. (Bit us 2026-08-03 building the no-fence probe kernel.)
+export -n LOCALVERSION 2>/dev/null || true
+# RPM Release. Bump it (RELEASE=2) whenever the CONTENT changes but the kernel Version does not —
+# e.g. a fork-branch change at the same base. Same NEVRA + different content is the classic trap:
+# dnf/rpm see the installed package as identical and skip the upgrade.
+RELEASE="${RELEASE:-1}"
 # Base config: the running guest's real Fedora config.
 CONFIG_BASE="${CONFIG_BASE:-/boot/config-$(uname -r)}"
 # Source: the liminavm/linux fork's `limina` branch at the rev pinned in
@@ -153,7 +163,7 @@ cat > "$SPEC" <<SPEC
 %define _build_id_links none
 Name:           limina-kernel-16k
 Version:        $BASE
-Release:        1%{?dist}
+Release:        $RELEASE%{?dist}
 Summary:        limina enhanced-tier 16 KiB-page Linux kernel ($KVER + limina fork, Fedora config + 16k)
 License:        GPL-2.0-only
 BuildArch:      aarch64
@@ -181,6 +191,11 @@ kernel-install add %{krel} /lib/modules/%{krel}/vmlinuz || :
 if [ \$1 -eq 0 ]; then kernel-install remove %{krel} || :; fi
 SPEC
 rpmbuild -bb "$SPEC"
-cp -f "$HOME"/rpmbuild/RPMS/aarch64/limina-kernel-16k-*.rpm "$OUT"/
+# Copy out ONLY the RPM this run produced. A glob over rpmbuild/RPMS/ sweeps in every kernel ever
+# built in this guest, and install-enhanced.sh picks with `head -1` — which sorts to the OLDER
+# version. That made a build "succeed" while the payload carried a stale kernel, twice (2026-08-03).
+RPM="$HOME/rpmbuild/RPMS/aarch64/limina-kernel-16k-$BASE-$RELEASE.fc$(rpm -E %{fedora}).aarch64.rpm"
+[ -f "$RPM" ] || { echo "expected RPM not found: $RPM" >&2; exit 1; }
+cp -f "$RPM" "$OUT"/
 ls -la "$OUT"/*.rpm 2>/dev/null || { echo "(no kernel RPM produced)"; exit 1; }
 echo "    KREL=$KREL"

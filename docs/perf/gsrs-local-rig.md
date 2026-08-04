@@ -17,7 +17,7 @@ requests to their side — whose host also runs other workloads, so their runs
 carry interference we can't control — we run the *same* driver + scorer on a
 local VM on the dev Mac (dev-mac), which is otherwise idle.
 
-## 2026-08-03: the KMS blob-scanout flush fence WRECKS async scanout (pending final isolation)
+## 2026-08-03/04: the KMS blob-scanout flush fence WRECKS async scanout — ISOLATED, patch dropped
 
 The guest-kernel fence for host3d blob `RESOURCE_FLUSH` — `patches/linux/0001`, which the
 2026-08-03 audit found had silently stopped applying at the 7.1.x bump and was therefore absent
@@ -25,13 +25,18 @@ from every kernel we ever shipped — was rewritten and landed on the `liminavm/
 branch. Measured on this rig, one kernel flip on one disk (same userspace, same host build, same
 three windows respawned identically), `NIRI_VK_ASYNC_SCANOUT=1`, `heavy` profile:
 
-| | 7.1.4 (fence absent) | 7.1.6 (fence present) |
-|---|---|---|
-| frames | 8730 | **4615** |
-| missed vblanks | 77 = **0.9%** | 3807 = **82.5%** |
-| elements (median) | 41 | 41 |
-| draws (median) | 35 | 35 |
-| gpu median / p90 | 3.00 / 8.05 ms | 2.77 / 7.65 ms |
+| | A: 7.1.4 (fence absent) | B: 7.1.6 (fence present) | C: 7.1.6 **minus the fence** |
+|---|---|---|---|
+| frames | 8730 | **4615** | 8674 |
+| missed vblanks | 77 = **0.9%** | 3983 = **86.3%** | 108 = **1.2%** |
+| elements (median) | 41 | 41 | 41 |
+| draws (median) | 35 | 35 | 35 |
+| gpu (median) | 3.00 ms | 2.77 ms | 3.74 ms |
+
+Arm C (`7.1.6-limina16knf`) is arm B's tree with exactly the fence commit reverted — the stable
+delta and both format patches held fixed. It lands back at arm A's frame clock, so the fence is
+confirmed as the sole cause. (Arm B's miss count is restated here as 3983/86.3%; the 3807/82.5%
+first reported on 2026-08-03 came from a narrower journal window.)
 
 The comparability check passes: identical elements and draws, and GPU time is *slightly lower* on
 the fence arm — so this is not "rendering got slower". Throughput roughly halves and the frame
@@ -45,12 +50,17 @@ own explicit fencing (`IN_FENCE_FD`), so the kernel wait is redundant serializat
 of it. The independent glmark2 A/B on the same kernel pair moved the same way (composited score
 1608 → 1233, `perf/ledger.csv`).
 
-**Not yet isolated:** that A/B has four variables (fence, two format patches, and the v7.1.4→v7.1.6
-stable delta). A kernel at v7.1.6 with only the fence commit reverted
-(`liminavm/linux` `probe/no-blob-fence`) is building to settle it; if that arm returns to ~1%, the
-fence is confirmed as the cause and 0001 needs a redesign — attach the fence for the host to honor
-without blocking `commit_tail`, or skip it when the client supplies its own IN_FENCE — before it
-can be shipped or offered upstream.
+**Disposition (2026-08-04):** the commit was **dropped** from the `limina` branch (the branch is
+now 3 commits; the fenced tip is preserved under tag `limina/2026-08-04`, and the probe branch was
+deleted after the run). Host-derived present feedback is still worth having — the redesign is to
+hand the host fence to the atomic commit as an **out-fence** so the flip event fires at the CA
+latch without anything blocking `commit_tail`, and/or to skip it when the client supplies its own
+`IN_FENCE_FD`. That is M15 present-pipeline work, not a carried kernel patch. Full write-up:
+`docs/upstreaming/ledger/linux.md`.
+
+**Still open:** the glmark2 composited A/B on the same kernel pair (1608 → 1233, `perf/ledger.csv`)
+moved the same way but was measured on a different VM and has *not* been re-run on an arm-C kernel.
+Likely the same cause; unproven.
 
 **Method note worth keeping:** the compositor-side hypothesis this overturns is in this very file
 (2026-07-29): "the flip/release side is engineered honest (guest kernel fences blob-scanout flush;

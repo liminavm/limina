@@ -6,15 +6,14 @@ are commits on **`github.com/liminavm/linux`** branch **`limina`**, base **`v7.1
 `torvalds/linux` has no stable point-release tags. Regenerate the series as a build artifact with
 `scripts/export-linux-patches.sh` (`git format-patch base..rev`).
 
-4 commits. Schema + protocol: `README.md`. Rows are keyed by SUBJECT; ordinals are informational
+3 commits. Schema + protocol: `README.md`. Rows are keyed by SUBJECT; ordinals are informational
 and drift on re-export.
 
 | ord | subject | files | diag | need | checked | issue | mr | sec | fold | tier | disp | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 0001 | mm/page_reporting: use system_freezable_wq to fix UAF during suspend | `mm/page_reporting.c` |  | **backport** — cherry-pick of upstream `0b45f69` (Link Lin, 2026-07-29, 3 Acks + akpm, Cc: stable, Fixes: 36e66c5); replaced our own driver-side patch | NOT in `v7.1.6` (checked `mm/page_reporting.c` at v7.1.5 + v7.1.6, 2026-08-03: still `schedule_delayed_work`) | n/a — upstream root-caused it independently | n/a — thread lore.kernel.org/virtualization/20260721005603.1710551-1-linkl@google.com | no (guest self-oops only) | standalone | guest-enhanced (bug also afflicts stock guests until the stable backport reaches them) | **drop-on-rebase** once the base carries the stable backport; nothing to send | judge a base by `mm/page_reporting.c`, NOT `virtio_balloon.c` — the fix is invisible in the file we used to patch; watch: restore-error-path UAF follow-up, and the `F_REPORTING_PM_SAFE` Bit 6 RFC (host-relevant: our libkrun balloon could offer Bit 6) |
-| 0002 | drm/virtio: fence RESOURCE_FLUSH for host3d blob scanout | `drivers/gpu/drm/virtio/virtgpu_plane.c` |  | needed — **rewritten** 2026-08-03 against the `vgplane_st` prepare_fb refactor (the old patch had silently stopped applying) | `v7.1.4`/`v7.1.6` read directly 2026-08-03: `prepare_fb:369` still early-returns on `!bo->guest_blob` before the fence alloc | n/a (dri-devel is patch-first) | none-yet | no | standalone | guest-enhanced | upstream-after-cleanup | mechanism-only, no uapi (avoids the DEFERRED_OUT_FENCE objection profile); the rewrite is the first version that actually ships — see Findings |
-| 0003 | drm/virtio: widen the primary plane format list | `drivers/gpu/drm/virtio/virtgpu_plane.c` |  | needed — primary plane still XRGB-only upstream | master `075b748` (7.2-rc6) 2026-08-03 | none-yet | none-yet | no | **folded** (was 0002 ARGB + 0006 XBGR/ABGR — merged into one commit 2026-08-03) | guest-enhanced | upstream-after-cleanup | restores part of the list removed by `42fd9e6c29b3` (2018, not 2017 — see Findings); Falempe 2024 widening got Gerd's Reviewed-by (unmerged); LE-only fourccs for the RGBA pair (no `HOST_` alias — flag big-endian in the submission) |
-| 0004 | drm/virtio: advertise DRM_FORMAT_MOD_LINEAR on planes | `drivers/gpu/drm/virtio/virtgpu_plane.c`, `drivers/gpu/drm/virtio/virtgpu_display.c` |  | needed — compositors gate direct scanout on an explicit LINEAR modifier | master `075b748` (7.2-rc6) 2026-08-03: `fb_modifiers_not_supported` still set | none | none; prior art = stalled 2021 set_scanout_blob-modifier series | low (guest-side; no new data crosses the virtio boundary) | standalone | guest-enhanced | **carry** — reverts a deliberate upstream decision (`85faca8ca0f6`, 2022); upstreamable only via host-negotiated modifiers (feature flag + capset + spec), a rider on the M15 device-advertised-formats work | the commit message now says NOT FOR UPSTREAM inline, so the verdict travels with the code; rebase watch: `display.c` churned by 2025 refactors |
+| 0002 | drm/virtio: widen the primary plane format list | `drivers/gpu/drm/virtio/virtgpu_plane.c` |  | needed — primary plane still XRGB-only upstream | master `075b748` (7.2-rc6) 2026-08-03 | none-yet | none-yet | no | **folded** (was 0002 ARGB + 0006 XBGR/ABGR — merged into one commit 2026-08-03) | guest-enhanced | upstream-after-cleanup | restores part of the list removed by `42fd9e6c29b3` (2018, not 2017 — see Findings); Falempe 2024 widening got Gerd's Reviewed-by (unmerged); LE-only fourccs for the RGBA pair (no `HOST_` alias — flag big-endian in the submission) |
+| 0003 | drm/virtio: advertise DRM_FORMAT_MOD_LINEAR on planes | `drivers/gpu/drm/virtio/virtgpu_plane.c`, `drivers/gpu/drm/virtio/virtgpu_display.c` |  | needed — compositors gate direct scanout on an explicit LINEAR modifier | master `075b748` (7.2-rc6) 2026-08-03: `fb_modifiers_not_supported` still set | none | none; prior art = stalled 2021 set_scanout_blob-modifier series | low (guest-side; no new data crosses the virtio boundary) | standalone | guest-enhanced | **carry** — reverts a deliberate upstream decision (`85faca8ca0f6`, 2022); upstreamable only via host-negotiated modifiers (feature flag + capset + spec), a rider on the M15 device-advertised-formats work | the commit message now says NOT FOR UPSTREAM inline, so the verdict travels with the code; rebase watch: `display.c` churned by 2025 refactors |
 
 ## Left the series
 
@@ -22,10 +21,52 @@ and drift on re-export.
 |---|---|---|
 | drm/virtio: align host-visible window allocations to 16 KiB | `guest/virtio-gpu-dkms/0001-align-host-visible-allocations-to-16-KiB.patch` | **No-op on the 16k enhanced kernel** (PAGE_ALIGN is already 16 KiB) and **known-rejected upstream**, so it has no place on a branch whose purpose is upstreamable delta. Its one real deployment is the stock-4k tier via the DKMS module. Full rationale + the (not yet reachable) F_BLOB_ALIGNMENT exit: `guest/virtio-gpu-dkms/README.md`. |
 | virtio_balloon: stop free-page reporting across suspend/resume | replaced by the `0b45f69` backport (row 0001) | Upstream root-caused the same UAF independently and chose the core fix over our driver-side approach. |
+| drm/virtio: fence RESOURCE_FLUSH for host3d blob scanout | **dropped 2026-08-04** (was on the branch for one day, as `bde37a06ba4d`; preserved under tag `limina/2026-08-04`) | Rewritten, shipped, then **measured**: it costs 86% of frames on the async-scanout rig. `virtio_gpu_resource_flush` *blocks* on the fence in `commit_tail`, and our host does not signal until the CA latch — so fencing blob scanout serialises every commit behind a host vblank. Not a bad idea badly implemented: a bad *place*. See Findings. |
 
 ## Findings
 
-### 0002 — the fence patch had been silently absent since the 7.1.x bump (2026-08-03)
+### The blob-scanout fence — absent by accident, then dropped on evidence (2026-08-03/04)
+
+Two-act story. Act one found the patch had never been applying; act two measured what it does and
+took it off the branch. **Current disposition: not carried.** The rest of this section is kept
+because the mechanism is load-bearing for the M15 present work and for anyone tempted to re-add it.
+
+#### Act two — it costs 86% of frames (2026-08-04, decisive)
+
+Isolated on the gnome-shell-rs rig (`docs/perf/gsrs-local-rig.md`): same disk, same three windows,
+`NIRI_VK_ASYNC_SCANOUT=1`, heavy profile, three kernels flipped with `grubby`.
+
+| arm | kernel | frames | missed vblanks | miss rate |
+|---|---|---|---|---|
+| A | `7.1.4-limina16k` (fence silently absent) | 8730 | 77 | **0.9%** |
+| B | `7.1.6-limina16k` (fence present) | 4615 | 3983 | **86.3%** |
+| C | `7.1.6-limina16knf` (B minus the fence commit) | 8674 | 108 | **1.2%** |
+
+Arm C is arm B's tree with exactly that commit reverted, so the stable delta and the two format
+patches are held fixed: the fence alone moves 86.3% → 1.2%. Workload comparability held across all
+three arms (median 41 elements, 35 draws); GPU time was *not* the difference (median 3.00 / 2.77 /
+3.74 ms — arm B was the fastest on the GPU and still missed nearly every frame).
+
+Mechanism, read from the source rather than inferred: `virtio_gpu_resource_flush()` calls
+`dma_fence_wait_timeout(..., 50ms)` **synchronously**, and on the atomic path that runs inside
+`commit_tail`. Our host does not signal the flush fence until the CoreAnimation latch, ~1 vblank
+later. So fencing blob scanout does not *pace* the compositor, it *serialises* it: every commit
+blocks a full refresh, and a compositor that queued its next frame ahead of time has already
+missed by the time the wait returns. Arm B's "queued 13.05ms early … presented 16.67ms late" lines
+are exactly that shape.
+
+The idea it was meant to serve — real host-derived present feedback instead of
+`drm_atomic_helper_fake_vblank()` — is still right, and the enhanced-tier rubric below still
+describes something worth having. What is wrong is delivering it as a blocking wait in the commit
+path. A redesign would hand the host fence to the atomic commit as an **out-fence** (the flip event
+fires when the host latches, nothing blocks) — that is a real design task, not a rewrite of two
+conditions, and it belongs with the M15 present work rather than as a carried kernel patch.
+
+**Method lesson:** we shipped this on inference — the code plainly "should" pace better — and the
+first oracle able to see it said the opposite by two orders of magnitude. A patch that has never
+been observed doing its job is a hypothesis, however plausible its diff.
+
+#### Act one — the patch had been silently absent since the 7.1.x bump (2026-08-03)
 
 The old `patches/linux/0001` stopped applying when upstream refactored `prepare_fb` to the
 per-plane-state `vgplane_st->fence` shape, and the build script's tolerant apply printed
@@ -62,13 +103,13 @@ dumb-path template this extends); Kasireddy's `DRM_CAP_DEFERRED_OUT_FENCE` RFC (
 scanout buffers from other devices" (whose fencing an earlier reading of ours mistook for full
 coverage).
 
-**Enhanced-tier rubric:** (a) host-paced flip completion for venus blob scanout — the host fence
+**Enhanced-tier rubric (of the dropped patch — kept as the spec a redesign would have to meet):** (a) host-paced flip completion for venus blob scanout — the host fence
 gates the guest's flip event (no stale-frame reuse races); (b) stock guest boots and renders;
 blob flushes unfenced → compositor free-runs against the presenter (occasional stale-frame
 flicker on the zero-copy path); (c) host-side-only pacing proven insufficient — the host cannot
 delay a completion the guest never waits on; (d) exit = rebased drm-misc submission.
 
-### 0003 — the format restriction is a 2018 big-endian side note, not a 2017 decision (corrected 2026-08-03)
+### 0002 — the format restriction is a 2018 big-endian side note, not a 2017 decision (corrected 2026-08-03)
 
 Earlier revisions of this ledger cited a 2017 kraxel series as the origin of the XRGB8888-only
 primary plane. Searching the actual history shows no such commit. The real one is
@@ -99,7 +140,7 @@ rejection happens in the guest's DRM atomic check before anything reaches the ho
 already displays RGBA-order IOSurfaces natively, `spikes/scanout-modifiers/`); (d) exit = upstream
 the folded patch and/or land device-advertised formats.
 
-### 0004 — LINEAR advertisement was deliberately *removed* upstream, not merely absent
+### 0003 — LINEAR advertisement was deliberately *removed* upstream, not merely absent
 
 Commit **`85faca8ca0f6`** ("drm/virtio: set fb_modifiers_not_supported", Chia-I Wu, 2022, R-b
 Daniel Stone, pushed by Gerd Hoffmann) opted virtio-gpu out of the drm core's implicit LINEAR
