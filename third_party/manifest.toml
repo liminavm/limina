@@ -5,7 +5,7 @@
 # every rev ever pinned here must stay reachable), then update `rev` here in the same commit.
 # Patch-audit status lives in docs/upstreaming/ledger/.
 #
-# Deps not yet migrated to the fork model (libkrun, kosmickrisp, mesa, edk2) still vendor via
+# Deps not yet migrated to the fork model (libkrun, guest mesa, edk2) still vendor via
 # their committed patches/<dep>/ series; they move here one at a time.
 #
 # `heavy = true` means `cargo xtask vendor` SKIPS the clone by default — the tree is huge and
@@ -36,7 +36,7 @@ base = "178a3d73968"
 repo = "https://github.com/liminavm/virglrenderer.git"
 upstream = "https://gitlab.freedesktop.org/virgl/virglrenderer.git"
 branch = "limina"
-rev = "bc03f705def3bd9becd5764f18ad8332172596aa"
+rev = "09e2a0b70a6dfe3fa2852cf6eb79df5350d5d7aa"
 base = "2048dfb7f3550f0873116b38083182b9ef5eb32a"
 
 [linux]
