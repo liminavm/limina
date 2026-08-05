@@ -19,9 +19,11 @@
 //!  3. the guest IS submitting (a quiet log must not pass as healthy — a black
 //!     desktop with no traffic would satisfy (1) vacuously),
 //!
-//! plus the usual identity floor (same boot_id, shell alive).
-//!
-//! Pixel fidelity (capture-based) is the P2 gate, not this one.
+//! plus the usual identity floor (same boot_id, shell alive), and — the P2 pixel
+//! oracle — the desktop's color diversity must survive the restore: the content-loss
+//! class (icon atlases / glyph caches / wallpaper flat gray, host-GL-only textures)
+//! collapses distinct-color counts by orders of magnitude while every process and
+//! submit oracle stays green. RED lever: `VREND_CONTENT=0` (structure-only replay).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -57,6 +59,22 @@ fn tick_total(window: &str, name: &str) -> (i64, usize) {
         }
     }
     (total, ticks)
+}
+
+/// Count distinct quantized colors (4 bits/channel, every 4th pixel) in a captured
+/// frame — the pixel oracle for the P2 content-loss class. A healthy seated desktop
+/// (wallpaper gradient, icons, glyphs) shows thousands of distinct colors; the
+/// gray-blocks failure state (every once-uploaded texture flat gray) collapses this
+/// by orders of magnitude. Deliberately NOT a golden-image compare: the clock ticks,
+/// windows animate — diversity is the property that survives those and dies with
+/// the content.
+fn color_diversity(frame: &limina_test::CapturedFrame) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    for px in frame.rgba.chunks_exact(4).step_by(4) {
+        let key = ((px[0] as u16 >> 4) << 8) | ((px[1] as u16 >> 4) << 4) | (px[2] as u16 >> 4);
+        seen.insert(key);
+    }
+    seen.len()
 }
 
 /// `ssh_exec` with a few retries: a loaded host can drop a single connection right
@@ -179,6 +197,24 @@ fn classic_vrend_world_survives_snapshot_restore() {
          before trusting the gate"
     );
 
+    // Pixel baseline for the P2 content oracle: the freshest presented frame of the
+    // live desktop (calculator open from the stimulus above).
+    let pre_frame = g1
+        .read_capture()
+        .expect("no pre-suspend scanout capture — display capture not flowing");
+    let pre_colors = color_diversity(&pre_frame);
+    eprintln!("pre-suspend pixel baseline: {pre_colors} distinct quantized colors");
+    assert!(
+        pre_colors >= 200,
+        "the live desktop capture shows only {pre_colors} distinct colors — not a real \
+         seated frame; the pixel oracle can't gate on this baseline"
+    );
+    // Keep the pre frame on disk for failure forensics (g1's scratch dies with it).
+    let pre_png = std::env::temp_dir().join(format!("limina-vrend-pre-{}.png", std::process::id()));
+    if let Some(p) = g1.display_capture_path() {
+        let _ = std::fs::copy(p, &pre_png);
+    }
+
     let boot_id = ssh_retry(&g1, "cat /proc/sys/kernel/random/boot_id");
     let shell_pid = ssh_retry(&g1, "pgrep -x gnome-shell | head -1");
     assert!(
@@ -286,6 +322,17 @@ fn classic_vrend_world_survives_snapshot_restore() {
     );
     std::thread::sleep(SETTLE);
 
+    // P2 pixel oracle: color diversity must survive the restore. The content-loss
+    // failure (icon atlases / glyph caches / wallpaper flat gray) collapses it by
+    // orders of magnitude while every process/submit oracle stays green.
+    let post_frame = g2
+        .read_capture()
+        .expect("no post-restore scanout capture — the restored session presented no frame");
+    let post_colors = color_diversity(&post_frame);
+    eprintln!(
+        "post-restore pixel probe: {post_colors} distinct quantized colors (pre {pre_colors})"
+    );
+
     let log = g2.supervisor_log();
     let window = &log[log_mark.min(log.len())..];
 
@@ -321,8 +368,20 @@ fn classic_vrend_world_survives_snapshot_restore() {
         && unknown_ctx == 0
         && unknown_res == 0
         && (0..=MAX_REJECTIONS as i64).contains(&errs)
-        && shell_pid_after == shell_pid;
+        && shell_pid_after == shell_pid
+        && post_colors * 4 >= pre_colors;
     if !verdict_ok {
+        // Keep the two frames for forensics (the scratch copies die with the guests).
+        let post_png =
+            std::env::temp_dir().join(format!("limina-vrend-post-{}.png", std::process::id()));
+        if let Some(p) = g2.display_capture_path() {
+            let _ = std::fs::copy(p, &post_png);
+        }
+        eprintln!(
+            "pixel forensics: pre frame at {}, post frame at {}",
+            pre_png.display(),
+            post_png.display()
+        );
         // Guest-side display forensics before teardown: distinguishes "world dead"
         // from "display never re-lit" (both read as submits=+0 host-side).
         let drm = g2
@@ -355,6 +414,7 @@ fn classic_vrend_world_survives_snapshot_restore() {
              window totals ({ticks} ticks): submits=+{submits} unknown_ctx=+{unknown_ctx} \
              unknown_res=+{unknown_res} errs=+{errs}\n\
              (submits must advance, zero unknowns, errs within tolerance)\n\
+             pixel diversity:          {pre_colors} -> {post_colors} (post must keep >= 1/4)\n\
              gnome-shell pid:          {shell_pid} -> {shell_pid_after}\n\
              guest display state:\n{drm}"
         );
@@ -362,7 +422,9 @@ fn classic_vrend_world_survives_snapshot_restore() {
 
     eprintln!(
         "classic world survived: scanout_rejects=0 submit_rejects={submit_rejects} \
-         submits=+{submits} errs=+{errs} over {ticks} ticks"
+         submits=+{submits} errs=+{errs} over {ticks} ticks, pixel diversity \
+         {pre_colors} -> {post_colors}"
     );
+    let _ = std::fs::remove_file(&pre_png);
     cleanup();
 }
