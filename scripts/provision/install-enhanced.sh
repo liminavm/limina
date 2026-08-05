@@ -21,7 +21,7 @@
 #   1. 16k kernel RPM   -> kernel-install/dracut writes a BLS entry; INSTALLONLY (co-exists with
 #                          stock AND keeps the prior enhanced kernel as a fallback). The STOCK
 #                          kernel is locked (not ours) so a stock update can't steal the default.
-#   2. mesa RPMs        -> replace stock mesa at /usr (zink GL + venus Vulkan); LOCKED, but the
+#   2. mesa RPMs        -> replace stock mesa at /usr (venus Vulkan; GL stays virgl); LOCKED, but the
 #                          installer lifts the lock to UPDATE it, then re-locks (re-runnable).
 #   3. clipboard@limina  -> the gnome-shell extension (GNOME tier of the clipboard bridge) at
 #                          /usr/share/gnome-shell/extensions; limina-agent-session self-enables
@@ -38,7 +38,7 @@
 #                          is enabled --global for every user's next login).
 #                          Both OPTIONAL: installed only if staged into the payload, and
 #                          SELinux-relabeled so they start on a stock (Enforcing) guest.
-#   5. driver-select env -> /etc/environment.d (route GL through zink->venus, force the venus ICD)
+#   5. driver-select env -> /etc/environment.d (GL via virgl/vrend, force the venus Vulkan ICD)
 #   6. GRUB              -> default to the 16k kernel + auto-boot (unattended)
 #
 # Usage (in guest):  sudo /path/to/install-enhanced.sh [PAYLOAD_DIR]
@@ -311,7 +311,7 @@ done
 echo "   kernel $KREL: initramfs verified (virtio_blk + $ROOT_FS) + BLS entry present"
 echo "   (installonly: co-installed beside stock + prior enhanced; stock kernel pinned)"
 
-### 2. mesa RPMs (26.2 zink+venus) -> REPLACE stock at /usr; versionlock #########
+### 2. mesa RPMs (26.x venus) -> REPLACE stock at /usr; versionlock ##############
 MESA_RPMS=$(runtime_rpms "$PAYLOAD/mesa-*.rpm")
 [ -n "$MESA_RPMS" ] || { echo "no mesa RPMs in payload"; exit 1; }
 # Guard against a STALE-OVERLAY payload (hit 2026-07-20): extracting a new tarball over an
@@ -328,7 +328,7 @@ MESA_VRS=$(for r in $MESA_RPMS; do rpm -qp --qf '%{VERSION}-%{RELEASE}\n' "$r" 2
 MESA_EXTRAS=$(installed_extra_rpms "$PAYLOAD/mesa-*.rpm")
 [ -z "$MESA_EXTRAS" ] || MESA_RPMS="$MESA_RPMS
 $MESA_EXTRAS"
-echo "-- installing mesa (replaces stock -> our venus/zink build):"; echo "$MESA_RPMS" | sed 's#.*/#     #'
+echo "-- installing mesa (replaces stock -> our venus build):"; echo "$MESA_RPMS" | sed 's#.*/#     #'
 # Lift any EXISTING mesa versionlock FIRST. On a re-run / update the lock pins the currently
 # installed enhanced mesa, so a newer build would be "filtered out by exclude filtering" and never
 # install — lifting before install is what lets the installer UPDATE a versionlocked package. On a
@@ -476,18 +476,23 @@ else
   echo "-- no limina-agent-session in payload; skipping (host<->guest clipboard stays inactive)"
 fi
 
-### 5. driver selection: GL via zink -> venus (force the venus ICD over lavapipe) #
-# mesa now lives at /usr, so this is plain driver-selection env (no LD_LIBRARY_PATH/prefix). Our
-# mesa-vulkan-drivers ships BOTH lavapipe (lvp) and venus (virtio) ICDs, so pin venus for zink;
-# otherwise zink may enumerate lavapipe first and run GL on the CPU. On a stock-4k fallback boot
-# venus will not init and GL degrades — acceptable, that path is the safety net, not the feature.
-echo "-- GL driver selection -> zink over venus"
+### 5. driver selection: GL via virgl (vrend), Vulkan via venus ################
+# mesa now lives at /usr, so this is plain driver-selection env (no LD_LIBRARY_PATH/prefix).
+# Since 2026-08-04 GL rides the virgl driver (host vrend renders EGLImage-backed IOSurface
+# scanouts zero-copy; zink-as-guest-GL is no longer a supported configuration — most guest
+# zink patches only guarded host feature gaps, and the vrend present path is now blit-free).
+# Vulkan stays venus: our mesa-vulkan-drivers ships BOTH lavapipe (lvp) and venus (virtio)
+# ICDs, so pin venus; otherwise clients may enumerate lavapipe first and run on the CPU. On
+# a stock-4k fallback boot venus will not init and Vulkan degrades — acceptable, that path
+# is the safety net, not the feature. (File name kept as 90-limina-zink.conf so upgrades
+# overwrite the old selection instead of leaving it to fight a new file.)
+echo "-- GL driver selection -> virgl (vrend); Vulkan -> venus"
 VENUS_ICD=$(ls /usr/share/vulkan/icd.d/virtio_icd.*.json 2>/dev/null | head -1)
 mkdir -p /etc/environment.d
 {
-  echo "# limina enhanced tier: route GL through zink -> venus (virtio Vulkan), not llvmpipe."
-  echo "GALLIUM_DRIVER=zink"
-  echo "MESA_LOADER_DRIVER_OVERRIDE=zink"
+  echo "# limina enhanced tier: GL through virgl (vrend), Vulkan through venus."
+  echo "GALLIUM_DRIVER=virgl"
+  echo "MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu"
   [ -n "$VENUS_ICD" ] && echo "VK_DRIVER_FILES=$VENUS_ICD"
   # No VN_PERF here. `no_fence_feedback` used to be set and was RETIRED 2026-07-25.
   #

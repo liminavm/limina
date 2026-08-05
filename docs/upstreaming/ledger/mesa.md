@@ -53,6 +53,19 @@ XCB/Wayland/Win32 ifdefs). These four retire with the guest zink deployment rath
 Note this settles the *host* question only — while guest zink still ships, the guest-side verdicts
 in the table above stand unchanged.
 
+**Drop-guest-zink EXECUTED (2026-08-04, later the same day):** zink-as-guest-GL is no longer a
+supported configuration — `install-enhanced.sh` selects virgl for GL (venus stays the Vulkan
+side), both F44 enhanced images repassed, both tiers smoke-tested. Consequences for this series:
+**0001, 0003, 0004, 0006 are DEAD in the guest** (their zink/kopper code paths no longer run in
+any supported config) — physically drop them at the next guest-mesa respin (the F43 base
+repoint), which also shrinks the pool ahead of the limina-guest fork migration (task #24).
+**0014**'s guest trigger is likewise gone (it lives on in the host zink-on-KK build, and stays
+an upstream-now MR — the bug is real upstream). **0002 stays**: the fbobject NULL guard is core
+GL-frontend code (its observed trigger was the zink session, but the guard is generic, free,
+and still an upstream-now candidate). The venus rows (0009–0013, 0015–0017) are untouched —
+venus is now the *only* guest consumer of these patches. `scripts/build-mesa-zink.sh` archived
+(`scripts/archive/`). Upstream-MR verdicts above are unaffected: dead-in-guest ≠ not-worth-sending.
+
 **Enhanced-tier rubric (series):** all patches ship only in the guest mesa RPMs; a
 stock guest degrades to llvmpipe rather than breaking (0012 exists precisely to keep
 that degradation non-fatal on the GRUB-fallback path). Exit strategy is the README's

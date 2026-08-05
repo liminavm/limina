@@ -59,9 +59,17 @@ Shell of that release (same `libmutter-NN` ABI) — F43 `49.6` over shell `49.1`
 regression" / `kk_encoder.c:299` block did NOT reproduce on the clean stack — F44 16k+venus+mutter-50.1
 boots the seated desktop and runs WebGL at ~60fps on venus→KK→Metal (see `limina-enh-delivery` memory).
 The enhanced 16 KiB kernel ships as RPM `limina-kernel-16k` (BLS entry beside stock).
-**Current shippable tarball (2026-08-04):**
+**Current shippable tarball (2026-08-04, re-tarred same day for the GL flip):**
 `target/guest-tools-7.1.6-mesa2615r6/limina-guest-tools-f44.tar.zst` (kernel 7.1.6-2 +
 mesa 26.1.5-6.limina; both F44 enhanced images took its `install-enhanced.sh` pass).
+**GL default flipped 2026-08-04 (drop-guest-zink):** the installer's
+`/etc/environment.d/90-limina-zink.conf` (name kept) now selects
+`GALLIUM_DRIVER=virgl` + `MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu` — the session's GL rides
+**vrend** (EGLImage-backed IOSurface scanout, zero-copy since virgl `d042ed65`); **venus
+stays as the Vulkan side** (`VK_DRIVER_FILES` → virtio ICD). zink-as-guest-GL is no longer
+a supported configuration. Both F44 enhanced images re-ran the installer pass and were
+smoke-tested (session-on-vrend + vkcube-on-venus + firefox, human-verified; stock tier
+re-smoked the same day).
 NOTE the host prerequisite: the 0010-less guest needs a host with KK ≥ `b778250986b`
 (modifier ext + graceful query) and virglrenderer ≥ `0cc513fd` (verbatim passthrough) —
 the revs pinned in `third_party/manifest.toml`. **Update the host app before (or with) the

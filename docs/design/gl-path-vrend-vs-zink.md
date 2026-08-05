@@ -1,8 +1,17 @@
 # The guest GL path: vrend/virgl vs zink-on-venus
 
-Status: **measured 2026-08-04** (task #25). Prompted by the proposal to stop forcing zink in the
-guest — "we do have virgl working with the vrend path … so we'd have vrend/virgl for GL and venus
-for Vulkan native".
+Status: **DECIDED + EXECUTED 2026-08-04**: zink-as-guest-GL is no longer a supported
+configuration. `install-enhanced.sh` now writes the virgl selection below as the enhanced
+default (file name `90-limina-zink.conf` kept for upgrade-overwrite); both F44 enhanced
+images took the pass and were smoke-tested (session-on-vrend + vkcube-on-venus + firefox),
+the stock tier re-smoked. The two blockers this doc's measurement era carried are gone the
+same day: the vrend context poison is fixed for real (venus-blob IOSurface import) and the
+readpixels present tax is deleted (EGLImage-backed scanout) — `spikes/vrend-iosurface/`.
+Guest zink guard patches (mesa 0001/0003/0004/0006; 0014's trigger) retire at the next
+guest-mesa respin — see `docs/upstreaming/ledger/mesa.md`.
+Originally: **measured 2026-08-04** (task #25). Prompted by the proposal to stop forcing zink in
+the guest — "we do have virgl working with the vrend path … so we'd have vrend/virgl for GL and
+venus for Vulkan native".
 
 Vehicle: `vrend-arm.raw`, an APFS clone of `Fedora-Workstation-44.enhanced.test.raw`, booted with
 the default EFI+venus recipe (`boot-enhanced-efi-kk.sh`). The whole experiment is **config-only** —
