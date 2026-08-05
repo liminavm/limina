@@ -90,7 +90,35 @@ in the black-window state — process survival is exactly the thing this bug doe
 host-side assert on the rejected-submit storm: 4.5 M ComponentError(22) in minutes is not
 subtle).
 
-### Fix directions (task #19)
+### RESOLVED (2026-08-05): fix direction 1 shipped — P0/P1/P2, desktop restores pixel-correct
+
+Direction 1 below is what shipped, in three steps (limina 999daf1 + 51626be; virgl fork
+2faed850 + 969af493; libkrun series 0127 + 0128):
+
+- **P0 (record + census)**: per-decode-ctx `vrend_journal` tee — durable subset (creates,
+  latest-wins binds/state, destroy-prunes). Seated shell = 128 entries / 18 KB flat.
+- **P1 (structural replay)**: journal export in the shared VKJR format (synthesized
+  SET_SUB_CTX switches keep per-sub namespaces id-faithful), libkrun payload v5 classic ops
+  (ResourceCreate2d/3d, AttachBacking, SetScanout), two-phase replay + full-box guest-shadow
+  re-upload. L2 gate `classic_vrend_world_survives_snapshot_restore` — **EFI-boots** the
+  seated golden (the injected-6.12 vehicle produces ZERO classic submits even live; that
+  environment gap is exactly how this bug hid from the venus-era L2s). RED (VREND_JOURNAL=0)
+  = errs +123,821/12 s; GREEN 117 s.
+- **P2 (host-side content capture)**: the P1 eyeball FALSIFIED the "clients redraw so
+  structure suffices" hope in an instructive way — clients DID self-heal (gears/cube
+  animating), but the shell's once-uploaded textures (icon atlases, glyph caches, corner
+  masks, shadow blurs) have their only copy in host GL objects: the restored shell rendered
+  every frame correctly from flat-gray sources. Fix = vrend content export/restore through
+  the normal transfer path (payload v6 `classic_contents`, restored before the scanout
+  flips). Seated capture: 5 classic ctxs / 193 MiB; restore 157 entries / 0 drops in a
+  ~400 ms DRIVER_OK hold. **User-verified fully restored** (icons, text, rounded corners,
+  shadows, both workloads animating).
+
+Item 3 (the `on_window_close = suspend` dogfood footgun) is thereby moot; the play-button
+UX remains task #18. An automated pixel-golden L2 (this dossier's "missing oracle") is the
+remaining #19 item.
+
+### Fix directions (task #19) — as written pre-fix
 
 1. **Extend retain-and-replay to classic vrend** (mirror of the venus design: virgl wire
    commands are guest-id-keyed, so replay is id-faithful; record per-context classic streams
