@@ -36,7 +36,7 @@ base = "418f2963a15"
 repo = "https://github.com/liminavm/virglrenderer.git"
 upstream = "https://gitlab.freedesktop.org/virgl/virglrenderer.git"
 branch = "limina"
-rev = "2faed85059932a67bc10608c118c04e1e479b668"
+rev = "969af493889d72457338d930e2ce59ae52b7b422"
 base = "f2945d3974256fefc731f0411c28b865680eebdc"
 
 [linux]
