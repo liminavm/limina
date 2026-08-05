@@ -52,7 +52,9 @@ fn l1_snapshot_save_writes_file_and_exits_126() {
         .expect("resolving L1 guest config")
         .append_cmdline("limina.counter")
         .with_supervisor_log()
-        .with_snapshot();
+        .with_snapshot()
+        // This test exercises the RAW (unquiesced) seam, which is inert unless armed (#20).
+        .with_env("LIMINA_RAW_SNAPSHOT_SEAM", "1");
     cfg.cpus = 2;
     // A small guest keeps the RAM snapshot (dumped + CRC'd + written) fast; the counter guest
     // needs almost nothing.
@@ -135,7 +137,11 @@ fn l1_guest_resumes_in_fresh_worker_from_snapshot() {
     };
     const CPUS: u8 = 2;
     let suspend_cfg = {
-        let mut c = base().with_supervisor_log().with_snapshot();
+        let mut c = base()
+            .with_supervisor_log()
+            .with_snapshot()
+            // Raw (unquiesced) seam — inert unless armed (#20).
+            .with_env("LIMINA_RAW_SNAPSHOT_SEAM", "1");
         c.cpus = CPUS;
         c.ram_mib = 512; // small RAM keeps the RAM dump + CRC + write fast
         c
@@ -328,6 +334,72 @@ fn l2_suspend_bracket_aborts_when_guest_cannot_quiesce() {
     assert!(
         guest.worker_pid().is_ok(),
         "worker should still be running after the second aborted suspend"
+    );
+
+    let _ = guest.shutdown(Duration::from_secs(10));
+}
+
+/// Task #20: the raw SIGUSR1 seam must be INERT on a production-shaped worker. The raw
+/// path dumps a RUNNING (unquiesced) guest — restoring such a snapshot produces subtle
+/// corruption, and mistaking this seam for the production bracket once manufactured a
+/// false wedge diagnosis (spikes/restore-s2idle-wake). Without the test-only
+/// `LIMINA_RAW_SNAPSHOT_SEAM` env, a stray `kill -USR1` must do nothing: no snapshot
+/// file, no exit, guest keeps running.
+#[test]
+fn raw_sigusr1_seam_is_inert_by_default() {
+    if !limina_test::require_hvf_or_skip("raw_sigusr1_seam_is_inert_by_default") {
+        return;
+    }
+
+    // Production shape: suspend armed (--snapshot-file), raw seam env NOT set.
+    let mut cfg = GuestConfig::l1_from_env()
+        .expect("resolving L1 guest config")
+        .append_cmdline("limina.counter")
+        .with_supervisor_log()
+        .with_snapshot();
+    cfg.cpus = 2;
+    cfg.ram_mib = 512;
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    guest
+        .wait_for("LIMINA_COUNTER_READY", Duration::from_secs(20))
+        .expect("counter guest did not reach userspace");
+    guest
+        .wait_for("mono_ms=", Duration::from_secs(5))
+        .expect("no counter heartbeat before the stray signal");
+    let before = last_counter(&guest.console()).expect("a counter heartbeat before the signal");
+
+    // The stray signal: exactly what the round-1 confusion sent.
+    guest.snapshot().expect("sending SIGUSR1 to the worker");
+    std::thread::sleep(Duration::from_secs(5));
+
+    // Inert means: worker alive, no snapshot written, no capture logged.
+    assert!(
+        guest.worker_pid().is_ok(),
+        "worker must survive a stray SIGUSR1 (raw seam unarmed)"
+    );
+    let snap = guest.snapshot_path().expect("snapshot path configured");
+    assert!(
+        !snap.exists(),
+        "a stray SIGUSR1 must not write a snapshot ({} exists)",
+        snap.display()
+    );
+    let log = guest.supervisor_log();
+    assert!(
+        !log.contains("SIGUSR1 received"),
+        "the raw trigger thread must not be installed without LIMINA_RAW_SNAPSHOT_SEAM:\n{log}"
+    );
+
+    // And the guest never noticed: the counter keeps climbing.
+    guest
+        .wait_for("mono_ms=", Duration::from_secs(15))
+        .expect("no counter heartbeat after the stray signal");
+    let after = last_counter(&guest.console()).expect("a counter heartbeat after the signal");
+    assert!(
+        after.0 > before.0,
+        "the counter must keep advancing (before n={}, after n={})",
+        before.0,
+        after.0
     );
 
     let _ = guest.shutdown(Duration::from_secs(10));

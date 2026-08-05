@@ -130,6 +130,14 @@ struct Cli {
     #[arg(long)]
     snapshot_file: Option<PathBuf>,
 
+    /// Discard a pending suspend for this run: delete the armed snapshot so this boot is COLD
+    /// instead of resuming it. Flat `--disk` runs arm suspend by default with the snapshot
+    /// living beside the boot disk (`<disk>.limina-suspend.bin` — the pair is only valid
+    /// together); without this flag an existing snapshot is always consumed and resumed — a VM
+    /// never boots past a pending resume.
+    #[arg(long)]
+    discard_suspend: bool,
+
     /// Managed-VM only (M9.2): the bundle's `state.toml`, so the supervisor can persist the
     /// `[suspended]` record when the worker exits 126. Set by `cli_from_definition`; not a user
     /// flag. Distinct from `--window-state-file` (which is windowed-display only).
@@ -510,7 +518,8 @@ struct StopArgs {
 
 #[derive(clap::Args, Debug)]
 struct SuspendArgs {
-    /// VM name or .liminavm bundle path.
+    /// VM name, .liminavm bundle path, or — for a flat `--disk` run — the boot-disk path
+    /// (the snapshot lands beside the disk; the next flat run of it resumes).
     vm: String,
 }
 
@@ -730,7 +739,19 @@ fn cmd_stop(args: StopArgs) -> Result<()> {
 }
 
 fn cmd_suspend(args: SuspendArgs) -> Result<()> {
-    let bundle = vmlib::bundle::resolve(&args.vm)?;
+    // Task #20: `limina suspend` also reaches FLAT runs — pass the boot disk path instead of
+    // a bundle name. Bundles keep priority (the existing contract); the disk-file fallback
+    // only engages when no bundle resolves and the argument names an existing file.
+    let bundle = match vmlib::bundle::resolve(&args.vm) {
+        Ok(b) => b,
+        Err(bundle_err) => {
+            let disk = Path::new(&args.vm);
+            if disk.is_file() {
+                return cmd_suspend_flat(disk);
+            }
+            return Err(bundle_err);
+        }
+    };
     let pid = match vmlib::runtime::status(&bundle) {
         vmlib::runtime::VmStatus::Stopped => {
             println!("{} is not running", bundle.dir_name());
@@ -760,6 +781,91 @@ fn cmd_suspend(args: SuspendArgs) -> Result<()> {
              guest ignoring the suspend button); it is still running",
             bundle.dir_name()
         )
+    }
+}
+
+/// Task #20: suspend a running FLAT `--disk` run by its boot-disk path. The supervisor is
+/// found by scanning for a `limina` process whose argv names this disk (flat runs have no
+/// bundle/state registry — the disk IS the identity); success = the supervisor exits and the
+/// default-armed snapshot (`<disk>.limina-suspend.bin`) exists. The next flat run of the same
+/// disk auto-resumes it.
+fn cmd_suspend_flat(disk: &Path) -> Result<()> {
+    // Deliberately NOT canonicalized: the running supervisor's argv and the default-armed
+    // snapshot both use the path exactly as the run was invoked (`/var/...` vs
+    // `/private/var/...` are different strings), so matching keys on the same spelling.
+    let snap = PathBuf::from(format!("{}.limina-suspend.bin", disk.display()));
+
+    // Find the supervisor: `pgrep -f <disk path>` matches both the supervisor (limina) and its
+    // worker (limina-vmm); keep only processes whose command name is exactly `limina`.
+    let out = std::process::Command::new("pgrep")
+        .arg("-f")
+        .arg(disk.as_os_str())
+        .output()
+        .context("running pgrep")?;
+    let mut supervisors: Vec<i32> = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let Ok(pid) = line.trim().parse::<i32>() else {
+            continue;
+        };
+        if pid == std::process::id() as i32 {
+            continue;
+        }
+        let comm = std::process::Command::new("ps")
+            .args(["-o", "comm=", "-p", &pid.to_string()])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        let name = Path::new(&comm)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or(comm);
+        if name == "limina" {
+            supervisors.push(pid);
+        }
+    }
+    let pid = match supervisors.as_slice() {
+        [] => anyhow::bail!(
+            "no running limina supervisor found for {} (is the VM running, and was it started \
+             with this disk path?)",
+            disk.display()
+        ),
+        [pid] => *pid,
+        many => anyhow::bail!(
+            "multiple limina supervisors match {} (pids {many:?}); suspend them individually \
+             with kill -TSTP",
+            disk.display()
+        ),
+    };
+
+    vmlib::runtime::signal_suspend(pid)?;
+    // Same bound as the managed path: quiesce ≤20s + save, supervisor teardown after. The
+    // SNAPSHOT is the success signal, not process death: it is published atomically
+    // (stream-to-.tmp + rename), and an exited supervisor can linger as a zombie when its
+    // parent hasn't reaped it yet — `kill(pid, 0)` still succeeds on a zombie.
+    let deadline = std::time::Instant::now() + Duration::from_secs(75);
+    loop {
+        if snap.exists() {
+            println!(
+                "suspended; snapshot at {} — the next run of this disk resumes it",
+                snap.display()
+            );
+            return Ok(());
+        }
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            anyhow::bail!(
+                "the VM stopped without leaving a snapshot at {} (it may have powered off, or \
+                 was started with an explicit --snapshot-file elsewhere)",
+                snap.display()
+            );
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "the VM did not suspend within 75s — the guest could not quiesce (a virtiofs \
+                 share or a guest ignoring the suspend button); it is still running"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(200));
     }
 }
 
@@ -874,6 +980,7 @@ fn cli_from_definition(
         // M9.2 suspend wiring (computed above): arm the worker's snapshot path and hand run_vm
         // the state.toml to persist `[suspended]` into on a 126 exit.
         snapshot_file: Some(snapshot_bin),
+        discard_suspend: false,
         suspend_state_file: Some(state_toml),
         on_window_close: cfg.display.on_window_close,
         virtio_console: None,
@@ -929,7 +1036,11 @@ fn cli_from_definition(
 /// invocation today, or (later) one synthesized from a managed VM definition. On
 /// success it never returns to the caller: the windowed path runs the AppKit loop
 /// forever and the headless path ends in `process::exit`.
-fn run_vm(cli: Cli) -> Result<()> {
+fn run_vm(mut cli: Cli) -> Result<()> {
+    // Task #20: flat runs get suspend armed by default (and --discard-suspend honored) before
+    // anything below reads cli.snapshot_file.
+    default_arm_flat_suspend(&mut cli)?;
+    let cli = cli;
     // Resolve the Command/Option swap policy up front (default ON; --no-swap-cmd-opt opts out)
     // before any field of `cli` is moved out below, so the windowed path can use it freely.
     let swap_cmd_opt = cli.swap_cmd_opt_enabled();
@@ -1376,19 +1487,31 @@ fn run_vm(cli: Cli) -> Result<()> {
             suspend_state_file: cli.suspend_state_file.clone(),
             snapshot_file: cli.snapshot_file.clone(),
             on_window_close: cli.on_window_close,
-            // The restore splash lives beside the snapshot under its canonical name (the
-            // snapshot itself gets renamed `.consumed` at restore; the splash does not).
-            splash_save_path: cli
-                .snapshot_file
-                .as_ref()
-                .map(|p| p.with_file_name("splash.png")),
+            // The restore splash lives beside the snapshot under a derived name (the snapshot
+            // itself gets renamed `.consumed` at restore; the splash does not). Managed VMs
+            // keep `run/splash.png` in their private bundle dir; a flat run's snapshot sits
+            // NEXT TO THE DISK in a shared directory, so its splash is disk-derived
+            // (`<disk>.limina-suspend.splash.png`) to avoid cross-VM collisions (#20).
+            splash_save_path: cli.snapshot_file.as_ref().map(|p| {
+                if cli.suspend_state_file.is_some() {
+                    p.with_file_name("splash.png")
+                } else {
+                    p.with_extension("splash.png")
+                }
+            }),
             // A resume is pending iff the armed snapshot exists (a PEEK — the consume happens
             // at worker spawn inside the session); show its splash until the first frame.
             restore_splash: cli
                 .snapshot_file
                 .as_ref()
                 .filter(|p| p.exists())
-                .map(|p| p.with_file_name("splash.png"))
+                .map(|p| {
+                    if cli.suspend_state_file.is_some() {
+                        p.with_file_name("splash.png")
+                    } else {
+                        p.with_extension("splash.png")
+                    }
+                })
                 .filter(|p| p.exists()),
         });
     }
@@ -1422,6 +1545,15 @@ fn run_vm(cli: Cli) -> Result<()> {
                 Ok(()) => log::info!("VM suspended; snapshot at {}", snapshot.display()),
                 Err(e) => log::error!("persisting the suspended state failed: {e}"),
             }
+        } else if let Some(snapshot) = &cli.snapshot_file {
+            // Flat run (#20): no state.toml to persist into — the snapshot beside the disk IS
+            // the record. Printed directly (default log level hides info!) so the CLI user
+            // learns the resume contract.
+            println!(
+                "suspended; snapshot at {} — the next run of this disk resumes it \
+                 (--discard-suspend to cold-boot)",
+                snapshot.display()
+            );
         }
     }
     // The worker is gone: a consumed snapshot (this run restored from it) has no further use —
@@ -1682,6 +1814,50 @@ struct DiskOpt {
 /// stripped from the right in any order; everything left is the path, so interior colons in a
 /// path are fine. The one un-escapable edge (shared with `--share`): a path that literally ends
 /// in `:ro` is read as the flag. `SIZE` accepts a `K`/`M`/`G`/`T` binary suffix (bare = bytes).
+/// Task #20: a flat `--disk` run arms suspend BY DEFAULT, with the snapshot beside the boot
+/// disk (`<disk>.limina-suspend.bin` — a snapshot is single-use against the disk exactly as
+/// the suspend left it, so the pair must travel together). This gives the CLI dev loop the
+/// same invariant managed VMs already have: a VM never boots PAST a pending resume — an
+/// armed path with an existing snapshot auto-resumes at spawn (`take_pending_resume`), and
+/// `--discard-suspend` is the explicit cold-boot escape. Managed starts (which pass
+/// `--suspend-state-file` + their bundle's snapshot path) are untouched, an explicit
+/// `--snapshot-file` always wins, and a read-only boot disk (`:ro` / `--read-only`) or an
+/// ISO-only boot stays unarmed (nothing durable to resume against).
+fn default_arm_flat_suspend(cli: &mut Cli) -> Result<()> {
+    if cli.snapshot_file.is_none() && cli.suspend_state_file.is_none() {
+        if let Some(spec) = cli.disk.first() {
+            let disk = parse_disk(spec)?;
+            if !disk.read_only && !cli.read_only {
+                let armed = PathBuf::from(format!("{}.limina-suspend.bin", disk.path.display()));
+                if armed.exists() {
+                    log::info!(
+                        "pending suspend found at {} — resuming (pass --discard-suspend to \
+                         cold-boot instead)",
+                        armed.display()
+                    );
+                } else {
+                    log::info!(
+                        "suspend armed by default: snapshot path {}",
+                        armed.display()
+                    );
+                }
+                cli.snapshot_file = Some(armed);
+            }
+        }
+    }
+    if cli.discard_suspend {
+        if let Some(snap) = cli.snapshot_file.clone() {
+            if snap.exists() {
+                std::fs::remove_file(&snap)
+                    .with_context(|| format!("discarding the pending suspend {snap:?}"))?;
+                let _ = std::fs::remove_file(snap.with_extension("splash.png"));
+                println!("discarded pending suspend {} — cold boot", snap.display());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn parse_disk(spec: &str) -> Result<DiskOpt> {
     let mut rest = spec;
     let mut read_only = false;
@@ -1830,6 +2006,74 @@ fn validate_disk_path(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// Task #20: flat runs default-arm suspend beside the boot disk; read-only and
+    /// explicitly-configured runs don't; --discard-suspend deletes a pending snapshot.
+    #[test]
+    fn flat_suspend_default_arming() {
+        use clap::Parser;
+        let dir = std::env::temp_dir().join(format!("limina-armtest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk = dir.join("vm.raw");
+        std::fs::write(&disk, b"x").unwrap();
+        let disk_s = disk.to_str().unwrap();
+        let armed = PathBuf::from(format!("{disk_s}.limina-suspend.bin"));
+
+        // Plain flat run: armed at the derived path.
+        let mut cli = Cli::try_parse_from(["limina", "--disk", disk_s]).unwrap();
+        default_arm_flat_suspend(&mut cli).unwrap();
+        assert_eq!(cli.snapshot_file.as_ref(), Some(&armed));
+
+        // Read-only boot disk (either spelling): NOT armed.
+        for argv in [
+            vec!["limina", "--disk", disk_s, "--read-only"],
+            vec!["limina", "--disk", &format!("{disk_s}:ro")],
+        ] {
+            let mut cli = Cli::try_parse_from(argv).unwrap();
+            default_arm_flat_suspend(&mut cli).unwrap();
+            assert_eq!(cli.snapshot_file, None, "read-only disks must not arm");
+        }
+
+        // Explicit --snapshot-file wins over the derivation.
+        let explicit = dir.join("explicit.bin");
+        let mut cli = Cli::try_parse_from([
+            "limina",
+            "--disk",
+            disk_s,
+            "--snapshot-file",
+            explicit.to_str().unwrap(),
+        ])
+        .unwrap();
+        default_arm_flat_suspend(&mut cli).unwrap();
+        assert_eq!(cli.snapshot_file.as_ref(), Some(&explicit));
+
+        // Managed shape (suspend_state_file set by cli_from_definition — an #[arg(skip)]
+        // field, never a user flag): untouched.
+        let mut cli = Cli::try_parse_from(["limina", "--disk", disk_s]).unwrap();
+        cli.suspend_state_file = Some(dir.join("state.toml"));
+        default_arm_flat_suspend(&mut cli).unwrap();
+        assert_eq!(
+            cli.snapshot_file, None,
+            "managed starts pass their own path"
+        );
+
+        // --discard-suspend deletes a pending snapshot at the armed path.
+        std::fs::write(&armed, b"pending").unwrap();
+        let mut cli =
+            Cli::try_parse_from(["limina", "--disk", disk_s, "--discard-suspend"]).unwrap();
+        default_arm_flat_suspend(&mut cli).unwrap();
+        assert_eq!(
+            cli.snapshot_file.as_ref(),
+            Some(&armed),
+            "still armed for future suspends"
+        );
+        assert!(
+            !armed.exists(),
+            "--discard-suspend must delete the pending snapshot"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Guards the launchd-256-fd login crash (2026-07-02): with the soft limit dropped to
     /// the Finder-launch default, raise_fd_limit must lift it to OPEN_MAX (or the hard cap

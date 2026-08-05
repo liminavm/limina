@@ -542,7 +542,17 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     // discard the Snapshot event and time out. A FAILED save is now recoverable: the parked vCPUs are
     // resumed (`resume_parked_vcpus`) and the guest woken, so the VM lives on (only if that resume
     // itself fails is it fatal, exit 1).
-    if let Some(path) = spec.snapshot_file.clone() {
+    // The raw SIGUSR1 seam dumps a RUNNING (unquiesced) guest — an L1 test vehicle, never a
+    // production path (a raw snapshot restores into subtle corruption; mistaking this seam for
+    // the bracket manufactured a false wedge diagnosis once — task #20). Only installed when the
+    // harness explicitly arms it, so a stray `kill -USR1` on a real worker is inert.
+    let raw_seam_armed = std::env::var_os("LIMINA_RAW_SNAPSHOT_SEAM").is_some();
+    if spec.snapshot_file.is_none() || !raw_seam_armed {
+        // Inert means IGNORED: without a handler, SIGUSR1's default disposition TERMINATES
+        // the process — a stray signal would kill the VM instead of doing nothing.
+        unsafe { libc::signal(libc::SIGUSR1, libc::SIG_IGN) };
+    }
+    if let Some(path) = spec.snapshot_file.clone().filter(|_| raw_seam_armed) {
         let trigger = crate::snapshot::install().context("installing the snapshot trigger")?;
         let vmm_for_snapshot = vmm.clone();
         let snap_path = path.clone();
@@ -587,14 +597,22 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                 }
             })
             .map_err(|e| anyhow!("spawning the snapshot trigger thread: {e}"))?;
+    }
 
-        // M9.2 suspend bracket (the PRODUCTION suspend path). On SIGTSTP: pulse the guest suspend
-        // button, wait for the guest to s2idle-quiesce (every virtio device reset to INIT — the
-        // `is_quiesced` oracle), then snapshot + exit 126. Unlike the raw SIGUSR1 path above it
-        // NEVER snapshots a non-quiesced guest, so a restore always resumes cleanly. If the guest
-        // never quiesces within the timeout (e.g. a virtiofs mount refuses s2idle), the bracket
-        // wakes it back out of suspend and keeps the VM running — the supervisor sees no exit-126
-        // and reports the suspend failed. See `crate::bracket` and docs/design/m9.2-*.md.
+    // M9.2 suspend bracket (the PRODUCTION suspend path) — armed whenever a snapshot path is
+    // set, independent of the raw test seam above. On SIGTSTP: pulse the guest suspend
+    // button, wait for the guest to s2idle-quiesce (every virtio device reset to INIT — the
+    // `is_quiesced` oracle), then snapshot + exit 126. Unlike the raw SIGUSR1 path above it
+    // NEVER snapshots a non-quiesced guest, so a restore always resumes cleanly. If the guest
+    // never quiesces within the timeout (e.g. a virtiofs mount refuses s2idle), the bracket
+    // wakes it back out of suspend and keeps the VM running — the supervisor sees no exit-126
+    // and reports the suspend failed. See `crate::bracket` and docs/design/m9.2-*.md.
+    if spec.snapshot_file.is_none() {
+        // Unarmed workers must IGNORE SIGTSTP: its default disposition STOPS the process — a
+        // stray relay would wedge the VM (same inert-not-fatal rule as SIGUSR1 above).
+        unsafe { libc::signal(libc::SIGTSTP, libc::SIG_IGN) };
+    }
+    if let Some(path) = spec.snapshot_file.clone() {
         let bracket_path = path.clone();
         let trigger =
             crate::bracket::install().context("installing the suspend-bracket trigger")?;
