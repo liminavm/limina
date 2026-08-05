@@ -210,6 +210,30 @@ struct TapCtx {
     panel_fs: Arc<AtomicBool>,
 }
 
+/// What a Ctrl+Opt ungrab-chord fire does to each grab, given whether the pointer is captured
+/// (an explicit hard grab or the fullscreen policy grab — the chord doesn't distinguish) at the
+/// moment it fires. Pure so the two-grab sequence is testable without a CGEvent in sight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ChordFire {
+    /// Latch the policy against an instant re-grab and toggle the pointer capture off.
+    release_pointer: bool,
+    /// Mute the soft keyboard grab until the window regains key status.
+    mute_soft: bool,
+}
+
+fn chord_fire(captured: bool) -> ChordFire {
+    ChordFire {
+        release_pointer: captured,
+        // ALWAYS mute, not just on a soft-only fire: the chord means "give me the host back",
+        // and after a captured fire (fullscreen policy grab, typically) the window is still key,
+        // so an unmuted soft grab would swallow the host combo the user chorded to reach —
+        // Ctrl held through the chord + arrow for a workspace switch went to the guest instead,
+        // and the chord had to be pressed twice, once per grab. The mute self-heals: regaining
+        // key status (clicking back into the VM) clears it.
+        mute_soft: true,
+    }
+}
+
 /// One bit per mouse button, for [`TapCtx::buttons`].
 fn btn_bit(etype: u32, button_number: i64) -> u8 {
     match etype {
@@ -394,18 +418,23 @@ extern "C" fn tap_callback(
                 ctx.input.tap_key(keycode, false, flags);
             }
             _ => {
-                // Ungrab chord (Ctrl+Option pressed and released alone). Captured: release
-                // the grab (toggle_capture force-releases all guest modifiers, so the edges
-                // this chord already forwarded can't stay wedged down). Soft: mute the soft
-                // grab until the window regains key status, flushing modifiers the same way.
+                // Ungrab chord (Ctrl+Option pressed and released alone) = "give me the host
+                // back": what it does to each grab is [`chord_fire`]'s call. Releasing the
+                // pointer goes through toggle_capture, which force-releases all guest modifiers
+                // (so the edges this chord already forwarded can't stay wedged down); a
+                // soft-only fire has no capture transition to do that, so it flushes directly.
+                // The soft mute lasts until the window regains key status.
                 match ctx.input.observe_ungrab_flags(keycode, flags) {
                     UngrabAction::Fire => {
-                        if captured {
+                        let fire = chord_fire(captured);
+                        if fire.release_pointer {
                             ctx.with_grab(|st| st.release_by_user(true));
                             ctx.input.toggle_capture(&ctx.view);
                         } else {
-                            ctx.soft_muted.set(true);
                             ctx.input.flush_modifiers();
+                        }
+                        if fire.mute_soft {
+                            ctx.soft_muted.set(true);
                             log::info!(
                                 "soft keyboard grab: muted (Ctrl-Opt) — host combos return \
                                  until the window regains focus"
@@ -1013,4 +1042,29 @@ pub(crate) fn prompt_accessibility_once() -> bool {
         CFRelease(options);
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chord_fire_from_a_pointer_grab_also_mutes_the_soft_keyboard() {
+        // The dogfood sequence: fullscreen, the POLICY holds the pointer (`captured`, no
+        // Cmd-Ctrl-G involved). Ctrl+Opt breaks — Option up, Ctrl still held — intending a host
+        // workspace switch (Ctrl+arrow). The window stays key after the pointer is released, so
+        // unless the fire ALSO mutes the soft keyboard grab, the still-held Ctrl + arrow is
+        // forwarded to the guest and macOS never sees the combo: the chord has to be pressed
+        // twice, once per grab. Ctrl+Opt means "give me the host back" — one press, both grabs.
+        let fire = chord_fire(true);
+        assert!(fire.release_pointer);
+        assert!(fire.mute_soft);
+    }
+
+    #[test]
+    fn chord_fire_with_no_pointer_grab_mutes_the_soft_keyboard_only() {
+        let fire = chord_fire(false);
+        assert!(!fire.release_pointer);
+        assert!(fire.mute_soft);
+    }
 }
