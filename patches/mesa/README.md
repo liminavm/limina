@@ -23,7 +23,7 @@ retired).
 | ~~`scripts/build-mesa-zink.sh`~~ **ARCHIVED 2026-08-04** (`scripts/archive/`) | ~~Mesa main `3515c52e8cf3`~~ | ~~0001–0006~~ — the prefix-style zink build died with the RPM pivot + drop-guest-zink; 0002–0006 now have NO live consumer |
 | `scripts/build-venus.sh` (guest venus ICD rebuild) | tag `mesa-26.1.0` (parametric `MESA_TAG`) | 0009 + 0010 *(dev vehicle, not respun — see 0010 retirement below)* |
 | `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM, currently 26.1.5-6.limina) | Fedora F44 SRPM, repo-current (26.1.4 at authoring, **26.1.5 since the -6 respin**) | 0001 + 0015 + 0011–0014 + 0016 + 0017 *(0010 retired 2026-08-04; 0001 + 0014 retire at the NEXT respin — drop-guest-zink)* |
-| `scripts/build-mesa-rpm.sh` (the SHIPPING F43 RPM) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`) | 0001 + 0009 + 0010 + 0014 + 0016-pre + 0016 + 0017 *(0010 + 0001 + 0014 retire at the next F43 respin — same arguments)* |
+| `scripts/build-mesa-rpm.sh` (the SHIPPING F43 RPM, 26.1.5-1.limina since the 2026-08-05 repoint) | **the F44 koji SRPM `mesa-26.1.5-1.fc44`** (pinned as `MESA_SRPM_URL`), built in the fc43 container against F43's repos | 0015 + 0011–0013 + 0016 + 0017 — the venus-only set, identical to F44's next-respin set *(0001 + 0009 + 0010 + 0014 + 0016-pre all left this build with the repoint)* |
 
 **Drop-guest-zink (2026-08-04) — status of the zink rows.** zink-as-guest-GL is no longer a
 supported configuration, so **0001, 0003, 0004, 0006 are DEAD in the guest** (0003–0006
@@ -49,7 +49,21 @@ explicit-pitch handling (`[KK-MODIFIER]` log). Full story:
 `docs/design/drm-format-modifier-for-real.md`, `spikes/modifier-necessity/RESULTS.md`. The file
 stays in the pool for the F43 script until its respin.
 
-### BACKLOG (2026-07-25, not a priority): repoint the F43 RPM at the F44 SRPM base
+### ~~BACKLOG~~ EXECUTED 2026-08-05: the F43 RPM is repointed at the F44 SRPM base
+
+**Done exactly as planned below.** `scripts/build-mesa-rpm.sh` rewritten to the F44 SRPM
+recipe (koji `mesa-26.1.5-1.fc44` pinned via `MESA_SRPM_URL`), still built in the fc43
+container against F43's repos (the old-toolchain stress the track exists for — builddep
+resolved clean with the Rust drivers %undefined). Both families now build the SAME base with
+the SAME venus-only patch set; the `3515c52` main-snapshot pin and the git-archive machinery
+are gone. **0016-pre is deleted from the pool** (it IS upstream; zero consumers remain).
+0009 + 0010 remain as files only for `scripts/build-venus.sh` (a stale dev vehicle — archive
+candidate) and 0001/0014 only for the F44 spec until its next respin. The version moved
+26.2.0-3.limina → 26.1.5-1.limina — a deliberate one-time DOWNGRADE; `install-enhanced.sh`
+grew a `dnf downgrade` branch for it (validated live on `Fedora-Workstation-43.enhanced.raw`:
+downgrade transaction + re-versionlock + venus enumerating 26.1.5 in the rebooted seated
+session, human-eyeballed desktop; `.test` recloned 2026-08-05). This was the precondition for
+the limina-guest fork migration (task #11 in-session). Original plan kept for the record:
 
 F43 exists **on purpose** — it is the "how well does the enhanced tier support an older distro"
 track, and the intent is to carry ~3 Fedora releases (F43 drops when F45 joins). But building it
@@ -244,8 +258,10 @@ host-zink series lives separately in `patches/kosmickrisp/`.
   26.2.0-3.limina respin; F43 needs `0016-pre` first — the F43 base predates the free-list
   scan). Upstream mesa main still has the bug (checked 38169ede9b2, 2026-07-21). Clearly
   upstreamable. Memory/forensics: `limina-venus-submit-freelist`.
-- **`0016-pre-venus-ring-get-submit-freelist-scan-backport.diff`** (2026-07-21, F43-base
-  prep — sorts before `0016-venus-*` so filename order stays the apply order) — verbatim
+- **`0016-pre-venus-ring-get-submit-freelist-scan-backport.diff`** — **DELETED 2026-08-05
+  (F43 repoint)**: its one job was making the old F43 main-snapshot base accept 0016/0017;
+  the repointed base (26.1.4+ stable) carries the free-list scan already, and the diff was
+  verbatim upstream (never MR material). Entry kept for the record: — verbatim
   upstream `2cf1f6cb508` "venus: fix unbound malloc leak in vn_ring_get_submits" (Yiwei
   Zhang, landed on main 2026-06 AFTER our F43 `MESA_COMMIT` pin 3515c52; its stable
   backport `d54c04f96c2` is already in the F44 26.1.4 base — never apply it there). It

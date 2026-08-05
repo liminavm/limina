@@ -339,12 +339,27 @@ echo "-- installing mesa (replaces stock -> our venus build):"; echo "$MESA_RPMS
 for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do
   dnf versionlock delete "$p" >/dev/null 2>&1 || true
 done
-# `dnf install` of the higher-versioned local RPMs upgrades/replaces the matching packages. GUARD it:
-# the lock is now LIFTED, and under `set -e` a failed install would abort the script BEFORE the
-# re-lock below — leaving mesa UNLOCKED so a later `dnf update` could drag it back to a venus-breaking
-# stock version (a silent, keyboard-less-to-recover regression on a daily driver). On failure, dnf is
-# transactional (the prior enhanced mesa stays installed), so re-lock THAT and abort loudly.
-if ! dnf install -y --allowerasing $MESA_RPMS; then
+# `dnf install` of the higher-versioned local RPMs upgrades/replaces the matching packages —
+# but it silently no-ops when the payload NEVRA is LOWER than what's installed. That case is
+# real: the 2026-08-05 F43 repoint moved that family's base 26.2.0 (main snapshot) -> 26.1.5
+# (the F44 SRPM base), a deliberate one-time version regression. Detect it and use
+# `dnf downgrade` instead. (sort -V on EVR is sufficient: no mesa package carries an Epoch.)
+DNF_VERB=install
+_pay_rpm=$(echo "$MESA_RPMS" | head -1)
+_pay_name=$(rpm -qp --qf '%{NAME}' "$_pay_rpm" 2>/dev/null || true)
+_pay_evr=$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$_pay_rpm" 2>/dev/null || true)
+_inst_evr=$(rpm -q --qf '%{VERSION}-%{RELEASE}' "$_pay_name" 2>/dev/null || true)
+if [ -n "$_pay_evr" ] && [ -n "$_inst_evr" ] && [ "$_pay_evr" != "$_inst_evr" ] \
+   && [ "$(printf '%s\n%s\n' "$_pay_evr" "$_inst_evr" | sort -V | head -1)" = "$_pay_evr" ]; then
+  echo "   installed mesa $_inst_evr > payload $_pay_evr — base repoint, using dnf downgrade"
+  DNF_VERB=downgrade
+fi
+# GUARD the transaction: the lock is now LIFTED, and under `set -e` a failed install would abort
+# the script BEFORE the re-lock below — leaving mesa UNLOCKED so a later `dnf update` could drag
+# it back to a venus-breaking stock version (a silent, keyboard-less-to-recover regression on a
+# daily driver). On failure, dnf is transactional (the prior enhanced mesa stays installed), so
+# re-lock THAT and abort loudly.
+if ! dnf "$DNF_VERB" -y --allowerasing $MESA_RPMS; then
   echo "ERROR: mesa install failed — restoring the mesa versionlock and aborting (mesa unchanged)" >&2
   for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do dnf versionlock add "$p" >/dev/null 2>&1 || true; done
   exit 1

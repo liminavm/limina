@@ -2,56 +2,71 @@
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 # Copyright © 2026 Gustavo Noronha Silva
 
-# Build the limina enhanced-tier Mesa (zink + venus, OUR pinned version) as a stock-style
-# Fedora RPM SET that REPLACES the distro's mesa at /usr.
+# Build the limina enhanced-tier GUEST mesa for an F43 guest — from the SAME Fedora SRPM base
+# the F44 family ships (the "F43 repoint", 2026-08-05; backlog in patches/mesa/README.md).
 #
-# WHY an RPM (not a sysext, not an /opt prefix): our mesa is 26.2 but stock F43 is 25.3.6, so
-# the megadriver soname differs (libgallium-26.2.0-devel.so vs libgallium-25.3.6.so). A sysext
-# overlay can SHADOW but not REMOVE the stock lib, so the stock 25.3.6 lib survives underneath
-# and blends into an ABI-inconsistent /usr/lib64/dri -> mutter's KMS-master EGL probe fails
-# ("GPU /dev/dri/card0 ... not supported by EGL") -> gnome-shell crash-loop. An RPM REPLACES
-# the stock package (the old soname is genuinely removed), so nothing blends. dnf versionlock
-# (applied by the installer, not here) then pins our version so an update can't revert it.
-# See memory limina-enh-delivery.
+# HISTORY / WHY THE REPOINT: this script used to build a pinned Mesa *main* snapshot
+# (26.2.0-devel @ 3515c52) against a rawhide spec, because at authoring time no released
+# base carried what we needed. That defeated the F43 track's purpose — "how well does the
+# enhanced tier support an older distro" — by routing around the old-distro friction and
+# shipping F43 a *different patch subset* than F44 (no 0011/0012/0013, plus the 0016-pre
+# backport whose only job was making the old base accept our patches). Now both families
+# build from the SAME F44 SRPM (mesa 26.1.5) with the SAME venus-only patch set; what stays
+# F43-specific is the BUILD ENVIRONMENT: this runs in an fc43 container against F43's repos,
+# so the RPMs link the guest's runtime sonames and the old toolchain (llvm/rust/libdrm age)
+# stays a stress we actually exercise.
 #
-# APPROACH (a): rebuild from Fedora's SRPM. We base on RAWHIDE's mesa.spec (26.1.3 -- one point
-# release off our 26.2, so the subpackage split / %files / build options already match 26.x),
-# and feed it OUR exact verified source snapshot. We DON'T use the spec's patch machinery:
-# instead we check out our commit, apply patches/mesa/* (MR!37115 zink nullDescriptor + the
-# venus WSI present-fix 0009/0010), commit, and `git archive` a PRE-PATCHED mesa-<ver>.tar.xz.
-# Fedora's own downstream Patch lines are stripped (they're against 26.1.3; our tree is 26.2.0).
+# WHY an RPM (not a sysext, not an /opt prefix): our mesa (26.1.5) differs from stock F43
+# (25.2.4), so the megadriver soname differs. A sysext overlay can SHADOW but not REMOVE the
+# stock lib -> ABI blend -> mutter's KMS-master EGL probe fails -> gnome-shell crash-loop.
+# An RPM REPLACES the stock package; dnf versionlock (applied by install-enhanced.sh) then
+# pins it. See memory limina-enh-delivery.
 #
-# Built inside an aarch64 Fedora `container` matching the TARGET guest release (default F43), so
-# the RPMs link the guest's runtime sonames. Output RPMs are same-named as stock at a higher
-# version, so `dnf install ./mesa-*.rpm` swaps stock -> ours. Mesa is OUR-version-pinned (cf.
-# mutter, which tracks the target distro -- see build-mutter-rpm.sh).
+# NOTE the version DOWNGRADE on already-enhanced F43 guests: the old track shipped
+# 26.2.0-N.limina; this base is 26.1.5 — a lower NEVRA, on purpose, one time.
+# install-enhanced.sh handles it (dnf downgrade branch); fresh provisioning from stock
+# (25.2.4 -> 26.1.5) is a plain upgrade.
 #
-# Usage: scripts/build-mesa-rpm.sh                 # F43 target, our 26.2 snapshot
-#        FEDORA_REL=44 scripts/build-mesa-rpm.sh   # build for an F44 guest
-#        LIMINA_REL=2 scripts/build-mesa-rpm.sh    # bump Release (REQUIRED for redelivery:
-#                                                  # a same-NEVRA rebuild makes dnf silently no-op)
+# OUR patches (the venus-only set, identical to F44's next respin — see patches/mesa/README.md):
+#   0015  venus WSI present-fix (post-rect-clone) — THE black-screen fix. 0009 is the
+#         pre-backport variant for old bases; this base (>= 26.1.4 stable) carries the
+#         rect-clone upstream, so 0015, never both. [0001/0014 (zink) NOT applied: dead in
+#         the guest since drop-guest-zink 2026-08-04 — guest GL rides virgl/vrend.]
+#   0011  venus WSI: drop 16-bit-unorm wayland swapchain formats (wgpu ghost-UI).
+#   0012  venus: degrade to the stub instance when ring setup fails (stock-kernel GRUB
+#         fallback boot must not lose lavapipe).
+#   0013  venus: pin the ICD for the TLS destructor (thread-exit SIGSEGV).
+#   0016  venus: ring loss -> VK_ERROR_DEVICE_LOST, not abort() (snapshot-resume survival).
+#   0017  venus: ring-submit free-list capacity fix (quadratic CPU creep). Superseded
+#         upstream by !43229 but NOT yet in the Fedora 26.1.5 tarball (proven at the F44
+#         26.1.5-6 respin: still applies clean). Its %prep apply-FAILURE at a future SRPM
+#         bump is the retirement signal — drop it then, no MR.
+#         [0016-pre NOT needed: the 26.1.4+ stable base already carries the free-list scan.]
+# Patches go in via the spec (Patch9xxx), NOT a tolerant pre-apply: a non-applying patch
+# fails %prep loudly rather than silently shipping a black-screen mesa.
+#
+# Usage: scripts/build-mesa-rpm.sh                  # F43 target, F44 26.1.5 SRPM base
+#        LIMINA_REL=2 scripts/build-mesa-rpm.sh     # bump Release (REQUIRED for redelivery:
+#                                                   # a same-NEVRA rebuild makes dnf silently no-op)
+#        PREP_ONLY=1 scripts/build-mesa-rpm.sh      # stop after %prep (fast patch-apply test)
 # Output: target/test-guest/mesa/rpm/*.aarch64.rpm  (gitignored)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Our pinned mesa: the EXACT snapshot verified to render zink+venus (commit 3515c52,
-# 26.2.0-devel). Keep in sync with scripts/build-mesa-zink.sh.
-MESA_VER="${MESA_VER:-26.2.0}"
-MESA_COMMIT="${MESA_COMMIT:-3515c52e8cf31549b6068ef43c23c89830b6db46}"
+# The pinned SRPM base — the koji SRPM the F44 family's shipping mesa is built from.
+# Keep in sync with the F44 track (scripts/provision/f44/build-mesa-rpm.sh + docs/images.md
+# §Component versions) when that family respins onto a newer base.
+MESA_SRPM_URL="${MESA_SRPM_URL:-https://kojipkgs.fedoraproject.org/packages/mesa/26.1.5/1.fc44/src/mesa-26.1.5-1.fc44.src.rpm}"
 FEDORA_REL="${FEDORA_REL:-43}"           # build + target guest release (RPMs link its sonames)
-SPEC_REL="${SPEC_REL:-rawhide}"          # which Fedora's mesa.spec to base on (closest to 26.2)
-# Drivers to %undefine: the TARGET Fedora can't satisfy their (rawhide-version) BuildRequires AND
-# a VM guest has no such GPU. NOTE: must %undefine (not set 0) -- the spec keys %{?with_X:...} on
+# Drivers to %undefine: the TARGET Fedora can't satisfy their BuildRequires AND a VM guest
+# has no such GPU. NOTE: must %undefine (not set 0) — the spec keys %{?with_X:...} on
 # DEFINED, not value. Why each:
-#   d3d12   -> needs DirectX-Headers>=1.619.1 (not in F43); Windows D3D12-on-Vulkan, useless in a VM
-#   nvk asahi panfrost opencl -> these four gate mesa's Rust path (%cargo_generate_buildrequires,
-#     spec line 184): they pull crate(syn/paste/rustc-hash/...) which F43 lacks. None exist in a VM.
-#   spirv_tools -> its pkgconfig(SPIRV-Tools) BR is ALSO under the line-184 Rust guard, but
-#     with_spirv_tools=1 still forces -Dspirv-tools=enabled -> meson fails (no SPIRV-Tools installed).
-#     Nothing we keep (venus/zink/llvmpipe) needs it; consistent to disable since its consumers are off.
-#   teflon -> NPU (ethosu/rocket); useless in a VM, avoids its deps.
-# zink (our GL) rides with_vulkan_hw, which stays on; radeonsi/radv/svga/etc. stay (build clean on
-# F43, unused but harmless) to avoid %files surgery -- trim later if we want slimmer RPMs.
+#   d3d12   -> needs DirectX-Headers the F43 repos may lack; Windows D3D12-on-Vulkan, useless in a VM
+#   nvk asahi panfrost opencl -> these gate mesa's Rust path (%cargo_generate_buildrequires):
+#     they pull crate(...) BuildRequires F43 lacks. None exist in a VM.
+#   spirv_tools -> its consumers are the disabled drivers; keeping it forces -Dspirv-tools=enabled
+#     with no SPIRV-Tools installed.
+#   teflon -> NPU; useless in a VM.
 DISABLE_DRIVERS="${DISABLE_DRIVERS:-d3d12 nvk asahi panfrost opencl spirv_tools teflon}"
 LIMINA_REL="${LIMINA_REL:-1}"            # Release = <N>.limina; bump for any redelivery (NEVRA must move)
 JOBS="${JOBS:-8}"
@@ -62,11 +77,11 @@ mkdir -p "$RPMOUT" "$OUT/cache"
 
 command -v container >/dev/null || { echo "Apple 'container' not installed" >&2; exit 1; }
 
-# Persistent build volume (mesa git clone + ccache survive across iterations).
+# Persistent build volume (SRPM download + rpmbuild tree survive across iterations).
 VOL="limina-mesabuild"
 container volume create -s 40g "$VOL" >/dev/null 2>&1 || true
 
-echo "==> building limina mesa RPM set ($MESA_VER @ ${MESA_COMMIT:0:12}; spec=$SPEC_REL; target=fedora:$FEDORA_REL; -j$JOBS)"
+echo "==> building limina F43 mesa RPM set (base SRPM: ${MESA_SRPM_URL##*/}; target=fedora:$FEDORA_REL; -j$JOBS)"
 
 scripts/build-image.sh   # ensure the unified limina-build image (rpm tooling + builddep mesa baked)
 container run --rm --cpus "$JOBS" --memory "$MEM" \
@@ -74,120 +89,83 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
   -v "$(pwd)/patches/mesa:/patches" \
   -v "$VOL:/build" \
   limina-build:fc43 bash -euo pipefail -c '
-    MESA_VER="'"$MESA_VER"'"; MESA_COMMIT="'"$MESA_COMMIT"'"; SPEC_REL="'"$SPEC_REL"'"
+    MESA_SRPM_URL="'"$MESA_SRPM_URL"'"
     DISABLE_DRIVERS="'"$DISABLE_DRIVERS"'"; LIMINA_REL="'"$LIMINA_REL"'"
+    PREP_ONLY="'"${PREP_ONLY:-}"'"
     export HOME=/build
 
-    git config --global user.email limina@local
-    git config --global user.name limina
-    git config --global --add safe.directory "*"
-
-    echo "--- [2/6] fetch base mesa.spec from fedora:$SPEC_REL SRPM"
-    SRCDIR=/build/srpm; mkdir -p "$SRCDIR"; cd "$SRCDIR"
-    if [ ! -f mesa.spec ]; then
-      # pull the SRPM from the chosen release (rawhide repo is reachable via --releasever)
-      dnf download --source mesa --releasever="$SPEC_REL" >/dev/null 2>&1 \
-        || dnf download --source mesa >/dev/null 2>&1
-      SRPM=$(ls mesa-*.src.rpm | head -1); echo "    base SRPM: $SRPM"
-      rpm2cpio "$SRPM" | cpio -idmu --quiet
-    fi
-
-    echo "--- [3/6] our pre-patched source tree -> SOURCES/mesa-$MESA_VER.tar.xz"
+    echo "--- [1/5] fetch the pinned F44 mesa SRPM"
     rpmdev-setuptree
-    CACHE=/build/mesa.git
-    # A FULL clone is required: git archive must read the patched tree+blob objects. A blobless
-    # (--filter) clone leaves them as unfetched promisor objects -> "unable to read sha1 file".
-    if [ -d "$CACHE/.git" ] && git -C "$CACHE" config --get remote.origin.partialclonefilter >/dev/null 2>&1; then
-      echo "    removing stale blobless cache"; rm -rf "$CACHE"
+    SRCDIR=/build/srpm-f44; mkdir -p "$SRCDIR"; cd "$SRCDIR"
+    SRPM_FILE="${MESA_SRPM_URL##*/}"
+    if [ ! -f "$SRPM_FILE" ]; then
+      # different base than any cached one -> clear the dir so stale spec/sources cannot blend
+      rm -f ./*; curl -fLO "$MESA_SRPM_URL"
     fi
-    if [ ! -d "$CACHE/.git" ]; then
-      echo "    full-cloning mesa (cached, one-time ~1.5GB)"
-      git clone https://gitlab.freedesktop.org/mesa/mesa.git "$CACHE"
-    fi
-    cd "$CACHE"
-    git fetch -q origin "$MESA_COMMIT" 2>/dev/null || git fetch -q origin 2>/dev/null || true
-    git checkout -q -f "$MESA_COMMIT"
-    git clean -qfdx                       # idempotent across the warm cache volume
-    echo "    applying patches/mesa/* (tolerant: skip if already upstream)"
-    shopt -s nullglob
-    for p in /patches/0001*MR37115* /patches/0009*venus* /patches/0010*venus*; do
-      [ -f "$p" ] || continue
-      if git apply --check "$p" 2>/dev/null; then git apply "$p"; echo "      applied $(basename "$p")"
-      else echo "      SKIP $(basename "$p") (does not apply -- likely already upstream)"; fi
-    done
-    shopt -u nullglob
-    # 0014 (zink unflushed-wait lost-wakeup deadlock) is NOT upstream (checked 2026-07-12) and is
-    # load-bearing for the seated zink desktop / venus_replay — a silent skip would ship the
-    # deadlock back into the image, so apply it FAIL-LOUD (no tolerant fallback).
-    git apply /patches/0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff
-    echo "      applied 0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff (mandatory)"
-    # 0016-pre: upstream 2cf1f6cb508 ("venus: fix unbound malloc leak in vn_ring_get_submits",
-    # landed on main AFTER our 3515c52 pin; its stable backport is already in F44 26.1.4).
-    # It reshapes vn_ring_get_submit into the free-list scan that 0016 anchors on and 0017
-    # fixes — without it neither applies to this base.
-    # 0016 (venus ring loss -> DEVICE_LOST, not abort) + 0017 (ring-submit free-list capacity
-    # fix, quadratic CPU creep) are NOT upstream (checked 2026-07-21) and load-bearing for
-    # snapshot-resume survival and long-running venus apps. ORDER MATTERS: 0016-pre -> 0016 ->
-    # 0017 (0017 was authored on top of the 0016-reshaped vn_ring.c). All fail-loud, like 0014.
-    # (NB: this whole block lives inside a single-quoted bash -c string -- no apostrophes.)
-    git apply /patches/0016-pre-venus-ring-get-submit-freelist-scan-backport.diff
-    echo "      applied 0016-pre-venus-ring-get-submit-freelist-scan-backport.diff (mandatory)"
-    git apply /patches/0016-venus-ring-loss-device-lost-not-abort.diff
-    echo "      applied 0016-venus-ring-loss-device-lost-not-abort.diff (mandatory)"
-    git apply /patches/0017-venus-fix-ring-submit-freelist-capacity.diff
-    echo "      applied 0017-venus-fix-ring-submit-freelist-capacity.diff (mandatory)"
-    git add -A
-    git commit -q -m "limina mesa patches" || true
-    git archive --format=tar --prefix="mesa-$MESA_VER/" HEAD | xz -T0 > "$HOME/rpmbuild/SOURCES/mesa-$MESA_VER.tar.xz"
-    echo "    tarball: $(du -h "$HOME/rpmbuild/SOURCES/mesa-$MESA_VER.tar.xz" | cut -f1)"
+    rpm2cpio "$SRPM_FILE" | cpio -idmu --quiet
+    MESA_VER=$(rpm -q --qf "%{VERSION}" -p "$SRPM_FILE"); echo "    mesa version: $MESA_VER"
+    cp -f ./* "$HOME/rpmbuild/SOURCES/" 2>/dev/null || true
+    cp -f mesa.spec "$HOME/rpmbuild/SPECS/mesa.spec"
 
-    echo "--- [4/6] rewrite the spec for our snapshot (version, release, strip downstream patches/autospec)"
-    cd "$SRCDIR"
-    cp -f *.spec "$HOME/rpmbuild/SPECS/mesa.spec"
-    # copy any non-tarball Sources the spec needs (macros, configs) alongside ours
-    find . -maxdepth 1 -type f ! -name "*.src.rpm" ! -name "mesa.spec" ! -name "mesa-*.tar.*" \
-      -exec cp -f {} "$HOME/rpmbuild/SOURCES/" \;
+    echo "--- [2/5] add OUR venus patches + bump Release + F43-buildability surgery"
+    cp -f /patches/0015-venus-wsi-present-fix-post-rect-clone.diff \
+          /patches/0011-venus-wsi-drop-16bit-unorm-swapchain.diff \
+          /patches/0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff \
+          /patches/0013-venus-pin-icd-for-tls-destructor.diff \
+          /patches/0016-venus-ring-loss-device-lost-not-abort.diff \
+          /patches/0017-venus-fix-ring-submit-freelist-capacity.diff \
+          "$HOME/rpmbuild/SOURCES/"
     SPEC="$HOME/rpmbuild/SPECS/mesa.spec"
-    # pin version; fixed Release that beats stock (25.3.6) AND rawhide (26.1.3) for dnf preference
-    sed -i -E "s/^Version:.*/Version:        $MESA_VER/" "$SPEC"
-    sed -i -E "s/^Release:.*/Release:        ${LIMINA_REL}.limina%{?dist}/" "$SPEC"
-    # drop rpmautospec macros (no package git here)
+    LAST_PATCH_LINE=$( { grep -nE "^Patch[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
+    [ -n "$LAST_PATCH_LINE" ] || LAST_PATCH_LINE=$( { grep -nE "^Source[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
+    ins="Patch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff\nPatch9012: 0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff\nPatch9013: 0013-venus-pin-icd-for-tls-destructor.diff\nPatch9015: 0015-venus-wsi-present-fix-post-rect-clone.diff\nPatch9016: 0016-venus-ring-loss-device-lost-not-abort.diff\nPatch9017: 0017-venus-fix-ring-submit-freelist-capacity.diff"
+    sed -i "${LAST_PATCH_LINE}a ${ins}" "$SPEC"
+    # Our patches are plain `git diff` (no mailbox headers); ensure %autosetup uses GNU patch (-p1).
+    sed -i -E "s/^%autosetup -S git/%autosetup -p1/" "$SPEC"
+    # Release: deterministic "<N>.limina" — outranks stock 25.2.4; bump LIMINA_REL for redelivery.
     sed -i -E "/^%autochangelog/d" "$SPEC"
-    sed -i -E "/%changelog/a * Wed Jun 25 2026 limina <limina@local> - $MESA_VER-${LIMINA_REL}.limina\n- limina enhanced-tier: our pinned mesa (zink+venus) + patches" "$SPEC"
-    # strip Fedora downstream patches (against 26.1.3; our tree is pre-patched at $MESA_VER)
-    sed -i -E "/^Patch[0-9]*:/d" "$SPEC"
-    # %autosetup must unpack our mesa-$MESA_VER/ and apply NO patches (-N)
-    sed -i -E "s/^%autosetup.*/%autosetup -p1 -n mesa-$MESA_VER -N/" "$SPEC"
-    # %undefine VM-irrelevant / dep-unavailable drivers. MUST land after the toggle defs but
-    # BEFORE the first BuildRequires -- the dep-gating %if 0%{?with_X} guards (e.g. DirectX-Headers
-    # under with_d3d12) live in the PREAMBLE, so undefining before %prep is too late for builddep.
-    # Anchored before the first BuildRequires: lazy expansion then drops it from BR, %build AND %files.
+    sed -i -E "s/^Release:.*/Release:        ${LIMINA_REL}.limina%{?dist}/" "$SPEC"
+    # %undefine VM-irrelevant / dep-unavailable drivers. Must land BEFORE the first
+    # BuildRequires — the dep-gating %if 0%{?with_X} guards live in the preamble.
     for d in $DISABLE_DRIVERS; do
       echo "    disabling driver: with_$d"
       sed -i "0,/^BuildRequires/s/^BuildRequires/%undefine with_$d\nBuildRequires/" "$SPEC"
     done
-    # Slim the VULKAN driver set to what a VM needs AND F43 can build: lavapipe(swrast) + venus(virtio).
-    # vulkan_drivers is an EAGERLY-expanded %global (it captured the full HW list at its definition,
-    # before our undefines), so override it directly. The HW vulkan drivers (radv/broadcom/freedreno/
-    # panfrost/powervr) sit UNCONDITIONALLY inside the `%if with_vulkan_hw` %files block (no per-driver
-    # toggle) and panfrost needs Rust, so toggles cannot drop them -- delete their %files lines instead.
-    # We KEEP with_vulkan_hw ON: that is what puts zink in -Dgallium-drivers and ships zink_dri.so.
+    # Slim the VULKAN driver set to what a VM needs AND F43 can build: lavapipe(swrast) +
+    # venus(virtio). vulkan_drivers is an EAGERLY-expanded %global (captured the full HW list
+    # before our undefines), so override it directly; the HW vulkan drivers sit unconditionally
+    # inside the `%if with_vulkan_hw` %files block (panfrost needs Rust), so delete their
+    # %files lines. with_vulkan_hw stays ON (it keeps zink in gallium — harmless, matches F44).
     sed -i -E "s|^%global vulkan_drivers .*|%global vulkan_drivers swrast,virtio|" "$SPEC"
     sed -i -E "/libvulkan_radeon\.so/d; /00-radv-defaults/d; /radeon_icd/d; /libvulkan_broadcom\.so/d; /broadcom_icd/d; /libvulkan_freedreno\.so/d; /freedreno_icd/d; /libvulkan_panfrost\.so/d; /panfrost_icd/d; /libvulkan_powervr_mesa\.so/d; /powervr_mesa_icd/d" "$SPEC"
-    # mesa 26.2 splits drirc into per-driver 00-<drv>-defaults.conf files (radeonsi/zink/virtio_gpu/...)
-    # that the 26.1.3 spec lists only as 00-mesa-defaults.conf -> the rest land unpackaged. Glob ALL
-    # built-driver drirc into dri-drivers (replaces the lone explicit entry, no double-listing).
-    sed -i -E "s|drirc\.d/00-mesa-defaults\.conf|drirc.d/*.conf|" "$SPEC"
-    grep -nE "^Version:|^Release:|^%autosetup|^%undefine|^%global vulkan_drivers" "$SPEC"
+    grep -nE "^Version:|^Release:|^Patch9|^%autosetup|^%undefine|^%global vulkan_drivers" "$SPEC" | head -20
 
-    echo "--- [5/6] dnf builddep"
+    if [ -n "$PREP_ONLY" ]; then
+      echo "--- PREP_ONLY: rpmbuild -bp --nodeps (patch-apply test)"
+      rpmbuild -bp --nodeps "$SPEC"
+      echo "--- PREP_ONLY: all patches applied cleanly on mesa $MESA_VER"
+      exit 0
+    fi
+
+    echo "--- [3/5] dnf builddep (against the F43 repos — old-toolchain friction is the point)"
     dnf -y builddep "$SPEC" 2>&1 | tail -3
 
-    echo "--- [6/6] rpmbuild"
+    echo "--- [4/5] rpmbuild"
+    # Clear PRIOR builds from the persistent volume first — otherwise the copy below sweeps
+    # stale NEVRAs into /out and the payload trips the installer's mixed-versions guard.
+    rm -f "$HOME"/rpmbuild/RPMS/aarch64/*.rpm "$HOME"/rpmbuild/RPMS/noarch/*.rpm
+    # If %prep fails on Patch9015, the venus present-fix needs rebasing onto mesa $MESA_VER —
+    # rebase it (it is the black-screen fix) and re-run. Do NOT ship without it.
+    # If %prep fails on Patch9017, upstream !43229 reached this base — retire 0017 (see README).
     rpmbuild -bb "$SPEC" 2>&1 | tail -40
     mkdir -p /out/rpm
     cp -f "$HOME"/rpmbuild/RPMS/aarch64/*.rpm /out/rpm/ 2>/dev/null || true
     cp -f "$HOME"/rpmbuild/RPMS/noarch/*.rpm  /out/rpm/ 2>/dev/null || true   # any noarch subpackages
+
+    echo "--- [5/5] venus sanity"
+    if ! rpm -qlp /out/rpm/mesa-vulkan-drivers-*.rpm 2>/dev/null | grep -q "virtio_icd"; then
+      echo "WARN: no virtio_icd (venus) in mesa-vulkan-drivers — check %global vulkan_drivers" >&2
+    fi
     echo "=== built RPMs ==="; ls -1 /out/rpm/*.rpm 2>/dev/null | sed "s#/out/#target/test-guest/mesa/#"
   '
 echo "==> mesa RPMs in: $RPMOUT/"

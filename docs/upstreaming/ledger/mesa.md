@@ -72,3 +72,13 @@ that degradation non-fatal on the GRUB-fallback path). Exit strategy is the READ
 own documented-debt plan: each MR that lands shrinks the pool, and the F43 base
 repoint retires 0009 + 0016-pre outright.
 
+**F43 repoint EXECUTED (2026-08-05):** the F43 RPM now builds from the F44 koji
+`mesa-26.1.5-1.fc44` SRPM in the fc43 container; both families ship the identical
+venus-only set (0015 + 0011–0013 + 0016 + 0017). Consequences for rows above:
+**0016-pre is deleted from the pool** (verbatim upstream, zero consumers);
+**0009** is retired from every RPM (file remains only for the stale
+`scripts/build-venus.sh` dev vehicle, with 0010); **0001/0014** now ship only in the
+F44 RPM until its next respin physically drops them. Upstream-MR verdicts unchanged.
+The pool is one respin away from the venus-only set everywhere — the precondition
+for the limina-guest fork migration.
+
