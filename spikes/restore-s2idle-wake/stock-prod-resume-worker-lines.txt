@@ -1,0 +1,9 @@
+[2026-08-05T16:44:16.429129Z INFO  krun_vmm::builder] restore: read + validated the snapshot file (3602 MiB) in 0.4s
+[2026-08-05T16:44:22.776270Z INFO  krun_vmm::builder] restore: applied 8194 MiB RAM (30 zero / 2019 data frames) in 6.3s
+[2026-08-05T16:44:22.779828Z INFO  krun_devices::usb::xhci::device] xhci restore: 2 slot(s), 10 data endpoint(s), usbcmd=0x4 usbsts=0x1 crcr=0x180199000 dcbaap=0x102f31000
+[2026-08-05T16:44:22.779874Z INFO  krun_vmm::device_manager::hvf::mmio] restore: captured virtio type=16 @0xa019000 status=0xf acked_features=0x12000001f 2 queue(s) (validated; queue regs seeded for the no-PM-ops thaw re-arm)
+[2026-08-05T16:44:22.779928Z INFO  krun_vmm::builder] restore: staged 6387-byte GPU re-creation payload for replay on thaw
+[2026-08-05T16:44:22.780273Z INFO  limina_vmm::krun] restore: injecting guest wake (KEY_WAKEUP) to resume from s2idle
+[2026-08-05T16:44:23.176521Z INFO  krun_devices::virtio::gpu::virtio_gpu] gpu restore: replay complete (session state re-created)
+[2026-08-05T16:44:23.176553Z INFO  krun_devices::virtio::gpu::worker] gpu worker: staged snapshot replay complete
+[2026-08-05T16:44:23.176589Z INFO  krun_devices::virtio::gpu::device] virtio_gpu: released DRIVER_OK after 390.37625ms (replay complete)
