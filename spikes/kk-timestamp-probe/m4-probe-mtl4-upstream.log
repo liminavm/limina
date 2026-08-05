@@ -1,0 +1,21 @@
+==> shipping libvulkan_kosmickrisp.dylib (17569080 B) + probe.c to dogfood-mac:/tmp
+=== one traced run ===
+device: Apple M4 Pro
+  timestampPeriod    = 41.6667
+  timestampValidBits = 64 (queue family 0)
+
+A  vkGetQueryPoolResults      -> 0  q0=12378097961437 avail=1  q1=12378097961437 avail=1
+   delta = 0 ns
+A' +WAIT_BIT                  -> 0  q0=12378097961437 avail=1  q1=12378097961437 avail=1
+   delta = 0 ns
+B  vkCmdCopyQueryPoolResults  ->    q0=12378098088941 avail=1  q1=12378098088941 avail=1
+   delta = 0 ns
+C  vkCmdCopyQueryPoolResults  ->    q0=12378098109444 avail=1  q1=12378098109444 avail=1
+   delta = 0 ns
+
+0xABAB... = the copy never ran; 0 with avail=1 = the guest symptom.
+
+=== 100 runs ===
+A  real=100  not_ready=0  ZERO-as-available=0  / 100
+B  real=100  ZERO-as-available=0  / 100
+C  real=100  ZERO-as-available=0  / 100

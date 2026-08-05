@@ -1,0 +1,20 @@
+### AB leg: mtl4tip (runs=3, cpus=6, base=Fedora-Workstation-44.enhanced.raw)
+Warning: Permanently added '[127.0.0.1]:2222' (ED25519) to the list of known hosts.
+venus device: Virtio-GPU Venus (Apple M1 Max)
+worker pid=63614
+-- mtl4tip IDLE wakeups (5s x3, no load) --
+   idle intr/s=390.8
+   idle intr/s=401.4
+-- mtl4tip run 1 wakeups (5s x3) --
+   intr/s=29651.4
+   intr/s=19081.2
+mtl4tip run 1:                                    vkmark Score: 3259
+-- mtl4tip run 2 wakeups (5s x3) --
+   intr/s=29661.4
+   intr/s=29303.4
+mtl4tip run 2:                                    vkmark Score: 3383
+-- mtl4tip run 3 wakeups (5s x3) --
+   intr/s=29573.0
+   intr/s=29515.2
+mtl4tip run 3:                                    vkmark Score: 3320
+### mtl4tip done

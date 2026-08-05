@@ -149,3 +149,50 @@ decoding the next frame.
 - Correctness gates: guest crossmark pixel hashes bit-match all cross-tier
   references; vkmark 2778 (post-arc median was 2674); full HVF suite run
   with the threaded KK — see the ledger.
+
+## 2026-08-05: the threaded-submit pair on the MTL4 tip — premise re-measured, pair RETIRED
+
+The 2026-08-05 KK rebase removed kk 0017+0018 from `limina-kk`: upstream's live-record rework
+(!42621, `0cd84d45`) moved encoding to vkCmd* record time, deleting the "vkQueueSubmit replays
+the whole command stream on the ring thread" premise the pair existed for. Before deciding
+retire-vs-re-derive, the remaining submit tax was measured on the tip
+(`a3df3aae`, Vulkan 1.4 / Mesa 26.3.0-devel; artifacts in `mtl4-resubmit/`).
+
+Rig: fresh clone of `Fedora-Workstation-44.enhanced.raw`, seated EFI+venus, 6 vcpu,
+`check-gpu-context-health.sh` clean, `ab-vkmark.sh` (3× vkmark 1280x720 in the seated
+session), 10 s `sample` of the worker mid-run-1 and mid-run-3.
+
+**vkmark: 3259 / 3383 / 3320** (median 3320, spread ±2%). No comparable pre-rebase baseline
+exists (the June 2778 was a different guest image + 4 vcpu — cross-image scores are
+incomparable, see the perf-display-pinning trap), so the scores serve as the tip reference for
+any future A/B, not as a regression verdict.
+
+**vkr-ring-4 thread profile during vkmark (5587 snapshots / 10 s, run 1; run 3 agrees):**
+
+| where | samples | share |
+|---|---|---|
+| relax nanosleep (idle) | 3826 | 68.5% |
+| dispatch → vkQueueSubmit | 611 | 10.9% |
+| dispatch → other venus cmds (ImportSemaphore 139, CreatePipelines 64, …) | 292 | 5.2% |
+| ring poll/read (+572 et al.) | ~860 | 15.4% |
+
+The old premise is dead: the ring thread idles two-thirds of the time under vkmark and submit
+is ~11% of its wall time (it was the dominant cost pre-live-record). BUT a residue is real and
+worth knowing: inside `kk_queue_submit`, ~180 of the 611 submit samples sit in
+`vk_cmd_queue_execute` replaying `vk_common_CmdBeginRenderPass` → `kk_CmdBeginRendering` →
+`mtl_new_render_command_encoder_with_descriptor` — **KK MTL4 still creates Metal render
+encoders at submit time for classic-render-pass apps** (the vk_common render-pass translation
+records into the common command queue; dynamic-rendering apps skip this). vkmark uses classic
+render passes, so this is that path's worst case, and it is ~3% of ring-thread wall time.
+
+Revival cost, measured by merge-tree dry-run: both commits CONFLICT on the tip
+(`kk_device.c`, `kk_queue.c`, `kk_sync.c` — upstream's Metal4/hang-detection/drawable-wait
+churn), so leg B would be a re-derivation of the sync machinery, not a cherry-pick.
+
+**Verdict: RETIRED.** Offloading ~11% of a 68%-idle thread cannot move a GPU-bound workload,
+and the conflict surface prices a re-derivation far above the bounded win. The residual
+submit-time encoder creation is latency-class (wake-chain/fusion territory, still parked), not
+thread-offload territory. If it ever resurfaces, the pair stays revivable from tag
+`limina-kk-2026-08-05-pre-mtl4-rebase` (70ead9445fe + d2aeced7eb6) — but any upstream-shaped
+fix should be a new design against the MTL4 queue, or better: teach the vk_common render-pass
+path to record dynamic-rendering directly (kills the replay at the source, upstreamable).

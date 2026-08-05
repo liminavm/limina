@@ -483,3 +483,32 @@ buy one.
 
 Run it with `./tsbench.sh [iters]` locally, or `./tsbench-remote.sh dogfood-mac 3000 <baseline.dylib>`
 for the A/B on the M4 Pro.
+
+## 2026-08-05 — upstream's MTL4 implementation probed on the M4 Pro: CLEAN, no bug to file
+
+The 2026-08-05 KK rebase (`limina-kk` → mesa main `418f2963a15`) dropped our whole timestamp
+arc in favor of upstream's Metal-4 implementation (`ed807097` + `7f540b05`: MTL4CounterHeap,
+per-stage `writeTimestampWithGranularity:`, resolve in the SAME MTL4 command buffer that wrote
+the timestamps). That same-cmdbuf resolve is exactly the shape our Metal-3 findings said loses
+values on M4-class GPUs — so the open action item was: probe it on the affected hardware before
+trusting it.
+
+Done (run-remote-m4.sh dogfood-mac 100, rebased dylib git-c72c9aa806, macOS 26.5.2, M4 Pro,
+log: m4-probe-mtl4-upstream.log):
+
+- **A (bare poll): real=100, not_ready=0, ZERO-as-available=0.**
+- **A' (+WAIT_BIT), B, C (GPU-side copy, the venus shape): 100/100 real, zero disease.**
+- Values advance between submissions; `timestampValidBits=64`, period 41.67 ns.
+
+**Verdict: the Metal-3 hazard does NOT carry over to MTL4CounterHeap on the M4 Pro.** Either
+the MTL4 counter-heap materialises samples at resolve time by construction, or the granularity
+machinery orders it; either way there is nothing to report upstream. The "file a mesa issue if
+zeros reproduce" action item is CLOSED — no issue.
+
+One semantics change, noted not judged: on an otherwise-EMPTY command buffer our Metal-3 impl
+returned deltas of ~27–32 µs (blit-encoder execution overhead — see the 2026-07 sections
+above); upstream MTL4 returns **delta = 0 ns** (both writes snap to the same boundary). For an
+empty bracket 0 is arguably the more honest answer, but a consumer that used the empty-bracket
+delta as an overhead floor will now read 0. Real-work deltas were not probed here (probe.c
+encodes nothing between the writes); the guest compositor's GL timer queries after the next
+dogfood deploy are the real-work oracle — if those read 0, revisit.
