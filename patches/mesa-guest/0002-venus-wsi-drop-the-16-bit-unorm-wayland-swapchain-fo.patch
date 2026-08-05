@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Wed, 5 Aug 2026 18:54:24 -0300
+Subject: [PATCH 2/6] venus/wsi: drop the 16-bit-unorm wayland swapchain format
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Rgba16Unorm is a legal Vulkan surface format but NOT a wgpu render
+attachment, so a conventional "first non-sRGB" wgpu client (ghost-ui)
+that lands on it fails pipeline creation. Matches lavapipe's format
+list; loses nothing real — host scanout is 8-bit and 16-bit textures
+still work.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ src/vulkan/wsi/wsi_common_wayland.c | 15 ++++++++-------
+ 1 file changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/src/vulkan/wsi/wsi_common_wayland.c b/src/vulkan/wsi/wsi_common_wayland.c
+index 19a381274a0..0edcffd107b 100644
+--- a/src/vulkan/wsi/wsi_common_wayland.c
++++ b/src/vulkan/wsi/wsi_common_wayland.c
+@@ -577,15 +577,16 @@ wsi_wl_display_add_drm_format_modifier(struct wsi_wl_display *display,
+     * compared to DRM formats, just like the 8-bits-per-channel ones.
+     * On little endian systems the memory representation of each channel
+     * matches the DRM formats'. */
++   /* limina: do NOT expose R16G16B16A16_UNORM as a wayland swapchain/surface format.
++      It is a legal Vulkan swapchain format but NOT a color-renderable surface format in
++      wgpu/WebGPU even with TEXTURE_FORMAT_16BIT_NORM, so a conventional "first non-sRGB"
++      wgpu client (e.g. ghost-ui) that lands on it fails pipeline creation ("Rgba16Unorm
++      cannot be used as a render attachment"). It is never a real scanout format here (host
++      virtio-gpu scanout is 8-bit); it reached clients only via the compositor's
++      compositable dmabuf set. Skip the UNORM 16-bit cases; the SFLOAT (HDR) variants below
++      stay (those ARE wgpu-renderable). Matches lavapipe. */
+    case DRM_FORMAT_ABGR16161616:
+-      wsi_wl_display_add_vk_format_modifier(display, formats,
+-                                            VK_FORMAT_R16G16B16A16_UNORM,
+-                                            WSI_WL_FMT_ALPHA, modifier);
+-      break;
+    case DRM_FORMAT_XBGR16161616:
+-      wsi_wl_display_add_vk_format_modifier(display, formats,
+-                                            VK_FORMAT_R16G16B16A16_UNORM,
+-                                            WSI_WL_FMT_OPAQUE, modifier);
+       break;
+    case DRM_FORMAT_ABGR16161616F:
+       wsi_wl_display_add_vk_format_modifier(display, formats,

@@ -19,7 +19,7 @@ Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
 | 0015 | venus wsi present fix post rect clone | `src/virtio/vulkan/vn_wsi.c`, `src/vulkan/wsi/wsi_common.h`, `src/vulkan/wsi/wsi_common_wayland.c` |  | needed — this IS the live residual (F44 RPM); every hunk absent from main | main 2026-08-03 | n/a | n/a | no | fold target of 0009; never apply both (README rule confirmed) | guest-enhanced | carry — SLIMMED 2026-08-04: the vn_wsi_create_image DRM_MOD→OPTIMAL rewrite hunk is DELETED (premise dead — KK implements the modifier ext for real now, and the hunk actively SIGSEGVed wsi_create_native_image_mem once 0010's fabricated query stopped masking it; RPM 26.1.5-6.limina). Residual = vn_wsi_init flags + wsi_common(.h)/wayland plumbing (treat_invalid_modifier_as_linear, block_16f); shrinks further with the M15 device-advertised story | stale "IOSurface→ANGLE" comments predate Metal scanout; block_16f is self-labeled diagnostic — re-probe on current KK |
 | 0016 | pre venus ring get submit freelist scan backport | `src/virtio/vulkan/vn_ring.c` |  | mechanical — verbatim upstream 2cf1f6cb508 backported so the F43 pinned-main base accepts 0016/0017 anchors | 2026-08-03 | n/a | n/a — it IS upstream | no | chained under 0017 | guest-enhanced (F43 build only) | retire-on-rebase — upstream has since REVERTED this very shape (09fb7ca8 undoes the scan): a future rebase drops 0016-pre AND 0017 together and takes 09fb7ca8 | also retires when the F43 RPM repoints at the F44 SRPM base (README backlog) |
 | 0016 | venus ring loss device lost not abort | `src/virtio/vulkan/vn_common.c`, `src/virtio/vulkan/vn_common.h`, `src/virtio/vulkan/vn_query_pool.c` +3 |  | needed — main still aborts on ring FATAL (vn_common.c:270, vn_ring.c:466, qfb vn_query_pool.c:340); our ffb/sfb hunks target code DELETED upstream (fence-feedback deprecated 2026-07-20, 4c1938c8) | main 2026-08-03 | n/a | WATCH !42501 (open third-party no-abort-on-ring-fatal via VN_DEBUG=no_abort — real demand, stalled; notes 401-gated) | no | standalone | guest-enhanced | carry; upstream attempt = medium effort — re-cut against the reworked sync code, propose default DEVICE_LOST or extend no_abort to ring-FATAL, coordinate with !42501 | M9 resume-hardening motivation ("ring loss is a legitimate runtime event") is the novel argument; companion virgl 0040 |
-| 0017 | venus fix ring submit freelist capacity | `src/virtio/vulkan/vn_ring.c` |  | **fixed-upstream@09fb7ca8d824** (MR !43229, merged 2026-07-27, Fixes: 2cf1f6cb) — different, better mechanism: bounded cache at retire, O(1) pop, no walk; stable pick 9b3c5935 → Fedora 26.1.5 | main + staging/26.1, 2026-08-03 | n/a | !43229 (theirs, merged); rejected lookalike !41904 | no | standalone | guest-enhanced | retire when base ≥ 26.1.5 — **no MR to file**; the apply-failure at the next SRPM bump IS the retirement signal | CLOSE the limina-venus-submit-freelist "OPEN: upstream MR" item |
+| 0017 | venus fix ring submit freelist capacity | `src/virtio/vulkan/vn_ring.c` |  | **still needed on the shipping base** — upstream main has 09fb7ca8d824 (MR !43229, merged 2026-07-27, Fixes: 2cf1f6cb; different, better mechanism: bounded cache at retire, O(1) pop, no walk), but the `mesa-26.1.5` tag = the Fedora SRPM base does NOT contain it (verified 2026-08-05: tag code still matches on caller-overwritten shmem_count, no capacity field, `git merge-base --is-ancestor` NO; the 08-03 note "stable pick 9b3c5935 → Fedora 26.1.5" was WRONG — that sha is not reachable from the tag). Twice proven live: 0017 applied clean at the 26.1.5-6 respin | mesa-26.1.5 tag directly, 2026-08-05 | n/a | !43229 (theirs, merged); rejected lookalike !41904 | no | standalone | guest-enhanced | carry (fork commit `limina-guest` 0006) until the base tarball contains 09fb7ca8 — **no MR to file**; the %prep apply-failure at a future SRPM bump IS the retirement signal | CLOSE the limina-venus-submit-freelist "OPEN: upstream MR" item |
 
 ## Findings
 
@@ -32,8 +32,9 @@ ICD TLS-destructor pin, deterministic repro, upstream already met the class in
 #13571), 0012 (stub-instance degrade — enhanced delivery, STOCK-tier purpose),
 0002 (fbobject NULL guard), and 0003+0004 as one MR (+0006 could join as "gate
 optional-extension entrypoints"). Two supersessions close open memory items: 0017's
-freelist fix landed upstream 07-27 by a better mechanism (bounded cache, reaching
-Fedora 26.1.5), and 0009's rect-clone hunks landed 07-01 (!42528). The venus WSI
+freelist fix landed upstream 07-27 by a better mechanism (bounded cache — on main only;
+the 26.1.5 base does NOT have it, see the corrected row), and 0009's rect-clone hunks
+landed 07-01 (!42528). The venus WSI
 residual (0015 + 0010 + 0011) is limina-shaped — every hunk works around the
 renderer lacking real modifier support — and shrinks toward zero with the M15
 device-advertised story, not with MRs.
@@ -81,4 +82,16 @@ venus-only set (0015 + 0011–0013 + 0016 + 0017). Consequences for rows above:
 F44 RPM until its next respin physically drops them. Upstream-MR verdicts unchanged.
 The pool is one respin away from the venus-only set everywhere — the precondition
 for the limina-guest fork migration.
+
+**limina-guest fork migration EXECUTED (2026-08-05, task #11):** the shipping venus set now
+lives as commits on `liminavm/mesa`'s `limina-guest` branch (base `mesa-26.1.5`, pinned by
+`third_party/manifest.toml [mesa-guest]`; worktree `/Volumes/mesa-cs/mesa-guest`), exported
+by `scripts/export-mesa-guest-patches.sh` into the committed `patches/mesa-guest/` series
+that BOTH RPM tracks apply. Row→fork-commit map (new series ordinals): 0015→0001
+`77a9a216d0b`, 0011→0002 `a4b71ec449e`, 0012→0003 `0bea34bcca9`, 0013→0004 `03f36b269f8`,
+0016→0005 `c2c0706e85b`, 0017→0006 `5f910f4188c`. The old `patches/mesa/` pool is retired
+as a build input (tombstone README; the migrated diffs deleted, the dead-in-guest
+upstream-queue rows 0001/0002/0003/0004/0006/0014 + the historical 0009/0010 remain as
+files). `scripts/build-venus.sh` archived with it. Rows above stay keyed by their OLD
+subjects; upstream-MR verdicts unchanged — dead-in-guest ≠ not-worth-sending.
 

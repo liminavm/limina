@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Wed, 5 Aug 2026 19:00:10 -0300
+Subject: [PATCH 6/6] venus: track vn_ring_submit capacity in its own field
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+vn_ring_get_submit() matches recycled free-list nodes on shmem_count, but
+the caller overwrites that field with the USED count after every submit —
+the allocated capacity is lost the first time a node is reused with fewer
+shmems than it was sized for. Nodes recorded below their capacity stop
+matching larger requests, so every >=1-shmem submit scans the whole
+(never-pruned) list and mallocs yet another node: unbounded list growth
+plus O(n) per submit = quadratic CPU creep in long-running venus apps
+(blobs demo: firefox 19.6% -> 29.3% CPU in 10 minutes at constant work).
+
+Record the allocated capacity once, at malloc time, in its own field and
+match on that; shmem_count goes back to meaning only the used count.
+
+Upstream fixed this independently on main (09fb7ca8d82, MR !43229) after
+this was authored; this release branch only carries the free-list scan
+(d54c04f96c2), not the capacity tracking, so the bug is live here. Drop
+this commit when the base moves to a tree containing 09fb7ca8d82.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ src/virtio/vulkan/vn_ring.c | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/src/virtio/vulkan/vn_ring.c b/src/virtio/vulkan/vn_ring.c
+index a0b39dcea53..01560841534 100644
+--- a/src/virtio/vulkan/vn_ring.c
++++ b/src/virtio/vulkan/vn_ring.c
+@@ -72,6 +72,8 @@ struct vn_ring_submit {
+ 
+    /* BOs to keep alive (TODO make sure shmems are pinned) */
+    uint32_t shmem_count;
++   /* how many slots shmems[] was allocated with; never shrinks */
++   uint32_t shmem_capacity;
+    struct vn_renderer_shmem *shmems[];
+ };
+ 
+@@ -437,16 +439,20 @@ vn_ring_get_submit(struct vn_ring *ring, uint32_t shmem_count)
+ {
+    list_for_each_entry_safe(struct vn_ring_submit, submit,
+                             &ring->free_submits, head) {
+-      if (submit->shmem_count >= shmem_count) {
++      if (submit->shmem_capacity >= shmem_count) {
+          list_del(&submit->head);
+          return submit;
+       }
+    }
+ 
+    const uint32_t min_shmem_count = 2;
+-   const size_t submit_size = offsetof(
+-      struct vn_ring_submit, shmems[MAX2(shmem_count, min_shmem_count)]);
+-   return malloc(submit_size);
++   const uint32_t shmem_capacity = MAX2(shmem_count, min_shmem_count);
++   const size_t submit_size =
++      offsetof(struct vn_ring_submit, shmems[shmem_capacity]);
++   struct vn_ring_submit *submit = malloc(submit_size);
++   if (submit)
++      submit->shmem_capacity = shmem_capacity;
++   return submit;
+ }
+ 
+ static VkResult

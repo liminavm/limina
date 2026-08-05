@@ -51,7 +51,7 @@ guest**, then packaged as RPMs. The **patch series is the durable artifact.**
 
 | Component | Source of truth | Version shipped (dogfood, 2026-07) | Governed by | Built via |
 |---|---|---|---|---|
-| **Guest Mesa** (venus **+** zink) | Fedora **F44's own** `mesa-*.src.rpm` — *not* the host 26.2.0-devel | `mesa 26.1.4-3.limina.fc44` | `patches/mesa/` **0001 (zink)** + **0015, 0010–0014, 0016, 0017 (venus/zink)** — 0009 is NOT applied (0015 superseded it for bases ≥ 26.1.4) | `scripts/provision/f44/build-mesa-rpm.sh` (applies exactly that subset; dnf-versionlocked) |
+| **Guest Mesa** (venus; guest GL is virgl/vrend since drop-guest-zink 2026-08-04) | **fork**: `github.com/liminavm/mesa`, branch `limina-guest`, base `mesa-26.1.5` (the Fedora SRPM base both tracks build); pinned in `third_party/manifest.toml [mesa-guest]`; worktree `/Volumes/mesa-cs/mesa-guest` | `mesa 26.1.5-6.limina.fc44` (LIMINA_REL=7 respin incoming, task #11) | 6 venus commits on the branch, exported by `scripts/export-mesa-guest-patches.sh` into the committed `patches/mesa-guest/` series (the old `patches/mesa/` pool is a tombstone) | `scripts/provision/f44/build-mesa-rpm.sh` (F44 build guest) / `scripts/build-mesa-rpm.sh` (F43, fc43 container) — both apply the whole series; dnf-versionlocked |
 | **Guest kernel** (16k) | **fork**: `github.com/liminavm/linux` (of `gregkh/linux`, the stable mirror), branch `limina`, base `v7.1.6`; pinned in `third_party/manifest.toml` | `7.1.5-limina16k` deployed (dogfood); `7.1.4-limina16k` in the enhanced images; `7.1.6-limina16k` incoming | 4 commits on the branch: page-reporting-vs-suspend backport (upstream `0b45f69`), blob-scanout flush fence, widened primary-plane formats, LINEAR modifier. *(16 KiB host-visible alignment left the series 2026-08-03 — it is a no-op on the 16k kernel and lives in `guest/virtio-gpu-dkms/` for the stock-4k tier.)* | `scripts/provision/f44/build-kernel-rpm.sh` on a dev-Mac F44 build guest (builds the pinned rev; no patch stage) |
 | **Guest mutter** | **STOCK Fedora** (since 2026-07-11 the payload ships NO mutter; the GNOME clipboard tier is the shell extension below) | distro's own (e.g. `50.3-2.fc44`) | `patches/mutter/` 0003 kept UNSHIPPED for ext-data-control experiments (0001/0002 retired) | optional: `scripts/provision/f44/build-mutter-rpm.sh` |
 | **clipboard@limina** (gnome-shell extension) | `guest/gnome-shell-extension/` | tracks repo | — (plain GJS, no build) | staged by `build-all.sh`, installed to `/usr/share/gnome-shell/extensions` |
@@ -81,15 +81,16 @@ and `docs/images.md` §Component versions for the authoritative version table.
 
 ## The two traps this map exists to prevent
 
-1. **`mesa-cs` is the HOST Mesa (KosmicKrisp + zink-on-KK), not the guest venus driver.**
-   venus source *lives* in that tree but is unbuilt and at a **different version** (26.2.0-devel)
-   than the guest ships (26.1.4). To change guest venus, work against the **F44 mesa SRPM
-   version + the `patches/mesa/` guest subset (0015, 0010–0014, 0016, 0017)**, not `/Volumes/mesa-cs`. venus only ever runs in the
-   guest; KosmicKrisp only ever runs on the host.
-2. **`patches/mesa/` serves two different builds.** `build-mesa-rpm.sh` applies **0001 + 0015 +
-   0010–0014 + 0016/0017** to the **guest** RPM. The **host** KK/zink build (`mesa-cs`) carries its delta as commits on the
-   `limina-kk` branch of the `liminavm/mesa` fork (no patch directory). Same directory of patches, two destinations — always
-   check *which build* a given patch number targets.
+1. **`/Volumes/mesa-cs/mesa` is the HOST Mesa (KosmicKrisp + zink-on-KK), not the guest venus
+   driver.** venus source *lives* in that tree but is unbuilt there and at a different version
+   (main tip) than the guest ships (26.1.5). To change guest venus, commit on the
+   **`limina-guest` branch (worktree `/Volumes/mesa-cs/mesa-guest`)** and re-export the series
+   per `patches/mesa-guest/README.md`. venus only ever runs in the guest; KosmicKrisp only
+   ever runs on the host.
+2. **One mesa fork, two branches, two destinations.** `liminavm/mesa` carries the **host**
+   KK/zink build on `limina-kk` (fork model, no patch directory) and the **guest** venus RPM
+   delta on `limina-guest` (exported to `patches/mesa-guest/` for the RPM specs). Always
+   check *which branch/build* a given mesa change targets.
 
 *(Open to refine: exact virgl-prefix vs virgl-gl-prefix build-arg split; full host-zink
 patch subset applied to `mesa-cs`. Add here as confirmed.)*

@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Wed, 5 Aug 2026 18:54:24 -0300
+Subject: [PATCH 4/6] venus: pin the ICD when creating the TLS-destructor key
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Any thread that touched venus runs vn_tls's destructor at exit — but
+by then the loader may have dlclose()d the ICD, so the destructor's
+code is unmapped and the thread SIGSEGVs (deterministic repro in
+limina's spikes/egl-tsd-repro). Pin the ICD with
+RTLD_NOLOAD|RTLD_NODELETE when the TLS key is created: the pin only
+activates when the key (and so the destructor) exists.
+
+Same class as sysprof's TLS-dtor crash (#13571); the linker-flag
+attempt (!36978) was closed — this activates only when needed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ src/virtio/vulkan/vn_common.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/src/virtio/vulkan/vn_common.c b/src/virtio/vulkan/vn_common.c
+index 5ae40176830..128ce9aad66 100644
+--- a/src/virtio/vulkan/vn_common.c
++++ b/src/virtio/vulkan/vn_common.c
+@@ -10,6 +10,7 @@
+ 
+ #include "vn_common.h"
+ 
++#include <dlfcn.h>
+ #include <stdarg.h>
+ 
+ #include "util/log.h"
+@@ -385,6 +386,20 @@ vn_tls_key_create_once(void)
+    vn_tls_key_valid = tss_create(&vn_tls_key, vn_tls_free) == thrd_success;
+    if (!vn_tls_key_valid && VN_DEBUG(INIT))
+       vn_log(NULL, "WARNING: failed to create vn_tls_key");
++
++   /* The key's destructor (vn_tls_free) lives in this DSO, but unlike
++    * __cxa_thread_atexit_impl, pthread/C11 TLS destructors do not pin the DSO
++    * they point into. The Vulkan loader dlclose()s the driver once the last
++    * instance is destroyed, after which any thread that ever used venus calls
++    * the now-unmapped destructor on exit and crashes in
++    * __nptl_deallocate_tsd. Pin ourselves (a no-op re-open with RTLD_NODELETE)
++    * so the destructor stays callable for the life of the process.
++    */
++   if (vn_tls_key_valid) {
++      Dl_info info;
++      if (dladdr((void *)vn_tls_free, &info) && info.dli_fname)
++         dlopen(info.dli_fname, RTLD_NOW | RTLD_NOLOAD | RTLD_NODELETE);
++   }
+ }
+ 
+ struct vn_tls *

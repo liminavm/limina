@@ -1,0 +1,378 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Wed, 5 Aug 2026 18:54:24 -0300
+Subject: [PATCH 5/6] venus: surface ring loss as VK_ERROR_DEVICE_LOST instead
+ of abort()
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A dead venus ring (host-side FATAL — e.g. a snapshot-restore replay
+gap, or any host renderer fault) used to abort() the entire process at
+the next submit/wait. Ring loss is a legitimate runtime event on a VMM
+that supports suspend/resume: propagate it as DEVICE_LOST from the
+calling entrypoints and let the application decide, like every other
+Vulkan device-loss path.
+
+Related upstream demand: !42501 (no-abort-on-ring-fatal behind
+VN_DEBUG=no_abort).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ src/virtio/vulkan/vn_common.c     | 14 +++--
+ src/virtio/vulkan/vn_common.h     |  6 +-
+ src/virtio/vulkan/vn_query_pool.c | 12 ++--
+ src/virtio/vulkan/vn_queue.c      | 16 ++----
+ src/virtio/vulkan/vn_ring.c       | 93 +++++++++++++++++++++++--------
+ src/virtio/vulkan/vn_ring.h       |  5 +-
+ 6 files changed, 100 insertions(+), 46 deletions(-)
+
+diff --git a/src/virtio/vulkan/vn_common.c b/src/virtio/vulkan/vn_common.c
+index 128ce9aad66..731b495a3bf 100644
+--- a/src/virtio/vulkan/vn_common.c
++++ b/src/virtio/vulkan/vn_common.c
+@@ -245,7 +245,7 @@ vn_relax_init(struct vn_instance *instance, enum vn_relax_reason reason)
+    };
+ }
+ 
+-void
++bool
+ vn_relax(struct vn_relax_state *state)
+ {
+    const uint32_t base_sleep_us = state->profile.base_sleep_us;
+@@ -257,7 +257,7 @@ vn_relax(struct vn_relax_state *state)
+    (*iter)++;
+    if (*iter < (1 << busy_wait_order)) {
+       thrd_yield();
+-      return;
++      return true;
+    }
+ 
+    state->warn = false;
+@@ -270,8 +270,13 @@ vn_relax(struct vn_relax_state *state)
+       struct vn_ring *ring = instance->ring.ring;
+       const uint32_t status = vn_ring_load_status(ring);
+       if (status & VK_RING_STATUS_FATAL_BIT_MESA) {
+-         vn_log(instance, "aborting on ring fatal error at iter %d", *iter);
+-         abort();
++         /* The renderer-side ring is dead: whatever we are waiting on will
++          * never make progress. Give up the wait instead of taking the
++          * process down — the caller surfaces VK_ERROR_DEVICE_LOST.
++          */
++         vn_log(instance, "ring fatal at iter %d: giving up the %s wait",
++                *iter, state->reason_str);
++         return false;
+       }
+ 
+       struct vn_watchdog *watchdog = &instance->ring.watchdog;
+@@ -293,6 +298,7 @@ vn_relax(struct vn_relax_state *state)
+ 
+    const uint32_t shift = util_last_bit(*iter) - busy_wait_order - 1;
+    os_time_sleep(base_sleep_us << shift);
++   return true;
+ }
+ 
+ struct vn_ring *
+diff --git a/src/virtio/vulkan/vn_common.h b/src/virtio/vulkan/vn_common.h
+index 92117977ab5..aace7a703a9 100644
+--- a/src/virtio/vulkan/vn_common.h
++++ b/src/virtio/vulkan/vn_common.h
+@@ -425,7 +425,11 @@ vn_watchdog_fini(struct vn_watchdog *watchdog)
+ struct vn_relax_state
+ vn_relax_init(struct vn_instance *instance, enum vn_relax_reason reason);
+ 
+-void
++/* Returns false when the renderer-side ring is dead (VK_RING_STATUS_FATAL) —
++ * the wait will never make progress and the caller must stop and surface
++ * VK_ERROR_DEVICE_LOST instead of spinning or aborting.
++ */
++bool
+ vn_relax(struct vn_relax_state *state);
+ 
+ void
+diff --git a/src/virtio/vulkan/vn_query_pool.c b/src/virtio/vulkan/vn_query_pool.c
+index 383eea694b9..74472f5aa1b 100644
+--- a/src/virtio/vulkan/vn_query_pool.c
++++ b/src/virtio/vulkan/vn_query_pool.c
+@@ -303,7 +303,11 @@ vn_query_feedback_wait_ready(struct vn_device *dev,
+       vn_relax_init(dev->instance, VN_RELAX_REASON_QUERY);
+    for (uint32_t i = 0, j = 0; i < query_count; i++, j += step) {
+       while (!avail[j]) {
+-         vn_relax(&relax_state);
++         if (!vn_relax(&relax_state)) {
++            /* ring dead: fall back to the synchronous probe below */
++            vn_relax_fini(&relax_state);
++            return false;
++         }
+ 
+          /* Wait until warn order is reached. */
+          if (vn_relax_warn(&relax_state)) {
+@@ -336,10 +340,8 @@ vn_get_query_pool_feedback(VkDevice device,
+          /* Emit synchronous call to catch renderer device lost */
+          result = vn_get_query_pool_results(device, queryPool, firstQuery,
+                                             queryCount, pData, stride, flags);
+-         if (result == VK_ERROR_DEVICE_LOST) {
+-            vn_log(dev->instance, "aborting on qfb device lost");
+-            abort();
+-         }
++         if (result == VK_ERROR_DEVICE_LOST)
++            vn_log(dev->instance, "device lost on qfb probe");
+          if (result != VK_SUCCESS)
+             return result;
+ 
+diff --git a/src/virtio/vulkan/vn_queue.c b/src/virtio/vulkan/vn_queue.c
+index 1ab9f41b8cf..3faebc9956c 100644
+--- a/src/virtio/vulkan/vn_queue.c
++++ b/src/virtio/vulkan/vn_queue.c
+@@ -1770,10 +1770,8 @@ vn_get_fence_status(VkDevice dev_handle,
+              */
+             result = vn_call_vkGetFenceStatus(dev->primary_ring, dev_handle,
+                                               fence_handle);
+-            if (result == VK_ERROR_DEVICE_LOST) {
+-               vn_log(dev->instance, "aborting on ffb device lost");
+-               abort();
+-            }
++            if (result == VK_ERROR_DEVICE_LOST)
++               vn_log(dev->instance, "device lost on ffb probe");
+             if (result == VK_SUCCESS &&
+                 vn_feedback_get_status(fence->feedback.slot) != VK_SUCCESS) {
+                vn_log(dev->instance, "ERROR: ffb must be signaled now");
+@@ -1852,8 +1850,8 @@ vn_update_sync_result(struct vn_device *dev,
+       if (abs_timeout != OS_TIMEOUT_INFINITE &&
+           os_time_get_nano() >= abs_timeout)
+          result = VK_TIMEOUT;
+-      else
+-         vn_relax(relax_state);
++      else if (!vn_relax(relax_state))
++         result = VK_ERROR_DEVICE_LOST;
+       break;
+    default:
+       assert(result == VK_SUCCESS || result < 0);
+@@ -2312,10 +2310,8 @@ vn_get_semaphore_counter_value(VkDevice dev_handle,
+          uint64_t tmp;
+          VkResult result = vn_call_vkGetSemaphoreCounterValue(
+             dev->primary_ring, dev_handle, sem_handle, &tmp);
+-         if (result == VK_ERROR_DEVICE_LOST) {
+-            vn_log(dev->instance, "aborting on sfb device lost");
+-            abort();
+-         }
++         if (result == VK_ERROR_DEVICE_LOST)
++            vn_log(dev->instance, "device lost on sfb probe");
+          if (result != VK_SUCCESS)
+             return result;
+       }
+diff --git a/src/virtio/vulkan/vn_ring.c b/src/virtio/vulkan/vn_ring.c
+index ff72774d243..a0b39dcea53 100644
+--- a/src/virtio/vulkan/vn_ring.c
++++ b/src/virtio/vulkan/vn_ring.c
+@@ -178,7 +178,7 @@ vn_ring_get_seqno_status(struct vn_ring *ring, uint32_t seqno)
+    return vn_ring_ge_seqno(ring, vn_ring_load_head(ring), seqno);
+ }
+ 
+-void
++VkResult
+ vn_ring_wait_seqno(struct vn_ring *ring, uint32_t seqno)
+ {
+    /* A renderer wait incurs several hops and the renderer might poll
+@@ -191,19 +191,31 @@ vn_ring_wait_seqno(struct vn_ring *ring, uint32_t seqno)
+    do {
+       if (vn_ring_get_seqno_status(ring, seqno)) {
+          vn_relax_fini(&relax_state);
+-         return;
++         return VK_SUCCESS;
++      }
++      /* Check THIS ring's status, not just the instance ring's (vn_relax):
++       * a dead ring never advances its head and the wait would never end.
++       */
++      if (unlikely(vn_ring_load_status(ring) &
++                   VK_RING_STATUS_FATAL_BIT_MESA)) {
++         vn_log(ring->instance, "ring fatal: abandoning the seqno wait");
++         vn_relax_fini(&relax_state);
++         return VK_ERROR_DEVICE_LOST;
++      }
++      if (!vn_relax(&relax_state)) {
++         vn_relax_fini(&relax_state);
++         return VK_ERROR_DEVICE_LOST;
+       }
+-      vn_relax(&relax_state);
+    } while (true);
+ }
+ 
+-void
++VkResult
+ vn_ring_wait_all(struct vn_ring *ring)
+ {
+    /* load from tail rather than ring->cur for atomicity */
+    const uint32_t pending_seqno =
+       atomic_load_explicit(ring->shared.tail, memory_order_relaxed);
+-   vn_ring_wait_seqno(ring, pending_seqno);
++   return vn_ring_wait_seqno(ring, pending_seqno);
+ }
+ 
+ static bool
+@@ -220,14 +232,14 @@ vn_ring_has_space(const struct vn_ring *ring,
+    return false;
+ }
+ 
+-static uint32_t
+-vn_ring_wait_space(struct vn_ring *ring, uint32_t size)
++/* Returns false when the ring died while waiting (VK_ERROR_DEVICE_LOST). */
++static bool
++vn_ring_wait_space(struct vn_ring *ring, uint32_t size, uint32_t *out_head)
+ {
+    assert(size <= ring->buffer_size);
+ 
+-   uint32_t head;
+-   if (likely(vn_ring_has_space(ring, size, &head)))
+-      return head;
++   if (likely(vn_ring_has_space(ring, size, out_head)))
++      return true;
+ 
+    {
+       VN_TRACE_FUNC();
+@@ -236,10 +248,15 @@ vn_ring_wait_space(struct vn_ring *ring, uint32_t size)
+       struct vn_relax_state relax_state =
+          vn_relax_init(ring->instance, VN_RELAX_REASON_RING_SPACE);
+       do {
+-         vn_relax(&relax_state);
+-         if (vn_ring_has_space(ring, size, &head)) {
++         if (unlikely(vn_ring_load_status(ring) &
++                      VK_RING_STATUS_FATAL_BIT_MESA) ||
++             !vn_relax(&relax_state)) {
+             vn_relax_fini(&relax_state);
+-            return head;
++            return false;
++         }
++         if (vn_ring_has_space(ring, size, out_head)) {
++            vn_relax_fini(&relax_state);
++            return true;
+          }
+       } while (true);
+    }
+@@ -432,11 +449,12 @@ vn_ring_get_submit(struct vn_ring *ring, uint32_t shmem_count)
+    return malloc(submit_size);
+ }
+ 
+-static bool
++static VkResult
+ vn_ring_submit_internal(struct vn_ring *ring,
+                         struct vn_ring_submit *submit,
+                         const struct vn_cs_encoder *cs,
+-                        uint32_t *seqno)
++                        uint32_t *seqno,
++                        bool *out_notify)
+ {
+    /* write cs to the ring */
+    assert(!vn_cs_encoder_is_empty(cs));
+@@ -444,17 +462,24 @@ vn_ring_submit_internal(struct vn_ring *ring,
+    /* avoid -Wmaybe-unitialized */
+    uint32_t cur_seqno = 0;
+ 
++   *out_notify = false;
++
+    for (uint32_t i = 0; i < cs->buffer_count; i++) {
+       const struct vn_cs_encoder_buffer *buf = &cs->buffers[i];
+-      cur_seqno = vn_ring_wait_space(ring, buf->committed_size);
++      if (!vn_ring_wait_space(ring, buf->committed_size, &cur_seqno))
++         return VK_ERROR_DEVICE_LOST;
+       vn_ring_write_buffer(ring, buf->base, buf->committed_size);
+    }
+ 
+    vn_ring_store_tail(ring);
+    const VkRingStatusFlagsMESA status = vn_ring_load_status(ring);
+    if (status & VK_RING_STATUS_FATAL_BIT_MESA) {
+-      vn_log(NULL, "vn_ring_submit abort on fatal");
+-      abort();
++      /* The renderer-side ring is dead; nothing will consume what we just
++       * wrote. Fail the submission instead of taking the process down — the
++       * loss surfaces as VK_ERROR_DEVICE_LOST from the calling entrypoint.
++       */
++      vn_log(NULL, "ring fatal: failing the submission with device lost");
++      return VK_ERROR_DEVICE_LOST;
+    }
+ 
+    vn_ring_retire_submits(ring, cur_seqno);
+@@ -473,10 +498,10 @@ vn_ring_submit_internal(struct vn_ring *ring,
+       if (os_time_timeout(ring->last_notify, ring->next_notify, now)) {
+          ring->last_notify = now;
+          ring->next_notify = now + VN_RING_IDLE_TIMEOUT_NS;
+-         return true;
++         *out_notify = true;
+       }
+    }
+-   return false;
++   return VK_SUCCESS;
+ }
+ 
+ static const struct vn_cs_encoder *
+@@ -619,6 +644,10 @@ vn_ring_submit_locked(struct vn_ring *ring,
+                       struct vn_renderer_shmem *extra_shmem,
+                       uint32_t *ring_seqno)
+ {
++   /* fast-fail: the ring is known dead and nothing will consume the cs */
++   if (unlikely(vn_ring_load_status(ring) & VK_RING_STATUS_FATAL_BIT_MESA))
++      return VK_ERROR_DEVICE_LOST;
++
+    const bool direct = vn_ring_submission_can_direct(ring, cs);
+    if (!direct && cs->storage_type == VN_CS_ENCODER_STORAGE_POINTER) {
+       cs = vn_ring_cs_upload_locked(ring, cs);
+@@ -634,8 +663,20 @@ vn_ring_submit_locked(struct vn_ring *ring,
+       return result;
+ 
+    uint32_t seqno;
+-   const bool notify =
+-      vn_ring_submit_internal(ring, submit.submit, submit.cs, &seqno);
++   bool notify;
++   result =
++      vn_ring_submit_internal(ring, submit.submit, submit.cs, &seqno, &notify);
++   if (result != VK_SUCCESS) {
++      /* the submit was never queued: drop its shmem refs and recycle it,
++       * mirroring vn_ring_retire_submits
++       */
++      for (uint32_t i = 0; i < submit.submit->shmem_count; i++)
++         vn_renderer_shmem_unref(ring->instance->renderer,
++                                 submit.submit->shmems[i]);
++      list_addtail(&submit.submit->head, &ring->free_submits);
++      vn_ring_submission_cleanup(&submit);
++      return result;
++   }
+    if (notify) {
+       uint32_t notify_ring_data[8];
+       struct vn_cs_encoder local_enc = VN_CS_ENCODER_INITIALIZER_LOCAL(
+@@ -716,12 +757,16 @@ vn_ring_submit_command(struct vn_ring *ring,
+    mtx_unlock(&ring->mutex);
+ 
+    if (submit->reply_size) {
+-      if (likely(submit->ring_seqno_valid)) {
++      if (likely(submit->ring_seqno_valid) &&
++          vn_ring_wait_seqno(ring, submit->ring_seqno) == VK_SUCCESS) {
+          void *reply_ptr = submit->reply_shmem->mmap_ptr + reply_offset;
+          submit->reply =
+             VN_CS_DECODER_INITIALIZER(reply_ptr, submit->reply_size);
+-         vn_ring_wait_seqno(ring, submit->ring_seqno);
+       } else {
++         /* submission failed or the ring died before consuming it: no reply
++          * will ever arrive — the caller sees a NULL reply decoder and fails
++          * the command instead of decoding garbage
++          */
+          vn_renderer_shmem_unref(ring->instance->renderer,
+                                  submit->reply_shmem);
+          submit->reply_shmem = NULL;
+diff --git a/src/virtio/vulkan/vn_ring.h b/src/virtio/vulkan/vn_ring.h
+index 5128fa4115f..a10ba6d7e32 100644
+--- a/src/virtio/vulkan/vn_ring.h
++++ b/src/virtio/vulkan/vn_ring.h
+@@ -65,10 +65,11 @@ vn_ring_unset_status_bits(struct vn_ring *ring, uint32_t mask);
+ bool
+ vn_ring_get_seqno_status(struct vn_ring *ring, uint32_t seqno);
+ 
+-void
++/* both waits return VK_ERROR_DEVICE_LOST when the ring dies mid-wait */
++VkResult
+ vn_ring_wait_seqno(struct vn_ring *ring, uint32_t seqno);
+ 
+-void
++VkResult
+ vn_ring_wait_all(struct vn_ring *ring);
+ 
+ struct vn_ring_submit_command {

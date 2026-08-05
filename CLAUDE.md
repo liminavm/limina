@@ -65,12 +65,17 @@ right tool — not treat upstream as immutable:
     image (Mesa won't build on a case-insensitive FS), so it is **not** vendored by
     `cargo xtask vendor` — `third_party/manifest.toml` records which rev the checkout should be on,
     and `scripts/ensure-mesa-cs.sh` only mounts the image.
-  - **`limina-guest`** — the **guest** venus/zink Mesa. **Not migrated yet** (task #24): still the
-    `patches/mesa/` pool, which is deliberately NOT a single-base series (three effective bases,
-    raw context diffs) and is consumed by the guest RPM spec. Migrating waits until the series
-    shrinks (see task #19) and the F43 base repoint collapses the bases.
+  - **`limina-guest`** — the **guest** venus Mesa (fork model since 2026-08-05, task #11).
+    Six venus commits on base `mesa-26.1.5` (the Fedora SRPM base both RPM tracks build);
+    worktree at `/Volumes/mesa-cs/mesa-guest`. Because the RPM builds run inside a build
+    guest/container with no access to that checkout, the branch is consumed as an **exported,
+    committed series**: `scripts/export-mesa-guest-patches.sh` derives `patches/mesa-guest/`
+    from the manifest pin, and both `scripts/provision/f44/build-mesa-rpm.sh` and
+    `scripts/build-mesa-rpm.sh` apply it via the spec. Never hand-edit the exported patches —
+    commit on the fork, push, bump the manifest rev, re-export. The old `patches/mesa/` pool
+    is a tombstone (reference-only upstream-queue material).
 
-  Always check *which build* a mesa patch targets — the same directory has served both.
+  Always check *which branch* a mesa change targets — host `limina-kk` vs guest `limina-guest`.
 - **The guest Linux kernel** — **fork model**: `github.com/liminavm/linux` (a fork of
   `gregkh/linux`, the stable-tree mirror — stable point releases don't exist in `torvalds/linux`),
   branch `limina`, pinned by `third_party/manifest.toml`. Our changes ARE the commits on that

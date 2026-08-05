@@ -1,0 +1,148 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Wed, 5 Aug 2026 18:53:49 -0300
+Subject: [PATCH 1/6] venus/wsi: linear-modifier fallback + 16F swapchain block
+ for virtio-gpu presents
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+THE black-screen fix for a venus guest desktop on limina (without it
+the desktop never paints). Two venus-set knobs grown in common WSI:
+
+- treat_invalid_modifier_as_linear: when the modifier query gives no
+  usable answer, fall back to LINEAR instead of the prime-blit path
+  (separate image+buffer memories) — on this transport the blit breaks
+  the host's IOSurface zero-copy scanout.
+- block_16f_swapchain_formats: drop 16-bit-float swapchain formats
+  (host scanout is 8-bit; the 16F variant trips a host stride bug).
+
+Carried on the limina-guest branch since mesa 26.1.0; the rect-clone
+half of the original patch was upstreamed independently (!42528), and
+the vn_wsi_create_image DRM_MOD->OPTIMAL rewrite hunk was dropped
+2026-08-04 when the host started implementing
+VK_EXT_image_drm_format_modifier for real.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ src/virtio/vulkan/vn_wsi.c          |  9 +++++++
+ src/vulkan/wsi/wsi_common.h         | 20 +++++++++++++++
+ src/vulkan/wsi/wsi_common_wayland.c | 40 ++++++++++++++++++++++++++++-
+ 3 files changed, 68 insertions(+), 1 deletion(-)
+
+diff --git a/src/virtio/vulkan/vn_wsi.c b/src/virtio/vulkan/vn_wsi.c
+index eb290cb8d1a..4e1fa670529 100644
+--- a/src/virtio/vulkan/vn_wsi.c
++++ b/src/virtio/vulkan/vn_wsi.c
+@@ -189,6 +189,15 @@ vn_wsi_init(struct vn_physical_device *physical_dev)
+    physical_dev->wsi_device.supports_scanout = false;
+    physical_dev->wsi_device.supports_modifiers =
+       physical_dev->base.vk.supported_extensions.EXT_image_drm_format_modifier;
++   /* macOS-host virtio-gpu compositors advertise modifiers as INVALID. Force
++    * the rewrite to LINEAR so mesa picks the native single-memory path; this
++    * is what lets the host-side IOSurface reach the wl_buffer Mutter samples. */
++   physical_dev->wsi_device.treat_invalid_modifier_as_linear = true;
++   /* Diagnostic: drop high-bit-depth DRM formats (RGBA16F, RGB10A2) so
++    * clients fall back to BGRA8/RGBA8. The high-bit path currently produces
++    * stride-mismatch position offsets and wrong colors via IOSurface→ANGLE.
++    * Remove this once the high-bit color/stride path is fixed. */
++   physical_dev->wsi_device.block_16f_swapchain_formats = true;
+    physical_dev->base.vk.wsi_device = &physical_dev->wsi_device;
+ 
+    return VK_SUCCESS;
+diff --git a/src/vulkan/wsi/wsi_common.h b/src/vulkan/wsi/wsi_common.h
+index 8c9f1f1da50..9110dc4d204 100644
+--- a/src/vulkan/wsi/wsi_common.h
++++ b/src/vulkan/wsi/wsi_common.h
+@@ -92,6 +92,26 @@ struct wsi_device {
+    bool supports_protected[VK_ICD_WSI_PLATFORM_MAX];
+ 
+    bool supports_modifiers;
++
++   /* On macOS-host virtio-gpu, the host has no DRM modifier negotiation;
++    * compositors (e.g. Mutter) advertise their dmabuf format tranches with
++    * modifier=DRM_FORMAT_MOD_INVALID. With INVALID, mesa falls back to the
++    * prime-blit path (separate image+buffer memories), which prevents the
++    * host-side IOSurface from reaching the wl_buffer Mutter samples.
++    *
++    * Setting this flag rewrites every INVALID modifier the compositor offers
++    * to DRM_FORMAT_MOD_LINEAR, which makes mesa pick the native single-memory
++    * path and lets the IOSurface flow end-to-end. */
++   bool treat_invalid_modifier_as_linear;
++
++   /* High-bit DRM formats (RGBA16F, RGB10A2 variants) currently produce
++    * severely distorted colors and (for 16F) a stride-mismatch position
++    * offset on the IOSurface→ANGLE path. Setting this flag suppresses those
++    * formats so vkcube/vkmark fall through to BGRA8/RGBA8, which renders
++    * pixel-perfect. (Diagnostic: covers both 16F and 10:10:10:2 despite
++    * the name. Drop when the high-bit color/stride issue is fixed.) */
++   bool block_16f_swapchain_formats;
++
+    uint32_t maxImageDimension2D;
+    uint32_t optimalBufferCopyRowPitchAlignment;
+    VkPresentModeKHR override_present_mode;
+diff --git a/src/vulkan/wsi/wsi_common_wayland.c b/src/vulkan/wsi/wsi_common_wayland.c
+index 73cc78c4c2d..19a381274a0 100644
+--- a/src/vulkan/wsi/wsi_common_wayland.c
++++ b/src/vulkan/wsi/wsi_common_wayland.c
+@@ -375,7 +375,7 @@ wsi_wl_display_add_vk_format(struct wsi_wl_display *display,
+ }
+ 
+ static void
+-wsi_wl_format_add_modifier(struct wsi_wl_format *format, uint64_t modifier)
++wsi_wl_format_add_modifier_full(struct wsi_wl_format *format, uint64_t modifier)
+ {
+    uint64_t *mod;
+ 
+@@ -391,6 +391,17 @@ wsi_wl_format_add_modifier(struct wsi_wl_format *format, uint64_t modifier)
+       *mod = modifier;
+ }
+ 
++static void
++wsi_wl_format_add_modifier(struct wsi_wl_format *format, uint64_t modifier)
++{
++   /* See treat_invalid_modifier_as_linear in wsi_common.h. The wsi_device
++    * pointer is reachable via the format's display, but format here doesn't
++    * carry it; the rewrite is done at the call sites that have wsi_device
++    * (wsi_wl_display_add_drm_format_modifier). For backward compat we still
++    * filter INVALID here. */
++   wsi_wl_format_add_modifier_full(format, modifier);
++}
++
+ static void
+ wsi_wl_display_add_vk_format_modifier(struct wsi_wl_display *display,
+                                       struct u_vector *formats,
+@@ -412,6 +423,33 @@ wsi_wl_display_add_drm_format_modifier(struct wsi_wl_display *display,
+    VK_FROM_HANDLE(vk_physical_device, pdevice, display->wsi_wl->physical_device);
+    struct wsi_device *wsi_device = pdevice->wsi_device;
+ 
++   /* On macOS-host virtio-gpu the compositor advertises every modifier as
++    * INVALID. Without the rewrite below, mesa would fall back to the
++    * prime-blit path, which on this transport breaks IOSurface zero-copy.
++    * See wsi_device::treat_invalid_modifier_as_linear. */
++   if (wsi_device->treat_invalid_modifier_as_linear &&
++       modifier == DRM_FORMAT_MOD_INVALID)
++      modifier = DRM_FORMAT_MOD_LINEAR;
++
++   /* Skip high-bit-depth DRM formats so apps fall back to 8-bpp BGRA/RGBA.
++    * See wsi_device::block_16f_swapchain_formats. The 16F variant trips a
++    * stride mismatch (8bpp treated as 4bpp downstream → cube positioned
++    * too far right) and 10:10:10:2 produces wrong colors via the current
++    * IOSurface→ANGLE path. Both render correctly at BGRA8/RGBA8. */
++   if (wsi_device->block_16f_swapchain_formats) {
++      switch (drm_format) {
++      case DRM_FORMAT_ABGR16161616F:
++      case DRM_FORMAT_XBGR16161616F:
++      case DRM_FORMAT_ARGB2101010:
++      case DRM_FORMAT_XRGB2101010:
++      case DRM_FORMAT_ABGR2101010:
++      case DRM_FORMAT_XBGR2101010:
++         return;
++      default:
++         break;
++      }
++   }
++
+    /* From Vulkan 1.3 onwards, we can always try adding the 4444 formats.
+     * If the format isn't supported or isn't renderable,
+     * wsi_wl_display_add_vk_format() will reject it via

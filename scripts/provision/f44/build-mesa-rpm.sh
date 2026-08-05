@@ -11,55 +11,31 @@
 # which had to manage a 25.x->26.2 soname swap on F43. The installer (install-enhanced.sh) then
 # `dnf versionlock`s it so an update can't revert venus.
 #
-# OUR patches (patches/mesa/, see its README):
-#   0001  zink nullDescriptor emulation (MR!37115) — GL correctness on zink.
-#   0015  venus WSI present-fix (post-rect-clone variant of 0009) — THE black-screen fix; without
-#         it the venus desktop never paints. 0015 fits bases >= 26.1.4, whose stable branch
-#         upstreamed 0009's vn_wsi_clone_present_info rectangle deep-copy; 0009 itself is for
-#         older bases (and 26.2.0, which branched before the backport).
-#   [0010 RETIRED 2026-08-04 — both halves are dead against the current host: (a) the renderer
-#         advertises dma-buf itself (virgl f2f038a3), so upstream's own branch fires; (b) the
-#         renderer advertises VK_EXT_image_drm_format_modifier + queue_family_foreign natively
-#         (KK LINEAR-only, mesa-fork befa0f2731e/d918b98d869 + virgl 0cc513fd), so upstream
-#         venus's passthrough gate lights up and answers TRUTHFULLY (host-computed pitches,
-#         where 0010(b) fabricated tight-packed ones). Requires that host; an enhanced guest
-#         never runs against another. See docs/design/drm-format-modifier-for-real.md.]
-#   0012  venus: degrade to the stub instance when ring/version setup fails post-connect —
-#         without it a 4 KiB-kernel boot (the stock-kernel GRUB fallback!) returns
-#         OUT_OF_HOST_MEMORY from vkCreateInstance and the loader kills lavapipe with it.
-#   0013  venus: pin the ICD with RTLD_NODELETE when the TLS key is created — without it any
-#         thread that used venus SIGSEGVs at exit once the loader dlclose()s the driver
-#         (spikes/egl-tsd-repro/).
-#   0011  venus WSI: drop the 16-bit-unorm wayland swapchain format. Rgba16Unorm is a legal
-#         Vulkan surface format but NOT a wgpu render attachment, so a conventional "first
-#         non-sRGB" wgpu client (ghost-ui) that lands on it fails pipeline creation. Matches
-#         lavapipe; loses nothing real (host scanout is 8-bit; 16-bit textures still work).
-#   0014  zink: fix the multi-context unflushed-batch wait lost-wakeup deadlock — without it
-#         a cross-context map (e.g. glReadPixels) can sleep forever on a cnd_broadcast that
-#         fired between the unlocked predicate check and the cnd_wait
-#         (spikes/venus-replay-zink-hang-2026-07-12/, live-confirmed; unfixed upstream).
-#   0016  venus: surface ring loss as VK_ERROR_DEVICE_LOST instead of abort() — a dead venus
-#         ring (host-side FATAL, e.g. a snapshot-restore replay gap) used to abort() the whole
-#         process at its next submit/wait (the 2026-07-20 vkmark-on-resume SIGABRT); now the
-#         loss propagates as DEVICE_LOST from the calling entrypoints (upstream-shaped;
-#         spikes/m9-vkmark-resume-crash/RESULTS.md).
-#   0017  venus: fix the ring-submit free-list degeneration — get_submit matched recycled
-#         nodes on shmem_count, which the caller overwrites with the USED count, losing the
-#         allocated capacity; nodes recorded 0 never match again, so every ≥1-shmem submit
-#         scans the whole (never-pruned) list and mallocs a new node → unbounded growth +
-#         O(n) per submit = quadratic CPU creep in long-running venus apps (blobs demo:
-#         firefox 19.6→29.3% CPU in 10 min at constant work). Track capacity in its own
-#         field, set once at malloc. Unfixed upstream (verified main 38169ede9b2 2026-07-21).
-# These were authored on mesa 26.1.0; F44 ships 26.0.x, so they may need a rebase. We add them via
-# the spec (NOT a tolerant pre-apply) ON PURPOSE: a non-applying patch FAILS %prep loudly, rather
-# than silently shipping a present-fix-less (black-screen) mesa.
+# OUR patches: the COMMITTED series patches/mesa-guest/ — a derived artifact of the fork
+# branch liminavm/mesa `limina-guest` (third_party/manifest.toml [mesa-guest] pins the rev;
+# scripts/export-mesa-guest-patches.sh regenerates the series from base..rev). The fork branch
+# is the source of truth; per-patch rationale lives in each patch's own commit message. To
+# change the set: commit on the fork, push, bump the manifest rev, re-export, then re-run this
+# with LIMINA_REL bumped. Current series (venus-only — guest GL rides virgl/vrend since
+# drop-guest-zink 2026-08-04, so the old zink rows 0001/0014 are gone):
+#   0001  venus/wsi linear-modifier fallback + 16F swapchain block — THE black-screen fix
+#   0002  venus/wsi drop the 16-bit-unorm wayland swapchain format (wgpu ghost-UI)
+#   0003  venus: degrade to the stub instance when ring setup fails (stock-4k GRUB fallback
+#         boot must not lose lavapipe)
+#   0004  venus: pin the ICD when creating the TLS-destructor key (thread-exit SIGSEGV)
+#   0005  venus: ring loss -> VK_ERROR_DEVICE_LOST, not abort() (snapshot-resume survival)
+#   0006  venus: track vn_ring_submit capacity in its own field (quadratic CPU creep;
+#         upstream main has 09fb7ca8d82 but this release branch does NOT — its %prep
+#         apply-FAILURE at a future base bump is the retirement signal)
+# We add them via the spec (NOT a tolerant pre-apply) ON PURPOSE: a non-applying patch FAILS
+# %prep loudly, rather than silently shipping a present-fix-less (black-screen) mesa.
 #
 # Usage (in the guest):  scripts/provision/f44/build-mesa-rpm.sh
 # Output: $OUT/*.rpm  (default ~/limina-build/mesa)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-PATCHES="$REPO/patches/mesa"
+PATCHES="$REPO/patches/mesa-guest"
 OUT="${OUT:-$HOME/limina-build/mesa}"
 mkdir -p "$OUT"
 
@@ -84,25 +60,25 @@ MESA_VER=$(rpm -q --qf "%{VERSION}" -p "$SRPM"); echo "    mesa version: $MESA_V
 cp -f ./* "$HOME/rpmbuild/SOURCES/" 2>/dev/null || true
 cp -f mesa.spec "$HOME/rpmbuild/SPECS/mesa.spec"
 
-echo "==> [2/5] add OUR venus/zink patches + bump Release"
-cp -f "$PATCHES"/0001-zink-nullDescriptor-emulation-MR37115.diff \
-      "$PATCHES"/0015-venus-wsi-present-fix-post-rect-clone.diff \
-      "$PATCHES"/0011-venus-wsi-drop-16bit-unorm-swapchain.diff \
-      "$PATCHES"/0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff \
-      "$PATCHES"/0013-venus-pin-icd-for-tls-destructor.diff \
-      "$PATCHES"/0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff \
-      "$PATCHES"/0016-venus-ring-loss-device-lost-not-abort.diff \
-      "$PATCHES"/0017-venus-fix-ring-submit-freelist-capacity.diff \
-      "$HOME/rpmbuild/SOURCES/"
+echo "==> [2/5] add OUR venus patches (the exported limina-guest series) + bump Release"
+ls "$PATCHES"/*.patch >/dev/null  # empty series = the export was never run; fail loudly
+cp -f "$PATCHES"/*.patch "$HOME/rpmbuild/SOURCES/"
 SPEC="$HOME/rpmbuild/SPECS/mesa.spec"
 LAST_PATCH_LINE=$( { grep -nE "^Patch[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
 [ -n "$LAST_PATCH_LINE" ] || LAST_PATCH_LINE=$( { grep -nE "^Source[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
-ins="Patch9001: 0001-zink-nullDescriptor-emulation-MR37115.diff\nPatch9009: 0015-venus-wsi-present-fix-post-rect-clone.diff\nPatch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff\nPatch9012: 0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff\nPatch9013: 0013-venus-pin-icd-for-tls-destructor.diff\nPatch9014: 0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff\nPatch9016: 0016-venus-ring-loss-device-lost-not-abort.diff\nPatch9017: 0017-venus-fix-ring-submit-freelist-capacity.diff"
-sed -i "${LAST_PATCH_LINE}a ${ins}" "$SPEC"
-# Our patches are plain `git diff` (no mailbox headers); ensure %autosetup uses GNU patch (-p1).
+# Patch9NNN lines + a %patch fallback, both derived from the series listing (sorted = apply order).
+ins=""; fallback=""; n=9001
+for p in "$PATCHES"/*.patch; do
+  ins="${ins}Patch${n}: $(basename "$p")\n"
+  fallback="${fallback}%patch -P ${n} -p1\n"
+  n=$((n+1))
+done
+sed -i "${LAST_PATCH_LINE}a ${ins%\\n}" "$SPEC"
+# The series is git format-patch mailbox output; GNU patch skips the mail headers fine, so a
+# plain -p1 %autosetup applies it (no need for the spec's `-S git`).
 sed -i -E "s/^%autosetup -S git/%autosetup -p1/" "$SPEC"
 if ! grep -qE "^%autosetup" "$SPEC"; then
-  sed -i "/^%setup/a %patch -P 9001 -p1\n%patch -P 9009 -p1\n%patch -P 9011 -p1" "$SPEC"
+  sed -i "/^%setup/a ${fallback%\\n}" "$SPEC"
 fi
 # Release: pin to a deterministic "<N>.limina" (N = LIMINA_REL, default 1) so (a) our build outranks
 # stock, and (b) bumping LIMINA_REL yields a STRICTLY NEWER NEVRA than a prior enhanced build —
@@ -144,8 +120,10 @@ for _ in 1 2 3; do
 done
 
 echo "==> [4/5] rpmbuild"
-# If %prep fails on Patch9009, the venus present-fix needs rebasing onto mesa $MESA_VER —
-# rebase it (it is the black-screen fix) and re-run. Do NOT ship without it.
+# If %prep fails on Patch9001, the venus present-fix needs rebasing onto mesa $MESA_VER —
+# rebase it on the fork branch (it is the black-screen fix) and re-run. Do NOT ship without it.
+# If %prep fails on Patch9006 (freelist capacity), upstream 09fb7ca8d82 reached this base —
+# drop that commit from the fork branch and re-export (planned retirement, not a break).
 rpmbuild -bb "$SPEC"
 
 echo "==> [5/5] collect RPMs -> $OUT"

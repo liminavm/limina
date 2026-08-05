@@ -27,23 +27,19 @@
 # install-enhanced.sh handles it (dnf downgrade branch); fresh provisioning from stock
 # (25.2.4 -> 26.1.5) is a plain upgrade.
 #
-# OUR patches (the venus-only set, identical to F44's next respin — see patches/mesa/README.md):
-#   0015  venus WSI present-fix (post-rect-clone) — THE black-screen fix. 0009 is the
-#         pre-backport variant for old bases; this base (>= 26.1.4 stable) carries the
-#         rect-clone upstream, so 0015, never both. [0001/0014 (zink) NOT applied: dead in
-#         the guest since drop-guest-zink 2026-08-04 — guest GL rides virgl/vrend.]
-#   0011  venus WSI: drop 16-bit-unorm wayland swapchain formats (wgpu ghost-UI).
-#   0012  venus: degrade to the stub instance when ring setup fails (stock-kernel GRUB
-#         fallback boot must not lose lavapipe).
-#   0013  venus: pin the ICD for the TLS destructor (thread-exit SIGSEGV).
-#   0016  venus: ring loss -> VK_ERROR_DEVICE_LOST, not abort() (snapshot-resume survival).
-#   0017  venus: ring-submit free-list capacity fix (quadratic CPU creep). Superseded
-#         upstream by !43229 but NOT yet in the Fedora 26.1.5 tarball (proven at the F44
-#         26.1.5-6 respin: still applies clean). Its %prep apply-FAILURE at a future SRPM
-#         bump is the retirement signal — drop it then, no MR.
-#         [0016-pre NOT needed: the 26.1.4+ stable base already carries the free-list scan.]
-# Patches go in via the spec (Patch9xxx), NOT a tolerant pre-apply: a non-applying patch
-# fails %prep loudly rather than silently shipping a black-screen mesa.
+# OUR patches: the COMMITTED series patches/mesa-guest/ — a derived artifact of the fork
+# branch liminavm/mesa `limina-guest` (third_party/manifest.toml [mesa-guest] pins the rev;
+# scripts/export-mesa-guest-patches.sh regenerates the series). The SAME series the F44 track
+# applies (scripts/provision/f44/build-mesa-rpm.sh) — one base, one set, per-patch rationale
+# in each patch's own commit message. Venus-only: guest GL rides virgl/vrend since
+# drop-guest-zink 2026-08-04. Highlights:
+#   0001  venus/wsi linear-modifier fallback + 16F swapchain block — THE black-screen fix.
+#   0006  venus freelist-capacity fix — upstream main has 09fb7ca8d82 but this release
+#         branch does NOT; its %prep apply-FAILURE at a future SRPM bump is the retirement
+#         signal (drop the commit from the fork branch and re-export).
+# Patches go in via the spec (Patch9xxx, derived from the series listing), NOT a tolerant
+# pre-apply: a non-applying patch fails %prep loudly rather than silently shipping a
+# black-screen mesa.
 #
 # Usage: scripts/build-mesa-rpm.sh                  # F43 target, F44 26.1.5 SRPM base
 #        LIMINA_REL=2 scripts/build-mesa-rpm.sh     # bump Release (REQUIRED for redelivery:
@@ -86,7 +82,7 @@ echo "==> building limina F43 mesa RPM set (base SRPM: ${MESA_SRPM_URL##*/}; tar
 scripts/build-image.sh   # ensure the unified limina-build image (rpm tooling + builddep mesa baked)
 container run --rm --cpus "$JOBS" --memory "$MEM" \
   -v "$(pwd)/$OUT:/out" \
-  -v "$(pwd)/patches/mesa:/patches" \
+  -v "$(pwd)/patches/mesa-guest:/patches" \
   -v "$VOL:/build" \
   limina-build:fc43 bash -euo pipefail -c '
     MESA_SRPM_URL="'"$MESA_SRPM_URL"'"
@@ -107,20 +103,21 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
     cp -f ./* "$HOME/rpmbuild/SOURCES/" 2>/dev/null || true
     cp -f mesa.spec "$HOME/rpmbuild/SPECS/mesa.spec"
 
-    echo "--- [2/5] add OUR venus patches + bump Release + F43-buildability surgery"
-    cp -f /patches/0015-venus-wsi-present-fix-post-rect-clone.diff \
-          /patches/0011-venus-wsi-drop-16bit-unorm-swapchain.diff \
-          /patches/0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff \
-          /patches/0013-venus-pin-icd-for-tls-destructor.diff \
-          /patches/0016-venus-ring-loss-device-lost-not-abort.diff \
-          /patches/0017-venus-fix-ring-submit-freelist-capacity.diff \
-          "$HOME/rpmbuild/SOURCES/"
+    echo "--- [2/5] add OUR venus patches (the exported limina-guest series) + bump Release + F43-buildability surgery"
+    ls /patches/*.patch >/dev/null  # empty series = the export was never run; fail loudly
+    cp -f /patches/*.patch "$HOME/rpmbuild/SOURCES/"
     SPEC="$HOME/rpmbuild/SPECS/mesa.spec"
     LAST_PATCH_LINE=$( { grep -nE "^Patch[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
     [ -n "$LAST_PATCH_LINE" ] || LAST_PATCH_LINE=$( { grep -nE "^Source[0-9]*:" "$SPEC" || true; } | tail -1 | cut -d: -f1)
-    ins="Patch9011: 0011-venus-wsi-drop-16bit-unorm-swapchain.diff\nPatch9012: 0012-venus-degrade-to-stub-instance-when-ring-setup-fails.diff\nPatch9013: 0013-venus-pin-icd-for-tls-destructor.diff\nPatch9015: 0015-venus-wsi-present-fix-post-rect-clone.diff\nPatch9016: 0016-venus-ring-loss-device-lost-not-abort.diff\nPatch9017: 0017-venus-fix-ring-submit-freelist-capacity.diff"
-    sed -i "${LAST_PATCH_LINE}a ${ins}" "$SPEC"
-    # Our patches are plain `git diff` (no mailbox headers); ensure %autosetup uses GNU patch (-p1).
+    # Patch9NNN lines derived from the series listing (sorted = apply order).
+    ins=""; n=9001
+    for p in /patches/*.patch; do
+      ins="${ins}Patch${n}: $(basename "$p")\n"
+      n=$((n+1))
+    done
+    sed -i "${LAST_PATCH_LINE}a ${ins%\\n}" "$SPEC"
+    # The series is git format-patch mailbox output; GNU patch skips the mail headers fine,
+    # so a plain -p1 %autosetup applies it (no need for the spec -S git mode).
     sed -i -E "s/^%autosetup -S git/%autosetup -p1/" "$SPEC"
     # Release: deterministic "<N>.limina" — outranks stock 25.2.4; bump LIMINA_REL for redelivery.
     sed -i -E "/^%autochangelog/d" "$SPEC"
@@ -152,11 +149,12 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
 
     echo "--- [4/5] rpmbuild"
     # Clear PRIOR builds from the persistent volume first — otherwise the copy below sweeps
-    # stale NEVRAs into /out and the payload trips the installer's mixed-versions guard.
+    # stale NEVRAs into /out and the payload trips the installer mixed-versions guard.
     rm -f "$HOME"/rpmbuild/RPMS/aarch64/*.rpm "$HOME"/rpmbuild/RPMS/noarch/*.rpm
-    # If %prep fails on Patch9015, the venus present-fix needs rebasing onto mesa $MESA_VER —
-    # rebase it (it is the black-screen fix) and re-run. Do NOT ship without it.
-    # If %prep fails on Patch9017, upstream !43229 reached this base — retire 0017 (see README).
+    # If %prep fails on Patch9001, the venus present-fix needs rebasing onto mesa $MESA_VER —
+    # rebase it on the fork branch (it is the black-screen fix) and re-run. Do NOT ship without it.
+    # If %prep fails on Patch9006, upstream 09fb7ca8d82 reached this base — drop the freelist
+    # commit from the fork branch and re-export (planned retirement, not a break).
     rpmbuild -bb "$SPEC" 2>&1 | tail -40
     mkdir -p /out/rpm
     cp -f "$HOME"/rpmbuild/RPMS/aarch64/*.rpm /out/rpm/ 2>/dev/null || true

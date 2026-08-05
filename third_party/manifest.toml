@@ -5,8 +5,8 @@
 # every rev ever pinned here must stay reachable), then update `rev` here in the same commit.
 # Patch-audit status lives in docs/upstreaming/ledger/.
 #
-# Deps not yet migrated to the fork model (libkrun, guest mesa, edk2) still vendor via
-# their committed patches/<dep>/ series; they move here one at a time.
+# Deps not yet migrated to the fork model (libkrun, edk2) still vendor via their
+# committed patches/<dep>/ series; they move here one at a time.
 #
 # `heavy = true` means `cargo xtask vendor` SKIPS the clone by default — the tree is huge and
 # this host never builds it (the kernel builds in a Linux container / build guest, which
@@ -24,13 +24,25 @@ rev = "5f2c0adba538159282b8941a3f3be61eefbc4769"
 # /Volumes/mesa-cs/mesa on a case-sensitive sparse image (scripts/ensure-mesa-cs.sh), because Mesa
 # will not build on a case-insensitive filesystem. The pin here is the source of truth for WHICH rev
 # that checkout should be on; the fork is also the off-machine backup the sparse image never was.
-# The guest venus/zink Mesa will join this same repo on a `limina-guest` branch (task #24).
 [kosmickrisp]
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-kk"
 rev = "a3df3aae6fe22796cf5d506d5d11d9730dba99c3"
 base = "418f2963a15"
+
+# The GUEST venus Mesa (task #11 — same liminavm/mesa repo, its own branch). NOT vendored by
+# `cargo xtask vendor`: the working checkout is a worktree at /Volumes/mesa-cs/mesa-guest (same
+# case-sensitive image as the KK tree). Consumed as an EXPORTED SERIES by the F44 RPM build —
+# `scripts/export-mesa-guest-patches.sh` derives patches/mesa-guest/ (a committed artifact) from
+# base..rev, and scripts/provision/f44/build-mesa-rpm.sh applies it via the spec inside the
+# build guest (which has no access to this checkout).
+[mesa-guest]
+repo = "https://github.com/liminavm/mesa.git"
+upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
+branch = "limina-guest"
+rev = "5f910f4188c044ee618e76e8c4511e175369e3f5"
+base = "mesa-26.1.5"
 
 [virglrenderer]
 repo = "https://github.com/liminavm/virglrenderer.git"

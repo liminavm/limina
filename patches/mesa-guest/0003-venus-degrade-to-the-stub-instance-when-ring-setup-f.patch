@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Wed, 5 Aug 2026 18:54:24 -0300
+Subject: [PATCH 3/6] venus: degrade to the stub instance when ring setup fails
+ post-connect
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A ring/version setup failure after the virtio-gpu connect used to
+hard-error the whole vkCreateInstance — and the loader kills every
+OTHER driver's instance with it, so a guest whose venus transport
+can't come up (e.g. a stock 4 KiB kernel on a 16 KiB-page host, the
+GRUB-fallback boot) loses lavapipe too and gets no Vulkan at all.
+Degrade to the same stub-instance path the version-mismatch case
+already takes: venus enumerates nothing, software rasterizers live.
+
+Precedent: !34613 took the same graceful-decline direction for
+another init-failure class.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ src/virtio/vulkan/vn_instance.c | 27 +++++++++++++++++++++++----
+ 1 file changed, 23 insertions(+), 4 deletions(-)
+
+diff --git a/src/virtio/vulkan/vn_instance.c b/src/virtio/vulkan/vn_instance.c
+index 8a3f9af873a..ad40ea2675c 100644
+--- a/src/virtio/vulkan/vn_instance.c
++++ b/src/virtio/vulkan/vn_instance.c
+@@ -333,11 +333,13 @@ vn_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
+ 
+    result = vn_instance_init_ring(instance);
+    if (result != VK_SUCCESS)
+-      goto out_shmem_pool_fini;
++      goto out_degrade_to_stub;
+ 
+    result = vn_instance_init_renderer_versions(instance);
+-   if (result != VK_SUCCESS)
+-      goto out_ring_fini;
++   if (result != VK_SUCCESS) {
++      vn_instance_fini_ring(instance);
++      goto out_degrade_to_stub;
++   }
+ 
+    VkInstanceCreateInfo local_create_info = *pCreateInfo;
+    local_create_info.ppEnabledExtensionNames = NULL;
+@@ -392,10 +394,27 @@ vn_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
+ 
+    return VK_SUCCESS;
+ 
++out_degrade_to_stub:
++   /* The renderer connected but the instance ring / version handshake can't
++    * be set up (e.g. the ring shmem can't be allocated or mapped -- seen on
++    * 4 KiB-page guests under a 16 KiB-page host). Degrade to the stub
++    * instance exactly like the wire-version-mismatch path in
++    * vn_instance_init_renderer(): a hard error here (especially
++    * VK_ERROR_OUT_OF_HOST_MEMORY) makes the loader fail the WHOLE
++    * vkCreateInstance, killing every other ICD (lavapipe) with us.
++    */
++   vn_renderer_shmem_pool_fini(instance->renderer,
++                               &instance->reply_shmem_pool);
++   vn_renderer_shmem_pool_fini(instance->renderer, &instance->cs_shmem_pool);
++   vn_renderer_destroy(instance->renderer, alloc);
++   /* needed by stub instance creation */
++   instance->renderer = NULL;
++   *pInstance = instance_handle;
++   return VK_SUCCESS;
++
+ out_ring_fini:
+    vn_instance_fini_ring(instance);
+ 
+-out_shmem_pool_fini:
+    vn_renderer_shmem_pool_fini(instance->renderer,
+                                &instance->reply_shmem_pool);
+    vn_renderer_shmem_pool_fini(instance->renderer, &instance->cs_shmem_pool);

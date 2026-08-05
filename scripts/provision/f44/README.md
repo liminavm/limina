@@ -23,7 +23,7 @@ fork:
 | Component | Source | limina delta | Pinned? |
 |---|---|---|---|
 | kernel | Fedora F44 kernel **source + config** | `CONFIG_ARM64_16K_PAGES=y` (+ `patches/linux/*` if not already upstream) | versionlocked |
-| mesa | F44 **mesa SRPM** (26.1.x) | venus present-fix `patches/mesa/0015` + 0011–0014/0016/0017 (+ zink `0001`); *0010 retired 2026-08-04 — the host advertises the modifier ext for real now* | versionlocked |
+| mesa | F44 **mesa SRPM** (26.1.x) | the `patches/mesa-guest/` series (6 venus commits exported from the `liminavm/mesa` `limina-guest` fork branch — present-fix, 16-bit-unorm drop, stub-instance degrade, ICD TLS pin, ring-loss DEVICE_LOST, freelist capacity); zink rows retired with drop-guest-zink 2026-08-04 | versionlocked |
 | mutter | F44 **mutter SRPM** (50.x) | `patches/mutter/0001-0003` rebased onto 50.x | NOT locked (tracks gnome-shell) |
 
 Because the mesa/mutter builds rebuild the **same version** Fedora ships (just `+.limina`
