@@ -24,7 +24,7 @@ binary(balloon) | binary(balloon_burst) | binary(balloon_inflate) | binary(ballo
 | binary(venus_replay) | binary(venus_fence_present) | binary(venus_fence_lost)
 | binary(venus_park_on_busy_reset) | binary(venus_reset) | binary(venus_session_preserved)
 | binary(inplace_s2idle) | binary(hvf_graceful) | binary(l2_vcpu_hotplug)
-| binary(venus_fd_census)
+| binary(venus_fd_census) | binary(vrend_session_restore)
 '''
 # venus_fd_census joined the exclusive set 2026-08-03: its carrier-fd flatness oracle samples
 # after a fixed workload, and under 3-wide load the async fd consumption lags the sample

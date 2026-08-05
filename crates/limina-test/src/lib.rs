@@ -791,6 +791,37 @@ impl GuestConfig {
         Ok(cfg)
     }
 
+    /// Like [`GuestConfig::seated_fedora_from_env`], but **EFI-booting** the seated enhanced
+    /// golden through the GOP firmware — the guest's OWN installed kernel + initrd, enforcing
+    /// SELinux, exactly as production boots it (`cargo xtask run --disk`). This is the vehicle
+    /// for **classic-vrend (GL ladder) session tests**: the injected-6.12 seated path never
+    /// produces classic `CmdSubmit3d` traffic even on a live desktop (its shell composites
+    /// without classic submits — kms_swrast-like), while the EFI-booted session runs the real
+    /// vrend world (task #19). Overrides: `LIMINA_GOP_FIRMWARE`, `LIMINA_TEST_DISK_ENH`, plus
+    /// the usual `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the
+    /// GOP firmware or the enhanced disk is missing.
+    pub fn seated_efi_fedora_from_env() -> Result<GuestConfig> {
+        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
+        anyhow::ensure!(
+            firmware.exists(),
+            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
+             (or set LIMINA_GOP_FIRMWARE)"
+        );
+        let mut cfg = GuestConfig::seated_fedora_from_env()?;
+        let disk = match &cfg.boot {
+            Boot::KernelDisk { disk, .. } => disk.clone(),
+            other => anyhow::bail!("seated_fedora_from_env built an unexpected boot {other:?}"),
+        };
+        cfg.boot = Boot::Firmware {
+            firmware,
+            disk,
+            read_only: true, // with_net cow-clones to a writable disk; the source stays pristine
+        };
+        Ok(cfg)
+    }
+
     /// L2 config for the **≥7.1-kernel virtiofs share guard** (task #36): the same injected-kernel
     /// enhanced path as [`enhanced_fedora_from_env`](GuestConfig::enhanced_fedora_from_env), but
     /// booting a **≥7.1** 16 KiB test kernel instead of the venus tests' 6.12 `Image-16k`.
