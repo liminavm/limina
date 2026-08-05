@@ -31,10 +31,16 @@ ErrInvalidResourceId` in minutes, while every process-survival oracle stays gree
 
 ## Design
 
-**No cross-layer fence needed** (unlike venus): classic resources are created purely on the
-control queue and wire objects reference resources, never the inverse (verified: no
-`PIPE_RESOURCE_CREATE` in vrend's decode table — that's a drm/native-context command). So
-replay is strictly two-phase per context, no per-entry `vkr_seq` analogue:
+**Cross-layer fence: needed after all, but the venus machinery generalizes.** The first
+draft claimed classic resources are control-queue-only; WRONG — `vrend_decode.c:1578`
+decodes `VIRGL_CCMD_PIPE_RESOURCE_CREATE` (wire defines `blob_id` → args), and with
+`+resource_blob` negotiated (our guests have it) mesa creates buffers via wire
+`PIPE_RESOURCE_CREATE` followed by control-queue `CREATE_BLOB(blob_mem_host3d, blob_id)`.
+Same wire-before-blob inversion as venus, so the **existing per-CreateBlob
+`vkr_seq`/`replay_wire_upto!` fence machinery applies verbatim** once `journal_vkr_seq` /
+`journal_export` route to the vrend journal for classic contexts (today they return
+0/None — venus-gated). Non-blob classic resources (`RESOURCE_CREATE_2D/3D`) have no wire
+dependency; for everything else the order is still two-phase per context:
 
     phase A (libkrun): create contexts (existing) → classic resource creates →
                        attach backings (restored-RAM iovecs) → ctx attaches
@@ -85,6 +91,12 @@ per-context log. Classes:
 - **Queries**: retain `CREATE_OBJECT(query)`; `BEGIN_QUERY` latest-wins per handle, removed
   by `END_QUERY`. A query spanning the snapshot replays its BEGIN into the fresh context;
   results are bogus-but-answerable (no hang). Revisit if a client is seen to care.
+- **Blob-backed pipe resources**: `PIPE_RESOURCE_CREATE` retained keyed by `blob_id`
+  (word 11), pruned at the blob resource's GLOBAL unref (the venus pin/unpin FFI path
+  generalizes); `PIPE_RESOURCE_SET_TYPE` latest-wins per res handle (word 1). These are the
+  gbm/compositor buffers since the GL flip — load-bearing.
+- **Video codec commands**: not journaled for now; the census counts them so a guest that
+  uses them shows up loudly rather than silently losing state.
 - **Dropped** (transient / re-emitted or content-path): `CLEAR*`, `DRAW_VBO`, `BLIT`,
   `RESOURCE_COPY_REGION`, `TRANSFER3D`, `END_QUERY`, `GET_QUERY_RESULT*`, barriers, string
   markers, `RESOURCE_INLINE_WRITE` (see gap below).
