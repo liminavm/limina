@@ -95,13 +95,15 @@ fn venus_enumerates_on_16k_kernel() {
     eprintln!("teardown outcome: {outcome:?}");
 }
 
-/// The **productized** enhanced tier: our *shipped* mesa (the versionlocked `*.limina` RPM — mesa 26.2
-/// zink+venus at `/usr`) on the enhanced golden (`enhanced.test.raw`) must enumerate venus AND bring up
-/// a live seated GNOME session on it. Where [`venus_enumerates_on_16k_kernel`] proves *stock* mesa's
-/// venus on an external 16k kernel, and `venus_replay` proves trace-replay render correctness (guest-side
-/// pixels), this validates the actual shipped product: our RPM mesa driving a real autologin session
-/// through zink→venus→KosmicKrisp→Metal. Heavy (full enhanced desktop boot); SKIPs without KK or the
-/// enhanced disk.
+/// The **productized** enhanced tier: our *shipped* mesa (the versionlocked `*.limina` RPM at `/usr`)
+/// on the enhanced golden (`enhanced.test.raw`) must enumerate venus AND bring up a live seated GNOME
+/// session on it. Where [`venus_enumerates_on_16k_kernel`] proves *stock* mesa's venus on an external
+/// 16k kernel, and `venus_replay` proves trace-replay render correctness (guest-side pixels), this
+/// validates the actual shipped product: our RPM mesa driving a real autologin session. Since the
+/// 2026-08-04 drop-guest-zink flip the session's GL rides virgl→vrend (EGLImage-backed IOSurface
+/// scanout); venus is the Vulkan side (`VK_DRIVER_FILES` → virtio ICD) — this test's identity checks
+/// (16k pages, `*.limina` RPMs, venus ICD present, session up) hold across that change. Heavy (full
+/// enhanced desktop boot); SKIPs without KK or the enhanced disk.
 #[test]
 fn our_mesa_venus_renders_seated_desktop() {
     if !limina_test::require_hvf_or_skip("our_mesa_venus_renders_seated_desktop") {

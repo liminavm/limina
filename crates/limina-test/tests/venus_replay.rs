@@ -224,10 +224,13 @@ fn venus_replay_matches_llvmpipe_reference() {
 
     // Replay on both backends, snapshotting every 100th frame. eglretrace exits non-zero
     // on a crashed replay, which ssh_exec turns into a failure.
-    // The enhanced image's environment.d FORCES the zink selectors (MESA_LOADER_DRIVER_OVERRIDE=zink,
-    // VK_DRIVER_FILES=venus) into every shell, so the llvmpipe REFERENCE leg must `-u` them or
-    // eglretrace tries zink-on-venus and dies "unable to initialize EGL display" (the same env trap
-    // perf-ledger.sh dodges; only surfaced once the test actually ran on the RPM image).
+    // The enhanced image's environment.d FORCES GL/Vulkan selectors (since the 2026-08-04
+    // drop-guest-zink flip: MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu, VK_DRIVER_FILES=venus) into
+    // every shell, so the llvmpipe REFERENCE leg must `-u` them or eglretrace picks the accelerated
+    // driver and the reference isn't a reference (originally: zink-on-venus died "unable to
+    // initialize EGL display" — the same env trap perf-ledger.sh dodges). The venus leg sets its
+    // own explicit ZINK_ENV, overriding the session default — zink here is a test *vehicle* for
+    // driving venus offscreen, not the (dropped) session GL config.
     for (name, unset, env) in [
         ("venus", "", ZINK_ENV),
         (
