@@ -1,6 +1,7 @@
 # virglrenderer — patch-audit ledger
 
-60 commits; base `2048dfb7f355`. Schema + protocol: `README.md`.
+69 commits; base **upstream tip `f2945d39`** (deps-to-tip rebase 2026-08-05 — see *Deps-to-tip
+rebase executed* in Findings). Schema + protocol: `README.md`.
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
 
 > **Fork model since 2026-08-04.** There is no `patches/virglrenderer/` any more — our delta is the
@@ -97,8 +98,37 @@ our diff. Premise tension logged on 0009 (our #28 called the fd double-mmap inco
 upstream ships it at 1770 FPS).
 
 **Verdict inversions worth noting:** 0001's shm_open hunk landed upstream independently
-(!1634, drop on rebase); 0058's poisoning branch is *ours* (from our 0039 diagnostic), not
-an upstream bug — folds into 0039.
+(!1634, **dropped at the 2026-08-05 rebase**); 0058's poisoning branch is *ours* (from our
+0039 diagnostic), not an upstream bug — folds into 0039.
+
+### Deps-to-tip rebase executed 2026-08-05
+
+Base `2048dfb7` → upstream tip `f2945d39`; head `09e2a0b7` → `c902f922` (69 commits);
+old head tagged `limina-2026-08-05-pre-tip-rebase` (pushed); fork `main` fast-forwarded to
+tip. Only 5 conflicts across the replay. Validated: build green, poke VM (seated venus,
+health-check clean, user-stressed), suite 77/79 + the 2 net failures re-run green on a
+quiet host (they raced the poke VM's gvproxy/port during the run).
+
+- **0001 hunk 1 (shm_open O_CLOEXEC) DROPPED** — upstream `058959ed` (!1634) is in the base.
+- **venus-protocol subproject** (131e5a72/7f9a6279 at tip): our delta to the generated
+  headers is now ZERO. The journal dispatch tee moved to the four `vn_dispatch_command`
+  call sites — new commit *"vkr: move the journal dispatch tee out of the generated
+  protocol headers"* (validated against the snapshot gate tests before the rebase, 4/4).
+  `cargo xtask vendor` materializes the revision-pinned wrap; no venus-protocol fork.
+- **Maintenance 8–11** grew the dispatch table 346 → 347; the journal's class-table bound
+  is now `ARRAY_SIZE(vn_dispatch_table)` (a hardcoded bound would silently strand new
+  vkCmd* outside RECORDING and snapshot replay would skip them — folded into the tee-move
+  commit).
+- **NEW upstream fixlet, send-now candidate:** *"vkr: fix the vulkan_metal.h include for
+  the venus-protocol subproject"* — upstream `b47495fb` broke their own macOS build
+  (`vkr_metal_helpers.m` includes a path that no longer resolves; no macOS CI to see it).
+  Trivial MR, good-citizen opener for the send queue.
+- The Metal-shm restructure (`8cebba7f`/`3b61c967`) is superseded inside our alloc-path
+  rewrite (0006/0009 territory) — and with `8cebba7f` now in-base, 0030's fd-leak MR is
+  directly demonstrable at tip, exactly as its row predicted.
+- The `checked` columns below predate the rebase (tip `956b034f`); every "needed" verdict
+  was implicitly re-tested by the replay (a superseded patch conflicts or empties — only
+  0001's hunk did).
 
 **Hygiene blockers before ANY freedesktop MR:** (1) ~~the `gkvm`/`GKVM_` naming~~ **DONE
 2026-08-05**: history-wide `git filter-repo` rename (gkvm→limina, GKVM_→LIMINA_, subjects

@@ -226,6 +226,22 @@ fn vendor(heavy: bool) -> Result<()> {
     // (the worker links it — see the virgl-link trap in CLAUDE.md).
     vendor_fork(&repo, "virglrenderer")?;
 
+    // venus-protocol: since upstream 131e5a72 the generated protocol headers live in a
+    // meson subproject (a revision-pinned git wrap) instead of in-tree. Materialize it at
+    // vendor time so `scripts/build-virglrenderer.sh` needs no network; a pinned rev
+    // predating the wrap simply lacks the file and skips this.
+    let virgl = repo.join("third_party/virglrenderer");
+    if virgl.join("subprojects/venus-protocol.wrap").exists()
+        && !virgl.join("subprojects/venus-protocol-1.0").exists()
+    {
+        eprintln!("==> downloading the venus-protocol subproject (pinned wrap)");
+        run(Command::new("meson").current_dir(&virgl).args([
+            "subprojects",
+            "download",
+            "venus-protocol",
+        ]))?;
+    }
+
     // imago: the fork-model pilot ([patch.crates-io] path override; the tree is a clone of our
     // fork pinned by third_party/manifest.toml — no patch series, the `limina` branch IS the delta).
     vendor_fork(&repo, "imago")?;
