@@ -11,11 +11,18 @@
 //! complete the guest's held flush fence — a wedge anywhere in that loop starves the
 //! guest's scanout pipeline and kills the session.
 //!
-//! Vehicle: the seated ENHANCED golden (gnome-shell rendering zink→venus→IOSurface blob
-//! scanouts — the only path that parks frames), with `LIMINA_FENCE_PRESENT=1` forced:
-//! the harness display is the ack-less capture sink, where the 0110 default stays off
-//! (by design) and deferred presents take the 0111 readback fallback. The shipping
-//! (windowed + shown-ack) leg stays covered by the seated A/B in `spikes/present-miss/`.
+//! Vehicle: the seated ENHANCED golden with the session's GL flipped back to
+//! zink→venus **by this test** (a 99- environment.d override on the per-guest disk
+//! clone + a gdm restart). Since the 2026-08-04 drop-guest-zink flip the golden's own
+//! session rides virgl/vrend, whose EGLImage scanouts never park — the fence-present
+//! chain is venus-BLOB-only, so the stock session stopped exercising it (this test
+//! caught exactly that on 2026-08-05 when the F43 golden flipped). The zink→venus
+//! session is not a legacy config: it models any venus-rendering compositor (the
+//! synoik direction — venus-blob framebuffers via SET_SCANOUT_BLOB), which is the
+//! class this chain serves. `LIMINA_FENCE_PRESENT=1` is forced: the harness display
+//! is the ack-less capture sink, where the 0110 default stays off (by design) and
+//! deferred presents take the 0111 readback fallback. The shipping (windowed +
+//! shown-ack) leg stays covered by the seated A/B in `spikes/present-miss/`.
 //!
 //! Oracles: the INFO "fence-accurate presents ENGAGED" line (fires on the first parked
 //! present, libkrun 0114 — proves the path is LIVE, not silently fallen back to
@@ -80,6 +87,34 @@ fn fence_present_chain_presents_and_never_wedges() {
     guest
         .ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
         .expect("gnome-shell never appeared — the seated enhanced session didn't come up");
+
+    // Re-create the venus-compositor vehicle: the golden's session GL rides virgl/vrend
+    // since drop-guest-zink, and vrend's EGLImage scanouts never park — only venus BLOB
+    // scanouts do. Flip THIS clone's session to zink→venus (99- overrides the installed
+    // 90-limina-zink.conf; environment.d merges lexically, later wins) and restart gdm so
+    // the autologin session comes back up on venus. MESA_LOADER_DRIVER_OVERRIDE=zink also
+    // flips gbm's backing driver, making the compositor's KMS buffers venus blobs — that
+    // is the point, not a side effect (see memory limina-classic-gbm-venus-import).
+    // environment.d is only re-read when the USER manager (user@1000) starts, so the
+    // restart must take the manager down too — and in the right ORDER: gdm first.
+    // `loginctl terminate-user` + `restart gdm` races: gdm re-seats the autologin
+    // session before the manager finishes winding down, the manager never exits, and
+    // the new session silently keeps the old virgl env (verified live 2026-08-05 —
+    // the manager pid survived and /proc/<shell>/environ still said virgl). The
+    // stop-gdm → stop-user@ → start-gdm sequence was likewise verified live: the new
+    // session's environ shows zink and gnome-shell maps libvulkan_virtio. Detached
+    // (systemd-run) because stopping gdm tears down our own ssh session's scope.
+    guest
+        .ssh_exec(
+            "printf 'GALLIUM_DRIVER=zink\\nMESA_LOADER_DRIVER_OVERRIDE=zink\\n' | \
+             sudo tee /etc/environment.d/99-fence-present-zink.conf >/dev/null && \
+             sudo systemd-run --no-block sh -c \
+             'systemctl stop gdm; systemctl stop user@1000; systemctl start gdm'",
+        )
+        .expect("flipping the session env to zink→venus");
+    guest
+        .ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
+        .expect("gnome-shell never came back after the zink→venus gdm restart");
 
     // `pgrep gnome-shell` is satisfied by the GREETER's shell (llvmpipe/sw2d) too, and gdm
     // autologin is the slow, occasionally-flaky step — so gate on the SESSION shell's venus
