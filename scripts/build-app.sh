@@ -40,12 +40,13 @@ EPOXY="$ROOT/third_party/epoxy-egl-prefix/lib/libepoxy.0.dylib"
 KK_BUILD="${LIMINA_KK_BUILD:-/Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan}"
 ZINK="/Volumes/mesa-cs/zink-kk-prefix/lib"
 KK_DRIVER="$KK_BUILD/libvulkan_kosmickrisp.dylib"
-# dlopen'd-by-env roots (not in the worker's link closure):
+# dlopen'd-by-env roots (not in the worker's link closure). The gallium dylib joins the
+# list below, AFTER ensure-mesa-cs mounts the volume — its leaf name carries the Mesa
+# version (26.2.0 → 26.3.0 at the 2026-08-05 MTL4 rebase broke a name hardcoded here).
 DLOPEN_ROOTS=(
   "$KK_DRIVER"
   "$ZINK/libEGL.dylib"
   "$ZINK/libGLESv2.dylib"
-  "$ZINK/libgallium-26.2.0-devel.dylib"
 )
 GOP_FD="$ROOT/target/krun-efi/KRUN_EFI.gop.fd"
 # gvproxy (user-mode NAT for `--net`); vendored into the bundle so networking works on a
@@ -54,6 +55,17 @@ GVPROXY="${LIMINA_GVPROXY_BIN:-/opt/homebrew/bin/gvproxy}"
 
 # KK/zink live on a case-sensitive sparse image whose mount macOS drops on reboot.
 . "$ROOT/scripts/ensure-mesa-cs.sh"
+
+# Resolve the versioned gallium dylib now that the volume is mounted. Exactly one may
+# exist: a stale second copy silently shipped is the same provenance trap the KK
+# tripwire below guards against.
+ZINK_GALLIUM=("$ZINK"/libgallium-*-devel.dylib)
+if [ "${#ZINK_GALLIUM[@]}" -ne 1 ] || [ ! -e "${ZINK_GALLIUM[0]}" ]; then
+  echo "expected exactly ONE $ZINK/libgallium-*-devel.dylib, found: ${ZINK_GALLIUM[*]}" >&2
+  echo "(rebuild zink-on-KK into the prefix, or prune stale versions from it)" >&2
+  exit 1
+fi
+DLOPEN_ROOTS+=("${ZINK_GALLIUM[0]}")
 
 for f in "$VIRGL" "$EPOXY" "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$GOP_FD" "$GVPROXY"; do
   [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(build KK/zink on the mesa-cs volume, build the GOP firmware, or 'brew install gvproxy' / set LIMINA_GVPROXY_BIN)" >&2; exit 1; }
@@ -235,7 +247,7 @@ echo "==> writing relative KK ICD"
 cat > "$RES/vulkan/kosmickrisp_icd.json" <<'JSON'
 {
     "ICD": {
-        "api_version": "1.3.353",
+        "api_version": "1.4.358",
         "library_path": "../../Frameworks/libvulkan_kosmickrisp.dylib"
     },
     "file_format_version": "1.0.1"
