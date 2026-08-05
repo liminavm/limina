@@ -1,11 +1,13 @@
-# patches/mesa — limina enhanced-tier GUEST Mesa patches (zink + venus)
+# patches/mesa — limina enhanced-tier GUEST Mesa patches (venus; zink rows retired)
 
-The limina enhanced tier ships a **patched guest Mesa**: zink (GL→Vulkan) and venus (the
-guest Vulkan driver) fixes so the GNOME/GL stack runs on **venus → KosmicKrisp → Metal**
-instead of llvmpipe. This dir carries our patches over upstream Mesa; the source clone +
-build happen in the Apple `container` Linux build env (host APFS is case-insensitive and
-can't check out mesa). The host-side Mesa series (KosmicKrisp + host zink) lives separately
-in `patches/kosmickrisp/`.
+The limina enhanced tier ships a **patched guest Mesa**. Since the 2026-08-04
+drop-guest-zink decision (`docs/design/gl-path-vrend-vs-zink.md`) the *living* patches are
+all **venus** (the guest Vulkan driver — guest GL rides virgl/vrend, unpatched); the zink
+rows below are retained as documented dead weight until the next respin physically drops
+them. Source clone + build happen in the Apple `container` Linux build env (host APFS is
+case-insensitive and can't check out mesa). The host-side Mesa work (KosmicKrisp + host
+zink) lives on the mesa fork's `limina-kk` branch (fork model — `patches/kosmickrisp/` is
+retired).
 
 > **⚠ This is a patch POOL, not a single-base series** (unlike `patches/libkrun`/
 > `patches/virglrenderer`): raw context diffs, three different effective bases, and three
@@ -18,10 +20,21 @@ in `patches/kosmickrisp/`.
 
 | Consumer | Base | Applies |
 |---|---|---|
-| `scripts/build-mesa-zink.sh` (guest GL/zink tree, `/opt/mesa-zink`) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`, 2026-06-07) | 0001–0006 (the zink pool) |
+| ~~`scripts/build-mesa-zink.sh`~~ **ARCHIVED 2026-08-04** (`scripts/archive/`) | ~~Mesa main `3515c52e8cf3`~~ | ~~0001–0006~~ — the prefix-style zink build died with the RPM pivot + drop-guest-zink; 0002–0006 now have NO live consumer |
 | `scripts/build-venus.sh` (guest venus ICD rebuild) | tag `mesa-26.1.0` (parametric `MESA_TAG`) | 0009 + 0010 *(dev vehicle, not respun — see 0010 retirement below)* |
-| `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM) | Fedora F44 `mesa-26.1.4` SRPM (repo-current) | 0001 + 0015 + 0011–0014 + 0016 + 0017 *(0010 retired 2026-08-04)* |
-| `scripts/build-mesa-rpm.sh` (the SHIPPING F43 RPM) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`) | 0001 + 0009 + 0010 + 0014 + 0016-pre + 0016 + 0017 *(0010 retires at the next F43 respin — same host argument)* |
+| `scripts/provision/f44/build-mesa-rpm.sh` (the SHIPPING F44 RPM, currently 26.1.5-6.limina) | Fedora F44 SRPM, repo-current (26.1.4 at authoring, **26.1.5 since the -6 respin**) | 0001 + 0015 + 0011–0014 + 0016 + 0017 *(0010 retired 2026-08-04; 0001 + 0014 retire at the NEXT respin — drop-guest-zink)* |
+| `scripts/build-mesa-rpm.sh` (the SHIPPING F43 RPM) | Mesa main `3515c52e8cf3` (pinned as `MESA_COMMIT`) | 0001 + 0009 + 0010 + 0014 + 0016-pre + 0016 + 0017 *(0010 + 0001 + 0014 retire at the next F43 respin — same arguments)* |
+
+**Drop-guest-zink (2026-08-04) — status of the zink rows.** zink-as-guest-GL is no longer a
+supported configuration, so **0001, 0003, 0004, 0006 are DEAD in the guest** (0003–0006
+already stopped shipping when the prefix build died; 0001 still rides both RPMs and comes
+out at each family's next respin). **0014's guest trigger is gone** (no zink in any
+supported guest config) but it stays temporarily since it's harmless and load-bearing
+HISTORY for the host build (applied there as fork commit `47308c0f026`); drop from the
+specs at the next respins. **0002 stays live**: core GL-frontend guard, reachable under
+virgl too. None of this changes upstream-MR worthiness — 0014 (both bugs), 0013, 0012,
+0002, and 0003+0004(+0006 as "gate optional entrypoints") remain the send queue
+(`docs/upstreaming/ledger/mesa.md`).
 
 **0010 RETIRED from the shipping F44 RPM (2026-08-04).** Both halves are dead against the current
 host stack: (a) vkr advertises `VK_EXT_external_memory_dma_buf` itself (virgl `f2f038a3`) so
@@ -61,8 +74,11 @@ this is a base change, not a new mechanism.
 Main unknown: mesa 26.1.4 has to *build* in an F43 container — old llvm/rust/libdrm could bite.
 That is itself an old-version signal worth having explicitly. Validation pass = build → installer
 pass over `Fedora-Workstation-43.enhanced.raw` → venus live in the seated session → reclone
-`.test`. Note retiring the F43 RPM base does **not** free the `3515c52e8cf3` pin —
-`build-mesa-zink.sh` shares it.
+`.test`. (2026-08-04: retiring the F43 RPM base now DOES free the `3515c52e8cf3` pin —
+`build-mesa-zink.sh`, its former co-owner, is archived.) The repoint also collapses the
+respin-time retirement list in one motion: 0001 + 0009 + 0010 + 0014 + 0016-pre all leave
+the F43 build, and both families converge on the venus-only set — the precondition for the
+limina-guest fork migration (task #24).
 
 **0009 vs 0015 — same fix, two bases.** Fedora's 26.1.4 stable backported an equivalent of
 0009's `vn_wsi_clone_present_info` rectangle deep-copy, so 0009 no longer applies there.
@@ -72,14 +88,15 @@ which branched before it). Never apply both.
 
 gitlab.freedesktop.org is Anubis-bot-blocked → builds clone a GitHub mirror.
 
-**Duplicate encodings of 0010 (known, deliberate for now):** `venus-dmabuf-patch.py` is the
-anchored-string "version-robust" re-encoding of 0010's physdev edits, and
-`spikes/venus-draw-probe/patch-venus-dmabuf-nomod.py` is the F44 no-modifier variant —
-"keep both until the F44 scanout story is settled" (py header). Retire the py forms when
-that settles or when 0010 lands upstream, whichever first.
+**Duplicate encodings of 0010 — RETIRED 2026-08-04.** `venus-dmabuf-patch.py` (the
+anchored-string re-encoding of 0010's physdev edits) and
+`spikes/venus-draw-probe/patch-venus-dmabuf-nomod.py` (the F44 no-modifier variant) were
+kept "until the F44 scanout story is settled" — it settled: the host advertises the
+modifier ext for real and 0010 itself is retired from the shipping RPM. Both .py files
+deleted; 0010.diff remains only for the F43 script until its respin.
 
 ## Patches (apply in filename order)
-- **`0001-zink-nullDescriptor-emulation-MR37115.diff`** — Mesa **MR !37115**: zink
+- **`0001-zink-nullDescriptor-emulation-MR37115.diff`** — **DEAD in guest (drop-guest-zink 2026-08-04; still applied by both RPMs until their next respins).** Mesa **MR !37115**: zink
   nullDescriptor *emulation* (dummy descriptors) so zink runs on Vulkan implementations
   that lack `robustness2.nullDescriptor` — which MoltenVK does. Without it zink bails
   (`Zink requires the nullDescriptor feature of KHR/EXT robustness2`) → llvmpipe. Clean (no
@@ -89,7 +106,7 @@ that settles or when 0010 lands upstream, whichever first.
   gbm/kopper winsys back buffer can be `Complete` yet have no `pipe_resource` while the
   swapchain rotates it, so `glInvalidateFramebuffer(GL_BACK)` crashed gnome-shell at swap
   on the mutter native/KMS path. Guard `prsc` for NULL. Upstreamable (#30 seated, wall 1).
-- **`0003-zink-guard-missing-external-semaphore-fd-on-dmabuf-import.diff`** — and
+- **`0003-zink-guard-missing-external-semaphore-fd-on-dmabuf-import.diff`** — **DEAD in guest (no live consumer since the prefix build died; MR-worthy).** and
   **`0004-...-on-dmabuf-export.diff`** — `zink_screen_import/export_dmabuf_semaphore()`
   call `VKSCR(GetSemaphoreFdKHR)` / `VKSCR(ImportSemaphoreFdKHR)` whenever built with
   libdrm on Linux, without checking `VK_KHR_external_semaphore_fd` is supported. venus over
@@ -99,7 +116,7 @@ that settles or when 0010 lands upstream, whichever first.
   cl_gl_sharing elsewhere); fall back to implicit dmabuf sync. Upstreamable (#30 seated,
   walls 2–3). Together 0002+0003+0004 make seated gnome-shell *survive* on venus (no more
   crash-loop); the remaining blocker is KMS-CRTC scanout-format negotiation, not a crash.
-- **`0006-zink-kopper-guard-missing-surface-extensions.diff`** — kopper guards for the
+- **`0006-zink-kopper-guard-missing-surface-extensions.diff`** — **DEAD in guest (same).** kopper guards for the
   surfaceless/no-WSI path on KK.
 - **`0007`** — *removed 2026-06-24.* It was a backport already upstream in 26.x; on the
   newer tree the fuzzy `patch -F5` fallback silently re-applied it at +347 lines, **duplicating**
@@ -173,7 +190,7 @@ host-zink series lives separately in `patches/kosmickrisp/`.
   `spikes/egl-tsd-repro/` (surfaceless EGL init + `eglTerminate` on a worker thread —
   the shape of niri's headless `egl_*` tests). Upstream `main` still has the bug
   (checked 2026-07-02). Clearly upstreamable.
-- **`0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff`** (2026-07-12, suite-wedge fix) —
+- **`0014-zink-fix-unflushed-batch-wait-lost-wakeup.diff`** (2026-07-12, suite-wedge fix; **guest trigger GONE since drop-guest-zink — retire from the specs at next respins; lives on host-side as fork commit `47308c0f026`, still an upstream-now MR**) —
   zink: `zink_batch_usage_unflushed_wait()`'s multi-context branch checked `u->unflushed`
   outside `u->mtx` and then `cnd_wait`ed with no re-check/loop, while `submit_queue`
   cleared the flag and broadcast without the mutex — a textbook lost wakeup. Bit as a
@@ -207,7 +224,11 @@ host-zink series lives separately in `patches/kosmickrisp/`.
   Clearly upstreamable —
   companion to the host-side virglrenderer 0040 create-arg closure
   (`spikes/m9-vkmark-resume-crash/RESULTS.md`).
-- **`0017-venus-fix-ring-submit-freelist-capacity.diff`** (2026-07-21, perf) — venus: fix the
+- **`0017-venus-fix-ring-submit-freelist-capacity.diff`** (2026-07-21, perf; **superseded
+  upstream** 2026-07-27 by !43229's bounded cache — but the 26.1.5-6 respin proved Fedora's
+  26.1.5 tarball does NOT carry it yet: 0017 still applied fail-loud clean. Keep until a
+  base bump actually contains !43229, then drop; no MR — see `limina-venus-submit-freelist`)
+  — venus: fix the
   ring-submit free-list degeneration. `vn_ring_get_submit` matched recycled nodes on
   `submit->shmem_count >= wanted`, but the caller (`vn_ring_submission_get_ring_submit`)
   overwrites that field with the count USED this time — a node last used for a direct

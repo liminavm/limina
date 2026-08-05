@@ -65,7 +65,7 @@ container run --rm \
       echo "=== applying $(basename "$p") ==="
       if git apply --verbose "$p"; then echo "OK: $p";
       elif patch -p1 -F5 --dry-run < "$p" >/dev/null 2>&1 && patch -p1 -F5 < "$p"; then echo "OK(fuzz): $p";
-      else echo "FAILED: $p — will need the version-robust venus-dmabuf-patch.py"; exit 3; fi
+      else echo "FAILED: $p (venus-dmabuf-patch.py retired 2026-08-04 — rebase 0010 by hand if this dev vehicle is ever respun)"; exit 3; fi
     done
 
     # dev-enh venus build options exactly: -Dvulkan-drivers=virtio -Dplatforms=wayland
