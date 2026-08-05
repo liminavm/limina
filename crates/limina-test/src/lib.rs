@@ -950,7 +950,23 @@ impl GuestConfig {
             epoxy.display()
         );
         let drivers = format!("{}/lib", prefix.display());
+        // Since the 2026-08-05 MTL4 rebase, mesa's zink dlopens "@rpath/libvulkan.1.dylib" and
+        // the installed libgallium carries no matching LC_RPATH (meson strips build rpaths at
+        // install), so the dlopen fails → `virgl_renderer_init` fails → the worker silently
+        // degrades to software-2D and every seated/venus test dies downstream (caught live
+        // 2026-08-05: a full suite run failed this way). DYLD_LIBRARY_PATH intercepts by leaf
+        // name BEFORE rpath resolution — but pointing it at all of /opt/homebrew/lib would
+        // shadow every Homebrew leaf name for the whole process tree, so use a shim dir
+        // holding ONLY the Vulkan loader symlink (same shim as boot-enhanced-efi-kk.sh).
+        let shim = prefix.join("vulkan-rpath");
+        let _ = std::fs::create_dir_all(&shim);
+        let shim_loader = shim.join("libvulkan.1.dylib");
+        if !shim_loader.exists() {
+            let _ = std::os::unix::fs::symlink("/opt/homebrew/lib/libvulkan.1.dylib", &shim_loader);
+        }
+        let shim = shim.display().to_string();
         for (k, v) in [
+            ("DYLD_LIBRARY_PATH", shim.as_str()),
             ("DYLD_FALLBACK_LIBRARY_PATH", dyld.as_str()),
             ("MESA_LOADER_DRIVER_OVERRIDE", "zink"),
             ("GALLIUM_DRIVER", "zink"),

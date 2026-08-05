@@ -444,6 +444,15 @@ fn main() -> Result<()> {
 
     init_worker_logging();
 
+    // Upstream KosmicKrisp gates its VK_EXT_custom_border_color (+ border_color_swizzle)
+    // implementation behind MESA_KK_EXPERIMENTAL=custom_border, default OFF. zink-on-KK
+    // needs the extension for its GL 3.2+ tier, and since the 2026-08-05 MTL4 rebase we
+    // adopt upstream's implementation instead of carrying our own advertise (mechanism
+    // upstream, policy here). Respect an explicit override from the environment.
+    if std::env::var_os("MESA_KK_EXPERIMENTAL").is_none() {
+        std::env::set_var("MESA_KK_EXPERIMENTAL", "custom_border");
+    }
+
     let cli = Cli::parse();
 
     // clap guarantees exactly one of --firmware / --kernel is present.

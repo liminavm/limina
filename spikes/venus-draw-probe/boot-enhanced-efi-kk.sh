@@ -35,6 +35,14 @@ MESA_PREFIX="${MESA_PREFIX:-/Volumes/mesa-cs/zink-kk-prefix}"
 export VK_ICD_FILENAMES="$ICD"
 export VK_DRIVER_FILES="$ICD"
 export DYLD_FALLBACK_LIBRARY_PATH="$MESA_PREFIX/lib:$ROOT/third_party/epoxy-egl-prefix/lib:/opt/homebrew/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+# Since the 2026-08-05 MTL4 rebase, mesa's zink dlopens "@rpath/libvulkan.1.dylib" and the
+# installed libgallium carries no matching LC_RPATH (meson strips build rpaths at install).
+# DYLD_LIBRARY_PATH intercepts by leaf name BEFORE rpath resolution — but pointing it at all
+# of /opt/homebrew/lib would shadow every Homebrew leaf name for the whole process tree, so
+# use a shim dir holding ONLY the Vulkan loader symlink.
+mkdir -p "$MESA_PREFIX/vulkan-rpath"
+ln -sf /opt/homebrew/lib/libvulkan.1.dylib "$MESA_PREFIX/vulkan-rpath/libvulkan.1.dylib"
+export DYLD_LIBRARY_PATH="$MESA_PREFIX/vulkan-rpath${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 export MESA_LOADER_DRIVER_OVERRIDE=zink
 export GALLIUM_DRIVER=zink
 export LIBGL_DRIVERS_PATH="$MESA_PREFIX/lib"
