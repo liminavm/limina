@@ -133,6 +133,14 @@ pub fn suspend_requested() -> bool {
     SUSPEND.load(Ordering::SeqCst)
 }
 
+/// Clear a satisfied suspend request. A successful bracket leaves the flag set (the worker
+/// exits before the monitor loop clears anything); the parked window (task #18) must clear
+/// it before resuming, or `monitor()` would SIGTSTP the freshly-respawned worker straight
+/// back into a suspend.
+pub fn clear_suspend_request() {
+    SUSPEND.store(false, Ordering::SeqCst);
+}
+
 /// Ask for an IMMEDIATE forceful stop (SIGKILL, no grace) — the window menu's Force Stop.
 /// Equivalent to a stop request plus the impatient second signal, which every ladder site
 /// already honors via [`force_stop_requested`].

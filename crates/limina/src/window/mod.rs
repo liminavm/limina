@@ -53,8 +53,8 @@ mod present;
 
 pub use lifecycle::{WorkerConn, WorkerIo};
 pub use present::{
-    empty_surface_map, mark_worker_exited, mark_worker_suspended, spawn_reader, surface_rendezvous,
-    Shared, SurfaceMap,
+    empty_surface_map, mark_worker_exited, mark_worker_running, mark_worker_suspended,
+    spawn_reader, surface_rendezvous, Shared, SurfaceMap,
 };
 
 // `input` builds the host pointer's default (blank) shape from the cursor module; re-exported
@@ -115,6 +115,11 @@ pub struct WindowOptions {
     /// A splash to show from window creation until the first presented frame — set when
     /// this boot restores from a snapshot and the splash file exists.
     pub restore_splash: Option<PathBuf>,
+    /// The parked window's resume channel (task #18): a menu/CLI suspend keeps the window
+    /// open with a play glyph, and the click sends here — the session's monitor thread,
+    /// parked in recv(), respawns the worker (which restores from the pending snapshot).
+    /// None disables parking: every suspend exits the process.
+    pub resume_worker: Option<std::sync::mpsc::Sender<()>>,
     /// The VM-menu context (Suspend gating, Show in Finder, Copy SSH Command).
     pub menu_ctx: MenuCtx,
     /// Drive the guest at the window's screen in device pixels rather than points, so a Retina
@@ -477,11 +482,44 @@ define_class!(
         }
 
         // Suspend: same path as close-to-suspend / `limina suspend` — the monitor relays
-        // the bracket, the overlay dims the live frame, the exit persists [suspended].
+        // the bracket, the overlay dims the live frame, and the window PARKS on the exit
+        // (task #18: play glyph, click to resume). While parked the same item reads
+        // "Resume" (validateMenuItem:) and routes to the play action.
         #[unsafe(method(suspendVm:))]
         fn suspend_vm(&self, _sender: &NSMenuItem) {
-            log::info!("menu: Suspend");
-            crate::supervisor::request_suspend();
+            if parked() {
+                log::info!("menu: Resume");
+                RESUME_REQUESTED.with(|r| r.set(true));
+            } else {
+                log::info!("menu: Suspend");
+                crate::supervisor::request_suspend();
+            }
+        }
+
+        // Keep the VM verbs honest across the parked lifecycle (task #18): while parked,
+        // "Suspend" becomes "Resume", and Shut Down / Force Stop go dead (there is no
+        // worker to stop — quitting the app or clicking play are the verbs that exist).
+        // While RESUMING, Suspend goes dead too (mid-respawn) but the stop verbs stay —
+        // they are the escape hatch from a hung resume.
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &NSMenuItem) -> objc2::runtime::Bool {
+            let phase = PARK_STATE.with(|p| p.get());
+            let action = item.action();
+            if action == Some(objc2::sel!(suspendVm:)) {
+                let title = if phase == ParkPhase::Parked {
+                    "Resume"
+                } else {
+                    "Suspend"
+                };
+                item.setTitle(&NSString::from_str(title));
+                return (phase != ParkPhase::Resuming).into();
+            }
+            if action == Some(objc2::sel!(shutDownVm:))
+                || action == Some(objc2::sel!(forceStopVm:))
+            {
+                return (phase != ParkPhase::Parked).into();
+            }
+            objc2::runtime::Bool::YES
         }
 
         // Shut Down: the graceful power-off ladder (agent shutdown → power button →
@@ -550,11 +588,21 @@ fn build_vm_menu(mtm: MainThreadMarker, actions: &VmMenuActions) -> Retained<NSM
         unsafe { item.setTarget(Some(actions)) };
         menu.addItem(&item);
     };
-    if ctx.suspend_armed {
-        add("Suspend", objc2::sel!(suspendVm:), "");
+    // The Dock menu is rebuilt on every open, so bake the parked-lifecycle titles/verbs in
+    // here as well as in validateMenuItem: (which the menu-bar copy relies on).
+    let phase = PARK_STATE.with(|p| p.get());
+    if ctx.suspend_armed && phase != ParkPhase::Resuming {
+        let title = if phase == ParkPhase::Parked {
+            "Resume"
+        } else {
+            "Suspend"
+        };
+        add(title, objc2::sel!(suspendVm:), "");
     }
-    add("Shut Down", objc2::sel!(shutDownVm:), "");
-    add("Force Stop", objc2::sel!(forceStopVm:), "");
+    if phase != ParkPhase::Parked {
+        add("Shut Down", objc2::sel!(shutDownVm:), "");
+        add("Force Stop", objc2::sel!(forceStopVm:), "");
+    }
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     add("Settings…", objc2::sel!(showControlCenter:), ",");
     if ctx.bundle_dir.is_some() {
@@ -571,6 +619,51 @@ thread_local! {
     /// button / Cmd-W); consumed by the render timer, which routes it through the
     /// `on_window_close` policy. Main-thread only, like all window state.
     static CLOSE_REQUESTED: Cell<bool> = const { Cell::new(false) };
+
+    /// Where the window is in the suspended-window lifecycle (task #18). Written by the
+    /// render timer; read by the VM-menu validation and the input monitor (all main
+    /// thread). See [`ParkPhase`].
+    static PARK_STATE: Cell<ParkPhase> = const { Cell::new(ParkPhase::Live) };
+
+    /// The play click (content-view click or the menu's Resume) — consumed by the render
+    /// timer, which signals the session's monitor thread. Main-thread only.
+    static RESUME_REQUESTED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The suspended-window lifecycle (task #18): a menu/CLI suspend parks the window (last
+/// frame under a scrim + play glyph) instead of exiting; the play click respawns the
+/// worker, which restores from the pending snapshot in the same window.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ParkPhase {
+    /// Normal operation (also during a restore/suspend overlay — the worker is live or
+    /// about to be).
+    Live,
+    /// The worker suspended and the window stayed up showing the play glyph.
+    Parked,
+    /// Play was clicked; the respawned worker is restoring. Back to `Live` on its first
+    /// presented frame.
+    Resuming,
+}
+
+/// Is the window currently parked on a suspended VM? (For the menu handlers, which live
+/// outside the timer closure.)
+pub(crate) fn parked() -> bool {
+    PARK_STATE.with(|p| p.get()) == ParkPhase::Parked
+}
+
+/// What a suspend exit does with the window: park it (menu/CLI suspend — the user kept the
+/// window, so keep the VM one click away), or quit the process (the user closed the window
+/// or asked to stop — the window's disappearance is the point). Pure policy, decided once
+/// per suspend exit.
+///
+/// `can_park` = the session wired a resume channel (parking without one would strand the
+/// window: the play click could never respawn).
+pub(crate) fn should_park_on_suspend(
+    close_requested: bool,
+    stop_requested: bool,
+    can_park: bool,
+) -> bool {
+    can_park && !close_requested && !stop_requested
 }
 
 define_class!(
@@ -984,6 +1077,7 @@ pub fn run(
         on_window_close,
         splash_save_path,
         restore_splash,
+        resume_worker,
         menu_ctx,
         hidpi,
         notch: cfg_notch,
@@ -1780,6 +1874,12 @@ pub fn run(
     // Window key-focus state carried across ticks, so the timer can detect the key→not-key edge.
     // Seeded with the current state (the window was just made key), so the first tick is a no-op.
     let was_key = Cell::new(window.isKeyWindow());
+    // Parked-window resume bookkeeping (task #18): when play was clicked (the felt-resume
+    // log) and the frame counter at the click — `frames` never resets across the worker
+    // swap, so "first fresh frame" means exceeding this baseline, not `> 0`.
+    let timer_view = view.clone();
+    let resume_clicked_at: Cell<std::time::Instant> = Cell::new(std::time::Instant::now());
+    let resume_frames_baseline: Cell<u64> = Cell::new(0);
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         // One-shot: the remembered fullscreen, taken on the first tick the window is actually on
         // screen. Not gated on the first frame — the guest is already sized for it, and waiting
@@ -1797,7 +1897,9 @@ pub fn run(
 
         // Worker gone (guest powered off, orderly or not): net any process-group
         // stragglers and exit. (`conn.pid()` is the *current* worker — relaunch keeps it fresh.)
-        if exited {
+        // Gated on the Live phase: while Parked the dead worker is EXPECTED (the play glyph is
+        // up), and while Resuming the monitor thread clears the flags only after the swap.
+        if exited && PARK_STATE.with(|p| p.get()) == ParkPhase::Live {
             // A suspend teardown first saves the last-presented frame as the next restore's
             // splash (M9.4 felt-resume) — the IOSurface outlives the dead worker in our
             // mapping, so the grab still reads the final content.
@@ -1815,6 +1917,35 @@ pub fn run(
                         None => log::warn!("splash save: surface {id} unresolved; skipping"),
                     }
                 }
+                // Park instead of quitting (task #18): a menu/CLI suspend keeps the window
+                // up — final frame under a scrim, play glyph in the middle — so the VM is
+                // one click from coming back. A close/stop-triggered suspend still quits:
+                // the user asked the window to go away.
+                if should_park_on_suspend(
+                    CLOSE_REQUESTED.with(|c| c.get()),
+                    crate::supervisor::stop_requested(),
+                    resume_worker.is_some(),
+                ) {
+                    PARK_STATE.with(|p| p.set(ParkPhase::Parked));
+                    // The satisfied request must not re-suspend the VM the moment it
+                    // resumes (monitor() SIGTSTPs on a set flag).
+                    crate::supervisor::clear_suspend_request();
+                    // Whatever grab/held state the session had dies with the worker.
+                    timer_input.release_all_held();
+                    timer_input.release_capture(&timer_view);
+                    let mut ov = timer_overlay.borrow_mut();
+                    if let Some(o) = ov.take() {
+                        o.remove();
+                    }
+                    if let Some(content) = window.contentView() {
+                        if let Some(host_layer) = content.layer() {
+                            ov.replace(overlay::Overlay::parked(&host_layer, &content));
+                        }
+                    }
+                    window.setTitle(&NSString::from_str(&format!("{title} — Suspended")));
+                    log::info!("VM suspended; window parked (click to resume)");
+                    return;
+                }
             }
             save_state_final(timer_state_path.as_deref(), &window);
             kill_worker_group(timer_conn.pid());
@@ -1823,14 +1954,68 @@ pub fn run(
             std::process::exit(0);
         }
 
+        // Parked / resuming (task #18): the play click signals the monitor thread (which
+        // respawns the worker into a restore), the "Resuming…" overlay rides until the
+        // fresh worker's first presented frame, then the window is live again.
+        match PARK_STATE.with(|p| p.get()) {
+            ParkPhase::Live => {}
+            ParkPhase::Parked => {
+                if RESUME_REQUESTED.with(|r| r.take()) {
+                    let sent = resume_worker.as_ref().is_some_and(|tx| tx.send(()).is_ok());
+                    if sent {
+                        PARK_STATE.with(|p| p.set(ParkPhase::Resuming));
+                        resume_clicked_at.set(std::time::Instant::now());
+                        resume_frames_baseline.set(frames);
+                        let mut ov = timer_overlay.borrow_mut();
+                        if let Some(o) = ov.take() {
+                            o.remove();
+                        }
+                        if let Some(content) = window.contentView() {
+                            if let Some(host_layer) = content.layer() {
+                                ov.replace(overlay::Overlay::resuming(&host_layer, &content));
+                            }
+                        }
+                        window.setTitle(&NSString::from_str(&title));
+                    } else {
+                        // The monitor thread is gone — resuming is impossible; quit like a
+                        // plain suspend exit would have (the snapshot stays pending, the
+                        // next start restores).
+                        log::error!("resume channel dead; closing the parked window");
+                        save_state_final(timer_state_path.as_deref(), &window);
+                        crate::gateway::cleanup();
+                        crate::control::cleanup();
+                        std::process::exit(0);
+                    }
+                }
+            }
+            ParkPhase::Resuming => {
+                if frames > resume_frames_baseline.get() {
+                    PARK_STATE.with(|p| p.set(ParkPhase::Live));
+                    if let Some(o) = timer_overlay.borrow_mut().take() {
+                        o.remove();
+                    }
+                    // The felt-resume endpoint for in-place resumes (perf oracle).
+                    log::info!(
+                        "resume: first frame presented {:.1}s after the play click",
+                        resume_clicked_at.get().elapsed().as_secs_f32()
+                    );
+                }
+            }
+        }
+
         // M9.4 overlay lifecycle: the restore splash comes down on the first presented frame;
         // the suspend dim appears when a suspend request is observed (close-triggered or
         // `limina suspend`) and comes down if the bracket is abandoned (timeout → the VM keeps
-        // running). While up, re-fit to the content view every tick.
+        // running). While up, re-fit to the content view every tick. The parked/resuming
+        // flavors (task #18) are owned by the PARK_STATE machine above — here they only get
+        // the per-tick re-fit, never the take-down/install logic (whose `!suspending` arm
+        // would tear the parked overlay down: the request is cleared when the park begins).
         {
             let mut ov = timer_overlay.borrow_mut();
+            let live = PARK_STATE.with(|p| p.get()) == ParkPhase::Live;
             let suspending = crate::supervisor::suspend_requested();
             let take_down = match ov.as_ref() {
+                _ if !live => false,
                 Some(o) if o.until_first_frame => frames > 0,
                 Some(_) => !suspending,
                 None => false,
@@ -1924,6 +2109,17 @@ pub fn run(
             timer_app.isHidden(),
         ) || CLOSE_REQUESTED.with(|c| c.get())
         {
+            // Parked (task #18): the VM is already suspended — a close or stop just quits
+            // the app, leaving the snapshot pending (the next start resumes). No close
+            // policy (nothing left to suspend), no shutdown ladder, and no process-group
+            // kill: the worker died at the suspend, and its pid may have been recycled by
+            // now — kill(-pid) could hit an innocent process.
+            if PARK_STATE.with(|p| p.get()) == ParkPhase::Parked {
+                save_state_final(timer_state_path.as_deref(), &window);
+                crate::gateway::cleanup();
+                crate::control::cleanup();
+                std::process::exit(0);
+            }
             use crate::vmlib::schema::WindowCloseAction;
             let action = if crate::supervisor::stop_requested() {
                 Some(WindowCloseAction::Shutdown)
@@ -2063,6 +2259,22 @@ pub fn run(
     let input_block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
         // SAFETY: the monitor hands us a valid, live event for the call's duration.
         let ev = unsafe { event.as_ref() };
+        // Parked window (task #18): the guest is suspended, so nothing is forwarded. A
+        // left click on the content (the play glyph fills it as an affordance, but the
+        // whole content is the target, Parallels-style) requests the resume; everything
+        // else passes to AppKit untouched so the window itself (title bar drag, menus,
+        // Cmd-W) keeps behaving like a normal mac window.
+        if parked() {
+            if ev.r#type() == NSEventType::LeftMouseDown {
+                let p = input::event_point_in_view(ev, &monitor_view);
+                let b = monitor_view.bounds();
+                if p.x >= 0.0 && p.y >= 0.0 && p.x < b.size.width && p.y < b.size.height {
+                    RESUME_REQUESTED.with(|r| r.set(true));
+                    return std::ptr::null_mut(); // the click was the play button, not input
+                }
+            }
+            return event.as_ptr();
+        }
         // Host shortcuts are intercepted BEFORE the guest sees them. We match on key-down; the
         // orphan key-up that leaks to the guest is dropped by the guest input core (a release of
         // an un-pressed key). Modifier flagsChanged still flow through, which is fine.
@@ -2139,6 +2351,30 @@ mod tests {
 
     /// Longer than `OVERLAY_SETTLE`: the condition has held.
     const HELD: Option<Duration> = Some(Duration::from_millis(600));
+
+    #[test]
+    fn a_menu_or_cli_suspend_parks_but_a_close_or_stop_still_quits() {
+        // Task #18: the play-button window exists precisely for suspends where the user KEPT
+        // the window (menu Suspend, `limina suspend`) — parking after the user closed the
+        // window (or hit Ctrl-C / `limina stop`) would resurrect a window they dismissed.
+        //
+        // args: (close_requested, stop_requested, can_park)
+        assert!(
+            should_park_on_suspend(false, false, true),
+            "a menu/CLI suspend with a live resume channel must park"
+        );
+        assert!(
+            !should_park_on_suspend(true, false, true),
+            "close-to-suspend must still close the window"
+        );
+        assert!(
+            !should_park_on_suspend(false, true, true),
+            "a stop-requested suspend must still quit"
+        );
+        // No resume channel = parking would strand the window (the play click could never
+        // respawn a worker) — always quit.
+        assert!(!should_park_on_suspend(false, false, false));
+    }
 
     #[test]
     fn a_window_focused_on_another_display_does_not_push_the_overlay_under_the_notch_backdrop() {

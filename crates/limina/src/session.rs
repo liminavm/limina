@@ -239,6 +239,7 @@ pub struct WindowedSession {
     on_window_close: crate::vmlib::schema::WindowCloseAction,
     splash_save_path: Option<PathBuf>,
     restore_splash: Option<PathBuf>,
+    resume_worker: std::sync::mpsc::Sender<()>,
     menu_ctx: window::MenuCtx,
 }
 
@@ -332,11 +333,17 @@ impl WindowedSession {
         let shared = window::Shared::new();
         window::spawn_reader(sup, shared.clone());
 
+        // The parked-window resume channel (task #18): the play click (window main thread)
+        // sends; the monitor thread below, parked in recv() after a suspend exit, respawns.
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+
         // Monitor the worker on a background thread. A guest *reboot* (distinct exit code)
         // relaunches the worker — recycle gvproxy, spawn a fresh worker, swap its fds into
-        // `conn`, start a new reader — keeping the SAME NSWindow open. Any other exit
-        // (power-off, error, Ctrl-C, or a boot loop) marks the worker gone so the window loop
-        // quits. The gateway handle lives in this thread (it owns gvproxy's restart) for the
+        // `conn`, start a new reader — keeping the SAME NSWindow open. A *suspend* exit
+        // parks: the thread waits for the window's play click and respawns the same way
+        // (the pending snapshot makes the spawn a restore). Any other exit (power-off,
+        // error, Ctrl-C, or a boot loop) marks the worker gone so the window loop quits.
+        // The gateway handle lives in this thread (it owns gvproxy's restart) for the
         // VM's life.
         let monitor_shared = shared.clone();
         let monitor_conn = conn.clone();
@@ -349,6 +356,7 @@ impl WindowedSession {
             loop {
                 let started = std::time::Instant::now();
                 let code = supervisor::monitor(child, grace, monitor_control.as_ref()).unwrap_or(0);
+                let mut resuming = false;
                 if !guard.should_relaunch(code, started.elapsed()) {
                     // The suspend bracket snapshotted the guest and the worker tore down:
                     // persist `[suspended]` (UI status; the snapshot file itself is what the
@@ -382,7 +390,25 @@ impl WindowedSession {
                         let _ = std::fs::remove_file(snapshot.with_extension("bin.consumed"));
                     }
                     window::mark_worker_exited(&monitor_shared);
-                    break;
+                    if code == supervisor::WORKER_EXIT_SNAPSHOT {
+                        // Park (task #18): the window decides what this suspend means. A
+                        // close/stop-triggered suspend exits the process (killing this
+                        // blocked thread with it); a menu/CLI suspend leaves the window up
+                        // with the play glyph, and its click lands here as a resume. The
+                        // respawn below consumes the pending snapshot (take_pending_resume
+                        // inside spawn_worker) — i.e. it IS a restore, one-shot by
+                        // construction.
+                        if resume_rx.recv().is_err() {
+                            // Window gone without exiting the process — not an expected
+                            // path, but nothing to do beyond staying exited.
+                            break;
+                        }
+                        log::info!("play clicked → resuming the suspended VM in place");
+                        supervisor::clear_suspend_request();
+                        resuming = true;
+                    } else {
+                        break;
+                    }
                 }
                 // Recycle gvproxy (single-connection vfkit socket) before the fresh worker dials it.
                 if let Some(gw) = &gateway {
@@ -404,9 +430,11 @@ impl WindowedSession {
                     width,
                     height,
                     monitor_port_name.as_deref(),
-                    // Reboot relaunch: no snapshot can be pending here (a suspend never
-                    // relaunches), so this resolves to a cold boot — by construction, not
-                    // by trusting argv (the bug that destroyed a dogfood disk).
+                    // The spawn decides cold-boot vs restore from the snapshot's presence —
+                    // by construction, not by trusting argv (the bug that destroyed a
+                    // dogfood disk). A reboot relaunch finds none (a suspend parks instead
+                    // of relaunching) and cold-boots; a play-click resume finds the one the
+                    // bracket just wrote and restores.
                     supervisor::ResumePaths {
                         snapshot_file: snapshot_file.as_deref(),
                         suspend_state_file: suspend_state_file.as_deref(),
@@ -429,7 +457,14 @@ impl WindowedSession {
                 let pid = next.io.pid();
                 monitor_conn.swap(next.io);
                 window::spawn_reader(next.sup, monitor_shared.clone());
-                log::info!("guest rebooted → relaunched the windowed VM worker (pid {pid})");
+                if resuming {
+                    // The exit flags described the suspended (dead) worker; clear them AFTER
+                    // the swap so the window never sees "running" with a stale conn.
+                    window::mark_worker_running(&monitor_shared);
+                    log::info!("resumed the suspended VM in place (worker pid {pid})");
+                } else {
+                    log::info!("guest rebooted → relaunched the windowed VM worker (pid {pid})");
+                }
                 child = next.child;
             }
         });
@@ -457,6 +492,7 @@ impl WindowedSession {
             on_window_close,
             splash_save_path,
             restore_splash,
+            resume_worker: resume_tx,
             menu_ctx,
         })
     }
@@ -492,6 +528,7 @@ impl WindowedSession {
                 on_window_close: self.on_window_close,
                 splash_save_path: self.splash_save_path,
                 restore_splash: self.restore_splash,
+                resume_worker: Some(self.resume_worker),
                 menu_ctx: self.menu_ctx,
             },
         );

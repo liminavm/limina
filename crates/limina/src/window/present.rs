@@ -214,6 +214,15 @@ pub fn mark_worker_suspended(shared: &Arc<Mutex<Shared>>) {
     shared.lock().unwrap().worker_suspended = true;
 }
 
+/// The parked window resumed: a fresh worker was respawned for the pending snapshot, so the
+/// exit flags no longer describe the current worker (task #18). Called by the monitor thread
+/// after the respawn's conn swap, mirroring the reboot relaunch (which never set them).
+pub fn mark_worker_running(shared: &Arc<Mutex<Shared>>) {
+    let mut s = shared.lock().unwrap();
+    s.worker_exited = false;
+    s.worker_suspended = false;
+}
+
 /// Read the control channel on a background thread, updating `shared`. Consumes (owns) `fd` —
 /// the supervisor's end of the control socketpair — and closes it when the reader hits EOF.
 pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {

@@ -281,6 +281,17 @@ extern "C" fn tap_callback(
     // SAFETY: `user` is the leaked `TapCtx` from `install`; the callback only runs on the main
     // run loop while that allocation is alive (the app's lifetime).
     let ctx = unsafe { &*(user as *const TapCtx) };
+
+    // Parked window (task #18): the guest is suspended, so the tap must claim NOTHING — no
+    // soft keyboard grab (Cmd-W has to close the window, Cmd-Q quit, media keys stay
+    // macOS's), no pointer bookkeeping. Live-caught: Cmd-W on a parked window vanished into
+    // the dead worker's input fd because this tap, not the parked-aware NSEvent monitor,
+    // consumes grabbed combos. (Same thread as the render timer — the main run loop — so
+    // the phase read is safe.)
+    if super::parked() {
+        return event;
+    }
+
     let geti = |field: u32| unsafe { CGEventGetIntegerValueField(event, field) };
 
     // Key-window tracking: the SOFT keyboard grab engages only while our window is key, and

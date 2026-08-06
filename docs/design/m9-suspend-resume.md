@@ -754,6 +754,22 @@ A sibling feature was designed 2026-07-20 (not built): **host sleep → in-place
 session-preserving thaw for stock guests (defer-and-classify the GPU session reset) —
 `docs/design/host-sleep-s2idle.md`.
 
+**Play-button park/resume — SHIPPED 2026-08-06 (task #18, commit 8c00768).** A menu/CLI
+suspend no longer exits the process: the window *parks* — the final frame stays presented
+(the IOSurface outlives the dead worker) under the dim scrim with a centered play glyph, and
+the title gains "— Suspended". A click anywhere in the content (or the VM menu's Suspend
+item, which `validateMenuItem:` retitles to **Resume** while parked) respawns the worker in
+the same NSWindow via the reboot-relaunch machinery; `take_pending_resume` makes the spawn a
+one-shot restore by construction. Close-to-suspend still closes — parking is only for
+suspends where the user kept the window (`should_park_on_suspend`, pure + unit-tested). The
+session's monitor thread parks in `recv()` on a resume channel; the window's `PARK_STATE`
+(Live/Parked/Resuming) gates the exit path, the overlay machine, the input monitor (parked:
+left-click = play, everything else passes to AppKit), the capture tap (full pass-through —
+a parked tap swallowing Cmd-W was caught live), and the menu verbs (Shut Down/Force Stop go
+dead while parked; they return during Resuming as the hung-resume escape hatch). The parked
+quit path deliberately skips the shutdown ladder *and* the process-group kill: a
+long-parked worker's pid may have been recycled.
+
 **Auto-resume, one-shot by construction — SHIPPED 2026-07-20 (dogfood incident fix).** The first
 dogfood deploy destroyed a guest's btrfs ("parent transid verify failed" → emergency mode): an
 in-guest **reboot of a restored session** relaunched the worker with the original argv — including

@@ -185,7 +185,7 @@ fn live_pointer_in_view(view: &NSView) -> Option<(f64, f64)> {
 /// in the wrong space. Measured: one event reported at `y = 982` by the tap came through here as
 /// `y = 65`, same `x`, same delta, 6 ms apart. Going via screen coordinates when the windows
 /// differ costs two conversions and removes the whole class.
-fn event_point_in_view(event: &NSEvent, view: &NSView) -> NSPoint {
+pub(super) fn event_point_in_view(event: &NSEvent, view: &NSView) -> NSPoint {
     let loc = event.locationInWindow();
     let ev_win = objc2::MainThreadMarker::new().and_then(|mtm| event.window(mtm));
     let base = match (ev_win, view.window()) {
@@ -574,6 +574,15 @@ impl InputState {
 
     fn is_captured(&self) -> bool {
         self.captured.load(Ordering::Acquire)
+    }
+
+    /// Release pointer capture if held (no-op otherwise) — for the parked window (task #18),
+    /// where the guest the capture served is gone and a hidden, pinned cursor would leave the
+    /// user unable to click the play glyph. Main thread only.
+    pub fn release_capture(&self, view: &NSView) {
+        if self.is_captured() {
+            self.toggle_capture(view);
+        }
     }
 
     /// Toggle pointer capture. On grab: decouple the hardware mouse from the cursor (so deltas
