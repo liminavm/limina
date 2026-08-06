@@ -42,12 +42,15 @@ earlier "probing masks it / lost-timer-IRQ" reading was misattribution. Upstream
 consoleless FDT (report to slp — RELEASE would degrade gracefully); note our GOP firmware
 builds RELEASE by default and carries the same-class CoreRaiseTpl fix at the source.
 
-**OPEN (found during the autopsy, real bug, needs a RED-first fix on the fork):** a live pause
-(`krun_vm_pause` / VmCtl::Pause) issued while the guest is pre-SMP deadlocks the control
-plane: secondaries parked in the *initial* `boot_receiver.recv()` (vstate.rs `run()`) never
-see the Pause event, so `Vmm::pause()` waits forever for their Paused response while the event
-loop holds the vmm mutex. The initial boot wait needs the same select-on-boot+events shape as
-`handle_offline`. Reachable from limina: a user suspend during early boot.
+**FIXED (task #21, 2026-08-06, fork rev `aeafaf23`):** the pre-SMP pause/snapshot deadlock
+found during the autopsy — secondaries parked in the *initial* `boot_receiver.recv()` never
+saw Pause/Snapshot events, so `pause()`/`snapshot_vcpus()` waited forever holding the vmm
+mutex (reachable by a user suspend during early boot, or any `maxcpus=`-capped guest). The
+boot wait now services events with the same select shape as `handle_offline`. RED-first
+regression test: `l1_snapshot_completes_with_a_never_onlined_vcpu` (cpus=2 + `maxcpus=1`).
+Restore fidelity for not-online vCPUs remains the task #41 limitation (save side only).
+Upstream note: the deadlock is an interaction of upstream's krun_vm_pause with our carried
+PSCI CPU_ON boot-channel park (0094-era), so the fix travels with that series.
 
 | ord | subject | files | diag | need | checked | issue | mr | sec | fold | tier | disp | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
