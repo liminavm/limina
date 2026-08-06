@@ -29,10 +29,15 @@ sampled signature). The trigger became reachable only when upstream removed the 
 console (ce4146d): a PL011-less FDT never existed before, so the DEBUG firmware's fragility
 was unobservable. limina's fix (in the migration commit): `console::attach_dropped` always
 attaches an output-dropped PL011 when no console is requested. The "load-sensitive net-test
-residue" was collateral, not a second bug: pre-fix, every suite run contained a dead-looping
-consoleless guest pinning a core for 150+s, and 1–3 concurrent net boots timed out under that
-load; with the fix the full suite is green (82/82) with net tests at normal speed. The earlier
-"probing masks it / lost-timer-IRQ" reading was misattribution. Upstream-report candidates
+residue" was NOT a second bug and is unreproducible on the fixed stack: four full suites on
+2026-08-06 (incl. one run with a synthetic 100%-CPU core-pinner for the whole duration, a
+harsher condition than the dead-looping guest) were all 82/82 with net tests at normal speed
+(18–21s — the spinner did not slow them at all, so "one wedged guest's load" alone does NOT
+explain the pre-fix timeouts either). Best remaining explanation for the pre-fix 1–3 net
+DHCP timeouts: uncontrolled concurrent host activity during those overnight runs — including
+one documented mid-suite `cargo build` (all cores) — on top of the wedged guest; recorded as
+reconstruction, not measurement (no failing net worker was ever sampled directly). The
+earlier "probing masks it / lost-timer-IRQ" reading was misattribution. Upstream-report candidates
 (queued, not yet filed): krunkit ships a DEBUG-built silent firmware that dead-loops on a
 consoleless FDT (report to slp — RELEASE would degrade gracefully); note our GOP firmware
 builds RELEASE by default and carries the same-class CoreRaiseTpl fix at the source.
