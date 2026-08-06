@@ -170,5 +170,6 @@ patches already claiming MR-ready) → `mesa`/`imago` → the two big series
 (`virglrenderer` 58, `libkrun` 126), one series per session, ledger committed as it
 fills so every session resumes from durable state.
 
-`patches/edk2/` is a script (`apply-virtio-keyboard.py`), not a format-patch series;
-it gets a prose section in its ledger file rather than generated rows.
+edk2 was a script (`apply-virtio-keyboard.py`) rather than a format-patch series at
+audit time; since 2026-08-06 it is fork-model (`liminavm/edk2`, 6 commits, task #22)
+and any upstreaming rows would key on those commit subjects.

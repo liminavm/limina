@@ -191,10 +191,10 @@ fn setup() -> Result<()> {
 
 /// Materialize every gitignored `third_party/` source tree, so the workspace can build.
 ///
-/// Every code dep is fork-model now (github.com/liminavm): clone our fork and check out the rev
+/// Every dep is fork-model now (github.com/liminavm): clone our fork and check out the rev
 /// pinned in `third_party/manifest.toml` — the fork's `limina` branch IS the delta, no patch
-/// series. (The one remaining patch-series dep is edk2's firmware build, applied by
-/// `scripts/build-krun-efi.sh`, not vendored here.)
+/// series. (edk2 is fork-model too but not vendored here: `scripts/build-krun-efi.sh` clones
+/// its pinned rev inside its own container build volume.)
 ///
 /// Idempotent — re-running resets/refreshes each tree.
 fn vendor(heavy: bool) -> Result<()> {

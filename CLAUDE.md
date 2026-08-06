@@ -31,14 +31,24 @@ right tool — not treat upstream as immutable:
   commit on the fork's `limina` branch, push, update the manifest rev; tag before every
   branch rewrite. Audit status: `docs/upstreaming/ledger/libkrun.md`.
   - **`cargo xtask vendor`** is the one-command bootstrap: it recreates every gitignored
-    `third_party/` source tree. Two models coexist during the **fork migration to
-    github.com/liminavm**: fork-model deps (imago, linux) clone our fork and check out the rev
-    pinned in the committed `third_party/manifest.toml` (the fork's `limina` branch IS the delta —
-    no patch series; `main`/`master` tracks upstream; tag-before-rebase keeps every pinned rev
-    reachable); patch-series deps (the rest) clone upstream and apply their committed `patches/**`
-    series. A dep marked `heavy = true` (the kernel — multi-GB, never built on this host) is
-    **skipped unless `--heavy`**. Run it once after a fresh clone, before `cargo build` /
-    `scripts/test-boot.sh`.
+    `third_party/` source tree. **Every dep is on the fork model now** (edk2 was the last
+    holdout, migrated 2026-08-06): clone our fork under github.com/liminavm and check out the
+    rev pinned in the committed `third_party/manifest.toml` — the fork's `limina` branch IS the
+    delta, no patch series; `main`/`master` tracks upstream; tag-before-rebase keeps every
+    pinned rev reachable. The `patches/**` dirs are tombstones (exception: `patches/mesa-guest/`
+    is a committed *export* derived from the mesa-guest fork, and `patches/mesa/` is
+    reference-only queue material). A dep marked `heavy = true` (the kernel — multi-GB, never
+    built on this host) is **skipped unless `--heavy`**. Run it once after a fresh clone,
+    before `cargo build` / `scripts/test-boot.sh`.
+- **edk2 (the KRUN_EFI boot firmware)** — **fork model** (migrated 2026-08-06, task #22):
+  `github.com/liminavm/edk2` (`limina` branch; base is `slp/edk2@krun-support`, the tree
+  krunkit's blob is built from), pinned by `[edk2]` in `third_party/manifest.toml` but **not
+  vendored** — `scripts/build-krun-efi.sh` clones the pinned rev inside its container build
+  volume and builds with zero build-time patching (`patches/edk2/` is a tombstone). Output:
+  `target/krun-efi/KRUN_EFI.gop.fd` (RELEASE + GOP + typeable ConIn), which is also the **test
+  suite's default firmware** — krunkit's `KRUN_EFI.silent.fd` is a DEBUG build whose live
+  ASSERTs end in `CpuDeadLoop` (the #14 cold-boot wedge) and remains only a loud last-resort
+  fallback (`LIMINA_FIRMWARE` overrides).
 - **imago** (libkrun's virtio-blk storage backend, a crates.io dep) — **fork model** (the pilot):
   `third_party/imago` is a clone of `github.com/liminavm/imago` (`limina` branch, default; upstream
   is gitlab.com/hreitz/imago), pinned by `third_party/manifest.toml` and overridden via

@@ -1,52 +1,32 @@
-# Vendored EDK2 sources for the KRUN_EFI firmware build
+# patches/edk2 — RETIRED (fork model since 2026-08-06)
 
-`scripts/build-krun-efi.sh` builds our GOP firmware from `slp/edk2@krun-support` and
-patches it in place (see that script). Most of our changes are *in-place patches* to
-files that already exist in the slp base (the `.dsc`/`.fdf`, `PlatformBm.c`,
-`VirtioSerialPort.c`). This directory carries **whole upstream files the slp base
-lacks**, so the build can drop them in: the build mounts `patches/edk2` at
-`/edk2-vendor` and copies these trees into the edk2 checkout before patching.
+The edk2 delta that lived here — the vendored `OvmfPkg/VirtioKeyboardDxe/` tree plus
+`apply-virtio-keyboard.py`, and the in-place patches inside `scripts/build-krun-efi.sh`
+(TerminalPcdProducerLib build fix, VirtioSerialDxe TPL fix, PL031 DT status=okay, the
+VirtioGpuDxe GOP/ConIn enablement) — was **migrated to the fork model** in task #22:
+`github.com/liminavm/edk2`, branch **`limina`**, is the delta (6 commits on the
+`slp/edk2@krun-support` base the krunkit blob is built from).
 
-## `OvmfPkg/VirtioKeyboardDxe/`
+- The pin lives in `[edk2]` in `third_party/manifest.toml`. edk2 is **not** vendored by
+  `cargo xtask vendor`: `scripts/build-krun-efi.sh` reads the pinned rev from the manifest
+  and clones/checks it out inside its own container build volume. A local `third_party/edk2`
+  checkout is optional (fork surgery only).
+- To change the firmware: commit on the fork's `limina` branch, push, bump the manifest rev,
+  rerun `scripts/build-krun-efi.sh`. Tag before every branch rewrite — every rev ever pinned
+  must stay reachable.
+- Why our own build at all: krunkit ships only `KRUN_EFI.silent.fd` — serial-only, no GOP,
+  and a DEBUG build whose live ASSERTs end in `CpuDeadLoop` (the #14 cold-boot wedge). Ours
+  is RELEASE with a graphical, typeable boot console.
 
-An EDK2 UEFI driver that binds a virtio-input device over `VIRTIO_DEVICE_PROTOCOL`
-and produces `EFI_SIMPLE_TEXT_INPUT_PROTOCOL` (+ the `…Ex` variant) — i.e. it turns
-libkrun's virtio keyboard into firmware **ConIn**, which is what gives GRUB and the
-early firmware a typeable keyboard in the limina window. The `slp/edk2@krun-support`
-base predates this driver (it was added upstream ~Dec 2024), so we vendor it.
+## VirtioKeyboardDxe provenance (kept from the retired vendored copy)
 
-- **Upstream:** `tianocore/edk2`, path `OvmfPkg/VirtioKeyboardDxe/`
-- **Pinned to:** tag `edk2-stable202505` (commit `6951dfe7d59d144a3a980bd7eda699db2d8554ac`)
-  - chosen as the *oldest* stable tag that contains the driver, to minimise VirtioLib /
-    `VIRTIO_DEVICE_PROTOCOL` API drift against the older slp base.
-- **License:** BSD-2-Clause-Patent (the EDK2 license; unchanged, files are verbatim).
-- **Files:** `VirtioKeyboard.c`, `VirtioKeyboard.h`, `VirtioKeyCodes.h`, `VirtioKeyboard.inf`.
-
-### How the build consumes it (GOP builds only)
-
-`build-krun-efi.sh` step (4):
-1. copies `OvmfPkg/VirtioKeyboardDxe/` into the checkout;
-2. adds `VIRTIO_SUBSYSTEM_INPUT 18` to `OvmfPkg/Include/IndustryStandard/Virtio10.h`
-   (the slp base defines only GPU=16 / FILESYSTEM=26);
-3. adds `VirtioKeyboard.inf` to `ArmVirtKrun.dsc` + `.fdf` (after VirtioGpu);
-4. patches `PlatformBm.c`: an `IsVirtioInput` filter + `FilterAndProcess(Connect)` to
-   bind the device, then an `AddInput` callback that adds each resulting `SimpleTextIn`
-   handle to `ConIn` — the input twin of the existing VirtioGpu→`ConOut` patch;
-5. declares `gEfiSimpleTextInProtocolGuid` in `PlatformBootManagerLib.inf`.
-
-Safety notes (verified against the source before vendoring): the driver raises only
-`TPL_NOTIFY` (it does **not** repeat the `RaiseTPL(TPL_CALLBACK)` lowering that hung
-VirtioSerial in this build), and its event loop filters by `EV_KEY`, so it harmlessly
-co-binds limina's tablet/mouse nodes (also `SubSystemDeviceId 18`) without emitting
-phantom keystrokes from pointer events.
-
-### Re-vendoring / bumping
-
-```sh
-TAG=edk2-stable202505   # or newer
-for f in VirtioKeyboard.c VirtioKeyboard.h VirtioKeyCodes.h VirtioKeyboard.inf; do
-  curl -fsSL "https://raw.githubusercontent.com/tianocore/edk2/$TAG/OvmfPkg/VirtioKeyboardDxe/$f" \
-    -o "patches/edk2/OvmfPkg/VirtioKeyboardDxe/$f"
-done
-```
-Then rebuild (`scripts/build-krun-efi.sh`) and update the pinned tag/commit above.
+The fork's import commit (`OvmfPkg/VirtioKeyboardDxe: import from edk2-stable202505`)
+carries these files verbatim from upstream `tianocore/edk2` tag `edk2-stable202505`
+(commit `6951dfe7d59d144a3a980bd7eda699db2d8554ac`) — the *oldest* stable tag containing
+the driver, to minimise VirtioLib / `VIRTIO_DEVICE_PROTOCOL` API drift against the older
+slp base. License: BSD-2-Clause-Patent (the EDK2 license; files unchanged). Safety notes
+verified before vendoring: the driver raises only `TPL_NOTIFY` (it does **not** repeat the
+`RaiseTPL(TPL_CALLBACK)` lowering that hung VirtioSerial in this build), and its event loop
+filters by `EV_KEY`, so it harmlessly co-binds limina's tablet/mouse nodes (also
+`SubSystemDeviceId 18`) without emitting phantom keystrokes from pointer events. To bump:
+re-import from a newer tag as a new commit on the fork branch.

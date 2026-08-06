@@ -5,8 +5,7 @@
 # every rev ever pinned here must stay reachable), then update `rev` here in the same commit.
 # Patch-audit status lives in docs/upstreaming/ledger/.
 #
-# Deps not yet migrated to the fork model (edk2) still vendor via their
-# committed patches/<dep>/ series; they move here one at a time.
+# Every dep is on the fork model now (edk2 was the last holdout, migrated 2026-08-06).
 #
 # `heavy = true` means `cargo xtask vendor` SKIPS the clone by default — the tree is huge and
 # this host never builds it (the kernel builds in a Linux container / build guest, which
@@ -25,6 +24,20 @@ upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
 rev = "aeafaf23e68e9f919aadb006a91de662aed8a804"
 base = "07fd40dcf6da8e14dd47e16a535531f0383fe52c"
+
+# The EFI firmware (task #22, migrated 2026-08-06). The `limina` branch carries our whole
+# delta as commits (TerminalPcdProducerLib build fix, the VirtioSerialDxe TPL fix, PL031
+# DT status=okay, the vendored VirtioKeyboardDxe, and the GOP/ConIn enablement) on slp's
+# krun-support base — build-krun-efi.sh no longer patches anything at build time. NOT
+# vendored by `cargo xtask vendor`: the build clones the pinned rev inside its own
+# container volume (scripts/build-krun-efi.sh reads `rev` from this entry). A local
+# third_party/edk2 checkout is optional (fork surgery only).
+[edk2]
+repo = "https://github.com/liminavm/edk2.git"
+upstream = "https://github.com/slp/edk2.git"
+branch = "limina"
+rev = "96006ce134cd8f52f40f3319ec821a17f74019da"
+base = "13e8adac8a83141b51375c799996946082e1eb43"
 
 [imago]
 repo = "https://github.com/liminavm/imago.git"
