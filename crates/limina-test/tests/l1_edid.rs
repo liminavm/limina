@@ -348,10 +348,14 @@ fn find_connector(guest: &mut Guest) -> String {
     let listing = guest
         .console_command("ls /sys/class/drm", Duration::from_secs(10))
         .expect("listing /sys/class/drm over the console");
+    // Connectors are always `cardN-<type>-<n>`. Filtering on that shape (not just "has a
+    // dash") keeps a kernel printk that interleaves with the ls output on ttyAMA0 (e.g.
+    // "[    4.2] input: gpio-keys...") from being mistaken for a connector name — that
+    // produced `xxd /sys/class/drm/[ ...` and a baffling one-in-many-suites flake.
     let connectors: Vec<&str> = listing
         .lines()
         .map(str::trim)
-        .filter(|e| e.contains('-') && !e.starts_with("render") && !e.starts_with("control"))
+        .filter(|e| e.starts_with("card") && e.contains('-'))
         .collect();
     connectors
         .iter()
