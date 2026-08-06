@@ -16,21 +16,33 @@ is gone; upstream's display/EDID consolidation (`crate::display`) absorbed our D
 EDID field, our 0119/0120 additions (identity/range/timings/`connected`) layer on top;
 consoles are explicit-only upstream now (`disable_implicit_console` no longer exists).
 
-**OPEN REGRESSION (2026-08-06, blocks calling #14 done):** an intermittent cold-boot wedge on
-the rebased stack — the guest spins in-guest at 100% on vCPU 0 with ZERO VM exits, pre-SMP
-(secondaries still parked on the CPU_ON boot channel), and never reaches userspace. Baseline
-control: the pre-rebase stack ran the same suite conditions clean. Two facets so far:
-(1) a boot with NO serial console wedged near-deterministically under nextest — fixed in limina
-(`console::attach_dropped`: always attach an output-dropped PL011 when none is requested,
-restoring the device shape upstream's old implicit console guaranteed; the consoleless vehicle
-went 3/3 red → 7/7 green); (2) a load-sensitive residue remains — full unprobed suite runs fail
-1–3 net-class tests ("guest never obtained a DHCP lease", 0 bytes ever sent) while solo reruns
-pass, and a suite run with the diagnostic probe armed (LIMINA_WEDGE_PROBE: periodic live
-pause/resume of every vCPU, logging PC + vtimer state from the park site) went clean — probing
-masks or rescues it, which smells like the lost-timer-IRQ / vtimer class (upstream's new live
-pause/resume machinery owns the vtimer offset now). The probe diff is preserved in the session
-notes; suspects to bisect against: upstream's vtimer-offset tracking + WFE-wait select rework
-vs our 0040/0054/0094 timer patches.
+**RESOLVED (2026-08-06) — the "cold-boot wedge" root cause:** NOT a timer/vtimer bug and NOT
+in libkrun at all. A guest-memory autopsy of a wedged boot (pause the vCPU at t=100s, read
+PC/registers, dump the stack + the PE image at the spinning PC) proved the guest was parked in
+EDK2's `CpuDeadLoop()` inside **DxeCore** of the Homebrew-krunkit `KRUN_EFI.silent.fd` — a
+**DEBUG_GCC5 build** (live ASSERTs) of slp/edk2@krun-support. The chain, each link read out of
+guest RAM: no uart node in the FDT → DxeCore's `SerialPortInitialize` constructor
+(FdtPL011SerialPortLib) returns EFI_NOT_FOUND → the generated `ASSERT_EFI_ERROR` in
+DxeMain/AutoGen.c(516) fires → DebugAssert formats "ASSERT [DxeCore] …" into the missing
+serial port → CpuDeadLoop (100% CPU, zero VM exits, IRQs masked, vtimer disabled — the exact
+sampled signature). The trigger became reachable only when upstream removed the implicit
+console (ce4146d): a PL011-less FDT never existed before, so the DEBUG firmware's fragility
+was unobservable. limina's fix (in the migration commit): `console::attach_dropped` always
+attaches an output-dropped PL011 when no console is requested. The "load-sensitive net-test
+residue" was collateral, not a second bug: pre-fix, every suite run contained a dead-looping
+consoleless guest pinning a core for 150+s, and 1–3 concurrent net boots timed out under that
+load; with the fix the full suite is green (82/82) with net tests at normal speed. The earlier
+"probing masks it / lost-timer-IRQ" reading was misattribution. Upstream-report candidates
+(queued, not yet filed): krunkit ships a DEBUG-built silent firmware that dead-loops on a
+consoleless FDT (report to slp — RELEASE would degrade gracefully); note our GOP firmware
+builds RELEASE by default and carries the same-class CoreRaiseTpl fix at the source.
+
+**OPEN (found during the autopsy, real bug, needs a RED-first fix on the fork):** a live pause
+(`krun_vm_pause` / VmCtl::Pause) issued while the guest is pre-SMP deadlocks the control
+plane: secondaries parked in the *initial* `boot_receiver.recv()` (vstate.rs `run()`) never
+see the Pause event, so `Vmm::pause()` waits forever for their Paused response while the event
+loop holds the vmm mutex. The initial boot wait needs the same select-on-boot+events shape as
+`handle_offline`. Reachable from limina: a user suspend during early boot.
 
 | ord | subject | files | diag | need | checked | issue | mr | sec | fold | tier | disp | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
