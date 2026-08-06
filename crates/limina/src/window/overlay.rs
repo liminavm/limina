@@ -30,19 +30,33 @@ use objc2::AnyThread;
 use objc2_app_kit::{NSImage, NSView};
 use objc2_core_foundation::CFRetained;
 use objc2_core_graphics::{
-    CGBitmapContextCreate, CGBitmapContextCreateImage, CGBitmapContextGetData, CGBitmapInfo,
-    CGColor, CGColorSpace, CGImage, CGImageAlphaInfo,
+    CGBitmapContextCreate, CGBitmapContextCreateImage, CGBitmapContextGetBytesPerRow,
+    CGBitmapContextGetData, CGBitmapInfo, CGColor, CGColorSpace, CGImage, CGImageAlphaInfo,
 };
 use objc2_foundation::{NSNumber, NSPoint, NSRect, NSSize, NSString};
-use objc2_quartz_core::{CABasicAnimation, CALayer, CAMediaTiming, CATextLayer, CATransaction};
+use objc2_quartz_core::{
+    CAAutoresizingMask, CABasicAnimation, CALayer, CAMediaTiming, CATextLayer, CATransaction,
+};
 use std::path::Path;
 
-/// Spinner diameter in points.
-const SPINNER_D: f64 = 40.0;
-/// Play-glyph diameter in points (the parked flavor's centerpiece — big, Parallels-style).
-const PLAY_D: f64 = 96.0;
-/// Vertical gap between the spinner center and the caption center, in points.
-const LABEL_DROP: f64 = 44.0;
+/// Centerpiece diameter for a given content size (user-picked 2026-08-06): 10% of the
+/// smaller dimension, clamped so a tiny window still shows a legible glyph and a big
+/// fullscreen panel doesn't get a billboard. The spinner arc and the parked play disc
+/// share it — one visual family — and `fit` re-derives it live across resizes.
+fn glyph_diameter(bounds: NSRect) -> f64 {
+    (bounds.size.width.min(bounds.size.height) * 0.10).clamp(64.0, 128.0)
+}
+
+/// Caption font size, scaled with the glyph (~d/5, clamped to stay readable-not-shouty).
+fn label_font_size(d: f64) -> f64 {
+    (d / 5.0).clamp(15.0, 26.0)
+}
+
+/// Vertical gap between the glyph center and the caption center. 1.1×d reproduces the
+/// original 44pt at the old 40pt spinner exactly.
+fn label_drop(d: f64) -> f64 {
+    d * 1.1
+}
 
 /// Which overlay this is — decides the centerpiece (spinner vs play glyph), the caption,
 /// and whether a splash underlay is expected.
@@ -69,6 +83,11 @@ pub(crate) struct Overlay {
     /// suspend flavor instead comes down when the suspend is abandoned (bracket timeout);
     /// parked comes down on the play click (replaced by a resuming overlay).
     pub(crate) until_first_frame: bool,
+    /// Which flavor this is — fit() needs it to re-render the right glyph on a size change.
+    flavor: Flavor,
+    /// The glyph diameter currently rendered, so fit() only re-renders when the window's
+    /// size actually moves it.
+    diameter: std::cell::Cell<f64>,
 }
 
 impl Overlay {
@@ -103,6 +122,15 @@ impl Overlay {
         let bounds = content.bounds();
         let root = CALayer::new();
         root.setFrame(bounds);
+        // CALayer autoresizing (macOS-only CA) adjusts sublayer geometry inside the same
+        // transaction as the superlayer's bounds change, keeping the overlay roughly in
+        // step with a live resize BETWEEN render-timer ticks (the timer's own geometry
+        // pass commits on its own schedule and lags the window by up to a frame). It
+        // reduces but does not eliminate the drag-time ghosting — see fit() for the
+        // accepted residual and the revisit direction.
+        root.setAutoresizingMask(
+            CAAutoresizingMask::LayerWidthSizable | CAAutoresizingMask::LayerHeightSizable,
+        );
         let mut fill = Vec::new();
         if let Some(path) = splash {
             // Opaque black base: the restore window has nothing real underneath yet, and
@@ -117,6 +145,10 @@ impl Overlay {
                     let obj: &AnyObject = &img;
                     let splash_layer = CALayer::new();
                     splash_layer.setFrame(bounds);
+                    splash_layer.setAutoresizingMask(
+                        CAAutoresizingMask::LayerWidthSizable
+                            | CAAutoresizingMask::LayerHeightSizable,
+                    );
                     unsafe {
                         splash_layer.setContents(Some(obj));
                         splash_layer.setContentsGravity(&NSString::from_str("resizeAspect"));
@@ -128,6 +160,9 @@ impl Overlay {
             }
             let scrim = CALayer::new();
             scrim.setFrame(bounds);
+            scrim.setAutoresizingMask(
+                CAAutoresizingMask::LayerWidthSizable | CAAutoresizingMask::LayerHeightSizable,
+            );
             scrim.setBackgroundColor(Some(&CGColor::new_generic_gray(0.0, 0.35)));
             root.addSublayer(&scrim);
             fill.push(scrim);
@@ -137,27 +172,19 @@ impl Overlay {
         }
 
         // The centerpiece: a rotating arc while something is in flight, the static play
-        // glyph while parked.
-        let d = if flavor == Flavor::Parked {
-            PLAY_D
-        } else {
-            SPINNER_D
-        };
+        // glyph while parked. Sized to the window (glyph_diameter); fit() re-derives on
+        // resize.
+        let d = glyph_diameter(bounds);
         let spinner = CALayer::new();
         spinner.setBounds(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(d, d)));
         spinner.setPosition(NSPoint::new(
             bounds.size.width / 2.0,
             bounds.size.height / 2.0,
         ));
-        let img = if flavor == Flavor::Parked {
-            play_image()
-        } else {
-            spinner_image()
-        };
-        if let Some(img) = img {
-            let obj: &AnyObject = unsafe { &*(&*img as *const CGImage as *const AnyObject) };
-            unsafe { spinner.setContents(Some(obj)) };
-        }
+        // All margins flexible = stays centered through the drag at its current size; the
+        // settle snap re-derives the size (an ellipse-free alternative to scaling live).
+        spinner.setAutoresizingMask(CENTERED_MASK);
+        set_glyph_contents(&spinner, flavor, d);
         // Crisp on Retina: the image is rendered at 2× and drawn into the point-sized layer.
         spinner.setContentsScale(2.0);
         if flavor != Flavor::Parked {
@@ -186,18 +213,11 @@ impl Overlay {
             };
             let obj: &AnyObject = &NSString::from_str(text);
             label.setString(Some(obj));
-            label.setFontSize(13.0);
             label.setForegroundColor(Some(&CGColor::new_generic_gray(1.0, 0.85)));
             label.setAlignmentMode(&NSString::from_str("center"));
             label.setContentsScale(2.0);
-            label.setBounds(NSRect::new(
-                NSPoint::new(0.0, 0.0),
-                NSSize::new(240.0, 18.0),
-            ));
-            label.setPosition(NSPoint::new(
-                bounds.size.width / 2.0,
-                bounds.size.height / 2.0 - LABEL_DROP,
-            ));
+            label.setAutoresizingMask(CENTERED_MASK);
+            fit_label(&label, bounds, d, true);
             label
         };
         root.addSublayer(&label);
@@ -209,27 +229,44 @@ impl Overlay {
             spinner,
             label,
             until_first_frame: matches!(flavor, Flavor::Restore | Flavor::Resuming),
+            flavor,
+            diameter: std::cell::Cell::new(d),
         }
     }
 
-    /// Re-fit to the content view (called from the render timer; cheap, animation-free for
-    /// the geometry — the spin animation is unaffected by a position change).
+    /// Re-fit to the content view, from the render timer. Geometry (frames, positions,
+    /// the glyph's bounds — Core Animation stretches the last-rendered image into them)
+    /// tracks every tick, so the glyph scales live through a drag; the EXPENSIVE work —
+    /// re-rendering the glyph bitmap and re-rasterizing the caption's font — waits for the
+    /// resize to settle (`inLiveResize` off), since doing those per tick read as flicker.
+    ///
+    /// KNOWN, accepted (user, 2026-08-06): during a continuous drag the overlay pieces can
+    /// transiently ghost/lag the window by a frame — the timer commits in a different CA
+    /// transaction than AppKit's live resize. The autoresizing masks set at install keep
+    /// the layers roughly in step between ticks, but did not eliminate it; a proper fix
+    /// (geometry from `viewDidLayout`/`layoutSublayers` instead of a timer) is a possible
+    /// later revisit.
     pub(crate) fn fit(&self, content: &NSView) {
         let bounds = content.bounds();
+        let d = glyph_diameter(bounds);
+        let settled = !content.inLiveResize();
         CATransaction::begin();
         CATransaction::setDisableActions(true);
         self.root.setFrame(bounds);
         for layer in &self.fill {
             layer.setFrame(bounds);
         }
+        self.spinner
+            .setBounds(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(d, d)));
         self.spinner.setPosition(NSPoint::new(
             bounds.size.width / 2.0,
             bounds.size.height / 2.0,
         ));
-        self.label.setPosition(NSPoint::new(
-            bounds.size.width / 2.0,
-            bounds.size.height / 2.0 - LABEL_DROP,
-        ));
+        if settled && (d - self.diameter.get()).abs() > 0.5 {
+            self.diameter.set(d);
+            set_glyph_contents(&self.spinner, self.flavor, d);
+        }
+        fit_label(&self.label, bounds, d, settled);
         CATransaction::commit();
     }
 
@@ -239,11 +276,55 @@ impl Overlay {
     }
 }
 
+/// Render the flavor's glyph at diameter `d` (points) into the layer's contents.
+fn set_glyph_contents(layer: &CALayer, flavor: Flavor, d: f64) {
+    let img = if flavor == Flavor::Parked {
+        play_image(d)
+    } else {
+        spinner_image(d)
+    };
+    if let Some(img) = img {
+        let obj: &AnyObject = unsafe { &*(&*img as *const CGImage as *const AnyObject) };
+        unsafe { layer.setContents(Some(obj)) };
+    }
+}
+
+/// Autoresizing mask that keeps a fixed-size layer proportionally positioned (all four
+/// margins flexible) — for the centered glyph and caption, "stay centered through the
+/// drag without scaling".
+const CENTERED_MASK: CAAutoresizingMask = CAAutoresizingMask(
+    CAAutoresizingMask::LayerMinXMargin.0
+        | CAAutoresizingMask::LayerMaxXMargin.0
+        | CAAutoresizingMask::LayerMinYMargin.0
+        | CAAutoresizingMask::LayerMaxYMargin.0,
+);
+
+/// Size and place the caption for glyph diameter `d`: font ~d/5, dropped 1.1×d under the
+/// center, box wide enough at any clamped font size. Position tracks every tick; the
+/// font-size/box change (a CATextLayer re-rasterize) waits for `settled` — the same
+/// anti-flicker split as the glyph re-render.
+fn fit_label(label: &CATextLayer, bounds: NSRect, d: f64, settled: bool) {
+    if settled {
+        let font = label_font_size(d);
+        label.setFontSize(font);
+        label.setBounds(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new((d * 3.0).max(240.0), font + 6.0),
+        ));
+    }
+    label.setPosition(NSPoint::new(
+        bounds.size.width / 2.0,
+        bounds.size.height / 2.0 - label_drop(d),
+    ));
+}
+
 /// Pre-render the spinner arc: a white "comet" ring whose alpha ramps around the circle
 /// (opaque head, fading tail), 2× pixels for Retina. BGRA premultiplied little-endian, the
-/// same layout the cursor bitmaps use.
-fn spinner_image() -> Option<CFRetained<CGImage>> {
-    let px = (SPINNER_D * 2.0) as usize;
+/// same layout the cursor bitmaps use. The ring rides at 0.70–0.90 of the radius — the
+/// proportions of the original fixed-size arc — so it thickens with the diameter instead
+/// of thinning into a wire.
+fn spinner_image(d: f64) -> Option<CFRetained<CGImage>> {
+    let px = (d * 2.0) as usize;
     let space = CGColorSpace::new_device_rgb()?;
     let info = CGBitmapInfo::ByteOrder32Little.0 | CGImageAlphaInfo::PremultipliedFirst.0;
     // SAFETY: null data = CG allocates the backing store; 0 bytes-per-row = CG chooses.
@@ -254,8 +335,13 @@ fn spinner_image() -> Option<CFRetained<CGImage>> {
         if data.is_null() {
             return None;
         }
+        // CG chose the row stride (bytesPerRow=0 above) and ALIGNS it — indexing rows by
+        // `px` shears every size whose px*4 isn't stride-aligned (the fixed 80/192px
+        // renders were accidentally aligned; proportional sizes exposed it as a glitched
+        // glyph at most window sizes, user-caught 2026-08-06).
+        let row = CGBitmapContextGetBytesPerRow(Some(&ctx)) / 4;
         let c = px as f64 / 2.0;
-        let (r_in, r_out) = (c - 12.0, c - 4.0);
+        let (r_in, r_out) = (c * 0.70, c * 0.90);
         for y in 0..px {
             for x in 0..px {
                 let (dx, dy) = (x as f64 + 0.5 - c, y as f64 + 0.5 - c);
@@ -270,7 +356,7 @@ fn spinner_image() -> Option<CFRetained<CGImage>> {
                 let t = (angle + std::f64::consts::PI) / std::f64::consts::TAU; // 0..1
                 let a = (radial as f64 * t) as u32;
                 // White premultiplied: every channel = alpha.
-                data.add(y * px + x).write(a << 24 | a << 16 | a << 8 | a);
+                data.add(y * row + x).write(a << 24 | a << 16 | a << 8 | a);
             }
         }
         CGBitmapContextCreateImage(Some(&ctx))
@@ -280,8 +366,8 @@ fn spinner_image() -> Option<CFRetained<CGImage>> {
 /// Pre-render the parked play glyph: a translucent white disc with a solid white triangle,
 /// 2× pixels for Retina — same BGRA premultiplied layout as the spinner. Drawn per-pixel
 /// with soft edges (signed-distance alpha), matching the spinner's hand-rendered style.
-fn play_image() -> Option<CFRetained<CGImage>> {
-    let px = (PLAY_D * 2.0) as usize;
+fn play_image(d: f64) -> Option<CFRetained<CGImage>> {
+    let px = (d * 2.0) as usize;
     let space = CGColorSpace::new_device_rgb()?;
     let info = CGBitmapInfo::ByteOrder32Little.0 | CGImageAlphaInfo::PremultipliedFirst.0;
     // SAFETY: null data = CG allocates the backing store; 0 bytes-per-row = CG chooses.
@@ -292,6 +378,11 @@ fn play_image() -> Option<CFRetained<CGImage>> {
         if data.is_null() {
             return None;
         }
+        // CG chose the row stride (bytesPerRow=0 above) and ALIGNS it — indexing rows by
+        // `px` shears every size whose px*4 isn't stride-aligned (the fixed 80/192px
+        // renders were accidentally aligned; proportional sizes exposed it as a glitched
+        // glyph at most window sizes, user-caught 2026-08-06).
+        let row = CGBitmapContextGetBytesPerRow(Some(&ctx)) / 4;
         let c = px as f64 / 2.0;
         let disc_r = c - 2.0;
         // The triangle: an equilateral-ish wedge inscribed in the disc, nudged right so its
@@ -321,7 +412,7 @@ fn play_image() -> Option<CFRetained<CGImage>> {
                     continue;
                 }
                 // White premultiplied: every channel = alpha.
-                data.add(y * px + x).write(a << 24 | a << 16 | a << 8 | a);
+                data.add(y * row + x).write(a << 24 | a << 16 | a << 8 | a);
             }
         }
         CGBitmapContextCreateImage(Some(&ctx))
