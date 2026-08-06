@@ -55,6 +55,9 @@ pub struct SessionConfig {
     pub state_path: Option<PathBuf>,
     /// Remembered NSWindow frame to restore (screen points, Cocoa bottom-left origin).
     pub restore_frame: Option<[f64; 4]>,
+    /// Identity key of the panel the VM was fullscreen on (`state.toml`'s
+    /// `window.fullscreen_display`). Outranks `restore_frame` when that panel is still attached.
+    pub fullscreen_display: Option<u64>,
     /// Enter fullscreen as soon as the window is on screen: the VM was fullscreen when it last
     /// stopped or was suspended (`state.toml`'s `window.fullscreen`).
     pub start_fullscreen: bool,
@@ -228,6 +231,7 @@ pub struct WindowedSession {
     edge_resistance: f64,
     state_path: Option<PathBuf>,
     restore_frame: Option<[f64; 4]>,
+    fullscreen_display: Option<u64>,
     start_fullscreen: bool,
     initial_size: (u32, u32),
     default_content: (u32, u32),
@@ -257,6 +261,7 @@ impl WindowedSession {
             mode,
             state_path,
             restore_frame,
+            fullscreen_display,
             start_fullscreen,
             default_content,
             suspend_state_file,
@@ -444,6 +449,7 @@ impl WindowedSession {
             mode,
             state_path,
             restore_frame,
+            fullscreen_display,
             start_fullscreen,
             initial_size: (width, height),
             default_content,
@@ -479,6 +485,7 @@ impl WindowedSession {
                 initial_size: self.initial_size,
                 default_content: self.default_content,
                 restore_frame: self.restore_frame,
+                fullscreen_display: self.fullscreen_display,
                 start_fullscreen: self.start_fullscreen,
                 state_path: self.state_path,
                 desired_size: self.desired_size,

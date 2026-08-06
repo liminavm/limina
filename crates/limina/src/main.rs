@@ -1409,11 +1409,10 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         // guest must boot at the size it will actually be displayed at, or fullscreen lands a
         // moment later and re-modesets in front of the user.
         let start_fullscreen = win_state.is_some_and(|w| w.fullscreen);
-        let screen = window::screen_info_for_restore(
-            restore_frame,
-            win_state.and_then(|w| w.fullscreen_display),
-            cli.notch,
-        );
+        // The remembered panel. It feeds BOTH halves — the screen this sizes the guest for, and
+        // (via the session) the screen the window actually opens on. They must not disagree.
+        let fullscreen_display = win_state.and_then(|w| w.fullscreen_display);
+        let screen = window::screen_info_for_restore(restore_frame, fullscreen_display, cli.notch);
         // Dynamic first-boot (nothing remembered): the half-area default at the SCREEN's
         // aspect — the same rule that sizes the first window, so window == guest with no
         // early re-modeset. --display-size only backstops a screen-less host.
@@ -1482,6 +1481,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             mode: cli.display_resolution,
             state_path: cli.window_state_file.clone(),
             restore_frame,
+            fullscreen_display,
             start_fullscreen,
             default_content,
             suspend_state_file: cli.suspend_state_file.clone(),

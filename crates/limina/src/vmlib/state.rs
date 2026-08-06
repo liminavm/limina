@@ -176,6 +176,38 @@ mod tests {
     }
 
     #[test]
+    fn the_dogfood_record_parses_with_its_identity_key_intact() {
+        // Verbatim from dogfood-mac's state.toml (2026-08-06), the session where a fullscreen VM kept
+        // restoring on the internal display. The suspicion was another silent type
+        // mis-serialization (the frame/content class); it was not — the key survives byte for
+        // byte and decomposes into a sane panel (serial 0x3704f790, product 0xf13b, 60 Hz), so
+        // the fault was downstream, in which SCREEN the window was then placed on. Keep this
+        // pinned: it is cheap, and it stops the next reader from re-litigating the file format.
+        let dir = scratch("dogfood");
+        let path = dir.join("state.toml");
+        std::fs::write(
+            &path,
+            "# limina per-VM machine state — safe to delete.\n\
+             [window]\n\
+             frame = [\n    3840.0,\n    919.0,\n    2048.0,\n    1286.0,\n]\n\
+             content = [\n    2048,\n    1286,\n]\n\
+             fullscreen = true\n\
+             fullscreen_display = 3964565773887406140\n",
+        )
+        .unwrap();
+        let win = load(&path).expect("the record parses").window.unwrap();
+        assert_eq!(win.frame, [3840.0, 919.0, 2048.0, 1286.0]);
+        assert_eq!(win.content, (2048, 1286));
+        assert!(win.fullscreen);
+        let key = win.fullscreen_display.expect("identity key preserved");
+        assert_eq!(key, 3_964_565_773_887_406_140);
+        // The identity_key layout: serial << 32 | product << 16 | refresh.
+        assert_eq!(key & 0xffff, 60, "60 Hz panel");
+        assert_eq!((key >> 16) & 0xffff, 0xf13b, "product code");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn set_suspended_preserves_window_and_round_trips() {
         let dir = scratch("suspended");
         let path = dir.join("state.toml");

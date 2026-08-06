@@ -92,6 +92,11 @@ pub struct WindowOptions {
     pub default_content: (u32, u32),
     /// Remembered NSWindow frame to restore, if it still lands on a screen.
     pub restore_frame: Option<[f64; 4]>,
+    /// Identity key of the panel the VM was fullscreen on. Outranks `restore_frame` when that
+    /// panel is still attached — see [`restore_placement`]. The same value already decided the
+    /// guest's boot resolution in [`screen_info_for_restore`], so the window has to land on the
+    /// screen it names or the guest comes back at another panel's size.
+    pub fullscreen_display: Option<u64>,
     /// Go fullscreen once the window is on screen — the VM was fullscreen when it last stopped.
     /// Deferred to the first tick rather than done at creation: `toggleFullScreen:` on a window
     /// that has not finished appearing is silently dropped.
@@ -207,16 +212,79 @@ fn notch_inset_for(screen: &NSScreen, notch: crate::vmlib::schema::NotchPolicy) 
     }
 }
 
-/// Does this window frame (screen points) intersect any current screen? Guards restoring
-/// a frame remembered on a since-unplugged display (which would open the window off-screen).
-fn frame_on_some_screen(frame: NSRect, mtm: MainThreadMarker) -> bool {
-    NSScreen::screens(mtm).into_iter().any(|s| {
-        let sf = s.frame();
-        frame.origin.x < sf.origin.x + sf.size.width
-            && frame.origin.x + frame.size.width > sf.origin.x
-            && frame.origin.y < sf.origin.y + sf.size.height
-            && frame.origin.y + frame.size.height > sf.origin.y
-    })
+/// The attached screens as [`restore_placement`] needs them.
+fn screen_slots(mtm: MainThreadMarker) -> Vec<ScreenSlot> {
+    NSScreen::screens(mtm)
+        .into_iter()
+        .map(|s| {
+            let f = s.frame();
+            (
+                hostdisplay::identity_key_of(&s),
+                [f.origin.x, f.origin.y, f.size.width, f.size.height],
+            )
+        })
+        .collect()
+}
+
+/// A screen as [`restore_placement`] needs it: its identity key and its Cocoa frame. Pulled out
+/// of `NSScreen` by the caller so the placement rule itself is testable without AppKit.
+pub type ScreenSlot = (u64, [f64; 4]);
+
+/// Where a restoring window opens, in screen points — `None` means "no usable memory, center on
+/// the main screen" (AppKit's `center()`).
+///
+/// The rule this encodes: **a remembered fullscreen display outranks the remembered frame**, the
+/// same precedence [`screen_info_for_restore`] already applies when it picks the guest's boot
+/// resolution. The two MUST agree. When they disagreed, a VM sized for the panel it was
+/// fullscreen on opened its window somewhere else and fullscreened there, so the guest arrived at
+/// the wrong resolution on the wrong glass.
+///
+/// The frame and the identity disagree in two ordinary situations, and the frame loses both times:
+///
+/// - The frame is the last *windowed* placement, which may predate the move to the display the VM
+///   was fullscreen on — so it can point at a different, still-attached panel.
+/// - The frame is absolute Cocoa coordinates, which are only meaningful within one display
+///   *arrangement*. Rearranging the displays in System Settings — or a panel coming back at a
+///   different origin — strands it off every screen, and the old code then fell all the way back
+///   to centering on the main display. Losing the placement to a rearrangement is expected;
+///   losing the *panel* is not, because the identity key survives exactly this.
+///
+/// A frame that is already on the target panel is kept verbatim (the placement is still good);
+/// otherwise the remembered size is centered on the target, clamped to fit it. With no identity
+/// match — the panel really is gone — the old behavior stands: keep a frame that still lands on
+/// some screen, else center.
+pub fn restore_placement(
+    frame: Option<[f64; 4]>,
+    fullscreen_display: Option<u64>,
+    screens: &[ScreenSlot],
+) -> Option<[f64; 4]> {
+    let on_screen = |f: [f64; 4], s: [f64; 4]| {
+        f[0] < s[0] + s[2] && f[0] + f[2] > s[0] && f[1] < s[1] + s[3] && f[1] + f[3] > s[1]
+    };
+    // The panel the VM was fullscreen on, if it is still attached. `find` by identity key, never
+    // by display id — ids are reassigned across reboots and hotplugs, which is the very situation
+    // the key exists to survive.
+    let target = fullscreen_display
+        .and_then(|key| screens.iter().find(|(k, _)| *k == key))
+        .map(|(_, s)| *s);
+    let Some(t) = target else {
+        // No remembered panel (or it is gone): keep a frame that still lands somewhere, else center.
+        return frame.filter(|f| screens.iter().any(|(_, s)| on_screen(*f, *s)));
+    };
+    // Midpoint, not intersection: a frame straddling two panels belongs to the one holding most
+    // of it, and "already on the target" has to mean the window really opens there.
+    let already_there = frame.is_some_and(|f| {
+        let (mx, my) = (f[0] + f[2] / 2.0, f[1] + f[3] / 2.0);
+        mx >= t[0] && mx < t[0] + t[2] && my >= t[1] && my < t[1] + t[3]
+    });
+    if already_there {
+        return frame;
+    }
+    // Center the remembered size on the target, never larger than it: a fullscreen record written
+    // before any windowed save carries a *screen-sized* frame, which can exceed the panel it is
+    // being restored onto.
+    let (w, h) = frame.map_or((t[2], t[3]), |f| (f[2].min(t[2]), f[3].min(t[3])));
+    Some([t[0] + (t[2] - w) / 2.0, t[1] + (t[3] - h) / 2.0, w, h])
 }
 
 /// Constrain interactive window resize to a fixed aspect ratio, so the content view can't
@@ -909,6 +977,7 @@ pub fn run(
         initial_size,
         default_content,
         restore_frame,
+        fullscreen_display,
         start_fullscreen,
         state_path,
         desired_size,
@@ -995,11 +1064,12 @@ pub fn run(
     // The runtime resize path never asks the guest for less than 64 pt; don't let the
     // window shrink below what the guest can be driven to.
     window.setContentMinSize(NSSize::new(64.0, 64.0));
-    // Restore the remembered frame when it still lands on a live screen (a frame from a
-    // since-unplugged display would open the window off-screen); otherwise center.
-    let restored = restore_frame
-        .map(|f| NSRect::new(NSPoint::new(f[0], f[1]), NSSize::new(f[2], f[3])))
-        .filter(|r| frame_on_some_screen(*r, mtm));
+    // Restore the remembered placement: the panel the VM was fullscreen on wins over the
+    // remembered frame (see `restore_placement` — this MUST agree with the screen
+    // `screen_info_for_restore` already sized the guest for), a frame from a since-unplugged
+    // display is dropped rather than opened off-screen, and nothing usable means center.
+    let restored = restore_placement(restore_frame, fullscreen_display, &screen_slots(mtm))
+        .map(|f| NSRect::new(NSPoint::new(f[0], f[1]), NSSize::new(f[2], f[3])));
     match restored {
         Some(r) => window.setFrame_display(r, false),
         None => window.center(),
@@ -2098,6 +2168,116 @@ mod tests {
         // limina resigns active, and an overlay above menu-bar level covers the very dialog that
         // grants limina its capture tap.
         assert_eq!(overlay_level(false, true, HELD), OVERLAY_LEVEL_INACTIVE);
+    }
+
+    /// The dogfood-mac arrangement, read out of the dogfood `state.toml` (2026-08-06): a built-in
+    /// Retina panel as the main screen at the origin, and the 60 Hz external the VM was
+    /// fullscreen on off to the right. `EXTERNAL` is the real saved `fullscreen_display` key;
+    /// `INTERNAL` is a second, different key.
+    const INTERNAL: u64 = 0x31d7_dd41_a04e_0078;
+    const EXTERNAL: u64 = 3_964_565_773_887_406_140;
+    const INTERNAL_FRAME: [f64; 4] = [0.0, 0.0, 1512.0, 982.0];
+    const EXTERNAL_FRAME: [f64; 4] = [3840.0, 919.0, 2048.0, 1286.0];
+
+    /// The midpoint of a frame, for asserting WHICH panel it landed on.
+    fn lands_on(frame: [f64; 4], screen: [f64; 4]) -> bool {
+        let (mx, my) = (frame[0] + frame[2] / 2.0, frame[1] + frame[3] / 2.0);
+        mx >= screen[0]
+            && mx < screen[0] + screen[2]
+            && my >= screen[1]
+            && my < screen[1] + screen[3]
+    }
+
+    #[test]
+    fn a_rearranged_display_still_restores_fullscreen_on_the_remembered_panel() {
+        // The dogfood symptom, 2026-08-06: "it's always putting the window on the internal
+        // screen". The saved frame is absolute Cocoa coordinates from the arrangement it was
+        // written in; move the external panel in System Settings (or let it come back at another
+        // origin) and that rectangle lands on no screen at all. The old rule then centered on the
+        // main display — the built-in — and fullscreened there, throwing away a `fullscreen_display`
+        // key that still matches an attached panel perfectly well.
+        let moved_external = [1512.0, 0.0, 2048.0, 1286.0];
+        let screens = [(INTERNAL, INTERNAL_FRAME), (EXTERNAL, moved_external)];
+        let placed = restore_placement(Some(EXTERNAL_FRAME), Some(EXTERNAL), &screens)
+            .expect("a matching panel is attached — never fall back to centering on main");
+        assert!(
+            lands_on(placed, moved_external),
+            "restored onto {placed:?}, which is not the remembered panel {moved_external:?}"
+        );
+    }
+
+    #[test]
+    fn the_remembered_panel_outranks_a_windowed_frame_on_another_screen() {
+        // The frame is the last *windowed* placement and may predate the move to the display the
+        // VM was fullscreen on. `screen_info_for_restore` already sizes the guest for the
+        // identity, so placing the window by the frame fullscreens the wrong panel at a
+        // resolution meant for the other one.
+        let screens = [(INTERNAL, INTERNAL_FRAME), (EXTERNAL, EXTERNAL_FRAME)];
+        let windowed_on_internal = [100.0, 100.0, 800.0, 600.0];
+        let placed = restore_placement(Some(windowed_on_internal), Some(EXTERNAL), &screens)
+            .expect("placed on the remembered panel");
+        assert!(
+            lands_on(placed, EXTERNAL_FRAME),
+            "restored onto {placed:?}, expected the external panel"
+        );
+    }
+
+    #[test]
+    fn a_frame_already_on_the_remembered_panel_is_kept_verbatim() {
+        // Nothing to fix: don't re-center a placement that is already right.
+        let screens = [(INTERNAL, INTERNAL_FRAME), (EXTERNAL, EXTERNAL_FRAME)];
+        let f = [3900.0, 1000.0, 800.0, 600.0];
+        assert_eq!(
+            restore_placement(Some(f), Some(EXTERNAL), &screens),
+            Some(f)
+        );
+    }
+
+    #[test]
+    fn an_unplugged_panel_falls_back_to_the_frame_then_to_center() {
+        // "Was fullscreen" is the stronger memory, but the panel is genuinely gone — undocking
+        // must not leave the window off-screen, and it must not invent a placement.
+        let screens = [(INTERNAL, INTERNAL_FRAME)];
+        let on_internal = [10.0, 10.0, 800.0, 600.0];
+        assert_eq!(
+            restore_placement(Some(on_internal), Some(EXTERNAL), &screens),
+            Some(on_internal),
+            "a still-valid frame survives the missing panel"
+        );
+        assert_eq!(
+            restore_placement(Some(EXTERNAL_FRAME), Some(EXTERNAL), &screens),
+            None,
+            "a frame on no screen with no panel to fall back to centers on main"
+        );
+        assert_eq!(
+            restore_placement(None, Some(EXTERNAL), &screens),
+            None,
+            "nothing remembered at all"
+        );
+    }
+
+    #[test]
+    fn a_windowed_vm_is_placed_by_its_frame_alone() {
+        // No fullscreen memory (the common record): unchanged behavior.
+        let screens = [(INTERNAL, INTERNAL_FRAME), (EXTERNAL, EXTERNAL_FRAME)];
+        let f = [3900.0, 1000.0, 800.0, 600.0];
+        assert_eq!(restore_placement(Some(f), None, &screens), Some(f));
+        assert_eq!(
+            restore_placement(Some([-9000.0, 0.0, 800.0, 600.0]), None, &screens),
+            None
+        );
+    }
+
+    #[test]
+    fn a_window_larger_than_the_remembered_panel_is_clamped_onto_it() {
+        // The saved frame can be bigger than the panel it is being moved to (a fullscreen record
+        // carries the *screen-sized* frame when it was written before any windowed save). Centering
+        // it unclamped would put the title bar off the top of the target.
+        let small = [0.0, 0.0, 1024.0, 768.0];
+        let screens = [(INTERNAL, INTERNAL_FRAME), (EXTERNAL, small)];
+        let placed = restore_placement(Some(EXTERNAL_FRAME), Some(EXTERNAL), &screens)
+            .expect("placed on the remembered panel");
+        assert_eq!(placed, small, "clamped to the panel it is restoring onto");
     }
 
     #[test]
