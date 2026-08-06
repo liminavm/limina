@@ -108,7 +108,7 @@ enum Cmd {
     /// Assemble the full self-contained `target/Limina.app` (wraps scripts/build-app.sh).
     /// Builds RELEASE by default — the .app is the deployable artifact, and an explicit
     /// debug profile passed here once overrode build-app.sh's release default and shipped
-    /// a debug bundle to the dogfood Mac (2026-07-20, twice).
+    /// a debug bundle to the dogfood Mac (it happened twice).
     App {
         /// Build a debuggable (unoptimized, debug-assertions) bundle instead of release.
         #[arg(long)]
@@ -201,12 +201,12 @@ fn vendor(heavy: bool) -> Result<()> {
     let repo = repo_root();
 
     // libkrun: the VMM library. limina consumes its crates by path ([workspace.dependencies]),
-    // so the checkout is the build input directly — fork model since 2026-08-06 (task #14).
+    // so the checkout is the build input directly — fork model (task #14).
     vendor_fork(&repo, "libkrun")?;
 
     // virglrenderer: a from-source git checkout built into third_party/virgl-prefix (the worker
     // links it — see the limina-virgl-link-trap memory). Clone if absent, then apply our series.
-    // virglrenderer: the host renderer for both accelerated tiers. Fork model since 2026-08-04 —
+    // virglrenderer: the host renderer for both accelerated tiers. Fork model —
     // the `limina` branch IS the delta (60 commits at migration), so there is no patch series to
     // apply. Built separately into `third_party/virgl-prefix` by `scripts/build-virglrenderer.sh`
     // (the worker links it — see the virgl-link trap in CLAUDE.md).
@@ -522,7 +522,7 @@ fn bundle(release: bool, open: bool) -> Result<()> {
                 "console=ttyAMA0 rootfstype=virtiofs rw init=/init limina.hold",
             ]))?;
         eprintln!(
-            "    launched. Watch dev-mac's screen; check {CAPTURE_PATH} for the rendered layer."
+            "    launched. Watch this Mac's screen; check {CAPTURE_PATH} for the rendered layer."
         );
     } else {
         eprintln!("==> done: {}", app.display());

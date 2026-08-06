@@ -210,7 +210,7 @@ struct Cli {
     /// Linux keep ballooned pages inside `MemTotal` (transparent accounting), so an inflated
     /// dynamic VM looks almost out of memory and systemd-oomd starts killing; the supervisor's
     /// PSI policy is the release path instead. Escape hatch for guests that need the in-kernel
-    /// deflate-at-OOM net (see docs/design/m6-dynamic-memory.md, 2026-07-20 addendum).
+    /// deflate-at-OOM net (see the docs/design/m6-dynamic-memory.md addendum).
     #[arg(long)]
     balloon_deflate_on_oom: bool,
 
@@ -359,7 +359,7 @@ fn parse_mac(s: &str) -> Result<[u8; 6]> {
 /// Raise RLIMIT_NOFILE's soft limit toward the hard cap (clamped to OPEN_MAX, which macOS
 /// always accepts). The venus render server spends one fd per guest shm blob; under the
 /// launchd 256-fd default a GNOME login's context burst hits EMFILE and every blob/context
-/// create fails (the 2026-07-02 login crash). The supervisor raises before spawning us, but
+/// create fails (a guest-login crash class). The supervisor raises before spawning us, but
 /// raise here too so direct/dev invocations of the worker are covered. Mirrors
 /// limina::raise_fd_limit — keep the two in sync.
 fn raise_fd_limit() {
@@ -389,8 +389,8 @@ fn raise_fd_limit() {
 /// drained by a writer thread, and when the channel is full new lines are DROPPED
 /// (and counted) instead of stalling the emitter. Synchronous stderr writes from the
 /// GPU worker/fence threads measurably destabilize frame pacing — RUST_LOG=trace
-/// benchmarking produced ~2k blocking writes/s and a 40–60 fps ping-pong
-/// (2026-07-27); with log-heavy debugging the *logging* must not become the stall
+/// benchmarking produced ~2k blocking writes/s and a 40–60 fps ping-pong;
+/// with log-heavy debugging the *logging* must not become the stall
 /// under investigation. Drops are reported to stderr (directly, bypassing the
 /// channel) by a watcher thread, so a lossy capture is always self-identifying.
 /// `LIMINA_LOG_BLOCKING=1` restores the plain synchronous logger for the runs where
@@ -446,7 +446,7 @@ fn main() -> Result<()> {
 
     // Upstream KosmicKrisp gates its VK_EXT_custom_border_color (+ border_color_swizzle)
     // implementation behind MESA_KK_EXPERIMENTAL=custom_border, default OFF. zink-on-KK
-    // needs the extension for its GL 3.2+ tier, and since the 2026-08-05 MTL4 rebase we
+    // needs the extension for its GL 3.2+ tier, and since the MTL4 rebase we
     // adopt upstream's implementation instead of carrying our own advertise (mechanism
     // upstream, policy here). Respect an explicit override from the environment.
     if std::env::var_os("MESA_KK_EXPERIMENTAL").is_none() {

@@ -169,7 +169,7 @@ impl ControlPlane {
 
         // The guest-clock sync sender. The guest kernel's CLOCK_REALTIME is CNTVCT-anchored
         // and CNTVCT freezes while the HOST sleeps, so a host nap lags a running guest's
-        // clock by the nap's length (dogfood-guest drifted 6h). Send the host wallclock to
+        // clock by the nap's length (a 6h drift observed in dogfooding). Send the host wallclock to
         // timesync-capable agents: right after a detected host sleep (the oversleep trick —
         // a 2s tick that took ≥3× longer means the host napped), and periodically as drift
         // insurance. The on-connect seed lives in serve_agent (covers boot + post-restore

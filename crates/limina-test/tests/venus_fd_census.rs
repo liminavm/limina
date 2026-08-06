@@ -9,7 +9,7 @@
 //! receive. The venus SHM import used to mmap and then DROP that received fd
 //! (virglrenderer patch 0032): one leaked fd per attach, owned by no context scope,
 //! surviving guest teardown, ratcheting the worker to RLIMIT_NOFILE over a session
-//! (the dogfood-guest compositor crashes; memory `limina-venus-ring-poison`). The same
+//! (a class of live compositor crashes). The same
 //! census also guards the earlier ratchet classes (ring/reply shmem, export-side
 //! carrier fd — virgl 0022/0030).
 //!
@@ -22,7 +22,7 @@
 //! Boots the seated ENHANCED golden (`seated_fedora_from_env`): dma_buf external
 //! memory needs our mesa's venus — STOCK mesa's venus advertises neither
 //! `VK_KHR_external_memory_fd` nor dma_buf against this host, so the cycler can't run
-//! on the stock image (verified empirically 2026-07-11). The idle gnome-shell session
+//! on the stock image (verified empirically). The idle gnome-shell session
 //! holds its own carriers; both censuses are settle-polled so its startup churn can't
 //! straddle them. Same prereqs as `venus_replay`: 16 KiB kernel + enhanced.test disk +
 //! KosmicKrisp; SKIPs cleanly if missing. Gated behind LIMINA_HVF_TESTS; run via

@@ -64,7 +64,7 @@ pub fn attach(vmr: &mut VmResources, console: &ConsoleSpec) -> Result<()> {
 /// Attach an **output-dropped PL011** when no serial console was requested. The device must
 /// exist regardless: consoles are explicit-only since the upstream config redesign, and a
 /// guest booted with no PL011 at all wedges intermittently in early boot (the cold-boot
-/// wedge caught rebasing libkrun, 2026-08-06: vCPU 0 spins in-guest at 100% with zero VM
+/// wedge caught rebasing libkrun: vCPU 0 spins in-guest at 100% with zero VM
 /// exits, secondaries never online, ~3/4 of no-console boots). This restores the device
 /// shape the old implicit console always guaranteed.
 pub fn attach_dropped(vmr: &mut VmResources) {

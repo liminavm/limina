@@ -16,7 +16,7 @@ This vehicle reproduces exactly that from inside the guest, over the guest's
 venus ICD: a 64x64 color-attachment render pass, then ONE vkCmdClearAttachments
 with a VALID sub-rect {8,8 16x16} + three poisons — an EMPTY rect {0,0 0x0}, a
 NEGATIVE-offset rect {-8,-8 16x16} (signed offset wraps to an inverted u32 rect;
-the 2026-08-04 dogfood-mac crash class), and a HUGE rect {8,8 0xFFFF0000x16}
+the live compositor-crash class), and a HUGE rect {8,8 0xFFFF0000x16}
 (offset+extent overflows i32) — then submit + wait. It clears no real work
 otherwise.
 
@@ -471,7 +471,7 @@ def run_clear(vk, dev):
     #   empty    {0,0 0x0}: the original zero-extent class (virgl 0045 / kk 0009).
     #   negative {-8,-8 16x16}: nonzero extent so it passes the zero-extent
     #     filters, but the signed offset wraps in the host driver's u32 rect math
-    #     into an inverted rect (the 2026-08-04 dogfood-mac crash class).
+    #     into an inverted rect (the live compositor-crash class).
     #   huge     {8,8 0xFFFF0000x16}: offset+width overflows i32; trips the
     #     viewport-union log2-range asserts instead.
     clear_att = ClearAttachment()

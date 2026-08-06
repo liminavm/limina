@@ -3,7 +3,7 @@
 
 //! Task #19 gate: the CLASSIC (vrend) GL world must survive a snapshot restore.
 //!
-//! Since the 2026-08-04 GL-ladder flip the compositor and every GL client run on
+//! Since the GL-ladder flip the compositor and every GL client run on
 //! classic vrend contexts. The M9.3 venus journal never covered them, so a restored
 //! seated desktop renders into the void: the guest keeps submitting (classic virgl is
 //! fire-and-forget — no client ever sees an error), while host-side every

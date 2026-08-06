@@ -79,7 +79,7 @@ fn fedora_gets_nat_dhcp_and_outbound() {
 /// independently lease (two separate NAT islands), both guests must answer SSH on their own host
 /// port at the same time, AND each harness handle must demonstrably reach ITS OWN guest (identity
 /// markers) — banner-answering alone can't catch a port mix-up because all test guests share
-/// creds, which is exactly how the 2026-07-20 assume-2222 crosstalk stayed invisible.
+/// creds, which is exactly how the assume-2222 crosstalk stayed invisible.
 #[test]
 fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
     if !limina_test::require_hvf_or_skip("two_vms_run_in_parallel_on_distinct_ssh_ports") {
@@ -89,7 +89,7 @@ fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
     // NO explicit ports: this exercises the harness's pre-allocated ephemeral ssh-forward
     // ports (the default path every other test rides). Assuming the supervisor default (2222)
     // here once sent every ssh_exec into a BYSTANDER VM's guest when a dev VM held 2222 —
-    // identical test creds made every check "pass" against the wrong guest (2026-07-20).
+    // identical test creds made every check "pass" against the wrong guest.
     // Each VM cow-clones its own writable disk via with_net, so the two share nothing on disk.
     let cfg_a = GuestConfig::fedora_from_env()
         .expect("resolving guest config A")

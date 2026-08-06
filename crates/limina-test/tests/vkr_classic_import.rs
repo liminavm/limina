@@ -3,15 +3,15 @@
 
 //! Classic-virgl-resource → venus import regression test (the synoik stall class).
 //!
-//! A Vulkan compositor allocates its KMS buffers with gbm; since the 2026-08-04
+//! A Vulkan compositor allocates its KMS buffers with gbm; since the
 //! drop-guest-zink GL flip, gbm resolves to the **virgl dri backend**, so those
 //! buffers are classic vrend pipe resources — not venus blobs. Importing one into
 //! venus (`vkGetMemoryFdPropertiesKHR` on the exported dmabuf, then
 //! `vkAllocateMemory` with `VkImportMemoryFdInfoKHR`) used to fail on macOS:
 //! `proxy_context_attach_resource` could not export a dmabuf from a pipe resource
 //! and silently dropped the attach, so vkr answered every import with
-//! "invalid res_id" / `VK_ERROR_INVALID_EXTERNAL_HANDLE` — the 2026-08-05
-//! dogfood-guest stall (synoik/gnome-shell-rs rendering zero frames while the window
+//! "invalid res_id" / `VK_ERROR_INVALID_EXTERNAL_HANDLE` — a live
+//! stall (synoik/gnome-shell-rs rendering zero frames while the window
 //! kept Plymouth's last image; memory `limina-vrend-context-poison` relatives).
 //!
 //! The fix attaches IOSurface-backed classic resources fd-lessly by surface id

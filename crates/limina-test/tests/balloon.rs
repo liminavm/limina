@@ -8,7 +8,7 @@
 //! This is the gating end-to-end test for M6 Step 1 (libkrun patch 0033): `process_frq` reclaims
 //! reported-free guest pages with `MADV_FREE_REUSABLE` (coalesced to whole 16 KiB host pages),
 //! replacing the shipped `MADV_DONTNEED` which — spike-proven on macOS 26.5
-//! (`spikes/balloon-madvise/RESULTS.md`, re-confirmed 2026-06-26) — returns *nothing*. The balloon
+//! (`spikes/balloon-madvise/RESULTS.md`) — returns *nothing*. The balloon
 //! device is attached unconditionally by libkrun, so this needs no new CLI: a stock guest's own
 //! `page_reporting` drives the FRQ and the fix does the rest.
 //!

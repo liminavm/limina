@@ -97,7 +97,7 @@ limina-agent.service and configured through the environment:
 
 /// Handle `--version`/`--help`; reject anything else. `Some(code)` means exit now.
 ///
-/// **Unknown arguments must FAIL, not be ignored.** Until 2026-08-01 this daemon never
+/// **Unknown arguments must FAIL, not be ignored.** Historically this daemon never
 /// looked at argv, so a probe like `limina-agent --version` printed nothing and silently
 /// *started a second agent*: the ssh running it hung forever and left a stray agent
 /// connected to the host control plane (it took a `ps` sweep on the dogfood guest to

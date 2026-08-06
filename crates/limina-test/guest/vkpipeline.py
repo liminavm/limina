@@ -4,7 +4,7 @@
 
 """vkpipeline — live-pipeline survival across suspend/resume (M9.4 vkmark crash).
 
-The 2026-07-20 dogfood crash (spikes/m9-vkmark-resume-crash/RESULTS.md): the venus
+The dogfood crash (spikes/m9-vkmark-resume-crash/RESULTS.md): the venus
 re-creation journal prunes a destroyed object's create entry, but a retained CREATE
 that merely *references* the id in its wire args can then never replay. The canonical
 legal pattern is exactly what every real app does:

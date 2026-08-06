@@ -247,7 +247,7 @@ fn fedora_stock_image_efi_renders_to_gop() {
 /// The stock-baseline **GNOME desktop session** must come up and render — the two-tier "stock
 /// baseline usable" floor that the serial/sshd tests don't cover.
 ///
-/// Closes the gap behind the 2026-06-19/20 venus investigation: the other boot tests prove serial
+/// Closes the gap behind the venus black-window investigation: the other boot tests prove serial
 /// getty + sshd ([`fedora_stock_image_efi_boots_to_userspace`]) and that the *boot console* paints
 /// ([`fedora_stock_image_efi_renders_to_gop`]) — but neither proves the *graphical session*
 /// initializes and renders. This boots the **default GPU** (the coexist device, i.e. venus

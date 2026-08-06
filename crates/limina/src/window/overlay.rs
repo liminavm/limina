@@ -39,7 +39,7 @@ use objc2_quartz_core::{
 };
 use std::path::Path;
 
-/// Centerpiece diameter for a given content size (user-picked 2026-08-06): 10% of the
+/// Centerpiece diameter for a given content size (user-picked): 10% of the
 /// smaller dimension, clamped so a tiny window still shows a legible glyph and a big
 /// fullscreen panel doesn't get a billboard. The spinner arc and the parked play disc
 /// share it — one visual family — and `fit` re-derives it live across resizes.
@@ -240,7 +240,7 @@ impl Overlay {
     /// re-rendering the glyph bitmap and re-rasterizing the caption's font — waits for the
     /// resize to settle (`inLiveResize` off), since doing those per tick read as flicker.
     ///
-    /// KNOWN, accepted (user, 2026-08-06): during a continuous drag the overlay pieces can
+    /// KNOWN, accepted: during a continuous drag the overlay pieces can
     /// transiently ghost/lag the window by a frame — the timer commits in a different CA
     /// transaction than AppKit's live resize. The autoresizing masks set at install keep
     /// the layers roughly in step between ticks, but did not eliminate it; a proper fix
@@ -338,7 +338,7 @@ fn spinner_image(d: f64) -> Option<CFRetained<CGImage>> {
         // CG chose the row stride (bytesPerRow=0 above) and ALIGNS it — indexing rows by
         // `px` shears every size whose px*4 isn't stride-aligned (the fixed 80/192px
         // renders were accidentally aligned; proportional sizes exposed it as a glitched
-        // glyph at most window sizes, user-caught 2026-08-06).
+        // glyph at most window sizes).
         let row = CGBitmapContextGetBytesPerRow(Some(&ctx)) / 4;
         let c = px as f64 / 2.0;
         let (r_in, r_out) = (c * 0.70, c * 0.90);
@@ -381,7 +381,7 @@ fn play_image(d: f64) -> Option<CFRetained<CGImage>> {
         // CG chose the row stride (bytesPerRow=0 above) and ALIGNS it — indexing rows by
         // `px` shears every size whose px*4 isn't stride-aligned (the fixed 80/192px
         // renders were accidentally aligned; proportional sizes exposed it as a glitched
-        // glyph at most window sizes, user-caught 2026-08-06).
+        // glyph at most window sizes).
         let row = CGBitmapContextGetBytesPerRow(Some(&ctx)) / 4;
         let c = px as f64 / 2.0;
         let disc_r = c - 2.0;

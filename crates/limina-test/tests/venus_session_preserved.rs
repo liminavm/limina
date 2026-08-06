@@ -11,7 +11,7 @@
 //! rings. Its first real submission after thaw spins in `vn_relax` until mesa's
 //! dead-ring abort threshold (~17 s) and the shell SIGABRTs — every Wayland client
 //! dies and GNOME starts a FRESH session. What looks like recovery is a restart
-//! (root-caused 2026-07-19 from the coredump: abort ← vn_relax ←
+//! (root-caused from the coredump: abort ← vn_relax ←
 //! vn_ring_submit_locked ← vn_CreateImage ← cogl glyph upload; see
 //! `spikes/m9-freeze-trigger/RESULTS.md` round 10).
 //!
@@ -44,7 +44,7 @@ const VKFDHOLD: &str = include_str!("../guest/vkfdhold.py");
 /// and verifies it after restore (P2 content capture).
 const VKCONTENT: &str = include_str!("../guest/vkcontent.py");
 /// Parks a live compute pipeline whose shader module + layout were destroyed after
-/// creation (the journal create-arg closure hazard — the 2026-07-20 vkmark crash),
+/// creation (the journal create-arg closure hazard — the vkmark dogfood crash),
 /// heartbeating dispatches that reference the pipeline across the suspend.
 const VKPIPELINE: &str = include_str!("../guest/vkpipeline.py");
 
@@ -180,7 +180,7 @@ fn seated_gnome_session_survives_snapshot_restore() {
     });
     eprintln!("content venus client parked (pattern staged in non-blob device memory)");
 
-    // --- Seed the create-arg closure hazard (the 2026-07-20 vkmark crash) ---
+    // --- Seed the create-arg closure hazard (the vkmark dogfood crash) ---
     // A fourth venus client creates a compute pipeline, destroys its shader module
     // and pipeline layout (legal, and what every real app does), then heartbeats
     // dispatches that reference the pipeline. Replaying its context needs the
@@ -488,7 +488,7 @@ fn seated_gnome_session_survives_snapshot_restore() {
 
     // --- Generation 2: suspend the RESUMED session and restore it AGAIN ---
     // Dogfood does this daily (suspend at night, resume in the morning, repeat), and it
-    // crashed 2/2 on 2026-07-20: the second restore's replay cascades stale-reference
+    // crashed 2/2 when found: the second restore's replay cascades stale-reference
     // failures and aborts the WORKER in a KK assert (kk_descriptor_set.c:74
     // sampled_gpu_resource_id). First restores are green across codec/build combos, so
     // the failure is generation-correlated — the GPU journal re-baselined after a first

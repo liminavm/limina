@@ -18,7 +18,7 @@
 //! `limina-agent-session` per graphical session, each numbering its own offers from 1, so
 //! serials from different peers are unrelated. Ratcheting them together let a long-lived
 //! session's high-water mark silently swallow every offer from a newer one — that session's
-//! clipboard simply never arrived (dogfood-guest, 2026-07-31). The ratchet therefore lives
+//! clipboard simply never arrived. The ratchet therefore lives
 //! with the peer's serve loop ([`crate::control`]), one per connection.
 //!
 //! M5 scope is text-only; richer formats ride the same OFFER/REQUEST/DATA shape later.

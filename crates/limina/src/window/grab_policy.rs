@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn a_side_lean_earns_its_release_sooner_than_the_same_lean_at_the_top() {
-        // The asymmetry dogfood asked for (2026-08-03), as a gesture rather than as a constant:
+        // The asymmetry dogfood asked for, as a gesture rather than as a constant:
         // the identical lean releases at a side and does not at the top.
         let mut st = GrabState::default();
         st.hold();

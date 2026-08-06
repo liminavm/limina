@@ -5,7 +5,7 @@
 //! Global-ring fences must retire through **virglrenderer's GL timeline** — not be
 //! marked completed at decode time.
 //!
-//! Regresses the loose-fence bug found by the 2026-07-28 crossmark matrix: limina's
+//! Regresses the loose-fence bug found by the crossmark matrix: limina's
 //! `create_fence_inner` sync-completed EVERY Global-ring fence (a coexist-venus
 //! firmware-wedge fix that swept vrend's real fences along with it), so a stock
 //! guest's `glFinish` waited only for host-side *decode*, never for GL/Metal
@@ -82,7 +82,7 @@ fn virgl_global_fences_retire_through_virglrenderer() {
         )
         .expect(
             "the vrend fence-routing flip never happened — Global-ring fences are being \
-             sync-completed at decode (loose glFinish, the crossmark 2026-07-28 bug)",
+             sync-completed at decode (loose glFinish, the crossmark bug)",
         );
 
     // 2. Routed fences must RETIRE: everything below happens *after* the flip, so the

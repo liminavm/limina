@@ -202,7 +202,7 @@ fn l1_real_session_helper_prefers_extension_bridge() {
     let _ = std::fs::remove_file(&mock_copy);
 }
 
-/// Production default (2026-07-20, user-decided): withOUT the RD opt-in
+/// Production default (user-decided): withOUT the RD opt-in
 /// (`LIMINA_CLIPBOARD_RD=1`), the helper must NEVER create a RemoteDesktop session —
 /// even when that API is the only backend on offer and the probe grace has long
 /// expired. A resident RemoteDesktop session lights GNOME's screen-share indicator for

@@ -31,7 +31,7 @@ const DEAD_BAND_PAGES: u32 = 4096;
 /// One inflation step (pages; 256 MiB). The PSI sensor lags the balloon by ~10 s (avg10 window),
 /// so the actuator must move slower than the sensor: 256 MiB per 2 s dwell bounds the overshoot
 /// between reports to a few hundred MiB. The old ¼-of-room step (5.9 GiB on a 24 GiB VM) inflated
-/// 0→20 GB before pressure could register, thrashing the guest to swap (2026-07-03 dogfood-guest).
+/// 0→20 GB before pressure could register, thrashing the guest to swap.
 const INFLATE_STEP_PAGES: u32 = 256 * PAGES_PER_MIB;
 /// After a pressure-triggered release, don't re-inflate for this long: a blowout proves the guest
 /// is actively using its memory, and each squeeze/release cycle costs it GiBs of disk swap.
@@ -104,9 +104,9 @@ fn sysctl_i32(name: &std::ffi::CStr) -> Option<i32> {
     (rc == 0).then_some(value)
 }
 
-/// `kern.memorystatus_vm_pressure_level` is STICKY around swap: dogfood-mac 2026-07-09 reported Warn
-/// with ~49% of RAM free because the swapfile stayed near-full (macOS never proactively drains
-/// it), and the policy squeezed the guest to a 21 GiB balloon against a healthy host for hours.
+/// `kern.memorystatus_vm_pressure_level` is STICKY around swap: a host can report Warn
+/// with ~49% of RAM free because the swapfile stays near-full (macOS never proactively drains
+/// it), and the policy then squeezes the guest to a tiny balloon against a healthy host for hours.
 /// Demote one level when `kern.memorystatus_level` (jetsam's available-memory percentage — the
 /// number `memory_pressure -Q` prints) says the host demonstrably has memory.
 fn blend_host_pressure(
@@ -267,8 +267,8 @@ fn allowance_pages(mode: ReclaimMode, host: HostPressure, max_pages: u32) -> Opt
     const GIB: u32 = 1024 * PAGES_PER_MIB;
     // Even a critical-pressure squeeze leaves the guest a minimal cache working set: a
     // zero-allowance target strands a desktop guest re-reading its executables from disk at
-    // GB/s with idle CPUs (2026-07-09 dogfood-guest: 263 MiB available, io-PSI full 44%,
-    // memory-PSI quiet — unusable, and invisible to the PSI release gate).
+    // GB/s with idle CPUs (observed as ~263 MiB available, io-PSI full 44%, memory-PSI
+    // quiet — unusable, and invisible to the PSI release gate).
     let squeeze_floor = (max_pages / 32).max(GIB / 2);
     match (mode, host) {
         (ReclaimMode::Disabled, _) => None, // not reached: policy isn't constructed
@@ -283,9 +283,9 @@ fn allowance_pages(mode: ReclaimMode, host: HostPressure, max_pages: u32) -> Opt
 }
 
 /// A guest is *starved* when MemAvailable is critically low: catastrophic cache starvation
-/// manifests as IO pressure (swap-in and refault storms), NOT as memory-PSI — 2026-07-09
-/// dogfood-guest sat at 263 MiB available / 2.3% memory-some / 44% io-full, wedged behind a
-/// 21 GiB balloon the PSI gates never released. Available this low while we hold a balloon is
+/// manifests as IO pressure (swap-in and refault storms), NOT as memory-PSI — a wedged guest
+/// can sit at 263 MiB available / 2.3% memory-some / 44% io-full, stuck behind a
+/// 21 GiB balloon the PSI gates never release. Available this low while we hold a balloon is
 /// the balloon's fault by definition.
 fn guest_starved(p: &MemPressure) -> bool {
     p.mem_total_kib > 0 && p.mem_available_kib < (256 * 1024).max(p.mem_total_kib / 64)
@@ -298,7 +298,7 @@ fn guest_starved(p: &MemPressure) -> bool {
 /// Deflation is otherwise always allowed, at any pressure: when available drops below the mode's
 /// cache [`allowance_pages`] the target shrinks by the shortfall immediately — giving memory back
 /// is always safe, and holding it was what let the guest thrash against an unreachable target
-/// (the 2026-07-03 dogfood-guest limit cycle). Inflation is the guarded direction: it requires
+/// (a squeeze/release limit cycle). Inflation is the guarded direction: it requires
 /// *sustained* calm (avg10 AND avg60 ≤ 2%), no recent release blowout ([`RELEASE_COOLDOWN`]),
 /// and moves in small dwell-limited [`INFLATE_STEP_PAGES`] steps so the lagging PSI sensor can
 /// push back before the squeeze overshoots. Aggressive keeps its original shape (squeeze to the
@@ -477,7 +477,7 @@ mod tests {
         let i = inputs(ReclaimMode::Moderate, HostPressure::Warn, 0);
         let next = decide(&report_pages(0, 4 * GIB_PAGES, MAX), &i);
         assert_eq!(next, Some(INFLATE_STEP_PAGES));
-        // The allowance never reaches zero under warn (2026-07-09 wedge).
+        // The allowance never reaches zero under warn (the sticky-Warn wedge class).
         assert_eq!(
             allowance_pages(ReclaimMode::Moderate, HostPressure::Warn, MAX),
             Some(GIB_PAGES)
@@ -518,7 +518,7 @@ mod tests {
         assert_eq!(next, Some(ROOM));
     }
 
-    /// 2026-07-03 dogfood-guest oscillation, regression 1: inflation must move in small bounded
+    /// Oscillation regression 1: inflation must move in small bounded
     /// steps (the PSI sensor lags ~10 s; ¼-of-room steps outran it and thrashed the guest).
     #[test]
     fn inflation_steps_are_small_and_bounded() {
@@ -603,7 +603,7 @@ mod tests {
             Some(2 * GIB_PAGES)
         );
         // Warn keeps the 1 GiB floor; Critical keeps the minimal working-set floor. Zero
-        // allowances died with the 2026-07-09 wedge.
+        // allowances died with the sticky-Warn wedge.
         assert_eq!(
             allowance_pages(ReclaimMode::Moderate, HostPressure::Warn, small_max),
             Some(GIB_PAGES)
@@ -618,7 +618,7 @@ mod tests {
         );
     }
 
-    /// 2026-07-09 dogfood-guest sticky-Warn wedge, regression: a 24 GiB VM squeezed to a ~21 GiB
+    /// Sticky-Warn wedge regression: a 24 GiB VM squeezed to a ~21 GiB
     /// balloon, 263 MiB available, memory-PSI quiet (2.28% — the thrash showed as 44% io-full,
     /// which the policy can't see), host stuck at Warn. The policy held forever. A starved
     /// guest must release the balloon regardless of memory-PSI, host state, or mode.
@@ -665,7 +665,7 @@ mod tests {
 
     #[test]
     fn sticky_host_warn_with_healthy_availability_reads_as_normal() {
-        // dogfood-mac 2026-07-09: level=2 (Warn) with 49% available — swap-full stickiness.
+        // level=2 (Warn) with 49% available — swap-full stickiness.
         assert_eq!(blend_host_pressure(Some(2), Some(49)), HostPressure::Normal);
         // Genuine warn (little available memory) is preserved.
         assert_eq!(blend_host_pressure(Some(2), Some(15)), HostPressure::Warn);

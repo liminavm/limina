@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 // Copyright © 2026 Gustavo Noronha Silva
 
-//! Allocation-burst guard for the `DEFLATE_ON_OOM` drop (M6 addendum, 2026-07-20).
+//! Allocation-burst guard for the `DEFLATE_ON_OOM` drop (M6 addendum).
 //!
 //! Dropping `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` (transparent balloon accounting) removes
 //! the guest kernel's last-resort synchronous deflate at OOM; the supervisor's PSI

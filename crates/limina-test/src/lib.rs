@@ -104,7 +104,7 @@ const FORWARDED_SSH_HOST: &str = "127.0.0.1";
 const DEFAULT_SSH_PORT: u16 = 2222;
 
 /// Hard cap on any single guest ssh/scp command, so a wedged guest-side process fails the
-/// test instead of stalling the whole suite (2026-07-12: a zink lost-wakeup deadlock froze
+/// test instead of stalling the whole suite (a zink lost-wakeup deadlock once froze
 /// eglretrace mid-`venus_replay` and the un-capped ssh blocked `test-boot.sh` for 100
 /// minutes — spikes/venus-replay-zink-hang-2026-07-12/). Generous on purpose: the longest
 /// legitimate steps (the ~1 GiB trace-fixture upload through gvproxy, a full llvmpipe
@@ -225,7 +225,7 @@ fn resolve_bin(name: &str, env_override: &str) -> Result<PathBuf> {
 /// app-bundle build sharing `target/`) replaces the codesigned copy with a plain
 /// linker-signed one — and every subsequent boot then dies with the thoroughly misleading
 /// `build_microvm: Internal(Vm(VmSetup(VmCreate)))` (hv_vm_create → HV_DENIED). This burnt
-/// a debugging session on 2026-07-03 (the whole test-boot tail failed because a parallel
+/// a debugging session (the whole test-boot tail failed because a parallel
 /// build unsigned the worker mid-suite). Checking up front turns that mystery into a
 /// one-line diagnosis.
 fn ensure_hypervisor_entitlement(vmm_bin: &Path) -> Result<()> {
@@ -1000,11 +1000,11 @@ impl GuestConfig {
             epoxy.display()
         );
         let drivers = format!("{}/lib", prefix.display());
-        // Since the 2026-08-05 MTL4 rebase, mesa's zink dlopens "@rpath/libvulkan.1.dylib" and
+        // Since the MTL4 rebase, mesa's zink dlopens "@rpath/libvulkan.1.dylib" and
         // the installed libgallium carries no matching LC_RPATH (meson strips build rpaths at
         // install), so the dlopen fails → `virgl_renderer_init` fails → the worker silently
-        // degrades to software-2D and every seated/venus test dies downstream (caught live
-        // 2026-08-05: a full suite run failed this way). DYLD_LIBRARY_PATH intercepts by leaf
+        // degrades to software-2D and every seated/venus test dies downstream (caught live:
+        // a full suite run failed this way). DYLD_LIBRARY_PATH intercepts by leaf
         // name BEFORE rpath resolution — but pointing it at all of /opt/homebrew/lib would
         // shadow every Homebrew leaf name for the whole process tree, so use a shim dir
         // holding ONLY the Vulkan loader symlink (same shim as boot-enhanced-efi-kk.sh).
@@ -1658,7 +1658,7 @@ impl Guest {
             // supervisor AUTO-ALLOCATES from 2222 up, so with another VM holding 2222 the forward
             // silently lands elsewhere while a harness that assumes 2222 ssh'es into the BYSTANDER
             // VM's guest (identical test creds — every check "works", against the wrong guest;
-            // cost an evening of phantom venus failures, 2026-07-20). Pre-allocating an ephemeral
+            // cost an evening of phantom venus failures). Pre-allocating an ephemeral
             // port here keeps the port known without parsing the supervisor log.
             let port = match cfg.ssh_port {
                 Some(p) => p,

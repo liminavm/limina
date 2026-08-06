@@ -490,7 +490,7 @@ fn managed_vm_suspends_and_resumes() {
             "the guest's xHCI controller reported {bad:?} after the restore:\n{xhci}"
         );
     }
-    // Wallclock guard (M9.4 "stock resume clock-step", verified closed 2026-07-20): a STOCK
+    // Wallclock guard (M9.4 "stock resume clock-step"): a STOCK
     // guest — no limina-agent, NTP stopped above — must resume with a correct CLOCK_REALTIME
     // purely via the kernel's s2idle thaw re-reading the RTC and injecting the slept duration.
     // The RTC is honest because libkrun 0088 anchors the PL031 to host CLOCK_REALTIME (served
@@ -526,7 +526,7 @@ fn managed_vm_suspends_and_resumes() {
     );
 
     // --- reboot after restore: --restore must be ONE-SHOT across worker relaunches ---
-    // The dogfood-guest disk-destruction bug (dogfood 2026-07-20): the reboot relaunch reused
+    // The disk-destruction bug (found in dogfooding): the reboot relaunch reused
     // the original worker argv INCLUDING --restore, so an in-guest reboot of a restored
     // session re-applied the stale pre-resume RAM over the now-advanced disk (btrfs
     // "parent transid verify failed" → emergency mode). A reboot must produce a genuine

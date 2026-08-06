@@ -5,7 +5,7 @@
 //!
 //! A guest `vkCmdClearAttachments` with a degenerate `VkClearRect` — zero
 //! extent (`{0,0}`), a NEGATIVE offset (`{-8,-8}`, wraps to an inverted u32
-//! rect in the host driver: the 2026-08-04 dogfood-mac crash), or an offset+extent
+//! rect in the host driver: a live compositor crash), or an offset+extent
 //! overflowing i32 — is invalid usage per
 //! VUID-vkCmdClearAttachments-rect-02682/-02683 but guest-controlled. It flows
 //! guest-mesa-venus (encode, no validation) → host virglrenderer vkr (decode) →

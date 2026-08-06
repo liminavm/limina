@@ -24,7 +24,7 @@
 //!   drive it — and that nothing else on stock mutter 49.5 can). Cosmetic cost: GNOME
 //!   shows the screen-share indicator while the RemoteDesktop session exists — which
 //!   is why the quieter tiers exist, and why this rung is DISABLED by default since
-//!   the extension bridge supersedes it (user-decided 2026-07-20).
+//!   the extension bridge supersedes it (user-decided).
 //!
 //! Bridge shape (see `crates/limina/src/clipboard.rs` for the host side and the protocol
 //! rules — symmetric eager-pull, newest serial wins):
@@ -78,7 +78,7 @@ const QUIET_RETRY_EVERY: Duration = Duration::from_secs(10);
 /// The RemoteDesktop fallback is OPT-IN (`LIMINA_CLIPBOARD_RD=1`): a resident
 /// RemoteDesktop session lights GNOME's screen-share indicator for the whole session,
 /// and the `clipboard@limina` extension bridge (which the helper self-enables) has
-/// superseded it as the stock-GNOME tier (user-decided 2026-07-20). Kept in the binary
+/// superseded it as the stock-GNOME tier (user-decided). Kept in the binary
 /// for sessions where user extensions are administratively disabled — and for the L1
 /// mock-mutter tests, whose init opts in.
 fn rd_enabled() -> bool {

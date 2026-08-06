@@ -121,7 +121,7 @@ pub fn notch_inset(screen: &NSScreen) -> f64 {
 /// this display, and hand that number back later.
 ///
 /// [`notch_inset`] is *nearly* the answer for the `avoid` policy but not exactly: the housing is
-/// 43 pt on dogfood-mac and 32 pt on dev-mac, while the fullscreen window comes up 44 and 33 pt shorter
+/// 43 pt on one measured Mac and 32 pt on another, while the fullscreen window comes up 44 and 33 pt shorter
 /// than the panel respectively. One point, consistently, on both machines — plausibly a
 /// separator AppKit draws, but a constant fitted to two data points is a guess. Observing the
 /// real figure costs a subtraction on a tick we already run, and being exact matters here: the

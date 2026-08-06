@@ -247,7 +247,7 @@ fn l1_clipboard_oversized_content_keeps_channel_alive() {
     assert_eq!(outcome.code, Some(0), "expected orderly power-off");
 }
 
-/// Gap (found 2026-08-06 during the #14 rebase validation, but pre-existing): a poll that
+/// Gap (found during rebase validation, but pre-existing): a poll that
 /// observes the pasteboard BETWEEN a writer's `clearContents` and `setString` must not
 /// consume the change. AppKit bumps `changeCount` on the clear and NOT on the subsequent
 /// write, so a poller that advanced its high-water mark on the bump — then found no string

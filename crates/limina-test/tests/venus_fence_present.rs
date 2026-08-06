@@ -3,9 +3,9 @@
 
 //! L2 guard for the fence-accurate present chain (libkrun 0017–0021, 0110/0111).
 //!
-//! The chain was validated by hand in June 2026 and then sat DORMANT — the productized
+//! The chain was validated by hand early on and then sat DORMANT — the productized
 //! supervisor never armed `LIMINA_FENCE_PRESENT`, and no test exercised it, so every
-//! green run since validated only the fire-and-forget present path (found 2026-07-27,
+//! green run since validated only the fire-and-forget present path (found via
 //! `spikes/present-miss/`). This test pins the chain itself: park the zero-copy flush,
 //! inject the present fence on vkr ring 63, retire it, present the parked frame, and
 //! complete the guest's held flush fence — a wedge anywhere in that loop starves the
@@ -13,10 +13,10 @@
 //!
 //! Vehicle: the seated ENHANCED golden with the session's GL flipped back to
 //! zink→venus **by this test** (a 99- environment.d override on the per-guest disk
-//! clone + a gdm restart). Since the 2026-08-04 drop-guest-zink flip the golden's own
+//! clone + a gdm restart). Since the drop-guest-zink flip the golden's own
 //! session rides virgl/vrend, whose EGLImage scanouts never park — the fence-present
 //! chain is venus-BLOB-only, so the stock session stopped exercising it (this test
-//! caught exactly that on 2026-08-05 when the F43 golden flipped). The zink→venus
+//! caught exactly that when the F43 golden flipped). The zink→venus
 //! session is not a legacy config: it models any venus-rendering compositor (the
 //! synoik direction — venus-blob framebuffers via SET_SCANOUT_BLOB), which is the
 //! class this chain serves. `LIMINA_FENCE_PRESENT=1` is forced: the harness display
@@ -99,7 +99,7 @@ fn fence_present_chain_presents_and_never_wedges() {
     // restart must take the manager down too — and in the right ORDER: gdm first.
     // `loginctl terminate-user` + `restart gdm` races: gdm re-seats the autologin
     // session before the manager finishes winding down, the manager never exits, and
-    // the new session silently keeps the old virgl env (verified live 2026-08-05 —
+    // the new session silently keeps the old virgl env (verified live —
     // the manager pid survived and /proc/<shell>/environ still said virgl). The
     // stop-gdm → stop-user@ → start-gdm sequence was likewise verified live: the new
     // session's environ shows zink and gnome-shell maps libvulkan_virtio. Detached

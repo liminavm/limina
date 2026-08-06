@@ -224,7 +224,7 @@ fn venus_replay_matches_llvmpipe_reference() {
 
     // Replay on both backends, snapshotting every 100th frame. eglretrace exits non-zero
     // on a crashed replay, which ssh_exec turns into a failure.
-    // The enhanced image's environment.d FORCES GL/Vulkan selectors (since the 2026-08-04
+    // The enhanced image's environment.d FORCES GL/Vulkan selectors (since the
     // drop-guest-zink flip: MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu, VK_DRIVER_FILES=venus) into
     // every shell, so the llvmpipe REFERENCE leg must `-u` them or eglretrace picks the accelerated
     // driver and the reference isn't a reference (originally: zink-on-venus died "unable to

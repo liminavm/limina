@@ -4,7 +4,7 @@
 //! §22 wedge invariant: **a guest fence must never vanish** — an exported venus
 //! sync_file has to signal even when the host rejects the command that carried it.
 //!
-//! The live wedge (dogfood-mac, 2026-07-30): a host sleep *attempt* s2idled the guest;
+//! The live wedge, seen in dogfooding: a host sleep *attempt* s2idled the guest;
 //! the resume classifier took the fail-closed session wipe; niri's in-flight
 //! explicit-sync fence was then decoded against the wiped session —
 //! `create_fence 30247 -> ErrRutabaga(InvalidContextId)` — and the worker parked
@@ -24,7 +24,7 @@
 //!    (guards against a vacuous green where the seam never fired);
 //!  - the guest's fence ledger reconverges: `virtio-gpu-irq-fence` last-signaled
 //!    catches up to last-emitted (the exact counter pair that stayed
-//!    `30246 30247` forever on dogfood-mac).
+//!    `30246 30247` forever in the live wedge).
 //!
 //! Same prereqs as the other venus L2 guards (the enhanced golden + KosmicKrisp);
 //! SKIPs cleanly if missing. Gated behind LIMINA_HVF_TESTS; run via
@@ -203,7 +203,7 @@ fn lost_context_fence_still_signals_its_sync_file() {
     assert!(
         !g2.contains("STUCK"),
         "the lost fence's sync_file never signaled — a guest waiting on it (a KMS \
-         atomic commit on dogfood-mac) wedges forever. The §22 signature:\n{g2}"
+         atomic commit, in the live wedge) wedges forever. The §22 signature:\n{g2}"
     );
     assert!(
         g2.contains("STORM DONE 1/1"),
@@ -211,7 +211,7 @@ fn lost_context_fence_still_signals_its_sync_file() {
     );
 
     // Ledger reconvergence, best-effort: last-signaled catches up to last-emitted
-    // (the pair that stayed `fence 30246 30247` forever on dogfood-mac). The 6.12 test
+    // (the pair that stayed `fence 30246 30247` forever in the live wedge). The 6.12 test
     // kernel may not expose the debugfs file — skip the oracle if absent.
     let ledger_path = ssh_retry(
         &g,

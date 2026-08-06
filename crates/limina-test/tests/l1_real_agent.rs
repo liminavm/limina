@@ -70,7 +70,7 @@ fn l1_real_agent_binary_handshakes_and_powers_off() {
 /// supervisor's on-connect `TimeSync`, steps the clock back to the host's wallclock. The
 /// agent logs the step to /dev/kmsg, which the serial console carries — that line (with the
 /// right magnitude) is the oracle. Without the timesync leg the clock silently stays 2h
-/// behind forever (the dogfood-guest 6h-drift bug).
+/// behind forever (the 6h-drift bug).
 #[test]
 fn l1_agent_steps_a_skewed_guest_clock() {
     if !limina_test::require_hvf_or_skip("l1_agent_steps_a_skewed_guest_clock") {

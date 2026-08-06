@@ -5,7 +5,7 @@
 //! scanout/input/ack channels to the native window, and relaunch it across guest reboots
 //! while the same NSWindow stays open.
 //!
-//! Split out of `main.rs` (2026-07-01 review, Part I recommendation 4): this spawn/relaunch
+//! Split out of `main.rs`: this spawn/relaunch
 //! machinery is exactly what the future M9 `--restore` path must reuse — a session that can
 //! (re)spawn a worker and retarget the live window's connection onto it.
 

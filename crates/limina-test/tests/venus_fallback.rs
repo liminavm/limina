@@ -9,8 +9,8 @@
 //! fixed only by the guest-side alignment: guest/virtio-gpu-dkms/0001 or the
 //! limina-virtio-gpu DKMS module). Mesa's venus then fails vkCreateInstance with
 //! VK_ERROR_OUT_OF_HOST_MEMORY, and the Vulkan loader treats OOM as fatal for the
-//! whole instance chain — masking a perfectly healthy lavapipe (observed live
-//! 2026-07-03; the loader only *skips* an ICD for INCOMPATIBLE_DRIVER, cf. dzn).
+//! whole instance chain — masking a perfectly healthy lavapipe (observed live;
+//! the loader only *skips* an ICD for INCOMPATIBLE_DRIVER, cf. dzn).
 //! The fix is authored — patches/mesa/0012 makes venus degrade to its stub
 //! instance (ships in our enhanced mesa; upstreaming it is the long-term plan,
 //! see docs/hardening-backlog.md) — but until Fedora ships it, the DEFAULT

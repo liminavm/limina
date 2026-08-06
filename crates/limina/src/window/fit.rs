@@ -235,7 +235,7 @@ pub(crate) const PARK_INSET: f64 = REGRAB_MARGIN;
 /// captured path integrates deltas into the virtual cursor — so parking somewhere far away
 /// injects that entire distance as phantom guest motion. Measured on a two-display Mac whose VM
 /// was fullscreen on the display *left of and below* the main one: every grab injected 1400-2400
-/// points, flinging the guest cursor into a corner (`[GRAB]` trace, 2026-08-02).
+/// points, flinging the guest cursor into a corner (`[GRAB]` trace).
 ///
 /// Parking where the cursor already is makes the grab warp zero-length, so there is no delta to
 /// inject and nothing to detect afterwards. The per-event re-pin that follows is zero-length too,
@@ -265,7 +265,7 @@ pub(crate) fn pull_inside(p: (f64, f64), fit: FitRect, inset: f64) -> (f64, f64)
 /// global pixel one past the display: the bottom row of a 982-point window at CG y ∈ [879, 1861]
 /// converts to y = 1861, and the display's last row is 1860. `CGWarpMouseCursorPosition` does not
 /// reject that — it clamps into the display union, so a bottom-edge release landed on the
-/// neighbouring screen (measured 2026-08-02, eight times in one session). Releasing a point inside
+/// neighbouring screen (measured eight times in one session). Releasing a point inside
 /// the content cannot be off it.
 pub(crate) const RELEASE_INSET: f64 = 1.0;
 
@@ -542,8 +542,7 @@ impl Charge {
 /// is "let me out onto the other display" during ordinary travel, so it happens mid-motion with no
 /// destination on screen to aim at. Dogfood, five rounds in: the top hold "feels great — I can
 /// trigger it whenever I want and haven't done it accidentally", while the sides at the same
-/// `Standard` felt "a bit too hard" (2026-08-03). The bottom counts as a side; it stopped being
-/// special the day before.
+/// `Standard` felt "a bit too hard". The bottom counts as a side, not a third case.
 pub(crate) const SIDE_HOLD_FACTOR: f64 = 0.6;
 
 /// The grace period between the strokes of a **side** press — more forgiving than
@@ -787,7 +786,7 @@ mod tests {
         // automatic re-grab could still warp up to 24 points — and a warp's whole vector arrives as
         // guest motion, which is the cursor jumping the instant the grab took hold. Dogfood found it
         // on re-entry from another display: reach the guest's top-right menu, start moving toward an
-        // item, and the pointer skips (2026-08-03).
+        // item, and the pointer skips.
         let fit = screen_fit();
         let long = Some(REGRAB_DWELL);
         for p in [
@@ -1070,7 +1069,7 @@ mod tests {
             assert!(h < top_hold, "{edge:?} must ask less than the top: {h}");
             assert!(d > top_decay, "{edge:?} must forgive longer: {d}");
         }
-        // The bottom is a side, not a third case — it stopped being special on 2026-08-02.
+        // The bottom is a side, not a third case.
         assert_eq!(
             edge_timing(hold, Edge::Bottom, side),
             edge_timing(hold, Edge::Left, side)

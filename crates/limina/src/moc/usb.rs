@@ -348,8 +348,8 @@ mod tests {
         });
     }
 
-    /// The bug behind the guest's "endpoint stalled ~133 ms after every device reset" report
-    /// (`dogfood-guest:fingerprint-usb-stall.md`, 2026-08-02): a wrong finger or a dismissed sheet
+    /// The bug behind a guest's "endpoint stalled ~133 ms after every device reset"
+    /// symptom: a wrong finger or a dismissed sheet
     /// makes the guest cancel and immediately retry, and the retry used to vouch for the
     /// abandoned command — so its STALL was written anyway and landed on the retry, or on the
     /// next session's first read after libfprint reopened the device.

@@ -4,7 +4,7 @@
 
 """vkclassicimport — import a CLASSIC virgl (vrend) gbm buffer into venus.
 
-The synoik/gnome-shell-rs shape (2026-08-05 dogfood-guest stall): a Vulkan compositor
+The synoik/gnome-shell-rs shape (a live dogfood stall): a Vulkan compositor
 allocates its KMS scanout buffers with gbm — which, since the drop-guest-zink GL
 flip, resolves to the **virgl dri backend** (classic vrend pipe resources, not venus
 blobs) — exports the dmabuf, and imports it into venus:

@@ -230,7 +230,7 @@ struct Cli {
     balloon_free_page_reporting: bool,
 
     /// Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` to the guest — forwarded to the worker.
-    /// OFF by default (M6 addendum, 2026-07-20): the bit makes Linux keep ballooned pages inside
+    /// OFF by default (M6 addendum): the bit makes Linux keep ballooned pages inside
     /// `MemTotal`, so an inflated dynamic VM reads as nearly out of memory and systemd-oomd
     /// starts killing; the PSI policy's deflate is the release path instead. Escape hatch for a
     /// guest whose workload provably needs the in-kernel deflate-at-OOM net.
@@ -576,8 +576,8 @@ impl Cli {
 /// Raise RLIMIT_NOFILE's soft limit toward the hard cap. A Dock/Finder-launched process
 /// inherits launchd's 256-fd soft default, and the venus render server spends one fd per
 /// guest shm blob — a GNOME login's context burst exhausts 256, every subsequent blob or
-/// context create fails EMFILE, guest venus init dies and gnome-shell aborts (2026-07-02
-/// dogfood-guest login crash; the worker idled 6 fds from the ceiling). Terminal launches
+/// context create fails EMFILE, guest venus init dies and gnome-shell aborts at login
+/// (observed with the worker idling just 6 fds from the ceiling). Terminal launches
 /// inherit a high shell limit, which is why dev runs never hit it. Called first thing in
 /// main so every child (center → `limina start` → limina-vmm + gvproxy) inherits the
 /// raised limit; the worker also raises its own. macOS rejects an unbounded setrlimit
@@ -2075,7 +2075,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Guards the launchd-256-fd login crash (2026-07-02): with the soft limit dropped to
+    /// Guards the launchd-256-fd login crash: with the soft limit dropped to
     /// the Finder-launch default, raise_fd_limit must lift it to OPEN_MAX (or the hard cap
     /// if lower). The real reproducer is launchd-only (12 concurrent venus contexts all
     /// EMFILE'd); this pins the mechanism the fix relies on.

@@ -896,7 +896,7 @@ impl InputState {
         // point in the wrong window's space and dropped motion the emitter would have mapped
         // correctly. A gate and its emitter disagreeing about where the pointer is means the guest
         // cursor silently stops tracking: dogfood saw 350 ms of it, and the freeze only became
-        // visible once the grab stopped inheriting the same stale position (2026-08-03).
+        // visible once the grab stopped inheriting the same stale position.
         let p = event_point_in_view(event, view);
         let inside = super::fit::point_in_fit(p.x, p.y, self.fit.get());
         if super::capture_tap::edge_trace() {

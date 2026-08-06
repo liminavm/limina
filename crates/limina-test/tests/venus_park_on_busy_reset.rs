@@ -4,7 +4,7 @@
 //! §22 hardening guard: a seated venus session that is merely MID-FRAME at a device
 //! reset must PARK (and survive the s2idle round-trip), not take the fail-closed wipe.
 //!
-//! The dogfood-mac 2026-07-30 incident: an aborted host-sleep attempt s2idled the guest while
+//! The live incident: an aborted host-sleep attempt s2idled the guest while
 //! the compositor was inside its suspend fade-out animation. At the device reset the
 //! fence ledger was empty but the present-fence plumbing wasn't (`present_quiescent()`
 //! false), so defer-and-classify wiped a perfectly healthy session — and the replayed
@@ -16,7 +16,7 @@
 //! The fix (drain-then-classify): before unbinding, pump retired presents and let the
 //! fence callbacks + guest-hold latch (500 ms ceiling) drain, bounded at 1.5 s. This
 //! test drives the same shape: seated enhanced golden with `LIMINA_FENCE_PRESENT=1`
-//! forced (frames park, guest flush fences are held — the plumbing the dogfood-mac reset
+//! forced (frames park, guest flush fences are held — the plumbing the live reset
 //! tripped over), in-guest suspend (GNOME's own suspend fade supplies present traffic
 //! right at entry), SIGWINCH wake. Oracles:
 //!
@@ -92,7 +92,7 @@ fn busy_seated_session_parks_across_reset() {
             .with_net()
             .with_supervisor_log()
             // Force the fence-present chain on: parked frames + held guest flush
-            // fences are exactly the plumbing the dogfood-mac reset tripped over.
+            // fences are exactly the plumbing the live reset tripped over.
             .with_env("LIMINA_FENCE_PRESENT", "1"),
         Err(e) => {
             eprintln!("SKIPPED busy_seated_session_parks_across_reset: {e}");

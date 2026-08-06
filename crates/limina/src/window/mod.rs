@@ -10,7 +10,7 @@
 //! the main thread; only plain data (ids/counters) crosses the thread boundary.
 #![allow(deprecated)] // objc2-io-surface 0.3 renamed some free fns to methods.
 //!
-//! Split along its seams (2026-07-01 review, Part I recommendation 5): `present` (surface
+//! Split along its seams: `present` (surface
 //! store/reader/frame-apply/shown-ack), `cursor` (guest-cursor shape + capture compositing),
 //! `lifecycle` (worker connection + quit policy), `diag` (capture / present-copy probes),
 //! plus the pre-existing `input` and `capture_tap`. This file keeps `run()` — the window,
@@ -451,8 +451,8 @@ define_class!(
 
     unsafe impl NSApplicationDelegate for VmMenuActions {
         // A quit Apple event (osascript "quit", logout) must not exit the
-        // supervisor abruptly — that orphans the worker (live-reproduced
-        // 2026-07-02). Cancel the terminate and route into the same graceful
+        // supervisor abruptly — that orphans the worker (live-reproduced).
+        // Cancel the terminate and route into the same graceful
         // stop the Ctrl-C/window-close path uses; the render timer drives the
         // shutdown ladder and exits the process when the guest is down.
         #[unsafe(method(applicationShouldTerminate:))]
@@ -734,7 +734,7 @@ struct OverlaySnapshot {
 /// `settled` is why this takes a duration rather than a bool. `NSScreen::mainScreen` **lags the
 /// activation change**: for a tick or two after focus leaves for the other display, `isActive` is
 /// already false while `mainScreen` still names ours, which reads exactly like a dialog opening
-/// here. Measured on dev-mac 2026-08-02 — 8 such transients in one switching session, each
+/// here. Measured: 8 such transients in one switching session, each
 /// resolving within a tick or two, and (almost certainly) the same stale read held longer is the
 /// black strip that survived the first cut of this fix. Dropping the level is therefore only done
 /// once the condition has *held*: a dialog stays covered for [`OVERLAY_SETTLE`] and no longer,
@@ -845,7 +845,7 @@ impl ExtendOverlay {
         // NSWindow, so `close()` releases it out from under the `Retained` we are holding — an
         // over-release that segfaults in the next autorelease-pool drain, i.e. inside
         // `NSApplication::run`, nowhere near the code that caused it. Cost a crash on the first
-        // Cmd-Tab out of the overlay (2026-08-01).
+        // Cmd-Tab out of the overlay.
         // SAFETY: plain property setter on a window we own and have not yet shown.
         unsafe { overlay.setReleasedWhenClosed(false) };
         overlay.setLevel(OVERLAY_LEVEL);
@@ -1240,7 +1240,7 @@ pub fn run(
     let present_copy_env = std::env::var_os("LIMINA_PRESENT_COPY").is_some();
     // Lock-only variant (LIMINA_PRESENT_LOCK / touch /tmp/limina-present-lock): keep zero-copy,
     // but IOSurfaceLock+Unlock the guest surface before handing it to CA.
-    // A/B VERDICT (2026-06-11): FAILED — visibly worse than no mitigation at all (several
+    // A/B VERDICT: FAILED — visibly worse than no mitigation at all (several
     // anomalies within seconds vs ~5 bursts/hour untreated). Kept as a documented negative
     // result: the copy's load-bearing property is IMMUTABILITY, not the GPU-write sync.
     // (a) At present time the repaint may not be submitted to Metal yet (venus ring decode
@@ -1526,7 +1526,7 @@ pub fn run(
                         // timing), bars top and bottom mean the right aspect at a stale *size*,
                         // and a short view with a matching guest means the housing strip never
                         // reached us. Diagnosing this on dogfood otherwise costs a round of ssh
-                        // archaeology (2026-08-01).
+                        // archaeology.
                         if (window.styleMask().contains(NSWindowStyleMask::FullScreen)
                             || apply_overlay.is_active())
                             && (target.w < sz_w - 1.0 || target.h < sz_h - 1.0)
@@ -2378,7 +2378,7 @@ mod tests {
 
     #[test]
     fn a_window_focused_on_another_display_does_not_push_the_overlay_under_the_notch_backdrop() {
-        // The dogfood symptom, 2026-08-02: click something on the external display and the guest's
+        // The dogfood symptom: click something on the external display and the guest's
         // top strip goes black on the internal one, hiding its panel, while the rest stays
         // full-panel. The overlay was still up — it had merely dropped below the fullscreen
         // Space's camera-housing backdrop, which the system draws at menu-bar level.
@@ -2388,7 +2388,7 @@ mod tests {
     #[test]
     fn a_stale_focus_reading_never_drops_the_overlay() {
         // `mainScreen` lags `isActive`, so every deactivation briefly claims the focus is still
-        // here. Traced on dev-mac: 8 of these in one switching session. Held for a tick or two they
+        // here. Traced: 8 of these in one switching session. Held for a tick or two they
         // are invisible; held longer they are the black strip that survived the first fix.
         assert_eq!(
             overlay_level(false, true, Some(Duration::from_millis(16))),
@@ -2406,7 +2406,7 @@ mod tests {
         assert_eq!(overlay_level(false, true, HELD), OVERLAY_LEVEL_INACTIVE);
     }
 
-    /// The dogfood-mac arrangement, read out of the dogfood `state.toml` (2026-08-06): a built-in
+    /// A real dogfood display arrangement, read out of its `state.toml`: a built-in
     /// Retina panel as the main screen at the origin, and the 60 Hz external the VM was
     /// fullscreen on off to the right. `EXTERNAL` is the real saved `fullscreen_display` key;
     /// `INTERNAL` is a second, different key.
@@ -2426,7 +2426,7 @@ mod tests {
 
     #[test]
     fn a_rearranged_display_still_restores_fullscreen_on_the_remembered_panel() {
-        // The dogfood symptom, 2026-08-06: "it's always putting the window on the internal
+        // The dogfood symptom: "it's always putting the window on the internal
         // screen". The saved frame is absolute Cocoa coordinates from the arrangement it was
         // written in; move the external panel in System Settings (or let it come back at another
         // origin) and that rectangle lands on no screen at all. The old rule then centered on the

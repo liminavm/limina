@@ -6,7 +6,7 @@
 
 A guest fence must never vanish: every exported sync_file has to signal
 eventually, even when the host rejects the command that carried it (a fenced
-submit decoded against a wiped session — the dogfood-mac 2026-07-30 KMS wedge:
+submit decoded against a wiped session — the live KMS wedge:
 `create_fence 30247 -> ErrRutabaga(InvalidContextId)` parked the response
 descriptor forever, so the guest dma_fence never signaled and `commit_tail`
 hung in D-state until reboot).

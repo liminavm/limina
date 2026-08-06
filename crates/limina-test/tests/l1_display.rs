@@ -104,7 +104,7 @@ fn wait_for_pattern(guest: &Guest, timeout: Duration) -> Option<CapturedFrame> {
             // color": under suite load the capture can catch an earlier boot-console
             // frame (text on black — 187 distinct colors, 99% black dominant), which
             // passed the old >=2-colors predicate and then failed the band asserts
-            // (the flake that hit the 2026-07-30 suite runs twice). The guest powers
+            // (a flake that hit real suite runs twice). The guest powers
             // off ~0.5 s after drawing, so the pattern frame is the LAST one — keep
             // polling until it appears.
             if frame.width == WIDTH && frame.height == HEIGHT {

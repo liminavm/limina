@@ -99,8 +99,8 @@ fn venus_enumerates_on_16k_kernel() {
 /// on the enhanced golden (`enhanced.test.raw`) must enumerate venus AND bring up a live seated GNOME
 /// session on it. Where [`venus_enumerates_on_16k_kernel`] proves *stock* mesa's venus on an external
 /// 16k kernel, and `venus_replay` proves trace-replay render correctness (guest-side pixels), this
-/// validates the actual shipped product: our RPM mesa driving a real autologin session. Since the
-/// 2026-08-04 drop-guest-zink flip the session's GL rides virgl→vrend (EGLImage-backed IOSurface
+/// validates the actual shipped product: our RPM mesa driving a real autologin session. Since
+/// the drop-guest-zink flip the session's GL rides virgl→vrend (EGLImage-backed IOSurface
 /// scanout); venus is the Vulkan side (`VK_DRIVER_FILES` → virtio ICD) — this test's identity checks
 /// (16k pages, `*.limina` RPMs, venus ICD present, session up) hold across that change. Heavy (full
 /// enhanced desktop boot); SKIPs without KK or the enhanced disk.

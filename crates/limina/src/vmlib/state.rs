@@ -158,7 +158,7 @@ mod tests {
     fn round_trips_a_top_bit_identity_key() {
         // The display identity_key is an FNV-1a-derived u64 — bit 63 is a coin flip. TOML
         // integers are i64, so a key > i64::MAX must still save (bit-preserved through i64),
-        // or fullscreen placement silently never persists on affected displays (dogfood-mac, 08-04).
+        // or fullscreen placement silently never persists on affected displays.
         let dir = scratch("topbit");
         let path = dir.join("state.toml");
         let state = VmState {
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn the_dogfood_record_parses_with_its_identity_key_intact() {
-        // Verbatim from dogfood-mac's state.toml (2026-08-06), the session where a fullscreen VM kept
+        // Verbatim from a dogfood state.toml, from a session where a fullscreen VM kept
         // restoring on the internal display. The suspicion was another silent type
         // mis-serialization (the frame/content class); it was not — the key survives byte for
         // byte and decomposes into a sane panel (serial 0x3704f790, product 0xf13b, 60 Hz), so

@@ -112,8 +112,8 @@ pub struct Hardware {
     /// stock-degrade). See `--no-fido`.
     #[serde(default = "default_true")]
     pub fido: bool,
-    /// Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` to the guest (default false; M6 addendum
-    /// 2026-07-20). The bit makes Linux keep ballooned pages inside `MemTotal`, so an inflated
+    /// Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` to the guest (default false; M6
+    /// addendum). The bit makes Linux keep ballooned pages inside `MemTotal`, so an inflated
     /// dynamic VM reads as nearly out of memory and systemd-oomd fires; without it accounting
     /// stays truthful and the supervisor's PSI policy owns the release path. Escape hatch only.
     /// See `--balloon-deflate-on-oom`.
@@ -300,7 +300,7 @@ pub struct DisplayCfg {
     /// `fit::edge_timing`. One number cannot serve both gestures: pushing up asks for the macOS
     /// chrome at a target the user can see, while pushing sideways happens mid-travel with nothing
     /// on screen to aim at, and dogfood found the top right and the sides too hard at the same
-    /// value (2026-08-03).
+    /// value.
     ///
     /// Ignored windowed, and needs the Accessibility grant the capture tap already asks for.
     #[serde(rename = "edge-resistance")]

@@ -3,8 +3,8 @@
 
 //! L1 regression test: TWO clipboard peers, each with its own serial namespace.
 //!
-//! Real guests run one `limina-agent-session` per graphical session (dogfood-guest was
-//! running three at once: a GNOME session, a niri session, and — unintentionally — one in
+//! Real guests run one `limina-agent-session` per graphical session (a dogfood guest
+//! ran three at once: a GNOME session, a niri session, and — unintentionally — one in
 //! the gdm greeter). Each helper is a separate process whose offer serial starts at 0 and
 //! counts *its own* selection changes, so serials from different peers are unrelated
 //! numbers.
@@ -13,7 +13,7 @@
 //! offer below the high-water mark. A long-lived session therefore pushed the ratchet up
 //! and permanently silenced every other session: a freshly started helper offering serial
 //! 1, 2, 3… was below the mark, so the host never even sent a REQUEST and that session's
-//! clipboard silently never reached the host. (Observed on dogfood-guest 2026-07-31: the
+//! clipboard silently never reached the host. (Observed in dogfooding: the
 //! niri session's copies went nowhere while host→guest still worked — host→guest uses the
 //! host's own single counter, so only the merged direction broke.)
 //!

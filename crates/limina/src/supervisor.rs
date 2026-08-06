@@ -222,7 +222,7 @@ pub struct ResumePaths<'a> {
 /// spawn in the same session (a guest reboot) finds nothing and cold-boots. This
 /// one-shot-by-construction shape replaced a `--restore` argv flag after that argv rode a
 /// reboot relaunch and re-applied the stale snapshot over the advanced disk (btrfs "parent
-/// transid verify failed" — destroyed a dogfood guest's filesystem, 2026-07-20).
+/// transid verify failed" — destroyed a dogfood guest's filesystem).
 ///
 /// Returns the path the worker must restore from (normally the `.consumed` name; the
 /// canonical name only if the rename failed and we degrade to restoring in place).

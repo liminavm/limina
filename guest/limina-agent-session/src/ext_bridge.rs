@@ -9,7 +9,7 @@
 //! ext-data-control carry) nor a resident RemoteDesktop session (the stock fallback
 //! whose cosmetic cost is GNOME's permanent "screen is shared" indicator). It also
 //! survives distro mutter updates, which is what demoted the dogfood guest to the
-//! indicator tier on 2026-07-11.
+//! indicator tier.
 //!
 //! Simpler contract than the other two backends: `Set` carries the full content and
 //! the extension parks it in a `Meta.SelectionSourceMemory`, so the compositor itself
