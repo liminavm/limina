@@ -189,13 +189,24 @@ impl Pasteboard {
 
     /// The text content if the pasteboard changed since the last look (consumes the
     /// change: subsequent calls return None until the next app copy).
+    ///
+    /// A change with no text is NOT consumed: AppKit bumps `changeCount` on the writer's
+    /// `clearContents` and not on the `setString` that follows, so a poll landing between
+    /// the two sees the bump while the pasteboard is still empty. Advancing `last_count`
+    /// there made the copy permanently invisible — the string arrives with no further bump
+    /// and every later poll saw "no change" (offers silently dropped ~10% of the time for
+    /// large content, whose NSString construction widens the window to milliseconds).
+    /// Leaving `last_count` stale keeps the change pending until the text lands; a
+    /// genuinely text-less change (image copy, bare clear) just re-reads on each poll and
+    /// never offers, which is the correct behavior for it anyway.
     fn take_changed_text(&mut self) -> Option<String> {
         let count = self.pb.changeCount();
         if count == self.last_count {
             return None;
         }
+        let text = self.current_text()?;
         self.last_count = count;
-        self.current_text()
+        Some(text)
     }
 
     fn current_text(&self) -> Option<String> {

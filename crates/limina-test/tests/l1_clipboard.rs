@@ -246,3 +246,49 @@ fn l1_clipboard_oversized_content_keeps_channel_alive() {
     assert!(!outcome.forced, "harness had to force teardown");
     assert_eq!(outcome.code, Some(0), "expected orderly power-off");
 }
+
+/// Gap (found 2026-08-06 during the #14 rebase validation, but pre-existing): a poll that
+/// observes the pasteboard BETWEEN a writer's `clearContents` and `setString` must not
+/// consume the change. AppKit bumps `changeCount` on the clear and NOT on the subsequent
+/// write, so a poller that advanced its high-water mark on the bump — then found no string
+/// — made the copy permanently invisible: the offer never fired and the content was lost
+/// until the next unrelated copy. Every real writer opens this window (it spans building
+/// the NSString — milliseconds for large content, which is why the oversized test flaked
+/// at ~10%); the slow writer below magnifies it so the race is deterministic: 200 ms
+/// mid-write with a 50 ms poll guarantees the poller looks mid-write.
+#[test]
+fn l1_clipboard_offer_survives_a_midwrite_poll() {
+    if !limina_test::require_hvf_or_skip("l1_clipboard_offer_survives_a_midwrite_poll") {
+        return;
+    }
+
+    let pb_name = format!("limina-test-pb-midwrite-{}", std::process::id());
+    let (guest, mut conn) = boot_with_clipboard_peer(&pb_name);
+
+    limina_test::set_pasteboard_text_slowly(&pb_name, "raced copy", Duration::from_millis(200));
+    let serial = match conn
+        .recv(Duration::from_secs(5))
+        .expect("awaiting CLIP_OFFER for a copy the poller observed mid-write")
+    {
+        (_, Message::ClipOffer(o)) => o.serial,
+        (_, other) => panic!("expected CLIP_OFFER, got {other:?}"),
+    };
+    conn.send(&Message::ClipRequest(ClipRequest {
+        serial,
+        mime_type: TEXT_MIME.into(),
+    }))
+    .expect("sending CLIP_REQUEST");
+    match conn
+        .recv(Duration::from_secs(5))
+        .expect("awaiting CLIP_DATA")
+    {
+        (_, Message::ClipData(d)) => assert_eq!(String::from_utf8_lossy(&d.data), "raced copy"),
+        (_, other) => panic!("expected CLIP_DATA, got {other:?}"),
+    }
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(10))
+        .expect("supervisor did not stop");
+    assert!(!outcome.forced, "harness had to force teardown");
+    assert_eq!(outcome.code, Some(0), "expected orderly power-off");
+}

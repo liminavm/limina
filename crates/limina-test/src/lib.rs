@@ -2748,6 +2748,21 @@ pub fn set_pasteboard_text(name: &str, text: &str) {
     }
 }
 
+/// Like [`set_pasteboard_text`], but with a deliberate delay between `clearContents` and
+/// `setString` — a magnified version of the window every real writer opens (AppKit bumps
+/// `changeCount` on the clear, NOT on the subsequent write). Lets a test force the
+/// clipboard poller to observe the pasteboard mid-write deterministically.
+pub fn set_pasteboard_text_slowly(name: &str, text: &str, midwrite_delay: Duration) {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+    use objc2_foundation::NSString;
+    unsafe {
+        let pb = NSPasteboard::pasteboardWithName(&NSString::from_str(name));
+        pb.clearContents();
+        std::thread::sleep(midwrite_delay);
+        pb.setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
+    }
+}
+
 #[cfg(test)]
 mod run_capped_tests {
     use super::*;
