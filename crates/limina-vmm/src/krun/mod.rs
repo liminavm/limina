@@ -16,8 +16,8 @@ mod display_update;
 
 use anyhow::{anyhow, Context, Result};
 use crossbeam_channel::unbounded;
+use devices::display::DisplayInfo;
 use devices::virtio::block::{CacheType, ImageType, SyncMode};
-use devices::virtio::display::DisplayInfo;
 use devices::virtio::{BalloonControlHandle, DisplayResizeHandle};
 use limina_display::{CaptureConfig, WindowConfig};
 use limina_displayctl::DisplayCommand;
@@ -162,6 +162,8 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
 
     if let Some(console) = &spec.console {
         console::attach(&mut vmr, console).context("attaching serial console")?;
+    } else {
+        console::attach_dropped(&mut vmr);
     }
 
     // Host battery mirror (virtio-i2c SBS battery): only when asked AND the host

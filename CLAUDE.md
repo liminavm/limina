@@ -21,13 +21,15 @@ fixed dependencies.** We are willing to fork, patch, and rebuild *any* layer to 
 the behavior we want, and the design should reach for that lever whenever it's the
 right tool — not treat upstream as immutable:
 
-- **libkrun** — vendored under `third_party/` (gitignored), built from source, carried as a
-  `git format-patch` series under `patches/libkrun/` (with `UPSTREAM_BASE`); apply with
-  `scripts/apply-libkrun-patches.sh`. We add devices, APIs, and behavior it lacks (e.g.
-  software 2D scanout for GL-less hosts [shipped], balloon target/inflate control, runtime
-  display resize, zero-copy scanout, snapshot/restore machinery, an emulated xHCI controller +
-  USB gadgets). To change libkrun: edit the checkout, commit on
-  a `limina/*` branch, re-export the series (see `patches/libkrun/README.md`).
+- **libkrun** — **fork model** (migrated 2026-08-06, task #14): `third_party/libkrun` is a clone
+  of `github.com/liminavm/libkrun` (`limina` branch; upstream moved to
+  `github.com/libkrun/libkrun`), pinned by `third_party/manifest.toml`. **The branch IS the
+  delta — `patches/libkrun/` is a tombstone and `scripts/apply-libkrun-patches.sh` is gone.**
+  We add devices, APIs, and behavior it lacks (e.g. software 2D scanout for GL-less hosts
+  [shipped], balloon target/inflate control, runtime display resize, zero-copy scanout,
+  snapshot/restore machinery, an emulated xHCI controller + USB gadgets). To change libkrun:
+  commit on the fork's `limina` branch, push, update the manifest rev; tag before every
+  branch rewrite. Audit status: `docs/upstreaming/ledger/libkrun.md`.
   - **`cargo xtask vendor`** is the one-command bootstrap: it recreates every gitignored
     `third_party/` source tree. Two models coexist during the **fork migration to
     github.com/liminavm**: fork-model deps (imago, linux) clone our fork and check out the rev

@@ -1,7 +1,36 @@
 # libkrun — patch-audit ledger
 
-126 patches; `UPSTREAM_BASE` `07a3f40973ce`. Schema + protocol: `README.md`.
-Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
+126 patches audited (at base `07a3f40973ce`). Schema + protocol: `README.md`.
+Rows are keyed by SUBJECT; ordinals refer to the retired `patches/libkrun/` series.
+
+**FORK MODEL since 2026-08-06 (task #14):** the series was rebased onto upstream tip
+`07fd40dc` (upstream moved to github.com/libkrun/libkrun) and lives as
+`liminavm/libkrun` branch `limina` (124 commits; pinned by `third_party/manifest.toml`).
+Dropped as upstream-superseded: 0038 (blk serial = block_id, upstream df85b8b),
+0044 (blob-map overflow guard, upstream #790 checked_blob_map_addr — upstream also ships
+an equivalent regression test, so 0071's copy of ours was dropped too), 0090 (fs worker,
+upstream 4e01b23). 0020 was squashed into 0017. Notable rebase convergences: upstream
+grew its own live vCPU pause/resume (VmCtl) at exactly our M9 quiesce boundary — our
+`pause_vcpus`/`resume_parked_vcpus` now ride it (vtimer hold included) and `handle_pause`
+is gone; upstream's display/EDID consolidation (`crate::display`) absorbed our DisplayInfo
+EDID field, our 0119/0120 additions (identity/range/timings/`connected`) layer on top;
+consoles are explicit-only upstream now (`disable_implicit_console` no longer exists).
+
+**OPEN REGRESSION (2026-08-06, blocks calling #14 done):** an intermittent cold-boot wedge on
+the rebased stack — the guest spins in-guest at 100% on vCPU 0 with ZERO VM exits, pre-SMP
+(secondaries still parked on the CPU_ON boot channel), and never reaches userspace. Baseline
+control: the pre-rebase stack ran the same suite conditions clean. Two facets so far:
+(1) a boot with NO serial console wedged near-deterministically under nextest — fixed in limina
+(`console::attach_dropped`: always attach an output-dropped PL011 when none is requested,
+restoring the device shape upstream's old implicit console guaranteed; the consoleless vehicle
+went 3/3 red → 7/7 green); (2) a load-sensitive residue remains — full unprobed suite runs fail
+1–3 net-class tests ("guest never obtained a DHCP lease", 0 bytes ever sent) while solo reruns
+pass, and a suite run with the diagnostic probe armed (LIMINA_WEDGE_PROBE: periodic live
+pause/resume of every vCPU, logging PC + vtimer state from the park site) went clean — probing
+masks or rescues it, which smells like the lost-timer-IRQ / vtimer class (upstream's new live
+pause/resume machinery owns the vtimer offset now). The probe diff is preserved in the session
+notes; suspects to bisect against: upstream's vtimer-offset tracking + WFE-wait select rework
+vs our 0040/0054/0094 timer patches.
 
 | ord | subject | files | diag | need | checked | issue | mr | sec | fold | tier | disp | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|

@@ -12,7 +12,7 @@
 //!
 //! See `docs/design/stable-edid-hotplug.md`.
 
-use devices::virtio::display::{
+use devices::display::{
     DetailedMode, EdidIdentity, EdidParams, PhysicalSize, RefreshRange, StandardTiming,
     StandardTimings,
 };

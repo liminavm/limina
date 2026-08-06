@@ -3,9 +3,8 @@
 
 //! Serial-console wiring for the krun facade.
 //!
-//! On the EFI/firmware path libkrun's *implicit* serial is hardcoded output-dropped
-//! and the EDK2 firmware is silent, so a naive boot is blind. We disable the implicit
-//! console and attach our own serial: it becomes the PL011 the firmware uses as
+//! On the EFI/firmware path a naive boot is blind (no serial, silent EDK2 firmware),
+//! so we attach our own explicit serial: it becomes the PL011 the firmware uses as
 //! ConOut, so EDK2 + GRUB + (with `console=ttyAMA0` in the guest cmdline) the kernel
 //! are all visible. Verified end-to-end in `spikes/m1-boot` and `spikes/m1-boot-internal`.
 //!
@@ -54,13 +53,25 @@ pub fn attach(vmr: &mut VmResources, console: &ConsoleSpec) -> Result<()> {
         ConsoleSpec::Pty => open_pty()?,
     };
 
-    vmr.disable_implicit_console = true;
     vmr.serial_consoles.push(SerialConsoleConfig {
         input_fd,
         output_fd,
     });
 
     Ok(())
+}
+
+/// Attach an **output-dropped PL011** when no serial console was requested. The device must
+/// exist regardless: consoles are explicit-only since the upstream config redesign, and a
+/// guest booted with no PL011 at all wedges intermittently in early boot (the cold-boot
+/// wedge caught rebasing libkrun, 2026-08-06: vCPU 0 spins in-guest at 100% with zero VM
+/// exits, secondaries never online, ~3/4 of no-console boots). This restores the device
+/// shape the old implicit console always guaranteed.
+pub fn attach_dropped(vmr: &mut VmResources) {
+    vmr.serial_consoles.push(SerialConsoleConfig {
+        input_fd: -1,
+        output_fd: -1,
+    });
 }
 
 /// Attach `spec` as a virtio-console (`hvc0`) — a robust, queue-based bidirectional data
@@ -91,10 +102,10 @@ pub fn attach_virtio(vmr: &mut VmResources, spec: &VirtioConsoleSpec) -> Result<
         None => -1,
     };
 
-    // disable_implicit_console so our explicit port is hvc0 (console id 0), not hvc1.
-    // ConsoleInOut (not InOut) marks it as a *console* port so the guest exposes it as
-    // hvc0 (a data port would be /dev/vport0p1, and `console=hvc0` would find nothing).
-    vmr.disable_implicit_console = true;
+    // Consoles are explicit-only since the upstream config redesign, so this port is
+    // hvc0 (console id 0) by construction. ConsoleInOut (not InOut) marks it as a
+    // *console* port so the guest exposes it as hvc0 (a data port would be
+    // /dev/vport0p1, and `console=hvc0` would find nothing).
     vmr.virtio_consoles
         .push(VirtioConsoleConfigMode::Explicit(vec![
             PortConfig::ConsoleInOut {

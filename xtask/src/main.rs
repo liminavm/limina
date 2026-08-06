@@ -10,9 +10,9 @@
 //! Bootstrap / build loop:
 //!   `setup`  — one-command fresh-clone bootstrap: `vendor` + enable the git hooks.
 //!   `vendor` — materialize the gitignored `third_party/` source trees: fork-model deps
-//!              (virglrenderer, imago, linux) clone from github.com/liminavm at the rev pinned in
-//!              `third_party/manifest.toml`; the rest (libkrun) still comes from its committed
-//!              patch series. `heavy = true` deps (the kernel) are skipped unless
+//!              (libkrun, virglrenderer, imago, linux) clone from github.com/liminavm at the rev
+//!              pinned in `third_party/manifest.toml` — the fork's `limina` branch IS the delta,
+//!              nothing to apply. `heavy = true` deps (the kernel) are skipped unless
 //!              `--heavy` — nothing on this host builds them. Run it first.
 //!   `build`  — build `limina` + `limina-vmm`, verify the worker links our virglrenderer (the
 //!              venus link trap), and codesign the worker (hypervisor entitlement). The inner-loop
@@ -56,8 +56,8 @@ struct Cli {
 enum Cmd {
     /// Fresh-clone bootstrap: `vendor` (materialize `third_party/`) + enable the git hooks.
     Setup,
-    /// Materialize the gitignored `third_party/` source trees by applying the committed patch
-    /// series. Run once after a fresh clone (or a libkrun re-clone) before building.
+    /// Materialize the gitignored `third_party/` source trees (fork clones at the manifest-pinned
+    /// revs). Run once after a fresh clone (or a libkrun re-clone) before building.
     Vendor {
         /// Also clone the `heavy = true` fork-model deps (the kernel tree — multi-GB, and this
         /// host never builds it). Needed only to author kernel commits or export its series.
@@ -180,10 +180,6 @@ fn profile_name(release: bool) -> &'static str {
 
 // --- bootstrap ---------------------------------------------------------------------------------
 
-/// libkrun upstream — cloned into `third_party/libkrun` when absent; the apply script then resets
-/// it to `patches/libkrun/UPSTREAM_BASE` and applies our series.
-const LIBKRUN_GIT: &str = "https://github.com/containers/libkrun.git";
-
 /// One-command fresh-clone bootstrap: vendor `third_party/`, then point git at the in-repo hooks.
 fn setup() -> Result<()> {
     vendor(false)?;
@@ -195,28 +191,18 @@ fn setup() -> Result<()> {
 
 /// Materialize every gitignored `third_party/` source tree, so the workspace can build.
 ///
-/// Two models coexist during the fork migration (github.com/liminavm):
-/// - **Fork-model deps** (imago, so far): clone our fork and check out the rev pinned in
-///   `third_party/manifest.toml` — the `limina` branch IS the delta, no patch series.
-/// - **Patch-series deps** (libkrun, virglrenderer): clone upstream and apply the committed
-///   series (`patches/<dep>/`) via the per-dependency apply scripts.
+/// Every code dep is fork-model now (github.com/liminavm): clone our fork and check out the rev
+/// pinned in `third_party/manifest.toml` — the fork's `limina` branch IS the delta, no patch
+/// series. (The one remaining patch-series dep is edk2's firmware build, applied by
+/// `scripts/build-krun-efi.sh`, not vendored here.)
 ///
 /// Idempotent — re-running resets/refreshes each tree.
 fn vendor(heavy: bool) -> Result<()> {
     let repo = repo_root();
 
-    // libkrun: a from-source git checkout (path deps in [workspace.dependencies]). Clone if absent.
-    let libkrun = repo.join("third_party/libkrun");
-    if !libkrun.join(".git").exists() {
-        eprintln!("==> cloning libkrun ({LIBKRUN_GIT}) — third_party/libkrun is absent");
-        run(Command::new("git").current_dir(&repo).args([
-            "clone",
-            LIBKRUN_GIT,
-            "third_party/libkrun",
-        ]))?;
-    }
-    eprintln!("==> applying the libkrun patch series");
-    bash_script(&repo, "scripts/apply-libkrun-patches.sh", &[] as &[&str])?;
+    // libkrun: the VMM library. limina consumes its crates by path ([workspace.dependencies]),
+    // so the checkout is the build input directly — fork model since 2026-08-06 (task #14).
+    vendor_fork(&repo, "libkrun")?;
 
     // virglrenderer: a from-source git checkout built into third_party/virgl-prefix (the worker
     // links it — see the limina-virgl-link-trap memory). Clone if absent, then apply our series.

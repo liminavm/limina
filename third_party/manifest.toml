@@ -5,7 +5,7 @@
 # every rev ever pinned here must stay reachable), then update `rev` here in the same commit.
 # Patch-audit status lives in docs/upstreaming/ledger/.
 #
-# Deps not yet migrated to the fork model (libkrun, edk2) still vendor via their
+# Deps not yet migrated to the fork model (edk2) still vendor via their
 # committed patches/<dep>/ series; they move here one at a time.
 #
 # `heavy = true` means `cargo xtask vendor` SKIPS the clone by default — the tree is huge and
@@ -13,6 +13,18 @@
 # fetches the pinned rev itself). Materialize one on demand with `cargo xtask vendor --heavy`.
 # `base` is the upstream tag the `limina` branch sits on; `scripts/export-linux-patches.sh`
 # derives the patch series from `base..branch` for the consumers that apply it onto other tags.
+
+# The VMM library (task #14, migrated 2026-08-06). The `limina` branch is the 128-patch series
+# rebased onto upstream tip (124 commits: 3 upstream-superseded patches dropped, one squash);
+# upstream moved orgs to github.com/libkrun/libkrun. `base` is the upstream commit the branch
+# sits on. limina consumes the crates by path ([workspace.dependencies] in the root Cargo.toml),
+# so vendor = clone + checkout, nothing to apply. patches/libkrun/ is retired (tombstone README).
+[libkrun]
+repo = "https://github.com/liminavm/libkrun.git"
+upstream = "https://github.com/libkrun/libkrun.git"
+branch = "limina"
+rev = "6796d31a6ba5ea646cc7a51a06aa9f5afe084205"
+base = "07fd40dcf6da8e14dd47e16a535531f0383fe52c"
 
 [imago]
 repo = "https://github.com/liminavm/imago.git"
