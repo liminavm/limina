@@ -36,15 +36,36 @@ use anyhow::{anyhow, bail, Context, Result};
 // Re-exported so tests can build display commands without depending on the crate directly.
 pub use limina_displayctl::{DisplayCommand, DisplayControl, EdidSpec, RangeSpec};
 
-/// Stable location of the krunkit EFI firmware blob (an EDK2 `.fd`). Overridable with
-/// `LIMINA_FIRMWARE`. This is the same firmware the M1 boot spikes used. It is "silent" — no
-/// GOP-*producing* video driver — so firmware/GRUB render only to the serial console.
-const DEFAULT_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
+/// Last-resort fallback firmware: the krunkit-shipped blob (an EDK2 `.fd`), the same one the
+/// M1 boot spikes used. It is a **DEBUG_GCC5 build with live ASSERTs that end in
+/// `CpuDeadLoop`** — an ASSERT anywhere in it wedges the guest at 100% CPU with no output
+/// (the #14 "cold-boot wedge" was exactly that), which is why it is no longer the default.
+const KRUNKIT_FALLBACK_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
 
 /// Stable location of OUR GOP-capable EDK2 firmware (built by `scripts/build-krun-efi.sh`,
 /// carries VirtioGpuDxe). Overridable with `LIMINA_GOP_FIRMWARE`. Unlike the silent firmware,
 /// firmware → GRUB → kernel all render to the virtio-gpu scanout — the windowed boot console.
 const DEFAULT_GOP_FIRMWARE: &str = "target/krun-efi/KRUN_EFI.gop.fd";
+
+/// The firmware every EFI-boot test uses: `LIMINA_FIRMWARE` if set, else OUR OWN RELEASE
+/// build ([`DEFAULT_GOP_FIRMWARE`] — what limina actually ships; RELEASE degrades gracefully
+/// where the DEBUG krunkit blob dead-loops), else the krunkit blob with a loud warning (a
+/// fresh clone before the first `scripts/build-krun-efi.sh` run).
+fn default_firmware() -> PathBuf {
+    if let Ok(fw) = std::env::var("LIMINA_FIRMWARE") {
+        return PathBuf::from(fw);
+    }
+    let ours = repo_root().join(DEFAULT_GOP_FIRMWARE);
+    if ours.exists() {
+        return ours;
+    }
+    eprintln!(
+        "WARNING: {DEFAULT_GOP_FIRMWARE} not built — falling back to the krunkit DEBUG \
+         firmware at {KRUNKIT_FALLBACK_FIRMWARE} (ASSERTs dead-loop silently there; run \
+         scripts/build-krun-efi.sh for the real default)"
+    );
+    PathBuf::from(KRUNKIT_FALLBACK_FIRMWARE)
+}
 
 /// Default EFI-bootable aarch64 installer ISO for the M10 Phase 3a boot-from-media test
 /// ([`GuestConfig::iso_boot_from_env`]). Gitignored & large (~1.1 GB) like the `.raw` images, so the
@@ -430,9 +451,7 @@ impl GuestConfig {
     /// Overrides: `LIMINA_BIN`, `LIMINA_VMM_BIN`, `LIMINA_FIRMWARE`, `LIMINA_TEST_DISK`,
     /// `LIMINA_TEST_SHUTDOWN_GRACE` (seconds).
     pub fn fedora_from_env() -> Result<GuestConfig> {
-        let firmware = std::env::var("LIMINA_FIRMWARE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_FIRMWARE));
+        let firmware = default_firmware();
         anyhow::ensure!(
             firmware.exists(),
             "firmware not found at {firmware:?} (set LIMINA_FIRMWARE)"
