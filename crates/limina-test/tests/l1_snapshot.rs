@@ -404,3 +404,54 @@ fn raw_sigusr1_seam_is_inert_by_default() {
 
     let _ = guest.shutdown(Duration::from_secs(10));
 }
+
+/// #21 (found during the #14 wedge autopsy): a suspend must complete even when some vCPUs
+/// have never been onlined. `maxcpus=1` keeps the guest from ever issuing PSCI CPU_ON for
+/// vCPU 1, so its VMM thread waits forever on the secondary boot channel — and that initial
+/// boot wait did not service Pause/Snapshot events, so `snapshot_vcpus` blocked forever on
+/// the never-arriving state reply: the suspend hung, the control plane deadlocked (the vmm
+/// mutex is held while waiting), and the VM was unrecoverable. Reachable by a user hitting
+/// suspend during early boot (before SMP bringup) or on any deliberately-capped guest.
+#[test]
+fn l1_snapshot_completes_with_a_never_onlined_vcpu() {
+    if !limina_test::require_hvf_or_skip("l1_snapshot_completes_with_a_never_onlined_vcpu") {
+        return;
+    }
+
+    let mut cfg = GuestConfig::l1_from_env()
+        .expect("resolving L1 guest config")
+        .append_cmdline("limina.counter maxcpus=1")
+        .with_supervisor_log()
+        .with_snapshot()
+        .with_env("LIMINA_RAW_SNAPSHOT_SEAM", "1");
+    cfg.cpus = 2;
+    cfg.ram_mib = 512;
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    guest
+        .wait_for("LIMINA_COUNTER_READY", Duration::from_secs(20))
+        .expect("counter guest did not reach userspace");
+
+    let snap = guest
+        .snapshot_path()
+        .expect("snapshot path configured")
+        .to_path_buf();
+    guest.snapshot().expect("triggering the snapshot");
+
+    let outcome = match guest.wait_supervisor_exit(Duration::from_secs(30)) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("=== supervisor+worker log ===\n{}", guest.supervisor_log());
+            panic!("suspend with a never-onlined vCPU did not complete: {e}");
+        }
+    };
+    assert_eq!(
+        outcome.code,
+        Some(126),
+        "worker should exit 'snapshotted' (126)"
+    );
+    assert!(
+        snap.exists() && snap.metadata().map(|m| m.len()).unwrap_or(0) > 0,
+        "snapshot file missing or empty at {snap:?}"
+    );
+}
