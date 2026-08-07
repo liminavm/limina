@@ -126,9 +126,9 @@ nothing, and "our new instrument shows no leak" is an expensive thing to believe
 It is now wired as a standing guard —
 `crates/limina-test/tests/scanout_churn_retention.rs`, which boots **windowed**
 (`--display-capture` never enters `window::run`, so a captured boot would test none of this)
-and asserts on the `owned unmapped` region-count delta: **+606 with eviction disabled, +23
-with it**, at 1280x800. Region count rather than bytes, so the threshold is
-resolution-independent.
+and asserts on the `owned unmapped` **byte** delta: **2340 MiB with eviction disabled, 98 MiB
+with it**, at 1280x800. It asserted on region COUNT until 2026-08-07 — see §0.4 for why that
+was blind (regions coalesce; the count moved by 1 across a 20x byte change).
 
 Two traps it documents in place. The env (`GALLIUM_DRIVER=zink`,
 `MESA_LOADER_DRIVER_OVERRIDE=zink`, `VK_DRIVER_FILES=…virtio_icd…`) is load-bearing and not
@@ -138,15 +138,15 @@ so a log can be audited. And its `handles=` count is **not** an identity count: 
 recycles a GEM handle number as soon as its object dies, so a perfect churn run reports
 `handles=3`. The host-side `[SCANOUT-LEDGER] … fresh N` line is the identity oracle.
 
-### §0.4 The 423 MB residual: NOT the cap, and NOT one sender (2026-08-07, sixth storm)
+### §0.4 Re-measuring the residual: the cap was right, the ORACLE was not (2026-08-07)
 
-§0.3 assumed the residual was `SurfaceStore`'s own 32-entry cap doing its job. Measured, it is
-not — it is a **second publisher re-sending the same surfaces**, and the cap is merely what
-stops it being unbounded.
+This section originally claimed the residual was not the cap but a second publisher re-sending
+surfaces. **That claim was wrong and is corrected below** — it was written from a call-count
+without reading the call site. What survives is a genuine oracle bug and two facts worth having.
 
-**Split kill, done properly this time** (`kill -9` on the supervisor: SIGTERM lets it tear the
-worker down on its way out, which is what invalidated the first attempt — the worker died with
-it and nothing could be attributed):
+**The split kill, done properly** (`kill -9` on the supervisor: SIGTERM lets it tear the worker
+down on its way out, which is what invalidated the first attempt — the worker died with it and
+nothing could be attributed):
 
 ```
                                     owned unmapped   regions
@@ -155,45 +155,47 @@ after 300 churn flips @2560x1440            436.8 M       38
 supervisor SIGKILLed, worker ALIVE            896 K         7
 ```
 
-So the supervisor holds it. **Note the region count barely moves (39 → 38) while bytes go 20×
-— region count is the WRONG oracle for this**, and the L2 guard, which asserts on regions,
-is blind to the whole 437 MB. It catches the catastrophic case (620 regions) and nothing else.
-Fix the oracle to bytes.
+The supervisor holds it, and 436.8 M is `SURFACE_STORE_CAP` x one framebuffer
+(32 x 14.1 MiB = 451 MiB). **§0.3's arithmetic was right.**
 
-**Where the surfaces come from.** Instrumenting both ends of the Mach surface-port:
+**THE REAL BUG HERE — the region count is not an oracle.** Note that column: it moves by ONE
+across a 20x change in bytes, because regions coalesce. The L2 guard asserted on region count,
+so it was blind to the entire 437 MB; it separated the catastrophic case (620 regions) and
+nothing finer. An oracle that reads green while the quantity it guards moves 20x is worse than
+none. Now asserted in BYTES, re-proven both ways: 2340 MiB fail / 98 MiB pass, six times the
+headroom the region threshold had.
+
+**Two facts from instrumenting both ends of the Mach surface port.**
 
 | | count |
 |---|---|
-| sends from `limina-display`'s `publish()` (the worker) | **12** |
-| receives in the supervisor's store | **614** |
-| distinct ids received | **39** |
-| distinct ids sent by the worker | **12** |
+| sends from `limina-display`'s `publish()` | 12 |
+| receives in the supervisor's store | 614 |
+| distinct ids received | 39 |
 
-The worker is not the main sender. **`third_party/virglrenderer/src/venus/vkr_metal_helpers.m`
-`limina_publish_surface()` sends venus scanout surfaces to the supervisor's port directly**,
-bypassing `limina-display` — 602 of the 614. And it has no already-sent guard, so it re-sends
-the same surface every time it is presented: ~25 sends per id.
+1. **vkr publishes scanout surfaces to the supervisor directly**, bypassing `limina-display` —
+   602 of the 614. This is structural, not a leak: the venus scanout IOSurfaces are created
+   *inside* vkr and are deliberately **non-global**, so `IOSurfaceLookup(id)` fails by design
+   and `limina-display` — which only ever sees an `iosurface_id` in `present_surface`, never
+   the `IOSurfaceRef` — cannot mint a Mach port for one. Only the creator can. The call sits in
+   `vkr_mtl_iosurface_alloc`, **one publish per `IOSurfaceCreate`**, which is correct.
+   *(The first version of this section claimed vkr re-sent each surface ~25x with no
+   already-sent guard, and filed a task to add one. There is nothing to dedupe — that was
+   inferred from 614-vs-12 without reading the call site. Read the call site.)*
+2. **602 publishes for 301 guest buffers = exactly 2 IOSurfaces per scanout buffer.** That is
+   the same ~2x already noted in the backlog (1207 charges for 611 creates) and is the open
+   question worth pulling on: halving it halves the resting cost of every cached surface.
+3. **IOSurface ids RECYCLE.** 301 guest buffers produced only **39 distinct ids** — the guest
+   holds ~3 at a time and the kernel reuses an id as soon as a surface dies.
 
-**Two facts that together explain the plateau, and break the obvious fix:**
-
-1. **IOSurface ids are RECYCLED by the kernel.** 301 guest buffers produced only **39 distinct
-   ids**, because the guest holds ~3 at a time and the kernel reuses an id as soon as a surface
-   dies. A store keyed by id therefore has a small key space that is permanently occupied.
-2. **Re-publishing refills what the release drains.** The unref notification works exactly as
-   designed — `hits=301, misses=0`, every release found its entry — and the store still ends at
-   31, because vkr re-sends between drains.
-
-**This makes the release-by-id design UNSAFE as it stands, not merely ineffective.** With ids
-recycled, a `release <id>` for a dead surface can remove a *different, live* surface that has
-since been given the same id. The WIP is therefore parked, not merged:
-`wip-release-notify-limina.patch` + `wip-release-notify-libkrun.patch` here, with the mechanism
-verified working and the hazard unresolved.
-
-**The fix is upstream of the supervisor.** vkr should not re-publish a surface it has already
-sent (a sent-set in `vkr_metal_helpers.m`), which removes ~98% of the traffic; and any
-release protocol needs a key that does not recycle — an epoch/generation alongside the id, or
-keying on the resource id rather than the IOSurface id. Until then the cap is what bounds this,
-and it bounds it correctly.
+**Fact 3 is why the unref-notification work is parked rather than merged**
+(`wip-release-notify-limina.patch` + `wip-release-notify-libkrun.patch` here). The mechanism is
+verified working — `hits=301, misses=0`, every release found its entry — and it correctly stops
+the supervisor holding what the guest freed. But **with ids recycling, `release <id>` can drop a
+DIFFERENT live surface that has since been given that id**: a correctness hazard, not merely an
+ineffective optimisation. Any release protocol needs a key that does not recycle — an
+epoch/generation alongside the id, or the virtio resource id instead. Until then the cap bounds
+this, and it bounds it correctly.
 
 ### What this cost, and the rule that would have saved it
 
