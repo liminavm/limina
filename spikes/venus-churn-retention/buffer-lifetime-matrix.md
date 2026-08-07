@@ -105,6 +105,22 @@ SCANOUT half 2026-08-05 (virgl `bc03f705`/`37bb9d6c`) and the non-scanout half 2
 allocate through gbm under `MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu` and have the compositor
 import it — which is exactly the asymmetric holder this section describes.
 
+> **TESTED 2026-08-07 (M3c) — the failure mode above does not occur.** `testcomp` now has a gbm
+> client arm; `teardown-matrix.sh matrix gbm` and `leakexit gbm` drive it. Every path returns to
+> baseline, and the RED that makes that mean something is real: 40 leaked gbm imports hold
+> **316.9 MiB in the vrend bucket** (40 × 7.9 MiB = 1920×1080×4) where the shipped path holds
+> `0 B live`.
+>
+> The provenance question this section implies — *is the buffer really vrend-owned?* — has an
+> exact answer, and it is the budget ledger: a vrend-allocated IOSurface bills to the shared
+> `"vrend"` pseudo-context, a venus one to the client's own. Ironically §6 is what makes this
+> work: the shared bucket exists precisely *because* per-client attribution is impossible here.
+> Right oracle for provenance, wrong one for retention.
+>
+> What §3 predicted still holds as *mechanism* — the `+1` does pin the vrend-owned surface, which
+> is why RED retains — it just never gets stranded, because the venus side always reaches
+> `vkr_device_memory_release`.
+
 ## 4. Test matrix — bunch by teardown PATH × holder
 
 The cases collapse along one axis: they share a *teardown path*, and the path is what breaks, not
@@ -151,18 +167,51 @@ ctx N [name] destroyed with X still charged — host GPU memory was not released
 with the size histogram attached. That turns each test's assertion into one log check instead of
 `vmmap` sampling plus settle-polling a noisy footprint.
 
-**Limitation:** `vkr_budget_set_context` is called only from the **venus** dispatch entry points
-(`vkr_context_submit_cmd`, `vkr_ring_submit_cmd`). vrend commands come through a different
-dispatch, so a **vrend-allocated IOSurface is charged to whatever context that thread last
-dispatched for, or `0`**. Totals stay correct (charge and credit hit the same ledger), but
-per-context attribution is unreliable on the vrend path. Irrelevant for "did the total return to
-baseline"; it matters if a test blames a specific context. Cheap fix: bind the TLS at the vrend
-dispatch entry too. **Do this before writing the vrend-holder tests.**
+> **RESOLVED (2026-08-07) — and it dissolved rather than got fixed.** This section used to read
+> "Cheap fix: bind the TLS at the vrend dispatch entry too. **Do this before writing the
+> vrend-holder tests.**" That prescription was wrong in premise, and the shipped answer
+> (virgl `53e660e6`, `vkr_budget_set_vrend()` called from `vrend_resource_iosurface_init`,
+> `vrend_renderer.c:8819`) is a **shared `"vrend"` pseudo-context**, not real attribution.
+>
+> The reason is structural, not an omission: a classic resource is created through the VMM's
+> **global** resource-create path, which carries no context at all — the guest attaches it to one
+> only afterwards — and that path runs on the same thread that dispatches venus. There is nothing
+> to bind. A shared bucket is the honest answer; per-client blame for a vrend-owned surface will
+> never exist.
+>
+> **Consequence for the M3c tests: the budget ledger is the wrong oracle for this whole column.**
+> Do not assert per-context budget lines for vrend-owned surfaces. The census pair
+> (`lookup A/F (+N)` and `DEALLOC … (alive M)`) is context-agnostic and is the right instrument.
+>
+> Stale in the fork itself: the `KNOWN LIMIT — attribution on the vrend path` paragraph at
+> `src/venus/vkr_budget.h:66-71` still describes the pre-`53e660e6` state and still says to bind
+> the TLS. Not worth a manifest bump alone — batch the comment fix with the next virgl commit.
+
+**Historical limitation (now resolved, above):** `vkr_budget_set_context` is called only from the
+**venus** dispatch entry points (`vkr_context_submit_cmd`, `vkr_ring_submit_cmd`), so a
+vrend-allocated IOSurface would be charged to whatever context that thread last dispatched for.
+Totals always stayed correct — charge and credit hit the same ledger.
 
 ## 7. Sequencing
 
-Budget feature ships → fix the vrend TLS attribution → write the path × holder tests → then
-design per-case ownership rules from whatever goes red.
+Budget feature ships → ~~fix the vrend TLS attribution~~ (dissolved, §6) → write the path ×
+holder tests → then design per-case ownership rules from whatever goes red.
+
+The venus-holder column is done (§8). What remains is the vrend column plus paths 3 and 4, and
+nothing gates them any more.
+
+**Two traps for whoever writes the vrend arm:**
+
+- **Prove the client's buffers are actually classic, per arm, host-side.** `MESA_LOADER_DRIVER_
+  OVERRIDE` selects gbm's backing driver: get it wrong and the client's gbm buffers are
+  zink→venus **blobs**, so the test re-runs the venus column while its name says vrend. That is
+  the five-exonerations invariance failure waiting to happen. The positive proof is the worker's
+  classic-attach / import-by-surface-id line — `info` level, so the `RUST_LOG` trap applies —
+  and client-side, `vkclassicimport.py`'s discipline of refusing to run when it would be vacuous.
+- **§4's not-a-bug case is the default outcome here, not an edge case.** The gbm client dying
+  first destroys the vrend resource while the compositor still holds the borrowed `+1`; the
+  surface staying alive until eviction is CORRECT, and from outside it is indistinguishable from
+  the leak. Decide which you are looking at before calling anything red.
 
 ## 8. The vehicle for these tests
 
@@ -199,7 +248,27 @@ census reads `lookup 508/508 (+0)` / `alive 1`. So **a venus↔venus client-buff
 cannot produce §1's compositor-quit residual**, however badly the guest behaves. That removes a
 whole column from suspicion and leaves the paths that do *not* route through this sweep.
 
-**Still untested, each needing its own RED first:** paths 3 and 4, and the whole vrend-holder
-column (§3) — that one is M3c and wants the §6 `vkr_budget_set_context` fix ahead of it. Plus
-the two non-vkr suspects §1 always carried: the supervisor's Mach send right, and caveat #1
-(the context never actually dying).
+**M3c landed the same day** (limina `713a7ad`), closing the vrend-holder column and adding a
+teardown path the original list did not have:
+
+- **The vrend column is clean too**, with its own RED (40 leaked gbm imports = 316.9 MiB held in
+  the vrend bucket vs `0 B live` shipped) and positive provenance proof per arm.
+- **Path 1' — clean exit while still holding leaked imports.** Every kill in paths 1/2/2b goes
+  through the live-instance full sweep, so none of them probe the bare-`free()` branch at all.
+  Path 1' does, and it comes back with `instance was gone, 0 objects and 0 resources left` —
+  **the branch ran with nothing to free**, on both holders. Structurally so: `vkr_instance_destroy`
+  sweeps the whole hierarchy under the instance, and a leaked import is reachable from it.
+
+**So §1's trigger is not a client-buffer lifetime bug, on either holder, however deliberately the
+guest misbehaves.** Both holder columns × four teardown paths, each gated on a RED, all clean.
+What is left is what never routes through that sweep:
+
+- **paths 3 and 4** — the `-1000158000` error-path partial, and ring-FATAL teardown (cheap
+  deterministic vehicle: an over-cap allocation trips `vkr_budget_kills_context`,
+  `vkr_device_memory.c:285`). Each still needs its own RED.
+- **the supervisor's Mach send right** — a different *process*, which no vkr sweep can reach and
+  no oracle here can see.
+- **caveat #1 in §7** — the context never actually died. Note every clean run above ends in a
+  `destroying context` line; §1's incident was never confirmed to have one.
+
+The last two are now the *leading* suspects rather than the leftovers, and neither is a vkr bug.

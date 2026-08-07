@@ -68,7 +68,7 @@ It is built bottom-up, and each step is gated on evidence rather than on compili
 | **2** ✅ | Wayland frontend (smithay), `wl_shm` clients | a real client's pixels reach the scanout. Passed 2026-08-07 — see below. |
 | **3a** ✅ | `linux-dmabuf` import (venus-allocated client) | a client's dmabuf pixels reach the scanout **and** the host log shows the IOSurface import branch. Passed 2026-08-07 — see below. |
 | **3b** ✅ | teardown paths × holders | discriminates between the paths in `buffer-lifetime-matrix.md` §4, against an oracle shown to move (+41) under a deliberate leak. Passed 2026-08-07. |
-| 3c | vrend-allocated (gbm) client buffers | reaches the **asymmetric** holder of matrix §3, the observed compositor-quit shape. Needs the `vkr_budget_set_context` fix in matrix §6 first. |
+| **3c** ✅ | vrend-allocated (gbm) client buffers | reaches the **asymmetric** holder of matrix §3, the observed compositor-quit shape. Needs its own RED (a new failure class) *and* positive host-side proof the buffers really are classic. Passed 2026-08-07 — see below. |
 
 ### M3a's gate has two halves, and the pixels are the weaker one
 
@@ -221,6 +221,75 @@ suspects that do *not* route through this sweep — the vrend-side holder (§3, 
 and ring-FATAL teardowns (paths 3 and 4), the supervisor's Mach send right, and caveat #1: the
 context never actually dying.
 
+### M3c: the asymmetric holder — vrend owns, venus borrows (2026-08-07)
+
+M3a/M3b's client allocates through Vulkan, which makes the import **symmetric**: the owning
+reference and the borrowed `+1` both sit on the venus side, so one sweep frees both. Matrix §3's
+worry is the other shape — vrend *owns* the IOSurface, venus holds only a borrowed `+1` — and no
+Vulkan-allocated buffer can express it. That needs gbm, which is also the *realistic* shape: since
+the 2026-08-04 `virtio_gpu` flip, an ordinary GL client's window buffer is exactly this.
+
+Run it with `./teardown-matrix.sh redgreen gbm` and `./teardown-matrix.sh matrix gbm`.
+
+**The trap this milestone lives inside.** `MESA_LOADER_DRIVER_OVERRIDE` selects gbm's *backing
+driver*. Under `zink` a gbm buffer **is** a venus blob — so the entire arm would re-run M3b's
+symmetric case while its name, its logs and its results all said "vrend". A vacuous pass that
+looks like evidence is worse than a failure, so there are two independent guards:
+
+| guard | proves | how |
+|---|---|---|
+| client refuses to start unless the override is `virtio_gpu` | **intent** | `require_classic_gbm`, the same discipline as `vkclassicimport.py` |
+| the budget ledger's shared `"vrend"` bucket | **fact** | a vrend-allocated IOSurface bills to ctx `4294967294 [vrend]`; a venus one bills to the client's own context |
+
+The second is the load-bearing one, and it is exact: a 640×480 client put `1.2 MiB live … 1 x
+1.2 MiB (IOSurface, 1 ever)` in the vrend bucket at the same second as the import line reporting
+`size=1228800` — which is 640×480×4. vrend allocated it; venus imported it.
+
+Note the ledger is the **right** oracle for *provenance* and the **wrong** one for *retention*
+here — per-client attribution of a vrend surface does not exist by construction (matrix §6).
+Different questions, and it is easy to dismiss the whole instrument on the strength of the wrong one.
+
+**RED first, because this is a new failure class** — the vehicle rule is per class, and M3's
+earned classes did not cover it. 40 × 1920×1080 gbm buffers:
+
+| arm | `lookup (+N)` | alive | vrend bucket after | evictions |
+|---|---|---|---|---|
+| GREEN — shipped | **+0** | 2 | **0 B live** | 42 |
+| RED — `--leak-imports` | **+41** | 42 | **316.9 MiB** (40 × 7.9 MiB) | 0 |
+
+7.9 MiB is exactly 1920×1080×4. Note GREEN's bucket returning to `0 B live`: when the compositor
+drops its borrowed `+1`, the vrend-owned surface really is freed. The asymmetry behaves as §3
+predicted, and the oracle sees it.
+
+**Every teardown path still comes back clean**, on both holders:
+
+| path | gbm | venus |
+|---|---|---|
+| 1 — client clean exit | 2 → 2 | 2 → 2 |
+| 2 — client SIGKILL, buffer committed+unreleased | 2 → 2 | 2 → 2 |
+| 2b — compositor SIGKILL holding a live import | 2 → 2 | 2 → 2 |
+| **1' — compositor exits CLEANLY while leaking imports** | 2 → 2 | 2 → 2 |
+
+### Path 1' is the one the other arms miss, and it needed a validity gate
+
+Every kill above goes through the **live-instance full sweep** (the §2 correction). The
+bare-`free()` branch takes only what *survives* that sweep, so probing it needs the opposite: a
+**clean** exit that is still holding imports it never released. That is `run 400 --leak-imports`
+(`./teardown-matrix.sh leakexit [venus|gbm]`), whose `Render::drop` deliberately skips the sweep.
+
+Result on both holders, with `COMPOSITOR DONE frames=400 imported=1 evicted=0`: `alive` 2 → 2,
+`lookup +0`, vrend bucket back to `0 B live`, and the destroy line reads `instance was gone, 0
+objects and 0 resources left in the tables` — **the bare-`free()` branch ran with nothing to
+free.** The reason is structural: `Vk::drop` destroys the `VkInstance`, and `vkr_instance_destroy`
+sweeps the whole hierarchy under it, leaked `VkDeviceMemory` included. Reaching bare-`free()`
+holding anything needs objects *not reachable from the instance*, which a leaked import is not.
+
+**The first run of this arm was invalid, and only said so because it was made to.** `start_comp`
+had overwritten the compositor's log, so whether it exited cleanly or was killed 60 s later by the
+next `pkill` was unknowable — a kill wearing a clean-exit label, which would have "confirmed"
+exactly what it could not test. The arm now writes its own log and **refuses to report numbers
+without a `COMPOSITOR DONE` line**.
+
 ### M2's gate: a real client's pixels on the scanout (2026-08-07)
 
 `limina-testcomp run` on the guest console, `limina-testcomp client` against it, and the
@@ -335,14 +404,12 @@ identical guest workload). testcomp has earned it twice, and the rule is **per f
 | class | RED | GREEN | separation |
 |---|---|---|---|
 | scanout churn (M1) | `SURFACE_STORE_CAP` lifted: +4.17 GiB | shipped cap: +361 MiB | 11.5x |
-| **client dmabuf retention (M3)** | `--leak-imports`: +41 alive IOSurfaces | shipped: +0 | flat vs 41 |
+| **client dmabuf retention, venus-owned (M3b)** | `--leak-imports`: +41 alive IOSurfaces | shipped: +0 | flat vs 41 |
+| **client dmabuf retention, vrend-owned (M3c)** | `--leak-imports`: `lookup +41`, 316.9 MiB held in the vrend bucket | shipped: `+0`, `0 B live` | flat vs 41 |
 
-So "testcomp shows no leak on the client dmabuf path" is now a statement with content, for the
-paths in the M3b table and **only** those. It still says nothing about:
+So "testcomp shows no leak on the client dmabuf path" is now a statement with content — for
+**both** holders, across paths 1, 2, 2b and 1'. It still says nothing about:
 
-- **vrend-allocated (gbm) client buffers** — the asymmetric holder of matrix §3, where vrend owns
-  the IOSurface and venus only borrows. That is M3c, and it is the shape of the originally
-  observed compositor-quit residual. Blocked on matrix §6's `vkr_budget_set_context` fix.
 - **paths 3 and 4** — the `-1000158000` error-path partial and the ring-FATAL teardown. Path 4
   has a cheap deterministic vehicle available: an over-cap allocation trips
   `vkr_budget_kills_context` (`vkr_device_memory.c:285`), giving FATAL teardown on demand.
