@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# A workspace of its own, deliberately NOT a member of limina's root workspace and NOT of
+# guest/. Three reasons, all load-bearing:
+#
+#   license  GPL-3.0-only here vs GPL-2.0-only WITH the limina exception everywhere else.
+#            Separate programs, never linked — see README.md. A shared workspace would not
+#            itself break that, but keeping them apart makes the boundary visible.
+#   target   aarch64-unknown-linux-GNU (it dlopens the guest's glibc libvulkan), while
+#            guest/ pins aarch64-unknown-linux-MUSL with rust-lld and no C toolchain.
+#   toolchain builds in the limina-build:fc43 container, not on the macOS host.
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "limina-testcomp"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "A small, realistic Wayland compositor for reproducing limina host behaviours"
+publish = false
+
+# Milestone 1 is KMS + Vulkan scanout only — no Wayland, no input. smithay/wayland-server
+# arrive with M2, and when they do the version to use is the one a working compositor on this
+# exact stack resolves: synoik pins smithay to a git fork (github.com/kov/smithay branch
+# `synoik`) for para-virt cursor-plane hotspot support, NOT a crates.io release. Adding it
+# early would have meant a recalled `"0.7"` pin carrying an unverified API surface into M1.
+#
+# Versions below are transcribed from synoik's Cargo.toml rather than recalled, so they are
+# known to resolve and to work against venus on a limina guest.
+[dependencies]
+# Vulkan. `ash` rather than a safe wrapper: the scanout path needs external-memory and
+# DRM-modifier structs that wrappers tend to lag on, and synoik's proven code is ash.
+ash = "0.38.0"
+
+# KMS. drm-rs for the mode/plane/framebuffer objects; we drive the flips ourselves.
+drm = "0.14"
+drm-ffi = "0.9.1"
+
+anyhow = "1.0"
+libc = "0.2"
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+debug = 1 # keep symbols: this is a debugging vehicle, a bare backtrace is worth the size
