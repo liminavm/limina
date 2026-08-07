@@ -10,10 +10,18 @@
 # calls vkDestroyInstance, so abrupt exit is the path that runs the FULL sweep. So the job here
 # is to find out which path leaves a residual, not to prove a predicted one does.
 #
-# Two modes:
-#   ./teardown-matrix.sh            paths 1, 2, 2b — what the host does per teardown path
-#   ./teardown-matrix.sh redgreen   the vehicle-rule gate: prove the setup can see a retained
-#                                   client import before believing the matrix's all-clean result
+# Modes. The second argument picks WHO OWNS the host IOSurface, which is the axis M3c adds:
+# `venus` (default) is symmetric — the owning ref and the borrowed +1 are both venus-side, so one
+# sweep frees both. `gbm` is the ASYMMETRIC case of matrix §3 — vrend owns, venus only borrows.
+#
+#   ./teardown-matrix.sh                    paths 1, 2, 2b with a venus-allocated client  (M3b)
+#   ./teardown-matrix.sh matrix gbm         the same paths with a gbm/vrend client        (M3c)
+#   ./teardown-matrix.sh redgreen [venus|gbm]
+#                                   the vehicle-rule gate: prove the setup can see a retained
+#                                   import OF THAT CLASS before believing any green above it
+#
+# The census-forcing tick client is deliberately venus in BOTH arms: it exists only to make the
+# worker allocate, and holding it constant keeps it from being a second variable.
 #
 # Run from the repo root, with a guest already booted by
 #   LIMINA_DISK=<enhanced.raw> LIMINA_GLOBAL_SCANOUT=1 LIMINA_GPU_MEM_BUDGET_CENSUS=10 \
@@ -99,6 +107,29 @@ start_comp() {
   g "grep -a 'COMPOSITOR READY' /tmp/comp.log" || { echo "!! compositor did not start"; g 'tail -5 /tmp/comp.log'; return 1; }
 }
 
+# THE PROVENANCE ORACLE for the gbm arm — proves the buffer under test is a CLASSIC vrend
+# resource and not a venus blob wearing a gbm API.
+#
+# This is the check without which M3c is unreadable. `MESA_LOADER_DRIVER_OVERRIDE` selects gbm's
+# backing driver: under `zink` a gbm buffer IS a venus allocation, so the arm would re-run M3b's
+# symmetric case while every label said vrend. The client's own env guard (require_classic_gbm)
+# proves only intent — this proves what the host actually did.
+#
+# It works because a vrend-allocated IOSurface bills to the shared "vrend" pseudo-context
+# (ctx UINT32_MAX-1 = 4294967294, vkr_budget_set_vrend() from vrend_resource_iosurface_init),
+# while a venus one bills to the client's own context. So the bucket naming a charge of exactly
+# the client's buffer size is positive proof of who allocated it.
+#
+# Measured 2026-08-07 with a 640x480 client: `ctx 4294967294 [vrend]: 1.2 MiB live ... 1 x 1.2 MiB
+# (IOSurface, 1 ever)` at the same second as the compositor's import line, and 1.2 MiB is exactly
+# 640*480*4 = 1228800, the size the import line reported.
+#
+# Note the budget ledger is the RIGHT oracle for provenance and the WRONG one for retention here:
+# per-client attribution of a vrend surface does not exist by construction (see the matrix §6).
+vrend_bucket() {
+  grep -a "\[vrend\]" "$WORKER_LOG" | tail -1 | sed 's/.*\[vrend\]: /    vrend bucket: /'
+}
+
 # Both census `(+N)` refcount deltas plus the dealloc `alive` count, on one line.
 refs() {
   local mark; mark=$(mark)
@@ -126,27 +157,130 @@ refs() {
 # already includes the opening tick, so the delta is 40 churn buffers + the closing tick.
 # ---------------------------------------------------------------------------------------------
 if [ "${1:-matrix}" = "redgreen" ]; then
-  echo "=== M3 RED/GREEN: can this vehicle see a retained client import? ==="
+  # Second argument picks WHO OWNS the host IOSurface — the whole axis M3c adds:
+  #   venus (default)  the client allocates through Vulkan. Symmetric: both the owning ref and
+  #                    the borrowed +1 sit on the venus side, so one sweep frees both.
+  #   gbm              the client allocates through gbm as a CLASSIC vrend resource. Asymmetric:
+  #                    vrend owns, venus borrows — matrix §3, the shape §1's residual looks like.
+  KIND="${2:-venus}"
+  case "$KIND" in
+    venus) CHURN_MODE="client-churn"; CLIENT_ENV="" ;;
+    gbm)   CHURN_MODE="client-churn-gbm"; CLIENT_ENV="MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu" ;;
+    *) echo "unknown kind $KIND — expected venus or gbm"; exit 1 ;;
+  esac
+
+  echo "=== M3 RED/GREEN ($KIND-allocated client buffers) ==="
+  echo "can this vehicle see a retained client import of this class?"
   echo
   for arm in "GREEN (shipped)::" "RED (--leak-imports)::--leak-imports"; do
     name="${arm%%::*}"; flag="${arm##*::}"
     start_comp "$flag" || exit 1
     echo "--- $name ---"
     echo "  before: $(refs)"
-    g "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD XDG_RUNTIME_DIR=/tmp/testcomp-run \
-       WAYLAND_DISPLAY=wayland-1 ./limina-testcomp client-churn 40 $SIZE" \
+    g "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD $CLIENT_ENV XDG_RUNTIME_DIR=/tmp/testcomp-run \
+       WAYLAND_DISPLAY=wayland-1 ./limina-testcomp $CHURN_MODE 40 $SIZE" \
       | grep -a "CHURN DONE" | sed 's/^/  /'
     echo "  after : $(refs)"
+    [ "$KIND" = gbm ] && vrend_bucket
     echo "  comp  : $(g 'grep -ac "imported client dmabuf" /tmp/comp.log' | tr -d ' ') imports / \
 $(g 'grep -ac "evicted a client dmabuf" /tmp/comp.log' | tr -d ' ') evictions"
     echo
   done
   echo 'RED must show a large positive lookup (+N) and a raised alive. If both arms read the'
   echo "same, the differential is not reaching the worker — fix that before reading the matrix."
+  if [ "$KIND" = gbm ]; then
+    echo
+    echo "AND for gbm, the vrend bucket must show charges of exactly the client's buffer size."
+    echo "Without that the buffers were venus blobs and this re-ran the venus arm under a"
+    echo "different name — a vacuous pass that LOOKS like evidence."
+  fi
   exit 0
 fi
 
-echo "=== M3b teardown matrix (client size $SIZE) ==="
+# ---------------------------------------------------------------------------------------------
+# `leakexit` — path 1', the one every other arm misses.
+#
+# Every kill in this script goes through the LIVE-instance full sweep (that is the §2 correction).
+# The bare-free() branch takes only what SURVIVES that sweep, so to probe it the compositor has to
+# exit CLEANLY — running its destructors, destroying its VkDevice and VkInstance explicitly —
+# while still holding imports it never released. That is `run <frames> --leak-imports`: the
+# frame bound makes it exit on its own, and Render::drop deliberately skips the import sweep.
+#
+# MEASURED 2026-08-07, both holders, `COMPOSITOR DONE frames=400 imported=1 evicted=0` with
+# self-exited=yes: alive 2 -> 2, lookup +0, and the vrend bucket back to 0 B live. The destroy
+# line reads `instance was gone, 0 objects and 0 resources left in the tables` — so the
+# bare-free() branch ran with NOTHING to free.
+#
+# The reason is structural: Vk::drop destroys the VkInstance, and vkr_instance_destroy sweeps the
+# whole object hierarchy under it, leaked VkDeviceMemory included. Reaching bare-free() with
+# anything in hand needs objects that are NOT reachable from the instance — which a leaked import
+# is not. So "the compositor quit and host memory stayed" cannot be explained by a client-buffer
+# leak on EITHER holder, however deliberately the guest leaks.
+# ---------------------------------------------------------------------------------------------
+if [ "${1:-matrix}" = "leakexit" ]; then
+  KIND="${2:-venus}"
+  case "$KIND" in
+    venus) CLIENT_MODE="client-dmabuf"; CLIENT_ENV="" ;;
+    gbm)   CLIENT_MODE="client-gbm";    CLIENT_ENV="MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu" ;;
+    *) echo "unknown kind $KIND — expected venus or gbm"; exit 1 ;;
+  esac
+  echo "=== path 1': compositor exits CLEANLY while leaking imports ($KIND client) ==="
+  start_comp "" >/dev/null 2>&1
+  echo "  before alive : $(refs)"
+  FROM=$(mark)
+
+  g "sudo -n pkill -f 'limina-testcomp run'"; sleep 2
+  # A SEPARATE log: start_comp's redirect would overwrite /tmp/comp.log with the fresh
+  # measurement compositor's output, and then whether this one exited cleanly is unknowable —
+  # which is the difference between an answer and a number.
+  "${SSH[@]}" "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD RUST_LOG=info nohup \
+     ./limina-testcomp run 400 --leak-imports > /tmp/leakexit.log 2>&1 &" >/dev/null 2>&1 &
+  sleep 4
+  g "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD $CLIENT_ENV XDG_RUNTIME_DIR=/tmp/testcomp-run \
+     WAYLAND_DISPLAY=wayland-1 ./limina-testcomp $CLIENT_MODE 20 $SIZE" \
+    | grep -aE "CLIENT (COMMITTED|DONE)" | sed 's/^/  /'
+  # Wait for the frame bound to fire and the process to leave ON ITS OWN. It only renders when
+  # there is something to render, so the client must still be committing while the count runs
+  # out — hence the 20 s client above rather than a brief one.
+  self_exited=no
+  for _ in $(seq 1 30); do
+    if ! g "pgrep -f 'limina-test[c]omp run'" >/dev/null 2>&1; then self_exited=yes; break; fi
+    sleep 2
+  done
+  # THE VALIDITY GATE for this arm. No COMPOSITOR DONE means the process did not reach its own
+  # exit path, so nothing ran its destructors and this arm tested a kill wearing a clean-exit
+  # label. Refuse to report a number in that case rather than publish an unreadable one.
+  done_line=$(g 'grep -a "COMPOSITOR DONE" /tmp/leakexit.log' | tr -d '\r')
+  echo "  self-exited  : $self_exited"
+  echo "  exit line    : ${done_line:-<none — see below>}"
+  if [ -z "$done_line" ]; then
+    echo
+    echo "!! INVALID ARM: the compositor never printed COMPOSITOR DONE, so it did not exit"
+    echo "!! through its own destructors. Whatever the counts below say, this did NOT test the"
+    echo "!! clean-exit path. Raise the frame bound or keep the client committing for longer."
+    g 'tail -4 /tmp/leakexit.log' | sed 's/^/    /'
+  fi
+  sleep 3
+  start_comp "" >/dev/null 2>&1
+  echo "  after alive  : $(refs)"
+  [ "$KIND" = gbm ] && vrend_bucket
+  echo "  --- host lines ---"
+  since "$FROM" | grep -aE "destroying context|destroyed —|destroyed with|still holds" \
+    | sed 's/.*virgl: vkr: /    /;s/.*virgl_renderer\] /    /' | tail -6
+  exit 0
+fi
+
+# The teardown paths run against either holder. `matrix gbm` is M3c: vrend owns the IOSurface and
+# venus holds only the borrowed +1, so a venus-side teardown that skips vkr_device_memory_release
+# strands the surface with NO owner left. `matrix` alone is M3b's venus/venus case.
+KIND="${2:-venus}"
+case "$KIND" in
+  venus) CLIENT_MODE="client-dmabuf"; CLIENT_ENV="" ;;
+  gbm)   CLIENT_MODE="client-gbm";    CLIENT_ENV="MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu" ;;
+  *) echo "unknown kind $KIND — expected venus or gbm"; exit 1 ;;
+esac
+
+echo "=== teardown matrix — $KIND-allocated client buffers, size $SIZE ==="
 echo
 
 # ---------------------------------------------------------------------------------------------
@@ -157,8 +291,8 @@ echo
 echo "--- path 1: clean exit ---"
 start_comp "" || exit 1
 FROM=$(mark); echo "  before alive   : $(force_census)"
-g "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD RUST_LOG=info XDG_RUNTIME_DIR=/tmp/testcomp-run \
-   WAYLAND_DISPLAY=wayland-1 ./limina-testcomp client-dmabuf 8 $SIZE" | grep -E "CLIENT (COMMITTED|DONE)" | sed 's/^/  /'
+g "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD $CLIENT_ENV RUST_LOG=info XDG_RUNTIME_DIR=/tmp/testcomp-run \
+   WAYLAND_DISPLAY=wayland-1 ./limina-testcomp $CLIENT_MODE 8 $SIZE" | grep -E "CLIENT (COMMITTED|DONE)" | sed 's/^/  /'
 sleep 3
 report "clean" "$FROM"
 echo "  compositor     : $(g 'grep -ac "evicted a client dmabuf" /tmp/comp.log') eviction(s)"
@@ -171,11 +305,11 @@ echo
 echo "--- path 2: SIGKILL, buffer committed and unreleased ---"
 start_comp "--hold-buffers" || exit 1
 FROM=$(mark); echo "  before alive   : $(force_census)"
-"${SSH[@]}" "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD RUST_LOG=info XDG_RUNTIME_DIR=/tmp/testcomp-run \
-   WAYLAND_DISPLAY=wayland-1 ./limina-testcomp client-dmabuf 60 $SIZE --park" >/tmp/m3b-client.log 2>&1 &
+"${SSH[@]}" "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD $CLIENT_ENV RUST_LOG=info XDG_RUNTIME_DIR=/tmp/testcomp-run \
+   WAYLAND_DISPLAY=wayland-1 ./limina-testcomp $CLIENT_MODE 60 $SIZE --park" >/tmp/m3b-client.log 2>&1 &
 sleep 6
 grep -aE "CLIENT (COMMITTED|PARKED)" /tmp/m3b-client.log | sed 's/^/  /'
-g "sudo -n pkill -9 -f 'limina-testcomp client-dmabuf'"
+g "sudo -n pkill -9 -f 'limina-testcomp client-'"
 echo "  SIGKILLed"
 sleep 4
 report "sigkill" "$FROM"
@@ -190,14 +324,14 @@ echo
 echo "--- path 2b: SIGKILL the COMPOSITOR while it holds a live import ---"
 start_comp "--hold-buffers" || exit 1
 FROM=$(mark); echo "  before alive   : $(force_census)"
-"${SSH[@]}" "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD RUST_LOG=info XDG_RUNTIME_DIR=/tmp/testcomp-run \
-   WAYLAND_DISPLAY=wayland-1 ./limina-testcomp client-dmabuf 60 $SIZE --park" >/tmp/m3b-client2.log 2>&1 &
+"${SSH[@]}" "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD $CLIENT_ENV RUST_LOG=info XDG_RUNTIME_DIR=/tmp/testcomp-run \
+   WAYLAND_DISPLAY=wayland-1 ./limina-testcomp $CLIENT_MODE 60 $SIZE --park" >/tmp/m3b-client2.log 2>&1 &
 sleep 6
 g "sudo -n pkill -9 -f 'limina-testcomp run'"
 echo "  compositor SIGKILLed (client still alive, holding its export)"
 sleep 4
 report "importer-death" "$FROM"
-g "sudo -n pkill -9 -f 'limina-testcomp client-dmabuf'"
+g "sudo -n pkill -9 -f 'limina-testcomp client-'"
 sleep 3
 # A fresh compositor, purely to make the worker allocate again: the census ticks on the
 # allocation path, and with both testcomp processes dead nothing does. Without this the final

@@ -38,6 +38,43 @@ use wayland_client::{delegate_noop, Connection, Dispatch, QueueHandle};
 pub enum Kind {
     Shm,
     Dmabuf,
+    /// M3c: the buffer is a **classic vrend** resource allocated through gbm, not a venus one.
+    /// Same protocol path as `Dmabuf` — the difference is entirely in who owns the host-side
+    /// IOSurface, which is the asymmetry `buffer-lifetime-matrix.md` §3 is about. See
+    /// `crate::gbm`.
+    Gbm,
+}
+
+impl Kind {
+    fn name(self) -> &'static str {
+        match self {
+            Kind::Shm => "shm",
+            Kind::Dmabuf => "dmabuf",
+            Kind::Gbm => "gbm",
+        }
+    }
+}
+
+/// Refuse to run the gbm arm when it would be **vacuous**.
+///
+/// `MESA_LOADER_DRIVER_OVERRIDE` selects gbm's backing driver too. Under `zink` a gbm buffer is a
+/// zink→venus **blob** — a venus allocation wearing a gbm API — so the whole arm would silently
+/// re-run M3b's symmetric venus↔venus case while its name, its logs and its results all claimed
+/// to be testing the asymmetric vrend one. That is the invariance failure `CLAUDE.md` describes,
+/// pre-armed; the same guard is why `vkclassicimport.py` refuses to run under zink.
+///
+/// This is necessary but **not sufficient**: it only proves the client's *intent*. The
+/// load-bearing confirmation is host-side — the worker must log the import resolving through a
+/// vrend-owned IOSurface. See `teardown-matrix.sh`.
+fn require_classic_gbm() -> Result<()> {
+    let override_ = std::env::var("MESA_LOADER_DRIVER_OVERRIDE").unwrap_or_default();
+    anyhow::ensure!(
+        override_ == "virtio_gpu",
+        "MESA_LOADER_DRIVER_OVERRIDE is {:?}, not \"virtio_gpu\" — under anything else gbm hands \
+         back a venus blob and the gbm arm tests the venus path while claiming to test vrend",
+        override_
+    );
+    Ok(())
 }
 
 /// The four quadrants, row-major (top-left, top-right, bottom-left, bottom-right), as RGB.
@@ -114,12 +151,15 @@ pub fn run(
             // wrong sample value that looks like a bug in the copy.
             pool.create_buffer(0, width, height, stride, wl_shm::Format::Xrgb8888, &qh, ())
         }
-        Kind::Dmabuf => {
+        Kind::Dmabuf | Kind::Gbm => {
             let dmabuf = app.dmabuf.clone().context(
                 "compositor has no zwp_linux_dmabuf_v1 — the dmabuf arm needs a compositor \
                  built with the M3 global",
             )?;
-            let (buffer, backing) = dmabuf_buffer(&dmabuf, &qh, width, height)?;
+            let (buffer, backing) = match kind {
+                Kind::Gbm => gbm_buffer(&dmabuf, &qh, width, height)?,
+                _ => dmabuf_buffer(&dmabuf, &qh, width, height)?,
+            };
             _vk_backing = backing;
             buffer
         }
@@ -133,13 +173,7 @@ pub fn run(
     app.draw(&qh);
     queue.roundtrip(&mut app).context("first frame roundtrip")?;
 
-    println!(
-        "CLIENT COMMITTED {width}x{height} kind={}",
-        match kind {
-            Kind::Shm => "shm",
-            Kind::Dmabuf => "dmabuf",
-        }
-    );
+    println!("CLIENT COMMITTED {width}x{height} kind={}", kind.name());
 
     // Render continuously off the compositor's frame callbacks, which is what a real client
     // does and what M3 needs: a client that must be killed *mid-lifetime*, with a buffer
@@ -177,7 +211,11 @@ pub fn run(
 /// presented and released it), then destroys the `wl_buffer` and frees the venus image. That
 /// destroy is what should fire `buffer_destroyed` on the other side; whether it does is the
 /// measurement.
-pub fn run_churn(width: i32, height: i32, count: u32) -> Result<()> {
+pub fn run_churn(width: i32, height: i32, count: u32, kind: Kind) -> Result<()> {
+    anyhow::ensure!(
+        kind != Kind::Shm,
+        "churn needs a dmabuf-class buffer; shm pixels are copied out and nothing is retained"
+    );
     let conn = Connection::connect_to_env()
         .context("connecting to the compositor (is WAYLAND_DISPLAY set?)")?;
     let display = conn.display();
@@ -197,7 +235,7 @@ pub fn run_churn(width: i32, height: i32, count: u32) -> Result<()> {
     let surface = compositor.create_surface(&qh, ());
     let xdg_surface = wm_base.get_xdg_surface(&surface, &qh, ());
     let toplevel = xdg_surface.get_toplevel(&qh, ());
-    toplevel.set_title("limina-testcomp dmabuf churn".into());
+    toplevel.set_title(format!("limina-testcomp {} churn", kind.name()));
     surface.commit();
     queue.roundtrip(&mut app).context("configure roundtrip")?;
 
@@ -208,8 +246,11 @@ pub fn run_churn(width: i32, height: i32, count: u32) -> Result<()> {
     app.park = true;
 
     for i in 0..count {
-        let (buffer, backing) = dmabuf_buffer(&dmabuf, &qh, width, height)
-            .with_context(|| format!("allocating churn buffer {i}"))?;
+        let (buffer, backing) = match kind {
+            Kind::Gbm => gbm_buffer(&dmabuf, &qh, width, height),
+            _ => dmabuf_buffer(&dmabuf, &qh, width, height),
+        }
+        .with_context(|| format!("allocating churn buffer {i}"))?;
 
         let before = app.frames;
         surface.attach(Some(&buffer), 0, 0);
@@ -245,7 +286,10 @@ pub fn run_churn(width: i32, height: i32, count: u32) -> Result<()> {
 
     // `created=` in kmschurn's spirit: a retention number means nothing without evidence that
     // the buffers were actually allocated and handed over.
-    println!("CLIENT CHURN DONE buffers={count} created={count}");
+    println!(
+        "CLIENT CHURN DONE buffers={count} created={count} kind={}",
+        kind.name()
+    );
     Ok(())
 }
 
@@ -314,7 +358,65 @@ fn dmabuf_buffer(
         img.dmabuf.as_raw_fd(),
     );
 
-    Ok((buffer, Backing { vk, img }))
+    Ok((buffer, Backing::Venus { vk, img }))
+}
+
+/// M3c's allocator: a **classic vrend** client buffer, handed over the same `linux-dmabuf` path.
+///
+/// The protocol traffic is identical to `dmabuf_buffer`'s — same `create_params`/`add`/
+/// `create_immed`, same format — and that is deliberate: the *only* variable between the two arms
+/// is which host renderer owns the storage. Anything else differing would confound the comparison.
+///
+/// Refuses to run when the loader override would make the buffer a venus blob (see
+/// `require_classic_gbm`), because a vacuous pass here is worse than a failure: it looks like
+/// evidence.
+fn gbm_buffer(
+    dmabuf: &linux_dmabuf::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
+    qh: &QueueHandle<App>,
+    width: i32,
+    height: i32,
+) -> Result<(wl_buffer::WlBuffer, Backing)> {
+    use std::os::fd::BorrowedFd;
+
+    require_classic_gbm()?;
+
+    let gbm = crate::gbm::Gbm::open().context("opening gbm in the client")?;
+    let bo = gbm
+        .create(width as u32, height as u32, DRM_FORMAT_XRGB8888)
+        .context("allocating the client's gbm buffer")?;
+    gbm.paint(&bo, width as u32, height as u32)
+        .context("painting the client's gbm buffer")?;
+
+    let params = dmabuf.create_params(qh, ());
+    params.add(
+        // SAFETY: `bo.fd` is open and owned by `bo`, which outlives this call.
+        unsafe { BorrowedFd::borrow_raw(bo.fd) },
+        0,
+        bo.offset,
+        bo.stride,
+        (bo.modifier >> 32) as u32,
+        (bo.modifier & 0xffff_ffff) as u32,
+    );
+    let buffer = params.create_immed(
+        width,
+        height,
+        DRM_FORMAT_XRGB8888,
+        linux_dmabuf::zwp_linux_buffer_params_v1::Flags::empty(),
+        qh,
+        (),
+    );
+    params.destroy();
+
+    // The modifier is worth logging on its own: vrend's IOSurface backing makes the storage
+    // LINEAR, so anything else here means the buffer did NOT take the path this arm is testing.
+    log::info!(
+        "client gbm buffer {width}x{height} stride={} offset={} modifier={:#x}",
+        bo.stride,
+        bo.offset,
+        bo.modifier,
+    );
+
+    Ok((buffer, Backing::Gbm { gbm, bo: Some(bo) }))
 }
 
 /// `DRM_FORMAT_XRGB8888`, the fourcc for the one format this vehicle handles end to end.
@@ -326,15 +428,38 @@ const DRM_FORMAT_XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
 /// reference can only be judged once the exporter has provably let go, which is the same rule
 /// `churn` runs under. A `SIGKILL`ed client never runs this — which is the point of M3b, not an
 /// oversight here.
-pub struct Backing {
-    vk: crate::vk::Vk,
-    img: crate::vk::ScanoutImage,
+pub enum Backing {
+    /// M3a/M3b: the storage is a venus allocation in this process.
+    Venus {
+        vk: crate::vk::Vk,
+        img: crate::vk::ScanoutImage,
+    },
+    /// M3c: the storage is a classic vrend resource. Note what this `Drop` does *not* control —
+    /// the host IOSurface belongs to vrend, and the compositor's borrowed `+1` outlives
+    /// everything here by design.
+    Gbm {
+        gbm: crate::gbm::Gbm,
+        bo: Option<crate::gbm::Bo>,
+    },
 }
 
 impl Drop for Backing {
     fn drop(&mut self) {
-        unsafe { libc::close(self.img.dmabuf) };
-        self.vk.destroy_image(&self.img);
+        match self {
+            Backing::Venus { vk, img } => {
+                // SAFETY: the exported fd is ours and this is its last use.
+                unsafe { libc::close(img.dmabuf) };
+                vk.destroy_image(img);
+            }
+            Backing::Gbm { gbm, bo } => {
+                if let Some(bo) = bo.take() {
+                    // SAFETY: the exported fd is ours and this is its last use. Closed before
+                    // the bo goes, mirroring the venus arm's order.
+                    unsafe { libc::close(bo.fd) };
+                    gbm.destroy(bo);
+                }
+            }
+        }
     }
 }
 

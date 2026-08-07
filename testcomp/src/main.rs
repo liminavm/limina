@@ -25,6 +25,7 @@
 
 mod client;
 mod comp;
+mod gbm;
 mod kms;
 mod vk;
 
@@ -70,7 +71,7 @@ fn main() -> Result<()> {
             }
             run(frames, hold_buffers, leak_imports)
         }
-        "client-churn" => {
+        "client-churn" | "client-churn-gbm" => {
             let count: u32 = args
                 .next()
                 .unwrap_or_else(|| "40".into())
@@ -83,9 +84,14 @@ fn main() -> Result<()> {
                 w = a.parse().context("width")?;
                 h = b.parse().context("height")?;
             }
-            client::run_churn(w, h, count)
+            let kind = if mode.ends_with("-gbm") {
+                client::Kind::Gbm
+            } else {
+                client::Kind::Dmabuf
+            };
+            client::run_churn(w, h, count, kind)
         }
-        "client" | "client-dmabuf" => {
+        "client" | "client-dmabuf" | "client-gbm" => {
             let secs: u64 = args
                 .next()
                 .unwrap_or_else(|| "20".into())
@@ -107,18 +113,18 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            let kind = if mode == "client-dmabuf" {
-                client::Kind::Dmabuf
-            } else {
-                client::Kind::Shm
+            let kind = match mode.as_str() {
+                "client-dmabuf" => client::Kind::Dmabuf,
+                "client-gbm" => client::Kind::Gbm,
+                _ => client::Kind::Shm,
             };
             client::run(w, h, std::time::Duration::from_secs(secs), kind, park)
         }
         other => anyhow::bail!(
             "unknown mode {other:?} — expected `probe`, `churn <frames>`, \
              `run [frames] [--hold-buffers] [--leak-imports]`, \
-             `client|client-dmabuf [seconds] [WxH] [--park]`, or \
-             `client-churn [count] [WxH]`"
+             `client|client-dmabuf|client-gbm [seconds] [WxH] [--park]`, or \
+             `client-churn|client-churn-gbm [count] [WxH]`"
         ),
     }
 }
