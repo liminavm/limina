@@ -54,27 +54,81 @@ pub(crate) type AckMsg = (u32, Option<SendSurface>);
 /// legacy no-receiver mode. Bounded and oldest-evicted: the worker only ever shows the current
 /// ring and cursor, so superseded ids are safe to drop (a stale id falls back to lookup, which
 /// fails for a freed non-global surface, so that frame is skipped rather than shown wrong).
-#[derive(Default)]
 pub struct SurfaceStore {
     map: std::collections::HashMap<u32, SendSurface>,
     order: VecDeque<u32>,
+    cap: usize,
 }
 
 const SURFACE_STORE_CAP: usize = 32;
 
+/// Cap for the main-thread frame-apply cache (see [`SurfaceStore::get_or_insert_with`]). Smaller
+/// than the store's: the cache only saves a mutex + lookup per frame, a miss costs a re-resolve,
+/// and the hot set is the guest's buffer ring (2–4 ids). Every retained entry is a whole
+/// framebuffer — 14 MiB at 1440p — so the cap is what bounds the supervisor's hold on host memory.
+pub(crate) const FRAME_CACHE_CAP: usize = 8;
+
+impl Default for SurfaceStore {
+    fn default() -> Self {
+        Self::with_cap(SURFACE_STORE_CAP)
+    }
+}
+
 impl SurfaceStore {
+    pub(crate) fn with_cap(cap: usize) -> Self {
+        Self {
+            map: std::collections::HashMap::new(),
+            order: VecDeque::new(),
+            cap,
+        }
+    }
+
     pub(crate) fn insert(&mut self, id: u32, surface: CFRetained<IOSurfaceRef>) {
         if self.map.insert(id, SendSurface(surface)).is_none() {
             self.order.push_back(id);
-            while self.order.len() > SURFACE_STORE_CAP {
+            while self.order.len() > self.cap {
                 if let Some(old) = self.order.pop_front() {
                     self.map.remove(&old);
                 }
             }
         }
     }
+
     pub(crate) fn get(&self, id: u32) -> Option<CFRetained<IOSurfaceRef>> {
         self.map.get(&id).map(|s| s.0.clone())
+    }
+
+    /// Resolve `id`, caching the result; `resolve` runs only on a miss.
+    ///
+    /// This is the frame-apply path's cache, and its bound is load-bearing. It used to be a plain
+    /// `HashMap` on the premise that "the worker reuses a small fixed set, its double buffer" — a
+    /// compositor that mints a fresh scanout resource per frame breaks that premise, giving a
+    /// fresh id every frame. Because IOSurface storage bills to the task that *created* it, the
+    /// resulting unbounded retention showed up as 8.6 GB of `owned unmapped` in the WORKER while
+    /// the references sat here, which is why every worker-side ledger came back balanced. See
+    /// `spikes/venus-churn-retention/RESULTS.md` §0.3.
+    pub(crate) fn get_or_insert_with(
+        &mut self,
+        id: u32,
+        resolve: impl FnOnce() -> Option<CFRetained<IOSurfaceRef>>,
+    ) -> Option<CFRetained<IOSurfaceRef>> {
+        if let Some(surface) = self.get(id) {
+            return Some(surface);
+        }
+        let surface = resolve()?;
+        self.insert(id, surface.clone());
+        Some(surface)
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
+
+    /// Retained surfaces currently held — the quantity the cap exists to bound.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.map.len()
     }
 }
 
@@ -355,7 +409,108 @@ pub(crate) fn set_layer_surface(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_cursor_coord;
+    use std::ffi::c_void;
+
+    use objc2_core_foundation::{
+        kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber,
+        CFString,
+    };
+    use objc2_io_surface::{
+        kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight, kIOSurfacePixelFormat,
+        kIOSurfaceWidth, IOSurfaceCreate,
+    };
+
+    use super::{parse_cursor_coord, CFRetained, IOSurfaceRef, SurfaceStore, FRAME_CACHE_CAP};
+
+    fn cfnum(v: i32) -> CFRetained<CFNumber> {
+        unsafe {
+            CFNumber::new(
+                None,
+                objc2_core_foundation::CFNumberType::SInt32Type,
+                &v as *const i32 as *const c_void,
+            )
+        }
+        .unwrap()
+    }
+
+    /// A minimal 8×4 BGRA surface — the test cares about how many we retain, not their pixels.
+    fn make_surface() -> CFRetained<IOSurfaceRef> {
+        unsafe {
+            let vw = cfnum(8);
+            let vh = cfnum(4);
+            let vbpe = cfnum(4);
+            let vbpr = cfnum(32);
+            let vpf = cfnum(i32::from_be_bytes(*b"BGRA"));
+            let mut keys: [*const c_void; 5] = [
+                (kIOSurfaceWidth as *const CFString).cast(),
+                (kIOSurfaceHeight as *const CFString).cast(),
+                (kIOSurfaceBytesPerElement as *const CFString).cast(),
+                (kIOSurfaceBytesPerRow as *const CFString).cast(),
+                (kIOSurfacePixelFormat as *const CFString).cast(),
+            ];
+            let mut values: [*const c_void; 5] = [
+                (&*vw as *const CFNumber).cast(),
+                (&*vh as *const CFNumber).cast(),
+                (&*vbpe as *const CFNumber).cast(),
+                (&*vbpr as *const CFNumber).cast(),
+                (&*vpf as *const CFNumber).cast(),
+            ];
+            let dict = CFDictionary::new(
+                None,
+                keys.as_mut_ptr(),
+                values.as_mut_ptr(),
+                keys.len() as isize,
+                &kCFTypeDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks,
+            )
+            .unwrap();
+            IOSurfaceCreate(&dict).expect("create surface")
+        }
+    }
+
+    /// The 8.6 GB bug (spikes/venus-churn-retention §0.3): a compositor that mints a fresh
+    /// scanout resource per frame hands the frame-apply path a fresh IOSurface id every frame.
+    /// The cache retained one framebuffer per id and was cleared only on a mode change, so ten
+    /// seconds of churn pinned ~620 surfaces. What must hold is that the retained set is bounded
+    /// by the cap no matter how many distinct ids go through it.
+    #[test]
+    fn frame_cache_retains_a_bounded_set_under_per_frame_id_churn() {
+        let mut cache = SurfaceStore::with_cap(FRAME_CACHE_CAP);
+        for id in 0..500u32 {
+            let surface = cache.get_or_insert_with(id, || Some(make_surface()));
+            assert!(surface.is_some(), "id {id} should resolve");
+            assert!(
+                cache.len() <= FRAME_CACHE_CAP,
+                "cache grew to {} after {} fresh ids (cap {FRAME_CACHE_CAP})",
+                cache.len(),
+                id + 1,
+            );
+        }
+    }
+
+    /// The cache must still be a cache: a repeated id resolves once and keeps returning the same
+    /// surface, so the steady state (a guest cycling a small buffer ring) costs no re-resolves.
+    #[test]
+    fn frame_cache_resolves_a_repeated_id_once() {
+        let mut cache = SurfaceStore::with_cap(FRAME_CACHE_CAP);
+        let mut resolves = 0;
+        let mut ptr = None;
+        for _ in 0..10 {
+            let surface = cache
+                .get_or_insert_with(7, || {
+                    resolves += 1;
+                    Some(make_surface())
+                })
+                .unwrap();
+            let this = &*surface as *const IOSurfaceRef;
+            assert_eq!(
+                *ptr.get_or_insert(this),
+                this,
+                "cache returned a new surface"
+            );
+        }
+        assert_eq!(resolves, 1);
+    }
 
     #[test]
     fn cursor_coords_accept_plain_and_negative_values() {

@@ -1259,9 +1259,11 @@ pub fn run(
     let copy_ring: RefCell<Vec<CFRetained<IOSurfaceRef>>> = RefCell::new(Vec::new());
     let copy_geom = Cell::new((0u32, 0u32));
     let copy_idx = Cell::new(0usize);
-    // Cache looked-up surfaces by id (the worker reuses a small fixed set, its double buffer).
-    let cache: RefCell<std::collections::HashMap<u32, CFRetained<IOSurfaceRef>>> =
-        RefCell::new(std::collections::HashMap::new());
+    // Cache looked-up surfaces by id. BOUNDED, and that bound is load-bearing: each entry
+    // retains a whole framebuffer, and a compositor that mints a fresh scanout resource per
+    // frame supplies a fresh id per frame (see `SurfaceStore::get_or_insert_with`).
+    let cache: RefCell<present::SurfaceStore> =
+        RefCell::new(present::SurfaceStore::with_cap(present::FRAME_CACHE_CAP));
     // The surface last handed to Core Animation (copy-ring or guest, whichever actually became
     // layer contents). Each frame's shown-ack carries the surface it REPLACED so the ack sender
     // can hold the ack until WindowServer stops sampling it (#24 off-glass gating; see the ack
@@ -1728,24 +1730,17 @@ pub fn run(
             // global `IOSurfaceLookup` for the venus zero-copy path (still global) and the legacy
             // no-receiver mode. A failed resolve (the worker freed it during a rapid remodeset
             // before we caught up) is not fatal — skip this frame rather than panic the UI.
-            use std::collections::hash_map::Entry;
-            let surface = match cache.entry(id) {
-                Entry::Occupied(e) => e.into_mut(),
-                Entry::Vacant(e) => {
-                    let resolved = surface_map
-                        .lock()
-                        .unwrap()
-                        .get(id)
-                        .or_else(|| IOSurfaceLookup(id));
-                    match resolved {
-                        Some(s) => e.insert(s),
-                        None => {
-                            log::warn!("window: surface {id} unresolved; skipping frame");
-                            return;
-                        }
-                    }
-                }
+            let Some(surface) = cache.get_or_insert_with(id, || {
+                surface_map
+                    .lock()
+                    .unwrap()
+                    .get(id)
+                    .or_else(|| IOSurfaceLookup(id))
+            }) else {
+                log::warn!("window: surface {id} unresolved; skipping frame");
+                return;
             };
+            let surface = &surface;
             // Shown-ack channel (#8 leg 2): after Core Animation processes this frame's
             // transaction, hand the id to the dedicated ack-sender thread (a bounded, non-blocking
             // try_send) so it can tell the worker "shown <id>" at the real latch boundary — the
