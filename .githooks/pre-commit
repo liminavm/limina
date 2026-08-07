@@ -16,6 +16,16 @@ fail() {
     exit 1
 }
 
+# --- Optional per-clone checks, run FIRST so they fail before the slow cargo passes. ---
+# `<git-common-dir>/local-pre-commit` is never tracked, which is the point: a check whose
+# CONTENT is specific to one machine (a private path or hostname deny-list, say) must not
+# be published by the repository it guards. This dispatch carries none of that content.
+# Common-dir, not --git-dir, so worktrees find the same hook.
+local_hook="$(git rev-parse --git-common-dir)/local-pre-commit"
+if [ -x "$local_hook" ]; then
+    "$local_hook" || fail "local pre-commit check ($local_hook)"
+fi
+
 # --- rustfmt: build-free and fast, so check every workspace we own. ---
 echo "pre-commit: cargo fmt --check (all crates)"
 cargo fmt --check || fail "rustfmt — run 'cargo fmt'"
