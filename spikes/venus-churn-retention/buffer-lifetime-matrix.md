@@ -99,6 +99,12 @@ venus↔venus import has both refs on the same side and is symmetric. Since the 
 allocates classic gbm resources. That arm is M3c (see §8); it is the one that needs the
 `vkr_budget_set_context` prerequisite in §6.
 
+The plumbing M3c needs is in place: **both** halves of the classic-gbm→venus import ship — the
+SCANOUT half 2026-08-05 (virgl `bc03f705`/`37bb9d6c`) and the non-scanout half 2026-08-06
+(limina `1a4a442`, virgl `034f7086`, the `VIRGL_BIND_SHARED` gate). So a testcomp client can
+allocate through gbm under `MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu` and have the compositor
+import it — which is exactly the asymmetric holder this section describes.
+
 ## 4. Test matrix — bunch by teardown PATH × holder
 
 The cases collapse along one axis: they share a *teardown path*, and the path is what breaks, not
@@ -179,9 +185,21 @@ the borrowed `+1`. Results and the oracle work-up are in `testcomp/README.md`:
   hardware rather than only from source.
 - **The vehicle earned the client-dmabuf class**: a deliberate `--leak-imports` compositor
   against 40 distinct client dmabufs retains +41 IOSurfaces where the shipped path retains 0.
-- **The oracle is `DEALLOC iosurface N (alive M)`** from `vkr_mtl_refcount_census`. Three others
-  (`owned unmapped`, the `vmmap` `IOSurface` row, the census `(+N)` counter) read *identical* in
-  both arms — they cannot see this class at all. Do not reuse M1's oracle here.
+  Re-runnable as `testcomp/teardown-matrix.sh redgreen`.
+- **The oracle is `DEALLOC iosurface N (alive M)`** from `vkr_mtl_refcount_census`, corroborated
+  by `lookup A/F (+N)` on the same census line — that one counts precisely the outstanding
+  borrowed `+1`s. Three others (`owned unmapped`, the `vmmap` `IOSurface` row, and the *other*
+  `(+N)` counter on that same line, `iosurface A/F`) read *identical* in both arms. Do not reuse
+  M1's oracle here, and do not say "the census counter" — the line carries two that disagree.
+
+**And a result the matrix did not ask for: the sweep survives a maximally-misbehaving guest.**
+Killing the `--leak-imports` compositor reclaimed all 41 retained imports — the RED peak reads
+`lookup 506/465 (+41)` / `alive 43`, ctx 3 is torn down `with a valid instance`, and the next
+census reads `lookup 508/508 (+0)` / `alive 1`. So **a venus↔venus client-buffer lifetime bug
+cannot produce §1's compositor-quit residual**, however badly the guest behaves. That removes a
+whole column from suspicion and leaves the paths that do *not* route through this sweep.
 
 **Still untested, each needing its own RED first:** paths 3 and 4, and the whole vrend-holder
-column (§3) — that one is M3c and wants the §6 `vkr_budget_set_context` fix ahead of it.
+column (§3) — that one is M3c and wants the §6 `vkr_budget_set_context` fix ahead of it. Plus
+the two non-vkr suspects §1 always carried: the supervisor's Mach send right, and caveat #1
+(the context never actually dying).

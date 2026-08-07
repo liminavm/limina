@@ -10,6 +10,11 @@
 # calls vkDestroyInstance, so abrupt exit is the path that runs the FULL sweep. So the job here
 # is to find out which path leaves a residual, not to prove a predicted one does.
 #
+# Two modes:
+#   ./teardown-matrix.sh            paths 1, 2, 2b — what the host does per teardown path
+#   ./teardown-matrix.sh redgreen   the vehicle-rule gate: prove the setup can see a retained
+#                                   client import before believing the matrix's all-clean result
+#
 # Run from the repo root, with a guest already booted by
 #   LIMINA_DISK=<enhanced.raw> LIMINA_GLOBAL_SCANOUT=1 LIMINA_GPU_MEM_BUDGET_CENSUS=10 \
 #     RUST_LOG="warn,krun_rutabaga_gfx::virgl_renderer=info" \
@@ -35,18 +40,23 @@ worker_pid() { pgrep -f "target/debug/limina-vmm" | head -1; }
 # (vkr_metal_helpers.m:152). It counts real IOSurface -dealloc, so one retained surface is
 # visible regardless of byte noise.
 #
-# Three oracles were tried and only this one discriminates — measured 2026-08-07 against a
-# deliberate leak (`--leak-imports`, 40 x 1920x1080 buffers):
+# Five oracles were tried and only two discriminate — measured 2026-08-07 against a deliberate
+# leak (`--leak-imports`, 40 x 1920x1080 buffers). Run `redgreen` below to reproduce:
 #
 #   owned unmapped   the row is ABSENT on this worker entirely. Not zero — absent. It is the
 #                    right oracle for M1's scanout churn and the wrong one here.
 #   vmmap IOSurface  364.2M -> 351.9M in BOTH arms. Virtual size, dominated by other mappings.
-#   census +N        `iosurface A/F (+1)` in BOTH arms: that counter tracks registry refs, not
-#                    deallocation.
+#   iosurface (+N)   `iosurface A/F (+1)` in BOTH arms: that counter tracks alloc-vs-free of
+#                    surfaces we OWN, and a borrowed import allocates nothing.
 #   DEALLOC alive    2 -> 2 (green) vs 2 -> 43 (red). This one.
+#   lookup (+N)      `lookup 508/508 (+0)` vs `lookup 506/465 (+41)`. Also discriminates, and
+#                    more specifically: it counts exactly the outstanding borrowed +1 refs that
+#                    `vkr_mtl_iosurface_lookup` handed out. Use it to corroborate `alive`, which
+#                    also moves for surfaces nobody imported.
 #
-# Identical A/B readings from the first three are the classic "the differential is not reaching
-# the system under test" — do not read them as an absence of retention.
+# Note the two `(+N)` counters on the same census line disagree by design — do not read "the
+# census counter" as one thing. Identical A/B readings from the first three are the classic
+# "the differential is not reaching the system under test" — not an absence of retention.
 alive_iosurfaces() {
   grep -a "DEALLOC iosurface" "$WORKER_LOG" | tail -1 \
     | sed 's/.*DEALLOC iosurface [0-9]* (alive \([0-9-]*\)).*/\1/'
@@ -88,6 +98,53 @@ start_comp() {
   sleep 4
   g "grep -a 'COMPOSITOR READY' /tmp/comp.log" || { echo "!! compositor did not start"; g 'tail -5 /tmp/comp.log'; return 1; }
 }
+
+# Both census `(+N)` refcount deltas plus the dealloc `alive` count, on one line.
+refs() {
+  local mark; mark=$(mark)
+  sleep 11
+  g "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD XDG_RUNTIME_DIR=/tmp/testcomp-run \
+     WAYLAND_DISPLAY=wayland-1 ./limina-testcomp client-dmabuf 3 320x240" >/dev/null 2>&1
+  sleep 2
+  # Keep BOTH `(+N)` counters: `iosurface` is blind to a borrowed import (it counts surfaces we
+  # own), `lookup` is exactly the outstanding borrowed +1s. Dropping the latter would hide the
+  # discriminating half of the reading.
+  since "$mark" | grep -a "refs — iosurface" | tail -1 \
+    | sed 's/.*refs — //;s/ texture [0-9/]* ([+-][0-9]*)//;s/ registry [0-9/]* ([+-][0-9]*)//' \
+    | sed 's/ publish .*| DEALLOC iosurface [0-9]*/ |/;s/ vkr-tex.*//'
+}
+
+# ---------------------------------------------------------------------------------------------
+# `redgreen` — the vehicle-rule gate. A negative result from this vehicle only counts once it
+# has caught a real failure of THIS class, so before trusting the all-clean matrix below, prove
+# the setup can see a retained client import at all: run the same 40-buffer churn against a
+# compositor that deliberately never evicts (`--leak-imports`) and against the shipped one.
+#
+# Measured 2026-08-07: GREEN 2 -> 2 alive / 42 evictions; RED 2 -> 43 alive / 0 evictions.
+# The +41 (not +40) is right: `refs`/`force_census` run a throwaway tick client to make the
+# worker allocate, and under RED that client's import is retained too — the baseline reading
+# already includes the opening tick, so the delta is 40 churn buffers + the closing tick.
+# ---------------------------------------------------------------------------------------------
+if [ "${1:-matrix}" = "redgreen" ]; then
+  echo "=== M3 RED/GREEN: can this vehicle see a retained client import? ==="
+  echo
+  for arm in "GREEN (shipped)::" "RED (--leak-imports)::--leak-imports"; do
+    name="${arm%%::*}"; flag="${arm##*::}"
+    start_comp "$flag" || exit 1
+    echo "--- $name ---"
+    echo "  before: $(refs)"
+    g "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD XDG_RUNTIME_DIR=/tmp/testcomp-run \
+       WAYLAND_DISPLAY=wayland-1 ./limina-testcomp client-churn 40 $SIZE" \
+      | grep -a "CHURN DONE" | sed 's/^/  /'
+    echo "  after : $(refs)"
+    echo "  comp  : $(g 'grep -ac "imported client dmabuf" /tmp/comp.log' | tr -d ' ') imports / \
+$(g 'grep -ac "evicted a client dmabuf" /tmp/comp.log' | tr -d ' ') evictions"
+    echo
+  done
+  echo 'RED must show a large positive lookup (+N) and a raised alive. If both arms read the'
+  echo "same, the differential is not reaching the worker — fix that before reading the matrix."
+  exit 0
+fi
 
 echo "=== M3b teardown matrix (client size $SIZE) ==="
 echo

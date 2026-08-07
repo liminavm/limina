@@ -159,12 +159,21 @@ same observation. So the import cache was made to leak on purpose (`run --leak-i
 evict, never sweep at exit) and driven with `client-churn 40 1920x1080`, forty **distinct**
 dmabufs so retention accumulates instead of staying at one:
 
-| arm | alive IOSurfaces, before → after | evictions |
-|---|---|---|
-| GREEN — shipped behaviour | 2 → **2** | 42 |
-| RED — `--leak-imports` | 2 → **43** | 0 |
+Reproduce with **`./teardown-matrix.sh redgreen`** — the A/B lives in the same committed script
+as the matrix, so the evidence below is re-runnable rather than a number in a paragraph:
+
+| arm | alive IOSurfaces, before → after | `lookup (+N)` | imports / evictions |
+|---|---|---|---|
+| GREEN — shipped behaviour | 2 → **2** | +1 | 42 / 42 |
+| RED — `--leak-imports` | 2 → **43** | **+41** | 42 / 0 |
 
 +41 retained against a flat baseline. The vehicle detects this failure class.
+
+**The arithmetic is +41, not +40, and that is correct.** Forcing a census tick means running a
+throwaway client (see the sampler note below), and under RED *its* import is retained too. The
+opening tick's leak is already inside the baseline reading, so the delta is 40 churn buffers plus
+the closing tick. The 42 imports in *both* arms is the same accounting from the other side: 40
+churned + 2 tick clients.
 
 **Getting there cost three wrong oracles, and the wrong ones all read "clean" in both arms** —
 the invariance smell, exactly as `CLAUDE.md` describes it:
@@ -173,11 +182,19 @@ the invariance smell, exactly as `CLAUDE.md` describes it:
 |---|---|---|---|
 | `owned unmapped` bytes | row **absent** | row **absent** | M1's oracle. Not this one — and absent parses as an empty string that looks like a failed read, not as zero. |
 | `vmmap` `IOSurface` row | 364.2M → 351.9M | 364.2M → 351.9M | virtual size, dominated by other mappings |
-| census `iosurface A/F (+N)` | +1 | +1 | counts registry refs, not deallocation |
+| census `iosurface A/F (+N)` | +1 | +1 | counts alloc-vs-free of surfaces we **own**; a borrowed import allocates nothing |
 | census `DEALLOC iosurface N (alive M)` | 2 → 2 | 2 → **43** | **the oracle** |
+| census `lookup A/F (+N)` | +1 | **+41** | also discriminates, and more specifically |
 
 The fourth is object-exact — it counts real IOSurface `-dealloc` — so one retained surface is
 visible regardless of byte noise, which also removes the need for large buffers.
+
+The fifth was found only when writing this up, and it is the sharper of the two: `lookup` counts
+exactly the borrowed `+1` refs `vkr_mtl_iosurface_lookup` handed out, which is *precisely* the
+thing under test, whereas `alive` also moves for surfaces nobody imported. Note the trap in
+naming: **the two `(+N)` counters sit on the same census line and disagree by design** — "the
+census counter" is not one thing, and reading the wrong half of that line gives you a blind
+oracle that looks like a live one.
 
 **And the census is a sampler, not a gauge.** It ticks on the *allocation* path
 (`vkr_budget.c:425`) every `LIMINA_GPU_MEM_BUDGET_CENSUS` seconds, so a quiesced worker never
@@ -189,6 +206,20 @@ final read is empty rather than zero.
 
 With that oracle, the three teardown paths above re-ran and all returned to baseline (2 → 2).
 That result now means something.
+
+### The RED arm answered a question it was not asked
+
+Killing the *leaking* compositor reclaimed all 41 retained imports. In the worker log the RED
+peak reads `lookup 506/465 (+41)` / `alive 43`; ctx 3 is then torn down
+`with a valid instance`, and the very next census reads `lookup 508/508 (+0)` / `alive 1`.
+
+So vkr's sweep cleans up after a guest compositor that is misbehaving **as badly as this vehicle
+knows how to misbehave** — deliberately never releasing a single import. That is a real narrowing
+of `buffer-lifetime-matrix.md`'s trigger: a venus↔venus client-buffer lifetime bug cannot produce
+the observed compositor-quit residual, however badly the guest behaves. What remains are the
+suspects that do *not* route through this sweep — the vrend-side holder (§3, M3c), the error-path
+and ring-FATAL teardowns (paths 3 and 4), the supervisor's Mach send right, and caveat #1: the
+context never actually dying.
 
 ### M2's gate: a real client's pixels on the scanout (2026-08-07)
 
