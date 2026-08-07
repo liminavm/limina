@@ -94,6 +94,43 @@ test is the post-fix storm, not the unit test: with the cache bounded, `owned un
 plateau at cap × frame size instead of climbing. Any residual that survives a bounded cache is
 CoreAnimation/WindowServer-side — the one thing a split kill cannot separate from the cache.
 
+### The reproducer, reduced to a vehicle we own (`crates/limina-test/guest/kmschurn.py`)
+
+Everything above was measured through synoik on a seated GNOME session — a compositor we do
+not control, needing a real GDM login, a seat fight, and a wallpaper to amplify. The bug does
+not need any of that. Its trigger is exactly **a fresh scanout resource per flip**, so a ~400
+line ctypes presenter reproduces it: gbm allocation under zink (which makes the buffers venus
+blobs, the shape synoik has), `drmModeAddFB2WithModifiers`, a page flip, release the previous.
+No Wayland, no session, no GDM — `systemctl isolate multi-user.target` frees DRM master and it
+takes the card directly.
+
+Validated three ways on `kmsprobe.raw` (2560x1440, LINEAR, 300 flips in 5.0 s), against builds
+differing only in whether `SurfaceStore::insert` evicts:
+
+| run | guest workload | worker `owned unmapped` | regions |
+|---|---|---|---|
+| `churn`, eviction disabled (the bug) | created=301, ledger fresh 253/256 | 127.8 M → **8.4 G** | 15 → **620** |
+| `churn`, `8e00d94` in place | created=301, ledger fresh 253/256 | 141.8 M → 407.8 M | 16 → **29** |
+| `static`, `8e00d94` in place | created=3, 300 flips | 407.8 M → 407.8 M | 29 → **29** |
+
+8.4 G over 620 regions is 14.1 MiB each — the leak signature exactly, at ~100 GB/min. The
+guest side of the first two rows is byte-identical, so the whole difference is host-side
+retention. The third row is the control that matters: same flip rate, same pixels, same
+everything, and the *only* removed variable is buffer freshness — it does not move a single
+region. The differential is churn, not presentation.
+
+**This is why the vehicle is trustworthy: it was proven to FAIL against the bug before any
+green from it was believed.** A test vehicle that has never reproduced the failure guards
+nothing, and "our new instrument shows no leak" is an expensive thing to believe wrongly.
+
+Two traps it documents in place. The env (`GALLIUM_DRIVER=zink`,
+`MESA_LOADER_DRIVER_OVERRIDE=zink`, `VK_DRIVER_FILES=…virtio_icd…`) is load-bearing and not
+set by the script — without it gbm loads a different gallium driver, the buffers are not venus
+blobs, and the run silently exercises a path the bug never lived on; it prints the env it saw
+so a log can be audited. And its `handles=` count is **not** an identity count: the kernel
+recycles a GEM handle number as soon as its object dies, so a perfect churn run reports
+`handles=3`. The host-side `[SCANOUT-LEDGER] … fresh N` line is the identity oracle.
+
 ### What this cost, and the rule that would have saved it
 
 Four storms and most of a day were spent instrumenting the worker because the memory appeared in
