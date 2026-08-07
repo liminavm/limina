@@ -94,6 +94,22 @@ if strings "$KK_DRIVER" | grep -qE "LIMINA_KK_DRAWPROBE|KKTRACE"; then
   echo "REFUSING to bundle: KK dylib carries debug instrumentation (LIMINA_KK_DRAWPROBE/KKTRACE)." >&2
   exit 1
 fi
+# Asserts must be compiled OUT of a shipped driver (2026-08-07). Mesa's common Vulkan
+# runtime and KK together carry ~820 assert()s, many on values a GUEST controls — and an
+# assert on the vkr ring thread SIGABRTs the worker, so a guest app's own bug kills the
+# whole VM. Four such incidents so far (see the limina-kk-empty-clear-rect memory); the
+# fourth was `assert(pCreateInfo->size > 0)` in vk_buffer_init. The build option is
+# `-Db_ndebug=true` (keep buildtype=debugoptimized: -O2 and -g stay, so crash reports still
+# symbolicate). This is a TRIPWIRE, not the fix — invalid guest input is rejected at the vkr
+# trust boundary; asserts-off is the backstop for the ones we have not found yet.
+# It lives here because the option is meson state on the sparse image, NOT anything this
+# repo pins: a fresh `meson setup` silently restores asserts, and nothing else would notice.
+if nm -u "$KK_DRIVER" 2>/dev/null | grep -q "assert_rtn"; then
+  echo "REFUSING to bundle: KK dylib still references __assert_rtn — it was built with" >&2
+  echo "asserts ON, so any guest can abort the worker and take the VM down. Rebuild with:" >&2
+  echo "  meson configure /Volumes/mesa-cs/build-kk -Db_ndebug=true && ninja -C /Volumes/mesa-cs/build-kk" >&2
+  exit 1
+fi
 
 # ---- signing identity (resolved FIRST so a locked keychain fails in seconds, ------
 #      not after the whole build) ---------------------------------------------------
