@@ -14,13 +14,18 @@
 //! stall (synoik/gnome-shell-rs rendering zero frames while the window
 //! kept Plymouth's last image; memory `limina-vrend-context-poison` relatives).
 //!
-//! The fix attaches IOSurface-backed classic resources fd-lessly by surface id
-//! (a SCANOUT-bound gbm buffer's vrend texture IS the display IOSurface since the
-//! EGLImage scanout work), and the venus side imports the same bytes as a host
-//! pointer. This test drives the exact guest-visible chain and — decisively — the
-//! ALIAS check: a pattern written through gbm must read back through the imported
-//! venus memory via a GPU copy, proving the two views share storage ("pixel-verify;
-//! proxies lie").
+//! The fix attaches IOSurface-backed classic resources fd-lessly by surface id, and
+//! the venus side imports the same bytes as a host pointer. This test drives the
+//! exact guest-visible chain and — decisively — the ALIAS check: a pattern written
+//! through gbm must read back through the imported venus memory via a GPU copy,
+//! proving the two views share storage ("pixel-verify; proxies lie").
+//!
+//! **Both buffer classes, because they hit different host gates.** vrend originally
+//! IOSurface-backed only `VIRGL_BIND_SCANOUT` resources, so a compositor's own KMS
+//! framebuffer imported while every CLIENT window buffer (rendering-only, the far
+//! more numerous class) still failed — which kept a Vulkan compositor off virtio_gpu
+//! entirely. Backing `VIRGL_BIND_SHARED` too closed that; a regression in either
+//! class must fail here, so the probe runs once per class in the same boot.
 //!
 //! Vehicle: `guest/vkclassicimport.py` (pure python3 + ctypes on libgbm +
 //! libvulkan; nothing to install). `MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu` is
@@ -78,29 +83,38 @@ fn classic_virgl_gbm_buffer_imports_into_venus() {
         ))
         .expect("staging vkclassicimport.py in the guest");
 
-    let out = guest
-        .ssh_exec(
-            "MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu GALLIUM_DRIVER=virgl \
-             VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
-             timeout 120 python3 /tmp/vkclassicimport.py Venus 2>&1 || true",
-        )
-        .expect("running vkclassicimport in the guest");
-    eprintln!("--- vkclassicimport ---\n{out}");
+    // Two classes, one boot: a second seated boot would cost minutes for nothing.
+    // "scanout" is the compositor's own KMS framebuffer, "rendering" a client's
+    // window buffer — the class that gated a Vulkan compositor on virtio_gpu.
+    for (mode, what) in [
+        ("scanout", "a compositor's own KMS framebuffer"),
+        ("rendering", "a client's rendering-only window buffer"),
+    ] {
+        let out = guest
+            .ssh_exec(&format!(
+                "MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu GALLIUM_DRIVER=virgl \
+                 VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
+                 timeout 120 python3 /tmp/vkclassicimport.py Venus {mode} 2>&1 || true"
+            ))
+            .expect("running vkclassicimport in the guest");
+        eprintln!("--- vkclassicimport {mode} ---\n{out}");
 
-    assert!(
-        out.contains("CLASSICIMPORT PASS"),
-        "classic-virgl gbm buffer failed to import into venus — the synoik/Vulkan-compositor \
-         KMS-buffer chain is broken (PROPS FAIL -1000072003 here means the fd-less \
-         IOSurface attach regressed; check the worker log for 'invalid res_id').\n{out}"
-    );
-    // The content proof is load-bearing, not optional: binding without aliasing would
-    // composite garbage. If a stack change makes this legitimately unreachable, that
-    // is a conscious decision to make here, not a silent skip.
-    assert!(
-        out.contains("ALIAS OK"),
-        "import succeeded but the imported venus memory did not read back the pattern \
-         written through gbm — the two views do not alias the same storage.\n{out}"
-    );
+        assert!(
+            out.contains(&format!("CLASSICIMPORT PASS {mode}")),
+            "{what} failed to import into venus — the Vulkan-compositor buffer chain is \
+             broken for the {mode} class (PROPS FAIL -1000072003 here means the fd-less \
+             IOSurface attach regressed; check the worker log for 'invalid res_id').\n{out}"
+        );
+        // The content proof is load-bearing, not optional: binding without aliasing would
+        // composite garbage. If a stack change makes this legitimately unreachable, that
+        // is a conscious decision to make here, not a silent skip.
+        assert!(
+            out.contains("ALIAS OK"),
+            "the {mode} import succeeded but the imported venus memory did not read back \
+             the pattern written through gbm — the two views do not alias the same \
+             storage.\n{out}"
+        );
+    }
 
     let outcome = guest
         .shutdown(Duration::from_secs(10))

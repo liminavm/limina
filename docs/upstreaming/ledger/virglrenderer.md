@@ -1,8 +1,10 @@
 # virglrenderer — patch-audit ledger
 
-69 commits; base **upstream tip `f2945d39`** (deps-to-tip rebase 2026-08-05 — see *Deps-to-tip
+74 commits; base **upstream tip `f2945d39`** (deps-to-tip rebase 2026-08-05 — see *Deps-to-tip
 rebase executed* in Findings). Schema + protocol: `README.md`.
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
+The table covers the 58 audited commits; the 5 added since are listed under
+*Post-audit commits* in Findings.
 
 > **Fork model since 2026-08-04.** There is no `patches/virglrenderer/` any more — our delta is the
 > commits on the `limina` branch of `github.com/liminavm/virglrenderer`, pinned by
@@ -75,6 +77,26 @@ Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
 | 0058 | vkr: a slow ring wait is not a fatal error (it was poisoning the context) | `src/venus/vkr_context.c` |  | **NOT needed upstream — the bug is OURS**: tip vkr_context_wait_ring_seqno uses plain cnd_wait, no timedwait/STUCK branch; the poisoning was introduced by our 0039 diagnostic | tip `956b034f` 2026-08-03 (branch-tip) | none-yet | none (self-inflicted) | no upstream exposure | **fold-into:0039** (fixes 0039's own diagnostic) | host | carry (folded) | the trap it documents IS real upstream (vendored c11 shim maps ETIMEDOUT→thrd_busy, non-conforming; tip monitor already codes to the quirk at vkr_context.c:538) — at most a comment-grade upstream courtesy; LIMINA_RING_WAIT_WARN_MS has no upstream analog, stays limina |
 
 ## Findings
+
+### Post-audit commits (unaudited — added after the 2026-08-03 pass)
+
+The table's 58 rows are the audited series. Five commits have landed on the branch since,
+and none has been researched against upstream yet. Listed so the drift is visible rather
+than implied by a stale count:
+
+| commit | subject | first guess at disposition |
+|---|---|---|
+| `490fb0ec` | vrend: add the classic snapshot-replay re-creation journal (P0: record + census) | carry (limina snapshot model) |
+| `2faed850` | vrend: journal export + replay for classic snapshot restore (P1) | carry |
+| `969af493` | vrend: host-side resource content capture for snapshot restore (P2) | carry |
+| `17bb8bf2` | vrend: VREND_CONTENT=0 kill switch for the content export | carry (chained) |
+| `034f7086` | vrend: back VIRGL_BIND_SHARED resources with IOSurfaces too | carry — chains onto the IOSurface backing (0053) and the fd-less classic attach; upstreamable only if that stack goes up |
+
+`034f7086` is the allocation-side half of the fd-less classic-resource attach: without it
+only `VIRGL_BIND_SCANOUT` resources got an IOSurface, so a Vulkan compositor could import
+its own framebuffer but none of its clients' window buffers, and could not run on the
+virgl GL default at all. Carries a `LIMINA_VREND_SHARED_IOSURFACE=0` kill switch (one more
+env for the fold plan's getenv-consistency item, alongside 0011/0054).
 
 ### Series verdict (all 58 rows researched 2026-08-03, vs tip `956b034f`)
 

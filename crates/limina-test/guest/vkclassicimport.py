@@ -4,12 +4,11 @@
 
 """vkclassicimport — import a CLASSIC virgl (vrend) gbm buffer into venus.
 
-The synoik/gnome-shell-rs shape (a live dogfood stall): a Vulkan compositor
-allocates its KMS scanout buffers with gbm — which, since the drop-guest-zink GL
-flip, resolves to the **virgl dri backend** (classic vrend pipe resources, not venus
-blobs) — exports the dmabuf, and imports it into venus:
+A Vulkan compositor's shape: it allocates buffers with gbm — which, since the
+drop-guest-zink GL flip, resolves to the **virgl dri backend** (classic vrend pipe
+resources, not venus blobs) — exports the dmabuf, and imports it into venus:
 
-    gbm_bo_create(USE_SCANOUT) -> gbm_bo_get_fd -> vkGetMemoryFdPropertiesKHR
+    gbm_bo_create(...) -> gbm_bo_get_fd -> vkGetMemoryFdPropertiesKHR
       -> vkAllocateMemory(VkImportMemoryFdInfoKHR) -> vkBindBufferMemory
 
 Host-side that lands in vkr_dispatch_vkGetMemoryResourcePropertiesMESA, which needs
@@ -18,18 +17,32 @@ drop classic pipe resources on macOS (no dmabuf export) -> "invalid res_id" ->
 VK_ERROR_INVALID_EXTERNAL_HANDLE per frame. This probe is the regression oracle for
 that import path.
 
+TWO buffer classes, selected by argv[2] — they exercise different host gates:
+
+  scanout   gbm_bo_create(USE_SCANOUT | USE_RENDERING) — the compositor's own KMS
+            framebuffer. Backed by an IOSurface since the EGLImage scanout work.
+  rendering gbm_bo_create(USE_RENDERING) — a CLIENT's window buffer, the far more
+            numerous class. vrend only IOSurface-backed VIRGL_BIND_SCANOUT
+            resources at first, so these imports failed while the compositor's own
+            framebuffer worked; a Vulkan compositor could not run on virtio_gpu.
+
+Both classes reach vrend with VIRGL_BIND_SHARED: gbm_bo_create unconditionally sets
+__DRI_IMAGE_USE_SHARE ("Gallium drivers requires shared in order to get the
+handle/stride"), which dri2 maps to PIPE_BIND_SHARED and virgl to VIRGL_BIND_SHARED.
+
 MESA_LOADER_DRIVER_OVERRIDE must be `virtio_gpu` in the environment (the harness
 sets it) — with `zink` the gbm buffer is a venus blob and the probe tests nothing.
 
 Speaks ctypes to libgbm.so.1 + libvulkan.so.1 (no gcc on the guest); same pattern
 as vkfdcycle.py. Structured output the harness asserts on:
 
+    USAGE <mode>
     GBM OK <stride> | GBM FAIL <stage>
     DEVICE <name> | NODEV <substring> | UNSUPPORTED <ext> | INSTANCE ERR <r>
     PROPS OK 0x<memoryTypeBits> | PROPS FAIL <VkResult>
     IMPORT OK | IMPORT FAIL <stage> <VkResult>
     ALIAS OK | ALIAS SKIP <why> | ALIAS FAIL <detail>
-    CLASSICIMPORT PASS | CLASSICIMPORT FAIL <stage>
+    CLASSICIMPORT PASS <mode> | CLASSICIMPORT FAIL <mode> <stage>
 
 ALIAS writes a pattern through gbm_bo_map and reads it back through the imported
 venus memory — proof the two views share storage. It SKIPs (non-fatal) where a
@@ -50,6 +63,14 @@ GBM_FORMAT_ARGB8888 = 0x34325241  # fourcc 'AR24'
 GBM_BO_USE_SCANOUT = 1 << 0
 GBM_BO_USE_RENDERING = 1 << 2
 GBM_BO_TRANSFER_WRITE = 1 << 1
+
+# argv[2] -> gbm usage. "rendering" deliberately omits USE_SCANOUT: that is the
+# client-buffer class, and the only thing distinguishing it host-side is which
+# vrend bind flags arrive.
+USAGE_MODES = {
+    "scanout": GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING,
+    "rendering": GBM_BO_USE_RENDERING,
+}
 
 W, H_PX = 256, 256
 
@@ -305,7 +326,7 @@ def load_gbm():
     return gbm
 
 
-def make_gbm_bo(gbm):
+def make_gbm_bo(gbm, usage):
     node = None
     for cand in sorted(os.listdir("/dev/dri")):
         if cand.startswith("renderD"):
@@ -319,9 +340,7 @@ def make_gbm_bo(gbm):
     if not dev:
         print("GBM FAIL gbm_create_device", flush=True)
         return None
-    bo = gbm.gbm_bo_create(
-        dev, W, H_PX, GBM_FORMAT_ARGB8888, GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING
-    )
+    bo = gbm.gbm_bo_create(dev, W, H_PX, GBM_FORMAT_ARGB8888, usage)
     if not bo:
         print("GBM FAIL gbm_bo_create", flush=True)
         return None
@@ -493,16 +512,25 @@ def gpu_readback_check(vk, phys, dev, src_buf, size, stride):
 
 def main():
     want = sys.argv[1] if len(sys.argv) > 1 else "Venus"
+    mode = sys.argv[2] if len(sys.argv) > 2 else "scanout"
+    print(f"USAGE {mode}", flush=True)
+
+    def fail(stage):
+        print(f"CLASSICIMPORT FAIL {mode} {stage}", flush=True)
+
+    if mode not in USAGE_MODES:
+        fail(f"unknown-usage-mode-{mode}")
+        return
     override = os.environ.get("MESA_LOADER_DRIVER_OVERRIDE", "")
     if override != "virtio_gpu":
         # With zink the gbm buffer is a venus blob and this probe tests nothing.
-        print(f"CLASSICIMPORT FAIL loader-override-is-{override or 'unset'}", flush=True)
+        fail(f"loader-override-is-{override or 'unset'}")
         return
 
     gbm = load_gbm()
-    got = make_gbm_bo(gbm)
+    got = make_gbm_bo(gbm, USAGE_MODES[mode])
     if got is None:
-        print("CLASSICIMPORT FAIL gbm", flush=True)
+        fail("gbm")
         return
     gbm_dev, bo, bo_fd, stride = got
 
@@ -526,16 +554,16 @@ def main():
     r, inst = make_instance(vk)
     if r != VK_SUCCESS:
         print(f"INSTANCE ERR {r}", flush=True)
-        print("CLASSICIMPORT FAIL instance", flush=True)
+        fail("instance")
         return
     phys = pick_device(vk, inst, want)
     if phys is None:
         print(f"NODEV {want}", flush=True)
-        print("CLASSICIMPORT FAIL nodev", flush=True)
+        fail("nodev")
         return
     dev = make_device(vk, phys)
     if dev is None:
-        print("CLASSICIMPORT FAIL device", flush=True)
+        fail("device")
         return
 
     props_t = C.CFUNCTYPE(C.c_int, P, C.c_uint32, C.c_int, P)
@@ -546,7 +574,7 @@ def main():
     r = get_fd_props(dev, DMA_BUF, bo_fd, C.byref(fp))
     if r != VK_SUCCESS:
         print(f"PROPS FAIL {r}", flush=True)
-        print("CLASSICIMPORT FAIL props", flush=True)
+        fail("props")
         return
     print(f"PROPS OK 0x{fp.memoryTypeBits:x}", flush=True)
 
@@ -567,14 +595,14 @@ def main():
     r = vk.vkCreateBuffer(dev, C.byref(bci), None, C.byref(buf))
     if r != VK_SUCCESS:
         print(f"IMPORT FAIL vkCreateBuffer {r}", flush=True)
-        print("CLASSICIMPORT FAIL import", flush=True)
+        fail("import")
         return
     req = MemoryRequirements()
     vk.vkGetBufferMemoryRequirements(dev, buf, C.byref(req))
     bits = req.memoryTypeBits & fp.memoryTypeBits
     if not bits:
         print("IMPORT FAIL no-common-memory-type 0", flush=True)
-        print("CLASSICIMPORT FAIL import", flush=True)
+        fail("import")
         return
 
     dedicated = MemoryDedicatedAllocateInfo()
@@ -594,12 +622,12 @@ def main():
     r = vk.vkAllocateMemory(dev, C.byref(ai), None, C.byref(mem))
     if r != VK_SUCCESS:
         print(f"IMPORT FAIL vkAllocateMemory {r}", flush=True)
-        print("CLASSICIMPORT FAIL import", flush=True)
+        fail("import")
         return
     r = vk.vkBindBufferMemory(dev, buf, mem, 0)
     if r != VK_SUCCESS:
         print(f"IMPORT FAIL vkBindBufferMemory {r}", flush=True)
-        print("CLASSICIMPORT FAIL import", flush=True)
+        fail("import")
         return
     print("IMPORT OK", flush=True)
 
@@ -614,11 +642,11 @@ def main():
         if alias is True:
             print("ALIAS OK", flush=True)
         elif alias is False:
-            print("CLASSICIMPORT FAIL alias", flush=True)
+            fail("alias")
             return
         # None = SKIP already printed
 
-    print("CLASSICIMPORT PASS", flush=True)
+    print(f"CLASSICIMPORT PASS {mode}", flush=True)
 
 
 if __name__ == "__main__":

@@ -73,6 +73,14 @@ issue a vrend fence. Worker `flush_resource`, when scanout has an id and compone
 vrend: call sync + park the present on the fence instead of `transfer_read`.
 Present cost: one GPU blit + `present_surface(id)`. CPU touches no pixels.
 
+**Since 2026-08-06 the gate is `SCANOUT | SHARED`, not `SCANOUT` alone.** Backing every
+gbm-allocated resource (gbm always sets `__DRI_IMAGE_USE_SHARE` → `PIPE_BIND_SHARED` →
+`VIRGL_BIND_SHARED`) is what lets a Vulkan compositor import its *clients'* window buffers
+into venus, not just its own framebuffer — see `limina-classic-gbm-venus-import`. The PBO
+mode above stays SCANOUT-only: it blits on `RESOURCE_FLUSH`, which only scanouts get, so a
+SHARED-only resource in PBO mode would alias bytes that never update. `LIMINA_VREND_SHARED_IOSURFACE=0`
+restores the SCANOUT-only gate.
+
 ### Fence-accurate present for vrend
 - `try_park_present` requires `resource.ctx_id != 0` (only blob-create sets it) and
   injects on ring 63 (a vkr concept). vrend needs its own keying: fence on the flushing
