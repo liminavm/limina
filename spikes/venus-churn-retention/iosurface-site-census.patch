@@ -1,0 +1,42 @@
+diff --git a/src/venus/vkr_image.c b/src/venus/vkr_image.c
+index bfa41a5b..7124c56e 100644
+--- a/src/venus/vkr_image.c
++++ b/src/venus/vkr_image.c
+@@ -223,6 +223,7 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+                /* MoltenVK: chain VkImportMetalIOSurfaceInfoEXT so the driver backs this
+                 * image with our global IOSurface (useIOSurface) — render lands in the
+                 * surface, presented zero-copy. */
++               fprintf(stderr, "[IOSITE] A metal_objects %ux%u\n", ci->extent.width, ci->extent.height);
+                limina_surf =
+                   vkr_mtl_iosurface_alloc(dev->mtl_device, ci->extent.width,
+                                           ci->extent.height, limina_mtl, limina_fourcc,
+@@ -273,6 +274,7 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+                    * bind on an sRGB image. */
+                   uint32_t limina_mtl_exact = limina_mtl;
+                   limina_vkformat_to_mtl_exact(ci->format, &limina_mtl_exact);
++                  fprintf(stderr, "[IOSITE] B mtltexture %ux%u\n", ci->extent.width, ci->extent.height);
+                   limina_surf = vkr_mtl_iosurface_alloc(dev->mtl_device, ci->extent.width,
+                                                       ci->extent.height, limina_mtl_exact,
+                                                       limina_fourcc, limina_bpe, 0);
+@@ -338,6 +340,7 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+                                     &subres, &layout);
+       struct vkr_mtl_iosurface *limina_kk_surf = NULL;
+       if (layout.rowPitch && layout.rowPitch == (uint32_t)layout.rowPitch) {
++         fprintf(stderr, "[IOSITE] C kk_linear %ux%u fmt=%d usage=0x%x\n", ci->extent.width, ci->extent.height, (int)ci->format, (unsigned)ci->usage);
+          limina_kk_surf = vkr_mtl_iosurface_alloc(dev->mtl_device, ci->extent.width,
+                                                 ci->extent.height, limina_mtl, limina_fourcc,
+                                                 limina_bpe, (uint32_t)layout.rowPitch);
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index 304c73e4..4b2c547c 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -8819,7 +8819,8 @@ static void vrend_resource_iosurface_init(struct vrend_resource *gr,
+    vkr_budget_set_vrend();
+ 
+    struct vkr_mtl_iosurface *surf =
+-      vkr_mtl_iosurface_alloc_plain(gr->base.width0, gr->base.height0, io_fourcc, 4);
++      (fprintf(stderr, "[IOSITE] D vrend_plain %ux%u\n", gr->base.width0, gr->base.height0),
++       vkr_mtl_iosurface_alloc_plain(gr->base.width0, gr->base.height0, io_fourcc, 4));
+    if (!surf)
+       return;
+ 

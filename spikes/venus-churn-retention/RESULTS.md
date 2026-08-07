@@ -197,6 +197,49 @@ ineffective optimisation. Any release protocol needs a key that does not recycle
 epoch/generation alongside the id, or the virtio resource id instead. Until then the cap bounds
 this, and it bounds it correctly.
 
+### §0.5 The 2x IOSurfaces: the GUEST creates two exportable images per buffer (2026-08-07)
+
+§0.4 left "602 publishes for 301 guest buffers = exactly 2 IOSurfaces per scanout buffer" as the
+open question. Answered by tagging every allocation site in vkr and counting across one
+300-flip churn (`iosurface-site-census.patch` here — re-apply it to repeat this):
+
+| site | what it is | allocations |
+|---|---|---|
+| A `vkr_image.c` metal_objects | MoltenVK `VkImportMetalIOSurfaceInfoEXT` | **0** (backend retired) |
+| B `vkr_image.c` mtltexture | `LIMINA_KK_MTLTEXTURE_SCANOUT` | **0** (gated off) |
+| C `vkr_image.c` kk_linear | the KK native-modifier path | **602** |
+| D `vrend_renderer.c` plain | classic/EGL-backed scanout | **3** (modeset only) |
+
+So it is not vkr allocating twice for one image — it is **one allocation per image, and the
+guest creating two images per buffer**. The tag prints the usage flags, and they alternate:
+
+```
+[IOSITE] C kk_linear 2560x1440 fmt=44 usage=0x480017
+[IOSITE] C kk_linear 2560x1440 fmt=44 usage=0x80097
+```
+
+`0x480017` = HOST_TRANSFER | ATTACHMENT_FEEDBACK_LOOP | COLOR_ATTACHMENT | SAMPLED |
+TRANSFER_SRC/DST; `0x80097` = the same minus HOST_TRANSFER, plus **INPUT_ATTACHMENT**. Two
+genuinely different images, not one image seen twice.
+
+vkr's behaviour is correct: it allocates for any image carrying
+`VkExternalMemoryImageCreateInfo` that is not an import, because it implements the export
+contract itself (no macOS driver honours dma-buf handle types). An exportable image the guest
+asked for gets a surface. **The 2x is upstream of us.**
+
+**CAVEAT, and it is a big one: this was measured through `kmschurn.py`, which allocates with
+gbm under zink — and zink is known to create a separate linear scanout shadow alongside the
+main image.** So this 2x may be an artifact of the probe's allocation path rather than a
+property of real workloads: synoik has allocated scanout images *directly in Vulkan* since
+`95c306bf` and would create one. Do NOT generalize this to the dogfood stack without
+re-measuring there. The backlog's "1207 charges for 611 creates" was seen on synoik, which
+suggests something similar happens there too — but that is a separate measurement, not this one.
+
+**Next, and it is now the same task as the `churn-vk` arm:** teach `kmschurn.py` to allocate
+scanout images directly in Vulkan (the sequence in synoik's `scanout-buffers-via-vulkan.md`),
+then re-run this census. One image per buffer would confirm the 2x is zink's shadow and close
+this; two would mean it is real and worth chasing into the guest.
+
 ### What this cost, and the rule that would have saved it
 
 Four storms and most of a day were spent instrumenting the worker because the memory appeared in
