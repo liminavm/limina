@@ -1,9 +1,9 @@
 # virglrenderer — patch-audit ledger
 
-74 commits; base **upstream tip `f2945d39`** (deps-to-tip rebase 2026-08-05 — see *Deps-to-tip
+75 commits; base **upstream tip `f2945d39`** (deps-to-tip rebase 2026-08-05 — see *Deps-to-tip
 rebase executed* in Findings). Schema + protocol: `README.md`.
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
-The table covers the 58 audited commits; the 5 added since are listed under
+The table covers the 58 audited commits; the 6 added since are listed under
 *Post-audit commits* in Findings.
 
 > **Fork model since 2026-08-04.** There is no `patches/virglrenderer/` any more — our delta is the
@@ -80,7 +80,7 @@ The table covers the 58 audited commits; the 5 added since are listed under
 
 ### Post-audit commits (unaudited — added after the 2026-08-03 pass)
 
-The table's 58 rows are the audited series. Five commits have landed on the branch since,
+The table's 58 rows are the audited series. Six commits have landed on the branch since,
 and none has been researched against upstream yet. Listed so the drift is visible rather
 than implied by a stale count:
 
@@ -91,12 +91,23 @@ than implied by a stale count:
 | `969af493` | vrend: host-side resource content capture for snapshot restore (P2) | carry |
 | `17bb8bf2` | vrend: VREND_CONTENT=0 kill switch for the content export | carry (chained) |
 | `034f7086` | vrend: back VIRGL_BIND_SHARED resources with IOSurfaces too | carry — chains onto the IOSurface backing (0053) and the fd-less classic attach; upstreamable only if that stack goes up |
+| `24a3c2d9` | venus: bound the host GPU memory a guest can hold | **send-later, standalone** — the accounting half is host-agnostic and generally useful (any VMM can be killed by a guest that over-allocates); the ledger + histogram would need no limina context to explain. The `LIMINA_GPU_MEM_BUDGET_MIB` name and the default-off policy are ours and would need renaming; splitting accounting from enforcement is the natural shape upstream |
 
 `034f7086` is the allocation-side half of the fd-less classic-resource attach: without it
 only `VIRGL_BIND_SCANOUT` resources got an IOSurface, so a Vulkan compositor could import
 its own framebuffer but none of its clients' window buffers, and could not run on the
 virgl GL default at all. Carries a `LIMINA_VREND_SHARED_IOSURFACE=0` kill switch (one more
 env for the fold plan's getenv-consistency item, alongside 0011/0054).
+
+`24a3c2d9` adds `src/venus/vkr_budget.{c,h}`, a ledger of host memory allocated on the
+guest's behalf, with an optional cap. Two things about it are load-bearing for anyone
+auditing it later. Charging happens at each **host allocator** call site (the driver
+allocation, our IOSurfaces, the mtl_shm carriers), not at the Vulkan entry point, so an
+import that aliases already-charged bytes is not billed twice. And enforcement **kills the
+context** instead of returning an error, because venus submits `vkAllocateMemory`
+asynchronously and discards the host's `VkResult` — a fact worth re-verifying against
+mesa's `vn_device_memory_alloc_simple` before reworking that decision. One more env for
+the getenv-consistency item.
 
 ### Series verdict (all 58 rows researched 2026-08-03, vs tip `956b034f`)
 

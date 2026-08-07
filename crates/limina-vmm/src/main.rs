@@ -439,6 +439,32 @@ fn init_worker_logging() {
         .init();
 }
 
+/// Default ceiling, in MiB, on host GPU memory held on the guest's behalf.
+///
+/// The guest cannot see this memory. A guest that leaks `VkDeviceMemory` grows the *host*
+/// worker, so its own OOM killer never fires and the guest's memory graphs stay flat;
+/// what happens instead is that macOS eventually picks the worker as the largest
+/// compressed process and SIGKILLs it, killing the VM with no guest backtrace, no crash
+/// report, and at a moment unrelated to the allocation at fault. (2026-08-06: a Vulkan
+/// compositor re-allocated a 4K backdrop texture instead of reusing it — ~51 GB/hour —
+/// and the VM died at 142 GB. See `spikes/wallpaper-backdrop-leak/`.)
+///
+/// Capping it trades that for one guest client losing its GPU context, with the culprit
+/// and its allocation histogram named in the worker log, while the VM and every other
+/// client keep running. It is a context kill rather than a returned error because venus
+/// submits `vkAllocateMemory` asynchronously and never reads the host's result — full
+/// reasoning in `vkr_budget.h`.
+///
+/// Deliberately generous: this is a runaway backstop, not a working-set limit. A healthy
+/// desktop guest holds well under its own RAM in host GPU memory, and the two-tier
+/// guarantee means a stock guest must never trip this in normal use — so the number is
+/// set far above any legitimate workload while staying far below the footprint that gets
+/// a worker killed.
+fn default_gpu_mem_budget_mib(ram_mib: usize) -> usize {
+    const FLOOR_MIB: usize = 8192;
+    std::cmp::max(FLOOR_MIB, ram_mib.saturating_mul(2))
+}
+
 fn main() -> Result<()> {
     raise_fd_limit();
 
@@ -454,6 +480,17 @@ fn main() -> Result<()> {
     }
 
     let cli = Cli::parse();
+
+    // Bound the host GPU memory the guest can hold (mechanism: virglrenderer's
+    // `vkr_budget.c`, which reads this once at its first allocation). Policy is here
+    // because guest RAM is here. An explicit setting always wins; `0` keeps the ledger
+    // and its diagnostics but lifts the cap.
+    if std::env::var_os("LIMINA_GPU_MEM_BUDGET_MIB").is_none() {
+        std::env::set_var(
+            "LIMINA_GPU_MEM_BUDGET_MIB",
+            default_gpu_mem_budget_mib(cli.ram_mib).to_string(),
+        );
+    }
 
     // clap guarantees exactly one of --firmware / --kernel is present.
     let boot = match cli.kernel {
@@ -616,6 +653,24 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use std::os::unix::io::AsRawFd;
+
+    #[test]
+    fn gpu_mem_budget_is_a_runaway_backstop_not_a_working_set_limit() {
+        // Small guests get the floor, not 2x — 2 GiB of guest RAM does not mean 4 GiB is
+        // a sane ceiling on host GPU memory (one 4K swapchain plus a browser's textures
+        // already runs to hundreds of MiB, and headroom is what keeps a legitimate
+        // workload from ever meeting the cap).
+        assert_eq!(default_gpu_mem_budget_mib(2048), 8192);
+        assert_eq!(default_gpu_mem_budget_mib(4096), 8192);
+        // Past the floor it tracks guest RAM, so a big VM gets proportionate headroom.
+        assert_eq!(default_gpu_mem_budget_mib(8192), 16384);
+        assert_eq!(default_gpu_mem_budget_mib(16384), 32768);
+        // The leak that motivated this reached 142 GB; every default is far below it.
+        assert!(default_gpu_mem_budget_mib(65536) < 142_000);
+        // Never zero — zero means "no cap" to the renderer, so the degenerate input must
+        // not silently disable enforcement.
+        assert!(default_gpu_mem_budget_mib(0) > 0);
+    }
 
     #[test]
     fn parse_mac_accepts_colon_hex_and_rejects_garbage() {
