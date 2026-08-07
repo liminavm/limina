@@ -164,8 +164,8 @@ as the matrix, so the evidence below is re-runnable rather than a number in a pa
 
 | arm | alive IOSurfaces, before → after | `lookup (+N)` | imports / evictions |
 |---|---|---|---|
-| GREEN — shipped behaviour | 2 → **2** | +1 | 42 / 42 |
-| RED — `--leak-imports` | 2 → **43** | **+41** | 42 / 0 |
+| GREEN — shipped behaviour | 2 → **2** | **+0** (`624/624`) | 42 / 42 |
+| RED — `--leak-imports` | 2 → **43** | **+41** (`708/667`) | 42 / 0 |
 
 +41 retained against a flat baseline. The vehicle detects this failure class.
 
@@ -184,7 +184,7 @@ the invariance smell, exactly as `CLAUDE.md` describes it:
 | `vmmap` `IOSurface` row | 364.2M → 351.9M | 364.2M → 351.9M | virtual size, dominated by other mappings |
 | census `iosurface A/F (+N)` | +1 | +1 | counts alloc-vs-free of surfaces we **own**; a borrowed import allocates nothing |
 | census `DEALLOC iosurface N (alive M)` | 2 → 2 | 2 → **43** | **the oracle** |
-| census `lookup A/F (+N)` | +1 | **+41** | also discriminates, and more specifically |
+| census `lookup A/F (+N)` | **+0** | **+41** | also discriminates, and more specifically |
 
 The fourth is object-exact — it counts real IOSurface `-dealloc` — so one retained surface is
 visible regardless of byte noise, which also removes the need for large buffers.
