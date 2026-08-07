@@ -66,7 +66,68 @@ It is built bottom-up, and each step is gated on evidence rather than on compili
 |---|---|---|
 | **1** ✅ | KMS + Vulkan scanout allocation + churn. No Wayland, no input. | **Reproduces `kmschurn.py`'s `churn-vk` numbers on the same host.** Until the two vehicles agree, a difference could as easily be a transcription bug as a finding. Passed 2026-08-07 — see below. |
 | **2** ✅ | Wayland frontend (smithay), `wl_shm` clients | a real client's pixels reach the scanout. Passed 2026-08-07 — see below. |
-| 3 | `linux-dmabuf` import, client death | reaches the path × holder cases in `buffer-lifetime-matrix.md` |
+| **3a** ✅ | `linux-dmabuf` import (venus-allocated client) | a client's dmabuf pixels reach the scanout **and** the host log shows the IOSurface import branch. Passed 2026-08-07 — see below. |
+| 3b | teardown paths × holders | discriminates between the paths in `buffer-lifetime-matrix.md` §4 |
+| 3c | vrend-allocated (gbm) client buffers | reaches the **asymmetric** holder of matrix §3, the observed compositor-quit shape. Needs the `vkr_budget_set_context` fix in matrix §6 first. |
+
+### M3a's gate has two halves, and the pixels are the weaker one
+
+The host resolves a cross-context import down a **silent fallback ladder** — IOSurface, then
+`map_ptr`, then cross-context SHM bytes (`vkr_device_memory.c:320-345`). If the IOSurface lookup
+fails, the import still succeeds and the pixels are still correct; what does *not* happen is the
+borrowed `+1` on `mem->imported_iosurface` (`:794`). Since that reference is the entire subject of
+M3b, a green pixel capture on its own would certify a vehicle that arms nothing.
+
+So M3a must show **both**:
+
+1. the client's quadrants on the scanout (`iosdump`), and
+2. a host worker line proving the IOSurface branch fired — `limina: import res N <- host-pointer
+   (IOSurface id=M ...)` with a **nonzero** id, or `[LIMINA-VKR-MTLTEX] import res N IOSurface
+   id=M`.
+
+**Oracle trap, cost one boot cycle:** those lines go through `vkr_log`, which is
+`VIRGL_LOG_LEVEL_INFO` (`vkr_common.c:261`) and therefore **invisible at the default
+`RUST_LOG=warn`**. Their absence at `warn` says nothing at all. Boot with
+`RUST_LOG="warn,krun_rutabaga_gfx::virgl_renderer=info"`, and note that the budget lines *are*
+visible at `warn` (they are `vkr_log_error`), which makes the log look instrumented when the
+import path is not.
+
+### M3a passed both halves (2026-08-07)
+
+```
+sudo -n env VK_DRIVER_FILES=…/virtio_icd.aarch64.json ./limina-testcomp run &
+sudo -n env … WAYLAND_DISPLAY=wayland-1 ./limina-testcomp client-dmabuf 40
+```
+
+**Mechanism**, from the host worker log — the half that certifies the holder is armed:
+
+```
+virgl: vkr: limina: import res 227 <- host-pointer (IOSurface id=78 base=0x12ea98000 size=491520)
+```
+
+The **nonzero** `IOSurface id` is the whole point: it means `vkr_mtl_iosurface_lookup` succeeded
+and the borrowed `+1` is parked in `mem->imported_iosurface`, rather than the import having
+quietly landed one rung down the fallback ladder. `size=491520` is 400×300×4 rounded up to the
+16 KiB guest page, which is the arithmetic agreeing too.
+
+**Pixels** (`spikes/venus-churn-retention/m3a-dmabuf-scanout.png`, cropped from the 2560x1440
+scanout): the four quadrants at (0,0), sampled and exact —
+
+| sample | got | expected |
+|---|---|---|
+| (100,75) TL | (255,0,0) | red |
+| (300,75) TR | (0,255,0) | green |
+| (100,225) BL | (0,0,255) | blue |
+| (300,225) BR | (255,255,0) | yellow |
+| (1200,700) | (26,26,64) | backdrop |
+
+Row-major and unswapped, so the import's stride and format survived the round trip. The client
+ran **1792 frames in 40 s**, which is the dmabuf release path and the frame callbacks both
+working — a compositor that never released would stall it after one frame. `imported=1` then
+`evicted` on client exit, `import_failures=0`.
+
+`iosprobe` reported `nonzeroRGB=0` for this very surface while `iosdump` read `nonzero=3686400`
+— the M2 trap, unchanged: enumerate ids with `iosprobe`, judge content only with `iosdump`.
 
 ### M2's gate: a real client's pixels on the scanout (2026-08-07)
 

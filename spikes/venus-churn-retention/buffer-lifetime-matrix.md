@@ -39,10 +39,41 @@ They are not held by the compositor process. They are held by its host-side prox
 
 The first is the important one and is **already documented in-tree as a leak canary**: with no
 live `VkInstance` left to sweep, whatever remains in the object table gets a plain `free()` and
-its host allocations (mtl_shm carrier fd, IOSurface refs, gbm bo, udmabuf fd) leak. That path is
-**normal, not exceptional** — the same file notes few clients destroy their `VkInstance` before
-exit, so teardown-by-DRM-fd-cleanup fires on essentially every venus client exit. Same shape as
+its host allocations (mtl_shm carrier fd, IOSurface refs, gbm bo, udmabuf fd) leak. Same shape as
 the 2026-07-10 incident (12k orphaned PSXSHM fds starving a fresh session at login).
+
+> **CORRECTION (2026-08-07, verified in source while building the M3 vehicle).** The paragraph
+> above originally continued "few clients destroy their `VkInstance` before exit, so
+> teardown-by-DRM-fd-cleanup fires on essentially every venus client exit", and §4 built path 2
+> on it. **That is backwards.** `vkr_context_destroy` gates the sweep on the instance being
+> *live*:
+>
+> ```c
+> if (ctx->instance)                                    /* vkr_context.c:1005 */
+>    vkr_instance_destroy(ctx, ctx->instance, false);
+> ```
+>
+> A `SIGKILL`ed client never calls `vkDestroyInstance`, so `ctx->instance` is **still set** and
+> the full sweep runs: `vkr_context.c:1006` → `vkr_physical_device_destroy`
+> (`vkr_physical_device.c:94`) → `vkr_device_destroy` → `vkr_device_object_destroy`, whose
+> "always cleanup vkr allocs" branch (`vkr_device.c:332-341`) calls `vkr_device_memory_release`
+> and **drops the `+1`**. limina builds with `-Drender-server-worker=thread`
+> (`scripts/build-virglrenderer.sh:61`), so the real `vk->FreeMemory` runs too.
+>
+> The bare-`free()` branch (`vkr_context.c:1067`) is reached by what *survives* that sweep —
+> orphans — and by contexts whose instance was already gone. So **abrupt exit is the path that
+> cleans up, and clean exit is the one that can leave orphans.** Path 2 may well come back green
+> at the vkr layer; if it does, the compositor-quit residual came from somewhere else (path 4's
+> poisoned teardown, a sweep orphan, the supervisor's Mach send right, or caveat #1 in §7 — the
+> context never actually died). The discriminator is already in-tree and should be recorded for
+> every teardown test:
+>
+> ```
+> destroying context %u (%s): instance was %s, %u objects and %u resources left in the tables
+> ```
+>
+> (`vkr_context.c:1013`). M3b is therefore written as a **discriminator, not a confirmation** —
+> see §8.
 
 ## 3. vrend × venus cross-imports — the asymmetric case
 
@@ -58,6 +89,16 @@ Failure mode: if the venus context dies through the bare-`free()` branch,
 `vkr_device_memory_release` never runs, the `+1` never drops, and the IOSurface **outlives both
 renderers with no owner left to free it**. That is exactly the compositor-quit shape observed.
 
+Note **which side has to die** for that: the holder of the borrowed `+1` is the **importer** —
+the compositor. A test that only kills *clients* exercises exporter-side death and never reaches
+this. M3b kills testcomp itself, with its import cache populated.
+
+Reaching this case at all also needs a **vrend-allocated** client buffer, not a venus one: a
+venus↔venus import has both refs on the same side and is symmetric. Since the 2026-08-04
+`MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu` flip that is also the *realistic* shape — a GL client
+allocates classic gbm resources. That arm is M3c (see §8); it is the one that needs the
+`vkr_budget_set_context` prerequisite in §6.
+
 ## 4. Test matrix — bunch by teardown PATH × holder
 
 The cases collapse along one axis: they share a *teardown path*, and the path is what breaks, not
@@ -66,8 +107,10 @@ the combination. One test per path; split only when one goes red.
 **Paths (4):**
 1. Clean exit — client destroys `VkInstance`/`VkDevice` and frees its memory. Baseline; residual
    must be zero.
-2. Abrupt exit (SIGKILL, no `VkInstance` destroy) — DRM-fd cleanup into the bare-`free()` branch.
-   **The common case.**
+2. Abrupt exit (SIGKILL, no `VkInstance` destroy). **The common case** — but see the correction
+   in §2: this leaves the instance *live*, so it is the path that runs the **full sweep**, not
+   the one that skips it. Expect it to be green at the vkr layer and treat a residual here as
+   the interesting result rather than the expected one.
 3. Error-path partial — the `-1000158000`
    (`VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT`) create failure that fired 38 s before
    the jetsam kill. A partially-built object on an error path is the classic dropped release.
