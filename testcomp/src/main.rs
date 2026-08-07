@@ -60,13 +60,30 @@ fn main() -> Result<()> {
             // looking at the screen.
             let mut frames = None;
             let mut hold_buffers = false;
+            let mut leak_imports = false;
             for arg in args {
                 match arg.as_str() {
                     "--hold-buffers" => hold_buffers = true,
+                    "--leak-imports" => leak_imports = true,
                     other => frames = other.parse::<u64>().ok(),
                 }
             }
-            run(frames, hold_buffers)
+            run(frames, hold_buffers, leak_imports)
+        }
+        "client-churn" => {
+            let count: u32 = args
+                .next()
+                .unwrap_or_else(|| "40".into())
+                .parse()
+                .context("buffer count")?;
+            let (mut w, mut h) = (1920, 1080);
+            if let Some((a, b)) = args.next().and_then(|s| {
+                s.split_once('x').map(|(a, b)| (a.to_string(), b.to_string()))
+            }) {
+                w = a.parse().context("width")?;
+                h = b.parse().context("height")?;
+            }
+            client::run_churn(w, h, count)
         }
         "client" | "client-dmabuf" => {
             let secs: u64 = args
@@ -99,15 +116,16 @@ fn main() -> Result<()> {
         }
         other => anyhow::bail!(
             "unknown mode {other:?} — expected `probe`, `churn <frames>`, \
-             `run [frames] [--hold-buffers]`, or \
-             `client|client-dmabuf [seconds] [WxH] [--park]`"
+             `run [frames] [--hold-buffers] [--leak-imports]`, \
+             `client|client-dmabuf [seconds] [WxH] [--park]`, or \
+             `client-churn [count] [WxH]`"
         ),
     }
 }
 
 /// The compositor. Accepts clients on a Wayland socket, composites their `wl_shm` buffers
 /// over a backdrop, and page-flips the result.
-fn run(frames: Option<u64>, hold_buffers: bool) -> Result<()> {
+fn run(frames: Option<u64>, hold_buffers: bool, leak_imports: bool) -> Result<()> {
     // `ListeningSocketSource::new_auto` needs somewhere to put the socket, and a `sudo` shell
     // over a non-login ssh has no XDG_RUNTIME_DIR at all. Defaulting it here beats failing
     // deep inside libwayland with a message about a directory nobody set.
@@ -123,7 +141,7 @@ fn run(frames: Option<u64>, hold_buffers: bool) -> Result<()> {
 
     let out = Output::open(CARD)?;
     let vk = vk::Vk::new(WANT_DRIVER)?;
-    comp::Comp::run(vk, out, frames, hold_buffers)
+    comp::Comp::run(vk, out, frames, hold_buffers, leak_imports)
 }
 
 /// Report the output and one buffer's real layout, then exit. Run this first on any new image:

@@ -161,10 +161,20 @@ pub struct Render {
     /// Set once the mode has been programmed, so `import_failed` can be reported without
     /// pretending a frame was presented.
     pub import_failures: u64,
+
+    /// **The RED injection.** Never evict, and never sweep at exit — hold every import for the
+    /// process's lifetime.
+    ///
+    /// This exists to satisfy the rule at the bottom of `README.md`: a vehicle that has never
+    /// reproduced a failure in a class cannot certify the absence of one, because a green result
+    /// and a blind oracle are the same observation. Churning distinct client dmabufs against
+    /// this flag retains one host-side `+1` per buffer, so the census and `owned unmapped` are
+    /// shown to *move* before their stillness is allowed to mean anything.
+    pub leak_imports: bool,
 }
 
 impl Render {
-    pub fn new(vk: Vk, out: Output) -> Self {
+    pub fn new(vk: Vk, out: Output, leak_imports: bool) -> Self {
         Render {
             vk,
             out,
@@ -174,6 +184,7 @@ impl Render {
             imported: 0,
             evicted: 0,
             import_failures: 0,
+            leak_imports,
         }
     }
 
@@ -229,6 +240,9 @@ impl Render {
     /// destroys a buffer politely and when it dies holding one — so this is the release whose
     /// *absence* the teardown tests are looking for on the host side.
     fn evict(&mut self, buffer: &wl_buffer::WlBuffer) {
+        if self.leak_imports {
+            return;
+        }
         if let Some(img) = self.imports.remove(&buffer.id()) {
             self.vk.destroy_imported(&img);
             self.evicted += 1;
@@ -304,6 +318,16 @@ impl Drop for Render {
         // *clean*, so a host-side residual after `COMPOSITOR DONE` is limina's and not ours.
         // Loud rather than silent: on the clean-exit path this count should be zero, and a
         // nonzero one changes what the following measurement means.
+        if self.leak_imports {
+            // Deliberately NOT swept: the RED arm has to still be holding them when the
+            // process dies, or the leak it is meant to demonstrate is cleaned up on the way
+            // out and the measurement reads green.
+            log::warn!(
+                "--leak-imports: leaving {} import(s) held at exit ON PURPOSE",
+                self.imports.len()
+            );
+            return;
+        }
         if !self.imports.is_empty() {
             log::warn!(
                 "{} client dmabuf import(s) still cached at exit — released now",
@@ -317,7 +341,13 @@ impl Drop for Render {
 }
 
 impl Comp {
-    pub fn run(vk: Vk, out: Output, frames: Option<u64>, hold_buffers: bool) -> Result<()> {
+    pub fn run(
+        vk: Vk,
+        out: Output,
+        frames: Option<u64>,
+        hold_buffers: bool,
+        leak_imports: bool,
+    ) -> Result<()> {
         let mut event_loop: EventLoop<Comp> = EventLoop::try_new().context("calloop")?;
         let display: Display<Comp> = Display::new().context("wayland display")?;
         let dh = display.handle();
@@ -345,12 +375,15 @@ impl Comp {
             pending: Vec::new(),
             frame_callbacks: Vec::new(),
             hold_buffers,
-            render: Render::new(vk, out),
+            render: Render::new(vk, out, leak_imports),
             start: Instant::now(),
             running: true,
         };
         if hold_buffers {
             log::warn!("--hold-buffers: client buffers will NOT be released (M3b teardown mode)");
+        }
+        if leak_imports {
+            log::warn!("--leak-imports: RED arm — imports are retained forever, on purpose");
         }
 
         // `new_auto` needs XDG_RUNTIME_DIR, which a `sudo` shell over non-login ssh does not

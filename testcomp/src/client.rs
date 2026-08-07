@@ -166,6 +166,89 @@ pub fn run(
     Ok(())
 }
 
+/// Churn `count` **distinct** dmabufs through the compositor, one at a time.
+///
+/// The one-buffer client cannot separate a working import cache from a leaking one: a single
+/// import is a single import either way. Churning distinct buffers makes the difference
+/// cumulative — a compositor that evicts holds one at a time, one that does not holds `count` —
+/// which is what turns the host-side census and `owned unmapped` into instruments with a scale.
+///
+/// Each iteration allocates, commits, **waits for the frame callback** (so the compositor has
+/// presented and released it), then destroys the `wl_buffer` and frees the venus image. That
+/// destroy is what should fire `buffer_destroyed` on the other side; whether it does is the
+/// measurement.
+pub fn run_churn(width: i32, height: i32, count: u32) -> Result<()> {
+    let conn = Connection::connect_to_env()
+        .context("connecting to the compositor (is WAYLAND_DISPLAY set?)")?;
+    let display = conn.display();
+    let mut queue = conn.new_event_queue();
+    let qh = queue.handle();
+    display.get_registry(&qh, ());
+
+    let mut app = App::default();
+    queue.roundtrip(&mut app).context("registry roundtrip")?;
+    let compositor = app.compositor.clone().context("no wl_compositor")?;
+    let wm_base = app.wm_base.clone().context("no xdg_wm_base")?;
+    let dmabuf = app
+        .dmabuf
+        .clone()
+        .context("compositor has no zwp_linux_dmabuf_v1")?;
+
+    let surface = compositor.create_surface(&qh, ());
+    let xdg_surface = wm_base.get_xdg_surface(&surface, &qh, ());
+    let toplevel = xdg_surface.get_toplevel(&qh, ());
+    toplevel.set_title("limina-testcomp dmabuf churn".into());
+    surface.commit();
+    queue.roundtrip(&mut app).context("configure roundtrip")?;
+
+    app.surface = Some(surface.clone());
+    app.size = (width, height);
+    // Parked: the churn loop drives commits by hand, one per buffer, rather than letting the
+    // callback re-`draw` the *previous* buffer.
+    app.park = true;
+
+    for i in 0..count {
+        let (buffer, backing) = dmabuf_buffer(&dmabuf, &qh, width, height)
+            .with_context(|| format!("allocating churn buffer {i}"))?;
+
+        let before = app.frames;
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage(0, 0, width, height);
+        surface.frame(&qh, ());
+        surface.commit();
+
+        // Wait for the frame callback: it means the compositor presented this buffer and is
+        // done reading it. Releasing the backing before that would be a use-after-free that
+        // happens to work — the same discipline `churn` applies to page flips.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.frames == before && std::time::Instant::now() < deadline {
+            queue
+                .blocking_dispatch(&mut app)
+                .context("waiting for the frame callback")?;
+        }
+        anyhow::ensure!(
+            app.frames != before,
+            "compositor never answered the frame callback for buffer {i} — it is stalled, and \
+             a churn measurement taken now would describe nothing"
+        );
+
+        // The destroy that should evict the compositor's import.
+        buffer.destroy();
+        drop(backing);
+        queue.flush().ok();
+
+        if i % 10 == 0 {
+            log::info!("churned {i}/{count}");
+        }
+    }
+    queue.roundtrip(&mut app).context("final roundtrip")?;
+
+    // `created=` in kmschurn's spirit: a retention number means nothing without evidence that
+    // the buffers were actually allocated and handed over.
+    println!("CLIENT CHURN DONE buffers={count} created={count}");
+    Ok(())
+}
+
 /// Allocate a venus image, paint the quadrants into it, and wrap it in a `wl_buffer` over
 /// `zwp_linux_dmabuf_v1`.
 ///

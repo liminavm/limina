@@ -23,7 +23,7 @@ set -uo pipefail
 
 PORT="${PORT:-2222}"
 WORKER_LOG="${WORKER_LOG:-/tmp/enhanced-efi-kk-worker.log}"
-SIZE="${SIZE:-1920x1080}"   # big enough that retention clears the `owned unmapped` noise floor
+SIZE="${SIZE:-1920x1080}"   # 8.3 MiB per buffer, so a retained one is unambiguous
 SSH=(ssh -p "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes claude@127.0.0.1)
 ICD=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json
 
@@ -31,20 +31,39 @@ g() { "${SSH[@]}" "$@" 2>/dev/null; }
 
 worker_pid() { pgrep -f "target/debug/limina-vmm" | head -1; }
 
-# `owned unmapped` BYTES, not regions: regions coalesce, so a region count understates retention
-# (see crates/limina-test/tests/scanout_churn_retention.rs). The row is ABSENT, not zero-valued,
-# when the worker holds none — an unguarded parse yields an empty string that reads like a failed
-# measurement, so normalise it to 0. `graphics` is excluded the same way the L2 test excludes it.
-owned_unmapped() {
-  local v
-  v=$(vmmap -summary "$(worker_pid)" 2>/dev/null \
-      | grep "owned unmapped" | grep -v graphics | awk '{print $3}' | head -1)
-  echo "${v:-0}"
+# THE ORACLE: the dealloc-sentinel `alive` count from vkr_mtl_refcount_census
+# (vkr_metal_helpers.m:152). It counts real IOSurface -dealloc, so one retained surface is
+# visible regardless of byte noise.
+#
+# Three oracles were tried and only this one discriminates — measured 2026-08-07 against a
+# deliberate leak (`--leak-imports`, 40 x 1920x1080 buffers):
+#
+#   owned unmapped   the row is ABSENT on this worker entirely. Not zero — absent. It is the
+#                    right oracle for M1's scanout churn and the wrong one here.
+#   vmmap IOSurface  364.2M -> 351.9M in BOTH arms. Virtual size, dominated by other mappings.
+#   census +N        `iosurface A/F (+1)` in BOTH arms: that counter tracks registry refs, not
+#                    deallocation.
+#   DEALLOC alive    2 -> 2 (green) vs 2 -> 43 (red). This one.
+#
+# Identical A/B readings from the first three are the classic "the differential is not reaching
+# the system under test" — do not read them as an absence of retention.
+alive_iosurfaces() {
+  grep -a "DEALLOC iosurface" "$WORKER_LOG" | tail -1 \
+    | sed 's/.*DEALLOC iosurface [0-9]* (alive \([0-9-]*\)).*/\1/'
 }
 
-# The census is object-exact: one leaked IOSurface is visible regardless of byte noise. It ticks
-# on the ALLOCATION path, so it only refreshes while something is allocating.
-census() { grep -a "refs — iosurface" "$WORKER_LOG" | tail -1 | sed 's/.*refs — //'; }
+# The census ticks on the ALLOCATION path (vkr_budget.c:425), so a quiesced worker never emits a
+# fresh one and `tail -1` silently returns a STALE line — which reads as "nothing changed". Wait
+# out the interval, then make the compositor allocate again with a throwaway client.
+force_census() {
+  local mark; mark=$(mark)
+  sleep 11
+  g "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD XDG_RUNTIME_DIR=/tmp/testcomp-run \
+     WAYLAND_DISPLAY=wayland-1 ./limina-testcomp client-dmabuf 3 320x240" >/dev/null 2>&1
+  sleep 2
+  since "$mark" | grep -a "DEALLOC iosurface" | tail -1 \
+    | sed 's/.*DEALLOC iosurface [0-9]* (alive \([0-9-]*\)).*/\1/'
+}
 
 # macOS `wc -l` pads with spaces; `tail -n +<padded>` rejects it as an illegal offset.
 mark() { wc -l < "$WORKER_LOG" | tr -d ' '; }
@@ -52,8 +71,7 @@ since() { tail -n "+$1" "$WORKER_LOG"; }
 
 report() {
   local path="$1" from="$2"
-  echo "  owned unmapped : $(owned_unmapped)"
-  echo "  census         : $(census)"
+  echo "  alive IOSurfaces: $(force_census)"
   echo "  --- host lines for this path ---"
   # The destroy line is the discriminator: it says whether the instance was live (full sweep) or
   # gone (bare free()), and how much survived the sweep.
@@ -81,8 +99,7 @@ echo
 # ---------------------------------------------------------------------------------------------
 echo "--- path 1: clean exit ---"
 start_comp "" || exit 1
-BEFORE=$(owned_unmapped); FROM=$(mark)
-echo "  before         : $BEFORE"
+FROM=$(mark); echo "  before alive   : $(force_census)"
 g "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD RUST_LOG=info XDG_RUNTIME_DIR=/tmp/testcomp-run \
    WAYLAND_DISPLAY=wayland-1 ./limina-testcomp client-dmabuf 8 $SIZE" | grep -E "CLIENT (COMMITTED|DONE)" | sed 's/^/  /'
 sleep 3
@@ -96,8 +113,7 @@ echo
 # ---------------------------------------------------------------------------------------------
 echo "--- path 2: SIGKILL, buffer committed and unreleased ---"
 start_comp "--hold-buffers" || exit 1
-BEFORE=$(owned_unmapped); FROM=$(mark)
-echo "  before         : $BEFORE"
+FROM=$(mark); echo "  before alive   : $(force_census)"
 "${SSH[@]}" "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD RUST_LOG=info XDG_RUNTIME_DIR=/tmp/testcomp-run \
    WAYLAND_DISPLAY=wayland-1 ./limina-testcomp client-dmabuf 60 $SIZE --park" >/tmp/m3b-client.log 2>&1 &
 sleep 6
@@ -116,8 +132,7 @@ echo
 # ---------------------------------------------------------------------------------------------
 echo "--- path 2b: SIGKILL the COMPOSITOR while it holds a live import ---"
 start_comp "--hold-buffers" || exit 1
-BEFORE=$(owned_unmapped); FROM=$(mark)
-echo "  before         : $BEFORE"
+FROM=$(mark); echo "  before alive   : $(force_census)"
 "${SSH[@]}" "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD RUST_LOG=info XDG_RUNTIME_DIR=/tmp/testcomp-run \
    WAYLAND_DISPLAY=wayland-1 ./limina-testcomp client-dmabuf 60 $SIZE --park" >/tmp/m3b-client2.log 2>&1 &
 sleep 6
@@ -127,8 +142,11 @@ sleep 4
 report "importer-death" "$FROM"
 g "sudo -n pkill -9 -f 'limina-testcomp client-dmabuf'"
 sleep 3
-echo "  after the client goes too:"
-echo "  owned unmapped : $(owned_unmapped)"
+# A fresh compositor, purely to make the worker allocate again: the census ticks on the
+# allocation path, and with both testcomp processes dead nothing does. Without this the final
+# read comes back EMPTY — which is not the same as zero, and reads like one.
+start_comp "" >/dev/null 2>&1
+echo "  after both are gone: alive=$(force_census)"
 echo
 
 echo "=== done ==="

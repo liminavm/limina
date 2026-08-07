@@ -67,7 +67,7 @@ It is built bottom-up, and each step is gated on evidence rather than on compili
 | **1** ✅ | KMS + Vulkan scanout allocation + churn. No Wayland, no input. | **Reproduces `kmschurn.py`'s `churn-vk` numbers on the same host.** Until the two vehicles agree, a difference could as easily be a transcription bug as a finding. Passed 2026-08-07 — see below. |
 | **2** ✅ | Wayland frontend (smithay), `wl_shm` clients | a real client's pixels reach the scanout. Passed 2026-08-07 — see below. |
 | **3a** ✅ | `linux-dmabuf` import (venus-allocated client) | a client's dmabuf pixels reach the scanout **and** the host log shows the IOSurface import branch. Passed 2026-08-07 — see below. |
-| **3b** ◐ | teardown paths × holders | discriminates between the paths in `buffer-lifetime-matrix.md` §4. Ran 2026-08-07, all three paths clean — but see the RED requirement below before believing that. |
+| **3b** ✅ | teardown paths × holders | discriminates between the paths in `buffer-lifetime-matrix.md` §4, against an oracle shown to move (+41) under a deliberate leak. Passed 2026-08-07. |
 | 3c | vrend-allocated (gbm) client buffers | reaches the **asymmetric** holder of matrix §3, the observed compositor-quit shape. Needs the `vkr_budget_set_context` fix in matrix §6 first. |
 
 ### M3a's gate has two halves, and the pixels are the weaker one
@@ -152,12 +152,43 @@ Path 2b is the one that matters most, and it is the one the original plan would 
 the compositor with a populated import cache is the shape of the observed compositor-quit
 residual — and here it came back clean, with the census returning to `iosurface N/N (+0)`.
 
-**None of that is yet evidence, and the table above must not be quoted as "no leak".** Per the
-rule at the bottom of this file, testcomp has not reproduced a failure in the *client-lifetime*
-class, so a green result from it is currently indistinguishable from an oracle that cannot see.
-What is still owed is a RED run: a `--leak-imports` compositor that never evicts, against a
-client churning distinct dmabufs, so the census and `owned unmapped` are shown to *move* when the
-holder is genuinely retained. Until that separation exists, M3b is ◐ and not ✅.
+### M3b detects the failure it is meant to detect (2026-08-07)
+
+The table above would have been worthless on its own — a green result and a blind oracle are the
+same observation. So the import cache was made to leak on purpose (`run --leak-imports`: never
+evict, never sweep at exit) and driven with `client-churn 40 1920x1080`, forty **distinct**
+dmabufs so retention accumulates instead of staying at one:
+
+| arm | alive IOSurfaces, before → after | evictions |
+|---|---|---|
+| GREEN — shipped behaviour | 2 → **2** | 42 |
+| RED — `--leak-imports` | 2 → **43** | 0 |
+
++41 retained against a flat baseline. The vehicle detects this failure class.
+
+**Getting there cost three wrong oracles, and the wrong ones all read "clean" in both arms** —
+the invariance smell, exactly as `CLAUDE.md` describes it:
+
+| oracle | GREEN | RED | verdict |
+|---|---|---|---|
+| `owned unmapped` bytes | row **absent** | row **absent** | M1's oracle. Not this one — and absent parses as an empty string that looks like a failed read, not as zero. |
+| `vmmap` `IOSurface` row | 364.2M → 351.9M | 364.2M → 351.9M | virtual size, dominated by other mappings |
+| census `iosurface A/F (+N)` | +1 | +1 | counts registry refs, not deallocation |
+| census `DEALLOC iosurface N (alive M)` | 2 → 2 | 2 → **43** | **the oracle** |
+
+The fourth is object-exact — it counts real IOSurface `-dealloc` — so one retained surface is
+visible regardless of byte noise, which also removes the need for large buffers.
+
+**And the census is a sampler, not a gauge.** It ticks on the *allocation* path
+(`vkr_budget.c:425`) every `LIMINA_GPU_MEM_BUDGET_CENSUS` seconds, so a quiesced worker never
+emits a fresh line and `tail -1` silently hands back a **stale** one — which reads as "nothing
+changed" and is how the first two RED runs came back green. `teardown-matrix.sh` forces a tick
+(wait out the interval, then run a throwaway client so the compositor allocates again); after a
+path that kills the *compositor*, it has to start a fresh one first, or nothing allocates and the
+final read is empty rather than zero.
+
+With that oracle, the three teardown paths above re-ran and all returned to baseline (2 → 2).
+That result now means something.
 
 ### M2's gate: a real client's pixels on the scanout (2026-08-07)
 
@@ -268,10 +299,21 @@ import, compositing with real surfaces, buffer lifetime across a client's death.
 
 **It must reproduce a real failure at least once before any negative result from it
 counts.** kmschurn earned that (+606 regions against the bug, +23 with the fix, over an
-identical guest workload). testcomp earned it for the **scanout-churn class** on
-2026-08-07 (+4.17 GiB against the bug, +361 MiB with the fix — see above).
+identical guest workload). testcomp has earned it twice, and the rule is **per failure class**:
 
-It has **not** earned it for the classes it was actually built for: client dmabuf import and
-buffer lifetime across a client's death. Those arrive with M3, and until one of them
-reproduces something, "testcomp shows no leak on the client path" is not evidence of
-anything. The rule is per failure class, not per vehicle.
+| class | RED | GREEN | separation |
+|---|---|---|---|
+| scanout churn (M1) | `SURFACE_STORE_CAP` lifted: +4.17 GiB | shipped cap: +361 MiB | 11.5x |
+| **client dmabuf retention (M3)** | `--leak-imports`: +41 alive IOSurfaces | shipped: +0 | flat vs 41 |
+
+So "testcomp shows no leak on the client dmabuf path" is now a statement with content, for the
+paths in the M3b table and **only** those. It still says nothing about:
+
+- **vrend-allocated (gbm) client buffers** — the asymmetric holder of matrix §3, where vrend owns
+  the IOSurface and venus only borrows. That is M3c, and it is the shape of the originally
+  observed compositor-quit residual. Blocked on matrix §6's `vkr_budget_set_context` fix.
+- **paths 3 and 4** — the `-1000158000` error-path partial and the ring-FATAL teardown. Path 4
+  has a cheap deterministic vehicle available: an over-cap allocation trips
+  `vkr_budget_kills_context` (`vkr_device_memory.c:285`), giving FATAL teardown on demand.
+
+Each of those needs its own RED before its own green means anything.
