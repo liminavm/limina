@@ -2,7 +2,7 @@
 //
 // Copyright (C) 2026 Gustavo Noronha Silva
 
-//! Milestone 2: the Wayland frontend. Clients connect, attach `wl_shm` buffers, and their
+//! The Wayland frontend. Clients connect, attach `wl_shm` or `linux-dmabuf` buffers, and their
 //! pixels are composited into a venus-allocated scanout image and page-flipped.
 //!
 //! Structure follows smithay's own `smallvil` example at the pinned rev, which is the
@@ -12,7 +12,7 @@
 //!     us, and buffer lifetime is the thing this vehicle exists to observe. Toplevels are kept
 //!     in a plain `Vec` so every reference is one we took.
 //!   * **No `smithay::backend::renderer`.** `on_commit_buffer_handler` and friends maintain a
-//!     `RendererSurfaceState` we would not read; the shm contents are taken straight off the
+//!     `RendererSurfaceState` we would not read; the buffer contents are taken straight off the
 //!     surface instead.
 //!
 //! Three obligations come back to us as a result of skipping that machinery, and each one, if
@@ -20,21 +20,39 @@
 //!
 //!   1. **Initial configure.** An xdg toplevel may not attach a buffer until it is configured,
 //!      so the first, bufferless commit must be answered with `send_configure()`.
-//!   2. **Buffer release.** We copy the pixels out synchronously, so the buffer goes back to
-//!      the client immediately; a double-buffered client blocks after two frames otherwise.
+//!   2. **Buffer release.** Released once our read of it has provably completed — immediately
+//!      for shm (the pixels are copied into memory we own), after the GPU copy's fence for
+//!      dmabuf. A double-buffered client blocks after two frames otherwise.
 //!   3. **Frame callbacks.** Drained on commit and answered after the flip, or the client
 //!      paces itself against a callback that never arrives.
+//!
+//! ## M3: the dmabuf import cache is the thing under test
+//!
+//! A `wl_shm` client's pixels stop being the client's the moment they are copied out. A dmabuf
+//! client's do not: the compositor holds a `VkImage` aliasing the client's buffer, and on a
+//! limina guest that import reaches across virtio-gpu contexts into the host, where vkr parks a
+//! **borrowed `+1`** on the exporter's IOSurface (`vkr_device_memory.c:794`).
+//!
+//! Caching that import across frames is what a real compositor does, and it is also what makes
+//! the holder exist at teardown — without a live import there is no cross-context reference for
+//! `buffer-lifetime-matrix.md`'s cases to be about. The obligation that comes with it is
+//! **eviction**: `buffer_destroyed` must destroy the import, or the vehicle leaks on its own
+//! account and every host-side number it produces is measuring testcomp rather than limina.
 
 use anyhow::{Context as _, Result};
+use smithay::backend::allocator::{Buffer as _, Format, Fourcc, Modifier};
 use smithay::reexports::calloop::{generic::Generic, EventLoop, Interest, Mode, PostAction};
-use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
+use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason, ObjectId};
 use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_seat, wl_surface::WlSurface};
-use smithay::reexports::wayland_server::{Client, Display, DisplayHandle};
+use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource as _};
 use smithay::utils::Serial;
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     with_states, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
     SurfaceAttributes,
+};
+use smithay::wayland::dmabuf::{
+    get_dmabuf, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier,
 };
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
@@ -42,12 +60,13 @@ use smithay::wayland::shell::xdg::{
 };
 use smithay::wayland::shm::{with_buffer_contents, ShmHandler, ShmState};
 use smithay::wayland::socket::ListeningSocketSource;
-use smithay::{delegate_compositor, delegate_shm, delegate_xdg_shell};
+use smithay::{delegate_compositor, delegate_dmabuf, delegate_shm, delegate_xdg_shell};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::kms::{Fb, Output};
-use crate::vk::{ScanoutImage, Vk};
+use crate::vk::{Imported, ImportedImage, ScanoutImage, Vk};
 
 /// The desktop background. A colour no client draws, so a capture that shows only this is
 /// unambiguously "the compositor ran and no client pixels arrived" rather than a black screen
@@ -59,24 +78,54 @@ pub struct Comp {
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     pub shm_state: ShmState,
+    pub dmabuf_state: DmabufState,
+    /// Held for the run, never read: dropping the handle is what would retire the global, so
+    /// this field *is* the advertisement's lifetime.
+    #[allow(dead_code)]
+    pub dmabuf_global: DmabufGlobal,
 
     /// Mapped toplevels, in stacking order (last is on top). A `Vec`, not a `Space`: see the
     /// module docs on why the bookkeeping stays ours.
     pub toplevels: Vec<ToplevelSurface>,
 
-    /// Pixels pending upload, taken from surfaces at commit and consumed by the next render.
-    /// Held as owned bytes because the `wl_buffer` is released back to the client the moment
-    /// the copy out of it completes — holding the buffer instead would be the very
-    /// "compositor keeps a reference the client cannot see" behaviour we are here to study,
-    /// and doing it accidentally in the vehicle would poison every measurement.
-    pending: Vec<Surface>,
+    /// Content pending composition, taken from surfaces at commit and consumed by the next
+    /// render.
+    pending: Vec<Content>,
 
     /// Frame callbacks owed to clients, answered after the flip that showed their content.
     frame_callbacks: Vec<smithay::reexports::wayland_server::protocol::wl_callback::WlCallback>,
 
+    /// Never release a client's dmabuf back to it. The teardown tests in
+    /// `buffer-lifetime-matrix.md` have to `SIGKILL` a client with a buffer *committed and
+    /// unreleased*, and at full speed that window is a few hundred microseconds wide — far too
+    /// narrow to hit from a shell script. Holding the buffer widens it to "as long as you like".
+    ///
+    /// It is a deliberate protocol violation in the sense that a real compositor would not do
+    /// it, but it is not a *lie*: the client genuinely cannot reuse a buffer we are still
+    /// reading, which is exactly the state being reproduced.
+    pub hold_buffers: bool,
+
     pub render: Render,
     start: Instant,
     pub running: bool,
+}
+
+/// What a client committed, ready to be composited.
+///
+/// The two arms differ in exactly the way M3 is about. `Shm` owns its bytes, so the client's
+/// buffer is already free by the time this exists. `Dmabuf` owns nothing but a handle: the
+/// pixels are still in the client's allocation, the GPU reads them directly, and the buffer
+/// cannot go back until that read has retired.
+enum Content {
+    Shm(Surface),
+    Dmabuf(wl_buffer::WlBuffer),
+}
+
+/// A cached import's handles, copied out so the cache is not borrowed across the copy.
+struct ImportHandles {
+    image: ash::vk::Image,
+    width: u32,
+    height: u32,
 }
 
 /// One client surface's contents, copied out of its `wl_shm` buffer.
@@ -95,6 +144,23 @@ pub struct Render {
     pub out: Output,
     onscreen: Option<(Fb, ScanoutImage)>,
     pub frames: u64,
+
+    /// Imported client dmabufs, keyed by the `wl_buffer` that named them.
+    ///
+    /// **This cache is the host-side holder under test** — see the module docs. It is also the
+    /// vehicle's own obligation: entries are evicted in `buffer_destroyed`, and anything left
+    /// here at exit is testcomp leaking rather than limina.
+    imports: HashMap<ObjectId, ImportedImage>,
+
+    /// Imports created and evicted over the run. Printed at exit: a retention measurement means
+    /// nothing without evidence that the guest both took and released its references, which is
+    /// the same rule `churn`'s `created=` field exists for.
+    pub imported: u64,
+    pub evicted: u64,
+
+    /// Set once the mode has been programmed, so `import_failed` can be reported without
+    /// pretending a frame was presented.
+    pub import_failures: u64,
 }
 
 impl Render {
@@ -104,24 +170,107 @@ impl Render {
             out,
             onscreen: None,
             frames: 0,
+            imports: HashMap::new(),
+            imported: 0,
+            evicted: 0,
+            import_failures: 0,
         }
     }
 
-    /// Composite `surfaces` over the backdrop into a fresh scanout image and flip to it.
-    pub fn present(&mut self, surfaces: &[Surface]) -> Result<()> {
+    /// Import a client's dmabuf, or return the cached import if this buffer is already known.
+    ///
+    /// Lazy rather than eager in `dmabuf_imported`: the `wl_buffer` that keys this cache does
+    /// not exist yet at that point (`ImportNotifier::successful` is what creates it), so
+    /// importing there would mean keying on something else and reconciling later.
+    /// Returns the handles by value rather than a borrow: the caller needs `&mut self` again
+    /// immediately (to record the copy), and a borrow out of the cache would keep this one
+    /// alive across it.
+    fn import(&mut self, buffer: &wl_buffer::WlBuffer) -> Result<ImportHandles> {
+        let id = buffer.id();
+        if !self.imports.contains_key(&id) {
+            let dmabuf = get_dmabuf(buffer)
+                .map_err(|e| anyhow::anyhow!("wl_buffer is not a dmabuf: {e:?}"))?;
+            let size = dmabuf.size();
+            let desc = Imported {
+                width: size.w as u32,
+                height: size.h as u32,
+                // Plane 0 only. The vehicle advertises exactly one format/modifier pair, and a
+                // multi-planar buffer could not have been created against it — so this is a
+                // scope, not an unchecked assumption.
+                stride: dmabuf.strides().next().context("dmabuf has no plane 0")?,
+                offset: dmabuf.offsets().next().context("dmabuf has no plane 0")?,
+                modifier: dmabuf.format().modifier.into(),
+            };
+            let handle = dmabuf.handles().next().context("dmabuf has no plane 0 fd")?;
+            let img = self
+                .vk
+                .import_dmabuf(handle, &desc)
+                .context("importing a client dmabuf")?;
+            log::info!(
+                "imported client dmabuf {}x{} stride={} modifier={:#x} ({} live)",
+                desc.width,
+                desc.height,
+                desc.stride,
+                desc.modifier,
+                self.imports.len() + 1,
+            );
+            self.imports.insert(id.clone(), img);
+            self.imported += 1;
+        }
+        let img = &self.imports[&id];
+        Ok(ImportHandles {
+            image: img.image,
+            width: img.width,
+            height: img.height,
+        })
+    }
+
+    /// Drop a client's import. Called from `buffer_destroyed`, which fires both when a client
+    /// destroys a buffer politely and when it dies holding one — so this is the release whose
+    /// *absence* the teardown tests are looking for on the host side.
+    fn evict(&mut self, buffer: &wl_buffer::WlBuffer) {
+        if let Some(img) = self.imports.remove(&buffer.id()) {
+            self.vk.destroy_imported(&img);
+            self.evicted += 1;
+            log::info!("evicted a client dmabuf import ({} live)", self.imports.len());
+        }
+    }
+
+    /// Composite `contents` over the backdrop into a fresh scanout image and flip to it.
+    fn present(&mut self, contents: &[Content]) -> Result<()> {
         let (w, h) = self.out.size();
         let img = self.vk.scanout_image(w, h)?;
         self.vk.clear(&img, BACKDROP)?;
 
-        for s in surfaces {
-            // Clip to the output: a client is free to ask for a surface larger than the
-            // screen, and vkCmdCopyBufferToImage on an out-of-bounds region is undefined
-            // behaviour, not a polite error.
-            let cw = s.width.min(w);
-            let ch = s.height.min(h);
-            self.vk
-                .upload(&img, &s.pixels, cw, ch, s.stride, 0, 0)
-                .context("compositing a client surface")?;
+        for c in contents {
+            match c {
+                Content::Shm(s) => {
+                    // Clip to the output: a client is free to ask for a surface larger than the
+                    // screen, and vkCmdCopyBufferToImage on an out-of-bounds region is undefined
+                    // behaviour, not a polite error.
+                    let cw = s.width.min(w);
+                    let ch = s.height.min(h);
+                    self.vk
+                        .upload(&img, &s.pixels, cw, ch, s.stride, 0, 0)
+                        .context("compositing a client shm surface")?;
+                }
+                Content::Dmabuf(buffer) => {
+                    // Import errors are per-client, not fatal: a client that asks for something
+                    // unimportable should lose its own frame, not take the compositor down and
+                    // with it whatever measurement is in flight.
+                    match self.import(buffer) {
+                        Ok(src) => {
+                            self.vk
+                                .copy_image(&img, src.image, src.width, src.height, 0, 0)
+                                .context("compositing a client dmabuf surface")?;
+                        }
+                        Err(e) => {
+                            self.import_failures += 1;
+                            log::warn!("dmabuf import failed: {e:#}");
+                        }
+                    }
+                }
+            }
         }
 
         let fb = self
@@ -150,27 +299,59 @@ impl Drop for Render {
             self.out.release(fb);
             self.vk.destroy_image(&img);
         }
+        // Anything still cached is an import whose `wl_buffer` outlived the run — a client that
+        // never destroyed it, or one killed while we held it. Releasing here keeps a clean exit
+        // *clean*, so a host-side residual after `COMPOSITOR DONE` is limina's and not ours.
+        // Loud rather than silent: on the clean-exit path this count should be zero, and a
+        // nonzero one changes what the following measurement means.
+        if !self.imports.is_empty() {
+            log::warn!(
+                "{} client dmabuf import(s) still cached at exit — released now",
+                self.imports.len()
+            );
+        }
+        for (_, img) in self.imports.drain() {
+            self.vk.destroy_imported(&img);
+        }
     }
 }
 
 impl Comp {
-    pub fn run(vk: Vk, out: Output, frames: Option<u64>) -> Result<()> {
+    pub fn run(vk: Vk, out: Output, frames: Option<u64>, hold_buffers: bool) -> Result<()> {
         let mut event_loop: EventLoop<Comp> = EventLoop::try_new().context("calloop")?;
         let display: Display<Comp> = Display::new().context("wayland display")?;
         let dh = display.handle();
+
+        let mut dmabuf_state = DmabufState::new();
+        // Exactly one format/modifier pair — the one the scanout path can actually copy from.
+        // Advertising more would let a client hand us something we would then fail to import,
+        // turning a vehicle limitation into what looks like an import bug.
+        let dmabuf_global = dmabuf_state.create_global::<Self>(
+            &dh,
+            vec![Format {
+                code: Fourcc::Xrgb8888,
+                modifier: Modifier::Linear,
+            }],
+        );
 
         let mut state = Comp {
             compositor_state: CompositorState::new::<Self>(&dh),
             xdg_shell_state: XdgShellState::new::<Self>(&dh),
             shm_state: ShmState::new::<Self>(&dh, vec![]),
+            dmabuf_state,
+            dmabuf_global,
             display_handle: dh,
             toplevels: Vec::new(),
             pending: Vec::new(),
             frame_callbacks: Vec::new(),
+            hold_buffers,
             render: Render::new(vk, out),
             start: Instant::now(),
             running: true,
         };
+        if hold_buffers {
+            log::warn!("--hold-buffers: client buffers will NOT be released (M3b teardown mode)");
+        }
 
         // `new_auto` needs XDG_RUNTIME_DIR, which a `sudo` shell over non-login ssh does not
         // have — main() sets one rather than letting this fail deep inside libwayland.
@@ -217,7 +398,17 @@ impl Comp {
                 }
             }
         }
-        println!("COMPOSITOR DONE frames={}", state.render.frames);
+        // `imported=`/`evicted=` are the load-bearing fields, in the same spirit as `churn`'s
+        // `created=`: a host-side retention number means nothing without evidence that the
+        // guest took references and gave them back. Equal counts mean the vehicle is clean and
+        // any residual is limina's.
+        println!(
+            "COMPOSITOR DONE frames={} imported={} evicted={} import_failures={}",
+            state.render.frames,
+            state.render.imported,
+            state.render.evicted,
+            state.render.import_failures,
+        );
         Ok(())
     }
 
@@ -226,12 +417,28 @@ impl Comp {
     /// Order matters: a callback says "the content you committed has been shown", so sending
     /// it before the flip would be a lie the client then paces itself against.
     fn render_and_notify(&mut self) {
-        let surfaces = std::mem::take(&mut self.pending);
-        if let Err(e) = self.render.present(&surfaces) {
+        let contents = std::mem::take(&mut self.pending);
+        if let Err(e) = self.render.present(&contents) {
             log::error!("present: {e:#}");
             self.running = false;
             return;
         }
+
+        // Release dmabufs only now. `present` fence-waits every copy it records, so by this
+        // point the GPU has provably finished reading the client's memory — releasing before
+        // that would hand the buffer back while a copy was still fetching from it, which is a
+        // tear at best and, being asynchronous, would reproduce intermittently.
+        //
+        // Under `--hold-buffers` we skip it on purpose, to hold the committed-and-unreleased
+        // state open for the teardown tests.
+        if !self.hold_buffers {
+            for c in &contents {
+                if let Content::Dmabuf(buffer) = c {
+                    buffer.release();
+                }
+            }
+        }
+
         let ms = self.start.elapsed().as_millis() as u32;
         for cb in self.frame_callbacks.drain(..) {
             cb.done(ms);
@@ -285,14 +492,27 @@ impl CompositorHandler for Comp {
 
         match buffer {
             Some(BufferAssignment::NewBuffer(buffer)) => {
-                match read_shm(&buffer) {
-                    Ok(surface) => self.pending.push(surface),
-                    Err(e) => log::warn!("client buffer not readable as shm: {e:#}"),
+                // Which kind it is decides who owns the pixels from here, and that is the whole
+                // difference M3 adds. `get_dmabuf` succeeding is the discriminator smithay
+                // gives us; anything else is shm (or unreadable, which is a client error).
+                if get_dmabuf(&buffer).is_ok() {
+                    // Deferred to `render_and_notify`, after the GPU copy has retired: the
+                    // pixels are still in the *client's* allocation and we are about to read
+                    // them directly.
+                    self.pending.push(Content::Dmabuf(buffer));
+                } else {
+                    match read_shm(&buffer) {
+                        Ok(surface) => self.pending.push(Content::Shm(surface)),
+                        Err(e) => log::warn!("client buffer is neither dmabuf nor shm: {e:#}"),
+                    }
+                    // Released immediately: the pixels are ours now, in our own allocation. A
+                    // compositor that holds an shm buffer past this point is holding a
+                    // reference the client cannot see — the exact shape this vehicle exists to
+                    // detect elsewhere.
+                    if !self.hold_buffers {
+                        buffer.release();
+                    }
                 }
-                // Released immediately: the pixels are ours now, in our own allocation. A
-                // compositor that holds the buffer past this point is holding a reference the
-                // client cannot see — the exact shape this vehicle exists to detect elsewhere.
-                buffer.release();
             }
             Some(BufferAssignment::Removed) => {}
             None => return,
@@ -325,7 +545,47 @@ fn read_shm(buffer: &wl_buffer::WlBuffer) -> Result<Surface> {
 }
 
 impl BufferHandler for Comp {
-    fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}
+    /// **The eviction obligation.** Fires when a client destroys a buffer and when a client
+    /// dies holding one, which are the same event from here — so this is where the vehicle
+    /// provably lets go of its side, and a host-side reference that survives past it is
+    /// limina's to explain.
+    fn buffer_destroyed(&mut self, buffer: &wl_buffer::WlBuffer) {
+        self.render.evict(buffer);
+    }
+}
+
+impl DmabufHandler for Comp {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf_state
+    }
+
+    /// A client has finished describing a dmabuf and wants a `wl_buffer` for it.
+    ///
+    /// The import itself is **not** done here: the `wl_buffer` that keys the cache does not
+    /// exist until `successful()` creates it. What is checked here is the shape, so a buffer we
+    /// could never composite is refused at creation — where the protocol has a way to say so —
+    /// rather than at the first commit, where the only options are a dropped frame or a lie.
+    fn dmabuf_imported(
+        &mut self,
+        _global: &DmabufGlobal,
+        dmabuf: smithay::backend::allocator::dmabuf::Dmabuf,
+        notifier: ImportNotifier,
+    ) {
+        let format = dmabuf.format();
+        if dmabuf.num_planes() != 1 || format.modifier != Modifier::Linear {
+            log::warn!(
+                "refusing a client dmabuf: {} plane(s), modifier {:?} — this vehicle handles \
+                 single-plane LINEAR only",
+                dmabuf.num_planes(),
+                format.modifier,
+            );
+            // Dropping the notifier without `successful()` is how smithay reports the failure
+            // to the client; answering it either way is not optional, as the client is blocked
+            // on the reply.
+            return;
+        }
+        let _ = notifier.successful::<Comp>();
+    }
 }
 
 impl ShmHandler for Comp {
@@ -366,6 +626,7 @@ impl XdgShellHandler for Comp {
 }
 
 delegate_compositor!(Comp);
+delegate_dmabuf!(Comp);
 delegate_shm!(Comp);
 delegate_xdg_shell!(Comp);
 

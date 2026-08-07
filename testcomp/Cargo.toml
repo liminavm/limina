@@ -48,7 +48,8 @@ smithay = { git = "https://github.com/Smithay/smithay.git", rev = "ff5fa7df392ce
 # The test client is a separate process speaking the real protocol, so it needs the client
 # library — a genuinely different crate from the server side, not a duplicate.
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client"] }
+# `unstable` is what gates `wp::linux_dmabuf::zv1` — xdg-shell alone needs only `client`.
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 # Vulkan. `ash` rather than a safe wrapper: the scanout path needs external-memory and
 # DRM-modifier structs that wrappers tend to lag on, and synoik's proven code is ash.
 ash = "0.38.0"

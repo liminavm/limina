@@ -48,10 +48,19 @@ const DEVICE_EXTENSIONS: [&CStr; 4] = [
     ash::ext::image_drm_format_modifier::NAME,
 ];
 
+/// Enabled when present, and only affecting the acquire barrier on an imported dmabuf. Kept out
+/// of `DEVICE_EXTENSIONS` deliberately: making it a fifth hard requirement would turn a *better*
+/// ownership transfer into a reason the vehicle refuses to start on a driver that is otherwise
+/// perfectly able to run every test here.
+const OPTIONAL_EXTENSIONS: [&CStr; 1] = [ash::ext::queue_family_foreign::NAME];
+
 pub struct Vk {
     pub device: ash::Device,
     pub queue: vk::Queue,
+    queue_family: u32,
     external_memory_fd: ash::khr::external_memory_fd::Device,
+    /// Whether `VK_EXT_queue_family_foreign` was enabled; see `OPTIONAL_EXTENSIONS`.
+    queue_family_foreign: bool,
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
     fence: vk::Fence,
@@ -90,7 +99,23 @@ impl Vk {
         let queue_ci = vk::DeviceQueueCreateInfo::default()
             .queue_family_index(queue_family)
             .queue_priorities(&priorities);
-        let ext_ptrs: Vec<_> = DEVICE_EXTENSIONS.iter().map(|e| e.as_ptr()).collect();
+
+        let available = unsafe { instance.enumerate_device_extension_properties(physical) }
+            .context("enumerate device extensions")?;
+        let has = |name: &CStr| {
+            available
+                .iter()
+                .any(|e| unsafe { CStr::from_ptr(e.extension_name.as_ptr()) } == name)
+        };
+        let queue_family_foreign = has(ash::ext::queue_family_foreign::NAME);
+        let mut ext_ptrs: Vec<_> = DEVICE_EXTENSIONS.iter().map(|e| e.as_ptr()).collect();
+        for name in OPTIONAL_EXTENSIONS {
+            if has(name) {
+                ext_ptrs.push(name.as_ptr());
+            } else {
+                log::info!("optional device extension absent: {}", name.to_string_lossy());
+            }
+        }
         let device_ci = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_ci))
             .enabled_extension_names(&ext_ptrs);
@@ -121,7 +146,9 @@ impl Vk {
         Ok(Vk {
             device,
             queue,
+            queue_family,
             external_memory_fd,
+            queue_family_foreign,
             command_pool,
             command_buffer,
             fence,
@@ -348,6 +375,220 @@ impl Vk {
         result
     }
 
+    /// Import a client's dmabuf as a `VkImage` this device can read.
+    ///
+    /// **This is the path M3 exists to exercise.** On a limina guest the fd names a venus blob,
+    /// so the import crosses from the client's virtio-gpu context into the compositor's, and the
+    /// host resolves it in `vkr_create_device_memory` (`third_party/virglrenderer/src/venus/
+    /// vkr_device_memory.c:319`) by looking the exporter's resource up in *this* context's table
+    /// and aliasing its bytes. When the exporter's resource carries an IOSurface, the host takes
+    /// a **borrowed `+1`** on it into `mem->imported_iosurface` (`:794`), released only by
+    /// `vkr_device_memory_release` (`:981`). That reference is the host-side holder the whole
+    /// `buffer-lifetime-matrix.md` is written about.
+    ///
+    /// The host has a **silent fallback ladder** underneath that (IOSurface → `map_ptr` →
+    /// cross-context SHM, `:320-345`): if the IOSurface lookup fails, the import still succeeds,
+    /// the pixels are still correct, and no `+1` exists. Correct pixels therefore do **not**
+    /// prove the holder was armed — see `README.md` on gating M3a on the host's mechanism line
+    /// as well as on the capture.
+    ///
+    /// Transcribed from synoik's `niri-vk/src/dmabuf.rs::ImportedImage::import`, with the usage
+    /// changed from `SAMPLED` to `TRANSFER_SRC` (we copy rather than sample) and the acquire
+    /// barrier's destination stage moved to match.
+    pub fn import_dmabuf(&self, fd: std::os::fd::BorrowedFd<'_>, desc: &Imported) -> Result<ImportedImage> {
+        use std::os::fd::IntoRawFd;
+
+        // The explicit layout, not a list: an import must describe the memory it is given, and
+        // a guessed pitch would shear the image one row at a time.
+        let plane_layout = vk::SubresourceLayout {
+            offset: desc.offset as u64,
+            size: 0,
+            row_pitch: desc.stride as u64,
+            array_pitch: 0,
+            depth_pitch: 0,
+        };
+        let mut mod_info = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
+            .drm_format_modifier(desc.modifier)
+            .plane_layouts(std::slice::from_ref(&plane_layout));
+        let mut ext_info = vk::ExternalMemoryImageCreateInfo::default()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+        let image_ci = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(SCANOUT_FORMAT)
+            .extent(vk::Extent3D { width: desc.width, height: desc.height, depth: 1 })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+            .usage(vk::ImageUsageFlags::TRANSFER_SRC)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .push_next(&mut ext_info)
+            .push_next(&mut mod_info);
+        let image = unsafe { self.device.create_image(&image_ci, None) }
+            .context("vkCreateImage for the imported dmabuf")?;
+
+        let req = unsafe { self.device.get_image_memory_requirements(image) };
+        let mem_type = self.dmabuf_memory_type(fd, req)?;
+
+        // vkAllocateMemory *consumes* the fd on success, so hand it a dup and let the caller keep
+        // owning theirs. Without this the compositor's import would close a client's fd out from
+        // under smithay's `Dmabuf`, and the second import of the same buffer would fail on EBADF.
+        let raw_fd = fd
+            .try_clone_to_owned()
+            .context("dup the client's dmabuf fd for import")?
+            .into_raw_fd();
+        let mut import_info = vk::ImportMemoryFdInfoKHR::default()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+            .fd(raw_fd);
+        // Dedicated, like the export side: without it venus suballocates guest-side and the host
+        // import path — the thing under test — is never reached.
+        let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(image);
+        let alloc_ci = vk::MemoryAllocateInfo::default()
+            .allocation_size(req.size)
+            .memory_type_index(mem_type)
+            .push_next(&mut import_info)
+            .push_next(&mut dedicated);
+        let memory = match unsafe { self.device.allocate_memory(&alloc_ci, None) } {
+            Ok(m) => m,
+            Err(e) => {
+                // Vulkan only takes the fd on success, so on failure it is still ours to close —
+                // and a client that can make this fail (M3b path 3) would otherwise leak one fd
+                // per attempt in the compositor.
+                unsafe { libc::close(raw_fd) };
+                unsafe { self.device.destroy_image(image, None) };
+                return Err(e).context("vkAllocateMemory importing the client's dmabuf");
+            }
+        };
+        unsafe { self.device.bind_image_memory(image, memory, 0) }
+            .context("bind the imported dmabuf memory")?;
+
+        // Acquire: the producer wrote these bytes outside this device, so ownership transfers
+        // from the FOREIGN queue family when the extension is there and is a plain transition
+        // when it is not. `UNDEFINED` as the old layout is safe *because the modifier is LINEAR*
+        // — there is no tiling to preserve, so the bytes survive.
+        let (src_qf, dst_qf) = if self.queue_family_foreign {
+            (vk::QUEUE_FAMILY_FOREIGN_EXT, self.queue_family)
+        } else {
+            (vk::QUEUE_FAMILY_IGNORED, vk::QUEUE_FAMILY_IGNORED)
+        };
+        self.record(|cbuf| unsafe {
+            let barrier = vk::ImageMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::empty())
+                .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .src_queue_family_index(src_qf)
+                .dst_queue_family_index(dst_qf)
+                .image(image)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .level_count(1)
+                        .layer_count(1),
+                );
+            self.device.cmd_pipeline_barrier(
+                cbuf,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier],
+            );
+        })
+        .context("acquire the imported image")?;
+
+        Ok(ImportedImage { image, memory, width: desc.width, height: desc.height })
+    }
+
+    /// The memory type an imported dmabuf can actually use: what the *image* accepts intersected
+    /// with what the *fd* accepts. Taking either alone picks an unimportable type on some
+    /// drivers, and the failure surfaces as an opaque `ERROR_INVALID_EXTERNAL_HANDLE`.
+    fn dmabuf_memory_type(
+        &self,
+        fd: std::os::fd::BorrowedFd<'_>,
+        req: vk::MemoryRequirements,
+    ) -> Result<u32> {
+        use std::os::fd::AsRawFd;
+        let mut fd_props = vk::MemoryFdPropertiesKHR::default();
+        // Borrows the fd, does not consume it (unlike the import that follows) — duping here
+        // would leak one fd per import.
+        unsafe {
+            self.external_memory_fd.get_memory_fd_properties(
+                vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+                fd.as_raw_fd(),
+                &mut fd_props,
+            )
+        }
+        .context("vkGetMemoryFdPropertiesKHR")?;
+
+        let bits = req.memory_type_bits & fd_props.memory_type_bits;
+        anyhow::ensure!(
+            bits != 0,
+            "no importable memory type for the client's dmabuf: image accepts {:#x}, \
+             fd accepts {:#x}",
+            req.memory_type_bits,
+            fd_props.memory_type_bits,
+        );
+        Ok(bits.trailing_zeros())
+    }
+
+    /// Composite an imported client image into the scanout at `(dst_x, dst_y)`, GPU to GPU.
+    ///
+    /// The dmabuf counterpart of `upload`: no staging buffer and no host round-trip, because the
+    /// client's pixels are already in a buffer this device can read. Source and destination are
+    /// both `B8G8R8A8_UNORM` and both LINEAR, so a straight `vkCmdCopyImage` is correct — a blit
+    /// would only add a filter we do not want and a format conversion we do not need.
+    ///
+    /// Takes the source as plain handles rather than an `&ImportedImage` so the caller can hold
+    /// its import cache mutably while recording the copy.
+    pub fn copy_image(
+        &self,
+        dst: &ScanoutImage,
+        src: vk::Image,
+        src_width: u32,
+        src_height: u32,
+        dst_x: i32,
+        dst_y: i32,
+    ) -> Result<()> {
+        // Clip to the scanout: a client is free to be larger than the display, and an
+        // out-of-bounds copy region is undefined behaviour rather than a clipped one.
+        let width = src_width.min(dst.width.saturating_sub(dst_x.max(0) as u32));
+        let height = src_height.min(dst.height.saturating_sub(dst_y.max(0) as u32));
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+        self.record(|cbuf| unsafe {
+            let layers = vk::ImageSubresourceLayers::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .layer_count(1);
+            let region = vk::ImageCopy::default()
+                .src_subresource(layers)
+                .src_offset(vk::Offset3D::default())
+                .dst_subresource(layers)
+                .dst_offset(vk::Offset3D { x: dst_x, y: dst_y, z: 0 })
+                .extent(vk::Extent3D { width, height, depth: 1 });
+            self.device.cmd_copy_image(
+                cbuf,
+                src,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                dst.image,
+                vk::ImageLayout::GENERAL,
+                &[region],
+            );
+        })
+    }
+
+    /// Release an imported image. The guest side must provably let go before any host-side
+    /// retention number means anything — the same rule M1's churn loop lives under.
+    pub fn destroy_imported(&self, img: &ImportedImage) {
+        unsafe {
+            self.device.destroy_image(img.image, None);
+            self.device.free_memory(img.memory, None);
+        }
+    }
+
     /// A host-visible, coherent staging buffer. Allocated per upload and freed immediately:
     /// a pool would be the obvious optimisation, and is exactly the kind of caching whose
     /// lifetime bugs this vehicle exists to find in *other* code — so it stays out of here
@@ -403,6 +644,27 @@ impl Drop for Vk {
 struct Staging {
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
+}
+
+/// The layout of a dmabuf being imported — everything `import_dmabuf` needs that the fd itself
+/// does not carry. Deliberately plain numbers rather than a smithay `Dmabuf`, so `vk.rs` stays
+/// independent of the Wayland layer and the client (which has no smithay) can describe its own
+/// buffer with the same type.
+pub struct Imported {
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub offset: u32,
+    pub modifier: u64,
+}
+
+/// A client's dmabuf, imported into *our* device. Holds no fd: `import_dmabuf` dups what it needs
+/// and Vulkan owns that dup, so the only thing to release here is the Vulkan pair.
+pub struct ImportedImage {
+    pub image: vk::Image,
+    pub memory: vk::DeviceMemory,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// One venus-allocated scanout image, exported as a dmabuf.

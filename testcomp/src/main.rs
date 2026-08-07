@@ -58,27 +58,39 @@ fn main() -> Result<()> {
         "run" => {
             // Frames are optional: bounded for a scripted gate, unbounded when a human is
             // looking at the screen.
-            let frames = args.next().and_then(|a| a.parse::<u64>().ok());
-            run(frames)
+            let mut frames = None;
+            let mut hold_buffers = false;
+            for arg in args {
+                match arg.as_str() {
+                    "--hold-buffers" => hold_buffers = true,
+                    other => frames = other.parse::<u64>().ok(),
+                }
+            }
+            run(frames, hold_buffers)
         }
-        "client" => {
+        "client" | "client-dmabuf" => {
             let secs: u64 = args
                 .next()
                 .unwrap_or_else(|| "20".into())
                 .parse()
                 .context("hold seconds")?;
-            client::run(400, 300, std::time::Duration::from_secs(secs))
+            let kind = if mode == "client-dmabuf" {
+                client::Kind::Dmabuf
+            } else {
+                client::Kind::Shm
+            };
+            client::run(400, 300, std::time::Duration::from_secs(secs), kind)
         }
         other => anyhow::bail!(
-            "unknown mode {other:?} — expected `probe`, `churn <frames>`, `run [frames]` \
-             or `client [seconds]`"
+            "unknown mode {other:?} — expected `probe`, `churn <frames>`, \
+             `run [frames] [--hold-buffers]`, `client [seconds]` or `client-dmabuf [seconds]`"
         ),
     }
 }
 
 /// The compositor. Accepts clients on a Wayland socket, composites their `wl_shm` buffers
 /// over a backdrop, and page-flips the result.
-fn run(frames: Option<u64>) -> Result<()> {
+fn run(frames: Option<u64>, hold_buffers: bool) -> Result<()> {
     // `ListeningSocketSource::new_auto` needs somewhere to put the socket, and a `sudo` shell
     // over a non-login ssh has no XDG_RUNTIME_DIR at all. Defaulting it here beats failing
     // deep inside libwayland with a message about a directory nobody set.
@@ -94,7 +106,7 @@ fn run(frames: Option<u64>) -> Result<()> {
 
     let out = Output::open(CARD)?;
     let vk = vk::Vk::new(WANT_DRIVER)?;
-    comp::Comp::run(vk, out, frames)
+    comp::Comp::run(vk, out, frames, hold_buffers)
 }
 
 /// Report the output and one buffer's real layout, then exit. Run this first on any new image:
