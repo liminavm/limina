@@ -55,6 +55,8 @@ pub struct Vk {
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
     fence: vk::Fence,
+    /// Cached so staging allocations do not re-query the physical device per upload.
+    memory_types: Vec<vk::MemoryType>,
     // Dropped last: `ash::Device` and the extension loaders borrow nothing from these, but the
     // Vulkan objects above are only valid while the instance lives.
     instance: ash::Instance,
@@ -112,6 +114,10 @@ impl Vk {
         let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
             .context("fence")?;
 
+        let mem_props = unsafe { instance.get_physical_device_memory_properties(physical) };
+        let memory_types =
+            mem_props.memory_types[..mem_props.memory_type_count as usize].to_vec();
+
         Ok(Vk {
             device,
             queue,
@@ -119,6 +125,7 @@ impl Vk {
             command_pool,
             command_buffer,
             fence,
+            memory_types,
             instance,
             _entry: entry,
         })
@@ -218,13 +225,8 @@ impl Vk {
     /// Waits on a fence rather than `vkQueueWaitIdle`: the wait must be scoped to *this*
     /// submission, since an idle-wait would also mask a stall belonging to another one.
     pub fn clear(&self, img: &ScanoutImage, colour: [f32; 4]) -> Result<()> {
-        let d = &self.device;
-        unsafe {
-            d.reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())?;
-            let begin = vk::CommandBufferBeginInfo::default()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-            d.begin_command_buffer(self.command_buffer, &begin)?;
-
+        self.record(|cbuf| unsafe {
+            let d = &self.device;
             let range = vk::ImageSubresourceRange::default()
                 .aspect_mask(vk::ImageAspectFlags::COLOR)
                 .level_count(1)
@@ -239,7 +241,7 @@ impl Vk {
                 .image(img.image)
                 .subresource_range(range);
             d.cmd_pipeline_barrier(
-                self.command_buffer,
+                cbuf,
                 vk::PipelineStageFlags::TOP_OF_PIPE,
                 vk::PipelineStageFlags::TRANSFER,
                 vk::DependencyFlags::empty(),
@@ -249,23 +251,128 @@ impl Vk {
             );
 
             let clear = vk::ClearColorValue { float32: colour };
-            d.cmd_clear_color_image(
-                self.command_buffer,
-                img.image,
-                vk::ImageLayout::GENERAL,
-                &clear,
-                &[range],
-            );
+            d.cmd_clear_color_image(cbuf, img.image, vk::ImageLayout::GENERAL, &clear, &[range]);
+        })
+    }
+
+    /// Record `f` into the single command buffer, submit it, and wait for it to retire.
+    ///
+    /// Waits on a fence rather than `vkQueueWaitIdle`: the wait must be scoped to *this*
+    /// submission, since an idle-wait would also mask a stall belonging to another one. The
+    /// whole vehicle is serial, so one command buffer reused under a fence is enough — and it
+    /// means every GPU write is complete before the flip that shows it.
+    fn record(&self, f: impl FnOnce(vk::CommandBuffer)) -> Result<()> {
+        let d = &self.device;
+        unsafe {
+            d.reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())?;
+            let begin = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            d.begin_command_buffer(self.command_buffer, &begin)?;
+            f(self.command_buffer);
             d.end_command_buffer(self.command_buffer)?;
 
-            let submit =
-                vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&self.command_buffer));
+            let submit = vk::SubmitInfo::default()
+                .command_buffers(std::slice::from_ref(&self.command_buffer));
             d.queue_submit(self.queue, &[submit], self.fence)?;
             d.wait_for_fences(&[self.fence], true, 5_000_000_000)
-                .context("clear fence timed out after 5s")?;
+                .context("GPU fence timed out after 5s")?;
             d.reset_fences(&[self.fence])?;
         }
         Ok(())
+    }
+
+    /// Composite one client's CPU-side pixels into a scanout image at `(dst_x, dst_y)`.
+    ///
+    /// This is `wl_shm`: the client's pixels live in shared *host* memory, so they have to be
+    /// staged through a host-visible buffer and copied on the GPU. A single
+    /// `vkCmdCopyBufferToImage` rather than a textured quad — M2 has no scaling, rotation or
+    /// blending to do, and a pipeline would be machinery whose failures we would then have to
+    /// rule out when something downstream looks wrong.
+    ///
+    /// `src_stride` is the client's row pitch and is honoured rather than recomputed, for the
+    /// same reason M1 takes its pitch from `vkGetImageSubresourceLayout`: a client is free to
+    /// pad its rows, and `width * 4` is right until one does.
+    pub fn upload(
+        &self,
+        dst: &ScanoutImage,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        src_stride: u32,
+        dst_x: i32,
+        dst_y: i32,
+    ) -> Result<()> {
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+        let size = (src_stride as u64) * (height as u64);
+        let staging = self.staging_buffer(size)?;
+        unsafe {
+            let ptr = self
+                .device
+                .map_memory(staging.memory, 0, size, vk::MemoryMapFlags::empty())
+                .context("map staging buffer")? as *mut u8;
+            let n = (size as usize).min(pixels.len());
+            std::ptr::copy_nonoverlapping(pixels.as_ptr(), ptr, n);
+            self.device.unmap_memory(staging.memory);
+        }
+
+        let result = self.record(|cbuf| unsafe {
+            let d = &self.device;
+            let copy = vk::BufferImageCopy::default()
+                .buffer_offset(0)
+                // In texels, not bytes — this is where a padded client stride would otherwise
+                // shear the image one row at a time.
+                .buffer_row_length(src_stride / 4)
+                .buffer_image_height(height)
+                .image_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .layer_count(1),
+                )
+                .image_offset(vk::Offset3D { x: dst_x, y: dst_y, z: 0 })
+                .image_extent(vk::Extent3D { width, height, depth: 1 });
+            d.cmd_copy_buffer_to_image(
+                cbuf,
+                staging.buffer,
+                dst.image,
+                vk::ImageLayout::GENERAL,
+                &[copy],
+            );
+        });
+
+        unsafe {
+            self.device.destroy_buffer(staging.buffer, None);
+            self.device.free_memory(staging.memory, None);
+        }
+        result
+    }
+
+    /// A host-visible, coherent staging buffer. Allocated per upload and freed immediately:
+    /// a pool would be the obvious optimisation, and is exactly the kind of caching whose
+    /// lifetime bugs this vehicle exists to find in *other* code — so it stays out of here
+    /// until a measurement asks for it.
+    fn staging_buffer(&self, size: u64) -> Result<Staging> {
+        let ci = vk::BufferCreateInfo::default()
+            .size(size)
+            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let buffer = unsafe { self.device.create_buffer(&ci, None) }.context("staging buffer")?;
+        let req = unsafe { self.device.get_buffer_memory_requirements(buffer) };
+        let want = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let index = self
+            .memory_types
+            .iter()
+            .enumerate()
+            .position(|(i, t)| req.memory_type_bits & (1 << i) != 0 && t.property_flags.contains(want))
+            .context("no host-visible coherent memory type")? as u32;
+        let alloc = vk::MemoryAllocateInfo::default()
+            .allocation_size(req.size)
+            .memory_type_index(index);
+        let memory =
+            unsafe { self.device.allocate_memory(&alloc, None) }.context("staging memory")?;
+        unsafe { self.device.bind_buffer_memory(buffer, memory, 0) }.context("bind staging")?;
+        Ok(Staging { buffer, memory })
     }
 
     /// Release an image's Vulkan objects. Separate from `ScanoutImage::drop` on purpose: a
@@ -290,6 +397,12 @@ impl Drop for Vk {
             self.instance.destroy_instance(None);
         }
     }
+}
+
+/// A host-visible buffer used to stage `wl_shm` pixels on their way to the GPU.
+struct Staging {
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
 }
 
 /// One venus-allocated scanout image, exported as a dmabuf.

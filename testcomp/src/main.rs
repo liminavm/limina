@@ -23,12 +23,15 @@
 //!     ./limina-testcomp churn 300
 //! ```
 
+mod client;
+mod comp;
 mod kms;
 mod vk;
 
 use anyhow::{Context, Result};
 use kms::{FbDesc, Output};
 use std::os::fd::BorrowedFd;
+use std::os::unix::fs::PermissionsExt;
 
 /// The DRM device. Hard-coded rather than probed: a limina guest has exactly one, and a probe
 /// would only add a way to silently drive the wrong one.
@@ -52,10 +55,46 @@ fn main() -> Result<()> {
                 .context("frame count")?;
             churn(frames)
         }
-        other => {
-            anyhow::bail!("unknown mode {other:?} — expected `probe` or `churn <frames>`")
+        "run" => {
+            // Frames are optional: bounded for a scripted gate, unbounded when a human is
+            // looking at the screen.
+            let frames = args.next().and_then(|a| a.parse::<u64>().ok());
+            run(frames)
         }
+        "client" => {
+            let secs: u64 = args
+                .next()
+                .unwrap_or_else(|| "20".into())
+                .parse()
+                .context("hold seconds")?;
+            client::run(400, 300, std::time::Duration::from_secs(secs))
+        }
+        other => anyhow::bail!(
+            "unknown mode {other:?} — expected `probe`, `churn <frames>`, `run [frames]` \
+             or `client [seconds]`"
+        ),
     }
+}
+
+/// The compositor. Accepts clients on a Wayland socket, composites their `wl_shm` buffers
+/// over a backdrop, and page-flips the result.
+fn run(frames: Option<u64>) -> Result<()> {
+    // `ListeningSocketSource::new_auto` needs somewhere to put the socket, and a `sudo` shell
+    // over a non-login ssh has no XDG_RUNTIME_DIR at all. Defaulting it here beats failing
+    // deep inside libwayland with a message about a directory nobody set.
+    if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
+        let dir = "/tmp/testcomp-run";
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {dir}"))?;
+        std::fs::set_permissions(dir, <std::fs::Permissions as PermissionsExt>::from_mode(0o700))
+            .with_context(|| format!("chmod 700 {dir}"))?;
+        log::info!("XDG_RUNTIME_DIR was unset; using {dir}");
+        // SAFETY: single-threaded, before any thread that could read the environment starts.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir) };
+    }
+
+    let out = Output::open(CARD)?;
+    let vk = vk::Vk::new(WANT_DRIVER)?;
+    comp::Comp::run(vk, out, frames)
 }
 
 /// Report the output and one buffer's real layout, then exit. Run this first on any new image:
@@ -142,7 +181,7 @@ fn churn(frames: u32) -> Result<()> {
     Ok(())
 }
 
-fn desc_of(img: &vk::ScanoutImage) -> FbDesc {
+pub fn desc_of(img: &vk::ScanoutImage) -> FbDesc {
     FbDesc {
         width: img.width,
         height: img.height,

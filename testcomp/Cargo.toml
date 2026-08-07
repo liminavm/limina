@@ -21,15 +21,34 @@ license = "GPL-3.0-only"
 description = "A small, realistic Wayland compositor for reproducing limina host behaviours"
 publish = false
 
-# Milestone 1 is KMS + Vulkan scanout only — no Wayland, no input. smithay/wayland-server
-# arrive with M2, and when they do the version to use is the one a working compositor on this
-# exact stack resolves: synoik pins smithay to a git fork (github.com/kov/smithay branch
-# `synoik`) for para-virt cursor-plane hotspot support, NOT a crates.io release. Adding it
-# early would have meant a recalled `"0.7"` pin carrying an unverified API surface into M1.
-#
-# Versions below are transcribed from synoik's Cargo.toml rather than recalled, so they are
+# Versions here are transcribed from synoik's Cargo.toml rather than recalled, so they are
 # known to resolve and to work against venus on a limina guest.
 [dependencies]
+# Wayland protocol state only. Pinned to the UPSTREAM rev synoik's `synoik` branch forks from,
+# because that is the exact API surface the synoik code lifted into this crate was written
+# against. Not a crates.io version — a version number is a guess until something resolves it —
+# and not synoik's fork, whose deltas (para-virt cursor-plane hotspot, text-input) this vehicle
+# has no use for and which would only make testcomp harder to build.
+#
+# We do NOT use smithay's DrmCompositor or its Renderer/Frame traits: implementing that pair for
+# a Vulkan renderer is ~6k lines in synoik and buys nothing, since we drive KMS ourselves — and
+# DrmCompositor deciding for itself when a buffer is still referenced by a scanout is the very
+# behaviour under test.
+#
+# `desktop` and the `renderer_*` features are deliberately off. Space/Window would track
+# buffer lifetime for us, and that is the thing under test — explicit is the point here.
+#
+# calloop and wayland-server are used through `smithay::reexports::*` and are NOT listed as
+# direct dependencies: two copies of either in the graph resolve to distinct types and produce
+# "expected `calloop::EventLoop`, found `calloop::EventLoop`".
+smithay = { git = "https://github.com/Smithay/smithay.git", rev = "ff5fa7df392cecfba049ffed55cdaa4e98a8e7ef", default-features = false, features = [
+    "wayland_frontend",
+] }
+
+# The test client is a separate process speaking the real protocol, so it needs the client
+# library — a genuinely different crate from the server side, not a duplicate.
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
 # Vulkan. `ash` rather than a safe wrapper: the scanout path needs external-memory and
 # DRM-modifier structs that wrappers tend to lag on, and synoik's proven code is ash.
 ash = "0.38.0"

@@ -65,8 +65,37 @@ It is built bottom-up, and each step is gated on evidence rather than on compili
 | M | scope | gate |
 |---|---|---|
 | **1** ✅ | KMS + Vulkan scanout allocation + churn. No Wayland, no input. | **Reproduces `kmschurn.py`'s `churn-vk` numbers on the same host.** Until the two vehicles agree, a difference could as easily be a transcription bug as a finding. Passed 2026-08-07 — see below. |
-| 2 | Wayland frontend (smithay), `wl_shm` clients | a real client maps and composites |
+| **2** ✅ | Wayland frontend (smithay), `wl_shm` clients | a real client's pixels reach the scanout. Passed 2026-08-07 — see below. |
 | 3 | `linux-dmabuf` import, client death | reaches the path × holder cases in `buffer-lifetime-matrix.md` |
+
+### M2's gate: a real client's pixels on the scanout (2026-08-07)
+
+`limina-testcomp run` on the guest console, `limina-testcomp client` against it, and the
+oracle is the host reading the scanout IOSurface — not the compositor's own logs:
+
+```
+sudo -n env VK_DRIVER_FILES=…/virtio_icd.aarch64.json ./limina-testcomp run &
+sudo -n env XDG_RUNTIME_DIR=/tmp/testcomp-run WAYLAND_DISPLAY=wayland-1 \
+    ./limina-testcomp client 15
+# host, with LIMINA_GLOBAL_SCANOUT=1 in the boot env:
+spikes/venus-draw-probe/iosdump <id>
+```
+
+The capture shows the client's four quadrants — red, green, blue, yellow in row-major
+order, so no channel swap — composited at (0,0) over the backdrop, on a 2560x1440 venus
+scanout. The client ran **853 frames in 15 s** (~57 fps, vsync-paced), which is the frame
+callback loop and the immediate buffer release both working: a client that never gets its
+buffer back stalls after two frames, and one whose callbacks go unanswered stops at one.
+`toplevel_destroyed` fired on exit, the compositor survived, and it accepted a second client
+afterwards.
+
+**Two oracle traps here, both nearly producing a false "nothing rendered":**
+- **`iosprobe` reports `nonzeroRGB=0` for surfaces `iosdump` reads as fully painted.** It
+  does not take the GPU-coherent lock that `iosdump` does, so it sees stale CPU-side
+  content. Use `iosprobe` to *enumerate* ids, never to judge content.
+- **The worker log's `iosurface scanout:` lines are the vrend/EGL path.** The compositor
+  presents venus blobs through `SET_SCANOUT_BLOB`, which logs nothing at that level — an
+  absence of new lines after the compositor starts is not an absence of scanouts.
 
 ### M1 detects the failure it is meant to detect (2026-08-07)
 
