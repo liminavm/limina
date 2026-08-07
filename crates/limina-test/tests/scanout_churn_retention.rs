@@ -17,16 +17,23 @@
 //! rule out, so it uses [`GuestConfig::with_windowed_coexist_display`] and a real NSWindow
 //! opens for the duration of the run.
 //!
-//! Vehicle: `guest/kmschurn.py` — a ctypes KMS presenter that allocates a fresh gbm scanout
-//! buffer per frame under zink (making them venus blobs, the shape the reporting compositor
-//! had), binds it with `drmModeAddFB2`, page-flips, and releases the previous one. It takes
-//! DRM master directly after the session is isolated to `multi-user.target`; no Wayland, no
-//! GDM, no seat. See `spikes/venus-churn-retention/RESULTS.md` for its RED/GREEN validation.
+//! Vehicle: `guest/kmschurn.py` in its `churn-vk` mode — a ctypes KMS presenter that allocates
+//! a fresh scanout image per frame **in venus directly** (modifier-tiled, exported dma-buf,
+//! prime-imported), clears it on the GPU, binds it with `drmModeAddFB2WithModifiers`,
+//! page-flips, and releases the previous one. It takes DRM master directly after the session
+//! is isolated to `multi-user.target`; no Wayland, no GDM, no seat. See
+//! `spikes/venus-churn-retention/RESULTS.md` for its RED/GREEN validation.
 //!
-//! Oracle: the `owned unmapped` REGION COUNT in `vmmap -summary` of our own worker. Region
-//! count rather than bytes because it is resolution-independent — each retained scanout is
-//! one region whatever the mode, so the same threshold holds on any rig, while a byte
-//! threshold would have to track the display size. `vmmap` of a pid we own is also
+//! The vehicle also has a `churn` mode that allocates with gbm, which is what the reporting
+//! compositor did at the time and what this test originally used. The Vulkan arm is the one to
+//! guard with: gbm only yields venus blobs when `GALLIUM_DRIVER=zink` is set, which is an env
+//! the enhanced tier no longer configures, so that arm silently stops testing the host path
+//! under study if the image's selectors change again. It also costs twice the host IOSurfaces
+//! for the same pixels (RESULTS.md §0.6). `churn-vk` needs nothing but the venus ICD, and it
+//! WRITES each buffer, so the pages are resident and the byte oracle below sees them.
+//!
+//! Oracle: the `owned unmapped` BYTES in `vmmap -summary` of our own worker — see
+//! [`owned_unmapped`] for why bytes and not the region count. `vmmap` of a pid we own is
 //! parallel-safe, which `ioclasscount` (system-wide) is not.
 //!
 //! Paired with a churn-actually-happened assert, and that pairing is the point: the silent
@@ -34,9 +41,10 @@
 //! buffers, software-2D), which would keep the region count flat while testing nothing. A
 //! green retention number means something only alongside evidence the workload ran.
 //!
-//! Measured separation, this test at 1280x800: **+606 regions** with `SurfaceStore`'s
-//! eviction disabled vs **+23** with it, over an identical guest workload (`created=301`
-//! both times). The threshold below sits far from both.
+//! Measured separation, this test at 1280x800 on the `churn-vk` arm: **+1213 MiB** with
+//! `SurfaceStore`'s cap lifted vs **+98 MiB** with it, over an identical guest workload
+//! (`created=301` both times). 1213 MiB is 301 x 4 MiB — one whole retained framebuffer per
+//! frame, exactly. The threshold below sits well clear of both.
 //!
 //! Trap, if you ever re-run that A/B by hand: `cargo test -p limina-test` does NOT rebuild
 //! `target/debug/limina`, and the harness launches that binary. Editing the supervisor and
@@ -69,18 +77,17 @@ const DISPLAY: (u32, u32) = (1280, 800);
 ///
 /// What the supervisor may legitimately hold is bounded by `SurfaceStore`'s cap (32) plus the
 /// frame cache (8), so at this display size the ceiling is ~40 x 1280x800x4 = 164 MB; measured
-/// residual is ~124 MB. Unbounded retention is one framebuffer per frame: 301 x 4 MB = 1.2 GB.
-/// 400 MB sits well clear of the first and far below the second. This is an "is it bounded at
-/// all" guard, deliberately loose, not a budget — tighten it only alongside a fix that actually
-/// lowers the resting number (see RESULTS.md §0.4: the residual is vkr re-publishing surfaces,
-/// not the cap doing its job).
+/// residual on the `churn-vk` arm is 98 MB. Unbounded retention is one framebuffer per frame:
+/// 301 x 4 MB = 1213 MB, measured. 400 MB sits well clear of the first and far below the
+/// second. This is an "is it bounded at all" guard, deliberately loose, not a budget — tighten
+/// it only alongside a fix that actually lowers the resting number, which means shrinking the
+/// cap itself: the residual IS the cap holding its 32 surfaces, not slack (RESULTS.md §0.4).
 const MAX_BYTE_GROWTH: i64 = 400 * 1024 * 1024;
 
-/// The guest's venus/zink selection. Without this gbm loads a different gallium driver, the
-/// buffers are not venus blobs, and the run silently exercises a path the bug never lived on
-/// — `kmschurn.py` echoes what it saw so a failure log shows which it got.
-const ZINK_ENV: &str = "GALLIUM_DRIVER=zink MESA_LOADER_DRIVER_OVERRIDE=zink \
-                        VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json";
+/// The venus ICD selection, and deliberately nothing else. A non-login ssh shell does not
+/// source `/etc/environment.d`, so the driver has to be named here; the `-vk` arm needs no
+/// gallium/gbm selectors at all, which is half of why it is the arm this test runs.
+const VENUS_ENV: &str = "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json";
 
 /// Parse one vmmap size cell ("896K", "436.8M", "8.4G") into bytes.
 fn parse_size(cell: &str) -> Option<i64> {
@@ -177,7 +184,7 @@ fn windowed_frame_apply_holds_bounded_state_under_scanout_churn() {
 
     let out = guest
         .ssh_exec_timeout(
-            &format!("sudo -n env {ZINK_ENV} python3 /tmp/kmschurn.py churn {FRAMES}"),
+            &format!("sudo -n env {VENUS_ENV} python3 /tmp/kmschurn.py churn-vk {FRAMES}"),
             Duration::from_secs(180),
         )
         .expect("running the churn presenter");
@@ -208,13 +215,13 @@ fn windowed_frame_apply_holds_bounded_state_under_scanout_churn() {
     // flat and look like a pass. `created` counts buffers allocated, one per frame.
     let created = out
         .lines()
-        .find_map(|l| l.strip_prefix("CHURN DONE churn "))
+        .find_map(|l| l.strip_prefix("CHURN DONE churn-vk "))
         .and_then(|rest| {
             rest.split_whitespace()
                 .find_map(|f| f.strip_prefix("created="))
         })
         .and_then(|n| n.parse::<usize>().ok())
-        .unwrap_or_else(|| panic!("no `CHURN DONE churn ... created=N` line in:\n{out}"));
+        .unwrap_or_else(|| panic!("no `CHURN DONE churn-vk ... created=N` line in:\n{out}"));
     assert!(
         created > FRAMES,
         "the presenter allocated only {created} buffers for {FRAMES} frames — it did not \
