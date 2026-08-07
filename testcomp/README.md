@@ -64,9 +64,34 @@ It is built bottom-up, and each step is gated on evidence rather than on compili
 
 | M | scope | gate |
 |---|---|---|
-| **1** | KMS + Vulkan scanout allocation + churn. No Wayland, no input. | **Reproduces `kmschurn.py --vk`'s numbers on the same host.** Until the two vehicles agree, a difference could as easily be a transcription bug as a finding. |
+| **1** ✅ | KMS + Vulkan scanout allocation + churn. No Wayland, no input. | **Reproduces `kmschurn.py`'s `churn-vk` numbers on the same host.** Until the two vehicles agree, a difference could as easily be a transcription bug as a finding. Passed 2026-08-07 — see below. |
 | 2 | Wayland frontend (smithay), `wl_shm` clients | a real client maps and composites |
 | 3 | `linux-dmabuf` import, client death | reaches the path × holder cases in `buffer-lifetime-matrix.md` |
+
+### M1's gate, and the trap in measuring it (2026-08-07)
+
+Both vehicles, 300 buffers each at 2560x1440, against the same host build; the oracle is
+`owned unmapped` bytes on the worker (`scanout_churn_retention.rs` explains why bytes and
+not regions):
+
+| boot | order | vehicle | before | after | growth |
+|---|---|---|---|---|---|
+| A | 1st | `kmschurn.py churn-vk` | 72.4 M | 408.7 M | **+336 MiB** |
+| A | 2nd | `limina-testcomp churn` | 408.7 M | 408.7 M | +0 |
+| B | 1st | `limina-testcomp churn` | 45.1 M | 409.6 M | **+364 MiB** |
+| B | 2nd | `kmschurn.py churn-vk` | 409.6 M | 409.6 M | +0 |
+
+The resting values agree to within 1 MiB, which is the comparison that means something: the
+resting number *is* `SurfaceStore` holding its 32 surfaces, so both vehicles drive the host
+allocator the same way. Gate passed.
+
+**The trap, which cost a re-run:** whichever vehicle goes *second* measures **+0 growth**, and
+it is not a result. The store rests at its cap, so a second churn evicts and replaces rather
+than accumulating — the host-side `[SCANOUT-LEDGER]` line shows the fresh binds happening
+(194 → 449 fresh) while the byte count sits still. **Each arm needs its own boot**, or the
+run reads as "my vehicle allocates nothing" when the truth is "the cache was already full".
+Enable the ledger to tell those apart:
+`RUST_LOG=krun_devices::virtio::gpu::virtio_gpu=debug,warn`.
 
 M1 depends on neither smithay nor libinput, so `Cargo.toml` does not carry them yet. When
 M2 adds smithay, the version to use is the one a working compositor on this exact stack

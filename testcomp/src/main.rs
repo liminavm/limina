@@ -110,9 +110,11 @@ fn churn(frames: u32) -> Result<()> {
         }
     }
 
-    // The line the harness parses. Printed only on the success path, so a truncated run cannot
-    // be mistaken for a complete one.
-    println!("CHURN DONE churn {frames}");
+    // The line the harness parses, in kmschurn.py's shape so the same parser reads both and the
+    // two vehicles stay directly comparable. `created=` is the load-bearing field: a retention
+    // number means nothing without evidence that buffers were actually allocated. Printed only
+    // on the success path, so a truncated run cannot be mistaken for a complete one.
+    println!("CHURN DONE churn frames={frames} created={frames}");
     Ok(())
 }
 
