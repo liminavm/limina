@@ -65,13 +65,16 @@ const FRAMES: usize = 300;
 /// region — do not depend on which host screen the window opens on.
 const DISPLAY: (u32, u32) = (1280, 800);
 
-/// Maximum growth in the worker's `owned unmapped` region count across the churn run.
+/// Maximum growth in the worker's `owned unmapped` BYTES across the churn run.
 ///
-/// The fix retains at most `FRAME_CACHE_CAP` (8) frame-cache entries plus `SurfaceStore`'s
-/// own 32, and the measured delta was +13. The bug retains one region per frame: +605. 100
-/// is comfortably clear of the first and far below the second — this is a "is it bounded at
-/// all" guard, not a tight budget, deliberately, so it does not fail on unrelated churn.
-const MAX_REGION_GROWTH: i64 = 100;
+/// What the supervisor may legitimately hold is bounded by `SurfaceStore`'s cap (32) plus the
+/// frame cache (8), so at this display size the ceiling is ~40 x 1280x800x4 = 164 MB; measured
+/// residual is ~124 MB. Unbounded retention is one framebuffer per frame: 301 x 4 MB = 1.2 GB.
+/// 400 MB sits well clear of the first and far below the second. This is an "is it bounded at
+/// all" guard, deliberately loose, not a budget — tighten it only alongside a fix that actually
+/// lowers the resting number (see RESULTS.md §0.4: the residual is vkr re-publishing surfaces,
+/// not the cap doing its job).
+const MAX_BYTE_GROWTH: i64 = 400 * 1024 * 1024;
 
 /// The guest's venus/zink selection. Without this gbm loads a different gallium driver, the
 /// buffers are not venus blobs, and the run silently exercises a path the bug never lived on
@@ -79,11 +82,28 @@ const MAX_REGION_GROWTH: i64 = 100;
 const ZINK_ENV: &str = "GALLIUM_DRIVER=zink MESA_LOADER_DRIVER_OVERRIDE=zink \
                         VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json";
 
-/// `owned unmapped` regions charged to `pid` — memory billed to the task but not mapped into
-/// its address space, which is where an IOSurface retained by another process lands (storage
-/// bills to the task that CREATED the surface, so these are the worker's even when the
+/// Parse one vmmap size cell ("896K", "436.8M", "8.4G") into bytes.
+fn parse_size(cell: &str) -> Option<i64> {
+    let (num, mult) = match cell.chars().last()? {
+        'K' => (&cell[..cell.len() - 1], 1024.0),
+        'M' => (&cell[..cell.len() - 1], 1024.0 * 1024.0),
+        'G' => (&cell[..cell.len() - 1], 1024.0 * 1024.0 * 1024.0),
+        _ => (cell, 1.0),
+    };
+    num.parse::<f64>().ok().map(|n| (n * mult) as i64)
+}
+
+/// `owned unmapped` BYTES and region count charged to `pid` — memory billed to the task but not
+/// mapped into its address space, which is where an IOSurface retained by another process lands
+/// (storage bills to the task that CREATED the surface, so these are the worker's even when the
 /// supervisor is what holds them).
-fn owned_unmapped_regions(pid: libc::pid_t) -> i64 {
+///
+/// **Bytes are the oracle; the region count is only reported.** Measured 2026-08-07: a run that
+/// took `owned unmapped` from 19.2 M to 436.8 M moved the region count from 39 to 38 — regions
+/// get coalesced, so a count-based assert is blind to hundreds of megabytes. It happens to
+/// separate the catastrophic case (620 regions) and nothing finer, which is exactly the kind of
+/// oracle that reads as a pass while the thing it guards regresses.
+fn owned_unmapped(pid: libc::pid_t) -> (i64, i64) {
     let out = Command::new("vmmap")
         .args(["-summary", &pid.to_string()])
         .output()
@@ -91,14 +111,14 @@ fn owned_unmapped_regions(pid: libc::pid_t) -> i64 {
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         // The "(graphics)" sibling row is a different, tiny bucket — match the bare one.
         if line.contains("owned unmapped") && !line.contains("graphics") {
-            if let Some(count) = line.split_whitespace().last() {
-                if let Ok(n) = count.parse::<i64>() {
-                    return n;
-                }
-            }
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            // "owned unmapped <VIRTUAL> <RESIDENT> <DIRTY> ... <REGIONS>"
+            let bytes = cols.get(2).and_then(|c| parse_size(c)).unwrap_or(0);
+            let regions = cols.last().and_then(|c| c.parse::<i64>().ok()).unwrap_or(0);
+            return (bytes, regions);
         }
     }
-    0
+    (0, 0)
 }
 
 #[test]
@@ -152,8 +172,8 @@ fn windowed_frame_apply_holds_bounded_state_under_scanout_churn() {
         .expect("writing kmschurn.py to the guest");
 
     let worker = guest.worker_pid().expect("worker pid");
-    let before = owned_unmapped_regions(worker);
-    eprintln!("worker {worker}: owned unmapped regions before = {before}");
+    let (before, before_regions) = owned_unmapped(worker);
+    eprintln!("worker {worker}: owned unmapped before = {before} B ({before_regions} regions)");
 
     let out = guest
         .ssh_exec_timeout(
@@ -163,9 +183,25 @@ fn windowed_frame_apply_holds_bounded_state_under_scanout_churn() {
         .expect("running the churn presenter");
     eprintln!("{out}");
 
-    let after = owned_unmapped_regions(worker);
+    // Settle before reading: releases and presents are drained on the supervisor's main thread
+    // and the last of them land after the guest-side run has returned. Measuring immediately
+    // reads the drain mid-flight rather than the resting state.
+    let (mut after, mut after_regions) = owned_unmapped(worker);
+    for _ in 0..10 {
+        std::thread::sleep(Duration::from_secs(1));
+        let now = owned_unmapped(worker);
+        if now.0 == after {
+            break;
+        }
+        after = now.0;
+        after_regions = now.1;
+    }
     let growth = after - before;
-    eprintln!("worker {worker}: owned unmapped regions after = {after} (+{growth})");
+    eprintln!(
+        "worker {worker}: owned unmapped after = {after} B ({after_regions} regions), \
+         growth = {} MiB",
+        growth / (1024 * 1024)
+    );
 
     // Did the workload actually run? A retention number is meaningless without this: a
     // silent fallback to a path that allocates no host surface would hold the region count
@@ -186,18 +222,21 @@ fn windowed_frame_apply_holds_bounded_state_under_scanout_churn() {
     );
 
     assert!(
-        growth <= MAX_REGION_GROWTH,
-        "the worker gained {growth} `owned unmapped` regions across {created} fresh scanout \
-         buffers (want <= {MAX_REGION_GROWTH}): host-side per-scanout state is unbounded \
-         again. Each region is a whole retained framebuffer; at this rate a real compositor \
-         session ends in a jetsam SIGKILL. The holder to suspect first is the SUPERVISOR, \
-         not the worker — IOSurface storage bills to the task that CREATED it, so these \
-         regions are charged to the worker however holds the reference. See \
-         `spikes/venus-churn-retention/RESULTS.md`.\n{out}"
+        growth <= MAX_BYTE_GROWTH,
+        "the worker gained {} MiB of `owned unmapped` across {created} fresh scanout buffers \
+         (want <= {} MiB): host-side per-scanout state is unbounded again. Every byte is a \
+         retained framebuffer; at this rate a real compositor session ends in a jetsam \
+         SIGKILL. The holder to suspect first is the SUPERVISOR, not the worker — IOSurface \
+         storage bills to the task that CREATED it, so this is charged to the worker no \
+         matter who holds the reference (proven by split-kill, RESULTS.md §0.4). Do NOT \
+         judge this by region count: it stayed flat across a 20x byte change.\n{out}",
+        growth / (1024 * 1024),
+        MAX_BYTE_GROWTH / (1024 * 1024)
     );
 
     eprintln!(
-        "BOUNDED: {created} fresh scanout buffers cost {growth} retained regions (cap \
-         {MAX_REGION_GROWTH})"
+        "BOUNDED: {created} fresh scanout buffers cost {} MiB retained (cap {} MiB)",
+        growth / (1024 * 1024),
+        MAX_BYTE_GROWTH / (1024 * 1024)
     );
 }

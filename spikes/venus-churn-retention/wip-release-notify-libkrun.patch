@@ -1,0 +1,137 @@
+diff --git a/src/devices/src/virtio/gpu/virtio_gpu.rs b/src/devices/src/virtio/gpu/virtio_gpu.rs
+index ce1c6b9..421818b 100644
+--- a/src/devices/src/virtio/gpu/virtio_gpu.rs
++++ b/src/devices/src/virtio/gpu/virtio_gpu.rs
+@@ -1822,6 +1822,16 @@ impl VirtioGpu {
+ 
+     /// Releases guest kernel reference on the resource.
+     pub fn unref_resource(&mut self, resource_id: u32) -> VirtioGpuResult {
++        // Resolved before the resource is torn down, because that is the only point at which the
++        // mapping still exists. A backend that handed this surface to another process has no other
++        // way to learn it is finished with.
++        #[cfg(target_os = "macos")]
++        let iosurface_id = self
++            .rutabaga
++            .as_ref()
++            .and_then(|r| r.iosurface_id(resource_id).ok())
++            .filter(|&id| id != 0);
++
+         let resource = self
+             .resources
+             .remove(&resource_id)
+@@ -1837,6 +1847,11 @@ impl VirtioGpu {
+         }
+         self.scanout_ledger.unref(resource_id, false);
+ 
++        #[cfg(target_os = "macos")]
++        if let Some(id) = iosurface_id {
++            let _ = self.display_backend.release_surface(id);
++        }
++
+         // limina software 2D resources have no rutabaga state.
+         if self.sw2d.remove(&resource_id).is_some() {
+             return Ok(OkNoData);
+diff --git a/src/display/libkrun_display.h b/src/display/libkrun_display.h
+index 649c25b..8563a17 100644
+--- a/src/display/libkrun_display.h
++++ b/src/display/libkrun_display.h
+@@ -211,6 +211,29 @@ typedef int32_t (*krun_display_move_cursor_fn)(void *instance, uint32_t x, uint3
+  */
+ typedef int32_t (*krun_display_present_surface_fn)(void *instance, uint32_t scanout_id, uint32_t iosurface_id, const struct krun_rect* damage_area);
+ 
++/**
++ * (limina extension, optional) The guest dropped its last reference to a scanout resource.
++ *
++ * Called from VIRTIO_GPU_CMD_RESOURCE_UNREF for a resource backed by an IOSurface the backend has
++ * been given (one previously passed to present_surface). After this call that IOSurface will never
++ * be presented again, so a backend holding it — or having handed it to another process — may drop it.
++ *
++ * This exists because that reference is otherwise unbounded in practice. A compositor is free to
++ * allocate a fresh scanout buffer per frame, and a backend that caches by IOSurface id then
++ * accumulates one whole framebuffer per frame with nothing to tell it otherwise. On macOS the
++ * storage bills to the task that CREATED the surface, so the holder feels no pressure of its own.
++ * The guest's unref is the only accurate signal that a surface is done with.
++ *
++ * Arguments:
++ *  "instance"     - userdata set by `krun_display_create`, represents this/self argument
++ *  "iosurface_id" - The IOSurface id (IOSurfaceGetID) the released resource was backed by.
++ *
++ * Returns:
++ *  Zero on success or a negative error code (KRUN_DISPLAY_ERR_*) otherwise. The device ignores the
++ *  result: the resource is freed either way.
++ */
++typedef int32_t (*krun_display_release_surface_fn)(void *instance, uint32_t iosurface_id);
++
+ /**
+  * Defines the set of callbacks for a display implementation.
+  * This structure holds function pointers that a display backend implements to integrate with the libkrun.
+@@ -237,6 +260,7 @@ struct krun_display_basic_framebuffer_vtable {
+     krun_display_set_cursor_fn          set_cursor; // (optional) limina: hardware cursor image+hotspot
+     krun_display_move_cursor_fn         move_cursor; // (optional) limina: hardware cursor position
+     krun_display_present_surface_fn     present_surface; // (optional) limina: zero-copy IOSurface scanout present
++    krun_display_release_surface_fn     release_surface; // (optional) limina: guest unref'd a scanout resource
+ };
+ 
+ union krun_display_vtable {
+diff --git a/src/display/src/c_to_rust.rs b/src/display/src/c_to_rust.rs
+index 81e1ca8..fd72c5e 100644
+--- a/src/display/src/c_to_rust.rs
++++ b/src/display/src/c_to_rust.rs
+@@ -176,6 +176,14 @@ impl DisplayBackendBasicFramebuffer for DisplayBackendInstance {
+             }
+         }
+     }
++
++    fn release_surface(&mut self, iosurface_id: u32) -> Result<(), DisplayBackendError> {
++        into_rust_result! {
++            method_call!{
++                self.release_surface(iosurface_id)
++            }
++        }
++    }
+ }
+ 
+ #[derive(Copy, Clone)]
+diff --git a/src/display/src/rust_to_c.rs b/src/display/src/rust_to_c.rs
+index 0db2eba..c99d077 100644
+--- a/src/display/src/rust_to_c.rs
++++ b/src/display/src/rust_to_c.rs
+@@ -66,6 +66,16 @@ pub trait DisplayBackendBasicFramebuffer {
+     ) -> Result<(), DisplayBackendError> {
+         Err(DisplayBackendError::MethodNotSupported)
+     }
++
++    /// (Optional, limina) The guest dropped its last reference to a scanout resource, and the
++    /// IOSurface behind it will not be presented again.
++    ///
++    /// A backend that hands surfaces to another process cannot otherwise learn this: the guest's
++    /// `RESOURCE_UNREF` is the only signal, and on macOS an IOSurface's storage bills to the task
++    /// that created it, so the holder sees no pressure of its own to let go. Default: unsupported.
++    fn release_surface(&mut self, _iosurface_id: u32) -> Result<(), DisplayBackendError> {
++        Err(DisplayBackendError::MethodNotSupported)
++    }
+ }
+ 
+ pub trait IntoDisplayBackend<T: Sync> {
+@@ -223,6 +233,13 @@ impl<T: Sync, I: DisplayBackendBasicFramebuffer + DisplayBackendNew<T>> IntoDisp
+             ))
+         }
+ 
++        extern "C" fn release_surface_fn<I: DisplayBackendBasicFramebuffer>(
++            instance: *mut c_void,
++            iosurface_id: u32,
++        ) -> i32 {
++            from_rust_result(cast_instance::<I>(instance).release_surface(iosurface_id))
++        }
++
+         DisplayBackend {
+             create_userdata: userdata.map_or(null(), |t| ptr::from_ref(t) as *const c_void),
+             create_userdata_lifetime: PhantomData,
+@@ -238,6 +255,7 @@ impl<T: Sync, I: DisplayBackendBasicFramebuffer + DisplayBackendNew<T>> IntoDisp
+                     set_cursor: Some(set_cursor_fn::<I>),
+                     move_cursor: Some(move_cursor_fn::<I>),
+                     present_surface: Some(present_surface_fn::<I>),
++                    release_surface: Some(release_surface_fn::<I>),
+                 },
+             },
+         }

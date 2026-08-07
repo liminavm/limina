@@ -1,0 +1,243 @@
+diff --git a/crates/limina-display/src/iosurface.rs b/crates/limina-display/src/iosurface.rs
+index b948e3a..66dd8aa 100644
+--- a/crates/limina-display/src/iosurface.rs
++++ b/crates/limina-display/src/iosurface.rs
+@@ -170,6 +170,11 @@ impl WindowBackend {
+     /// Hand a freshly-created surface to the supervisor over the Mach channel, keyed by its id.
+     /// No-op when there's no receiver (legacy global path — the supervisor `IOSurfaceLookup`s it).
+     fn publish(&self, id: u32, surface: &IOSurfaceRef) {
++        static SENDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++        log::warn!(
++            "[SENDPROBE] id={id} n={}",
++            SENDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
++        );
+         if let Some(tx) = self.sender.as_ref() {
+             if let Err(e) = tx.send(id, surface) {
+                 log::error!("window: surface-port send(id={id}) failed: {e}");
+@@ -221,6 +226,7 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
+         // Hand each ring surface to the supervisor over the Mach channel, keyed by its id, BEFORE
+         // the `surface` line announces them — so the supervisor can resolve the ids without a
+         // global IOSurfaceLookup.
++        log::warn!("[PUBPROBE] configure_scanout ALLOC {width}x{height} {format:?} ids={ids:?}");
+         for (id, surface) in ids.iter().zip(surfaces.iter()) {
+             self.publish(*id, surface);
+         }
+@@ -273,6 +279,18 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
+         Ok(())
+     }
+ 
++    /// The guest let go of a scanout resource: tell the supervisor so it can drop its reference.
++    ///
++    /// Without this the supervisor can only bound its cache by size, because nothing else ever
++    /// tells it a surface is finished with — and a compositor minting a fresh scanout buffer per
++    /// frame then keeps that cache permanently full of whole framebuffers. This makes the release
++    /// exact instead of approximate. Purely host-side: `RESOURCE_UNREF` is stock virtio-gpu, so it
++    /// works on a guest with none of our components.
++    fn release_surface(&mut self, iosurface_id: u32) -> Result<(), DisplayBackendError> {
++        self.send(&format!("release {iosurface_id}"));
++        Ok(())
++    }
++
+     fn alloc_frame(&mut self, scanout_id: u32) -> Result<(u32, &mut [u8]), DisplayBackendError> {
+         let scanout = self
+             .scanout
+@@ -366,6 +384,7 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
+         let surface = create_scanout_iosurface(width, height, self.also_global)
+             .ok_or(DisplayBackendError::InternalError)?;
+         let id = IOSurfaceGetID(&surface);
++        log::warn!("[PUBPROBE] set_cursor {width}x{height} id={id}");
+         self.publish(id, &surface);
+         // Swizzle the cursor pixels into BGRA, PRESERVING alpha (unlike the scanout path,
+         // which forces opaque): the cursor image is mostly transparent surround.
+diff --git a/crates/limina/src/window/mod.rs b/crates/limina/src/window/mod.rs
+index 0f1cd05..88832c8 100644
+--- a/crates/limina/src/window/mod.rs
++++ b/crates/limina/src/window/mod.rs
+@@ -1264,6 +1264,11 @@ pub fn run(
+     // frame supplies a fresh id per frame (see `SurfaceStore::get_or_insert_with`).
+     let cache: RefCell<present::SurfaceStore> =
+         RefCell::new(present::SurfaceStore::with_cap(present::FRAME_CACHE_CAP));
++    // Releases we could not act on yet because the surface was still on the layer. Normally
++    // empty; retried on the next frame-apply.
++    let pending_release: RefCell<Vec<u32>> = RefCell::new(Vec::new());
++    static HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++    static MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+     // The surface last handed to Core Animation (copy-ring or guest, whichever actually became
+     // layer contents). Each frame's shown-ack carries the surface it REPLACED so the ack sender
+     // can hold the ack until WindowServer stops sampling it (#24 off-glass gating; see the ack
+@@ -1683,10 +1688,47 @@ pub fn run(
+                 }
+             }
+ 
+-            let (gen, show_id, width, height) = {
+-                let s = shared.lock().unwrap();
+-                (s.gen, s.show_id, s.width, s.height)
++            let (gen, show_id, width, height, released) = {
++                let mut s = shared.lock().unwrap();
++                let released = std::mem::take(&mut s.released);
++                (s.gen, s.show_id, s.width, s.height, released)
+             };
++
++            // Drop the surfaces the guest has let go of. Done BEFORE the early returns below: a
++            // release can arrive with no frame beside it (an idle guest freeing its buffers), and
++            // `gen` does not move for one. This is what makes retention exact instead of merely
++            // capped — see `SurfaceStore::get_or_insert_with`.
++            //
++            // The one we are currently showing is held back: the layer's contents is it, and
++            // dropping our reference mid-flight would make a re-resolve miss and skip the frame.
++            // Its release is retried on the next drain, by which time the guest has moved on. In
++            // practice the guest cannot unref a still-bound scanout (libkrun refuses), so this is
++            // belt-and-braces rather than a path we expect to take.
++            if !released.is_empty() || !pending_release.borrow().is_empty() {
++                let mut pending = pending_release.borrow_mut();
++                pending.extend(released);
++                let mut cache = cache.borrow_mut();
++                let mut store = surface_map.lock().unwrap();
++                pending.retain(|&id| {
++                    if Some(id) == show_id {
++                        return true;
++                    }
++                    cache.remove(id);
++                    let hit = store.remove(id);
++                    if !hit {
++                        MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++                    }
++                    HITS.fetch_add(hit as u64, std::sync::atomic::Ordering::Relaxed);
++                    log::warn!(
++                        "[STOREPROBE] id={id} hit={hit} store_len={} hits={} misses={}",
++                        store.probe_len(),
++                        HITS.load(std::sync::atomic::Ordering::Relaxed),
++                        MISSES.load(std::sync::atomic::Ordering::Relaxed),
++                    );
++                    false
++                });
++            }
++
+             if gen == last_gen.get() {
+                 return;
+             }
+diff --git a/crates/limina/src/window/present.rs b/crates/limina/src/window/present.rs
+index 4839337..1050175 100644
+--- a/crates/limina/src/window/present.rs
++++ b/crates/limina/src/window/present.rs
+@@ -120,6 +120,19 @@ impl SurfaceStore {
+         Some(surface)
+     }
+ 
++    /// Drop a surface the guest has released. No-op for an id we never cached.
++    pub(crate) fn remove(&mut self, id: u32) -> bool {
++        if self.map.remove(&id).is_some() {
++            self.order.retain(|&o| o != id);
++            return true;
++        }
++        false
++    }
++
++    pub(crate) fn probe_len(&self) -> usize {
++        self.map.len()
++    }
++
+     pub(crate) fn clear(&mut self) {
+         self.map.clear();
+         self.order.clear();
+@@ -138,10 +151,18 @@ pub type SurfaceMap = Arc<Mutex<SurfaceStore>>;
+ /// Run the surface-port receive loop on a background thread for the supervisor's whole life.
+ /// Survives worker relaunches: a relaunched worker re-looks-up the same bootstrap name and
+ /// re-sends its surfaces, which land in the same store.
++static INSERTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++
+ fn spawn_surface_receiver(receiver: SurfacePortReceiver, map: SurfaceMap) {
+     std::thread::spawn(move || loop {
+         match receiver.recv(None) {
+-            Ok((id, surface)) => map.lock().unwrap().insert(id, surface),
++            Ok((id, surface)) => {
++                let n = INSERTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
++                let mut m = map.lock().unwrap();
++                let dup = m.get(id).is_some();
++                m.insert(id, surface);
++                log::warn!("[INSPROBE] id={id} dup={dup} inserts={n} len={}", m.probe_len());
++            }
+             Err(e) => {
+                 log::warn!("window: surface-port recv failed: {e}");
+                 std::thread::sleep(std::time::Duration::from_millis(50));
+@@ -230,6 +251,12 @@ pub struct Shared {
+     /// on surface geometry. The restore overlay comes down on the first real frame, not on
+     /// the fresh worker's surface announcement (which would flash black under the spinner).
+     pub(crate) frames: u64,
++    /// Scanout surfaces the guest has unref'd, drained by the frame-apply. The worker reports
++    /// these from `RESOURCE_UNREF` so our retention can be exact rather than merely bounded:
++    /// nothing else ever tells the supervisor a surface is finished with, and a compositor that
++    /// mints a fresh scanout buffer per frame would otherwise keep the caches permanently full of
++    /// whole framebuffers. See `spikes/venus-churn-retention/RESULTS.md`.
++    pub(crate) released: Vec<u32>,
+ 
+     /// Guest hardware-cursor state (decoupled from the scanout above; the worker publishes
+     /// the cursor image as its own IOSurface). In the normal (absolute) path the host pointer
+@@ -314,6 +341,15 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
+                         wake_main_apply();
+                     }
+                 }
++                Some("release") => {
++                    // release <id> — the guest unref'd this scanout resource. Waking the main
++                    // thread matters: an idle guest that frees its buffers sends no frames, and
++                    // the release would otherwise sit undrained until something else happened.
++                    if let Some(id) = parts.next().and_then(|s| s.parse::<u32>().ok()) {
++                        shared.lock().unwrap().released.push(id);
++                        wake_main_apply();
++                    }
++                }
+                 Some("cursor") => {
+                     // cursor <id> <w> <h> <hot_x> <hot_y> — new cursor image + hotspot.
+                     let id = parts.next().and_then(|s| s.parse::<u32>().ok());
+@@ -488,6 +524,51 @@ mod tests {
+         }
+     }
+ 
++    /// A guest release drops the surface outright, ahead of the cap. This is what makes retention
++    /// exact rather than merely bounded: without it the cache stays full of whole framebuffers the
++    /// guest has already finished with, and only eviction pressure ever frees one.
++    #[test]
++    fn a_released_id_is_dropped_and_re_resolves_afterwards() {
++        let mut cache = SurfaceStore::with_cap(FRAME_CACHE_CAP);
++        let mut resolves = 0;
++        let mut resolve = |cache: &mut SurfaceStore| {
++            cache.get_or_insert_with(7, || {
++                resolves += 1;
++                Some(make_surface())
++            })
++        };
++
++        assert!(resolve(&mut cache).is_some());
++        assert_eq!(cache.len(), 1);
++
++        cache.remove(7);
++        assert_eq!(cache.len(), 0, "a released id must not stay cached");
++
++        // And the store is left consistent: the id resolves again from scratch rather than
++        // returning a stale entry or wedging on the eviction order.
++        assert!(resolve(&mut cache).is_some());
++        assert_eq!(
++            resolves, 2,
++            "the released id should have been resolved again"
++        );
++        assert_eq!(cache.len(), 1);
++    }
++
++    /// Removing an id we never held must not disturb the eviction order — the worker reports every
++    /// unref, including resources this cache never saw a frame for.
++    #[test]
++    fn removing_an_unknown_id_leaves_the_cache_intact() {
++        let mut cache = SurfaceStore::with_cap(FRAME_CACHE_CAP);
++        for id in 0..4u32 {
++            cache.get_or_insert_with(id, || Some(make_surface()));
++        }
++        cache.remove(999);
++        assert_eq!(cache.len(), 4);
++        for id in 0..4u32 {
++            assert!(cache.get(id).is_some(), "id {id} should still be cached");
++        }
++    }
++
+     /// The cache must still be a cache: a repeated id resolves once and keeps returning the same
+     /// surface, so the steady state (a guest cycling a small buffer ring) costs no re-resolves.
+     #[test]
