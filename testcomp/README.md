@@ -68,6 +68,26 @@ It is built bottom-up, and each step is gated on evidence rather than on compili
 | 2 | Wayland frontend (smithay), `wl_shm` clients | a real client maps and composites |
 | 3 | `linux-dmabuf` import, client death | reaches the path × holder cases in `buffer-lifetime-matrix.md` |
 
+### M1 detects the failure it is meant to detect (2026-08-07)
+
+Matching `kmschurn` on a healthy host shows the transcription is faithful; it does **not**
+satisfy the rule at the bottom of this file, which is a different and higher bar. So M1 was
+also run against the known bug, by lifting `SURFACE_STORE_CAP` (`crates/limina/src/window/present.rs`)
+to 100000 — the shape the supervisor had before limina `8e00d94`:
+
+| `SURFACE_STORE_CAP` | before | after | growth |
+|---|---|---|---|
+| 100000 (the bug) | 30.2 M | 4.2 G | **+4.17 GiB** |
+| 32 (shipped) | 47.4 M | 408.7 M | +361 MiB |
+
+4.17 GiB is 300 × 14.7 MiB: one whole retained framebuffer per frame, exactly. An 11.5×
+separation, so the vehicle detects this failure class rather than merely agreeing on green.
+
+**Trap when re-running that A/B:** restoring the source file with `mv present.rs.orig
+present.rs` restores its *mtime* too, and cargo then skips the rebuild and leaves the
+cap-lifted binary in place — the GREEN half would silently re-measure the RED build. `touch`
+the file and confirm the "Compiling limina" line before booting.
+
 ### M1's gate, and the trap in measuring it (2026-08-07)
 
 Both vehicles, 300 buffers each at 2560x1440, against the same host build; the oracle is
@@ -93,10 +113,15 @@ run reads as "my vehicle allocates nothing" when the truth is "the cache was alr
 Enable the ledger to tell those apart:
 `RUST_LOG=krun_devices::virtio::gpu::virtio_gpu=debug,warn`.
 
-M1 depends on neither smithay nor libinput, so `Cargo.toml` does not carry them yet. When
-M2 adds smithay, the version to use is the one a working compositor on this exact stack
-resolves — synoik pins a **git fork** (`github.com/kov/smithay`, branch `synoik`) for
-para-virt cursor-plane hotspot support, not a crates.io release.
+M1 depends on neither smithay nor libinput, so `Cargo.toml` does not carry them yet.
+
+**When M2 adds smithay, pin upstream as a git dep at rev
+`ff5fa7df392cecfba049ffed55cdaa4e98a8e7ef`** — the base synoik's `synoik` branch forks from.
+That is the exact API surface every piece of synoik code lifted here was written against,
+which is the whole reason to pin it. Not a crates.io version (a version number is a guess
+until something resolves it), and not synoik's fork either: its deltas are para-virt
+cursor-plane hotspot and text-input work that this vehicle has no use for, and depending on a
+personal fork would make testcomp harder to build than it needs to be.
 
 ## Building
 
@@ -123,5 +148,10 @@ import, compositing with real surfaces, buffer lifetime across a client's death.
 
 **It must reproduce a real failure at least once before any negative result from it
 counts.** kmschurn earned that (+606 regions against the bug, +23 with the fix, over an
-identical guest workload). This one has not yet — until it does, "the compositor shows no
-leak" is not evidence of anything.
+identical guest workload). testcomp earned it for the **scanout-churn class** on
+2026-08-07 (+4.17 GiB against the bug, +361 MiB with the fix — see above).
+
+It has **not** earned it for the classes it was actually built for: client dmabuf import and
+buffer lifetime across a client's death. Those arrive with M3, and until one of them
+reproduces something, "testcomp shows no leak on the client path" is not evidence of
+anything. The rule is per failure class, not per vehicle.

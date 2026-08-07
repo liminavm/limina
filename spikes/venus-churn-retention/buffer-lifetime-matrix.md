@@ -114,3 +114,15 @@ dispatch entry too. **Do this before writing the vrend-holder tests.**
 
 Budget feature ships → fix the vrend TLS attribution → write the path × holder tests → then
 design per-case ownership rules from whatever goes red.
+
+## 8. The vehicle for these tests
+
+`kmschurn.py` cannot reach §4: it has no clients, so nothing can outlive one. `testcomp/` is
+the vehicle being built for that — a small but realistic compositor, bottom-up.
+
+**Milestone 1 landed 2026-08-07** (limina `c645a86`, `e6d6609`): KMS + a Vulkan-allocated
+scanout, page-flipped, no Wayland yet. It matches `kmschurn.py churn-vk` on a healthy host
+(resting values within 1 MiB) *and* detects the retention bug it was validated against
+(+4.17 GiB cap-lifted vs +361 MiB shipped). `testcomp/README.md` carries the numbers and two
+measurement traps. The client-side cases here wait on M3 (`linux-dmabuf` import + client
+death), which is when this matrix becomes testable.

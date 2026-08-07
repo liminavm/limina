@@ -91,6 +91,12 @@ fn churn(frames: u32) -> Result<()> {
     let vk = vk::Vk::new(WANT_DRIVER)?;
     log::info!("churning {frames} buffers at {w}x{h}");
 
+    // The buffer currently scanned out. It cannot be released until a later flip has completed
+    // — a page flip is asynchronous, so the outgoing buffer is still being read by the display
+    // right up to the flip event. Holding exactly one is also what keeps the workload honest:
+    // two buffers alive at a time, like a real double-buffered compositor.
+    let mut onscreen: Option<(kms::Fb, vk::ScanoutImage)> = None;
+
     for frame in 0..frames {
         let img = vk.scanout_image(w, h)?;
         // A visibly changing colour, so a human watching the console can tell a live run from
@@ -99,15 +105,33 @@ fn churn(frames: u32) -> Result<()> {
         vk.clear(&img, [t, 1.0 - t, 0.5, 1.0])?;
 
         let fb = out.import(unsafe { BorrowedFd::borrow_raw(img.dmabuf) }, desc_of(&img))?;
-        out.set_crtc(&fb)?;
-
-        out.release(fb);
+        // KMS took its own reference at import, so the exported fd has done its job. Closing
+        // it here rather than at teardown keeps at most one open at a time; deferring it would
+        // exhaust the fd table long before the buffer count got interesting.
         close_dmabuf(&img);
-        vk.destroy_image(&img);
+
+        match onscreen {
+            // The first buffer needs a modeset; every one after that is a flip.
+            None => out.set_crtc(&fb)?,
+            Some(_) => out.flip(&fb)?,
+        }
+
+        // The flip has completed, so the outgoing buffer is off-glass and every reference to
+        // it can go. This is the release the whole measurement rests on: the host number only
+        // says something if the guest has provably let go.
+        if let Some((old_fb, old_img)) = onscreen.replace((fb, img)) {
+            out.release(old_fb);
+            vk.destroy_image(&old_img);
+        }
 
         if frame % 50 == 0 {
             log::info!("frame {frame}/{frames}");
         }
+    }
+
+    if let Some((fb, img)) = onscreen.take() {
+        out.release(fb);
+        vk.destroy_image(&img);
     }
 
     // The line the harness parses, in kmschurn.py's shape so the same parser reads both and the

@@ -15,7 +15,9 @@
 
 use anyhow::{bail, Context, Result};
 use drm::buffer::{DrmFourcc, DrmModifier, Handle as BufferHandle, PlanarBuffer};
-use drm::control::{connector, crtc, framebuffer, Device as ControlDevice, FbCmd2Flags, Mode};
+use drm::control::{
+    connector, crtc, framebuffer, Device as ControlDevice, Event, FbCmd2Flags, Mode, PageFlipFlags,
+};
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsFd, BorrowedFd};
 
@@ -150,6 +152,29 @@ impl Output {
                 Some(self.mode),
             )
             .context("drmModeSetCrtc — does this process hold DRM master?")
+    }
+
+    /// Queue a page flip to `fb` and block until the flip completes.
+    ///
+    /// A real compositor page-flips; it does not re-run a modeset every frame. The difference
+    /// is not cosmetic here — a flip is asynchronous, so the *previous* buffer stays scanned
+    /// out until this returns, and releasing it any earlier would be a use-after-free that
+    /// happens to work. The caller's release order depends on that, which is why this waits
+    /// rather than handing the event loop back.
+    pub fn flip(&self, fb: &Fb) -> Result<()> {
+        self.card
+            .page_flip(self.crtc, fb.fb, PageFlipFlags::EVENT, None)
+            .context("drmModePageFlip")?;
+        // Blocking read on the card fd: the flip event is the only thing this vehicle waits
+        // for, so there is nothing to lose by parking here, and it paces the loop to vblank
+        // the way a compositor is paced.
+        loop {
+            for event in self.card.receive_events().context("drmHandleEvent")? {
+                if matches!(event, Event::PageFlip(_)) {
+                    return Ok(());
+                }
+            }
+        }
     }
 
     /// Drop every reference this process holds to `fb`: the framebuffer first, then the GEM
