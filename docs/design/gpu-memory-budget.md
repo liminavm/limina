@@ -121,6 +121,20 @@ than useless — the guest ignores the refusal, keeps a ghost `VkDeviceMemory`, 
 its ring on the next use anyway, so you get the same context death with the cause several
 commands in the past.
 
+`LIMINA_GPU_MEM_BUDGET_CENSUS=<seconds>` logs the breakdown on a timer, cap or no cap. This
+is the instrument for a guest-vs-host leak hunt, and **`vmmap` is not a substitute**: a 2 GiB
+live set of venus images moved `owned unmapped` from 16.1M to 19.2M and back, which is noise
+(`spikes/venus-churn-retention/`). Against a healthy compositor the census reads:
+
+```
+limina GPU budget: census — 126.9 MiB live of 16.0 GiB cap (0%)
+limina GPU budget:   ctx 2 [synoik]: 126.9 MiB live — 4 x 14.1 MiB (IOSurface), …
+```
+
+`4 x 14.1 MiB` is a 4-slot swapchain at 2560×1440 — named, per context, no correlation
+needed. Diff this series against the guest's own allocation census to localise a leak:
+guest live flat while host live climbs means the retention is ours.
+
 **Generous on purpose.** This is a runaway backstop, not a working-set limit. A healthy
 desktop guest holds well under its own RAM in host GPU memory, and the two-tier guarantee
 means a stock guest must never trip it in normal use — so the number sits far above any
