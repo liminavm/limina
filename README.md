@@ -68,3 +68,22 @@ repo? Read [`docs/dev-onboarding.md`](docs/dev-onboarding.md).
 - Homebrew provides the VM stack (libkrun, krunkit, libkrunfw, virglrenderer,
   molten-vk, vulkan-loader, gvproxy, libusb, qemu, cmake/meson/ninja) — though the
   shipping app links our own patched builds, not Homebrew's.
+
+## License
+
+limina is licensed **GPL-2.0-only WITH LicenseRef-limina-exception** — the GNU
+General Public License, version 2, plus an additional permission (the *limina
+linking exception*, [`LICENSES/LicenseRef-limina-exception.txt`](LICENSES/LicenseRef-limina-exception.txt))
+that explicitly allows combining limina with Apache-2.0-licensed material and
+conveying the result. The exception exists because limina statically links
+[libkrun](https://github.com/liminavm/libkrun) and other Apache-2.0 crates, and
+Apache-2.0 is famously incompatible with plain GPLv2; the additional permission
+resolves that combination directly while keeping limina's own code GPLv2-only.
+
+Some subtrees carry their own licenses (see [`REUSE.toml`](REUSE.toml)): the
+kernel-derived `guest/virtio-gpu-dkms/` is GPL-2.0-only, patches against Mesa
+are MIT, and an instrumentation patch against MoltenVK is Apache-2.0. The repo
+is [REUSE](https://reuse.software/)-compliant; `reuse lint` verifies it.
+
+Contributions are accepted under the same terms, including the linking
+exception.
