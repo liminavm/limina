@@ -167,5 +167,21 @@ the vehicle being built for that — a small but realistic compositor, bottom-up
 scanout, page-flipped, no Wayland yet. It matches `kmschurn.py churn-vk` on a healthy host
 (resting values within 1 MiB) *and* detects the retention bug it was validated against
 (+4.17 GiB cap-lifted vs +361 MiB shipped). `testcomp/README.md` carries the numbers and two
-measurement traps. The client-side cases here wait on M3 (`linux-dmabuf` import + client
-death), which is when this matrix becomes testable.
+measurement traps.
+
+**M3 landed 2026-08-07** (limina `fcc43dc`, `a23a10e`, `ccda080`, `ae32255`), which is when this
+matrix became testable. `testcomp/teardown-matrix.sh` drives paths 1, 2 and a new **2b** — the
+importer's death, which the original path list omitted and which is the side that actually holds
+the borrowed `+1`. Results and the oracle work-up are in `testcomp/README.md`:
+
+- **Paths 1, 2, 2b: clean.** IOSurface `alive` returns to baseline in all three, and path 2
+  logs `destroying context N ... with a valid instance`, confirming the §2 correction on real
+  hardware rather than only from source.
+- **The vehicle earned the client-dmabuf class**: a deliberate `--leak-imports` compositor
+  against 40 distinct client dmabufs retains +41 IOSurfaces where the shipped path retains 0.
+- **The oracle is `DEALLOC iosurface N (alive M)`** from `vkr_mtl_refcount_census`. Three others
+  (`owned unmapped`, the `vmmap` `IOSurface` row, the census `(+N)` counter) read *identical* in
+  both arms — they cannot see this class at all. Do not reuse M1's oracle here.
+
+**Still untested, each needing its own RED first:** paths 3 and 4, and the whole vrend-holder
+column (§3) — that one is M3c and wants the §6 `vkr_budget_set_context` fix ahead of it.
