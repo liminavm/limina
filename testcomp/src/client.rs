@@ -51,7 +51,17 @@ pub const QUADRANTS: [[u8; 3]; 4] = [
     [255, 255, 0], // yellow
 ];
 
-pub fn run(width: i32, height: i32, hold: std::time::Duration, kind: Kind) -> Result<()> {
+/// `park`: commit one frame and then stop drawing, holding the buffer committed and (with a
+/// `--hold-buffers` compositor) unreleased, so a `SIGKILL` from outside lands in a *known*
+/// state. Without it the kill would land at a random point in the render loop, which is the
+/// same experiment run with an uncontrolled variable.
+pub fn run(
+    width: i32,
+    height: i32,
+    hold: std::time::Duration,
+    kind: Kind,
+    park: bool,
+) -> Result<()> {
     let conn = Connection::connect_to_env()
         .context("connecting to the compositor (is WAYLAND_DISPLAY set?)")?;
     let display = conn.display();
@@ -119,6 +129,7 @@ pub fn run(width: i32, height: i32, hold: std::time::Duration, kind: Kind) -> Re
     app.buffer = Some(buffer.clone());
     app.size = (width, height);
 
+    app.park = park;
     app.draw(&qh);
     queue.roundtrip(&mut app).context("first frame roundtrip")?;
 
@@ -134,10 +145,22 @@ pub fn run(width: i32, height: i32, hold: std::time::Duration, kind: Kind) -> Re
     // does and what M3 needs: a client that must be killed *mid-lifetime*, with a buffer
     // committed and in flight, rather than one parked on a single frame.
     let deadline = std::time::Instant::now() + hold;
-    while std::time::Instant::now() < deadline && !app.closed {
-        queue
-            .blocking_dispatch(&mut app)
-            .context("dispatching client events")?;
+    if park {
+        // Parked: nothing will arrive, so a blocking dispatch would sit past the deadline.
+        // Idle instead, with the buffer committed — this is the state a SIGKILL is meant to
+        // catch, and staying in it is the whole job.
+        println!("CLIENT PARKED pid={}", std::process::id());
+        while std::time::Instant::now() < deadline && !app.closed {
+            queue.flush().ok();
+            queue.dispatch_pending(&mut app).ok();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    } else {
+        while std::time::Instant::now() < deadline && !app.closed {
+            queue
+                .blocking_dispatch(&mut app)
+                .context("dispatching client events")?;
+        }
     }
     println!("CLIENT DONE frames={}", app.frames);
     Ok(())
@@ -269,6 +292,8 @@ struct App {
     size: (i32, i32),
     frames: u32,
     closed: bool,
+    /// Stop drawing after the first commit; see `run`'s docs.
+    park: bool,
 }
 
 impl App {
@@ -382,7 +407,9 @@ impl Dispatch<wl_callback::WlCallback, ()> for App {
         qh: &QueueHandle<Self>,
     ) {
         state.frames += 1;
-        state.draw(qh);
+        if !state.park {
+            state.draw(qh);
+        }
     }
 }
 

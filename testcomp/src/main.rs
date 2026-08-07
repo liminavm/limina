@@ -74,16 +74,33 @@ fn main() -> Result<()> {
                 .unwrap_or_else(|| "20".into())
                 .parse()
                 .context("hold seconds")?;
+            // Size is a knob because the *host* oracle needs it to be. A 400x300 buffer is
+            // ~0.5 MiB, which sits under the noise floor of `vmmap`'s `owned unmapped` bytes;
+            // the teardown tests want a buffer big enough that its retention is unambiguous.
+            let (mut w, mut h) = (400, 300);
+            let mut park = false;
+            for arg in args {
+                match arg.as_str() {
+                    "--park" => park = true,
+                    other => {
+                        if let Some((a, b)) = other.split_once('x') {
+                            w = a.parse().context("width")?;
+                            h = b.parse().context("height")?;
+                        }
+                    }
+                }
+            }
             let kind = if mode == "client-dmabuf" {
                 client::Kind::Dmabuf
             } else {
                 client::Kind::Shm
             };
-            client::run(400, 300, std::time::Duration::from_secs(secs), kind)
+            client::run(w, h, std::time::Duration::from_secs(secs), kind, park)
         }
         other => anyhow::bail!(
             "unknown mode {other:?} — expected `probe`, `churn <frames>`, \
-             `run [frames] [--hold-buffers]`, `client [seconds]` or `client-dmabuf [seconds]`"
+             `run [frames] [--hold-buffers]`, or \
+             `client|client-dmabuf [seconds] [WxH] [--park]`"
         ),
     }
 }

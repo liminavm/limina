@@ -67,7 +67,7 @@ It is built bottom-up, and each step is gated on evidence rather than on compili
 | **1** ✅ | KMS + Vulkan scanout allocation + churn. No Wayland, no input. | **Reproduces `kmschurn.py`'s `churn-vk` numbers on the same host.** Until the two vehicles agree, a difference could as easily be a transcription bug as a finding. Passed 2026-08-07 — see below. |
 | **2** ✅ | Wayland frontend (smithay), `wl_shm` clients | a real client's pixels reach the scanout. Passed 2026-08-07 — see below. |
 | **3a** ✅ | `linux-dmabuf` import (venus-allocated client) | a client's dmabuf pixels reach the scanout **and** the host log shows the IOSurface import branch. Passed 2026-08-07 — see below. |
-| 3b | teardown paths × holders | discriminates between the paths in `buffer-lifetime-matrix.md` §4 |
+| **3b** ◐ | teardown paths × holders | discriminates between the paths in `buffer-lifetime-matrix.md` §4. Ran 2026-08-07, all three paths clean — but see the RED requirement below before believing that. |
 | 3c | vrend-allocated (gbm) client buffers | reaches the **asymmetric** holder of matrix §3, the observed compositor-quit shape. Needs the `vkr_budget_set_context` fix in matrix §6 first. |
 
 ### M3a's gate has two halves, and the pixels are the weaker one
@@ -128,6 +128,36 @@ working — a compositor that never released would stall it after one frame. `im
 
 `iosprobe` reported `nonzeroRGB=0` for this very surface while `iosdump` read `nonzero=3686400`
 — the M2 trap, unchanged: enumerate ids with `iosprobe`, judge content only with `iosdump`.
+
+### M3b: the teardown paths, and what they actually showed (2026-08-07)
+
+`./teardown-matrix.sh` (client at 1920x1080, so a retained buffer is 8.3 MiB rather than 0.5 MiB
+and clears the `owned unmapped` noise floor). Three paths, all with the compositor holding a live
+import:
+
+| path | `destroying context` line | objects left | `owned unmapped` | census |
+|---|---|---|---|---|
+| 1 — client clean exit | `instance was gone` | 0 | 0 | +0 alive |
+| 2 — client SIGKILL, buffer committed+unreleased | **`with a valid instance`**, then `instance was gone` | 0 | 0 | +0 alive |
+| 2b — **compositor** SIGKILL holding a live import | **`with a valid instance`**, then `instance was gone` | 0 | 0 | +0 alive |
+
+**Path 2 settles the matrix correction empirically.** `destroying context 4 (limina-testcomp)
+with a valid instance` is `vkr_context.c:1006` firing — a `SIGKILL`ed client leaves
+`ctx->instance` set, so the full sweep runs down to `vkr_device_memory_release` and drops the
+borrowed `+1`. The matrix predicted the opposite (bare-`free()`, leak). It is the *clean* exit
+that shows `instance was gone` with nothing to sweep. Source said so; the log agrees.
+
+Path 2b is the one that matters most, and it is the one the original plan would have missed: the
+`+1` is held by the **importer**, so killing clients only ever tests exporter-side death. Killing
+the compositor with a populated import cache is the shape of the observed compositor-quit
+residual — and here it came back clean, with the census returning to `iosurface N/N (+0)`.
+
+**None of that is yet evidence, and the table above must not be quoted as "no leak".** Per the
+rule at the bottom of this file, testcomp has not reproduced a failure in the *client-lifetime*
+class, so a green result from it is currently indistinguishable from an oracle that cannot see.
+What is still owed is a RED run: a `--leak-imports` compositor that never evicts, against a
+client churning distinct dmabufs, so the census and `owned unmapped` are shown to *move* when the
+holder is genuinely retained. Until that separation exists, M3b is ◐ and not ✅.
 
 ### M2's gate: a real client's pixels on the scanout (2026-08-07)
 
