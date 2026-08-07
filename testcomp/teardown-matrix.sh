@@ -16,6 +16,10 @@
 #
 #   ./teardown-matrix.sh                    paths 1, 2, 2b with a venus-allocated client  (M3b)
 #   ./teardown-matrix.sh matrix gbm         the same paths with a gbm/vrend client        (M3c)
+#   ./teardown-matrix.sh leakexit [venus|gbm]
+#                                   path 1': a CLEAN exit still holding leaked imports. The only
+#                                   arm that reaches the bare-free() branch — every kill above
+#                                   goes through the live-instance full sweep instead.
 #   ./teardown-matrix.sh redgreen [venus|gbm]
 #                                   the vehicle-rule gate: prove the setup can see a retained
 #                                   import OF THAT CLASS before believing any green above it
@@ -90,6 +94,10 @@ since() { tail -n "+$1" "$WORKER_LOG"; }
 report() {
   local path="$1" from="$2"
   echo "  alive IOSurfaces: $(force_census)"
+  # Per-PATH provenance, not just per-run: the standard for the gbm arm is that every path shows
+  # host-side evidence its buffers were classic. Printing it once for the whole script would let
+  # a single path silently run venus blobs under a vrend label.
+  [ "${KIND:-venus}" = gbm ] && vrend_bucket
   echo "  --- host lines for this path ---"
   # The destroy line is the discriminator: it says whether the instance was live (full sweep) or
   # gone (bare free()), and how much survived the sweep.

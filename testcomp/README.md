@@ -399,7 +399,8 @@ import, compositing with real surfaces, buffer lifetime across a client's death.
 
 **It must reproduce a real failure at least once before any negative result from it
 counts.** kmschurn earned that (+606 regions against the bug, +23 with the fix, over an
-identical guest workload). testcomp has earned it twice, and the rule is **per failure class**:
+identical guest workload). testcomp has earned it three times, and the rule is **per failure
+class**:
 
 | class | RED | GREEN | separation |
 |---|---|---|---|
