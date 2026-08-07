@@ -240,6 +240,39 @@ scanout images directly in Vulkan (the sequence in synoik's `scanout-buffers-via
 then re-run this census. One image per buffer would confirm the 2x is zink's shadow and close
 this; two would mean it is real and worth chasing into the guest.
 
+### §0.6 CLOSED: the 2x is zink's shadow. A Vulkan-native allocator gets one (2026-08-07)
+
+The caveat above was the whole finding. `kmschurn.py` now has `-vk` modes that allocate the
+scanout image in venus directly (limina `b690901`, synoik's sequence step for step), so the
+census could be re-run with the ALLOCATOR as the only variable. Both arms ran **in the same
+boot, against the same instrumented build, at the same frame count**:
+
+| arm | buffers created | `[IOSITE] C` allocations | usage flags seen | ledger charges | peak |
+|---|---|---|---|---|---|
+| `churn` (gbm under zink) | 301 | **602** | `0x480017` x301, `0x80097` x301 | 1205 | 112.5 MiB |
+| `churn-vk` (venus direct) | 301 | **301** | `0x12` x301 | 603 | 84.4 MiB |
+
+**One image per buffer.** vkr allocates exactly once per exportable image in both arms; gbm
+under zink simply asks for two. The 2x is zink's linear scanout shadow, it is not vkr's, and
+a Vulkan-native compositor does not pay it. Nothing to fix on the host — **#9 closes here.**
+
+The charge counts also dispose of the loose end §0.5 left hanging. The backlog's "1207 charges
+for 611 creates" on synoik looked like the same 2x, and it is not: **a charge is not an
+IOSurface.** Every scanout buffer costs two charges — the surface and its dedicated device
+memory — so ~2 charges per create is what a 1:1 allocator looks like. The vk arm's 603 charges
+for 301 surfaces is exactly that ratio, and synoik's 1207/611 matches the vk arm, not the gbm
+one. Synoik was already at one surface per buffer.
+
+Reading this table the other way is the more useful result for the stack: the gbm-under-zink
+path costs **twice the host IOSurfaces and 33% more peak host GPU memory** for the same
+pixels. That is an argument for the Vulkan-native allocation path on its own, independent of
+any leak.
+
+Repeating the census: apply `iosurface-site-census.patch` to `third_party/virglrenderer`,
+rebuild, boot, `systemctl isolate multi-user.target`, then run both arms and tally
+`[IOSITE]` in the worker log. Revert and rebuild after — the patch is instrumentation, not a
+change we carry.
+
 ### What this cost, and the rule that would have saved it
 
 Four storms and most of a day were spent instrumenting the worker because the memory appeared in
