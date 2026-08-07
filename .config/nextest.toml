@@ -25,7 +25,12 @@ binary(balloon) | binary(balloon_burst) | binary(balloon_inflate) | binary(ballo
 | binary(venus_park_on_busy_reset) | binary(venus_reset) | binary(venus_session_preserved)
 | binary(inplace_s2idle) | binary(hvf_graceful) | binary(l2_vcpu_hotplug)
 | binary(venus_fd_census) | binary(vrend_session_restore) | binary(flat_suspend)
+| binary(scanout_churn_retention)
 '''
+# scanout_churn_retention is exclusive for two reasons: its verdict is a memory measurement
+# (a co-resident guest's own scanout traffic lands in the same worker-side accounting the
+# test diffs), and it is the ONLY test that opens a real NSWindow — the leak it guards lives
+# in the supervisor's window frame-apply path, which a --display-capture boot never enters.
 # venus_fd_census joined the exclusive set 2026-08-03: its carrier-fd flatness oracle samples
 # after a fixed workload, and under 3-wide load the async fd consumption lags the sample
 # (12 vs baseline 4 — looked exactly like the virgl-0032 leak; solo it is flat).

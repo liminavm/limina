@@ -349,6 +349,11 @@ pub struct DisplayCfg {
     /// venus 3D is available (the enhanced-tier path). A display is required for the GPU
     /// device to exist at all, even when a test only probes 3D over SSH.
     pub software_2d: bool,
+    /// Open a real native window (`--window`) instead of capturing frames. Required by any
+    /// test whose subject is the SUPERVISOR's frame-apply path: `--display-capture` never
+    /// runs `window::run`, so a capture boot would exercise none of it and pass against a
+    /// broken window. Mutually exclusive with capture in the CLI, so there is no PNG.
+    pub windowed: bool,
 }
 
 /// Which guest console device an interactive (`console_input`) session is wired through.
@@ -954,6 +959,7 @@ impl GuestConfig {
             width,
             height,
             software_2d: true,
+            windowed: false,
         });
         self
     }
@@ -967,6 +973,7 @@ impl GuestConfig {
             width,
             height,
             software_2d: false,
+            windowed: false,
         });
         // A coexist display runs virglrenderer's `vrend` half (host GL via zink-on-KK), whose
         // `virgl_renderer_init` dlopens libEGL at startup — so a coexist boot ALWAYS needs the
@@ -975,6 +982,29 @@ impl GuestConfig {
         // render test) gets it automatically; `with_virgl_host_gl` is idempotent, so an explicit
         // call afterwards is a harmless no-op. (KK absent → `Guest::boot` degrades to software-2D,
         // which doesn't touch libEGL, so the env is set-but-unused and still harmless.)
+        self.with_virgl_host_gl()
+    }
+
+    /// A coexist display shown in a **real native window** (`--window`) at a pinned
+    /// resolution, instead of captured to a PNG.
+    ///
+    /// Use this — and only this — when the subject under test is the SUPERVISOR's own
+    /// frame-apply path. `--display-capture` boots never enter `window::run`, so a capture
+    /// boot exercises none of the window's per-scanout state and would pass green against a
+    /// window that leaks a framebuffer per frame (which is exactly what limina `8e00d94`
+    /// fixed). Pinning `--display-resolution` to `width`x`height` keeps the scanout size
+    /// independent of whichever host screen the window opens on, so byte thresholds and
+    /// surface counts mean the same thing on every rig.
+    ///
+    /// A window really does open during the run, so a test using this belongs in the
+    /// EXCLUSIVE set in `.config/nextest.toml` — it should not overlap other guests.
+    pub fn with_windowed_coexist_display(mut self, width: u32, height: u32) -> GuestConfig {
+        self.display = Some(DisplayCfg {
+            width,
+            height,
+            software_2d: false,
+            windowed: true,
+        });
         self.with_virgl_host_gl()
     }
 
@@ -1584,17 +1614,36 @@ impl Guest {
         }
         let capture_png = match &cfg.display {
             Some(d) => {
+                // A windowed display opens a REAL NSWindow and runs the supervisor's
+                // frame-apply path (`window::run`) — the only way to exercise host-side
+                // per-scanout state, since `--display-capture` never enters that code at
+                // all. `--display-resolution WIDTHxHEIGHT` pins the guest mode so the
+                // surface size doesn't vary with whichever screen the window lands on.
+                // The two flags are mutually exclusive in the CLI, so there is no capture
+                // PNG for a windowed boot.
                 let png = scratch.join("scanout.png");
-                cmd.arg("--display-capture")
-                    .arg(&png)
-                    .arg("--display-size")
-                    .arg(format!("{}x{}", d.width, d.height))
-                    .arg("--display-control-socket")
-                    .arg(
-                        resize_socket
-                            .as_ref()
-                            .expect("resize_socket set with a display"),
-                    );
+                if d.windowed {
+                    cmd.arg("--window")
+                        .arg("--display-resolution")
+                        .arg(format!("{}x{}", d.width, d.height))
+                        .arg("--display-control-socket")
+                        .arg(
+                            resize_socket
+                                .as_ref()
+                                .expect("resize_socket set with a display"),
+                        );
+                } else {
+                    cmd.arg("--display-capture")
+                        .arg(&png)
+                        .arg("--display-size")
+                        .arg(format!("{}x{}", d.width, d.height))
+                        .arg("--display-control-socket")
+                        .arg(
+                            resize_socket
+                                .as_ref()
+                                .expect("resize_socket set with a display"),
+                        );
+                }
                 // The 2D capture oracle forces the software-2D GPU so it's deterministic and
                 // independent of venus/Metal (the worker default is the coexist device). A
                 // coexist/3D test (`with_coexist_display`) leaves venus on.
@@ -1623,7 +1672,9 @@ impl Guest {
                         }
                     }
                 }
-                Some(png)
+                // No capture path for a windowed boot: the pixels go to a real window, so
+                // `wait_for_capture` must fail loudly rather than wait on a PNG nothing writes.
+                (!d.windowed).then_some(png)
             }
             None => None,
         };

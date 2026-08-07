@@ -123,6 +123,13 @@ region. The differential is churn, not presentation.
 green from it was believed.** A test vehicle that has never reproduced the failure guards
 nothing, and "our new instrument shows no leak" is an expensive thing to believe wrongly.
 
+It is now wired as a standing guard —
+`crates/limina-test/tests/scanout_churn_retention.rs`, which boots **windowed**
+(`--display-capture` never enters `window::run`, so a captured boot would test none of this)
+and asserts on the `owned unmapped` region-count delta: **+606 with eviction disabled, +23
+with it**, at 1280x800. Region count rather than bytes, so the threshold is
+resolution-independent.
+
 Two traps it documents in place. The env (`GALLIUM_DRIVER=zink`,
 `MESA_LOADER_DRIVER_OVERRIDE=zink`, `VK_DRIVER_FILES=…virtio_icd…`) is load-bearing and not
 set by the script — without it gbm loads a different gallium driver, the buffers are not venus
