@@ -243,7 +243,7 @@ this; two would mean it is real and worth chasing into the guest.
 ### §0.6 CLOSED: the 2x is zink's shadow. A Vulkan-native allocator gets one (2026-08-07)
 
 The caveat above was the whole finding. `kmschurn.py` now has `-vk` modes that allocate the
-scanout image in venus directly (limina `b690901`, synoik's sequence step for step), so the
+scanout image in venus directly (synoik's sequence step for step), so the
 census could be re-run with the ALLOCATOR as the only variable. Both arms ran **in the same
 boot, against the same instrumented build, at the same frame count**:
 
@@ -267,6 +267,12 @@ Reading this table the other way is the more useful result for the stack: the gb
 path costs **twice the host IOSurfaces and 33% more peak host GPU memory** for the same
 pixels. That is an argument for the Vulkan-native allocation path on its own, independent of
 any leak.
+
+The L2 guard (`crates/limina-test/tests/scanout_churn_retention.rs`) moved onto this arm for
+the same reason, re-proven RED first: **+1213 MiB with `SurfaceStore`'s cap lifted vs +98 MiB
+with it**, at 1280x800 over 301 buffers. 1213 MiB is 301 x 4 MiB — one whole framebuffer per
+frame, exactly. The gbm arm's own RED/GREEN (2340 / 98 MiB) is above; the vk arm's is half
+because it allocates half the surfaces.
 
 Repeating the census: apply `iosurface-site-census.patch` to `third_party/virglrenderer`,
 rebuild, boot, `systemctl isolate multi-user.target`, then run both arms and tally
