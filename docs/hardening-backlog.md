@@ -81,6 +81,19 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   Unreachable in practice: the only sender is our own worker and it sends exactly 0 descriptors
   (release) or 1 (publish), and the release path is discriminated earlier by the complex bit, so
   the branch has never run. Fix = `mach_port_deallocate` before the early return.
+- **`vkr_dispatch_vkAllocateMemory` strands an IOSurface ref on one early return** — same shape as
+  the entry above, same disposition. `vkr_mtl_iosurface_lookup`
+  (`third_party/virglrenderer/src/venus/vkr_device_memory.c:324`) returns a **retained** surface,
+  and its `*out_base` is set only by `IOSurfaceGetBaseAddress`. If the lookup succeeds but hands
+  back a NULL base (and the MTLTexture import arm doesn't take it), `limina_res_imported` stays
+  false and the `VK_ERROR_INVALID_EXTERNAL_HANDLE` early return at `:411` returns **without**
+  `vkr_mtl_iosurface_release_ref` — the +1 outlives the call. Every *later* failure path already
+  releases it (`:752`). Not RED-first-able: a non-purgeable IOSurface we allocated always has a
+  base address, so the trigger can't be produced naturally — which is why this is a backlog line
+  and not a fix with a test. Fix = release the ref before that return. **Batch it** with the stale
+  "KNOWN LIMIT — attribution on the vrend path" paragraph at `vkr_budget.h:66-71` (obsoleted by
+  virgl `53e660e6`, still telling the reader to bind the TLS) into one virgl commit the next time
+  that fork is touched.
 
 ## Guest-reachable aborts (a guest must never kill the VMM)
 

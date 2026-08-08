@@ -1,9 +1,9 @@
 # Handoff: buffer lifetime past client death — test matrix + design notes
 
 **ACTIONED 2026-08-07 — this file is now a record, not a queue.** Written by a fork as a design
-handoff; §1's trigger is answered in §9 and its fix shipped. What is still open lives in the task
-list (matrix paths 3 and 4), not here. Kept in place because §§2–4 are the holder taxonomy the
-answer was found by eliminating, and §9 needs them to make sense.
+handoff; §1's trigger is answered in §9 and its fix shipped. Paths 3 and 4, the last two unrun
+rows, were run on 2026-08-08 — see §10. Nothing here is open. Kept in place because §§2–4 are the
+holder taxonomy the answer was found by eliminating, and §§9–10 need them to make sense.
 
 ## 1. The trigger
 

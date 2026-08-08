@@ -398,7 +398,9 @@ if [ "${1:-matrix}" = "path4" ]; then
       | sed 's/.*virgl: vkr: /    /;s/.*virgl_renderer\] /    /' | tail -8
     echo
   done
-  g "sudo -n rm -f /tmp/limina-fault-fatal-skip-release"
+  # HOST-side, like every other touch/rm of a selector file: the injector's access() runs in the
+  # worker. `g "rm ..."` here would delete a guest file nothing ever reads.
+  rm -f /tmp/limina-fault-fatal-skip-release
   echo "RED must hold references the GREEN arm gives back. Read the FATAL-but-alive line too:"
   echo "that is the state the 2026-08-06 incident was in for 38 s before the jetsam kill."
   exit 0
