@@ -45,8 +45,16 @@ they persist in the managed VM's bundle dir (`<bundle>/fido-credentials.json`).
 
 - A Mac with a Secure Enclave (Apple silicon / T2). Without one the host never advertises
   the `fido` capability and the guest simply has no authenticator (graceful degrade).
-- The app / supervisor must be **Apple-Development-signed** (ad-hoc signing can't use the
-  enclave — same class as the TCC accessibility trap). The shipped `.app` satisfies this.
+- No particular **signing identity**. This line used to claim the supervisor had to be
+  Apple-Development-signed because "ad-hoc signing can't use the enclave" — **measured false
+  on 2026-08-08**: a plain ad-hoc, linker-signed `target/debug/limina` created a SEP key,
+  raised the Touch ID sheet, and produced a credential `fido2-cred -V` accepted, exactly like
+  the dev-signed build (A/B in `spikes/touchid-fido/RESULTS.md`). The real constraint is
+  narrower and unchanged: the **data-protection keychain** needs profile-backed entitlements,
+  and plain `codesign --entitlements` without a profile is an AMFI SIGKILL. We never touch the
+  keychain — persistence is a CryptoKit `dataRepresentation` blob, which needs no entitlement
+  and, now confirmed, no identity. (Measured on one Mac, macOS 26.5; it retires a blanket
+  claim rather than establishing a new one.)
 - Enhanced-tier guest with **`limina-agent` ≥ 0.3.0** (creates the `/dev/uhid` device).
 
 ## Recipes

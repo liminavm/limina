@@ -12,6 +12,12 @@
 *.iso
 *.bak
 
+# Per-VM passkey stores. A flat `--disk` run now drops one beside its disk by default
+# (`<disk>.limina-fido.json`), so these appear unbidden in the working tree. The blobs are
+# enclave-encrypted and useless off this Mac, but credential material is not something to
+# leave one `git add` away from a public repo.
+*.limina-fido.json
+
 # Regenerable trace fixtures for the replay tests (like the .raw images:
 # kept locally; regenerate via spikes/trace-replay/capture-replay*.sh)
 /fixtures/traces/*.trace

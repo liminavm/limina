@@ -168,6 +168,32 @@ this Mac, and the store is per-VM. `true` is the spec-accurate statement. The ch
 cosmetic, and the one thing it could buy — consistency with the `usb` transport string — is a
 string Firefox hardcodes anyway.
 
+### The probe run, and an A/B that retired a documented claim (2026-08-08)
+
+`spikes/fido-passkey/verify-credential.sh` in a live F44 guest (USB gadget, no guest components),
+`fido2-cred -M -r -v` then `-V`:
+
+| Supervisor signature | Device attaches | getInfo | Touch ID sheet | `fido2-cred -V` |
+|---|---|---|---|---|
+| Apple Development (`WDNHP64H9G`) | yes | `FIDO_2_0` | appeared, user authenticated | **PASS** |
+| **ad-hoc, linker-signed** (plain `cargo build`) | yes | `FIDO_2_0` | appeared, user authenticated | **PASS** |
+
+Both wrote a 284-byte enclave blob to the store. So the credential we mint is well-formed by an
+independent verifier's standard, and **`docs/fido-authenticator.md`'s "the supervisor must be
+Apple-Development-signed — ad-hoc signing can't use the enclave" was wrong** and has been
+corrected. That claim was an over-generalization of test 4/4b above: it is the *data-protection
+keychain* that needs profile-backed entitlements. The CryptoKit `dataRepresentation` path we
+actually use needs neither entitlement nor identity.
+
+Why it was worth running the dev-signed leg first even though both pass: `sep::available()` is
+`SecureEnclave.isAvailable`, i.e. **hardware presence only** — it never asks whether *this
+process* may use the enclave. So an ad-hoc build advertises the authenticator regardless, and a
+makeCredential failure would have been ambiguous between "our CTAP is wrong" and "this binary
+can't reach the enclave". The baseline made the second leg attributable to one variable. The
+happy outcome also dissolves the follow-up it suggested (tightening the capability gate to prove
+the enclave is usable): no configuration was found that advertises an authenticator unable to
+mint.
+
 Worth knowing if this comes back: the reasoning above says nothing about clients we haven't read
 (Chrome, libfido2 policy layers). The cheap empirical check is **webauthn.io in the guest, which
 prints `authenticatorAttachment` for a registration** — that measures what an RP actually receives,
