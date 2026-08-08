@@ -193,7 +193,11 @@ pub fn describe(screen: &NSScreen, scale: fit::Scale, notch_inset: f64) -> HostD
     let frame = screen.frame().size;
     let (usable_w, usable_h) = fit::usable_content(frame.width, frame.height, notch_inset);
     let points = (usable_w.round() as u32, usable_h.round() as u32);
-    let size = scale.to_guest((usable_w, usable_h));
+    // Snapped *here*, where the resolution is decided, so the size we push and the EDID we
+    // generate from it can never disagree — the guest kernel prunes a preferred mode that does
+    // not match the pushed rect. See [`fit::snap_to_scalable`] for why a panel's exact height is
+    // often one its own desktop cannot scale.
+    let size = fit::snap_to_scalable(scale.to_guest((usable_w, usable_h)));
     let backing = screen.backingScaleFactor();
     let display_id = display_id_of(screen);
     let (millimeters_wide, _) = screen_size_millimeters(display_id);

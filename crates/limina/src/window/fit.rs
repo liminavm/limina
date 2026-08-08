@@ -103,6 +103,68 @@ pub(crate) fn reshape_to_aspect(
     content_for_area(area, a, visible)
 }
 
+/// The scales a desktop can offer for a given resolution, as exact rationals. Every one of these
+/// was observed in a guest GNOME's `GetCurrentState` output; the list is a *ruler* for comparing
+/// two candidate resolutions, not a claim about any particular compositor's menu.
+const SCALE_CANDIDATES: [(u32, u32); 13] = [
+    (1, 1),
+    (5, 4),
+    (4, 3),
+    (3, 2),
+    (5, 3),
+    (7, 4),
+    (2, 1),
+    (9, 4),
+    (7, 3),
+    (5, 2),
+    (8, 3),
+    (11, 4),
+    (3, 1),
+];
+
+/// How many of [`SCALE_CANDIDATES`] a `w`×`h` guest can actually be scaled by.
+///
+/// A compositor will only offer a scale whose *logical* size is whole — fractional logical pixels
+/// have nowhere to land — so `a/b` is offerable exactly when `a` divides both dimensions after
+/// multiplying through by `b`.
+pub(crate) fn offerable_scales(w: u32, h: u32) -> u32 {
+    SCALE_CANDIDATES
+        .iter()
+        .filter(|(a, b)| (w * b) % a == 0 && (h * b) % a == 0)
+        .count() as u32
+}
+
+/// Give up at most this many pixels of guest height to earn a better scale menu. Four is
+/// deliberately small: it is two points on a Retina panel — a letterbox band nobody can see — and
+/// a wider budget starts *losing* useful scales rather than gaining them (at 8 px the 14" panel
+/// snaps to 1890, which trades 133% away for 175%).
+const SNAP_BUDGET: u32 = 4;
+
+/// Trim a guest resolution to one the guest's desktop can actually scale.
+///
+/// The exact fullscreen height of a panel is whatever the glass and the camera housing add up to,
+/// and it is often hostile: the 14" MacBook Pro's 3024×1898 shares only a factor of two between
+/// its dimensions, so GNOME can offer 100% and 200% and nothing else, while a 2560×1440 monitor
+/// beside it offers seven scales. Two pixels off the height turns that into six.
+///
+/// Only the height moves, only downward, and only when it strictly buys something — a resolution
+/// that already scales well keeps its **exact** fit and its zero letterbox. The cost when it does
+/// move is a band up to [`SNAP_BUDGET`] px tall, which the host-mode letterbox already draws.
+pub(crate) fn snap_to_scalable(size: (u32, u32)) -> (u32, u32) {
+    let (w, h) = size;
+    if w == 0 || h <= 64 + SNAP_BUDGET {
+        return size;
+    }
+    let mut best = (h, offerable_scales(w, h));
+    for candidate in (h - SNAP_BUDGET..h).rev() {
+        let scales = offerable_scales(w, candidate);
+        if scales > best.1 {
+            best = (candidate, scales);
+        }
+    }
+    (w, best.0)
+}
+
 /// The migration reshape as a *policy*: [`reshape_to_aspect`], but only when the window is
 /// ours to reshape. `None` in native fullscreen — there the window's shape IS the screen's,
 /// AppKit owns it, and the visible frame the clamp uses (screen minus menu bar and Dock)
@@ -1311,6 +1373,38 @@ mod tests {
         // Degenerate inputs floor at 64 and never panic.
         let (w, h) = reshape_to_aspect((0.0, 0.0), (0, 0), (0.0, 0.0));
         assert!(w >= 64 && h >= 64);
+    }
+
+    /// GNOME only offers a scale whose *logical* size comes out whole, so the scale menu the user
+    /// gets is decided by the resolution we hand the guest. The 14" panel's exact fullscreen
+    /// height, 1898 px, shares only a factor of 2 with its 3024 width — GNOME could offer 100% and
+    /// 200% and nothing else, while the 2560×1440 BenQ beside it offered seven scales. Two pixels
+    /// off the height buys 133/150/267/300% for a letterbox band one point tall.
+    #[test]
+    fn a_hostile_height_is_snapped_to_one_the_guest_can_scale() {
+        // The 14" built-in at 2×, the case that prompted this.
+        assert_eq!(snap_to_scalable((3024, 1898)), (3024, 1896));
+        // …and at 1× (`--no-hidpi`), where the same panel is just as hostile.
+        assert_eq!(snap_to_scalable((1512, 949)), (1512, 945));
+
+        // Resolutions that already scale well are left EXACTLY alone: there is nothing to buy,
+        // and an exact fit means no letterbox at all.
+        for already_fine in [(2560, 1440), (3456, 2160), (1920, 1080), (3024, 1896)] {
+            assert_eq!(snap_to_scalable(already_fine), already_fine);
+        }
+
+        // The budget is a hard ceiling — a snap never costs more than 4 px of height, never
+        // touches the width, and never grows the guest (which would crop rather than letterbox).
+        for h in 900..1000 {
+            let (w, snapped) = snap_to_scalable((3024, h));
+            assert_eq!(w, 3024, "width is never touched");
+            assert!(snapped <= h && h - snapped <= 4, "{h} -> {snapped}");
+            assert!(offerable_scales(3024, snapped) >= offerable_scales(3024, h));
+        }
+
+        // Degenerate and tiny sizes are returned untouched rather than shrunk toward zero.
+        assert_eq!(snap_to_scalable((0, 0)), (0, 0));
+        assert_eq!(snap_to_scalable((64, 64)), (64, 64));
     }
 
     /// A fullscreen window's shape is the screen's — AppKit owns it, and the visible frame

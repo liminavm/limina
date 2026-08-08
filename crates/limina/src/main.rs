@@ -1446,6 +1446,16 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             screen.as_ref().map(|s| to_guest(s.frame)),
             fallback,
         );
+        // Match-host derives this from the panel, so it gets the same scale-friendly trim the
+        // runtime pushes get (`hostdisplay::describe`) — otherwise the guest boots at the raw
+        // panel height and re-modesets to the snapped one the first time the window reports its
+        // screen. A fixed size or an explicit --display-size is the user's number, not ours.
+        let (width, height) = match cli.display_resolution {
+            vmlib::schema::DisplayResolution::Host => {
+                window::fit::snap_to_scalable((width, height))
+            }
+            _ => (width, height),
+        };
         // First-appearance window: half the display's area at the guest's aspect, so the
         // window is neither tiny, nor screen-filling, nor letterboxed on first show.
         // ...but the first-appearance *window* size stays in points. Only the aspect of
