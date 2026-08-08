@@ -19,6 +19,20 @@
 //!   supervisor [`SurfacePortReceiver::recv`]s it and `IOSurfaceLookupFromMachPort`s it back to a
 //!   live surface. The existing line protocol (`surface <idx> <w> <h>` / `frame <idx>`) still
 //!   sequences presents; the index just keys into the Mach-delivered surfaces instead of a global id.
+//! - When the guest drops its last reference to a scanout resource the worker
+//!   [`SurfacePortSender::release`]s the id, and the supervisor drops its own reference. Without
+//!   this the supervisor can only bound its hold by *size*, and a compositor that mints a fresh
+//!   scanout per frame then leaves whole framebuffers pinned for the supervisor's life — see
+//!   `testcomp/supervisor-retention.sh`.
+//!
+//! **The release rides this same port, and that is load-bearing, not tidiness.** IOSurface ids
+//! recycle as soon as a surface dies, so a release naming a dead id could drop a *live* surface
+//! that has since been given that id. Sending it here makes that impossible by causality: the
+//! release is enqueued while the surface is still alive (the worker sends before teardown), the
+//! id cannot recycle until the surface dies, so any publish of a recycled id is enqueued strictly
+//! later — and one Mach port is one FIFO queue. A release on the side-channel control socket
+//! would be a second queue with no such ordering, which is why the first attempt at this was
+//! parked (`spikes/venus-churn-retention/RESULTS.md` §0.4).
 //!
 //! `bootstrap_register` is deprecated but functional on current macOS (verified 26.5); it is the
 //! simplest parent/child rendezvous that needs no launchd plist.
@@ -126,6 +140,14 @@ fn kr_err(what: &str, kr: i32) -> io::Error {
     io::Error::other(format!("{what}: mach/bootstrap error {kr} (0x{kr:x})"))
 }
 
+/// What the worker had to say about a surface.
+pub enum SurfaceMsg {
+    /// A new surface, keyed by the worker's ring index or `IOSurfaceGetID`.
+    Published(u32, CFRetained<IOSurfaceRef>),
+    /// The guest let go of this id; it will never be presented again.
+    Released(u32),
+}
+
 /// Supervisor side: owns a receive right registered under a bootstrap name; [`recv`] blocks for the
 /// next surface the worker hands over.
 ///
@@ -171,12 +193,13 @@ impl SurfacePortReceiver {
         self.name.to_str().unwrap_or_default()
     }
 
-    /// Block (up to `timeout`, or forever if `None`) for the next surface. Returns the worker's
-    /// ring index for it and a retained handle to the surface.
-    pub fn recv(
-        &self,
-        timeout: Option<std::time::Duration>,
-    ) -> io::Result<(u32, CFRetained<IOSurfaceRef>)> {
+    /// Block (up to `timeout`, or forever if `None`) for the next message.
+    ///
+    /// The two shapes are told apart by the **complex bit**, which the kernel sets only for a
+    /// message that actually carries a port descriptor: a publish is complex with exactly one
+    /// descriptor, a release is a bare header. Nothing about the payload is trusted to
+    /// distinguish them.
+    pub fn recv(&self, timeout: Option<std::time::Duration>) -> io::Result<SurfaceMsg> {
         let mut msg: RecvMsg = unsafe { std::mem::zeroed() };
         let (option, ms) = match timeout {
             Some(d) => (
@@ -200,6 +223,10 @@ impl SurfacePortReceiver {
         if kr != 0 {
             return Err(kr_err("mach_msg(RCV)", kr));
         }
+        let ring_idx = msg.header.msgh_id as u32;
+        if msg.header.msgh_bits & MACH_MSGH_BITS_COMPLEX == 0 {
+            return Ok(SurfaceMsg::Released(ring_idx));
+        }
         if msg.body.descriptor_count != 1 {
             return Err(io::Error::other(format!(
                 "surfaceport: expected 1 descriptor, got {}",
@@ -207,7 +234,6 @@ impl SurfacePortReceiver {
             )));
         }
         let port = msg.port.name;
-        let ring_idx = msg.header.msgh_id as u32;
         // `port` is the send right the worker MOVE'd to us, naming a live IOSurface.
         let surface = IOSurfaceLookupFromMachPort(port);
         // The lookup retains the surface; we own the moved send right and drop it now.
@@ -215,7 +241,7 @@ impl SurfacePortReceiver {
             mach_port_deallocate(task(), port);
         }
         match surface {
-            Some(s) => Ok((ring_idx, s)),
+            Some(s) => Ok(SurfaceMsg::Published(ring_idx, s)),
             None => Err(io::Error::other(
                 "surfaceport: IOSurfaceLookupFromMachPort returned null",
             )),
@@ -308,6 +334,40 @@ impl SurfacePortSender {
         }
         Ok(())
     }
+
+    /// Tell the supervisor the guest is finished with `id`, so it can drop its reference.
+    ///
+    /// **Call this while the surface is still alive** — before whatever teardown drops the
+    /// worker's own reference. That ordering is what makes the id safe to name despite IOSurface
+    /// ids recycling; see the module docs.
+    pub fn release(&self, id: u32) -> io::Result<()> {
+        // A bare header: no descriptor, so no complex bit, which is exactly how the receiver
+        // tells a release from a publish.
+        let mut header = MachMsgHeader {
+            msgh_bits: MACH_MSG_TYPE_COPY_SEND,
+            msgh_size: std::mem::size_of::<MachMsgHeader>() as u32,
+            msgh_remote_port: self.remote,
+            msgh_local_port: MACH_PORT_NULL,
+            msgh_voucher_port: MACH_PORT_NULL,
+            msgh_id: id as i32,
+        };
+        // SAFETY: a correctly-laid-out simple send message; `remote` is a live send right.
+        let kr = unsafe {
+            mach_msg(
+                &mut header,
+                MACH_SEND_MSG,
+                std::mem::size_of::<MachMsgHeader>() as u32,
+                0,
+                MACH_PORT_NULL,
+                MACH_MSG_TIMEOUT_NONE,
+                MACH_PORT_NULL,
+            )
+        };
+        if kr != 0 {
+            return Err(kr_err("mach_msg(SEND release)", kr));
+        }
+        Ok(())
+    }
 }
 
 impl Drop for SurfacePortSender {
@@ -396,9 +456,12 @@ mod tests {
         let want_id = IOSurfaceGetID(&surf);
         tx.send(7, &surf).expect("send");
 
-        let (idx, got) = rx
+        let SurfaceMsg::Published(idx, got) = rx
             .recv(Some(std::time::Duration::from_secs(2)))
-            .expect("recv");
+            .expect("recv")
+        else {
+            panic!("a message carrying a port descriptor must read as Published");
+        };
         assert_eq!(idx, 7, "ring index round-trips via msgh_id");
         assert_eq!(IOSurfaceGetID(&got), want_id, "same underlying surface");
         unsafe {
@@ -407,5 +470,36 @@ mod tests {
             assert_eq!(base.read(), 0xAB, "the shared pixel came across");
             IOSurfaceUnlock(&got, IOSurfaceLockOptions(0), std::ptr::null_mut());
         }
+    }
+
+    /// A release must arrive as a release, and — the part that matters — it must stay ORDERED
+    /// behind the publishes that preceded it on the same port. That ordering is the whole reason
+    /// the release rides this channel instead of the control socket: it is what makes naming a
+    /// recyclable IOSurface id safe.
+    #[test]
+    fn releases_round_trip_and_stay_ordered_behind_publishes() {
+        let name = format!("eti.noronha.limina.test.rel.{}", std::process::id());
+        let rx = SurfacePortReceiver::register(&name).expect("register");
+        let tx = SurfacePortSender::lookup(&name).expect("lookup");
+
+        let surf = make_surface(0x11);
+        let id = IOSurfaceGetID(&surf);
+        tx.send(id, &surf).expect("send");
+        tx.release(id).expect("release");
+
+        let first = rx
+            .recv(Some(std::time::Duration::from_secs(2)))
+            .expect("recv publish");
+        assert!(
+            matches!(first, SurfaceMsg::Published(got, _) if got == id),
+            "the publish must come out first"
+        );
+        let second = rx
+            .recv(Some(std::time::Duration::from_secs(2)))
+            .expect("recv release");
+        assert!(
+            matches!(second, SurfaceMsg::Released(got) if got == id),
+            "the release must come out second, and as a release"
+        );
     }
 }
