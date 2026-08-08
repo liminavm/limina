@@ -1,0 +1,406 @@
+[2026-08-08T12:09:17Z INFO  limina] suspend armed by default: snapshot path edid-repro.raw.limina-suspend.bin
+time="2026-08-08T09:09:17-03:00" level=warning msg="bad log level \"\", falling back to \"info\""
+time="2026-08-08T09:09:17-03:00" level=info msg="gvproxy version v0.8.8"
+time="2026-08-08T09:09:17-03:00" level=info msg="waiting for clients..."
+[2026-08-08T12:09:17Z INFO  limina::gateway] death-pact watcher up (pid 75377) tying gvproxy 75376 to this supervisor
+[2026-08-08T12:09:17Z INFO  limina::gateway] gvproxy gateway up (pid 75376, socket "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-75347.sock", ssh-port 2222)
+guest SSH forward ready: ssh -p 2222 <user>@127.0.0.1
+[2026-08-08T12:09:17Z INFO  limina::supervisor] VM worker started (pid 75378); Ctrl-C to power off
+[2026-08-08T12:09:17Z INFO  limina::window::capture_tap] pointer capture: CGEventTap installed (session-level, consuming)
+[2026-08-08T12:09:19.078856Z INFO  limina_vmm::krun] virtio-gpu virgl_flags = 0x35b, software_2d = false (coexist = true)
+[2026-08-08T12:09:19.079037Z INFO  limina_vmm::krun] virtio-input: keyboard fd=8, pointer fd=10, rel-pointer fd=12
+[2026-08-08T12:09:19.079601Z INFO  limina_vmm::krun] battery: mirroring the host battery into the guest
+[2026-08-08T12:09:19.080070Z INFO  limina_vmm::krun] USB: cold-plugging the FIDO authenticator gadget ("/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-fido-usb-75347.sock")
+[2026-08-08T12:09:19.080218Z INFO  limina_vmm::krun] USB: cold-plugging the fingerprint reader gadget ("/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-moc-usb-75347.sock")
+[2026-08-08T12:09:19.080328Z INFO  limina_vmm::krun] building microVM: 6 vcpu(s), 8192 MiB, 1 disk(s), 0 share(s), display=true, boot=EFI firmware
+[2026-08-08T12:09:19.084013Z INFO  limina_vmm::krun] display-resize: listening on "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-resize-75347.sock"
+[2026-08-08T12:09:19.084110Z INFO  limina_vmm::krun] microVM running; entering event loop (SIGTERM/SIGINT → guest power-off)
+[2026-08-08T12:09:19.084265Z INFO  limina_vmm::power] host sleep: registered (guest will s2idle around host sleep)
+[2026-08-08T12:09:19.120252Z WARN  krun_devices::virtio::mmio] virtio queue marked ready with QueueNum=0; defaulting to max_size=256
+[2026-08-08T12:09:19Z INFO  limina::fido::usb] fido-usb: connected to the worker gadget at "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-fido-usb-75347.sock"
+[2026-08-08T12:09:19.179343Z INFO  limina_vmm::fido_usb] fido-usb: supervisor connected
+[2026-08-08T12:09:19.179340Z INFO  limina_vmm::moc_usb] moc-usb: supervisor connected
+[2026-08-08T12:09:19Z INFO  limina::moc::usb] moc: connected to the worker gadget at "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-moc-usb-75347.sock"
+[2026-08-08T12:09:19.424788Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: gl_version 31 - es profile enabled
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA, type = GL_UNSIGNED_INT_8_8_8_8)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA, type = GL_UNSIGNED_INT_8_8_8_8)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ABGR_EXT, type = GL_UNSIGNED_BYTE)
+Mesa: error: GL_INVALID_OPERATION in glTexImage2D(format = GL_BGRA, type = GL_UNSIGNED_SHORT_4_4_4_4_REV, internalformat = GL_RGBA4)
+Mesa: error: GL_INVALID_OPERATION in glTexImage2D(format = GL_BGRA, type = GL_UNSIGNED_SHORT_1_5_5_5_REV, internalformat = GL_RGB5_A1)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_RGB, type = GL_UNSIGNED_BYTE_3_3_2)
+Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_UNSIGNED_SHORT, internalformat = GL_ALPHA16)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_UNSIGNED_BYTE)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_UNSIGNED_BYTE)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_UNSIGNED_BYTE)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_BYTE)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_BYTE)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_BYTE)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_UNSIGNED_SHORT)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_UNSIGNED_SHORT)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_UNSIGNED_SHORT)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_SHORT)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_SHORT)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_SHORT)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_UNSIGNED_INT)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_UNSIGNED_INT)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_UNSIGNED_INT)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_INT)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_INT)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_INT)
+Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_HALF_FLOAT, internalformat = GL_ALPHA16F_ARB)
+Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE, type = GL_HALF_FLOAT, internalformat = GL_LUMINANCE16F_ARB)
+Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_HALF_FLOAT, internalformat = GL_LUMINANCE_ALPHA16F_ARB)
+Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_FLOAT, internalformat = GL_ALPHA32F_ARB)
+Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE, type = GL_FLOAT, internalformat = GL_LUMINANCE32F_ARB)
+Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_FLOAT, internalformat = GL_LUMINANCE_ALPHA32F_ARB)
+Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_BYTE, internalformat = GL_ALPHA8_SNORM)
+Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_BYTE, internalformat = GL_LUMINANCE8_ALPHA8_SNORM)
+Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_SHORT, internalformat = GL_ALPHA16_SNORM)
+Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_SHORT, internalformat = GL_LUMINANCE16_ALPHA16_SNORM)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA_INTEGER, type = GL_UNSIGNED_INT_2_10_10_10_REV)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_ALPHA8)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB32F)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_SR8_EXT)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB_S3TC_DXT1_EXT)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_S3TC_DXT1_EXT)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_S3TC_DXT3_EXT)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_S3TC_DXT5_EXT)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_S3TC_DXT1_EXT)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RED_RGTC1)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_RED_RGTC1)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RG_RGTC2)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_RG_RGTC2)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB9_E5)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB32UI)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB32I)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_BPTC_UNORM)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB8_ETC2)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ETC2)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA8_ETC2_EAC)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_R11_EAC)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_R11_EAC)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RG11_EAC)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_RG11_EAC)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_4x4)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x4)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x5)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x5)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x5)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x6)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x8)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x5)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x6)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x8)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x10)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_SR8_EXT)
+Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_SRG8_EXT)
+[2026-08-08T12:09:19.435273Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: proxy: proxy server with pid -1
+[2026-08-08T12:09:19.435666Z INFO  limina_display::iosurface] window: scanout surfaces scoped via Mach port (name eti.noronha.limina.75347)
+[2026-08-08T12:09:19.437243Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [74, 77, 79] (640x480 BGRX)
+[2026-08-08T12:09:19Z INFO  limina::window::present] window: <- surface 74 77 640 480
+[2026-08-08T12:09:19.438870Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [80, 82, 83] (1280x800 BGRX)
+[2026-08-08T12:09:19Z INFO  limina::window::present] window: <- surface 80 82 1280 800
+[2026-08-08T12:09:19Z INFO  limina::window] display-control: pushed "display id=0 size=2560x1440 refresh=60 dpi=123 vendor=LMN product=32795 serial=1816328933 name=BenQ%20LCD" to the guest
+[2026-08-08T12:09:19.439357Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: Some((2560, 1440)), connected: None, edid: Some(EdidSpec { refresh_hz: 60, dpi: 123, vendor: [76, 77, 78], product_id: 32795, serial: 1816328933, name: "BenQ LCD", serial_string: None, range: None, modes: [], alt_mode: None }) }
+[2026-08-08T12:09:19Z INFO  limina::window] window: off-glass ack gating ENGAGED (first gated ack waited 790.209µs, fence cap 20ms)
+[2026-08-08T12:09:27.219001Z INFO  krun_devices::virtio::gpu::worker] gpu worker: reset drain quiesced in 31.542µs
+[2026-08-08T12:09:27.219066Z INFO  krun_devices::virtio::gpu::worker] gpu worker: device reset with a quiescent session — PARKED for classification at the next activation
+[2026-08-08T12:09:27.439861Z INFO  krun_devices::virtio::gpu::worker] gpu worker: dropping the parked session — this activation programmed its queues (real driver re-init)
+[2026-08-08T12:09:28.651917Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [84, 86, 91] (2560x1440 BGRX)
+[2026-08-08T12:09:28Z INFO  limina::window::present] window: <- surface 84 86 2560 1440
+[2026-08-08T12:09:33.046734Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[2026-08-08T12:09:33Z INFO  limina::control] control: guest agent connected: limina-agent/0.1.0 caps=["heartbeat", "shutdown", "mempressure"] pagesize=16384
+[2026-08-08T12:09:34.714320Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=2 init=0x2 name=Some("gnome-shell\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-08-08T12:09:34.714395Z INFO  krun_devices::virtio::gpu::virtio_gpu] vrend context ctx=2 (capset 2): Global-ring fences now retire through virglrenderer
+[2026-08-08T12:09:34.714562Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: GLSL feature level 310
+[2026-08-08T12:09:34.761765Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: cap 16384 MiB
+[LIMINA-SENTINEL] vkr sentinel-1 armed; IOSurface dealloc sentinel self-test: OK
+[LIMINA-SENTINEL] kk kk-sentinel-1 armed; dealloc sentinel self-test: OK
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0880500 for image plane: 2560x1440 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:09:34.762046Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2560x1440 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 96), renders land in the surface directly
+[2026-08-08T12:09:35.192748Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x2 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-08-08T12:09:35.194431Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-08-08T12:09:35.196021Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: context 5 failed to dispatch CREATE_VIDEO_BUFFER: 22
+[2026-08-08T12:09:35.196063Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vrend_decode_ctx_submit_cmd: context error reported 5 "gst-plugin-scan" Illegal command buffer 393271
+[2026-08-08T12:09:35.196094Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.196574Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.196963Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.197283Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.197582Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.197738Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.197959Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.198166Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.198309Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.198417Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.198568Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.198705Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.198930Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.198998Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.201701Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+[2026-08-08T12:09:35.202092Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-08-08T12:09:35.202763Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: context 5 failed to dispatch CREATE_VIDEO_BUFFER: 22
+[2026-08-08T12:09:35.202796Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vrend_decode_ctx_submit_cmd: context error reported 5 "gst-plugin-scan" Illegal command buffer 393271
+[2026-08-08T12:09:35.202828Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.203090Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.203319Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.203605Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.203821Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.203998Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.204255Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.204615Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.204829Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.204924Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.205193Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.205304Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.205396Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.205453Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.206464Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+[2026-08-08T12:09:35.206860Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-08-08T12:09:35.208502Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: context 5 failed to dispatch CREATE_VIDEO_BUFFER: 22
+[2026-08-08T12:09:35.208538Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vrend_decode_ctx_submit_cmd: context error reported 5 "gst-plugin-scan" Illegal command buffer 393271
+[2026-08-08T12:09:35.208569Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.208832Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.209151Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.209348Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.220173Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.220422Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.220538Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.220885Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.221043Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.221162Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.221286Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.221477Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.221650Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.221750Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+[2026-08-08T12:09:35.222891Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+[2026-08-08T12:09:35.226861Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+[2026-08-08T12:09:35.260170Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x4 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-08-08T12:09:35.848070Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[2026-08-08T12:09:35Z INFO  limina::control] control: guest agent connected: limina-agent-session/0.1.0 caps=["clipboard"] pagesize=16384
+MESA: warning: zink: PERF WARNING! > 100 copy boxes detected for 0xbb0ff1e00
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0882d00 for image plane: 2560x1440 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:09:36.036073Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2560x1440 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 98), renders land in the surface directly
+[2026-08-08T12:09:36.040857Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+[2026-08-08T12:09:36.040862Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: server: socket disconnected
+[2026-08-08T12:09:36.040978Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: destroying context 4 (gst-plugin-scan): instance was gone, 0 objects and 0 resources left in the tables
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0596f80 for image plane: 2560x1440 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:09:36.127123Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2560x1440 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 99), renders land in the surface directly
+[2026-08-08T12:10:27.709090Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[2026-08-08T12:11:27.821856Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[2026-08-08T12:12:19Z INFO  limina::window::input] pointer capture: ON (Cmd-Ctrl-G to release)
+[2026-08-08T12:12:21.644080Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x4 name=Some("gnome-control-c\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-08-08T12:12:21.692436Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gnome-control-c\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafd94280 for image plane: 2560x1400 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:12:21.766808Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 2560x1400 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 133), importable into venus
+MESA: warning: zink: PERF WARNING! > 100 copy boxes detected for 0xbb0b0ad00
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafffdb80 for image plane: 2560x1400 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:12:22.028524Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 2560x1400 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 143), importable into venus
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafffef80 for image plane: 2560x1400 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:12:22.219842Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 2560x1400 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 144), importable into venus
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafc18f00 for image plane: 2560x1400 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:12:26.404949Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 2560x1400 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 97), importable into venus
+[2026-08-08T12:12:26.432453Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+[2026-08-08T12:12:26.432723Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: context 4: resource 512 detached while backing a live ring (normal at client teardown); stopping the ring
+[2026-08-08T12:12:26.432859Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+[2026-08-08T12:12:26.432920Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: server: socket disconnected
+[2026-08-08T12:12:26.433062Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: destroying context 4 (gnome-control-center) with a valid instance
+[2026-08-08T12:12:26.433117Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: destroying device with valid objects
+[2026-08-08T12:12:26.433802Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: destroying context 4 (gnome-control-c): instance was gone, 0 objects and 0 resources left in the tables
+[2026-08-08T12:12:28.047801Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[2026-08-08T12:12:28Z INFO  limina::window] display-control: pushed "display id=0 size=3024x1898 refresh=120 dpi=255 vendor=LMN product=41038 serial=836230465 name=Built-in%20Retina%20Display range=24-120/47-234/838 alt=3024x1898@60" to the guest
+[2026-08-08T12:12:28.483093Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: Some((3024, 1898)), connected: None, edid: Some(EdidSpec { refresh_hz: 120, dpi: 255, vendor: [76, 77, 78], product_id: 41038, serial: 836230465, name: "Built-in Retina Display", serial_string: None, range: Some(RangeSpec { min_vertical_hz: 24, max_vertical_hz: 120, min_horizontal_khz: 47, max_horizontal_khz: 234, max_pixel_clock_mhz: 838 }), modes: [], alt_mode: Some((3024, 1898, 60)) }) }
+[2026-08-08T12:12:28.483440Z WARN  krun_devices::display::edid] edid: 3024x1898@120 needs a 837 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafc1b200 for image plane: 3024x1898 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:12:28.494939Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1898 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 148), renders land in the surface directly
+[2026-08-08T12:12:28Z INFO  limina::window] display-control: pushed "resize 3024 1842" to the guest
+[2026-08-08T12:12:28.497575Z INFO  limina_vmm::krun] display-control: resize 3024x1842
+[2026-08-08T12:12:28.509884Z WARN  krun_devices::display::edid] edid: 3024x1842@120 needs a 813 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[2026-08-08T12:12:28Z INFO  limina::window] display-control: pushed "resize 3024 1814" to the guest
+[2026-08-08T12:12:28.512443Z INFO  limina_vmm::krun] display-control: resize 3024x1814
+[2026-08-08T12:12:28.512722Z WARN  krun_devices::display::edid] edid: 3024x1814@120 needs a 801 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb099d400 for image plane: 3024x1814 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:12:28.521223Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1814 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 149), renders land in the surface directly
+[2026-08-08T12:12:28Z INFO  limina::window] display-control: pushed "resize 3024 1800" to the guest
+[2026-08-08T12:12:28.531943Z INFO  limina_vmm::krun] display-control: resize 3024x1800
+[2026-08-08T12:12:28.532299Z WARN  krun_devices::display::edid] edid: 3024x1800@120 needs a 795 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafc1b480 for image plane: 3024x1800 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:12:28.537210Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1800 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 155), renders land in the surface directly
+[2026-08-08T12:12:28Z INFO  limina::window] display-control: pushed "resize 3024 1792" to the guest
+[2026-08-08T12:12:28.545873Z INFO  limina_vmm::krun] display-control: resize 3024x1792
+[2026-08-08T12:12:28.546116Z WARN  krun_devices::display::edid] edid: 3024x1792@120 needs a 792 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[2026-08-08T12:12:28.558379Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [69, 71, 106] (3024x1800 BGRX)
+[2026-08-08T12:12:28Z INFO  limina::window::present] window: <- surface 69 71 3024 1800
+[2026-08-08T12:12:28Z INFO  limina::window] display-control: pushed "resize 3024 1788" to the guest
+[2026-08-08T12:12:28.559520Z INFO  limina_vmm::krun] display-control: resize 3024x1788
+[2026-08-08T12:12:28.559644Z WARN  krun_devices::display::edid] edid: 3024x1788@120 needs a 790 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[2026-08-08T12:12:28Z INFO  limina::window] display-control: pushed "resize 3024 1786" to the guest
+[2026-08-08T12:12:28.560149Z INFO  limina_vmm::krun] display-control: resize 3024x1786
+[2026-08-08T12:12:28.560267Z WARN  krun_devices::display::edid] edid: 3024x1786@120 needs a 789 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[2026-08-08T12:12:28Z INFO  limina::window] display-control: pushed "resize 3024 1784" to the guest
+[2026-08-08T12:12:28.562328Z INFO  limina_vmm::krun] display-control: resize 3024x1784
+[2026-08-08T12:12:28.562454Z WARN  krun_devices::display::edid] edid: 3024x1784@120 needs a 788 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafffcf00 for image plane: 3024x1784 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:12:28.573135Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1784 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 84), renders land in the surface directly
+[2026-08-08T12:12:28.591525Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [98, 99, 107] (3024x1784 BGRX)
+[2026-08-08T12:12:28Z INFO  limina::window::present] window: <- surface 98 99 3024 1784
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafc19400 for image plane: 3024x1784 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:12:28.602273Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1784 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 111), renders land in the surface directly
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0486d00 for image plane: 3024x1784 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:12:28.611765Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1784 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 144), renders land in the surface directly
+[2026-08-08T12:12:33.896770Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x4 name=Some("gnome-control-c\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-08-08T12:12:33.930711Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gnome-control-c\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0b4b200 for image plane: 3024x1720 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:12:33.970554Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 3024x1720 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 131), importable into venus
+MESA: warning: zink: PERF WARNING! > 100 copy boxes detected for 0xbaf44d500
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafdbf700 for image plane: 3024x1720 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:12:34.171300Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 3024x1720 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 139), importable into venus
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0ba1400 for image plane: 3024x1720 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:12:34.335433Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 3024x1720 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 69), importable into venus
+[2026-08-08T12:12:48Z INFO  limina::window::capture_tap] pointer capture: promoted to a hard grab (Ctrl-Opt or Cmd-Ctrl-G to release)
+[2026-08-08T12:12:49Z INFO  limina::window::input] pointer capture: OFF
+[2026-08-08T12:12:49Z INFO  limina::window::capture_tap] soft keyboard grab: muted (Ctrl-Opt) — host combos return until the window regains focus
+[2026-08-08T12:12:49Z INFO  limina::window::capture_tap] pointer capture: the pointer left the guest — the fullscreen grab re-arms
+[2026-08-08T12:13:24Z INFO  limina::window::input] pointer capture: ON (Cmd-Ctrl-G to release)
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0b48280 for image plane: 3024x1784 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:25.664712Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1784 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 4), renders land in the surface directly
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0596f80 for image plane: 3024x1784 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:25.705023Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1784 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 100), renders land in the surface directly
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbaf485900 for image plane: 3024x1784 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:25.723411Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1784 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 84), renders land in the surface directly
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbaf487980 for image plane: 3024x1741 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:25.735367Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 3024x1741 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 101), importable into venus
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbaf451400 for image plane: 3024x1741 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:25.773200Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 3024x1741 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 86), importable into venus
+[2026-08-08T12:13:28.100802Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[2026-08-08T12:13:31.625726Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+[2026-08-08T12:13:31.625902Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: context 4: resource 962 detached while backing a live ring (normal at client teardown); stopping the ring
+[2026-08-08T12:13:31.626017Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+[2026-08-08T12:13:31.626044Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: server: socket disconnected
+[2026-08-08T12:13:31.626153Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: destroying context 4 (gnome-control-center) with a valid instance
+[2026-08-08T12:13:31.626203Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: destroying device with valid objects
+[2026-08-08T12:13:31.626674Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: destroying context 4 (gnome-control-c): instance was gone, 0 objects and 0 resources left in the tables
+[2026-08-08T12:13:37Z INFO  limina::window] display-control: pushed "display id=0 size=2560x1440 refresh=60 dpi=123 vendor=LMN product=32795 serial=1816328933 name=BenQ%20LCD" to the guest
+[2026-08-08T12:13:37.452270Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: Some((2560, 1440)), connected: None, edid: Some(EdidSpec { refresh_hz: 60, dpi: 123, vendor: [76, 77, 78], product_id: 32795, serial: 1816328933, name: "BenQ LCD", serial_string: None, range: None, modes: [], alt_mode: None }) }
+[2026-08-08T12:13:37Z INFO  limina::window] display-control: pushed "resize 2560 1382" to the guest
+[2026-08-08T12:13:37.465752Z INFO  limina_vmm::krun] display-control: resize 2560x1382
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafffe080 for image plane: 2560x1440 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:37.466091Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2560x1440 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 161), renders land in the surface directly
+[2026-08-08T12:13:37Z INFO  limina::window] display-control: pushed "resize 2560 1354" to the guest
+[2026-08-08T12:13:37.480319Z INFO  limina_vmm::krun] display-control: resize 2560x1354
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafffd680 for image plane: 2560x1354 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:37.494937Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2560x1354 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 148), renders land in the surface directly
+[2026-08-08T12:13:37Z INFO  limina::window] display-control: pushed "resize 2560 1340" to the guest
+[2026-08-08T12:13:37.500441Z INFO  limina_vmm::krun] display-control: resize 2560x1340
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbaffff480 for image plane: 2560x1340 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:37.503316Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2560x1340 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 103), renders land in the surface directly
+[2026-08-08T12:13:37Z INFO  limina::window] display-control: pushed "resize 2560 1333" to the guest
+[2026-08-08T12:13:37.514189Z INFO  limina_vmm::krun] display-control: resize 2560x1333
+[2026-08-08T12:13:37.522193Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [98, 99, 168] (2560x1340 BGRX)
+[2026-08-08T12:13:37Z INFO  limina::window::present] window: <- surface 98 99 2560 1340
+[2026-08-08T12:13:37Z INFO  limina::window] display-control: pushed "resize 2560 1330" to the guest
+[2026-08-08T12:13:37.527510Z INFO  limina_vmm::krun] display-control: resize 2560x1330
+[2026-08-08T12:13:37Z INFO  limina::window] display-control: pushed "resize 2560 1328" to the guest
+[2026-08-08T12:13:37.527951Z INFO  limina_vmm::krun] display-control: resize 2560x1328
+[2026-08-08T12:13:37Z INFO  limina::window] display-control: pushed "resize 2560 1327" to the guest
+[2026-08-08T12:13:37.531889Z INFO  limina_vmm::krun] display-control: resize 2560x1327
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafffca00 for image plane: 2560x1327 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:37.543062Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2560x1327 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 107), renders land in the surface directly
+[2026-08-08T12:13:37Z INFO  limina::window] display-control: pushed "resize 2560 1326" to the guest
+[2026-08-08T12:13:37.547288Z INFO  limina_vmm::krun] display-control: resize 2560x1326
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafffc780 for image plane: 2560x1326 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:37.553711Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2560x1326 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 84), renders land in the surface directly
+[2026-08-08T12:13:37.575291Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [148, 161, 171] (2560x1326 BGRX)
+[2026-08-08T12:13:37Z INFO  limina::window::present] window: <- surface 148 161 2560 1326
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbaf450f00 for image plane: 2560x1326 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:37.595296Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2560x1326 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 4), renders land in the surface directly
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0596a80 for image plane: 2560x1326 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:38.497739Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2560x1326 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 21), renders land in the surface directly
+[2026-08-08T12:13:47.582370Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x4 name=Some("gnome-control-c\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-08-08T12:13:47.615800Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gnome-control-c\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbaf89d900 for image plane: 2560x1294 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:47.691054Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 2560x1294 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 111), importable into venus
+MESA: warning: zink: PERF WARNING! > 100 copy boxes detected for 0xbb0728600
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0b48500 for image plane: 2560x1294 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:13:47.746532Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 2560x1294 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 98), importable into venus
+[2026-08-08T12:13:55Z INFO  limina::window::input] pointer capture: OFF
+[2026-08-08T12:13:55Z INFO  limina::window::capture_tap] soft keyboard grab: muted (Ctrl-Opt) — host combos return until the window regains focus
+[2026-08-08T12:13:55Z INFO  limina::window::capture_tap] pointer capture: the pointer left the guest — the fullscreen grab re-arms
+[2026-08-08T12:14:28.188083Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0486f80 for image plane: 2560x1294 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:14:34.502617Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 2560x1294 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 122), importable into venus
+[2026-08-08T12:14:34.805970Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+[2026-08-08T12:14:34.806116Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: context 4: resource 1551 detached while backing a live ring (normal at client teardown); stopping the ring
+[2026-08-08T12:14:34.806252Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+[2026-08-08T12:14:34.806278Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: server: socket disconnected
+[2026-08-08T12:14:34.806392Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: destroying context 4 (gnome-control-center) with a valid instance
+[2026-08-08T12:14:34.806444Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: destroying device with valid objects
+[2026-08-08T12:14:34.806874Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: destroying context 4 (gnome-control-c): instance was gone, 0 objects and 0 resources left in the tables
+[2026-08-08T12:14:35Z INFO  limina::window::input] pointer capture: ON (Cmd-Ctrl-G to release)
+[2026-08-08T12:14:36Z INFO  limina::window] display-control: pushed "display id=0 size=3024x1898 refresh=120 dpi=255 vendor=LMN product=41038 serial=836230465 name=Built-in%20Retina%20Display range=24-120/47-234/838 alt=3024x1898@60" to the guest
+[2026-08-08T12:14:36.955816Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: Some((3024, 1898)), connected: None, edid: Some(EdidSpec { refresh_hz: 120, dpi: 255, vendor: [76, 77, 78], product_id: 41038, serial: 836230465, name: "Built-in Retina Display", serial_string: None, range: Some(RangeSpec { min_vertical_hz: 24, max_vertical_hz: 120, min_horizontal_khz: 47, max_horizontal_khz: 234, max_pixel_clock_mhz: 838 }), modes: [], alt_mode: Some((3024, 1898, 60)) }) }
+[2026-08-08T12:14:36.956201Z WARN  krun_devices::display::edid] edid: 3024x1898@120 needs a 837 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[2026-08-08T12:14:36Z INFO  limina::window] display-control: pushed "resize 3024 1842" to the guest
+[2026-08-08T12:14:36.968364Z INFO  limina_vmm::krun] display-control: resize 3024x1842
+[2026-08-08T12:14:36.968687Z WARN  krun_devices::display::edid] edid: 3024x1842@120 needs a 813 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0ba1400 for image plane: 3024x1842 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:14:36.976524Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1842 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 133), renders land in the surface directly
+[2026-08-08T12:14:36Z INFO  limina::window] display-control: pushed "resize 3024 1814" to the guest
+[2026-08-08T12:14:36.981766Z INFO  limina_vmm::krun] display-control: resize 3024x1814
+[2026-08-08T12:14:36.993651Z WARN  krun_devices::display::edid] edid: 3024x1814@120 needs a 801 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[2026-08-08T12:14:37Z INFO  limina::window] display-control: pushed "resize 3024 1800" to the guest
+[2026-08-08T12:14:37.000732Z INFO  limina_vmm::krun] display-control: resize 3024x1800
+[2026-08-08T12:14:37.000942Z WARN  krun_devices::display::edid] edid: 3024x1800@120 needs a 795 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0ba2580 for image plane: 3024x1800 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:14:37.012059Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1800 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 107), renders land in the surface directly
+[2026-08-08T12:14:37Z INFO  limina::window] display-control: pushed "resize 3024 1792" to the guest
+[2026-08-08T12:14:37.036892Z INFO  limina_vmm::krun] display-control: resize 3024x1792
+[2026-08-08T12:14:37.041584Z WARN  krun_devices::display::edid] edid: 3024x1792@120 needs a 792 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[2026-08-08T12:14:37.045799Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [86, 106, 131] (3024x1800 BGRX)
+[2026-08-08T12:14:37Z INFO  limina::window::present] window: <- surface 86 106 3024 1800
+[2026-08-08T12:14:37Z INFO  limina::window] display-control: pushed "resize 3024 1788" to the guest
+[2026-08-08T12:14:37.047329Z INFO  limina_vmm::krun] display-control: resize 3024x1788
+[2026-08-08T12:14:37.047477Z WARN  krun_devices::display::edid] edid: 3024x1788@120 needs a 790 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbaf89ea80 for image plane: 3024x1788 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:14:37.059186Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1788 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 148), renders land in the surface directly
+[2026-08-08T12:14:37Z INFO  limina::window] display-control: pushed "resize 3024 1786" to the guest
+[2026-08-08T12:14:37.059653Z INFO  limina_vmm::krun] display-control: resize 3024x1786
+[2026-08-08T12:14:37Z INFO  limina::window] display-control: pushed "resize 3024 1784" to the guest
+[2026-08-08T12:14:37.060318Z INFO  limina_vmm::krun] display-control: resize 3024x1784
+[2026-08-08T12:14:37.060354Z WARN  krun_devices::display::edid] edid: 3024x1786@120 needs a 789 MHz pixel clock, above the 655.35 MHz an EDID detailed timing can express; clamping the advertised refresh
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbaf89e080 for image plane: 3024x1786 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:14:37.069682Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1786 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 4), renders land in the surface directly
+[2026-08-08T12:14:37.084679Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [21, 84, 133] (3024x1786 BGRX)
+[2026-08-08T12:14:37Z INFO  limina::window::present] window: <- surface 21 84 3024 1786
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb099cf00 for image plane: 3024x1786 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:14:37.096990Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1786 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 73), renders land in the surface directly
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbb0883c00 for image plane: 3024x1786 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:14:37.105599Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 3024x1786 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 100), renders land in the surface directly
+[2026-08-08T12:14:40.919141Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x4 name=Some("gnome-control-c\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-08-08T12:14:40.953690Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gnome-control-c\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbaec73480 for image plane: 3024x1722 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:14:40.995299Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 3024x1722 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 99), importable into venus
+MESA: warning: zink: PERF WARNING! > 100 copy boxes detected for 0xbaf444300
+[LIMINA-KK-IMPORT] adopted MTLTexture 0xbafd97480 for image plane: 3024x1722 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+[2026-08-08T12:14:41.056698Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface shared: 3024x1722 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 86), importable into venus
+[2026-08-08T12:14:44Z INFO  limina::window::input] pointer capture: OFF
+[2026-08-08T12:14:44Z INFO  limina::window::capture_tap] soft keyboard grab: muted (Ctrl-Opt) — host combos return until the window regains focus
+[2026-08-08T12:14:44Z INFO  limina::window::capture_tap] pointer capture: the pointer left the guest — the fullscreen grab re-arms
+[2026-08-08T12:15:28.294195Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[2026-08-08T12:16:28.390315Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[2026-08-08T12:17:28.492063Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[2026-08-08T12:18:28.587322Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[2026-08-08T12:19:28.686582Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[2026-08-08T12:20:28.852927Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[2026-08-08T12:21:29.047271Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3

@@ -103,6 +103,47 @@ pub(crate) fn reshape_to_aspect(
     content_for_area(area, a, visible)
 }
 
+/// The migration reshape as a *policy*: [`reshape_to_aspect`], but only when the window is
+/// ours to reshape. `None` in native fullscreen — there the window's shape IS the screen's,
+/// AppKit owns it, and the visible frame the clamp uses (screen minus menu bar and Dock)
+/// describes an area the window is deliberately not confined to.
+///
+/// Reshaping a fullscreen window is not the no-op it looks like: `setContentSize` shrinks the
+/// content view *inside* the fullscreen window, which is also the view
+/// [`fullscreen_inset_measurement`] measures the camera-housing inset from. The two then chase
+/// each other — shorter view → bigger apparent inset → shorter guest → shorter view — settling
+/// at an arbitrary fixed point well short of the panel. Observed 2026-08-08: a host-display
+/// hotplug (and, it turned out, any fullscreen restore) drove eight modesets converging on
+/// 2560×1326 instead of 2560×1440, and the drifting final size then stopped matching the mode
+/// GNOME had remembered for that monitor, so the guest lost its saved scale too.
+pub(crate) fn migration_reshape(
+    current: (f64, f64),
+    aspect: (u32, u32),
+    visible: (f64, f64),
+    fullscreen: bool,
+) -> Option<(u32, u32)> {
+    (!fullscreen).then(|| reshape_to_aspect(current, aspect, visible))
+}
+
+/// What a fullscreen content view says the camera housing costs — `None` when it says nothing.
+///
+/// The sensor is only honest when the window is actually filling the panel, so a view that is
+/// not the screen's full width is rejected outright: mid-transition ticks (a display coming or
+/// going) and any transient reshape report a short view whose height has nothing to do with the
+/// housing. A plain magnitude bound does not catch those — 151 pt of "inset" is a perfectly
+/// plausible-looking number. Returns points, `0.0` on a notchless display being a real answer.
+pub(crate) fn fullscreen_inset_measurement(screen: (f64, f64), view: (f64, f64)) -> Option<f64> {
+    const WIDTH_TOLERANCE: f64 = 1.0;
+    if !(screen.0.is_finite() && screen.1 > 0.0 && view.0.is_finite() && view.1 > 0.0) {
+        return None;
+    }
+    if (screen.0 - view.0).abs() > WIDTH_TOLERANCE {
+        return None;
+    }
+    let inset = screen.1 - view.1;
+    (0.0..=200.0).contains(&inset).then_some(inset)
+}
+
 /// A content size of the given `area` (pt²) at `aspect` (w/h), clamped into the visible
 /// frame with the aspect preserved so the window never spills off-screen and AppKit never
 /// has to constrain it.
@@ -1270,6 +1311,67 @@ mod tests {
         // Degenerate inputs floor at 64 and never panic.
         let (w, h) = reshape_to_aspect((0.0, 0.0), (0, 0), (0.0, 0.0));
         assert!(w >= 64 && h >= 64);
+    }
+
+    /// A fullscreen window's shape is the screen's — AppKit owns it, and the visible frame
+    /// (which excludes the menu bar and Dock) does not apply. Reshaping there anyway shrank the
+    /// content view *inside* the fullscreen window, which poisoned the very measurement the
+    /// guest's height is derived from ([`fullscreen_inset_measurement`]) and sent the two into a
+    /// feedback loop: eight modesets converging 114 guest px short of the panel.
+    ///
+    /// Numbers verbatim from the `LIMINA_DISPLAY_TRACE=1` boot of 2026-08-08 that caught it — a
+    /// fullscreen restore on the 14" built-in, no hotplug needed.
+    #[test]
+    fn a_fullscreen_window_is_never_reshaped() {
+        // The first poisoned tick: a full-panel content view (1512×949) "reshaped" to 1324×831,
+        // because the clamp used the visible frame (859 pt) rather than the panel.
+        assert_eq!(
+            migration_reshape((1512.0, 949.0), (3024, 1898), (1512.0, 859.0), true),
+            None,
+            "fullscreen: leave the window alone"
+        );
+        // Windowed, the reshape is exactly the shipped behavior — this is the case it exists for.
+        assert_eq!(
+            migration_reshape((1600.0, 900.0), (1920, 1200), (2560.0, 1415.0), false),
+            Some(reshape_to_aspect(
+                (1600.0, 900.0),
+                (1920, 1200),
+                (2560.0, 1415.0)
+            )),
+        );
+    }
+
+    /// The inset sensor only reads true when the window really is filling the panel. A view that
+    /// is narrower than the screen is mid-transition (or mid-reshape) and its height says nothing
+    /// about what the camera housing costs — believing it is what let one bad tick ratchet into
+    /// the loop above, and 151 pt sailed through the plain 0..200 bounds check.
+    #[test]
+    fn the_inset_is_only_learned_from_a_full_width_fullscreen_view() {
+        // The honest measurement: full-width view, 33 pt of housing.
+        assert_eq!(
+            fullscreen_inset_measurement((1512.0, 982.0), (1512.0, 949.0)),
+            Some(33.0)
+        );
+        // The poisoned ones, both from the trace. Narrower than the panel ⇒ not a measurement.
+        assert_eq!(
+            fullscreen_inset_measurement((1512.0, 982.0), (1324.0, 831.0)),
+            None
+        );
+        assert_eq!(
+            fullscreen_inset_measurement((1512.0, 982.0), (1415.0, 778.0)),
+            None
+        );
+        // A notchless external display in fullscreen measures zero, and zero is a real answer.
+        assert_eq!(
+            fullscreen_inset_measurement((2560.0, 1440.0), (2560.0, 1440.0)),
+            Some(0.0)
+        );
+        // Nonsense never reaches the cache: a taller-than-screen view, or a degenerate screen.
+        assert_eq!(
+            fullscreen_inset_measurement((1512.0, 982.0), (1512.0, 1000.0)),
+            None
+        );
+        assert_eq!(fullscreen_inset_measurement((0.0, 0.0), (0.0, 0.0)), None);
     }
 
     #[test]

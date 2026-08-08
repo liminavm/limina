@@ -768,6 +768,16 @@ fn overlay_trace() -> bool {
     *ON.get_or_init(|| std::env::var_os("LIMINA_OVERLAY_TRACE").is_some_and(|v| v != "0"))
 }
 
+/// Whether to log every display-sizing decision to stderr (`LIMINA_DISPLAY_TRACE=1`): what
+/// fullscreen inset was measured and for which display id, what size the host-mode push
+/// derived from it, and what the window was reshaped to. The oracle for the class of bug
+/// where the guest resolution and the window's own geometry feed each other — a host display
+/// hotplug drove eight modesets converging 114 px short of the screen (2026-08-08).
+fn display_trace() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LIMINA_DISPLAY_TRACE").is_some_and(|v| v != "0"))
+}
+
 fn focus_is_on_screen(screen: Option<&NSScreen>, mtm: MainThreadMarker) -> bool {
     let (Some(screen), Some(main)) = (screen, NSScreen::mainScreen(mtm)) else {
         return true;
@@ -1525,7 +1535,27 @@ pub fn run(
                     && !apply_overlay.is_active()
                 {
                     if let Some(s) = window.screen() {
-                        hostdisplay::learn_fullscreen_inset(&s, s.frame().size.height - sz.height);
+                        let frame = s.frame().size;
+                        let observed = fit::fullscreen_inset_measurement(
+                            (frame.width, frame.height),
+                            (sz.width, sz.height),
+                        );
+                        if display_trace() {
+                            eprintln!(
+                                "[DISPTRACE] learn id={} name={:?} frame={}x{} view={}x{} \
+                                 observed={observed:?} was={}",
+                                hostdisplay::display_id_of(&s),
+                                s.localizedName().to_string(),
+                                frame.width,
+                                frame.height,
+                                sz.width,
+                                sz.height,
+                                hostdisplay::fullscreen_inset(&s),
+                            );
+                        }
+                        if let Some(observed) = observed {
+                            hostdisplay::learn_fullscreen_inset(&s, observed);
+                        }
                     }
                 }
                 // No housing arithmetic here any more. Under `avoid` AppKit insets the native
@@ -1656,13 +1686,32 @@ pub fn run(
                                 if let Some(v) = window.contentView() {
                                     let cur = v.frame().size;
                                     let vis = screen.visibleFrame().size;
-                                    let (nw, nh) = fit::reshape_to_aspect(
+                                    let fullscreen =
+                                        window.styleMask().contains(NSWindowStyleMask::FullScreen);
+                                    let reshaped = fit::migration_reshape(
                                         (cur.width, cur.height),
                                         want,
                                         (vis.width, vis.height),
+                                        fullscreen,
                                     );
-                                    window
-                                        .setContentSize(NSSize::new(f64::from(nw), f64::from(nh)));
+                                    if display_trace() {
+                                        eprintln!(
+                                            "[DISPTRACE] push want={want:?} key={key:x} \
+                                             migrated={migrated} fullscreen={fullscreen} inset={} \
+                                             screen_h={} vis_h={} reshape=({},{})->{reshaped:?}",
+                                            notch_inset_for(&screen, cfg_notch),
+                                            screen.frame().size.height,
+                                            vis.height,
+                                            cur.width,
+                                            cur.height,
+                                        );
+                                    }
+                                    if let Some((nw, nh)) = reshaped {
+                                        window.setContentSize(NSSize::new(
+                                            f64::from(nw),
+                                            f64::from(nh),
+                                        ));
+                                    }
                                 }
                                 desired_size.store(
                                     crate::session::pack_size(want.0, want.1),

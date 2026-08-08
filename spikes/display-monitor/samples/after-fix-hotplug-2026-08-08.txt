@@ -1,0 +1,26 @@
+# after-fix hotplug verification, 2026-08-08 — 4 physical BenQ plug/unplug cycles
+# (DISPTRACE learn lines collapsed: 33k identical ticks, shown as counts)
+
+## pushes
+[2026-08-08T12:27:29Z] display-control: pushed "display id=0 size=3024x1898 refresh=120 dpi=255 vendor=LMN product=41038 serial=836230465 name=Built-in%20Retina%20Display range=24-120/47-234/838 alt=3024x1898@60" to the guest
+[2026-08-08T12:32:00Z] display-control: pushed "display id=0 size=2560x1440 refresh=60 dpi=123 vendor=LMN product=32795 serial=1816328933 name=BenQ%20LCD" to the guest
+[2026-08-08T12:32:20Z] display-control: pushed "display id=0 size=3024x1898 refresh=120 dpi=255 vendor=LMN product=41038 serial=836230465 name=Built-in%20Retina%20Display range=24-120/47-234/838 alt=3024x1898@60" to the guest
+[2026-08-08T12:32:41Z] display-control: pushed "display id=0 size=2560x1440 refresh=60 dpi=123 vendor=LMN product=32795 serial=1816328933 name=BenQ%20LCD" to the guest
+[2026-08-08T12:32:48Z] display-control: pushed "display id=0 size=3024x1898 refresh=120 dpi=255 vendor=LMN product=41038 serial=836230465 name=Built-in%20Retina%20Display range=24-120/47-234/838 alt=3024x1898@60" to the guest
+[2026-08-08T12:34:37Z] display-control: pushed "display id=0 size=2560x1440 refresh=60 dpi=123 vendor=LMN product=32795 serial=1816328933 name=BenQ%20LCD" to the guest
+[2026-08-08T12:34:56Z] display-control: pushed "display id=0 size=3024x1898 refresh=120 dpi=255 vendor=LMN product=41038 serial=836230465 name=Built-in%20Retina%20Display range=24-120/47-234/838 alt=3024x1898@60" to the guest
+[2026-08-08T12:35:06Z] display-control: pushed "display id=0 size=2560x1440 refresh=60 dpi=123 vendor=LMN product=32795 serial=1816328933 name=BenQ%20LCD" to the guest
+
+## DISPTRACE push
+[DISPTRACE] push want=(3024, 1898) key=31d7dd41a04e0078 migrated=true fullscreen=true inset=33 screen_h=982 vis_h=859 reshape=(1512,949)->None
+[DISPTRACE] push want=(2560, 1440) key=6c42fae5801b003c migrated=true fullscreen=true inset=0 screen_h=1440 vis_h=1410 reshape=(2560,1440)->None
+[DISPTRACE] push want=(3024, 1898) key=31d7dd41a04e0078 migrated=true fullscreen=true inset=33 screen_h=982 vis_h=949 reshape=(1512,949)->None
+[DISPTRACE] push want=(2560, 1440) key=6c42fae5801b003c migrated=true fullscreen=true inset=0 screen_h=1440 vis_h=1410 reshape=(2560,1440)->None
+[DISPTRACE] push want=(3024, 1898) key=31d7dd41a04e0078 migrated=true fullscreen=true inset=33 screen_h=982 vis_h=949 reshape=(1512,949)->None
+[DISPTRACE] push want=(2560, 1440) key=6c42fae5801b003c migrated=true fullscreen=true inset=0 screen_h=1440 vis_h=1410 reshape=(2560,1440)->None
+[DISPTRACE] push want=(3024, 1898) key=31d7dd41a04e0078 migrated=true fullscreen=true inset=33 screen_h=982 vis_h=949 reshape=(1512,949)->None
+[DISPTRACE] push want=(2560, 1440) key=6c42fae5801b003c migrated=true fullscreen=true inset=0 screen_h=1440 vis_h=1410 reshape=(2560,1440)->None
+
+## DISPTRACE learn (collapsed)
+28774 id=1 name="Built-in Retina Display" frame=1512x982 view=1512x949 observed=Some(33.0)
+9362 id=3 name="BenQ LCD" frame=2560x1440 view=2560x1440 observed=Some(0.0)
