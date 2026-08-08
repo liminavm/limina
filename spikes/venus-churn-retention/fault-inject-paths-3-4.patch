@@ -1,0 +1,147 @@
+diff --git a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
+index fbbca978..ddf1c663 100644
+--- a/src/venus/vkr_device_memory.c
++++ b/src/venus/vkr_device_memory.c
+@@ -978,7 +978,19 @@ vkr_device_memory_release(struct vkr_device_memory *mem)
+    mem->limina_budget_size = 0;
+ 
+    vkr_mtl_shm_free(mem->mtl_shm);
+-   vkr_mtl_iosurface_release_ref(mem->imported_iosurface);
++   /* FAULT INJECTION — matrix path 4's RED arm. NOT shipped: this hunk lives only in
++    * spikes/venus-churn-retention/fault-inject-paths-3-4.patch.
++    *
++    * The first attempt skipped the whole instance sweep in vkr_context_destroy, which SIGSEGV'd
++    * the worker: the object table is destroyed right after, and freeing objects whose device and
++    * instance are already gone is a use-after-free. A fault injector that crashes the process
++    * proves nothing about retention. So drop exactly the reference under test instead — the
++    * borrowed +1 on an imported client IOSurface — and leave the object graph intact. */
++   if (access("/tmp/limina-fault-fatal-skip-release", F_OK) == 0 && mem->imported_iosurface) {
++      vkr_log_error("[LIMINA-FAULT] dropping the release of imported IOSurface (path 4 RED)");
++   } else {
++      vkr_mtl_iosurface_release_ref(mem->imported_iosurface);
++   }
+    if (mem->gbm_bo)
+       vkr_gbm_bo_destroy(mem->gbm_bo);
+    if (mem->udmabuf_fd >= 0)
+diff --git a/src/venus/vkr_image.c b/src/venus/vkr_image.c
+index bfa41a5b..a9499dbd 100644
+--- a/src/venus/vkr_image.c
++++ b/src/venus/vkr_image.c
+@@ -14,6 +14,30 @@
+ #include "vulkan/vulkan_metal.h"
+ #include "vkr_metal_helpers.h"
+ 
++/* FAULT INJECTION — matrix path 3. NOT shipped; see
++ * spikes/venus-churn-retention/fault-inject-paths-3-4.patch.
++ *
++ * The handshake between the vehicle and the injector: limina-testcomp's `badmod` mode asks for
++ * exactly this modifier, which no driver implements, so KosmicKrisp refuses the create with
++ * VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT. Matching on the value keeps the
++ * injection scoped to creates that are *about* to fail — no other traffic allocates anything
++ * extra, so the census stays readable and the path-4 budget stays untouched. */
++#include <unistd.h>
++#define LIMINA_FAULT_DOOMED_MODIFIER 0x00fedeadbeef0123ull
++
++static bool
++limina_fault_doomed_create(const VkImageCreateInfo *ci)
++{
++   const VkImageDrmFormatModifierListCreateInfoEXT *list = vkr_find_struct(
++      ci->pNext, VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT);
++   if (!list)
++      return false;
++   for (uint32_t i = 0; i < list->drmFormatModifierCount; i++)
++      if (list->pDrmFormatModifiers[i] == LIMINA_FAULT_DOOMED_MODIFIER)
++         return true;
++   return false;
++}
++
+ /* MTLPixelFormat values (Metal/MTLPixelFormat.h) used for IOSurface backing. */
+ #define LIMINA_MTLPixelFormatRGBA8Unorm 70
+ #define LIMINA_MTLPixelFormatRGBA8Unorm_sRGB 71
+@@ -307,8 +331,53 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+    }
+ #endif /* __APPLE__ */
+ 
++#ifdef __APPLE__
++   /* FAULT INJECTION — matrix path 3's RED arm. NOT shipped: this hunk lives only in
++    * spikes/venus-churn-retention/fault-inject-paths-3-4.patch.
++    *
++    * The shipped config allocates NOTHING before the driver call (the KK-linear path
++    * allocates only after a successful create), so a failed create cannot strand anything —
++    * which means a green census would certify a vehicle that arms nothing. This synthesizes
++    * the class: take a host allocation BEFORE the create, then on failure either release it
++    * (=1, GREEN) or drop it on the floor (=2, RED, the classic dropped release).
++    *
++    *   LIMINA_FAULT_ERRPATH=1  allocate pre-create, free correctly on the error path
++    *   LIMINA_FAULT_ERRPATH=2  allocate pre-create, LEAK it on the error path
++    */
++   struct vkr_mtl_iosurface *limina_fault_surf = NULL;
++   if (ci && limina_fault_doomed_create(ci)) {
++      /* Fires ONLY for a create the vehicle marked doomed (the private modifier below), so
++       * arming it adds no allocation to any other traffic — the alternative, allocating for
++       * every create, would both drown the census and eat the path-4 budget. */
++      struct vkr_device *fault_dev = vkr_device_from_handle(args->device);
++      if (fault_dev && fault_dev->mtl_device && ci->extent.width && ci->extent.height) {
++         limina_fault_surf = vkr_mtl_iosurface_alloc(fault_dev->mtl_device,
++                                                     ci->extent.width, ci->extent.height,
++                                                     LIMINA_MTLPixelFormatBGRA8Unorm,
++                                                     (uint32_t)'BGRA', 4, 0);
++         vkr_log_error("[LIMINA-FAULT] pre-create IOSurface id=%u",
++                       limina_fault_surf ? limina_fault_surf->id : 0);
++      }
++   }
++#endif
++
+    struct vkr_image *limina_obj = vkr_image_create_and_add(dispatch->data, args);
+ 
++#ifdef __APPLE__
++   if (limina_fault_surf) {
++      /* The arm selector is a FILE, not an env var, so RED and GREEN run in one boot: a
++       * worker's environment is fixed at exec, and rebooting between arms would put a fresh
++       * guest, fresh contexts and a fresh census between two numbers meant to be compared. */
++      const bool leak =
++         args->ret != VK_SUCCESS && access("/tmp/limina-fault-leak-errpath", F_OK) == 0;
++      if (leak)
++         vkr_log_error("[LIMINA-FAULT] LEAKING IOSurface id=%u on ret=%d",
++                       limina_fault_surf->id, (int)args->ret);
++      else
++         vkr_mtl_iosurface_free(limina_fault_surf);
++   }
++#endif
++
+ #ifdef __APPLE__
+    /* Remember the create format for the MTLTEXTURE import path (vkr_device_memory.c):
+     * a dedicated import allocation names this image, and the adopted texture's pixel
+
+--- HOW TO USE (not part of the diff) -------------------------------------------------------
+Apply to third_party/virglrenderer (a clone of liminavm/virglrenderer at the manifest rev),
+rebuild with scripts/build-virglrenderer.sh, and boot with LIMINA_GPU_MEM_BUDGET_MIB=2048.
+
+    git -C third_party/virglrenderer apply ../../spikes/venus-churn-retention/fault-inject-paths-3-4.patch
+    ./scripts/build-virglrenderer.sh
+    ./crates/limina-vmm/sign.sh
+
+Both injectors are OFF unless a file exists ON THE HOST — a file rather than an env var so RED
+and GREEN run against ONE boot (a worker's environment is fixed at exec, and rebooting between
+arms puts a fresh guest, fresh contexts and a fresh census between two numbers that only mean
+anything compared to each other):
+
+    /tmp/limina-fault-leak-errpath        path 3 RED — leak the pre-create IOSurface on the
+                                          error path instead of freeing it
+    /tmp/limina-fault-fatal-skip-release  path 4 RED — drop the release of an imported client
+                                          IOSurface at teardown
+
+testcomp/teardown-matrix.sh path3 / path4 drive both arms and touch these itself. REMEMBER THE
+FILES ARE HOST-SIDE: touching them over ssh puts them in the guest, where nothing reads them,
+and the RED then runs as a second GREEN — a broken arm that looks like a clean result. Both
+arms print an injection count for exactly that reason.
+
+The path-3 injector fires ONLY for creates carrying the vehicle's private doomed modifier
+(0x00fedeadbeef0123, from limina-testcomp's `badmod`), so arming it adds no allocation to any
+other traffic.
+
+An earlier path-4 injector skipped the whole instance sweep in vkr_context_destroy and SIGSEGV'd
+the worker: the object table is destroyed immediately after, and freeing objects whose device and
+instance are already gone is a use-after-free. A fault injector that crashes the process proves
+nothing about retention — which is why this one drops exactly the reference under test and leaves
+the object graph intact.

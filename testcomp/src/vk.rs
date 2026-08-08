@@ -34,6 +34,11 @@ use std::ffi::CStr;
 /// vehicle is scoped to it — an explicit choice, not an oversight.
 pub const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 
+/// A modifier no vendor implements: vendor id `0xff` (unassigned in `drm_fourcc.h`) with a
+/// nonsense payload. Used only by `create_image_bad_modifier`, whose whole job is to be refused.
+/// It is NOT `DRM_FORMAT_MOD_INVALID` (`0x00ff_ffff_ffff_ffff`), which drivers special-case.
+const BOGUS_MODIFIER: u64 = 0x00fe_dead_beef_0123;
+
 /// DRM `XRGB8888` little-endian memory order is `[B, G, R, X]`, which is
 /// `VK_FORMAT_B8G8R8A8_UNORM` on the Vulkan side. The pair must agree or KMS scans out
 /// channel-swapped pixels that still "work".
@@ -244,6 +249,65 @@ impl Vk {
             offset: layout.offset as u32,
             modifier: DRM_FORMAT_MOD_LINEAR,
         })
+    }
+
+    /// Ask for a create the host driver **must** refuse: modifier tiling with a LIST that offers
+    /// only a modifier nobody implements. KosmicKrisp answers
+    /// `VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT` ("modifier list offers none we
+    /// support", `kk_image.c`) — the `-1000158000` that fired 38 s before the 2026-08-06 jetsam
+    /// kill, reached deliberately instead of by waiting for totem.
+    ///
+    /// Everything except the modifier value is byte-for-byte `scanout_image`'s create, so a
+    /// difference in the host's behaviour can only be the failure and not the shape of the
+    /// request.
+    ///
+    /// Returns the driver's `VkResult` rather than an `anyhow::Error`: which error came back is
+    /// the measurement, and a **success** is the arm's validity gate failing (see `badmod`).
+    pub fn create_image_bad_modifier(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> std::result::Result<vk::Image, vk::Result> {
+        let modifiers = [BOGUS_MODIFIER];
+        let mut modifier_list = vk::ImageDrmFormatModifierListCreateInfoEXT::default()
+            .drm_format_modifiers(&modifiers);
+        let mut external = vk::ExternalMemoryImageCreateInfo::default()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+        let image_ci = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(SCANOUT_FORMAT)
+            .extent(vk::Extent3D { width, height, depth: 1 })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+            .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .push_next(&mut external)
+            .push_next(&mut modifier_list);
+        unsafe { self.device.create_image(&image_ci, None) }
+    }
+
+    /// Allocate `mib` MiB in ONE `VkDeviceMemory` and keep it — the deterministic way to trip
+    /// limina's host GPU-memory budget (`vkr_budget_admit` refuses, `vkr_budget_kills_context`
+    /// sets the context FATAL) without provoking a real ring fault.
+    ///
+    /// Dedicated-free and unexported on purpose: the point is a plain device allocation big
+    /// enough to be refused, not a scanout. venus submits `vkAllocateMemory` asynchronously and
+    /// discards our `VkResult`, so a refusal is **invisible here** — `Ok` proves nothing about
+    /// what the host did, and the host log is the only oracle for it.
+    pub fn hog(&self, mib: u64) -> std::result::Result<vk::DeviceMemory, vk::Result> {
+        let want = vk::MemoryPropertyFlags::DEVICE_LOCAL;
+        let index = self
+            .memory_types
+            .iter()
+            .position(|t| t.property_flags.contains(want))
+            .unwrap_or(0) as u32;
+        let alloc = vk::MemoryAllocateInfo::default()
+            .allocation_size(mib * 1024 * 1024)
+            .memory_type_index(index);
+        unsafe { self.device.allocate_memory(&alloc, None) }
     }
 
     /// Transition a fresh scanout image to `GENERAL` and clear it, so the buffer carries real

@@ -142,7 +142,10 @@ the combination. One test per path; split only when one goes red.
 3. Error-path partial — the `-1000158000`
    (`VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT`) create failure that fired 38 s before
    the jetsam kill. A partially-built object on an error path is the classic dropped release.
+   **RUN 2026-08-08 (§10): clean, and structurally so — nothing is allocated before the create.**
 4. Ring-FATAL / poisoned context — teardown taking a different branch than the healthy one.
+   **RUN 2026-08-08 (§10): the premise is wrong — there is no second branch. What FATAL changes
+   is WHEN: nothing is released until the guest process dies.**
 
 **Holders (2):** venus-side ref, vrend-side ref.
 
@@ -318,5 +321,57 @@ port (limina `93ff513`, libkrun `d9afca2`), plus a store clear when a dead worke
    while the first and fourth rows got the whole investigation, because they were the ones a
    census could see. **The holder no instrument reaches is the one to test first, not last.**
 
-What remains open is paths 3 and 4, and §7 caveat #1 — and neither is now suspected of the §1
-incident, since the holder that produced it has been found and closed.
+What remained open was paths 3 and 4, and §7 caveat #1 — see §10; the matrix is now fully run.
+
+## 10. Paths 3 and 4, and §7's caveat, measured (2026-08-08)
+
+Neither path was still a suspect for §1 by the time it was run — §9 had closed that — so this is
+the matrix being finished rather than a hunt. Full numbers, traps and per-arm evidence are in
+`testcomp/README.md` §M3e and §M3f; `testcomp/teardown-matrix.sh path3 | shipped3 | path4` re-runs
+all of it, and the REDs need `fault-inject-paths-3-4.patch` on the worker.
+
+**Path 3 — the error-path partial: nothing is stranded, and the reason is structural.** The
+trigger is real and deterministic (`limina-testcomp badmod` asks for a modifier no driver
+implements; KosmicKrisp answers `-1000158000`, `[totem]`'s own error). 40 refused creates leave
+the census exactly flat. But the flatness is only worth reading because of *why*: with KK's
+native `VK_EXT_image_drm_format_modifier` a modifier-tiled create reaches the driver verbatim and
+**vkr allocates nothing before it** — the KK-linear IOSurface is allocated only after
+`args->ret == VK_SUCCESS`. There is no partially-built object on this path to strand. The RED had
+to synthesize one (pre-create allocation, dropped on the error path: +40 alive), and that is what
+makes the shipped zero a result rather than an untested arm.
+
+Two things the run added that the matrix never asked for:
+
+- **The failing create does not poison the ring.** The same context allocates and renders
+  normally afterwards (`survived=true`, every run). venus answered *this* create synchronously,
+  so the guest saw the error and never used a ghost handle — the incident's "ghost object" half
+  is not reproduced by this vehicle, and the host's own warning ("its next use will ring-FATAL")
+  is accurate only for an async create.
+- **The error path is reachable by any guest, cheaply.** A client asking for an unsupported
+  modifier gets a clean per-context error and nothing else. That is the right behaviour, and it
+  is now a test rather than a hope.
+
+**Path 4 — ring-FATAL teardown: the branch premise was wrong, and the real answer is about
+timing.** `vkr_context_destroy` gates its sweep on `ctx->instance` and nothing else, so a FATAL
+context tears down through exactly the same code as a healthy one — there is no second branch to
+audit. What a FATAL changes is *when* teardown happens at all:
+
+| moment | what the host holds |
+|---|---|
+| context FATAL, guest process still alive | **everything** — census flat, budget still counting every byte |
+| guest process gone | released: the full sweep runs (`with a valid instance`) and the borrowed `+1`s come back |
+
+That middle row is **§7's caveat #1 turned into a measurement**: a FATAL context releases nothing
+until its guest process goes away — the state the 2026-08-06 incident sat in for 38 s. It is not
+a leak (the memory is still owned by a live client, and a client whose ring is dead may still be
+killed by its user), but it is the shape a leak wears, and anything reading host memory during
+that window will mis-read it.
+
+Both holders (venus and gbm/vrend, provenance proved per arm) behave identically, each against a
+RED that drops the release at teardown and does accumulate.
+
+**The lever worth remembering: the GPU-memory budget is a deterministic context killer.** Boot
+with `LIMINA_GPU_MEM_BUDGET_MIB=2048`, have the guest ask for 4 GiB, and `vkr_budget_kills_context`
+sets that context FATAL on demand — no ring fault to provoke, no timing to win. Put the
+over-allocation in the process that *holds* the references, not in a client: the budget kills the
+context that asked.

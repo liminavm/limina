@@ -70,6 +70,8 @@ It is built bottom-up, and each step is gated on evidence rather than on compili
 | **3b** ✅ | teardown paths × holders | discriminates between the paths in `buffer-lifetime-matrix.md` §4, against an oracle shown to move (+41) under a deliberate leak. Passed 2026-08-07. |
 | **3c** ✅ | vrend-allocated (gbm) client buffers | reaches the **asymmetric** holder of matrix §3, the observed compositor-quit shape. Needs its own RED (a new failure class) *and* positive host-side proof the buffers really are classic. Passed 2026-08-07 — see below. |
 | **3d** ✅ | the holder in the *other process* — does the supervisor let go when the compositor quits? | attribute the post-quit residual to a process by killing it, and show a fix moves the number. Passed 2026-08-07 — **this is the one that found matrix §1's actual cause.** See below. |
+| **3e** ✅ | matrix path 3 — the error-path partial | drive the incident's own `-1000158000` create failure on demand, with a RED that shows a stranded pre-create allocation would be seen. Passed 2026-08-08 — see below. |
+| **3f** ✅ | matrix path 4 — ring-FATAL teardown, both holders | kill a context deterministically via the host GPU budget while it holds a live import, and read what it releases *and when*. Passed 2026-08-08 — see below. |
 
 ### M3a's gate has two halves, and the pixels are the weaker one
 
@@ -326,6 +328,94 @@ The GREEN residual is the guest's live ring, not the cap.
   (`RESULTS.md` §0.4 lost a run to exactly that). The script asserts the worker survived before
   it reports the freed number.
 
+### M3e: the error-path partial — matrix path 3 (2026-08-08)
+
+`teardown-matrix.sh path3` / `shipped3`. The matrix's suspicion: "a partially-built object on an
+error path is the classic dropped release — far enough along to have taken a host allocation, not
+far enough to be registered where the sweep will find it." The trigger is the incident's own
+error, on demand: `limina-testcomp badmod` asks for a modifier no driver implements, and
+KosmicKrisp answers `VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT` — `-1000158000`, the
+code `[totem]` produced 38 s before the 2026-08-06 jetsam kill.
+
+| arm | alive IOSurfaces, before → after | host refusals | injections |
+|---|---|---|---|
+| **RED** — pre-create alloc, leaked on the error path | 2 → **42** | 40 | 40 |
+| **GREEN** — pre-create alloc, freed on the error path | 42 → **42** (flat) | 40 | 0 |
+| **SHIPPED** — clean build | 2 → **2** (flat) | 40 | 0 |
+
+**Read the shipped code before reading the shipped number, because it decides what the number can
+mean.** With KK's native `VK_EXT_image_drm_format_modifier`, a modifier-tiled create reaches the
+driver verbatim and vkr allocates **nothing** before it — the KK-linear IOSurface is allocated
+only after `args->ret == VK_SUCCESS` (`vkr_image.c`). So the shipped path *cannot* strand anything
+on this error, and a flat census on its own would have certified a vehicle that arms nothing. The
+RED exists to synthesize the class: `fault-inject-paths-3-4.patch` takes a host allocation before
+the doomed create and drops it on the error path. That is what earns the right to report the
+shipped flatness as a result.
+
+**Two things the arm found that the matrix did not ask for.**
+
+- **The failing create does not poison the ring.** `survived=true` in every run: after 40 refused
+  creates the same context allocates, clears and exports a scanout normally. The incident's
+  "ghost object" half is *not* reproduced here, and the reason is visible in the client — venus
+  answered this create **synchronously**, so the guest saw the error and never used the ghost
+  handle. Whether totem's create was async is unknown; the host-side error path is the same
+  either way, which is what path 3 was asking about.
+- **The host log's own warning overstates it.** `vkCreateImage failed host-side … the object id
+  is now a ghost and its next use will ring-FATAL` fired 40 times against a client that was never
+  in danger. Accurate for an async create, misleading for a synchronous one.
+
+### M3f: ring-FATAL teardown — matrix path 4 (2026-08-08)
+
+`teardown-matrix.sh path4 [venus|gbm]`. The matrix framed this as "teardown taking a different
+branch than the healthy one". **Reading `vkr_context_destroy` says it does not**: the sweep is
+gated on `ctx->instance` and nothing else, so fatal or healthy, the same sweep runs. What a FATAL
+actually changes is *when* — and that turned out to be the interesting half.
+
+The vehicle is deterministic and needs no real ring fault: `--hog-mib 4096` allocates over
+limina's host GPU budget from inside the **compositor** (where the borrowed `+1`s live), which
+`vkr_budget_kills_context` refuses and answers by setting that context FATAL. Both holders:
+
+| arm | `lookup (+N)` before → settled | injections | verdict |
+|---|---|---|---|
+| RED, venus client | +10 → **+11** (baseline climbed +10 → +13 across the arm) | 3 | retains |
+| GREEN, venus client | +13 → **+12** | 0 | returns |
+| RED, gbm client | +16 → **+17** | 3 | retains |
+| GREEN, gbm client | +19 → **+18** | 0 | returns |
+
+The gbm arm's provenance is proved per-arm as M3c requires — `vrend bucket: … 7.9 MiB (IOSurface)`
+is exactly 1920×1080×4, so those really were classic vrend resources and not venus blobs.
+
+**The finding is the middle reading, not the last one.** With the context FATAL and the
+compositor *process still alive*, nothing is reclaimed at all — the census does not move, and the
+budget still counts every byte. Everything comes back only when the process dies. That is matrix
+§7's caveat #1 stated as a measurement: **a FATAL context releases nothing until its guest process
+goes away**, which is exactly the state the 2026-08-06 incident sat in for 38 s.
+
+Making the vehicle able to show that took a change of its own: a compositor that exits on its
+first failed present runs its destructors, the guest destroys its `VkInstance`, and the host takes
+the ordinary `instance was gone` teardown — never the state under test. `--hog-mib` now keeps it
+up (`staying alive with a FATAL context`).
+
+**Four harness bugs this pair cost, all of the same family: a broken arm that reads as a clean
+result.** They are worth listing because every one of them printed a plausible number.
+
+1. **The fault-selector files are read by the WORKER, on the HOST filesystem.** Touching them
+   over ssh puts them in the guest, where nothing reads them, and the RED runs as a second GREEN.
+2. **A "shipped" arm measured against a build that still carries the injector** is not a shipped
+   reading. The path-3 injector keys on the vehicle's private modifier and cannot be disarmed by
+   the vehicle, so `shipped3` is a separate mode, run against a clean build, that asserts the
+   injector line count is zero.
+3. **A fault injector that crashes the worker proves nothing.** The first path-4 RED skipped the
+   whole instance sweep; the object table is destroyed immediately after, so freeing objects whose
+   device and instance are gone SIGSEGV'd the process mid-arm. Drop the one reference under test.
+4. **Log-slice counters lie in the safe direction.** `since $FROM | grep -c` reported "0 refusals"
+   for arms that had plainly refused, because `refs` sleeps ~15 s before `FROM` is marked and
+   anything firing in that gap lands above the slice. These events are monotonic — take
+   before/after totals of the whole log instead, with the baseline captured before *anything* in
+   the arm runs. Same class: the hog itself raced the tick client until its trigger was made
+   explicit (`/tmp/limina-testcomp-hog`), and the refusal arrives a second or two after the
+   trigger, so the harness waits for it rather than sleeping a guess.
+
 ### M2's gate: a real client's pixels on the scanout (2026-08-07)
 
 `limina-testcomp run` on the guest console, `limina-testcomp client` against it, and the
@@ -435,7 +525,7 @@ import, compositing with real surfaces, buffer lifetime across a client's death.
 
 **It must reproduce a real failure at least once before any negative result from it
 counts.** kmschurn earned that (+606 regions against the bug, +23 with the fix, over an
-identical guest workload). testcomp has earned it four times, and the rule is **per failure
+identical guest workload). testcomp has earned it six times, and the rule is **per failure
 class**:
 
 | class | RED | GREEN | separation |
@@ -444,16 +534,17 @@ class**:
 | **client dmabuf retention, venus-owned (M3b)** | `--leak-imports`: +41 alive IOSurfaces | shipped: +0 | flat vs 41 |
 | **client dmabuf retention, vrend-owned (M3c)** | `--leak-imports`: `lookup +41`, 316.9 MiB held in the vrend bucket | shipped: `+0`, `0 B live` | flat vs 41 |
 | **supervisor retention past compositor quit (M3d)** | before the fix: +195.9 MiB, permanent | after: +23.8 MiB | 8.2x |
+| **error-path partial (M3e)** | pre-create alloc leaked on the error path: +40 alive | freed: flat | flat vs 40 |
+| **ring-FATAL teardown, both holders (M3f)** | dropped release at teardown: borrowed refs accumulate (+3 per arm) | shipped: returns them (−1) | opposite directions |
 
 M3d's RED is the odd one: it is not a deliberately-broken build but the **shipped** one, because
 the failure was live in it. That is the strongest form of the rule — the vehicle reproduced a
 real bug, on a real host, before it was fixed.
 
 So "testcomp shows no leak on the client dmabuf path" is now a statement with content — for
-**both** holders, across paths 1, 2, 2b and 1'. It still says nothing about:
+**both** holders, across every teardown path the matrix names: 1, 2, 2b, 1', 3 and 4, each gated
+on its own RED. `buffer-lifetime-matrix.md` §4 is closed.
 
-- **paths 3 and 4** — the `-1000158000` error-path partial and the ring-FATAL teardown. Path 4
-  has a cheap deterministic vehicle available: an over-cap allocation trips
-  `vkr_budget_kills_context` (`vkr_device_memory.c:285`), giving FATAL teardown on demand.
-
-Each of those needs its own RED before its own green means anything.
+What it still says nothing about is anything outside that matrix — most of all the classes no
+vkr-side oracle can reach at all, which is the lesson M3d paid for: the holder no instrument
+reaches is the one to test first, not last.

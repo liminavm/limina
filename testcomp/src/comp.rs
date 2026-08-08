@@ -73,6 +73,9 @@ use crate::vk::{Imported, ImportedImage, ScanoutImage, Vk};
 /// that could mean anything.
 const BACKDROP: [f32; 4] = [0.10, 0.10, 0.25, 1.0];
 
+/// The harness touches this (in the GUEST) when it wants `--hog-mib` to fire. See `maybe_hog`.
+const HOG_TRIGGER: &str = "/tmp/limina-testcomp-hog";
+
 pub struct Comp {
     pub display_handle: DisplayHandle,
     pub compositor_state: CompositorState,
@@ -108,6 +111,18 @@ pub struct Comp {
     pub render: Render,
     start: Instant,
     pub running: bool,
+
+    /// PATH 4 of the teardown matrix. Once at least one client dmabuf is imported — so the
+    /// context under test is holding a borrowed host `+1` — allocate this many MiB in one go,
+    /// which limina's host GPU-memory budget refuses and answers by setting **this** context
+    /// FATAL (`vkr_budget_kills_context`). A deterministic ring-FATAL, with no need to provoke a
+    /// real ring fault.
+    ///
+    /// The hog goes in the COMPOSITOR and not a client on purpose: the budget kills the context
+    /// that over-allocates, and the borrowed references live on the importer's side. Hogging from
+    /// a client would kill a context holding nothing and measure a teardown nobody asked about.
+    hog_mib: Option<u64>,
+    hogged: bool,
 }
 
 /// What a client committed, ready to be composited.
@@ -186,6 +201,12 @@ impl Render {
             import_failures: 0,
             leak_imports,
         }
+    }
+
+    /// How many client imports are cached right now — the count of borrowed host `+1`s this
+    /// context is holding, which is what makes a teardown measurement mean anything.
+    pub fn imports_live(&self) -> usize {
+        self.imports.len()
     }
 
     /// Import a client's dmabuf, or return the cached import if this buffer is already known.
@@ -347,6 +368,7 @@ impl Comp {
         frames: Option<u64>,
         hold_buffers: bool,
         leak_imports: bool,
+        hog_mib: Option<u64>,
     ) -> Result<()> {
         let mut event_loop: EventLoop<Comp> = EventLoop::try_new().context("calloop")?;
         let display: Display<Comp> = Display::new().context("wayland display")?;
@@ -378,12 +400,20 @@ impl Comp {
             render: Render::new(vk, out, leak_imports),
             start: Instant::now(),
             running: true,
+            hog_mib,
+            hogged: false,
         };
         if hold_buffers {
             log::warn!("--hold-buffers: client buffers will NOT be released (M3b teardown mode)");
         }
         if leak_imports {
             log::warn!("--leak-imports: RED arm — imports are retained forever, on purpose");
+        }
+        if let Some(mib) = hog_mib {
+            log::warn!(
+                "--hog-mib {mib}: will trip the host GPU budget when an import is live AND \
+                 {HOG_TRIGGER} exists"
+            );
         }
 
         // `new_auto` needs XDG_RUNTIME_DIR, which a `sudo` shell over non-login ssh does not
@@ -425,6 +455,7 @@ impl Comp {
                 .dispatch(Some(Duration::from_millis(100)), &mut state)
                 .context("event loop")?;
             state.display_handle.flush_clients().ok();
+            state.maybe_hog();
             if let Some(limit) = frames {
                 if state.render.frames >= limit {
                     break;
@@ -445,6 +476,33 @@ impl Comp {
         Ok(())
     }
 
+    /// Trip the host GPU-memory budget, once, as soon as this context is holding a live import.
+    ///
+    /// Nothing here can tell whether it worked: venus submits `vkAllocateMemory` asynchronously
+    /// and throws the host's `VkResult` away, so the allocation "succeeds" guest-side whether the
+    /// host admitted it or killed the context for asking. The worker log is the only oracle —
+    /// `vkr_budget_refused` names the size and the context, and the FATAL follows it.
+    fn maybe_hog(&mut self) {
+        let Some(mib) = self.hog_mib else { return };
+        if self.hogged || self.render.imports_live() == 0 {
+            return;
+        }
+        // WHEN is the harness's call, not ours. Firing on "an import exists" alone raced the
+        // census-tick client every time: `refs` connects a throwaway client to make the worker
+        // allocate, that import satisfied the condition, and the context was already dead before
+        // the measurement window opened — with the refusal off the top of the log slice, so the
+        // run read as "no refusal, both arms identical". Wait to be told.
+        if !std::path::Path::new(HOG_TRIGGER).exists() {
+            return;
+        }
+        self.hogged = true;
+        println!("HOG SUBMITTED mib={mib} imports_live={}", self.render.imports_live());
+        match self.render.vk.hog(mib) {
+            Ok(_) => log::warn!("--hog-mib {mib}: guest-side Ok (says nothing — see the host log)"),
+            Err(e) => log::warn!("--hog-mib {mib}: guest-side refusal {e:?}"),
+        }
+    }
+
     /// Composite whatever clients have committed, flip, then answer their frame callbacks.
     ///
     /// Order matters: a callback says "the content you committed has been shown", so sending
@@ -453,6 +511,17 @@ impl Comp {
         let contents = std::mem::take(&mut self.pending);
         if let Err(e) = self.render.present(&contents) {
             log::error!("present: {e:#}");
+            // Once the hog has tripped the budget, this context is FATAL and every later command
+            // fails — usually as `VK_ERROR_OUT_OF_HOST_MEMORY`, which the venus ring returns for
+            // any "could not get a reply", memory or not. Exiting here would be the wrong
+            // vehicle: the process's destructors would run, the guest would destroy its
+            // VkInstance, and the host would take the ordinary `instance was gone` teardown —
+            // never the state path 4 is about. The 2026-08-06 incident's context sat FATAL for
+            // 38 s with its client alive; staying up is what reproduces that.
+            if self.hogged {
+                log::warn!("staying alive with a FATAL context (path 4) — kill me to tear down");
+                return;
+            }
             self.running = false;
             return;
         }

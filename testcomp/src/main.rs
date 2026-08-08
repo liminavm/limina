@@ -62,14 +62,39 @@ fn main() -> Result<()> {
             let mut frames = None;
             let mut hold_buffers = false;
             let mut leak_imports = false;
+            let mut hog_mib = None;
+            let mut want_hog = false;
             for arg in args {
                 match arg.as_str() {
                     "--hold-buffers" => hold_buffers = true,
                     "--leak-imports" => leak_imports = true,
+                    "--hog-mib" => want_hog = true,
+                    other if want_hog => {
+                        hog_mib = Some(other.parse::<u64>().context("--hog-mib")?);
+                        want_hog = false;
+                    }
                     other => frames = other.parse::<u64>().ok(),
                 }
             }
-            run(frames, hold_buffers, leak_imports)
+            run(frames, hold_buffers, leak_imports, hog_mib)
+        }
+        // PATH 3 of `spikes/venus-churn-retention/buffer-lifetime-matrix.md` §4: a create the
+        // host must refuse, run on purpose instead of waiting for a video player to hit it.
+        "badmod" => {
+            let count: u32 = args
+                .next()
+                .unwrap_or_else(|| "8".into())
+                .parse()
+                .context("attempt count")?;
+            let (mut w, mut h) = (1920, 1080);
+            if let Some((a, b)) = args
+                .next()
+                .and_then(|s| s.split_once('x').map(|(a, b)| (a.to_string(), b.to_string())))
+            {
+                w = a.parse().context("width")?;
+                h = b.parse().context("height")?;
+            }
+            badmod(count, w, h)
         }
         "client-churn" | "client-churn-gbm" => {
             let count: u32 = args
@@ -122,16 +147,21 @@ fn main() -> Result<()> {
         }
         other => anyhow::bail!(
             "unknown mode {other:?} — expected `probe`, `churn <frames>`, \
-             `run [frames] [--hold-buffers] [--leak-imports]`, \
-             `client|client-dmabuf|client-gbm [seconds] [WxH] [--park]`, or \
-             `client-churn|client-churn-gbm [count] [WxH]`"
+             `run [frames] [--hold-buffers] [--leak-imports] [--hog-mib N]`, \
+             `client|client-dmabuf|client-gbm [seconds] [WxH] [--park]`, \
+             `client-churn|client-churn-gbm [count] [WxH]`, or `badmod [count] [WxH]`"
         ),
     }
 }
 
 /// The compositor. Accepts clients on a Wayland socket, composites their `wl_shm` buffers
 /// over a backdrop, and page-flips the result.
-fn run(frames: Option<u64>, hold_buffers: bool, leak_imports: bool) -> Result<()> {
+fn run(
+    frames: Option<u64>,
+    hold_buffers: bool,
+    leak_imports: bool,
+    hog_mib: Option<u64>,
+) -> Result<()> {
     // `ListeningSocketSource::new_auto` needs somewhere to put the socket, and a `sudo` shell
     // over a non-login ssh has no XDG_RUNTIME_DIR at all. Defaulting it here beats failing
     // deep inside libwayland with a message about a directory nobody set.
@@ -147,7 +177,61 @@ fn run(frames: Option<u64>, hold_buffers: bool, leak_imports: bool) -> Result<()
 
     let out = Output::open(CARD)?;
     let vk = vk::Vk::new(WANT_DRIVER)?;
-    comp::Comp::run(vk, out, frames, hold_buffers, leak_imports)
+    comp::Comp::run(vk, out, frames, hold_buffers, leak_imports, hog_mib)
+}
+
+/// PATH 3 — the error-path partial. Drive `count` creates the host driver must refuse, then ask
+/// whether this context can still allocate at all.
+///
+/// The refusal is `VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT` (`-1000158000`), the
+/// same error a real client (totem) produced 38 s before the 2026-08-06 jetsam kill. The question
+/// the matrix asks is whether a create that fails *after* the host has taken an allocation for it
+/// leaves that allocation stranded — so what matters here is only that the failures are real and
+/// counted; the host census is the oracle, and it is read by `teardown-matrix.sh path3`.
+///
+/// **The validity gate is `failed=`.** venus forwards the create asynchronously and the guest
+/// driver may answer locally, in which case nothing ever reaches the host error path and a green
+/// census would certify nothing. Zero failures ⇒ the arm did not run, and it says so.
+fn badmod(count: u32, w: u32, h: u32) -> Result<()> {
+    let vk = vk::Vk::new(WANT_DRIVER)?;
+    let (mut failed, mut accepted, mut last) = (0u32, 0u32, 0i32);
+    for _ in 0..count {
+        match vk.create_image_bad_modifier(w, h) {
+            Err(e) => {
+                failed += 1;
+                last = e.as_raw();
+            }
+            Ok(image) => {
+                accepted += 1;
+                unsafe { vk.device.destroy_image(image, None) };
+            }
+        }
+    }
+
+    // Does the context still work? A create failure that poisons the ring is the incident's own
+    // shape (the guest treats an async create as success and the next command goes CS-fatal), and
+    // "the context died here" vs "the context survived" changes which teardown the host then ran.
+    let survived = match vk.scanout_image(w, h) {
+        Ok(img) => {
+            let ok = vk.clear(&img, [0.2, 0.4, 0.6, 1.0]).is_ok();
+            close_dmabuf(&img);
+            vk.destroy_image(&img);
+            ok
+        }
+        Err(_) => false,
+    };
+
+    println!(
+        "BADMOD DONE attempts={count} failed={failed} accepted={accepted} err={last} \
+         survived={survived}"
+    );
+    if failed == 0 {
+        println!(
+            "BADMOD INVALID: every create was ACCEPTED, so no host error path ran. Whatever the \
+             census says next, this arm tested nothing."
+        );
+    }
+    Ok(())
 }
 
 /// Report the output and one buffer's real layout, then exit. Run this first on any new image:

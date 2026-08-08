@@ -23,6 +23,20 @@
 #   ./teardown-matrix.sh redgreen [venus|gbm]
 #                                   the vehicle-rule gate: prove the setup can see a retained
 #                                   import OF THAT CLASS before believing any green above it
+#   ./teardown-matrix.sh path3      the ERROR-PATH PARTIAL: creates the host must refuse
+#                                   (VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT, the
+#                                   -1000158000 of the incident) — RED/GREEN, needs the fault patch
+#   ./teardown-matrix.sh shipped3   the same trigger against a CLEAN build: what limina really does
+#   ./teardown-matrix.sh path4 [venus|gbm]
+#                                   RING-FATAL teardown: the compositor over-allocates, limina's
+#                                   host GPU budget kills ITS context, and the question is what
+#                                   happens to the imports it was holding. Also with its own RED
+#
+# Paths 3 and 4 need a worker built with spikes/venus-churn-retention/fault-inject-paths-3-4.patch
+# and a boot that sets LIMINA_GPU_MEM_BUDGET_MIB=2048. Both REDs are selected by touching a file
+# rather than by an env var, so each arm's RED and GREEN run against ONE boot — a reboot between
+# them would put a fresh guest, fresh contexts and a fresh census between two numbers that only
+# mean something compared to each other.
 #
 # The census-forcing tick client is deliberately venus in BOTH arms: it exists only to make the
 # worker allocate, and holding it constant keeps it from being a second variable.
@@ -81,7 +95,7 @@ force_census() {
   local mark; mark=$(mark)
   sleep 11
   g "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD XDG_RUNTIME_DIR=/tmp/testcomp-run \
-     WAYLAND_DISPLAY=wayland-1 ./limina-testcomp client-dmabuf 3 320x240" >/dev/null 2>&1
+     WAYLAND_DISPLAY=wayland-1 timeout 15 ./limina-testcomp client-dmabuf 3 320x240" >/dev/null 2>&1
   sleep 2
   since "$mark" | grep -a "DEALLOC iosurface" | tail -1 \
     | sed 's/.*DEALLOC iosurface [0-9]* (alive \([0-9-]*\)).*/\1/'
@@ -143,7 +157,7 @@ refs() {
   local mark; mark=$(mark)
   sleep 11
   g "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD XDG_RUNTIME_DIR=/tmp/testcomp-run \
-     WAYLAND_DISPLAY=wayland-1 ./limina-testcomp client-dmabuf 3 320x240" >/dev/null 2>&1
+     WAYLAND_DISPLAY=wayland-1 timeout 15 ./limina-testcomp client-dmabuf 3 320x240" >/dev/null 2>&1
   sleep 2
   # Keep BOTH `(+N)` counters: `iosurface` is blind to a borrowed import (it counts surfaces we
   # own), `lookup` is exactly the outstanding borrowed +1s. Dropping the latter would hide the
@@ -202,6 +216,191 @@ $(g 'grep -ac "evicted a client dmabuf" /tmp/comp.log' | tr -d ' ') evictions"
     echo "Without that the buffers were venus blobs and this re-ran the venus arm under a"
     echo "different name — a vacuous pass that LOOKS like evidence."
   fi
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------------------------
+# `path3` — the ERROR-PATH PARTIAL.
+#
+# The matrix's reasoning: "a partially-built object on an error path is the classic dropped
+# release — far enough along to have taken a host allocation, not far enough to be registered
+# where the sweep will find it." The trigger is real and deterministic (`badmod` asks for a
+# modifier no driver implements; KosmicKrisp answers -1000158000, the incident's own error).
+#
+# But READ THE SHIPPED CODE FIRST, because it decides what a green number here can mean: with
+# KK's native VK_EXT_image_drm_format_modifier, a modifier-tiled create reaches the driver
+# verbatim and vkr allocates NOTHING before it — the KK-linear IOSurface is allocated only after
+# `args->ret == VK_SUCCESS` (vkr_image.c). So the shipped path cannot strand anything on this
+# error, and a flat census would certify a vehicle that arms nothing.
+#
+# Hence the RED: the fault patch takes a host allocation BEFORE the doomed create and, when
+# /tmp/limina-fault-leak-errpath exists, drops it on the error path. That is the class, synthesized
+# — and it is what earns the right to report the shipped arm's flatness as a result.
+# ---------------------------------------------------------------------------------------------
+if [ "${1:-matrix}" = "path3" ]; then
+  N="${N:-40}"
+  echo "=== path 3: the error-path partial ($N doomed creates at $SIZE) ==="
+  echo
+  # A compositor is running purely so `refs` has something to make the worker allocate with.
+  start_comp "" || exit 1
+  # TRAP, cost one run: the injector's `access()` runs in the WORKER, on the HOST filesystem.
+  # Touching /tmp/limina-fault-leak-errpath over ssh puts it in the GUEST, where nothing reads it
+  # — and a RED arm that silently stays green is indistinguishable from a clean result. The
+  # "N leak(s) injected" count below is the guard: RED with zero injections is a broken arm.
+  #
+  # There is no third "shipped" arm here on purpose. This build HAS the injector, which allocates
+  # before every doomed create, so nothing run against it can report shipped behaviour. Run
+  # `path3 shipped` against a clean build for that — it asserts the pre-create count is zero.
+  for arm in "RED (fault: leak on the error path)::yes" "GREEN (fault: free on the error path)::no"; do
+    name="${arm%%::*}"; leak="${arm##*::}"
+    case "$leak" in
+      yes) touch /tmp/limina-fault-leak-errpath ;;
+      *)   rm -f /tmp/limina-fault-leak-errpath ;;
+    esac
+    echo "--- $name ---"
+    echo "  before: $(refs)"
+    FROM=$(mark)
+    g "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD RUST_LOG=info \
+       ./limina-testcomp badmod $N $SIZE" | grep -aE "BADMOD (DONE|INVALID)" | sed 's/^/  /'
+    echo "  after : $(refs)"
+    echo "  host  : $(since "$FROM" | grep -ac "vkCreateImage failed host-side: -1000158000") \
+refusal(s), $(since "$FROM" | grep -ac "LIMINA-FAULT.*LEAKING") leak(s) injected, \
+$(since "$FROM" | grep -ac "LIMINA-FAULT.*pre-create") pre-create alloc(s)"
+    echo
+  done
+  rm -f /tmp/limina-fault-leak-errpath
+  echo "RED must raise alive, and its injection count must be nonzero — a RED that injected"
+  echo "nothing is a broken arm, not a clean result. GREEN must come back flat."
+  exit 0
+fi
+
+# `shipped3` — the same trigger against a build WITHOUT the fault patch. This is the arm that
+# reports what limina actually does, and its whole content is two assertions: the host refused
+# every create, and it allocated nothing before doing so.
+if [ "${1:-matrix}" = "shipped3" ]; then
+  N="${N:-40}"
+  echo "=== path 3, SHIPPED build: $N doomed creates at $SIZE ==="
+  start_comp "" || exit 1
+  echo "  before: $(refs)"
+  FROM=$(mark)
+  g "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD RUST_LOG=info \
+     ./limina-testcomp badmod $N $SIZE" | grep -aE "BADMOD (DONE|INVALID)" | sed 's/^/  /'
+  echo "  after : $(refs)"
+  refusals=$(since "$FROM" | grep -ac "vkCreateImage failed host-side: -1000158000")
+  faults=$(since "$FROM" | grep -ac "LIMINA-FAULT")
+  echo "  host  : $refusals refusal(s), $faults fault-injector line(s)"
+  [ "$faults" != 0 ] && echo "!! this build still carries the fault patch — not a shipped reading"
+  [ "$refusals" = 0 ] && echo "!! no host-side refusal: the guest answered locally, arm is vacuous"
+  since "$FROM" | grep -aE "still charged|destroyed with" | sed 's/.*virgl: vkr: /    /' | tail -4
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------------------------
+# `path4` — RING-FATAL teardown.
+#
+# The matrix asks whether "teardown takes a different branch than the healthy one". Reading
+# vkr_context_destroy says it does not: the sweep is gated on ctx->instance and nothing else, so
+# fatal or healthy, the same sweep runs. What a FATAL really changes is WHEN — a context whose
+# ring is dead keeps every host allocation until its guest process goes away.
+#
+# So this arm measures both moments: with the compositor's context FATAL but the PROCESS STILL
+# ALIVE, and then after killing it. The kill is what should reclaim; the first reading is what
+# tells you a wedged-but-alive client holds everything (matrix §7 caveat #1, "the context never
+# actually died").
+#
+# The vehicle: `--hog-mib` allocates over the budget from inside the compositor, which is where
+# the borrowed +1s live. `vkr_budget_kills_context` sets the FATAL, deterministically, with no
+# need to provoke a real ring fault. The RED is the fault patch's skipped sweep.
+# ---------------------------------------------------------------------------------------------
+if [ "${1:-matrix}" = "path4" ]; then
+  KIND="${2:-venus}"
+  case "$KIND" in
+    venus) CLIENT_MODE="client-dmabuf"; CLIENT_ENV="" ;;
+    gbm)   CLIENT_MODE="client-gbm";    CLIENT_ENV="MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu" ;;
+    *) echo "unknown kind $KIND — expected venus or gbm"; exit 1 ;;
+  esac
+  HOG="${HOG:-4096}"
+  echo "=== path 4: ring-FATAL teardown ($KIND client, hog ${HOG} MiB) ==="
+  echo
+  for arm in "RED (fault: the imported IOSurface release is dropped)::yes" "GREEN (shipped teardown)::no"; do
+    name="${arm%%::*}"; skip="${arm##*::}"
+    # HOST-side, like path 3's: the injector's access() runs in the worker. Touching it over ssh
+    # puts it in the guest, where nothing reads it, and the RED silently runs as a second GREEN.
+    case "$skip" in
+      yes) touch /tmp/limina-fault-fatal-skip-release ;;
+      *)   rm -f /tmp/limina-fault-fatal-skip-release ;;
+    esac
+    echo "--- $name ---"
+    # The counter baseline belongs BEFORE anything in this arm runs. Taken after `refs` it
+    # already included the arm's own refusal whenever the hog fired early, and printed a
+    # difference of zero for an arm that had refused — a lie in the safest-looking direction.
+    R0=$(grep -ac "REFUSING" "$WORKER_LOG"); F0=$(grep -ac "LIMINA-FAULT" "$WORKER_LOG")
+    # A SEPARATE log, for the same reason `leakexit` uses one: the fresh compositor started at
+    # the end to tick the census would otherwise overwrite /tmp/comp.log, and whether the hog
+    # ever fired would be unknowable — the difference between an answer and a number.
+    g "sudo -n pkill -f 'limina-testcomp run'; sudo -n rm -f /tmp/limina-testcomp-hog"; sleep 2
+    "${SSH[@]}" "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD RUST_LOG=info nohup \
+       ./limina-testcomp run --hog-mib $HOG > /tmp/path4-comp.log 2>&1 &" >/dev/null 2>&1 &
+    sleep 5
+    g "grep -a 'COMPOSITOR READY' /tmp/path4-comp.log" >/dev/null || { echo "!! no compositor"; exit 1; }
+    echo "  before        : $(refs)"
+    FROM=$(mark)
+    # Counters are taken as BEFORE/AFTER totals, not from a line slice. Slicing kept reporting
+    # "0 refusals in window" for arms whose refusal is plainly in the log: `refs` sleeps ~15 s
+    # before FROM is marked, and anything that fires in that gap lands above the slice. These
+    # events are monotonic, so a difference of totals cannot miss one however the timing moves.
+    # The client has to still be committing when the hog fires, so the compositor is holding a
+    # live import at the moment its context is killed. --park keeps it there.
+    "${SSH[@]}" "cd /tmp && sudo -n env VK_DRIVER_FILES=$ICD $CLIENT_ENV RUST_LOG=info \
+       XDG_RUNTIME_DIR=/tmp/testcomp-run WAYLAND_DISPLAY=wayland-1 \
+       ./limina-testcomp $CLIENT_MODE 60 $SIZE --park" >/tmp/path4-client.log 2>&1 &
+    sleep 8
+    grep -aE "CLIENT (COMMITTED|PARKED)" /tmp/path4-client.log | sed 's/^/  /'
+    # Only NOW — with the measurement window open and the real client's import live. The trigger
+    # is explicit because "hog as soon as any import exists" fired on the census tick client
+    # instead, ~15 s earlier, killing the context before the arm had even started measuring.
+    g "sudo -n touch /tmp/limina-testcomp-hog"
+    # WAIT for the refusal rather than sleeping a guess: the compositor hogs on its next event
+    # loop tick and the 4 GiB request takes a second or two to reach the host.
+    for _ in $(seq 1 20); do
+      [ "$(grep -ac 'REFUSING' "$WORKER_LOG")" != "$R0" ] && break
+      sleep 2
+    done
+    echo "  hog           : $(g 'grep -a "HOG SUBMITTED" /tmp/path4-comp.log' | tr -d '\r')"
+    echo "  host refusals : $(( $(grep -ac "REFUSING" "$WORKER_LOG") - R0 )) — $(grep -a "REFUSING" \
+      "$WORKER_LOG" | tail -1 | sed 's/.*REFUSING a //' | cut -c1-60)"
+    echo "  ring FATAL    : $(since "$FROM" | grep -a "ring FATAL set" | tail -1 \
+      | sed 's/.*virgl: vkr: //')"
+    # THE READING PATH 4 IS ABOUT: the context is dead, the process holding the imports is not.
+    # It only exists because the vehicle survives its own FATAL — a compositor that exits here
+    # runs its destructors and the host takes the ordinary `instance was gone` teardown instead.
+    echo "  alive?        : $(g "pgrep -f 'limina-test[c]omp run' >/dev/null && echo yes || echo no — IT EXITED, this arm tests the clean path")"
+    echo "  ctx FATAL, compositor process STILL ALIVE:"
+    echo "    $(refs)"
+    g "sudo -n pkill -9 -f 'limina-testcomp client-'"
+    g "sudo -n pkill -9 -f 'limina-testcomp run'"
+    sleep 4
+    # The census ticks on the allocation path, so with both testcomp processes dead nothing
+    # emits one — a fresh compositor is the only way to get a reading rather than an empty line.
+    start_comp "" >/dev/null 2>&1
+    echo "  after both are gone:"
+    echo "    $(refs)"
+    # A SECOND settled reading. The first one lands while the last context teardown is still in
+    # flight, so a RED arm's own leak showed up only in the NEXT arm's baseline — real, but
+    # unreadable in place. Two consecutive reads, the venus_fd_census discipline.
+    echo "  settled       : $(refs)"
+    # Per-ARM provenance for the gbm holder, the standard M3c set: without it this arm could be
+    # running venus blobs behind a gbm API and every label would still say vrend.
+    [ "$KIND" = gbm ] && vrend_bucket
+    echo "  fault fired   : $(( $(grep -ac "LIMINA-FAULT" "$WORKER_LOG") - F0 )) time(s)"
+    echo "  --- host lines ---"
+    since "$FROM" | grep -aE "destroying context|destroyed —|destroyed with|LIMINA-FAULT|still holds" \
+      | sed 's/.*virgl: vkr: /    /;s/.*virgl_renderer\] /    /' | tail -8
+    echo
+  done
+  g "sudo -n rm -f /tmp/limina-fault-fatal-skip-release"
+  echo "RED must hold references the GREEN arm gives back. Read the FATAL-but-alive line too:"
+  echo "that is the state the 2026-08-06 incident was in for 38 s before the jetsam kill."
   exit 0
 fi
 
