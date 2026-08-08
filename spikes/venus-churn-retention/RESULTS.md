@@ -188,14 +188,30 @@ headroom the region threshold had.
 3. **IOSurface ids RECYCLE.** 301 guest buffers produced only **39 distinct ids** — the guest
    holds ~3 at a time and the kernel reuses an id as soon as a surface dies.
 
-**Fact 3 is why the unref-notification work is parked rather than merged**
-(`wip-release-notify-limina.patch` + `wip-release-notify-libkrun.patch` here). The mechanism is
+**Fact 3 is why the unref-notification work was parked rather than merged.** The mechanism was
 verified working — `hits=301, misses=0`, every release found its entry — and it correctly stops
 the supervisor holding what the guest freed. But **with ids recycling, `release <id>` can drop a
 DIFFERENT live surface that has since been given that id**: a correctness hazard, not merely an
-ineffective optimisation. Any release protocol needs a key that does not recycle — an
-epoch/generation alongside the id, or the virtio resource id instead. Until then the cap bounds
-this, and it bounds it correctly.
+ineffective optimisation.
+
+> **UN-PARKED AND SHIPPED 2026-08-07** (limina `93ff513`, libkrun `d9afca2`; the two
+> `wip-release-notify-*.patch` files are gone from this directory, superseded). The hazard needed
+> no epoch and no change of key. It existed only because the release rode the **control socket**
+> while publishes rode the **Mach surface port** — two queues, no ordering between them. Move the
+> release onto the same port, send it *before* the rutabaga unref that drops the last host
+> reference, and it closes by causality:
+>
+> - the release is enqueued while the surface is still alive;
+> - the id cannot recycle until the surface dies, which is after that;
+> - so a publish of a recycled id is enqueued strictly later;
+> - and one Mach port is one FIFO queue, so the supervisor sees them in that order and can never
+>   drop the newcomer.
+>
+> Sender identity does not enter into it — causality orders the enqueues, not the sender. The
+> lesson worth keeping is that **the hazard was a property of the CHANNEL, not of the key**; a
+> whole epoch-plumbing design was avoided by asking which queue the message was in. What §1
+> actually needed measuring, and what this bought, is in `buffer-lifetime-matrix.md` §8 and
+> `testcomp/supervisor-retention.sh`.
 
 ### §0.5 The 2x IOSurfaces: the GUEST creates two exportable images per buffer (2026-08-07)
 

@@ -5,6 +5,10 @@ touched. Move into `docs/hardening-backlog.md` (or a `spikes/` RESULTS.md) when 
 
 ## 1. The trigger
 
+> **ANSWERED 2026-08-07 — see §9.** It was the supervisor's own hold on published scanout
+> IOSurfaces, not any of the vkr paths this matrix was written to test. Read §9 before spending
+> time on §§2–4; they are still correct, and all of them came back clean.
+
 User observation (2026-08-06, recalled 08-07): **host memory did not shrink when the Vulkan
 compositor was quit.** This is the §6 discriminator that `spikes/wallpaper-backdrop-leak/RESULTS.md`
 left open — guest compositor vs. our release path — and it points at the **host side**.
@@ -272,3 +276,45 @@ What is left is what never routes through that sweep:
   `destroying context` line; §1's incident was never confirmed to have one.
 
 The last two are now the *leading* suspects rather than the leftovers, and neither is a vkr bug.
+
+## 9. FOUND: it was the supervisor, and it is fixed (2026-08-07)
+
+**The third suspect was the answer.** `testcomp/supervisor-retention.sh` — churn 300 fresh venus
+scanouts at 1920×1080, quit the compositor cleanly, leave the guest up, read `owned unmapped`
+settled both sides:
+
+| | before | after |
+|---|---|---|
+| residual over baseline, compositor gone | **+195.9 MiB** | **+23.8 MiB** |
+| freed by SIGKILLing the supervisor alone | **229.7 MiB** | 39.0 MiB |
+
+The second row is the attribution: with the worker still alive and no guest process left, killing
+the supervisor alone dropped the worker's `owned unmapped` from 230.6 MiB to 896 K. **The
+supervisor was holding it, and nothing was ever going to make it let go.**
+
+The mechanism is duller than any of the teardown paths this matrix was built to test.
+`SurfaceStore` evicts only on *arrival* and publishes happen once per `IOSurfaceCreate` — so a
+compositor that quits publishes nothing more, evicts nothing, and its last `SURFACE_STORE_CAP`
+framebuffers stay pinned for the life of the supervisor. Not a teardown bug at all: a **missing
+release edge**. Fixed by wiring the guest's `RESOURCE_UNREF` through to a release on the surface
+port (limina `93ff513`, libkrun `d9afca2`), plus a store clear when a dead worker is replaced
+(`01de871`), since no release protocol can cover a worker that has exited.
+
+**Three things worth carrying out of this.**
+
+1. **§0.4 had the number a day earlier and it was read as a bound, not a bug.** "436.8 M is
+   `SURFACE_STORE_CAP` × one framebuffer" was correct arithmetic and the wrong conclusion — the
+   cap *was* holding, and the question nobody asked was whether it would ever stop. A quantity
+   that is explained is not the same as a quantity that is acceptable.
+2. **The parked release-notify work was parked for a real hazard with the wrong fix in mind.**
+   Ids recycle, so a release naming a dead id can drop a live one — true, and it looked like it
+   needed an epoch plumbed through vkr, rutabaga and the device. It needed a *channel* change
+   instead: same Mach port as the publishes, sent before teardown, and the ordering closes it.
+   See RESULTS.md §0.4.
+3. **§2's holder table was right about this row all along** — "supervisor's Mach send right /
+   another **process** / released by supervisor drop". It sat last in a four-row table for a day
+   while the first and fourth rows got the whole investigation, because they were the ones a
+   census could see. **The holder no instrument reaches is the one to test first, not last.**
+
+What remains open is paths 3 and 4, and §7 caveat #1 — and neither is now suspected of the §1
+incident, since the holder that produced it has been found and closed.

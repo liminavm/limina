@@ -46,6 +46,10 @@
 //! (`created=301` both times). 1213 MiB is 301 x 4 MiB — one whole retained framebuffer per
 //! frame, exactly. The threshold below sits well clear of both.
 //!
+//! Since limina `93ff513` the supervisor also drops each surface as the guest unrefs it, so the
+//! resting number is the guest's live ring rather than the cap: **+11 MiB**. The threshold was
+//! tightened to match, which makes this test guard the release path too — see `MAX_BYTE_GROWTH`.
+//!
 //! Trap, if you ever re-run that A/B by hand: `cargo test -p limina-test` does NOT rebuild
 //! `target/debug/limina`, and the harness launches that binary. Editing the supervisor and
 //! re-running the test alone reproduces the OLD supervisor and returns a pass either way —
@@ -75,14 +79,21 @@ const DISPLAY: (u32, u32) = (1280, 800);
 
 /// Maximum growth in the worker's `owned unmapped` BYTES across the churn run.
 ///
-/// What the supervisor may legitimately hold is bounded by `SurfaceStore`'s cap (32) plus the
-/// frame cache (8), so at this display size the ceiling is ~40 x 1280x800x4 = 164 MB; measured
-/// residual on the `churn-vk` arm is 98 MB. Unbounded retention is one framebuffer per frame:
-/// 301 x 4 MB = 1213 MB, measured. 400 MB sits well clear of the first and far below the
-/// second. This is an "is it bounded at all" guard, deliberately loose, not a budget — tighten
-/// it only alongside a fix that actually lowers the resting number, which means shrinking the
-/// cap itself: the residual IS the cap holding its 32 surfaces, not slack (RESULTS.md §0.4).
-const MAX_BYTE_GROWTH: i64 = 400 * 1024 * 1024;
+/// Three regimes this has to separate, all measured at this display size (4 MB per framebuffer):
+///
+/// | | growth |
+/// |---|---|
+/// | unbounded retention — one framebuffer per frame | 301 x 4 MB = **1213 MB** |
+/// | bounded by the caps alone — `SurfaceStore` (32) + frame cache (8) | ~164 MB ceiling, **98 MB** measured |
+/// | the guest's live ring, which is what it should be | **11 MB** (`handles=3`) |
+///
+/// The threshold used to be 400 MB, which only asked "is it bounded at all" — the residual then
+/// *was* the cap holding its 32 surfaces, so there was nothing tighter to ask for. Since limina
+/// `93ff513` the supervisor drops each surface when the guest unrefs it, so the resting number
+/// tracks the guest's live ring instead of the cap, and 64 MB now catches a regression to
+/// cap-bounded (164 MB) as well as to unbounded — a strictly stronger guard, with 5.8x headroom
+/// over the measured 11 MB.
+const MAX_BYTE_GROWTH: i64 = 64 * 1024 * 1024;
 
 /// The venus ICD selection, and deliberately nothing else. A non-login ssh shell does not
 /// source `/etc/environment.d`, so the driver has to be named here; the `-vk` arm needs no

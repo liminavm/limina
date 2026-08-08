@@ -69,6 +69,7 @@ It is built bottom-up, and each step is gated on evidence rather than on compili
 | **3a** ✅ | `linux-dmabuf` import (venus-allocated client) | a client's dmabuf pixels reach the scanout **and** the host log shows the IOSurface import branch. Passed 2026-08-07 — see below. |
 | **3b** ✅ | teardown paths × holders | discriminates between the paths in `buffer-lifetime-matrix.md` §4, against an oracle shown to move (+41) under a deliberate leak. Passed 2026-08-07. |
 | **3c** ✅ | vrend-allocated (gbm) client buffers | reaches the **asymmetric** holder of matrix §3, the observed compositor-quit shape. Needs its own RED (a new failure class) *and* positive host-side proof the buffers really are classic. Passed 2026-08-07 — see below. |
+| **3d** ✅ | the holder in the *other process* — does the supervisor let go when the compositor quits? | attribute the post-quit residual to a process by killing it, and show a fix moves the number. Passed 2026-08-07 — **this is the one that found matrix §1's actual cause.** See below. |
 
 ### M3a's gate has two halves, and the pixels are the weaker one
 
@@ -290,6 +291,41 @@ next `pkill` was unknowable — a kill wearing a clean-exit label, which would h
 exactly what it could not test. The arm now writes its own log and **refuses to report numbers
 without a `COMPOSITOR DONE` line**.
 
+### M3d: the holder in the other process — and the answer to matrix §1 (2026-08-07)
+
+`supervisor-retention.sh`. Every previous milestone asked what **vkr** does at teardown, and all
+of them came back clean. This one asks the question none of them can: after the compositor quits,
+does the **supervisor** — a separate process, holding scanout IOSurfaces it was handed by Mach
+port — ever let go?
+
+It does not, and that was matrix §1's cause the whole time. Churn 300 fresh venus scanouts at
+1920×1080, quit cleanly, leave the guest up, read settled both sides:
+
+| | shipped (RED) | fixed (GREEN) |
+|---|---|---|
+| baseline | 34.7 MiB | 16.1 MiB |
+| after the churn, compositor gone | 230.6 MiB | 39.9 MiB |
+| **residual over baseline** | **+195.9 MiB** | **+23.8 MiB** |
+| freed by SIGKILLing the supervisor alone | 229.7 MiB | 39.0 MiB |
+
+`SurfaceStore` evicts only on *arrival* and each surface is published once, at
+`IOSurfaceCreate` — so a compositor that quits publishes nothing more, evicts nothing, and its
+last framebuffers are pinned for the supervisor's life. Fixed by giving the guest's
+`RESOURCE_UNREF` a path to a release on the surface port (limina `93ff513`, libkrun `d9afca2`).
+The GREEN residual is the guest's live ring, not the cap.
+
+**Two measurement traps this arm cost.**
+
+- **The supervisor's argv contains `--vmm-bin target/debug/limina-vmm`**, so a bare
+  `pgrep -f target/debug/limina-vmm` matches the *supervisor* first. Every reading then comes
+  from the wrong process — and because IOSurface storage bills to the task that CREATED it, the
+  supervisor has no `owned unmapped` row at all, so the whole run reports a clean `0.0 MiB`. A
+  wrong-pid read here is indistinguishable from a perfect result.
+- **Attribute by killing, and kill only one.** `SIGKILL` the supervisor, never `SIGTERM`: a
+  clean shutdown takes the worker down with it and then nothing can be attributed to either
+  (`RESULTS.md` §0.4 lost a run to exactly that). The script asserts the worker survived before
+  it reports the freed number.
+
 ### M2's gate: a real client's pixels on the scanout (2026-08-07)
 
 `limina-testcomp run` on the guest console, `limina-testcomp client` against it, and the
@@ -399,7 +435,7 @@ import, compositing with real surfaces, buffer lifetime across a client's death.
 
 **It must reproduce a real failure at least once before any negative result from it
 counts.** kmschurn earned that (+606 regions against the bug, +23 with the fix, over an
-identical guest workload). testcomp has earned it three times, and the rule is **per failure
+identical guest workload). testcomp has earned it four times, and the rule is **per failure
 class**:
 
 | class | RED | GREEN | separation |
@@ -407,6 +443,11 @@ class**:
 | scanout churn (M1) | `SURFACE_STORE_CAP` lifted: +4.17 GiB | shipped cap: +361 MiB | 11.5x |
 | **client dmabuf retention, venus-owned (M3b)** | `--leak-imports`: +41 alive IOSurfaces | shipped: +0 | flat vs 41 |
 | **client dmabuf retention, vrend-owned (M3c)** | `--leak-imports`: `lookup +41`, 316.9 MiB held in the vrend bucket | shipped: `+0`, `0 B live` | flat vs 41 |
+| **supervisor retention past compositor quit (M3d)** | before the fix: +195.9 MiB, permanent | after: +23.8 MiB | 8.2x |
+
+M3d's RED is the odd one: it is not a deliberately-broken build but the **shipped** one, because
+the failure was live in it. That is the strongest form of the rule — the vehicle reproduced a
+real bug, on a real host, before it was fixed.
 
 So "testcomp shows no leak on the client dmabuf path" is now a statement with content — for
 **both** holders, across paths 1, 2, 2b and 1'. It still says nothing about:
