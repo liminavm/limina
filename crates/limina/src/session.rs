@@ -350,6 +350,7 @@ impl WindowedSession {
         let monitor_control = control.clone();
         let monitor_port_name = surface_port_name.clone();
         let monitor_desired = desired_size.clone();
+        let monitor_surface_map = surface_map.clone();
         std::thread::spawn(move || {
             let mut child = child;
             let mut guard = supervisor::RebootGuard::new();
@@ -455,6 +456,14 @@ impl WindowedSession {
                 // loop. (The scanout `sup` fd is separate: its reader thread owns it and closes
                 // it on EOF.)
                 let pid = next.io.pid();
+                // Let go of the dead worker's scanouts. Nothing else will: the release protocol
+                // needs a live worker to send it, so a worker that exits leaves whatever it had
+                // published pinned here — whole framebuffers, and no longer even attributable,
+                // since an IOSurface bills to the task that created it. The fresh worker
+                // republishes everything it needs before its first frame, and the window's
+                // current contents are held by the layer, not by this map, so a parked window
+                // keeps showing its frame across the resume.
+                monitor_surface_map.lock().unwrap().clear_for_new_worker();
                 monitor_conn.swap(next.io);
                 window::spawn_reader(next.sup, monitor_shared.clone());
                 if resuming {
