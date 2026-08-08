@@ -159,14 +159,56 @@ process — which is also what a dozen unrelated venus transport failures look l
 a transport bug. **Never diagnose a venus context death from the guest symptom alone**;
 read the worker log at that timestamp.
 
+## Telling the guest, before we kill it
+
+The section above is about *allocations*, and it is specific to them: venus discards our
+`VkResult`, so a refusal can only be delivered by killing the context. A budget **query** is
+not an allocation. The guest's `vn_GetPhysicalDeviceMemoryProperties2` issues a real
+synchronous `vn_call_` round-trip whenever a `VkPhysicalDeviceMemoryBudgetPropertiesEXT` is
+chained (`vn_physical_device.c`), so `VK_EXT_memory_budget` is the one backpressure channel
+the transport does not throw away — the only way a client can learn to shrink its caches
+*before* it loses its context.
+
+`vkr_budget_answer_memory_budget` (`vkr_physical_device.c`) overwrites the driver's reply
+from the ledger:
+
+    heapUsage  = what the asking context holds
+    heapBudget = cap − what every OTHER context holds     ("what is left for me")
+
+clamped against the driver's own numbers and the heap size, floored at the caller's own
+usage (the spec requires a non-zero budget and `budget ≥ usage`, which an exhausted cap
+would otherwise violate — and memory you already hold *is* inside your budget). Only
+`DEVICE_LOCAL` heaps are rewritten. With no cap configured nothing is touched and the
+driver's answer stands, so a bare virglrenderer is unaffected.
+
+Measured before the change, against a 2 GiB cap: the guest was told it had **13.8 GiB**, and
+after allocating a further 1 GiB the reported budget went **up**, to 14.8 GiB — the
+passthrough reports Metal's global state, which moves with unrelated host activity and is
+anti-correlated with what the client just did. After: budget 2.00 GiB flat, usage
+0 → 1.00 GiB.
+
+The guest half is **configuration, not code**: venus advertises the extension only under
+`VN_DEBUG(MEM_BUDGET)`, which is a runtime env gate (`vn_common.h:65`, read once per process
+via `os_get_option`), so `install-enhanced.sh` ships `VN_DEBUG=mem_budget` in
+`/etc/environment.d/90-limina-zink.conf` next to the driver selection. Two consequences
+worth remembering: it must be in the client's environment *before* the process starts, and
+a **non-login ssh shell does not source `environment.d`** — the same false-negative shape as
+an empty `vulkaninfo` over ssh. The test sets the variable explicitly for that reason.
+
 ## Known limits
 
 - **Attribution on the vrend path.** `vkr_budget_set_context` is called from the venus
-  dispatch entry points only. vrend has its own dispatch, so an IOSurface allocated for a
-  classic vrend resource is charged to whatever context that thread last dispatched for
-  (or to 0). Totals stay exact — charge and credit hit the same ledger — but per-context
-  blame is unreliable for vrend-allocated surfaces. Bind the TLS at the vrend entry if that
-  matters.
+  dispatch entry points only, so an IOSurface allocated for a classic vrend resource used to
+  be charged to whatever context that thread last dispatched for. vrend now binds a shared
+  pseudo-context at its own entry (`vkr_budget_set_vrend`) — the honest answer rather than a
+  fix, since at classic-resource creation time nobody owns the resource yet. Those bytes are
+  billed to one "vrend" bucket instead of to an innocent guest client; totals are exact
+  either way.
+- **zink reads the wrong field.** `zink_query_memory_info` computes available memory as
+  `heap.size − heapUsage` and ignores `heapBudget` entirely, so the GL-level
+  `GL_NVX_gpu_memory_info` numbers still describe the host heap, not our cap. Clients that
+  honour the extension as specified (`heapBudget`) do see the cap. Fixing zink is upstream
+  work, not ours.
 - **The cap is global, not per-context.** A well-behaved client can be refused because a
   badly-behaved one filled the budget. Per-context caps would be a fairer policy, but they
   need a fairness model nobody has needed yet; the histogram already names the culprit.
@@ -183,3 +225,9 @@ a ledger that only counted up would satisfy every other assertion and still brea
 that merely churns memory.
 
 The test asserts nothing about the guest-side `VkResult`, because the transport discards it.
+
+A second test, `the_guest_sees_our_cap_through_vk_ext_memory_budget`, covers the reporting
+half: it boots under the same cap, allocates well *under* it (the client must survive to ask
+a second time), and asserts the reported budget is our cap rather than the GPU's heap and
+that usage moves with what the client holds. Both assertions fail against a blind
+passthrough, which is where the numbers quoted above came from.

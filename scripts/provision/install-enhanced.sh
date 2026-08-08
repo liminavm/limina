@@ -509,6 +509,21 @@ mkdir -p /etc/environment.d
   echo "GALLIUM_DRIVER=virgl"
   echo "MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu"
   [ -n "$VENUS_ICD" ] && echo "VK_DRIVER_FILES=$VENUS_ICD"
+  # Let clients see the host GPU-memory budget. venus advertises VK_EXT_memory_budget only
+  # under this flag (`.EXT_memory_budget = VN_DEBUG(MEM_BUDGET)`), which upstream gates
+  # because the host's answer is a plain passthrough of the GPU's own heap and therefore
+  # not worth a ring round-trip. Ours is not: since virglrenderer's vkr_budget_query the
+  # host answers from OUR ledger, so the numbers describe the cap the guest will actually
+  # be killed at (vkr_budget.h). That makes it the one piece of backpressure the venus
+  # transport does not discard — an allocation refusal cannot be delivered (the guest never
+  # reads our VkResult), but a budget QUERY round-trips synchronously, so a client that
+  # honours it can drop caches instead of losing its context.
+  #
+  # The name is misleading: VN_DEBUG here is a plain runtime env gate, not a debug build or
+  # any extra logging (the noisy print is behind VN_DEBUG=init, separately). Cost is one
+  # round-trip per budget query, and only from clients that ask — nothing queries it per
+  # frame; zink's is behind pipe_screen::query_memory_info, i.e. GL_NVX_gpu_memory_info.
+  echo "VN_DEBUG=mem_budget"
   # No VN_PERF here. `no_fence_feedback` used to be set and was RETIRED 2026-07-25.
   #
   # It was a workaround from the MoltenVK era: venus's feedback buffers are a host-written

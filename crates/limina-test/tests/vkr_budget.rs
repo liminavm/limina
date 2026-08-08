@@ -180,3 +180,149 @@ fn runaway_guest_allocation_kills_the_client_not_the_vm() {
         .expect("shutting down the guest");
     eprintln!("teardown outcome: {outcome:?}");
 }
+
+/// Parse one `BUDGET HEAP <i> <when> flags=.. size=.. budget=.. usage=..` line's numbers.
+fn heap_line(out: &str, index: u32, when: &str) -> Option<(u64, u64)> {
+    let prefix = format!("BUDGET HEAP {index} {when} ");
+    let line = out.lines().find(|l| l.starts_with(&prefix))?;
+    let field = |k: &str| -> Option<u64> {
+        line.split_whitespace()
+            .find_map(|f| f.strip_prefix(k))?
+            .parse()
+            .ok()
+    };
+    Some((field("budget=")?, field("usage=")?))
+}
+
+/// The guest is told the truth about *our* cap, not about Metal's heap.
+///
+/// The sibling test above exists because a refusal cannot be delivered: venus submits
+/// `vkAllocateMemory` asynchronously and discards our `VkResult`, so the only refusal that
+/// sticks is killing the context. That reasoning is specific to *allocations*. A budget
+/// query is not an allocation — `vn_GetPhysicalDeviceMemoryProperties2` issues a real
+/// synchronous `vn_call_` round-trip whenever the budget struct is chained
+/// (`vn_physical_device.c`) — so `VK_EXT_memory_budget` is the one backpressure channel the
+/// transport does not throw away, and the only way a well-behaved client can learn to drop
+/// caches *before* we kill it.
+///
+/// Two properties, both of which are false if the host merely forwards the query to
+/// KosmicKrisp (which is what it did before this test existed — the RED):
+///
+/// 1. **The budget reflects our cap**, not the host GPU's. A guest told it has tens of GiB
+///    when we will kill it at 2 GiB is being actively misled: it will size its caches for
+///    a budget that does not exist.
+/// 2. **Usage tracks what this client actually holds**, so the number moves when the guest
+///    allocates. A budget that never changes is indistinguishable from a constant, and a
+///    client cannot back off against a constant.
+///
+/// `VN_DEBUG=mem_budget` is set explicitly in the client's environment: venus gates the
+/// extension on it (`.EXT_memory_budget = VN_DEBUG(MEM_BUDGET)`) and reads it once per
+/// process. The test deliberately does *not* rely on the `/etc/environment.d` drop-in that
+/// ships this for real desktop clients — that file is sourced by the session, and this
+/// probe runs over a non-login ssh shell which would not see it.
+#[test]
+fn the_guest_sees_our_cap_through_vk_ext_memory_budget() {
+    if !limina_test::require_hvf_or_skip("the_guest_sees_our_cap_through_vk_ext_memory_budget") {
+        return;
+    }
+    if limina_test::kosmickrisp_icd().is_none() {
+        eprintln!(
+            "SKIPPED the_guest_sees_our_cap_through_vk_ext_memory_budget: no KosmicKrisp ICD \
+             under /Volumes/mesa-cs/build-kk (mount third_party/mesa-cs.sparseimage and ninja)"
+        );
+        return;
+    }
+    let cfg = match GuestConfig::enhanced_fedora_from_env() {
+        Ok(cfg) => cfg
+            .with_coexist_display(1280, 800)
+            .with_net()
+            .with_supervisor_log()
+            .with_env("LIMINA_GPU_MEM_BUDGET_MIB", &BUDGET_MIB.to_string()),
+        Err(e) => {
+            eprintln!("SKIPPED the_guest_sees_our_cap_through_vk_ext_memory_budget: {e}");
+            return;
+        }
+    };
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    let banner = guest
+        .wait_for_ssh_banner(Duration::from_secs(240))
+        .expect("guest sshd never became reachable through gvproxy");
+    eprintln!("guest SSH up: {banner}");
+
+    guest
+        .ssh_exec(&format!(
+            "cat > /tmp/vkbudget.py <<'VKBUDGET_PY_EOF'\n{VKBUDGET}\nVKBUDGET_PY_EOF"
+        ))
+        .expect("staging vkbudget.py in the guest");
+
+    // Stay well under the cap: this client must survive to make its second query. Four
+    // chunks is 1 GiB against a 2 GiB cap.
+    const CHUNKS: usize = 4;
+    let out = guest
+        .ssh_exec(&format!(
+            "{ICD} VN_DEBUG=mem_budget timeout 180 python3 /tmp/vkbudget.py Venus budget \
+             {CHUNK_MIB} {CHUNKS} 2>&1 || true"
+        ))
+        .expect("running the vkbudget budget query in the guest");
+    eprintln!("--- vkbudget budget ---\n{out}");
+
+    assert!(
+        !out.contains("BUDGET NOEXT"),
+        "venus did not advertise VK_EXT_memory_budget even with VN_DEBUG=mem_budget set, so \
+         the guest cannot query a budget at all and nothing below is testable.\n{out}"
+    );
+    assert!(
+        out.contains("BUDGET DONE budget"),
+        "the guest-side budget probe did not run to completion.\n{out}"
+    );
+
+    let target: u32 = out
+        .lines()
+        .find_map(|l| l.strip_prefix("BUDGET TARGET "))
+        .and_then(|v| v.trim().parse().ok())
+        .expect("the probe did not name the heap its allocations land in");
+    let (before_budget, before_usage) =
+        heap_line(&out, target, "before").expect("no 'before' line for the target heap");
+    let (after_budget, after_usage) =
+        heap_line(&out, target, "after").expect("no 'after' line for the target heap");
+
+    let cap = (BUDGET_MIB as u64) * 1024 * 1024;
+    let allocated = (CHUNKS as u64) * (CHUNK_MIB as u64) * 1024 * 1024;
+    eprintln!(
+        "heap {target}: budget {before_budget} -> {after_budget}, usage {before_usage} -> \
+         {after_usage} (cap {cap}, allocated {allocated})"
+    );
+
+    // (1) The budget is OUR cap, not the host GPU's heap. This is the assertion that fails
+    // against a blind passthrough: KosmicKrisp answers with Metal's number, which is far
+    // larger than the cap we will actually kill the client at.
+    assert!(
+        before_budget <= cap,
+        "the guest was told it has {before_budget} bytes of budget while the host will kill \
+         its context at {cap} — the budget query is being forwarded to the GPU driver \
+         instead of answered from our ledger, so the guest sizes its caches against memory \
+         it is not allowed to have.\n{out}"
+    );
+
+    // (2) The numbers move. Allocating must show up as usage; asserting on the delta rather
+    // than the absolute keeps this honest about whatever else the session holds. The
+    // tolerance is generous downward only — venus rounds allocations up, never down.
+    let used = after_usage.saturating_sub(before_usage);
+    assert!(
+        used >= allocated / 2,
+        "the client allocated {allocated} bytes but reported usage moved by only {used} — a \
+         budget that does not track what the client holds is a constant, and a client \
+         cannot back off against a constant.\n{out}"
+    );
+    assert!(
+        after_budget <= before_budget,
+        "the reported budget did not shrink after the client allocated {allocated} bytes \
+         ({before_budget} -> {after_budget}).\n{out}"
+    );
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(10))
+        .expect("shutting down the guest");
+    eprintln!("teardown outcome: {outcome:?}");
+}
