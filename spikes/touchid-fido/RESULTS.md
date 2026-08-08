@@ -106,7 +106,17 @@ assert` tools driving `/dev/hidraw0`:
 
 ## Next (productization, not core)
 
-- Per-VM store path wired to the VM state dir (currently `LIMINA_FIDO_STORE`).
+- ✅ Per-VM store path wired, and **persistence is now the default everywhere** (2026-08-08).
+  Managed VMs keep passkeys in the bundle beside `state.toml`; a flat `--disk` run keeps them in
+  a sidecar beside its disk, `<disk>.limina-fido.json` — the same shape (and the same reasoning)
+  as `<disk>.limina-suspend.bin`: the credentials belong to the guest that registered them and
+  travel with it.
+  A store is also a **precondition**, not a convenience: a run that can keep none — read-only
+  disk, or no disk at all (L1 initrd, ISO) — gets **no authenticator**. It used to fall back to an
+  in-memory store, so such a run would register a passkey a real site then kept forever while our
+  half died with the process: an account entry nothing can satisfy, and a lockout if it was the
+  only one. No authenticator is a state every browser handles; an amnesiac one is not.
+  `LIMINA_FIDO_STORE` overrides outright (how the L1 tests opt in).
 - Deliver the FIDO agent + SEP-signed supervisor via the enhanced payload /
   app-bundle (build-app.sh must copy `liblimina_sep.dylib` into Frameworks and
   fix its rpath — dev/test bakes the rpath to OUT_DIR).

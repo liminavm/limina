@@ -18,6 +18,15 @@ use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
 
+/// A per-test passkey store path. The supervisor now refuses to offer an authenticator with
+/// nowhere to keep credentials, so a flat test boot has to name one; a fresh file per test also
+/// keeps one test's credentials out of another's store.
+fn fido_store_path(test: &str) -> std::path::PathBuf {
+    let p = std::env::temp_dir().join(format!("limina-fido-{test}-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&p);
+    p
+}
+
 #[test]
 fn usb_ip_stack_is_present_in_the_guest_kernel() {
     if !limina_test::require_hvf_or_skip("usb_ip_stack_is_present_in_the_guest_kernel") {
@@ -312,10 +321,15 @@ fn l1_xhci_fido_authenticator() {
         return;
     }
 
+    // A flat (non-managed) boot has no bundle dir, and an authenticator with nowhere to keep its
+    // passkeys is no longer offered at all — so the store path is what makes the gadget attach
+    // here, exactly as a managed VM's bundle dir does in the shipped path.
+    let store = fido_store_path("l1_xhci_fido_authenticator");
     let cfg = GuestConfig::l1_from_env()
         .expect("resolving L1 guest config")
         .with_supervisor_arg("--usb")
         .with_env("LIMINA_FIDO_TEST_APPROVE", "1")
+        .with_env("LIMINA_FIDO_STORE", &store.to_string_lossy())
         .with_cmdline_token("limina.fido_probe");
     eprintln!("booting L1 xHCI FIDO-authenticator guest: {:?}", cfg.boot);
 
@@ -374,6 +388,13 @@ fn l1_xhci_no_fido_drops_the_gadget_but_keeps_the_controller() {
         // device count below is about FIDO alone.
         .with_supervisor_arg("--no-fingerprint")
         .with_env("LIMINA_FIDO_TEST_APPROVE", "1")
+        // Load-bearing for the same reason the approve knob is: with a store AND an enclave the
+        // gadget would certainly attach, so this fails if `--no-fido` were ignored rather than
+        // passing because the authenticator had nowhere to live.
+        .with_env(
+            "LIMINA_FIDO_STORE",
+            &fido_store_path("l1_xhci_no_fido").to_string_lossy(),
+        )
         .with_cmdline_token("limina.xhci_probe");
     eprintln!("booting L1 xHCI --no-fido guest: {:?}", cfg.boot);
 

@@ -27,21 +27,48 @@ pub mod usb;
 
 use store::FidoStore;
 
-/// Build the shared per-VM passkey store **iff** this host can back a FIDO authenticator —
-/// a usable Secure Enclave, or the test-only approve knob (see [`test_approve`]). Returns the
-/// `Arc` both transports share (control-plane uhid + USB gadget), or `None` to advertise no
-/// `fido` capability at all (the stock-degrade rule). `path` persists passkeys in the managed
-/// VM's bundle dir; `None` falls back to `LIMINA_FIDO_STORE` / in-memory.
-pub fn store_if_capable(path: Option<PathBuf>) -> Option<Arc<FidoStore>> {
-    if crate::sep::available() || test_approve() {
-        let store = match path {
-            Some(p) => FidoStore::with_path(p),
-            None => FidoStore::from_env(),
-        };
-        Some(Arc::new(store))
+/// Where this VM's passkeys live, or `None` to advertise no `fido` capability at all.
+///
+/// Two preconditions, and **both** are hard. The enclave one is the stock-degrade rule: a host
+/// that cannot back the keys offers no authenticator. The store one is newer and less obvious —
+/// see the test — but it is the same principle: a passkey is a credential a *real site* keeps, so
+/// an authenticator that cannot remember its half is not a degraded authenticator, it is a trap.
+fn store_location(capable: bool, path: Option<PathBuf>) -> Option<PathBuf> {
+    if capable {
+        path
     } else {
-        log::info!("fido: no Secure Enclave; authenticator disabled");
         None
+    }
+}
+
+/// Build the shared per-VM passkey store **iff** this host can back a FIDO authenticator — a
+/// usable Secure Enclave, or the test-only approve knob (see [`test_approve`]) — **and** there is
+/// somewhere to keep the credentials. Returns the `Arc` both transports share (control-plane uhid
+/// + USB gadget), or `None` to advertise no `fido` capability at all.
+///
+/// `path` is where this run keeps them (`crate::fido_store_path`: a managed VM's bundle dir, or a
+/// sidecar beside a flat run's boot disk). `LIMINA_FIDO_STORE` overrides it outright — that is the
+/// escape hatch for runs with no disk to hang a sidecar on, which is how the L1 tests opt in. With
+/// neither, there is no authenticator; it used to fall through to an in-memory store, which
+/// silently forgot every passkey at shutdown.
+pub fn store_if_capable(path: Option<PathBuf>) -> Option<Arc<FidoStore>> {
+    let capable = crate::sep::available() || test_approve();
+    if !capable {
+        log::info!("fido: no Secure Enclave; authenticator disabled");
+    }
+    let path = std::env::var_os("LIMINA_FIDO_STORE")
+        .map(PathBuf::from)
+        .or(path);
+    match store_location(capable, path) {
+        Some(p) => Some(Arc::new(FidoStore::with_path(p))),
+        None if capable => {
+            log::info!(
+                "fido: nowhere to keep passkeys for this VM (no bundle dir and no writable boot \
+                 disk to sit beside); authenticator disabled — set LIMINA_FIDO_STORE to enable it"
+            );
+            None
+        }
+        None => None,
     }
 }
 
@@ -320,6 +347,30 @@ mod tests {
     /// never reach the SEP-backed CTAP2 commands, so no store contents are needed.
     fn auth() -> FidoAuthenticator {
         FidoAuthenticator::new(Arc::new(FidoStore::in_memory()))
+    }
+
+    #[test]
+    fn an_authenticator_with_nowhere_to_keep_passkeys_is_not_offered_at_all() {
+        // A passkey is a credential a REAL SITE now holds. Minting one into a store that dies with
+        // the process leaves the user with an account entry nothing can ever satisfy — and if it
+        // was their only one, locked out. That is strictly worse than having no authenticator: the
+        // guest simply sees no device, which every browser already handles.
+        //
+        // Ad-hoc `--disk` runs are the case that mattered: managed VMs pass their bundle dir, but
+        // a flat run passed None and fell through to an in-memory store with no warning
+        // (2026-08-08 — found while looking into a GitHub passkey that turned out to be fine).
+        assert_eq!(
+            store_location(true, None),
+            None,
+            "capable, but nowhere to keep them"
+        );
+        let p = PathBuf::from("/tmp/limina-fido.json");
+        assert_eq!(store_location(true, Some(p.clone())), Some(p.clone()));
+        assert_eq!(
+            store_location(false, Some(p)),
+            None,
+            "no enclave, no authenticator"
+        );
     }
 
     fn init_frame(cid: u32, cmd: u8, payload: &[u8]) -> [u8; REPORT_SIZE] {

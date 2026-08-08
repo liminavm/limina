@@ -1058,6 +1058,8 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     let fingerprint = usb && cli.fingerprint_enabled();
     // FIDO is NOT gated on `usb`: its uhid transport rides the agent, not the controller.
     let fido = cli.fido_enabled();
+    // Same reason as the flags above — this reads whole-`cli` fields, and `vmm_bin` moves one out.
+    let fido_store_target = fido_store_path(&cli);
     let vmm_bin = resolve_vmm_bin(cli.vmm_bin).context("locating the limina-vmm worker binary")?;
 
     // Dynamic memory (M6): --memory MIN..MAX overrides --ram-mib with MAX (what libkrun allocates)
@@ -1192,18 +1194,14 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // FIDO passkey store: shared by BOTH transports — the control-plane uhid/agent path and
     // the stock-tier USB gadget (M14 Stage C) — so a guest with either (or both) speaks to one
     // store. `Some` only where a Secure Enclave (or the test-approve knob) can back the
-    // authenticator (stock-degrade rule). Persist in the managed VM's bundle dir (next to
-    // state.toml) so passkeys survive boots; ad-hoc/flat VMs fall back to in-memory.
+    // authenticator (stock-degrade rule). Somewhere to keep the passkeys is a *precondition*, not
+    // a convenience — see `fido_store_path` for where each shape of run keeps them, and why a run
+    // that can keep none gets no authenticator rather than an amnesiac one.
     // `--no-fido` cuts it off here, at the store — which is what makes the opt-out cover BOTH
     // transports at once: with no store the control plane serves no uhid authenticator and the USB
     // gadget below is never wired.
     let fido_store = if fido {
-        fido::store_if_capable(
-            cli.suspend_state_file
-                .as_ref()
-                .and_then(|s| s.parent())
-                .map(|dir| dir.join("fido-credentials.json")),
-        )
+        fido::store_if_capable(fido_store_target)
     } else {
         None
     };
@@ -1868,6 +1866,33 @@ fn default_arm_flat_suspend(cli: &mut Cli) -> Result<()> {
     Ok(())
 }
 
+/// Where this run keeps its passkeys — or `None`, which means *no authenticator at all*
+/// ([`fido::store_if_capable`]: somewhere to keep them is a precondition, not a convenience).
+///
+/// A managed VM gets its bundle dir, next to `state.toml`. A flat `--disk` run gets a sidecar
+/// beside its boot disk, `<disk>.limina-fido.json`, on the same reasoning that puts
+/// `<disk>.limina-suspend.bin` there: credentials belong to the guest that registered them and
+/// should travel with it. Deriving it rather than demanding `LIMINA_FIDO_STORE` is what keeps the
+/// precondition from quietly disabling passkeys across the whole CLI dev loop.
+///
+/// `None` is left for the runs where an authenticator would be *amnesiac*: a read-only boot disk
+/// (nowhere to write the sidecar), and no disk at all — an L1 initrd guest or an ISO. Those get no
+/// device rather than one that registers a passkey a site then keeps forever while our half dies
+/// with the process. `LIMINA_FIDO_STORE` still overrides, which is how the L1 tests opt in.
+fn fido_store_path(cli: &Cli) -> Option<PathBuf> {
+    if let Some(state) = &cli.suspend_state_file {
+        return state.parent().map(|dir| dir.join("fido-credentials.json"));
+    }
+    let disk = parse_disk(cli.disk.first()?).ok()?;
+    if disk.read_only || cli.read_only {
+        return None;
+    }
+    Some(PathBuf::from(format!(
+        "{}.limina-fido.json",
+        disk.path.display()
+    )))
+}
+
 fn parse_disk(spec: &str) -> Result<DiskOpt> {
     let mut rest = spec;
     let mut read_only = false;
@@ -2083,6 +2108,43 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A dev `--disk` run keeps its passkeys next to the disk, and the runs that *can't* keep
+    /// them get no authenticator at all rather than an amnesiac one.
+    #[test]
+    fn passkeys_live_beside_the_disk_they_were_registered_from() {
+        let disk = "/images/fedora.raw";
+
+        let cli = Cli::try_parse_from(["limina", "--disk", disk]).unwrap();
+        assert_eq!(
+            fido_store_path(&cli),
+            Some(PathBuf::from("/images/fedora.raw.limina-fido.json")),
+            "a flat run must persist by default, not lose passkeys on exit"
+        );
+
+        // Managed VMs keep theirs in the bundle, beside state.toml.
+        let mut cli = Cli::try_parse_from(["limina", "--disk", disk]).unwrap();
+        cli.suspend_state_file = Some(PathBuf::from("/vms/dev.liminavm/state.toml"));
+        assert_eq!(
+            fido_store_path(&cli),
+            Some(PathBuf::from("/vms/dev.liminavm/fido-credentials.json"))
+        );
+
+        // Nowhere to write it (read-only, either spelling) and nothing to write it beside
+        // (initrd/ISO boot): no store, which means no authenticator.
+        for argv in [
+            vec!["limina", "--disk", disk, "--read-only"],
+            vec!["limina", "--disk", "/images/fedora.raw:ro"],
+            vec!["limina"],
+        ] {
+            let cli = Cli::try_parse_from(&argv).unwrap();
+            assert_eq!(
+                fido_store_path(&cli),
+                None,
+                "{argv:?} has nowhere to keep a passkey"
+            );
+        }
     }
 
     /// Guards the launchd-256-fd login crash: with the soft limit dropped to

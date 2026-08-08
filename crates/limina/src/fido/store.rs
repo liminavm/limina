@@ -10,9 +10,10 @@
 //!
 //! Shared across all control-plane peers of one VM (an `Arc` in the supervisor's
 //! `Inner`), so a guest that reconnects — or a second agent connection — sees the
-//! same passkeys. Optionally persisted to a JSON file (`LIMINA_FIDO_STORE`, later
-//! the per-VM state dir) so credentials survive a VM restart; without a path it is
-//! in-memory only.
+//! same passkeys. Persisted to a JSON file — the managed VM's state dir, or
+//! `LIMINA_FIDO_STORE` — so credentials survive a VM restart. That file is a
+//! *precondition* for offering the authenticator at all
+//! ([`crate::fido::store_if_capable`]); [`FidoStore::in_memory`] exists for tests.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -40,14 +41,10 @@ pub struct FidoStore {
 }
 
 impl FidoStore {
-    /// A store that persists to `LIMINA_FIDO_STORE` if set, else in-memory only.
-    pub fn from_env() -> FidoStore {
-        match std::env::var_os("LIMINA_FIDO_STORE") {
-            Some(p) => Self::with_path(PathBuf::from(p)),
-            None => Self::in_memory(),
-        }
-    }
-
+    /// An in-memory store — **tests only**, hence the `cfg`. A shipped authenticator always
+    /// has a path behind it (see [`crate::fido::store_if_capable`]): a passkey a site keeps
+    /// forever but we forget at exit is worse than no authenticator at all.
+    #[cfg(test)]
     pub fn in_memory() -> FidoStore {
         FidoStore {
             inner: Mutex::new(Vec::new()),
