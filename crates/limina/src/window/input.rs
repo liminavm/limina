@@ -198,6 +198,19 @@ pub(super) fn event_point_in_view(event: &NSEvent, view: &NSView) -> NSPoint {
     view.convertPoint_fromView(base, None)
 }
 
+/// Whether this event was delivered to a window OTHER than the guest view's — under
+/// `notch = extend` that means the housing strip, which is its own borderless window sitting over
+/// the top of the same picture. Diagnostic only: the pointer's shape is app-wide, but AppKit's
+/// own cursor management is per-window, so "which window is under the pointer" is a candidate
+/// explanation whenever the shape misbehaves in the band and nowhere else.
+fn event_off_view_window(event: &NSEvent, view: &NSView) -> bool {
+    let ev_win = objc2::MainThreadMarker::new().and_then(|mtm| event.window(mtm));
+    match (ev_win, view.window()) {
+        (Some(ev), Some(vw)) => !std::ptr::eq(&*ev, &*vw),
+        _ => false,
+    }
+}
+
 /// Whether we currently have the host cursor hidden for capture — keeps `NSCursor::hide`/`unhide`
 /// (a reference count) balanced no matter how the toggle is driven.
 static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
@@ -301,6 +314,11 @@ const MODIFIER_KEYCODES: [u16; 8] = [0x37, 0x36, 0x38, 0x3C, 0x3A, 0x3D, 0x3B, 0
 pub struct HostCursor {
     cursor: RefCell<Retained<NSCursor>>,
     inside: Cell<bool>,
+    /// Whether `cursor` is the transparent shape. `NSCursor` exposes no way to ask, and the
+    /// difference between "wearing nothing" and "wearing the guest's arrow" is the whole
+    /// question when the pointer goes missing — so it is carried, not derived.
+    blank: Cell<bool>,
+    traced: Cell<Option<(bool, bool, bool)>>,
 }
 
 impl HostCursor {
@@ -314,16 +332,19 @@ impl HostCursor {
             // with their shape on first hover.
             cursor: RefCell::new(super::blank_cursor().unwrap_or_else(NSCursor::arrowCursor)),
             inside: Cell::new(false),
+            blank: Cell::new(true),
+            traced: Cell::new(None),
         })
     }
 
     /// Adopt a new guest cursor shape (or blank). Takes effect now if the pointer is over
     /// the view, otherwise on the next entry.
-    pub fn update(&self, cursor: Retained<NSCursor>) {
+    pub fn update(&self, cursor: Retained<NSCursor>, blank: bool) {
         if self.inside.get() {
             cursor.set();
         }
         *self.cursor.borrow_mut() = cursor;
+        self.blank.set(blank);
     }
 
     /// Re-assert the guest cursor shape if the pointer is currently over the view (used when
@@ -337,13 +358,35 @@ impl HostCursor {
     /// Track the pointer crossing the view boundary. Re-asserts the guest cursor on every
     /// inside motion (AppKit can reset the cursor behind our back — resize edges, window
     /// transitions); restores the arrow when leaving.
-    fn on_motion(&self, inside: bool) {
+    fn on_motion(&self, inside: bool, on_strip: bool) {
+        self.trace(inside, on_strip);
         if inside {
             self.cursor.borrow().set();
         } else if self.inside.get() {
             NSCursor::arrowCursor().set();
         }
         self.inside.set(inside);
+    }
+
+    /// `LIMINA_EDGE_TRACE`: what the host pointer is wearing, and where.
+    ///
+    /// "The pointer vanishes over the housing band" (2026-08-08) has three explanations that look
+    /// identical on screen — we never see the motion there, we see it but set a transparent shape,
+    /// or we set the right shape and something takes it away. They are separated by exactly these
+    /// three bits, so they are traced together, on transitions only.
+    fn trace(&self, inside: bool, on_strip: bool) {
+        if !super::capture_tap::edge_trace() {
+            return;
+        }
+        let now = (inside, on_strip, self.blank.get());
+        if self.traced.get() != Some(now) {
+            self.traced.set(Some(now));
+            eprintln!(
+                "[CURSOR] t={:.1} inside={inside} on_strip={on_strip} blank={}",
+                super::capture_tap::trace_ms(),
+                self.blank.get(),
+            );
+        }
     }
 }
 
@@ -841,7 +884,8 @@ impl InputState {
                     return false;
                 }
                 let inside = self.pointer_inside(event, view);
-                self.host_cursor.on_motion(inside);
+                self.host_cursor
+                    .on_motion(inside, event_off_view_window(event, view));
                 if inside {
                     self.emit_motion(event, view);
                 }
@@ -855,7 +899,8 @@ impl InputState {
                     return false;
                 }
                 let inside = self.pointer_inside(event, view);
-                self.host_cursor.on_motion(inside);
+                self.host_cursor
+                    .on_motion(inside, event_off_view_window(event, view));
                 // A drag continues a press: forward it (clamped) even outside the view,
                 // but only if the press itself went to the guest.
                 if self.guest_buttons.get() != 0 || inside {

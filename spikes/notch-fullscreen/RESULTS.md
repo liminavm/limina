@@ -330,3 +330,172 @@ region, still moving). macOS has only the first: `CGAssociateMouseAndMouseCursor
 which capture mode already uses. There is no `ClipCursor`/`XGrabPointer` equivalent, so confining
 to a rect has to be emulated with warp-clamping — which is what `fit::capture_step` and
 `fit::EdgeResist` do. The resistance code is the standard workaround, not a reinvention.
+
+---
+
+# Round 6 — the Space-switch artifact: four fixes, none shippable
+
+**Date:** 2026-08-08. Reported from dogfood: with `notch = extend` fullscreen, switching to another
+Space and back animates the slide-in with the guest *inset below the housing*, then snaps up to
+full-panel when the animation ends. Leaving looks correct. Returning before the switch resolves
+keeps the strip.
+
+**Instrumented rather than guessed:** `LIMINA_OVERLAY_TRACE=1` gained an `[OVERLAY-GATE]` line that
+reports the gate inputs whether or not the overlay exists (the pre-existing trace could only
+describe an overlay that was already up, i.e. it was blind to "why is it still down"), timestamped
+in ms so signals can be timed against the ~0.4 s animation. `space-switch-probe.sh` drives the
+sequence — **except that macOS ignores synthetic Ctrl-arrow for Space switching**: `osascript`
+returns 0 and the WindowServer does nothing, so the switches themselves need a human.
+
+## What the trace showed
+
+`isOnActiveSpace` goes **false at the start of leaving** and **true only when the incoming
+animation completes**. Both halves of the report follow: the outgoing animation shows a snapshot
+taken while the overlay was still up (correct-looking), and the incoming one runs entirely in the
+window where the gate is still false. The snap is the overlay being *rebuilt* — `show()`
+re-parents the guest's whole view from the carrier into the overlay in one frame.
+
+## Four attempts, each one moving the artifact rather than removing it
+
+| attempt | result (human oracle, real notched panel) |
+|---|---|
+| 1. Overlay survives the switch (drop the `isOnActiveSpace` gate) | Geometry snap gone — guest animates full-panel both ways. **New:** black band beside the notch during the animation. |
+| 2. Don't yield the *level* while our Space is away | Band gone. **New:** whole-screen black flash for several frames after the switch resolves; black rectangle over the wallpaper in Mission Control. |
+| 3. Yield by hiding the overlay instead of dropping it to level 0 | Flash gone. **New:** guest renders inset, then snaps back — the original bug in a third costume. |
+| 4. Make the yield clock measure the whole condition | Snap gone. **Black flash and Mission Control both return.** |
+
+Attempt 4 + re-handing Core Animation the current frame on the way back (an idle guest presents
+nothing, so nothing repairs the window on its own): **neither symptom improved**, which falsifies
+"the layer simply stops being composited while off-screen".
+
+## Shipped state: reverted, with two real bugs fixed on the way through
+
+The `isOnActiveSpace` gate is **back**, so the reported snap is back. That is deliberate: the snap
+is cosmetic, while the persistent overlay costs a whole-screen flash and a Mission Control
+regression the user confirmed does *not* happen with the VM shut down.
+
+Two genuine defects found while circling it, both kept:
+
+- **Yielding dropped the overlay to level 0**, which puts it *behind* the carrier — whose content
+  view is the empty placeholder `show()` leaves behind. So a dialog taking focus on our screen did
+  not shrink the guest below the housing, it blanked the screen. Yielding now hides the overlay,
+  which returns the view to the carrier and looks exactly like `notch = avoid`.
+- **The yield clock measured the wrong condition** ("inactive and focus is here"), so it ran for
+  the entire time the user was on another Space and was already expired on return — firing a yield
+  in the frame after the animation. It now measures the full condition, including
+  `on_active_space`, so returning restarts it.
+
+## The redesign that would actually fix it
+
+Stop moving the guest's view. Round 4 above already proved an **80 pt strip window** works: keep
+the guest in the carrier permanently and float a strip-only overlay over the housing. A Space
+switch then re-parents nothing, so there is no frame in which the geometry can differ — and
+whatever Mission Control does with an above-menu-bar window costs a 33 pt strip rather than the
+whole screen. The blocker round 4 recorded was *input*, and it has since been removed: the
+uncaptured pointer path already maps through global coordinates
+(`input::cg_global_to_view_point`, added for edge resistance), so the strip need not be dead to
+clicks. Not attempted here — it is a design change, not a tweak.
+
+# Round 7 — the strip-only redesign, and why hiding it had to stop using `orderOut`
+
+**Date:** 2026-08-08, same session. The redesign above, built and driven on the real notched panel.
+
+## The shape
+
+The guest's `NSView` **never moves again**. It lives in the carrier for the process's lifetime. The
+overlay becomes a second window covering only the housing band, with a *second* `CALayer` that is
+handed the **same IOSurface** every present. Both layers get identical geometry in panel space
+(`fit::notch_strip_frames`) and each window clips to its own bounds, so the seam is exact by
+construction rather than by tuning — the strip's layer is just the carrier's layer frame shifted
+down by the carrier's height.
+
+Three consequences fall out, and each one killed a symptom from round 6:
+
+- **A Space switch reflows nothing.** There is no re-parent, so there is no frame where the guest's
+  geometry differs. The snap, the band-during-animation and the inset-then-snap costumes all go.
+- **The guest's size is keyed on the *policy*, not on whether the strip is on screen**
+  (`ExtendOverlay::claims_band`). The strip still hides while our Space is away — it is
+  `fullScreenAuxiliary` but still drew over the neighbouring Spaces once their switch resolved,
+  measured — and if the guest's height followed it down, every Space switch would put a full
+  rescale back in. It doesn't.
+- **The measurement path stops needing a special case.** The carrier's view is the inset one under
+  both policies now, so `fullscreen_inset_measurement` no longer has to be skipped while the
+  overlay is up.
+
+Human oracle after the rebuild: *"seam invisible, notch area used"*, neighbours clean, no rescale.
+Mission Control's black wallpaper background persisted and was **attributed to macOS, not us** by
+the user (seen outside limina) — the round-6 version of it that *did* disappear with the VM shut
+down is gone with the re-parent.
+
+## The residual: the band flashing on the *external* display
+
+One artifact survived: on some Space switches the 33 pt band appeared for a frame or two on the
+BenQ — while limina was fullscreen on the **built-in**.
+
+Two plausible causes were fixed first, on reasoning rather than measurement: `orderOut`'s
+re-insertion re-binding the window's Space (round 1 measured that going to the *main* screen
+regardless of frame), and `place()` caching rects computed from mid-switch `carrier.screen()`
+readings. Both were real defects and both are kept. **Neither was the flash.** The flash survived
+them, which is what forced the instrument.
+
+`LIMINA_OVERLAY_TRACE` gained a `[STRIP]` line — the strip's `NSWindow::frame` at every
+show/hide/place, stamped in epoch milliseconds so it interleaves with the detector's log. Two
+consecutive lines, 20 ms apart, ended it:
+
+```
+[STRIP] …826059 show  cocoa=(-1512,528,1512,33) want=(-1512,528,1512,33) alpha=0.0
+[STRIP] …826079 place cocoa=(  728,528,1512,33) want=(-1512,528,1512,33) alpha=1.0
+```
+
+**The window server parks a hidden `fullScreenAuxiliary` window while its Space is away, and does
+not tell AppKit.** At `show()` the frame read back as the correct `-1512` — so the "is it already
+in the right place?" test passed and the write was skipped — while the server had the window at
+x=728, i.e. on the BenQ. Alpha went to 1 at the parked position; the next tick's `place()` found
+728, moved it home, and that round trip *is* the flash. `NSWindow::frame` is our last write, not
+the server's copy of it, and there is no API that reports the difference.
+
+The fix is one line in the wrong place, twice over:
+
+- Forcing the write from `show()` **does not work.** Two `setFrame:display:` calls in one pass
+  coalesce against the frame the pass *started* with, so nudging away and back leaves the nudge
+  and drops the destination — measured, and visible in the detector as the band revealing 1 pt
+  low. You cannot land on a rectangle in a pass that began at that rectangle.
+- So **`hide()` desynchronises deliberately**: it parks AppKit's cached frame one point *down*
+  while alpha is 0 and nothing can see it. `show()`'s ordinary "is the frame right?" test is then
+  false, the write happens, and it lands in the same transaction as the alpha. One point down
+  rather than up because if the write is a frame late the band sits 1 px low, leaving a 1 px gap
+  at the very top — which is the camera housing, black either way.
+
+Also: the strip is **born at the band**, not at the screen frame. An opaque black window the size
+of the panel, even for the single frame before `place()` corrects it, is a full-screen flash.
+
+**Verified** over ~10 human-driven Space switches (including animation-interrupting ones) and a
+fullscreen exit/re-enter: the human oracle reports no flash, and the detector's x=728 population
+is gone — 0 `SOLO` samples, i.e. the strip is never off its display on its own.
+
+## `flash-detector.swift` — making "no flash" a measurement
+
+A one-or-two-frame artifact on an intermittent, human-driven event is not something eyeballing can
+clear. `flash-detector.swift` polls `CGWindowListCopyWindowInfo` (public API, no Screen Recording
+permission needed for bounds or alpha) every 5 ms and logs each *change* in a limina window's
+bounds, alpha or on-screen state — a change log, because the question was never "where was it" but
+"did our alpha lead or trail the move", which is what separates "we revealed it in the wrong place"
+from "the server moved it behind our back":
+
+```
+swiftc -O spikes/notch-fullscreen/flash-detector.swift -o /tmp/flash-detector
+/tmp/flash-detector             # displays read from CoreGraphics; Ctrl-C for the summary
+```
+
+Two things it got wrong at first, both worth keeping in mind:
+
+- **The first version took the expected display origin on the command line** and was given the
+  `NSScreen` value. `CGWindowBounds` is in CG's top-left-origin global space and `NSScreen.frame`
+  is not, so every reading was misclassified. It now asks `CGDisplayBounds` itself.
+- **Off-display is not the same as wrong.** A Space slide legitimately carries every window of that
+  Space across the boundary, and the first run flagged 704 samples that were all just the animation
+  — the carrier included. The signal is the strip off its display **while the rest of the app is
+  still home**, which the summary counts as `SOLO`. That is the number that has to be zero, and a
+  post-hoc Python pass to compute it is now built in.
+
+Synthetic Space switches remain impossible (round 6), so the human drives and this watches.

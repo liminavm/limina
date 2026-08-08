@@ -103,6 +103,41 @@ pub(crate) fn reshape_to_aspect(
     content_for_area(area, a, visible)
 }
 
+/// Where the housing-strip window goes, and where its copy of the guest layer sits inside it.
+///
+/// The `extend` strip is a second window covering only the camera-housing band, showing the top
+/// `inset` points of the *same* guest image the carrier is showing below it. Both windows give
+/// their layer the identical geometry in **panel** space — origin at the bottom-left of the glass
+/// — and let each window's own bounds do the clipping. The carrier's view stops `inset` short of
+/// the top, so the top of the image falls outside it; the strip's window covers exactly that band,
+/// so the layer inside it is the same rect shifted down by the carrier's height.
+///
+/// Returns `(strip_frame_in_screen_points, layer_frame_in_strip_points)`. Screen coordinates are
+/// Cocoa's (bottom-left origin), which is why the strip sits at `screen.height - inset`.
+pub(crate) fn notch_strip_frames(
+    screen: (f64, f64, f64, f64),
+    carrier_height: f64,
+    inset: f64,
+    layer: FitRect,
+) -> ((f64, f64, f64, f64), FitRect) {
+    let (sx, sy, sw, sh) = screen;
+    let strip = (sx, sy + sh - inset, sw, inset);
+    let shifted = FitRect {
+        x: layer.x,
+        y: layer.y - carrier_height,
+        w: layer.w,
+        h: layer.h,
+    };
+    (strip, shifted)
+}
+
+/// The area the guest is drawn into, in points: the carrier's content view, plus the housing band
+/// when the `extend` strip is covering it. One number decides the letterbox fit, the pointer
+/// mapping and both layer frames, so the guest cannot disagree with itself about how tall it is.
+pub(crate) fn panel_size(view: (f64, f64), strip_inset: f64) -> (f64, f64) {
+    (view.0, view.1 + strip_inset.max(0.0))
+}
+
 /// The scales a desktop can offer for a given resolution, as exact rationals. Every one of these
 /// was observed in a guest GNOME's `GetCurrentState` output; the list is a *ruler* for comparing
 /// two candidate resolutions, not a claim about any particular compositor's menu.
@@ -1373,6 +1408,48 @@ mod tests {
         // Degenerate inputs floor at 64 and never panic.
         let (w, h) = reshape_to_aspect((0.0, 0.0), (0, 0), (0.0, 0.0));
         assert!(w >= 64 && h >= 64);
+    }
+
+    /// The `extend` strip shows the top of the same image the carrier shows the rest of, so the
+    /// two layers must land on one continuous picture across the seam. Numbers are the 14" panel:
+    /// 1512×982 glass, 33 pt of housing, so the carrier's fullscreen view is 949 tall.
+    #[test]
+    fn the_strip_continues_the_carrier_across_the_seam() {
+        let (screen_w, screen_h) = (1512.0, 982.0);
+        let carrier_h = screen_h - NOTCH; // 949 — what AppKit gives a fullscreen window
+        let guest = FitRect::full(screen_w, screen_h); // extend: the guest fills the glass
+
+        let (strip, layer) =
+            notch_strip_frames((0.0, 0.0, screen_w, screen_h), carrier_h, NOTCH, guest);
+
+        // The strip window covers exactly the band the carrier cannot reach.
+        assert_eq!(strip, (0.0, carrier_h, screen_w, NOTCH));
+        // Inside it, the layer is the same rect shifted down by the carrier's height, so the
+        // image's row at panel-y 949 lands at the strip's own y=0 — no seam, no doubled row.
+        assert_eq!(layer.y, -carrier_h);
+        assert_eq!((layer.x, layer.w, layer.h), (guest.x, guest.w, guest.h));
+        // The bottom of the strip's copy and the top of the carrier's copy meet exactly.
+        assert_eq!(layer.y + layer.h, guest.h - carrier_h);
+
+        // A screen that is not at the origin (a second display) keeps the same relationship.
+        let (strip, _) = notch_strip_frames(
+            (-1512.0, 300.0, screen_w, screen_h),
+            carrier_h,
+            NOTCH,
+            guest,
+        );
+        assert_eq!(strip, (-1512.0, 300.0 + carrier_h, screen_w, NOTCH));
+    }
+
+    /// The guest is as tall as the area it is actually drawn into — and that changes when the
+    /// strip stands down (for a dialog, or the chrome ask), which must letterbox rather than
+    /// clip the top off.
+    #[test]
+    fn the_panel_is_the_view_plus_the_strip_when_the_strip_is_up() {
+        assert_eq!(panel_size((1512.0, 949.0), NOTCH), (1512.0, 982.0));
+        assert_eq!(panel_size((1512.0, 949.0), 0.0), (1512.0, 949.0));
+        // A notchless display never has a strip, so the view is the whole story.
+        assert_eq!(panel_size((2560.0, 1440.0), 0.0), (2560.0, 1440.0));
     }
 
     /// GNOME only offers a scale whose *logical* size comes out whole, so the scale menu the user

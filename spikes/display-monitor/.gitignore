@@ -1,0 +1,6 @@
+# Live harness output. `sample.sh` writes a timestamped dump per run and `watch.sh` appends to
+# samples/timeline.log continuously; both are working state, and the ones worth keeping get
+# committed under a descriptive name instead (see samples/*-2026-08-08-*).
+*.state.toml
+samples/timeline.log
+samples/2[0-9][0-9][0-9][0-1][0-9][0-3][0-9]T*.txt

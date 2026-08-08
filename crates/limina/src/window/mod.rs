@@ -695,18 +695,17 @@ define_class!(
     }
 );
 
-/// Window level for the `extend` overlay while limina is the active app: above the menu bar, so
-/// the chrome cannot reveal over the guest. `NSMainMenuWindowLevel` is 24.
-const OVERLAY_LEVEL: isize = 25;
-
-/// Window level for the overlay while something on **our own screen** has focus and it isn't us:
-/// ordinary.
+/// Window level for the `extend` overlay: above the menu bar, so the chrome cannot reveal over
+/// the guest. `NSMainMenuWindowLevel` is 24.
 ///
-/// Above the menu bar costs something real: a window at that level covers *system* windows too. It
-/// hid the Accessibility grant dialog — the app sat there full-panel over a prompt the user could
-/// not click, which is a particularly bad trap given that prompt is how limina earns its own
-/// capture tap.
-const OVERLAY_LEVEL_INACTIVE: isize = 0;
+/// Constant while the overlay is up — the level is not a lever for getting out of something's
+/// way. Yielding used to be a level drop to 0 rather than putting the overlay down, which looked
+/// cheaper (no re-parent, so no visible reflow) and was wrong in a way only dogfood found
+/// (2026-08-08): at level 0 the overlay sits **below the carrier**, whose content view is the
+/// empty placeholder [`ExtendOverlay::show`] leaves behind, so the guest did not shrink below the
+/// housing, it disappeared — a whole-screen black flash for as long as the yield lasted.
+/// [`overlay_yields`] now decides whether the overlay is up at all.
+const OVERLAY_LEVEL: isize = 25;
 
 /// One tick's worth of overlay stacking state, compared to suppress repeats in the trace.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -718,35 +717,53 @@ struct OverlaySnapshot {
     have: isize,
 }
 
-/// Where the overlay belongs in the window order.
+/// Whether the overlay must get out of the way of something on screen.
 ///
-/// Dropping the level whenever limina was merely *inactive* had a symptom we only ever see with a
-/// second display attached: focus a window over there and the guest's top strip goes black, hiding
-/// the guest's own panel, while the rest of it stays full-panel. That strip is the fullscreen
-/// Space's camera-housing backdrop, which the system draws at `NSMainMenuWindowLevel` (24) — below
-/// 25 we are simply behind it. There is no level in between that shows the strip without covering
-/// system windows, so the level cannot be the thing that decides this.
+/// Nothing can appear over an above-menu-bar window — that is the whole point of the overlay —
+/// so there has to be one condition under which it stands down, or a system dialog on our screen
+/// is unreachable. The Accessibility prompt is the case that matters, since that prompt is how
+/// limina earns its capture tap in the first place.
 ///
-/// What distinguishes the two cases is *where the focused window is*. The Accessibility prompt
-/// opens on our screen, so dropping there still lets it come forward; a window focused on another
-/// display leaves our Space showing untouched and has no claim on our stacking at all.
+/// Three things narrow it, each learned from a symptom:
 ///
-/// `settled` is why this takes a duration rather than a bool. `NSScreen::mainScreen` **lags the
-/// activation change**: for a tick or two after focus leaves for the other display, `isActive` is
-/// already false while `mainScreen` still names ours, which reads exactly like a dialog opening
-/// here. Measured: 8 such transients in one switching session, each
-/// resolving within a tick or two, and (almost certainly) the same stale read held longer is the
-/// black strip that survived the first cut of this fix. Dropping the level is therefore only done
-/// once the condition has *held*: a dialog stays covered for [`OVERLAY_SETTLE`] and no longer,
-/// while a stale sample never gets the chance.
-fn overlay_level(app_active: bool, focus_on_our_screen: bool, settled: Option<Duration>) -> isize {
-    let drop =
-        !app_active && focus_on_our_screen && settled.is_some_and(|held| held >= OVERLAY_SETTLE);
-    if drop {
-        OVERLAY_LEVEL_INACTIVE
-    } else {
-        OVERLAY_LEVEL
-    }
+/// - **Where the focused window is.** Dropping whenever limina was merely *inactive* black-strips
+///   a guest that is still perfectly visible: focus something on an external display and the
+///   built-in's top strip goes black (the fullscreen Space's housing backdrop, drawn at
+///   `NSMainMenuWindowLevel`, showing through). A window focused on another display has no claim
+///   on our stacking at all.
+/// - **How long that has held.** `NSScreen::mainScreen` lags the activation change — for a tick or
+///   two after focus leaves for another display, `isActive` is already false while `mainScreen`
+///   still names ours, which reads exactly like a dialog opening here. Measured: 8 such transients
+///   in one switching session. A dialog is covered for at most [`OVERLAY_SETTLE`]; a stale sample
+///   never gets the chance.
+/// - **Whether our Space is even showing.** A Space switch on our own display is indistinguishable
+///   from a dialog by the first two — limina resigns active, `mainScreen` stays ours — but there is
+///   nothing on screen to yield *to*, and yielding mid-switch is visible: it lands in the middle of
+///   the animation back, which is exactly when the user is looking at it.
+///
+/// Returns the updated hold timer and whether to yield **this tick**.
+///
+/// The timer measures the *whole* condition, which is the only version of it that works. Timing
+/// just "inactive and the focus is here" leaves the clock running for the entire time the user
+/// spends on another Space — so it is long expired when they come back, and the yield fires the
+/// instant `on_active_space` turns true, in the one frame after the animation, hiding the overlay
+/// until limina finishes activating. That is the reported snap wearing a different hat
+/// (2026-08-08, third round): perfect rendering, then a frame inset below the housing, then back.
+fn yield_step(
+    app_active: bool,
+    focus_on_our_screen: bool,
+    on_active_space: bool,
+    held_since: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> (Option<std::time::Instant>, bool) {
+    let condition = !app_active && on_active_space && focus_on_our_screen;
+    let since = match (condition, held_since) {
+        (false, _) => None,
+        (true, Some(started)) => Some(started),
+        (true, None) => Some(now),
+    };
+    let yields = since.is_some_and(|started| now.duration_since(started) >= OVERLAY_SETTLE);
+    (since, yields)
 }
 
 /// How long "inactive, and the focus is on our screen" must hold before the overlay gives up its
@@ -778,6 +795,46 @@ fn display_trace() -> bool {
     *ON.get_or_init(|| std::env::var_os("LIMINA_DISPLAY_TRACE").is_some_and(|v| v != "0"))
 }
 
+/// Shared zero for the trace timestamps, so lines from different traces sit on one timeline.
+fn trace_clock() -> &'static std::time::Instant {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now)
+}
+
+/// Wall-clock milliseconds. The other traces are relative to [`trace_clock`], which is enough to
+/// time our own signals against each other — but the notch strip's bugs are about what the
+/// *window server* does to a window between our ticks, and the only way to see that is to
+/// interleave our log with an outside observer's (`spikes/notch-fullscreen/flash-detector.swift`,
+/// which polls `CGWindowListCopyWindowInfo`). That needs a clock both can name.
+fn epoch_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// One `[STRIP]` line, under `LIMINA_OVERLAY_TRACE`, reporting what *we* believe the strip
+/// window's frame is at the moment we act on it. Paired with the detector's view of the same
+/// window, it separates "we revealed it at the wrong place" from "the window server moved it and
+/// AppKit never told us" — which need opposite fixes.
+fn strip_trace(what: &str, window: Option<&NSWindow>, want: Option<(f64, f64, f64, f64)>) {
+    if !overlay_trace() {
+        return;
+    }
+    let have = window.map(|w| {
+        let f = w.frame();
+        (f.origin.x, f.origin.y, f.size.width, f.size.height)
+    });
+    eprintln!(
+        "[STRIP] {} {} cocoa={:?} want={:?} alpha={:?}",
+        epoch_ms(),
+        what,
+        have,
+        want,
+        window.map(|w| w.alphaValue()),
+    );
+}
+
 fn focus_is_on_screen(screen: Option<&NSScreen>, mtm: MainThreadMarker) -> bool {
     let (Some(screen), Some(main)) = (screen, NSScreen::mainScreen(mtm)) else {
         return true;
@@ -796,17 +853,49 @@ fn focus_is_on_screen(screen: Option<&NSScreen>, mtm: MainThreadMarker) -> bool 
 /// the carrier's Space gives both, and because the overlay sits above menu-bar level the chrome
 /// cannot appear over the guest at all. All three measured in `spikes/notch-fullscreen/` round 5.
 ///
-/// The trick that keeps this small: the overlay gets no view of its own. The **same** `NSView` —
-/// scanout layer, cursor sublayer and every input binding already attached — is re-parented into
-/// it and back out. Nothing that holds the view needs to know.
+/// **The strip shows the housing band and nothing else, and the guest's view never moves.**
+///
+/// The first cut re-parented the guest's whole `NSView` into a full-panel overlay and back. It
+/// worked, and every artifact this file has ever had came from it: the re-parent is a one-frame
+/// reflow of the entire guest, and it is bound to `isOnActiveSpace`, which only turns true again
+/// once a Space-switch animation has *finished* (2026-08-08 — four attempted fixes, each of which
+/// moved the artifact rather than removing it; `spikes/notch-fullscreen/` round 6).
+///
+/// So the guest's view stays in the carrier for good, and this window covers only the band the
+/// carrier cannot reach, showing the top `inset` points of the *same* IOSurface through a second
+/// `CALayer`. Both layers get identical geometry in panel space and each window clips to its own
+/// bounds ([`fit::notch_strip_frames`]), so the seam is exact by construction. A Space switch now
+/// re-parents nothing and reflows nothing; whatever the compositor does with an above-menu-bar
+/// window while its Space is away can cost at most a 33 pt band instead of the whole screen.
+/// Where the strip window sits in screen points, and where its copy of the guest layer sits inside
+/// it — the pair [`fit::notch_strip_frames`] returns, remembered so it can be re-applied before the
+/// band is revealed again.
+type StripPlacement = ((f64, f64, f64, f64), fit::FitRect);
+
 #[derive(Default)]
 pub(crate) struct ExtendOverlay {
     window: RefCell<Option<Retained<NSWindow>>>,
+    /// The strip's copy of the guest scanout. Created once and re-used across show/hide so the
+    /// present path can hand it every frame without caring whether the strip is up.
+    strip_layer: RefCell<Option<Retained<CALayer>>>,
+    /// The strip's copy of the captured-pointer cursor — see [`Self::strip_cursor_layer`].
+    strip_cursor_layer: RefCell<Option<Retained<CALayer>>>,
     /// Read by the capture tap, which has no access to the `Rc` graph. One fact, one owner.
     active: Arc<std::sync::atomic::AtomicBool>,
     /// Last state logged by `LIMINA_OVERLAY_TRACE`, so a 60 Hz tick reports transitions rather
     /// than a flood.
     traced: Cell<Option<OverlaySnapshot>>,
+    /// Last *gate* state logged by `LIMINA_OVERLAY_TRACE` — see the trace in [`Self::reconcile`].
+    /// Separate from `traced` because it is reported whether or not the overlay exists: the
+    /// interesting question is often why it does *not*.
+    gate_traced: Cell<Option<(bool, bool, bool, bool)>>,
+    /// Whether the *policy* says the guest owns the housing band, ignoring whether the strip
+    /// window happens to be on screen this instant. See [`Self::claims_band`].
+    claims_band: Cell<bool>,
+    /// The last placement [`Self::place`] computed: the strip's screen rect and its layer's frame
+    /// within it. Re-applied by [`Self::show`] *before* the window is ordered back in, so a strip
+    /// that was hidden across a display change never appears at its old rect first.
+    placement: Cell<Option<StripPlacement>>,
     /// When "inactive, and the focus is on our screen" started holding — see [`overlay_level`].
     /// Cleared the moment it stops, so only a sustained condition ever drops the level.
     yielding_since: Cell<Option<std::time::Instant>>,
@@ -817,30 +906,159 @@ impl ExtendOverlay {
         self.active.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Whether the strip window has ever been built. Distinct from [`Self::is_active`]: the strip
+    /// outlives every hide, and its layers stay valid while it is invisible.
+    fn has_strip(&self) -> bool {
+        self.window.borrow().is_some()
+    }
+
+    /// Whether the guest owns the housing band **as policy** — `extend`, fullscreen, on a notched
+    /// panel, with neither the chrome ask nor a yield standing it down. Deliberately blind to
+    /// whether the strip window is on screen right now, because that flips for a reason the guest
+    /// must not react to: the strip is hidden while our Space is away (it would otherwise float
+    /// over the neighbouring Space — measured 2026-08-08), and sizing the guest to that would
+    /// rescale the whole picture by the band's height twice per Space switch. Standing *down* —
+    /// the chrome ask, a dialog — does change it, and there the reflow is the intent.
+    fn claims_band(&self) -> bool {
+        self.claims_band.get()
+    }
+
     fn flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
         self.active.clone()
     }
 
-    /// The view the guest is drawn in and receives input through: the overlay's while it is up,
-    /// the carrier's otherwise — the same object either way.
-    fn active_view(&self, carrier: &NSWindow) -> Option<Retained<NSView>> {
-        match self.window.borrow().as_ref() {
-            Some(w) => w.contentView(),
-            None => carrier.contentView(),
+    /// The strip's copy of the **capture** cursor layer, created on first use as a sublayer of
+    /// [`Self::strip_layer`] — exactly where the carrier keeps its own.
+    ///
+    /// While the pointer is captured (which fullscreen's grab does on its own) the host `NSCursor`
+    /// is hidden and the guest's cursor is *composited*, into a sublayer of the carrier's scanout
+    /// layer. That layer is a housing-inset taller than the carrier's window, so its top band is
+    /// clipped by the window and drawn by the strip instead — and the strip had a copy of the
+    /// picture but not of the cursor. The pointer therefore disappeared on entering the band while
+    /// still driving the guest, which reads as a lost pointer rather than a clipped one
+    /// (reported 2026-08-08). Both layers have the same bounds, so `update_capture_cursor`
+    /// computes the same frame for both and each window clips it to its own share.
+    fn strip_cursor_layer(&self) -> Retained<CALayer> {
+        let mut slot = self.strip_cursor_layer.borrow_mut();
+        slot.get_or_insert_with(|| {
+            let layer = CALayer::new();
+            layer.setHidden(true);
+            self.strip_layer().addSublayer(&layer);
+            layer
+        })
+        .clone()
+    }
+
+    /// The strip's copy of the scanout layer, created on first use. The present path sets the
+    /// same IOSurface on it as on the carrier's layer; [`Self::place`] gives it its geometry.
+    fn strip_layer(&self) -> Retained<CALayer> {
+        let mut slot = self.strip_layer.borrow_mut();
+        slot.get_or_insert_with(|| {
+            let layer = CALayer::new();
+            // Same reasoning as the carrier's scanout layer: the guest surface is XRGB with a
+            // "don't care" alpha, and blending it would composite the strip transparent.
+            layer.setOpaque(true);
+            layer
+        })
+        .clone()
+    }
+
+    /// Put the strip window over the housing band and its layer where the guest image continues.
+    /// Re-asserted every tick: nothing in AppKit keeps a borderless window in place across a
+    /// display reconfiguration, and the layer follows the letterbox fit.
+    fn place(&self, screen: &NSScreen, carrier_height: f64, inset: f64, layer_fit: fit::FitRect) {
+        let f = screen.frame();
+        let (strip, shifted) = fit::notch_strip_frames(
+            (f.origin.x, f.origin.y, f.size.width, f.size.height),
+            carrier_height,
+            inset,
+            layer_fit,
+        );
+        // Only trust a reading taken while the band is actually up. Mid-Space-switch
+        // `carrier.screen()` misreads, and on the wrong screen the whole chain degenerates —
+        // `notch_inset` is 0 for a notchless panel, so the computed strip is a ZERO-HEIGHT rect
+        // over the other display. Caching that and re-applying it on the way back in would show
+        // as a missing band. Remember only placements computed while on screen; a hidden strip
+        // keeps the last good frame it already has.
+        if !self.is_active() {
+            return;
         }
+        self.placement.set(Some((strip, shifted)));
+        self.apply_placement(strip, shifted);
+    }
+
+    /// Put the strip window and its layer at an already-computed placement.
+    ///
+    /// The skip when the frame already matches is safe only because [`Self::hide`] deliberately
+    /// leaves AppKit's cached frame *wrong* — see the note there. `NSWindow::frame` is our last
+    /// write, not the window server's copy of it, so "already correct" is not evidence the window
+    /// is where we think it is.
+    fn apply_placement(&self, strip: (f64, f64, f64, f64), layer: fit::FitRect) {
+        let Some(window) = self.window.borrow().as_ref().cloned() else {
+            return;
+        };
+        let want = NSRect::new(
+            NSPoint::new(strip.0, strip.1),
+            NSSize::new(strip.2, strip.3),
+        );
+        if window.frame() != want {
+            strip_trace("place", Some(&window), Some(strip));
+            window.setFrame_display(want, true);
+        }
+        set_layer_frame(&self.strip_layer(), layer);
     }
 
     fn show(&self, carrier: &NSWindow, mtm: MainThreadMarker) {
         if self.is_active() {
             return;
         }
-        let (Some(screen), Some(view)) = (carrier.screen(), carrier.contentView()) else {
+        // Already built: just bring it back. Rebuilding it per Space switch meant it was born
+        // from whatever `carrier.screen()` said at that instant and corrected by `place` a frame
+        // later, which showed up as the band flashing on the *other* display before jumping home
+        // (2026-08-08). The window keeps its frame while ordered out, so there is nothing to
+        // correct on the way back.
+        if let Some(strip) = self.window.borrow().as_ref().cloned() {
+            // Frame first, then reveal, and `force` because AppKit's idea of the frame is stale
+            // here — see [`Self::apply_placement`]. Only a placement that is still inside this
+            // screen is worth applying; a stale one is left for the tick's `place` to correct now
+            // that we are on screen.
+            if let (Some((rect, layer)), Some(screen)) = (self.placement.get(), carrier.screen()) {
+                let f = screen.frame();
+                let inside = rect.0 >= f.origin.x - 1.0
+                    && rect.0 + rect.2 <= f.origin.x + f.size.width + 1.0
+                    && rect.3 > 0.0;
+                if inside {
+                    self.apply_placement(rect, layer);
+                }
+            }
+            strip_trace("show", Some(&strip), self.placement.get().map(|p| p.0));
+            strip.setIgnoresMouseEvents(false);
+            strip.setAlphaValue(1.0);
+            self.active
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
+        let Some(screen) = carrier.screen() else {
             return;
         };
-        let overlay: Retained<NSWindow> = unsafe {
+        // A plain NSView, layer-hosting like the carrier's, holding the strip's copy of the
+        // scanout. The carrier's view is NOT touched — that is the whole point of this design.
+        let host = NSView::new(mtm);
+        host.setLayer(Some(&self.strip_layer()));
+        host.setWantsLayer(true);
+        host.setLayerContentsRedrawPolicy(NSViewLayerContentsRedrawPolicy::Never);
+        // Born at the band, not at the screen: an opaque black window the size of the panel,
+        // even for the one frame before `place` corrects it, is a full-screen flash.
+        let f = screen.frame();
+        let inset = hostdisplay::fullscreen_inset(&screen);
+        let born = NSRect::new(
+            NSPoint::new(f.origin.x, f.origin.y + f.size.height - inset),
+            NSSize::new(f.size.width, inset),
+        );
+        let strip: Retained<NSWindow> = unsafe {
             let w: Retained<LiminaWindow> = msg_send![
                 LiminaWindow::alloc(mtm),
-                initWithContentRect: screen.frame(),
+                initWithContentRect: born,
                 styleMask: NSWindowStyleMask::Borderless,
                 backing: NSBackingStoreType::Buffered,
                 defer: false,
@@ -850,40 +1068,73 @@ impl ExtendOverlay {
         // Borderless is the only style the compositor lets draw beside the housing;
         // FullScreenAuxiliary is what lets the window join the carrier's Space rather than
         // yanking the user out of it.
-        overlay.setCollectionBehavior(NSWindowCollectionBehavior::FullScreenAuxiliary);
+        strip.setCollectionBehavior(NSWindowCollectionBehavior::FullScreenAuxiliary);
         // MUST be false. `isReleasedWhenClosed` defaults to TRUE for a programmatically created
         // NSWindow, so `close()` releases it out from under the `Retained` we are holding — an
         // over-release that segfaults in the next autorelease-pool drain, i.e. inside
         // `NSApplication::run`, nowhere near the code that caused it. Cost a crash on the first
         // Cmd-Tab out of the overlay.
         // SAFETY: plain property setter on a window we own and have not yet shown.
-        unsafe { overlay.setReleasedWhenClosed(false) };
-        overlay.setLevel(OVERLAY_LEVEL);
-        overlay.setOpaque(true);
-        overlay.setBackgroundColor(Some(NSColor::blackColor().as_ref()));
-        overlay.setContentView(Some(&view));
-        // Never leave the carrier with a nil content view. It is never seen — the overlay covers
-        // it — but AppKit is happier with something there.
-        carrier.setContentView(Some(&NSView::new(mtm)));
-        overlay.setFrame_display(screen.frame(), true);
-        overlay.makeKeyAndOrderFront(None);
+        unsafe { strip.setReleasedWhenClosed(false) };
+        strip.setLevel(OVERLAY_LEVEL);
+        strip.setOpaque(true);
+        strip.setBackgroundColor(Some(NSColor::blackColor().as_ref()));
+        strip.setContentView(Some(&host));
+        // The guest's top bar lives in this band, so its clicks have to land — but the carrier
+        // stays the key window: the strip is `orderFront`, never `makeKeyAndOrderFront`, and the
+        // input monitor is app-wide, so an event delivered here is decoded into the carrier
+        // view's space by `input::event_point_in_view` exactly as if the carrier had received it.
+        strip.setAcceptsMouseMovedEvents(true);
+        strip.orderFront(None);
         self.active
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        *self.window.borrow_mut() = Some(overlay);
+        *self.window.borrow_mut() = Some(strip);
     }
 
-    fn hide(&self, carrier: &NSWindow) {
-        let Some(overlay) = self.window.borrow_mut().take() else {
+    /// Take the band off screen **without ordering the window out**, keeping its place in the
+    /// window list — see [`Self::show`]. The guest's own view is never involved either way.
+    ///
+    /// Alpha, not `orderOut`. `orderOut` removes the window from the window list entirely, so it
+    /// belongs to no Space, and the next `orderFront` has to re-insert it — and re-insertion is
+    /// where the window server decides which Space (and therefore which display) it lands on. Our
+    /// own earlier measurement says that decision can go to the *main* screen regardless of the
+    /// window's frame (`spikes/notch-fullscreen/` round 1), and mid-Space-switch "main screen" is
+    /// exactly the reading that transiently names the wrong display. That is the band flashing on
+    /// the external display. An alpha-0 window is still in the list, still bound, still framed —
+    /// it simply draws nothing, which is all that was ever wanted here.
+    ///
+    /// **It does not stay where we left it, though**, and that is the second half of the flash.
+    /// The window server parks a hidden `fullScreenAuxiliary` window while its Space is away —
+    /// measured at x=728 on the 2560-wide external display, i.e. squarely on the other panel —
+    /// without telling AppKit, which goes on reporting the frame we last set. So [`Self::show`]
+    /// looked at a frame that "already matched", skipped the write, and revealed the band at the
+    /// server's parked position for the frame before the next tick moved it home.
+    ///
+    /// The write cannot simply be forced from `show`: two `setFrame:display:` calls in one pass
+    /// coalesce against the frame the pass *started* with, so nudging away and back leaves the
+    /// nudge, not the destination (measured, 2026-08-08). Desynchronise here instead — park
+    /// AppKit's cached frame one point off, while it is invisible and nothing can see it. Then
+    /// `show`'s ordinary "is the frame right?" test is false, the write happens, and it lands in
+    /// the same transaction as the alpha. One point, because the value is irrelevant: all it has
+    /// to be is *not* the rectangle we are about to ask for.
+    fn hide(&self, _carrier: &NSWindow) {
+        let Some(strip) = self.window.borrow().as_ref().cloned() else {
             return;
         };
         self.active
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        if let Some(view) = overlay.contentView() {
-            carrier.setContentView(Some(&view));
-        }
-        overlay.orderOut(None);
-        overlay.close();
-        carrier.makeKeyAndOrderFront(None);
+        strip_trace("hide", Some(&strip), None);
+        strip.setAlphaValue(0.0);
+        // An invisible window must not eat the clicks it is sitting on top of.
+        strip.setIgnoresMouseEvents(true);
+        let f = strip.frame();
+        strip.setFrame_display(
+            NSRect::new(
+                NSPoint::new(f.origin.x, f.origin.y - 1.0),
+                NSSize::new(f.size.width, f.size.height),
+            ),
+            false,
+        );
     }
 
     /// Keep the overlay in step with the carrier, from the tick that already runs — polled rather
@@ -898,21 +1149,18 @@ impl ExtendOverlay {
     /// - the carrier is natively fullscreen (the overlay needs a Space to float over);
     /// - the screen actually **has** a camera housing — on an external display native fullscreen
     ///   already covers everything, so an overlay would be risk for no pixels;
-    /// - **the carrier's Space is the one on screen.** An overlay above menu-bar level would
-    ///   otherwise float over whatever the user switched to, so switching away has to put it
-    ///   down. Dropping it returns the view to the carrier, so the Space still shows the guest
-    ///   (inset below the housing) — the right look for a background app anyway.
-    ///
-    ///   The test is `isOnActiveSpace`, **not** `isActive`: activating an app on *another*
-    ///   display leaves limina's Space perfectly visible on its own, and dropping the overlay
-    ///   there shrank a still-on-screen guest back below the housing for no reason. Activation
-    ///   is about which app has the keyboard; what the overlay actually cares about is whether
-    ///   its Space is showing, which is exactly what this asks.
     /// - **the user is not asking for the chrome.** Nothing can reveal over the overlay, which is
     ///   the point of it, but the menu bar and the window's controls still have to be reachable
     ///   for the VM's own menu actions. A deliberate shove at the top edge (the edge-resistance
     ///   breakthrough, uncaptured only) sets `reveal_chrome` and puts the overlay down until the
     ///   pointer returns to the guest.
+    ///
+    /// The *guest's geometry* is deliberately **not** conditioned on `isOnActiveSpace`
+    /// ([`Self::claims_band`]) even though the strip window itself is. That gate used to decide
+    /// both, because the overlay held the guest's view — and it was the direct cause of the
+    /// Space-switch reflow, since it only turns true again once the incoming animation has
+    /// finished. Now the strip carries nothing but a copy of the housing band, so it can come and
+    /// go with the Space while the guest's size never moves.
     fn reconcile(
         &self,
         carrier: &NSWindow,
@@ -925,23 +1173,31 @@ impl ExtendOverlay {
         let screen = carrier.screen();
         // Re-assert every tick: activation changes without any of the up/down conditions moving.
         let active = NSApplication::sharedApplication(mtm).isActive();
+        // Read once, used by both halves: it tells the *level* whether there is anything on
+        // screen to yield to, and it is the signal whose lateness the overlay's lifetime
+        // deliberately no longer depends on (see `want` below).
+        let on_active_space = carrier.isOnActiveSpace();
+        // Tracked whether or not the overlay is up: it is what *brings it back*, so letting it go
+        // stale while down would strand the overlay off-screen for good.
+        let focus_here = focus_is_on_screen(screen.as_deref(), mtm);
+        let (since, yields) = yield_step(
+            active,
+            focus_here,
+            on_active_space,
+            self.yielding_since.get(),
+            std::time::Instant::now(),
+        );
+        self.yielding_since.set(since);
         if let Some(overlay) = self.window.borrow().as_ref() {
-            let yielding = !active && focus_is_on_screen(screen.as_deref(), mtm);
-            let since = match (yielding, self.yielding_since.get()) {
-                (false, _) => None,
-                (true, Some(t)) => Some(t),
-                (true, None) => Some(std::time::Instant::now()),
-            };
-            self.yielding_since.set(since);
-            let level = overlay_level(active, yielding, since.map(|t| t.elapsed()));
-            if overlay.level() != level {
-                overlay.setLevel(level);
+            // The level is constant while the overlay is up — see [`OVERLAY_LEVEL`]. Re-asserted
+            // rather than set once, because a display reconfiguration can reset it.
+            if overlay.level() != OVERLAY_LEVEL {
+                overlay.setLevel(OVERLAY_LEVEL);
             }
             // `LIMINA_OVERLAY_TRACE=1`: the oracle for "why is the notch strip black". It reports
             // the level we asked for AND the one the window actually carries, plus both display
-            // ids, so a wrong *decision* (we chose to drop) is distinguishable from a wrong
-            // *model* (we are at 25 and the system still paints over us) without another round of
-            // swapping mechanisms. Transitions only — this runs at 60 Hz.
+            // ids, so a wrong *decision* is distinguishable from a wrong *model* (we are at 25 and
+            // the system still paints over us). Transitions only — this runs at 60 Hz.
             if overlay_trace() {
                 let ours = screen
                     .as_deref()
@@ -954,35 +1210,55 @@ impl ExtendOverlay {
                     active,
                     ours,
                     focused,
-                    want: level,
+                    want: OVERLAY_LEVEL,
                     have: overlay.level(),
                 };
                 if self.traced.get() != Some(now) {
                     self.traced.set(Some(now));
                     eprintln!(
                         "[OVERLAY] active={active} ours={ours} focused={focused} \
-                         want_level={level} have_level={} on_active_space={}",
+                         want_level={OVERLAY_LEVEL} have_level={} on_active_space={on_active_space}",
                         overlay.level(),
-                        carrier.isOnActiveSpace(),
                     );
                 }
             }
         }
-        let want = notch == crate::vmlib::schema::NotchPolicy::Extend
+        let fullscreen = carrier.styleMask().contains(NSWindowStyleMask::FullScreen);
+        // Deliberately NOT gated on `on_active_space` — see the doc comment. The overlay is an
+        // auxiliary window of the carrier's Space and travels with it; tearing it down when the
+        // Space goes away is what makes coming back visibly snap.
+        // What the policy says, and what is actually shown. They differ only while our Space is
+        // off screen: the strip is `fullScreenAuxiliary`, but it still draws over the Spaces
+        // either side of ours once their switch resolves (measured on a real panel), so it has to
+        // come down — and the guest's geometry must NOT follow it down. See `claims_band`.
+        let claims_band = notch == crate::vmlib::schema::NotchPolicy::Extend
             && !reveal_chrome
-            && carrier.styleMask().contains(NSWindowStyleMask::FullScreen)
-            && carrier.isOnActiveSpace()
+            && !yields
+            && fullscreen
             && screen
                 .as_ref()
                 .is_some_and(|s| hostdisplay::notch_inset(s) > 0.0);
-        if want == self.is_active() {
-            // No switch, but the overlay has no AppKit machinery keeping it on the screen: a
-            // display reconfigured under it would leave it the wrong size.
-            if let (Some(overlay), Some(screen)) = (self.window.borrow().as_ref(), screen) {
-                if overlay.frame() != screen.frame() {
-                    overlay.setFrame_display(screen.frame(), true);
-                }
+        self.claims_band.set(claims_band);
+        let want = claims_band && on_active_space;
+        // The *gate*, traced whether or not the overlay exists — `traced` above can only report
+        // an overlay that is up, which makes it blind to the question "why is it still down?".
+        // Timestamped in ms because the answers here are about *when* a signal arrives relative
+        // to a ~0.4 s Space-switch animation, not just what it eventually says.
+        if overlay_trace() {
+            let now = (want, on_active_space, fullscreen, reveal_chrome);
+            if self.gate_traced.get() != Some(now) {
+                self.gate_traced.set(Some(now));
+                eprintln!(
+                    "[OVERLAY-GATE] +{:>7.1}ms want={want} on_active_space={on_active_space} \
+                     fullscreen={fullscreen} reveal_chrome={reveal_chrome} up={}",
+                    trace_clock().elapsed().as_secs_f64() * 1000.0,
+                    self.is_active(),
+                );
             }
+        }
+        if want == self.is_active() {
+            // Nothing to switch. The strip's frame is re-asserted by `place` from the tick, which
+            // knows the letterbox fit; there is nothing to do here.
             return;
         }
         if want {
@@ -1285,6 +1561,8 @@ pub fn run(
     // can hold the ack until WindowServer stops sampling it (#24 off-glass gating; see the ack
     // thread above).
     let last_ca: RefCell<Option<CFRetained<IOSurfaceRef>>> = RefCell::new(None);
+    // Whether the `extend` strip was up last tick — see the seed in the render tick.
+    let strip_was_up = Cell::new(false);
     // Guest-cursor per-timer state: the last applied cursor gen and the (IOSurface id,
     // content scale) of the shape the host pointer currently wears (so we rebuild only on
     // an actual shape or window-scale change).
@@ -1525,15 +1803,14 @@ pub fn run(
                 cfg_notch,
                 apply_reveal.load(std::sync::atomic::Ordering::Relaxed),
             );
-            if let Some(v) = apply_overlay.active_view(&window) {
+            if let Some(v) = window.contentView() {
                 let sz = v.frame().size;
                 // Native fullscreen is the only state that reveals what AppKit's own housing
                 // inset actually costs; record it so `avoid` can size the guest to the point.
-                // Skipped while the overlay is up — it is taller than the carrier by exactly the
-                // inset, so measuring there would learn zero and un-inset the `avoid` guest.
-                if window.styleMask().contains(NSWindowStyleMask::FullScreen)
-                    && !apply_overlay.is_active()
-                {
+                // The carrier's view is the inset one in BOTH policies now — the strip is a
+                // separate window and never changes what this measures — so unlike the
+                // re-parenting design there is no state to skip.
+                if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
                     if let Some(s) = window.screen() {
                         let frame = s.frame().size;
                         let observed = fit::fullscreen_inset_measurement(
@@ -1558,14 +1835,22 @@ pub fn run(
                         }
                     }
                 }
-                // No housing arithmetic here any more. Under `avoid` AppKit insets the native
-                // fullscreen window below the housing itself (we no longer ship the
-                // compatibility plist key, which only ever bought a *frame* covering the strip
-                // while the compositor masked it anyway); under `extend` the panel-fullscreen
-                // window is exactly the panel and every point of it is ours. Either way the
-                // content view we are handed is already the usable area, and subtracting the
-                // housing again would letterbox the guest by that much a second time.
-                let (sz_w, sz_h) = (sz.width, sz.height);
+                // The area the guest is drawn into. AppKit insets the fullscreen carrier below
+                // the housing in both policies; under `extend` the strip window covers that band
+                // and shows the top of the same image, so the guest's usable height is the view
+                // plus the inset. One number for the fit, the pointer mapping and both layers.
+                // Keyed on the POLICY, not on whether the strip is on screen — the strip hides
+                // while our Space is away, and rescaling the guest for that would put a reflow
+                // back into every Space switch, which is the whole thing this design removes.
+                let strip_inset = if apply_overlay.claims_band() {
+                    window
+                        .screen()
+                        .map(|s| hostdisplay::fullscreen_inset(&s))
+                        .unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+                let (sz_w, sz_h) = fit::panel_size((sz.width, sz.height), strip_inset);
                 if sz_w > 0.0 && sz_h > 0.0 {
                     let g = geom.get();
                     let target = if mode == DisplayResolution::Dynamic {
@@ -1605,6 +1890,24 @@ pub fn run(
                         }
                         fit_cell.set(target);
                         set_layer_frame(&layer, target);
+                    }
+                    // Keep the strip over the housing band and its copy of the layer on the same
+                    // image, every tick: it has no AppKit machinery holding it in place across a
+                    // display reconfiguration, and the fit it mirrors can change under it.
+                    if let Some(s) = window.screen() {
+                        apply_overlay.place(&s, sz.height, strip_inset, target);
+                    }
+                    // The strip has just come up: hand it the frame the carrier is already
+                    // showing. An idle guest presents nothing, so without this the band would
+                    // stay black until something in the guest happened to redraw. No ack — this
+                    // is not a new frame, and one frame must produce exactly one "shown".
+                    let up = apply_overlay.is_active();
+                    if up && !strip_was_up.replace(up) {
+                        if let Some(surface) = last_ca.borrow().as_ref() {
+                            set_layer_surface(&apply_overlay.strip_layer(), surface, None);
+                        }
+                    } else {
+                        strip_was_up.set(up);
                     }
                 }
             }
@@ -1832,6 +2135,15 @@ pub fn run(
                     .filter(|p| !std::ptr::eq::<IOSurfaceRef>(&**p, &**shown));
                 Some((ack_tx.clone(), (id, prev.map(present::SendSurface::new))))
             };
+            // Hand a frame to the carrier's layer and, when the `extend` strip is up, to its copy
+            // of it. The strip's transaction carries NO ack: one presented frame must produce
+            // exactly one "shown" or the worker's flush fence would be completed twice.
+            let show = |src: &CFRetained<IOSurfaceRef>, ack| {
+                set_layer_surface(&layer, src, ack);
+                if apply_overlay.is_active() {
+                    set_layer_surface(&apply_overlay.strip_layer(), src, None);
+                }
+            };
             // Distinct object each frame (the worker alternates ids) → CA re-reads.
             if marker_poll_at.get().elapsed() >= std::time::Duration::from_millis(500) {
                 marker_poll_at.set(std::time::Instant::now());
@@ -1855,16 +2167,16 @@ pub fn run(
                     let dst = &ring[copy_idx.get() % 3];
                     copy_idx.set(copy_idx.get().wrapping_add(1));
                     copy_surface(surface, dst);
-                    set_layer_surface(&layer, dst, ack_for(dst));
+                    show(dst, ack_for(dst));
                 } else {
-                    set_layer_surface(&layer, surface, ack_for(surface));
+                    show(surface, ack_for(surface));
                 }
             } else {
                 let present_lock = present_lock_env || lock_marker.get();
                 if present_lock {
                     sync_surface(surface);
                 }
-                set_layer_surface(&layer, surface, ack_for(surface));
+                show(surface, ack_for(surface));
             }
 
             // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
@@ -1933,6 +2245,7 @@ pub fn run(
     let timer_conn = conn.clone();
     let timer_captured = captured.clone();
     let timer_cursor_layer = cursor_layer.clone();
+    let timer_overlay_cursor = overlay.clone();
     let timer_surface_map = surface_map.clone();
     let timer_cache = cache.clone();
     // For the quit-check below: distinguish a real window CLOSE from a mere miniaturize/app-hide
@@ -2308,6 +2621,17 @@ pub fn run(
             &shared,
             &timer_surface_map,
         );
+        // And the strip's copy of it, on the same terms as the strip's copy of the picture: the
+        // band is a different window, so a cursor composited only into the carrier's layer is
+        // clipped out of existence there. Only while the strip exists — this creates the layer.
+        if timer_overlay_cursor.has_strip() {
+            update_capture_cursor(
+                &timer_overlay_cursor.strip_cursor_layer(),
+                &timer_captured,
+                &shared,
+                &timer_surface_map,
+            );
+        }
 
         // Frame apply: normally event-driven (dispatch from the reader thread); this is
         // the fallback so a lost wake-up costs one tick, not a stuck frame.
@@ -2425,7 +2749,6 @@ mod tests {
     use super::*;
 
     /// Longer than `OVERLAY_SETTLE`: the condition has held.
-    const HELD: Option<Duration> = Some(Duration::from_millis(600));
 
     #[test]
     fn a_menu_or_cli_suspend_parks_but_a_close_or_stop_still_quits() {
@@ -2452,12 +2775,42 @@ mod tests {
     }
 
     #[test]
+    fn the_strips_capture_cursor_hangs_off_the_strips_own_scanout() {
+        // The band is a different WINDOW, so a cursor composited only into the carrier's layer is
+        // clipped out of existence there — the pointer vanished on entering the housing band while
+        // still driving the guest (2026-08-08). What makes the copy correct without any geometry of
+        // its own is that it hangs off the strip's scanout layer, exactly as the carrier's hangs off
+        // the carrier's: same bounds, same computed frame, each window clipping its own share. A
+        // cursor layer created detached would draw at the wrong place, or not at all.
+        let overlay = ExtendOverlay::default();
+        let cursor = overlay.strip_cursor_layer();
+        let scanout = overlay.strip_layer();
+        assert!(
+            cursor
+                .superlayer()
+                .is_some_and(|l| std::ptr::eq(&*l, &*scanout)),
+            "the strip's cursor layer must be a sublayer of the strip's scanout layer"
+        );
+        assert!(
+            cursor.isHidden(),
+            "it must not draw before capture positions it"
+        );
+    }
+
+    /// `yield_step` for a condition that has already held long enough to act on.
+    fn yields_after(active: bool, focus_here: bool, on_space: bool) -> bool {
+        let t0 = std::time::Instant::now();
+        let (since, _) = yield_step(active, focus_here, on_space, None, t0);
+        yield_step(active, focus_here, on_space, since, t0 + OVERLAY_SETTLE).1
+    }
+
+    #[test]
     fn a_window_focused_on_another_display_does_not_push_the_overlay_under_the_notch_backdrop() {
         // The dogfood symptom: click something on the external display and the guest's
         // top strip goes black on the internal one, hiding its panel, while the rest stays
         // full-panel. The overlay was still up — it had merely dropped below the fullscreen
         // Space's camera-housing backdrop, which the system draws at menu-bar level.
-        assert_eq!(overlay_level(false, false, None), OVERLAY_LEVEL);
+        assert!(!yields_after(false, false, true));
     }
 
     #[test]
@@ -2465,20 +2818,65 @@ mod tests {
         // `mainScreen` lags `isActive`, so every deactivation briefly claims the focus is still
         // here. Traced: 8 of these in one switching session. Held for a tick or two they
         // are invisible; held longer they are the black strip that survived the first fix.
-        assert_eq!(
-            overlay_level(false, true, Some(Duration::from_millis(16))),
-            OVERLAY_LEVEL,
+        let t0 = std::time::Instant::now();
+        let (since, now) = yield_step(false, true, true, None, t0);
+        assert!(!now, "the first tick of a condition is never enough");
+        assert!(
+            !yield_step(false, true, true, since, t0 + Duration::from_millis(16)).1,
             "one tick of 'focus is here' is a stale sample, not a dialog"
         );
-        assert_eq!(overlay_level(false, true, None), OVERLAY_LEVEL);
     }
 
     #[test]
     fn focus_settling_on_our_own_screen_still_yields_to_system_windows() {
-        // The reason the drop exists at all: the Accessibility prompt opens on our screen and
+        // The reason yielding exists at all: the Accessibility prompt opens on our screen and
         // limina resigns active, and an overlay above menu-bar level covers the very dialog that
         // grants limina its capture tap.
-        assert_eq!(overlay_level(false, true, HELD), OVERLAY_LEVEL_INACTIVE);
+        assert!(yields_after(false, true, true));
+    }
+
+    /// Switching to another Space on our own display looks exactly like a dialog taking focus
+    /// here — limina resigns active and `mainScreen` is still ours — but there is nothing of ours
+    /// on screen to yield *to*, and yielding is visible in a way it never is for a dialog.
+    #[test]
+    fn a_space_that_is_not_showing_has_nothing_to_yield_to() {
+        assert!(!yields_after(false, true, false));
+        // And the dialog case is unchanged — that one really is on screen, over us.
+        assert!(yields_after(false, true, true));
+    }
+
+    /// The timer must measure the **whole** condition, not just "inactive and the focus is here".
+    ///
+    /// Keyed on the narrower pair, the clock runs for the entire time the user is away on another
+    /// Space, so it is already expired when they come back: `on_active_space` turns true in the
+    /// frame after the animation, the yield fires immediately, and the guest shows inset below the
+    /// housing until limina finishes activating. That is the reported snap, third variation —
+    /// each fix moved it rather than removing it, because the clock was measuring the wrong thing.
+    #[test]
+    fn returning_from_another_space_restarts_the_yield_clock() {
+        let t0 = std::time::Instant::now();
+
+        // Away: our Space is not showing, so the condition does not hold, however long it lasts.
+        let (since, yields) = yield_step(false, true, false, None, t0);
+        assert_eq!(since, None);
+        assert!(!yields);
+        let away = t0 + Duration::from_secs(30);
+        let (since, yields) = yield_step(false, true, false, since, away);
+        assert_eq!(since, None, "30 s away must not bank credit toward a yield");
+        assert!(!yields);
+
+        // The switch resolves: still inactive for a moment, but the clock starts NOW.
+        let (since, yields) = yield_step(false, true, true, since, away);
+        assert_eq!(since, Some(away));
+        assert!(!yields, "the frame the Space returns is never a yield");
+
+        // limina activates within the settle window, as it does — so the overlay never moves.
+        let (_, yields) = yield_step(true, true, true, since, away + Duration::from_millis(100));
+        assert!(!yields);
+
+        // A dialog that really is holding focus still wins once it has held long enough.
+        let (_, yields) = yield_step(false, true, true, since, away + OVERLAY_SETTLE);
+        assert!(yields);
     }
 
     /// A real dogfood display arrangement, read out of its `state.toml`: a built-in
@@ -2596,7 +2994,7 @@ mod tests {
         // While limina is active the overlay is always on top, wherever the focus sits — our own
         // sheets and dialogs are children of the carrier and order above it regardless.
         for focus_here in [true, false] {
-            assert_eq!(overlay_level(true, focus_here, HELD), OVERLAY_LEVEL);
+            assert!(!yields_after(true, focus_here, true));
         }
     }
 }

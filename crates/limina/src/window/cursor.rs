@@ -145,7 +145,7 @@ pub(crate) fn apply_cursor(
             }
             match build_guest_cursor(id, w, h, hot_x, hot_y, surface_map, scale_key) {
                 Some(c) => {
-                    host.update(c);
+                    host.update(c, false);
                     built.set(Some((id, scale_key)));
                 }
                 None => log::warn!("window: building guest cursor from IOSurface {id} failed"),
@@ -157,7 +157,7 @@ pub(crate) fn apply_cursor(
             // hide before any shape was ever built keeps the default arrow (early boot).
             if built.get().is_some() {
                 built.set(None);
-                host.update(blank_cursor().unwrap_or_else(NSCursor::arrowCursor));
+                host.update(blank_cursor().unwrap_or_else(NSCursor::arrowCursor), true);
             }
         }
     }
