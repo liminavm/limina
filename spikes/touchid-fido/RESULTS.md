@@ -126,3 +126,49 @@ assert` tools driving `/dev/hidraw0`:
   confirms the CTAP2/canonical-CBOR implementation across two clients.
 - PAM `pam_u2f` recipe, then the stock-tier xHCI + impersonated-MOC-fingerprint
   wave (roadmap M14).
+
+## The GitHub passkey report — closed, no bug (2026-08-08)
+
+Reported: GitHub wouldn't take our authenticator as a passkey, and its dialog said *"this browser
+reports partial passkey support"*. Two separate things, neither ours:
+
+**The registration failure was user error** — the flow asks to verify with an *existing* passkey
+before adding a new one, and that prompt was read as the new-passkey prompt. Registration on a
+second guest then succeeded. No GitHub bug to fix.
+
+**The "partial passkey support" banner is Firefox-on-Linux, device-independent.** GitHub feature-
+detects `PublicKeyCredential.isConditionalMediationAvailable()` (passkey autofill / conditional
+UI). Firefox has the API from 122, but conditional UI only works where the OS provides a
+credential manager — Windows 11, macOS, Android, iOS 16+ — and **not on Linux**. The same banner
+is reported by Firefox and Firefox-derived users with no limina device anywhere near them. Nothing
+we can emit from CTAP changes it.
+
+### Is `plat: true` on a USB-attached authenticator a contradiction? — Measured: inert
+
+Our `getInfo` advertises `plat` (see `fido/ctap2.rs`), which looked like something a browser could
+reasonably object to. Read in Firefox's actual CTAP stack (`authenticator` 0.5.0, the crate Gecko
+vendors) rather than guessed at:
+
+- **`plat` is purely reportorial.** It appears in exactly one decision, in both
+  `make_credentials.rs:337` and `get_assertion.rs:369`:
+  `Some(info) if info.options.platform_device => AuthenticatorAttachment::Platform`. That string is
+  handed to the RP as `authenticatorAttachment`. **Nothing filters or rejects a device on it.**
+- **Transport is a separate axis we don't control.** `authrs_bridge/src/lib.rs::get_transports`:
+  *"In production, we only support the 'usb' transport"* — it returns `usb` unconditionally. So an
+  RP sees `attachment: "platform"` with `transports: ["usb"]`. Odd-looking, but Firefox itself
+  produces that pairing; it isn't something the RP can hold against us specifically.
+- **A `platform` request never reaches any device.** `authrs_bridge` rejects a request carrying
+  `authenticatorAttachment: "platform"` with `NS_ERROR_FAILURE` before enumerating. So `plat: true`
+  cannot gain us anything on Linux Firefox, and its absence cannot lose us anything either.
+
+**Verdict: leave it true, and this is why.** CTAP defines `plat` as *"the device is attached to the
+client and therefore can't be removed and used on another client"* (quoted verbatim in
+`get_info.rs:69`). That is exactly true of ours: the keys are non-exportable SEP blobs bound to
+this Mac, and the store is per-VM. `true` is the spec-accurate statement. The change would be
+cosmetic, and the one thing it could buy — consistency with the `usb` transport string — is a
+string Firefox hardcodes anyway.
+
+Worth knowing if this comes back: the reasoning above says nothing about clients we haven't read
+(Chrome, libfido2 policy layers). The cheap empirical check is **webauthn.io in the guest, which
+prints `authenticatorAttachment` for a registration** — that measures what an RP actually receives,
+which `fido2-cred -V` cannot show.
