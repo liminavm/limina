@@ -74,6 +74,13 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   (`FC_EXIT_CODE_GENERIC_ERROR`) instead of aborting the worker process. Healthy guests never hit
   these arms (L1 boot still green). RED-first: `spikes/hvf-trap-probe` (96-byte bare-metal arm64
   Image) + `crates/limina-test/tests/hvf_graceful.rs` — verified RED (SIGABRT) before, GREEN after.
+- **surface-port `recv` leaks a port name on a malformed message** — cosmetic today, worth a line
+  when that file is next touched. `SurfaceReceiver::recv` (`crates/limina-surfaceport/src/lib.rs`)
+  returns an error on `descriptor_count != 1` **without** deallocating `msg.port.name`, so a
+  complex message carrying an unexpected descriptor count would strand a right in our port space.
+  Unreachable in practice: the only sender is our own worker and it sends exactly 0 descriptors
+  (release) or 1 (publish), and the release path is discriminated earlier by the complex bit, so
+  the branch has never run. Fix = `mach_port_deallocate` before the early return.
 
 ## Guest-reachable aborts (a guest must never kill the VMM)
 

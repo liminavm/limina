@@ -183,6 +183,18 @@ PSCI CPU_ON boot-channel park (0094-era), so the fix travels with that series.
 
 ## Findings
 
+### Post-audit commits (unaudited — added after the 2026-08-03 pass / the fork migration)
+
+The table's 126 rows are the audited series (124 commits at migration). The branch now carries
+127 commits above upstream `07fd40dc`; the three below have not been researched against upstream.
+Listed so the drift is visible rather than implied by a stale count:
+
+| commit | subject | first guess at disposition |
+|---|---|---|
+| `aeafaf2` | vmm/macos: service pause/snapshot from the secondary boot wait | **send-later** — the deadlock is an interaction with our carried PSCI CPU_ON boot-channel park (0094-era), so it travels with that series; see the task #21 note above |
+| `bfc332a` | virtio-gpu: ledger the display path's scanout resources | carry (DIAG-class, `[SCANOUT-LEDGER]` at debug) — but the `stranded` count it added names a real upstream-shared bug: `unref_resource` drops a resource's metadata *before* refusing a still-scanned-out unref. Worth a standalone upstream fix if that path is ever confirmed reachable |
+| `d9afca2` | virtio/gpu: tell the display backend when a scanout resource is unref'd | carry (chains onto 0001's display-backend vtable, which is limina-shaped) — the *mechanism* (a release edge on the display callback, so a host-side backend can drop its reference) is generic and would interest any out-of-process display backend; unsendable until the vtable itself is |
+
 ### Series verdict (all 126 rows researched 2026-08-03, vs main `c652b56`) — COMPLETE
 
 All 8 research clusters (C1–C8) banked + the 36 carry rows + the 15 fold rows. Disposition

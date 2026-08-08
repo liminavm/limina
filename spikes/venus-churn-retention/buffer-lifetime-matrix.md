@@ -1,7 +1,9 @@
 # Handoff: buffer lifetime past client death — test matrix + design notes
 
-**Action after the GPU-memory budget feature ships.** Written by a fork; no repo files were
-touched. Move into `docs/hardening-backlog.md` (or a `spikes/` RESULTS.md) when actioned.
+**ACTIONED 2026-08-07 — this file is now a record, not a queue.** Written by a fork as a design
+handoff; §1's trigger is answered in §9 and its fix shipped. What is still open lives in the task
+list (matrix paths 3 and 4), not here. Kept in place because §§2–4 are the holder taxonomy the
+answer was found by eliminating, and §9 needs them to make sense.
 
 ## 1. The trigger
 
