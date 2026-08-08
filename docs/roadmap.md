@@ -12,6 +12,37 @@ vendored header `third_party/libkrun/include/libkrun.h` unless noted.
 
 ---
 
+## Where we are (refreshed 2026-08-08)
+
+The milestone numbers are a *dependency* order, not a schedule, and by now they are only
+loosely a sequence: several later ones shipped before earlier ones finished. Read this
+section for the honest state; read each milestone for the detail.
+
+**Shipped and in daily dogfood use.** M1 boot, M2 display+input, M2.5 console/serial, M3
+NAT+SSH, M6 dynamic memory, M9 suspend/resume + snapshots, M10 multi-disk + ISO, M11 the
+`cargo xtask` surface. The desktop-polish half of M8 and the audio half both shipped.
+M4 (venus 3D) and M5 (clipboard/virtiofs/agent) are green at their cores. M14's biometric
+work shipped *both* halves — FIDO and the impersonated fingerprint reader — along with the
+emulated xHCI controller it shares with M7, which is default-on.
+
+**In flight.** M15 (display pipeline v2): wave 1 parts 1+2 shipped, wave 4's spike closed
+with a partial win; per-host-display + VRR and waves 2–3 remain. This is the main line of
+work.
+
+**Planned, not started.** M12 (SPICE vdagent, spike green), M13 (visibility/power render
+adaptation).
+
+**Deferred by decision, not by neglect.** M3 bridged networking and M7 real-device USB
+capture both wait on the single shared privileged helper (`docs/design/privileged-helper.md`);
+M8's x86 emulation and multi-display remainder are unscheduled.
+
+**Not a milestone, but load-bearing.** Since roughly 2026-07 a growing share of the work has
+been *robustness* rather than features — host-memory discipline, guest-triggerable aborts,
+lifecycle correctness. It now has its own cross-cutting section below, because filing it
+under whichever milestone the symptom appeared in was losing it.
+
+---
+
 ## Cross-cutting architecture decisions (apply to all milestones)
 
 These are settled and constrain every milestone:
@@ -44,8 +75,20 @@ These are settled and constrain every milestone:
   Our custom kernel/drivers/agent are the *enhanced* tier layered on top, never a precondition for
   the VM to run. Every milestone must preserve this floor; detect enhanced capabilities granularly
   and additively, not as one tier switch.
-- **Repo hygiene:** vendor libkrun / libkrunfw / virglrenderer as patched forks under
-  `third_party/` with patches as tracked series so rebases onto upstream stay reviewable.
+- **Repo hygiene — the FORK model (migration completed 2026-08-06).** Every dependency we
+  patch is a fork under `github.com/liminavm`, checked out into gitignored `third_party/` and
+  pinned by rev in the committed `third_party/manifest.toml`. **The fork's `limina` branch IS
+  the delta** — there is no patch series any more, and the `patches/**` directories are
+  tombstones (the one exception, `patches/mesa-guest/`, is a committed *export* derived from
+  the guest-mesa fork, because the RPM build runs where that checkout isn't reachable). To
+  change a dependency: commit on its `limina` branch, push, bump the manifest rev. Branches
+  get rewritten as patches land upstream, so **tag before every rewrite** — every rev ever
+  pinned must stay reachable. `cargo xtask vendor` recreates every tree from the manifest.
+  Upstreaming status per dependency: `docs/upstreaming/ledger/`.
+  - **Reading older text in this doc:** a reference like `patches/linux/0006` or "libkrun 0119"
+    now names a *commit on that fork's `limina` branch*, not a file in a series. The numbering
+    survived the migration because it is how we talk about these changes; the directories did
+    not.
 
 ---
 
@@ -111,6 +154,53 @@ helper (`limina sendkey <combo>` / a harness API on the `Guest` type), so automa
 driving of a windowed VM is deterministic and independent of the macOS event system. Pairs with the
 GNOME state problem hit above: kiosk-mode app launch is the workaround; robust key injection is the
 fix. Small; unblocks scripted UI tests and reliable agent control of the desktop.
+
+---
+
+## Robustness & resource discipline (cross-cutting)
+
+Booked as its own section on 2026-08-08. These items kept being filed under whichever
+milestone the symptom surfaced in — a memory leak found while chasing a display bug is not
+display work — and were getting lost. The unifying property: **the guest is untrusted and
+the host must survive it**, whether the guest is malicious, buggy, or merely enthusiastic.
+
+Two failure shapes drive nearly all of it. First, **host resources the guest can consume but
+cannot see**: memory allocated on its behalf lands in the *worker's* address space, so the
+guest's own accounting stays flat while macOS eventually jetsams the worker and the whole VM
+dies at a moment unrelated to the cause. Second, **guest-reachable aborts**: a malformed
+command that trips an assert in a host library kills the VMM for every client.
+
+**Shipped.**
+- **Host GPU-memory budget** (`docs/design/gpu-memory-budget.md`) — a per-context ledger with
+  an exact-size histogram, always on, plus an opt-in cap that refuses and deliberately kills
+  the offending context rather than letting the worker grow until jetsam takes it. Since
+  2026-08-08 the guest is also *told* the truth through `VK_EXT_memory_budget`, which is the
+  one backpressure channel venus doesn't discard (a refused allocation can't be reported —
+  the transport drops our `VkResult` — but a budget query round-trips synchronously), so a
+  well-behaved client can shrink its caches instead of being killed.
+- **Scanout retention** — the holder turned out to be the *supervisor*, not the worker: an
+  unbounded frame-apply surface cache, and then, once capped, a send right it never dropped.
+  Worth remembering as a method lesson — capping the cache **bounded** the growth and read
+  like a fix for a week; the actual retention was still there underneath. Guarded by
+  `scanout_churn_retention`. The buffer-lifetime matrix that found it
+  (`spikes/venus-churn-retention/buffer-lifetime-matrix.md`) is now fully run, all paths.
+- **Guest-triggerable host aborts** — four instances of the empty-clear-rect class fixed at
+  the vkr trust boundary; the dogfood KosmicKrisp now builds with asserts off.
+
+**Open.**
+- **Audit the vkr dispatch boundary for guest-triggerable invalid usage** (was task #12). The
+  fixes so far were reactive, one incident at a time. A systematic pass over the venus
+  dispatch entry points — every place a guest-supplied count, offset, handle or rect reaches
+  a host API — would turn a recurring class into a closed one. Pairs naturally with the
+  upstreaming work, since "validate at the trust boundary" is exactly what upstream wants.
+- **Rein in the leak-hunt instrumentation's log volume** (was task #6). The census and
+  per-allocation tracing that made the 2026-08 leaks findable are too loud to leave on by
+  default; they need levels, so the diagnostic power survives without the noise.
+- **GL-only guests are unbounded.** The GPU-memory cap is enforced at `vkAllocateMemory`,
+  which a pure-GL (vrend) session never reaches. Its allocations *are* accounted — they show
+  up in the shared vrend bucket — so the ledger sees the growth; nothing stops it.
+- **Smaller lifecycle nits** are tracked in `docs/hardening-backlog.md` rather than here, and
+  get folded into the next commit that touches their file.
 
 ---
 
@@ -464,8 +554,11 @@ default** in the coexist flags — see `docs/tiers.md` (tier 2). What *was* park
 **virgl-over-ANGLE** variant (a separate GL→VK→Metal translation stack); zink-on-KK replaced the need
 for it. Native-context (vdrm) backed by Metal is recorded only as a curiosity — venus is the top tier.
 
-**libkrun patches (shipped):** coexist (0010), fence-present series (0017–0022), virglrenderer fork,
-KK perf/XFB patches, kernel `patches/linux/0001–0003`, mutter ×2. Remaining: the upstream queue.
+**Dependency changes (shipped):** coexist (0010), fence-present series (0017–0022), the
+virglrenderer fork, KK perf/XFB work, guest-kernel fork commits. The two carried **mutter patches
+are RETIRED** — guest mutter has been stock since 2026-07-11, and the user is writing a
+gnome-shell/mutter replacement, so patching GNOME's compositor stopped being a path we invest in.
+Remaining: the upstream queue (`docs/upstreaming/ledger/`).
 
 **Done test:** in the guest, `vulkaninfo` reports the Venus renderer (not llvmpipe), `glmark2` runs
 on the GPU, GNOME Shell animations are smooth; full-screen 3D/video shows no per-frame
@@ -500,11 +593,13 @@ channel between limina and a guest agent.
 - **Text clipboard (live end-to-end):** `CHANNEL_CLIPBOARD` (OFFER/REQUEST/DATA, newest-serial wins
   both ways); the supervisor's NSPasteboard bridge (`crates/limina/src/clipboard.rs` — changeCount
   poller, self-change suppression, `LIMINA_PASTEBOARD` test override). **Two-tier guest mechanism:**
-  the enhanced tier implements **ext-data-control-v1** in our carried mutter (`patches/mutter/0003`
-  — GNOME refuses it upstream, mutter#524) so the helper is a focusless pure-Rust Wayland client with
-  no "screen is being shared" indicator; **stock mutter falls back to the
-  `org.gnome.Mutter.RemoteDesktop` D-Bus clipboard API** (no mutter patch, but the orange indicator
-  is the documented cosmetic cost). Loop prevention = track our own live source / `is_owner` echo.
+  the plan was **ext-data-control-v1** in a carried mutter (GNOME refuses it upstream, mutter#524),
+  giving a focusless client with no "screen is being shared" indicator. **That patch is retired and
+  guest mutter is stock** (since 2026-07-11): under GNOME the bridge is now the `clipboard@limina`
+  shell extension (`guest/gnome-shell-extension`), with the
+  `org.gnome.Mutter.RemoteDesktop` D-Bus clipboard API as the opt-in fallback (the orange
+  indicator is its documented cosmetic cost). Both are **interim** — the user's compositor
+  replacement is expected to implement the protocol directly. Loop prevention = track our own live source / `is_owner` echo.
   The Wayland foundation is also the stepping stone for future drag-n-drop.
 - **virtiofs sharing (shm-less):** `limina --share '[NAME=]PATH[:ro]'` (repeatable) attaches a host
   dir as virtiofs tag `limina-NAME`; the agent auto-mounts every `limina-`-tagged device at
@@ -532,8 +627,7 @@ rewritten after the fact (2026-07-01) — the authoritative rationale lives in `
 (§"Why RPM-replace, not a sysext overlay") and `docs/images.md`. Short form:
 
 - **Userspace = rebuilt Fedora SRPMs replacing stock at `/usr`** (mesa pinned to our version +
-  dnf-versionlocked; mutter matched to the target distro's version with `patches/mutter` rebased
-  per GNOME release). Why not sysext for mesa: our-mesa-vs-stock **libgallium SONAME mismatch**,
+  dnf-versionlocked; mutter is **stock** since 2026-07-11 — the carried patches are retired). Why not sysext for mesa: our-mesa-vs-stock **libgallium SONAME mismatch**,
   and an overlayfs upper can't *remove* stock files — the resulting ABI blend broke mutter's KMS
   EGL. The retired sysext builders live in `scripts/archive/`.
 - **The kernel goes through the distro's own EFI boot machinery** (this part of the original
@@ -708,7 +802,14 @@ dynamic feature is a DROP; only the #40 robustness fix was kept.** Authoritative
 
 ## Milestone 7 — USB passthrough
 
-**Status: 🟡 mock passthrough works end-to-end; real-device capture proven; the helper is DEFERRED.**
+**Status: 🟢 emulated USB ships default-on; host-device passthrough is what remains, blocked on the
+privileged helper.** Note the shape changed after this milestone was written: the **emulated xHCI
+controller** built for M14 (libkrun 0095–0098, `docs/design/usb-xhci.md`) is now the guest's USB
+controller, default-on since `f9646d0`, and it carries our own gadgets (FIDO, fingerprint) into a
+*stock* guest with zero guest components. The USB/IP work below is still the plan for passing a
+**real host device** through, but it is no longer the only USB in the product. Original status,
+still accurate for that half: **mock passthrough works end-to-end; real-device capture proven; the
+helper is DEFERRED.**
 Build-by-build plan + as-built log: `docs/design/m7-usb-passthrough.md`. Shipped & verified on HVF:
 **(1) kernel** — `build-test-kernel.sh` enables USB + `USBIP_VHCI_HCD` + class drivers + `uinput`;
 **(2) host `limina-usbip` crate** — the full USB/IP wire protocol (byte-exact to the kernel source) +
@@ -731,7 +832,7 @@ guest.
 `build-test-kernel.sh:111-132` sets `CONFIG_USB_SUPPORT`/`USBIP_VHCI_HCD`/xHCI + class drivers — and an
 emulated xHCI controller shipped as M14 shared infrastructure, libkrun 0095–0098):**
 1. **PREREQUISITE — enable USB in OUR kernel config (cheap now).** The enhanced tier standardized on
-   our own kernel (`scripts/build-test-kernel.sh`, 16 KiB pages, `patches/linux/` auto-applied), so
+   our own kernel (`scripts/build-test-kernel.sh`, 16 KiB pages, built from the kernel fork), so
    this is a config edit in *our* pipeline, not a libkrunfw rebuild: add `CONFIG_USB_SUPPORT=y`,
    `CONFIG_USB=y`, `CONFIG_USBIP_CORE`, `CONFIG_USBIP_VHCI_HCD`, and needed `CONFIG_USB_*` class
    drivers (while there: `CONFIG_UINPUT` — its absence already bit us; ydotool is unusable without
@@ -1479,7 +1580,14 @@ control plane (`limina-proto` `SHUTDOWN`/`TIME_SYNC`) + `limina-agent` (M5); dis
 
 ## Milestone 14 — Biometric auth: host Touch ID → guest passkeys + fingerprint login
 
-**Status: 🟢 CTAP2 core GREEN end-to-end (2026-07-24, `spikes/touchid-fido/RESULTS.md`). Spikes A
+**Status: 🟢 BOTH halves shipped — passkeys and the fingerprint reader.** The stock-tier wave
+completed: the emulated xHCI controller plus the FIDO gadget *and* the impersonated MOC
+(elanmoc) fingerprint reader are default-on since `f9646d0`, so a stock guest gets both with no
+guest components installed (`docs/design/usb-moc-fingerprint.md`, `docs/fingerprint-reader.md`).
+What remains is an L2 FIDO guard with a test-only Touch-ID bypass, and payload/app-bundle
+delivery polish. Original CTAP2-core detail, still accurate:
+
+**CTAP2 core GREEN end-to-end (2026-07-24, `spikes/touchid-fido/RESULTS.md`). Spikes A
 (SEP/Touch ID primitive) + B (uhid↔vsock transport) done, then the real authenticator: hand-rolled
 CTAP2 over a Swift CryptoKit SEP shim. On a live F44 enhanced guest, `fido2-cred`/`fido2-assert`
 against `/dev/hidraw0` register + assert a passkey with host Touch ID prompts and libfido2
@@ -1689,17 +1797,17 @@ wins ships with a before/after on the guest's heavy-band `gpu p50`.
 | M2 display+input ✅ | supervisor IOSurface window, native-Rust display backend, input provider, kVK→KEY table | software-2D scanout (0001); hw-cursor queue (0008); Darwin input worker ran as-is |
 | M2.5 console/serial ✅ | serial command/getty shell (`l1_command` + stock getty), serial pane in window, boot-console-frame test | PL011 tty (0004 HVF halfword-MMIO + 0005 FDT `arm,primecell`); hvc0 (0003), PL011 WouldBlock (0002); KRUN_EFI EDK2 + VirtioGpuDxe GOP (0006/0022 + PlatformBm.c) |
 | M3 networking ✅ (NAT+SSH; bridged deferred) | gvproxy supervision + gateway cleanup; well-known-MAC static lease | none needed (reconnect-on-HANG_UP still optional) |
-| M4 3D 🟢 | coexist routing, zero-copy + fence-accurate present path, KK as host driver | coexist (0010), fence-present series (0017–0022), virglrenderer fork, KK perf/XFB, kernel `patches/linux/0001–0006`, mutter ×2; remaining: upstream queue |
+| M4 3D 🟢 | coexist routing, zero-copy + fence-accurate present path, KK as host driver | coexist (0010), fence-present series (0017–0022), virglrenderer fork, KK perf/XFB, guest-kernel fork commits, mutter ×2 (retired — see M4); remaining: upstream queue |
 | M5 clipboard/fs/agent 🟢 core | guest agent (from L1 vsock seed), NSPasteboard bridge, ext-data-control + RemoteDesktop clipboard clients, virtiofs share + auto-mount, enhanced-tier installer (remaining) | mutter 0003 (ext-data-control); none for transport (vsock+virtiofs exist) |
 | M6 dynamic memory ✅ | PSI autoballoon policy + `BalloonControlHandle` / `--memory` / control socket (internal Rust API, not a C ABI) | reclaim fix (MADV_FREE_REUSABLE) + 16 KiB align/coalesce + inflate/deflate handlers + DEFLATE_ON_OOM (0033/0034) |
-| M7 USB | host claim/attach, usbip plumbing | our-kernel config edit (USB+uinput); later native virtio-usb + krun_add_usb* |
-| M8 audio/x86/polish | fullscreen, keymap, multi-display, pointer capture, IOSurface mach-port scoping, FEX wiring | native virtio-snd; runtime resize/EDID; LED parity |
+| M7 USB 🟢 emulated / 🟡 passthrough | host claim/attach, usbip plumbing; real-device capture waits on the privileged helper | emulated xHCI controller (0095–0098, shared with M14, default-on); our-kernel config edit (USB+uinput) |
+| M8 audio/x86/polish 🟢 polish + audio shipped; x86 + multi-display open | fullscreen, keymap, multi-display, pointer capture, IOSurface mach-port scoping, FEX wiring | native virtio-snd; runtime resize/EDID; LED parity |
 | M9 suspend/resume + snapshots ✅ | host-side VMM snapshot (file format/CRC, `--restore` wiring, device schema + mapped-blob set, named-snapshot manager + clone + APFS `clonefile` disk, agent freeze bracket, proto `Snapshot`/`Restore`/`TimeSet`, capability probe, UX); Mesa-venus object-graph replay + **device-local content readback** + blob copy-back (venus tier) | multi-vCPU HVF pause/quiesce (incl. WFE-parked wakeup) + vCPU save/restore (wrappers, FFI exists) + GIC state (spike #2 green) + `CNTVOFF` set + `--restore` mode + device (de)serialize + virtio freeze/thaw hardening + snapshot-time GPU quiesce (restore = fresh worker, no in-process renderer reset; `reset_session` rutabaga-context fix already shipped, 0035); carry `patches/linux` Dongwon-Kim drm/virtio freeze-restore (virgl) |
-| M10 multiple disks + ISO ✅ | repeatable `--disk`, stable virtio serial identity, `--cdrom`, qcow2 sniff, EFI-ISO boot | imago discard→punch-hole fix (`patches/imago/`, `[patch.crates-io]`) |
+| M10 multiple disks + ISO ✅ | repeatable `--disk`, stable virtio serial identity, `--cdrom`, qcow2 sniff, EFI-ISO boot | imago discard→punch-hole fix (fork, pinned by `third_party/manifest.toml` + `[patch.crates-io]`) |
 | M11 productization ✅ | `cargo xtask` command surface (`setup`/`vendor`/`build`/`sign`/`test`/`run`/`app`/`bundle`) wrapping the tested scripts; `docs/dev-onboarding.md` | none |
 | M12 SPICE agent 📋 planned | host vdagent broker (framing + clipboard, then client→guest file transfer), NSPasteboard bridge reuse (M5), **per-session** native-vs-SPICE arbitration (SPICE default; the helper claims only sessions vdagent can't cover — no XWayland — and the decision is made in-guest); display-resize deliberately excluded (native EDID already covers it) | virtio-serial named multiport port `com.redhat.spice.0` (wakes stock `spice-vdagentd`); no crate reuse |
 | M13 visibility/power render adaptation 📋 planned | front-end occlusion/Space/power signal + hysteresis policy, `vm.toml [power]/[render]` config, host present cap/pause (reuse s2idle), agent frame-rate throttle message | present pause/cap knob (extends s2idle 0089) + fence-feedback pacing knob; relax deep-idle bias on occlusion |
-| M14 biometric auth 🟡 spiked | host CTAP2 authenticator (SEP ES256 + LAContext, CryptoKit blob store per VM), agent uhid FIDO bridge + vsock channel, later xHCI + FIDO/MOC-fingerprint gadgets, pam_u2f/authselect recipe | none for uhid transport (vsock exists); stock wave = xHCI controller + gadget device models in libkrun (shared with M7) |
+| M14 biometric auth ✅ both halves shipped | host CTAP2 authenticator (SEP ES256 + LAContext, CryptoKit blob store per VM), agent uhid FIDO bridge + vsock channel, later xHCI + FIDO/MOC-fingerprint gadgets, pam_u2f/authselect recipe | none for uhid transport (vsock exists); stock wave = xHCI controller + gadget device models in libkrun (shared with M7) |
 | M15 display pipeline v2 📋 planned | per-hw-display window/present policy (native refresh + VRR pacing), CALayer-per-plane compositing, WindowServer GPU-share profiling | krun-display EDID/modes per host display (incl. VRR range), virtio-gpu overlay-plane + YUV(NV12/P010)+color-props protocol extension (device + guest kernel, capset-gated), primary-plane format/modifier advertisement (XBGR/ABGR now; non-LINEAR per `spikes/scanout-modifiers/`), cursor-size lift (low-prio) |
 
 ## First three things to spike
