@@ -714,6 +714,9 @@ define_class!(
     }
 );
 
+/// One `[GRABSTATE]` sample: `(captured, key, on_active_space, has_screen, app_active)`.
+type GrabStateTrace = (bool, bool, bool, bool, bool);
+
 /// Window level for the `extend` overlay: above the menu bar, so the chrome cannot reveal over
 /// the guest. `NSMainMenuWindowLevel` is 24.
 ///
@@ -2405,6 +2408,9 @@ pub fn run(
     // Window key-focus state carried across ticks, so the timer can detect the key→not-key edge.
     // Seeded with the current state (the window was just made key), so the first tick is a no-op.
     let was_key = Cell::new(window.isKeyWindow());
+    let was_on_space = Cell::new(window.isOnActiveSpace());
+    // Last `[GRABSTATE]` tuple, so the trace reports transitions rather than 60 lines a second.
+    let grab_traced: Cell<Option<GrabStateTrace>> = Cell::new(None);
     // Parked-window resume bookkeeping (task #18): when play was clicked (the felt-resume
     // log) and the frame counter at the click — `frames` never resets across the worker
     // swap, so "first fresh frame" means exceeding this baseline, not `> 0`.
@@ -2599,6 +2605,61 @@ pub fn run(
             timer_input.release_all_held();
         }
         was_key.set(is_key);
+
+        // Give a live grab back when the window it belongs to is no longer on screen, and flush
+        // whatever was held on the way out. Polled here for the same reason the key-release above
+        // is: both grabs are driven by input events, and a Space leaving produces none.
+        //
+        // The flush is on the *edge* and is not conditioned on capture, because the gesture that
+        // takes the Space away is itself made of keys: Ctrl-Up is delivered to the guest as
+        // Ctrl-down while the soft keyboard grab is still engaged, and the matching key-up then
+        // goes to macOS instead — leaving Ctrl stuck down in the guest for good.
+        let on_active_space = window.isOnActiveSpace();
+        if was_on_space.get() && !on_active_space {
+            timer_input.release_all_held();
+        }
+        was_on_space.set(on_active_space);
+        if grab_policy::must_drop_grab(
+            timer_input.captured_flag(),
+            on_active_space,
+            window.screen().is_some(),
+        ) {
+            log::debug!("pointer grab released: window is not on screen");
+            timer_input.release_capture(&timer_view);
+        }
+
+        // `LIMINA_EDGE_TRACE`: every bit that could tell us a live pointer grab has lost its
+        // context, on one line, on transitions.
+        //
+        // Reported 2026-08-08: the hard grab sticks through a Mission Control gesture (Ctrl-Up or
+        // three fingers up) and through an unplug that moves our Space out of view — the pointer
+        // stays decoupled and hidden with no way to reach anything. Nothing releases it today
+        // except the user and the suspend path, so a release condition has to be added; which
+        // *signal* to hang it on is the open question, and guessing between key status, Space
+        // membership and screen presence is how the other two bugs today started. So they are all
+        // recorded, and the fix will use whichever ones actually move.
+        if capture_tap::edge_trace() {
+            let now = (
+                timer_input.captured_flag(),
+                is_key,
+                on_active_space,
+                window.screen().is_some(),
+                NSApplication::sharedApplication(mtm).isActive(),
+            );
+            if grab_traced.get() != Some(now) {
+                grab_traced.set(Some(now));
+                eprintln!(
+                    "[GRABSTATE] t={:.1} captured={} key={} on_active_space={} \
+                     has_screen={} app_active={}",
+                    capture_tap::trace_ms(),
+                    now.0,
+                    now.1,
+                    now.2,
+                    now.3,
+                    now.4,
+                );
+            }
+        }
 
         // Remember the window placement: once the frame settles (~half a second stable,
         // not mid live-resize — the snapshot itself skips fullscreen), persist it on a

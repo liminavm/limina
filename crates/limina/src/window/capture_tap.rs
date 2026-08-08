@@ -298,6 +298,9 @@ extern "C" fn tap_callback(
     // a Ctrl-Opt mute of it lasts until the window regains key status (losing and retaking
     // focus is the natural "reset" — clicking back into the VM means you want it again).
     let is_key = ctx.view.window().is_some_and(|w| w.isKeyWindow());
+    // Whether our window's Space is the one on screen — a *different* question from key status,
+    // which a window keeps across a Space switch. Both grabs need it (see `grab_policy`).
+    let space_visible = ctx.view.window().is_some_and(|w| w.isOnActiveSpace());
     if is_key && !ctx.was_key.replace(true) {
         ctx.soft_muted.set(false);
         ctx.with_grab(|st| st.rearm());
@@ -382,7 +385,13 @@ extern "C" fn tap_callback(
     // stays free (absolute mode via the local monitor, cursor can leave the window). Losing
     // key status disengages it instantly, so clicking anywhere else returns the keyboard to
     // the host with no chord needed.
-    let soft = !captured && ctx.soft_enabled && is_key && !ctx.soft_muted.get();
+    let soft = grab_policy::soft_keyboard_engaged(
+        captured,
+        ctx.soft_enabled,
+        is_key,
+        ctx.soft_muted.get(),
+        space_visible,
+    );
 
     // Aux keys (the special/media top row, which arrives as NX_SYSDEFINED rather than as a
     // keycode — see `limina_input::auxkey`). Ownership is per BUCKET, not per grab mode alone:
@@ -726,6 +735,10 @@ fn uncaptured_edges(ctx: &TapCtx, event: CGEventRef) -> CGEventRef {
         pos: cur,
         fit,
         fullscreen_and_key: ctx.view.window().is_some_and(|w| w.isKeyWindow()) && ctx.fullscreen(),
+        // Read here rather than folded into the line above, because it is a *different* question
+        // and the two disagree exactly where the bug lived: a window keeps key status across a
+        // Space switch, so without this the grab was taken while limina was off screen entirely.
+        space_visible: ctx.view.window().is_some_and(|w| w.isOnActiveSpace()),
         grab_enabled: ctx.hold > 0.0,
         buttons_down: ctx.buttons.get() != 0,
     };

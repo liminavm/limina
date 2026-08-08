@@ -619,6 +619,11 @@ impl InputState {
         self.captured.load(Ordering::Acquire)
     }
 
+    /// Whether the pointer is captured, for the window tick's own bookkeeping.
+    pub(crate) fn captured_flag(&self) -> bool {
+        self.is_captured()
+    }
+
     /// Release pointer capture if held (no-op otherwise) — for the parked window (task #18),
     /// where the guest the capture served is gone and a hidden, pinned cursor would leave the
     /// user unable to click the play glyph. Main thread only.

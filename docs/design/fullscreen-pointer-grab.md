@@ -323,6 +323,47 @@ tap needs Accessibility, and that grant is **per-binary** — a test harness wou
 Order matters: (1) is a refactor of the file that changed all week, so it lands after a dogfood
 validation, never bundled with a behaviour fix. (2) and (3) are small once (1) exists.
 
+## Round eight: key status is not "on screen" (2026-08-08)
+
+Two dogfood reports, one root cause. The hard grab would stick through a Mission Control gesture
+(Ctrl-Up or three fingers up), and after an unplug/replug that relocates our Space the pointer would
+work for a moment, then freeze and vanish "after a little bit of idle".
+
+The trace (`LIMINA_EDGE_TRACE`, `[GRABSTATE]` — captured / key / on-active-space / has-screen /
+app-active, on transitions) settled it in one run and inverted the fix I was about to write:
+
+```
+[GRABSTATE] t=322393.2 captured=false key=true on_active_space=false …
+[GRABSTATE] t=324494.8 captured=true  key=true on_active_space=false …
+```
+
+The grab was **taken two seconds after our Space had already left**. Through Mission Control, `key`,
+`app_active` and `has_screen` all stay true — *only* `on_active_space` moves. So `fullscreen_and_key`,
+the test for "is this pointer ours to think about", said yes about a window the user could not see:
+the pointer came to rest somewhere over where our fullscreen window lives, served the re-grab dwell
+(hence "after a little bit of idle" — that is `REGRAB_DWELL`), and capture parked and hid it on a
+Space limina was not on. There was no way back short of finding limina again.
+
+Both directions are needed and the fix is symmetric:
+
+- `Free::space_visible` joins the ownership test in `free_step`, so the grab is never *taken* from a
+  Space we are not on — and the `reset_gesture` on the way out means the dwell spent there is not
+  banked for our return.
+- `must_drop_grab` releases a grab already *held* when the Space (or the screen) goes away, polled
+  from the window tick. Without it the pointer stays parked through Mission Control; without the
+  first, the tap re-grabs on the next dwell and the two fight at 60 Hz.
+
+**The same trap had a second instance one input over**, found immediately after: the *soft keyboard
+grab* also engaged on key status alone, so with the pointer correctly released the guest went on
+eating keystrokes aimed at Mission Control. `soft_keyboard_engaged` now takes `space_visible` too.
+And the held-key flush moved to the Space-leave *edge*, unconditionally: the gesture that takes the
+Space away is itself made of keys, so Ctrl-Up reaches the guest as Ctrl-down while the soft grab is
+still engaged, and its key-up then goes to macOS — leaving Ctrl stuck down in the guest for good.
+
+The generalisable part: **`isKeyWindow` survives a Space switch, and every ownership question in
+this feature was asking it.** "Is this window focused" and "is this window on screen" are different
+questions, and the input layer needs the second one wherever it takes something away from the user.
+
 ## Still open
 
 - Does `Firm` at 0.6 s feel like control or like a stuck pointer? Only `Standard` has had real use.

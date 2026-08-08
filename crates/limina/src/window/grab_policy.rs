@@ -93,6 +93,38 @@ impl GrabState {
     }
 }
 
+/// Whether the **soft keyboard grab** is engaged: keystrokes, system combos included, go to the
+/// guest while the mouse stays free.
+///
+/// `space_visible` is here for the same reason it is on [`Free`], and was missing for the same
+/// reason: key status survives a Space switch, so a three-finger-up into Mission Control left the
+/// keyboard pointed at a guest that was no longer on screen. `captured` takes precedence because a
+/// full capture owns the keyboard through its own path — the two must not both claim it.
+pub(crate) fn soft_keyboard_engaged(
+    captured: bool,
+    enabled: bool,
+    is_key: bool,
+    muted: bool,
+    space_visible: bool,
+) -> bool {
+    !captured && enabled && is_key && space_visible && !muted
+}
+
+/// Whether a grab that is *already held* has lost the context that justified it: our Space is no
+/// longer the one on screen (Mission Control, a Space switch, an unplug that relocates us), or the
+/// window has no screen at all.
+///
+/// The counterpart to [`Free::space_visible`], which only stops a grab being *taken*. Both are
+/// needed: without this the pointer stays parked and hidden through Mission Control; without that
+/// the tap simply re-grabs on the next dwell and the two fight at 60 Hz.
+///
+/// `has_screen` is defensive. The Space bit is what dogfood measured; a window with no screen at
+/// all was never observed holding a grab, but it is the same class of "there is nothing on screen
+/// that explains why the pointer is gone" and costs one `||`.
+pub(crate) fn must_drop_grab(captured: bool, on_active_space: bool, has_screen: bool) -> bool {
+    captured && (!on_active_space || !has_screen)
+}
+
 /// One motion event with the pointer **free**.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Free {
@@ -102,6 +134,10 @@ pub(crate) struct Free {
     pub fit: fit::FitRect,
     /// Our window is fullscreen and key: whether this pointer is ours to think about at all.
     pub fullscreen_and_key: bool,
+    /// Our window's Space is the one on screen. Separate from `fullscreen_and_key` because **key
+    /// status survives a Space switch** — the window goes on claiming the pointer from a Space the
+    /// user cannot see, which is exactly how the grab used to be taken behind their back.
+    pub space_visible: bool,
     /// `[display] edge-resistance` is not `Off`.
     pub grab_enabled: bool,
     pub buttons_down: bool,
@@ -129,7 +165,10 @@ pub(crate) struct FreeOutcome {
 /// containment would take the pointer back on the first inward jitter. That is the likeliest way
 /// this design ships worse than what it replaces.
 pub(crate) fn free_step(st: &mut GrabState, s: &Free) -> FreeOutcome {
-    let duties = fit::edge_duties(s.fullscreen_and_key, s.grab_enabled);
+    // `space_visible` joins the ownership test rather than sitting beside it: a pointer moving over
+    // a Space we are not on is not ours by any reading, so it owes us neither a grab nor an ask —
+    // and the reset below is what stops the dwell it spent there from being banked for our return.
+    let duties = fit::edge_duties(s.fullscreen_and_key && s.space_visible, s.grab_enabled);
     if !duties.ask {
         // Not our pointer. Drop any half-earned dwell so the *next* fullscreen session cannot
         // inherit it and grab on its first twitch.
@@ -471,9 +510,71 @@ mod tests {
             pos,
             fit: screen(),
             fullscreen_and_key: true,
+            space_visible: true,
             grab_enabled: true,
             buttons_down: false,
         }
+    }
+
+    #[test]
+    fn a_window_whose_space_is_off_screen_never_takes_the_pointer() {
+        // Dogfood 2026-08-08: the pointer would freeze and vanish on *another* Space, a couple of
+        // seconds after coming to rest. Traced: `captured=true` while `on_active_space=false`, the
+        // grab taken two seconds AFTER our Space left.
+        //
+        // Key status is the trap. A window stays key across a Space switch, so `fullscreen_and_key`
+        // still said "this pointer is ours" while limina was not on screen at all; the pointer then
+        // served the re-grab dwell over a window nobody could see, and capture parked and hid it
+        // where its owner was invisible. Mission Control is the same fault with a shorter fuse.
+        let mut st = GrabState::default();
+        let t0 = Instant::now();
+        let deep = (700.0, 400.0);
+        for i in 0..40 {
+            let mut s = free(deep, t0 + Duration::from_millis(16 * i));
+            s.space_visible = false;
+            assert!(!free_step(&mut st, &s).grab, "grabbed from another Space");
+        }
+        // And it is not merely deferred: coming back is a fresh dwell, not a banked one.
+        assert!(!free_step(&mut st, &free(deep, t0 + fit::REGRAB_DWELL * 2)).grab);
+    }
+
+    #[test]
+    fn the_soft_keyboard_grab_lets_go_when_our_space_is_not_the_one_on_screen() {
+        // Dogfood 2026-08-08, found immediately after the pointer half: with the pointer grab now
+        // released into Mission Control, the *keyboard* kept feeding the guest. Same trap, one
+        // input over — the soft grab engages on key status, and a window keeps that across a Space
+        // switch, so limina went on eating keystrokes aimed at a Mission Control it wasn't in.
+        let engaged = |is_key, space| soft_keyboard_engaged(false, true, is_key, false, space);
+        assert!(engaged(true, true), "our Space, our window: ours");
+        assert!(!engaged(true, false), "key, but we are not on screen");
+        assert!(!engaged(false, true), "not key: someone else's keyboard");
+        // The existing terms still decide on their own.
+        assert!(
+            !soft_keyboard_engaged(true, true, true, false, true),
+            "a full capture owns the keyboard through the other path"
+        );
+        assert!(
+            !soft_keyboard_engaged(false, false, true, false, true),
+            "disabled"
+        );
+        assert!(
+            !soft_keyboard_engaged(false, true, true, true, true),
+            "muted"
+        );
+    }
+
+    #[test]
+    fn a_live_grab_is_dropped_when_its_window_goes_out_of_view() {
+        // The other half: the bits above only stop it being *taken*. A grab already held when the
+        // Space leaves — Ctrl-Up into Mission Control — has to be given back, or the pointer is
+        // parked and hidden with nothing on screen to explain why.
+        assert!(must_drop_grab(true, false, true), "Space gone");
+        assert!(must_drop_grab(true, true, false), "screen gone");
+        assert!(!must_drop_grab(true, true, true), "nothing has changed");
+        assert!(
+            !must_drop_grab(false, false, false),
+            "no grab to drop; releasing would unhide a cursor nobody grabbed"
+        );
     }
 
     #[test]
