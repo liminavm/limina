@@ -87,11 +87,12 @@ pub fn migration_command(host: &HostDisplay, drives_size: bool) -> DisplayComman
 pub fn notch_inset(screen: &NSScreen) -> f64 {
     use std::cell::RefCell;
     thread_local! {
-        /// (display id, housing height). A handful of screens at most, so a Vec beats a map.
-        static SEEN: RefCell<Vec<(u32, f64)>> = const { RefCell::new(Vec::new()) };
+        /// (panel key, housing height). A handful of screens at most, so a Vec beats a map.
+        static SEEN: RefCell<Vec<(u64, f64)>> = const { RefCell::new(Vec::new()) };
     }
 
-    let id = display_id_of(screen);
+    // Keyed on the panel, NOT the display id — see [`panel_key`]. A hotplug renumbers the ids.
+    let id = panel_key(screen);
     // `safeAreaInsets` is the direct answer; `auxiliaryTopLeftArea` (the menu-bar region beside
     // the housing) is the corroborating read, and non-empty only on a notched panel.
     let live = screen.safeAreaInsets().top.max({
@@ -137,7 +138,7 @@ pub fn learn_fullscreen_inset(screen: &NSScreen, observed: f64) {
         return;
     }
     FULLSCREEN_INSETS.with(|seen| {
-        let id = display_id_of(screen);
+        let id = panel_key(screen);
         let mut seen = seen.borrow_mut();
         match seen.iter_mut().find(|(seen_id, _)| *seen_id == id) {
             Some(entry) => entry.1 = observed,
@@ -149,7 +150,7 @@ pub fn learn_fullscreen_inset(screen: &NSScreen, observed: f64) {
 /// The height a native fullscreen window loses to the camera housing on this display: the
 /// learned figure if we have one, else the housing height itself. Zero on a notchless display.
 pub fn fullscreen_inset(screen: &NSScreen) -> f64 {
-    let id = display_id_of(screen);
+    let id = panel_key(screen);
     let learned = FULLSCREEN_INSETS.with(|seen| {
         seen.borrow()
             .iter()
@@ -164,8 +165,9 @@ pub fn fullscreen_inset(screen: &NSScreen) -> f64 {
 }
 
 thread_local! {
-    /// (display id, observed native-fullscreen inset). See [`learn_fullscreen_inset`].
-    static FULLSCREEN_INSETS: std::cell::RefCell<Vec<(u32, f64)>> =
+    /// (panel key, observed native-fullscreen inset). See [`learn_fullscreen_inset`] and
+    /// [`panel_key`] — keyed on the panel, because a hotplug renumbers the display ids.
+    static FULLSCREEN_INSETS: std::cell::RefCell<Vec<(u64, f64)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -367,6 +369,38 @@ pub(crate) fn display_id_of(screen: &NSScreen) -> u32 {
         .unwrap_or(0)
 }
 
+/// A cache key for a physical panel that **survives a hotplug**.
+///
+/// `CGDirectDisplayID` does not: macOS reassigns ids when the arrangement changes, so a cache
+/// keyed on one hands back a *stranger's* value after an unplug/replug. Measured 2026-08-08 on the
+/// notch caches below: after replugging an external monitor the built-in panel's learned housing
+/// inset was no longer found under its new id, so the guest was sized as if there were no housing
+/// and rendered entirely below it — while the external display, having inherited an id that *did*
+/// carry a learned inset, got a 33 pt housing strip placed on a panel that has no housing (the
+/// strip's frame was traced at x=0, on the external display). The user saw two GNOME panels, and
+/// it healed on anything that forced a re-measure — leaving fullscreen, or the chrome ask.
+///
+/// Vendor/model/serial come from the panel's own EDID, so they are stable across hotplugs and
+/// reboots alike. A display reporting none of them falls back to the transient id, tagged so it
+/// can never collide with a real panel's key.
+pub(crate) fn panel_key(screen: &NSScreen) -> u64 {
+    let id = display_id_of(screen);
+    let (vendor, model, serial) = display_numbers(id);
+    panel_key_from(vendor, model, serial, id)
+}
+
+fn panel_key_from(vendor: u32, model: u32, serial: u32, display_id: u32) -> u64 {
+    const UNIDENTIFIED: u64 = 1 << 63;
+    if vendor == 0 && model == 0 && serial == 0 {
+        return UNIDENTIFIED | u64::from(display_id);
+    }
+    let mut bytes = [0u8; 12];
+    bytes[0..4].copy_from_slice(&vendor.to_le_bytes());
+    bytes[4..8].copy_from_slice(&model.to_le_bytes());
+    bytes[8..12].copy_from_slice(&serial.to_le_bytes());
+    fnv1a(&bytes) & !UNIDENTIFIED
+}
+
 fn screen_size_millimeters(display_id: u32) -> (f64, f64) {
     // SAFETY: `CGDisplayScreenSize` takes a display id by value and returns a POD struct; an
     // unknown id yields (0, 0), which the caller treats as "no physical size".
@@ -540,6 +574,34 @@ mod tests {
         };
         assert_ne!(make(1).identity_key(), make(2).identity_key());
         assert_eq!(make(7).identity_key(), make(7).identity_key());
+    }
+
+    /// The notch caches are keyed on this, and **a hotplug renumbers `CGDirectDisplayID`**. When
+    /// they were keyed on the id, replugging an external monitor left the built-in unable to find
+    /// its own learned housing inset — so the guest was sized as if the panel had no housing and
+    /// rendered wholly below it — while the external display inherited an id that *did* carry a
+    /// learned inset and got a 33 pt housing strip placed on it. Two GNOME panels, healing on
+    /// anything that forced a re-measure. So: same panel, new id, same key.
+    #[test]
+    fn the_panel_key_survives_a_hotplug_renumbering_the_display_ids() {
+        // One physical panel, seen under two different display ids across an unplug/replug.
+        assert_eq!(
+            panel_key_from(0x610, 0xa038, 0x31d1_4c41, 1),
+            panel_key_from(0x610, 0xa038, 0x31d1_4c41, 724_045_140),
+        );
+        // Two panels are still two panels, whatever ids they happen to hold.
+        assert_ne!(
+            panel_key_from(0x610, 0xa038, 0x31d1_4c41, 3),
+            panel_key_from(0x9d1, 0x7f5c, 0x0000_0001, 3),
+        );
+        // A display reporting nothing identifying falls back to its id, and those stay distinct.
+        assert_ne!(panel_key_from(0, 0, 0, 1), panel_key_from(0, 0, 0, 2));
+        assert_eq!(panel_key_from(0, 0, 0, 9), panel_key_from(0, 0, 0, 9));
+        // ...and an unidentified display can never be confused with a real panel.
+        assert_ne!(
+            panel_key_from(0, 0, 0, 1),
+            panel_key_from(0x610, 0xa038, 0x31d1_4c41, 1),
+        );
     }
 
     /// Every mode hands over the identity; only match-host also drives the resolution.
