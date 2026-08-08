@@ -104,11 +104,19 @@ func scan() {
         let wrong = alpha > 0.01 && home != nil && expectedHome[number] != nil && home != expectedHome[number]
         visible.append((number, rect, alpha, home, wrong))
     }
-    // Solo = something of ours is off its display while something else of ours, visible in the
-    // same sample, is still at home. During a slide they travel together, so nothing is solo.
-    let anyHome = visible.contains { $0.alpha > 0.01 && !$0.wrong && $0.home != nil }
+    // Solo = a window is off its display and **no other window of ours is at the same x**, i.e. it
+    // is not travelling with the app.
+    //
+    // The obvious rule — "off-display while something else of ours is home" — is wrong, and its
+    // 26 false positives are worth the paragraph. Mid-slide, every window of the Space shares one
+    // x, but they do not share a verdict: the 33 pt strip fits entirely inside the external
+    // display's y range while the 949 pt carrier is clipped by that display's bottom edge, so the
+    // area majority tips for one and not the other. The strip looked abandoned while it was in
+    // perfect lockstep. What actually distinguished the real bug was *disagreement*: the strip sat
+    // at x=728 while the carrier was at x=-1512, 2240 points apart.
     for v in visible {
-        let isSolo = v.wrong && anyHome
+        let travelling = visible.contains { $0.number != v.number && abs($0.rect.minX - v.rect.minX) <= 2 }
+        let isSolo = v.wrong && !travelling
         if v.wrong { lastOff = now() }
         if v.wrong && !isSolo { lastCompanion = now() }
         let mark = isSolo ? "SOLO" : (v.wrong ? "OFF " : "    ")

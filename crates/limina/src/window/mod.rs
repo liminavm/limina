@@ -315,6 +315,25 @@ fn set_layer_frame(layer: &CALayer, r: fit::FitRect) {
     CATransaction::commit();
 }
 
+/// Whether Core Animation's copy of the layer's frame has drifted from the rect we want.
+///
+/// **Never decide this from a cache of what we last asked for.** AppKit resets a layer-hosting
+/// view's layer to the view's bounds on a layout pass — a display reconfiguration is one — and
+/// says nothing. Guarding the write on our own intent then means the drift is permanent, because
+/// the intent is still whatever it was. That is exactly how a replug left the guest squashed into
+/// the carrier's 949 pt view while the strip went on showing the top of the real 980 pt fit: the
+/// top bar drawn twice, 33 pt apart, healing only on a fullscreen toggle or the chrome ask —
+/// i.e. on the things that happen to *change* the intent (2026-08-08). Compare against the layer.
+///
+/// A point of tolerance: these rects come from a letterbox division, and CA stores floats.
+fn layer_frame_differs(layer: &CALayer, r: fit::FitRect) -> bool {
+    let f = layer.frame();
+    (f.origin.x - r.x).abs() > 0.5
+        || (f.origin.y - r.y).abs() > 0.5
+        || (f.size.width - r.w).abs() > 0.5
+        || (f.size.height - r.h).abs() > 0.5
+}
+
 /// Snapshot the window's frame + content size for state.toml. `None` while fullscreen (the
 /// *windowed* frame is what we remember) or before the window has a real size. The `extend`
 /// overlay needs no case of its own: it exists only while the carrier is natively fullscreen,
@@ -896,6 +915,9 @@ pub(crate) struct ExtendOverlay {
     /// within it. Re-applied by [`Self::show`] *before* the window is ordered back in, so a strip
     /// that was hidden across a display change never appears at its old rect first.
     placement: Cell<Option<StripPlacement>>,
+    /// Set when [`Self::show`] had no placement it could trust, so the window went up invisible
+    /// and the next [`Self::place`] owes it the reveal.
+    reveal_pending: Cell<bool>,
     /// When "inactive, and the focus is on our screen" started holding — see [`overlay_level`].
     /// Cleared the moment it stops, so only a sustained condition ever drops the level.
     yielding_since: Cell<Option<std::time::Instant>>,
@@ -985,6 +1007,13 @@ impl ExtendOverlay {
         }
         self.placement.set(Some((strip, shifted)));
         self.apply_placement(strip, shifted);
+        // A reveal that had no trustworthy frame to go up at waits here, where there is one: this
+        // rect was computed from the screen the carrier is on *now*. See [`Self::show`].
+        if self.reveal_pending.replace(false) {
+            if let Some(window) = self.window.borrow().as_ref() {
+                window.setAlphaValue(1.0);
+            }
+        }
     }
 
     /// Put the strip window and its layer at an already-computed placement.
@@ -1018,22 +1047,31 @@ impl ExtendOverlay {
         // (2026-08-08). The window keeps its frame while ordered out, so there is nothing to
         // correct on the way back.
         if let Some(strip) = self.window.borrow().as_ref().cloned() {
-            // Frame first, then reveal, and `force` because AppKit's idea of the frame is stale
-            // here — see [`Self::apply_placement`]. Only a placement that is still inside this
-            // screen is worth applying; a stale one is left for the tick's `place` to correct now
-            // that we are on screen.
-            if let (Some((rect, layer)), Some(screen)) = (self.placement.get(), carrier.screen()) {
-                let f = screen.frame();
-                let inside = rect.0 >= f.origin.x - 1.0
-                    && rect.0 + rect.2 <= f.origin.x + f.size.width + 1.0
-                    && rect.3 > 0.0;
-                if inside {
-                    self.apply_placement(rect, layer);
+            // Frame first, then reveal — and only a placement still inside this screen is worth
+            // applying. If the arrangement changed while the band was down (the display this was
+            // all found on: a monitor unplugged mid-Space-switch), the remembered rect names a
+            // screen that no longer exists there, and revealing on it is the very bug this window
+            // spent a day on. So in that case we go up *invisible* and let the tick's `place`
+            // reveal us once it has computed a frame from the screen we are actually on.
+            let placed = match (self.placement.get(), carrier.screen()) {
+                (Some((rect, layer)), Some(screen)) => {
+                    let f = screen.frame();
+                    let inside = rect.0 >= f.origin.x - 1.0
+                        && rect.0 + rect.2 <= f.origin.x + f.size.width + 1.0
+                        && rect.3 > 0.0;
+                    if inside {
+                        self.apply_placement(rect, layer);
+                    }
+                    inside
                 }
-            }
+                _ => false,
+            };
             strip_trace("show", Some(&strip), self.placement.get().map(|p| p.0));
             strip.setIgnoresMouseEvents(false);
-            strip.setAlphaValue(1.0);
+            self.reveal_pending.set(!placed);
+            if placed {
+                strip.setAlphaValue(1.0);
+            }
             self.active
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             return;
@@ -1124,6 +1162,8 @@ impl ExtendOverlay {
         self.active
             .store(false, std::sync::atomic::Ordering::Relaxed);
         strip_trace("hide", Some(&strip), None);
+        // A reveal still owed is owed no longer.
+        self.reveal_pending.set(false);
         strip.setAlphaValue(0.0);
         // An invisible window must not eat the clicks it is sitting on top of.
         strip.setIgnoresMouseEvents(true);
@@ -1563,6 +1603,10 @@ pub fn run(
     let last_ca: RefCell<Option<CFRetained<IOSurfaceRef>>> = RefCell::new(None);
     // Whether the `extend` strip was up last tick — see the seed in the render tick.
     let strip_was_up = Cell::new(false);
+    // Last `[GEOM]` state logged, so a 60 Hz tick reports transitions rather than a firehose.
+    let geom_traced: Cell<Option<(u32, u32, u32, bool)>> = Cell::new(None);
+    // Last `[LAYER]` state logged — the two layer frames as CA actually holds them.
+    let layer_traced: Cell<Option<(i32, i32, i32, i32)>> = Cell::new(None);
     // Guest-cursor per-timer state: the last applied cursor gen and the (IOSurface id,
     // content scale) of the shape the host pointer currently wears (so we rebuild only on
     // an actual shape or window-scale change).
@@ -1782,6 +1826,28 @@ pub fn run(
         let apply_overlay = overlay.clone();
         let apply_reveal = reveal_chrome.clone();
         let cache = cache.clone();
+        // How much taller than its content view the guest's drawing area is right now. **One
+        // definition**, because there are two callers — this tick, and the present path's
+        // modeset refit — and they used to disagree: the present path fitted the guest into the
+        // raw content view, which under `extend` is exactly the housing inset too short. Its
+        // write lands on the carrier's layer and on `fit_cell`, so the picture the strip is
+        // continuing and the picture the carrier is showing came from different panel heights,
+        // and the guest's top bar was drawn twice, 33 pt apart (2026-08-08, caught in a
+        // screenshot after every individual number checked out).
+        let strip_inset_now = {
+            let window = window.clone();
+            let overlay = overlay.clone();
+            move || {
+                if overlay.claims_band() {
+                    window
+                        .screen()
+                        .map(|s| hostdisplay::fullscreen_inset(&s))
+                        .unwrap_or(0.0)
+                } else {
+                    0.0
+                }
+            }
+        };
         move || {
             // Track the scanout layer to the window every tick — INCLUDING mid live-resize
             // (the timer fires in common modes, so this runs during the drag). Dynamic mode
@@ -1842,15 +1908,53 @@ pub fn run(
                 // Keyed on the POLICY, not on whether the strip is on screen — the strip hides
                 // while our Space is away, and rescaling the guest for that would put a reflow
                 // back into every Space switch, which is the whole thing this design removes.
-                let strip_inset = if apply_overlay.claims_band() {
-                    window
-                        .screen()
-                        .map(|s| hostdisplay::fullscreen_inset(&s))
-                        .unwrap_or(0.0)
-                } else {
-                    0.0
-                };
+                let strip_inset = strip_inset_now();
                 let (sz_w, sz_h) = fit::panel_size((sz.width, sz.height), strip_inset);
+                // Every input to the guest's height, on one line, whenever any of them moves. The
+                // symptom "guest renders below the housing while the band still shows content"
+                // has three candidate causes — the policy said no band, the learned inset came
+                // back 0, or the view was already the whole panel — and they are indistinguishable
+                // from the outside. Traced rather than reasoned about, after a wrong guess.
+                if display_trace() {
+                    let (id, notch, learned) = window
+                        .screen()
+                        .map(|s| {
+                            (
+                                hostdisplay::panel_key(&s),
+                                hostdisplay::notch_inset(&s),
+                                hostdisplay::fullscreen_inset(&s),
+                            )
+                        })
+                        .unwrap_or((0, -1.0, -1.0));
+                    let now = (
+                        sz.height as u32,
+                        strip_inset as u32,
+                        sz_h as u32,
+                        apply_overlay.claims_band(),
+                    );
+                    if geom_traced.get() != Some(now) {
+                        geom_traced.set(Some(now));
+                        eprintln!(
+                            "[GEOM] {} panel={:x} view={:.0}x{:.0} claims_band={} notch={:.0} \
+                             learned={:.0} strip_inset={:.0} -> guest_area={:.0}x{:.0} \
+                             screen={:?}",
+                            epoch_ms(),
+                            id,
+                            sz.width,
+                            sz.height,
+                            apply_overlay.claims_band(),
+                            notch,
+                            learned,
+                            strip_inset,
+                            sz_w,
+                            sz_h,
+                            window.screen().map(|s| {
+                                let f = s.frame();
+                                (f.origin.x, f.origin.y, f.size.width, f.size.height)
+                            }),
+                        );
+                    }
+                }
                 if sz_w > 0.0 && sz_h > 0.0 {
                     let g = geom.get();
                     let target = if mode == DisplayResolution::Dynamic {
@@ -1889,6 +1993,14 @@ pub fn run(
                             );
                         }
                         fit_cell.set(target);
+                    }
+                    // Re-assert the scanout layer's frame whenever CA's copy has drifted from it
+                    // — checked against the LAYER, not against `fit_cell`. See
+                    // [`layer_frame_differs`]: AppKit resets it to the view's bounds on a layout
+                    // pass, and a guard on our own unchanged intent makes that permanent. The
+                    // strip has always been re-asserted this way; the carrier was not, and that
+                    // asymmetry is the whole bug.
+                    if layer_frame_differs(&layer, target) {
                         set_layer_frame(&layer, target);
                     }
                     // Keep the strip over the housing band and its copy of the layer on the same
@@ -1896,6 +2008,39 @@ pub fn run(
                     // display reconfiguration, and the fit it mirrors can change under it.
                     if let Some(s) = window.screen() {
                         apply_overlay.place(&s, sz.height, strip_inset, target);
+                    }
+                    // What the two layers ACTUALLY hold, as opposed to what we last asked for.
+                    // The guest's top bar was once drawn twice, 33 pt apart, while every input
+                    // number read correct — because a second writer had put a differently-fitted
+                    // rect on the carrier's layer. Only the layers themselves can report that.
+                    if display_trace() {
+                        let c = layer.frame();
+                        let s = apply_overlay.strip_layer().frame();
+                        let now = (
+                            c.origin.y as i32,
+                            c.size.height as i32,
+                            s.origin.y as i32,
+                            s.size.height as i32,
+                        );
+                        if layer_traced.get() != Some(now) {
+                            layer_traced.set(Some(now));
+                            eprintln!(
+                                "[LAYER] {} carrier=({:.0},{:.0} {:.0}x{:.0}) \
+                                 strip=({:.0},{:.0} {:.0}x{:.0}) target={:?} view={:.0}x{:.0}",
+                                epoch_ms(),
+                                c.origin.x,
+                                c.origin.y,
+                                c.size.width,
+                                c.size.height,
+                                s.origin.x,
+                                s.origin.y,
+                                s.size.width,
+                                s.size.height,
+                                target,
+                                sz.width,
+                                sz.height,
+                            );
+                        }
                     }
                     // The strip has just come up: hand it the frame the carrier is already
                     // showing. An idle guest presents nothing, so without this the band would
@@ -2087,8 +2232,11 @@ pub fn run(
                 } else if let Some(v) = window.contentView() {
                     // Host/fixed: the window is host-owned — a guest modeset re-fits the
                     // letterbox NOW (not next tick) so this frame presents at the right rect.
+                    // Through `strip_inset_now`, so this agrees with the render tick about how
+                    // tall the guest's area is — see that closure.
                     let sz = v.frame().size;
-                    let target = fit::aspect_fit(width, height, sz.width, sz.height);
+                    let (pw, ph) = fit::panel_size((sz.width, sz.height), strip_inset_now());
+                    let target = fit::aspect_fit(width, height, pw, ph);
                     if target != fit_cell.get() {
                         fit_cell.set(target);
                         set_layer_frame(&layer, target);

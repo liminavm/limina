@@ -225,18 +225,44 @@ overlay paints beside the housing, takes keyboard focus, and the menu bar cannot
 | `[display] notch` | fullscreen | guest gets | the strip |
 |---|---|---|---|
 | `avoid` (default) | native, AppKit insets it | the safe area | black |
-| `extend` | native carrier + full-panel overlay | the whole panel | guest content, housing overlapping it |
+| `extend` | native carrier + housing-band strip | the whole panel | guest content, housing overlapping it |
 
 Both policies use `toggleFullScreen:`, so the green title-bar button and Cmd-Ctrl-F finally do the
 same thing.
 
-### What the overlay costs, and the four rules that pay for it
+### The overlay is a strip, and it must never hold the guest's view
 
-The overlay gets **no view of its own**: the same `NSView` — scanout layer, cursor sublayer, every
-input binding — is re-parented into it and back out, so nothing that holds the view knows it moved.
-Sizing reads `ExtendOverlay::active_view` rather than the carrier's content view.
+The first cut re-parented the guest's whole `NSView` into a full-panel overlay and back out. It
+worked, and **every artifact this feature has ever had came from it**: the re-parent is a one-frame
+reflow of the entire guest, and it was bound to `isOnActiveSpace`, which turns true again only once
+a Space-switch animation has *finished*. Four attempts to fix that in place each moved the artifact
+somewhere worse (2026-08-08; `spikes/notch-fullscreen/` rounds 6–7 has the table). Do not attempt a
+fifth — the answer is not to re-parent at all.
 
-It is up only while *all* of these hold, each for its own reason:
+So the guest's view lives in the carrier permanently, and the overlay covers only the housing band,
+showing the top of the **same** IOSurface through a second `CALayer`. Both layers get identical
+geometry in *panel* space (`fit::notch_strip_frames`) and each window clips to its own bounds, so
+the seam is exact by construction rather than by tuning: the strip's layer is the carrier's layer
+frame shifted down by the carrier's height. `fit::panel_size` is the single number the letterbox
+fit, the pointer mapping and both layers agree on.
+
+**The strip must mirror every layer the carrier composites, not just the picture.** The band is a
+different *window*, so anything drawn only into the carrier's layer tree is clipped out of existence
+there — silently, because the guest keeps behaving correctly underneath. The captured-pointer cursor
+is drawn (the host `NSCursor` is hidden in capture mode, which fullscreen's grab enters on its own)
+into a sublayer of the carrier's scanout layer, and the strip did not have one: the pointer vanished
+on crossing into the band while still driving the guest, which reads as a lost pointer rather than a
+clipped one (2026-08-08). `ExtendOverlay::strip_cursor_layer` hangs the copy off the strip's scanout
+layer exactly as the carrier does, so the same `update_capture_cursor` frame is right for both and
+neither needs geometry of its own. Anything else that grows a sublayer there owes the same copy.
+
+The load-bearing consequence: **the guest's size is keyed on the policy, not on whether the strip
+is on screen** (`ExtendOverlay::claims_band`). The strip still comes down while our Space is away —
+`fullScreenAuxiliary` or not, it draws over the neighbouring Spaces once their switch resolves —
+and if the guest's height followed it down, every Space switch would get a full rescale back.
+Standing *down* for the chrome ask or a dialog does change it, and there the reflow is the intent.
+
+The strip is up only while *all* of these hold, each for its own reason:
 
 - **The carrier is natively fullscreen.** The overlay needs a Space to float over.
 - **The screen has a camera housing.** On an external display native fullscreen already covers
@@ -247,12 +273,41 @@ the pointer is in the guest, and it costs something real — a window at that le
 windows too, and it hid the Accessibility grant dialog behind the very app that needed the grant.
 
 - **The carrier's Space is the one on screen** (`isOnActiveSpace`). A window above menu-bar level
-  would otherwise float over whatever the user Cmd-Tabbed to. Dropping it returns the view to the
-  carrier, so the Space still shows the guest — the right look for a background app anyway.
-  Deliberately *not* `isActive`: activating an app on another display leaves limina's Space
-  perfectly visible on its own, and the first cut shrank a still-on-screen guest back below the
-  housing for no reason. Activation says which app has the keyboard; the overlay's question is
-  whether its Space is showing.
+  would otherwise float over whatever the user Cmd-Tabbed to. Deliberately *not* `isActive`:
+  activating an app on another display leaves limina's Space perfectly visible on its own, and the
+  first cut shrank a still-on-screen guest back below the housing for no reason. Activation says
+  which app has the keyboard; the overlay's question is whether its Space is showing. This gates
+  the *window* only — see `claims_band` above for why the guest's geometry must not follow it.
+
+  Taking the band down is `alphaValue = 0`, **never `orderOut`**. `orderOut` removes the window
+  from the window list entirely, so the next `orderFront` has to re-insert it, and re-insertion is
+  where the window server decides which Space — and therefore which display — it lands on (round 1
+  measured that going to the *main* screen regardless of the window's frame).
+
+  And then the sharp edge, which cost a day on its own: **`NSWindow::frame` is our last write, not
+  the window server's copy of it.** The server parks a hidden `fullScreenAuxiliary` window while
+  its Space is away — measured at x=728, i.e. squarely on the *external* display — and tells AppKit
+  nothing. `if window.frame() != want { setFrame }` therefore skipped the write on the way back in,
+  and the band was revealed at the parked position for the frame before the next tick moved it
+  home. Forcing the write from the reveal does not help: two `setFrame:display:` calls in one pass
+  coalesce against the frame the pass *started* with, so nudging away and back keeps the nudge and
+  drops the destination. **You cannot land on a rectangle in a pass that began at that rectangle.**
+  `ExtendOverlay::hide` therefore desynchronises deliberately — it parks AppKit's cached frame one
+  point *down* while alpha is 0 and nothing can see it, so the reveal's ordinary equality test is
+  false, the write happens, and it lands in the same transaction as the alpha. Down rather than up
+  because a write one frame late then leaves the 1 pt gap at the very top, under the housing, where
+  it is black either way.
+
+  The same shape bit the **scanout layer**, and is worth stating as a rule rather than an anecdote.
+  AppKit resets a layer-hosting view's layer frame to the view's bounds on a layout pass — a
+  display reconfiguration is one — without telling anyone. The carrier's layer write was guarded on
+  `target != fit_cell`, a cache of *what we last asked for*; the intent had not changed, so the
+  drift was permanent, and after a monitor replug the guest was squashed into the carrier's 949 pt
+  view while the strip went on showing the top of the real 980 pt fit. The GNOME top bar rendered
+  twice, 33 pt apart, healing only on the things that happen to change the intent (a fullscreen
+  toggle, the chrome ask). `layer_frame_differs` compares against the layer. **Never guard a write
+  to state someone else can change on a cache of your own intent** — `NSWindow::frame`, `fit_cell`
+  and the layer frames are all last-writes, not observations.
 - **The user is not asking for the chrome.** Nothing can reveal over the overlay, which is the
   point of it; but the menu bar and the window's own controls still have to be reachable for the
   VM's menu actions. A deliberate shove at the top edge — **uncaptured only**, so a grabbed pointer
@@ -272,8 +327,9 @@ windows too, and it hid the Accessibility grant dialog behind the very app that 
   released it, over and over. The monitor was the wrong one, for a reason worth knowing:
   `locationInWindow` is relative to *the window the event was delivered to*, while
   `convertPoint_fromView(_, None)` decodes it in *the view's current window* — normally the same
-  window, but not once the overlay re-parents the guest view. `event_point_in_view` routes through
-  screen coordinates when they differ. (That bug also fed the guest's absolute pointer.)
+  window, but not once an event is delivered to the strip rather than the carrier — the guest's top
+  bar lives in that band, so its clicks have to land. `event_point_in_view` routes through screen
+  coordinates when they differ. (That bug also fed the guest's absolute pointer.)
 
   Ways to get this wrong, each found by dogfooding it:
   - **The release must not be gated on the overlay being up.** It was, and the overlay is down
@@ -295,8 +351,8 @@ windows too, and it hid the Accessibility grant dialog behind the very app that 
     plateaued at 0.384 s against a 0.45 s bar and could never fire however long the user leaned.
     It is neutral now: it neither charges (that would bank stillness, reopening the shove-then-
     linger hole) nor lapses. Only a genuinely downward move gives the gesture up.
-  - **Granting the ask moves the content out from under the pointer.** The overlay drops, the view
-    re-parents into the shorter carrier, and for a few frames the reported position says "back
+  - **Granting the ask moves the content out from under the pointer.** The strip drops, the guest
+    reflows into the shorter carrier, and for a few frames the reported position says "back
     inside the guest" while nothing moved — releasing the ask that was just granted, restoring the
     geometry, and letting the still-leaning pointer re-arm it. Two guards, because one was not
     enough: `fit::is_reflow` discards any event whose position change disagrees with its own delta,
@@ -320,15 +376,26 @@ windows too, and it hid the Accessibility grant dialog behind the very app that 
   afterwards fired at 0.251–0.263 across eight consecutive leans, against 0.25–3.5 before.
 
 Two knock-on simplifications. `NSWindowStyleMask::FullScreen` is meaningful again, since fullscreen
-is always native; only the capture tap needs the overlay flag, because a guest hosted in the
-overlay is fullscreen for resistance purposes while the overlay carries no fullscreen bit. And the
-resistance **keep-out band is switched off** under the overlay: it exists only because macOS
-reveals chrome on contact, and holding the cursor two points short would otherwise stop the guest's
-top bar and top-left hot corner getting the pointer at the true corner.
+is always native; only the capture tap needs the overlay flag, because a guest reaching into the
+housing band is fullscreen for resistance purposes while the strip carries no fullscreen bit. And
+the resistance **keep-out band is switched off** while the strip is up: it exists only because
+macOS reveals chrome on contact, and holding the cursor two points short would otherwise stop the
+guest's top bar and top-left hot corner getting the pointer at the true corner.
 
-Because a borderless `NSWindow` refuses key status — and the overlay carries the guest — the window
-is a `LiminaWindow`, an `NSWindow` subclass overriding
-`canBecomeKeyWindow`/`canBecomeMainWindow`, from creation.
+The carrier is a `LiminaWindow` — an `NSWindow` subclass overriding
+`canBecomeKeyWindow`/`canBecomeMainWindow` — from creation, because a borderless `NSWindow` refuses
+key status and the window is restyled in place. The strip is the same subclass but is only ever
+`orderFront`, never `makeKeyAndOrderFront`: the carrier stays key, and the app-wide input monitor
+decodes whatever is delivered to the strip into the carrier view's space.
+
+Verifying any of this needs a machine, not an eye — the artifacts are one or two frames on a
+human-driven event, and synthetic Space switches are ignored by the WindowServer.
+`spikes/notch-fullscreen/flash-detector.swift` polls `CGWindowListCopyWindowInfo` every 5 ms and
+logs each change in a limina window's bounds, alpha or on-screen state. Read its `SOLO` count, not
+its raw off-display count: a Space slide legitimately carries *every* window of that Space across
+the display boundary, so the signal is one window off its display **while the rest of the app is
+home**. (`CGWindowBounds` is CG's top-left-origin global space, not `NSScreen.frame`; mixing the
+two misclassifies everything.)
 
 ### Where the overlay sits in the window order (2026-08-02)
 

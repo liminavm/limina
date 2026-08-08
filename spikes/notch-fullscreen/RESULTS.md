@@ -470,8 +470,15 @@ Also: the strip is **born at the band**, not at the screen frame. An opaque blac
 of the panel, even for the single frame before `place()` corrects it, is a full-screen flash.
 
 **Verified** over ~10 human-driven Space switches (including animation-interrupting ones) and a
-fullscreen exit/re-enter: the human oracle reports no flash, and the detector's x=728 population
-is gone — 0 `SOLO` samples, i.e. the strip is never off its display on its own.
+fullscreen exit/re-enter: the human oracle reports no flash, and in the detector's log the x=728
+population is gone — every remaining off-display sample has the carrier at the same x, i.e. the
+slide.
+
+The route to that sentence is itself the cautionary tale, and the detector section below has the
+detail: the discriminator was first computed by a post-hoc pass, then built into the tool as
+`SOLO` — whose *first live run printed 26 hits on a clean build*, all false. The rule was wrong,
+not the code. With the corrected rule (companion-x rather than "somebody else is home") the tool
+prints its own verdict: `7761 changes, 1448 off-display (0 SOLO)`.
 
 ## `flash-detector.swift` — making "no flash" a measurement
 
@@ -498,4 +505,110 @@ Two things it got wrong at first, both worth keeping in mind:
   still home**, which the summary counts as `SOLO`. That is the number that has to be zero, and a
   post-hoc Python pass to compute it is now built in.
 
+- **Off-display is not even the right *unit*.** The first `SOLO` rule was "off its display while
+  something else of ours is home", and it fired 26 times on a clean build. At every one the strip
+  and the carrier sat at the *identical* x, mid-slide — they only disagreed because the 33 pt strip
+  fits entirely inside the external display's y range while the 949 pt carrier is clipped by that
+  display's bottom edge, tipping the area majority for one and not the other. What actually
+  distinguished the real bug was **disagreement in position**: the strip at x=728 while the carrier
+  was at x=-1512. `SOLO` now means "off-display and no other window of ours within 2 pt of the same
+  x". Replayed over the recorded logs: 0 on the fixed build, and all 13 of the original x=728
+  samples still caught.
+
 Synthetic Space switches remain impossible (round 6), so the human drives and this watches.
+
+## The hotplug sequel: a cache of intent is not a cache of reality
+
+Found by the user while driving the above: after unplugging and replugging the external monitor,
+the guest rendered **entirely below the housing** while the band still showed content — two GNOME
+panels — healing on anything that forced a re-measure (leaving fullscreen, or the chrome ask).
+
+**This section is also a record of two wrong diagnoses, both reached by deduction from a partial
+reading, and both cheap to have avoided.**
+
+*Wrong #1.* The `[STRIP]` trace showed `hide cocoa=Some((0.0, 948.0, 1512.0, 33.0))` — a housing
+strip at x=0, which I called a housing strip on the *external* display. It is not: with the
+external monitor unplugged the built-in **becomes** the display at origin 0. The frame was correct.
+
+*Wrong #2.* That misreading suggested the notch caches were confusing the two panels, because they
+were keyed on `CGDirectDisplayID` and macOS renumbers those across an arrangement change. That is a
+real latent hazard and it is now fixed — the caches key on `hostdisplay::panel_key` (vendor / model
+/ serial from the panel's own EDID), with `the_panel_key_survives_a_hotplug_renumbering_the_display_ids`
+as the regression, confirmed RED against the old behaviour. **But it was not this bug**: the trace
+shows the built-in kept `id=1` across the replug, so no renumbering ever occurred.
+
+What ended it was refusing to reason any further. A `[GEOM]` line logging every input to the
+guest's height, read *while the user held the broken state*, said every number was correct and
+unchanged — one `[GEOM]` line for the whole session, `claims_band=true`, `strip_inset=33`,
+`guest_area=1512x982`, and the guest itself at 3024x1960. A screenshot then showed the top bar
+drawn **twice, 33 pt apart**. So the two layers disagreed about where the image started while every
+input agreed. A `[LAYER]` line — what Core Animation *actually holds*, rather than what we last
+asked for — named it on the next repro:
+
+```
+[LAYER] … carrier=(0,0 1512x949) strip=(0,-948 1512x980) target=FitRect{0,1,1512,980}
+```
+
+`target` correct. Strip correct. **The carrier's layer reset to its view's bounds.** AppKit resets
+a layer-hosting view's layer frame to the view bounds on a layout pass — a display reconfiguration
+is one — and says nothing. The strip recovered because `place()` rewrites its layer every tick; the
+carrier's write was guarded by `target != fit_cell`, **a cache of what we asked for**, and the
+intent had not changed, so the drift was permanent. The guest was squashed into the 949 pt view
+(bar 2, at the carrier's top) while the strip went on showing the top of the real 980 pt fit
+(bar 1). It healed on exactly the actions that *change* the intent — a fullscreen toggle, the
+chrome ask — which is why it looked so arbitrary.
+
+`layer_frame_differs` compares against the layer now, not against our cache. Verified by the user
+and in the trace: through a full replug the layers stay `strip.y == carrier.y - carrier_height`
+with matching heights, and the drift line never appears.
+
+A second writer found on the way and fixed with it: the present path's modeset refit fitted the
+guest into the **raw content view**, which under `extend` is exactly the housing inset too short,
+and wrote that to both the carrier's layer and `fit_cell`. `strip_inset_now` is the one definition
+both callers use now — the same "one number" rule `fit::panel_size` already stated and this path
+quietly broke.
+
+## The pointer that vanished in the band
+
+Reported the same day, in the same fullscreen `extend` session: the pointer disappears on entering
+the housing band — but the guest keeps reacting to it (the GNOME top bar highlights, clicks land).
+
+Four things had to be established before the mechanism was even a candidate, and three of them
+killed a theory I would otherwise have implemented:
+
+1. **The chrome ask, suspected first, was not involved.** The run's own `[OVERLAY-GATE]` line shows
+   a clean grant/withdraw cycle. Separately: the *original* complaint that day — "the band stays put
+   on the chrome ask" — did not reproduce on the fixed build. That is consistent with the layer-drift
+   fault above (the ask was one of the things that *healed* the two-panel state, so a run in the
+   drifted state is exactly where it would misbehave), but it is not separately proven.
+2. **The guest holds a hardware cursor plane.** `sudo cat /sys/kernel/debug/dri/0/state` in the guest
+   shows `plane-1`, `AR24`, allocated by the KMS thread. So the guest never draws the pointer into
+   the scanout, and the "the strip is showing a stale picture" family of theories was dead.
+3. **A warp is not a measurement.** The first probe placed the cursor with
+   `CGWarpMouseCursorPosition`, which posts **no events** — `on_motion` never runs, so the trace is
+   silent whatever the truth is. Silence that looks like a finding is worse than no probe. Real
+   synthetic `mouseMoved` events, and a *control* sweep in the middle of the guest first, so band
+   silence can only mean one thing.
+4. **The probe could not drive the pointer at all** — and that was the answer. `[GRAB] grabbing`:
+   in fullscreen the grab enters pointer **capture**, which warps the cursor back every event.
+
+Capture is the whole mechanism. It hides the host `NSCursor` and composites the guest's cursor into
+a `CALayer` — a sublayer of the **carrier's** scanout layer. That layer is a housing inset taller
+than the carrier's window, so its top band is clipped by the window and drawn by the strip instead,
+and the strip had a copy of the picture but not of the cursor. Hence: vanishes exactly in the band,
+input unaffected. `ExtendOverlay::strip_cursor_layer` hangs the copy off the strip's scanout layer,
+where the same computed frame is correct for both and each window clips its own share.
+
+The generalisation is the one the strip design owes from here on: **a second window showing part of
+the same picture must mirror every layer the first one composites, not just the picture.** The
+scanout got a copy on day one because it was obvious; the cursor did not, because it only exists in
+a mode nobody was in while building it.
+
+### The lesson, which is not about AppKit
+
+Three times in this session the answer came from measuring the thing itself rather than the thing
+we believed about it: `NSWindow::frame` is our last write, not the server's; `fit_cell` is our last
+intent, not the layer's; a strip "off its display" is not the same as a strip drawn *alone* off its
+display. Every one of those is a cache of an intention being read as an observation. When state can
+be changed by something other than us — the window server, AppKit's layout, the compositor — the
+only safe comparison is against the state.
