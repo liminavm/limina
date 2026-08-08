@@ -18,7 +18,7 @@ use objc2_core_foundation::CFRetained;
 use objc2_io_surface::IOSurfaceRef;
 use objc2_quartz_core::{CALayer, CATransaction};
 
-use limina_surfaceport::SurfacePortReceiver;
+use limina_surfaceport::{SurfaceMsg, SurfacePortReceiver};
 
 /// A retained IOSurface that can cross threads. IOSurface is thread-safe — the kernel object is
 /// atomically refcounted and designed for cross-process/-thread scanout sharing — but objc2
@@ -58,6 +58,10 @@ pub struct SurfaceStore {
     map: std::collections::HashMap<u32, SendSurface>,
     order: VecDeque<u32>,
     cap: usize,
+    /// Ids the worker has released, waiting for the main thread to drop them from its own frame
+    /// cache. Carried here rather than in a second channel so the release needs no new plumbing:
+    /// the store is already shared between the receive thread and the main thread.
+    released: Vec<u32>,
 }
 
 const SURFACE_STORE_CAP: usize = 32;
@@ -80,6 +84,7 @@ impl SurfaceStore {
             map: std::collections::HashMap::new(),
             order: VecDeque::new(),
             cap,
+            released: Vec::new(),
         }
     }
 
@@ -92,6 +97,31 @@ impl SurfaceStore {
                 }
             }
         }
+    }
+
+    /// Drop `id`. **Both structures**: leaving a stale entry in `order` would make the cap count
+    /// phantom ids and evict *live* surfaces early.
+    pub(crate) fn remove(&mut self, id: u32) {
+        if self.map.remove(&id).is_some() {
+            self.order.retain(|&o| o != id);
+        }
+    }
+
+    /// The guest let go of `id`: drop our reference now, and queue the id for the main thread to
+    /// drop from its frame cache too.
+    ///
+    /// Safe to act on immediately even if the surface is still on the layer — Core Animation and
+    /// `last_ca` hold their own references, so dropping ours cannot pull a displayed frame out
+    /// from under the window. And the guest will not present it again, so no later resolve can
+    /// miss because of this.
+    pub(crate) fn note_released(&mut self, id: u32) {
+        self.remove(id);
+        self.released.push(id);
+    }
+
+    /// Take the ids released since the last call (main thread; purges the frame cache).
+    pub(crate) fn take_released(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.released)
     }
 
     pub(crate) fn get(&self, id: u32) -> Option<CFRetained<IOSurfaceRef>> {
@@ -125,6 +155,15 @@ impl SurfaceStore {
         self.order.clear();
     }
 
+    /// Drop everything the previous worker published, queueing the ids so the main thread drops
+    /// them from its frame cache too. Plain [`clear`](Self::clear) would leave the cache holding
+    /// the same framebuffers by another route.
+    pub(crate) fn clear_for_new_worker(&mut self) {
+        self.released.extend(self.map.keys().copied());
+        self.map.clear();
+        self.order.clear();
+    }
+
     /// Retained surfaces currently held — the quantity the cap exists to bound.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
@@ -141,7 +180,8 @@ pub type SurfaceMap = Arc<Mutex<SurfaceStore>>;
 fn spawn_surface_receiver(receiver: SurfacePortReceiver, map: SurfaceMap) {
     std::thread::spawn(move || loop {
         match receiver.recv(None) {
-            Ok((id, surface)) => map.lock().unwrap().insert(id, surface),
+            Ok(SurfaceMsg::Published(id, surface)) => map.lock().unwrap().insert(id, surface),
+            Ok(SurfaceMsg::Released(id)) => map.lock().unwrap().note_released(id),
             Err(e) => {
                 log::warn!("window: surface-port recv failed: {e}");
                 std::thread::sleep(std::time::Duration::from_millis(50));
@@ -510,6 +550,50 @@ mod tests {
             );
         }
         assert_eq!(resolves, 1);
+    }
+
+    /// A release must drop the surface AND its slot in the eviction order. Removing from the map
+    /// alone leaves a phantom id in `order`, and the cap then counts surfaces that are already
+    /// gone — so an insert evicts a LIVE surface while the store is not even full, and the frame
+    /// that surface belongs to gets skipped.
+    ///
+    /// It takes releasing a *newer* id to show this, which is also the realistic pattern: a guest
+    /// frees the buffer it has just finished with, not its oldest. Release the oldest instead and
+    /// the phantoms sit at the front of the queue and are popped harmlessly, so both the bug and
+    /// the fix behave identically — an easy way to write a test that proves nothing.
+    #[test]
+    fn releasing_frees_the_slot_it_took() {
+        let mut store = SurfaceStore::with_cap(3);
+        for id in 0..3u32 {
+            store.insert(id, make_surface());
+        }
+        store.note_released(2);
+        assert_eq!(store.len(), 2, "the released surface must be gone");
+
+        store.insert(10, make_surface());
+        assert!(
+            store.get(0).is_some(),
+            "id 0 was evicted with only 2 live surfaces held under a cap of 3 — the released id \
+             still held a slot"
+        );
+        assert_eq!(store.len(), 3);
+        assert_eq!(store.take_released(), vec![2]);
+        assert!(
+            store.take_released().is_empty(),
+            "taking the released list must drain it"
+        );
+    }
+
+    /// Releasing an id we never held must not corrupt the bound. The worker unrefs plenty of
+    /// resources whose surfaces we were never handed (or have already evicted), so this is the
+    /// common case, not an edge one.
+    #[test]
+    fn releasing_an_unknown_id_is_a_no_op_on_the_bound() {
+        let mut store = SurfaceStore::with_cap(2);
+        store.insert(1, make_surface());
+        store.note_released(999);
+        store.insert(2, make_surface());
+        assert!(store.get(1).is_some() && store.get(2).is_some());
     }
 
     #[test]

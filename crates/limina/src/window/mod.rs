@@ -1262,8 +1262,14 @@ pub fn run(
     // Cache looked-up surfaces by id. BOUNDED, and that bound is load-bearing: each entry
     // retains a whole framebuffer, and a compositor that mints a fresh scanout resource per
     // frame supplies a fresh id per frame (see `SurfaceStore::get_or_insert_with`).
-    let cache: RefCell<present::SurfaceStore> =
-        RefCell::new(present::SurfaceStore::with_cap(present::FRAME_CACHE_CAP));
+    // `Rc` because the render timer purges it too: releases arrive whenever the guest frees a
+    // scanout, including long after the last frame — a compositor that quits stops presenting,
+    // so a purge that only ran on frame-apply would never run again and its framebuffers would
+    // stay pinned for the supervisor's life. That is the bug being fixed, so the drain has to
+    // sit on a path that keeps ticking when nothing is being drawn.
+    let cache: std::rc::Rc<RefCell<present::SurfaceStore>> = std::rc::Rc::new(RefCell::new(
+        present::SurfaceStore::with_cap(present::FRAME_CACHE_CAP),
+    ));
     // The surface last handed to Core Animation (copy-ring or guest, whichever actually became
     // layer contents). Each frame's shown-ack carries the surface it REPLACED so the ack sender
     // can hold the ack until WindowServer stops sampling it (#24 off-glass gating; see the ack
@@ -1458,6 +1464,22 @@ pub fn run(
         });
     }
 
+    /// Drop, from the main thread's frame cache, the surfaces the guest has let go of.
+    ///
+    /// The receive thread has already dropped the store's reference (`note_released`); this is
+    /// the other half, and it has to happen on the main thread because the cache is main-thread
+    /// state. Called from both the frame-apply and the render timer — see the note on `cache`.
+    fn drain_releases(map: &SurfaceMap, cache: &RefCell<present::SurfaceStore>) {
+        let released = map.lock().unwrap().take_released();
+        if released.is_empty() {
+            return;
+        }
+        let mut cache = cache.borrow_mut();
+        for id in released {
+            cache.remove(id);
+        }
+    }
+
     // The frame-apply path, shared by the 60 Hz timer (fallback/liveness) and the
     // dispatch wake-up from the reader thread (event-driven, leg 1 of the latency
     // collapse): applying the moment a frame arrives instead of at the next tick.
@@ -1471,6 +1493,7 @@ pub fn run(
         let desired_size = desired_size.clone();
         let apply_overlay = overlay.clone();
         let apply_reveal = reveal_chrome.clone();
+        let cache = cache.clone();
         move || {
             // Track the scanout layer to the window every tick — INCLUDING mid live-resize
             // (the timer fires in common modes, so this runs during the drag). Dynamic mode
@@ -1724,6 +1747,8 @@ pub fn run(
                 cache.borrow_mut().clear();
             }
 
+            drain_releases(&surface_map, &cache);
+
             let mut cache = cache.borrow_mut();
             // Resolve the id to a surface once and keep our own retained reference. Prefer the
             // Mach-delivered store (the capability-scoped, non-global scanouts); fall back to a
@@ -1860,6 +1885,7 @@ pub fn run(
     let timer_captured = captured.clone();
     let timer_cursor_layer = cursor_layer.clone();
     let timer_surface_map = surface_map.clone();
+    let timer_cache = cache.clone();
     // For the quit-check below: distinguish a real window CLOSE from a mere miniaturize/app-hide
     // (all three make the window not-visible, but only a close should power the guest off).
     let timer_app = app.clone();
@@ -1885,6 +1911,11 @@ pub fn run(
         {
             window.toggleFullScreen(None);
         }
+        // Let go of what the guest has let go of, every tick — not only when a frame arrives.
+        // A compositor that quits stops presenting, and its framebuffers are exactly the ones
+        // worth reclaiming (testcomp/supervisor-retention.sh).
+        drain_releases(&timer_surface_map, &timer_cache);
+
         let (exited, worker_suspended, show_id, frames) = {
             let s = shared.lock().unwrap();
             (s.worker_exited, s.worker_suspended, s.show_id, s.frames)

@@ -273,6 +273,29 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         Ok(())
     }
 
+    /// Tell the supervisor the guest is finished with `iosurface_id`, so it can drop its
+    /// reference.
+    ///
+    /// A backend that hands surfaces to another process has no way to learn one is finished
+    /// with: on macOS an IOSurface's storage bills to the task that CREATED it, so the holder
+    /// feels no pressure of its own to let go, and the supervisor can otherwise bound its hold
+    /// only by size. A compositor that mints a fresh scanout per frame then leaves whole
+    /// framebuffers pinned for the supervisor's life — `testcomp/supervisor-retention.sh`
+    /// measured 229.7 MiB still held after the compositor had quit. The guest's `RESOURCE_UNREF`
+    /// is the accurate signal.
+    ///
+    /// This rides the surface port rather than the control socket on purpose: it is what keeps a
+    /// release naming a recycled IOSurface id from overtaking the publish that reused it. See
+    /// `limina_surfaceport`'s module docs for the ordering argument.
+    fn release_surface(&mut self, iosurface_id: u32) -> Result<(), DisplayBackendError> {
+        if let Some(tx) = self.sender.as_ref() {
+            if let Err(e) = tx.release(iosurface_id) {
+                log::error!("window: surface-port release(id={iosurface_id}) failed: {e}");
+            }
+        }
+        Ok(())
+    }
+
     fn alloc_frame(&mut self, scanout_id: u32) -> Result<(u32, &mut [u8]), DisplayBackendError> {
         let scanout = self
             .scanout
