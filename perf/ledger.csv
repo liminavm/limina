@@ -161,3 +161,31 @@ date,commit,workload,metric,value,notes
 2026-08-08,fc84491,gl-replay-venus,fps,47.36,"cross-check on the enhanced.raw BASE image (the other 08-08 rows were a clone): 47.36 vs 47.60 — base and clone agree, so the pass is reproducible on the shipped base"
 2026-08-08,fc84491,gl-replay-llvmpipe,fps,745.35,"base-image cross-check: 745.3 vs 746 on the clone — CPU control identical"
 2026-08-08,fc84491,glmark2-wayland-venus,score,2893,"base-image cross-check: 2893 vs 2944 median on the clone (~2%, within boot-to-boot). Confirms the +82% is a property of the stack, not of the clone"
+2026-08-09,b671482,gl-replay-venus,fps,45.3293,"INVALID — booted with LIMINA_KK_ALLOC_STATS=4000, so the pending-tracker instrument (mutex per begin/commit/completion + allocatedSize per reset) was live. Not a shipping configuration. Superseded by the uninstrumented row below."
+2026-08-09,b671482,gl-replay-llvmpipe,fps,748.221,"INVALID (same instrumented boot) — though as the CPU control it is unaffected: 748.2 vs 746 on 08-08."
+2026-08-09,b671482,vk-replay-venus-headless,fps,1998.078528,"INVALID (same instrumented boot). Superseded below."
+2026-08-09,b671482,glmark2-wayland-venus,score,2811,"INVALID (same instrumented boot). Superseded below."
+2026-08-09,b671482,gl-replay-venus,fps,44.372,allocator pool kk 34a207e0405 B=4, UNINSTRUMENTED (LIMINA_KK_ALLOC_STATS unset)
+2026-08-09,b671482,gl-replay-llvmpipe,fps,747.175,allocator pool kk 34a207e0405 B=4, UNINSTRUMENTED (LIMINA_KK_ALLOC_STATS unset)
+2026-08-09,b671482,vk-replay-venus-headless,fps,1701.029229,allocator pool kk 34a207e0405 B=4, UNINSTRUMENTED (LIMINA_KK_ALLOC_STATS unset)
+2026-08-09,b671482,glmark2-wayland-venus,score,2712,allocator pool kk 34a207e0405 B=4, UNINSTRUMENTED (LIMINA_KK_ALLOC_STATS unset)
+2026-08-09,b671482,gl-replay-venus,fps,44.2622,pool B=4 uninstrumented, repeat r2
+2026-08-09,b671482,gl-replay-llvmpipe,fps,751.671,pool B=4 uninstrumented, repeat r2
+2026-08-09,b671482,vk-replay-venus-headless,fps,2031.343632,pool B=4 uninstrumented, repeat r2
+2026-08-09,b671482,glmark2-wayland-venus,score,2831,pool B=4 uninstrumented, repeat r2
+2026-08-09,b671482,gl-replay-venus,fps,44.131,pool B=4 uninstrumented, repeat r3
+2026-08-09,b671482,gl-replay-llvmpipe,fps,746.624,pool B=4 uninstrumented, repeat r3
+2026-08-09,b671482,vk-replay-venus-headless,fps,1962.565708,pool B=4 uninstrumented, repeat r3
+2026-08-09,b671482,glmark2-wayland-venus,score,2808,pool B=4 uninstrumented, repeat r3
+2026-08-09,b671482,gl-replay-venus,fps,44.483,PRE-POOL BASELINE kk d1ce8f3fe7f, same-day control, r1
+2026-08-09,b671482,gl-replay-llvmpipe,fps,754.111,PRE-POOL BASELINE kk d1ce8f3fe7f, same-day control, r1
+2026-08-09,b671482,vk-replay-venus-headless,fps,1927.280489,PRE-POOL BASELINE kk d1ce8f3fe7f, same-day control, r1
+2026-08-09,b671482,glmark2-wayland-venus,score,2771,PRE-POOL BASELINE kk d1ce8f3fe7f, same-day control, r1
+2026-08-09,b671482,gl-replay-venus,fps,44.3288,PRE-POOL BASELINE kk d1ce8f3fe7f, same-day control, r2
+2026-08-09,b671482,gl-replay-llvmpipe,fps,748.805,PRE-POOL BASELINE kk d1ce8f3fe7f, same-day control, r2
+2026-08-09,b671482,vk-replay-venus-headless,fps,2009.450264,PRE-POOL BASELINE kk d1ce8f3fe7f, same-day control, r2
+2026-08-09,b671482,glmark2-wayland-venus,score,2820,PRE-POOL BASELINE kk d1ce8f3fe7f, same-day control, r2
+2026-08-09,b671482,gl-replay-venus,fps,44.4015,PRE-POOL BASELINE kk d1ce8f3fe7f, same-day control, r3
+2026-08-09,b671482,gl-replay-llvmpipe,fps,750.841,PRE-POOL BASELINE kk d1ce8f3fe7f, same-day control, r3
+2026-08-09,b671482,vk-replay-venus-headless,fps,1995.306879,PRE-POOL BASELINE kk d1ce8f3fe7f, same-day control, r3
+2026-08-09,b671482,glmark2-wayland-venus,score,2812,PRE-POOL BASELINE kk d1ce8f3fe7f, same-day control, r3

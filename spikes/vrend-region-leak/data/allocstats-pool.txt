@@ -1,0 +1,25 @@
+# STRUCTURAL FIX: shared, type-segregated, budget-retired allocator pool. No destroy outside
+# device teardown. Same 3-cycle aquarium workload, cold boot per arm.
+
+# --- budget 16 MiB ---
+[c1 open] regions=16429 distinct=108 sum=1054.8MiB max=17.396MiB VIOLATIONS=0 peak_pending=92 | hist<1M=46 1-8M=0   8-32M=62  32-128M=0 >=128M=0
+[c2 open] regions=21746 distinct=142 sum=2229.4MiB max=17.458MiB VIOLATIONS=0                | hist<1M=11 1-8M=0   8-32M=131 32-128M=0 >=128M=0
+[c3 open] regions=27107 distinct=180 sum=2535.8MiB max=17.458MiB VIOLATIONS=0                | hist<1M=31 1-8M=0   8-32M=149 32-128M=0 >=128M=0
+
+# --- budget 4 MiB (now the default) ---
+[c1 open] regions=10099 distinct=216 sum=605.8MiB  max=5.068MiB VIOLATIONS=1 peak_pending=81 | hist<1M=91 1-8M=125 8-32M=0 32-128M=0 >=128M=0
+[c2 open] regions=12190 distinct=257 sum=1169.7MiB max=5.068MiB VIOLATIONS=1                 | hist<1M=16 1-8M=241 8-32M=0 32-128M=0 >=128M=0
+[c3 open] regions=12468 distinct=261 sum=1203.3MiB max=5.068MiB VIOLATIONS=1                 | hist<1M=13 1-8M=248 8-32M=0 32-128M=0 >=128M=0
+
+# Cycle-3 comparison across every approach tried:
+#                        regions   alloc sum   largest alloc   per-cycle sum growth
+#   unfixed               69,263   7,392 MiB      753 MiB        +1,571 MiB
+#   MAX_MIB=32 (destroy)  17,642   1,422 MiB     26.7 MiB        (not measured per-cycle)
+#   pool B=16             27,107   2,536 MiB     17.5 MiB          +306 MiB
+#   pool B=4              12,468   1,203 MiB     5.07 MiB           +34 MiB   <-- converging
+#
+# B=4 beats the destroy-based cap on every axis while obeying the no-destroy constraint.
+# Sum growth c2->c3 is +33.6 MiB against +1,571 unfixed: ~98% of the ratchet gone, and the
+# shape is convergence (+563.9 then +33.6), not a smaller ratchet.
+# Lower budget => MORE allocators but a smaller total, consistent with total ~ F + active x B:
+# the population term is bounded by in-flight work, the per-allocator term scales with B.
