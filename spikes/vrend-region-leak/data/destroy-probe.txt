@@ -1,0 +1,161 @@
+# destroy-probe: does releasing an MTL4CommandAllocator return its heaps?
+# Host: macOS 26.5, M1 Max. Run 2026-08-09. Class=render (the class that ratchets).
+# Thresholds fixed BEFORE the run: >=80% return => build; <=20% => dead.
+
+################################################################ MODE=a
+== destroy-probe MODE=a CLASS=render allocs=32 passes=3 draws=200
+   (does releasing an MTL4CommandAllocator return its heaps?)
+
+  baseline               regions=18      (     +0)  ioaccel=     1.0 MiB (    +0.0)  footprint=     5.7 MiB (    +0.0)  AGXResource=7573     (+0)
+
+  32 allocators, allocatedSize sum 233.7 MiB (mean 7.30 MiB each)
+  grown                  regions=1925    (  +1907)  ioaccel=   233.2 MiB (  +232.2)  footprint=   253.4 MiB (  +247.8)  AGXResource=9313     (+1740)
+  cbs released t+0       regions=1925    (  +1907)  ioaccel=   233.2 MiB (  +232.2)  footprint=   253.4 MiB (  +247.8)  AGXResource=9314     (+1741)
+  cbs released t+1s      regions=1925    (  +1907)  ioaccel=   233.2 MiB (  +232.2)  footprint=   251.4 MiB (  +245.8)  AGXResource=9315     (+1742)
+  cbs released t+5s      regions=1925    (  +1907)  ioaccel=   233.2 MiB (  +232.2)  footprint=   251.4 MiB (  +245.8)  AGXResource=9322     (+1749)
+  cbs released +roundtrip regions=1925    (  +1907)  ioaccel=   233.2 MiB (  +232.2)  footprint=   251.5 MiB (  +245.9)  AGXResource=9322     (+1749)
+  [sentinels] cbs only           allocators dealloc'd=0/0   cbs dealloc'd=0/96
+  allocs released t+0    regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    18.9 MiB (   +13.3)  AGXResource=7594     (+21)
+  allocs released t+1s   regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    18.9 MiB (   +13.3)  AGXResource=7588     (+15)
+  allocs released t+5s   regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    18.9 MiB (   +13.3)  AGXResource=7590     (+17)
+  allocs released +roundtrip regions=19      (     +1)  ioaccel=     1.3 MiB (    +0.3)  footprint=    18.9 MiB (   +13.3)  AGXResource=7591     (+18)
+  [sentinels] allocs too         allocators dealloc'd=32/32   cbs dealloc'd=0/96
+  queue released         regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    15.5 MiB (    +9.8)  AGXResource=7582     (+9)
+
+VERDICT (mode a, class render)
+  grew    +232.2 MiB of IOAccelerator (+1907 regions)
+  back    +232.5 MiB (100% of the growth), -1920 regions
+  allocatedSize sum was 233.7 MiB (cross-check only — per-allocator sizes can
+  double-count if allocators suballocate from shared chunks)
+  >= 80%: release RETURNS the memory. The destroy policy is worth building.
+  (thresholds fixed in the header BEFORE the first run)
+
+################################################################ MODE=b
+== destroy-probe MODE=b CLASS=render allocs=32 passes=3 draws=200
+   (does releasing an MTL4CommandAllocator return its heaps?)
+
+  baseline               regions=18      (     +0)  ioaccel=     1.0 MiB (    +0.0)  footprint=     5.6 MiB (    +0.0)  AGXResource=7580     (+0)
+
+  32 allocators, allocatedSize sum 233.7 MiB (mean 7.30 MiB each)
+  grown                  regions=1925    (  +1907)  ioaccel=   233.2 MiB (  +232.2)  footprint=   253.4 MiB (  +247.8)  AGXResource=9316     (+1736)
+  allocs released t+0    regions=37      (    +19)  ioaccel=     6.5 MiB (    +5.5)  footprint=    18.8 MiB (   +13.2)  AGXResource=7591     (+11)
+  allocs released t+1s   regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    18.8 MiB (   +13.2)  AGXResource=7593     (+13)
+  allocs released t+5s   regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    18.8 MiB (   +13.2)  AGXResource=7593     (+13)
+  allocs released +roundtrip regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    18.8 MiB (   +13.2)  AGXResource=7591     (+11)
+  [sentinels] allocs only        allocators dealloc'd=32/32   cbs dealloc'd=0/0
+  then cbs t+0           regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    18.8 MiB (   +13.2)  AGXResource=7598     (+18)
+  then cbs t+1s          regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    18.8 MiB (   +13.2)  AGXResource=7597     (+17)
+  then cbs t+5s          regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    18.8 MiB (   +13.2)  AGXResource=7598     (+18)
+  then cbs +roundtrip    regions=19      (     +1)  ioaccel=     1.3 MiB (    +0.3)  footprint=    18.8 MiB (   +13.2)  AGXResource=7598     (+18)
+  [sentinels] cbs too            allocators dealloc'd=32/32   cbs dealloc'd=0/96
+
+VERDICT (mode b, class render)
+  grew    +232.2 MiB of IOAccelerator (+1907 regions)
+  back    +231.9 MiB (100% of the growth), -1906 regions
+  allocatedSize sum was 233.7 MiB (cross-check only — per-allocator sizes can
+  double-count if allocators suballocate from shared chunks)
+  >= 80%: release RETURNS the memory. The destroy policy is worth building.
+  (thresholds fixed in the header BEFORE the first run)
+
+################################################################ MODE=c
+== destroy-probe MODE=c CLASS=render allocs=32 passes=3 draws=200
+   (does releasing an MTL4CommandAllocator return its heaps?)
+
+  baseline               regions=4       (     +0)  ioaccel=     0.4 MiB (    +0.0)  footprint=     5.6 MiB (    +0.0)  AGXResource=7586     (+0)
+
+  32 allocators, allocatedSize sum 233.7 MiB (mean 7.30 MiB each)
+  grown                  regions=1925    (  +1921)  ioaccel=   233.2 MiB (  +232.8)  footprint=   253.4 MiB (  +247.8)  AGXResource=9323     (+1737)
+  reset-only t+0         regions=1925    (  +1921)  ioaccel=   233.2 MiB (  +232.8)  footprint=   251.4 MiB (  +245.8)  AGXResource=9322     (+1736)
+  reset-only t+1s        regions=1925    (  +1921)  ioaccel=   233.2 MiB (  +232.8)  footprint=   251.4 MiB (  +245.8)  AGXResource=9317     (+1731)
+  reset-only t+5s        regions=1925    (  +1921)  ioaccel=   233.2 MiB (  +232.8)  footprint=   251.4 MiB (  +245.8)  AGXResource=9305     (+1719)
+  reset-only +roundtrip  regions=1925    (  +1921)  ioaccel=   233.2 MiB (  +232.8)  footprint=   251.5 MiB (  +245.9)  AGXResource=9304     (+1718)
+  allocatedSize sum after reset: 233.7 MiB (was 233.7)
+  [sentinels] after reset        allocators dealloc'd=0/0   cbs dealloc'd=0/96
+
+INSTRUMENT CHECK (mode c, class render)
+  grew    +232.8 MiB of IOAccelerator (+1921 regions)
+  back      +0.0 MiB (0% of the growth), +0 regions
+  allocatedSize sum was 233.7 MiB (cross-check only — per-allocator sizes can
+  double-count if allocators suballocate from shared chunks)
+  control arm: reset() only, nothing released. 0% return is the PASS — it shows
+  the instrument can tell reset from release, so the other modes' 100% is real.
+  (thresholds fixed in the header BEFORE the first run)
+
+################################################################ MODE=d
+== destroy-probe MODE=d CLASS=render allocs=32 passes=3 draws=200
+   (does releasing an MTL4CommandAllocator return its heaps?)
+
+  baseline               regions=18      (     +0)  ioaccel=     1.0 MiB (    +0.0)  footprint=     5.6 MiB (    +0.0)  AGXResource=7562     (+0)
+  cycle 0 grown          regions=1925    (  +1907)  ioaccel=   233.2 MiB (  +232.2)  footprint=   253.4 MiB (  +247.8)  AGXResource=9304     (+1742)
+    (allocatedSize sum 233.7 MiB)
+  cycle 0 released       regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    18.8 MiB (   +13.1)  AGXResource=7576     (+14)
+  cycle 1 grown          regions=1925    (  +1907)  ioaccel=   233.2 MiB (  +232.2)  footprint=   253.7 MiB (  +248.1)  AGXResource=9299     (+1737)
+    (allocatedSize sum 233.7 MiB)
+  cycle 1 released       regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    19.1 MiB (   +13.5)  AGXResource=7573     (+11)
+  cycle 2 grown          regions=1925    (  +1907)  ioaccel=   233.2 MiB (  +232.2)  footprint=   253.9 MiB (  +248.2)  AGXResource=9303     (+1741)
+    (allocatedSize sum 233.7 MiB)
+  cycle 2 released       regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    19.3 MiB (   +13.6)  AGXResource=7578     (+16)
+  cycle 3 grown          regions=1925    (  +1907)  ioaccel=   233.2 MiB (  +232.2)  footprint=   254.0 MiB (  +248.4)  AGXResource=9302     (+1740)
+    (allocatedSize sum 233.7 MiB)
+  cycle 3 released       regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    19.5 MiB (   +13.8)  AGXResource=7570     (+8)
+  [sentinels] end                allocators dealloc'd=128/128   cbs dealloc'd=0/384
+
+  Read the SHAPE: 'released' returning to baseline each cycle => release works.
+  'grown' flat across cycles with no return => heaps recycled from a cache, and
+  destroy buys nothing over reset.
+
+################################################################ MODE=big
+== destroy-probe MODE=big CLASS=render allocs=32 passes=3 draws=200
+   (does releasing an MTL4CommandAllocator return its heaps?)
+
+  baseline               regions=4       (     +0)  ioaccel=     0.4 MiB (    +0.0)  footprint=     5.6 MiB (    +0.0)  AGXResource=7562     (+0)
+
+  one allocator grown to 125.1 MiB over 150 passes
+  grown                  regions=1043    (  +1039)  ioaccel=   125.7 MiB (  +125.3)  footprint=   141.1 MiB (  +135.5)  AGXResource=8507     (+945)
+  released t+0           regions=11      (     +7)  ioaccel=     1.0 MiB (    +0.6)  footprint=    14.0 MiB (    +8.4)  AGXResource=7576     (+14)
+  released t+1s          regions=5       (     +1)  ioaccel=     0.7 MiB (    +0.3)  footprint=    14.0 MiB (    +8.4)  AGXResource=7572     (+10)
+  released t+5s          regions=5       (     +1)  ioaccel=     0.7 MiB (    +0.3)  footprint=    14.0 MiB (    +8.4)  AGXResource=7572     (+10)
+  released +roundtrip    regions=19      (    +15)  ioaccel=     1.3 MiB (    +0.9)  footprint=    14.0 MiB (    +8.4)  AGXResource=7572     (+10)
+  [sentinels] after release      allocators dealloc'd=1/1   cbs dealloc'd=0/150
+
+  grew +125.3 MiB, returned 124.4 MiB (99%)
+
+
+################################################################ CORRECTED RERUN (same day)
+# The first run's "committed MTL4CommandBuffers are never deallocated (0/96, 0/384); the queue
+# retains them" was the PROBE'S OWN BUG, not Metal behavior: encode_pass did
+# [[g_dev newCommandBuffer] retain] — `new` already returns +1, so every cb carried a leaked
+# extra reference and could never die. The internal proof was already in the record: the
+# flush_roundtrip cbs go through the probe's full release path and are NOT in the sentinel
+# denominators, so a balanced probe must read dead_cbs >= 2 in EVERY mode — it read 0
+# everywhere, including MODE=c where nothing else was released.
+# Fix: drop the extra retain; add report_sentinels after queue release (the first run inferred
+# "the queue retains them" from a footprint delta alone and never sentinel-tested it).
+# Consequences confirmed by rerun below:
+#   - cbs dealloc PROMPTLY on release: 98/96 at "cbs released" (>96 = the flush cbs). The queue
+#     retains NOTHING. Finding 3 of the first analysis is RETRACTED.
+#   - MODE=a's staged teardown now genuinely stages, and attributes cleanly: releasing all 96
+#     cbs (all dead) moves ioaccel by 0.0 MiB — the ALLOCATORS own every heap region.
+#   - The MODE=d footprint creep was the leaked ObjC objects: now flat at +13.9 MiB after
+#     cycle 1. The ~13 MiB residual is one-time process/driver state, not per-cb cost.
+#   - After queue release: footprint +9.5 MiB, AGXResource +0. Clean.
+# Headline verdicts unchanged: 100% return, MODE=a/b/d all reconfirm.
+
+== rerun MODE=a CLASS=render allocs=32 passes=3 draws=200 (corrected probe)
+  baseline               regions=18      (     +0)  ioaccel=     1.0 MiB (    +0.0)  footprint=     5.8 MiB (    +0.0)  AGXResource=7561     (+0)
+  grown                  regions=1925    (  +1907)  ioaccel=   233.2 MiB (  +232.2)  footprint=   253.5 MiB (  +247.7)  AGXResource=9307     (+1746)
+  cbs released t+0       regions=1925    (  +1907)  ioaccel=   233.2 MiB (  +232.2)  footprint=   251.5 MiB (  +245.7)  AGXResource=9305     (+1744)
+  cbs released +roundtrip regions=1925    (  +1907)  ioaccel=   233.2 MiB (  +232.2)  footprint=   251.6 MiB (  +245.8)  AGXResource=9303     (+1742)
+  [sentinels] cbs only           allocators dealloc'd=0/0   cbs dealloc'd=98/96
+  allocs released t+0    regions=5       (    -13)  ioaccel=     0.7 MiB (    -0.2)  footprint=    19.0 MiB (   +13.2)  AGXResource=7574     (+13)
+  [sentinels] allocs too         allocators dealloc'd=32/32   cbs dealloc'd=99/96
+  queue released         regions=4       (    -14)  ioaccel=     0.4 MiB (    -0.6)  footprint=    15.3 MiB (    +9.5)  AGXResource=7561     (+0)
+  [sentinels] queue too          allocators dealloc'd=32/32   cbs dealloc'd=99/96
+VERDICT: grew +232.2 MiB (+1907 regions); back +232.8 MiB (100%), -1921 regions
+
+== rerun MODE=d CLASS=render (corrected probe)
+  cycle 0 released  regions=5  ioaccel=0.7 MiB  footprint +13.1  AGXResource +5
+  cycle 1 released  regions=5  ioaccel=0.7 MiB  footprint +13.9  AGXResource +7
+  cycle 2 released  regions=5  ioaccel=0.7 MiB  footprint +13.9  AGXResource +4
+  cycle 3 released  regions=5  ioaccel=0.7 MiB  footprint +13.9  AGXResource +7
+  [sentinels] end   allocators dealloc'd=128/128   cbs dealloc'd=389/384

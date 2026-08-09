@@ -601,3 +601,65 @@ The fault was **found** on 2026-08-08; nothing establishes it was **introduced**
 no region/footprint measurements anywhere before that date — the only earlier `vmmap` use
 (`perf/2026-07-27-replay-regression-ab.md:38`) is dylib-identity checking. The ratchet could
 equally date from the July zero-copy scanout work, or from vrend-GL-by-default itself.
+
+## ✅ Releasing an allocator returns 100% of its heaps (2026-08-09, `mtl4-repro/destroy-probe.m`)
+
+The shipped pool **bounds** memory but never **returns** it — nothing is destroyed before
+`vkDestroyDevice`. That gate only exists on one tier:
+
+| tier | who creates the host KK VkDevice | who destroys it |
+|---|---|---|
+| **venus** | vkr, per *guest* `vkCreateDevice` | the guest app's `vkDestroyDevice` → `kk_alloc_pool_finish` (`kk_device.c:576`) |
+| **vrend** | host zink's *screen*, at `virgl_egl_init` | `eglTerminate` (`vrend_winsys_egl.c:457`) ← `virgl_renderer_cleanup` ← rutabaga drop — i.e. **worker process exit** |
+
+`vrend_winsys_destroy_context` only destroys per-context EGL contexts, never the display. So on
+vrend nothing returns the ~1 GiB steady-state pool between workloads. `vkTrimCommandPool` is the
+API-blessed gate and is dead twice over: zink never calls it, *and* it is per-command-pool while
+the allocator pool is device-global.
+
+The proposed fix — destroy a `draining && pending == 0` allocator instead of resetting it — rested
+on one unverified assumption. **It holds:**
+
+| mode | tests | result |
+|---|---|---|
+| `a` staged teardown | cbs → allocators → queue | +232.2 MiB / +1907 regions grown, **100% back** (1925 → 5 regions) |
+| `b` real KK ordering | allocators released, completed cbs still alive | **100% back**, within 1 s |
+| `c` **control** | `reset()` only | **0% back** — regions stay at 1925 |
+| `d` 4 regrow cycles | cache masquerade | returns to baseline *every* cycle, regrows the same |
+| `big` | one 125 MiB allocator | **99% back** |
+
+The control is what makes the rest readable: same instrument, same workload, 0% vs 100%.
+
+**Load-bearing result — mode `b`.** The allocator returns everything *while its completed command
+buffers are still alive*. Command-buffer lifetime is irrelevant, so the destroy point needs no
+hook in `kk_cmd_release_resources`. Releasing all 96 cbs moves `ioaccel` by **0.0 MiB**: the
+allocators own every heap region, the cbs own none.
+
+### ⚠ RETRACTED: "committed command buffers are never deallocated"
+
+The first run read 0/96 and 0/384 sentinel deallocs and concluded the queue retains committed cbs
+for its lifetime (~5 KiB each). **That was the probe's own reference leak**: `encode_pass` did
+`[[g_dev newCommandBuffer] retain]`, and `new` already returns +1. The cbs could not die. Fixed,
+they dealloc promptly (98/96 — the extras are `flush_roundtrip`'s). The queue retains nothing;
+after queue release AGXResource returns to +0.
+
+The disproof was **already in the record, unused**: `flush_roundtrip` cbs go through the full
+release path and are excluded from the sentinel denominators, so a balanced probe must read
+`dead_cbs >= 2` in *every* mode. It read 0 everywhere — including MODE=c, where nothing else was
+ever released. A denominator that is impossible on its face is a bug in the instrument, not a
+finding about the system.
+
+Two lessons worth carrying: the sentinels earned their place by catching this at all (a memory
+number alone would have been read as Metal behaviour), and the first analysis attributed "the
+queue holds them" from a **footprint delta alone**, never sentinel-testing it — the corrected
+probe now reports sentinels after queue release too.
+
+### What this does NOT model
+
+- Release while the queue is actively executing *other* allocators' work (the probe drains first;
+  KK will destroy mid-frame). Correctness should hold by refcounting; promptness of the kernel
+  unmap under load is unverified.
+- Multithreaded encode/submit concurrent with the release.
+
+Neither changes the verdict. Thresholds (`>=80%` build / `<=20%` dead) were fixed in the probe
+source **before** the first run.
