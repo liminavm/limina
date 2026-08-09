@@ -1,0 +1,47 @@
+# Allocator-pool DESTROY policy: A/B on the vrend tier (2026-08-09)
+# Acceptance test named by the review: worker-process IOAccelerator (graphics) across an
+# app launch/exit cycle. Same enhanced.raw clone, same sequence, same host session.
+# Workload: Firefox --kiosk aquarium numFish=20000 (GL -> vrend -> host zink -> KK), 75s.
+# Reclaim is acquire-driven, so "after-reclaim" drives the compositor for ~50s post-exit.
+
+                       CONTROL (LIMINA_KK_ALLOC_DESTROY=0)   DESTROY ON
+  baseline             1774 regions /  620.1M                1775 regions /  624.1M
+  at-peak              8148 regions /    1.5G                 2294 regions /  815.6M
+  just-closed          8127 regions /    1.5G                 2224 regions /  806.6M
+  after-reclaim       10047 regions /    1.2G                 3046 regions /  604.0M
+  retirements          render=0 compute=0                     render=508 compute=74
+
+# Peak IOAccelerator -46% (regions -72%); post-exit -50%.
+# The dominant effect is DURING the run: the policy stops the pool accumulating, it does not
+# merely reclaim afterwards.
+#
+# NOTE on the region counts at "after-reclaim": they RISE in both arms (2224->3046, 8127->10047)
+# because the activity used to drive reclaim -- toggling the GNOME overview -- itself allocates
+# GPU resources. Bytes are the clean metric here; the region count is contaminated by the
+# instrument's own stimulus. Both arms are contaminated identically, so the comparison holds.
+
+# ── The bug this test caught, which no unit test would have ───────────────────────────────────
+# First implementation gated the destroy scan on "pass 1 found a ready allocator". Because
+# allocatedSize never shrinks, a render allocator is permanently over budget once it crosses the
+# budget once -- so in steady state EVERY render allocator is draining, pass 1 never succeeds,
+# and destroy fired 66 times for compute and ZERO times for render: the one class that holds the
+# memory. Worker regions moved 16014 -> 15955 and the policy looked nearly useless.
+# The real requirement is only "never destroy in a call that then has to mint", which is
+# satisfied by testing `found != NULL` AFTER both passes. Retirements went 0 -> 508 for render.
+
+# ── UAF fix: fault-injection results (2026-08-09, LIMINA_KK_FAIL_DISCHARGE_ALLOC) ─────────────
+# The discharge-payload allocation is ~40 bytes and never fails in practice, which is exactly why
+# its recovery path carried a use-after-free unnoticed. The knob makes it reachable.
+#
+#   500 injections requested, heavy GL workload (aquarium 20k), aggressive decay (200ms, floor 2):
+#     injections actually fired ...... 1
+#     worker processes still alive ... 2  (supervisor + worker)
+#     host abort/SIGSEGV/panic ....... 0
+#     guest gnome-shell .............. alive, no device-lost in the user journal
+#
+# ONLY ONE CAN EVER FIRE, and that is the correct behaviour rather than a broken knob: the Vulkan
+# runtime calls vk_queue_set_lost on any driver_submit error (vk_queue.c:709), so the
+# vk_queue_is_lost() check at the top of kk_queue_submit short-circuits every later submit on that
+# queue. The fix therefore trades a use-after-free for a device loss on a path that essentially
+# never fires -- the standard Mesa contract for submit-path OOM, and the right trade: a device
+# loss is defined and recoverable by restart, memory corruption is neither.

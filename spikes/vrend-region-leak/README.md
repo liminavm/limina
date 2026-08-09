@@ -663,3 +663,111 @@ probe now reports sentinels after queue release too.
 
 Neither changes the verdict. Thresholds (`>=80%` build / `<=20%` dead) were fixed in the probe
 source **before** the first run.
+
+## ✅ SHIPPED: the pool now RETIRES surplus allocators (2026-08-09, kk `f2216e9dc29`)
+
+`kk_alloc_pool_acquire` destroys a drained allocator that has been idle past a decay window
+instead of resetting it, above a floor. Data: `data/pool-destroy-ab.txt`.
+
+| vrend tier, aquarium 20k fish | control (`LIMINA_KK_ALLOC_DESTROY=0`) | destroy on | |
+|---|---|---|---|
+| baseline | 1774 regions / 620.1M | 1775 / 624.1M | — |
+| **at peak** | 8148 regions / **1.5G** | 2294 / **815.6M** | **−46%**, regions −72% |
+| after app exit + compositing | 10047 regions / **1.2G** | 3046 / **604.0M** | **−50%** |
+| retirements | render 0, compute 0 | **render 508**, compute 74 | |
+
+**The dominant effect is during the run, not after it** — the pool stops accumulating rather than
+merely being reclaimed at the end. That was not the predicted shape: the policy was designed to
+claw memory back after a heavy app exits, and it turns out to matter more while the app is still
+running.
+
+Knobs: `LIMINA_KK_ALLOC_DESTROY=0` (kill switch), `LIMINA_KK_ALLOC_DECAY_MS` (2000),
+`LIMINA_KK_ALLOC_FLOOR` (8), `LIMINA_KK_ALLOC_POOL_LOG`.
+
+### The design rules that are load-bearing
+
+- **At most one retirement per acquire, and only once the call is already served from the pool** —
+  so a destroy is never followed by a mint in the same call, which is the thrash the pool exists
+  to avoid and would bite hardest at the concurrency edge (peak 184 command buffers in flight).
+- **`mtl_release` outside the mutex.** It unmaps heaps in the kernel; every encoder thread
+  contends on that lock from `cs_start_render`.
+- **The floor is a small constant, NOT `peak_live`.** `peak_live` only ever grows, so a floor
+  there would pin the pool at its all-time high-water and reclaim nothing after a heavy app exits
+  — the entire point. The decay clock does the real work; the floor only protects steady-state
+  concurrency.
+
+### ⚠ The bug the acceptance test caught, that no unit test would have
+
+The first implementation gated the retirement scan on "pass 1 found a ready allocator". Since
+`allocatedSize` never shrinks, a render allocator is permanently over budget once it crosses the
+budget **once** — so in steady state *every* render allocator is draining, pass 1 never succeeds,
+and retirement fired 66 times for compute and **zero** times for render, the one class that holds
+the memory. Worker regions moved 16014 → 15955 and the policy looked nearly useless.
+
+It would have passed any "does destroy work" test. What exposed it was measuring the **real
+acceptance criterion** — worker IOAccelerator across an app launch/exit on the vrend tier — and
+then asking why a mechanism that demonstrably fired had not moved the number. The per-class
+retirement counters are what turned "barely moved" into "zero for render" in one grep; a single
+aggregate counter would have hidden it.
+
+The real requirement is only *never destroy in a call that then has to mint*, satisfied by testing
+`found != NULL` after **both** passes. Render retirements went 0 → 508.
+
+### Two ledger holes closed first
+
+Both would have turned from recoverable into a use-after-free under a destroy policy:
+
+- `kk_encoder_begin` took the charge **before** recording the pointer used to discharge it, so a
+  failed dynarray grow lost the charge forever and wedged the allocator in draining. Grow first,
+  charge on success.
+- When the submit's discharge payload cannot be allocated, charges are discharged at
+  command-buffer reset instead of at GPU completion — and `rerecord_cmd_buffer` reaches that path
+  with the first submission still executing, **with no app-side spec violation**, so a guest could
+  drive it. Those allocators are now pinned out of the destroy policy. The underlying early
+  discharge is still open and fixed separately.
+
+## ✅ CLOSED: the discharge-at-reset use-after-free (2026-08-09, kk `38b801cbdd6`)
+
+The charge for a command buffer must be released when the **GPU** finishes with it. The submit
+path allocated the completion payload *after* committing, and on allocation failure left the
+charges in `charged_allocs` to be discharged by `kk_cmd_release_resources` at Vulkan
+command-buffer reset instead — which `rerecord_cmd_buffer` reaches on a `SIMULTANEOUS_USE`
+resubmit **while the first submission is still executing**.
+
+No app-side spec violation is required to get there, so on both tiers a guest could drive
+`pending` to 0 with the GPU still reading the heaps. Harmless while the pool only ever *reset* a
+drained allocator; a use-after-free once it may *destroy* one.
+
+**Fix: allocate the payload before anything is committed or cleared.** On failure, return
+`VK_ERROR_OUT_OF_HOST_MEMORY` without committing — the GPU never receives the work, so discharging
+later at reset is then exactly right. Nothing between the dynarray clear and the commit can fail,
+so a charge can never be dropped either. The window is removed, not narrowed.
+
+This retired the `no_destroy` pin that shipped with the destroy policy as an interim guard. With
+the window gone it was dead code, and a stale defence carrying an obsolete rationale is worse than
+none.
+
+### The error path is now reachable — `LIMINA_KK_FAIL_DISCHARGE_ALLOC=<n>`
+
+The allocation is ~40 bytes and never fails in practice, which is precisely why the bug survived.
+An untestable error path is an unreviewed one, so the knob fails the first `n` payload allocations
+on demand.
+
+**Its result is a finding, not a flaky knob.** With 500 requested under a heavy GL workload,
+exactly **one** fires:
+
+| | |
+|---|---|
+| injections fired | **1** (of 500 requested) |
+| worker processes alive | 2 (supervisor + worker) |
+| host abort / SIGSEGV / panic | **0** |
+| guest session | gnome-shell alive, no device-lost in the user journal |
+
+One is correct: the Vulkan runtime calls `vk_queue_set_lost` on any `driver_submit` error
+(`vk_queue.c:709`), so the `vk_queue_is_lost()` check at the top of `kk_queue_submit`
+short-circuits every later submit on that queue.
+
+So the fix trades a use-after-free for a **device loss** on a path that essentially never fires.
+That is the standard Mesa contract for submit-path OOM and the right trade — a device loss is
+defined and recoverable by restart; memory corruption is neither. Worth stating explicitly rather
+than leaving implied, because it *is* a behaviour change on that path.
