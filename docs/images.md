@@ -373,6 +373,32 @@ Mirrors the F43 five-role layout (see the release selector in Conventions); sele
 `LIMINA_FEDORA_REL=44`. Built natively in-guest from Fedora's own F44 SRPMs + a minimal limina
 delta (`scripts/provision/f44/`, `scripts/provision/make-accessible.sh`).
 
+#### Baked-in perf tooling (added 2026-08-08)
+
+`Fedora-Workstation-44.enhanced.raw` now carries the whole measurement battery, so a perf pass
+needs no ad-hoc installs (which perturb the very thing being measured, and on 2026-08-08 caused a
+`GUARD_FAIL` that read as a driver fault when it was only a missing binary):
+
+| tool | provenance | used by |
+|---|---|---|
+| `glmark2` | Fedora `glmark2-2023.01^20250221gitcebbb63-3.fc44` | `glmark2-wayland-venus`, `glmark2-display-*`, the ledger backend guard |
+| `apitrace` (`eglretrace`) | Fedora `apitrace-13.0-6.fc44` | `gl-replay-venus`, `gl-replay-llvmpipe` |
+| `vkmark` | Fedora `vkmark-2025.01-3.20250123git2bf2ca7.fc44` | `vkmark-default-venus` — note this is the **distro** binary, so compare only against `vkmark-default-venus` rows, never the `vkmark-3scene-venus` ones |
+| `fio` | Fedora | virtio-blk path numbers |
+| `gfxrecon-replay` | **built in-guest** at `~claude/gfxreconstruct/build/tools/replay/`, upstream `765c3d6` | `vk-replay-venus-headless` |
+
+`gfxrecon-replay` is not packaged for Fedora; the build recipe (and its F44-specific dependency
+set, without which OpenXR aborts cmake) lives in the header of `scripts/perf-ledger.sh`. Build
+with **`-j2`** — `-j4` OOMs a 4 GiB guest. Since 2026-08-08 `perf-ledger.sh` **aborts** rather
+than silently dropping the `vk-replay` row if this binary is missing, so if that fires, the guest
+has drifted from this baseline (`LIMINA_PERF_SKIP_VK=1` overrides deliberately).
+
+The toolchain install pulled a routine `glibc`/`libgcc` dependency upgrade into the base; the
+versionlocked components are unaffected (mesa `26.1.5-7.limina.fc44`, kernel `7.1.6-limina16k`
+both verified after the fact). A CoW safety copy was taken first as
+`Fedora-Workstation-44.enhanced.raw.pre-perftools.bak`. **`enhanced.test.raw` was NOT recloned** —
+the frozen L2 snapshot does not need perf tooling, and recloning it would churn the test baseline.
+
 #### Rebuilding `enhanced.raw` from the accessible base (validated 2026-07-05)
 
 `install-enhanced.sh` delivers RPMs but deliberately does **NOT** resize the disk (it must also

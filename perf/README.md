@@ -27,9 +27,18 @@ Workloads (see `scripts/perf-ledger.sh` for the exact invocations):
   `-b build -b shading -b texture` at 800x600 through the full compositor. **The `virgl` row is
   vsync-limited, not throughput-limited** (a 64x64 scene scores the same) — do not rank tiers with
   it; use `aquarium-*`. See `docs/tiers.md` §Performance.
-- `aquarium-*` — WebGL aquarium fps at 5k/10k/15k fish, on-display. This is the workload that
-  actually measures throughput on all three tiers. Fully automated by `scripts/perf/aquarium-run.sh`
-  (drives Firefox, harvests the supervisor frame dump, crops the counter) — no human needed.
+- `aquarium-*` — WebGL aquarium fps, on-display, the workload that actually measures throughput
+  on all three tiers. Fully automated by `scripts/perf/aquarium-run.sh` (drives Firefox, harvests
+  the supervisor frame dump, crops the counter) — no human needed.
+  **The default sweep is 5k/10k/15k/20k/25k/30k fish since 2026-08-08.** The old 5k/10k/15k set
+  stopped discriminating on the GPU tiers: both GL paths now return a flat 60 across all three,
+  which is the **vsync ceiling, not throughput** — a 60 hides arbitrary headroom exactly the way
+  the `glmark2-display-virgl` row does. Separation appears at **20 000 fish** (vrend 60 vs
+  zink-on-venus 48); at 25k/30k both are GPU-bound and converge (42/42, 39/38). Read any cell
+  reading 60 as "≥60, capped", and never rank tiers on one. The low counts stay in the sweep for
+  the software-2D tier and for continuity with the historical rows.
+  ⚠ Numbers from the **unpaced-present era** (through 2026-07-26, e.g. venus 71 @5k) are not
+  commensurable with post-fence-accurate-present rows — a counter above the mode is the tell.
 
 ## Before you measure ANYTHING: pin the display
 

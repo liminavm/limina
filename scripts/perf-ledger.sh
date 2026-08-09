@@ -63,7 +63,9 @@ PERF_SCALE="${LIMINA_PERF_SCALE:-1.0}"
   exit 1
 }
 
-OUT=$("${SSH[@]}" '
+# The guest script below is single-quoted, so host env does NOT reach it — anything the guest
+# needs must be exported here, as a separate argv word ssh joins with a space.
+OUT=$("${SSH[@]}" "export LIMINA_PERF_SKIP_VK=${LIMINA_PERF_SKIP_VK:-0};" '
 set -e
 XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* | head -1)
 BASE="XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 XAUTHORITY=$XAUTH VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1"
@@ -87,6 +89,25 @@ fi
 # is not packaged — use a local build (~/gfxreconstruct) or the dev-enh /opt; skip vk-replay if absent.
 command -v eglretrace >/dev/null || sudo dnf install -y -q apitrace >/dev/null 2>&1 || true
 GFXR=$(command -v gfxrecon-replay 2>/dev/null || ls /opt/gfxreconstruct/bin/gfxrecon-replay ~/gfxreconstruct/build/tools/replay/gfxrecon-replay 2>/dev/null | head -1)
+
+# FAIL LOUDLY on a missing vk-replay (2026-08-08). This row used to be skipped in SILENCE when
+# gfxrecon-replay was absent, and on 2026-08-08 it duly vanished from a full pass without anyone
+# noticing until the write-up — a missing row reads as "not measured" only if you happen to look.
+# It is the purest venus-pipeline number of the set, and the Vulkan side is now the whole claim
+# of venus on the enhanced tier (GL ships on vrend), so losing it quietly guts the pass.
+# gfxrecon-replay is baked into the enhanced base image; if it is gone, something is wrong with
+# the guest, not with the measurement. Set LIMINA_PERF_SKIP_VK=1 to proceed deliberately.
+# NOTE: no apostrophes anywhere in this guest-side block — it lives inside a single-quoted string.
+if [ -z "$GFXR" ]; then
+  if [ "$LIMINA_PERF_SKIP_VK" != "1" ]; then
+    echo "ABORT: gfxrecon-replay not found in the guest — the vk-replay-venus-headless row would" >&2
+    echo "       be skipped silently. It is baked into the enhanced base; rebuild it there (recipe" >&2
+    echo "       in the header of scripts/perf-ledger.sh), or re-run with LIMINA_PERF_SKIP_VK=1 to" >&2
+    echo "       record the other rows deliberately without it." >&2
+    exit 1
+  fi
+  echo "WARNING: recording WITHOUT vk-replay-venus-headless (LIMINA_PERF_SKIP_VK=1)" >&2
+fi
 
 # Backend guard: refuse to record numbers from a silent llvmpipe fallback (the env trap).
 env $BASE $ZINK glmark2-es2 -b build:duration=0.5 --size 128x128 2>&1 | grep -q "Virtio-GPU Venus" \

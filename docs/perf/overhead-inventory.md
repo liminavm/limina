@@ -1,5 +1,15 @@
 # Runtime overhead inventory — wakeups, exits, and CPU tax under load
 
+> **RE-MEASURED 2026-08-08** (`perf/2026-08-08-remeasure.md`): clean-fullscreen blobs, verified
+> 60 fps, 4 vCPU — **~1 850 wakeups/s on the shipped path** (GL now runs on vrend) and
+> **~3 400/s** with GL forced back onto zink-on-venus, against the ~8 100/s baseline below;
+> idle ~101/s (was ~130). Guest side: `arch_timer` 2 483/s, `IPI1` 3 859/s, virtio_gpu 259/s.
+>
+> **This changes lever 4 / the M13 plateau knob.** Its target — the ~5.9k/s `vkr_ring`
+> poll-sleep budget — is *absent from the shipped GL path*, because vrend does not use the venus
+> ring. The lever is now worth only what Vulkan clients cost, not what the desktop costs.
+> Re-gate before building it.
+
 **Date:** 2026-07-21. **Status: measured + decomposed (read-only pass); trimming is future
 milestone work.** Goal per the user: *figure out exactly what the sources of overhead are and
 plan to trim them down to the absolute minimum.*

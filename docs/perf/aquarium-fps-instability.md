@@ -1,5 +1,17 @@
 # OPEN: WebGL aquarium FPS instability (host-dependent severity)
 
+> **DID NOT REPRODUCE 2026-08-08** (`perf/2026-08-08-remeasure.md`). On the dev Mac — the host
+> that reported the symptom — the aquarium held a rock-steady **60 fps up to 20 000 fish** on the
+> shipped vrend path, and 60 through 15 000 on zink-on-venus. The reported symptom was
+> ping-ponging 40–60 fps at **500** fish on this same machine. No dips were seen at any point of
+> the sweep.
+>
+> This is *not* a root-cause: nothing here explains what the 07-27 runs were seeing, and the
+> stack changed substantially in between (fence-accurate present, the KK MTL4 rebase, the GL
+> default flip to vrend, the EGLImage vrend scanout). Treat the issue as **stale rather than
+> solved** — if it never recurs, retire it; if it does, the leads below are still the right
+> order, starting with the display-pinning trap.
+
 Status: **open, not scheduled** — parked here for the eventual investigation, with the
 exoneration work already done so it doesn't get redone. Found 2026-07-27 during
 fence-present validation (`spikes/present-miss/`), but **not caused by anything from that

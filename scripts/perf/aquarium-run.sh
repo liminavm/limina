@@ -36,7 +36,14 @@
 set -euo pipefail
 
 TIER="${1:?usage: aquarium-run.sh <tier-label> [fish...]}"; shift
-FISH=("$@"); [ ${#FISH[@]} -gt 0 ] || FISH=(5000 10000 15000)
+# DEFAULT SWEEP EXTENDED 2026-08-08 to 20k/25k/30k. The old 5k/10k/15k set no longer measures
+# anything on the GPU tiers: as of this stack BOTH GL paths (shipped vrend and zink-on-venus) sit
+# at a flat 60 fps across all three — that is the vsync CEILING, not throughput, and a ceiling
+# reading hides arbitrary headroom. Separation only appears at 20 000 fish (vrend 60 vs
+# zink-on-venus 48); by 25k/30k both are GPU-bound and converge again (42/42, 39/38).
+# Keep the low counts in the sweep anyway — they stay meaningful for the software-2D tier and are
+# the continuity link to every historical row. See perf/2026-08-08-remeasure.md.
+FISH=("$@"); [ ${#FISH[@]} -gt 0 ] || FISH=(5000 10000 15000 20000 25000 30000)
 
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel); cd "$ROOT"
 PORT="${LIMINA_SSH_PORT:-2222}"
