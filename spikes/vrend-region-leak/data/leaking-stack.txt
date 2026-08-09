@@ -1,0 +1,53 @@
+# The leaking allocation stack — IOTRACE, worker pid 93856, 2026-08-09
+# AGXResource 7537 -> 33280 (+25,743) over ~100s of 5000-fish aquarium.
+# Selector 9 = IOGPUResourceCreate. Selector 29 = IOGPUCommandQueueSubmitCommandBuffers (submission, not the leak).
+
+[IOTRACE 93856] bucket table (count selector):
+[IOTRACE 93856]      15856  sel=29      top=0x1ae1fc1a0
+[IOTRACE 93856]      12048  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]       2181  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]       1128  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]       1000  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]        819  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]        816  sel=14      top=0x1ae1fae78
+[IOTRACE 93856]        816  sel=14      top=0x1ae1fae78
+[IOTRACE 93856]        753  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]        753  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]        704  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]        624  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]        520  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]        466  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]        384  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]        379  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]        288  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]        286  sel=9       top=0x1ae1fc878
+[IOTRACE 93856]        286  sel=9       top=0x1ae1fc878
+
+[IOTRACE 93856]     20  libgallium-26.3.0-devel.dylib       0x0000000109dccb50 impl_thrd_routine + 28
+[IOTRACE 93856] --- #2: 12048 calls, 0.0 MiB, selector 9 ---
+[IOTRACE 93856]     0   IOGPU                               0x00000001ae1fc878 IOGPUResourceCreate + 248
+[IOTRACE 93856]     1   IOGPU                               0x00000001ae1f590c -[IOGPUMetalResource initWithDevice:remoteStorageResource:options:args:argsSize:] + 484
+[IOTRACE 93856]     2   IOGPU                               0x00000001ae1f6cf0 IOGPUMetalResourcePoolCreatePooledResource + 196
+[IOTRACE 93856]     3   IOGPU                               0x00000001ae1f0a3c IOGPUMetalCommandBufferStorageAllocResourceAtIndex + 200
+[IOTRACE 93856]     4   AGXMetalG13X                        0x000000010d1dcef4 _ZN3AGX13ContextCommonINS_3G138EncodersENS1_7ClassesENS1_10ObjClassesENS1_19DataBufferAllocatorEE10newCommandEmb + 256
+[IOTRACE 93856]     5   AGXMetalG13X                        0x000000010d318a74 _ZN3AGX13RenderContextINS_3G138EncodersENS1_7ClassesENS1_10ObjClassesENS1_19CommandEncodingNextEE15beginRenderPassEv + 172
+[IOTRACE 93856]     6   AGXMetalG13X                        0x000000010d329f30 -[AGXG13XFamilyRenderContext_mtlnext initWithCommandBuffer:allocator:descriptor:options:captureProgramAddressTable:] + 6716
+[IOTRACE 93856]     7   AGXMetalG13X                        0x000000010d1b60b0 -[AGXG13XFamilyCommandBuffer_mtlnext renderCommandEncoderWithDescriptor:options:] + 88
+[IOTRACE 93856]     8   libvulkan_kosmickrisp.dylib         0x000000010c3d6aec mtl_new_render_command_encoder_with_descriptor + 52
+[IOTRACE 93856]     9   libvulkan_kosmickrisp.dylib         0x000000010c205d90 cs_start_render + 92
+[IOTRACE 93856]     10  libvulkan_kosmickrisp.dylib         0x000000010c208638 kk_CmdBeginRendering + 1404
+[IOTRACE 93856]     11  libvulkan_kosmickrisp.dylib         0x000000010c1cfd2c do_blit + 1388
+[IOTRACE 93856]     12  libvulkan_kosmickrisp.dylib         0x000000010c1cf654 vk_meta_blit_image + 488
+[IOTRACE 93856]     13  libvulkan_kosmickrisp.dylib         0x000000010c1d0c4c vk_meta_blit_image2 + 60
+[IOTRACE 93856]     14  libvulkan_kosmickrisp.dylib         0x000000010c20d480 kk_CmdBlitImage2 + 384
+[IOTRACE 93856]     15  libvulkan_kosmickrisp.dylib         0x000000010c14986c vk_common_CmdBlitImage + 300
+[IOTRACE 93856]     16  libvulkan_kosmickrisp.dylib         0x000000010c1fc8c8 kk_cmd_tramp_CmdBlitImage + 92
+[IOTRACE 93856]     17  libgallium-26.3.0-devel.dylib       0x000000010a0bfc68 zink_blit + 5940
+[IOTRACE 93856]     18  libgallium-26.3.0-devel.dylib       0x0000000109f9cdc4 tc_batch_execute + 5564
+[IOTRACE 93856]     19  libgallium-26.3.0-devel.dylib       0x0000000109d9f1f8 util_queue_thread_func + 364
+[IOTRACE 93856]     20  libgallium-26.3.0-devel.dylib       0x0000000109dccb50 impl_thrd_routine + 28
+
+## Causation, measured 2026-08-09 (fresh boot, ~110s aquarium)
+AGXResource 7541 -> 35070 = +27,529
+[IOTRACE 95540] PER-SELECTOR TOTALS: sel9=27551 sel29=15666 sel14=3102 sel0=29 sel35=24 sel38=16 sel36=16 sel10=14
+sel9 = IOGPUResourceCreate = 27,499. Difference 30, i.e. 99.9% — 1:1.

@@ -1,0 +1,40 @@
+# vmmap -v IOAccelerator (graphics) size histogram, c2-closed (59,196 regions, 6.9 G)
+# count  size
+41189 32K
+6042 16K
+3049 48K
+2999 160K
+2394 1024K
+2393 768K
+ 757 128K
+  76 2048K
+  75 80K
+  70 144K
+  31 272K
+  31 208K
+  22 1376K
+  20 5472K
+  15 112K
+   9 4096K
+   2 64K
+   2 5120K
+   2 256K
+   1 IOAccelerator (graphics)    5b2b50000-5b3b50000    [ 16.0M  16.0M  16.0M     0K] rw-/rw- SM=SHM PURGE=N  
+   1 IOAccelerator (graphics)    1718e4000-1728e4000    [ 16.0M  16.0M  16.0M     0K] rw-/rw- SM=SHM PURGE=N  
+   1 IOAccelerator (graphics)    164a3c000-165678000    [ 12.2M  12.2M  12.2M     0K] rw-/rw- SM=SHM PURGE=N  
+   1 IOAccelerator (graphics)    1592bc000-159dfc000    [ 11.2M  11.2M  11.2M     0K] rw-/rw- SM=SHM PURGE=N  
+   1 IOAccelerator (graphics)    140ad4000-141e9c000    [ 19.8M  19.8M  19.8M     0K] rw-/rw- SM=SHM PURGE=N  
+   1 IOAccelerator (graphics)    13f8b4000-140ad4000    [ 18.1M  18.1M  18.1M     0K] rw-/rw- SM=SHM PURGE=N  
+   1 IOAccelerator (graphics)    13ea54000-13f8b4000    [ 14.4M  14.4M  14.4M     0K] rw-/rw- SM=SHM PURGE=N  
+   1 IOAccelerator (graphics)    132e04000-13ae04000    [128.0M 128.0M 128.0M     0K] rw-/rw- SM=SHM PURGE=N  
+   1 IOAccelerator (graphics)    12f678000-131a78000    [ 36.0M  36.0M  36.0M     0K] rw-/rw- SM=SHM PURGE=N  
+   1 IOAccelerator (graphics)    126e04000-12ae04000    [ 64.0M  64.0M  64.0M     0K] rw-/rw- SM=SHM PURGE=N  
+   1 IOAccelerator (graphics)    1216e4000-122904000    [ 18.1M  18.1M  18.1M     0K] rw-/rw- SM=SHM PURGE=N  
+   1 IOAccelerator (graphics)           6.9G     6.9G     6.9G       0K       0K     6.9G       0K    59196 
+   1 9216K
+   1 8256K
+   1 5216K
+   1 4160K
+   1 336K
+   1 3104K
+   1 2080K

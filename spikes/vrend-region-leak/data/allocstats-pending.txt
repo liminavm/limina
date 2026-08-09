@@ -1,0 +1,28 @@
+# LIMINA_KK_ALLOC_STATS=2000 with pending-at-reset tracking. vrend arm, aquarium 5000 fish.
+# Run A (population already saturated from a long prelude):
+[c1 closed] regions=4078   ...
+[c1 open]   regions=31410  distinct=450 sum=3020.8MiB VIOLATIONS=697  commits=29565 | hist<1M=296 1-8M=97  8-32M=45 32-128M=9  >=128M=3
+[c2 open]   regions=58279  distinct=450 sum=6064.5MiB VIOLATIONS=1436 commits=62174 | hist<1M=251 1-8M=117 8-32M=49 32-128M=22 >=128M=11
+[c3 open]   regions=72076  distinct=450 sum=7621.5MiB VIOLATIONS=2243 commits=94427 | hist<1M=244 1-8M=121 8-32M=44 32-128M=28 >=128M=13
+
+# Run B, cold boot, WITH the charged/missed self-test:
+[c1 closed] regions=4081
+[c1 open]   regions=26491 distinct=261 sum=2683.9MiB VIOLATIONS=583  commits=30930 charged=49424  missed=0 | hist<1M=177 1-8M=51  8-32M=22 32-128M=6  >=128M=5
+[c2 closed] regions=26475 distinct=261 sum=2683.9MiB VIOLATIONS=584  commits=31052 charged=49612  missed=0
+[c2 open]   regions=53467 distinct=279 sum=5728.7MiB VIOLATIONS=1258 commits=62511 charged=102642 missed=0 | hist<1M=153 1-8M=71  8-32M=27 32-128M=16 >=128M=12
+[c3 closed] regions=53446 distinct=279 sum=5731.1MiB VIOLATIONS=1265 commits=62636 charged=102847 missed=0
+[c3 open]   regions=67760 distinct=405 sum=7180.5MiB VIOLATIONS=2007 commits=93943 charged=154135 missed=0 | hist<1M=229 1-8M=103 8-32M=39 32-128M=20 >=128M=14
+
+# Run B per cycle:  regions +22410 / +26992 / +14314
+#                   violations  583 /   +674 /   +742
+# Region growth varies ~2x while violations barely move, and cycle 3 has the MOST
+# violations with the LEAST growth. Anti-correlated.
+# Violations = 2007 / 1,478,000 resets = 0.14%. missed=0 => the tracker saw every commit.
+
+# --- LIMINA_KK_ALLOC_MAX_MIB=32 (threshold recycle), cold boot, same workload ---
+[c1 closed] regions=3122  footprint=4.7G
+[c1 open]   regions=11796 footprint=10.2G distinct=374 sum=815.5MiB  max=26.677MiB VIOLATIONS=568  charged=49845  missed=0 | hist<1M=255 1-8M=77  8-32M=42 32-128M=0 >=128M=0
+[c2 open]   regions=16131 footprint=10.9G distinct=397 sum=1267.0MiB max=26.677MiB VIOLATIONS=1266 charged=101166 missed=0 | hist<1M=237 1-8M=97  8-32M=63 32-128M=0 >=128M=0
+[c3 open]   regions=17642 footprint=10.9G distinct=409 sum=1422.1MiB max=26.677MiB VIOLATIONS=1850 charged=154510 missed=0 | hist<1M=231 1-8M=108 8-32M=70 32-128M=0 >=128M=0
+# final vmmap: IOAccelerator (graphics) 1.8G / 17634 regions; IOSurface 150.6M / 20
+# per-cycle growth +8674 / +4346 / +1554 -- decelerating, unlike the unfixed arm.

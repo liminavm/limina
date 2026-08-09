@@ -59,10 +59,27 @@ done
 # worker so the KK dylib + scanout publisher see them. LIMINA_KK_STATS=1 → once/sec [LIMINA-KK-STATS]
 # draws line in the worker log; LIMINA_GLOBAL_SCANOUT=1 → iosdump can read the scanout; MESA_KK_DEBUG,
 # the LIMINA_KK_* knobs, and Metal-capture toggles pass through when set.
+# LIMINA_GPU_MEM_BUDGET_CENSUS=<secs> is the host half of a leak hunt: it makes the GPU-memory
+# ledger log a per-context breakdown plus the Metal refcount census (IOSurface/texture/registry
+# alloc-vs-free deltas) on a timer. Pair it with a host footprint sample — a ledger that stays
+# FLAT while the process grows means the leak is NOT in a charged allocator, which is itself the
+# answer to where to look next. _MIB caps, _SOFT changes what a refusal does (see vkr_budget.h).
 for v in LIMINA_KK_STATS LIMINA_KK_RTLOG LIMINA_GLOBAL_SCANOUT MESA_KK_DEBUG MESA_KK_GPU_CAPTURE LIMINA_KK_CAPTURE \
-         LIMINA_KK_NOLISTRESTART LIMINA_KK_BOCACHE LIMINA_KK_SLIMPUSH LIMINA_KK_EARLYZ LIMINA_KK_SLIMROOT LIMINA_KK_FASTBIND; do
+         LIMINA_KK_NOLISTRESTART LIMINA_KK_BOCACHE LIMINA_KK_SLIMPUSH LIMINA_KK_EARLYZ LIMINA_KK_SLIMROOT LIMINA_KK_FASTBIND \
+         LIMINA_GPU_MEM_BUDGET_MIB LIMINA_GPU_MEM_BUDGET_CENSUS LIMINA_GPU_MEM_BUDGET_SOFT; do
   [ -n "$(eval echo "\${$v:-}")" ] && export "$v"
 done
+# Leak-hunt interposer (spikes/vrend-region-leak/iokit-trace). It has to be handed in under a
+# NON-DYLD name and renamed here: /bin/bash is SIP-protected, so dyld strips DYLD_* from the
+# environment every time a bash script STARTS. A caller that exports DYLD_INSERT_LIBRARIES and
+# then execs this script loses it silently — the dylib simply never loads and the trace is empty,
+# which reads exactly like "no allocations happened". Setting it here, in the process that execs
+# the worker, is the same trick DYLD_FALLBACK_LIBRARY_PATH above relies on.
+[ -n "${LIMINA_IOTRACE_DYLIB:-}" ] && export DYLD_INSERT_LIBRARIES="$LIMINA_IOTRACE_DYLIB"
+for v in LIMINA_IOTRACE_DUMP LIMINA_IOTRACE_DEPTH LIMINA_IOTRACE_ALL; do
+  [ -n "$(eval echo "\${$v:-}")" ] && export "$v"
+done
+
 NET_FLAG=--net
 [ "${LIMINA_NET:-1}" = "0" ] && NET_FLAG=
 EXTRA_ARGS=()

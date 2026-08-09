@@ -32,12 +32,14 @@ Raw rows in `perf/ledger.csv`; aquarium frames in `perf/evidence/aquarium-2026-0
   against 2140 for the same distro-packaged binary on 2026-07-28 (**+47%**), and
   **`vk-replay-venus-headless` 1974.7** against 1399 on 2026-07-26 (**+41%**). The latter row had
   gone missing and was recovered by baking `gfxrecon-replay` into the enhanced base.
-- **One real regression found, and it is a memory leak, not a speed one.** The worker's
-  `IOAccelerator (graphics)` allocations **ratchet ~9–12k regions / ~1.3 GB per workload
+- **One real leak found** (⚠ called a *regression* here, but that was never measured — no region
+  or footprint baseline exists before this pass, so "found 08-08" ≠ "introduced 08-08"). The
+  worker's `IOAccelerator (graphics)` allocations **ratchet ~9–12k regions / ~1.3 GB per workload
   open/close cycle and never return** — physical footprint 20.4 → 24.2 GB over three cycles.
-  This is *not* the IOSurface scanout leak fixed on 08-07: that fix holds cleanly here. A scoping
-  A/B puts it **on the vrend GL path only** — the shipped default — while zink-on-venus returns
-  every byte.
+  This is *not* the IOSurface scanout leak fixed on 08-07: that fix holds cleanly here. ⚠ The
+  scoping A/B below (**"vrend GL path only"**) was **retracted** the same day — it discriminates
+  teardown, not layer; see the note at §Scoping A/B and
+  `spikes/vrend-region-leak/README.md` for the current reading.
 - **`gl-replay-venus` is flat at ~47.6 fps.** The −18% versus the 57.6 reference of 2026-06-25
   remains open and accepted; nothing in this pass moved it.
 
@@ -236,6 +238,14 @@ counts venus blob allocations, and this is already at 17.3 G). Per
 
 #### Scoping A/B: it is the vrend path, not a common layer
 
+> ⚠ **RETRACTED later the same day** — the conclusion in this subsection is wrong. The two arms
+> differ in **teardown**, not only in layer: guest zink owns a VkInstance/VkDevice, so closing the
+> workload destroys the entire host Vulkan device (and every KK pool, queue, allocator and cached
+> BO behind it), whereas vrend's host GL stack is built once per worker and never torn down. Any
+> device-lifetime accumulation therefore produces exactly this signature, so the A/B **exonerates
+> no layer**. The measurements below stand; the inference drawn from them does not. Current
+> reading: `spikes/vrend-region-leak/README.md`.
+
 One further open/close cycle with GL forced onto **zink-on-venus**, same workload, same host,
 same boot:
 
@@ -305,10 +315,12 @@ GL rendering).
 ## Follow-ups
 
 1. **Root-cause the `IOAccelerator (graphics)` ratchet.** The highest-value item here by a wide
-   margin — unbounded growth in the shipped configuration, already scoped to the vrend GL path
-   (see the A/B above), which narrows the search to the recent EGLImage-scanout / gbm-import
-   work. A RED-first L2 guard in the shape of the existing `venus_fd_census` /
-   `testcomp` region-count tests is the natural vehicle.
+   margin — unbounded growth in the shipped configuration. ⚠ The narrowing asserted here (scoped
+   to vrend ⟹ search the EGLImage-scanout / gbm-import work) **does not hold**: the A/B was
+   retracted, and those suspects are demoted on magnitude anyway (tens of paired objects per
+   cycle vs ~10–29k regions). Live plan and ranked instruments:
+   `spikes/vrend-region-leak/README.md`. A RED-first L2 guard in the shape of the existing
+   `venus_fd_census` / `testcomp` region-count tests is still the natural vehicle.
 2. ~~Bake `gfxrecon-replay` into the enhanced image and make the ledger fail loudly.~~ **DONE
    2026-08-08** — the full battery is baked into the base and the ledger aborts on a missing
    `vk-replay`; the row is recovered at 1974.7 fps. The aquarium default sweep also now runs to

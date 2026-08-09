@@ -2,7 +2,12 @@
 # Staged open/close cycle: does IOAccelerator(graphics) ratchet, or does it return?
 set -u
 SSH="ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR claude@127.0.0.1"
-PID=$(pgrep -f "limina-vmm --cpus" | head -1)
+# Pick the LARGEST-RSS match, not the first: more than one process matches this pattern, and
+# `head -1` can pick a tiny one, which reports a ~1.6 MB footprint and no IOAccelerator lines
+# at all — a snapshot that reads like "nothing allocated" rather than like a mismeasurement.
+# (census-correlate.sh has always done this; this script was left behind.)
+PID=$(ps -o pid=,rss= -p "$(pgrep -f 'limina-vmm --cpus' | tr '\n' ',' | sed 's/,$//')" \
+      | sort -k2 -rn | head -1 | awk '{print $1}')
 SPID=$(pgrep -f "target/debug/limina --vmm-bin" | head -1)
 
 snap() {

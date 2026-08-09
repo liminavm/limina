@@ -1,0 +1,24 @@
+# Is 450 allocators POPULATION or CONCURRENCY?
+# `sample <worker> 15` under aquarium 5000 fish, vrend arm. No source changes.
+#
+# Total threads in the worker: 59
+# Threads with ANY kk_/mtl_ frame:
+#     com.Metal4.CompletionQueue (x2 dispatch queues -- Metal's own, not recording)
+#     gpu worker
+#     limina-vm:zfq0
+#     vrend-sync
+#     limina-v:gdrv0
+#
+# Threads observed in the RECORDING path
+# (kk_BeginCommandBuffer / kk_reset_cmd_buffer_internal / cs_start_render / mtl_begin_command_buffer):
+#     gpu worker
+#     limina-v:gdrv0
+#     limina-vm:zfq0        (also the kk_queue_submit thread)
+#
+# => THREE recording threads. KK needs 3 encoder states each (pre_gfx/gfx/post_gfx),
+#    so true concurrency demand is ~9 allocators against ~450 live: a ~50x over-provision.
+#
+# Caveat: a 15s sample proves these threads DO record; it cannot prove no other thread
+# ever does. 3 of 59 threads showing any recording frame is strong but not exhaustive.
+# A counter of max simultaneous in-flight kk_BeginCommandBuffer..kk_EndCommandBuffer
+# would be exhaustive; not taken.

@@ -1,0 +1,18 @@
+# LIMINA_KK_ALLOC_STATS=2000, vrend arm, aquarium 5000 fish, 3 open/close cycles
+# (continuous-run prelude is in allocstats-continuous-run.txt: +20 regions over 1.3M resets)
+[cycle1 closed] regions=61947  resets=2944000 distinct=450 sum=6475.5MiB  max=617.614MiB mean=14.390MiB
+[cycle1 open]   regions=73544  resets=3448000 distinct=450 sum=7762.1MiB  max=745.974MiB mean=17.249MiB
+[cycle2 closed] regions=73520  resets=3450000 distinct=450 sum=7762.1MiB  max=745.974MiB mean=17.249MiB
+[cycle2 open]   regions=87756  resets=3948000 distinct=450 sum=9355.3MiB  max=745.974MiB mean=20.789MiB
+[cycle3 closed] regions=87731  resets=3950000 distinct=450 sum=9355.3MiB  max=745.974MiB mean=20.789MiB
+[cycle3 open]   regions=102092 resets=4458000 distinct=450 sum=10980.4MiB max=745.974MiB mean=24.401MiB
+[final closed]  regions=102061 resets=4458000 distinct=450 sum=10980.4MiB max=745.974MiB mean=24.401MiB
+
+# bytes-per-region, closed->open, three independent cycles:
+#   c1: 1286.6MiB / 11597 regions = 113.6 KiB
+#   c2: 1593.2MiB / 14236 regions = 114.6 KiB
+#   c3: 1625.1MiB / 14361 regions = 115.9 KiB
+# (CORRECTED 08-09: c2/c3 were first published as 111.9/113.2, computed with MiB*1000
+#  instead of MiB*1024 while c1 used *1024. Spread is ~2% and monotone increasing, so the
+#  identity conclusion is unchanged -- but an argument resting on 'a ratio that tight' must
+#  not contain a unit slip.)
