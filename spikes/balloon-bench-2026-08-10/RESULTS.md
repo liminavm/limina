@@ -21,10 +21,12 @@ policy was **not** running. Host poll 200 ms, in-guest sampler 250 ms.
 
 The first-ever deflate-throughput number says the guest driver hands back 3 GiB in
 **~1.25 s**, reproducibly (cold and warm cycles within 0.5%). Inflate fills at ~1.8 GiB/s
-on an idle guest. Nobody perceives a 1.2-second mechanism as "not deflating quickly
-enough" — so the complaint, if real, lives upstream: **D1 detection (the ~10 s PSI avg10
-EMA) and D2 transport (the ~1 s idle-tick agent cadence) are where the seconds are.**
-Phase 1's S2 rate sweep measures those directly.
+on an idle guest. This is the mechanism **at rest** — under real pressure the balloon
+workqueue competes with a thrashing guest for CPU, which S2 captures end-to-end — but
+nobody perceives a 1.2-second mechanism as "not deflating quickly enough", so the
+complaint, if real, lives upstream: **D1 detection (the ~10 s PSI avg10 EMA) and D2
+transport (the ~1 s idle-tick agent cadence) are where the seconds are.** Phase 1's S2
+rate sweep measures those directly.
 
 (Resolution note: numbers are quantized by the 200 ms host poll — legs complete between
 samples, so true throughput is slightly higher than quoted. Immaterial at this scale.)
@@ -48,6 +50,10 @@ samples, so true throughput is slightly higher than quoted. Immaterial at this s
   empty grep also looks exactly like a broken pipeline. S7 (unreachable-target chase)
   forcibly generates `Out of puff` lines and is the channel's validation — treat
   journal-based conclusions as unproven until it runs.
+- **`LIMINA_BALLOON_TRACE` is equally unproven in vivo.** S1 runs no policy, so the
+  decision-trace writer has only ever executed in its unit test, never in a live
+  supervisor. The first policy-driven scenario (S4 or S2) must assert the trace file is
+  non-empty — same positive-control pattern as S7 for the journal.
 
 ### Instrument status after Phase 0
 

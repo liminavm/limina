@@ -279,8 +279,9 @@ warn, critical — injected} × guest tier {stock-4k baseline (harness plays age
 enhanced-16k (real agent)} × scenario. The full product is hours of wall-clock; phase
 it:
 
-- **Phase 0 (instrument):** §3 gaps + recorder + summarizer + S1. Deliverable: the D4
-  number per tier, and the trace/metrics pipeline proven end-to-end.
+- **Phase 0 (instrument):** §3 gaps + recorder + summarizer + S1 on the stock baseline.
+  Deliverable: the stock-tier D4 number and the trace/metrics pipeline proven end-to-end
+  (the enhanced-16k D4 lands with the Phase 2 tier runs).
 - **Phase 1 (characterize the complaints):** stock baseline; S2 sweep + S3 across all
   modes at host-normal, S6 for the host axis, S4 + S7 for the inflate/`Out of puff`
   side. Deliverable: `spikes/balloon-bench-<date>/RESULTS.md` — the current-behavior
