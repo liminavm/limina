@@ -228,6 +228,11 @@ impl GuestSampler {
 
     /// Stop the sampler and fetch every sample. The bracketed pgrep pattern avoids the
     /// ssh-shell self-match trap.
+    ///
+    /// Errors if the sampler died early (last row much older than now): a scenario whose
+    /// sampler quietly died mid-run once produced hollow all-green metrics — the S3 tmpfs
+    /// incident, where a workload filled /tmp (a RAM-backed tmpfs) and the sampler's own
+    /// CSV writes ENOSPC'd it to death 9 s in.
     pub fn stop_and_fetch(&self, guest: &Guest) -> Result<(String, Vec<GuestSample>)> {
         guest
             .ssh_exec("pkill -f '[l]imina-bench-sampler.py' || true")
@@ -236,6 +241,14 @@ impl GuestSampler {
             .ssh_exec(&format!("cat {SAMPLER_CSV}"))
             .context("fetching the guest sampler CSV")?;
         let samples = parse_guest_csv(&csv)?;
+        let last_ts = samples.last().map(|s| s.ts_ms).unwrap_or(0);
+        let age_ms = now_ms().saturating_sub(last_ts);
+        anyhow::ensure!(
+            age_ms < 10_000,
+            "guest sampler died mid-run: last sample is {age_ms} ms old ({} rows) — \
+             the scenario's time series is truncated, its metrics would be hollow",
+            samples.len()
+        );
         Ok((csv, samples))
     }
 }

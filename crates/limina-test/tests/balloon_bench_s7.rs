@@ -34,8 +34,11 @@ use limina_test::{Guest, GuestConfig};
 
 const MIB: u64 = 1 << 20;
 const RAM_MIB: usize = 6144;
-/// Phase-A cache file: sized to push MemFree low while staying writable (guest disk has room).
+/// Phase-A cache file: sized to push MemFree low. On DISK (/var/tmp) — /tmp is a
+/// RAM-backed tmpfs sized RAM/2: too small, and tmpfs pages aren't reclaimable cache, so
+/// they can't produce the H1 shape at all (the S3 tmpfs incident).
 const CACHE_FILE_MIB: u64 = 4600;
+const CACHE_FILE: &str = "/var/tmp/limina-cachefill";
 /// Phase-B target: should be fillable by nibbling cache, slowly.
 const SLOW_FILL_TARGET: u64 = 2048 * MIB;
 /// Phase-C escalation: start here and step up whenever the driver closes the gap, so the
@@ -103,12 +106,24 @@ fn s7_out_of_puff_chase() {
     let mut host_samples: Vec<HostSample> = Vec::new();
 
     // ---- Phase A: the H1 stage-set (MemFree low, MemAvailable high). --------------------
-    eprintln!("phase A: filling the page cache ({CACHE_FILE_MIB} MiB file)");
+    eprintln!("phase A: filling the page cache ({CACHE_FILE_MIB} MiB file on disk)");
+    let df_avail_mib: u64 = guest
+        .ssh_exec("df -m --output=avail /var/tmp | tail -1")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    assert!(
+        df_avail_mib > CACHE_FILE_MIB + 1024,
+        "guest disk too small for the cache-fill file ({df_avail_mib} MiB avail on /var/tmp)"
+    );
+    // Write, then read back: the write path caches the pages, the read-back re-warms
+    // anything writeback pressure evicted — the point is a page-cache-full guest.
     guest
         .ssh_exec(&format!(
-            "dd if=/dev/zero of=/tmp/limina-cachefill bs=1M count={CACHE_FILE_MIB} 2>/dev/null; sync"
+            "dd if=/dev/zero of={CACHE_FILE} bs=1M count={CACHE_FILE_MIB} 2>/dev/null; sync; \
+             cat {CACHE_FILE} > /dev/null"
         ))
-        .expect("cache-fill dd");
+        .expect("cache-fill dd + read-back");
     std::thread::sleep(Duration::from_secs(3));
     let shape = guest
         .ssh_exec(

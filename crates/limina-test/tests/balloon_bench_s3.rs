@@ -34,13 +34,17 @@ const FILE_MIB: u64 = 3072;
 /// How long the thrash loop runs per point.
 const THRASH_SECS: u64 = 120;
 
-const THRASH_OUT: &str = "/tmp/limina-thrash.out";
+// /var/tmp, NOT /tmp: Fedora's /tmp is a RAM-backed tmpfs sized RAM/2 — a 3 GiB file
+// fills it, the workload's writes ENOSPC, and worse, tmpfs pages are not reclaimable
+// page cache, so the scenario would not even exercise what it claims to.
+const THRASH_OUT: &str = "/var/tmp/limina-thrash.out";
+const THRASH_BIN: &str = "/var/tmp/limina-thrash.bin";
 
 /// Stage + start the re-read loop (one line per completed pass: `pass <ms>`).
 fn start_thrash(guest: &Guest) -> u64 {
     guest
         .ssh_exec(&format!(
-            "rm -f {THRASH_OUT}; setsid nohup bash -c 'while true; do cat /tmp/limina-thrash.bin > /dev/null; echo pass $(date +%s%3N) >> {THRASH_OUT}; done' </dev/null >/dev/null 2>&1 & echo spawned"
+            "rm -f {THRASH_OUT}; setsid nohup bash -c 'while true; do cat {THRASH_BIN} > /dev/null; echo pass $(date +%s%3N) >> {THRASH_OUT}; done' </dev/null >/dev/null 2>&1 & echo spawned"
         ))
         .expect("spawning the thrash loop");
     now_ms()
@@ -51,7 +55,7 @@ fn stop_thrash(guest: &Guest) {
     // carries it (the balloon_burst pgrep lesson, in pkill form).
     guest
         .ssh_exec(
-            "pkill -f '[l]imina-thrash.bin' || true; pkill -f '[c]at /tmp/limina-thrash' || true",
+            "pkill -f '[l]imina-thrash.bin' || true; pkill -f '[c]at /var/tmp/limina-thrash' || true",
         )
         .ok();
 }
@@ -99,7 +103,7 @@ fn run_point(run: &BenchRun, mode: &str) -> PointResult {
     eprintln!("  creating the {FILE_MIB} MiB working-set file");
     guest
         .ssh_exec(&format!(
-            "dd if=/dev/zero of=/tmp/limina-thrash.bin bs=1M count={FILE_MIB} 2>/dev/null; sync"
+            "df -m --output=avail /var/tmp | tail -1; dd if=/dev/zero of={THRASH_BIN} bs=1M count={FILE_MIB} 2>/dev/null; sync"
         ))
         .expect("creating the thrash file");
 
@@ -191,6 +195,11 @@ fn run_point(run: &BenchRun, mode: &str) -> PointResult {
         .filter(|l| l.contains("Out of puff"))
         .count();
 
+    assert!(
+        pass_count > 0,
+        "mode {mode}: the thrash loop completed ZERO passes in {THRASH_SECS} s — the workload \
+         never ran, the point is hollow (the S3 tmpfs incident class)"
+    );
     let json = json_object(&[
         ("mode", format!("\"{mode}\"")),
         ("thrash_secs", THRASH_SECS.to_string()),
