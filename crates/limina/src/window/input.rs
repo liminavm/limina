@@ -307,6 +307,33 @@ pub(crate) fn ungrab_chord_action(armed_before: bool, flags: u64) -> (bool, Ungr
 /// Command/Shift/Option/Control) — the set force-released at an ungrab boundary.
 const MODIFIER_KEYCODES: [u16; 8] = [0x37, 0x36, 0x38, 0x3C, 0x3A, 0x3D, 0x3B, 0x3E];
 
+/// Short names for the modifier keycodes, index-aligned with [`MODIFIER_KEYCODES`] — trace only.
+const MODIFIER_NAMES: [&str; 8] = [
+    "lcmd", "rcmd", "lshift", "rshift", "lopt", "ropt", "lctrl", "rctrl",
+];
+
+/// Trace-friendly name for a macOS modifier keycode (`"other"` for anything else).
+fn mod_name(kc: u16) -> &'static str {
+    match MODIFIER_KEYCODES.iter().position(|&m| m == kc) {
+        Some(i) => MODIFIER_NAMES[i],
+        None if kc == MACOS_KC_CAPSLOCK => "caps",
+        None => "other",
+    }
+}
+
+/// Whether to log every keyboard/modifier decision to stderr (`LIMINA_INPUT_TRACE=1`).
+///
+/// The oracle for "the guest saw the wrong modifier state". The load-bearing question it answers
+/// is whether the *host* bitmask and our *believed* pressed-set agree: `flagsChanged` tells us
+/// which key changed, never the whole picture, so a modifier that goes down while we aren't
+/// looking (another Space, another app) is invisible to us until it moves again — and macOS sends
+/// no reconciling edge on refocus. Every line therefore prints both sides plus the drift between
+/// them, so a repro shows the divergence rather than requiring it to be inferred.
+pub(crate) fn input_trace() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LIMINA_INPUT_TRACE").is_some_and(|v| v != "0"))
+}
+
 /// The host pointer's adoption of the guest cursor (main thread only). `cursor` is what
 /// the macOS pointer should look like over the guest view (the guest's current cursor
 /// image, or a blank cursor while the guest hides it); `inside` tracks whether the pointer
@@ -706,9 +733,9 @@ impl InputState {
         // itself is always mid-press at this moment (releases of un-pressed keys are dropped
         // by the guest's input core, so over-releasing is safe).
         if now {
-            self.release_all_held();
+            self.release_all_held("grab-on");
         } else {
-            self.release_all_modifiers();
+            self.release_all_modifiers("grab-off");
         }
         now
     }
@@ -723,7 +750,20 @@ impl InputState {
     /// forwards any straggling release for a key it already pressed — see
     /// [`limina_input::auxkey::route_aux_event_key`] — so this is the belt to that's braces:
     /// it covers the case where no release ever arrives.)
-    fn release_all_modifiers(&self) {
+    fn release_all_modifiers(&self, why: &str) {
+        if input_trace() {
+            let names: Vec<&str> = self
+                .pressed_mods
+                .borrow()
+                .iter()
+                .map(|&kc| mod_name(kc))
+                .collect();
+            eprintln!(
+                "[INP] t={:.1} release_all_modifiers({why}) believed=[{}]",
+                super::capture_tap::trace_ms(),
+                names.join(","),
+            );
+        }
         for &kc in &MODIFIER_KEYCODES {
             if let Some(code) = macos_keycode_to_linux_remapped(kc, &self.remap) {
                 self.send_kbd(InputEvent::new(EV_KEY, code, 0));
@@ -767,8 +807,25 @@ impl InputState {
     /// believed-pressed tracking so a focus-loss flush releases tap-forwarded keys too).
     /// The tap calls this for keyDown/keyUp it consumes (captured or soft-grab mode).
     pub(crate) fn tap_key(&self, macos_keycode: u16, down: bool, flags: u64) {
+        self.trace_key("TAP-key", macos_keycode, down, flags);
         self.sync_capslock(flags);
         self.emit_key(macos_keycode, down);
+    }
+
+    /// `LIMINA_INPUT_TRACE`: a non-modifier key crossing into the guest, with the modifier
+    /// picture it is wearing. The bug this exists for is a key arriving *bare* in the guest
+    /// because a modifier held across a focus/Space change was never re-announced — so the
+    /// interesting part of a key line is the `DRIFT` field, not the key.
+    fn trace_key(&self, tag: &str, macos_keycode: u16, down: bool, flags: u64) {
+        if !input_trace() {
+            return;
+        }
+        eprintln!(
+            "[INP] t={:.1} {tag} kc={macos_keycode:#04x} {}",
+            super::capture_tap::trace_ms(),
+            if down { "DOWN" } else { "UP" },
+        );
+        self.trace_mods(tag, None, flags);
     }
 
     /// Tap-side **aux key** forwarding (media/volume from the `NX_SYSDEFINED` class — see
@@ -789,6 +846,7 @@ impl InputState {
 
     /// Tap-side `flagsChanged` forwarding — the modifier twin of [`InputState::tap_key`].
     pub(crate) fn tap_flags(&self, macos_keycode: u16, flags: u64) {
+        self.trace_mods("TAP-flags", Some(macos_keycode), flags);
         self.sync_capslock(flags);
         self.emit_modifier(macos_keycode, flags);
     }
@@ -797,7 +855,7 @@ impl InputState {
     /// modifiers the chord pushed into the guest so nothing stays wedged. The caller mutes
     /// soft mode until the window regains key status.
     pub(crate) fn flush_modifiers(&self) {
-        self.release_all_modifiers();
+        self.release_all_modifiers("soft-grab-exit");
     }
 
     /// Feed a grabbed-mode `flagsChanged` to the ungrab chord and get the verdict for that edge:
@@ -806,6 +864,18 @@ impl InputState {
     /// [`UngrabAction::Forward`] (forward it to the guest as usual).
     pub(crate) fn observe_ungrab_flags(&self, macos_keycode: u16, flags: u64) -> UngrabAction {
         let (armed, action) = ungrab_chord_action(self.ungrab_armed.get(), flags);
+        if input_trace() {
+            // Fire and Withhold both return before `tap_flags`, so without this line the chord is
+            // invisible to the trace and has to be inferred from its side effects. It is the
+            // deciding evidence for "the guest never saw that key at all" — a consumed edge and a
+            // forwarded-but-bare edge look identical from the guest end.
+            eprintln!(
+                "[INP] t={:.1} chord kc={} flags={flags:#x} armed {}->{armed} action={action:?}",
+                super::capture_tap::trace_ms(),
+                mod_name(macos_keycode),
+                self.ungrab_armed.get(),
+            );
+        }
         self.ungrab_armed.set(armed);
         match action {
             // The gesture was an ungrab after all: the withheld edges were never the guest's.
@@ -854,6 +924,12 @@ impl InputState {
         self.sync_capslock(event.modifierFlags().0 as u64);
         match event.r#type() {
             NSEventType::KeyDown => {
+                self.trace_key(
+                    "MON-key",
+                    event.keyCode(),
+                    true,
+                    event.modifierFlags().0 as u64,
+                );
                 self.cancel_ungrab_chord();
                 // The guest kernel autorepeats from key-down state; drop macOS repeats.
                 if !event.isARepeat() {
@@ -869,6 +945,7 @@ impl InputState {
                 // Degraded (tap-less) capture consumes flagsChanged here — give the ungrab
                 // chord (Ctrl+Option) the same meaning it has under the tap.
                 let flags = event.modifierFlags().0 as u64;
+                self.trace_mods("MON-flags", Some(event.keyCode()), flags);
                 if self.is_captured() {
                     match self.observe_ungrab_flags(event.keyCode(), flags) {
                         UngrabAction::Fire => {
@@ -987,12 +1064,28 @@ impl InputState {
     /// in the guest — a wedged Command then makes the guest compositor eat every later key. Cheap
     /// and idempotent when nothing is held. State is re-learned once focus returns (modifiers from
     /// the next `flagsChanged`, keys from the next key-down), so over-releasing here is safe.
-    pub fn release_all_held(&self) {
+    pub fn release_all_held(&self, why: &str) {
         let mut mods = self.pressed_mods.borrow_mut();
         let mut keys = self.pressed_keys.borrow_mut();
         let mut aux = self.pressed_aux.borrow_mut();
         if mods.is_empty() && keys.is_empty() && aux.is_empty() {
+            if input_trace() {
+                eprintln!(
+                    "[INP] t={:.1} release_all_held({why}) — nothing held",
+                    super::capture_tap::trace_ms(),
+                );
+            }
             return;
+        }
+        if input_trace() {
+            let names: Vec<&str> = mods.iter().map(|&kc| mod_name(kc)).collect();
+            eprintln!(
+                "[INP] t={:.1} release_all_held({why}) mods=[{}] keys={} aux={}",
+                super::capture_tap::trace_ms(),
+                names.join(","),
+                keys.len(),
+                aux.len(),
+            );
         }
         for &macos_keycode in mods.iter().chain(keys.iter()) {
             if let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap) {
@@ -1044,8 +1137,62 @@ impl InputState {
                 }
                 self.send_kbd(InputEvent::new(EV_KEY, code, down as i32));
                 self.send_kbd(InputEvent::syn());
+                if input_trace() {
+                    eprintln!(
+                        "[INP] t={:.1}   -> guest mod {} evdev={code} {}",
+                        super::capture_tap::trace_ms(),
+                        mod_name(macos_keycode),
+                        if down { "DOWN" } else { "UP" },
+                    );
+                }
             }
         }
+    }
+
+    /// `LIMINA_INPUT_TRACE`: one line comparing what the host bitmask says every modifier is
+    /// doing against what we believe we've told the guest, plus the **drift** — the modifiers
+    /// where the two disagree. Drift is the whole diagnosis: a non-empty drift set at the moment
+    /// a key is pressed means the guest is about to receive that key wearing the wrong modifiers.
+    ///
+    /// `tag` names the call site (`MON`/`TAP`/`KEY`/…) and `kc` the keycode the event is *about*
+    /// (`None` for events that carry flags without naming a modifier).
+    pub(crate) fn trace_mods(&self, tag: &str, kc: Option<u16>, flags: u64) {
+        if !input_trace() {
+            return;
+        }
+        let believed = self.pressed_mods.borrow();
+        let mut host = Vec::new();
+        let mut guest = Vec::new();
+        let mut drift = Vec::new();
+        for (i, &m) in MODIFIER_KEYCODES.iter().enumerate() {
+            let h = limina_input::keymap::modifier_is_down(m, flags).unwrap_or(false);
+            let g = believed.contains(&m);
+            if h {
+                host.push(MODIFIER_NAMES[i]);
+            }
+            if g {
+                guest.push(MODIFIER_NAMES[i]);
+            }
+            if h != g {
+                drift.push(format!(
+                    "{}:host={}",
+                    MODIFIER_NAMES[i],
+                    if h { "DOWN" } else { "up" }
+                ));
+            }
+        }
+        eprintln!(
+            "[INP] t={:.1} {tag} kc={} flags={flags:#x} host=[{}] guest=[{}]{}",
+            super::capture_tap::trace_ms(),
+            kc.map(mod_name).unwrap_or("-"),
+            host.join(","),
+            guest.join(","),
+            if drift.is_empty() {
+                String::new()
+            } else {
+                format!("  DRIFT[{}]", drift.join(" "))
+            },
+        );
     }
 
     /// Align the guest's caps-lock with the host caps LED (carried by every event's modifier

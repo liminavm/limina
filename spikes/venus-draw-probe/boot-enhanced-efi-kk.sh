@@ -64,9 +64,14 @@ done
 # alloc-vs-free deltas) on a timer. Pair it with a host footprint sample — a ledger that stays
 # FLAT while the process grows means the leak is NOT in a charged allocator, which is itself the
 # answer to where to look next. _MIB caps, _SOFT changes what a refusal does (see vkr_budget.h).
+# LIMINA_INPUT_TRACE / LIMINA_EDGE_TRACE / LIMINA_DISPLAY_TRACE / LIMINA_OVERLAY_TRACE are the
+# supervisor-side oracles (keyboard+modifier state, pointer-grab edges, display sizing, the notch
+# overlay). They live in the same passthrough list because they are read by `limina`, not the
+# worker, and this script is what execs it.
 for v in LIMINA_KK_STATS LIMINA_KK_RTLOG LIMINA_GLOBAL_SCANOUT MESA_KK_DEBUG MESA_KK_GPU_CAPTURE LIMINA_KK_CAPTURE \
          LIMINA_KK_NOLISTRESTART LIMINA_KK_BOCACHE LIMINA_KK_SLIMPUSH LIMINA_KK_EARLYZ LIMINA_KK_SLIMROOT LIMINA_KK_FASTBIND \
-         LIMINA_GPU_MEM_BUDGET_MIB LIMINA_GPU_MEM_BUDGET_CENSUS LIMINA_GPU_MEM_BUDGET_SOFT; do
+         LIMINA_GPU_MEM_BUDGET_MIB LIMINA_GPU_MEM_BUDGET_CENSUS LIMINA_GPU_MEM_BUDGET_SOFT \
+         LIMINA_INPUT_TRACE LIMINA_EDGE_TRACE LIMINA_DISPLAY_TRACE LIMINA_OVERLAY_TRACE; do
   [ -n "$(eval echo "\${$v:-}")" ] && export "$v"
 done
 # Leak-hunt interposer (spikes/vrend-region-leak/iokit-trace). It has to be handed in under a

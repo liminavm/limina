@@ -2473,7 +2473,7 @@ pub fn run(
                     // resumes (monitor() SIGTSTPs on a set flag).
                     crate::supervisor::clear_suspend_request();
                     // Whatever grab/held state the session had dies with the worker.
-                    timer_input.release_all_held();
+                    timer_input.release_all_held("park");
                     timer_input.release_capture(&timer_view);
                     let mut ov = timer_overlay.borrow_mut();
                     if let Some(o) = ov.take() {
@@ -2602,7 +2602,14 @@ pub fn run(
         // the app-switch case too.
         let is_key = window.isKeyWindow();
         if was_key.get() && !is_key {
-            timer_input.release_all_held();
+            timer_input.release_all_held("key-loss");
+        } else if !was_key.get() && is_key && input::input_trace() {
+            // The regain edge emits nothing today — it is logged so a trace shows the gap between
+            // "focus is back" and the first event that tells us anything about the modifiers.
+            eprintln!(
+                "[INP] t={:.1} key-GAIN (no modifier resync happens here)",
+                capture_tap::trace_ms(),
+            );
         }
         was_key.set(is_key);
 
@@ -2616,7 +2623,12 @@ pub fn run(
         // goes to macOS instead — leaving Ctrl stuck down in the guest for good.
         let on_active_space = window.isOnActiveSpace();
         if was_on_space.get() && !on_active_space {
-            timer_input.release_all_held();
+            timer_input.release_all_held("space-leave");
+        } else if !was_on_space.get() && on_active_space && input::input_trace() {
+            eprintln!(
+                "[INP] t={:.1} space-RETURN (no modifier resync happens here)",
+                capture_tap::trace_ms(),
+            );
         }
         was_on_space.set(on_active_space);
         if grab_policy::must_drop_grab(

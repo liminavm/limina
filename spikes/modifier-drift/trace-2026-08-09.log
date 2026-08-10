@@ -1,0 +1,69 @@
+[INP] t=20795.4 space-RETURN (no modifier resync happens here)
+[INP] t=173708.7 release_all_held(key-loss) — nothing held
+[INP] t=176458.0 key-GAIN (no modifier resync happens here)
+[INP] t=180940.5 TAP-key kc=0x35 DOWN
+[INP] t=180940.9 TAP-key kc=- flags=0x100 host=[] guest=[]
+[INP] t=180941.7 TAP-key kc=0x35 UP
+[INP] t=180941.7 TAP-key kc=- flags=0x100 host=[] guest=[]
+[INP] t=182208.7 release_all_held(grab-on) — nothing held
+[INP] t=183422.6 TAP-flags kc=lctrl flags=0x40101 host=[lctrl] guest=[]  DRIFT[lctrl:host=DOWN]
+[INP] t=183423.2   -> guest mod lctrl evdev=29 DOWN
+[INP] t=183424.5 TAP-flags kc=lctrl flags=0x40101 host=[lctrl] guest=[lctrl]
+[INP] t=183694.1 release_all_modifiers(grab-off) believed=[lctrl]
+[INP] t=183697.0 MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[]  DRIFT[lctrl:host=DOWN]
+[INP] t=184837.4 release_all_held(space-leave) — nothing held
+[INP] t=184868.1 release_all_held(key-loss) — nothing held
+[INP] t=186705.9 space-RETURN (no modifier resync happens here)
+[INP] t=186716.8 key-GAIN (no modifier resync happens here)
+[INP] t=187704.4 release_all_modifiers(soft-grab-exit) believed=[]
+[INP] t=187709.8 MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[]  DRIFT[lctrl:host=DOWN]
+[INP] t=188801.9 release_all_held(space-leave) — nothing held
+[INP] t=188836.7 release_all_held(key-loss) — nothing held
+[INP] t=192467.2 key-GAIN (no modifier resync happens here)
+[INP] t=192467.4 space-RETURN (no modifier resync happens here)
+[INP] t=193471.7 release_all_modifiers(soft-grab-exit) believed=[]
+[INP] t=193476.2 MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[]  DRIFT[lctrl:host=DOWN]
+[INP] t=194030.1 MON-flags kc=lopt flags=0xc0121 host=[lopt,lctrl] guest=[]  DRIFT[lopt:host=DOWN lctrl:host=DOWN]
+[INP] t=194030.8   -> guest mod lopt evdev=125 DOWN
+[INP] t=194045.0 MON-flags kc=lopt flags=0xc0121 host=[lopt,lctrl] guest=[lopt]  DRIFT[lctrl:host=DOWN]
+[INP] t=194179.4 MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[lopt]  DRIFT[lopt:host=up lctrl:host=DOWN]
+[INP] t=194179.9   -> guest mod lopt evdev=125 UP
+[INP] t=194180.3 MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[]  DRIFT[lctrl:host=DOWN]
+[INP] t=195863.1 MON-flags kc=lopt flags=0xc0121 host=[lopt,lctrl] guest=[]  DRIFT[lopt:host=DOWN lctrl:host=DOWN]
+[INP] t=195863.7   -> guest mod lopt evdev=125 DOWN
+[INP] t=195864.3 MON-flags kc=lopt flags=0xc0121 host=[lopt,lctrl] guest=[lopt]  DRIFT[lctrl:host=DOWN]
+[INP] t=196000.0 MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[lopt]  DRIFT[lopt:host=up lctrl:host=DOWN]
+[INP] t=196000.6   -> guest mod lopt evdev=125 UP
+[INP] t=196001.1 MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[]  DRIFT[lctrl:host=DOWN]
+[INP] t=196794.8 MON-flags kc=lctrl flags=0x100 host=[] guest=[]
+[INP] t=196796.3 MON-flags kc=lctrl flags=0x100 host=[] guest=[]
+[INP] t=196981.7 MON-flags kc=lctrl flags=0x40101 host=[lctrl] guest=[]  DRIFT[lctrl:host=DOWN]
+[INP] t=196982.2   -> guest mod lctrl evdev=29 DOWN
+[INP] t=196997.6 MON-flags kc=lctrl flags=0x40101 host=[lctrl] guest=[lctrl]
+[INP] t=198025.2 release_all_held(key-loss) mods=[lctrl] keys=0 aux=0
+[INP] t=198025.5 release_all_held(space-leave) — nothing held
+[INP] t=202034.0 space-RETURN (no modifier resync happens here)
+[INP] t=202067.6 key-GAIN (no modifier resync happens here)
+[INP] t=202563.4 release_all_modifiers(soft-grab-exit) believed=[]
+[INP] t=202570.3 MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[]  DRIFT[lctrl:host=DOWN]
+[INP] t=203644.2 MON-flags kc=lopt flags=0xc0121 host=[lopt,lctrl] guest=[]  DRIFT[lopt:host=DOWN lctrl:host=DOWN]
+[INP] t=203645.0   -> guest mod lopt evdev=125 DOWN
+[INP] t=203653.8 MON-flags kc=lopt flags=0xc0121 host=[lopt,lctrl] guest=[lopt]  DRIFT[lctrl:host=DOWN]
+[INP] t=203777.9 MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[lopt]  DRIFT[lopt:host=up lctrl:host=DOWN]
+[INP] t=203778.5   -> guest mod lopt evdev=125 UP
+[INP] t=203787.2 MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[]  DRIFT[lctrl:host=DOWN]
+[INP] t=204702.2 release_all_held(space-leave) — nothing held
+[INP] t=204736.3 release_all_held(key-loss) — nothing held
+[INP] t=208176.1 space-RETURN (no modifier resync happens here)
+[INP] t=208201.8 key-GAIN (no modifier resync happens here)
+[INP] t=208687.0 release_all_modifiers(soft-grab-exit) believed=[]
+[INP] t=208689.9 MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[]  DRIFT[lctrl:host=DOWN]
+[INP] t=209226.2 MON-flags kc=lopt flags=0xc0121 host=[lopt,lctrl] guest=[]  DRIFT[lopt:host=DOWN lctrl:host=DOWN]
+[INP] t=209226.7   -> guest mod lopt evdev=125 DOWN
+[INP] t=209240.9 MON-flags kc=lopt flags=0xc0121 host=[lopt,lctrl] guest=[lopt]  DRIFT[lctrl:host=DOWN]
+[INP] t=209344.8 MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[lopt]  DRIFT[lopt:host=up lctrl:host=DOWN]
+[INP] t=209345.1   -> guest mod lopt evdev=125 UP
+[INP] t=209357.9 MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[]  DRIFT[lctrl:host=DOWN]
+[INP] t=210159.5 MON-flags kc=lctrl flags=0x100 host=[] guest=[]
+[INP] t=210175.4 MON-flags kc=lctrl flags=0x100 host=[] guest=[]
+[INP] t=212155.0 release_all_held(key-loss) — nothing held
