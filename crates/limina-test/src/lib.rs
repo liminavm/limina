@@ -36,6 +36,8 @@ use anyhow::{anyhow, bail, Context, Result};
 // Re-exported so tests can build display commands without depending on the crate directly.
 pub use limina_displayctl::{DisplayCommand, DisplayControl, EdidSpec, RangeSpec};
 
+pub mod bench;
+
 /// Last-resort fallback firmware: the krunkit-shipped blob (an EDK2 `.fd`), the same one the
 /// M1 boot spikes used. It is a **DEBUG_GCC5 build with live ASSERTs that end in
 /// `CpuDeadLoop`** — an ASSERT anywhere in it wedges the guest at 100% CPU with no output
