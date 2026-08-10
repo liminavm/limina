@@ -76,12 +76,21 @@ fn sizes() -> Sizes {
             ballast_mib: 0,
             swapoff: false,
         },
+        // chase_start == chase_cap: NO escalation on enhanced. Attempt 4 (10 GiB,
+        // escalating chase) proved the last piece: the 16k driver + kernel reclaim
+        // yield EVERYTHING to a patient chaser — cache first, then the desktop via
+        // zram — so an adaptive chase always terminates in guest collapse, at any
+        // scale. There is no healthy natural plateau to find. The state the dogfood
+        // guest actually lives in is the GRIND: a held mid-range target the driver
+        // can only approach at ~33 MiB/s through cache, spamming the whole way, on an
+        // otherwise healthy guest. A fixed 4608 MiB hold from B's 2048 = ~2.5 GiB of
+        // grind ≈ the full 90 s window of retry-loop spam, with the desktop untouched.
         limina_test::bench::Tier::Enhanced => Sizes {
             ram_mib: 10240,
             cache_file_mib: 8192,
-            chase_start: 5120 * MIB,
-            chase_cap: 8192 * MIB,
-            ballast_mib: 4096,
+            chase_start: 4608 * MIB,
+            chase_cap: 4608 * MIB,
+            ballast_mib: 3072,
             swapoff: false,
         },
     }
