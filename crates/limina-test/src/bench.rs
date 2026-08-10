@@ -112,6 +112,8 @@ for p in glob.glob('/proc/[0-9]*/comm'):
             break
     except OSError:
         pass
+import sys
+print('kswapd_stat=' + str(kswapd_stat), file=sys.stderr)
 
 def kswapd_ticks():
     if not kswapd_stat:
@@ -194,6 +196,19 @@ impl GuestSampler {
                 .ssh_exec(&format!("head -1 {SAMPLER_CSV} 2>/dev/null"))
                 .unwrap_or_default();
             if out.trim() == GUEST_CSV_HEADER {
+                // Discovery check: an all-zero kswapd_cpu_ticks column can mean a quiet
+                // kernel OR a failed PID lookup — make the two distinguishable. Warn only:
+                // a kernel without kswapd0 must not fail the whole bench.
+                let log = guest
+                    .ssh_exec("grep kswapd_stat= /tmp/limina-bench-sampler.log 2>/dev/null")
+                    .unwrap_or_default();
+                if log.contains("kswapd_stat=None") || !log.contains("kswapd_stat=/proc/") {
+                    eprintln!(
+                        "WARNING: guest sampler did not find kswapd0 ({}) — the \
+                         kswapd_cpu_ticks column will be all zeros by construction",
+                        log.trim()
+                    );
+                }
                 return Ok(GuestSampler { period_ms });
             }
             if std::time::Instant::now() > deadline {

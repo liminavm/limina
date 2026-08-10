@@ -54,6 +54,14 @@ samples, so true throughput is slightly higher than quoted. Immaterial at this s
   decision-trace writer has only ever executed in its unit test, never in a live
   supervisor. The first policy-driven scenario (S4 or S2) must assert the trace file is
   non-empty — same positive-control pattern as S7 for the journal.
+- **Reclaim-work channel added and validated for schema, not yet for signal**
+  (run `s1-1786367471`, second S1 pass — throughput reproduced a third time: inflate
+  1833/1858, deflate 2460/2471 MiB/s). The sampler now records kswapd0 CPU ticks and
+  `pgscan/pgsteal_{kswapd,direct}`; this run showed all zeros, credible for an idle
+  guest that kept ~2 GiB free after the inflate (reclaim never fired, kswapd0 never ran
+  since boot). The sampler logs its kswapd0 PID discovery and the harness warns when
+  discovery fails, so an all-zero column can't hide a broken lookup — but the channel's
+  positive control (columns moving under a real squeeze) lands with S2/S3.
 
 ### Instrument status after Phase 0
 
