@@ -289,17 +289,20 @@ warn, critical — injected} × guest tier {stock-4k baseline (harness plays age
 enhanced-16k (real agent)} × scenario. The full product is hours of wall-clock; phase
 it:
 
-- **Phase 0 (instrument):** §3 gaps + recorder + summarizer + S1 on the stock baseline.
-  Deliverable: the stock-tier D4 number and the trace/metrics pipeline proven end-to-end
-  (the enhanced-16k D4 lands with the Phase 2 tier runs).
-- **Phase 1 (characterize the complaints):** stock baseline; S2 sweep + S3 across all
-  modes at host-normal, S6 for the host axis, S4 + S7 for the inflate/`Out of puff`
-  side. Deliverable: `spikes/balloon-bench-<date>/RESULTS.md` — the current-behavior
-  baseline across both directions, with the latency chains attributed and the §2
-  hypotheses adjudicated.
+- **Phase 0 (instrument): DONE 2026-08-10.** §3 gaps shipped, S1 ran — stock-tier D4 =
+  deflate ~2.5 GiB/s / inflate ~1.8 GiB/s; pipeline proven. Results:
+  `spikes/balloon-bench-2026-08-10/RESULTS.md`.
+- **Phase 1 (characterize the complaints): DONE 2026-08-10.** S2/S3/S4/S6/S7 on the
+  stock baseline, every channel positive-controlled; same RESULTS file. Headlines:
+  detection (1.5–3.5 s) is the whole deflation story; the policy covers bursts
+  ≤512 MiB/s and zram carries ≥2 GiB/s; `Out of puff` = held target/actual gap,
+  confirmed (H2 dead); the organic policy-held gap was NOT captured — it moves to
+  the Phase-2 steady state. Two findings feed back into §10 (levers 6–7).
 - **Phase 2 (tiers + edges):** enhanced-16k runs of S1/S2/S4/S7 (real agent ⇒ real D2;
   16k pages change both I3 allocation and I4 coalescing, and the dogfood `Out of puff`
-  reports come from a 16k guest), S5. Then tuning starts, replay-first.
+  reports come from a 16k guest), S5, and the **desktop-shaped ≥30-min warm-cache
+  steady state** (S7's deferred variant — where H1 predicts the policy parks an
+  unfillable target). Then tuning starts, replay-first.
 
 ## 9. What gates where
 
@@ -338,7 +341,15 @@ Not commitments — the bench decides. Ordered by expected relevance:
    below allowance, PSI total spiking) instead of only the idle tick — fixes D2's
    worst case if S5 shows it matters.
 5. **D4 throughput**, only if S1 shows the driver is a bottleneck (larger leak batches,
-   etc. — guest-kernel territory, we own it).
+   etc. — guest-kernel territory, we own it). *Phase 0 answered: it is not.*
+6. **An io-PSI / refault term in the give-back rule** (from S3): moderate's allowance
+   charges a measured 5× I/O penalty on working sets above it while every existing
+   threshold reads "fine" — cache-miss burn should be a loosening signal, not just
+   starvation.
+7. **Debounce host-level improvements** (from S6): light drops its entire ramp on a
+   single Normal sample, and the sysctl blend can flap at the 40% availability
+   boundary. Demotions (toward squeezing less) can stay instant; promotions back to
+   Normal deserve a dwell.
 
 ## 11. Cross-references
 

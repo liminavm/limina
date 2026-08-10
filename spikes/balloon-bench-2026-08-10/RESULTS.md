@@ -216,9 +216,12 @@ achieved exactly as §2 predicts): run `s7-1786373164`.
   kswapd channel also went live: 606 ticks (~6 s of kswapd CPU). Notably the driver
   eventually filled even RAM−512 MiB — given time, the 5 Hz retry loop + zram grinds
   through everything; "unfillable" is really "fillable at 33 MiB/s with spam".
-- **Phase D (close the gap): 0 lines in 30 s — silence is immediate.** The §2 requeue
-  model is confirmed end-to-end: the spam exists exactly while `target > actual`
-  is held, and stops the moment the gap closes.
+- **Phase D (gap closed): 0 lines in 30 s.** (Precision: the driver had already ground
+  its way to the final 3584 MiB target by the end of C — `plateau_actual ==
+  chase_final_target` in the metrics — so D verified that silence *persists* once
+  target equals actual rather than performing the close itself.) Jointly, C+D confirm
+  the §2 requeue model: spam exists exactly while `target > actual` is held, and only
+  then.
 
 ### H1/H2/H3 adjudication
 
