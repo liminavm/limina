@@ -224,29 +224,66 @@ struct State {
 }
 
 impl BalloonPolicy {
-    pub fn new(min_pages: u32, max_pages: u32, mode: ReclaimMode, socket: PathBuf) -> Self {
+    /// `default_trace`: where the decision journal goes when `LIMINA_BALLOON_TRACE` is
+    /// unset — managed VMs pass `<bundle>/logs/balloon-trace.jsonl` so a Dock-launched
+    /// app traces without any environment plumbing; flat CLI runs pass `None` (env-only,
+    /// no surprise files). The default path is rotated (one `.1` generation) at every
+    /// VM start so it stays bounded to two boots; an explicit env path keeps plain
+    /// append semantics (the bench harness owns those files and their lifecycle).
+    pub fn new(
+        min_pages: u32,
+        max_pages: u32,
+        mode: ReclaimMode,
+        socket: PathBuf,
+        default_trace: Option<PathBuf>,
+    ) -> Self {
         // The bench's decision journal (docs/design/balloon-bench.md §3): every consumed
         // report with the verdict AND the gate that held — "why didn't it move" is the
         // question incident debugging keeps re-deriving from scattered logs.
-        let trace = std::env::var("LIMINA_BALLOON_TRACE")
+        let trace = match std::env::var("LIMINA_BALLOON_TRACE")
             .ok()
             .filter(|p| !p.is_empty())
-            .and_then(|p| {
-                match std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&p)
-                {
+        {
+            Some(p) => match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&p)
+            {
+                Ok(f) => {
+                    log::warn!("autoballoon: decision trace -> {p}");
+                    Some(f)
+                }
+                Err(e) => {
+                    log::warn!("autoballoon: cannot open LIMINA_BALLOON_TRACE {p:?}: {e}");
+                    None
+                }
+            },
+            None => default_trace.and_then(|p| {
+                let rotated = p.with_extension("1.jsonl");
+                if p.exists() {
+                    let _ = std::fs::rename(&p, &rotated);
+                }
+                match p
+                    .parent()
+                    .map(std::fs::create_dir_all)
+                    .transpose()
+                    .and_then(|_| {
+                        std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&p)
+                    }) {
                     Ok(f) => {
-                        log::warn!("autoballoon: decision trace -> {p}");
+                        log::warn!("autoballoon: decision trace -> {}", p.display());
                         Some(f)
                     }
                     Err(e) => {
-                        log::warn!("autoballoon: cannot open LIMINA_BALLOON_TRACE {p:?}: {e}");
+                        log::warn!("autoballoon: cannot open trace {}: {e}", p.display());
                         None
                     }
                 }
-            });
+            }),
+        };
         Self {
             min_pages,
             max_pages,

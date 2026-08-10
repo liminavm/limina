@@ -1083,11 +1083,21 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                 "dynamic memory: {min}..{max} MiB (reclaim {:?})",
                 cli.reclaim
             );
+            // Managed VMs trace into the bundle by default (<bundle>/logs/), so the
+            // decision journal exists on a plain Dock launch — no env plumbing. The
+            // bundle root is state.toml's parent; flat runs have no bundle and stay
+            // env-only (LIMINA_BALLOON_TRACE always overrides either way).
+            let default_trace = cli
+                .suspend_state_file
+                .as_deref()
+                .and_then(|st| st.parent())
+                .map(|bundle| bundle.join("logs").join("balloon-trace.jsonl"));
             Some(balloon_policy::BalloonPolicy::new(
                 min as u32 * balloon_policy::PAGES_PER_MIB,
                 max as u32 * balloon_policy::PAGES_PER_MIB,
                 cli.reclaim,
                 sock,
+                default_trace,
             ))
         }
         (Some((min, max)), Some(_)) => {
