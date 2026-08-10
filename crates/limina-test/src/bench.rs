@@ -359,6 +359,11 @@ impl BenchRun {
 
     /// Serialize host samples as CSV alongside the guest CSV.
     pub fn write_host_samples(&self, samples: &[HostSample]) -> Result<()> {
+        self.write_host_samples_named("host.csv", samples)
+    }
+
+    /// Like [`BenchRun::write_host_samples`] under an explicit name (multi-point sweeps).
+    pub fn write_host_samples_named(&self, file: &str, samples: &[HostSample]) -> Result<()> {
         let mut csv = String::from("ts_ms,target,actual,reclaimed,worker_footprint\n");
         for s in samples {
             let _ = writeln!(
@@ -367,7 +372,7 @@ impl BenchRun {
                 s.ts_ms, s.target, s.actual, s.reclaimed, s.worker_footprint
             );
         }
-        self.write("host.csv", &csv)
+        self.write(file, &csv)
     }
 }
 
