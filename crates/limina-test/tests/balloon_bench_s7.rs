@@ -48,6 +48,11 @@ struct Sizes {
     cache_file_mib: u64,
     chase_start: u64,
     chase_cap: u64,
+    /// Phase-C pinned working set (0 = none). Stock's bare console reaches its natural
+    /// plateau unaided; the enhanced 16k+zram guest yields everything reclaimable up to
+    /// any survivable cap (measured: 4 escalations to the cap in 1.5 s, zero puff), so
+    /// the unfillable gap must be guaranteed by pinning what a real desktop pins.
+    ballast_mib: u64,
 }
 
 fn sizes() -> Sizes {
@@ -57,12 +62,14 @@ fn sizes() -> Sizes {
             cache_file_mib: 3072,
             chase_start: 3072 * MIB,
             chase_cap: (4096 - 512) * MIB,
+            ballast_mib: 0,
         },
         limina_test::bench::Tier::Enhanced => Sizes {
             ram_mib: 6144,
             cache_file_mib: 4096,
             chase_start: 3584 * MIB,
             chase_cap: (6144 - 1536) * MIB,
+            ballast_mib: 2048,
         },
     }
 }
@@ -84,6 +91,69 @@ fn puff_since(guest: &Guest, mark: &str) -> u64 {
         .trim()
         .parse()
         .expect("puff_since: unparseable grep -c output")
+}
+
+/// Stage and spawn an mlocked, OOM-protected anon ballast of `mib` MiB (root: mlockall
+/// needs CAP_IPC_LOCK, the -1000 oom_score_adj needs root). Panics if the lock fails —
+/// unlocked ballast is quietly reclaimable and the phase-C guarantee evaporates.
+///
+/// Why it exists: the first enhanced chase proved a 16k+zram guest with nothing pinned
+/// yields EVERYTHING — every escalation step filled instantly to the cap (and the cap
+/// that would exceed its yield kills the desktop instead, agent and sshd first). The
+/// dogfood guest's gap exists because real desktops pin a working set (browser anon
+/// memory) the driver can never take. The ballast is that working set, synthesized:
+/// with it held, a mid-range target is guaranteed unfillable while the guest stays
+/// healthy.
+fn spawn_ballast(guest: &Guest, mib: u64) {
+    let script = format!(
+        r#"import ctypes, time
+SZ = {mib} * 1024 * 1024
+libc = ctypes.CDLL(None, use_errno=True)
+buf = ctypes.create_string_buffer(SZ)
+ctypes.memset(buf, 1, SZ)
+r = libc.mlockall(1)  # MCL_CURRENT
+open('/proc/self/oom_score_adj', 'w').write('-1000')
+open('/tmp/limina-ballast-ok', 'w').write('locked %d\n' % r)
+while True:
+    time.sleep(60)
+"#
+    );
+    guest
+        .ssh_exec(&format!(
+            "cat > /tmp/limina-ballast.py <<'BENCH_BALLAST_EOF'\n{script}\nBENCH_BALLAST_EOF"
+        ))
+        .expect("staging the ballast");
+    guest
+        .ssh_exec(
+            "rm -f /tmp/limina-ballast-ok; \
+             sudo setsid nohup python3 /tmp/limina-ballast.py </dev/null >/dev/null 2>&1 & \
+             echo spawned",
+        )
+        .expect("spawning the ballast");
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+        let out = guest
+            .ssh_exec("cat /tmp/limina-ballast-ok 2>/dev/null")
+            .unwrap_or_default();
+        if let Some(line) = out.lines().next() {
+            assert_eq!(
+                line.trim(),
+                "locked 0",
+                "ballast mlockall failed ({line}) — an unlocked ballast is reclaimable \
+                 and phase C's unfillable-target guarantee is gone"
+            );
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "ballast never reported in — spawn failed or the touch loop wedged the guest"
+        );
+    }
+}
+
+fn kill_ballast(guest: &Guest) {
+    let _ = guest.ssh_exec("sudo pkill -f '[l]imina-ballast.py' || true");
 }
 
 /// Sample the host at ~200 ms for `secs`, appending to `samples`; returns the last sample.
@@ -203,6 +273,13 @@ fn s7_out_of_puff_chase() {
     // ---- Phase C: chase the driver past its plateau — the permanent retry loop. ---------
     // Adaptive: whenever the driver closes the gap, raise the target one step (capped),
     // so the loop runs against the guest's NATURAL allocation ceiling for the whole hold.
+    if sz.ballast_mib > 0 {
+        eprintln!(
+            "  pinning {} MiB of mlocked ballast (the synthetic desktop working set)",
+            sz.ballast_mib
+        );
+        spawn_ballast(&guest, sz.ballast_mib);
+    }
     let mark_c = guest_epoch_secs(&guest).expect("guest clock");
     let mut chase_target = sz.chase_start;
     guest
@@ -253,6 +330,9 @@ fn s7_out_of_puff_chase() {
     eprintln!("  phase D: puff lines={puff_d} (want ≤1 ratelimit straggler)");
 
     // Deflate and collect.
+    if sz.ballast_mib > 0 {
+        kill_ballast(&guest);
+    }
     guest.set_balloon_target(0).ok();
     std::thread::sleep(Duration::from_secs(5));
     let (guest_csv, guest_samples) = sampler.stop_and_fetch(&guest).expect("fetching guest CSV");
@@ -277,6 +357,7 @@ fn s7_out_of_puff_chase() {
         ("scenario", "\"s7-out-of-puff\"".to_string()),
         ("ram_mib", sz.ram_mib.to_string()),
         ("cache_file_mib", sz.cache_file_mib.to_string()),
+        ("ballast_mib", sz.ballast_mib.to_string()),
         ("h1_free_kib", free_kib.to_string()),
         ("h1_avail_kib", avail_kib.to_string()),
         ("slow_fill_target", SLOW_FILL_TARGET.to_string()),
