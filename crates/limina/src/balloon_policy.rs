@@ -136,14 +136,24 @@ pub fn sample_host_pressure() -> HostPressureSample {
 
 /// Parse the `LIMINA_HOST_PRESSURE` override. Unset/empty means no override; a value that
 /// parses to none of the three levels is a misconfigured bench run and must not silently read
-/// as real sysctls, so it pins Normal (and [`read_host_pressure`] announces the override).
+/// as real sysctls, so it pins Normal (and [`sample_host_pressure`] announces the override).
+///
+/// `@/path/to/file` re-reads the level from that file on every sample: a process env var is
+/// frozen at spawn, but the bench's S6 staircase needs the level to *change mid-run* — the
+/// harness rewrites the file. An unreadable/empty file, unlike an unset var, is still an
+/// active override (pinned Normal): mid-bench the real sysctls must never leak back in.
 fn host_pressure_override(var: Option<String>) -> Option<HostPressure> {
     let var = var?;
     let var = var.trim();
     if var.is_empty() {
         return None;
     }
-    Some(match var.to_ascii_lowercase().as_str() {
+    let level = if let Some(path) = var.strip_prefix('@') {
+        std::fs::read_to_string(path).unwrap_or_default()
+    } else {
+        var.to_string()
+    };
+    Some(match level.trim().to_ascii_lowercase().as_str() {
         "warn" => HostPressure::Warn,
         "critical" => HostPressure::Critical,
         _ => HostPressure::Normal,
@@ -957,6 +967,26 @@ mod tests {
         assert_eq!(over("CRITICAL"), Some(HostPressure::Critical));
         // A typo must not silently fall through to the real sysctls mid-bench.
         assert_eq!(over("critcal"), Some(HostPressure::Normal));
+    }
+
+    /// `@file` re-reads the level per sample (the S6 staircase seam); a vanished file stays
+    /// an active override (Normal), never a fall-through to the sysctls.
+    #[test]
+    fn host_pressure_override_follows_a_file() {
+        let path = std::env::temp_dir().join(format!("hp-seam-test-{}", std::process::id()));
+        let arg = Some(format!("@{}", path.display()));
+        std::fs::write(&path, "warn\n").unwrap();
+        assert_eq!(
+            host_pressure_override(arg.clone()),
+            Some(HostPressure::Warn)
+        );
+        std::fs::write(&path, "critical").unwrap();
+        assert_eq!(
+            host_pressure_override(arg.clone()),
+            Some(HostPressure::Critical)
+        );
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(host_pressure_override(arg), Some(HostPressure::Normal));
     }
 
     #[test]

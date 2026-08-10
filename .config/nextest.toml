@@ -21,6 +21,7 @@ slow-timeout = { period = "120s" }
 [[profile.default.overrides]]
 filter = '''
 binary(balloon) | binary(balloon_burst) | binary(balloon_inflate) | binary(balloon_psi)
+| binary(~balloon_bench)
 | binary(venus_replay) | binary(venus_fence_present) | binary(venus_fence_lost)
 | binary(venus_park_on_busy_reset) | binary(venus_reset) | binary(venus_session_preserved)
 | binary(inplace_s2idle) | binary(hvf_graceful) | binary(l2_vcpu_hotplug)

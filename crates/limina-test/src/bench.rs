@@ -394,6 +394,340 @@ pub fn mib_per_s(bytes: u64, elapsed: Duration) -> f64 {
     (bytes as f64 / (1024.0 * 1024.0)) / secs
 }
 
+// ---------------------------------------------------------------------------
+// Decision-trace parsing (the LIMINA_BALLOON_TRACE JSONL the supervisor writes)
+// ---------------------------------------------------------------------------
+
+/// One parsed `LIMINA_BALLOON_TRACE` line — the fields the summarizer consumes. The writer
+/// (`balloon_policy::trace_decision`) emits flat JSON with stable keys; this parser is
+/// deliberately a key-scanner, not a JSON library: same no-serde trade as the writer.
+#[derive(Debug, Clone, Default)]
+pub struct TraceEvent {
+    pub ts_ms: u64,
+    pub some_avg10: u64,
+    pub avail_kib: u64,
+    /// Blended host level acted on ("normal"/"warn"/"critical").
+    pub host: String,
+    pub current_pages: u64,
+    /// "set" or the hold gate ("converged"/"not-idle"/"dead-band"/"not-calm"/"cooldown"/"dwell").
+    pub decision: String,
+    pub new_target_pages: Option<u64>,
+    pub cooldown_active: bool,
+    pub sent: bool,
+}
+
+fn json_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let tag = format!("\"{key}\":");
+    let start = line.find(&tag)? + tag.len();
+    let rest = &line[start..];
+    let end = rest
+        .char_indices()
+        .find(|(i, c)| {
+            if rest.starts_with('"') {
+                *c == '"' && *i > 0
+            } else {
+                *c == ',' || *c == '}'
+            }
+        })
+        .map(|(i, _)| if rest.starts_with('"') { i + 1 } else { i })?;
+    Some(&rest[..end])
+}
+
+fn json_u64(line: &str, key: &str) -> u64 {
+    json_field(line, key)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+fn json_str(line: &str, key: &str) -> String {
+    json_field(line, key)
+        .map(|v| v.trim_matches('"').to_string())
+        .unwrap_or_default()
+}
+
+/// Parse a full trace file; unparseable lines are skipped (the writer appends atomically
+/// per line, but a run can die mid-write).
+pub fn parse_trace(jsonl: &str) -> Vec<TraceEvent> {
+    jsonl
+        .lines()
+        .filter(|l| l.contains("\"decision\":"))
+        .map(|l| TraceEvent {
+            ts_ms: json_u64(l, "ts_ms"),
+            some_avg10: json_u64(l, "some_avg10"),
+            avail_kib: json_u64(l, "avail_kib"),
+            host: json_str(l, "host"),
+            current_pages: json_u64(l, "current_pages"),
+            decision: json_str(l, "decision"),
+            new_target_pages: json_field(l, "new_target_pages")
+                .filter(|v| *v != "null")
+                .and_then(|v| v.parse().ok()),
+            cooldown_active: json_field(l, "cooldown_active") == Some("true"),
+            sent: json_field(l, "sent") == Some("true"),
+        })
+        .collect()
+}
+
+/// The first *sent* target decrease at/after `t_ms` — the policy's detection instant for a
+/// release. Returns `(ts_ms, from_pages, to_pages)`.
+pub fn first_target_decrease_after(trace: &[TraceEvent], t_ms: u64) -> Option<(u64, u64, u64)> {
+    trace.iter().find_map(|e| {
+        let new = e.new_target_pages?;
+        (e.ts_ms >= t_ms && e.sent && new < e.current_pages).then_some((
+            e.ts_ms,
+            e.current_pages,
+            new,
+        ))
+    })
+}
+
+/// Count direction reversals in the *sent* target sequence (the oscillation metric).
+pub fn target_reversals(trace: &[TraceEvent]) -> usize {
+    let targets: Vec<u64> = trace
+        .iter()
+        .filter(|e| e.sent)
+        .filter_map(|e| e.new_target_pages)
+        .collect();
+    targets
+        .windows(3)
+        .filter(|w| (w[1] > w[0]) != (w[2] > w[1]))
+        .count()
+}
+
+// ---------------------------------------------------------------------------
+// Guest-side workload: the throttled allocation burst (S2/S5)
+// ---------------------------------------------------------------------------
+
+const BURST_PY: &str = "/tmp/limina-burst.py";
+const BURST_OUT: &str = "/tmp/limina-burst.out";
+
+/// What the burst allocator has done so far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BurstStatus {
+    /// Still allocating: bytes touched so far.
+    Running(u64),
+    /// Touched everything; holding the allocation (ts_ms of completion).
+    Complete(u64),
+    /// The process is gone without BURST-OK — killed (the OOM killer's signature).
+    Died,
+}
+
+/// The staged burst script (unit-tested for syntax like the sampler). Touches `total` bytes
+/// of anonymous memory at `rate` bytes/s (0 = unthrottled), logging per-chunk timestamps,
+/// then HOLDS the allocation (relief measurements need the pressure to persist until the
+/// harness kills it).
+fn burst_script(total: u64, rate: u64) -> String {
+    format!(
+        r#"import ctypes
+import time
+
+CH = 64 * 1024 * 1024
+total = {total}
+rate = {rate}
+chunks = []
+out = open('{BURST_OUT}', 'w', buffering=1)
+start = time.time()
+alloc = 0
+while alloc < total:
+    b = ctypes.create_string_buffer(CH)
+    ctypes.memset(b, 1, CH)
+    chunks.append(b)
+    alloc += CH
+    out.write('chunk %d %d\n' % (alloc // CH, int(time.time() * 1000)))
+    if rate > 0:
+        d = (start + alloc / rate) - time.time()
+        if d > 0:
+            time.sleep(d)
+out.write('BURST-OK %d\n' % int(time.time() * 1000))
+while True:
+    time.sleep(60)
+"#
+    )
+}
+
+/// Stage and launch the burst detached; returns the host-clock ms just before the spawn
+/// command went out (`t0` for detection-latency metrics; the guest logs its own per-chunk
+/// timestamps on the same clock).
+pub fn start_burst(guest: &Guest, total: u64, rate: u64) -> Result<u64> {
+    let script = burst_script(total, rate);
+    guest
+        .ssh_exec(&format!(
+            "cat > {BURST_PY} <<'BENCH_BURST_EOF'\n{script}\nBENCH_BURST_EOF"
+        ))
+        .context("staging the burst allocator")?;
+    let t0 = now_ms();
+    guest
+        .ssh_exec(&format!(
+            "rm -f {BURST_OUT}; \
+             setsid nohup python3 {BURST_PY} </dev/null >/dev/null 2>&1 & \
+             echo spawned"
+        ))
+        .context("spawning the burst allocator")?;
+    Ok(t0)
+}
+
+/// Poll the burst's progress. The bracketed pgrep avoids the ssh-shell self-match trap.
+pub fn burst_status(guest: &Guest) -> Result<BurstStatus> {
+    let out = guest
+        .ssh_exec(&format!("cat {BURST_OUT} 2>/dev/null"))
+        .unwrap_or_default();
+    if let Some(ok) = out.lines().find(|l| l.starts_with("BURST-OK")) {
+        let ts = ok
+            .split_whitespace()
+            .nth(1)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        return Ok(BurstStatus::Complete(ts));
+    }
+    let alive = guest
+        .ssh_exec("pgrep -f '[l]imina-burst.py' | head -1")
+        .unwrap_or_default();
+    if alive.trim().is_empty() {
+        return Ok(BurstStatus::Died);
+    }
+    let chunks = out.lines().filter(|l| l.starts_with("chunk")).count() as u64;
+    Ok(BurstStatus::Running(chunks * 64 * 1024 * 1024))
+}
+
+/// Kill the burst (releases its held allocation).
+pub fn kill_burst(guest: &Guest) -> Result<()> {
+    guest
+        .ssh_exec("pkill -f '[l]imina-burst.py' || true")
+        .map(|_| ())
+        .context("killing the burst allocator")
+}
+
+// ---------------------------------------------------------------------------
+// Control-plane relay (the harness playing limina-agent on the stock baseline)
+// ---------------------------------------------------------------------------
+
+/// Join the control plane as the agent (Hello/Welcome) with the `mempressure` capability.
+pub fn join_control_as_agent(guest: &mut Guest, name: &str) -> Result<crate::AgentConn> {
+    use limina_proto::{Hello, Message};
+    let mut conn = guest
+        .connect_control(Duration::from_secs(30))
+        .context("connecting to the control plane")?;
+    conn.send(&Message::Hello(Hello {
+        agent: name.to_string(),
+        caps: vec!["mempressure".to_string()],
+        pagesize: 4096,
+    }))
+    .context("sending Hello")?;
+    match conn.recv(Duration::from_secs(10)) {
+        Ok((_, Message::Welcome(_))) => Ok(conn),
+        other => anyhow::bail!("expected Welcome from the control plane, got {other:?}"),
+    }
+}
+
+/// Read the guest's REAL pressure + meminfo over ssh, as limina-agent would report them
+/// (`avg10=1.23` → `123`, the MemPressure hundredths scale).
+pub fn real_report(guest: &Guest) -> Option<limina_proto::MemPressure> {
+    let out = guest
+        .ssh_exec(
+            "cat /proc/pressure/memory; awk '/MemTotal|MemAvailable/{print $1, $2}' /proc/meminfo",
+        )
+        .ok()?;
+    let pct100 = |line_tag: &str, field: &str| -> u32 {
+        out.lines()
+            .find(|l| l.starts_with(line_tag))
+            .and_then(|l| l.split(&format!("{field}=")).nth(1))
+            .and_then(|r| r.split_whitespace().next())
+            .and_then(|v| v.parse::<f64>().ok())
+            .map(|f| (f * 100.0) as u32)
+            .unwrap_or(0)
+    };
+    let mem_kib = |tag: &str| -> u64 {
+        out.lines()
+            .find(|l| l.starts_with(tag))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    };
+    Some(limina_proto::MemPressure {
+        some_avg10: pct100("some", "avg10"),
+        some_avg60: pct100("some", "avg60"),
+        full_avg10: pct100("full", "avg10"),
+        full_avg60: pct100("full", "avg60"),
+        mem_available_kib: mem_kib("MemAvailable:"),
+        mem_total_kib: mem_kib("MemTotal:"),
+    })
+}
+
+/// A synthetic idle, memory-rich report for `total_mib`: drives the policy to inflate
+/// (the balloon_psi/balloon_burst drive).
+pub fn idle_report(total_mib: u64) -> limina_proto::MemPressure {
+    let total = total_mib * 1024;
+    limina_proto::MemPressure {
+        some_avg10: 0,
+        some_avg60: 0,
+        full_avg10: 0,
+        full_avg60: 0,
+        mem_available_kib: total * 70 / 100,
+        mem_total_kib: total,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Summarizer helpers over the sample series
+// ---------------------------------------------------------------------------
+
+/// Time-integral of a PSI avg10 channel over `[from_ms, to_ms]`, in percent·seconds
+/// (step-sum: each sample's value held until the next).
+pub fn psi_integral_pct_s(
+    samples: &[GuestSample],
+    field: impl Fn(&GuestSample) -> u64,
+    from_ms: u64,
+    to_ms: u64,
+) -> f64 {
+    let window: Vec<&GuestSample> = samples
+        .iter()
+        .filter(|s| s.ts_ms >= from_ms && s.ts_ms <= to_ms)
+        .collect();
+    window
+        .windows(2)
+        .map(|w| {
+            let dt_s = (w[1].ts_ms - w[0].ts_ms) as f64 / 1000.0;
+            (field(w[0]) as f64 / 100.0) * dt_s
+        })
+        .sum()
+}
+
+/// Delta of a cumulative counter between the last sample ≤ `from_ms` (or the first) and the
+/// last sample ≤ `to_ms`.
+pub fn counter_delta(
+    samples: &[GuestSample],
+    field: impl Fn(&GuestSample) -> u64,
+    from_ms: u64,
+    to_ms: u64,
+) -> u64 {
+    let at = |t: u64| {
+        samples
+            .iter()
+            .filter(|s| s.ts_ms <= t)
+            .next_back()
+            .or(samples.first())
+            .map(&field)
+            .unwrap_or(0)
+    };
+    at(to_ms).saturating_sub(at(from_ms))
+}
+
+/// Count OOM kills in the guest kernel log since the given guest epoch-seconds watermark.
+pub fn count_oom_since(guest: &Guest, since_epoch_secs: &str) -> u64 {
+    guest
+        .ssh_exec(&format!(
+            "sudo journalctl -k --since=@{since_epoch_secs} 2>/dev/null \
+             | grep -ci 'out of memory\\|oom-kill' || true"
+        ))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// The guest's wall clock in epoch seconds (journal watermark).
+pub fn guest_epoch_secs(guest: &Guest) -> Result<String> {
+    Ok(guest.ssh_exec("date +%s")?.trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,25 +759,76 @@ mod tests {
     /// flattened indentation otherwise only surfaces as a dead sampler in a live boot.
     /// Skips silently on a host without python3 (the dev Macs all have it).
     #[test]
-    fn sampler_script_is_valid_python() {
-        let script = sampler_script(250);
-        assert!(script.contains(GUEST_CSV_HEADER));
-        let dir = std::env::temp_dir().join(format!("limina-bench-pyck-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("sampler.py");
-        std::fs::write(&path, &script).unwrap();
-        let out = std::process::Command::new("python3")
-            .args(["-m", "py_compile"])
-            .arg(&path)
-            .output();
-        std::fs::remove_dir_all(&dir).ok();
-        match out {
-            Ok(o) => assert!(
-                o.status.success(),
-                "sampler script does not compile:\n{}\n--- script ---\n{script}",
-                String::from_utf8_lossy(&o.stderr)
+    fn staged_python_is_valid() {
+        for (name, script) in [
+            ("sampler", sampler_script(250)),
+            (
+                "burst",
+                burst_script(3 * 1024 * 1024 * 1024, 512 * 1024 * 1024),
             ),
-            Err(_) => eprintln!("SKIPPED sampler_script_is_valid_python: no python3 on host"),
+        ] {
+            let dir = std::env::temp_dir()
+                .join(format!("limina-bench-pyck-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("staged.py");
+            std::fs::write(&path, &script).unwrap();
+            let out = std::process::Command::new("python3")
+                .args(["-m", "py_compile"])
+                .arg(&path)
+                .output();
+            std::fs::remove_dir_all(&dir).ok();
+            match out {
+                Ok(o) => assert!(
+                    o.status.success(),
+                    "{name} script does not compile:\n{}\n--- script ---\n{script}",
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+                Err(_) => {
+                    eprintln!("SKIPPED staged_python_is_valid: no python3 on host");
+                    return;
+                }
+            }
         }
+    }
+
+    /// Trace-line parsing against the exact shape `trace_decision` writes.
+    #[test]
+    fn trace_parser_reads_the_writer_shape() {
+        let jsonl = concat!(
+            r#"{"ts_ms":1000,"mode":"Moderate","some_avg10":0,"some_avg60":0,"full_avg10":0,"full_avg60":0,"avail_kib":4194304,"total_kib":6291456,"host_raw_level":1,"host_avail_pct":80,"host":"normal","host_injected":false,"current_pages":0,"decision":"set","new_target_pages":65536,"cooldown_active":false,"sent":true}"#,
+            "\n",
+            r#"{"ts_ms":2000,"mode":"Moderate","some_avg10":1500,"some_avg60":300,"full_avg10":10,"full_avg60":5,"avail_kib":262144,"total_kib":6291456,"host_raw_level":null,"host_avail_pct":null,"host":"warn","host_injected":true,"current_pages":65536,"decision":"set","new_target_pages":0,"cooldown_active":true,"sent":true}"#,
+            "\n",
+            r#"{"ts_ms":3000,"mode":"Moderate","some_avg10":0,"some_avg60":0,"full_avg10":0,"full_avg60":0,"avail_kib":4194304,"total_kib":6291456,"host_raw_level":1,"host_avail_pct":80,"host":"normal","host_injected":false,"current_pages":0,"decision":"cooldown","new_target_pages":null,"cooldown_active":true,"sent":false}"#,
+            "\ngarbage line\n",
+        );
+        let trace = parse_trace(jsonl);
+        assert_eq!(trace.len(), 3);
+        assert_eq!(trace[0].new_target_pages, Some(65536));
+        assert_eq!(trace[0].host, "normal");
+        assert!(trace[0].sent && !trace[0].cooldown_active);
+        assert_eq!(trace[1].some_avg10, 1500);
+        assert_eq!(trace[1].new_target_pages, Some(0));
+        assert_eq!(trace[2].decision, "cooldown");
+        assert_eq!(trace[2].new_target_pages, None);
+        // The release at ts=2000 is the first sent decrease after ts=1500.
+        assert_eq!(
+            first_target_decrease_after(&trace, 1500),
+            Some((2000, 65536, 0))
+        );
+        assert_eq!(first_target_decrease_after(&trace, 2500), None);
+    }
+
+    #[test]
+    fn reversal_counting() {
+        let ev = |ts: u64, tgt: u64| TraceEvent {
+            ts_ms: ts,
+            new_target_pages: Some(tgt),
+            sent: true,
+            ..Default::default()
+        };
+        // up, up, down, up: two reversals.
+        let trace = vec![ev(1, 10), ev(2, 20), ev(3, 30), ev(4, 5), ev(5, 40)];
+        assert_eq!(target_reversals(&trace), 2);
     }
 }

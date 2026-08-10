@@ -423,6 +423,9 @@ pub struct GuestConfig {
     /// the guest RAM; setting this starts the supervisor's PSI autoballoon policy. See
     /// [`with_memory`](GuestConfig::with_memory).
     pub memory: Option<(usize, usize)>,
+    /// `--reclaim` mode override for the autoballoon policy (the supervisor defaults to
+    /// moderate); the bench sweeps this axis.
+    pub reclaim: Option<String>,
     /// Extra environment variables for the supervisor process (e.g. `LIMINA_PASTEBOARD`).
     pub envs: Vec<(String, String)>,
     /// Host directories shared into the guest (`--share name=path[:ro]` → virtiofs tag
@@ -495,6 +498,7 @@ impl GuestConfig {
             control_socket: false,
             balloon_control: false,
             memory: None,
+            reclaim: None,
             envs: Vec::new(),
             shares: Vec::new(),
             data_disks: Vec::new(),
@@ -583,6 +587,7 @@ impl GuestConfig {
             control_socket: false,
             balloon_control: false,
             memory: None,
+            reclaim: None,
             envs: Vec::new(),
             shares: Vec::new(),
             data_disks: Vec::new(),
@@ -673,6 +678,7 @@ impl GuestConfig {
             control_socket: false,
             balloon_control: false,
             memory: None,
+            reclaim: None,
             envs: Vec::new(),
             shares: Vec::new(),
             data_disks: Vec::new(),
@@ -714,6 +720,7 @@ impl GuestConfig {
             control_socket: false,
             balloon_control: false,
             memory: None,
+            reclaim: None,
             envs: Vec::new(),
             shares: Vec::new(),
             data_disks: Vec::new(),
@@ -777,6 +784,7 @@ impl GuestConfig {
             control_socket: false,
             balloon_control: false,
             memory: None,
+            reclaim: None,
             envs: Vec::new(),
             shares: Vec::new(),
             data_disks: Vec::new(),
@@ -911,6 +919,7 @@ impl GuestConfig {
             control_socket: false,
             balloon_control: false,
             memory: None,
+            reclaim: None,
             envs: Vec::new(),
             shares: Vec::new(),
             data_disks: Vec::new(),
@@ -1177,6 +1186,13 @@ impl GuestConfig {
     pub fn with_memory(mut self, min_mib: usize, max_mib: usize) -> GuestConfig {
         self.memory = Some((min_mib, max_mib));
         self.ram_mib = max_mib;
+        self
+    }
+
+    /// Select the autoballoon `--reclaim` mode (`disabled`/`light`/`moderate`/`aggressive`;
+    /// the supervisor defaults to moderate). Only meaningful with [`GuestConfig::with_memory`].
+    pub fn with_reclaim(mut self, mode: &str) -> GuestConfig {
+        self.reclaim = Some(mode.to_string());
         self
     }
 
@@ -1623,6 +1639,9 @@ impl Guest {
         // Dynamic-memory range (M6): starts the supervisor's PSI autoballoon policy.
         if let Some((min, max)) = cfg.memory {
             cmd.arg("--memory").arg(format!("{min}..{max}"));
+        }
+        if let Some(mode) = &cfg.reclaim {
+            cmd.arg("--reclaim").arg(mode);
         }
         let capture_png = match &cfg.display {
             Some(d) => {
