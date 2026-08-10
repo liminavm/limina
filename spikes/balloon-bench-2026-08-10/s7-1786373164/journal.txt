@@ -1,0 +1,10 @@
+1786373257.519249 fedora kernel: virtio_balloon virtio0: Out of puff! Can't get 1 pages
+1786373257.759726 fedora kernel: virtio_balloon virtio0: Out of puff! Can't get 1 pages
+1786373257.997118 fedora kernel: virtio_balloon virtio0: Out of puff! Can't get 1 pages
+1786373258.292349 fedora kernel: virtio_balloon virtio0: Out of puff! Can't get 1 pages
+1786373258.516061 fedora kernel: virtio_balloon virtio0: Out of puff! Can't get 1 pages
+1786373258.736068 fedora kernel: virtio_balloon virtio0: Out of puff! Can't get 1 pages
+1786373259.022076 fedora kernel: virtio_balloon virtio0: Out of puff! Can't get 1 pages
+1786373259.252426 fedora kernel: virtio_balloon virtio0: Out of puff! Can't get 1 pages
+1786373259.464145 fedora kernel: virtio_balloon virtio0: Out of puff! Can't get 1 pages
+1786373259.675037 fedora kernel: virtio_balloon virtio0: Out of puff! Can't get 1 pages

@@ -1,0 +1,1 @@
+{"scenario":"s4-idle-converge","mode":"moderate","t_start_ms":1786370747121,"onset_ms":245,"converge_ms":38356,"sent_target_changes":16,"reversals":0,"median_report_gap_ms":1268,"final_target":4294967296,"final_actual":4294967296,"final_reclaimed":4260347904,"final_worker_footprint":1646942400,"out_of_puff_lines":0,"gap_residency_pct":0.0,"guest_samples":1341}

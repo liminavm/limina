@@ -1,0 +1,1 @@
+{"scenario":"s7-out-of-puff","h1_free_kib":223252,"h1_avail_kib":3486132,"slow_fill_target":2147483648,"slow_fill_actual_60s":2147483648,"slow_fill_mib_s":33.0,"puff_lines_b":0,"chase_final_target":3758096384,"plateau_actual":3758096384,"puff_lines_c_90s":10,"puff_lines_d_30s":0,"kswapd_cpu_ticks_delta":606,"guest_samples":782}
