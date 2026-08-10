@@ -36,6 +36,10 @@ adaptation).
 capture both wait on the single shared privileged helper (`docs/design/privileged-helper.md`);
 M8's x86 emulation and multi-display remainder are unscheduled.
 
+**Moonshot, design captured.** M16 (LiminaOS: a purpose-built guest distro + system
+compositor) — design discussion recorded 2026-08-10, deliberately unscheduled. The
+compositor half is sequenced to be shippable on the Fedora enhanced tier first.
+
 **Not a milestone, but load-bearing.** Since roughly 2026-07 a growing share of the work has
 been *robustness* rather than features — host-memory discipline, guest-triggerable aborts,
 lifecycle correctness. It now has its own cross-cutting section below, because filing it
@@ -1789,6 +1793,176 @@ wins ships with a before/after on the guest's heavy-band `gpu p50`.
 
 ---
 
+## Milestone 16 — LiminaOS: a purpose-built guest distribution + system compositor (moonshot)
+
+**Status: 💭 moonshot — design discussion captured 2026-08-10 (this session); nothing started,
+deliberately unscheduled.** Recorded in full because the load-bearing decisions were actually
+made in that discussion; treat this section as the design memo until a `docs/design/` doc
+supersedes it.
+
+**Goal:** our own image-based guest distro on the GNOME OS strategy — **BuildStream** builds on
+the **freedesktop-sdk** base, **systemd-sysupdate** A/B image updates (not OSTree, not packages)
+— built solely for Apple Silicon guests (aarch64, 16 KiB-page-clean userspace, venus-first), with
+**Plymouth and GDM replaced by one Wayland system compositor** that owns the display from early
+boot to shutdown. LiminaOS becomes the first-class enhanced guest and eventually replaces the
+RPMs-over-Fedora enhanced delivery; the **two-tier guarantee is untouched** — stock Fedora keeps
+booting, this is the top tier, never the entry fee.
+
+### The system compositor (the heart of it)
+
+One Wayland compositor, started as early in boot as possible, running **unprivileged**, that is
+the *only* display owner for the machine's lifetime. No VTs, no KMS-master handoff, no
+Plymouth→GDM→session flicker chain. User sessions run **our session compositor**
+(the gnome-shell/mutter replacement) as its sole Wayland client, doing unredirected fullscreen
+**scanout passthrough** — the session's buffer flips straight to the primary plane. Boot splash,
+login, logout, lock, session switch all become one continuous visual timeline the system
+compositor animates.
+
+- **Prior art that makes this credible:** Wayland's *original* architecture (system compositor
+  hosting session compositors — dropped by desktops, fine in constrained environments, and a VM
+  guest is exactly that); **gamescope** (production proof of the nested-host + fullscreen-client
+  direct-scanout model, and of its core trap: forward client commits without imposing your own
+  frame clock or you add a frame of latency); **ChromeOS** (production proof of no-VTs, with a
+  minimal recovery console — our equivalents are serial + ssh + limina's console paths).
+- **Explicit non-goal: hosting stock mutter/GNOME nested.** The session compositor is ours, so
+  the system↔session protocol is **private and versioned in lockstep** — passthrough negotiation,
+  animation handoff, and everything a session compositor normally gets from KMS directly
+  (gamma/color, VRR, mode setting, DPMS) becomes protocol between two components we both own.
+  Stock guests get the stock Fedora path; they never meet this compositor.
+- **Privilege split:** the compositor gets the DRM master fd handed to it once (udev uaccess tag
+  / seatd / logind `TakeControl` on a VT-less seat — one line of policy). Session *tracking*
+  stays logind + pam_systemd (XDG_RUNTIME_DIR, polkit, ACLs); session *launching* — GDM's actual
+  job — is a small greetd-shaped privileged helper (PAM auth + spawn as user), same pattern as
+  `docs/design/privileged-helper.md`. Security win worth naming: the entire user session runs
+  with **no /dev/dri master and no /dev/input access at all**.
+- **Passthrough constraints on our stack:** the session's buffers must be LINEAR dmabufs (KK
+  modifier support is LINEAR-only — see M15 wave 4; render-direct-to-LINEAR is the win there
+  too, so the constraints compose).
+- **Host-side splash handoff — a lever no bare-metal distro has:** the limina window presents
+  its own boot visual instantly, before the guest produces a frame, and cross-fades to the
+  system compositor's first frame. Perceived boot is seamless regardless of how early the guest
+  compositor truly starts — which also means it can be an ordinary early systemd unit; the
+  Plymouth-style initrd/survive-switch-root trick is unnecessary (see boot chain below).
+- **Sole-display-owner obligations:** with every fallback display path deleted, compositor
+  failure needs deliberate design — systemd respawn policy, `sd_notify` watchdog, and serial as
+  the only oracle when it's down. ChromeOS accepted the same trade; it's a decision, not a
+  default.
+
+### Boot chain — every stage ours, no pivots
+
+**KRUN_EFI → systemd-boot → UKI (kernel + cmdline, no initrd) → systemd → system compositor.**
+
+- **No simpledrm, no framebuffer inheritance:** in a VM, virtio-gpu exists from cycle zero —
+  build it in, turn `CONFIG_SYSFB_SIMPLEFB` off, and `/dev/dri/card0` is there before PID 1
+  moves. The simpledrm→virtio-gpu handoff (the fiddliest part of "replace Plymouth" on bare
+  metal) simply doesn't exist. Consider `CONFIG_VT=n` outright: no fbcon, nothing to fight for
+  the DRM device on panic. Text (kmsg, emergency shell, rescue) lives on serial `ttyAMA0` — and
+  the Plymouth-details-mode trap that `console=ttyAMA0` causes today dies with Plymouth.
+- **No initrd** (ChromeOS is the existence proof): the initrd solves hardware discovery, and the
+  guest's answer is known at build time. A/B root selection is each boot entry's baked-in
+  `root=PARTUUID=<slot>`; **dm-verity without userspace** via `CONFIG_DM_INIT` +
+  `dm-mod.create=` on the cmdline (literally the ChromeOS mechanism); read-only verity root ⇒
+  no fsck problem (`/var` fscks normally later); a UKI without an initrd section is still one
+  signed/measurable object for sysupdate to replace. Given up: userspace-before-root — LUKS
+  root (fine: disk encryption belongs at the host image layer, FileVault/APFS) and the initrd
+  rescue shell (serial + automatic A/B fallback via boot counting / `boot-complete.target` is
+  better anyway). Watch-item: systemd's blessed paths increasingly assume an initrd exists —
+  expect the ChromeOS-shaped road and reading source over man pages. Acceptable; stated.
+
+### How software gets installed (the image-based elephant)
+
+Three tiers, and we deliberately do **not** build package layering (Silverblue's
+`rpm-ostree install` lesson: a crutch that reintroduces package management with worse
+ergonomics):
+
+1. **GUI apps → Flatpak.** Out of the base image, own update cadence, survive rollbacks in
+   `/var`. "The OS ships complete, apps come from Flathub" is the whole story for non-dev use.
+2. **CLI/dev → containers (toolbox/distrobox), first-class.** A mutable Fedora-or-anything
+   userland with real dnf, home shared, base sealed — how people actually live on
+   Silverblue/ChromeOS (Crostini is this model). We own the distro, so it ships preconfigured
+   with session integration (exported apps/binaries, default terminal target). This tier doubles
+   as the **agent-isolation boundary** (no access to the sealed base, the session compositor's
+   socket, or unshared mounts) — with clone-VM-per-agent as the stronger lever limina uniquely
+   makes cheap.
+3. **System-level tail → systemd-sysext.** Overlayfs on `/usr`, layers fine over the verity
+   root, composes with sysupdate. Because we control the image, common needs go *in the image*
+   next release; sysext is the escape hatch, not a pillar.
+
+### Development workflow for the compositor itself (the ladder)
+
+Inner loop → outer loop: (1) **nested** — the system compositor runs windowed as a client of the
+running session (we own both ends, small backend, zero blast radius); (2) **scratch clone VM**
+with the test build attached as a sysext — tests the real thing (DRM master, boot ordering,
+serial as log oracle) against a disposable file; (3) **sysext on the dogfood guest** as final
+soak — `systemd-sysext refresh` to install, `unmerge` or reboot-without to revert to the
+image's known-good build. This is GNOME OS's own hacking model; the reversibility is the point
+when the thing under test is the only display owner.
+
+### Compositor restart without dropping clients
+
+Two different problems, deliberately different answers:
+
+- **System compositor restart → reconnect model.** It has exactly one client, ours, on a private
+  protocol: build reconnect-and-republish into the session compositor and system-compositor
+  restarts are free. Do this one **first** (days, not weeks) — it alone makes live iteration on
+  the display owner painless, and the layer stays upgradeable forever.
+- **Session compositor planned restart/upgrade → exec-in-place handover** (generic reconnect is
+  a dead end for arbitrary clients: Qt can rebuild (`QT_WAYLAND_RECONNECT`), GTK can't and won't
+  soon). The design: freeze; **quiesce and drain both directions** (stop reading clients, finish
+  or snapshot in-flight requests, flush outgoing fully — an unflushable tail goes in the
+  snapshot and is written first by the successor, or a message is torn); keep the fds open
+  (CLOEXEC cleared, manifest of fd→role, systemd fd-store naming); write the state snapshot
+  (scene graph, serials, un-acked configures, frame callbacks) to a memfd; `exec` the new binary
+  **same PID**; successor deserializes and resumes. Load-bearing details:
+  - **DRM fds survive exec ⇒ master status, framebuffer objects, and GEM handles survive** —
+    the currently-scanned-out FB stays live, no modeset, no black frame. Handover is invisible.
+  - **Driver state does not survive**: EGL/Vulkan contexts die; therefore every long-held buffer
+    is held *as a dmabuf fd* (shm pools as fds), re-imported/re-mmapped by the successor.
+  - **libwayland is the least handover-friendly layer**: recreate every `wl_resource` with the
+    same object ID (`wl_resource_create` takes an explicit id) but the global serial counter has
+    no setter — patch libwayland-server (small) or own the server library. We own the stack.
+  - **Failure plan**: `exec` failing returns to the old process (handle it, resume). The
+    successor's deserialize is read-only-until-validated; on any error it execs *back* to the
+    old binary path recorded in the manifest — A/B semantics for the compositor binary itself.
+  - **Watchdog keeps ticking across exec** — successor must `sd_notify(WATCHDOG=1)` before
+    anything slow; snapshot load must fit the window.
+  - **Exercise it constantly** (restart-into-self on every scratch-lane deploy, snapshot
+    version round-trips in CI) — systemd's `daemon-reexec` stayed boring because it runs all
+    the time; a twice-a-year handover path rots into the scariest code we own.
+- **Crashes are scoped out, explicitly.** A crashed compositor can't serialize; crash survival
+  means an always-alive fd-holding shadow process (a real architecture commitment) or the
+  reconnect model's toolkit limits. Honest, shippable answer: crash = clean animated "session
+  ended" screen from the system compositor + relaunch. Sealed images + the test ladder should
+  make it rare.
+
+### Sequencing — compositor first, distro second
+
+The system compositor is independently valuable and **derisks the distro decision rather than
+depending on it**: it can ship on the *Fedora* enhanced tier first (RPMs replacing Plymouth+GDM
+through the existing enhanced delivery), where it's also the differentiated payoff — seamless
+boot-to-desktop is exactly the Parallels-polish gap. The distro is the bigger commitment and its
+real cost is not the initial build but the cadence forever after (security updates, toolchain
+bumps, kernel tracking) — freedesktop-sdk as the base layer is what makes that survivable for a
+small team; inherit it, don't rebuild it.
+
+**Done test (compositor phase):** an enhanced Fedora guest boots with no Plymouth/GDM into the
+system compositor, host-splash→guest cross-fade is seamless, login/logout are animated with no
+mode switch or black frame, the session runs with zero /dev/dri-master or /dev/input access, and
+a system-compositor restart mid-session is invisible to the seated session.
+**Done test (distro phase):** a LiminaOS image boots KRUN_EFI → systemd-boot → UKI → compositor
+with no initrd, no simpledrm, no VTs; sysupdate applies an A/B update and a forced-bad slot
+auto-rolls back via boot counting; Flatpak, toolbox, and a sysext all install and survive the
+update; a session-compositor exec-handover upgrade keeps a running GTK client alive.
+
+**Risks / spike first:** (a) exec-in-place handover on a toy compositor — fd manifest, snapshot
+round-trip, exec-back rollback (this is the gating unknown for the restart story); (b) no-initrd
+boot in a scratch VM — `root=PARTUUID` + `dm-mod.create=` verity root on our kernel config,
+**including KRUN_EFI → systemd-boot/UKI, which is untested today** (every guest boots GRUB);
+(c) passthrough latency — prove the system compositor adds zero frames on the fullscreen path
+(gamescope's problem) before building the animation layer on top.
+
+---
+
 ## Summary of net-new code vs libkrun patches
 
 | Milestone | Net-new limina code | libkrun (or fw/virgl) patches |
@@ -1809,6 +1983,7 @@ wins ships with a before/after on the guest's heavy-band `gpu p50`.
 | M13 visibility/power render adaptation 📋 planned | front-end occlusion/Space/power signal + hysteresis policy, `vm.toml [power]/[render]` config, host present cap/pause (reuse s2idle), agent frame-rate throttle message | present pause/cap knob (extends s2idle 0089) + fence-feedback pacing knob; relax deep-idle bias on occlusion |
 | M14 biometric auth ✅ both halves shipped | host CTAP2 authenticator (SEP ES256 + LAContext, CryptoKit blob store per VM), agent uhid FIDO bridge + vsock channel, later xHCI + FIDO/MOC-fingerprint gadgets, pam_u2f/authselect recipe | none for uhid transport (vsock exists); stock wave = xHCI controller + gadget device models in libkrun (shared with M7) |
 | M15 display pipeline v2 📋 planned | per-hw-display window/present policy (native refresh + VRR pacing), CALayer-per-plane compositing, WindowServer GPU-share profiling | krun-display EDID/modes per host display (incl. VRR range), virtio-gpu overlay-plane + YUV(NV12/P010)+color-props protocol extension (device + guest kernel, capset-gated), primary-plane format/modifier advertisement (XBGR/ABGR now; non-LINEAR per `spikes/scanout-modifiers/`), cursor-size lift (low-prio) |
+| M16 LiminaOS 💭 moonshot | system compositor + private session protocol, greetd-shaped session-launch helper, host-splash→guest cross-fade, exec-handover machinery; distro phase: BuildStream/fdo-sdk + sysupdate image pipeline | none host-side; guest kernel config (SYSFB off, `CONFIG_VT=n`, DM_INIT, virtio built-in) + small libwayland-server handover hooks on our forks |
 
 ## First three things to spike
 
