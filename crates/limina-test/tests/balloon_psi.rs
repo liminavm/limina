@@ -76,7 +76,7 @@ fn drive(
         conn.send(&Message::MemPressure(report))
             .expect("sending MemPressure to the control plane");
         std::thread::sleep(Duration::from_millis(1200));
-        let (actual, _) = guest.balloon_stats().expect("reading balloon stats");
+        let actual = guest.balloon_stats().expect("reading balloon stats").actual;
         eprintln!(
             "  injected some_avg10={} → balloon actual={} MiB",
             report.some_avg10,

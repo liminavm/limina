@@ -1394,6 +1394,16 @@ impl CapturedFrame {
     }
 }
 
+/// One `stats` reply from the worker's balloon control socket, all in bytes. `target` is the
+/// last commanded balloon size, `actual` the guest driver's self-reported size, `reclaimed`
+/// the cumulative host memory returned via `MADV_FREE_REUSABLE`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BalloonStats {
+    pub target: u64,
+    pub actual: u64,
+    pub reclaimed: u64,
+}
+
 /// How the supervisor (and thus the VM) ended.
 #[derive(Debug, Clone, Copy)]
 pub struct Outcome {
@@ -1917,9 +1927,10 @@ impl Guest {
         Ok(())
     }
 
-    /// Read balloon stats from the worker: `(actual_bytes, reclaimed_bytes)` — the guest's current
-    /// balloon size and the total host memory returned via `MADV_FREE_REUSABLE`. M6 dynamic memory.
-    pub fn balloon_stats(&self) -> Result<(u64, u64)> {
+    /// Read balloon stats from the worker. The `target`/`actual` gap is the oscillation /
+    /// "Out of puff" signature — a held nonzero gap means the guest is chasing a target it
+    /// cannot fill. M6 dynamic memory.
+    pub fn balloon_stats(&self) -> Result<BalloonStats> {
         use std::io::{BufRead, BufReader, Write};
         let mut stream = self.connect_balloon()?;
         writeln!(stream, "stats").context("requesting balloon stats")?;
@@ -1928,17 +1939,18 @@ impl Guest {
         BufReader::new(&stream)
             .read_line(&mut line)
             .context("reading balloon stats reply")?;
-        // Reply: `actual=<bytes> reclaimed=<bytes>`.
-        let mut actual = 0u64;
-        let mut reclaimed = 0u64;
+        // Reply: `target=<bytes> actual=<bytes> reclaimed=<bytes>`.
+        let mut stats = BalloonStats::default();
         for tok in line.split_whitespace() {
-            if let Some(v) = tok.strip_prefix("actual=") {
-                actual = v.parse().unwrap_or(0);
+            if let Some(v) = tok.strip_prefix("target=") {
+                stats.target = v.parse().unwrap_or(0);
+            } else if let Some(v) = tok.strip_prefix("actual=") {
+                stats.actual = v.parse().unwrap_or(0);
             } else if let Some(v) = tok.strip_prefix("reclaimed=") {
-                reclaimed = v.parse().unwrap_or(0);
+                stats.reclaimed = v.parse().unwrap_or(0);
             }
         }
-        Ok((actual, reclaimed))
+        Ok(stats)
     }
 
     /// Decode the current captured scanout PNG. Errors if no display was configured or no

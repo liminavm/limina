@@ -134,7 +134,7 @@ fn allocation_burst_survives_inflated_balloon() {
         conn.send(&Message::MemPressure(idle_report()))
             .expect("sending idle MemPressure");
         std::thread::sleep(Duration::from_millis(1200));
-        let (actual, _) = guest.balloon_stats().expect("reading balloon stats");
+        let actual = guest.balloon_stats().expect("reading balloon stats").actual;
         inflated = actual;
         if actual >= INFLATE_FLOOR {
             break;
@@ -227,7 +227,10 @@ fn allocation_burst_survives_inflated_balloon() {
             "sudo journalctl -k --since=@{since} 2>/dev/null | grep -ci 'out of memory\\|oom-kill' || true"
         ))
         .unwrap_or_default();
-    let (actual_after, _) = guest.balloon_stats().expect("post-burst balloon stats");
+    let actual_after = guest
+        .balloon_stats()
+        .expect("post-burst balloon stats")
+        .actual;
     eprintln!(
         "post-burst: verdict={verdict} oom-lines={} balloon actual={} MiB\n--- burst.out ---\n{burst_out}",
         oom.trim(),

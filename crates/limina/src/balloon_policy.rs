@@ -82,11 +82,39 @@ const HOST_HEALTHY_AVAILABLE_PERCENT: i32 = 40;
 /// Read the host's memory-pressure level (1 = normal, 2 = warn, 4 = critical), blended with the
 /// actual availability percentage. Errors read as Normal: the host kernel manages its own
 /// pressure, and "don't squeeze the guest" is the safe default for guest performance.
+///
+/// `LIMINA_HOST_PRESSURE=normal|warn|critical` bypasses the sysctls entirely — a test/bench
+/// seam, not a user knob: `Light` and `Moderate` differ only under host Warn/Critical, which a
+/// healthy dev host never reports, so without injection most of the mode×host matrix is
+/// unreachable. Logged loudly (once) when active.
 pub fn read_host_pressure() -> HostPressure {
+    if let Some(level) = host_pressure_override(std::env::var("LIMINA_HOST_PRESSURE").ok()) {
+        static ANNOUNCED: std::sync::Once = std::sync::Once::new();
+        ANNOUNCED.call_once(|| {
+            log::warn!("autoballoon: host pressure OVERRIDDEN to {level:?} (LIMINA_HOST_PRESSURE)");
+        });
+        return level;
+    }
     blend_host_pressure(
         sysctl_i32(c"kern.memorystatus_vm_pressure_level"),
         sysctl_i32(c"kern.memorystatus_level"),
     )
+}
+
+/// Parse the `LIMINA_HOST_PRESSURE` override. Unset/empty means no override; a value that
+/// parses to none of the three levels is a misconfigured bench run and must not silently read
+/// as real sysctls, so it pins Normal (and [`read_host_pressure`] announces the override).
+fn host_pressure_override(var: Option<String>) -> Option<HostPressure> {
+    let var = var?;
+    let var = var.trim();
+    if var.is_empty() {
+        return None;
+    }
+    Some(match var.to_ascii_lowercase().as_str() {
+        "warn" => HostPressure::Warn,
+        "critical" => HostPressure::Critical,
+        _ => HostPressure::Normal,
+    })
 }
 
 fn sysctl_i32(name: &std::ffi::CStr) -> Option<i32> {
@@ -661,6 +689,18 @@ mod tests {
         let allow = max / 16;
         let next = decide(&report_pages(300, avail, max), &i);
         assert_eq!(next, Some(21 * GIB_PAGES - (allow - avail)));
+    }
+
+    #[test]
+    fn host_pressure_override_parses_the_bench_seam() {
+        let over = |s: &str| host_pressure_override(Some(s.to_string()));
+        assert_eq!(host_pressure_override(None), None);
+        assert_eq!(over(""), None);
+        assert_eq!(over("normal"), Some(HostPressure::Normal));
+        assert_eq!(over("Warn"), Some(HostPressure::Warn));
+        assert_eq!(over("CRITICAL"), Some(HostPressure::Critical));
+        // A typo must not silently fall through to the real sysctls mid-bench.
+        assert_eq!(over("critcal"), Some(HostPressure::Normal));
     }
 
     #[test]

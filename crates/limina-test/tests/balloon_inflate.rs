@@ -35,19 +35,19 @@ fn mib(bytes: u64) -> u64 {
     bytes / MIB
 }
 
-/// Poll `balloon_stats().0` (actual bytes) until `pred` holds or the timeout elapses; returns the
+/// Poll the balloon's `actual` (bytes) until `pred` holds or the timeout elapses; returns the
 /// last reading.
 fn poll_actual(guest: &Guest, timeout: Duration, pred: impl Fn(u64) -> bool) -> u64 {
     let deadline = Instant::now() + timeout;
     loop {
-        let (actual, reclaimed) = guest.balloon_stats().expect("reading balloon stats");
+        let stats = guest.balloon_stats().expect("reading balloon stats");
         eprintln!(
             "  balloon actual={} MiB (reclaimed {} MiB)",
-            mib(actual),
-            mib(reclaimed)
+            mib(stats.actual),
+            mib(stats.reclaimed)
         );
-        if pred(actual) || Instant::now() >= deadline {
-            return actual;
+        if pred(stats.actual) || Instant::now() >= deadline {
+            return stats.actual;
         }
         std::thread::sleep(Duration::from_secs(2));
     }
@@ -87,7 +87,7 @@ fn host_target_inflates_and_deflates_the_guest_balloon() {
 
     let avail0 = mem_available_kib(&guest);
     let foot0 = guest.worker_phys_footprint().unwrap_or(0);
-    let (actual0, _) = guest.balloon_stats().expect("initial balloon stats");
+    let actual0 = guest.balloon_stats().expect("initial balloon stats").actual;
     eprintln!(
         "baseline: balloon actual={} MiB, guest MemAvailable={} MiB, worker footprint={} MiB",
         mib(actual0),
