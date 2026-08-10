@@ -1,0 +1,7 @@
+1786401356238 net-sweep [bracket-before]: stored=187889p (2.867G) live_net_sum=2.732G unattributed=0.135G
+1786401589670 net-sweep [cycle-0]: stored=1523147p (23.241G) live_net_sum=23.898G unattributed=-0.657G
+1786402206006 net-sweep [cycle-1]: stored=1612450p (24.604G) live_net_sum=25.203G unattributed=-0.599G
+1786402471335 net-sweep [cycle-2]: stored=1631516p (24.895G) live_net_sum=25.864G unattributed=-0.969G
+1786402736906 net-sweep [cycle-3]: stored=1622933p (24.764G) live_net_sum=25.925G unattributed=-1.161G
+1786403002252 net-sweep [cycle-4]: stored=1616548p (24.667G) live_net_sum=25.814G unattributed=-1.147G
+1786403082578 net-sweep [bracket-after]: stored=213410p (3.256G) live_net_sum=3.123G unattributed=0.133G

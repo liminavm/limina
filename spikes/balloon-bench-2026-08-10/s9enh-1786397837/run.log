@@ -1,0 +1,336 @@
+==> building limina + limina-vmm (debug)
+warning: field `status_ioc` is never read
+  --> third_party/libkrun/src/devices/src/usb/xhci/engine.rs:78:5
+   |
+68 | pub(super) struct ControlEvents {
+   |                   ------------- field in this struct
+...
+78 |     status_ioc: bool,
+   |     ^^^^^^^^^^
+   |
+   = note: `ControlEvents` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `krun-devices` (lib) generated 1 warning
+warning: limina-vmm@0.1.0: virglrenderer: linking OUR prefix (<repo>/third_party/virgl-prefix/lib)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s
+==> codesigning the worker (hypervisor entitlement)
+<repo>/target/debug/limina-vmm: replacing existing signature
+signed <repo>/target/debug/limina-vmm (com.apple.security.hypervisor OK)
+==> checking the worker links our virglrenderer (venus guard)
+check-virgl-link: OK — target/debug/limina-vmm links our virgl-prefix virglrenderer
+==> building the L1 test guest (kernel + rootfs)
+    Finished `release` profile [optimized] target(s) in 0.11s
+==> building the hvf-trap-probe (bare-metal PSCI probe for hvf_graceful)
+==> running boot tests (LIMINA_HVF_TESTS=1)
+   Compiling limina-test v0.1.0 (<repo>/crates/limina-test)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.88s
+────────────
+ Nextest run ID 9c2f0c04-e293-4ad7-b3bf-9be665256027 with nextest profile: default
+    Starting 1 test across 1 binary (62 binaries skipped)
+        SLOW [>120.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>240.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>360.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>480.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>600.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>720.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>840.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>960.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1080.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1200.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1320.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1440.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1560.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1680.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1800.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1920.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>2040.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>2160.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>2280.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>2400.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>2520.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>2640.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>2760.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>2880.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>3000.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        FAIL [3110.354s] (1/1) limina-test::balloon_bench_s9 s9_ledger_churn
+  stdout ───
+
+    running 1 test
+    guest SSH forward ready: ssh -p 51223 <user>@127.0.0.1
+    test s9_ledger_churn has been running for over 60 seconds
+    test s9_ledger_churn ... FAILED
+
+    failures:
+
+    failures:
+        s9_ledger_churn
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3110.33s
+
+  stderr ───
+    S9 ledger churn (enhanced tier, 5 cycles); artifacts -> "<repo>/target/balloon-bench/s9enh-1786397837"
+      vm_stat stored before boot: 156803 pages (~2.39 G)
+      net-sweep [bracket-before]: stored=156760p (2.392G) live_net_sum=2.258G unattributed=0.134G
+    [2026-08-10T21:37:23Z INFO  limina] suspend armed by default: snapshot path /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-test-98366-0/disk.raw.limina-suspend.bin
+    [2026-08-10T21:37:23Z INFO  limina] dynamic memory: 3072..12288 MiB (reclaim Moderate)
+    [2026-08-10T21:37:23Z WARN  limina::balloon_policy] autoballoon: decision trace -> <repo>/target/balloon-bench/s9enh-1786397837/trace.jsonl
+    [2026-08-10T21:37:23Z INFO  limina::gateway] death-pact watcher up (pid 99630) tying gvproxy 99629 to this supervisor
+    [2026-08-10T21:37:23Z INFO  limina::gateway] gvproxy gateway up (pid 99629, socket "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-99626.sock", ssh-port 51223)
+    [2026-08-10T21:37:23Z INFO  limina::supervisor] VM worker started (pid 99631); Ctrl-C to power off
+    [2026-08-10T21:37:25.164121Z INFO  limina_vmm::krun] battery: mirroring the host battery into the guest
+    [2026-08-10T21:37:25.164610Z INFO  limina_vmm::krun] USB: cold-plugging the FIDO authenticator gadget ("/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-fido-usb-99626.sock")
+    [2026-08-10T21:37:25.164769Z INFO  limina_vmm::krun] USB: cold-plugging the fingerprint reader gadget ("/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-moc-usb-99626.sock")
+    [2026-08-10T21:37:25.164875Z INFO  limina_vmm::krun] building microVM: 4 vcpu(s), 12288 MiB, 1 disk(s), 0 share(s), display=false, boot=EFI firmware
+    [2026-08-10T21:37:25.168541Z INFO  limina_vmm::krun] balloon: control socket listening on "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-test-98366-0/balloon.sock"
+    [2026-08-10T21:37:25.168607Z INFO  limina_vmm::krun] microVM running; entering event loop (SIGTERM/SIGINT → guest power-off)
+    [2026-08-10T21:37:25.168751Z INFO  limina_vmm::power] host sleep: registered (guest will s2idle around host sleep)
+    [2026-08-10T21:37:25Z INFO  limina::moc::usb] moc: connected to the worker gadget at "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-moc-usb-99626.sock"
+    [2026-08-10T21:37:25.283831Z INFO  limina_vmm::moc_usb] moc-usb: supervisor connected
+    [2026-08-10T21:37:25Z INFO  limina::fido::usb] fido-usb: connected to the worker gadget at "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-fido-usb-99626.sock"
+    [2026-08-10T21:37:25.310431Z INFO  limina_vmm::fido_usb] fido-usb: supervisor connected
+    [2026-08-10T21:37:37.410265Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:37:37Z INFO  limina::control] control: guest agent connected: limina-agent/0.1.0 caps=["heartbeat", "shutdown", "mempressure"] pagesize=16384
+    [2026-08-10T21:37:38Z WARN  limina::balloon_policy] autoballoon: host pressure OVERRIDDEN to Normal (LIMINA_HOST_PRESSURE)
+    [2026-08-10T21:37:38.412423Z INFO  limina_vmm::krun] balloon: target 268435456 bytes (65536 pages)
+      worker pid 99631
+    [2026-08-10T21:37:40.435321Z INFO  limina_vmm::krun] balloon: target 536870912 bytes (131072 pages)
+    [2026-08-10T21:37:42.449642Z INFO  limina_vmm::krun] balloon: target 805306368 bytes (196608 pages)
+    [2026-08-10T21:37:45.327728Z INFO  limina_vmm::krun] balloon: target 1073741824 bytes (262144 pages)
+    [2026-08-10T21:37:48.193816Z INFO  limina_vmm::krun] balloon: target 1342177280 bytes (327680 pages)
+    == cycle 1/5 ==
+    [2026-08-10T21:37:50.200444Z INFO  limina_vmm::krun] balloon: target 1610612736 bytes (393216 pages)
+    [2026-08-10T21:37:52.213031Z INFO  limina_vmm::krun] balloon: target 1879048192 bytes (458752 pages)
+    [2026-08-10T21:37:54.223447Z INFO  limina_vmm::krun] balloon: target 2147483648 bytes (524288 pages)
+    [2026-08-10T21:37:56.233111Z INFO  limina_vmm::krun] balloon: target 2415919104 bytes (589824 pages)
+    [2026-08-10T21:37:58.244529Z INFO  limina_vmm::krun] balloon: target 2684354560 bytes (655360 pages)
+    [2026-08-10T21:38:00.259386Z INFO  limina_vmm::krun] balloon: target 2952790016 bytes (720896 pages)
+    [2026-08-10T21:38:02.290056Z INFO  limina_vmm::krun] balloon: target 3221225472 bytes (786432 pages)
+    [2026-08-10T21:38:04.303118Z INFO  limina_vmm::krun] balloon: target 3489660928 bytes (851968 pages)
+    [2026-08-10T21:38:06.339712Z INFO  limina_vmm::krun] balloon: target 3758096384 bytes (917504 pages)
+    [2026-08-10T21:38:08.355240Z INFO  limina_vmm::krun] balloon: target 4026531840 bytes (983040 pages)
+    [2026-08-10T21:38:10.367320Z INFO  limina_vmm::krun] balloon: target 4294967296 bytes (1048576 pages)
+    [2026-08-10T21:38:12.377726Z INFO  limina_vmm::krun] balloon: target 4563402752 bytes (1114112 pages)
+    [2026-08-10T21:38:14.392120Z INFO  limina_vmm::krun] balloon: target 4831838208 bytes (1179648 pages)
+    [2026-08-10T21:38:16.407087Z INFO  limina_vmm::krun] balloon: target 5100273664 bytes (1245184 pages)
+    [2026-08-10T21:38:18.428455Z INFO  limina_vmm::krun] balloon: target 5368709120 bytes (1310720 pages)
+    [2026-08-10T21:38:20.446326Z INFO  limina_vmm::krun] balloon: target 5637144576 bytes (1376256 pages)
+    [2026-08-10T21:38:22.469268Z INFO  limina_vmm::krun] balloon: target 5905580032 bytes (1441792 pages)
+    [2026-08-10T21:38:24.479637Z INFO  limina_vmm::krun] balloon: target 6174015488 bytes (1507328 pages)
+    [2026-08-10T21:38:26.490712Z INFO  limina_vmm::krun] balloon: target 6442450944 bytes (1572864 pages)
+    [2026-08-10T21:38:28.513393Z INFO  limina_vmm::krun] balloon: target 6710886400 bytes (1638400 pages)
+    [2026-08-10T21:38:30.522202Z INFO  limina_vmm::krun] balloon: target 6979321856 bytes (1703936 pages)
+    [2026-08-10T21:38:32.014824Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:38:32.530064Z INFO  limina_vmm::krun] balloon: target 7247757312 bytes (1769472 pages)
+    [2026-08-10T21:38:34.551125Z INFO  limina_vmm::krun] balloon: target 7369687040 bytes (1799240 pages)
+      compress: host reclaimable 18346 MiB -> ballast 16298 MiB
+    [2026-08-10T21:39:32.219338Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:40:32.432538Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:41:32.654731Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:42:32.885250Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:42:36.305812Z INFO  limina_vmm::krun] balloon: target 7352565760 bytes (1795060 pages)
+    [2026-08-10T21:42:37.316455Z INFO  limina_vmm::krun] balloon: target 7335198720 bytes (1790820 pages)
+    [2026-08-10T21:43:33.119298Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:44:33.340989Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      compress gates: ic NO RISE — VOID, swappedout 44
+    [2026-08-10T21:44:53.321179Z INFO  limina_vmm::krun] balloon: target 7603634176 bytes (1856356 pages)
+    [2026-08-10T21:44:55.332227Z INFO  limina_vmm::krun] balloon: target 7872069632 bytes (1921892 pages)
+    [2026-08-10T21:44:57.344131Z INFO  limina_vmm::krun] balloon: target 8140505088 bytes (1987428 pages)
+    [2026-08-10T21:44:59.359105Z INFO  limina_vmm::krun] balloon: target 8408940544 bytes (2052964 pages)
+    [2026-08-10T21:45:01.365678Z INFO  limina_vmm::krun] balloon: target 8596504576 bytes (2098756 pages)
+    [2026-08-10T21:45:03.378192Z INFO  limina_vmm::krun] balloon: target 8623800320 bytes (2105420 pages)
+    [2026-08-10T21:45:33.552771Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:46:33.751502Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      net-sweep [cycle-0]: stored=1202836p (18.354G) live_net_sum=18.225G unattributed=0.129G
+    [2026-08-10T21:47:00.664712Z INFO  limina_vmm::krun] balloon: target 7547912192 bytes (1842752 pages)
+    [2026-08-10T21:47:01.666580Z INFO  limina_vmm::krun] balloon: target 7452639232 bytes (1819492 pages)
+    [2026-08-10T21:47:33.958990Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      cycle 1: peak actual=8224 MiB, trough actual=7107 MiB, VOID, swappedout@storm=44
+    == cycle 2/5 ==
+    [2026-08-10T21:48:01.050805Z INFO  limina_vmm::krun] balloon: target 7412662272 bytes (1809732 pages)
+    [2026-08-10T21:48:02.057282Z INFO  limina_vmm::krun] balloon: target 7325089792 bytes (1788352 pages)
+    [2026-08-10T21:48:03.059697Z INFO  limina_vmm::krun] balloon: target 6599753728 bytes (1611268 pages)
+    [2026-08-10T21:48:04.064601Z INFO  limina_vmm::krun] balloon: target 6464438272 bytes (1578232 pages)
+    [2026-08-10T21:48:18.169920Z INFO  limina_vmm::krun] balloon: target 6732873728 bytes (1643768 pages)
+    [2026-08-10T21:48:20.184921Z INFO  limina_vmm::krun] balloon: target 7001309184 bytes (1709304 pages)
+    [2026-08-10T21:48:22.205613Z INFO  limina_vmm::krun] balloon: target 7269744640 bytes (1774840 pages)
+    [2026-08-10T21:48:24.212583Z INFO  limina_vmm::krun] balloon: target 7514931200 bytes (1834700 pages)
+    [2026-08-10T21:48:34.194129Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      compress: host reclaimable 21679 MiB -> ballast 19631 MiB
+    [2026-08-10T21:49:34.441764Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:50:34.672020Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:51:34.865908Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:52:22.062549Z INFO  limina_vmm::krun] balloon: target 7497531392 bytes (1830452 pages)
+    [2026-08-10T21:52:35.087028Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:53:35.283236Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:54:35.484272Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      compress gates: ic NO RISE — VOID, swappedout 20142
+    [2026-08-10T21:55:05.241354Z INFO  limina_vmm::krun] balloon: target 7765966848 bytes (1895988 pages)
+    [2026-08-10T21:55:07.262486Z INFO  limina_vmm::krun] balloon: target 8034402304 bytes (1961524 pages)
+    [2026-08-10T21:55:09.285169Z INFO  limina_vmm::krun] balloon: target 8302837760 bytes (2027060 pages)
+    [2026-08-10T21:55:11.307524Z INFO  limina_vmm::krun] balloon: target 8571273216 bytes (2092596 pages)
+    [2026-08-10T21:55:13.318530Z INFO  limina_vmm::krun] balloon: target 8657813504 bytes (2113724 pages)
+    [2026-08-10T21:55:16.332102Z INFO  limina_vmm::krun] balloon: target 8890925056 bytes (2170636 pages)
+    [2026-08-10T21:55:17.344381Z INFO  limina_vmm::krun] balloon: target 8730542080 bytes (2131480 pages)
+    [2026-08-10T21:55:18.355348Z INFO  limina_vmm::krun] balloon: target 8667316224 bytes (2116044 pages)
+    [2026-08-10T21:55:35.677398Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T21:56:35.918369Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      net-sweep [cycle-1]: stored=1461473p (22.300G) live_net_sum=22.147G unattributed=0.153G
+    [2026-08-10T21:57:13.690015Z INFO  limina_vmm::krun] balloon: target 7597850624 bytes (1854944 pages)
+    [2026-08-10T21:57:14.694149Z INFO  limina_vmm::krun] balloon: target 7489159168 bytes (1828408 pages)
+    [2026-08-10T21:57:36.131345Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      cycle 2: peak actual=8265 MiB, trough actual=7142 MiB, VOID, swappedout@storm=20142
+    == cycle 3/5 ==
+    [2026-08-10T21:58:14.042420Z INFO  limina_vmm::krun] balloon: target 7700889600 bytes (1880100 pages)
+    [2026-08-10T21:58:15.053617Z INFO  limina_vmm::krun] balloon: target 7535902720 bytes (1839820 pages)
+    [2026-08-10T21:58:16.057062Z INFO  limina_vmm::krun] balloon: target 6277431296 bytes (1532576 pages)
+    [2026-08-10T21:58:18.081266Z INFO  limina_vmm::krun] balloon: target 6545866752 bytes (1598112 pages)
+    [2026-08-10T21:58:20.103597Z INFO  limina_vmm::krun] balloon: target 6814302208 bytes (1663648 pages)
+    [2026-08-10T21:58:22.116627Z INFO  limina_vmm::krun] balloon: target 7082737664 bytes (1729184 pages)
+    [2026-08-10T21:58:24.143880Z INFO  limina_vmm::krun] balloon: target 7351173120 bytes (1794720 pages)
+    [2026-08-10T21:58:26.158280Z INFO  limina_vmm::krun] balloon: target 7561199616 bytes (1845996 pages)
+    [2026-08-10T21:58:36.361600Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      compress: host reclaimable 22604 MiB -> ballast 20556 MiB
+    [2026-08-10T21:59:36.555912Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:00:36.788339Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:00:51.179965Z INFO  limina_vmm::krun] balloon: target 7475085312 bytes (1824972 pages)
+    [2026-08-10T22:00:52.181307Z INFO  limina_vmm::krun] balloon: target 7436599296 bytes (1815576 pages)
+    [2026-08-10T22:00:53.183628Z INFO  limina_vmm::krun] balloon: target 7383908352 bytes (1802712 pages)
+    [2026-08-10T22:00:54.185021Z INFO  limina_vmm::krun] balloon: target 7313178624 bytes (1785444 pages)
+    [2026-08-10T22:00:56.197711Z INFO  limina_vmm::krun] balloon: target 7405666304 bytes (1808024 pages)
+    [2026-08-10T22:00:58.211532Z INFO  limina_vmm::krun] balloon: target 7435681792 bytes (1815352 pages)
+    [2026-08-10T22:01:01.218245Z INFO  limina_vmm::krun] balloon: target 7456309248 bytes (1820388 pages)
+    [2026-08-10T22:01:03.226184Z INFO  limina_vmm::krun] balloon: target 7474888704 bytes (1824924 pages)
+    [2026-08-10T22:01:37.024833Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:02:37.255905Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:03:37.462956Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:04:37.673373Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      compress gates: ic NO RISE — VOID, swappedout 41142
+    [2026-08-10T22:05:17.059353Z INFO  limina_vmm::krun] balloon: target 7743324160 bytes (1890460 pages)
+    [2026-08-10T22:05:19.067209Z INFO  limina_vmm::krun] balloon: target 8011759616 bytes (1955996 pages)
+    [2026-08-10T22:05:21.087538Z INFO  limina_vmm::krun] balloon: target 8280195072 bytes (2021532 pages)
+    [2026-08-10T22:05:23.095588Z INFO  limina_vmm::krun] balloon: target 8548630528 bytes (2087068 pages)
+    [2026-08-10T22:05:25.110202Z INFO  limina_vmm::krun] balloon: target 8608645120 bytes (2101720 pages)
+    [2026-08-10T22:05:27.123818Z INFO  limina_vmm::krun] balloon: target 8626552832 bytes (2106092 pages)
+    [2026-08-10T22:05:29.134393Z INFO  limina_vmm::krun] balloon: target 8646770688 bytes (2111028 pages)
+    [2026-08-10T22:05:31.140407Z INFO  limina_vmm::krun] balloon: target 8625930240 bytes (2105940 pages)
+    [2026-08-10T22:05:32.146219Z INFO  limina_vmm::krun] balloon: target 8605712384 bytes (2101004 pages)
+    [2026-08-10T22:05:34.167424Z INFO  limina_vmm::krun] balloon: target 8642297856 bytes (2109936 pages)
+    [2026-08-10T22:05:37.905438Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:05:39.200952Z INFO  limina_vmm::krun] balloon: target 8678719488 bytes (2118828 pages)
+    [2026-08-10T22:06:38.126523Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      net-sweep [cycle-2]: stored=1461552p (22.302G) live_net_sum=22.346G unattributed=-0.044G
+    [2026-08-10T22:07:24.700806Z INFO  limina_vmm::krun] balloon: target 7587348480 bytes (1852380 pages)
+    [2026-08-10T22:07:25.702755Z INFO  limina_vmm::krun] balloon: target 7455375360 bytes (1820160 pages)
+    [2026-08-10T22:07:27.709481Z INFO  limina_vmm::krun] balloon: target 7472791552 bytes (1824412 pages)
+    [2026-08-10T22:07:29.722857Z INFO  limina_vmm::krun] balloon: target 7497613312 bytes (1830472 pages)
+    [2026-08-10T22:07:31.728992Z INFO  limina_vmm::krun] balloon: target 7522041856 bytes (1836436 pages)
+    [2026-08-10T22:07:33.733910Z INFO  limina_vmm::krun] balloon: target 7546568704 bytes (1842424 pages)
+    [2026-08-10T22:07:35.748281Z INFO  limina_vmm::krun] balloon: target 7570948096 bytes (1848376 pages)
+    [2026-08-10T22:07:38.330462Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      cycle 3: peak actual=8276 MiB, trough actual=7220 MiB, VOID, swappedout@storm=41142
+    == cycle 4/5 ==
+    [2026-08-10T22:08:25.016103Z INFO  limina_vmm::krun] balloon: target 7727726592 bytes (1886652 pages)
+    [2026-08-10T22:08:26.025791Z INFO  limina_vmm::krun] balloon: target 7557447680 bytes (1845080 pages)
+    [2026-08-10T22:08:27.026990Z INFO  limina_vmm::krun] balloon: target 6504120320 bytes (1587920 pages)
+    [2026-08-10T22:08:29.040881Z INFO  limina_vmm::krun] balloon: target 6772555776 bytes (1653456 pages)
+    [2026-08-10T22:08:31.057547Z INFO  limina_vmm::krun] balloon: target 7040991232 bytes (1718992 pages)
+    [2026-08-10T22:08:33.064425Z INFO  limina_vmm::krun] balloon: target 7309426688 bytes (1784528 pages)
+    [2026-08-10T22:08:35.080993Z INFO  limina_vmm::krun] balloon: target 7577862144 bytes (1850064 pages)
+    [2026-08-10T22:08:37.087526Z INFO  limina_vmm::krun] balloon: target 7597719552 bytes (1854912 pages)
+    [2026-08-10T22:08:38.553347Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      compress: host reclaimable 23800 MiB -> ballast 21752 MiB
+    [2026-08-10T22:09:38.770901Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:10:38.980064Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:11:39.214251Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:11:52.108879Z INFO  limina_vmm::krun] balloon: target 7580811264 bytes (1850784 pages)
+    [2026-08-10T22:11:53.120620Z INFO  limina_vmm::krun] balloon: target 7563837440 bytes (1846640 pages)
+    [2026-08-10T22:11:54.131861Z INFO  limina_vmm::krun] balloon: target 7546798080 bytes (1842480 pages)
+    [2026-08-10T22:11:55.133704Z INFO  limina_vmm::krun] balloon: target 7529693184 bytes (1838304 pages)
+    [2026-08-10T22:11:56.142254Z INFO  limina_vmm::krun] balloon: target 7512522752 bytes (1834112 pages)
+    [2026-08-10T22:12:39.414494Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:13:39.644398Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:14:39.876949Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      compress gates: ic NO RISE — VOID, swappedout 41181
+    [2026-08-10T22:15:28.246027Z INFO  limina_vmm::krun] balloon: target 7780958208 bytes (1899648 pages)
+    [2026-08-10T22:15:30.263251Z INFO  limina_vmm::krun] balloon: target 8049393664 bytes (1965184 pages)
+    [2026-08-10T22:15:32.275269Z INFO  limina_vmm::krun] balloon: target 8317829120 bytes (2030720 pages)
+    [2026-08-10T22:15:34.293174Z INFO  limina_vmm::krun] balloon: target 8586264576 bytes (2096256 pages)
+    [2026-08-10T22:15:36.303672Z INFO  limina_vmm::krun] balloon: target 8661008384 bytes (2114504 pages)
+    [2026-08-10T22:15:40.088593Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:15:56.450136Z INFO  limina_vmm::krun] balloon: target 8678162432 bytes (2118692 pages)
+    [2026-08-10T22:15:57.459582Z INFO  limina_vmm::krun] balloon: target 8658927616 bytes (2113996 pages)
+    [2026-08-10T22:16:10.555753Z INFO  limina_vmm::krun] balloon: target 8681799680 bytes (2119580 pages)
+    [2026-08-10T22:16:39.753121Z INFO  limina_vmm::krun] balloon: target 8663547904 bytes (2115124 pages)
+    [2026-08-10T22:16:40.345904Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:16:41.773997Z INFO  limina_vmm::krun] balloon: target 8680783872 bytes (2119332 pages)
+    [2026-08-10T22:16:47.823986Z INFO  limina_vmm::krun] balloon: target 8663465984 bytes (2115104 pages)
+    [2026-08-10T22:17:01.915977Z INFO  limina_vmm::krun] balloon: target 8680734720 bytes (2119320 pages)
+      net-sweep [cycle-3]: stored=1539873p (23.497G) live_net_sum=23.565G unattributed=-0.068G
+    [2026-08-10T22:17:34.619876Z INFO  limina_vmm::krun] balloon: target 7598587904 bytes (1855124 pages)
+    [2026-08-10T22:17:35.621018Z INFO  limina_vmm::krun] balloon: target 7495401472 bytes (1829932 pages)
+    [2026-08-10T22:17:40.632691Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      cycle 4: peak actual=8278 MiB, trough actual=7148 MiB, VOID, swappedout@storm=41181
+    == cycle 5/5 ==
+    [2026-08-10T22:18:36.032266Z INFO  limina_vmm::krun] balloon: target 7635861504 bytes (1864224 pages)
+    [2026-08-10T22:18:37.043332Z INFO  limina_vmm::krun] balloon: target 7557185536 bytes (1845016 pages)
+    [2026-08-10T22:18:38.045872Z INFO  limina_vmm::krun] balloon: target 6685229056 bytes (1632136 pages)
+    [2026-08-10T22:18:40.826896Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:18:47.089144Z INFO  limina_vmm::krun] balloon: target 6953664512 bytes (1697672 pages)
+    [2026-08-10T22:18:49.106591Z INFO  limina_vmm::krun] balloon: target 7222099968 bytes (1763208 pages)
+    [2026-08-10T22:18:51.122236Z INFO  limina_vmm::krun] balloon: target 7490535424 bytes (1828744 pages)
+    [2026-08-10T22:18:53.131506Z INFO  limina_vmm::krun] balloon: target 7581188096 bytes (1850876 pages)
+      compress: host reclaimable 23940 MiB -> ballast 21892 MiB
+    [2026-08-10T22:19:41.063635Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:20:41.275132Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:21:41.501716Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:22:19.651035Z INFO  limina_vmm::krun] balloon: target 7563935744 bytes (1846664 pages)
+    [2026-08-10T22:22:41.735755Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:23:02.002356Z INFO  limina_vmm::krun] balloon: target 7546601472 bytes (1842432 pages)
+    [2026-08-10T22:23:41.939820Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:24:42.166243Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      compress gates: ic NO RISE — VOID, swappedout 63054
+    [2026-08-10T22:25:39.095036Z INFO  limina_vmm::krun] balloon: target 7815036928 bytes (1907968 pages)
+    [2026-08-10T22:25:41.106734Z INFO  limina_vmm::krun] balloon: target 8083472384 bytes (1973504 pages)
+    [2026-08-10T22:25:42.364619Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:25:43.125864Z INFO  limina_vmm::krun] balloon: target 8351907840 bytes (2039040 pages)
+    [2026-08-10T22:25:45.138513Z INFO  limina_vmm::krun] balloon: target 8620343296 bytes (2104576 pages)
+    [2026-08-10T22:25:47.152289Z INFO  limina_vmm::krun] balloon: target 8677376000 bytes (2118500 pages)
+    [2026-08-10T22:26:02.224633Z INFO  limina_vmm::krun] balloon: target 8660336640 bytes (2114340 pages)
+    [2026-08-10T22:26:04.238707Z INFO  limina_vmm::krun] balloon: target 8688533504 bytes (2121224 pages)
+    [2026-08-10T22:26:18.348954Z INFO  limina_vmm::krun] balloon: target 8669741056 bytes (2116636 pages)
+    [2026-08-10T22:26:42.578501Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T22:27:42.796679Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      net-sweep [cycle-4]: stored=1614158p (24.630G) live_net_sum=24.750G unattributed=-0.120G
+    [2026-08-10T22:27:47.674415Z INFO  limina_vmm::krun] balloon: target 7609221120 bytes (1857720 pages)
+    [2026-08-10T22:27:48.683745Z INFO  limina_vmm::krun] balloon: target 7438401536 bytes (1816016 pages)
+    [2026-08-10T22:27:53.706894Z INFO  limina_vmm::krun] balloon: target 7455703040 bytes (1820240 pages)
+    [2026-08-10T22:27:55.715147Z INFO  limina_vmm::krun] balloon: target 7499612160 bytes (1830960 pages)
+    [2026-08-10T22:27:57.720314Z INFO  limina_vmm::krun] balloon: target 7543455744 bytes (1841664 pages)
+    [2026-08-10T22:27:59.743775Z INFO  limina_vmm::krun] balloon: target 7586234368 bytes (1852108 pages)
+    [2026-08-10T22:28:43.020954Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      cycle 5: peak actual=8268 MiB, trough actual=7234 MiB, VOID, swappedout@storm=63054
+    [2026-08-10T22:28:48.071224Z INFO  limina_vmm::krun] balloon: target 7854669824 bytes (1917644 pages)
+    [2026-08-10T22:28:49Z INFO  limina::control] control: SHUTDOWN sent to limina-agent/0.1.0
+    [2026-08-10T22:28:49Z INFO  limina::supervisor] shutdown requested → asking the guest agent to power off
+    [2026-08-10T22:28:49Z INFO  limina::control] control: agent acknowledged shutdown
+    [2026-08-10T22:28:49Z INFO  limina::control] control: guest agent disconnected: limina-agent/0.1.0
+    [2026-08-10T22:28:50.906975Z INFO  krun_vmm::macos::vstate] vCPU 0 received shutdown signal
+    [2026-08-10T22:28:50.907098Z INFO  krun_vmm] Vmm is stopping.
+    [2026-08-10T22:28:50Z INFO  limina::moc::usb] moc: worker gadget connection ended; retrying
+    [2026-08-10T22:28:50Z INFO  limina::fido::usb] fido-usb: worker gadget connection ended; retrying
+    [2026-08-10T22:28:50Z INFO  limina::supervisor] VM powered off cleanly (worker exit 0)
+    teardown: Ok(Outcome { code: Some(0), signal: None, forced: false })
+      vm_stat stored after teardown: 182351 pages (residue vs pre-boot: 25548 pages ≈ 0.39 G — raw; the oracle is the unattributed delta)
+      net-sweep [bracket-after]: stored=182311p (2.782G) live_net_sum=2.648G unattributed=0.134G
+    == S9 metrics ==
+    {"tier":"enhanced","guest_pagesize":16384,"guest_kernel":"7.1.6-limina16k","disk":"Fedora-Workstation-44.enhanced.test.raw","scenario":"s9-ledger-churn","min_mib":3072,"max_mib":12288,"cycles":5,"ballast_cap_mib":22528,"reclaim_mode":"moderate","non_void_cycles":0,"swap_regime_cycles":5,"touch_mib":2048,"cache_mib":1024,"worker_pid":99631,"stored_before_pages":156803,"stored_after_pages":182351,"residue_pages":25548,"netsweep_before":"net-sweep [bracket-before]: stored=156760p (2.392G) live_net_sum=2.258G unattributed=0.134G","netsweep_after":"net-sweep [bracket-after]: stored=182311p (2.782G) live_net_sum=2.648G unattributed=0.134G","ledger_rows":195,"final_ic_balance":735513149,"final_phys_footprint":5124969725,"oom_kills":0,"guest_samples":6029,"cycle_ends":[{"cycle":0,"peak_actual":8623800320,"trough_actual":7452639232,"non_void":false,"swappedout_at_storm":44},{"cycle":1,"peak_actual":8667316224,"trough_actual":7489159168,"non_void":false,"swappedout_at_storm":20142},{"cycle":2,"peak_actual":8678719488,"trough_actual":7570948096,"non_void":false,"swappedout_at_storm":41142},{"cycle":3,"peak_actual":8680734720,"trough_actual":7495401472,"non_void":false,"swappedout_at_storm":41181},{"cycle":4,"peak_actual":8669741056,"trough_actual":7586234368,"non_void":false,"swappedout_at_storm":63054}]}
+
+    thread 's9_ledger_churn' panicked at crates/limina-test/tests/balloon_bench_s9.rs:777:5:
+    every cycle was VOID (internal_compressed never rose ≥ 1 GiB under the ballast) — the compress construction failed, the run is not evidence
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [3110.361s] 1 test run: 0 passed, 1 failed, 0 skipped
+        FAIL [3110.354s] (1/1) limina-test::balloon_bench_s9 s9_ledger_churn
+error: test run failed

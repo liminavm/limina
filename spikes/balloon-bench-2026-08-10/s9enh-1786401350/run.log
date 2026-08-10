@@ -1,0 +1,47 @@
+==> building limina + limina-vmm (debug)
+warning: field `status_ioc` is never read
+  --> third_party/libkrun/src/devices/src/usb/xhci/engine.rs:78:5
+   |
+68 | pub(super) struct ControlEvents {
+   |                   ------------- field in this struct
+...
+78 |     status_ioc: bool,
+   |     ^^^^^^^^^^
+   |
+   = note: `ControlEvents` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `krun-devices` (lib) generated 1 warning
+warning: limina-vmm@0.1.0: virglrenderer: linking OUR prefix (<repo>/third_party/virgl-prefix/lib)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+==> codesigning the worker (hypervisor entitlement)
+<repo>/target/debug/limina-vmm: replacing existing signature
+signed <repo>/target/debug/limina-vmm (com.apple.security.hypervisor OK)
+==> checking the worker links our virglrenderer (venus guard)
+check-virgl-link: OK — target/debug/limina-vmm links our virgl-prefix virglrenderer
+==> building the L1 test guest (kernel + rootfs)
+    Finished `release` profile [optimized] target(s) in 0.11s
+==> building the hvf-trap-probe (bare-metal PSCI probe for hvf_graceful)
+==> running boot tests (LIMINA_HVF_TESTS=1)
+   Compiling limina-test v0.1.0 (<repo>/crates/limina-test)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.80s
+────────────
+ Nextest run ID b382a7a7-e35b-4006-bede-aa543ec3102f with nextest profile: default
+    Starting 1 test across 1 binary (62 binaries skipped)
+        SLOW [>120.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>240.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>360.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>480.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>600.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>720.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>840.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>960.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1080.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1200.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1320.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1440.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1560.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        SLOW [>1680.000s] (───) limina-test::balloon_bench_s9 s9_ledger_churn
+        PASS [1731.928s] (1/1) limina-test::balloon_bench_s9 s9_ledger_churn
+────────────
+     Summary [1731.931s] 1 test run: 1 passed (1 slow), 0 skipped

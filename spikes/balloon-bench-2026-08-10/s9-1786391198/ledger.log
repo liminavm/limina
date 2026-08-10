@@ -1,0 +1,375 @@
+=== ts_ms=1786391227679 pid=12966
+task ledger 'Per-task ledger' id=1127411 entries=68 (pid 12966)
+
+entry                                group      units                   balance           credit            debit
+cpu_time                             sched      ns                    513280434        513280434                0
+tkm_private                          physmem    bytes                   0.003 G          0.003 G          0.000 G
+tkm_shared                           physmem    bytes                   0.000 G          0.000 G          0.000 G
+phys_mem                             physmem    bytes                   4.280 G          4.280 G          0.000 G
+wired_mem                            physmem    bytes                   0.000 G          0.000 G          0.000 G
+internal                             physmem    bytes                   4.268 G          4.283 G          0.015 G
+external                             physmem    bytes                   0.012 G          0.013 G          0.002 G
+reusable                             physmem    bytes                   0.000 G          0.000 G          0.000 G
+internal_compressed                  physmem    bytes                   0.000 G          0.000 G          0.000 G
+iokit_mapped                         mappings   bytes                   0.000 G          0.000 G          0.000 G
+alternate_accounting                 physmem    bytes                   0.000 G          0.000 G          0.000 G
+alternate_accounting_compressed      physmem    bytes                   0.000 G          0.000 G          0.000 G
+conclave_mem                         physmem    bytes                   0.000 G          0.000 G          0.000 G
+phys_footprint                       physmem    bytes                   4.271 G          4.286 G          0.015 G
+memorystatus_dirty_time              physmem    ns                            0                0                0
+page_table                           physmem    bytes                   0.003 G          0.003 G          0.000 G
+pages_grabbed                        physmem    count                    301829           301829                0
+pages_grabbed_kern                   physmem    count                       961              961                0
+pages_grabbed_iopl                   physmem    count                         0                0                0
+pages_grabbed_upl                    physmem    count                    101681           101681                0
+purgeable_volatile                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_nonvolatile                physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_volatile_compress          physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_nonvolatile_compress       physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_nofootprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_footprint                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_nofootprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_footprint_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_volatile                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_nonvolatile                  physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_volatile_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_nonvolatile_compressed       physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_nofootprint                    physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_footprint                      physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_nofootprint_compressed         physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_footprint_compressed           physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_nofootprint                 physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_footprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_nofootprint_compressed      physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_footprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_footprint                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_footprint_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint_total             physmem    bytes                   0.000 G          0.000 G          0.000 G
+swapins                              physmem    bytes                   0.000 G          0.000 G          0.000 G
+est_reclaimable                      virtmem    bytes                   0.004 G          0.004 G          0.000 G
+platform_idle_wakeups                power      count                       425              425                0
+interrupt_wakeups                    power      count                     12853            12853                0
+SFI_CLASS_APP_NAP                    sfi        MATUs                         0                0                0
+SFI_CLASS_DARWIN_BG                  sfi        MATUs                         0                0                0
+SFI_CLASS_DEFAULT                    sfi        MATUs                         0                0                0
+SFI_CLASS_LEGACY                     sfi        MATUs                         0                0                0
+SFI_CLASS_MAINTENANCE                sfi        MATUs                         0                0                0
+SFI_CLASS_MANAGED                    sfi        MATUs                         0                0                0
+SFI_CLASS_OPTED_OUT                  sfi        MATUs                         0                0                0
+SFI_CLASS_USER_INITIATED             sfi        MATUs                         0                0                0
+SFI_CLASS_USER_INTERACTIVE           sfi        MATUs                         0                0                0
+SFI_CLASS_UTILITY                    sfi        MATUs                         0                0                0
+SFI_CLASS_RUNAWAY_MITIGATION         sfi        MATUs                         0                0                0
+cpu_time_billed_to_me                sched      ns                       814578           814578                0
+cpu_time_billed_to_others            sched      ns                            0                0                0
+energy_billed_to_me                  power      nj                       199604           199604                0
+energy_billed_to_others              power      nj                            0                0                0
+physical_writes                      res        bytes                   1.074 G          1.074 G          0.000 G
+logical_writes                       res        bytes                   1.095 G          1.095 G          0.000 G
+logical_writes_to_external           res        bytes                   0.000 G          0.000 G          0.000 G
+fs_metadata_writes                   res        bytes                   0.033 G          0.033 G          0.000 G
+
+sum of physmem byte balances (excl. phys_footprint itself): 8.566 G
+(entries reported: template 68, task 68)
+=== ts_ms=1786391287748 pid=12966
+task ledger 'Per-task ledger' id=1127411 entries=68 (pid 12966)
+
+entry                                group      units                   balance           credit            debit
+cpu_time                             sched      ns                   1193545734       1193545734                0
+tkm_private                          physmem    bytes                   0.005 G          0.005 G          0.000 G
+tkm_shared                           physmem    bytes                   0.000 G          0.000 G          0.000 G
+phys_mem                             physmem    bytes                   7.712 G          7.712 G          0.000 G
+wired_mem                            physmem    bytes                   0.000 G          0.000 G          0.000 G
+internal                             physmem    bytes                   3.041 G          7.710 G          4.668 G
+external                             physmem    bytes                   0.012 G          0.013 G          0.002 G
+reusable                             physmem    bytes                   4.659 G          4.659 G          0.000 G
+internal_compressed                  physmem    bytes                   0.000 G          0.000 G          0.000 G
+iokit_mapped                         mappings   bytes                   0.000 G          0.000 G          0.000 G
+alternate_accounting                 physmem    bytes                   0.000 G          0.000 G          0.000 G
+alternate_accounting_compressed      physmem    bytes                   0.000 G          0.000 G          0.000 G
+conclave_mem                         physmem    bytes                   0.000 G          0.000 G          0.000 G
+phys_footprint                       physmem    bytes                   3.047 G          7.715 G          4.668 G
+memorystatus_dirty_time              physmem    ns                            0                0                0
+page_table                           physmem    bytes                   0.005 G          0.005 G          0.000 G
+pages_grabbed                        physmem    count                    501138           501138                0
+pages_grabbed_kern                   physmem    count                       983              983                0
+pages_grabbed_iopl                   physmem    count                         0                0                0
+pages_grabbed_upl                    physmem    count                    103054           103054                0
+purgeable_volatile                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_nonvolatile                physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_volatile_compress          physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_nonvolatile_compress       physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_nofootprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_footprint                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_nofootprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_footprint_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_volatile                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_nonvolatile                  physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_volatile_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_nonvolatile_compressed       physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_nofootprint                    physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_footprint                      physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_nofootprint_compressed         physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_footprint_compressed           physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_nofootprint                 physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_footprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_nofootprint_compressed      physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_footprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_footprint                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_footprint_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint_total             physmem    bytes                   0.000 G          0.000 G          0.000 G
+swapins                              physmem    bytes                   0.000 G          0.000 G          0.000 G
+est_reclaimable                      virtmem    bytes                   0.010 G          0.010 G          0.000 G
+platform_idle_wakeups                power      count                      2058             2058                0
+interrupt_wakeups                    power      count                     39960            39960                0
+SFI_CLASS_APP_NAP                    sfi        MATUs                         0                0                0
+SFI_CLASS_DARWIN_BG                  sfi        MATUs                         0                0                0
+SFI_CLASS_DEFAULT                    sfi        MATUs                         0                0                0
+SFI_CLASS_LEGACY                     sfi        MATUs                         0                0                0
+SFI_CLASS_MAINTENANCE                sfi        MATUs                         0                0                0
+SFI_CLASS_MANAGED                    sfi        MATUs                         0                0                0
+SFI_CLASS_OPTED_OUT                  sfi        MATUs                         0                0                0
+SFI_CLASS_USER_INITIATED             sfi        MATUs                         0                0                0
+SFI_CLASS_USER_INTERACTIVE           sfi        MATUs                         0                0                0
+SFI_CLASS_UTILITY                    sfi        MATUs                         0                0                0
+SFI_CLASS_RUNAWAY_MITIGATION         sfi        MATUs                         0                0                0
+cpu_time_billed_to_me                sched      ns                       893538           893538                0
+cpu_time_billed_to_others            sched      ns                            0                0                0
+energy_billed_to_me                  power      nj                       214274           214274                0
+energy_billed_to_others              power      nj                            0                0                0
+physical_writes                      res        bytes                   1.167 G          1.167 G          0.000 G
+logical_writes                       res        bytes                   1.174 G          1.174 G          0.000 G
+logical_writes_to_external           res        bytes                   0.000 G          0.000 G          0.000 G
+fs_metadata_writes                   res        bytes                   0.049 G          0.049 G          0.000 G
+
+sum of physmem byte balances (excl. phys_footprint itself): 15.434 G
+(entries reported: template 68, task 68)
+=== ts_ms=1786391348056 pid=12966
+task ledger 'Per-task ledger' id=1127411 entries=68 (pid 12966)
+
+entry                                group      units                   balance           credit            debit
+cpu_time                             sched      ns                   2113700556       2113700556                0
+tkm_private                          physmem    bytes                   0.005 G          0.005 G          0.000 G
+tkm_shared                           physmem    bytes                   0.000 G          0.000 G          0.000 G
+phys_mem                             physmem    bytes                   7.724 G          7.724 G          0.000 G
+wired_mem                            physmem    bytes                   0.000 G          0.000 G          0.000 G
+internal                             physmem    bytes                   3.053 G          7.728 G          4.675 G
+external                             physmem    bytes                   0.012 G          0.013 G          0.002 G
+reusable                             physmem    bytes                   4.659 G          4.659 G          0.000 G
+internal_compressed                  physmem    bytes                   0.000 G          0.000 G          0.000 G
+iokit_mapped                         mappings   bytes                   0.000 G          0.000 G          0.000 G
+alternate_accounting                 physmem    bytes                   0.000 G          0.000 G          0.000 G
+alternate_accounting_compressed      physmem    bytes                   0.000 G          0.000 G          0.000 G
+conclave_mem                         physmem    bytes                   0.000 G          0.000 G          0.000 G
+phys_footprint                       physmem    bytes                   3.058 G          7.734 G          4.675 G
+memorystatus_dirty_time              physmem    ns                            0                0                0
+page_table                           physmem    bytes                   0.005 G          0.005 G          0.000 G
+pages_grabbed                        physmem    count                    501803           501803                0
+pages_grabbed_kern                   physmem    count                       999              999                0
+pages_grabbed_iopl                   physmem    count                         0                0                0
+pages_grabbed_upl                    physmem    count                    103245           103245                0
+purgeable_volatile                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_nonvolatile                physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_volatile_compress          physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_nonvolatile_compress       physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_nofootprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_footprint                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_nofootprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_footprint_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_volatile                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_nonvolatile                  physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_volatile_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_nonvolatile_compressed       physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_nofootprint                    physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_footprint                      physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_nofootprint_compressed         physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_footprint_compressed           physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_nofootprint                 physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_footprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_nofootprint_compressed      physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_footprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_footprint                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_footprint_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint_total             physmem    bytes                   0.000 G          0.000 G          0.000 G
+swapins                              physmem    bytes                   0.000 G          0.000 G          0.000 G
+est_reclaimable                      virtmem    bytes                   0.010 G          0.010 G          0.000 G
+platform_idle_wakeups                power      count                      3353             3353                0
+interrupt_wakeups                    power      count                     67210            67210                0
+SFI_CLASS_APP_NAP                    sfi        MATUs                         0                0                0
+SFI_CLASS_DARWIN_BG                  sfi        MATUs                         0                0                0
+SFI_CLASS_DEFAULT                    sfi        MATUs                         0                0                0
+SFI_CLASS_LEGACY                     sfi        MATUs                         0                0                0
+SFI_CLASS_MAINTENANCE                sfi        MATUs                         0                0                0
+SFI_CLASS_MANAGED                    sfi        MATUs                         0                0                0
+SFI_CLASS_OPTED_OUT                  sfi        MATUs                         0                0                0
+SFI_CLASS_USER_INITIATED             sfi        MATUs                         0                0                0
+SFI_CLASS_USER_INTERACTIVE           sfi        MATUs                         0                0                0
+SFI_CLASS_UTILITY                    sfi        MATUs                         0                0                0
+SFI_CLASS_RUNAWAY_MITIGATION         sfi        MATUs                         0                0                0
+cpu_time_billed_to_me                sched      ns                      1010698          1010698                0
+cpu_time_billed_to_others            sched      ns                            0                0                0
+energy_billed_to_me                  power      nj                       214274           214274                0
+energy_billed_to_others              power      nj                            0                0                0
+physical_writes                      res        bytes                   1.255 G          1.255 G          0.000 G
+logical_writes                       res        bytes                   1.234 G          1.234 G          0.000 G
+logical_writes_to_external           res        bytes                   0.000 G          0.000 G          0.000 G
+fs_metadata_writes                   res        bytes                   0.054 G          0.054 G          0.000 G
+
+sum of physmem byte balances (excl. phys_footprint itself): 15.458 G
+(entries reported: template 68, task 68)
+=== ts_ms=1786391408235 pid=12966
+task ledger 'Per-task ledger' id=1127411 entries=68 (pid 12966)
+
+entry                                group      units                   balance           credit            debit
+cpu_time                             sched      ns                   2651597602       2651597602                0
+tkm_private                          physmem    bytes                   0.005 G          0.005 G          0.000 G
+tkm_shared                           physmem    bytes                   0.000 G          0.000 G          0.000 G
+phys_mem                             physmem    bytes                   7.937 G          7.937 G          0.000 G
+wired_mem                            physmem    bytes                   0.000 G          0.000 G          0.000 G
+internal                             physmem    bytes                   3.083 G          7.767 G          4.683 G
+external                             physmem    bytes                   0.012 G          0.013 G          0.002 G
+reusable                             physmem    bytes                   4.842 G          4.842 G          0.000 G
+internal_compressed                  physmem    bytes                   0.000 G          0.000 G          0.000 G
+iokit_mapped                         mappings   bytes                   0.000 G          0.000 G          0.000 G
+alternate_accounting                 physmem    bytes                   0.000 G          0.000 G          0.000 G
+alternate_accounting_compressed      physmem    bytes                   0.000 G          0.000 G          0.000 G
+conclave_mem                         physmem    bytes                   0.000 G          0.000 G          0.000 G
+phys_footprint                       physmem    bytes                   3.089 G          7.772 G          4.683 G
+memorystatus_dirty_time              physmem    ns                            0                0                0
+page_table                           physmem    bytes                   0.005 G          0.005 G          0.000 G
+pages_grabbed                        physmem    count                    502502           502502                0
+pages_grabbed_kern                   physmem    count                      1016             1016                0
+pages_grabbed_iopl                   physmem    count                         0                0                0
+pages_grabbed_upl                    physmem    count                    103406           103406                0
+purgeable_volatile                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_nonvolatile                physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_volatile_compress          physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_nonvolatile_compress       physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_nofootprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_footprint                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_nofootprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_footprint_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_volatile                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_nonvolatile                  physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_volatile_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_nonvolatile_compressed       physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_nofootprint                    physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_footprint                      physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_nofootprint_compressed         physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_footprint_compressed           physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_nofootprint                 physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_footprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_nofootprint_compressed      physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_footprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_footprint                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_footprint_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint_total             physmem    bytes                   0.000 G          0.000 G          0.000 G
+swapins                              physmem    bytes                   0.000 G          0.000 G          0.000 G
+est_reclaimable                      virtmem    bytes                   0.010 G          0.010 G          0.000 G
+platform_idle_wakeups                power      count                      5490             5490                0
+interrupt_wakeups                    power      count                     97653            97653                0
+SFI_CLASS_APP_NAP                    sfi        MATUs                         0                0                0
+SFI_CLASS_DARWIN_BG                  sfi        MATUs                         0                0                0
+SFI_CLASS_DEFAULT                    sfi        MATUs                         0                0                0
+SFI_CLASS_LEGACY                     sfi        MATUs                         0                0                0
+SFI_CLASS_MAINTENANCE                sfi        MATUs                         0                0                0
+SFI_CLASS_MANAGED                    sfi        MATUs                         0                0                0
+SFI_CLASS_OPTED_OUT                  sfi        MATUs                         0                0                0
+SFI_CLASS_USER_INITIATED             sfi        MATUs                         0                0                0
+SFI_CLASS_USER_INTERACTIVE           sfi        MATUs                         0                0                0
+SFI_CLASS_UTILITY                    sfi        MATUs                         0                0                0
+SFI_CLASS_RUNAWAY_MITIGATION         sfi        MATUs                         0                0                0
+cpu_time_billed_to_me                sched      ns                      1125373          1125373                0
+cpu_time_billed_to_others            sched      ns                            0                0                0
+energy_billed_to_me                  power      nj                       214274           214274                0
+energy_billed_to_others              power      nj                            0                0                0
+physical_writes                      res        bytes                   1.339 G          1.339 G          0.000 G
+logical_writes                       res        bytes                   1.289 G          1.289 G          0.000 G
+logical_writes_to_external           res        bytes                   0.000 G          0.000 G          0.000 G
+fs_metadata_writes                   res        bytes                   0.059 G          0.059 G          0.000 G
+
+sum of physmem byte balances (excl. phys_footprint itself): 15.884 G
+(entries reported: template 68, task 68)
+=== ts_ms=1786391409652 pid=12966
+task ledger 'Per-task ledger' id=1127411 entries=68 (pid 12966)
+
+entry                                group      units                   balance           credit            debit
+cpu_time                             sched      ns                   2670754652       2670754652                0
+tkm_private                          physmem    bytes                   0.005 G          0.005 G          0.000 G
+tkm_shared                           physmem    bytes                   0.000 G          0.000 G          0.000 G
+phys_mem                             physmem    bytes                   7.939 G          7.939 G          0.000 G
+wired_mem                            physmem    bytes                   0.000 G          0.000 G          0.000 G
+internal                             physmem    bytes                   3.083 G          7.767 G          4.683 G
+external                             physmem    bytes                   0.012 G          0.013 G          0.002 G
+reusable                             physmem    bytes                   4.844 G          4.844 G          0.000 G
+internal_compressed                  physmem    bytes                   0.000 G          0.000 G          0.000 G
+iokit_mapped                         mappings   bytes                   0.000 G          0.000 G          0.000 G
+alternate_accounting                 physmem    bytes                   0.000 G          0.000 G          0.000 G
+alternate_accounting_compressed      physmem    bytes                   0.000 G          0.000 G          0.000 G
+conclave_mem                         physmem    bytes                   0.000 G          0.000 G          0.000 G
+phys_footprint                       physmem    bytes                   3.089 G          7.772 G          4.683 G
+memorystatus_dirty_time              physmem    ns                            0                0                0
+page_table                           physmem    bytes                   0.005 G          0.005 G          0.000 G
+pages_grabbed                        physmem    count                    502608           502608                0
+pages_grabbed_kern                   physmem    count                      1017             1017                0
+pages_grabbed_iopl                   physmem    count                         0                0                0
+pages_grabbed_upl                    physmem    count                    103511           103511                0
+purgeable_volatile                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_nonvolatile                physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_volatile_compress          physmem    bytes                   0.000 G          0.000 G          0.000 G
+purgeable_nonvolatile_compress       physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_nofootprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_footprint                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_nofootprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+tagged_footprint_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_volatile                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_nonvolatile                  physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_volatile_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+network_nonvolatile_compressed       physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_nofootprint                    physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_footprint                      physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_nofootprint_compressed         physmem    bytes                   0.000 G          0.000 G          0.000 G
+media_footprint_compressed           physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_nofootprint                 physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_footprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_nofootprint_compressed      physmem    bytes                   0.000 G          0.000 G          0.000 G
+graphics_footprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint                   physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_footprint                     physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint_compressed        physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_footprint_compressed          physmem    bytes                   0.000 G          0.000 G          0.000 G
+neural_nofootprint_total             physmem    bytes                   0.000 G          0.000 G          0.000 G
+swapins                              physmem    bytes                   0.000 G          0.000 G          0.000 G
+est_reclaimable                      virtmem    bytes                   0.010 G          0.010 G          0.000 G
+platform_idle_wakeups                power      count                      5690             5690                0
+interrupt_wakeups                    power      count                     99936            99936                0
+SFI_CLASS_APP_NAP                    sfi        MATUs                         0                0                0
+SFI_CLASS_DARWIN_BG                  sfi        MATUs                         0                0                0
+SFI_CLASS_DEFAULT                    sfi        MATUs                         0                0                0
+SFI_CLASS_LEGACY                     sfi        MATUs                         0                0                0
+SFI_CLASS_MAINTENANCE                sfi        MATUs                         0                0                0
+SFI_CLASS_MANAGED                    sfi        MATUs                         0                0                0
+SFI_CLASS_OPTED_OUT                  sfi        MATUs                         0                0                0
+SFI_CLASS_USER_INITIATED             sfi        MATUs                         0                0                0
+SFI_CLASS_USER_INTERACTIVE           sfi        MATUs                         0                0                0
+SFI_CLASS_UTILITY                    sfi        MATUs                         0                0                0
+SFI_CLASS_RUNAWAY_MITIGATION         sfi        MATUs                         0                0                0
+cpu_time_billed_to_me                sched      ns                      1125373          1125373                0
+cpu_time_billed_to_others            sched      ns                            0                0                0
+energy_billed_to_me                  power      nj                       214274           214274                0
+energy_billed_to_others              power      nj                            0                0                0
+physical_writes                      res        bytes                   1.347 G          1.347 G          0.000 G
+logical_writes                       res        bytes                   1.294 G          1.294 G          0.000 G
+logical_writes_to_external           res        bytes                   0.000 G          0.000 G          0.000 G
+fs_metadata_writes                   res        bytes                   0.060 G          0.060 G          0.000 G
+
+sum of physmem byte balances (excl. phys_footprint itself): 15.889 G
+(entries reported: template 68, task 68)
