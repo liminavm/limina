@@ -29,9 +29,9 @@ use limina_test::bench::{
     burst_status, count_oom_since, counter_delta, fetch_balloon_journal,
     first_target_decrease_after, guest_epoch_secs, idle_report, join_control_as_agent, json_object,
     kill_burst, now_ms, parse_trace, psi_integral_pct_s, real_report, sample_host, start_burst,
-    BenchRun, BurstStatus, GuestSampler, HostSample,
+    tier, tier_config, verify_tier, BenchRun, BurstStatus, GuestSampler, HostSample, Tier,
 };
-use limina_test::{Guest, GuestConfig};
+use limina_test::Guest;
 
 const MIB: u64 = 1 << 20;
 const MIN_MIB: usize = 2048;
@@ -48,8 +48,14 @@ struct Point {
 }
 
 fn points() -> Vec<Point> {
+    // Phase 2's axis is the TIER, not the mode ladder (Phase 1 characterized the modes):
+    // enhanced defaults to moderate + the disabled denominator only.
+    let default_modes = match tier() {
+        Tier::Stock => "disabled,moderate,aggressive",
+        Tier::Enhanced => "disabled,moderate",
+    };
     let modes: Vec<String> = std::env::var("LIMINA_BENCH_S2_MODES")
-        .unwrap_or_else(|_| "disabled,moderate,aggressive".into())
+        .unwrap_or_else(|_| default_modes.into())
         .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -100,8 +106,8 @@ fn run_point(run: &BenchRun, p: &Point) -> PointOutcome {
         p.mode, p.rate_mib_s
     );
 
-    let mut cfg = GuestConfig::baseline_fedora_from_env()
-        .expect("baseline disk (checked before the sweep)")
+    let mut cfg = tier_config()
+        .expect("tier disk (checked before the sweep)")
         .with_net()
         .with_memory(MIN_MIB, MAX_MIB)
         .with_balloon_control()
@@ -114,20 +120,32 @@ fn run_point(run: &BenchRun, p: &Point) -> PointOutcome {
     guest
         .wait_for_ssh_banner(Duration::from_secs(300))
         .expect("guest sshd never became reachable");
+    let stamp = verify_tier(&guest, &cfg).expect("tier positive control");
     std::thread::sleep(Duration::from_secs(5));
     let sampler = GuestSampler::start(&guest, 250).expect("starting the guest sampler");
-    let mut conn = join_control_as_agent(&mut guest, &format!("limina-bench-s2/{tag}"))
-        .expect("joining the control plane");
+    // Stock: the harness plays the agent. Enhanced: the REAL agent reports — relaying on
+    // top of it would double-feed the policy and un-measure the real D2.
+    let mut conn = match tier() {
+        Tier::Stock => Some(
+            join_control_as_agent(&mut guest, &format!("limina-bench-s2/{tag}"))
+                .expect("joining the control plane"),
+        ),
+        Tier::Enhanced => None,
+    };
     let mut host_samples: Vec<HostSample> = Vec::new();
 
-    // Pre-inflate via synthetic idle reports (constant avail ratchets the target to room).
+    // Pre-inflate to the floor. Stock: synthetic idle reports (constant avail ratchets the
+    // target to room). Enhanced: the real closed loop does it on its own (S0 measured full
+    // convergence in ~30 s) — we only watch.
     let mut balloon_at_burst = 0u64;
     if p.mode != "disabled" {
-        eprintln!("  inflating to the policy cap via idle reports");
+        eprintln!("  inflating to the policy cap ({})", tier().label());
         let deadline = Instant::now() + Duration::from_secs(200);
         loop {
-            conn.send(&Message::MemPressure(idle_report(MAX_MIB as u64)))
-                .expect("sending idle report");
+            if let Some(c) = conn.as_mut() {
+                c.send(&Message::MemPressure(idle_report(MAX_MIB as u64)))
+                    .expect("sending idle report");
+            }
             std::thread::sleep(Duration::from_millis(1200));
             let s = sample_host(&guest).expect("host sample");
             host_samples.push(s);
@@ -162,8 +180,10 @@ fn run_point(run: &BenchRun, p: &Point) -> PointOutcome {
         }
         tick += 1;
         if tick % 5 == 0 {
-            if let Some(r) = real_report(&guest) {
-                let _ = conn.send(&Message::MemPressure(r));
+            if let Some(c) = conn.as_mut() {
+                if let Some(r) = real_report(&guest) {
+                    let _ = c.send(&Message::MemPressure(r));
+                }
             }
             match burst_status(&guest).unwrap_or(BurstStatus::Died) {
                 BurstStatus::Complete(ts) => break Ok(ts),
@@ -228,7 +248,8 @@ fn run_point(run: &BenchRun, p: &Point) -> PointOutcome {
     let cd = |f: fn(&limina_test::bench::GuestSample) -> u64| {
         counter_delta(&guest_samples, f, t0, burst_end + 5000)
     };
-    let json = json_object(&[
+    let mut point_entries = stamp.entries();
+    point_entries.extend([
         ("mode", format!("\"{}\"", p.mode)),
         ("rate_mib_s", p.rate_mib_s.to_string()),
         ("survived", survived.to_string()),
@@ -271,6 +292,7 @@ fn run_point(run: &BenchRun, p: &Point) -> PointOutcome {
         ),
         ("pre_burst_ms", pre_burst.to_string()),
     ]);
+    let json = json_object(&point_entries);
     eprintln!("  point metrics: {json}");
 
     let outcome_teardown = guest.shutdown(Duration::from_secs(15));
@@ -287,13 +309,18 @@ fn s2_allocation_rate_sweep() {
     if !limina_test::require_hvf_or_skip("s2_allocation_rate_sweep") {
         return;
     }
-    if let Err(e) = GuestConfig::baseline_fedora_from_env() {
+    if let Err(e) = tier_config() {
         eprintln!("SKIPPED s2_allocation_rate_sweep: {e}");
         return;
     }
 
-    let run = BenchRun::create("s2").expect("creating the bench run dir");
-    eprintln!("S2 sweep; artifacts -> {:?}", run.dir());
+    let run =
+        BenchRun::create(&format!("s2{}", tier().suffix())).expect("creating the bench run dir");
+    eprintln!(
+        "S2 sweep ({} tier); artifacts -> {:?}",
+        tier().label(),
+        run.dir()
+    );
     let mut results = Vec::new();
     let mut any_survived = false;
     for p in points() {
@@ -303,7 +330,7 @@ fn s2_allocation_rate_sweep() {
     }
     let metrics = json_object(&[
         ("scenario", "\"s2-rate-sweep\"".to_string()),
-        ("guest_tier", "\"stock-4k\"".to_string()),
+        ("tier", format!("\"{}\"", tier().label())),
         ("min_mib", MIN_MIB.to_string()),
         ("max_mib", MAX_MIB.to_string()),
         ("burst_total_bytes", BURST_TOTAL.to_string()),

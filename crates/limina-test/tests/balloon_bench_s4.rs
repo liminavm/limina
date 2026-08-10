@@ -21,9 +21,9 @@ use std::time::{Duration, Instant};
 use limina_proto::Message;
 use limina_test::bench::{
     fetch_balloon_journal, json_object, now_ms, parse_trace, real_report, sample_host,
-    target_reversals, BenchRun, GuestSampler, HostSample,
+    target_reversals, tier, tier_config, verify_tier, BenchRun, GuestSampler, HostSample, Tier,
 };
-use limina_test::{Guest, GuestConfig};
+use limina_test::Guest;
 
 const MIB: u64 = 1 << 20;
 const MIN_MIB: usize = 2048;
@@ -44,12 +44,12 @@ fn s4_idle_inflate_convergence() {
     if !limina_test::require_hvf_or_skip("s4_idle_inflate_convergence") {
         return;
     }
-    let run = match BenchRun::create("s4") {
+    let run = match BenchRun::create(&format!("s4{}", tier().suffix())) {
         Ok(r) => r,
         Err(e) => panic!("bench run dir: {e}"),
     };
     let trace_path = run.dir().join("trace.jsonl");
-    let cfg = match GuestConfig::baseline_fedora_from_env() {
+    let cfg = match tier_config() {
         Ok(cfg) => cfg
             .with_net()
             .with_memory(MIN_MIB, MAX_MIB)
@@ -63,7 +63,8 @@ fn s4_idle_inflate_convergence() {
         }
     };
     eprintln!(
-        "S4 convergence: moderate, real-report relay; artifacts -> {:?}",
+        "S4 convergence: moderate, {} tier; artifacts -> {:?}",
+        tier().label(),
         run.dir()
     );
 
@@ -71,21 +72,30 @@ fn s4_idle_inflate_convergence() {
     guest
         .wait_for_ssh_banner(Duration::from_secs(300))
         .expect("guest sshd never became reachable");
+    let stamp = verify_tier(&guest, &cfg).expect("tier positive control");
     std::thread::sleep(Duration::from_secs(5));
     let sampler = GuestSampler::start(&guest, 250).expect("starting the guest sampler");
-    let mut conn = limina_test::bench::join_control_as_agent(&mut guest, "limina-bench-s4/0")
-        .expect("joining the control plane");
+    // Stock: relay REAL reports at the agent cadence (the honest closed loop, played by
+    // the harness). Enhanced: the REAL agent is the loop — the harness only observes.
+    let mut conn = match tier() {
+        Tier::Stock => Some(
+            limina_test::bench::join_control_as_agent(&mut guest, "limina-bench-s4/0")
+                .expect("joining the control plane"),
+        ),
+        Tier::Enhanced => None,
+    };
 
-    // Relay REAL reports at the agent cadence until the target has been quiet for the
-    // stability window (or the budget runs out).
+    // Run until the target has been quiet for the stability window (or the budget runs out).
     let t_start = now_ms();
     let mut host_samples: Vec<HostSample> = Vec::new();
     let start = Instant::now();
     let mut last_target: Option<u64> = None;
     let mut last_move = Instant::now();
     while start.elapsed() < RUN_BUDGET {
-        if let Some(r) = real_report(&guest) {
-            let _ = conn.send(&Message::MemPressure(r));
+        if let Some(c) = conn.as_mut() {
+            if let Some(r) = real_report(&guest) {
+                let _ = c.send(&Message::MemPressure(r));
+            }
         }
         std::thread::sleep(Duration::from_millis(1000));
         if let Ok(s) = sample_host(&guest) {
@@ -144,7 +154,8 @@ fn s4_idle_inflate_convergence() {
         .filter(|s| s.target.abs_diff(s.actual) > 16 * MIB)
         .count();
 
-    let metrics = json_object(&[
+    let mut entries = stamp.entries();
+    entries.extend([
         ("scenario", "\"s4-idle-converge\"".to_string()),
         ("mode", "\"moderate\"".to_string()),
         ("t_start_ms", t_start.to_string()),
@@ -170,6 +181,7 @@ fn s4_idle_inflate_convergence() {
         ),
         ("guest_samples", guest_samples.len().to_string()),
     ]);
+    let metrics = json_object(&entries);
     run.write("metrics.json", &metrics).unwrap();
     eprintln!("== S4 metrics ==\n{metrics}");
 

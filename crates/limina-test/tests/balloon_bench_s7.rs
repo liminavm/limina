@@ -27,10 +27,10 @@
 use std::time::Duration;
 
 use limina_test::bench::{
-    fetch_balloon_journal, guest_epoch_secs, json_object, mib_per_s, now_ms, sample_host, BenchRun,
-    GuestSampler, HostSample,
+    fetch_balloon_journal, guest_epoch_secs, json_object, mib_per_s, now_ms, sample_host, tier,
+    tier_config, verify_tier, BenchRun, GuestSampler, HostSample,
 };
-use limina_test::{Guest, GuestConfig};
+use limina_test::Guest;
 
 const MIB: u64 = 1 << 20;
 /// 4 GiB, not 6: the baseline image's /var/tmp holds ~4.4 GiB, and the H1 shape needs
@@ -84,7 +84,7 @@ fn s7_out_of_puff_chase() {
     if !limina_test::require_hvf_or_skip("s7_out_of_puff_chase") {
         return;
     }
-    let cfg = match GuestConfig::baseline_fedora_from_env() {
+    let cfg = match tier_config() {
         Ok(mut cfg) => {
             cfg.ram_mib = RAM_MIB;
             cfg.with_net().with_balloon_control()
@@ -94,9 +94,11 @@ fn s7_out_of_puff_chase() {
             return;
         }
     };
-    let run = BenchRun::create("s7").expect("creating the bench run dir");
+    let run =
+        BenchRun::create(&format!("s7{}", tier().suffix())).expect("creating the bench run dir");
     eprintln!(
-        "S7 out-of-puff chase (no policy); artifacts -> {:?}",
+        "S7 out-of-puff chase (no policy, {} tier); artifacts -> {:?}",
+        tier().label(),
         run.dir()
     );
 
@@ -104,6 +106,7 @@ fn s7_out_of_puff_chase() {
     guest
         .wait_for_ssh_banner(Duration::from_secs(300))
         .expect("guest sshd never became reachable");
+    let stamp = verify_tier(&guest, &cfg).expect("tier positive control");
     std::thread::sleep(Duration::from_secs(5));
     let sampler = GuestSampler::start(&guest, 250).expect("starting the guest sampler");
     let mut host_samples: Vec<HostSample> = Vec::new();
@@ -240,7 +243,8 @@ fn s7_out_of_puff_chase() {
             .unwrap_or(0);
         last.saturating_sub(first)
     };
-    let metrics = json_object(&[
+    let mut entries = stamp.entries();
+    entries.extend([
         ("scenario", "\"s7-out-of-puff\"".to_string()),
         ("h1_free_kib", free_kib.to_string()),
         ("h1_avail_kib", avail_kib.to_string()),
@@ -255,6 +259,7 @@ fn s7_out_of_puff_chase() {
         ("kswapd_cpu_ticks_delta", kswapd_delta.to_string()),
         ("guest_samples", guest_samples.len().to_string()),
     ]);
+    let metrics = json_object(&entries);
     run.write("metrics.json", &metrics).unwrap();
     eprintln!("== S7 metrics ==\n{metrics}");
 

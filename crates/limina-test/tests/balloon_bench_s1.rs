@@ -22,10 +22,10 @@
 use std::time::{Duration, Instant};
 
 use limina_test::bench::{
-    fetch_balloon_journal, json_object, mib_per_s, now_ms, sample_host, BenchRun, GuestSampler,
-    HostSample,
+    fetch_balloon_journal, json_object, mib_per_s, now_ms, sample_host, tier, tier_config,
+    verify_tier, BenchRun, GuestSampler, HostSample,
 };
-use limina_test::{Guest, GuestConfig};
+use limina_test::Guest;
 
 const MIB: u64 = 1 << 20;
 /// Guest RAM: comfortably above the balloon excursion so the idle guest never fights S1.
@@ -110,7 +110,7 @@ fn s1_mechanism_deflate_inflate() {
         return;
     }
 
-    let cfg = match GuestConfig::baseline_fedora_from_env() {
+    let cfg = match tier_config() {
         Ok(mut cfg) => {
             cfg.ram_mib = RAM_MIB;
             cfg.with_net().with_balloon_control()
@@ -120,9 +120,11 @@ fn s1_mechanism_deflate_inflate() {
             return;
         }
     };
-    let run = BenchRun::create("s1").expect("creating the bench run dir");
+    let run =
+        BenchRun::create(&format!("s1{}", tier().suffix())).expect("creating the bench run dir");
     eprintln!(
-        "S1 mechanism bench: stock baseline, {RAM_MIB} MiB RAM, {} MiB excursion, no policy; artifacts -> {:?}",
+        "S1 mechanism bench: {} tier, {RAM_MIB} MiB RAM, {} MiB excursion, no policy; artifacts -> {:?}",
+        tier().label(),
         TARGET_BYTES / MIB,
         run.dir()
     );
@@ -132,6 +134,7 @@ fn s1_mechanism_deflate_inflate() {
         .wait_for_ssh_banner(Duration::from_secs(300))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
+    let stamp = verify_tier(&guest, &cfg).expect("tier positive control");
     // Let boot-time churn settle so the idle baseline is honest.
     std::thread::sleep(Duration::from_secs(10));
 
@@ -216,9 +219,9 @@ fn s1_mechanism_deflate_inflate() {
         .lines()
         .filter(|l| l.contains("Out of puff"))
         .count();
-    let metrics = json_object(&[
+    let mut entries = stamp.entries();
+    entries.extend([
         ("scenario", "\"s1-mechanism\"".to_string()),
-        ("guest_tier", "\"stock-4k\"".to_string()),
         ("ram_mib", RAM_MIB.to_string()),
         ("target_bytes", TARGET_BYTES.to_string()),
         ("cycles", format!("[{}]", cycles_json.join(","))),
@@ -226,6 +229,7 @@ fn s1_mechanism_deflate_inflate() {
         ("guest_samples", guest_samples.len().to_string()),
         ("host_samples", host_samples.len().to_string()),
     ]);
+    let metrics = json_object(&entries);
     run.write("metrics.json", &metrics)
         .expect("writing metrics.json");
 
