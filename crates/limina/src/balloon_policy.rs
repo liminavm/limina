@@ -75,30 +75,63 @@ pub enum HostPressure {
     Critical,
 }
 
+impl HostPressure {
+    /// Stable lowercase label (trace format).
+    fn label(self) -> &'static str {
+        match self {
+            HostPressure::Normal => "normal",
+            HostPressure::Warn => "warn",
+            HostPressure::Critical => "critical",
+        }
+    }
+}
+
 /// `kern.memorystatus_level` (percent of memory jetsam counts as available) at/above which the
 /// host is demonstrably fine regardless of what the pressure *level* claims.
 const HOST_HEALTHY_AVAILABLE_PERCENT: i32 = 40;
 
-/// Read the host's memory-pressure level (1 = normal, 2 = warn, 4 = critical), blended with the
-/// actual availability percentage. Errors read as Normal: the host kernel manages its own
+/// One host-pressure reading with its components kept apart, so the decision trace can record
+/// what the sysctls said, what the blend concluded, and whether an override was in force.
+pub struct HostPressureSample {
+    /// Raw `kern.memorystatus_vm_pressure_level` (1/2/4), if readable.
+    pub raw_level: Option<i32>,
+    /// Raw `kern.memorystatus_level` (jetsam available %), if readable.
+    pub available_percent: Option<i32>,
+    /// The level the policy acts on.
+    pub blended: HostPressure,
+    /// True when `LIMINA_HOST_PRESSURE` pinned the level (the raw fields are still real).
+    pub injected: bool,
+}
+
+/// Sample the host's memory-pressure level (1 = normal, 2 = warn, 4 = critical), blended with
+/// the actual availability percentage. Errors read as Normal: the host kernel manages its own
 /// pressure, and "don't squeeze the guest" is the safe default for guest performance.
 ///
 /// `LIMINA_HOST_PRESSURE=normal|warn|critical` bypasses the sysctls entirely — a test/bench
 /// seam, not a user knob: `Light` and `Moderate` differ only under host Warn/Critical, which a
 /// healthy dev host never reports, so without injection most of the mode×host matrix is
-/// unreachable. Logged loudly (once) when active.
-pub fn read_host_pressure() -> HostPressure {
+/// unreachable. Logged loudly (once) when active; the raw sysctl fields stay real either way.
+pub fn sample_host_pressure() -> HostPressureSample {
+    let raw_level = sysctl_i32(c"kern.memorystatus_vm_pressure_level");
+    let available_percent = sysctl_i32(c"kern.memorystatus_level");
     if let Some(level) = host_pressure_override(std::env::var("LIMINA_HOST_PRESSURE").ok()) {
         static ANNOUNCED: std::sync::Once = std::sync::Once::new();
         ANNOUNCED.call_once(|| {
             log::warn!("autoballoon: host pressure OVERRIDDEN to {level:?} (LIMINA_HOST_PRESSURE)");
         });
-        return level;
+        return HostPressureSample {
+            raw_level,
+            available_percent,
+            blended: level,
+            injected: true,
+        };
     }
-    blend_host_pressure(
-        sysctl_i32(c"kern.memorystatus_vm_pressure_level"),
-        sysctl_i32(c"kern.memorystatus_level"),
-    )
+    HostPressureSample {
+        raw_level,
+        available_percent,
+        blended: blend_host_pressure(raw_level, available_percent),
+        injected: false,
+    }
 }
 
 /// Parse the `LIMINA_HOST_PRESSURE` override. Unset/empty means no override; a value that
@@ -176,10 +209,34 @@ struct State {
     last_change: Option<Instant>,
     /// No inflation before this instant (armed on every high-pressure report).
     cooldown_until: Option<Instant>,
+    /// `LIMINA_BALLOON_TRACE` decision journal: one JSON line per consumed report.
+    trace: Option<std::fs::File>,
 }
 
 impl BalloonPolicy {
     pub fn new(min_pages: u32, max_pages: u32, mode: ReclaimMode, socket: PathBuf) -> Self {
+        // The bench's decision journal (docs/design/balloon-bench.md §3): every consumed
+        // report with the verdict AND the gate that held — "why didn't it move" is the
+        // question incident debugging keeps re-deriving from scattered logs.
+        let trace = std::env::var("LIMINA_BALLOON_TRACE")
+            .ok()
+            .filter(|p| !p.is_empty())
+            .and_then(|p| {
+                match std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&p)
+                {
+                    Ok(f) => {
+                        log::warn!("autoballoon: decision trace -> {p}");
+                        Some(f)
+                    }
+                    Err(e) => {
+                        log::warn!("autoballoon: cannot open LIMINA_BALLOON_TRACE {p:?}: {e}");
+                        None
+                    }
+                }
+            });
         Self {
             min_pages,
             max_pages,
@@ -190,6 +247,7 @@ impl BalloonPolicy {
                 target_pages: 0,
                 last_change: None,
                 cooldown_until: None,
+                trace,
             }),
         }
     }
@@ -207,7 +265,7 @@ impl BalloonPolicy {
         if room == 0 || self.mode == ReclaimMode::Disabled {
             return;
         }
-        let host = read_host_pressure();
+        let host = sample_host_pressure();
         let mut st = self.state.lock().unwrap();
         let now = Instant::now();
         // A high-pressure or starvation report arms the re-inflation cooldown whether or not
@@ -217,7 +275,7 @@ impl BalloonPolicy {
         }
         let inputs = DecideInputs {
             mode: self.mode,
-            host,
+            host: host.blended,
             current: st.target_pages,
             room,
             max_pages: self.max_pages,
@@ -225,19 +283,22 @@ impl BalloonPolicy {
             cooldown_until: st.cooldown_until,
             now,
         };
-        let Some(new_target) = decide(p, &inputs) else {
-            return;
-        };
-        if self.send_target(&mut st, new_target) {
-            st.target_pages = new_target;
-            st.last_change = Some(now);
-            log::debug!(
-                "autoballoon: target -> {new_target} pages (some_avg10={}, avail/total={}/{})",
-                p.some_avg10,
-                p.mem_available_kib,
-                p.mem_total_kib
-            );
+        let decision = decide(p, &inputs);
+        let mut sent = false;
+        if let Decision::Set(new_target) = decision {
+            sent = self.send_target(&mut st, new_target);
+            if sent {
+                st.target_pages = new_target;
+                st.last_change = Some(now);
+                log::debug!(
+                    "autoballoon: target -> {new_target} pages (some_avg10={}, avail/total={}/{})",
+                    p.some_avg10,
+                    p.mem_available_kib,
+                    p.mem_total_kib
+                );
+            }
         }
+        trace_decision(&mut st, p, &host, &inputs, decision, sent);
     }
 
     /// Write `target <bytes>` to the balloon socket, reconnecting once on failure. Returns whether
@@ -266,6 +327,61 @@ impl BalloonPolicy {
             st.conn = None; // broken pipe — drop and retry once
         }
         false
+    }
+}
+
+/// Append one JSON line to the decision journal (no-op without `LIMINA_BALLOON_TRACE`).
+/// Hand-formatted flat JSON — stable keys for the bench summarizer, no serde in the hot path.
+/// A write error drops the trace (never the policy).
+fn trace_decision(
+    st: &mut State,
+    p: &MemPressure,
+    host: &HostPressureSample,
+    i: &DecideInputs,
+    decision: Decision,
+    sent: bool,
+) {
+    let Some(f) = st.trace.as_mut() else {
+        return;
+    };
+    let ts_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let json_opt = |v: Option<i32>| v.map_or("null".to_string(), |v| v.to_string());
+    let new_target = decision
+        .target()
+        .map_or("null".to_string(), |t| t.to_string());
+    let cooldown_active = i.cooldown_until.is_some_and(|t| i.now < t);
+    let line = format!(
+        concat!(
+            "{{\"ts_ms\":{},\"mode\":\"{:?}\",",
+            "\"some_avg10\":{},\"some_avg60\":{},\"full_avg10\":{},\"full_avg60\":{},",
+            "\"avail_kib\":{},\"total_kib\":{},",
+            "\"host_raw_level\":{},\"host_avail_pct\":{},\"host\":\"{}\",\"host_injected\":{},",
+            "\"current_pages\":{},\"decision\":\"{}\",\"new_target_pages\":{},",
+            "\"cooldown_active\":{},\"sent\":{}}}\n"
+        ),
+        ts_ms,
+        i.mode,
+        p.some_avg10,
+        p.some_avg60,
+        p.full_avg10,
+        p.full_avg60,
+        p.mem_available_kib,
+        p.mem_total_kib,
+        json_opt(host.raw_level),
+        json_opt(host.available_percent),
+        host.blended.label(),
+        host.injected,
+        i.current,
+        decision.label(),
+        new_target,
+        cooldown_active,
+        sent,
+    );
+    if f.write_all(line.as_bytes()).is_err() {
+        st.trace = None;
     }
 }
 
@@ -319,8 +435,59 @@ fn guest_starved(p: &MemPressure) -> bool {
     p.mem_total_kib > 0 && p.mem_available_kib < (256 * 1024).max(p.mem_total_kib / 64)
 }
 
+/// The pure policy verdict: a new target, or a hold carrying the gate that held. The reason is
+/// not decoration — "why didn't it move" is the question every balloon incident re-derived from
+/// scattered logs, and the bench's decision trace records it per report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Decision {
+    /// Command this new target (pages).
+    Set(u32),
+    /// Leave the current target alone.
+    Hold(Hold),
+}
+
+impl Decision {
+    /// The commanded target, if any (test/trace convenience).
+    fn target(self) -> Option<u32> {
+        match self {
+            Decision::Set(t) => Some(t),
+            Decision::Hold(_) => None,
+        }
+    }
+
+    /// Short stable label for the trace (`set` or the hold gate).
+    fn label(self) -> &'static str {
+        match self {
+            Decision::Set(_) => "set",
+            Decision::Hold(Hold::Converged) => "converged",
+            Decision::Hold(Hold::NotIdle) => "not-idle",
+            Decision::Hold(Hold::DeadBand) => "dead-band",
+            Decision::Hold(Hold::NotCalm) => "not-calm",
+            Decision::Hold(Hold::Cooldown) => "cooldown",
+            Decision::Hold(Hold::Dwell) => "dwell",
+        }
+    }
+}
+
+/// Which gate held the target in place (see [`decide`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hold {
+    /// The desired target equals the current one (including "release, but already at 0").
+    Converged,
+    /// Aggressive only: the guest has <30% available, not idle enough to squeeze.
+    NotIdle,
+    /// The adjustment is smaller than the dead band.
+    DeadBand,
+    /// Inflation gate: PSI is not sustainedly calm (avg10 or avg60 above the low threshold).
+    NotCalm,
+    /// Inflation gate: inside the post-release cooldown.
+    Cooldown,
+    /// Inflation gate: inside the dwell since the last target change.
+    Dwell,
+}
+
 /// The pure policy decision (unit-tested): given a pressure report and the current state, return
-/// the next target in pages, or `None` to hold.
+/// the next target in pages, or the gate that held it.
 ///
 /// All modes release to 0 immediately when the *guest* is under acute pressure (avg10 ≥ 10%).
 /// Deflation is otherwise always allowed, at any pressure: when available drops below the mode's
@@ -331,12 +498,16 @@ fn guest_starved(p: &MemPressure) -> bool {
 /// and moves in small dwell-limited [`INFLATE_STEP_PAGES`] steps so the lagging PSI sensor can
 /// push back before the squeeze overshoots. Aggressive keeps its original shape (squeeze to the
 /// floor while ≥30% is available, host pressure ignored) with the same inflation guards.
-fn decide(p: &MemPressure, i: &DecideInputs) -> Option<u32> {
+fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
     // Guest under acute pressure OR starved of cache: hand memory back, now. All modes. (The
     // caller also arms the re-inflation cooldown on these signals.) The starvation check exists
     // because thrash shows up as IO pressure, not memory-PSI — see [`guest_starved`].
     if p.some_avg10 >= PRESSURE_HIGH || guest_starved(p) {
-        return (i.current != 0).then_some(0);
+        return if i.current != 0 {
+            Decision::Set(0)
+        } else {
+            Decision::Hold(Hold::Converged)
+        };
     }
 
     let desired = match allowance_pages(i.mode, i.host, i.max_pages) {
@@ -348,7 +519,7 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Option<u32> {
                 && p.mem_available_kib.saturating_mul(100)
                     >= p.mem_total_kib.saturating_mul(IDLE_FREE_PERCENT);
             if !idle_free {
-                return None;
+                return Decision::Hold(Hold::NotIdle);
             }
             i.room
         }
@@ -365,7 +536,11 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Option<u32> {
     };
 
     if desired.abs_diff(i.current) < DEAD_BAND_PAGES && desired != 0 {
-        return None;
+        return Decision::Hold(if desired == i.current {
+            Hold::Converged
+        } else {
+            Hold::DeadBand
+        });
     }
     let next = if desired <= i.current {
         // Deflation: immediate, no idle/cooldown/dwell gates.
@@ -374,19 +549,23 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Option<u32> {
         // Inflation: only from a sustainedly calm guest (a 10 s window is just a busy guest
         // catching its breath), never inside the post-release cooldown, one small step per dwell.
         if p.some_avg10 > PRESSURE_LOW || p.some_avg60 > PRESSURE_LOW {
-            return None;
+            return Decision::Hold(Hold::NotCalm);
         }
         if i.cooldown_until.is_some_and(|t| i.now < t) {
-            return None;
+            return Decision::Hold(Hold::Cooldown);
         }
         if let Some(t) = i.last_change {
             if i.now.duration_since(t) < DWELL {
-                return None;
+                return Decision::Hold(Hold::Dwell);
             }
         }
         i.current.saturating_add(INFLATE_STEP_PAGES).min(desired)
     };
-    (next != i.current).then_some(next)
+    if next != i.current {
+        Decision::Set(next)
+    } else {
+        Decision::Hold(Hold::Converged)
+    }
 }
 
 #[cfg(test)]
@@ -442,7 +621,7 @@ mod tests {
                 let mut i = inputs(mode, host, ROOM / 2);
                 i.last_change = Some(i.now); // release must ignore the dwell
                 let next = decide(&report_pages(5000, GIB_PAGES / 8, MAX), &i);
-                assert_eq!(next, Some(0), "{mode:?}/{host:?}");
+                assert_eq!(next, Decision::Set(0), "{mode:?}/{host:?}");
             }
         }
     }
@@ -452,15 +631,15 @@ mod tests {
         // Idle with ≥30% available: one step toward full, regardless of host pressure.
         let i = inputs(ReclaimMode::Aggressive, HostPressure::Normal, 0);
         let next = decide(&report_pages(0, MAX * 7 / 10, MAX), &i);
-        assert_eq!(next, Some(INFLATE_STEP_PAGES));
+        assert_eq!(next, Decision::Set(INFLATE_STEP_PAGES));
         // Idle but <30% available: hold.
         let next = decide(&report_pages(0, MAX / 10, MAX), &i);
-        assert_eq!(next, None);
+        assert_eq!(next, Decision::Hold(Hold::NotIdle));
         // Dwell gates inflation.
         let mut i = inputs(ReclaimMode::Aggressive, HostPressure::Critical, ROOM / 4);
         i.last_change = Some(i.now);
         let next = decide(&report_pages(0, MAX * 7 / 10, MAX), &i);
-        assert_eq!(next, None);
+        assert_eq!(next, Decision::Hold(Hold::Dwell));
     }
 
     #[test]
@@ -471,7 +650,7 @@ mod tests {
         for mode in [ReclaimMode::Moderate, ReclaimMode::Aggressive] {
             let i = inputs(mode, HostPressure::Normal, ROOM / 4);
             let next = decide(&report_pages(500, MAX / 2, MAX), &i);
-            assert_eq!(next, None, "{mode:?}");
+            assert_eq!(next, Decision::Hold(Hold::NotCalm), "{mode:?}");
         }
     }
 
@@ -481,11 +660,11 @@ mod tests {
         // avail − allowance = 3 GiB, one step at a time.
         let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
         let next = decide(&report_pages(0, 4 * GIB_PAGES, MAX), &i);
-        assert_eq!(next, Some(INFLATE_STEP_PAGES));
+        assert_eq!(next, Decision::Set(INFLATE_STEP_PAGES));
         // Fully converged: current already at avail − allowance → hold (sub-dead-band).
         let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 3 * GIB_PAGES);
         let next = decide(&report_pages(0, GIB_PAGES, MAX), &i);
-        assert_eq!(next, None);
+        assert_eq!(next, Decision::Hold(Hold::Converged));
     }
 
     #[test]
@@ -495,7 +674,10 @@ mod tests {
         let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 3 * GIB_PAGES);
         i.last_change = Some(i.now);
         let next = decide(&report_pages(0, GIB_PAGES / 4, MAX), &i);
-        assert_eq!(next, Some(3 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4)));
+        assert_eq!(
+            next,
+            Decision::Set(3 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4))
+        );
     }
 
     #[test]
@@ -504,7 +686,7 @@ mod tests {
         // 3 GiB, stepped; from 0 that's one step.
         let i = inputs(ReclaimMode::Moderate, HostPressure::Warn, 0);
         let next = decide(&report_pages(0, 4 * GIB_PAGES, MAX), &i);
-        assert_eq!(next, Some(INFLATE_STEP_PAGES));
+        assert_eq!(next, Decision::Set(INFLATE_STEP_PAGES));
         // The allowance never reaches zero under warn (the sticky-Warn wedge class).
         assert_eq!(
             allowance_pages(ReclaimMode::Moderate, HostPressure::Warn, MAX),
@@ -517,11 +699,11 @@ mod tests {
         // Host fine → Light drifts the target to 0 (give the guest its cache back)…
         let i = inputs(ReclaimMode::Light, HostPressure::Normal, 2 * GIB_PAGES);
         let next = decide(&report_pages(0, 2 * GIB_PAGES, MAX), &i);
-        assert_eq!(next, Some(0));
+        assert_eq!(next, Decision::Set(0));
         // …and stays at 0.
         let i = inputs(ReclaimMode::Light, HostPressure::Normal, 0);
         let next = decide(&report_pages(0, 4 * GIB_PAGES, MAX), &i);
-        assert_eq!(next, None);
+        assert_eq!(next, Decision::Hold(Hold::Converged));
     }
 
     #[test]
@@ -530,7 +712,7 @@ mod tests {
         // one step at a time.
         let i = inputs(ReclaimMode::Light, HostPressure::Warn, 0);
         let next = decide(&report_pages(0, 4 * GIB_PAGES, MAX), &i);
-        assert_eq!(next, Some(INFLATE_STEP_PAGES));
+        assert_eq!(next, Decision::Set(INFLATE_STEP_PAGES));
     }
 
     #[test]
@@ -543,7 +725,7 @@ mod tests {
             ROOM - INFLATE_STEP_PAGES / 2,
         );
         let next = decide(&report_pages(0, 2 * GIB_PAGES, MAX), &i);
-        assert_eq!(next, Some(ROOM));
+        assert_eq!(next, Decision::Set(ROOM));
     }
 
     /// Oscillation regression 1: inflation must move in small bounded
@@ -554,7 +736,7 @@ mod tests {
         // 7 GiB available, 1 GiB allowance: desired is ~6 GiB away, but one decision may only
         // move one INFLATE_STEP.
         let next = decide(&report_pages(0, 7 * GIB_PAGES, MAX), &i);
-        assert_eq!(next, Some(INFLATE_STEP_PAGES));
+        assert_eq!(next, Decision::Set(INFLATE_STEP_PAGES));
     }
 
     /// Regression 2: while the guest sits in the neutral band (2–10%), the policy must still
@@ -567,7 +749,10 @@ mod tests {
         i.last_change = Some(i.now);
         // PSI 7%, available 256 MiB < 1 GiB allowance: deflate by the shortfall, now.
         let next = decide(&report_pages(700, GIB_PAGES / 4, MAX), &i);
-        assert_eq!(next, Some(5 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4)));
+        assert_eq!(
+            next,
+            Decision::Set(5 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4))
+        );
     }
 
     /// Regression 2b: Light at host-normal holds no balloon; that drift-to-0 is a deflation and
@@ -576,7 +761,7 @@ mod tests {
     fn light_normal_gives_back_in_the_neutral_band() {
         let i = inputs(ReclaimMode::Light, HostPressure::Normal, 2 * GIB_PAGES);
         let next = decide(&report_pages(500, 2 * GIB_PAGES, MAX), &i);
-        assert_eq!(next, Some(0));
+        assert_eq!(next, Decision::Set(0));
     }
 
     /// Regression 3: a 10-second calm window is not "idle" — inflation also requires the 60 s
@@ -586,7 +771,7 @@ mod tests {
         let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
         let mut p = report_pages(0, 7 * GIB_PAGES, MAX);
         p.some_avg60 = 500; // 5% over the last minute
-        assert_eq!(decide(&p, &i), None);
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::NotCalm));
     }
 
     /// Regression 4: after a pressure-triggered release the policy must back off, not re-inflate
@@ -595,18 +780,24 @@ mod tests {
     fn release_cooldown_blocks_reinflation() {
         let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
         i.cooldown_until = Some(i.now + Duration::from_secs(100));
-        assert_eq!(decide(&report_pages(0, 7 * GIB_PAGES, MAX), &i), None);
+        assert_eq!(
+            decide(&report_pages(0, 7 * GIB_PAGES, MAX), &i),
+            Decision::Hold(Hold::Cooldown)
+        );
         // Cooldown elapsed: inflation resumes.
         i.cooldown_until = Some(i.now - Duration::from_secs(1));
         assert_eq!(
             decide(&report_pages(0, 7 * GIB_PAGES, MAX), &i),
-            Some(INFLATE_STEP_PAGES)
+            Decision::Set(INFLATE_STEP_PAGES)
         );
         // Deflation is never cooldown-gated (giving memory back is always safe).
         i.cooldown_until = Some(i.now + Duration::from_secs(100));
         i.current = 5 * GIB_PAGES;
         let next = decide(&report_pages(700, GIB_PAGES / 4, MAX), &i);
-        assert_eq!(next, Some(5 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4)));
+        assert_eq!(
+            next,
+            Decision::Set(5 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4))
+        );
     }
 
     #[test]
@@ -615,7 +806,7 @@ mod tests {
         let cur = 2 * GIB_PAGES;
         let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
         let next = decide(&report_pages(0, GIB_PAGES + 2048, MAX), &i);
-        assert_eq!(next, None);
+        assert_eq!(next, Decision::Hold(Hold::DeadBand));
     }
 
     #[test]
@@ -671,7 +862,7 @@ mod tests {
                 mem_available_kib: 263 * 1024,
                 mem_total_kib: 24870560,
             };
-            assert_eq!(decide(&p, &i), Some(0), "{mode:?}");
+            assert_eq!(decide(&p, &i), Decision::Set(0), "{mode:?}");
         }
     }
 
@@ -688,7 +879,72 @@ mod tests {
         let avail = 600 * PAGES_PER_MIB;
         let allow = max / 16;
         let next = decide(&report_pages(300, avail, max), &i);
-        assert_eq!(next, Some(21 * GIB_PAGES - (allow - avail)));
+        assert_eq!(next, Decision::Set(21 * GIB_PAGES - (allow - avail)));
+    }
+
+    /// The trace line is consumed by the bench summarizer: keys and shapes are a contract.
+    /// One `Set` line and one `Hold` line, round-tripped through a real file.
+    #[test]
+    fn trace_lines_carry_the_verdict_and_the_gate() {
+        let path = std::env::temp_dir().join(format!("balloon-trace-test-{}", std::process::id()));
+        let mut st = State {
+            conn: None,
+            target_pages: 0,
+            last_change: None,
+            cooldown_until: None,
+            trace: Some(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .unwrap(),
+            ),
+        };
+        let host = HostPressureSample {
+            raw_level: Some(2),
+            available_percent: Some(49),
+            blended: HostPressure::Normal,
+            injected: false,
+        };
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
+        trace_decision(
+            &mut st,
+            &report_pages(0, 4 * GIB_PAGES, MAX),
+            &host,
+            &i,
+            Decision::Set(INFLATE_STEP_PAGES),
+            true,
+        );
+        i.cooldown_until = Some(i.now + Duration::from_secs(100));
+        trace_decision(
+            &mut st,
+            &report_pages(0, 4 * GIB_PAGES, MAX),
+            &host,
+            &i,
+            Decision::Hold(Hold::Cooldown),
+            false,
+        );
+        let out = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2, "{out}");
+        assert!(
+            lines[0].contains("\"decision\":\"set\"")
+                && lines[0].contains(&format!("\"new_target_pages\":{INFLATE_STEP_PAGES}"))
+                && lines[0].contains("\"sent\":true")
+                && lines[0].contains("\"host\":\"normal\"")
+                && lines[0].contains("\"host_raw_level\":2"),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("\"decision\":\"cooldown\"")
+                && lines[1].contains("\"new_target_pages\":null")
+                && lines[1].contains("\"cooldown_active\":true")
+                && lines[1].contains("\"sent\":false"),
+            "{}",
+            lines[1]
+        );
     }
 
     #[test]
