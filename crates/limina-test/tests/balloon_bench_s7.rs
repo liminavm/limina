@@ -53,12 +53,16 @@ struct Sizes {
     /// any survivable cap (measured: 4 escalations to the cap in 1.5 s, zero puff), so
     /// the unfillable gap must be guaranteed by pinning what a real desktop pins.
     ballast_mib: u64,
-    /// `swapoff -a` before the stage-set. The mlocked ballast alone was NOT enough on
-    /// enhanced: zram makes every *unpinned* page obtainable too, so the chase swapped
-    /// the whole desktop out and killed sshd anyway (run s7enh-1786380313). With swap
-    /// off, anon memory is unreclaimable by construction — the driver fails cleanly
-    /// into its retry loop against the cache floor and the guest stays healthy. Stock
-    /// keeps zram (it held its plateau with almost no anon to swap; comparability).
+    /// `swapoff -a` before the stage-set. Kept as a seam; currently FALSE on both tiers.
+    /// The enhanced construction took three attempts, and the failures are the record:
+    /// (1) no pinning — a 16k+zram guest yields everything to any survivable cap;
+    /// (2) mlocked ballast + zram — the chase swapped the whole DESKTOP out instead
+    /// (s7enh-1786380313); (3) ballast + swapoff — with no swap escape the desktop's
+    /// own unswappable allocations raced the last pages and the guest collapsed anyway
+    /// (s7enh-1786382977). The variable that actually works is SCALE: on 6 GiB,
+    /// "target unfillable" and "guest dead" are the same state; on 10 GiB a held gap
+    /// leaves the desktop ~1 GiB of real headroom — which is also why the dogfood
+    /// guest can spam `Out of puff` for hours while perfectly healthy.
     swapoff: bool,
 }
 
@@ -73,12 +77,12 @@ fn sizes() -> Sizes {
             swapoff: false,
         },
         limina_test::bench::Tier::Enhanced => Sizes {
-            ram_mib: 6144,
-            cache_file_mib: 4096,
-            chase_start: 3584 * MIB,
-            chase_cap: (6144 - 1536) * MIB,
-            ballast_mib: 2048,
-            swapoff: true,
+            ram_mib: 10240,
+            cache_file_mib: 8192,
+            chase_start: 5120 * MIB,
+            chase_cap: 8192 * MIB,
+            ballast_mib: 4096,
+            swapoff: false,
         },
     }
 }
