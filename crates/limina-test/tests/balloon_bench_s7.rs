@@ -27,8 +27,8 @@
 use std::time::Duration;
 
 use limina_test::bench::{
-    fetch_balloon_journal, guest_epoch_secs, json_object, mib_per_s, now_ms, sample_host, tier,
-    tier_config, verify_tier, BenchRun, GuestSampler, HostSample,
+    count_oom_since, fetch_balloon_journal, guest_epoch_secs, json_object, mib_per_s, now_ms,
+    sample_host, tier, tier_config, verify_tier, BenchRun, GuestSampler, HostSample,
 };
 use limina_test::Guest;
 
@@ -53,16 +53,11 @@ struct Sizes {
     /// any survivable cap (measured: 4 escalations to the cap in 1.5 s, zero puff), so
     /// the unfillable gap must be guaranteed by pinning what a real desktop pins.
     ballast_mib: u64,
-    /// `swapoff -a` before the stage-set. Kept as a seam; currently FALSE on both tiers.
-    /// The enhanced construction took three attempts, and the failures are the record:
-    /// (1) no pinning — a 16k+zram guest yields everything to any survivable cap;
-    /// (2) mlocked ballast + zram — the chase swapped the whole DESKTOP out instead
-    /// (s7enh-1786380313); (3) ballast + swapoff — with no swap escape the desktop's
-    /// own unswappable allocations raced the last pages and the guest collapsed anyway
-    /// (s7enh-1786382977). The variable that actually works is SCALE: on 6 GiB,
-    /// "target unfillable" and "guest dead" are the same state; on 10 GiB a held gap
-    /// leaves the desktop ~1 GiB of real headroom — which is also why the dogfood
-    /// guest can spam `Out of puff` for hours while perfectly healthy.
+    /// `swapoff -a` before the stage-set. Stock FALSE (the bare console plateaus on its
+    /// own); enhanced TRUE — with zram on there is no wall short of desktop eviction,
+    /// because every unpinned page (cache first, then the desktop's anon via zram) is
+    /// obtainable to a patient chaser. Swapoff makes anon unreclaimable, so the wall is
+    /// real and the chase stalls at it instead of grinding the session out.
     swapoff: bool,
 }
 
@@ -76,22 +71,35 @@ fn sizes() -> Sizes {
             ballast_mib: 0,
             swapoff: false,
         },
-        // chase_start == chase_cap: NO escalation on enhanced. Attempt 4 (10 GiB,
-        // escalating chase) proved the last piece: the 16k driver + kernel reclaim
-        // yield EVERYTHING to a patient chaser — cache first, then the desktop via
-        // zram — so an adaptive chase always terminates in guest collapse, at any
-        // scale. There is no healthy natural plateau to find. The state the dogfood
-        // guest actually lives in is the GRIND: a held mid-range target the driver
-        // can only approach at ~33 MiB/s through cache, spamming the whole way, on an
-        // otherwise healthy guest. A fixed 4608 MiB hold from B's 2048 = ~2.5 GiB of
-        // grind ≈ the full 90 s window of retry-loop spam, with the desktop untouched.
+        // CONCLUDED UNCONSTRUCTIBLE (the test SKIPS on this tier; the arm is the
+        // record). Six constructions, one convergent finding: **the driver has no
+        // self-preservation** — a chased/oversized target takes everything, and the
+        // only "plateau" is guest death. The record: (1) stock cap on 4 GiB —
+        // desktop squeezed to catatonia, agent+sshd died (s7enh-1786378025); (2) no
+        // pinning — the 16k+zram guest yielded everything to any survivable cap
+        // (4 escalations to cap in 1.5 s, zero puff); (3) ballast + zram — the chase
+        // ground the DESKTOP out via zram once cache was gone (s7enh-1786380313,
+        // again at 10 GiB in s7enh-1786383422); (4) ballast + swapoff on 6 GiB —
+        // OOM collapse at the absolute-zero-cache wall (s7enh-1786382977); (5) fixed
+        // mid-range target, "the grind" (s7enh-1786383821) — closed silently in
+        // seconds: the driver has NO slow-approach state, it fills fast or it fails
+        // (the "~33 MiB/s grind" that motivated it was an instrument artifact —
+        // actual/60 s on a fill that finished in <1 s); (6) ballast + swapoff +
+        // 10 GiB scale (s7enh-1786384443) — every 256 MiB escalation closed in one
+        // 200 ms sample, 4096→6400 in <5 s, the OOM killer fed the (unprotected)
+        // desktop to the balloon and sshd died. With swap the desktop is evicted,
+        // without swap it is killed; either way the wall that protects the guest
+        // does not exist in the guest — it has to live in the HOST POLICY (the
+        // MemFree-informed target clamp lever). Stock's journal positive control
+        // covers the mechanism; the dogfood field spam is the enhanced-tier
+        // positive control.
         limina_test::bench::Tier::Enhanced => Sizes {
             ram_mib: 10240,
             cache_file_mib: 8192,
-            chase_start: 4608 * MIB,
-            chase_cap: 4608 * MIB,
+            chase_start: 4096 * MIB,
+            chase_cap: (10240 - 512) * MIB,
             ballast_mib: 3072,
-            swapoff: false,
+            swapoff: true,
         },
     }
 }
@@ -200,6 +208,16 @@ fn s7_out_of_puff_chase() {
     if !limina_test::require_hvf_or_skip("s7_out_of_puff_chase") {
         return;
     }
+    if matches!(tier(), limina_test::bench::Tier::Enhanced) {
+        eprintln!(
+            "SKIPPED s7_out_of_puff_chase on the enhanced tier: the scenario is \
+             CONCLUDED UNCONSTRUCTIBLE there — six constructions all ended in guest \
+             death because the driver has no self-preservation (see the Sizes doc \
+             comment and spikes/balloon-bench-2026-08-10/RESULTS.md, S7enh). The \
+             dogfood field spam is the enhanced-tier positive control."
+        );
+        return;
+    }
     let sz = sizes();
     let cfg = match tier_config() {
         Ok(mut cfg) => {
@@ -280,18 +298,36 @@ fn s7_out_of_puff_chase() {
         .set_balloon_target(SLOW_FILL_TARGET)
         .expect("commanding the slow-fill target");
     eprintln!("phase B: 2 GiB target into the cache-full guest (60 s observation)");
-    let b_last = observe(&guest, &mut host_samples, 60);
+    // Record WHEN the target is first reached — the old actual/window arithmetic
+    // reported "~33 MiB/s" for a fill that completed in under a second (2048/60
+    // exactly, every run). The rate is only honest over the time the fill took.
+    let mut b_last = HostSample::default();
+    let mut b_fill_ms: Option<u64> = None;
+    for _ in 0..(60 * 5) {
+        std::thread::sleep(Duration::from_millis(200));
+        if let Ok(s) = sample_host(&guest) {
+            if b_fill_ms.is_none() && s.actual >= SLOW_FILL_TARGET {
+                b_fill_ms = Some(s.ts_ms.saturating_sub(t_b).max(1));
+            }
+            b_last = s;
+            host_samples.push(s);
+        }
+    }
     let puff_b = puff_since(&guest, &mark_b);
-    let b_fill_rate = mib_per_s(
-        b_last.actual,
-        Duration::from_millis(
-            // Time to reach the last observed actual: use the sample timestamp.
-            b_last.ts_ms.saturating_sub(t_b).max(1),
+    let b_fill_rate = match b_fill_ms {
+        Some(ms) => mib_per_s(SLOW_FILL_TARGET, Duration::from_millis(ms)),
+        None => mib_per_s(
+            b_last.actual,
+            Duration::from_millis(b_last.ts_ms.saturating_sub(t_b).max(1)),
         ),
-    );
+    };
     eprintln!(
-        "  phase B: actual={} MiB after 60 s (~{:.0} MiB/s vs S1's ~1840), puff lines={}",
+        "  phase B: actual={} MiB ({}, ~{:.0} MiB/s vs S1's ~1840 against free), puff lines={}",
         b_last.actual / MIB,
+        match b_fill_ms {
+            Some(ms) => format!("target reached in {:.2} s", ms as f64 / 1000.0),
+            None => "target NOT reached in 60 s".to_string(),
+        },
         b_fill_rate,
         puff_b
     );
@@ -334,11 +370,14 @@ fn s7_out_of_puff_chase() {
         }
     }
     let puff_c = puff_since(&guest, &mark_c);
+    let oom_c = count_oom_since(&guest, &mark_c);
     eprintln!(
-        "  phase C: plateau actual={} MiB (final target {} MiB), puff lines={} in 90 s",
+        "  phase C: plateau actual={} MiB (final target {} MiB), puff lines={} in 90 s, \
+         oom kills={}",
         c_last.actual / MIB,
         chase_target / MIB,
-        puff_c
+        puff_c,
+        oom_c
     );
 
     // ---- Phase D: close the gap, the loop must stop. ------------------------------------
@@ -389,11 +428,16 @@ fn s7_out_of_puff_chase() {
         ("h1_avail_kib", avail_kib.to_string()),
         ("slow_fill_target", SLOW_FILL_TARGET.to_string()),
         ("slow_fill_actual_60s", b_last.actual.to_string()),
+        (
+            "slow_fill_reach_ms",
+            b_fill_ms.map_or("null".to_string(), |ms| ms.to_string()),
+        ),
         ("slow_fill_mib_s", format!("{b_fill_rate:.1}")),
         ("puff_lines_b", puff_b.to_string()),
         ("chase_final_target", chase_target.to_string()),
         ("plateau_actual", plateau.to_string()),
         ("puff_lines_c_90s", puff_c.to_string()),
+        ("oom_kills_c", oom_c.to_string()),
         ("puff_lines_d_30s", puff_d.to_string()),
         ("kswapd_cpu_ticks_delta", kswapd_delta.to_string()),
         ("guest_samples", guest_samples.len().to_string()),
@@ -409,6 +453,13 @@ fn s7_out_of_puff_chase() {
          either the journal pipeline is broken (grep/sudo/journalctl) or the driver model \
          in docs/design/balloon-bench.md §2 is wrong; both need investigating before any \
          journal-based conclusion is trusted"
+    );
+    // The wall must be HEALTHY: the retry loop spamming while the guest OOM-kills is
+    // the attempt-3 collapse, not the dogfood state this scenario reproduces.
+    assert_eq!(
+        oom_c, 0,
+        "phase C's plateau came with {oom_c} OOM kill(s) — the wall is not a healthy \
+         stall, the construction squeezed the guest"
     );
     // Closing the gap must stop the loop (ratelimit may land one straggler).
     assert!(

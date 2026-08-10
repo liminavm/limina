@@ -847,9 +847,13 @@ pub fn verify_tier(guest: &Guest, cfg: &crate::GuestConfig) -> Result<TierStamp>
         .parse()
         .context("parsing guest PAGESIZE")?;
     let uname_r = guest.ssh_exec("uname -r")?.trim().to_string();
+    // File NAME only: the stamp lands in committed metrics.json, and an absolute path
+    // would publish the private home directory (the repo is public, scrub-token rule).
     let disk = match &cfg.boot {
-        crate::Boot::Firmware { disk, .. } => disk.display().to_string(),
-        crate::Boot::KernelDisk { disk, .. } => disk.display().to_string(),
+        crate::Boot::Firmware { disk, .. } | crate::Boot::KernelDisk { disk, .. } => disk
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "<no-file-name>".to_string()),
         other => format!("{other:?}"),
     };
     let want = match t {

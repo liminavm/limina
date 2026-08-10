@@ -1,0 +1,90 @@
+==> building limina + limina-vmm (debug)
+warning: field `status_ioc` is never read
+  --> third_party/libkrun/src/devices/src/usb/xhci/engine.rs:78:5
+   |
+68 | pub(super) struct ControlEvents {
+   |                   ------------- field in this struct
+...
+78 |     status_ioc: bool,
+   |     ^^^^^^^^^^
+   |
+   = note: `ControlEvents` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `krun-devices` (lib) generated 1 warning
+warning: limina-vmm@0.1.0: virglrenderer: linking OUR prefix (<repo>/third_party/virgl-prefix/lib)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s
+==> codesigning the worker (hypervisor entitlement)
+<repo>/target/debug/limina-vmm: replacing existing signature
+signed <repo>/target/debug/limina-vmm (com.apple.security.hypervisor OK)
+==> checking the worker links our virglrenderer (venus guard)
+check-virgl-link: OK — target/debug/limina-vmm links our virgl-prefix virglrenderer
+==> building the L1 test guest (kernel + rootfs)
+    Finished `release` profile [optimized] target(s) in 0.11s
+==> building the hvf-trap-probe (bare-metal PSCI probe for hvf_graceful)
+==> running boot tests (LIMINA_HVF_TESTS=1)
+   Compiling limina-test v0.1.0 (<repo>/crates/limina-test)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.56s
+────────────
+ Nextest run ID acfaf010-c7d3-4230-a9e2-917405213173 with nextest profile: default
+    Starting 1 test across 1 binary (61 binaries skipped)
+        SLOW [>120.000s] (───) limina-test::balloon_bench_s7 s7_out_of_puff_chase
+        FAIL [ 199.112s] (1/1) limina-test::balloon_bench_s7 s7_out_of_puff_chase
+  stdout ───
+
+    running 1 test
+    guest SSH forward ready: ssh -p 54983 <user>@127.0.0.1
+    test s7_out_of_puff_chase has been running for over 60 seconds
+    test s7_out_of_puff_chase ... FAILED
+
+    failures:
+
+    failures:
+        s7_out_of_puff_chase
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 199.09s
+
+  stderr ───
+    S7 out-of-puff chase (no policy, enhanced tier); artifacts -> "<repo>/target/balloon-bench/s7enh-1786380313"
+    [2026-08-10T16:45:13Z INFO  limina] suspend armed by default: snapshot path /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-test-77553-0/disk.raw.limina-suspend.bin
+    [2026-08-10T16:45:13Z INFO  limina::gateway] death-pact watcher up (pid 77593) tying gvproxy 77592 to this supervisor
+    [2026-08-10T16:45:13Z INFO  limina::gateway] gvproxy gateway up (pid 77592, socket "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-77587.sock", ssh-port 54983)
+    [2026-08-10T16:45:14Z INFO  limina::supervisor] VM worker started (pid 77594); Ctrl-C to power off
+    [2026-08-10T16:45:15.579058Z INFO  limina_vmm::krun] battery: mirroring the host battery into the guest
+    [2026-08-10T16:45:15.579565Z INFO  limina_vmm::krun] USB: cold-plugging the FIDO authenticator gadget ("/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-fido-usb-77587.sock")
+    [2026-08-10T16:45:15.579707Z INFO  limina_vmm::krun] USB: cold-plugging the fingerprint reader gadget ("/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-moc-usb-77587.sock")
+    [2026-08-10T16:45:15.579816Z INFO  limina_vmm::krun] building microVM: 4 vcpu(s), 6144 MiB, 1 disk(s), 0 share(s), display=false, boot=EFI firmware
+    [2026-08-10T16:45:15.583553Z INFO  limina_vmm::krun] balloon: control socket listening on "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-test-77553-0/balloon.sock"
+    [2026-08-10T16:45:15.583625Z INFO  limina_vmm::krun] microVM running; entering event loop (SIGTERM/SIGINT → guest power-off)
+    [2026-08-10T16:45:15.583775Z INFO  limina_vmm::power] host sleep: registered (guest will s2idle around host sleep)
+    [2026-08-10T16:45:15Z INFO  limina::moc::usb] moc: connected to the worker gadget at "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-moc-usb-77587.sock"
+    [2026-08-10T16:45:15.768834Z INFO  limina_vmm::moc_usb] moc-usb: supervisor connected
+    [2026-08-10T16:45:15Z INFO  limina::fido::usb] fido-usb: connected to the worker gadget at "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-fido-usb-77587.sock"
+    [2026-08-10T16:45:15.771121Z INFO  limina_vmm::fido_usb] fido-usb: supervisor connected
+    [2026-08-10T16:45:26.885697Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:45:26Z INFO  limina::control] control: guest agent connected: limina-agent/0.1.0 caps=["heartbeat", "shutdown", "mempressure"] pagesize=16384
+    phase A: filling the page cache (4096 MiB file on disk)
+      H1 shape: MemTotal:6117392 MemFree:975008 MemAvailable:4739664 Cached:4595728
+    phase B: 2 GiB target into the cache-full guest (60 s observation)
+    [2026-08-10T16:45:40.614192Z INFO  limina_vmm::krun] balloon: target 2147483648 bytes (524288 pages)
+    [2026-08-10T16:46:22.286077Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      phase B: actual=2048 MiB after 60 s (~33 MiB/s vs S1's ~1840), puff lines=0
+      pinning 2048 MiB of mlocked ballast (the synthetic desktop working set)
+    phase C: chasing from 3584 MiB (step 256 MiB, cap 4608 MiB), 90 s hold
+    [2026-08-10T16:46:44.250233Z INFO  limina_vmm::krun] balloon: target 3758096384 bytes (917504 pages)
+    [2026-08-10T16:46:48Z INFO  limina::control] control: guest agent disconnected: limina-agent/0.1.0
+
+    thread 's7_out_of_puff_chase' panicked at crates/limina-test/tests/balloon_bench_s7.rs:90:10:
+    puff_since: ssh to the guest failed — the count would be a lie, not a zero: ssh `sudo journalctl -k --since=@1786380404 2>/dev/null | grep -c 'Out of puff' || true` failed (exit status: 255):
+    kex_exchange_identification: read: Connection reset by peer
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    [2026-08-10T16:48:28Z INFO  limina::supervisor] shutdown requested → asking guest to power off
+    [2026-08-10T16:48:31Z WARN  limina::supervisor] guest did not power off within 3s; forcing (SIGKILL)
+    [2026-08-10T16:48:31Z INFO  limina::fido::usb] fido-usb: worker gadget connection ended; retrying
+    [2026-08-10T16:48:31Z INFO  limina::moc::usb] moc: worker gadget connection ended; retrying
+    [2026-08-10T16:48:31Z WARN  limina::supervisor] VM stopped — worker terminated by signal 9
+
+────────────
+     Summary [ 199.113s] 1 test run: 0 passed, 1 failed, 0 skipped
+        FAIL [ 199.112s] (1/1) limina-test::balloon_bench_s7 s7_out_of_puff_chase
+error: test run failed

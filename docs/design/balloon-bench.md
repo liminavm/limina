@@ -249,6 +249,11 @@ mode × host-pressure × guest tier.
 - **S5 — burst under a busy control plane.** S2 at a fixed rate while the control plane
   carries synthetic traffic (e.g. a chatty peer). Directly answers the D2 starvation
   question: does report inter-arrival stretch, and does detection latency follow?
+  (A second, distinct starvation seam found reading the agent for Phase 2: the agent
+  piggybacks MemPressure **only on idle poll ticks** — `guest/limina-agent/src/main.rs`,
+  the `!stream_ready && !uhid_ready` branch — so sustained host→agent traffic (FIDO,
+  clipboard) defers reports entirely. Not synthesizable from the harness cheaply;
+  validates lever #4's fast-path shape and is an S8 observable.)
 - **S6 — host-pressure staircase.** With the injection seam: Normal → Warn → Critical →
   Normal, dwell at each step, idle guest. Verifies each mode's allowance ladder engages
   and disengages (Light does nothing at Normal, engages at Warn; floors hold at
@@ -298,11 +303,20 @@ it:
   ≤512 MiB/s and zram carries ≥2 GiB/s; `Out of puff` = held target/actual gap,
   confirmed (H2 dead); the organic policy-held gap was NOT captured — it moves to
   the Phase-2 steady state. Two findings feed back into §10 (levers 6–7).
-- **Phase 2 (tiers + edges):** enhanced-16k runs of S1/S2/S4/S7 (real agent ⇒ real D2;
-  16k pages change both I3 allocation and I4 coalescing, and the dogfood `Out of puff`
-  reports come from a 16k guest), S5, and the **desktop-shaped ≥30-min warm-cache
-  steady state** (S7's deferred variant — where H1 predicts the policy parks an
-  unfillable target). Then tuning starts, replay-first.
+- **Phase 2 (tiers + edges): DONE 2026-08-10.** S0/S1/S2/S4 enhanced, S5, S8, and the
+  six-construction S7enh saga; same RESULTS file. Headlines: the mechanism is
+  tier-independent, and the **real agent is 2–5× faster than Phase 1's relayed
+  numbers** (detection 318–1152 ms) — fresh reports flip the release tier from
+  panic-to-0 to proportional dribbles, halving swap at 1–2 GiB/s. S5 = clean negative
+  (per-peer serve threads). S8 (35 idle desktop minutes) = zero gap episodes, zero
+  puff, policy actively tracking. S7enh = **CONCLUDED UNCONSTRUCTIBLE**: the driver
+  has no self-preservation — six constructions all ended in desktop eviction (zram)
+  or OOM death (swapoff); "unfillable while healthy" cannot be driven from the
+  target side, so the protective wall must live in the host policy (lever 2 is now
+  mandatory-shaped). Phase 1's "33 MiB/s fill-vs-cache grind" was retracted as an
+  instrument artifact (fills run at GiB/s on both tiers). **Next: tuning,
+  replay-first (§7, levers §10), opening with a read-only `LIMINA_BALLOON_TRACE`
+  capture on the dogfood guest as the first fixture.**
 
 ## 9. What gates where
 
@@ -327,19 +341,25 @@ Not commitments — the bench decides. Ordered by expected relevance:
    stall per tick — reacts in one report instead of the avg10 EMA's ~10 s), and/or a
    MemAvailable-slope predictor ("at this burn rate the guest is starved in <2 s →
    release now"). Instrument gap #4 records both candidates from day one.
-2. **Close the H1 gap** (`Out of puff`): if H1 confirms, either size/clamp inflation
-   targets by something the driver can actually allocate (MemFree-informed, not
-   MemAvailable alone), or detect a persistently-held target−actual gap in the policy
-   and back the target off to `actual` (gap decay). Policy-side first; teaching the
-   *driver* to reclaim harder is guest-kernel territory we own but a bigger hammer
-   (upstream chose `__GFP_NORETRY` deliberately — inflation stealing cache under the
-   guest's feet is its own failure mode, see Run D).
+2. **Close the H1 gap** (`Out of puff`): either size/clamp inflation targets by
+   something the driver can actually allocate (MemFree-informed, not MemAvailable
+   alone), or detect a persistently-held target−actual gap in the policy and back the
+   target off to `actual` (gap decay). Policy-side first; teaching the *driver* to
+   reclaim harder is guest-kernel territory we own but a bigger hammer (upstream
+   chose `__GFP_NORETRY` deliberately — inflation stealing cache under the guest's
+   feet is its own failure mode, see Run D). *(Phase 2 upgraded this from candidate
+   to mandatory-shaped: S7enh proved the driver satisfies ANY target up to guest
+   death — cache, then desktop-via-zram, then OOM. The guest will not protect
+   itself; the clamp is the only wall.)*
 3. **Graduated release** (deflate): today's release is binary (shortfall-sized dribble
    below the allowance vs panic-to-0 at 10%); a middle tier (e.g. release proportional
    to pressure slope) may cut relief latency without full dumps.
 4. **Agent-side fast path**: report immediately on threshold crossings (avail dropping
    below allowance, PSI total spiking) instead of only the idle tick — fixes D2's
-   worst case if S5 shows it matters.
+   worst case if S5 shows it matters. (Phase 2 sharpened the case: reports ride only
+   *idle* poll ticks today, so a busy agent stream starves them — see the S5 note in
+   §6 — and the S2-enhanced sweep showed fresh 1 s reports alone already flip the
+   policy from panic-to-0 dumps into proportional dribbles.)
 5. **D4 throughput**, only if S1 shows the driver is a bottleneck (larger leak batches,
    etc. — guest-kernel territory, we own it). *Phase 0 answered: it is not.*
 6. **An io-PSI / refault term in the give-back rule** (from S3): moderate's allowance

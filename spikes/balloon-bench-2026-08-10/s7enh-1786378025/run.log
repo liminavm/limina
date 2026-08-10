@@ -1,0 +1,472 @@
+==> building limina + limina-vmm (debug)
+warning: field `status_ioc` is never read
+  --> third_party/libkrun/src/devices/src/usb/xhci/engine.rs:78:5
+   |
+68 | pub(super) struct ControlEvents {
+   |                   ------------- field in this struct
+...
+78 |     status_ioc: bool,
+   |     ^^^^^^^^^^
+   |
+   = note: `ControlEvents` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `krun-devices` (lib) generated 1 warning
+warning: limina-vmm@0.1.0: virglrenderer: linking OUR prefix (<repo>/third_party/virgl-prefix/lib)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s
+==> codesigning the worker (hypervisor entitlement)
+<repo>/target/debug/limina-vmm: replacing existing signature
+signed <repo>/target/debug/limina-vmm (com.apple.security.hypervisor OK)
+==> checking the worker links our virglrenderer (venus guard)
+check-virgl-link: OK — target/debug/limina-vmm links our virgl-prefix virglrenderer
+==> building the L1 test guest (kernel + rootfs)
+    Finished `release` profile [optimized] target(s) in 0.11s
+==> building the hvf-trap-probe (bare-metal PSCI probe for hvf_graceful)
+==> running boot tests (LIMINA_HVF_TESTS=1)
+   Compiling limina-test v0.1.0 (<repo>/crates/limina-test)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.20s
+────────────
+ Nextest run ID 13741f5c-a359-4c50-b8f8-c4765e79f163 with nextest profile: default
+    Starting 2 tests across 2 binaries (60 binaries skipped)
+        SLOW [>120.000s] (───) limina-test::balloon_bench_s7 s7_out_of_puff_chase
+        FAIL [ 222.526s] (1/2) limina-test::balloon_bench_s7 s7_out_of_puff_chase
+  stdout ───
+
+    running 1 test
+    guest SSH forward ready: ssh -p 54697 <user>@127.0.0.1
+    test s7_out_of_puff_chase has been running for over 60 seconds
+    test s7_out_of_puff_chase ... FAILED
+
+    failures:
+
+    failures:
+        s7_out_of_puff_chase
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 222.50s
+
+  stderr ───
+    S7 out-of-puff chase (no policy, enhanced tier); artifacts -> "<repo>/target/balloon-bench/s7enh-1786378520"
+    [2026-08-10T16:15:21Z INFO  limina] suspend armed by default: snapshot path /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-test-71972-0/disk.raw.limina-suspend.bin
+    [2026-08-10T16:15:21Z INFO  limina::gateway] death-pact watcher up (pid 72009) tying gvproxy 72007 to this supervisor
+    [2026-08-10T16:15:21Z INFO  limina::gateway] gvproxy gateway up (pid 72007, socket "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-72006.sock", ssh-port 54697)
+    [2026-08-10T16:15:21Z INFO  limina::supervisor] VM worker started (pid 72010); Ctrl-C to power off
+    [2026-08-10T16:15:22.797612Z INFO  limina_vmm::krun] battery: mirroring the host battery into the guest
+    [2026-08-10T16:15:22.798122Z INFO  limina_vmm::krun] USB: cold-plugging the FIDO authenticator gadget ("/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-fido-usb-72006.sock")
+    [2026-08-10T16:15:22.798288Z INFO  limina_vmm::krun] USB: cold-plugging the fingerprint reader gadget ("/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-moc-usb-72006.sock")
+    [2026-08-10T16:15:22.798397Z INFO  limina_vmm::krun] building microVM: 4 vcpu(s), 6144 MiB, 1 disk(s), 0 share(s), display=false, boot=EFI firmware
+    [2026-08-10T16:15:22.801718Z INFO  limina_vmm::krun] balloon: control socket listening on "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-test-71972-0/balloon.sock"
+    [2026-08-10T16:15:22.801798Z INFO  limina_vmm::krun] microVM running; entering event loop (SIGTERM/SIGINT → guest power-off)
+    [2026-08-10T16:15:22.801978Z INFO  limina_vmm::power] host sleep: registered (guest will s2idle around host sleep)
+    [2026-08-10T16:15:22Z INFO  limina::fido::usb] fido-usb: connected to the worker gadget at "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-fido-usb-72006.sock"
+    [2026-08-10T16:15:22.846980Z INFO  limina_vmm::fido_usb] fido-usb: supervisor connected
+    [2026-08-10T16:15:22Z INFO  limina::moc::usb] moc: connected to the worker gadget at "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-moc-usb-72006.sock"
+    [2026-08-10T16:15:22.853319Z INFO  limina_vmm::moc_usb] moc-usb: supervisor connected
+    [2026-08-10T16:15:34.984285Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:15:34Z INFO  limina::control] control: guest agent connected: limina-agent/0.1.0 caps=["heartbeat", "shutdown", "mempressure"] pagesize=16384
+    phase A: filling the page cache (4096 MiB file on disk)
+      H1 shape: MemTotal:6117392 MemFree:966848 MemAvailable:4731616 Cached:4595760
+    phase B: 2 GiB target into the cache-full guest (60 s observation)
+    [2026-08-10T16:15:48.768016Z INFO  limina_vmm::krun] balloon: target 2147483648 bytes (524288 pages)
+    [2026-08-10T16:16:29.502254Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      phase B: actual=2048 MiB after 60 s (~33 MiB/s vs S1's ~1840), puff lines=0
+    phase C: chasing from 3584 MiB (step 256 MiB, cap 4608 MiB), 90 s hold
+    [2026-08-10T16:16:51.097589Z INFO  limina_vmm::krun] balloon: target 3758096384 bytes (917504 pages)
+      gap closed — escalating target to 3840 MiB
+    [2026-08-10T16:16:51.714221Z INFO  limina_vmm::krun] balloon: target 4026531840 bytes (983040 pages)
+      gap closed — escalating target to 4096 MiB
+    [2026-08-10T16:16:51.924496Z INFO  limina_vmm::krun] balloon: target 4294967296 bytes (1048576 pages)
+      gap closed — escalating target to 4352 MiB
+    [2026-08-10T16:16:52.128641Z INFO  limina_vmm::krun] balloon: target 4563402752 bytes (1114112 pages)
+      gap closed — escalating target to 4608 MiB
+    [2026-08-10T16:16:52.339145Z INFO  limina_vmm::krun] balloon: target 4831838208 bytes (1179648 pages)
+    [2026-08-10T16:17:29.637151Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      phase C: plateau actual=4608 MiB (final target 4608 MiB), puff lines=0 in 90 s
+    phase D: target = actual (4608 MiB), 30 s silence check
+    [2026-08-10T16:18:24.273362Z INFO  limina_vmm::krun] balloon: target 4831838208 bytes (1179648 pages)
+    [2026-08-10T16:18:29.752117Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+      phase D: puff lines=0 (want ≤1 ratelimit straggler)
+    [2026-08-10T16:18:55.446918Z INFO  limina_vmm::krun] balloon: target 0 bytes (0 pages)
+    == S7 metrics ==
+    {"tier":"enhanced","guest_pagesize":16384,"guest_kernel":"7.1.6-limina16k","disk":"<repo>/Fedora-Workstation-44.enhanced.test.raw","scenario":"s7-out-of-puff","ram_mib":6144,"cache_file_mib":4096,"h1_free_kib":966848,"h1_avail_kib":4731728,"slow_fill_target":2147483648,"slow_fill_actual_60s":2147483648,"slow_fill_mib_s":33.1,"puff_lines_b":0,"chase_final_target":4831838208,"plateau_actual":4831838208,"puff_lines_c_90s":0,"puff_lines_d_30s":0,"kswapd_cpu_ticks_delta":8,"guest_samples":779}
+
+    thread 's7_out_of_puff_chase' panicked at crates/limina-test/tests/balloon_bench_s7.rs:298:5:
+    phase C held an unfillable target for 90 s with ZERO 'Out of puff' journal lines — either the journal pipeline is broken (grep/sudo/journalctl) or the driver model in docs/design/balloon-bench.md §2 is wrong; both need investigating before any journal-based conclusion is trusted
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    [2026-08-10T16:19:01Z INFO  limina::control] control: SHUTDOWN sent to limina-agent/0.1.0
+    [2026-08-10T16:19:01Z INFO  limina::supervisor] shutdown requested → asking the guest agent to power off
+    [2026-08-10T16:19:01Z INFO  limina::control] control: agent acknowledged shutdown
+    [2026-08-10T16:19:01Z INFO  limina::control] control: guest agent disconnected: limina-agent/0.1.0
+    [2026-08-10T16:19:02.419888Z INFO  krun_vmm::macos::vstate] vCPU 0 received shutdown signal
+    [2026-08-10T16:19:02Z INFO  limina::fido::usb] fido-usb: worker gadget connection ended; retrying
+    [2026-08-10T16:19:02Z INFO  limina::moc::usb] moc: worker gadget connection ended; retrying
+    [2026-08-10T16:19:02Z INFO  limina::supervisor] VM powered off cleanly (worker exit 0)
+
+        SLOW [>120.000s] (───) limina-test::balloon_bench_s8 s8_desktop_steady_state
+        SLOW [>240.000s] (───) limina-test::balloon_bench_s8 s8_desktop_steady_state
+        SLOW [>360.000s] (───) limina-test::balloon_bench_s8 s8_desktop_steady_state
+        SLOW [>480.000s] (───) limina-test::balloon_bench_s8 s8_desktop_steady_state
+        SLOW [>600.000s] (───) limina-test::balloon_bench_s8 s8_desktop_steady_state
+        SLOW [>720.000s] (───) limina-test::balloon_bench_s8 s8_desktop_steady_state
+        SLOW [>840.000s] (───) limina-test::balloon_bench_s8 s8_desktop_steady_state
+        SLOW [>960.000s] (───) limina-test::balloon_bench_s8 s8_desktop_steady_state
+        SLOW [>1080.000s] (───) limina-test::balloon_bench_s8 s8_desktop_steady_state
+        SLOW [>1200.000s] (───) limina-test::balloon_bench_s8 s8_desktop_steady_state
+        SLOW [>1320.000s] (───) limina-test::balloon_bench_s8 s8_desktop_steady_state
+  Cancelling due to signal: 1 test still running
+     SIGTERM [1332.689s] (2/2) limina-test::balloon_bench_s8 s8_desktop_steady_state
+  stdout ───
+
+    running 1 test
+    guest SSH forward ready: ssh -p 54761 <user>@127.0.0.1
+    [2026-08-10T16:19:03.660106Z INFO  limina_vmm::fido_usb] fido-usb: supervisor connected
+    [2026-08-10T16:19:03.666426Z INFO  limina_vmm::moc_usb] moc-usb: supervisor connected
+    [2026-08-10T16:19:03.969502Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: gl_version 31 - es profile enabled
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA, type = GL_UNSIGNED_INT_8_8_8_8)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA, type = GL_UNSIGNED_INT_8_8_8_8)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ABGR_EXT, type = GL_UNSIGNED_BYTE)
+    Mesa: error: GL_INVALID_OPERATION in glTexImage2D(format = GL_BGRA, type = GL_UNSIGNED_SHORT_4_4_4_4_REV, internalformat = GL_RGBA4)
+    Mesa: error: GL_INVALID_OPERATION in glTexImage2D(format = GL_BGRA, type = GL_UNSIGNED_SHORT_1_5_5_5_REV, internalformat = GL_RGB5_A1)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_RGB, type = GL_UNSIGNED_BYTE_3_3_2)
+    Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_UNSIGNED_SHORT, internalformat = GL_ALPHA16)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_UNSIGNED_BYTE)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_UNSIGNED_BYTE)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_UNSIGNED_BYTE)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_BYTE)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_BYTE)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_BYTE)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_UNSIGNED_SHORT)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_UNSIGNED_SHORT)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_UNSIGNED_SHORT)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_SHORT)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_SHORT)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_SHORT)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_UNSIGNED_INT)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_UNSIGNED_INT)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_UNSIGNED_INT)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_INT)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_INT)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_INT)
+    Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_HALF_FLOAT, internalformat = GL_ALPHA16F_ARB)
+    Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE, type = GL_HALF_FLOAT, internalformat = GL_LUMINANCE16F_ARB)
+    Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_HALF_FLOAT, internalformat = GL_LUMINANCE_ALPHA16F_ARB)
+    Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_FLOAT, internalformat = GL_ALPHA32F_ARB)
+    Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE, type = GL_FLOAT, internalformat = GL_LUMINANCE32F_ARB)
+    Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_FLOAT, internalformat = GL_LUMINANCE_ALPHA32F_ARB)
+    Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_BYTE, internalformat = GL_ALPHA8_SNORM)
+    Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_BYTE, internalformat = GL_LUMINANCE8_ALPHA8_SNORM)
+    Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_SHORT, internalformat = GL_ALPHA16_SNORM)
+    Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_SHORT, internalformat = GL_LUMINANCE16_ALPHA16_SNORM)
+    Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA_INTEGER, type = GL_UNSIGNED_INT_2_10_10_10_REV)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_ALPHA8)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB32F)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_SR8_EXT)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB_S3TC_DXT1_EXT)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_S3TC_DXT1_EXT)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_S3TC_DXT3_EXT)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_S3TC_DXT5_EXT)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_S3TC_DXT1_EXT)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RED_RGTC1)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_RED_RGTC1)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RG_RGTC2)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_RG_RGTC2)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB9_E5)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB32UI)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB32I)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_BPTC_UNORM)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB8_ETC2)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ETC2)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA8_ETC2_EAC)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_R11_EAC)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_R11_EAC)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RG11_EAC)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_RG11_EAC)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_4x4)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x4)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x5)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x5)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x5)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x6)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x8)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x5)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x6)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x8)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x10)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_SR8_EXT)
+    Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_SRG8_EXT)
+    [2026-08-10T16:19:03.985479Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: proxy: proxy server with pid -1
+    [2026-08-10T16:19:03.986758Z INFO  limina_display] capture: configure scanout 0: 640x480 BGRX (display 1280x800, 1228800 bytes)
+    [2026-08-10T16:19:03.987572Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:12.041819Z INFO  krun_devices::virtio::gpu::worker] gpu worker: reset drain quiesced in 20.209µs
+    [2026-08-10T16:19:12.041887Z INFO  krun_devices::virtio::gpu::worker] gpu worker: device reset with a quiescent session — PARKED for classification at the next activation
+    [2026-08-10T16:19:12.261920Z INFO  krun_devices::virtio::gpu::worker] gpu worker: dropping the parked session — this activation programmed its queues (real driver re-init)
+    [2026-08-10T16:19:13.444886Z INFO  limina_display] capture: disable scanout 0
+    [2026-08-10T16:19:13.445373Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:13.461746Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:16.881010Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:19:17.884225Z INFO  limina_vmm::krun] balloon: target 268435456 bytes (65536 pages)
+    [2026-08-10T16:19:18.703656Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=2 init=0x2 name=Some("gnome-shell\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+    [2026-08-10T16:19:18.703730Z INFO  krun_devices::virtio::gpu::virtio_gpu] vrend context ctx=2 (capset 2): Global-ring fences now retire through virglrenderer
+    [2026-08-10T16:19:18.704043Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: GLSL feature level 310
+    [2026-08-10T16:19:18.739946Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: cap 12288 MiB
+    [LIMINA-SENTINEL] vkr sentinel-1 armed; IOSurface dealloc sentinel self-test: OK
+    [LIMINA-SENTINEL] kk kk-sentinel-1 armed; dealloc sentinel self-test: OK
+    [LIMINA-KK-IMPORT] adopted MTLTexture 0xb70f74500 for image plane: 1280x800 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+    [2026-08-10T16:19:18.740423Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 1280x800 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 7), renders land in the surface directly
+    [2026-08-10T16:19:19.190615Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x2 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+    [2026-08-10T16:19:19.192549Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+    [2026-08-10T16:19:19.196104Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: context 5 failed to dispatch CREATE_VIDEO_BUFFER: 22
+    [2026-08-10T16:19:19.196145Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vrend_decode_ctx_submit_cmd: context error reported 5 "gst-plugin-scan" Illegal command buffer 393271
+    [2026-08-10T16:19:19.196177Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.196536Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.196853Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.197225Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.197442Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.197560Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.197685Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.197870Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.197996Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.198093Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.198195Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.198365Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.198502Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.198666Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.200800Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+    [2026-08-10T16:19:19.201213Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+    [2026-08-10T16:19:19.201867Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: context 5 failed to dispatch CREATE_VIDEO_BUFFER: 22
+    [2026-08-10T16:19:19.201897Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vrend_decode_ctx_submit_cmd: context error reported 5 "gst-plugin-scan" Illegal command buffer 393271
+    [2026-08-10T16:19:19.201932Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.202151Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.202354Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.202527Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.202793Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.202933Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.203040Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.203463Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.203616Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.203732Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.203841Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.203943Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.204049Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.204115Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.205123Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+    [2026-08-10T16:19:19.205375Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+    [2026-08-10T16:19:19.205839Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: context 5 failed to dispatch CREATE_VIDEO_BUFFER: 22
+    [2026-08-10T16:19:19.205866Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vrend_decode_ctx_submit_cmd: context error reported 5 "gst-plugin-scan" Illegal command buffer 393271
+    [2026-08-10T16:19:19.205898Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.206122Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.206326Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.206490Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.206637Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.206741Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.206834Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.207000Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.207119Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.207404Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.207567Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.207679Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.207779Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.207849Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(22))
+    [2026-08-10T16:19:19.208872Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+    [2026-08-10T16:19:19.209985Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+    [2026-08-10T16:19:19.253477Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x4 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+    [2026-08-10T16:19:19.886280Z INFO  limina_vmm::krun] balloon: target 536870912 bytes (131072 pages)
+    [2026-08-10T16:19:20.015051Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    MESA: warning: zink: PERF WARNING! > 100 copy boxes detected for 0xb71807c00
+    [2026-08-10T16:19:20.287125Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.302228Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+    [2026-08-10T16:19:20.302231Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: server: socket disconnected
+    [2026-08-10T16:19:20.302325Z INFO  krun_rutabaga_gfx::virgl_renderer] virgl: vkr: destroying context 4 (gst-plugin-scan): instance was gone, 0 objects and 0 resources left in the tables
+    [LIMINA-KK-IMPORT] adopted MTLTexture 0xb704aef80 for image plane: 1280x800 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+    [2026-08-10T16:19:20.313822Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 1280x800 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 10), renders land in the surface directly
+    [2026-08-10T16:19:20.330534Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.429150Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [LIMINA-KK-IMPORT] adopted MTLTexture 0xb704ac500 for image plane: 1280x800 type=2 fmt=80 usage=0x17 (image usage=0x17 linear=0 optimized=0)
+    [2026-08-10T16:19:20.434542Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 1280x800 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id 23), renders land in the surface directly
+    [2026-08-10T16:19:20.462489Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.479381Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.495919Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.512741Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.529191Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.546300Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.562548Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.579207Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.595926Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.612697Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.629631Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.647089Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.661771Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.678451Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.695125Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.711776Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.728334Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.745064Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.761819Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.778373Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.795100Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.811948Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.878451Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.895391Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.912062Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.929148Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.945441Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.961896Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:20.981488Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.013104Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.026776Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.045674Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.062877Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.079498Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.095159Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.111246Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.127053Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.143505Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.160418Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.177018Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.193612Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.210123Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.226895Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.243534Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.260112Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.276915Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.293502Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.311205Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.327052Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.343386Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:19:21.888221Z INFO  limina_vmm::krun] balloon: target 805306368 bytes (196608 pages)
+    [2026-08-10T16:19:23.965491Z INFO  limina_vmm::krun] balloon: target 1073741824 bytes (262144 pages)
+    [2026-08-10T16:19:26.115010Z INFO  limina_vmm::krun] balloon: target 1342177280 bytes (327680 pages)
+    [2026-08-10T16:19:28.131779Z INFO  limina_vmm::krun] balloon: target 1610612736 bytes (393216 pages)
+    [2026-08-10T16:19:30.148539Z INFO  limina_vmm::krun] balloon: target 1879048192 bytes (458752 pages)
+    [2026-08-10T16:19:32.161845Z INFO  limina_vmm::krun] balloon: target 2147483648 bytes (524288 pages)
+    [2026-08-10T16:19:34.177712Z INFO  limina_vmm::krun] balloon: target 2415919104 bytes (589824 pages)
+    [2026-08-10T16:19:36.183430Z INFO  limina_vmm::krun] balloon: target 2684354560 bytes (655360 pages)
+    [2026-08-10T16:19:38.192964Z INFO  limina_vmm::krun] balloon: target 2827550720 bytes (690320 pages)
+    [2026-08-10T16:19:50.260773Z INFO  limina_vmm::krun] balloon: target 2907226112 bytes (709772 pages)
+    [2026-08-10T16:19:51.261674Z INFO  limina_vmm::krun] balloon: target 2877947904 bytes (702624 pages)
+    [2026-08-10T16:19:53.274374Z INFO  limina_vmm::krun] balloon: target 2845261824 bytes (694644 pages)
+    [2026-08-10T16:20:00.081336Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    test s8_desktop_steady_state has been running for over 60 seconds
+    [2026-08-10T16:20:12.432619Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:20:22.456054Z INFO  limina_vmm::krun] balloon: target 2689007616 bytes (656496 pages)
+    [2026-08-10T16:20:23.467235Z INFO  limina_vmm::krun] balloon: target 2628599808 bytes (641748 pages)
+    [2026-08-10T16:20:25.473722Z INFO  limina_vmm::krun] balloon: target 2513551360 bytes (613660 pages)
+    [2026-08-10T16:20:26.474706Z INFO  limina_vmm::krun] balloon: target 2379546624 bytes (580944 pages)
+    [2026-08-10T16:20:28.484932Z INFO  limina_vmm::krun] balloon: target 2479587328 bytes (605368 pages)
+    [2026-08-10T16:20:30.486727Z INFO  limina_vmm::krun] balloon: target 2659762176 bytes (649356 pages)
+    [2026-08-10T16:20:32.490229Z INFO  limina_vmm::krun] balloon: target 2754658304 bytes (672524 pages)
+    [2026-08-10T16:20:34.493462Z INFO  limina_vmm::krun] balloon: target 2799304704 bytes (683424 pages)
+    [2026-08-10T16:20:36.498302Z INFO  limina_vmm::krun] balloon: target 2833137664 bytes (691684 pages)
+    [2026-08-10T16:20:41.506498Z INFO  limina_vmm::krun] balloon: target 2853699584 bytes (696704 pages)
+    [2026-08-10T16:20:43.510742Z INFO  limina_vmm::krun] balloon: target 2826977280 bytes (690180 pages)
+    [2026-08-10T16:20:44.518484Z INFO  limina_vmm::krun] balloon: target 2793504768 bytes (682008 pages)
+    [2026-08-10T16:20:46.520670Z INFO  limina_vmm::krun] balloon: target 2827829248 bytes (690388 pages)
+    [2026-08-10T16:20:50.525346Z INFO  limina_vmm::krun] balloon: target 2850111488 bytes (695828 pages)
+    [2026-08-10T16:20:53.920320Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:20:53.952862Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:20:53.971224Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:20:54.003108Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:20:54.530309Z INFO  limina_vmm::krun] balloon: target 2736078848 bytes (667988 pages)
+    [2026-08-10T16:20:55.532975Z INFO  limina_vmm::krun] balloon: target 2682667008 bytes (654948 pages)
+    [2026-08-10T16:21:00.071951Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:21:04.573575Z INFO  limina_vmm::krun] balloon: target 2645999616 bytes (645996 pages)
+    [2026-08-10T16:21:05.579479Z INFO  limina_vmm::krun] balloon: target 2625536000 bytes (641000 pages)
+    [2026-08-10T16:21:12.555873Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:21:55.858755Z INFO  limina_vmm::krun] balloon: target 2667577344 bytes (651264 pages)
+    [2026-08-10T16:22:00.074673Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:22:12.721450Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:23:00.071329Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:23:12.841276Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:24:00.073111Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:24:12.970015Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:24:54.857484Z INFO  limina_vmm::krun] balloon: target 2650767360 bytes (647160 pages)
+    [2026-08-10T16:25:00.065311Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:25:07.917502Z INFO  limina_vmm::krun] balloon: target 2633793536 bytes (643016 pages)
+    [2026-08-10T16:25:08.919318Z INFO  limina_vmm::krun] balloon: target 2616737792 bytes (638852 pages)
+    [2026-08-10T16:25:13.105260Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:25:55.190582Z INFO  limina_vmm::krun] balloon: target 2693595136 bytes (657616 pages)
+    [2026-08-10T16:25:57.199338Z INFO  limina_vmm::krun] balloon: target 2724265984 bytes (665104 pages)
+    [2026-08-10T16:26:00.075596Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:26:13.259718Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:27:00.066971Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:27:13.391421Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:28:00.080577Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:28:13.548775Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:29:00.088044Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:29:13.655117Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:30:00.076324Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:30:13.792726Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:30:25.572743Z INFO  limina_vmm::krun] balloon: target 2910355456 bytes (710536 pages)
+    [2026-08-10T16:31:00.080575Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:31:13.945435Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:32:00.087520Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:32:14.106339Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:33:00.068779Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:33:14.233212Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:34:00.072024Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:34:14.384716Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:35:00.075592Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:35:14.516925Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:36:00.087053Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:36:14.671554Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:37:00.082447Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:37:14.780041Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:38:00.079452Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:38:14.938134Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:39:00.077226Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:39:15.048047Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:40:00.086156Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:40:15.198058Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+    [2026-08-10T16:41:00.058288Z INFO  limina_display] capture: configure scanout 0: 1280x800 BGRX (display 1280x800, 4096000 bytes)
+    [2026-08-10T16:41:15.317123Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+  stderr ───
+    S8 desktop steady state: moderate, 35 min observation; artifacts -> "<repo>/target/balloon-bench/s8enh-1786378742"
+    [2026-08-10T16:19:03Z INFO  limina] suspend armed by default: snapshot path /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-test-72990-0/disk.raw.limina-suspend.bin
+    [2026-08-10T16:19:03Z INFO  limina] dynamic memory: 2048..6144 MiB (reclaim Moderate)
+    [2026-08-10T16:19:03Z WARN  limina::balloon_policy] autoballoon: decision trace -> <repo>/target/balloon-bench/s8enh-1786378742/trace.jsonl
+    [2026-08-10T16:19:03Z INFO  limina::gateway] death-pact watcher up (pid 73026) tying gvproxy 73025 to this supervisor
+    [2026-08-10T16:19:03Z INFO  limina::gateway] gvproxy gateway up (pid 73025, socket "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-73024.sock", ssh-port 54761)
+    [2026-08-10T16:19:03Z INFO  limina::supervisor] VM worker started (pid 73027); Ctrl-C to power off
+    [2026-08-10T16:19:03.544865Z INFO  limina_vmm::krun] virtio-gpu virgl_flags = 0x35b, software_2d = false (coexist = true)
+    [2026-08-10T16:19:03.545555Z INFO  limina_vmm::krun] battery: mirroring the host battery into the guest
+    [2026-08-10T16:19:03.545742Z INFO  limina_vmm::krun] USB: cold-plugging the FIDO authenticator gadget ("/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-fido-usb-73024.sock")
+    [2026-08-10T16:19:03.545898Z INFO  limina_vmm::krun] USB: cold-plugging the fingerprint reader gadget ("/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-moc-usb-73024.sock")
+    [2026-08-10T16:19:03.545961Z INFO  limina_vmm::krun] building microVM: 4 vcpu(s), 6144 MiB, 1 disk(s), 0 share(s), display=true, boot=EFI firmware
+    [2026-08-10T16:19:03.549594Z INFO  limina_vmm::krun] display-resize: listening on "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-test-72990-0/resize.sock"
+    [2026-08-10T16:19:03.549710Z INFO  limina_vmm::krun] balloon: control socket listening on "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-test-72990-0/balloon.sock"
+    [2026-08-10T16:19:03.549781Z INFO  limina_vmm::krun] microVM running; entering event loop (SIGTERM/SIGINT → guest power-off)
+    [2026-08-10T16:19:03.549933Z INFO  limina_vmm::power] host sleep: registered (guest will s2idle around host sleep)
+    [2026-08-10T16:19:03.584535Z WARN  krun_devices::virtio::mmio] virtio queue marked ready with QueueNum=0; defaulting to max_size=256
+    [2026-08-10T16:19:03Z INFO  limina::fido::usb] fido-usb: connected to the worker gadget at "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-fido-usb-73024.sock"
+    [2026-08-10T16:19:03Z INFO  limina::moc::usb] moc: connected to the worker gadget at "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-moc-usb-73024.sock"
+    [2026-08-10T16:19:16Z INFO  limina::control] control: guest agent connected: limina-agent/0.1.0 caps=["heartbeat", "shutdown", "mempressure"] pagesize=16384
+    [2026-08-10T16:19:20Z INFO  limina::control] control: guest agent connected: limina-agent-session/0.1.0 caps=["clipboard"] pagesize=16384
+      sessions: 1 1000 claude seat0 1149 user    tty2 no -;2 1000 claude -     1168 manager -    no -;5 1000 claude -     2457 user    -    no -;
+      warming the page cache (tar-read of /usr + /var/lib)
+      post-warm shape: MemTotal:3306912 MemFree:449680 MemAvailable:1013440 Cached:1365568
+    [2026-08-10T16:41:15Z INFO  limina::control] control: guest agent disconnected: limina-agent/0.1.0
+    [2026-08-10T16:41:15Z INFO  limina::supervisor] shutdown requested → asking guest to power off
+    [2026-08-10T16:41:15Z WARN  limina::supervisor] force stop requested (second signal); skipping the grace (SIGKILL)
+    [2026-08-10T16:41:15Z INFO  limina::control] control: guest agent disconnected: limina-agent-session/0.1.0
+    [2026-08-10T16:41:15Z INFO  limina::moc::usb] moc: worker gadget connection ended; retrying
+    [2026-08-10T16:41:15Z INFO  limina::fido::usb] fido-usb: worker gadget connection ended; retrying
+    [2026-08-10T16:41:15Z WARN  limina::supervisor] VM stopped — worker terminated by signal 9
+
+    (test aborted with signal 15: SIGTERM)
+
+────────────
+     Summary [1555.218s] 2 tests run: 0 passed, 2 failed, 0 skipped
+        FAIL [ 222.526s] (1/2) limina-test::balloon_bench_s7 s7_out_of_puff_chase
+     SIGTERM [1332.689s] (2/2) limina-test::balloon_bench_s8 s8_desktop_steady_state
+error: test run failed
