@@ -34,8 +34,8 @@ use limina_input::constants::{
     REL_HWHEEL_HI_RES, REL_WHEEL, REL_WHEEL_HI_RES, REL_X, REL_Y,
 };
 use limina_input::keymap::{
-    capslock_on, macos_keycode_to_linux_remapped, modifier_emit, CapsLockSync, KeyRemap, ModEmit,
-    MACOS_KC_CAPSLOCK,
+    capslock_on, macos_keycode_to_linux_remapped, modifier_emit, reconcile_modifiers, CapsLockSync,
+    KeyRemap, ModEmit, MACOS_KC_CAPSLOCK, MODIFIER_KEYCODES,
 };
 use limina_input::InputEvent;
 
@@ -302,10 +302,6 @@ pub(crate) fn ungrab_chord_action(armed_before: bool, flags: u64) -> (bool, Ungr
     };
     (armed, action)
 }
-
-/// The macOS virtual keycodes of every held-modifier key (left/right pairs of
-/// Command/Shift/Option/Control) — the set force-released at an ungrab boundary.
-const MODIFIER_KEYCODES: [u16; 8] = [0x37, 0x36, 0x38, 0x3C, 0x3A, 0x3D, 0x3B, 0x3E];
 
 /// Short names for the modifier keycodes, index-aligned with [`MODIFIER_KEYCODES`] — trace only.
 const MODIFIER_NAMES: [&str; 8] = [
@@ -809,6 +805,11 @@ impl InputState {
     pub(crate) fn tap_key(&self, macos_keycode: u16, down: bool, flags: u64) {
         self.trace_key("TAP-key", macos_keycode, down, flags);
         self.sync_capslock(flags);
+        // A key press must arrive wearing the modifiers the user is actually holding, so heal
+        // before it goes out — the caller has already cancelled (and replayed) any armed chord.
+        if down {
+            self.sync_modifiers(flags, None);
+        }
         self.emit_key(macos_keycode, down);
     }
 
@@ -848,6 +849,9 @@ impl InputState {
     pub(crate) fn tap_flags(&self, macos_keycode: u16, flags: u64) {
         self.trace_mods("TAP-flags", Some(macos_keycode), flags);
         self.sync_capslock(flags);
+        // Only reached on `UngrabAction::Forward` (the caller returns on Fire/Withhold), so the
+        // chord's withheld edges stay withheld.
+        self.sync_modifiers(flags, Some(macos_keycode));
         self.emit_modifier(macos_keycode, flags);
     }
 
@@ -856,6 +860,39 @@ impl InputState {
     /// soft mode until the window regains key status.
     pub(crate) fn flush_modifiers(&self) {
         self.release_all_modifiers("soft-grab-exit");
+    }
+
+    /// Feed a `flagsChanged` to the ungrab chord while the keyboard is **not** grabbed — the
+    /// state the chord itself creates when it mutes the soft grab. Same state machine as
+    /// [`InputState::observe_ungrab_flags`], but nothing it withholds is ever replayed to the
+    /// guest: an ungrabbed keyboard's modifier edges were never the guest's to receive, so
+    /// replaying them would hand it exactly the gesture the chord is there to intercept.
+    ///
+    /// This exists because the chord used to go deaf the moment it fired. With the Cmd/Option
+    /// swap on — the default — the guest's Super *is* macOS's Option, so "Ctrl held + Super" and
+    /// the ungrab chord are one physical gesture; after the first fire muted the soft grab, every
+    /// later press fell through to the local monitor and reached the guest as a bare Super.
+    /// Reported 2026-08-09 as "it takes 2 Super presses"; see `spikes/modifier-drift/`.
+    pub(crate) fn observe_ungrab_flags_ungrabbed(
+        &self,
+        macos_keycode: u16,
+        flags: u64,
+    ) -> UngrabAction {
+        let (armed, action) = ungrab_chord_action(self.ungrab_armed.get(), flags);
+        if input_trace() {
+            eprintln!(
+                "[INP] t={:.1} chord(ungrabbed) kc={} flags={flags:#x} armed {}->{armed} \
+                 action={action:?}",
+                super::capture_tap::trace_ms(),
+                mod_name(macos_keycode),
+                self.ungrab_armed.get(),
+            );
+        }
+        self.ungrab_armed.set(armed);
+        // Never accumulate: there is no guest-bound replay on this path, and a leftover entry
+        // would be replayed by the *grabbed* path if the grab came back mid-chord.
+        self.ungrab_withheld.borrow_mut().clear();
+        action
     }
 
     /// Feed a grabbed-mode `flagsChanged` to the ungrab chord and get the verdict for that edge:
@@ -933,6 +970,9 @@ impl InputState {
                 self.cancel_ungrab_chord();
                 // The guest kernel autorepeats from key-down state; drop macOS repeats.
                 if !event.isARepeat() {
+                    // Heal the modifiers first (after the chord replay above), so the key lands
+                    // wearing what the user is holding rather than what we last happened to see.
+                    self.sync_modifiers(event.modifierFlags().0 as u64, None);
                     self.emit_key(event.keyCode(), true);
                 }
                 true
@@ -957,6 +997,9 @@ impl InputState {
                         UngrabAction::Forward => {}
                     }
                 }
+                // After the chord has had its say: a `Withhold`/`Fire` returns above, so this
+                // never leaks the edges the chord is holding back.
+                self.sync_modifiers(flags, Some(event.keyCode()));
                 self.emit_modifier(event.keyCode(), flags);
                 true
             }
@@ -1193,6 +1236,41 @@ impl InputState {
                 format!("  DRIFT[{}]", drift.join(" "))
             },
         );
+    }
+
+    /// Align the guest's **held** modifiers with the host bitmask, emitting whatever edges the
+    /// two disagree about. The held-modifier twin of [`InputState::sync_capslock`], and it heals
+    /// the same blind spot: a modifier that goes down (or up) while our window isn't receiving
+    /// events is never mentioned again, because macOS sends no reconciling `flagsChanged` on
+    /// refocus and the key does not move until it is released.
+    ///
+    /// The case that motivated it (2026-08-09, `spikes/modifier-drift/`): Control held through a
+    /// Space switch. Leaving the Space correctly releases it in the guest; coming back restores
+    /// nothing, so the next key arrives unmodified — a bare Super, which GNOME reads as "open the
+    /// overview". Every bitmask in between carried the Control bit; nothing read it.
+    ///
+    /// `except` is the modifier the caller is about to emit itself — see
+    /// [`reconcile_modifiers`], where excluding it is what keeps Control ahead of Super.
+    ///
+    /// Called from the `flagsChanged` and key-down paths only, both of which carry
+    /// device-dependent bits. Pointer events are deliberately left out: they would heal at class
+    /// granularity at best, and [`reconcile_modifiers`] refuses to press on that evidence anyway,
+    /// so all they could add is a release we will get from the next key event regardless.
+    fn sync_modifiers(&self, raw_flags: u64, except: Option<u16>) {
+        let edges = reconcile_modifiers(raw_flags, &self.pressed_mods.borrow(), except);
+        for (macos_keycode, down) in edges {
+            if input_trace() {
+                eprintln!(
+                    "[INP] t={:.1}   RESYNC {} {}",
+                    super::capture_tap::trace_ms(),
+                    mod_name(macos_keycode),
+                    if down { "DOWN" } else { "UP" },
+                );
+            }
+            // Through `emit_modifier` rather than straight to the socket, so the pressed-set
+            // bookkeeping, the remap and the trace all stay in one place.
+            self.emit_modifier(macos_keycode, raw_flags);
+        }
     }
 
     /// Align the guest's caps-lock with the host caps LED (carried by every event's modifier
