@@ -8,16 +8,20 @@
 //! Four phases:
 //! - **A (H1 stage-set):** fill the page cache (write + sync a file sized near RAM) so the
 //!   guest reaches the H1 shape — MemFree LOW, MemAvailable HIGH.
-//! - **B (slow fill):** command a 2 GiB target into that shape. `balloon_page_alloc` is
-//!   `__GFP_NORETRY`: it can nibble cache via light direct reclaim but fails easily — this
-//!   measures the *fill rate against cache* vs S1's ~1.8 GiB/s against free pages, and how
-//!   much `Out of puff` a mere ramp produces (H2's magnitude).
-//! - **C (chase):** escalate the target past whatever the driver manages to fill (adaptive
-//!   — a fixed guess either OOMs guest daemons or turns out fillable via zram), so
-//!   fill_balloon runs its 5 Hz retry loop against the guest's natural ceiling for the
-//!   whole hold: journal line rate, kswapd/direct-reclaim cost, plateau level. This is the
-//!   **journal channel's positive control** — the run FAILS if no `Out of puff` line
-//!   appears, because that means the pipeline (not the driver) is broken.
+//! - **B (fill-vs-cache):** command a 2 GiB target into that shape and record how long the
+//!   fill takes (`slow_fill_reach_ms`). Measured answer: it is FAST — GiB/s, same order as
+//!   S1's fill against free pages; `__GFP_NORETRY`'s light direct reclaim keeps up. (The
+//!   phase's "slow fill" naming survives from a retracted instrument artifact — the
+//!   original harness divided actual by the whole window and reported a 33 MiB/s "grind"
+//!   that never existed.)
+//! - **C (held gap):** put the driver's 5 Hz retry loop against an unfillable target for
+//!   the whole hold: journal line rate, kswapd/direct-reclaim cost, plateau level. This is
+//!   the **journal channel's positive control** — the run FAILS if no `Out of puff` line
+//!   appears, because that means the pipeline (not the driver) is broken. On stock, an
+//!   escalating chase to the cap does it. On the ENHANCED tier the phase is
+//!   unconstructible and the test SKIPS: seven attempts covering every cell of
+//!   {fixed, escalating} × {zram, swapoff} ended in guest death, never a healthy stall
+//!   (see the `Sizes` doc comment for the full record).
 //! - **D (silence):** re-command exactly the plateau `actual`. The gap closes to zero and
 //!   the retry loop must stop: at most a ratelimit straggler in the window. Proves the
 //!   fix direction H1 implies (close the gap → the spam stops) at the mechanism level.
@@ -53,11 +57,15 @@ struct Sizes {
     /// any survivable cap (measured: 4 escalations to the cap in 1.5 s, zero puff), so
     /// the unfillable gap must be guaranteed by pinning what a real desktop pins.
     ballast_mib: u64,
-    /// `swapoff -a` before the stage-set. Stock FALSE (the bare console plateaus on its
-    /// own); enhanced TRUE — with zram on there is no wall short of desktop eviction,
-    /// because every unpinned page (cache first, then the desktop's anon via zram) is
-    /// obtainable to a patient chaser. Swapoff makes anon unreclaimable, so the wall is
-    /// real and the chase stalls at it instead of grinding the session out.
+    /// `swapoff -a` before the stage-set. Stock FALSE (its escalating chase closes fully
+    /// in seconds and the puff lines come from the brief final stall — no wall needed).
+    /// Enhanced TRUE: with zram on, every unpinned page (cache first, then the desktop's
+    /// anon) is obtainable, so no held gap can exist short of desktop eviction. Swapoff
+    /// makes anon unreclaimable — which does NOT create a safe stall for an *escalating*
+    /// chase (attempt 6: the escalator follows reclaim all the way down and the OOM
+    /// killer makes up the difference), but does pin a permanently open gap under a
+    /// FIXED target sized above the obtainable pool. It also matches the dogfood shape:
+    /// the dogfood guest's swap runs full, a natural swapoff.
     swapoff: bool,
 }
 
@@ -71,41 +79,50 @@ fn sizes() -> Sizes {
             ballast_mib: 0,
             swapoff: false,
         },
-        // CONCLUDED UNCONSTRUCTIBLE (the test SKIPS on this tier; the arm is the
-        // record). Six constructions, one convergent finding: **the driver has no
-        // self-preservation** — a chased/oversized target takes everything, and the
-        // only "plateau" is guest death. The record: (1) stock cap on 4 GiB —
-        // desktop squeezed to catatonia, agent+sshd died (s7enh-1786378025); (2) no
-        // pinning — the 16k+zram guest yielded everything to any survivable cap
-        // (4 escalations to cap in 1.5 s, zero puff); (3) ballast + zram — the chase
-        // ground the DESKTOP out via zram once cache was gone (s7enh-1786380313,
-        // again at 10 GiB in s7enh-1786383422); (4) ballast + swapoff on 6 GiB —
-        // OOM collapse at the absolute-zero-cache wall (s7enh-1786382977); (5) fixed
-        // mid-range target, "the grind" (s7enh-1786383821) — closed silently in
-        // seconds: the driver has NO slow-approach state, it fills fast or it fails
-        // (the "~33 MiB/s grind" that motivated it was an instrument artifact —
-        // actual/60 s on a fill that finished in <1 s); (6) ballast + swapoff +
-        // 10 GiB scale (s7enh-1786384443) — every 256 MiB escalation closed in one
-        // 200 ms sample, 4096→6400 in <5 s, the OOM killer fed the (unprotected)
-        // desktop to the balloon and sshd died. With swap the desktop is evicted,
-        // without swap it is killed; either way the wall that protects the guest
-        // does not exist in the guest — it has to live in the HOST POLICY (the
-        // MemFree-informed target clamp lever). Stock's journal positive control
-        // covers the mechanism; the dogfood field spam is the enhanced-tier
-        // positive control.
+        // CONCLUDED UNCONSTRUCTIBLE — the test SKIPS on this tier; the arm and its
+        // record stay as the evidence. Seven attempts covered every cell of
+        // {fixed, escalating} × {zram, swapoff}; all ended in guest death. The last,
+        // attempt 7 (these values: fixed 4608 + swapoff + 5120 mlocked ballast,
+        // s7enh-1786385502), tested the cell the others left open — and exposed the
+        // window's arithmetic: for a held gap the target must exceed the obtainable
+        // pool, but ballast + unswappable desktop + kernel + target then overcommit
+        // total RAM, and with no swap the OOM killer settles the difference against
+        // whatever isn't mlock-protected (sshd died mid-phase-C). A surviving
+        // construction would need a target inside the sliver between "gap open" and
+        // "desktop starved" — if that window exists at all, it is too narrow to bench
+        // reliably, which is itself the finding.
+        //
+        // The earlier failures: (1) stock cap on 4 GiB — desktop
+        // squeezed to catatonia, agent+sshd died (s7enh-1786378025); (2) no pinning —
+        // the 16k+zram guest yielded everything to any survivable cap (4 escalations
+        // to cap in 1.5 s, zero puff); (3) ballast + zram — the chase ground the
+        // DESKTOP out via zram once cache was gone (s7enh-1786380313, again at 10 GiB
+        // in s7enh-1786383422); (4) ballast + swapoff on 6 GiB — OOM collapse at the
+        // absolute-zero-cache wall (s7enh-1786382977); (5) fixed mid-range target +
+        // zram, small ballast (s7enh-1786383821) — closed silently in seconds: the
+        // driver has NO slow-approach state, it fills fast or it fails (the "~33 MiB/s
+        // grind" that motivated it was an instrument artifact — actual/60 s on a fill
+        // that finished in <1 s); (6) ballast + swapoff + 10 GiB, ESCALATING
+        // (s7enh-1786384443) — every 256 MiB escalation closed in one 200 ms sample,
+        // 4096→6400 in <5 s, and the desktop died with it. The standing lesson: the
+        // driver has no self-preservation — the wall that protects the guest has to
+        // live in the HOST POLICY (the MemFree-informed target clamp lever). Stock's
+        // journal positive control covers the mechanism; the dogfood field spam is
+        // the enhanced-tier positive control.
         limina_test::bench::Tier::Enhanced => Sizes {
             ram_mib: 10240,
             cache_file_mib: 8192,
-            chase_start: 4096 * MIB,
-            chase_cap: (10240 - 512) * MIB,
-            ballast_mib: 3072,
+            chase_start: 4608 * MIB,
+            chase_cap: 4608 * MIB,
+            ballast_mib: 5120,
             swapoff: true,
         },
     }
 }
 
 const CACHE_FILE: &str = "/var/tmp/limina-cachefill";
-/// Phase-B target: should be fillable by nibbling cache, slowly.
+/// Phase-B target: fillable from cache. Measured: the fill is FAST (GiB/s) — the
+/// "slow" in the name survives from the retracted 33 MiB/s instrument artifact.
 const SLOW_FILL_TARGET: u64 = 2048 * MIB;
 const CHASE_STEP: u64 = 256 * MIB;
 
@@ -210,11 +227,12 @@ fn s7_out_of_puff_chase() {
     }
     if matches!(tier(), limina_test::bench::Tier::Enhanced) {
         eprintln!(
-            "SKIPPED s7_out_of_puff_chase on the enhanced tier: the scenario is \
-             CONCLUDED UNCONSTRUCTIBLE there — six constructions all ended in guest \
-             death because the driver has no self-preservation (see the Sizes doc \
-             comment and spikes/balloon-bench-2026-08-10/RESULTS.md, S7enh). The \
-             dogfood field spam is the enhanced-tier positive control."
+            "SKIPPED s7_out_of_puff_chase on the enhanced tier: CONCLUDED \
+             UNCONSTRUCTIBLE — seven attempts covering all of {{fixed, escalating}} × \
+             {{zram, swapoff}} ended in guest death because the driver has no \
+             self-preservation (see the Sizes doc comment and \
+             spikes/balloon-bench-2026-08-10/RESULTS.md, S7enh). The dogfood field \
+             spam is the enhanced-tier positive control."
         );
         return;
     }
@@ -332,9 +350,11 @@ fn s7_out_of_puff_chase() {
         puff_b
     );
 
-    // ---- Phase C: chase the driver past its plateau — the permanent retry loop. ---------
-    // Adaptive: whenever the driver closes the gap, raise the target one step (capped),
-    // so the loop runs against the guest's NATURAL allocation ceiling for the whole hold.
+    // ---- Phase C: hold an unfillable target — the permanent retry loop. -----------------
+    // Stock: adaptive — whenever the driver closes the gap, raise the target one step
+    // (capped; the puff lines come from the stalls between steps). Enhanced:
+    // chase_start == chase_cap, so this loop never escalates — the fixed target sits
+    // above what ballast + swapoff leave obtainable and the gap stays open by design.
     if sz.ballast_mib > 0 {
         eprintln!(
             "  pinning {} MiB of mlocked ballast (the synthetic desktop working set)",

@@ -397,13 +397,15 @@ MemFree floor, and the dogfood VM's own sizing. The next honest step when tuning
 starts is a read-only trace capture on the dogfood guest itself (LIMINA_BALLOON_TRACE
 is deployable there) rather than more synthetic horizons here.
 
-## S7enh — six constructions, one finding: the driver has no self-preservation
+## S7enh — seven constructions, one finding: the driver has no self-preservation
 
-The stock S7 needed one run. The enhanced S7 got six constructions and every one
-ended the same way — and that convergence, not a green run, is the result. The goal
-was a *healthy* guest holding an unfillable target (the dogfood state: hours of
-`Out of puff` spam from a perfectly usable desktop). The record (all run dirs
-archived here):
+The stock S7 needed one run. The enhanced S7 got seven constructions — covering
+every cell of {fixed, escalating} × {zram, swapoff} — and every one ended the same
+way. That convergence, not a green run, is the result. The goal was a *healthy*
+guest holding an unfillable target (the dogfood state: hours of `Out of puff` spam
+from a perfectly usable desktop). The record (all run dirs archived here; the
+dead-guest attempts died before artifact teardown, so their `run.log` is the
+forensic record):
 
 | # | construction | outcome |
 |---|-------------|---------|
@@ -412,7 +414,8 @@ archived here):
 | 3 | + 3 GiB mlocked ballast, zram on | the chase ground the **desktop** out via zram once cache was gone (`s7enh-1786380313`) |
 | 4 | ballast + swapoff, 6 GiB | wall sat at absolute-zero cache → OOM collapse (`s7enh-1786382977`; zram variant repeated at 10 GiB, `s7enh-1786383422`) |
 | 5 | fixed mid-range target ("the grind") | closed **silently in seconds** — the 33 MiB/s grind it was built on was the instrument artifact (`s7enh-1786383821`) |
-| 6 | ballast + swapoff + 10 GiB scale | every 256 MiB escalation closed in one 200 ms sample (4096→6400 MiB in <5 s); the OOM killer fed the unprotected desktop to the balloon; sshd reset (`s7enh-1786384443`) |
+| 6 | ballast + swapoff + 10 GiB scale, escalating | every 256 MiB escalation closed in one 200 ms sample (4096→6400 MiB in <5 s); the desktop died with it — by OOM kill on the inference (the guest was dead before the journal could be read); sshd reset (`s7enh-1786384443`) |
+| 7 | **fixed** 4608 target + swapoff + 5120 MiB ballast (the last untested cell) | the overcommit arithmetic closed the window: ballast + unswappable desktop + kernel + target ≈ 11.8 GiB on a 9.8 GiB guest, and with no swap the OOM killer settled the difference against everything not mlock-protected; sshd died mid-hold (`s7enh-1786385502`) |
 
 Attempt 6's honest phase B: 2 GiB against warm cache in **1.25 s (~1.6 GiB/s)** on
 16k — same order as stock's corrected 2.4 GiB/s and S1's 1840 MiB/s. Fill speed is
@@ -422,19 +425,24 @@ tier-independent and source-independent; there is no grind state anywhere.
 the host asks for, up to and including the guest's own working set — cache first,
 then the desktop's anon via zram, and with swap off the OOM killer makes up the
 difference. "Unfillable while healthy" is not a state the guest can be *driven* into
-from the target side; every path there ends in eviction or death. The wall that
-protects the guest **does not exist in the guest — it has to live in the host
-policy** (the MemFree-informed target clamp / gap-decay lever just acquired its
-strongest justification). Conversely, the dogfood healthy-spam state must be the
-*policy* parking a target just above what the driver can extract *without* the guest
-noticing — a narrow band the S8 idle desktop never entered and a synthetic chaser
-overshoots by construction.
+from the target side; every path there ends in eviction or death. Attempt 7 closed
+the last cell and exposed why: a held gap needs `target > obtainable`, but
+`ballast + unswappable working set + kernel + target` then overcommits total RAM —
+a surviving construction would need a target inside the sliver between "gap open"
+and "desktop starved", and if that window exists at all it is too narrow to bench
+reliably, **which is itself the finding**. The wall that protects the guest **does
+not exist in the guest — it has to live in the host policy** (the MemFree-informed
+target clamp / gap-decay lever just acquired its strongest justification).
+Conversely, the dogfood healthy-spam state must be the *policy* parking a target
+inside exactly that narrow band — just above what the driver can extract without
+the guest noticing — for hours at a time: precisely what a clamp/gap-decay lever
+would end.
 
 Consequences recorded in code: the enhanced S7 now **skips** with the conclusion
 (the scenario is unconstructible, not flaky); the stock run remains the journal
 channel's positive control, and the dogfood field spam is the enhanced-tier positive
 control. `puff_since` panics on dead ssh and `count_oom_since` brackets the chase —
-both guards were paid for by these six runs.
+both guards were paid for by these seven runs.
 
 ## Phase-2 instrument incidents (tuition paid, guards added)
 
@@ -478,7 +486,7 @@ both guards were paid for by these six runs.
    two additions: (a) the **slow-grind state does not exist** — the "33 MiB/s"
    Phase-1 number was an instrument artifact, fills run at GiB/s from any
    reclaimable source on both page sizes; (b) the enhanced tier **cannot be driven
-   into healthy-spam from the target side at all** (S7enh, six constructions — the
+   into healthy-spam from the target side at all** (S7enh, seven constructions covering all of {fixed, escalating} × {zram, swapoff} — the
    driver has no self-preservation). Combined with S8 (35 idle desktop minutes,
    zero episodes, policy actively tracking), the dogfood state is bounded to a
    narrow band: the policy parking a target just past what the driver can extract

@@ -310,7 +310,7 @@ it:
   panic-to-0 to proportional dribbles, halving swap at 1–2 GiB/s. S5 = clean negative
   (per-peer serve threads). S8 (35 idle desktop minutes) = zero gap episodes, zero
   puff, policy actively tracking. S7enh = **CONCLUDED UNCONSTRUCTIBLE**: the driver
-  has no self-preservation — six constructions all ended in desktop eviction (zram)
+  has no self-preservation — seven constructions, all four cells of {fixed, escalating} × {zram, swapoff}, ended in desktop eviction (zram)
   or OOM death (swapoff); "unfillable while healthy" cannot be driven from the
   target side, so the protective wall must live in the host policy (lever 2 is now
   mandatory-shaped). Phase 1's "33 MiB/s fill-vs-cache grind" was retracted as an
