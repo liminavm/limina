@@ -53,6 +53,13 @@ struct Sizes {
     /// any survivable cap (measured: 4 escalations to the cap in 1.5 s, zero puff), so
     /// the unfillable gap must be guaranteed by pinning what a real desktop pins.
     ballast_mib: u64,
+    /// `swapoff -a` before the stage-set. The mlocked ballast alone was NOT enough on
+    /// enhanced: zram makes every *unpinned* page obtainable too, so the chase swapped
+    /// the whole desktop out and killed sshd anyway (run s7enh-1786380313). With swap
+    /// off, anon memory is unreclaimable by construction — the driver fails cleanly
+    /// into its retry loop against the cache floor and the guest stays healthy. Stock
+    /// keeps zram (it held its plateau with almost no anon to swap; comparability).
+    swapoff: bool,
 }
 
 fn sizes() -> Sizes {
@@ -63,6 +70,7 @@ fn sizes() -> Sizes {
             chase_start: 3072 * MIB,
             chase_cap: (4096 - 512) * MIB,
             ballast_mib: 0,
+            swapoff: false,
         },
         limina_test::bench::Tier::Enhanced => Sizes {
             ram_mib: 6144,
@@ -70,6 +78,7 @@ fn sizes() -> Sizes {
             chase_start: 3584 * MIB,
             chase_cap: (6144 - 1536) * MIB,
             ballast_mib: 2048,
+            swapoff: true,
         },
     }
 }
@@ -202,6 +211,10 @@ fn s7_out_of_puff_chase() {
         .wait_for_ssh_banner(Duration::from_secs(300))
         .expect("guest sshd never became reachable");
     let stamp = verify_tier(&guest, &cfg).expect("tier positive control");
+    if sz.swapoff {
+        eprintln!("  swapoff -a (zram would make every unpinned page obtainable)");
+        guest.ssh_exec("sudo swapoff -a").expect("swapoff");
+    }
     std::thread::sleep(Duration::from_secs(5));
     let sampler = GuestSampler::start(&guest, 250).expect("starting the guest sampler");
     let mut host_samples: Vec<HostSample> = Vec::new();
@@ -358,6 +371,7 @@ fn s7_out_of_puff_chase() {
         ("ram_mib", sz.ram_mib.to_string()),
         ("cache_file_mib", sz.cache_file_mib.to_string()),
         ("ballast_mib", sz.ballast_mib.to_string()),
+        ("swapoff", sz.swapoff.to_string()),
         ("h1_free_kib", free_kib.to_string()),
         ("h1_avail_kib", avail_kib.to_string()),
         ("slow_fill_target", SLOW_FILL_TARGET.to_string()),
