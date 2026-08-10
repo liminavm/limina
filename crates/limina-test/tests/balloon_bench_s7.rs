@@ -33,33 +33,57 @@ use limina_test::bench::{
 use limina_test::Guest;
 
 const MIB: u64 = 1 << 20;
-/// 4 GiB, not 6: the baseline image's /var/tmp holds ~4.4 GiB, and the H1 shape needs
-/// the cache file to approach RAM minus the working set — a smaller guest makes the
-/// fill achievable within the disk budget.
-const RAM_MIB: usize = 4096;
-/// Phase-A cache file: sized to push MemFree low. On DISK (/var/tmp) — /tmp is a
-/// RAM-backed tmpfs sized RAM/2: too small, and tmpfs pages aren't reclaimable cache, so
-/// they can't produce the H1 shape at all (the S3 tmpfs incident).
-const CACHE_FILE_MIB: u64 = 3072;
+
+/// The stage sizes are TIER-DEPENDENT: the shape (cache-full guest, chase past the
+/// plateau) is the same, but the guest's own working set is not. Stock is a bare console
+/// (~200 MiB alive; a RAM−512 cap is survivable, and the baseline image's /var/tmp only
+/// holds ~4.4 GiB, so the guest stays at 4 GiB). The enhanced guest runs a real GNOME
+/// session + the agent (~1.2 GiB alive): the first enhanced run used the stock cap and
+/// squeezed the desktop to 512 MiB — the session swapped to catatonia, the AGENT
+/// disconnected and sshd died (a finding in itself: an overshooting target severs the
+/// pressure channel). Enhanced runs a 6 GiB guest, a 4 GiB cache file (the 40G image has
+/// the disk), and a cap that leaves the desktop 1.5 GiB.
+struct Sizes {
+    ram_mib: usize,
+    cache_file_mib: u64,
+    chase_start: u64,
+    chase_cap: u64,
+}
+
+fn sizes() -> Sizes {
+    match tier() {
+        limina_test::bench::Tier::Stock => Sizes {
+            ram_mib: 4096,
+            cache_file_mib: 3072,
+            chase_start: 3072 * MIB,
+            chase_cap: (4096 - 512) * MIB,
+        },
+        limina_test::bench::Tier::Enhanced => Sizes {
+            ram_mib: 6144,
+            cache_file_mib: 4096,
+            chase_start: 3584 * MIB,
+            chase_cap: (6144 - 1536) * MIB,
+        },
+    }
+}
+
 const CACHE_FILE: &str = "/var/tmp/limina-cachefill";
 /// Phase-B target: should be fillable by nibbling cache, slowly.
 const SLOW_FILL_TARGET: u64 = 2048 * MIB;
-/// Phase-C escalation: start here and step up whenever the driver closes the gap, so the
-/// run finds the guest's NATURAL plateau instead of guessing it (a fixed target either
-/// overshoots into OOM-killing guest daemons or undershoots into a fillable target).
-const CHASE_START: u64 = 3072 * MIB;
 const CHASE_STEP: u64 = 256 * MIB;
-const CHASE_CAP: u64 = (RAM_MIB as u64 - 512) * MIB;
 
-/// Count `Out of puff` journal lines since a guest-epoch watermark.
+/// Count `Out of puff` journal lines since a guest-epoch watermark. PANICS if the ssh
+/// round-trip fails: a dead guest must read as "instrument down", never as a zero — the
+/// first enhanced run wedged its guest and phase C reported puff=0 through a reset ssh.
 fn puff_since(guest: &Guest, mark: &str) -> u64 {
     guest
         .ssh_exec(&format!(
             "sudo journalctl -k --since=@{mark} 2>/dev/null | grep -c 'Out of puff' || true"
         ))
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0)
+        .expect("puff_since: ssh to the guest failed — the count would be a lie, not a zero")
+        .trim()
+        .parse()
+        .expect("puff_since: unparseable grep -c output")
 }
 
 /// Sample the host at ~200 ms for `secs`, appending to `samples`; returns the last sample.
@@ -84,9 +108,10 @@ fn s7_out_of_puff_chase() {
     if !limina_test::require_hvf_or_skip("s7_out_of_puff_chase") {
         return;
     }
+    let sz = sizes();
     let cfg = match tier_config() {
         Ok(mut cfg) => {
-            cfg.ram_mib = RAM_MIB;
+            cfg.ram_mib = sz.ram_mib;
             cfg.with_net().with_balloon_control()
         }
         Err(e) => {
@@ -112,22 +137,26 @@ fn s7_out_of_puff_chase() {
     let mut host_samples: Vec<HostSample> = Vec::new();
 
     // ---- Phase A: the H1 stage-set (MemFree low, MemAvailable high). --------------------
-    eprintln!("phase A: filling the page cache ({CACHE_FILE_MIB} MiB file on disk)");
+    eprintln!(
+        "phase A: filling the page cache ({} MiB file on disk)",
+        sz.cache_file_mib
+    );
     let df_avail_mib: u64 = guest
         .ssh_exec("df -m --output=avail /var/tmp | tail -1")
         .ok()
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
     assert!(
-        df_avail_mib > CACHE_FILE_MIB + 1024,
+        df_avail_mib > sz.cache_file_mib + 1024,
         "guest disk too small for the cache-fill file ({df_avail_mib} MiB avail on /var/tmp)"
     );
     // Write, then read back: the write path caches the pages, the read-back re-warms
     // anything writeback pressure evicted — the point is a page-cache-full guest.
     guest
         .ssh_exec(&format!(
-            "dd if=/dev/zero of={CACHE_FILE} bs=1M count={CACHE_FILE_MIB} 2>/dev/null; sync; \
-             cat {CACHE_FILE} > /dev/null"
+            "dd if=/dev/zero of={CACHE_FILE} bs=1M count={} 2>/dev/null; sync; \
+             cat {CACHE_FILE} > /dev/null",
+            sz.cache_file_mib
         ))
         .expect("cache-fill dd + read-back");
     std::thread::sleep(Duration::from_secs(3));
@@ -175,15 +204,15 @@ fn s7_out_of_puff_chase() {
     // Adaptive: whenever the driver closes the gap, raise the target one step (capped),
     // so the loop runs against the guest's NATURAL allocation ceiling for the whole hold.
     let mark_c = guest_epoch_secs(&guest).expect("guest clock");
-    let mut chase_target = CHASE_START;
+    let mut chase_target = sz.chase_start;
     guest
         .set_balloon_target(chase_target)
         .expect("commanding the chase target");
     eprintln!(
         "phase C: chasing from {} MiB (step {} MiB, cap {} MiB), 90 s hold",
-        CHASE_START / MIB,
+        sz.chase_start / MIB,
         CHASE_STEP / MIB,
-        CHASE_CAP / MIB
+        sz.chase_cap / MIB
     );
     let mut c_last = HostSample::default();
     for _ in 0..(90 * 5) {
@@ -191,8 +220,8 @@ fn s7_out_of_puff_chase() {
         if let Ok(s) = sample_host(&guest) {
             c_last = s;
             host_samples.push(s);
-            if chase_target.saturating_sub(s.actual) < 64 * MIB && chase_target < CHASE_CAP {
-                chase_target = (chase_target + CHASE_STEP).min(CHASE_CAP);
+            if chase_target.saturating_sub(s.actual) < 64 * MIB && chase_target < sz.chase_cap {
+                chase_target = (chase_target + CHASE_STEP).min(sz.chase_cap);
                 guest.set_balloon_target(chase_target).ok();
                 eprintln!(
                     "  gap closed — escalating target to {} MiB",
@@ -246,6 +275,8 @@ fn s7_out_of_puff_chase() {
     let mut entries = stamp.entries();
     entries.extend([
         ("scenario", "\"s7-out-of-puff\"".to_string()),
+        ("ram_mib", sz.ram_mib.to_string()),
+        ("cache_file_mib", sz.cache_file_mib.to_string()),
         ("h1_free_kib", free_kib.to_string()),
         ("h1_avail_kib", avail_kib.to_string()),
         ("slow_fill_target", SLOW_FILL_TARGET.to_string()),
