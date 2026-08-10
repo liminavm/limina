@@ -746,6 +746,137 @@ pub fn guest_epoch_secs(guest: &Guest) -> Result<String> {
     Ok(guest.ssh_exec("date +%s")?.trim().to_string())
 }
 
+// ---- The tier axis (Phase 2) ----
+
+/// The guest tier a bench scenario runs on (`LIMINA_BENCH_TIER`: `stock` | `enhanced`,
+/// default stock). Unknown values panic — a typo silently benching the wrong tier is
+/// exactly the failure mode the tier stamp exists to prevent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    /// Stock-4k baseline image; the harness plays the agent.
+    Stock,
+    /// F44 enhanced test golden, EFI-booted on its own 16k kernel; the REAL limina-agent
+    /// reports (the harness must NOT relay).
+    Enhanced,
+}
+
+impl Tier {
+    /// Run-directory suffix (`s2` vs `s2enh`) so tier archives never collide.
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Tier::Stock => "",
+            Tier::Enhanced => "enh",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tier::Stock => "stock",
+            Tier::Enhanced => "enhanced",
+        }
+    }
+}
+
+pub fn tier() -> Tier {
+    match std::env::var("LIMINA_BENCH_TIER") {
+        Err(_) => Tier::Stock,
+        Ok(v) if v == "stock" => Tier::Stock,
+        Ok(v) if v == "enhanced" => Tier::Enhanced,
+        Ok(v) => panic!("LIMINA_BENCH_TIER={v:?} is not a tier (stock|enhanced)"),
+    }
+}
+
+/// Boot config for the current tier. Stock = the baseline EFI Fedora. Enhanced = the
+/// seated enhanced golden EFI-booted through the GOP firmware (guest's own 16k kernel,
+/// real agent) — with the disk **pinned to the F44 family**: `LIMINA_FEDORA_REL`
+/// defaults to 43 and the F43 enhanced golden also exists on this machine, so trusting
+/// the env would silently bench a 6.12-kernel guest with every assert green.
+/// `LIMINA_TEST_DISK_ENH` still overrides for a deliberate different disk.
+pub fn tier_config() -> Result<crate::GuestConfig> {
+    match tier() {
+        Tier::Stock => crate::GuestConfig::baseline_fedora_from_env(),
+        Tier::Enhanced => {
+            let mut cfg = crate::GuestConfig::seated_efi_fedora_from_env()?;
+            if std::env::var("LIMINA_TEST_DISK_ENH").is_err() {
+                let disk = crate::repo_root().join("Fedora-Workstation-44.enhanced.test.raw");
+                anyhow::ensure!(
+                    disk.exists(),
+                    "F44 enhanced test golden not found at {disk:?} (set LIMINA_TEST_DISK_ENH)"
+                );
+                match &mut cfg.boot {
+                    crate::Boot::Firmware { disk: d, .. } => *d = disk,
+                    other => anyhow::bail!("seated EFI config built unexpected boot {other:?}"),
+                }
+            }
+            Ok(cfg)
+        }
+    }
+}
+
+/// What actually booted — folded into every scenario's `metrics.json`.
+#[derive(Debug, Clone)]
+pub struct TierStamp {
+    pub tier: Tier,
+    pub pagesize: u64,
+    pub uname_r: String,
+    pub disk: String,
+}
+
+impl TierStamp {
+    /// Entries for [`json_object`].
+    pub fn entries(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("tier", format!("\"{}\"", self.tier.label())),
+            ("guest_pagesize", self.pagesize.to_string()),
+            ("guest_kernel", format!("\"{}\"", self.uname_r)),
+            ("disk", format!("\"{}\"", self.disk)),
+        ]
+    }
+}
+
+/// The tier positive control — "verify the fix is actually loaded", applied to the tier
+/// axis: assert in-guest that the pagesize (and for enhanced, the F44-family 7.x kernel)
+/// matches what `LIMINA_BENCH_TIER` asked for, and stamp what booted. Every enhanced
+/// scenario calls this right after ssh comes up; a wrong disk fails loudly instead of
+/// producing a green run of the wrong guest.
+pub fn verify_tier(guest: &Guest, cfg: &crate::GuestConfig) -> Result<TierStamp> {
+    let t = tier();
+    let pagesize: u64 = guest
+        .ssh_exec("getconf PAGESIZE")?
+        .trim()
+        .parse()
+        .context("parsing guest PAGESIZE")?;
+    let uname_r = guest.ssh_exec("uname -r")?.trim().to_string();
+    let disk = match &cfg.boot {
+        crate::Boot::Firmware { disk, .. } => disk.display().to_string(),
+        crate::Boot::KernelDisk { disk, .. } => disk.display().to_string(),
+        other => format!("{other:?}"),
+    };
+    let want = match t {
+        Tier::Stock => 4096,
+        Tier::Enhanced => 16384,
+    };
+    anyhow::ensure!(
+        pagesize == want,
+        "tier mismatch: LIMINA_BENCH_TIER={} but the guest runs PAGESIZE={pagesize} \
+         (kernel {uname_r}, disk {disk}) — the wrong image/kernel booted",
+        t.label()
+    );
+    if t == Tier::Enhanced {
+        anyhow::ensure!(
+            uname_r.starts_with('7'),
+            "enhanced tier expected the F44-family 7.x 16k kernel, booted {uname_r} \
+             (disk {disk}) — F43 golden by mistake?"
+        );
+    }
+    Ok(TierStamp {
+        tier: t,
+        pagesize,
+        uname_r,
+        disk,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
