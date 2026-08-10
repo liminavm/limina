@@ -38,10 +38,19 @@ struct StepResult {
     json: String,
 }
 
+/// Write the level file ATOMICALLY (temp + rename). A plain fs::write truncates first,
+/// and the policy sampling in that window reads empty → pinned Normal — one such race
+/// released light's entire 8960 MiB balloon mid-staircase and restarted the ramp from 0.
+fn write_level(path: &std::path::Path, level: &str) {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, format!("{level}\n")).expect("writing the host-level temp file");
+    std::fs::rename(&tmp, path).expect("renaming the host-level file into place");
+}
+
 fn run_mode(run: &BenchRun, mode: &str) -> String {
     let trace_path = run.dir().join(format!("trace-{mode}.jsonl"));
     let level_path = run.dir().join(format!("host-level-{mode}"));
-    std::fs::write(&level_path, "normal\n").expect("seeding the host-level file");
+    write_level(&level_path, "normal");
     eprintln!("== S6 mode={mode} ==");
 
     let cfg = GuestConfig::baseline_fedora_from_env()
@@ -69,7 +78,7 @@ fn run_mode(run: &BenchRun, mode: &str) -> String {
 
     let mut steps: Vec<StepResult> = Vec::new();
     for level in STEPS {
-        std::fs::write(&level_path, format!("{level}\n")).expect("stepping the host level");
+        write_level(&level_path, level);
         let t_step = now_ms();
         eprintln!("  step -> {level} ({STEP_SECS} s dwell)");
         let deadline = Instant::now() + Duration::from_secs(STEP_SECS);
