@@ -144,8 +144,13 @@ Three pieces, all living in the repo (`spikes/` convention for results, harness 
     (`setsid nohup`, output to a guest tmpfile fetched at the end) sampling at 250 ms:
     meminfo (MemTotal/MemAvailable/**MemFree**/Cached/SwapFree — free vs available is
     the H1 discriminator), `/proc/pressure/{memory,io}` (avgs *and* totals), vmstat
-    counters. Sampling in-guest is load-bearing: deflate latency needs sub-second
-    resolution and per-sample ssh round-trips would alias it.
+    counters, and the **reclaim-work channel**: kswapd0 CPU ticks
+    (`/proc/<pid>/stat` utime+stime) plus `pgscan/pgsteal_{kswapd,direct}` from vmstat.
+    The kswapd deltas are the kernel doing the balloon's work in the background; the
+    *direct*-reclaim deltas are allocating processes stalled doing that work themselves —
+    the user-visible-latency shape of the same squeeze, and (with pgmajfault/pswpin) the
+    honest cost side of every inflation. Sampling in-guest is load-bearing: deflate
+    latency needs sub-second resolution and per-sample ssh round-trips would alias it.
   - *Kernel journal channel*: at run end, `journalctl -k -o short-unix` filtered to
     `virtio_balloon` (the `Out of puff` lines and anything else the driver says) becomes
     trace events on the shared timeline — the raw material for the §2 attribution.
@@ -181,6 +186,11 @@ Release path (the complaint):
   the mode's allowance (or the workload completing, per scenario).
 - **Casualties** — OOM-kill count (hard fail, always), `pgmajfault` delta, `pswpin`/
   `pswpout` deltas, peak swap usage.
+- **Reclaim work** — per-phase deltas of `pgscan/pgsteal_kswapd` (background kernel work
+  the balloon induces), `pgscan/pgsteal_direct` (allocation-latency work — a nonzero
+  direct-reclaim delta means guest processes paid for the squeeze in their own stalls),
+  and kswapd0 CPU time. A tuning change that trades a second of relief latency for a
+  direct-reclaim storm did not win.
 - **Pressure exposure** — time-integral of PSI `some avg10` (memory *and* io) over the
   run; the sticky-wedge class shows up in io-PSI while memory-PSI sleeps.
 - **Workload slowdown** — scenario completion time vs the same scenario on
