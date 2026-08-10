@@ -80,20 +80,51 @@ Worth noting the chord arms off `ungrab_chord_step`, which reads the CONTROL cla
 from the raw flags — including a Ctrl the guest has never been told about. The chord and the guest
 disagree about what is held, and the chord wins.
 
-## Consequences for the fix
+## Fixed, 2026-08-09
 
-- Fault A wants a whole-bitmask reconcile of held modifiers, the `sync_capslock` analogue: pure
-  function in `limina-input/src/keymap.rs`, RED-first, next to `modifier_emit`. Two traps found
-  while reading: the reconcile must emit the *other* modifiers **before** the event's own keycode
-  (so Ctrl-down precedes Super-down), and it must not run while the ungrab chord is in `Withhold`,
-  or it leaks exactly the edges the chord is hiding.
-- Non-`flagsChanged` events carry only class bits, no left/right dev bits, so a reconcile driven
-  from *every* event cannot tell left Ctrl from right. `flagsChanged` carries both. Whether the
-  first `flagsChanged` is a sufficient heal point, or key/pointer events should heal too at class
-  granularity, is a real design fork — decide it against the trace, not from assumption.
-- Fault A alone does not fully fix the reported symptom, and fault B alone does not either. Fixing
-  only A leaves press 1 eaten by the chord; fixing only B makes press 1 arrive bare instead of
-  press 2. The report needs both.
-- Fault B is a policy collision, not a coding error: with the default swap, the guest's Super and
-  the ungrab chord's Option are one physical key. Any fix is a decision about which gesture owns
-  Ctrl+Option, and that is the user's call.
+**A — `reconcile_modifiers`** (`crates/limina-input/src/keymap.rs`), the held-modifier twin of
+`CapsLockSync`: given the host bitmask and the believed pressed-set, it returns the edges that
+close the gap. Fed from the `flagsChanged` and key-down paths, after the chord has had its say so
+withheld edges stay withheld. Two details are load-bearing, and both are unit-tested against
+bitmasks lifted verbatim from the trace above:
+
+- The event's own modifier is **excluded**. The walk order puts Option before Control, so
+  reconciling it here would emit Super *before* the Ctrl it is meant to be modified by.
+- A press is **never** inferred from a device-independent class bit. Asked about all eight
+  keycodes, a lone CONTROL bit answers "down" for both Controls and would press a key the user is
+  not holding. Releases need no such gate — a clear class bit means both sides are genuinely up.
+
+**B — `chord_survives_mute`** (`window/grab_policy.rs`): the chord no longer goes deaf once it
+fires. A Control still held re-arms it, so repeated Ctrl+Super releases and never reaches the
+guest — the reporter's stated expectation. Gated on the mute itself, so `--no-soft-kbd-grab` keeps
+Ctrl+Option as an ordinary guest combo.
+
+Verified live on the same vehicle, five consecutive chords, every one `Withhold → Withhold →
+Fire` with no `evdev=125` in sight, and the guest's Control restored by `RESYNC` after each:
+
+```
+chord(ungrabbed) kc=lopt flags=0xc0121 armed false->true action=Withhold
+chord(ungrabbed) kc=lopt flags=0x40101 armed true->false action=Fire
+MON-flags kc=lopt flags=0x40101 host=[lctrl] guest=[]  DRIFT[lctrl:host=DOWN]
+  RESYNC lctrl DOWN
+```
+
+The first cut of B also called `flush_modifiers()` on the ungrabbed fire, and the trace caught
+what that costs: the flush released Control in the guest and the very next edge resynced it back,
+one spurious release/press pair per chord, five in five. Removed — this path never forwards a
+chord edge, so the only modifiers it holds are ones the resync put there because the user really
+is holding them.
+
+A side effect worth knowing: synthetic `flagsChanged` (osascript) carry keycode 0, so
+`emit_modifier` used to drop them entirely and no synthetic modifier ever reached the guest. The
+reconcile does not depend on the event naming a key, so scripted key+modifier combos now land.
+
+## Still open
+
+- **Pointer events do not heal.** The reconcile runs on `flagsChanged` and key-down only. A
+  Ctrl+click straight after a Space return still reaches the guest as a plain click. Pointer
+  events carry class bits at best, and `reconcile_modifiers` refuses to press on that evidence
+  (see above), so healing there needs a different answer than "call it from one more place".
+- **Why the tap sees each `flagsChanged` twice.** Every chord edge in the trace appears as two
+  identical calls ~1 ms apart (`armed false->true`, then `armed true->true`). The dedup in
+  `modifier_emit` absorbs it and it predates this work, but it is unexplained.

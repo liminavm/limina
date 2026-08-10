@@ -110,6 +110,30 @@ pub(crate) fn soft_keyboard_engaged(
     !captured && enabled && is_key && space_visible && !muted
 }
 
+/// Whether the ungrab chord should still be recognized **after it has muted the soft keyboard
+/// grab** — that is, whether a Control still held from the last fire re-arms it.
+///
+/// It used to go deaf the instant it fired, and with the Command/Option swap on (the default) that
+/// was a bug with teeth: the guest's Super *is* macOS's Option, so "Control held + Super" and the
+/// chord are one physical gesture. After the first fire, later presses fell through to the local
+/// monitor and reached the guest as a bare Super — GNOME's overview. Reported 2026-08-09; the
+/// trace is in `spikes/modifier-drift/`.
+///
+/// Gated on `muted` rather than merely on "nothing is grabbed", so this claims Control+Option only
+/// in the state the chord itself created. Someone running `--no-soft-kbd-grab` with no pointer
+/// grab has no chord to repeat, and keeps Control+Option as an ordinary guest combo.
+pub(crate) fn chord_survives_mute(
+    captured: bool,
+    soft: bool,
+    muted: bool,
+    is_key: bool,
+    space_visible: bool,
+) -> bool {
+    // `is_key`/`space_visible`: this is a SESSION tap, so without them we would eat Control+Option
+    // out from under whatever app the user is actually looking at.
+    !captured && !soft && muted && is_key && space_visible
+}
+
 /// Whether a grab that is *already held* has lost the context that justified it: our Space is no
 /// longer the one on screen (Mission Control, a Space switch, an unplug that relocates us), or the
 /// window has no screen at all.
@@ -560,6 +584,29 @@ mod tests {
         assert!(
             !soft_keyboard_engaged(false, true, true, true, true),
             "muted"
+        );
+    }
+
+    #[test]
+    fn the_chord_stays_armed_after_it_has_muted_the_soft_grab() {
+        // The reported bug: with the Cmd/Option swap on, "Ctrl held + Super" IS the chord, so the
+        // second press must be recognized rather than falling through to the guest as a bare
+        // Super. Muted + key + on-screen is exactly the state the first fire leaves behind.
+        assert!(chord_survives_mute(false, false, true, true, true));
+        // Not muted: the soft grab (or nothing at all) owns Ctrl+Option, and this path must keep
+        // its hands off — leaving it an ordinary guest combo under --no-soft-kbd-grab.
+        assert!(!chord_survives_mute(false, false, false, true, true));
+        // A live grab has its own chord path; the two must never both claim the edge.
+        assert!(!chord_survives_mute(true, false, true, true, true));
+        assert!(!chord_survives_mute(false, true, true, true, true));
+        // Session tap: without these we would eat Ctrl+Option from whatever app is really focused.
+        assert!(
+            !chord_survives_mute(false, false, true, false, true),
+            "not key"
+        );
+        assert!(
+            !chord_survives_mute(false, false, true, true, false),
+            "our Space is not the one on screen"
         );
     }
 

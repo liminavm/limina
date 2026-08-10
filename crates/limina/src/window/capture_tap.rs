@@ -416,24 +416,19 @@ extern "C" fn tap_callback(
     // first fire muted the soft grab, every later press with Control still held fell through to
     // the local monitor and reached the guest as a bare Super — GNOME's overview, twice over.
     // Reported 2026-08-09; evidence in `spikes/modifier-drift/`.
-    if etype == FLAGS_CHANGED
-        && !captured
-        && !soft
-        && ctx.soft_muted.get()
-        && is_key
-        && space_visible
+    if grab_policy::chord_survives_mute(captured, soft, ctx.soft_muted.get(), is_key, space_visible)
+        && etype == FLAGS_CHANGED
     {
         let keycode = geti(FIELD_KEYBOARD_KEYCODE) as u16;
         let flags = unsafe { CGEventGetFlags(event) };
         match ctx.input.observe_ungrab_flags_ungrabbed(keycode, flags) {
-            // Already muted and nothing is grabbed, so there is no grab left to drop: the fire's
-            // whole job here is to keep the gesture away from the guest. The flush is the same
-            // belt the grabbed path wears — the chord must never leave a modifier wedged down.
-            UngrabAction::Fire => {
-                ctx.input.flush_modifiers();
-                return std::ptr::null_mut();
-            }
-            UngrabAction::Withhold => return std::ptr::null_mut(),
+            // No grab is left to drop and nothing needs flushing: this path never forwards a
+            // chord edge to the guest, so the only modifiers it holds are ones the resync put
+            // there because the user really is holding them. A flush here would release them and
+            // the next edge would immediately put them back — the trace of the first fix showed
+            // exactly that, one spurious Control release/press pair per chord. Consuming the
+            // event is the whole job.
+            UngrabAction::Fire | UngrabAction::Withhold => return std::ptr::null_mut(),
             // Not chord business — fall through and leave the event to macOS and the monitor.
             UngrabAction::Forward => {}
         }
