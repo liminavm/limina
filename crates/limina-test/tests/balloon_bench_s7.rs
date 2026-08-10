@@ -33,18 +33,21 @@ use limina_test::bench::{
 use limina_test::{Guest, GuestConfig};
 
 const MIB: u64 = 1 << 20;
-const RAM_MIB: usize = 6144;
+/// 4 GiB, not 6: the baseline image's /var/tmp holds ~4.4 GiB, and the H1 shape needs
+/// the cache file to approach RAM minus the working set — a smaller guest makes the
+/// fill achievable within the disk budget.
+const RAM_MIB: usize = 4096;
 /// Phase-A cache file: sized to push MemFree low. On DISK (/var/tmp) — /tmp is a
 /// RAM-backed tmpfs sized RAM/2: too small, and tmpfs pages aren't reclaimable cache, so
 /// they can't produce the H1 shape at all (the S3 tmpfs incident).
-const CACHE_FILE_MIB: u64 = 4600;
+const CACHE_FILE_MIB: u64 = 3072;
 const CACHE_FILE: &str = "/var/tmp/limina-cachefill";
 /// Phase-B target: should be fillable by nibbling cache, slowly.
 const SLOW_FILL_TARGET: u64 = 2048 * MIB;
 /// Phase-C escalation: start here and step up whenever the driver closes the gap, so the
 /// run finds the guest's NATURAL plateau instead of guessing it (a fixed target either
 /// overshoots into OOM-killing guest daemons or undershoots into a fillable target).
-const CHASE_START: u64 = 4608 * MIB;
+const CHASE_START: u64 = 3072 * MIB;
 const CHASE_STEP: u64 = 256 * MIB;
 const CHASE_CAP: u64 = (RAM_MIB as u64 - 512) * MIB;
 
@@ -271,7 +274,7 @@ fn s7_out_of_puff_chase() {
     );
     // The H1 stage-set must actually have been the H1 shape, or phase B measured nothing.
     assert!(
-        free_kib < 1024 * 1024 && avail_kib > 3 * 1024 * 1024,
+        free_kib < 1024 * 1024 && avail_kib > 5 * 512 * 1024,
         "phase A did not produce the H1 shape (free={free_kib} KiB, avail={avail_kib} KiB) — \
          phase B's fill-vs-cache number is not measuring fill-vs-cache"
     );
