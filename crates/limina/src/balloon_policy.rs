@@ -8,7 +8,11 @@
 //! Mechanism vs policy: the balloon device, the target/`actual` loop, and the control socket are in
 //! libkrun / limina-vmm; *this* is the policy that decides when and how much. The rule is simple and
 //! conservative: release fast under pressure (always safe), reclaim gradually when the guest is idle
-//! with memory to spare. The thresholds are starting points, not a tuned policy.
+//! with memory to spare. Because the guest driver has NO self-preservation (it satisfies any target,
+//! digging into page cache and toward guest death at full inflate speed), the protective wall is
+//! host-side: inflation steps are paced by the guest's reported MemFree (the clamp in [`decide`]),
+//! and a commanded target the driver can't fill decays back to `actual` instead of standing as a
+//! permanent 5 Hz retry loop ([`gap_action`]).
 //!
 //! Besides the reactive target loop, the policy runs a **pressure-triggered scrub**
 //! (`spikes/balloon-retention-testbed/`): one eager full inflate → hold → deflate cycle. Inflating
@@ -44,6 +48,20 @@ const INFLATE_STEP_PAGES: u32 = 256 * PAGES_PER_MIB;
 /// After a pressure-triggered release, don't re-inflate for this long: a blowout proves the guest
 /// is actively using its memory, and each squeeze/release cycle costs it GiBs of disk swap.
 const RELEASE_COOLDOWN: Duration = Duration::from_secs(300);
+/// Inflation step when the guest's free list is exhausted but the squeeze contract still owes
+/// memory (host Warn/Critical, or Aggressive): 32 MiB per dwell ≈ 16 MiB/s. The driver satisfies
+/// any target by digging into page cache at full inflate speed; this keeps the dig at a pace the
+/// guest's reclaim absorbs instead of the 128 MiB/s cache-dump sprints.
+const TRICKLE_STEP_PAGES: u32 = 32 * PAGES_PER_MIB;
+/// A commanded-but-unfilled target gap smaller than this is noise (pages; same as the dead band).
+const GAP_EPS_PAGES: u32 = DEAD_BAND_PAGES;
+/// How long a target>actual gap must sit with NO fill progress before the target decays to
+/// `actual`. The driver fills a 256 MiB step in ~140 ms when it can; ten seconds of a stuck gap
+/// is the driver's permanent 5 Hz retry loop ("Out of puff"), not a slow fill.
+const GAP_DECAY_AFTER: Duration = Duration::from_secs(10);
+/// After a gap decay, don't ask for more for this long: the guest just proved it can't give
+/// more, and immediately re-commanding the same unfillable target re-enters the retry loop.
+const GAP_BACKOFF: Duration = Duration::from_secs(60);
 
 /// Minimum time between scrub cycles — and, because the timer starts armed at construction, the
 /// minimum uptime before the first one (never scrub a freshly booted VM; this also keeps the
@@ -278,8 +296,32 @@ struct State {
     /// End of the last scrub cycle. Initialized to construction time so a fresh VM never
     /// scrubs before [`SCRUB_COOLDOWN`] of uptime.
     last_scrub_end: Instant,
+    /// Tracking for a commanded-but-unfilled target gap (see [`gap_action`]). Only updated on
+    /// ticks with a known `actual` — a failed stats query freezes it rather than resetting or
+    /// advancing it.
+    gap: Option<GapTrack>,
     /// `LIMINA_BALLOON_TRACE` decision journal: one JSON line per consumed report.
     trace: Option<std::fs::File>,
+}
+
+/// One armed observation of a target>actual gap: when it started, and the fill level at arm
+/// time so progress (a rising `actual`) re-arms instead of firing.
+struct GapTrack {
+    since: Instant,
+    actual_at_arm: u32,
+}
+
+/// The pure per-tick verdict on a commanded-but-unfilled gap (see [`gap_action`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GapAction {
+    /// Gap below the dead band (or actual caught up): clear any tracking.
+    Clear,
+    /// Gap present, no tracking yet (or fill progressed): (re)arm the timer at `now`.
+    Arm,
+    /// Gap present, timer running, nothing to do yet.
+    Stay,
+    /// Gap stuck past [`GAP_DECAY_AFTER`] with no progress: decay the target to `actual`.
+    Fire,
 }
 
 /// One scrub cycle in flight (see [`scrub_due`] and [`BalloonPolicy::scrub_tick`]).
@@ -390,6 +432,7 @@ impl BalloonPolicy {
                 scrub: None,
                 scrub_gen: 0,
                 last_scrub_end: Instant::now(),
+                gap: None,
                 trace,
             })),
         }
@@ -438,17 +481,25 @@ impl BalloonPolicy {
             self.start_scrub(&mut st, now, room);
             return;
         }
+        // Worker stats now feed the policy, not just the journal: `actual` is the pacing
+        // clamp's base and the gap tracker's progress signal. A failed query degrades softly —
+        // the clamp bases off `current` and gap tracking freezes — never a stalled policy.
+        let wstats = self.query_stats(&mut st);
+        let actual_pages = wstats
+            .as_ref()
+            .map(|w| (w.actual_bytes >> 12).min(u32::MAX as u64) as u32);
         let inputs = DecideInputs {
             mode: self.mode,
             host: host.blended,
             current: st.target_pages,
+            actual_pages,
             room,
             max_pages: self.max_pages,
             last_change: st.last_change,
             cooldown_until: st.cooldown_until,
             now,
         };
-        let decision = decide(p, &inputs);
+        let mut decision = decide(p, &inputs);
         let mut sent = false;
         if let Decision::Set(new_target) = decision {
             sent = send_target(&self.socket, &mut st, new_target);
@@ -463,13 +514,39 @@ impl BalloonPolicy {
                 );
             }
         }
-        // Worker stats enrich the journal only: skipped entirely when tracing is off, and
-        // a failed query degrades to null fields, never a stalled or altered policy.
-        let wstats = if st.trace.is_some() {
-            self.query_stats(&mut st)
-        } else {
-            None
-        };
+        // Gap decay: a held target the driver can't fill is its permanent 5 Hz retry loop
+        // ("Out of puff" spam) — after GAP_DECAY_AFTER of no fill progress, trim the target to
+        // what the driver actually reached and back off. Skipped entirely when `actual` is
+        // unknown (frozen, not reset — see `State::gap`).
+        if let Some(a) = actual_pages {
+            match gap_action(st.gap.as_ref(), st.target_pages, a, sent, now) {
+                GapAction::Clear => st.gap = None,
+                GapAction::Arm => {
+                    st.gap = Some(GapTrack {
+                        since: now,
+                        actual_at_arm: a,
+                    })
+                }
+                GapAction::Stay => {}
+                GapAction::Fire => {
+                    if send_target(&self.socket, &mut st, a) {
+                        let gap_mib = (st.target_pages.saturating_sub(a)) / PAGES_PER_MIB;
+                        st.target_pages = a;
+                        st.last_change = Some(now);
+                        st.gap = None;
+                        let backoff = now + GAP_BACKOFF;
+                        st.cooldown_until =
+                            Some(st.cooldown_until.map_or(backoff, |t| t.max(backoff)));
+                        decision = Decision::Decay(a);
+                        sent = true;
+                        log::warn!(
+                            "autoballoon: gap decay — target trimmed to actual ({a} pages, \
+                             {gap_mib} MiB unfillable), inflation backed off {GAP_BACKOFF:?}"
+                        );
+                    }
+                }
+            }
+        }
         trace_decision(&mut st, p, &host, &inputs, decision, sent, wstats.as_ref());
     }
 
@@ -483,6 +560,7 @@ impl BalloonPolicy {
         }
         st.target_pages = room;
         st.last_change = Some(now);
+        st.gap = None; // the scrub owns the target now; stale gap timing must not survive it
         st.scrub_gen += 1;
         let gen = st.scrub_gen;
         st.scrub = Some(Scrub {
@@ -736,6 +814,32 @@ fn scrub_step(
     }
 }
 
+/// The pure per-tick gap verdict (unit-tested): given the tracked gap state, the commanded
+/// target, the driver's reported fill, and whether this tick already sent a target change,
+/// decide what happens to the gap tracker. Progress (a rising `actual`) re-arms rather than
+/// fires — a slow fill under the trickle clamp is legitimate; only a STUCK gap decays. A tick
+/// that just sent a target change never fires (the driver deserves a chance to chase the new
+/// target), but the timer keeps running — a rising target over a stuck `actual` is still stuck.
+fn gap_action(
+    track: Option<&GapTrack>,
+    target: u32,
+    actual: u32,
+    sent_this_tick: bool,
+    now: Instant,
+) -> GapAction {
+    if target.saturating_sub(actual) < GAP_EPS_PAGES {
+        return GapAction::Clear;
+    }
+    match track {
+        None => GapAction::Arm,
+        Some(g) if actual >= g.actual_at_arm.saturating_add(GAP_EPS_PAGES) => GapAction::Arm,
+        Some(g) if !sent_this_tick && now.duration_since(g.since) >= GAP_DECAY_AFTER => {
+            GapAction::Fire
+        }
+        Some(_) => GapAction::Stay,
+    }
+}
+
 /// Abandon an in-flight scrub (acute guest pressure or starvation). The caller's release
 /// decision hands the memory back; re-arming `last_scrub_end` here keeps an abort-prone guest
 /// from being re-squeezed the moment the acute report passes.
@@ -850,6 +954,10 @@ struct DecideInputs {
     host: HostPressure,
     /// The balloon size we've currently commanded (pages).
     current: u32,
+    /// The driver's reported fill (pages), when the stats query succeeded. The pacing clamp's
+    /// base: free-list headroom is measured from what the driver has actually taken, not from
+    /// what we asked for. `None` falls back to `current`.
+    actual_pages: Option<u32>,
     /// max − min: the most the balloon may hold (pages).
     room: u32,
     /// Total guest RAM libkrun allocated (pages) — the allowance percentages key off this.
@@ -884,6 +992,19 @@ fn allowance_pages(mode: ReclaimMode, host: HostPressure, max_pages: u32) -> Opt
     }
 }
 
+/// The free-list margin the pacing clamp preserves (pages): inflation may consume guest MemFree
+/// down to this level without being considered "digging" — below it, allocation forces reclaim.
+/// Keyed by mode as the guest-comfort knob: Light leaves the roomiest kernel working margin,
+/// Aggressive shaves closest to the reclaim edge.
+fn free_margin_pages(mode: ReclaimMode) -> u32 {
+    match mode {
+        ReclaimMode::Disabled => 0, // not reached: policy isn't constructed
+        ReclaimMode::Light => 512 * PAGES_PER_MIB,
+        ReclaimMode::Moderate => 256 * PAGES_PER_MIB,
+        ReclaimMode::Aggressive => 128 * PAGES_PER_MIB,
+    }
+}
+
 /// A guest is *starved* when MemAvailable is critically low: catastrophic cache starvation
 /// manifests as IO pressure (swap-in and refault storms), NOT as memory-PSI — a wedged guest
 /// can sit at 263 MiB available / 2.3% memory-some / 44% io-full, stuck behind a
@@ -900,6 +1021,11 @@ fn guest_starved(p: &MemPressure) -> bool {
 enum Decision {
     /// Command this new target (pages).
     Set(u32),
+    /// Gap decay: the target was trimmed to the driver's actual fill (pages). Never returned
+    /// by [`decide`] — `on_pressure` substitutes it when [`gap_action`] fires, so the trace
+    /// distinguishes a decay from a policy release (`first_target_decrease_after` in the bench
+    /// filters on `"set"`).
+    Decay(u32),
     /// Leave the current target alone.
     Hold(Hold),
 }
@@ -908,21 +1034,23 @@ impl Decision {
     /// The commanded target, if any (test/trace convenience).
     fn target(self) -> Option<u32> {
         match self {
-            Decision::Set(t) => Some(t),
+            Decision::Set(t) | Decision::Decay(t) => Some(t),
             Decision::Hold(_) => None,
         }
     }
 
-    /// Short stable label for the trace (`set` or the hold gate).
+    /// Short stable label for the trace (`set`, `gap-decay`, or the hold gate).
     fn label(self) -> &'static str {
         match self {
             Decision::Set(_) => "set",
+            Decision::Decay(_) => "gap-decay",
             Decision::Hold(Hold::Converged) => "converged",
             Decision::Hold(Hold::NotIdle) => "not-idle",
             Decision::Hold(Hold::DeadBand) => "dead-band",
             Decision::Hold(Hold::NotCalm) => "not-calm",
             Decision::Hold(Hold::Cooldown) => "cooldown",
             Decision::Hold(Hold::Dwell) => "dwell",
+            Decision::Hold(Hold::FreeExhausted) => "free-exhausted",
         }
     }
 }
@@ -942,6 +1070,10 @@ enum Hold {
     Cooldown,
     /// Inflation gate: inside the dwell since the last target change.
     Dwell,
+    /// Inflation gate: the guest's free list is at the mode's margin and the host doesn't need
+    /// the memory urgently (Normal) — wait for the guest to free memory on its own instead of
+    /// forcing cache reclaim.
+    FreeExhausted,
 }
 
 /// The pure policy decision (unit-tested): given a pressure report and the current state, return
@@ -954,8 +1086,10 @@ enum Hold {
 /// (a squeeze/release limit cycle). Inflation is the guarded direction: it requires
 /// *sustained* calm (avg10 AND avg60 ≤ 2%), no recent release blowout ([`RELEASE_COOLDOWN`]),
 /// and moves in small dwell-limited [`INFLATE_STEP_PAGES`] steps so the lagging PSI sensor can
-/// push back before the squeeze overshoots. Aggressive keeps its original shape (squeeze to the
-/// floor while ≥30% is available, host pressure ignored) with the same inflation guards.
+/// push back before the squeeze overshoots — further paced by the MemFree clamp (steps sized to
+/// the guest's free list; cache reclaim only ever forced at the trickle rate, and only when the
+/// host needs the memory). Aggressive keeps its original shape (squeeze to the floor while ≥30%
+/// is available, host pressure ignored) with the same inflation guards.
 fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
     // Guest under acute pressure OR starved of cache: hand memory back, now. All modes. (The
     // caller also arms the re-inflation cooldown on these signals.) The starvation check exists
@@ -1017,7 +1151,29 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
                 return Decision::Hold(Hold::Dwell);
             }
         }
-        i.current.saturating_add(INFLATE_STEP_PAGES).min(desired)
+        // Self-preservation pacing clamp. The driver satisfies ANY target: past the guest's
+        // free list it digs into page cache at full inflate speed (and toward guest death
+        // beyond that) — the guest has no wall of its own, so this is it. The step is capped
+        // by what the guest can hand over WITHOUT reclaim (MemFree minus the mode's margin,
+        // measured from the driver's actual fill); past that it drops to the trickle when the
+        // squeeze contract still owes memory, or holds when the host doesn't need it urgently.
+        // `mem_free_kib == 0` = an agent predating the field: clamp off, pre-clamp behavior.
+        let step = if p.mem_free_kib == 0 {
+            INFLATE_STEP_PAGES
+        } else {
+            let free_pages = (p.mem_free_kib / 4).min(u32::MAX as u64) as u32;
+            let headroom = free_pages.saturating_sub(free_margin_pages(i.mode));
+            let cap = i.actual_pages.unwrap_or(i.current).saturating_add(headroom);
+            let cap_step = cap.saturating_sub(i.current).min(INFLATE_STEP_PAGES);
+            if cap_step >= DEAD_BAND_PAGES {
+                cap_step
+            } else if i.mode == ReclaimMode::Aggressive || i.host != HostPressure::Normal {
+                TRICKLE_STEP_PAGES
+            } else {
+                return Decision::Hold(Hold::FreeExhausted);
+            }
+        };
+        i.current.saturating_add(step).min(desired)
     };
     if next != i.current {
         Decision::Set(next)
@@ -1054,6 +1210,7 @@ mod tests {
             mode,
             host,
             current,
+            actual_pages: None,
             room: ROOM,
             max_pages: MAX,
             last_change: None,
@@ -1193,6 +1350,147 @@ mod tests {
         // move one INFLATE_STEP.
         let next = decide(&report_pages(0, 7 * GIB_PAGES, MAX), &i);
         assert_eq!(next, Decision::Set(INFLATE_STEP_PAGES));
+    }
+
+    /// `report_pages` with the guest's free list set (in pages) — engages the pacing clamp.
+    fn report_with_free(
+        some_avg10: u32,
+        avail_pages: u32,
+        free_pages: u32,
+        total_pages: u32,
+    ) -> MemPressure {
+        let mut p = report_pages(some_avg10, avail_pages, total_pages);
+        p.mem_free_kib = free_pages as u64 * 4;
+        p
+    }
+
+    /// The pacing clamp: a cache-heavy guest (avail huge, free small) only yields what its free
+    /// list holds beyond the mode's margin — never a full step dug out of page cache.
+    #[test]
+    fn clamp_paces_inflation_to_the_free_list() {
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
+        // 7 GiB available but only margin + 100 MiB free: the step is 100 MiB, not 256.
+        let free = free_margin_pages(ReclaimMode::Moderate) + 100 * PAGES_PER_MIB;
+        let next = decide(&report_with_free(0, 7 * GIB_PAGES, free, MAX), &i);
+        assert_eq!(next, Decision::Set(100 * PAGES_PER_MIB));
+    }
+
+    /// The free≈0 row at host-Normal (where the dogfood guest lives): the free list is at the
+    /// margin and the host doesn't need the memory — hold, don't force cache reclaim.
+    #[test]
+    fn clamp_holds_at_host_normal_when_free_is_exhausted() {
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
+        let free = free_margin_pages(ReclaimMode::Moderate); // headroom exactly 0
+        assert_eq!(
+            decide(&report_with_free(0, 7 * GIB_PAGES, free, MAX), &i),
+            Decision::Hold(Hold::FreeExhausted)
+        );
+    }
+
+    /// The free≈0 row when the squeeze contract still owes memory (host Warn/Critical, or
+    /// Aggressive anywhere): inflation continues at the trickle, never at full sprint.
+    #[test]
+    fn clamp_trickles_when_free_is_exhausted_but_memory_is_owed() {
+        let tiny_free = 4; // pages; nonzero so the clamp is engaged, far below every margin
+        for (mode, host) in [
+            (ReclaimMode::Moderate, HostPressure::Warn),
+            (ReclaimMode::Moderate, HostPressure::Critical),
+            (ReclaimMode::Light, HostPressure::Warn),
+            (ReclaimMode::Aggressive, HostPressure::Normal),
+        ] {
+            let i = inputs(mode, host, 0);
+            assert_eq!(
+                decide(&report_with_free(0, 7 * GIB_PAGES, tiny_free, MAX), &i),
+                Decision::Set(TRICKLE_STEP_PAGES),
+                "{mode:?}/{host:?}"
+            );
+        }
+    }
+
+    /// Free-list headroom is measured from the driver's ACTUAL fill when stats are available:
+    /// an outstanding commanded-but-unfilled gap consumes the headroom.
+    #[test]
+    fn clamp_measures_headroom_from_actual() {
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, GIB_PAGES);
+        i.actual_pages = Some(GIB_PAGES / 2); // 512 MiB still unfilled
+        let free = free_margin_pages(ReclaimMode::Moderate) + 600 * PAGES_PER_MIB;
+        let next = decide(&report_with_free(0, 7 * GIB_PAGES, free, MAX), &i);
+        // cap = actual (512 MiB) + headroom (600 MiB) = 1112 MiB; current 1024 → step 88 MiB.
+        assert_eq!(next, Decision::Set(GIB_PAGES + 88 * PAGES_PER_MIB));
+    }
+
+    /// An old agent (mem_free_kib 0 = field absent) disables the clamp entirely — pre-clamp
+    /// behavior, exactly as the proto contract requires (0 is never "an empty free pool").
+    #[test]
+    fn clamp_off_when_the_report_lacks_mem_free() {
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
+        assert_eq!(
+            decide(&report_pages(0, 7 * GIB_PAGES, MAX), &i),
+            Decision::Set(INFLATE_STEP_PAGES)
+        );
+    }
+
+    #[test]
+    fn gap_action_tracks_arms_and_fires() {
+        let now = Instant::now();
+        let target = 2 * GIB_PAGES;
+        let track = |since: Instant, at_arm: u32| GapTrack {
+            since,
+            actual_at_arm: at_arm,
+        };
+        // Gap below the dead band: cleared, even with a stale track armed.
+        let filled = target - (GAP_EPS_PAGES - 1);
+        assert_eq!(
+            gap_action(
+                Some(&track(now - GAP_DECAY_AFTER, 0)),
+                target,
+                filled,
+                false,
+                now
+            ),
+            GapAction::Clear
+        );
+        // A real gap with no tracking arms the timer.
+        let stuck = target - GIB_PAGES;
+        assert_eq!(gap_action(None, target, stuck, false, now), GapAction::Arm);
+        // Fill progress since arming re-arms (a slow trickle fill is legitimate)...
+        let old = now - GAP_DECAY_AFTER - Duration::from_secs(1);
+        assert_eq!(
+            gap_action(
+                Some(&track(old, stuck - GAP_EPS_PAGES)),
+                target,
+                stuck,
+                false,
+                now
+            ),
+            GapAction::Arm
+        );
+        // ...but a STUCK gap past the deadline fires,
+        assert_eq!(
+            gap_action(Some(&track(old, stuck)), target, stuck, false, now),
+            GapAction::Fire
+        );
+        // never on a tick that just moved the target,
+        assert_eq!(
+            gap_action(Some(&track(old, stuck)), target, stuck, true, now),
+            GapAction::Stay
+        );
+        // and never before the deadline.
+        assert_eq!(
+            gap_action(Some(&track(now, stuck)), target, stuck, false, now),
+            GapAction::Stay
+        );
+    }
+
+    #[test]
+    fn new_decision_labels_are_stable() {
+        // The bench summarizer keys off these strings; a rename is a contract change.
+        assert_eq!(Decision::Decay(5).label(), "gap-decay");
+        assert_eq!(
+            Decision::Hold(Hold::FreeExhausted).label(),
+            "free-exhausted"
+        );
+        assert_eq!(Decision::Decay(5).target(), Some(5));
     }
 
     /// Regression 2: while the guest sits in the neutral band (2–10%), the policy must still
@@ -1352,6 +1650,7 @@ mod tests {
             scrub: None,
             scrub_gen: 0,
             last_scrub_end: Instant::now(),
+            gap: None,
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -1576,6 +1875,7 @@ mod tests {
             }),
             scrub_gen: 3,
             last_scrub_end: now,
+            gap: None,
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -1625,6 +1925,7 @@ mod tests {
             scrub: None,
             scrub_gen: 0,
             last_scrub_end: Instant::now(),
+            gap: None,
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)

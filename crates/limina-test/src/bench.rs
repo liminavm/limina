@@ -486,11 +486,12 @@ pub fn parse_trace(jsonl: &str) -> Vec<TraceEvent> {
 }
 
 /// The first *sent* target decrease at/after `t_ms` — the policy's detection instant for a
-/// release. Returns `(ts_ms, from_pages, to_pages)`.
+/// release. Returns `(ts_ms, from_pages, to_pages)`. Only `"set"` decisions count: a
+/// `"gap-decay"` trim is the driver failing to fill, not the policy detecting anything.
 pub fn first_target_decrease_after(trace: &[TraceEvent], t_ms: u64) -> Option<(u64, u64, u64)> {
     trace.iter().find_map(|e| {
         let new = e.new_target_pages?;
-        (e.ts_ms >= t_ms && e.sent && new < e.current_pages).then_some((
+        (e.ts_ms >= t_ms && e.sent && e.decision == "set" && new < e.current_pages).then_some((
             e.ts_ms,
             e.current_pages,
             new,
