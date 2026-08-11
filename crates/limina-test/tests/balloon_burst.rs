@@ -43,12 +43,9 @@ fn mib(bytes: u64) -> u64 {
 fn idle_report() -> MemPressure {
     let total = (MAX_MIB as u64) * 1024;
     MemPressure {
-        some_avg10: 0,
-        some_avg60: 0,
-        full_avg10: 0,
-        full_avg60: 0,
         mem_available_kib: total * 70 / 100,
         mem_total_kib: total,
+        ..Default::default()
     }
 }
 
@@ -57,7 +54,7 @@ fn idle_report() -> MemPressure {
 fn real_report(guest: &Guest) -> Option<MemPressure> {
     let out = guest
         .ssh_exec(
-            "cat /proc/pressure/memory; awk '/MemTotal|MemAvailable/{print $1, $2}' /proc/meminfo",
+            "cat /proc/pressure/memory; awk '/MemTotal|MemAvailable|MemFree/{print $1, $2}' /proc/meminfo",
         )
         .ok()?;
     let pct100 = |line_tag: &str, field: &str| -> u32 {
@@ -83,6 +80,8 @@ fn real_report(guest: &Guest) -> Option<MemPressure> {
         full_avg60: pct100("full", "avg60"),
         mem_available_kib: mem_kib("MemAvailable:"),
         mem_total_kib: mem_kib("MemTotal:"),
+        mem_free_kib: mem_kib("MemFree:"),
+        ..Default::default()
     })
 }
 

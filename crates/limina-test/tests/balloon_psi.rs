@@ -39,12 +39,9 @@ fn mib(bytes: u64) -> u64 {
 fn idle_report() -> MemPressure {
     let total = (MAX_MIB as u64) * 1024; // KiB
     MemPressure {
-        some_avg10: 0,
-        some_avg60: 0,
-        full_avg10: 0,
-        full_avg60: 0,
         mem_available_kib: total * 70 / 100,
         mem_total_kib: total,
+        ..Default::default()
     }
 }
 
@@ -58,6 +55,7 @@ fn pressure_report() -> MemPressure {
         full_avg60: 2000,
         mem_available_kib: total * 5 / 100,
         mem_total_kib: total,
+        ..Default::default()
     }
 }
 

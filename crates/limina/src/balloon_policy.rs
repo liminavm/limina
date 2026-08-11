@@ -1038,11 +1038,9 @@ mod tests {
     fn pressure(some_avg10: u32, avail_kib: u64, total_kib: u64) -> MemPressure {
         MemPressure {
             some_avg10,
-            some_avg60: 0,
-            full_avg10: 0,
-            full_avg60: 0,
             mem_available_kib: avail_kib,
             mem_total_kib: total_kib,
+            ..Default::default()
         }
     }
 
@@ -1319,6 +1317,7 @@ mod tests {
                 full_avg60: 307,
                 mem_available_kib: 263 * 1024,
                 mem_total_kib: 24870560,
+                ..Default::default()
             };
             assert_eq!(decide(&p, &i), Decision::Set(0), "{mode:?}");
         }

@@ -121,7 +121,7 @@ pub struct Heartbeat {
 
 /// Guest → host memory-pressure report for the M6 PSI autoballoon policy. Sent on an interval over
 /// [`CHANNEL_CONTROL`]; the host moves the balloon target between min and max with hysteresis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
 pub struct MemPressure {
     /// PSI `some` memory pressure over the 10s/60s windows, in hundredths of a percent (`avg*100`,
     /// so 0..=10000). Both `some_*` and `full_*` are 0 when `/proc/pressure/memory` is unavailable
@@ -141,14 +141,31 @@ pub struct MemPressure {
     /// `/proc/meminfo` `MemTotal` in KiB.
     #[n(5)]
     pub mem_total_kib: u64,
+    /// `/proc/meminfo` `MemFree` in KiB. 0 means "not reported" (an agent predating the field, or
+    /// an unreadable meminfo) — consumers MUST treat 0 as absent, never as an empty free pool
+    /// (a live guest's MemFree is never exactly 0).
+    #[n(6)]
+    #[cbor(default)]
+    pub mem_free_kib: u64,
+    /// PSI `full` **IO** pressure (10s/60s windows), hundredths of a percent, from
+    /// `/proc/pressure/io`. Cache starvation shows up here rather than in memory PSI (a guest
+    /// squeezed of page cache thrashes on re-reads with io-full pegged while memory-PSI stays
+    /// modest). 0 when absent.
+    #[n(7)]
+    #[cbor(default)]
+    pub io_full_avg10: u32,
+    #[n(8)]
+    #[cbor(default)]
+    pub io_full_avg60: u32,
 }
 
 impl MemPressure {
-    /// Parse a snapshot from the raw `/proc/pressure/memory` and `/proc/meminfo` contents (the
-    /// guest agent reads the files; this is the pure, host-testable parser). PSI fields are 0 when
-    /// `pressure` is empty (kernel `psi=0`); MemAvailable/MemTotal come from `meminfo`. Tolerant of
-    /// missing fields (default 0).
-    pub fn from_proc(pressure: &str, meminfo: &str) -> MemPressure {
+    /// Parse a snapshot from the raw `/proc/pressure/memory`, `/proc/pressure/io`, and
+    /// `/proc/meminfo` contents (the guest agent reads the files; this is the pure, host-testable
+    /// parser). PSI fields are 0 when the corresponding `pressure` text is empty (kernel `psi=0`
+    /// or unreadable file); MemAvailable/MemTotal/MemFree come from `meminfo`. Tolerant of missing
+    /// fields (default 0).
+    pub fn from_proc(pressure: &str, io_pressure: &str, meminfo: &str) -> MemPressure {
         // A PSI line: "some avg10=1.23 avg60=4.56 avg300=0.00 total=12345"; value is a percent.
         fn avg(line: &str, key: &str) -> u32 {
             line.split_whitespace()
@@ -174,6 +191,10 @@ impl MemPressure {
             .lines()
             .find(|l| l.starts_with("full"))
             .unwrap_or("");
+        let io_full = io_pressure
+            .lines()
+            .find(|l| l.starts_with("full"))
+            .unwrap_or("");
         MemPressure {
             some_avg10: avg(some, "avg10"),
             some_avg60: avg(some, "avg60"),
@@ -181,6 +202,9 @@ impl MemPressure {
             full_avg60: avg(full, "avg60"),
             mem_available_kib: kib(meminfo, "MemAvailable:"),
             mem_total_kib: kib(meminfo, "MemTotal:"),
+            mem_free_kib: kib(meminfo, "MemFree:"),
+            io_full_avg10: avg(io_full, "avg10"),
+            io_full_avg60: avg(io_full, "avg60"),
         }
     }
 }
@@ -471,6 +495,9 @@ mod tests {
             full_avg60: 0,
             mem_available_kib: 5151232,
             mem_total_kib: 6029312,
+            mem_free_kib: 204800,
+            io_full_avg10: 4400,
+            io_full_avg60: 1200,
         };
         let (_, decoded) = round_trip(Message::MemPressure(mp));
         assert_eq!(decoded, Message::MemPressure(mp));
@@ -480,25 +507,109 @@ mod tests {
     fn mem_pressure_parses_psi_and_meminfo() {
         let pressure = "some avg10=1.23 avg60=4.56 avg300=0.00 total=999\n\
                         full avg10=0.50 avg60=0.00 avg300=0.00 total=10\n";
+        let io_pressure = "some avg10=9.99 avg60=8.88 avg300=0.00 total=999\n\
+                           full avg10=44.00 avg60=12.34 avg300=0.00 total=10\n";
         let meminfo = "MemTotal:       6029312 kB\nMemFree:         123 kB\n\
                        MemAvailable:    5151232 kB\n";
-        let mp = MemPressure::from_proc(pressure, meminfo);
+        let mp = MemPressure::from_proc(pressure, io_pressure, meminfo);
         assert_eq!(mp.some_avg10, 123); // 1.23% -> 123 hundredths
         assert_eq!(mp.some_avg60, 456);
         assert_eq!(mp.full_avg10, 50);
         assert_eq!(mp.full_avg60, 0);
         assert_eq!(mp.mem_available_kib, 5151232);
         assert_eq!(mp.mem_total_kib, 6029312);
+        assert_eq!(mp.mem_free_kib, 123);
+        assert_eq!(mp.io_full_avg10, 4400);
+        assert_eq!(mp.io_full_avg60, 1234);
     }
 
     #[test]
     fn mem_pressure_psi_absent_keeps_meminfo() {
-        // psi=0 kernel: /proc/pressure/memory missing -> empty; meminfo still parsed.
-        let mp = MemPressure::from_proc("", "MemTotal: 100 kB\nMemAvailable: 80 kB\n");
+        // psi=0 kernel: /proc/pressure/{memory,io} missing -> empty; meminfo still parsed.
+        let mp = MemPressure::from_proc("", "", "MemTotal: 100 kB\nMemAvailable: 80 kB\n");
         assert_eq!(mp.some_avg10, 0);
         assert_eq!(mp.full_avg60, 0);
+        assert_eq!(mp.io_full_avg10, 0);
         assert_eq!(mp.mem_available_kib, 80);
         assert_eq!(mp.mem_total_kib, 100);
+        assert_eq!(mp.mem_free_kib, 0); // absent from meminfo -> 0 = "not reported"
+    }
+
+    /// Old-agent compat: a payload encoded WITHOUT the `#[cbor(default)]` tail fields
+    /// (`mem_free_kib`, `io_full_*`) must decode into the grown struct with those fields 0.
+    /// `OldMemPressure` is a byte-exact twin of the struct as shipped before the fields grew.
+    #[test]
+    fn mem_pressure_decodes_old_agent_payload() {
+        #[derive(Encode)]
+        struct OldMemPressure {
+            #[n(0)]
+            some_avg10: u32,
+            #[n(1)]
+            some_avg60: u32,
+            #[n(2)]
+            full_avg10: u32,
+            #[n(3)]
+            full_avg60: u32,
+            #[n(4)]
+            mem_available_kib: u64,
+            #[n(5)]
+            mem_total_kib: u64,
+        }
+        let old = OldMemPressure {
+            some_avg10: 123,
+            some_avg60: 456,
+            full_avg10: 50,
+            full_avg60: 7,
+            mem_available_kib: 5151232,
+            mem_total_kib: 6029312,
+        };
+        let bytes = minicbor::to_vec(&old).expect("encode old");
+        let mp: MemPressure = minicbor::decode(&bytes).expect("decode old payload into new struct");
+        assert_eq!(mp.some_avg10, 123);
+        assert_eq!(mp.mem_total_kib, 6029312);
+        assert_eq!(mp.mem_free_kib, 0);
+        assert_eq!(mp.io_full_avg10, 0);
+        assert_eq!(mp.io_full_avg60, 0);
+    }
+
+    /// New-agent → old-supervisor compat: a payload encoded WITH the new tail fields must
+    /// still decode into the pre-growth struct shape (the decoder skips unknown indices).
+    /// A mid-upgrade dogfood host hits exactly this state.
+    #[test]
+    fn mem_pressure_new_payload_decodes_into_old_shape() {
+        #[derive(Debug, PartialEq, Decode)]
+        struct OldMemPressure {
+            #[n(0)]
+            some_avg10: u32,
+            #[n(1)]
+            some_avg60: u32,
+            #[n(2)]
+            full_avg10: u32,
+            #[n(3)]
+            full_avg60: u32,
+            #[n(4)]
+            mem_available_kib: u64,
+            #[n(5)]
+            mem_total_kib: u64,
+        }
+        let new = MemPressure {
+            some_avg10: 123,
+            some_avg60: 456,
+            full_avg10: 50,
+            full_avg60: 7,
+            mem_available_kib: 5151232,
+            mem_total_kib: 6029312,
+            mem_free_kib: 204800,
+            io_full_avg10: 4400,
+            io_full_avg60: 1200,
+        };
+        let bytes = minicbor::to_vec(new).expect("encode new");
+        let old: OldMemPressure =
+            minicbor::decode(&bytes).expect("decode new payload into old shape");
+        assert_eq!(old.some_avg10, 123);
+        assert_eq!(old.full_avg60, 7);
+        assert_eq!(old.mem_available_kib, 5151232);
+        assert_eq!(old.mem_total_kib, 6029312);
     }
 
     #[test]

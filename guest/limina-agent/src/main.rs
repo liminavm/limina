@@ -375,13 +375,14 @@ fn apply_time_sync(host_unix_ns: u64) {
 }
 
 /// Read a one-shot memory-pressure snapshot for the host's M6 autoballoon policy. PSI fields are 0
-/// when `/proc/pressure/memory` is absent (kernel `psi=0`); MemAvailable/MemTotal from
-/// `/proc/meminfo` are the always-present fallback. Returns `None` if meminfo is unreadable. The
-/// parsing lives in `limina_proto::MemPressure::from_proc` (host-testable).
+/// when `/proc/pressure/{memory,io}` are absent (kernel `psi=0`); MemAvailable/MemTotal/MemFree
+/// from `/proc/meminfo` are the always-present fallback. Returns `None` if meminfo is unreadable.
+/// The parsing lives in `limina_proto::MemPressure::from_proc` (host-testable).
 fn read_mem_pressure() -> Option<MemPressure> {
     let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
     let pressure = std::fs::read_to_string("/proc/pressure/memory").unwrap_or_default();
-    Some(MemPressure::from_proc(&pressure, &meminfo))
+    let io_pressure = std::fs::read_to_string("/proc/pressure/io").unwrap_or_default();
+    Some(MemPressure::from_proc(&pressure, &io_pressure, &meminfo))
 }
 
 /// `poll(2)` the socket (and, when present, the uhid fd) for readability, up to
