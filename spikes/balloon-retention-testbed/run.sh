@@ -2,7 +2,8 @@
 # Retention-pool fix-grading testbed driver. See README.md.
 # Usage: ./run.sh <disk.raw> [label]
 # Env: MIX=full|touch|none (default touch), MEM (2G..12G), CPUS (8), SSH_PORT (2233),
-#      PLATEAU_MIN (16), SCRUB=1, KEEP_VM=0
+#      PLATEAU_MIN (16), SCRUB=1, KEEP_VM=0, SOAK_MIN=0 (no-scrub trickle soak:
+#      idle SOAK_MIN, guest touch workload, idle SOAK_MIN again, ballast held)
 set -eu
 SPIKE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$SPIKE/../.." && pwd)
@@ -10,7 +11,7 @@ GAP=$SPIKE/../hv-ledger-gap
 DISK=${1:?usage: run.sh <disk.raw> [label]}
 LABEL=${2:-run}
 MIX=${MIX:-touch} MEM=${MEM:-2G..12G} CPUS=${CPUS:-8} SSH_PORT=${SSH_PORT:-2233}
-PLATEAU_MIN=${PLATEAU_MIN:-16} SCRUB=${SCRUB:-1} KEEP_VM=${KEEP_VM:-0}
+PLATEAU_MIN=${PLATEAU_MIN:-16} SCRUB=${SCRUB:-1} KEEP_VM=${KEEP_VM:-0} SOAK_MIN=${SOAK_MIN:-0}
 STAMP=$(date +%s)
 OUTDIR=$SPIKE/out-$LABEL-$STAMP
 mkdir -p "$OUTDIR"
@@ -116,5 +117,30 @@ if [ "$SCRUB" = 1 ]; then
     sleep 30
     POOL_AFTER=$(pool_g); IC_AFTER=$(last_col 2)
     log "SCRUB RESULT [$LABEL]: ic_bal ${IC_BEFORE}G -> ${IC_AFTER}G; pool ${POOL_BEFORE}G -> ${POOL_AFTER}G"
+fi
+
+# --- Phase 4: no-scrub trickle soak ---------------------------------------
+if [ "$SOAK_MIN" -gt 0 ]; then
+    soak() {
+        local mins=0
+        while [ "$mins" -lt "$1" ]; do
+            sleep 120; mins=$((mins + 2))
+            log "  soak-$2 t+${mins}m ic_bal=$(last_col 2)G pool=$(pool_g)G"
+        done
+    }
+    log "SOAK idle ${SOAK_MIN}m (ballast held)"
+    soak "$SOAK_MIN" idle
+    log "SOAK activity: guest touch workload (2G cache cycle + 3G anon touch)"
+    $SSH 'set -e
+          dd if=/dev/urandom of=/var/tmp/soak.dat bs=1M count=2048 status=none
+          cat /var/tmp/soak.dat > /dev/null
+          rm /var/tmp/soak.dat
+          python3 -c "
+b = bytearray(3 << 30)
+for i in range(0, len(b), 4096): b[i] = 1
+" ' >> "$OUTDIR/mix.log" 2>&1
+    log "SOAK post-activity: ic_bal=$(last_col 2)G pool=$(pool_g)G"
+    soak "$SOAK_MIN" post
+    log "SOAK RESULT [$LABEL]: ic_bal=$(last_col 2)G pool=$(pool_g)G (from ic_bal=${IC_BEFORE}G pool=${POOL_BEFORE}G at plateau)"
 fi
 log "done; data in $OUTDIR"
