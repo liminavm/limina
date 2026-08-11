@@ -948,11 +948,11 @@ mod tests {
     #[test]
     fn trace_parser_reads_the_writer_shape() {
         let jsonl = concat!(
-            r#"{"ts_ms":1000,"mode":"Moderate","some_avg10":0,"some_avg60":0,"full_avg10":0,"full_avg60":0,"avail_kib":4194304,"total_kib":6291456,"host_raw_level":1,"host_avail_pct":80,"host":"normal","host_injected":false,"current_pages":0,"decision":"set","new_target_pages":65536,"cooldown_active":false,"sent":true}"#,
+            r#"{"ts_ms":1000,"mode":"Moderate","some_avg10":0,"some_avg60":0,"full_avg10":0,"full_avg60":0,"avail_kib":4194304,"total_kib":6291456,"host_raw_level":1,"host_avail_pct":80,"host":"normal","host_injected":false,"current_pages":0,"decision":"set","new_target_pages":65536,"cooldown_active":false,"sent":true,"actual_bytes":0,"reclaimed_bytes":0,"heals":0,"released_bytes":0,"remapped_bytes":0,"stray_faults":0}"#,
             "\n",
-            r#"{"ts_ms":2000,"mode":"Moderate","some_avg10":1500,"some_avg60":300,"full_avg10":10,"full_avg60":5,"avail_kib":262144,"total_kib":6291456,"host_raw_level":null,"host_avail_pct":null,"host":"warn","host_injected":true,"current_pages":65536,"decision":"set","new_target_pages":0,"cooldown_active":true,"sent":true}"#,
+            r#"{"ts_ms":2000,"mode":"Moderate","some_avg10":1500,"some_avg60":300,"full_avg10":10,"full_avg60":5,"avail_kib":262144,"total_kib":6291456,"host_raw_level":null,"host_avail_pct":null,"host":"warn","host_injected":true,"current_pages":65536,"decision":"set","new_target_pages":0,"cooldown_active":true,"sent":true,"actual_bytes":268435456,"reclaimed_bytes":1073741824,"heals":12,"released_bytes":1073741824,"remapped_bytes":4194304,"stray_faults":0}"#,
             "\n",
-            r#"{"ts_ms":3000,"mode":"Moderate","some_avg10":0,"some_avg60":0,"full_avg10":0,"full_avg60":0,"avail_kib":4194304,"total_kib":6291456,"host_raw_level":1,"host_avail_pct":80,"host":"normal","host_injected":false,"current_pages":0,"decision":"cooldown","new_target_pages":null,"cooldown_active":true,"sent":false}"#,
+            r#"{"ts_ms":3000,"mode":"Moderate","some_avg10":0,"some_avg60":0,"full_avg10":0,"full_avg60":0,"avail_kib":4194304,"total_kib":6291456,"host_raw_level":1,"host_avail_pct":80,"host":"normal","host_injected":false,"current_pages":0,"decision":"cooldown","new_target_pages":null,"cooldown_active":true,"sent":false,"actual_bytes":null,"reclaimed_bytes":null,"heals":null,"released_bytes":null,"remapped_bytes":null,"stray_faults":null}"#,
             "\ngarbage line\n",
         );
         let trace = parse_trace(jsonl);

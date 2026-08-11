@@ -210,6 +210,18 @@ pub struct BalloonPolicy {
     state: Mutex<State>,
 }
 
+/// One `stats` reply from the worker (all cumulative since boot, bytes unless noted).
+/// `heals`/`released`/`remapped`/`strays` are the stage-2 release/heal counters
+/// (see `hvf::ReleasedRamStats` in the libkrun fork).
+struct WorkerStats {
+    actual_bytes: u64,
+    reclaimed_bytes: u64,
+    heals: u64,
+    released_bytes: u64,
+    remapped_bytes: u64,
+    stray_faults: u64,
+}
+
 struct State {
     /// A kept-open connection to the balloon socket (reconnected on error).
     conn: Option<UnixStream>,
@@ -345,7 +357,14 @@ impl BalloonPolicy {
                 );
             }
         }
-        trace_decision(&mut st, p, &host, &inputs, decision, sent);
+        // Worker stats enrich the journal only: skipped entirely when tracing is off, and
+        // a failed query degrades to null fields, never a stalled or altered policy.
+        let wstats = if st.trace.is_some() {
+            self.query_stats(&mut st)
+        } else {
+            None
+        };
+        trace_decision(&mut st, p, &host, &inputs, decision, sent, wstats.as_ref());
     }
 
     /// Write `target <bytes>` to the balloon socket, reconnecting once on failure. Returns whether
@@ -375,6 +394,59 @@ impl BalloonPolicy {
         }
         false
     }
+
+    /// One `stats` round-trip over the shared connection. Any failure — including a read
+    /// timeout — drops the connection: a late reply left buffered would be read as the NEXT
+    /// tick's answer, silently time-shifting the journal. Dropping instead keeps the
+    /// invariant that an open connection never has a reply in flight.
+    fn query_stats(&self, st: &mut State) -> Option<WorkerStats> {
+        use std::io::BufRead;
+        if st.conn.is_none() {
+            st.conn = UnixStream::connect(&self.socket).ok();
+        }
+        let conn = st.conn.as_mut()?;
+        if writeln!(conn, "stats").and_then(|()| conn.flush()).is_err() {
+            st.conn = None;
+            return None;
+        }
+        if conn
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .is_err()
+        {
+            st.conn = None;
+            return None;
+        }
+        let mut line = String::new();
+        let read = std::io::BufReader::new(&*conn).read_line(&mut line);
+        if read.is_err() || !line.ends_with('\n') {
+            st.conn = None;
+            return None;
+        }
+        let mut s = WorkerStats {
+            actual_bytes: 0,
+            reclaimed_bytes: 0,
+            heals: 0,
+            released_bytes: 0,
+            remapped_bytes: 0,
+            stray_faults: 0,
+        };
+        for tok in line.split_whitespace() {
+            let Some((k, v)) = tok.split_once('=') else {
+                continue;
+            };
+            let v: u64 = v.parse().unwrap_or(0);
+            match k {
+                "actual" => s.actual_bytes = v,
+                "reclaimed" => s.reclaimed_bytes = v,
+                "heals" => s.heals = v,
+                "released" => s.released_bytes = v,
+                "remapped" => s.remapped_bytes = v,
+                "strays" => s.stray_faults = v,
+                _ => {}
+            }
+        }
+        Some(s)
+    }
 }
 
 /// Append one JSON line to the decision journal (no-op without `LIMINA_BALLOON_TRACE`).
@@ -387,6 +459,7 @@ fn trace_decision(
     i: &DecideInputs,
     decision: Decision,
     sent: bool,
+    wstats: Option<&WorkerStats>,
 ) {
     let Some(f) = st.trace.as_mut() else {
         return;
@@ -396,6 +469,7 @@ fn trace_decision(
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let json_opt = |v: Option<i32>| v.map_or("null".to_string(), |v| v.to_string());
+    let json_stat = |v: Option<u64>| v.map_or("null".to_string(), |v| v.to_string());
     let new_target = decision
         .target()
         .map_or("null".to_string(), |t| t.to_string());
@@ -407,7 +481,9 @@ fn trace_decision(
             "\"avail_kib\":{},\"total_kib\":{},",
             "\"host_raw_level\":{},\"host_avail_pct\":{},\"host\":\"{}\",\"host_injected\":{},",
             "\"current_pages\":{},\"decision\":\"{}\",\"new_target_pages\":{},",
-            "\"cooldown_active\":{},\"sent\":{}}}\n"
+            "\"cooldown_active\":{},\"sent\":{},",
+            "\"actual_bytes\":{},\"reclaimed_bytes\":{},\"heals\":{},",
+            "\"released_bytes\":{},\"remapped_bytes\":{},\"stray_faults\":{}}}\n"
         ),
         ts_ms,
         i.mode,
@@ -426,6 +502,12 @@ fn trace_decision(
         new_target,
         cooldown_active,
         sent,
+        json_stat(wstats.map(|w| w.actual_bytes)),
+        json_stat(wstats.map(|w| w.reclaimed_bytes)),
+        json_stat(wstats.map(|w| w.heals)),
+        json_stat(wstats.map(|w| w.released_bytes)),
+        json_stat(wstats.map(|w| w.remapped_bytes)),
+        json_stat(wstats.map(|w| w.stray_faults)),
     );
     if f.write_all(line.as_bytes()).is_err() {
         st.trace = None;
@@ -954,6 +1036,14 @@ mod tests {
             injected: false,
         };
         let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
+        let wstats = WorkerStats {
+            actual_bytes: 1 << 30,
+            reclaimed_bytes: 2 << 30,
+            heals: 7,
+            released_bytes: 3 << 30,
+            remapped_bytes: 1 << 20,
+            stray_faults: 0,
+        };
         trace_decision(
             &mut st,
             &report_pages(0, 4 * GIB_PAGES, MAX),
@@ -961,6 +1051,7 @@ mod tests {
             &i,
             Decision::Set(INFLATE_STEP_PAGES),
             true,
+            Some(&wstats),
         );
         i.cooldown_until = Some(i.now + Duration::from_secs(100));
         trace_decision(
@@ -970,6 +1061,7 @@ mod tests {
             &i,
             Decision::Hold(Hold::Cooldown),
             false,
+            None,
         );
         let out = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -980,7 +1072,10 @@ mod tests {
                 && lines[0].contains(&format!("\"new_target_pages\":{INFLATE_STEP_PAGES}"))
                 && lines[0].contains("\"sent\":true")
                 && lines[0].contains("\"host\":\"normal\"")
-                && lines[0].contains("\"host_raw_level\":2"),
+                && lines[0].contains("\"host_raw_level\":2")
+                && lines[0].contains(&format!("\"actual_bytes\":{}", 1u64 << 30))
+                && lines[0].contains("\"heals\":7")
+                && lines[0].contains("\"stray_faults\":0"),
             "{}",
             lines[0]
         );
@@ -988,7 +1083,8 @@ mod tests {
             lines[1].contains("\"decision\":\"cooldown\"")
                 && lines[1].contains("\"new_target_pages\":null")
                 && lines[1].contains("\"cooldown_active\":true")
-                && lines[1].contains("\"sent\":false"),
+                && lines[1].contains("\"sent\":false")
+                && lines[1].contains("\"heals\":null"),
             "{}",
             lines[1]
         );

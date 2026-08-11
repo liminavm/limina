@@ -830,9 +830,10 @@ fn install_balloon_listener(path: std::path::PathBuf, handle: BalloonControlHand
 }
 
 /// Serve one balloon control connection: `target <bytes>` drives the live balloon, `stats` replies
-/// with `target=<bytes> actual=<bytes> reclaimed=<bytes>` (the commanded target vs the guest's
-/// self-reported size — a gap between the two is the guest failing/refusing to inflate). Reads
-/// until EOF.
+/// with `target=<bytes> actual=<bytes> reclaimed=<bytes> heals=<n> released=<bytes>
+/// remapped=<bytes> strays=<n>` (the commanded target vs the guest's self-reported size — a gap
+/// between the two is the guest failing/refusing to inflate; the rest are the stage-2
+/// release/heal counters). Reads until EOF.
 fn serve_balloon_conn(
     stream: std::os::unix::net::UnixStream,
     handle: BalloonControlHandle,
@@ -865,9 +866,14 @@ fn serve_balloon_conn(
                 let actual_bytes = (stats.actual_pages as u64) << 12;
                 if let Err(e) = writeln!(
                     writer,
-                    "target={} actual={actual_bytes} reclaimed={}",
+                    "target={} actual={actual_bytes} reclaimed={} heals={} released={} \
+                     remapped={} strays={}",
                     target_bytes.load(Ordering::Relaxed),
-                    stats.reclaimed_bytes
+                    stats.reclaimed_bytes,
+                    stats.heals,
+                    stats.released_bytes,
+                    stats.remapped_bytes,
+                    stats.stray_faults
                 )
                 .and_then(|()| writer.flush())
                 {

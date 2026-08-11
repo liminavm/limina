@@ -1420,6 +1420,14 @@ pub struct BalloonStats {
     pub target: u64,
     pub actual: u64,
     pub reclaimed: u64,
+    /// Stage-2 heal faults taken (guest touches on released ranges), cumulative.
+    pub heals: u64,
+    /// Bytes stage-2 unmapped by release, cumulative.
+    pub released: u64,
+    /// Bytes re-validated and re-mapped (heals + deflate reclaims), cumulative.
+    pub remapped: u64,
+    /// Stage-2 translation faults outside every released range (should stay 0).
+    pub strays: u64,
 }
 
 /// How the supervisor (and thus the VM) ended.
@@ -1960,15 +1968,23 @@ impl Guest {
         BufReader::new(&stream)
             .read_line(&mut line)
             .context("reading balloon stats reply")?;
-        // Reply: `target=<bytes> actual=<bytes> reclaimed=<bytes>`.
+        // Reply: `target=<bytes> actual=<bytes> reclaimed=<bytes> heals=<n> released=<bytes>
+        // remapped=<bytes> strays=<n>`.
         let mut stats = BalloonStats::default();
         for tok in line.split_whitespace() {
-            if let Some(v) = tok.strip_prefix("target=") {
-                stats.target = v.parse().unwrap_or(0);
-            } else if let Some(v) = tok.strip_prefix("actual=") {
-                stats.actual = v.parse().unwrap_or(0);
-            } else if let Some(v) = tok.strip_prefix("reclaimed=") {
-                stats.reclaimed = v.parse().unwrap_or(0);
+            let Some((k, v)) = tok.split_once('=') else {
+                continue;
+            };
+            let v: u64 = v.parse().unwrap_or(0);
+            match k {
+                "target" => stats.target = v,
+                "actual" => stats.actual = v,
+                "reclaimed" => stats.reclaimed = v,
+                "heals" => stats.heals = v,
+                "released" => stats.released = v,
+                "remapped" => stats.remapped = v,
+                "strays" => stats.strays = v,
+                _ => {}
             }
         }
         Ok(stats)
