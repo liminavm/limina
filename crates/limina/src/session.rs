@@ -418,6 +418,9 @@ impl WindowedSession {
                             "could not restart the NAT gateway for the reboot: {e:#}; stopping"
                         );
                         window::mark_worker_exited(&monitor_shared);
+                        if resuming {
+                            window::mark_resume_dead(&monitor_shared);
+                        }
                         break;
                     }
                 }
@@ -445,6 +448,9 @@ impl WindowedSession {
                     Err(e) => {
                         log::error!("relaunch after guest reboot failed: {e:#}; stopping");
                         window::mark_worker_exited(&monitor_shared);
+                        if resuming {
+                            window::mark_resume_dead(&monitor_shared);
+                        }
                         break;
                     }
                 };

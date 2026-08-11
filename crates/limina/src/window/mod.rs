@@ -53,8 +53,8 @@ mod present;
 
 pub use lifecycle::{WorkerConn, WorkerIo};
 pub use present::{
-    empty_surface_map, mark_worker_exited, mark_worker_running, mark_worker_suspended,
-    spawn_reader, surface_rendezvous, Shared, SurfaceMap,
+    empty_surface_map, mark_resume_dead, mark_worker_exited, mark_worker_running,
+    mark_worker_suspended, spawn_reader, surface_rendezvous, Shared, SurfaceMap,
 };
 
 // `input` builds the host pointer's default (blank) shape from the cursor module; re-exported
@@ -683,6 +683,22 @@ pub(crate) fn should_park_on_suspend(
     can_park: bool,
 ) -> bool {
     can_park && !close_requested && !stop_requested
+}
+
+/// Did the RESUME's fresh worker die before its first frame? Pure policy for the timer's
+/// Resuming arm. The trap it exists to avoid: during a normal resume the OLD worker's
+/// `exited` flag stays set from the play click until the monitor thread swaps the fresh
+/// worker in and calls `mark_worker_running` — so `exited` alone cannot distinguish "the
+/// swap hasn't happened yet" from "the fresh worker crashed". `epoch > baseline` proves a
+/// swap happened after the click (the flags describe the FRESH worker), and `resume_dead`
+/// covers the respawn never reaching a swap at all (spawn/gateway failure).
+pub(crate) fn resume_worker_died(
+    exited: bool,
+    resume_dead: bool,
+    worker_epoch: u64,
+    epoch_at_click: u64,
+) -> bool {
+    resume_dead || (exited && worker_epoch > epoch_at_click)
 }
 
 define_class!(
@@ -2417,6 +2433,7 @@ pub fn run(
     let timer_view = view.clone();
     let resume_clicked_at: Cell<std::time::Instant> = Cell::new(std::time::Instant::now());
     let resume_frames_baseline: Cell<u64> = Cell::new(0);
+    let resume_epoch_baseline: Cell<u64> = Cell::new(0);
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         // One-shot: the remembered fullscreen, taken on the first tick the window is actually on
         // screen. Not gated on the first frame — the guest is already sized for it, and waiting
@@ -2432,9 +2449,16 @@ pub fn run(
         // worth reclaiming (testcomp/supervisor-retention.sh).
         drain_releases(&timer_surface_map, &timer_cache);
 
-        let (exited, worker_suspended, show_id, frames) = {
+        let (exited, worker_suspended, show_id, frames, worker_epoch, resume_dead) = {
             let s = shared.lock().unwrap();
-            (s.worker_exited, s.worker_suspended, s.show_id, s.frames)
+            (
+                s.worker_exited,
+                s.worker_suspended,
+                s.show_id,
+                s.frames,
+                s.worker_epoch,
+                s.resume_dead,
+            )
         };
 
         // Worker gone (guest powered off, orderly or not): net any process-group
@@ -2508,6 +2532,7 @@ pub fn run(
                         PARK_STATE.with(|p| p.set(ParkPhase::Resuming));
                         resume_clicked_at.set(std::time::Instant::now());
                         resume_frames_baseline.set(frames);
+                        resume_epoch_baseline.set(worker_epoch);
                         let mut ov = timer_overlay.borrow_mut();
                         if let Some(o) = ov.take() {
                             o.remove();
@@ -2531,6 +2556,36 @@ pub fn run(
                 }
             }
             ParkPhase::Resuming => {
+                // The fresh worker died (or was never spawned) before its first frame: the
+                // dogfood 2026-08-10 replay SIGSEGV left the window on "Resuming…" forever
+                // — the Live-gated exit branch above never fires in this phase. Surface
+                // the failure and quit; the snapshot was consumed at spawn (one-shot by
+                // design), so the next start cold-boots.
+                if resume_worker_died(
+                    exited,
+                    resume_dead,
+                    worker_epoch,
+                    resume_epoch_baseline.get(),
+                ) {
+                    log::error!(
+                        "resume: the fresh worker died before its first frame \
+                         (epoch {worker_epoch}, resume_dead {resume_dead}); quitting"
+                    );
+                    let alert = NSAlert::new(mtm);
+                    alert.setMessageText(&NSString::from_str(&format!(
+                        "“{title}” failed to resume"
+                    )));
+                    alert.setInformativeText(&NSString::from_str(
+                        "The VM worker crashed while restoring the suspended session. \
+                         The VM is now powered off; starting it again will boot fresh.",
+                    ));
+                    alert.addButtonWithTitle(&NSString::from_str("OK"));
+                    alert.runModal();
+                    save_state_final(timer_state_path.as_deref(), &window);
+                    crate::gateway::cleanup();
+                    crate::control::cleanup();
+                    std::process::exit(1);
+                }
                 if frames > resume_frames_baseline.get() {
                     PARK_STATE.with(|p| p.set(ParkPhase::Live));
                     if let Some(o) = timer_overlay.borrow_mut().take() {
@@ -2993,6 +3048,32 @@ mod tests {
         // No resume channel = parking would strand the window (the play click could never
         // respawn a worker) — always quit.
         assert!(!should_park_on_suspend(false, false, false));
+    }
+
+    #[test]
+    fn a_resume_workers_death_is_detected_without_racing_the_swap() {
+        // The dogfood 2026-08-10 hang: the resume worker SIGSEGVed during the venus journal
+        // replay, and the window sat on "Resuming…" forever — the dead-worker exit branch is
+        // gated on ParkPhase::Live. The detection must not fire in the pre-swap window,
+        // where the OLD worker's exited flag is still set but the fresh worker is fine.
+        //
+        // args: (exited, resume_dead, worker_epoch, epoch_at_click)
+        assert!(
+            !resume_worker_died(true, false, 3, 3),
+            "the old worker's stale exited flag (no swap yet) must not read as a death"
+        );
+        assert!(
+            !resume_worker_died(false, false, 4, 3),
+            "a swapped-in, running fresh worker is not a death"
+        );
+        assert!(
+            resume_worker_died(true, false, 4, 3),
+            "exited set again AFTER the swap = the fresh worker died"
+        );
+        assert!(
+            resume_worker_died(false, true, 3, 3),
+            "a respawn that never reached a swap (spawn/gateway failure) is a death"
+        );
     }
 
     #[test]

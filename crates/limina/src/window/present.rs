@@ -266,6 +266,15 @@ pub struct Shared {
     /// Set (before `worker_exited`) when the worker exited BY SUSPENDING (exit 126): the
     /// window's exit path saves the last-presented frame as the restore splash (M9.4).
     pub(crate) worker_suspended: bool,
+    /// Bumped by [`mark_worker_running`] on every respawn swap. Lets the window tell "the
+    /// OLD worker's exit flags haven't been cleared yet" (epoch unchanged since the play
+    /// click) from "the FRESH resume worker died" (epoch advanced, exited set again) —
+    /// the two states are otherwise identical during a resume.
+    pub(crate) worker_epoch: u64,
+    /// Set by the monitor thread when a resume respawn is abandoned before any swap
+    /// (spawn or gateway-restart failure): the window must not wait for a worker that
+    /// will never come.
+    pub(crate) resume_dead: bool,
     /// Count of *presented frames* (`frame` messages), as opposed to `gen`, which also bumps
     /// on surface geometry. The restore overlay comes down on the first real frame, not on
     /// the fresh worker's surface announcement (which would flash black under the spinner).
@@ -315,6 +324,15 @@ pub fn mark_worker_running(shared: &Arc<Mutex<Shared>>) {
     let mut s = shared.lock().unwrap();
     s.worker_exited = false;
     s.worker_suspended = false;
+    s.worker_epoch += 1;
+    s.resume_dead = false;
+}
+
+/// A resume respawn was abandoned before any swap (spawn/gateway failure): tell the window
+/// so it can surface the failure instead of showing "Resuming…" over a worker that will
+/// never arrive. Called by the monitor thread on its resume-relaunch error paths.
+pub fn mark_resume_dead(shared: &Arc<Mutex<Shared>>) {
+    shared.lock().unwrap().resume_dead = true;
 }
 
 /// Read the control channel on a background thread, updating `shared`. Consumes (owns) `fd` —
