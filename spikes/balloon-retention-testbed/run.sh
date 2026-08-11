@@ -1,7 +1,9 @@
 #!/bin/bash
 # Retention-pool fix-grading testbed driver. See README.md.
 # Usage: ./run.sh <disk.raw> [label]
-# Env: MIX=full|touch|none (default touch), MEM (2G..12G), CPUS (8), SSH_PORT (2233),
+# Env: MIX=full|touch|cache|none (default touch; cache = warm KEPT page cache + anon
+#      churn — the clamp-binding profile: MemFree low, MemAvailable high), MEM (2G..12G),
+#      CPUS (8), SSH_PORT (2233),
 #      PLATEAU_MIN (16), SCRUB=1, KEEP_VM=0, SOAK_MIN=0 (no-scrub trickle soak:
 #      idle SOAK_MIN, guest touch workload, idle SOAK_MIN again, ballast held),
 #      POLICY_SCRUB=0 (live oracle for the supervisor's pressure-triggered scrub: boots
@@ -100,6 +102,15 @@ touch) log "pool build: synthetic dirty-then-free (cache + anon)"
              dd if=/dev/urandom of=/var/tmp/pool.dat bs=1M count=4096 status=none
              cat /var/tmp/pool.dat > /dev/null
              rm /var/tmp/pool.dat
+             python3 -c "
+b = bytearray(3 << 30)
+for i in range(0, len(b), 4096): b[i] = 1
+" ' >> "$OUTDIR/mix.log" 2>&1 ;;
+cache) log "pool build: warm KEPT cache (5G file, read twice) + 3G anon churn"
+       $SSH 'set -e
+             dd if=/dev/urandom of=/var/tmp/cache.dat bs=1M count=5120 status=none
+             cat /var/tmp/cache.dat > /dev/null
+             cat /var/tmp/cache.dat > /dev/null
              python3 -c "
 b = bytearray(3 << 30)
 for i in range(0, len(b), 4096): b[i] = 1
