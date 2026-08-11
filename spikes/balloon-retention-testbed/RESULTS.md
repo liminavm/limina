@@ -126,3 +126,13 @@ proven (recovery). Take 1–3 traps for the next runner: ab images lack the agen
 `out-<label>-<ts>/balloon.sock` must stay under ~100 chars (SUN_LEN — run.sh now
 fails fast); detach runs >30 min with `nohup … & disown` (the background-task
 reaper killed takes 1 and 3... take 1 was the suite).
+
+**Protocol change (08-11 tuning arc, limina 59e40ee):** the scrub is now mode-keyed
+(Light = critical trigger / 60 min cooldown / BOUNDED depth; Moderate = warn / 30 min /
+bounded; Aggressive = warn / 15 min / full), so this oracle run's warn-flip-at-30-min
+protocol no longer matches `--reclaim light`. run.sh now derives the flip level and
+wait from `SCRUB_MODE` (default light → critical at 3630 s). Bounded scrubs need an
+agent that reports MemFree; against an older agent they degrade to eager-full, so the
+cycle shape above still holds. NEXT run here: grade the clamp + bounded scrub against
+a POPULATED pool (MIX=full on an enhanced clone with the NEW agent, moderate mode) —
+that's the profile where the 08-11 clamp actually binds.
