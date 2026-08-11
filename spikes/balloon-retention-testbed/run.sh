@@ -29,7 +29,7 @@ balloon() { printf '%s\n' "$1" | nc -U "$SOCK" -w 2 2>/dev/null; }
 actual_bytes() { balloon stats | tr ' ' '\n' | awk -F= '/^actual/{print $2}'; }
 last_col() { tail -1 "$CSV" | cut -d, -f"$1"; }
 pool_g() { # ic_bal − guest live (MemTotal − MemAvailable), GiB
-    tail -1 "$CSV" | awk -F, '{ printf "%.2f", $2 - ($11 - $13)/1048576 }'
+    tail -1 "$CSV" | awk -F, '{ printf "%.2f", $2 - ($14 - $16)/1048576 }'
 }
 
 cleanup() {

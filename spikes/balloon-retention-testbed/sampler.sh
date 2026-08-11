@@ -8,7 +8,7 @@
 set -u
 pid=$1 sock=$2 port=$3 out=$4
 dump="$(dirname "$0")/../hv-ledger-gap/ledger-dump"
-echo "ts,ic_bal_g,ic_cred_g,ic_deb_g,int_bal_g,reus_bal_g,reus_cred_g,pf_g,stored_pages,balloon_actual_b,g_total_kib,g_free_kib,g_avail_kib,g_cached_kib" > "$out"
+echo "ts,ic_bal_g,ic_cred_g,ic_deb_g,int_bal_g,reus_bal_g,reus_cred_g,pf_g,stored_pages,balloon_actual_b,released_b,remapped_b,heals,g_total_kib,g_free_kib,g_avail_kib,g_cached_kib" > "$out"
 while kill -0 "$pid" 2>/dev/null; do
     ts=$(date +%s)
     row=$("$dump" "$pid" -a 2>/dev/null | awk '
@@ -18,9 +18,11 @@ while kill -0 "$pid" 2>/dev/null; do
         /^phys_footprint /{pf=$4}
         END{printf "%s,%s,%s,%s,%s,%s,%s", ic, icc, icd, ib, rb, rc, pf}')
     stored=$(vm_stat | awk '/stored in compressor/{gsub("\\.","",$5); print $5}')
-    actual=$(printf 'stats\n' | nc -U "$sock" -w 2 2>/dev/null | tr ' ' '\n' | awk -F= '/^actual/{print $2}')
+    bal=$(printf 'stats\n' | nc -U "$sock" -w 2 2>/dev/null | tr ' ' '\n' | awk -F= '
+        /^actual/{a=$2} /^released/{r=$2} /^remapped/{m=$2} /^heals/{h=$2}
+        END{printf "%s,%s,%s,%s", a, r, m, h}')
     guest=$(ssh -o ConnectTimeout=3 -o BatchMode=yes -p "$port" claude@127.0.0.1 \
         "awk '/^MemTotal|^MemFree|^MemAvailable|^Cached:/{printf \"%s,\", \$2}' /proc/meminfo" 2>/dev/null)
-    echo "$ts,$row,$stored,${actual:-},${guest%,}" >> "$out"
+    echo "$ts,$row,$stored,${bal:-,,,},${guest%,}" >> "$out"
     sleep 10
 done

@@ -56,3 +56,37 @@ The attractive refinement: zero only on *deflate/scrub-path* releases (balloon
 inflate queue) and leave FRQ releases plain — settles the pool when a scrub
 runs without the steady-state overhead. The balloon device can tell the two
 queues apart.
+
+## No-scrub soak A/B (`SCRUB=0 SOAK_MIN=10`, 08-11): memset without a scrub buys nothing
+
+Protocol: plateau, then (ballast held): 10 m idle → guest touch workload
+(2G cache cycle + 3G anon touch, ~6-11 s) → 10 m idle.
+
+| arm | plateau pool | idle slope | post-touch pool | pf idle | pf post-touch |
+|---|---|---|---|---|---|
+| soak-ctl | 9.02G | −0.05G/10m | 3.61G (settled ≤2 m, then flat) | 14.36G | **14.45G (flat)** |
+| soak-on | 10.79G | −0.12G/10m | 3.69G (settled ≤2 m, then flat) | 18.90G | 15.96G |
+
+- **Pool endpoint identical** (3.61 vs 3.69G) — without a scrub, memset does not
+  change where guest activity lands the ic-based pool metric.
+- **Footprint: memset strictly worse at every phase** of the no-scrub protocol
+  (18.9 vs 14.4 idle; 16.0 vs 14.4 post-activity).
+- **The metric caveat this run exposed:** in the control, the touch-driven
+  ic_bal drop (9.68 → 4.32G) left pf FLAT at ~14.4G — int_bal rose 4.7 → 10.1G
+  in the same tick. Guest re-touches *decompress* dead content into residency;
+  the dead-dirty total billed to the worker is unchanged, it just changes form.
+  `pool = ic_bal − guest_live` only counts the COMPRESSED share, so
+  activity-driven "drain" of the metric is largely accounting migration, not
+  memory returned to the host. Read pf alongside pool for any recovery claim.
+  (This also reinterprets the dogfood 17.4 → 6.6G drain observation: evidence
+  the content is guest-reachable, NOT evidence of recovery.)
+- The only intervention so far that actually shrinks pf is the scrub
+  (14.5 → 6.90G control, → 8.99G-falling memset). After the workload exited,
+  control int_bal and reus_bal sat flat for 10 minutes — nothing further was
+  reported/settled post-exit; the drained content reformed resident. How much
+  FPR released *during* the touch window is underdetermined from these columns
+  (the cache cycle writes fresh pages, so int-arithmetic can't isolate it, and
+  reus_bal only shows releases whose pages were resident when marked — which is
+  why the memset arm shows +3.1G there and the control +0.4G without implying
+  asymmetric FPR behavior). The sampler now records the balloon's
+  released/remapped/heals counters so the next soak answers this directly.
