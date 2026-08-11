@@ -483,6 +483,12 @@ the reuse event — deflate goes through our queue handler — so prompt
 re-billing there is a one-liner today, no unmap machinery; only FRQ needs
 the unmap+fault to get any event at all.
 
+→ **IMPLEMENTED (2026-08-10, same night): libkrun fork 1763801 + 7d98528 + d1b0a5a
+(`hvf::ReleasedRam`), pinned in the manifest; mechanism spike =
+`spikes/balloon-unmap-fault/` (GREEN); L1 guard =
+`released_pages_heal_when_the_guest_reuses_them` in `crates/limina-test/tests/balloon.rs`.
+Full HVF suite GREEN 2026-08-11: 103/103 passed at this pin.**
+
 ### Round 9 (2026-08-10): the race-model correction (user's) — the scan keeps a trampled page by LUCK, not contract; fundamentals restated
 
 **The challenge**: rounds 7–8c drifted into treating xnu's scan behavior as a

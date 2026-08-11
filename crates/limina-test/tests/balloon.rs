@@ -181,3 +181,166 @@ fn free_page_reporting_returns_memory_to_the_host() {
         .expect("shutting down the guest");
     eprintln!("teardown outcome: {outcome:?}");
 }
+
+/// The FRQ stage-2 unmap fix (spikes/hv-ledger-gap round 8c → libkrun `ReleasedRam`): released
+/// pages are unmapped from the guest, so the guest's spec-sanctioned reuse of reported-free pages
+/// takes a stage-2 fault the vCPU HEALS (`MADV_FREE_REUSE` + remap + retry) instead of silently
+/// trampling pages the OS considers disposable.
+///
+/// Sequence: fault 2 GiB in the guest → free it → wait for the release (worker footprint drops;
+/// with the unmap in place that reclaim now implies the stage-2 unmap happened) → fault 2 GiB
+/// AGAIN with a pattern and verify every byte in-guest. The re-allocation draws from the very
+/// pages just released, so it storms the heal path; the pattern verify proves the healed pages
+/// carry exactly what the guest wrote (no tearing against the retried instruction, no stale
+/// content). The worker log must show `balloon: stage-2 heal` — RED before the fix (the line
+/// doesn't exist; the reuse is an invisible trample), GREEN after.
+#[test]
+fn released_pages_heal_when_the_guest_reuses_them() {
+    if !limina_test::require_hvf_or_skip("released_pages_heal_when_the_guest_reuses_them") {
+        return;
+    }
+
+    let cfg = match GuestConfig::baseline_fedora_from_env() {
+        Ok(mut cfg) => {
+            cfg.ram_mib = 6144;
+            cfg.with_net()
+                .with_supervisor_arg("--balloon-free-page-reporting")
+                .with_supervisor_log()
+                // The heal counter logs at info from the hvf crate (lib target `krun_hvf` —
+                // dependents rename it to `hvf`, but log targets use the compiled crate name);
+                // the worker defaults to warn.
+                .with_env("RUST_LOG", "warn,krun_hvf=info")
+        }
+        Err(e) => {
+            eprintln!("SKIPPED released_pages_heal_when_the_guest_reuses_them: {e}");
+            return;
+        }
+    };
+    eprintln!(
+        "booting stock 4 KiB F44 baseline (headless, NAT) for a {} MiB release→reuse→heal cycle",
+        mib(ALLOC_BYTES)
+    );
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    let banner = guest
+        .wait_for_ssh_banner(Duration::from_secs(300))
+        .expect("guest sshd never became reachable through gvproxy");
+    eprintln!("guest SSH up: {banner}");
+
+    let f0 = guest
+        .worker_phys_footprint()
+        .expect("reading worker footprint");
+
+    // Round 1: fault the pages in, then free them, so page-reporting releases them (stage-2
+    // unmap + MADV_FREE_REUSABLE). The footprint drop is the proof the release actually ran —
+    // without it the heal assertion below would be vacuous.
+    let alloc_py = "import mmap,sys,time\n\
+        n=int(sys.argv[1]); hold=int(sys.argv[2])\n\
+        b=mmap.mmap(-1,n)\n\
+        chunk=1<<20; buf=b'\\xab'*chunk\n\
+        o=0\n\
+        while o<n:\n    b[o:o+chunk]=buf; o+=chunk\n\
+        time.sleep(hold)\n";
+    guest
+        .ssh_exec(&format!(
+            "cat > /tmp/alloc.py <<'PY'\n{alloc_py}PY\necho wrote"
+        ))
+        .expect("writing the guest allocator");
+    let pid = guest
+        .ssh_exec(&format!(
+            "nohup python3 /tmp/alloc.py {ALLOC_BYTES} 60 >/dev/null 2>&1 </dev/null & echo $!"
+        ))
+        .expect("launching the guest allocator");
+    let pid = pid.trim().to_string();
+
+    std::thread::sleep(Duration::from_secs(15));
+    let f1 = guest
+        .worker_phys_footprint()
+        .expect("reading worker footprint");
+    assert!(
+        f1.saturating_sub(f0) >= RISE_MIN,
+        "guest allocation did not raise the worker footprint (got +{} MiB) — the differential \
+         isn't reaching the system under test",
+        mib(f1.saturating_sub(f0))
+    );
+
+    guest
+        .ssh_exec(&format!(
+            "kill {pid} 2>/dev/null; sudo sh -c 'echo 1 > /proc/sys/vm/compact_memory' 2>/dev/null; echo freed"
+        ))
+        .expect("freeing the guest allocation");
+
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut lowest = f1;
+    loop {
+        std::thread::sleep(Duration::from_secs(3));
+        let cur = guest
+            .worker_phys_footprint()
+            .expect("reading worker footprint");
+        lowest = lowest.min(cur);
+        if f1.saturating_sub(lowest) >= RECLAIM_MIN || Instant::now() >= deadline {
+            break;
+        }
+    }
+    let reclaimed = f1.saturating_sub(lowest);
+    assert!(
+        reclaimed >= RECLAIM_MIN,
+        "release never happened (worker footprint fell only {} MiB of the {} MiB freed) — \
+         nothing was unmapped, so a reuse cycle would heal nothing",
+        mib(reclaimed),
+        mib(ALLOC_BYTES)
+    );
+    eprintln!(
+        "release confirmed ({} MiB reclaimed); re-faulting {} MiB with a verified pattern",
+        mib(reclaimed),
+        mib(ALLOC_BYTES)
+    );
+
+    // Round 2: the guest reuses the released pages, writing a pattern and verifying every byte.
+    // Every touched released page takes a stage-2 fault the vCPU must heal; a wrong heal (bad
+    // remap, lost retry, stale mapping) surfaces as CORRUPT or a wedged guest.
+    let verify_py = "import mmap,sys\n\
+        n=int(sys.argv[1])\n\
+        b=mmap.mmap(-1,n)\n\
+        chunk=1<<20; buf=b'\\x5a'*chunk\n\
+        o=0\n\
+        while o<n:\n    b[o:o+chunk]=buf; o+=chunk\n\
+        o=0\n\
+        while o<n:\n    assert b[o:o+chunk]==buf,('CORRUPT at',o); o+=chunk\n\
+        print('VERIFIED',n)\n";
+    guest
+        .ssh_exec(&format!(
+            "cat > /tmp/verify.py <<'PY'\n{verify_py}PY\necho wrote"
+        ))
+        .expect("writing the guest verifier");
+    let verdict = guest
+        .ssh_exec(&format!("python3 /tmp/verify.py {ALLOC_BYTES}"))
+        .expect(
+            "the release→reuse verification failed in the guest — either the heal path broke \
+             the VM (wedge/death) or the healed pages did not carry the guest's writes \
+             (AssertionError CORRUPT)",
+        );
+    assert!(
+        verdict.contains("VERIFIED"),
+        "guest data integrity check failed across the release→reuse cycle: {verdict}"
+    );
+    eprintln!(
+        "guest verified {} MiB across the reuse cycle",
+        mib(ALLOC_BYTES)
+    );
+
+    // The heal oracle: the worker logs its first stage-2 heal (and every 256th) at info. The
+    // reuse of ~2 GiB of released RAM cannot complete without heals.
+    guest
+        .wait_for_supervisor_log("balloon: stage-2 heal", Duration::from_secs(10))
+        .expect(
+            "the guest reused released pages but the worker never healed a stage-2 fault — \
+             either the pages were never unmapped (the pre-fix trample) or the heal log is gone",
+        );
+    eprintln!("stage-2 heal confirmed in the worker log");
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(15))
+        .expect("shutting down the guest");
+    eprintln!("teardown outcome: {outcome:?}");
+}
