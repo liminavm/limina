@@ -9,11 +9,19 @@
 //! libkrun / limina-vmm; *this* is the policy that decides when and how much. The rule is simple and
 //! conservative: release fast under pressure (always safe), reclaim gradually when the guest is idle
 //! with memory to spare. The thresholds are starting points, not a tuned policy.
+//!
+//! Besides the reactive target loop, the policy runs a **pressure-triggered scrub**
+//! (`spikes/balloon-retention-testbed/`): one eager full inflate → hold → deflate cycle. Inflating
+//! routes guest-freed pages through the release path (unmap), which settles the *retention pool* —
+//! content the guest dirtied then freed that the host compressor keeps billing to the worker — and
+//! is the only measured lever that shrinks phys_footprint (14.5 → 6.9 G on the testbed). The cost,
+//! accepted for now, is a guest page-cache dump per cycle; [`scrub_due`]'s conditions keep it rare
+//! and host-need-driven. `LIMINA_BALLOON_SCRUB=0` disables it.
 
 use std::io::Write;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use limina_proto::MemPressure;
@@ -36,6 +44,34 @@ const INFLATE_STEP_PAGES: u32 = 256 * PAGES_PER_MIB;
 /// After a pressure-triggered release, don't re-inflate for this long: a blowout proves the guest
 /// is actively using its memory, and each squeeze/release cycle costs it GiBs of disk swap.
 const RELEASE_COOLDOWN: Duration = Duration::from_secs(300);
+
+/// Minimum time between scrub cycles — and, because the timer starts armed at construction, the
+/// minimum uptime before the first one (never scrub a freshly booted VM; this also keeps the
+/// bench scenarios, which inject host Warn/Critical for minutes at a time, scrub-free).
+const SCRUB_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+/// Don't scrub when the balloon can grow by less than this (pages; 512 MiB): a near-full balloon
+/// means the freed pages already went through the release path — there is no pool to settle.
+const SCRUB_MIN_INFLATE: u32 = 512 * PAGES_PER_MIB;
+/// Stop waiting for the inflate after this long. `target = room` is usually unreachable (the
+/// guest's live set bounds it), and a held gap is the driver's permanent 5 Hz retry loop — it
+/// must be bounded, never left standing.
+const SCRUB_INFLATE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Consecutive stats reads with no inflate progress that end the inflate early (reports arrive
+/// ~1 s apart, so ~10 s at a plateau) — no point burning the full timeout once the guest has
+/// given all it will give.
+const SCRUB_STALL_TICKS: u32 = 10;
+/// How long the fully-inflated balloon is held before deflating, giving the host's pageout scan
+/// a beat to finish settling the freshly-released ranges.
+const SCRUB_HOLD: Duration = Duration::from_secs(15);
+/// Stop waiting for the deflate to converge after this long.
+const SCRUB_DEFLATE_TIMEOUT: Duration = Duration::from_secs(60);
+/// The deflate counts as converged within this much of the resume target (bytes).
+const SCRUB_DONE_SLACK: u64 = 64 << 20;
+/// Hard deadline for a whole scrub, enforced by a detached watchdog thread: the tick machinery
+/// runs on guest pressure reports, and the inflate itself can kill the reporter (an agent
+/// thrashed out of its heartbeat) — a full balloon must never strand the guest at min RAM.
+/// Comfortably above inflate-timeout + hold + deflate-timeout, so ticks always finish first.
+const SCRUB_WATCHDOG: Duration = Duration::from_secs(300);
 
 /// 4 KiB balloon pages per MiB.
 pub const PAGES_PER_MIB: u32 = 256;
@@ -207,7 +243,10 @@ pub struct BalloonPolicy {
     mode: ReclaimMode,
     /// The worker's balloon control socket (`target <bytes>` / `stats`).
     socket: PathBuf,
-    state: Mutex<State>,
+    /// `LIMINA_BALLOON_SCRUB=0` kill-switch for the scrub cycle (field safety valve).
+    scrub_enabled: bool,
+    /// Shared with the scrub watchdog threads — the only other holders.
+    state: Arc<Mutex<State>>,
 }
 
 /// One `stats` reply from the worker (all cumulative since boot, bytes unless noted).
@@ -231,8 +270,47 @@ struct State {
     last_change: Option<Instant>,
     /// No inflation before this instant (armed on every high-pressure report).
     cooldown_until: Option<Instant>,
+    /// In-flight scrub cycle, if any. While active it owns the balloon target; the normal
+    /// [`decide`] path is bypassed.
+    scrub: Option<Scrub>,
+    /// Bumped per scrub start; see [`Scrub::gen`].
+    scrub_gen: u64,
+    /// End of the last scrub cycle. Initialized to construction time so a fresh VM never
+    /// scrubs before [`SCRUB_COOLDOWN`] of uptime.
+    last_scrub_end: Instant,
     /// `LIMINA_BALLOON_TRACE` decision journal: one JSON line per consumed report.
     trace: Option<std::fs::File>,
+}
+
+/// One scrub cycle in flight (see [`scrub_due`] and [`BalloonPolicy::scrub_tick`]).
+struct Scrub {
+    phase: ScrubPhase,
+    phase_since: Instant,
+    /// The pre-scrub target the deflate returns to (pages).
+    resume_pages: u32,
+    /// Monotonic id so the watchdog thread can tell whether the scrub it armed for is still the
+    /// one in flight: a finished or *aborted* scrub must never be "restored" to `resume_pages` —
+    /// after an abort the guest just proved it needs its memory.
+    gen: u64,
+    /// Progress tracking for the inflate stall detector.
+    last_actual_bytes: u64,
+    stall_ticks: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScrubPhase {
+    Inflating,
+    Holding,
+    Deflating,
+}
+
+/// Verdict of one scrub tick (pure; see [`scrub_step`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScrubStep {
+    Stay,
+    ToHolding,
+    ToDeflating,
+    Done,
 }
 
 impl BalloonPolicy {
@@ -301,13 +379,19 @@ impl BalloonPolicy {
             max_pages,
             mode,
             socket,
-            state: Mutex::new(State {
+            scrub_enabled: std::env::var("LIMINA_BALLOON_SCRUB")
+                .ok()
+                .is_none_or(|v| v.trim() != "0"),
+            state: Arc::new(Mutex::new(State {
                 conn: None,
                 target_pages: 0,
                 last_change: None,
                 cooldown_until: None,
+                scrub: None,
+                scrub_gen: 0,
+                last_scrub_end: Instant::now(),
                 trace,
-            }),
+            })),
         }
     }
 
@@ -329,8 +413,30 @@ impl BalloonPolicy {
         let now = Instant::now();
         // A high-pressure or starvation report arms the re-inflation cooldown whether or not
         // there is a balloon to release: the guest just proved it needs its memory.
-        if p.some_avg10 >= PRESSURE_HIGH || guest_starved(p) {
+        let acute = p.some_avg10 >= PRESSURE_HIGH || guest_starved(p);
+        if acute {
             st.cooldown_until = Some(now + RELEASE_COOLDOWN);
+            // An in-flight scrub is abandoned, not paused: falling through lets the normal
+            // release decision hand the memory back this same tick.
+            abort_scrub(&mut st, now);
+        }
+        if st.scrub.is_some() {
+            self.scrub_tick(&mut st, now, room);
+            return;
+        }
+        if self.scrub_enabled
+            && scrub_due(
+                host.blended,
+                acute,
+                st.target_pages,
+                room,
+                st.cooldown_until,
+                st.last_scrub_end,
+                now,
+            )
+        {
+            self.start_scrub(&mut st, now, room);
+            return;
         }
         let inputs = DecideInputs {
             mode: self.mode,
@@ -345,7 +451,7 @@ impl BalloonPolicy {
         let decision = decide(p, &inputs);
         let mut sent = false;
         if let Decision::Set(new_target) = decision {
-            sent = self.send_target(&mut st, new_target);
+            sent = send_target(&self.socket, &mut st, new_target);
             if sent {
                 st.target_pages = new_target;
                 st.last_change = Some(now);
@@ -367,32 +473,124 @@ impl BalloonPolicy {
         trace_decision(&mut st, p, &host, &inputs, decision, sent, wstats.as_ref());
     }
 
-    /// Write `target <bytes>` to the balloon socket, reconnecting once on failure. Returns whether
-    /// the command went out.
-    fn send_target(&self, st: &mut State, pages: u32) -> bool {
-        let bytes = (pages as u64) << 12;
-        for attempt in 0..2 {
-            if st.conn.is_none() {
-                match UnixStream::connect(&self.socket) {
-                    Ok(c) => st.conn = Some(c),
-                    Err(e) => {
-                        if attempt == 1 {
-                            log::warn!("autoballoon: connect {:?}: {e}", self.socket);
-                        }
-                        continue;
+    /// Begin a scrub cycle: eager full inflate (the page-cache dump is the accepted cost), hold,
+    /// deflate back to the pre-scrub target. Driven forward by [`Self::scrub_tick`] on subsequent
+    /// reports; the watchdog thread is the only other exit.
+    fn start_scrub(&self, st: &mut State, now: Instant, room: u32) {
+        let resume_pages = st.target_pages;
+        if !send_target(&self.socket, st, room) {
+            return; // still due — retried on the next report
+        }
+        st.target_pages = room;
+        st.last_change = Some(now);
+        st.scrub_gen += 1;
+        let gen = st.scrub_gen;
+        st.scrub = Some(Scrub {
+            phase: ScrubPhase::Inflating,
+            phase_since: now,
+            resume_pages,
+            gen,
+            last_actual_bytes: 0,
+            stall_ticks: 0,
+        });
+        trace_scrub(st, "start", gen, resume_pages, None, None);
+        log::warn!("autoballoon: scrub start (inflate to {room} pages, resume {resume_pages})");
+        self.spawn_scrub_watchdog(gen, resume_pages);
+    }
+
+    /// Advance an in-flight scrub one report-tick. Every phase advances on timeout alone —
+    /// worker stats are the fast path, never load-bearing (a failed stats query must not stall
+    /// the cycle with the balloon fully inflated).
+    fn scrub_tick(&self, st: &mut State, now: Instant, room: u32) {
+        let actual = self.query_stats(st).map(|w| w.actual_bytes);
+        let Some(scrub) = st.scrub.as_mut() else {
+            return;
+        };
+        if scrub.phase == ScrubPhase::Inflating {
+            match actual {
+                Some(a) if a > scrub.last_actual_bytes => {
+                    scrub.last_actual_bytes = a;
+                    scrub.stall_ticks = 0;
+                }
+                Some(_) => scrub.stall_ticks += 1,
+                None => {}
+            }
+        }
+        let (phase, phase_since, gen, resume_pages, stall_ticks) = (
+            scrub.phase,
+            scrub.phase_since,
+            scrub.gen,
+            scrub.resume_pages,
+            scrub.stall_ticks,
+        );
+        let target_bytes = (room as u64) << 12;
+        let step = scrub_step(
+            phase,
+            now.duration_since(phase_since),
+            actual,
+            target_bytes,
+            (resume_pages as u64) << 12,
+            stall_ticks,
+        );
+        match step {
+            ScrubStep::Stay => {}
+            ScrubStep::ToHolding => {
+                if let Some(s) = st.scrub.as_mut() {
+                    s.phase = ScrubPhase::Holding;
+                    s.phase_since = now;
+                }
+                // The reached fraction distinguishes "completed" from "timed out at 60%" for a
+                // field debugger without timestamp correlation.
+                let pct =
+                    actual.map(|a| a.min(target_bytes).saturating_mul(100) / target_bytes.max(1));
+                trace_scrub(st, "hold", gen, resume_pages, actual, pct);
+            }
+            ScrubStep::ToDeflating => {
+                // Only advance once the deflate command actually went out; a failed send leaves
+                // the phase at Holding, whose elapsed timer retries this transition every tick
+                // (and the watchdog remains the backstop).
+                if send_target(&self.socket, st, resume_pages) {
+                    st.target_pages = resume_pages;
+                    st.last_change = Some(now);
+                    if let Some(s) = st.scrub.as_mut() {
+                        s.phase = ScrubPhase::Deflating;
+                        s.phase_since = now;
                     }
+                    trace_scrub(st, "deflate", gen, resume_pages, actual, None);
                 }
             }
-            let conn = st.conn.as_mut().unwrap();
-            if writeln!(conn, "target {bytes}")
-                .and_then(|()| conn.flush())
-                .is_ok()
-            {
-                return true;
+            ScrubStep::Done => {
+                st.scrub = None;
+                st.last_scrub_end = now;
+                trace_scrub(st, "done", gen, resume_pages, actual, None);
+                log::warn!("autoballoon: scrub done (resumed {resume_pages} pages)");
             }
-            st.conn = None; // broken pipe — drop and retry once
         }
-        false
+    }
+
+    /// The scrub's independent exit: after [`SCRUB_WATCHDOG`], if *this* scrub (by generation)
+    /// is somehow still in flight — the report stream died mid-scrub, so ticks stopped — deflate
+    /// back unconditionally. A completed or aborted scrub bumped past the generation and makes
+    /// this a no-op, so an abort's release is never undone by a stale re-inflate.
+    fn spawn_scrub_watchdog(&self, gen: u64, resume_pages: u32) {
+        let state = Arc::clone(&self.state);
+        let socket = self.socket.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(SCRUB_WATCHDOG);
+            let mut st = state.lock().unwrap();
+            if st.scrub.as_ref().is_some_and(|s| s.gen == gen) {
+                st.scrub = None;
+                st.last_scrub_end = Instant::now();
+                if send_target(&socket, &mut st, resume_pages) {
+                    st.target_pages = resume_pages;
+                }
+                trace_scrub(&mut st, "watchdog", gen, resume_pages, None, None);
+                log::warn!(
+                    "autoballoon: scrub watchdog fired (pressure reports stalled mid-scrub) — \
+                     deflated to {resume_pages} pages"
+                );
+            }
+        });
     }
 
     /// One `stats` round-trip over the shared connection. Any failure — including a read
@@ -446,6 +644,137 @@ impl BalloonPolicy {
             }
         }
         Some(s)
+    }
+}
+
+/// Write `target <bytes>` to the balloon socket, reconnecting once on failure. Returns whether
+/// the command went out. A free function (not a method) so the scrub watchdog thread, which only
+/// holds the state `Arc` and the socket path, can call it too.
+fn send_target(socket: &Path, st: &mut State, pages: u32) -> bool {
+    let bytes = (pages as u64) << 12;
+    for attempt in 0..2 {
+        if st.conn.is_none() {
+            match UnixStream::connect(socket) {
+                Ok(c) => st.conn = Some(c),
+                Err(e) => {
+                    if attempt == 1 {
+                        log::warn!("autoballoon: connect {socket:?}: {e}");
+                    }
+                    continue;
+                }
+            }
+        }
+        let conn = st.conn.as_mut().unwrap();
+        if writeln!(conn, "target {bytes}")
+            .and_then(|()| conn.flush())
+            .is_ok()
+        {
+            return true;
+        }
+        st.conn = None; // broken pipe — drop and retry once
+    }
+    false
+}
+
+/// Whether a pressure-triggered scrub may start (pure; unit-tested). The scrub is the only
+/// measured lever that shrinks the retention pool's phys_footprint, but a full inflate also
+/// dumps the guest's page cache — so it runs only when the HOST actually needs memory back, from
+/// a guest that isn't in acute pressure or starving, outside both the post-release and the scrub
+/// cooldown, and only when the balloon has meaningful room left to grow.
+fn scrub_due(
+    host: HostPressure,
+    acute: bool,
+    current: u32,
+    room: u32,
+    cooldown_until: Option<Instant>,
+    last_scrub_end: Instant,
+    now: Instant,
+) -> bool {
+    host != HostPressure::Normal
+        && !acute
+        && room.saturating_sub(current) >= SCRUB_MIN_INFLATE
+        && cooldown_until.is_none_or(|t| now >= t)
+        && now.duration_since(last_scrub_end) >= SCRUB_COOLDOWN
+}
+
+/// The pure per-tick phase-advance verdict for an in-flight scrub. Stats (`actual_bytes`) are
+/// the fast path; every phase also advances on elapsed time alone, so a dead stats channel can
+/// slow a scrub but never stall it inflated.
+fn scrub_step(
+    phase: ScrubPhase,
+    in_phase: Duration,
+    actual_bytes: Option<u64>,
+    target_bytes: u64,
+    resume_bytes: u64,
+    stall_ticks: u32,
+) -> ScrubStep {
+    match phase {
+        ScrubPhase::Inflating => {
+            let reached = actual_bytes.is_some_and(|a| a >= target_bytes / 10 * 9);
+            if reached || stall_ticks >= SCRUB_STALL_TICKS || in_phase >= SCRUB_INFLATE_TIMEOUT {
+                ScrubStep::ToHolding
+            } else {
+                ScrubStep::Stay
+            }
+        }
+        ScrubPhase::Holding => {
+            if in_phase >= SCRUB_HOLD {
+                ScrubStep::ToDeflating
+            } else {
+                ScrubStep::Stay
+            }
+        }
+        ScrubPhase::Deflating => {
+            let converged =
+                actual_bytes.is_some_and(|a| a <= resume_bytes.saturating_add(SCRUB_DONE_SLACK));
+            if converged || in_phase >= SCRUB_DEFLATE_TIMEOUT {
+                ScrubStep::Done
+            } else {
+                ScrubStep::Stay
+            }
+        }
+    }
+}
+
+/// Abandon an in-flight scrub (acute guest pressure or starvation). The caller's release
+/// decision hands the memory back; re-arming `last_scrub_end` here keeps an abort-prone guest
+/// from being re-squeezed the moment the acute report passes.
+fn abort_scrub(st: &mut State, now: Instant) {
+    let Some(scrub) = st.scrub.take() else {
+        return;
+    };
+    st.last_scrub_end = now;
+    trace_scrub(st, "abort", scrub.gen, scrub.resume_pages, None, None);
+    log::warn!("autoballoon: scrub aborted (guest under pressure)");
+}
+
+/// Append one scrub event to the decision journal. The distinct `"scrub"` key (and no
+/// `"decision"` key) keeps these lines invisible to the bench summarizer, which filters on the
+/// decision key — additive, not a contract change.
+fn trace_scrub(
+    st: &mut State,
+    event: &str,
+    gen: u64,
+    resume_pages: u32,
+    actual_bytes: Option<u64>,
+    reached_pct: Option<u64>,
+) {
+    let Some(f) = st.trace.as_mut() else {
+        return;
+    };
+    let ts_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let json_stat = |v: Option<u64>| v.map_or("null".to_string(), |v| v.to_string());
+    let line = format!(
+        "{{\"ts_ms\":{ts_ms},\"scrub\":\"{event}\",\"gen\":{gen},\"resume_pages\":{resume_pages},\
+         \"actual_bytes\":{},\"reached_pct\":{}}}\n",
+        json_stat(actual_bytes),
+        json_stat(reached_pct),
+    );
+    if f.write_all(line.as_bytes()).is_err() {
+        st.trace = None;
     }
 }
 
@@ -1021,6 +1350,9 @@ mod tests {
             target_pages: 0,
             last_change: None,
             cooldown_until: None,
+            scrub: None,
+            scrub_gen: 0,
+            last_scrub_end: Instant::now(),
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -1087,6 +1419,229 @@ mod tests {
                 && lines[1].contains("\"heals\":null"),
             "{}",
             lines[1]
+        );
+    }
+
+    /// The scrub trigger matrix: host level × acute × cooldowns × remaining room. The armed-at-
+    /// construction scrub cooldown is what keeps bench scenarios (injected Warn/Critical, calm
+    /// guest — exactly the trigger shape) scrub-free, so it's load-bearing, not a nicety.
+    #[test]
+    fn scrub_due_only_under_host_pressure_calm_and_out_of_cooldowns() {
+        let base = Instant::now();
+        let now = base + SCRUB_COOLDOWN; // base = construction/last scrub; cooldown just elapsed
+        assert!(scrub_due(
+            HostPressure::Warn,
+            false,
+            0,
+            ROOM,
+            None,
+            base,
+            now
+        ));
+        assert!(scrub_due(
+            HostPressure::Critical,
+            false,
+            0,
+            ROOM,
+            None,
+            base,
+            now
+        ));
+        // Host fine: never — the scrub's page-cache cost buys nothing the host needs.
+        assert!(!scrub_due(
+            HostPressure::Normal,
+            false,
+            0,
+            ROOM,
+            None,
+            base,
+            now
+        ));
+        // Acute guest pressure or starvation: never.
+        assert!(!scrub_due(
+            HostPressure::Warn,
+            true,
+            0,
+            ROOM,
+            None,
+            base,
+            now
+        ));
+        // Inside the post-release cooldown: the guest just proved it needs its memory.
+        assert!(!scrub_due(
+            HostPressure::Warn,
+            false,
+            0,
+            ROOM,
+            Some(now + DWELL),
+            base,
+            now
+        ));
+        // An expired release cooldown no longer blocks.
+        assert!(scrub_due(
+            HostPressure::Warn,
+            false,
+            0,
+            ROOM,
+            Some(now - DWELL),
+            base,
+            now
+        ));
+        // Scrub cooldown: fresh construction (last_scrub_end = now) blocks the first 30 min.
+        assert!(!scrub_due(
+            HostPressure::Warn,
+            false,
+            0,
+            ROOM,
+            None,
+            now,
+            now
+        ));
+        // Balloon already nearly full: the freed pages were already released — nothing to scrub.
+        assert!(!scrub_due(
+            HostPressure::Warn,
+            false,
+            ROOM - SCRUB_MIN_INFLATE + 1,
+            ROOM,
+            None,
+            base,
+            now
+        ));
+    }
+
+    #[test]
+    fn scrub_step_phases_advance_on_completion_stall_or_timeout() {
+        use ScrubPhase::*;
+        use ScrubStep::*;
+        let t = 10u64 << 30; // 10 GiB inflate target
+        let short = Duration::from_secs(5);
+        // Inflating: keep going while below 90% and progressing.
+        assert_eq!(scrub_step(Inflating, short, Some(t / 2), t, 0, 0), Stay);
+        // Stats unavailable: elapsed time is the only advance (stats are never load-bearing).
+        assert_eq!(scrub_step(Inflating, short, None, t, 0, 0), Stay);
+        assert_eq!(
+            scrub_step(Inflating, SCRUB_INFLATE_TIMEOUT, None, t, 0, 0),
+            ToHolding
+        );
+        // Reached ≥90% of target: advance early.
+        assert_eq!(
+            scrub_step(Inflating, short, Some(t / 10 * 9), t, 0, 0),
+            ToHolding
+        );
+        // Stalled short of target: advance without burning the full timeout.
+        assert_eq!(
+            scrub_step(Inflating, short, Some(t / 2), t, 0, SCRUB_STALL_TICKS),
+            ToHolding
+        );
+        // Holding is a pure timer.
+        assert_eq!(scrub_step(Holding, short, Some(t), t, 0, 0), Stay);
+        assert_eq!(
+            scrub_step(Holding, SCRUB_HOLD, Some(t), t, 0, 0),
+            ToDeflating
+        );
+        // Deflating: done when actual is back within slack of the resume target…
+        let resume = 2u64 << 30;
+        assert_eq!(
+            scrub_step(Deflating, short, Some(t / 2), t, resume, 0),
+            Stay
+        );
+        assert_eq!(
+            scrub_step(Deflating, short, Some(resume + (1 << 20)), t, resume, 0),
+            Done
+        );
+        // …or on timeout, stats or not.
+        assert_eq!(
+            scrub_step(Deflating, SCRUB_DEFLATE_TIMEOUT, None, t, resume, 0),
+            Done
+        );
+    }
+
+    /// An abort must clear the scrub, re-arm the scrub cooldown (an abort-prone guest is not
+    /// re-squeezed the moment the acute report passes), and trace a summarizer-invisible line.
+    #[test]
+    fn scrub_abort_arms_the_scrub_cooldown_and_traces() {
+        let path = std::env::temp_dir().join(format!("scrub-abort-test-{}", std::process::id()));
+        let now = Instant::now();
+        let mut st = State {
+            conn: None,
+            target_pages: ROOM,
+            last_change: None,
+            cooldown_until: None,
+            scrub: Some(Scrub {
+                phase: ScrubPhase::Inflating,
+                phase_since: now,
+                resume_pages: GIB_PAGES,
+                gen: 3,
+                last_actual_bytes: 0,
+                stall_ticks: 0,
+            }),
+            scrub_gen: 3,
+            last_scrub_end: now,
+            trace: Some(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .unwrap(),
+            ),
+        };
+        abort_scrub(&mut st, now);
+        assert!(st.scrub.is_none());
+        assert!(!scrub_due(
+            HostPressure::Warn,
+            false,
+            0,
+            ROOM,
+            None,
+            st.last_scrub_end,
+            now
+        ));
+        // A second abort with no scrub in flight is a no-op (no duplicate trace line).
+        abort_scrub(&mut st, now);
+        let out = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 1, "{out}");
+        assert!(
+            lines[0].contains("\"scrub\":\"abort\"")
+                && lines[0].contains("\"gen\":3")
+                && lines[0].contains(&format!("\"resume_pages\":{GIB_PAGES}")),
+            "{}",
+            lines[0]
+        );
+        // Scrub lines must stay invisible to the bench summarizer, which keys on "decision".
+        assert!(!out.contains("\"decision\""), "{out}");
+    }
+
+    /// The hold-transition line carries the reached fraction — "completed" vs "timed out at
+    /// 60%" must be readable from the journal alone.
+    #[test]
+    fn scrub_trace_lines_carry_progress() {
+        let path = std::env::temp_dir().join(format!("scrub-trace-test-{}", std::process::id()));
+        let mut st = State {
+            conn: None,
+            target_pages: 0,
+            last_change: None,
+            cooldown_until: None,
+            scrub: None,
+            scrub_gen: 0,
+            last_scrub_end: Instant::now(),
+            trace: Some(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .unwrap(),
+            ),
+        };
+        trace_scrub(&mut st, "hold", 1, 0, Some(5 << 30), Some(93));
+        let out = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert!(
+            out.contains("\"scrub\":\"hold\"")
+                && out.contains(&format!("\"actual_bytes\":{}", 5u64 << 30))
+                && out.contains("\"reached_pct\":93"),
+            "{out}"
         );
     }
 
