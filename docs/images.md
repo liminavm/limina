@@ -59,10 +59,11 @@ Shell of that release (same `libmutter-NN` ABI) — F43 `49.6` over shell `49.1`
 regression" / `kk_encoder.c:299` block did NOT reproduce on the clean stack — F44 16k+venus+mutter-50.1
 boots the seated desktop and runs WebGL at ~60fps on venus→KK→Metal (see `limina-enh-delivery` memory).
 The enhanced 16 KiB kernel ships as RPM `limina-kernel-16k` (BLS entry beside stock).
-**Current shippable tarball (2026-08-05, the fork-model mesa respin):**
-`target/guest-tools-7.1.6-mesa2615r7/limina-guest-tools-f44.tar.zst` (kernel 7.1.6-2 +
-mesa 26.1.5-7.limina from the `limina-guest` fork branch; both F44 enhanced images took its
-`install-enhanced.sh` pass, `.test` recloned 2026-08-05).
+**Current shippable tarball (2026-08-11, the agent-0.4.0 respin):**
+`target/guest-tools-agent040/limina-guest-tools-f44.tar.zst` (RPMs identical to
+`guest-tools-7.1.6-mesa2615r7` — kernel 7.1.6-2 + mesa 26.1.5-7.limina from the `limina-guest`
+fork branch — with the agent binaries swapped to 0.4.0 MemFree/io-PSI; both F44 enhanced images
+carry 0.4.0 via the 2026-08-11 agent-only pass, `.test` recloned same day).
 **GL default flipped 2026-08-04 (drop-guest-zink):** the installer's
 `/etc/environment.d/90-limina-zink.conf` (name kept) now selects
 `GALLIUM_DRIVER=virgl` + `MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu` — the session's GL rides
@@ -222,6 +223,19 @@ installing: the musl unit-test binaries run there green (3+3) and the real binar
 run the old binary until their next login — functionally identical, so restarting another user's
 session was not worth the disruption. The host-side per-peer clipboard serial fix (`583030a`) is
 **not** deployed here; the user deploys the app bundle separately.
+
+**limina-agent 0.4.0 — MemFree + io-PSI reporting (2026-08-11, the balloon tuning arc)** — the
+agent's `MemPressure` reports now carry `MemFree` and `/proc/pressure/io` full-PSI (proto
+`7fb067d`, `#[cbor(default)]`, compat proven both directions), feeding the host policy's MemFree
+pacing clamp + bounded scrub (`dae02ce`/`59e40ee`). Against an old host build the extra fields are
+skipped harmlessly; an old 0.3.0 agent leaves the clamp disabled (reports decode as
+`mem_free_kib == 0` = "not reported"). Deployed: dogfood guest per-file 2026-08-11 (rollback
+`*.bak-20260811`, verified `limina-agent 0.4.0` connected + 1 Hz trace ticks on the dogfood Mac);
+**both F44 enhanced images refreshed the same day** (agent-only pass on `enhanced.raw`, booted in
+place + `restorecon` + 0.4.0 connect verified + clean poweroff; `.test` recloned); payload respun
+as `target/guest-tools-agent040/limina-guest-tools-f44.tar.zst` (RPMs unchanged from
+`mesa2615r7`, agent binaries swapped, hardlinks preserved). `limina-agent-session` rebuilt against
+the new proto (no behaviour change); running sessions pick it up at next login.
 
 **limina-agent 0.3.0 — Touch ID FIDO authenticator (2026-07-24)** — the agent advertises the
 **`fido`** cap and, when the host has a Secure Enclave, creates a `/dev/uhid` FIDO2 HID device
