@@ -76,3 +76,7 @@ spikes/virgl-zink-kk/timerprobe
 # spikes/venus-ring-fatal-timeout build artifacts
 spikes/venus-ring-fatal-timeout/probe
 spikes/venus-ring-fatal-timeout/probe.dSYM/
+
+# spikes/balloon-compressor-zero build artifacts (source + RESULTS.md are kept)
+spikes/balloon-compressor-zero/probe
+spikes/balloon-compressor-zero/probe.dSYM/
