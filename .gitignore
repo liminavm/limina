@@ -80,3 +80,9 @@ spikes/venus-ring-fatal-timeout/probe.dSYM/
 # spikes/balloon-compressor-zero build artifacts (source + RESULTS.md are kept)
 spikes/balloon-compressor-zero/probe
 spikes/balloon-compressor-zero/probe.dSYM/
+
+# spikes/hv-ledger-marker build artifacts (source + RESULTS.md are kept)
+spikes/hv-ledger-marker/probe
+spikes/hv-ledger-marker/probe.dSYM/
+spikes/hv-ledger-marker/payload.o
+spikes/hv-ledger-marker/payload.bin
