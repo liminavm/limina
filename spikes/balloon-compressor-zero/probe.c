@@ -118,15 +118,72 @@ static int advise(unsigned char *base, int q, int adv, const char *name) {
     return rc;
 }
 
-int main(void) {
-    printf("host page size: %d\n", getpagesize());
+// Mode "race": does MADV_FREE_REUSABLE issued WHILE the pageout scan is actively
+// compressing the range strand slots (the xnu vmp_laundry/vmp_cleaning skip), and does a
+// second pass after the dust settles recover them (the janitor question)? We race one
+// REUSABLE against every ballast step while compression is in flight, free the ballast
+// (taking its own compressed share with it), then measure the leftover compressed
+// attributable to the target and whether one more REUSABLE clears it.
+static int race_mode(unsigned char *target) {
+    memset(target, PATTERN, TARGET_SIZE);
+    print_snap("after dirtying 2 GiB", take_snap());
 
-    unsigned char *target = mmap(NULL, TARGET_SIZE, PROT_READ | PROT_WRITE,
-                                 MAP_ANON | MAP_PRIVATE, -1, 0);
+    void *ballast[BALLAST_MAX];
+    size_t nballast = 0;
+    for (; nballast < BALLAST_MAX; nballast++) {
+        void *b = mmap(NULL, BALLAST_CHUNK, PROT_READ | PROT_WRITE,
+                       MAP_ANON | MAP_PRIVATE, -1, 0);
+        if (b == MAP_FAILED)
+            break;
+        memset(b, 0xa5, BALLAST_CHUNK);
+        ballast[nballast] = b;
+        // Race: madvise the whole target while the scan may be laundering it.
+        madvise(target, TARGET_SIZE, MADV_FREE_REUSABLE);
+        size_t res = resident_pages(target, TARGET_SIZE);
+        printf("  ballast %2zu GiB + REUSABLE race: target resident %6zu pages, "
+               "task compressed %7.1f MiB\n",
+               nballast + 1, res, take_snap().compressed / 1048576.0);
+        if (res * (size_t)getpagesize() < TARGET_SIZE / 8)
+            break;
+    }
+    for (size_t i = 0; i < nballast; i++)
+        munmap(ballast[i], BALLAST_CHUNK);
+    sleep(2); // let the compressor/scan settle
+
+    struct snap s1 = take_snap();
+    print_snap("settled (ballast gone)", s1);
+    printf("leftover compressed attributable to target: %.1f MiB\n",
+           s1.compressed / 1048576.0);
+
+    uint64_t t0 = now_ns();
+    int rc = madvise(target, TARGET_SIZE, MADV_FREE_REUSABLE);
+    printf("janitor pass: madvise(FREE_REUSABLE) -> %s (%.2f ms)\n",
+           rc == 0 ? "OK" : strerror(errno), (now_ns() - t0) / 1e6);
+    struct snap s2 = take_snap();
+    print_snap("after janitor pass", s2);
+    printf("janitor recovered: compressed %+.1f MiB, footprint %+.1f MiB\n",
+           ((double)s2.compressed - s1.compressed) / 1048576.0,
+           ((double)s2.footprint - s1.footprint) / 1048576.0);
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    // Mode: private (MAP_ANON|MAP_PRIVATE, the v1 run) or shared (MAP_ANON|MAP_SHARED —
+    // the worker's guest RAM shows SM=SHM in vmmap, and xnu's reuse kill has silent no-op
+    // conditions that depend on the object shape), or race (see race_mode).
+    int shared = argc > 1 && strcmp(argv[1], "shared") == 0;
+    printf("host page size: %d, mode: %s\n", getpagesize(),
+           shared ? "MAP_SHARED" : "MAP_PRIVATE");
+
+    unsigned char *target =
+        mmap(NULL, TARGET_SIZE, PROT_READ | PROT_WRITE,
+             MAP_ANON | (shared ? MAP_SHARED : MAP_PRIVATE), -1, 0);
     if (target == MAP_FAILED) {
         perror("mmap target");
         return 1;
     }
+    if (argc > 1 && strcmp(argv[1], "race") == 0)
+        return race_mode(target);
 
     print_snap("baseline", take_snap());
     memset(target, PATTERN, TARGET_SIZE);

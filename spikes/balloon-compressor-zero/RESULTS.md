@@ -81,7 +81,42 @@ perfectly, so the excess needs a differential):
 - The dogfood 13.9 GB could also partly be non-guest-RAM untagged allocations (venus ring
   shmem etc.) — worth a vmmap region-level attribution pass before deeper probing.
 
+## Follow-up runs (same day)
+
+**MAP_SHARED mode** (the worker's guest RAM is SM=SHM in vmmap, and xnu's reuse kill has
+silent no-op conditions tied to object shape): results IDENTICAL to MAP_PRIVATE, quarter by
+quarter. Object shape exonerated.
+
+**Race mode** (the janitor question): issue REUSABLE on the whole 2 GiB target at every
+ballast step while the scan is actively compressing it — the vmp_laundry skip's window —
+then free the ballast, settle, measure leftover, and run one more REUSABLE. Result: mid-race
+the task's compressed briefly billed up to 1.5 GiB (the scan does compress reusable-marked
+pages), but on settle the leftover was **0.2 MiB** and the janitor pass recovered nothing.
+The mid-laundry strand does not reproduce in this vehicle; even reusable-marked pages that
+got compressed were cleaned up without help.
+
+**memset-0 between hv_vm_unmap and REUSABLE** (considered): would fault back and decompress
+every compressor-held copy, dirty every page (write bandwidth on the full release volume —
+the field churns >100 GB/h), and end in exactly the state plain REUSABLE already reaches.
+All cost, no benefit. Rejected.
+
 ## Verdict for the release path
 
 Keep `release()` exactly as it is (`hv_vm_unmap` + `MADV_FREE_REUSABLE`). MADV_ZERO adds
-nothing (Q4) and placed defensively-early it strands compressed billing (Q3).
+nothing (Q4) and placed defensively-early it strands compressed billing (Q3). A janitor
+re-pass has nothing to recover in any local shape; do not add one on current evidence.
+
+## Where the field investigation goes instead
+
+With object shape, the laundry race, and REUSABLE-vs-compressor all exonerated locally, the
+dogfood guest-RAM compressor residue (~6 GB at one capture) is most plausibly **legitimately
+live guest content compressed under host pressure, snapshot-aliased by the balloon
+oscillation** (at a 9 GiB trough, guest-live is ~15 GiB — a capture minutes later with the
+balloon at 18 GiB misreads it as excess). The oscillation is the engine of the whole
+picture (churn, compression load, transient billing) — the MemFree-clamp policy lever, not
+a release-path defect. The discriminating measurement, once the counters build is deployed:
+per-tick outstanding released bytes (released−remapped) from balloon-trace.jsonl correlated
+against the guest-RAM region's dirty+swap in periodic vmmap samples — a true strand shows up
+as billed bytes inside outstanding-released ranges; legit compression tracks guest-live
+instead. The separate ~6.5 GB phys_footprint-vs-categorized ledger gap remains hv-ledger-gap
+round 8 (stage-2 per-mapping billing) territory.
