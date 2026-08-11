@@ -3,7 +3,13 @@
 # Usage: ./run.sh <disk.raw> [label]
 # Env: MIX=full|touch|none (default touch), MEM (2G..12G), CPUS (8), SSH_PORT (2233),
 #      PLATEAU_MIN (16), SCRUB=1, KEEP_VM=0, SOAK_MIN=0 (no-scrub trickle soak:
-#      idle SOAK_MIN, guest touch workload, idle SOAK_MIN again, ballast held)
+#      idle SOAK_MIN, guest touch workload, idle SOAK_MIN again, ballast held),
+#      POLICY_SCRUB=0 (live oracle for the supervisor's pressure-triggered scrub: boots
+#      with the @file LIMINA_HOST_PRESSURE seam pinned "normal" + --reclaim light so the
+#      policy stays quiescent through pool build, plus the decision trace; after the other
+#      phases it waits out the 30-min armed scrub cooldown, flips the file to "warn", and
+#      watches trace.jsonl for one full start->hold->deflate->done cycle. Needs a guest
+#      running limina-agent — no pressure reports, no policy ticks. Use with SCRUB=0.)
 set -eu
 SPIKE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$SPIKE/../.." && pwd)
@@ -12,6 +18,7 @@ DISK=${1:?usage: run.sh <disk.raw> [label]}
 LABEL=${2:-run}
 MIX=${MIX:-touch} MEM=${MEM:-2G..12G} CPUS=${CPUS:-8} SSH_PORT=${SSH_PORT:-2233}
 PLATEAU_MIN=${PLATEAU_MIN:-16} SCRUB=${SCRUB:-1} KEEP_VM=${KEEP_VM:-0} SOAK_MIN=${SOAK_MIN:-0}
+POLICY_SCRUB=${POLICY_SCRUB:-0}
 STAMP=$(date +%s)
 OUTDIR=$SPIKE/out-$LABEL-$STAMP
 mkdir -p "$OUTDIR"
@@ -44,11 +51,20 @@ cleanup() {
 trap cleanup EXIT
 
 # --- Phase 0: boot ---------------------------------------------------------
+RECLAIM_ARGS=()
+if [ "$POLICY_SCRUB" = 1 ]; then
+    echo normal > "$OUTDIR/host-pressure"
+    export LIMINA_HOST_PRESSURE="@$OUTDIR/host-pressure"
+    export LIMINA_BALLOON_TRACE="$OUTDIR/trace.jsonl"
+    RECLAIM_ARGS=(--reclaim light) # Light@Normal holds no balloon: quiescent until the flip
+fi
 log "booting $DISK (mem $MEM, $CPUS cpus) -> $BOOTLOG"
+BOOT_TS=$(date +%s)
 "$ROOT/target/debug/limina" --vmm-bin "$ROOT/target/debug/limina-vmm" \
     --firmware "$ROOT/target/krun-efi/KRUN_EFI.gop.fd" --disk "$DISK" \
     --net --ssh-port "$SSH_PORT" --cpus "$CPUS" --memory "$MEM" \
     --balloon-free-page-reporting --balloon-control-socket "$SOCK" \
+    ${RECLAIM_ARGS[@]+"${RECLAIM_ARGS[@]}"} \
     > "$BOOTLOG" 2>&1 &
 VM_PID=$!
 for _ in $(seq 60); do $SSH true 2>/dev/null && break; sleep 5; done
@@ -142,5 +158,41 @@ for i in range(0, len(b), 4096): b[i] = 1
     log "SOAK post-activity: ic_bal=$(last_col 2)G pool=$(pool_g)G"
     soak "$SOAK_MIN" post
     log "SOAK RESULT [$LABEL]: ic_bal=$(last_col 2)G pool=$(pool_g)G (from ic_bal=${IC_BEFORE}G pool=${POOL_BEFORE}G at plateau)"
+fi
+
+# --- Phase 5: live policy-scrub oracle --------------------------------------
+if [ "$POLICY_SCRUB" = 1 ]; then
+    TRACE=$OUTDIR/trace.jsonl
+    wait_trace() { # <ERE pattern> <timeout-sec>
+        local t=0
+        while [ "$t" -lt "$2" ]; do
+            grep -qE "$1" "$TRACE" 2>/dev/null && return 0
+            sleep 5; t=$((t + 5))
+        done
+        return 1
+    }
+    [ -s "$TRACE" ] || log "POLICY-SCRUB WARNING: trace empty — no pressure reports (agent not running?)"
+    # The policy's scrub cooldown is armed at construction (30 min): wait it out.
+    while :; do
+        UP=$(( $(date +%s) - BOOT_TS ))
+        [ "$UP" -ge 1830 ] && break
+        log "POLICY-SCRUB: waiting out the armed scrub cooldown (uptime ${UP}s / 1830s)"
+        sleep 60
+    done
+    PF_PRE=$(last_col 8); POOL_PRE=$(pool_g)
+    log "POLICY-SCRUB: flipping injected host pressure to warn (pf=${PF_PRE}G pool=${POOL_PRE}G)"
+    echo warn > "$OUTDIR/host-pressure"
+    if ! wait_trace '"scrub":"start"' 180; then
+        log "POLICY-SCRUB FAILED [$LABEL]: no scrub start within 180s of warn (see $TRACE)"
+    else
+        log "POLICY-SCRUB: cycle started; waiting for a terminal event"
+        wait_trace '"scrub":"(done|abort|watchdog)"' 420 \
+            || log "POLICY-SCRUB: no terminal event within 420s"
+        sleep 60
+        PF_POST=$(last_col 8); POOL_POST=$(pool_g)
+        log "POLICY-SCRUB RESULT [$LABEL]: pf ${PF_PRE}G -> ${PF_POST}G; pool ${POOL_PRE}G -> ${POOL_POST}G"
+        grep '"scrub"' "$TRACE" | while IFS= read -r l; do log "  $l"; done
+    fi
+    echo normal > "$OUTDIR/host-pressure"
 fi
 log "done; data in $OUTDIR"
