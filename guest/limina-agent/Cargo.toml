@@ -5,7 +5,7 @@
 # orderly SHUTDOWN. Static musl binary so one artifact works on any aarch64 guest.
 [package]
 name = "limina-agent"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "GPL-2.0-only WITH LicenseRef-limina-exception"
 
