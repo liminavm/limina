@@ -86,3 +86,6 @@ spikes/hv-ledger-marker/probe
 spikes/hv-ledger-marker/probe.dSYM/
 spikes/hv-ledger-marker/payload.o
 spikes/hv-ledger-marker/payload.bin
+
+# spikes/balloon-retention-testbed run outputs (scripts + README are kept)
+spikes/balloon-retention-testbed/out-*/
