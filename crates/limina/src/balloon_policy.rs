@@ -112,15 +112,17 @@ pub enum ReclaimMode {
     /// Never drive the balloon (free-page reporting still returns freed guest memory).
     Disabled,
     /// Host-pressure-driven, generous cache: no inflation while the host is fine; under host
-    /// warn leave the guest 25% of max as cache; under critical squeeze down to the minimal
-    /// working-set floor (never to zero).
+    /// warn take free pages down to a 512 MiB margin and trickle toward a 25%-of-max cache
+    /// allowance; under critical squeeze toward the minimal working-set floor (never to zero).
     Light,
-    /// Host-pressure-driven (the default): while the host is fine leave the guest 12.5% of max
-    /// (min 1 GiB) as cache; under host warn 6.25% (min 1 GiB); under critical squeeze down to
-    /// the minimal working-set floor (never to zero).
+    /// Host-pressure-driven (the default): while the host is fine take only what the guest
+    /// has FREE (down to a 256 MiB margin — an established page cache is left alone until the
+    /// host actually needs the RAM); under host warn trickle into cache toward a 6.25%-of-max
+    /// (min 1 GiB) allowance; under critical squeeze toward the minimal working-set floor
+    /// (never to zero).
     Moderate,
     /// Squeeze to the floor whenever the guest is idle, ignoring host pressure (the original
-    /// M6 policy).
+    /// M6 policy), pacing cache reclaim at the trickle past a 128 MiB free margin.
     Aggressive,
 }
 
