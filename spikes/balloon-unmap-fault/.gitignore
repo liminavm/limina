@@ -1,0 +1,4 @@
+probe
+payload.o
+payload.bin
+*.dSYM/
