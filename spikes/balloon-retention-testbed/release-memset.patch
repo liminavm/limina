@@ -1,0 +1,32 @@
+diff --git a/src/hvf/src/released_ram.rs b/src/hvf/src/released_ram.rs
+index 1d4b433..3017b0a 100644
+--- a/src/hvf/src/released_ram.rs
++++ b/src/hvf/src/released_ram.rs
+@@ -86,6 +86,9 @@ pub struct ReleasedRam {
+     /// A heal-race stray resolves on retry, so consecutive repeats of the SAME page mean a
+     /// genuine hole in the bookkeeping — cap and stop instead of spinning.
+     last_stray: Mutex<(u64, u32)>,
++    /// Experiment gate (`LIMINA_BALLOON_RELEASE_MEMSET=1`): zero released ranges before
++    /// marking them REUSABLE, to measure the cost/benefit on the retention testbed.
++    zero_on_release: bool,
+ }
+ 
+ /// Consecutive stray faults on one page before we declare a real bookkeeping hole.
+@@ -127,6 +130,7 @@ impl ReleasedRam {
+             remapped_bytes: AtomicU64::new(0),
+             stray_faults: AtomicU64::new(0),
+             last_stray: Mutex::new((u64::MAX, 0)),
++            zero_on_release: std::env::var("LIMINA_BALLOON_RELEASE_MEMSET").as_deref() == Ok("1"),
+         }
+     }
+ 
+@@ -172,6 +176,9 @@ impl ReleasedRam {
+             return false;
+         }
+         let host = Self::host_of(region, gpa);
++        if self.zero_on_release {
++            unsafe { std::ptr::write_bytes(host as *mut u8, 0, len as usize) };
++        }
+         let rc = unsafe {
+             libc::madvise(
+                 host as *mut libc::c_void,
