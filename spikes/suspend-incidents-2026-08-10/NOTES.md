@@ -181,3 +181,52 @@ park path discards the stranded bookkeeping with a log line (a stale cookie left
 the next activation's first trailing fence into a spurious guest hold; a stale awaiting-shown entry
 skews the pop-to-first ack drain forever). Unit tests in `virtio_gpu.rs` cover both directions;
 `facf7eb` fixes the pre-existing edid test-import breakage that blocked `cargo test --features gpu`.
+
+## Issue 2 VERDICT (2026-08-10 local repro + fix): replay dispatches the tail of a broken recording
+
+**Reproduced deterministically on the dev Mac** with `vkr-hazard.c` (this dir): record a cmd_buf
+(Begin → CmdBeginRenderPass(FB) → CmdEndRenderPass → End), destroy the framebuffer, keep the
+process alive, then park (SIGTSTP) + click-resume. One cycle on the unpatched dylib = the exact
+dogfood crash: `EXC_BAD_ACCESS KERN_INVALID_ADDRESS at 0x60`, `end_subpass` ←
+`vk_common_CmdEndRenderPass` ← `vn_dispatch_vkCmdEndRenderPass` ← `vkr_renderer_replay_submit`.
+0x60 = `&((struct vk_render_pass *)NULL)->subpass_count` — the mesa runtime derefs
+`cmd_buffer->render_pass` with no active render pass.
+
+**Root cause** (virglrenderer fork, venus journal): RECORDING entries are keyed by their cmd_buf
+and do NOT pin the objects their payload references (CREATE entries do). Destroying a referenced
+object (dogfood: a compositor framebuffer that died before the suspend) leaves a replayable
+recording whose CmdBeginRenderPass names a dead handle. On resume the Begin fails decode and is
+FATAL-recovered — but the rest of the recording still dispatched, and CmdEndRenderPass walked into
+the driver with no render pass bound.
+
+**Fix** (virglrenderer fork `limina` branch, commit 283aeea4): poison the cmd_buf at the first
+failed RECORDING dispatch; skip its remaining RECORDING entries for the rest of the replay
+(Begin/Reset lifts the poison; a failing Begin re-poisons via the post-dispatch hook). Verified
+GREEN in one cycle: `replay: poisoning cmd_buf 12`, resume completes (first frame 4.5s), hazard
+process survives, zero coredumps. Bonus: skipped entries are not re-journaled, so the NEXT snapshot
+is clean of the broken recording — one cycle self-heals.
+
+**UX half** (limina, window/mod.rs + present.rs + session.rs): the dogfood "Resuming…" forever was
+the timer's dead-worker exit branch gating on `ParkPhase::Live` — a worker dying during `Resuming`
+was never handled. Detection must not race the swap (the OLD worker's `exited` flag stays set until
+`mark_worker_running`), so death = `resume_dead || (exited && worker_epoch > epoch_at_click)`
+(`resume_worker_died`, unit-tested). On death: log, alert ("failed to resume … starting it again
+will boot fresh"), save state, exit — verified live in the RED cycle (alert shown, OK exits).
+
+**Close-while-parked UX asks: both already hold in the normal flow** (verified live): closing a
+parked window just quits keeping the snapshot; relaunching the same flat command auto-resumes from
+it (first frame 4.3s). Dogfood's cold boot happened because the CRASHED resume had already consumed
+the snapshot (one-shot rename at spawn, by design — anti-crash-loop). Residual hazard, by design:
+the whole parked content is a play target, so a click aimed at the auto-reveal close button that
+lands short resumes instead — flagged for the user, not changed.
+
+**Residual (correction to the 283aeea4 commit message): a poisoned cmd_buf is left
+mid-recording, not empty.** The replayed vkBeginCommandBuffer succeeded and was re-journaled
+before the CmdBeginRenderPass failed, so across snapshot generations the cmd_buf converges to a
+host-side recording that was Begun and never Ended (the hazard's second-generation journal is
+exactly Begin-only). A guest that resubmits that cmd_buf without re-recording pushes an un-ended
+command buffer into KK — invalid usage, same trust-boundary class as the empty-clear-rect
+incidents. Low severity (a client whose referenced object died re-records before reuse), but if a
+future KK crash implicates a resumed cmd_buf, start here. The alternative — synthetically ending
+or resetting poisoned cmd_bufs at replay end — has its own hazards (the pool may lack
+RESET_COMMAND_BUFFER_BIT) and was deliberately not taken.
