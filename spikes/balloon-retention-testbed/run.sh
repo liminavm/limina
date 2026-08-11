@@ -5,11 +5,17 @@
 #      PLATEAU_MIN (16), SCRUB=1, KEEP_VM=0, SOAK_MIN=0 (no-scrub trickle soak:
 #      idle SOAK_MIN, guest touch workload, idle SOAK_MIN again, ballast held),
 #      POLICY_SCRUB=0 (live oracle for the supervisor's pressure-triggered scrub: boots
-#      with the @file LIMINA_HOST_PRESSURE seam pinned "normal" + --reclaim light so the
-#      policy stays quiescent through pool build, plus the decision trace; after the other
-#      phases it waits out the 30-min armed scrub cooldown, flips the file to "warn", and
-#      watches trace.jsonl for one full start->hold->deflate->done cycle. Needs a guest
-#      running limina-agent — no pressure reports, no policy ticks. Use with SCRUB=0.)
+#      with the @file LIMINA_HOST_PRESSURE seam pinned "normal" + --reclaim SCRUB_MODE
+#      plus the decision trace; after the other phases it waits out the mode's armed
+#      scrub cooldown, flips the file to the mode's trigger level, and watches
+#      trace.jsonl for one full start->hold->deflate->done cycle. Needs a guest running
+#      limina-agent — no pressure reports, no policy ticks. Use with SCRUB=0.)
+#      SCRUB_MODE=light|moderate|aggressive (default light — the only mode quiescent at
+#      injected-Normal, so the pool build is undisturbed; moderate/aggressive inflate
+#      during the plateau, pre-settling whatever the guest has free). Trigger/cooldown
+#      per mode mirror balloon_policy.rs scrub_params: light=critical/60min,
+#      moderate=warn/30min, aggressive=warn/15min. An agent that predates mem_free
+#      reporting degrades bounded scrubs to eager-full — the oracle still cycles.
 set -eu
 SPIKE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$SPIKE/../.." && pwd)
@@ -18,7 +24,15 @@ DISK=${1:?usage: run.sh <disk.raw> [label]}
 LABEL=${2:-run}
 MIX=${MIX:-touch} MEM=${MEM:-2G..12G} CPUS=${CPUS:-8} SSH_PORT=${SSH_PORT:-2233}
 PLATEAU_MIN=${PLATEAU_MIN:-16} SCRUB=${SCRUB:-1} KEEP_VM=${KEEP_VM:-0} SOAK_MIN=${SOAK_MIN:-0}
-POLICY_SCRUB=${POLICY_SCRUB:-0}
+POLICY_SCRUB=${POLICY_SCRUB:-0} SCRUB_MODE=${SCRUB_MODE:-light}
+# Per-mode scrub trigger + armed-cooldown wait (must mirror balloon_policy.rs scrub_params;
+# +30 s of slack over the policy's cooldown so the flip lands past it, never just short).
+case "$SCRUB_MODE" in
+    light)      SCRUB_FLIP=critical SCRUB_WAIT=3630 ;;
+    moderate)   SCRUB_FLIP=warn     SCRUB_WAIT=1830 ;;
+    aggressive) SCRUB_FLIP=warn     SCRUB_WAIT=930 ;;
+    *) echo "bad SCRUB_MODE=$SCRUB_MODE (light|moderate|aggressive)" >&2; exit 1 ;;
+esac
 STAMP=$(date +%s)
 OUTDIR=$SPIKE/out-$LABEL-$STAMP
 mkdir -p "$OUTDIR"
@@ -59,7 +73,7 @@ if [ "$POLICY_SCRUB" = 1 ]; then
     echo normal > "$OUTDIR/host-pressure"
     export LIMINA_HOST_PRESSURE="@$OUTDIR/host-pressure"
     export LIMINA_BALLOON_TRACE="$OUTDIR/trace.jsonl"
-    RECLAIM_ARGS=(--reclaim light) # Light@Normal holds no balloon: quiescent until the flip
+    RECLAIM_ARGS=(--reclaim "$SCRUB_MODE") # light@Normal holds no balloon: quiescent until the flip
 fi
 log "booting $DISK (mem $MEM, $CPUS cpus) -> $BOOTLOG"
 BOOT_TS=$(date +%s)
@@ -175,19 +189,19 @@ if [ "$POLICY_SCRUB" = 1 ]; then
         return 1
     }
     [ -s "$TRACE" ] || log "POLICY-SCRUB WARNING: trace empty — no pressure reports (agent not running?)"
-    # The policy's scrub cooldown is armed at construction (30 min): wait it out.
+    # The policy's scrub cooldown is armed at construction (mode-keyed): wait it out.
     while :; do
         UP=$(( $(date +%s) - BOOT_TS ))
-        [ "$UP" -ge 1830 ] && break
-        log "POLICY-SCRUB: waiting out the armed scrub cooldown (uptime ${UP}s / 1830s)"
+        [ "$UP" -ge "$SCRUB_WAIT" ] && break
+        log "POLICY-SCRUB: waiting out the armed scrub cooldown (uptime ${UP}s / ${SCRUB_WAIT}s)"
         sleep 60
     done
     PF_PRE=$(last_col 8); POOL_PRE=$(pool_g)
-    log "POLICY-SCRUB: flipping injected host pressure to warn (pf=${PF_PRE}G pool=${POOL_PRE}G)"
+    log "POLICY-SCRUB: flipping injected host pressure to $SCRUB_FLIP (pf=${PF_PRE}G pool=${POOL_PRE}G)"
     # temp+rename: a read landing in the truncation window of a direct write pins Normal
-    echo warn > "$OUTDIR/host-pressure.tmp" && mv "$OUTDIR/host-pressure.tmp" "$OUTDIR/host-pressure"
+    echo "$SCRUB_FLIP" > "$OUTDIR/host-pressure.tmp" && mv "$OUTDIR/host-pressure.tmp" "$OUTDIR/host-pressure"
     if ! wait_trace '"scrub":"start"' 180; then
-        log "POLICY-SCRUB FAILED [$LABEL]: no scrub start within 180s of warn (see $TRACE)"
+        log "POLICY-SCRUB FAILED [$LABEL]: no scrub start within 180s of $SCRUB_FLIP (see $TRACE)"
     else
         log "POLICY-SCRUB: cycle started; waiting for a terminal event"
         wait_trace '"scrub":"(done|abort|watchdog)"' 420 \

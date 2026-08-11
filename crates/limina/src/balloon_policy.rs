@@ -15,12 +15,14 @@
 //! permanent 5 Hz retry loop ([`gap_action`]).
 //!
 //! Besides the reactive target loop, the policy runs a **pressure-triggered scrub**
-//! (`spikes/balloon-retention-testbed/`): one eager full inflate → hold → deflate cycle. Inflating
-//! routes guest-freed pages through the release path (unmap), which settles the *retention pool* —
+//! (`spikes/balloon-retention-testbed/`): one inflate → hold → deflate cycle. Inflating routes
+//! guest-freed pages through the release path (unmap), which settles the *retention pool* —
 //! content the guest dirtied then freed that the host compressor keeps billing to the worker — and
-//! is the only measured lever that shrinks phys_footprint (14.5 → 6.9 G on the testbed). The cost,
-//! accepted for now, is a guest page-cache dump per cycle; [`scrub_due`]'s conditions keep it rare
-//! and host-need-driven. `LIMINA_BALLOON_SCRUB=0` disables it.
+//! is the only measured lever that shrinks phys_footprint (14.5 → 6.9 G on the testbed). Trigger
+//! level, cadence, and depth are mode-keyed ([`scrub_params`]): Light/Moderate run *bounded*
+//! cycles (inflate only over the guest's free list — captures the dead share, keeps the page
+//! cache), Aggressive runs eager full cycles (also reaches cold cache, dumping it). [`scrub_due`]
+//! keeps every variant rare and host-need-driven. `LIMINA_BALLOON_SCRUB=0` disables it.
 
 use std::io::Write;
 use std::os::unix::net::UnixStream;
@@ -66,6 +68,7 @@ const GAP_BACKOFF: Duration = Duration::from_secs(60);
 /// Minimum time between scrub cycles — and, because the timer starts armed at construction, the
 /// minimum uptime before the first one (never scrub a freshly booted VM; this also keeps the
 /// bench scenarios, which inject host Warn/Critical for minutes at a time, scrub-free).
+/// This is the Moderate baseline; [`scrub_params`] keys the working value by mode.
 const SCRUB_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 /// Don't scrub when the balloon can grow by less than this (pages; 512 MiB): a near-full balloon
 /// means the freed pages already went through the release path — there is no pool to settle.
@@ -122,7 +125,8 @@ pub enum ReclaimMode {
 }
 
 /// macOS memory-pressure level, as reported by `kern.memorystatus_vm_pressure_level`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Ordered by severity (declaration order): `Normal < Warn < Critical`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HostPressure {
     Normal,
     Warn,
@@ -328,6 +332,8 @@ enum GapAction {
 struct Scrub {
     phase: ScrubPhase,
     phase_since: Instant,
+    /// What this cycle inflates to (pages) — the mode's depth decided it at start time.
+    target_pages: u32,
     /// The pre-scrub target the deflate returns to (pages).
     resume_pages: u32,
     /// Monotonic id so the watchdog thread can tell whether the scrub it armed for is still the
@@ -464,30 +470,41 @@ impl BalloonPolicy {
             abort_scrub(&mut st, now);
         }
         if st.scrub.is_some() {
-            self.scrub_tick(&mut st, now, room);
-            return;
-        }
-        if self.scrub_enabled
-            && scrub_due(
-                host.blended,
-                acute,
-                st.target_pages,
-                room,
-                st.cooldown_until,
-                st.last_scrub_end,
-                now,
-            )
-        {
-            self.start_scrub(&mut st, now, room);
+            self.scrub_tick(&mut st, now);
             return;
         }
         // Worker stats now feed the policy, not just the journal: `actual` is the pacing
-        // clamp's base and the gap tracker's progress signal. A failed query degrades softly —
-        // the clamp bases off `current` and gap tracking freezes — never a stalled policy.
+        // clamp's base, the gap tracker's progress signal, and the scrub due-gate's fill
+        // measure. A failed query degrades softly — everything bases off `current` and gap
+        // tracking freezes — never a stalled policy.
         let wstats = self.query_stats(&mut st);
         let actual_pages = wstats
             .as_ref()
             .map(|w| (w.actual_bytes >> 12).min(u32::MAX as u64) as u32);
+        if self.scrub_enabled {
+            let params = scrub_params(self.mode);
+            let fill = actual_pages.unwrap_or(st.target_pages);
+            let inflate_to = scrub_target_pages(
+                params.depth,
+                room,
+                fill,
+                p.mem_free_kib,
+                free_margin_pages(self.mode),
+            );
+            if scrub_due(
+                &params,
+                host.blended,
+                acute,
+                inflate_to,
+                fill,
+                st.cooldown_until,
+                st.last_scrub_end,
+                now,
+            ) {
+                self.start_scrub(&mut st, now, inflate_to);
+                return;
+            }
+        }
         let inputs = DecideInputs {
             mode: self.mode,
             host: host.blended,
@@ -550,15 +567,15 @@ impl BalloonPolicy {
         trace_decision(&mut st, p, &host, &inputs, decision, sent, wstats.as_ref());
     }
 
-    /// Begin a scrub cycle: eager full inflate (the page-cache dump is the accepted cost), hold,
-    /// deflate back to the pre-scrub target. Driven forward by [`Self::scrub_tick`] on subsequent
-    /// reports; the watchdog thread is the only other exit.
-    fn start_scrub(&self, st: &mut State, now: Instant, room: u32) {
+    /// Begin a scrub cycle: inflate to `inflate_to` (the mode's [`ScrubDepth`] decided how deep
+    /// — [`scrub_target_pages`]), hold, deflate back to the pre-scrub target. Driven forward by
+    /// [`Self::scrub_tick`] on subsequent reports; the watchdog thread is the only other exit.
+    fn start_scrub(&self, st: &mut State, now: Instant, inflate_to: u32) {
         let resume_pages = st.target_pages;
-        if !send_target(&self.socket, st, room) {
+        if !send_target(&self.socket, st, inflate_to) {
             return; // still due — retried on the next report
         }
-        st.target_pages = room;
+        st.target_pages = inflate_to;
         st.last_change = Some(now);
         st.gap = None; // the scrub owns the target now; stale gap timing must not survive it
         st.scrub_gen += 1;
@@ -566,20 +583,23 @@ impl BalloonPolicy {
         st.scrub = Some(Scrub {
             phase: ScrubPhase::Inflating,
             phase_since: now,
+            target_pages: inflate_to,
             resume_pages,
             gen,
             last_actual_bytes: 0,
             stall_ticks: 0,
         });
         trace_scrub(st, "start", gen, resume_pages, None, None);
-        log::warn!("autoballoon: scrub start (inflate to {room} pages, resume {resume_pages})");
+        log::warn!(
+            "autoballoon: scrub start (inflate to {inflate_to} pages, resume {resume_pages})"
+        );
         self.spawn_scrub_watchdog(gen, resume_pages);
     }
 
     /// Advance an in-flight scrub one report-tick. Every phase advances on timeout alone —
     /// worker stats are the fast path, never load-bearing (a failed stats query must not stall
     /// the cycle with the balloon fully inflated).
-    fn scrub_tick(&self, st: &mut State, now: Instant, room: u32) {
+    fn scrub_tick(&self, st: &mut State, now: Instant) {
         let actual = self.query_stats(st).map(|w| w.actual_bytes);
         let Some(scrub) = st.scrub.as_mut() else {
             return;
@@ -601,7 +621,7 @@ impl BalloonPolicy {
             scrub.resume_pages,
             scrub.stall_ticks,
         );
-        let target_bytes = (room as u64) << 12;
+        let target_bytes = (scrub.target_pages as u64) << 12;
         let step = scrub_step(
             phase,
             now.duration_since(phase_since),
@@ -754,25 +774,96 @@ fn send_target(socket: &Path, st: &mut State, pages: u32) -> bool {
     false
 }
 
+/// How deep a scrub inflates (see [`scrub_target_pages`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScrubDepth {
+    /// Inflate only as far as the guest's free list covers: captures the DEAD share of the
+    /// retention pool (freed-but-unreported pages sitting in the guest's free lists — MemFree
+    /// includes them) without forcing page-cache reclaim.
+    Bounded,
+    /// Eager full inflate to the whole room: also reaches the cold-cache share, at the cost of
+    /// dumping the guest's page cache (the testbed-measured 66%-of-pool recovery).
+    Full,
+}
+
+/// Per-mode scrub tuning: how bad the host must be doing before a cycle may run, how often,
+/// and how deep. Keyed by [`ReclaimMode`] as the guest-comfort knob, like the allowances:
+/// Light guests give up their cache only when the host is in real trouble; Aggressive guests
+/// scrub eagerly and often.
+struct ScrubParams {
+    /// Minimum blended host level that can trigger a cycle.
+    min_host: HostPressure,
+    /// Minimum time between cycles (and, because the timer starts armed at construction, the
+    /// minimum uptime before the first).
+    cooldown: Duration,
+    depth: ScrubDepth,
+}
+
+fn scrub_params(mode: ReclaimMode) -> ScrubParams {
+    match mode {
+        // Not reached: `on_pressure` returns early for Disabled. Values are the gentlest.
+        ReclaimMode::Disabled | ReclaimMode::Light => ScrubParams {
+            min_host: HostPressure::Critical,
+            cooldown: 2 * SCRUB_COOLDOWN,
+            depth: ScrubDepth::Bounded,
+        },
+        ReclaimMode::Moderate => ScrubParams {
+            min_host: HostPressure::Warn,
+            cooldown: SCRUB_COOLDOWN,
+            depth: ScrubDepth::Bounded,
+        },
+        ReclaimMode::Aggressive => ScrubParams {
+            min_host: HostPressure::Warn,
+            cooldown: SCRUB_COOLDOWN / 2,
+            depth: ScrubDepth::Full,
+        },
+    }
+}
+
+/// What a scrub starting now would inflate to (pages, pure). `Bounded` degrades to the full
+/// room when the agent doesn't report MemFree (`mem_free_kib == 0` = absent, per the proto
+/// contract) — an old agent gets the pre-tuning eager behavior, not a broken no-op scrub.
+fn scrub_target_pages(
+    depth: ScrubDepth,
+    room: u32,
+    fill: u32,
+    mem_free_kib: u64,
+    margin_pages: u32,
+) -> u32 {
+    match depth {
+        ScrubDepth::Full => room,
+        ScrubDepth::Bounded if mem_free_kib == 0 => room,
+        ScrubDepth::Bounded => {
+            let free_pages = (mem_free_kib / 4).min(u32::MAX as u64) as u32;
+            fill.saturating_add(free_pages.saturating_sub(margin_pages))
+                .min(room)
+        }
+    }
+}
+
 /// Whether a pressure-triggered scrub may start (pure; unit-tested). The scrub is the only
-/// measured lever that shrinks the retention pool's phys_footprint, but a full inflate also
-/// dumps the guest's page cache — so it runs only when the HOST actually needs memory back, from
-/// a guest that isn't in acute pressure or starving, outside both the post-release and the scrub
-/// cooldown, and only when the balloon has meaningful room left to grow.
+/// measured lever that shrinks the retention pool's phys_footprint, but inflating also costs
+/// the guest (cache, for a Full scrub) — so it runs only when the HOST is at/above the mode's
+/// trigger level, from a guest that isn't in acute pressure or starving, outside both the
+/// post-release and the mode's scrub cooldown, and only when the cycle would actually inflate
+/// meaningfully past the driver's current fill (`inflate_to` is the depth-computed target: a
+/// cache-full guest under a Bounded scrub has huge room but nothing free to capture — not due).
+#[allow(clippy::too_many_arguments)]
 fn scrub_due(
+    params: &ScrubParams,
     host: HostPressure,
     acute: bool,
-    current: u32,
-    room: u32,
+    inflate_to: u32,
+    fill: u32,
     cooldown_until: Option<Instant>,
     last_scrub_end: Instant,
     now: Instant,
 ) -> bool {
-    host != HostPressure::Normal
+    host >= params.min_host
         && !acute
-        && room.saturating_sub(current) >= SCRUB_MIN_INFLATE
+        && inflate_to.saturating_sub(fill) >= SCRUB_MIN_INFLATE
         && cooldown_until.is_none_or(|t| now >= t)
-        && now.duration_since(last_scrub_end) >= SCRUB_COOLDOWN
+        && now.duration_since(last_scrub_end) >= params.cooldown
 }
 
 /// The pure per-tick phase-advance verdict for an in-flight scrub. Stats (`actual_bytes`) are
@@ -1720,87 +1811,209 @@ mod tests {
         );
     }
 
-    /// The scrub trigger matrix: host level × acute × cooldowns × remaining room. The armed-at-
-    /// construction scrub cooldown is what keeps bench scenarios (injected Warn/Critical, calm
-    /// guest — exactly the trigger shape) scrub-free, so it's load-bearing, not a nicety.
+    /// The scrub trigger matrix: host level × acute × cooldowns × meaningful inflate. The
+    /// armed-at-construction scrub cooldown is what keeps bench scenarios (injected
+    /// Warn/Critical, calm guest — exactly the trigger shape) scrub-free, so it's load-bearing,
+    /// not a nicety.
     #[test]
     fn scrub_due_only_under_host_pressure_calm_and_out_of_cooldowns() {
+        let m = scrub_params(ReclaimMode::Moderate);
         let base = Instant::now();
-        let now = base + SCRUB_COOLDOWN; // base = construction/last scrub; cooldown just elapsed
+        let now = base + m.cooldown; // base = construction/last scrub; cooldown just elapsed
         assert!(scrub_due(
+            &m,
             HostPressure::Warn,
             false,
-            0,
             ROOM,
+            0,
             None,
             base,
             now
         ));
         assert!(scrub_due(
+            &m,
             HostPressure::Critical,
             false,
-            0,
             ROOM,
+            0,
             None,
             base,
             now
         ));
-        // Host fine: never — the scrub's page-cache cost buys nothing the host needs.
+        // Host fine: never — the scrub's cost buys nothing the host needs.
         assert!(!scrub_due(
+            &m,
             HostPressure::Normal,
             false,
-            0,
             ROOM,
+            0,
             None,
             base,
             now
         ));
         // Acute guest pressure or starvation: never.
         assert!(!scrub_due(
+            &m,
             HostPressure::Warn,
             true,
-            0,
             ROOM,
+            0,
             None,
             base,
             now
         ));
         // Inside the post-release cooldown: the guest just proved it needs its memory.
         assert!(!scrub_due(
+            &m,
             HostPressure::Warn,
             false,
-            0,
             ROOM,
+            0,
             Some(now + DWELL),
             base,
             now
         ));
         // An expired release cooldown no longer blocks.
         assert!(scrub_due(
+            &m,
             HostPressure::Warn,
             false,
-            0,
             ROOM,
+            0,
             Some(now - DWELL),
             base,
             now
         ));
-        // Scrub cooldown: fresh construction (last_scrub_end = now) blocks the first 30 min.
+        // Scrub cooldown: fresh construction (last_scrub_end = now) blocks the first cycle.
         assert!(!scrub_due(
+            &m,
             HostPressure::Warn,
             false,
-            0,
             ROOM,
+            0,
             None,
             now,
             now
         ));
         // Balloon already nearly full: the freed pages were already released — nothing to scrub.
         assert!(!scrub_due(
+            &m,
             HostPressure::Warn,
             false,
-            ROOM - SCRUB_MIN_INFLATE + 1,
             ROOM,
+            ROOM - SCRUB_MIN_INFLATE + 1,
+            None,
+            base,
+            now
+        ));
+    }
+
+    /// The mode key: Light scrubs only under Critical and half as often; Aggressive scrubs
+    /// under Warn twice as often as Moderate. (Depth is covered by `scrub_targets_by_depth`.)
+    #[test]
+    fn scrub_params_key_trigger_and_cadence_by_mode() {
+        let (l, m, a) = (
+            scrub_params(ReclaimMode::Light),
+            scrub_params(ReclaimMode::Moderate),
+            scrub_params(ReclaimMode::Aggressive),
+        );
+        let base = Instant::now();
+        let now = base + l.cooldown; // long enough for every mode
+                                     // Light: Warn is not enough; Critical is.
+        assert!(!scrub_due(
+            &l,
+            HostPressure::Warn,
+            false,
+            ROOM,
+            0,
+            None,
+            base,
+            now
+        ));
+        assert!(scrub_due(
+            &l,
+            HostPressure::Critical,
+            false,
+            ROOM,
+            0,
+            None,
+            base,
+            now
+        ));
+        // Cadence ordering: Aggressive < Moderate < Light.
+        assert!(a.cooldown < m.cooldown && m.cooldown < l.cooldown);
+        // At a point where Moderate's cooldown has elapsed but Light's hasn't, only the
+        // faster modes fire.
+        let mid = base + m.cooldown;
+        assert!(!scrub_due(
+            &l,
+            HostPressure::Critical,
+            false,
+            ROOM,
+            0,
+            None,
+            base,
+            mid
+        ));
+        assert!(scrub_due(
+            &m,
+            HostPressure::Warn,
+            false,
+            ROOM,
+            0,
+            None,
+            base,
+            mid
+        ));
+        // Depths: bounded for the host-considerate modes, full for Aggressive.
+        assert_eq!(l.depth, ScrubDepth::Bounded);
+        assert_eq!(m.depth, ScrubDepth::Bounded);
+        assert_eq!(a.depth, ScrubDepth::Full);
+    }
+
+    /// Bounded depth inflates over the free list only; Full takes the room; Bounded without
+    /// MemFree (old agent) degrades to Full rather than a no-op.
+    #[test]
+    fn scrub_targets_by_depth() {
+        let margin = free_margin_pages(ReclaimMode::Moderate);
+        let free_kib = (margin as u64 + 2048 * PAGES_PER_MIB as u64) * 4; // margin + 2 GiB free
+        assert_eq!(
+            scrub_target_pages(ScrubDepth::Full, ROOM, 0, free_kib, margin),
+            ROOM
+        );
+        assert_eq!(
+            scrub_target_pages(ScrubDepth::Bounded, ROOM, 0, 0, margin),
+            ROOM
+        );
+        // fill 1 GiB + (free − margin) 2 GiB = 3 GiB.
+        assert_eq!(
+            scrub_target_pages(ScrubDepth::Bounded, ROOM, GIB_PAGES, free_kib, margin),
+            3 * GIB_PAGES
+        );
+        // Never past the room.
+        assert_eq!(
+            scrub_target_pages(
+                ScrubDepth::Bounded,
+                2 * GIB_PAGES,
+                GIB_PAGES,
+                free_kib,
+                margin
+            ),
+            2 * GIB_PAGES
+        );
+        // The due-gate composes with the bounded target: a cache-full guest (huge room, tiny
+        // free list) has nothing a bounded scrub could capture — not due, whatever the room.
+        let m = scrub_params(ReclaimMode::Moderate);
+        let base = Instant::now();
+        let now = base + m.cooldown;
+        let fill = GIB_PAGES;
+        let tiny = scrub_target_pages(ScrubDepth::Bounded, ROOM, fill, (margin as u64) * 4, margin);
+        assert!(!scrub_due(
+            &m,
+            HostPressure::Warn,
+            false,
+            tiny,
+            fill,
             None,
             base,
             now
@@ -1868,6 +2081,7 @@ mod tests {
             scrub: Some(Scrub {
                 phase: ScrubPhase::Inflating,
                 phase_since: now,
+                target_pages: ROOM,
                 resume_pages: GIB_PAGES,
                 gen: 3,
                 last_actual_bytes: 0,
@@ -1887,10 +2101,11 @@ mod tests {
         abort_scrub(&mut st, now);
         assert!(st.scrub.is_none());
         assert!(!scrub_due(
+            &scrub_params(ReclaimMode::Moderate),
             HostPressure::Warn,
             false,
-            0,
             ROOM,
+            0,
             None,
             st.last_scrub_end,
             now
