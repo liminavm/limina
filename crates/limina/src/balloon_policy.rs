@@ -1002,7 +1002,7 @@ fn trace_decision(
         concat!(
             "{{\"ts_ms\":{},\"mode\":\"{:?}\",",
             "\"some_avg10\":{},\"some_avg60\":{},\"full_avg10\":{},\"full_avg60\":{},",
-            "\"avail_kib\":{},\"total_kib\":{},",
+            "\"avail_kib\":{},\"total_kib\":{},\"free_kib\":{},\"io_full_avg10\":{},",
             "\"host_raw_level\":{},\"host_avail_pct\":{},\"host\":\"{}\",\"host_injected\":{},",
             "\"current_pages\":{},\"decision\":\"{}\",\"new_target_pages\":{},",
             "\"cooldown_active\":{},\"sent\":{},",
@@ -1017,6 +1017,8 @@ fn trace_decision(
         p.full_avg60,
         p.mem_available_kib,
         p.mem_total_kib,
+        p.mem_free_kib,
+        p.io_full_avg10,
         json_opt(host.raw_level),
         json_opt(host.available_percent),
         host.blended.label(),
@@ -1794,6 +1796,8 @@ mod tests {
                 && lines[0].contains("\"sent\":true")
                 && lines[0].contains("\"host\":\"normal\"")
                 && lines[0].contains("\"host_raw_level\":2")
+                && lines[0].contains("\"free_kib\":0")
+                && lines[0].contains("\"io_full_avg10\":0")
                 && lines[0].contains(&format!("\"actual_bytes\":{}", 1u64 << 30))
                 && lines[0].contains("\"heals\":7")
                 && lines[0].contains("\"stray_faults\":0"),

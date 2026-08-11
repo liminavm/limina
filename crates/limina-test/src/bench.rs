@@ -427,7 +427,9 @@ pub struct TraceEvent {
     /// Blended host level acted on ("normal"/"warn"/"critical").
     pub host: String,
     pub current_pages: u64,
-    /// "set" or the hold gate ("converged"/"not-idle"/"dead-band"/"not-calm"/"cooldown"/"dwell").
+    /// "set", "gap-decay" (a target trimmed to the driver's actual — not a policy release), or
+    /// the hold gate ("converged"/"not-idle"/"dead-band"/"not-calm"/"cooldown"/"dwell"/
+    /// "free-exhausted").
     pub decision: String,
     pub new_target_pages: Option<u64>,
     pub cooldown_active: bool,
