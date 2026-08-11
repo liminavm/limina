@@ -150,3 +150,34 @@ not suspended since 2026-08-10 16:19 (overwritten on every park).
   sleeps through), or hold the logind delay inhibitor until the curtain settles + the frame is
   presented. limina behaves correctly; resume will show the finished lock screen and the splash
   merely mirrors the guest's frozen mid-animation state.
+
+## Issue 3 VERDICT (2026-08-10 local repro + fix): stranded present bookkeeping is not in-flight work
+
+**Reproduced end-to-end on the dev Mac** (suspend-repro.raw clone, windowed, synoik + zink env +
+ghost translucent — the dogfood parity environment): `sudo systemctl suspend` in the guest, then a
+SIGWINCH to the worker (the KEY_WAKEUP test seam, `crates/limina-vmm/src/wake.rs`) →
+`device reset with the session NOT quiescent (… 1 parked-flush-cookies …) — wiping (fail-closed)` →
+synoik SIGABRT + ghost SIGABRT (coredumps in the guest), the session torn down — the dogfood
+incident, minus host sleep. A GNOME control run on the same image was clean (drain quiesced in
+~11µs, in-place adopt worked): GNOME quiesces rendering before s2idle; a continuously-rendering
+Vulkan compositor hits the freeze mid-stream every time. Fullscreen A/B (6.5 min idle): still
+`0 awaiting-shown` — the dogfood 13894 backlog did NOT reproduce and is filed separately.
+
+**Root cause** (all in the libkrun fork, `virtio_gpu.rs`): `present_quiescent()` counted
+`flush_parked_cookies` and `awaiting_shown` against quiescence. Both are forward-looking host
+bookkeeping that never references the virtio queue a reset frees:
+- `flush_parked_cookies` is per-flush scratch — `flush_resource` CLEARS it at entry and only the
+  same flush's trailing FLAG_FENCE consumes it. An unfenced final flush (or one whose trailing
+  fence the guest's freeze-time reset dropped — the no-PM-ops virtio-gpu driver resets the device
+  on freeze, dropping in-queue commands) always leaves exactly 1 cookie parked. Hence the
+  deterministic "1 parked-flush-cookies" on both machines.
+- `awaiting_shown` waits on supervisor "shown" acks, which cannot be delivered during a reset.
+Neither can drain once the activation is gone, so the classify path burned its full 1.5s timeout
+and wiped fail-closed on every wake → every guest venus ring fatal → compositor SIGABRT.
+
+**Fix** (libkrun fork `limina` branch, commit 8ec965d, RED-first): quiescence counts only the trio
+that indexes the activation's queue (parked flushes, guest holds, unprocessed retirements); the
+park path discards the stranded bookkeeping with a log line (a stale cookie left behind would turn
+the next activation's first trailing fence into a spurious guest hold; a stale awaiting-shown entry
+skews the pop-to-first ack drain forever). Unit tests in `virtio_gpu.rs` cover both directions;
+`facf7eb` fixes the pre-existing edid test-import breakage that blocked `cargo test --features gpu`.
