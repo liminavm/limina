@@ -23,6 +23,9 @@ STAMP=$(date +%s)
 OUTDIR=$SPIKE/out-$LABEL-$STAMP
 mkdir -p "$OUTDIR"
 CSV=$OUTDIR/sampler.csv BOOTLOG=$OUTDIR/boot.log SOCK=$OUTDIR/balloon.sock
+# macOS SUN_LEN caps Unix socket paths at ~104 bytes; a long label overflows it and the
+# worker dies at bind time ("path must be shorter than SUN_LEN"). Fail early instead.
+[ ${#SOCK} -le 100 ] || { echo "balloon socket path too long (${#SOCK} > 100): $SOCK — use a shorter label" >&2; exit 1; }
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -p $SSH_PORT claude@127.0.0.1"
 
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUTDIR/driver.log"; }
@@ -181,7 +184,8 @@ if [ "$POLICY_SCRUB" = 1 ]; then
     done
     PF_PRE=$(last_col 8); POOL_PRE=$(pool_g)
     log "POLICY-SCRUB: flipping injected host pressure to warn (pf=${PF_PRE}G pool=${POOL_PRE}G)"
-    echo warn > "$OUTDIR/host-pressure"
+    # temp+rename: a read landing in the truncation window of a direct write pins Normal
+    echo warn > "$OUTDIR/host-pressure.tmp" && mv "$OUTDIR/host-pressure.tmp" "$OUTDIR/host-pressure"
     if ! wait_trace '"scrub":"start"' 180; then
         log "POLICY-SCRUB FAILED [$LABEL]: no scrub start within 180s of warn (see $TRACE)"
     else
@@ -193,6 +197,6 @@ if [ "$POLICY_SCRUB" = 1 ]; then
         log "POLICY-SCRUB RESULT [$LABEL]: pf ${PF_PRE}G -> ${PF_POST}G; pool ${POOL_PRE}G -> ${POOL_POST}G"
         grep '"scrub"' "$TRACE" | while IFS= read -r l; do log "  $l"; done
     fi
-    echo normal > "$OUTDIR/host-pressure"
+    echo normal > "$OUTDIR/host-pressure.tmp" && mv "$OUTDIR/host-pressure.tmp" "$OUTDIR/host-pressure"
 fi
 log "done; data in $OUTDIR"

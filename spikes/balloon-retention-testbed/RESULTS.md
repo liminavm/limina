@@ -7,10 +7,17 @@
 | first-repro | 08-11 | 225/60/198 s | 10.47G | 11.20 → 4.26G | 10.47 → 3.55G | ~14.2G | 6.40G |
 | memset-ctl | 08-11 | 225/61/198 s | 10.49G | 11.21 → 3.95G | 10.49 → 3.23G | 14.53G | 6.90G |
 | memset-on | 08-11 | 226/61/198 s | 11.04G | 11.74 → 1.35G | 11.04 → 0.65G | **18.03G** | 8.99G (still falling at cutoff) |
+| oracle2 (policy scrub, enhanced guest) | 08-11 | touch mix | ~0G (16k FPR kernel retains nothing) | n/a (policy-driven) | n/a | 1.45G | 1.49G (flat — no pool to recover, by design) |
 
 All runs: fresh APFS clone of ab-run-b.raw, `MIX=full`, 2G..12G, 8 cpus, ~12.5G
 host ballast. Reproduction is tight: two independent control runs landed within
 0.02G of each other at the plateau.
+
+**The ab-* images have NO limina-agent** (no unit, no RPM — leaner than the
+enhanced tier). Manual socket scrubs (`SCRUB=1`) work on them, but the
+`POLICY_SCRUB=1` oracle needs guest pressure reports to tick the policy, so it
+must run on an `enhanced.test` clone (4 KiB balloon-visible pool will be smaller
+there: the 16k host-page-aware kernel reports frees FPR can actually take).
 
 ## Testbed verdict (first-repro + memset-ctl)
 
@@ -90,3 +97,32 @@ Protocol: plateau, then (ballast held): 10 m idle → guest touch workload
   why the memset arm shows +3.1G there and the control +0.4G without implying
   asymmetric FPR behavior). The sampler now records the balloon's
   released/remapped/heals counters so the next soak answers this directly.
+
+## Live policy-scrub oracle (`POLICY_SCRUB=1`, 08-11, out-oracle2-1786477496)
+
+First end-to-end execution of the shipped pressure-triggered scrub (limina 8fdac4f),
+on an `enhanced.test` clone (the ab images carry no limina-agent — no reports, no
+policy ticks). Boot with the `@file` host-pressure seam pinned `normal` +
+`--reclaim light` (policy quiescent, `converged` at target 0 through pool build and
+plateau), then at 30.7 min uptime the file flipped to `warn`:
+
+- **Trigger: ≤5 s** from the flip to `"scrub":"start"` (gen 1, resume 0) — the armed
+  30-min construction cooldown held until then, through a plateau of injected-Normal
+  ticks and the real sysctls reading Warn underneath.
+- **Inflate: ~7 s to 96%** of the 10 GiB room (guest mostly free pages), the ≥90%
+  fast-path advance to Holding, `reached_pct:96` in the trace.
+- **Hold: 15.1 s** (SCRUB_HOLD honored), actual topped out at 10.74G = 100% of room.
+- **Deflate → done: 6 s**, actual back to 0 = the resume target, converged via stats
+  (not timeout). Total cycle 28 s. No abort, no watchdog, guest healthy, clean
+  poweroff after.
+- pf 1.45 → 1.49G, flat as designed: the 16k host-page-aware kernel's FPR retains
+  ~nothing (plateau pool ≈ 0), so this run validates the **policy cycle**; the
+  recovery magnitude stands on the manual-scrub rows above (4k ab guest, 66%).
+
+Caveats this run does NOT cover: the abort path (acute pressure mid-scrub), the
+watchdog path (reports dying mid-scrub), and a scrub against a populated retention
+pool with a busy guest — those remain unit-tested only (policy) or manual-scrub
+proven (recovery). Take 1–3 traps for the next runner: ab images lack the agent;
+`out-<label>-<ts>/balloon.sock` must stay under ~100 chars (SUN_LEN — run.sh now
+fails fast); detach runs >30 min with `nohup … & disown` (the background-task
+reaper killed takes 1 and 3... take 1 was the suite).
