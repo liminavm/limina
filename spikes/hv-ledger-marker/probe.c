@@ -136,7 +136,17 @@ static size_t resident_pages(void *p, size_t len) {
     return n;
 }
 
-/* Run the vCPU until the payload's DONE MMIO store. */
+/* Cycle-mode heal state: 2 MiB windows over the G-range (the production chunked-heal
+ * shape). Faults on released pages heal their window with MADV_FREE_REUSE + hv_vm_map. */
+#define HEAL_WIN (2ULL << 20)
+#define N_WIN (RANGE_SIZE / HEAL_WIN)
+static bool g_cycle_heal;
+static uint8_t g_win_mapped[N_WIN];
+static int g_heals;
+
+/* Run the vCPU until the payload's DONE MMIO store (PC is advanced past it, so a
+ * later run continues into the payload's next touch pass). In cycle mode, stage-2
+ * faults on the released G-range are healed production-style and retried. */
 static bool run_guest_dirty_pass(hv_vcpu_t vcpu, hv_vcpu_exit_t *vexit) {
     atomic_store(&g_deadline_ns, now_ns() + WATCHDOG_NS);
     atomic_store(&g_watch_on, true);
@@ -145,7 +155,7 @@ static bool run_guest_dirty_pass(hv_vcpu_t vcpu, hv_vcpu_exit_t *vexit) {
         if (vexit->reason == HV_EXIT_REASON_CANCELED) {
             uint64_t pc = 0;
             hv_vcpu_get_reg(vcpu, HV_REG_PC, &pc);
-            fprintf(stderr, "WATCHDOG: pc=0x%llx\n", pc);
+            fprintf(stderr, "WATCHDOG: pc=0x%llx heals=%d\n", pc, g_heals);
             atomic_store(&g_watch_on, false);
             return false;
         }
@@ -158,8 +168,28 @@ static bool run_guest_dirty_pass(hv_vcpu_t vcpu, hv_vcpu_exit_t *vexit) {
         uint64_t ec = (syn >> 26) & 0x3f;
         uint64_t pa = vexit->exception.physical_address;
         if (ec == 0x24 && pa >= MMIO_BASE && pa < MMIO_BASE + 0x1000) {
+            uint64_t pc = 0;
+            CHECK(hv_vcpu_get_reg(vcpu, HV_REG_PC, &pc));
+            CHECK(hv_vcpu_set_reg(vcpu, HV_REG_PC, pc + 4));
             atomic_store(&g_watch_on, false);
-            return true; /* DONE — leave the vCPU parked at the spin loop */
+            return true; /* DONE */
+        }
+        if (g_cycle_heal && ec == 0x24 && pa >= G_GPA && pa < G_GPA + RANGE_SIZE) {
+            uint64_t w = (pa - G_GPA) / HEAL_WIN;
+            if (!g_win_mapped[w]) {
+                uint64_t gpa = G_GPA + w * HEAL_WIN;
+                if (madvise(gpa_to_hva(gpa), HEAL_WIN, MADV_FREE_REUSE) != 0)
+                    printf("heal REUSE failed: %s\n", strerror(errno));
+                CHECK(hv_vm_map(gpa_to_hva(gpa), gpa, HEAL_WIN,
+                                HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC));
+                g_win_mapped[w] = 1;
+                g_heals++;
+                atomic_store(&g_deadline_ns, now_ns() + WATCHDOG_NS);
+                continue; /* no PC advance: retry the store */
+            }
+            fprintf(stderr, "repeat fault in healed window pa=0x%llx\n", pa);
+            atomic_store(&g_watch_on, false);
+            return false;
         }
         fprintf(stderr, "unhandled exit ec=0x%llx pa=0x%llx syndrome=0x%llx\n", ec, pa, syn);
         atomic_store(&g_watch_on, false);
@@ -209,6 +239,59 @@ int main(int argc, char **argv) {
     CHECK(hv_vcpu_set_reg(vcpu, HV_REG_PC, RAM_BASE));
     if (!run_guest_dirty_pass(vcpu, vexit)) return 1;
     s = show("P2 GUEST dirtied G-range 1G (one u64/page)", s);
+
+    /* mode "cycle": the field's actual loop — release (unmap+REUSABLE, the production
+     * shape) -> guest re-touches everything -> 512 chunked heals (REUSE+remap) -> release
+     * again. A per-cycle footprint ratchet here replicates the post-fix dogfood excess;
+     * flat means the leak is not in the release/heal cycle itself.
+     * "cycle-pressure": same, with ~14G of held ballast so the compressor participates. */
+    int cycle = argc > 2 && strncmp(argv[2], "cycle", 5) == 0;
+    if (cycle) {
+        int pressure = strcmp(argv[2], "cycle-pressure") == 0;
+        void *ballast[BALLAST_MAX];
+        size_t nballast = 0;
+        if (pressure) {
+            printf("holding 14G dirty ballast through the cycles...\n");
+            for (; nballast < 14; nballast++) {
+                void *b = mmap(NULL, BALLAST_CHUNK, PROT_READ | PROT_WRITE,
+                               MAP_ANON | MAP_PRIVATE, -1, 0);
+                if (b == MAP_FAILED) break;
+                memset(b, 0x11, BALLAST_CHUNK);
+                ballast[nballast] = b;
+            }
+        }
+        g_cycle_heal = true;
+        struct snap base = take_snap();
+        printf("cycle base: fp=%.1fM comp=%.1fM\n", base.fp, base.comp);
+        for (int c = 1; c <= 10; c++) {
+            CHECK(hv_vm_unmap(G_GPA, RANGE_SIZE));
+            if (madvise(gpa_to_hva(G_GPA), RANGE_SIZE, MADV_FREE_REUSABLE) != 0)
+                printf("cycle %d REUSABLE failed: %s\n", c, strerror(errno));
+            memset(g_win_mapped, 0, sizeof(g_win_mapped));
+            struct snap rel = take_snap();
+            g_heals = 0;
+            if (!run_guest_dirty_pass(vcpu, vexit)) return 1;
+            struct snap tch = take_snap();
+            printf("cycle %2d: released fp=%8.1fM comp=%8.1fM | re-touched (heals=%3d) "
+                   "fp=%8.1fM comp=%8.1fM | drift vs base %+7.1fM\n",
+                   c, rel.fp, rel.comp, g_heals, tch.fp, tch.comp, tch.fp - base.fp);
+            fflush(stdout);
+        }
+        for (size_t i = 0; i < nballast; i++) munmap(ballast[i], BALLAST_CHUNK);
+        s = show("cycles done (ballast freed)", take_snap());
+        CHECK(hv_vm_unmap(G_GPA, RANGE_SIZE));
+        s = show("final hv_vm_unmap G", s);
+        if (madvise(gpa_to_hva(G_GPA), RANGE_SIZE, MADV_FREE_REUSABLE) != 0)
+            printf("final REUSABLE failed: %s\n", strerror(errno));
+        s = show("final REUSABLE G", s);
+        CHECK(hv_vcpu_destroy(vcpu));
+        hv_vm_unmap(RAM_BASE, RAM_SIZE);
+        CHECK(hv_vm_destroy());
+        s = show("teardown (vm destroyed)", s);
+        munmap(g_ram, RAM_SIZE);
+        show("munmap RAM", s);
+        return 0;
+    }
 
     /* mode "resident": skip compression entirely — the exact pre-fix L1-test shape
      * (fresh guest-faulted resident pages, stage-2 mapped, REUSABLE straight away). */

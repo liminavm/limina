@@ -14,7 +14,11 @@
 .global _start
 _start:
     movz x20, #0x1000, lsl #16      // MMIO base 0x10000000
-    movz x21, #0x9000, lsl #16      // G-range base 0x90000000
+
+    // Outer loop: touch every page of the G-range, signal DONE, repeat forever.
+    // The host decides per-DONE whether to release the range and resume (cycle
+    // mode) or stop running the vCPU (single-pass modes).
+0:  movz x21, #0x9000, lsl #16      // G-range base 0x90000000
     movz x2,  #0x5a5a
     movz x3,  #1, lsl #16           // 65536 pages
 
@@ -24,5 +28,5 @@ _start:
     b.ne 1b
 
     movz x2, #0xD05E
-    str  x2, [x20]                  // DONE
-2:  b    2b
+    str  x2, [x20]                  // DONE (host may release G here)
+    b    0b

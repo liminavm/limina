@@ -54,6 +54,25 @@ This reconciles everything that looked contradictory:
   P4 (unmap → REUSABLE) is exactly the production sequence and is the best of all
   measured recipes.
 
+## Cycle mode (same day): the field loop does NOT reproduce the post-fix excess locally
+
+`cycle` / `cycle-pressure` modes run the actual field loop — release (unmap+REUSABLE,
+production shape) → guest re-touches every page → 512 chunked heals (REUSE + 2 MiB remap,
+production shape) → release again — 10 times, optionally with 14 G of held ballast.
+Result: **zero drift**. Every release debits exactly 1024 M, every re-touch re-bills
+exactly 1024 M, teardown returns to baseline. (Caveat: in the pressure run the compressor
+never engaged on the target — the 16 G working set still fit. The single-shot compressed
+runs cover that cell: unmap debits the compressed share cleanly.)
+
+So the post-fix dogfood excess (~22 G billed vs ~7.4 G guest-visible) is **NOT replicated**
+by any local shape tried: single-shot × {resident, compressed} × {private, shared}, and
+cyclic × {ambient, pressured}. What the field has that these probes don't: 24 G scale with
+192-piece fragmentation, 10 vCPUs healing concurrently against the release lock, the
+virtio-gpu SHM-window map/unmap churn interleaved, s2idle/park cycles, and hour-scale
+duration. Also unresolved: the 2.07× disagreement observed between the balloon socket's
+`target=actual` and the decision-trace's view of the same instant (2026-08-11 field
+snapshot) — pin that down before trusting any single instrument.
+
 ## Production consequences
 
 1. **release() is optimal as shipped** — no janitor, no rescan, no memset, no MADV_ZERO.
@@ -64,3 +83,7 @@ This reconciles everything that looked contradictory:
    (per-tick `released−remapped` vs the guest-RAM region's billed bytes) — but the limbo
    mechanism no longer applies to released ranges there, so the suspects narrow to live
    content aliased by the oscillation plus anything the balloon never releases.
+4. Local probe space is exhausted without a replication; the next replication vehicles are
+   the REAL stack: (a) the deployed counters build on dogfood (outstanding-vs-billed
+   correlation), (b) a local limina run with the ledger sampler attached under the
+   compile-mix A/B workload — full scale, multi-vCPU, GPU churn included.
