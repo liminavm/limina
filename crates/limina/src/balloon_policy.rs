@@ -103,6 +103,13 @@ const IO_PRESSURE_LOW: u32 = 200; // 2.00%
 /// to complete. Worsening levels act immediately (host distress must never wait on a
 /// debounce); improving levels must prove themselves for this long.
 const HOST_DEMOTE_SUSTAIN: Duration = Duration::from_secs(60);
+/// Give-back escalation cap: the step doubles per consecutive sent give-back
+/// ([`INFLATE_STEP_PAGES`] << streak) up to this shift — 256 MiB, 512 MiB, 1 GiB. One fixed
+/// step walked a 4 GiB dig down over 16 dwells (~35 s of the guest still thrashing) on the S3
+/// warn-dug point; escalation cuts that to ~6 while the first step — most give-back episodes
+/// in full — stays the small sensor-paced one. The remaining tail is re-fault warm-up, which
+/// no deflate pacing can remove.
+const GIVEBACK_MAX_SHIFT: u32 = 2;
 
 /// Minimum time between scrub cycles — and, because the timer starts armed at construction, the
 /// minimum uptime before the first one (never scrub a freshly booted VM; this also keeps the
@@ -368,6 +375,9 @@ struct State {
     /// inflation at host-Normal (see [`Hold::Inelastic`]) until the guest's free list rises
     /// [`INELASTIC_FREE_RISE_KIB`] above the level recorded here.
     inelastic: Option<InelasticHold>,
+    /// Consecutive sent give-backs in the current episode: doubles the give-back step (see
+    /// [`GIVEBACK_MAX_SHIFT`]). Advanced by [`giveback_streak_next`]; cleared by a scrub start.
+    giveback_streak: u32,
     /// Downward hysteresis over the blended host level (see [`HOST_DEMOTE_SUSTAIN`]).
     host_debounce: HostDebounce,
     /// `LIMINA_BALLOON_TRACE` decision journal: one JSON line per consumed report.
@@ -582,6 +592,7 @@ impl BalloonPolicy {
                 elastic_probe: None,
                 inelastic: None,
                 host_debounce: HostDebounce::new(),
+                giveback_streak: 0,
                 trace,
             })),
         }
@@ -692,6 +703,7 @@ impl BalloonPolicy {
             last_change: st.last_change,
             cooldown_until: st.cooldown_until,
             inelastic: st.inelastic.is_some(),
+            giveback_streak: st.giveback_streak,
             now,
         };
         let mut decision = decide(p, &inputs);
@@ -772,6 +784,7 @@ impl BalloonPolicy {
                 }
             }
         }
+        st.giveback_streak = giveback_streak_next(st.giveback_streak, decision, sent);
         trace_decision(&mut st, p, &host, &inputs, decision, sent, wstats.as_ref());
     }
 
@@ -787,6 +800,7 @@ impl BalloonPolicy {
         st.last_change = Some(now);
         st.gap = None; // the scrub owns the target now; stale gap timing must not survive it
         st.elastic_probe = None; // scrub churn must not feed an elasticity verdict
+        st.giveback_streak = 0; // same: an episode must not straddle a scrub cycle
         st.scrub_gen += 1;
         let gen = st.scrub_gen;
         st.scrub = Some(Scrub {
@@ -1292,6 +1306,8 @@ struct DecideInputs {
     /// An inelastic verdict is in force: the last judged inflation step was fed by reclaim
     /// (cache), not free memory (see [`elasticity_action`]). Gates inflation at host-Normal.
     inelastic: bool,
+    /// Consecutive sent give-backs in the current episode (see [`GIVEBACK_MAX_SHIFT`]).
+    giveback_streak: u32,
     now: Instant,
 }
 
@@ -1339,6 +1355,20 @@ fn free_margin_pages(mode: ReclaimMode) -> u32 {
 /// the balloon's fault by definition.
 fn guest_starved(p: &MemPressure) -> bool {
     p.mem_total_kib > 0 && p.mem_available_kib < (256 * 1024).max(p.mem_total_kib / 64)
+}
+
+/// Advance the give-back escalation streak for one consumed report. A sent give-back extends
+/// the episode; `Hold(Dwell)` preserves it (the only dwells that can coexist with a nonzero
+/// streak are give-back-path dwells: every sent give-back arms [`RELEASE_COOLDOWN`], so the
+/// inflation path answers `Cooldown`, not `Dwell`, for the next 300 s); anything else — an
+/// allowance move, a decay, any other hold, or a give-back the socket failed to deliver —
+/// ends the episode and the next one starts back at the small step.
+fn giveback_streak_next(streak: u32, decision: Decision, sent: bool) -> u32 {
+    match decision {
+        Decision::GiveBack(_) if sent => streak.saturating_add(1),
+        Decision::Hold(Hold::Dwell) => streak,
+        _ => 0,
+    }
 }
 
 /// The pure policy verdict: a new target, or a hold carrying the gate that held. The reason is
@@ -1493,7 +1523,11 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
                 return Decision::Hold(Hold::Dwell);
             }
         }
-        return Decision::GiveBack(i.current.saturating_sub(INFLATE_STEP_PAGES));
+        // The step doubles per consecutive give-back (256 MiB → 512 MiB → 1 GiB): the first
+        // step stays sensor-paced, but a trigger that survives a whole dwell after a step
+        // means the shortfall is deep — walk it down in dwells-log time, not dwells-linear.
+        let step = INFLATE_STEP_PAGES << i.giveback_streak.min(GIVEBACK_MAX_SHIFT);
+        return Decision::GiveBack(i.current.saturating_sub(step));
     }
 
     if desired.abs_diff(i.current) < DEAD_BAND_PAGES && desired != 0 {
@@ -1607,6 +1641,7 @@ mod tests {
             room: ROOM,
             max_pages: MAX,
             inelastic: false,
+            giveback_streak: 0,
             last_change: None,
             cooldown_until: None,
             now: Instant::now(),
@@ -1929,6 +1964,61 @@ mod tests {
         // and avg60 is calm — no give-back.
         let p = report_pages(0, GIB_PAGES, MAX);
         assert_eq!(decide(&p, &i), Decision::Hold(Hold::Converged));
+    }
+
+    /// The give-back step doubles per consecutive give-back (256 MiB → 512 MiB → 1 GiB cap):
+    /// the first step stays sensor-paced, a trigger that survives whole dwells means the
+    /// shortfall is deep. Saturation still floors the escalated step at zero.
+    #[test]
+    fn pressure_giveback_escalates_on_consecutive_fires() {
+        let cur = 6 * GIB_PAGES;
+        let p = report_with_io(0, GIB_PAGES, MAX, 1000);
+        let ladder = [
+            (0, INFLATE_STEP_PAGES),
+            (1, 2 * INFLATE_STEP_PAGES),
+            (2, 4 * INFLATE_STEP_PAGES),
+            (3, 4 * INFLATE_STEP_PAGES), // capped at 1 GiB
+            (9, 4 * INFLATE_STEP_PAGES),
+        ];
+        for (streak, step) in ladder {
+            let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
+            i.giveback_streak = streak;
+            assert_eq!(decide(&p, &i), Decision::GiveBack(cur - step));
+        }
+        // An escalated step bigger than the balloon saturates at zero.
+        let mut i = inputs(
+            ReclaimMode::Moderate,
+            HostPressure::Normal,
+            3 * INFLATE_STEP_PAGES,
+        );
+        i.giveback_streak = 2;
+        assert_eq!(decide(&p, &i), Decision::GiveBack(0));
+    }
+
+    /// The streak advance: a sent give-back extends the episode, the give-back path's dwell
+    /// hold preserves it (a nonzero streak can only coexist with give-back dwells — every
+    /// sent give-back arms the release cooldown, so the inflation path answers Cooldown for
+    /// 300 s), and everything else — an allowance move, an unsent give-back, any other hold —
+    /// ends the episode.
+    #[test]
+    fn giveback_streak_advances_and_resets() {
+        assert_eq!(giveback_streak_next(0, Decision::GiveBack(0), true), 1);
+        assert_eq!(giveback_streak_next(2, Decision::GiveBack(0), true), 3);
+        assert_eq!(giveback_streak_next(2, Decision::GiveBack(0), false), 0);
+        assert_eq!(
+            giveback_streak_next(2, Decision::Hold(Hold::Dwell), false),
+            2
+        );
+        assert_eq!(giveback_streak_next(2, Decision::Set(0), true), 0);
+        assert_eq!(giveback_streak_next(2, Decision::Decay(0), true), 0);
+        assert_eq!(
+            giveback_streak_next(2, Decision::Hold(Hold::Cooldown), false),
+            0
+        );
+        assert_eq!(
+            giveback_streak_next(2, Decision::Hold(Hold::Converged), false),
+            0
+        );
     }
 
     /// An inelastic dig at host Warn proceeds (digging is the squeeze contract) but paced by
@@ -2334,6 +2424,7 @@ mod tests {
             elastic_probe: None,
             inelastic: None,
             host_debounce: HostDebounce::new(),
+            giveback_streak: 0,
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -2687,6 +2778,7 @@ mod tests {
             elastic_probe: None,
             inelastic: None,
             host_debounce: HostDebounce::new(),
+            giveback_streak: 0,
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -2741,6 +2833,7 @@ mod tests {
             elastic_probe: None,
             inelastic: None,
             host_debounce: HostDebounce::new(),
+            giveback_streak: 0,
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
