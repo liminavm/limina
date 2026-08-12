@@ -310,6 +310,22 @@ rects). Remaining:
   FUSE_SETUPMAPPING/SHMCAP on 16 KiB host pages (enhanced tier already runs 16k guest = host-page;
   test stock-4k separately) + host↔guest uid mapping. Roadmap M5 (~line 502).
 
+## M6 dynamic memory
+- **Post-episode warm-read tax (~1.6×)** (added 2026-08-12, from the S3 escalating give-back
+  grade): after a deep balloon dig + give-back, a *fully recovered* guest (cache re-warmed,
+  kswapd idle, io-some <1%, zero stage-2 heals, no swap) reads its own page cache at ~16 GB/s
+  vs ~26 GB/s pristine — 192 vs 118 ms/pass on the S3 vehicle. Cause unidentified; leading
+  hypothesis is page-cache folio-order collapse (virtio-balloon inflates scattered 4 KiB pages
+  → buddy fragmentation → the re-warm under duress rebuilds the cache as order-0 folios, and
+  per-folio bookkeeping dominates at these speeds). Deflate pacing is exhausted as a lever —
+  this is NOT a policy item. Discriminating probes: `/proc/buddyinfo` + folio-order stats in
+  the bench recorder across an episode; and in the recovered state, `drop_caches` + a calm
+  re-read (back to ~118 = build-conditions problem; still ~192 = persistent fragmentation).
+  A real fix likely wants the custom balloon device idea (host-page-aware batched inflate
+  keeping the buddy lists intact — memory `limina-balloon-bench`, FUTURE DIRECTION). Low
+  priority: bites only after a real host-pressure episode, and 16 GB/s cached reads are
+  still fast for desktop use; kernel compaction probably erodes it over time (unverified).
+
 ## M3 networking
 - **gvproxy reconnect-on-HANG_UP** — today the net worker logs FATAL and permanently disables the NIC
   on HANG_UP (`worker.rs:146`); the supervisor recreates the path. A small libkrun reconnect patch
