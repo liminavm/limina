@@ -9,6 +9,8 @@
 | memset-on | 08-11 | 226/61/198 s | 11.04G | 11.74 → 1.35G | 11.04 → 0.65G | **18.03G** | 8.99G (still falling at cutoff) |
 | oracle2 (policy scrub, enhanced guest) | 08-11 | touch mix | ~0G (16k FPR kernel retains nothing) | n/a (policy-driven) | n/a | 1.45G | 1.49G (flat — no pool to recover, by design) |
 | clampgrade (clamp+decay+bounded scrub, enhanced guest, NEW 0.4.0 agent) | 08-11 | cache mix (5G kept file + 3G anon) | 4.20G | n/a (bounded scrub correctly NOT DUE) | n/a | 6.23G | 5.79G (warn-tier policy inflation, no scrub) |
+| clampgrade2 (elasticity gate v1 — FALSE LATCH) | 08-11 | cache mix | 6.72G | policy scrub FIRED (first live populated-pool cycle) | 6.52 → 5.12G | 11.62G | 8.86G |
+| clampgrade3 (elasticity gate v2 — PASS) | 08-11 | cache mix | 6.48G | n/a (correctly not due: headroom 333M) | n/a | 11.2G | 6.98G (warn-tier dig, no scrub) |
 
 All runs: fresh APFS clone of ab-run-b.raw, `MIX=full`, 2G..12G, 8 cpus, ~12.5G
 host ballast. Reproduction is tight: two independent control runs landed within
@@ -167,6 +169,45 @@ agent, `--reclaim moderate`, injected-Normal through build + plateau, warn flip 
   0.4.0). A static-margin bump (a) is ruled out above. Note the intent split: at
   Warn/Critical digging cache is *intended* (memory is owed) — the elasticity hold is a
   Normal-tier rule; Warn might get a trickle governor instead.
+
+## Elasticity gate (08-11, runs 2+3): cache preservation at Normal, fixed and GRADED
+
+The falsified clamp got its replacement the same day: the **free-elasticity gate**
+(limina adf3957 + ccdf09f) judges each sent inflation step by whether MemFree actually
+surrendered the pages the balloon absorbed; a step backfilled by reclaim (free drop <
+half the absorbed amount) judges inelastic and holds inflation at host-Normal until free
+genuinely rises off its observed floor.
+
+- **Run 2 (out-clampgrade2, gate v1): both design defects in one run.** A probe armed at
+  free≈8G during the dd latched a false verdict off concurrent churn (free rose while the
+  balloon absorbed → the conservative branch), and the release bar — captured at that 8G
+  transient — became unreachable once the mix converted free to cache: a PERMANENT hold,
+  balloon parked at 768M, guest untouched, plateau pf 11.6G. Silver lining: with the
+  balloon tiny, free at the warn flip was ~3.5G, the bounded scrub's due-gate passed, and
+  the **first live populated-pool policy scrub** ran a clean start→hold→deflate→done
+  cycle: pf 11.62 → 8.86G, pool 6.52 → 5.12G. Fixes (ccdf09f): probes arm only in the
+  low-free chase regime (free < margin + 2 steps — churn noise there is
+  watermark-bounded), and the release bar decays to the LOWEST free observed while held.
+- **Run 3 (out-clampgrade3, gate v2): PASS on the falsifying profile.** Boot inflation
+  ran full elastic steps 10G→550M free (no probes above the regime); the first step sent
+  from inside it (free 542M) judged inelastic at t+45.6s — the reclaim equilibrium —
+  and the hold parked the balloon at 5632M. **Cached held at ~5.27G through the whole
+  24-min plateau (96% of the 5.5G warm set) vs run 1's 1.96G (36%)**; avail stayed 4.8G
+  vs run 1's dig to the 1.5G allowance. Total cache lost at Normal: ~0.24G at latch +
+  one 256M re-probe step each time free wobble crossed the 128M release bar (twice in
+  24 min) ≈ 0.75G, vs run 1's 3.5G sprint. At the warn flip the gate yielded on the
+  first tick and the intended dig ran to the 6.25% allowance in ~25 s (cached → 1.46G,
+  pf 10.72 → 6.98G) — memory owed, memory delivered. Scrub correctly not-due (headroom
+  333M < SCRUB_MIN_INFLATE).
+- **The cost profile moved where it belongs:** at host-Normal the host now pays for guest
+  cache retention (plateau pf 11.2G vs run 1's 6.2G — the ballast compresses what the
+  guest keeps); at Warn the memory comes back in seconds. That is the designed Moderate
+  contract.
+- **Residuals, known and accepted for now:** (1) the watermark wobble can cross the 128M
+  release bar (~2×/24 min here), each costing one 256M probe into cache — bump
+  INELASTIC_FREE_RISE_KIB if it proves noisy on dogfood; (2) the warn-tier dig runs at
+  full 128 MiB/s (kswapd keeps free above the margin, so the trickle never engages) —
+  the io-PSI give-back lever is the parked follow-up for pacing an owed dig.
 
 **Protocol change (08-11 tuning arc, limina 59e40ee):** the scrub is now mode-keyed
 (Light = critical trigger / 60 min cooldown / BOUNDED depth; Moderate = warn / 30 min /
