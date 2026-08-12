@@ -64,6 +64,17 @@ const GAP_DECAY_AFTER: Duration = Duration::from_secs(10);
 /// After a gap decay, don't ask for more for this long: the guest just proved it can't give
 /// more, and immediately re-commanding the same unfillable target re-enters the retry loop.
 const GAP_BACKOFF: Duration = Duration::from_secs(60);
+/// An inflation step judges as INELASTIC when the guest's free list surrendered less than half
+/// of what the balloon absorbed: the difference was backfilled by reclaim, i.e. the step came
+/// out of page cache, not free memory. (kswapd holds MemFree at its watermark equilibrium —
+/// ~450–550 MiB on a 12 GiB guest, above every mode margin — so the MemFree clamp alone never
+/// binds on a cache-warm guest: the 08-11 `out-clampgrade` testbed run.)
+const ELASTIC_MIN_FILL_PAGES: u32 = DEAD_BAND_PAGES;
+/// An inelastic hold at host-Normal releases only when the guest's free list rises this far
+/// (KiB; 128 MiB) above its level at verdict time: real frees show up as a rise, while the
+/// watermark equilibrium just wobbles ±tens of MiB. No timer — if free never rises, there is
+/// nothing new to take and probing again would only eat another step of cache.
+const INELASTIC_FREE_RISE_KIB: u64 = 128 * 1024;
 
 /// Minimum time between scrub cycles — and, because the timer starts armed at construction, the
 /// minimum uptime before the first one (never scrub a freshly booted VM; this also keeps the
@@ -106,13 +117,15 @@ pub const PAGES_PER_MIB: u32 = 256;
 /// cost) and always runs.
 ///
 /// Inflation steps are paced by the guest's reported MemFree down to a mode-keyed margin
-/// (`free_margin_pages`). NOTE this paces the RATE only — it does NOT preserve guest page
-/// cache: kswapd refills the free list from cache above the margin, so allowance-based
-/// targets still consume cache at full step rate (measured 2026-08-11,
-/// spikes/balloon-retention-testbed out-clampgrade run). The clamp binds — holding at
-/// host-Normal, trickling when memory is owed — only when the guest genuinely runs out of
-/// reclaimable pages (anon-heavy, nothing left to evict): it is death-spiral protection,
-/// not a cache preserver.
+/// (`free_margin_pages`). The margin alone cannot preserve page cache — kswapd refills the
+/// free list from cache above every margin, so a MemFree reading is a lie while cache is
+/// being eaten (measured 2026-08-11, spikes/balloon-retention-testbed out-clampgrade run).
+/// Cache preservation at host-Normal is instead the free-ELASTICITY gate: a sent step whose
+/// pages the free list didn't surrender judges inelastic ([`elasticity_action`]) and holds
+/// further inflation ([`Hold::Inelastic`]) until MemFree genuinely rises. When memory is owed
+/// (host Warn/Critical, or Aggressive by contract) cache digging is intended and proceeds —
+/// at the trickle once the free list is exhausted. The margin clamp remains as death-spiral
+/// protection for the genuinely-unreclaimable case.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize,
 )]
@@ -313,8 +326,41 @@ struct State {
     /// ticks with a known `actual` — a failed stats query freezes it rather than resetting or
     /// advancing it.
     gap: Option<GapTrack>,
+    /// Armed after each sent inflation step: judged by [`elasticity_action`] once the fill
+    /// progresses. Cleared by any deflate, decay, or scrub (a stale probe must never judge).
+    elastic_probe: Option<ElasticityProbe>,
+    /// An in-force inelastic verdict: inflation came from reclaim, not free memory. Gates
+    /// inflation at host-Normal (see [`Hold::Inelastic`]) until the guest's free list rises
+    /// [`INELASTIC_FREE_RISE_KIB`] above the level recorded here.
+    inelastic: Option<InelasticHold>,
     /// `LIMINA_BALLOON_TRACE` decision journal: one JSON line per consumed report.
     trace: Option<std::fs::File>,
+}
+
+/// One armed elasticity observation: the free level and driver fill at the moment an inflation
+/// step was sent, so the next tick can ask "did MemFree actually surrender those pages?".
+struct ElasticityProbe {
+    free_kib_at_send: u64,
+    actual_at_send: u32,
+}
+
+/// The free-list level at the moment a step judged inelastic — the release baseline.
+struct InelasticHold {
+    free_kib_at_verdict: u64,
+}
+
+/// The pure per-tick verdict on an armed [`ElasticityProbe`] (see [`elasticity_action`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Elasticity {
+    /// The fill hasn't progressed enough to judge yet: keep the probe armed.
+    Judging,
+    /// Free tracked the fill: the balloon consumed genuinely free pages. Probe done.
+    Elastic,
+    /// The fill grew but free didn't drop to match: reclaim backfilled the free list from
+    /// page cache — the step was a cache dig.
+    Inelastic,
+    /// The balloon deflated under the probe: no verdict possible, discard it.
+    Stale,
 }
 
 /// One armed observation of a target>actual gap: when it started, and the fill level at arm
@@ -448,6 +494,8 @@ impl BalloonPolicy {
                 scrub_gen: 0,
                 last_scrub_end: Instant::now(),
                 gap: None,
+                elastic_probe: None,
+                inelastic: None,
                 trace,
             })),
         }
@@ -514,6 +562,35 @@ impl BalloonPolicy {
                 return;
             }
         }
+        // Free-elasticity: judge the last sent inflation step. A step whose pages the free
+        // list didn't surrender was backfilled by reclaim — it came out of page cache, and the
+        // MemFree clamp alone can't see that (kswapd holds MemFree at its watermark equilibrium,
+        // above every mode margin — the 08-11 `out-clampgrade` run). The verdict holds inflation
+        // at host-Normal until the guest's free list genuinely rises.
+        if p.mem_free_kib != 0 {
+            if let (Some(probe), Some(a)) = (st.elastic_probe.as_ref(), actual_pages) {
+                match elasticity_action(probe, p.mem_free_kib, a) {
+                    Elasticity::Judging => {}
+                    Elasticity::Elastic | Elasticity::Stale => st.elastic_probe = None,
+                    Elasticity::Inelastic => {
+                        st.elastic_probe = None;
+                        st.inelastic = Some(InelasticHold {
+                            free_kib_at_verdict: p.mem_free_kib,
+                        });
+                        log::info!(
+                            "autoballoon: inflation judged inelastic (free did not track the \
+                             fill — reclaim is feeding the balloon from cache); holding at \
+                             host-Normal until MemFree rises"
+                        );
+                    }
+                }
+            }
+            if let Some(h) = st.inelastic.as_ref() {
+                if p.mem_free_kib >= h.free_kib_at_verdict + INELASTIC_FREE_RISE_KIB {
+                    st.inelastic = None; // the guest freed real memory: probe again
+                }
+            }
+        }
         let inputs = DecideInputs {
             mode: self.mode,
             host: host.blended,
@@ -523,15 +600,26 @@ impl BalloonPolicy {
             max_pages: self.max_pages,
             last_change: st.last_change,
             cooldown_until: st.cooldown_until,
+            inelastic: st.inelastic.is_some(),
             now,
         };
         let mut decision = decide(p, &inputs);
         let mut sent = false;
         if let Decision::Set(new_target) = decision {
+            let old_target = st.target_pages;
             sent = send_target(&self.socket, &mut st, new_target);
             if sent {
                 st.target_pages = new_target;
                 st.last_change = Some(now);
+                // Arm the elasticity probe on inflations; a deflate invalidates any armed one.
+                st.elastic_probe = if new_target > old_target && p.mem_free_kib != 0 {
+                    Some(ElasticityProbe {
+                        free_kib_at_send: p.mem_free_kib,
+                        actual_at_send: actual_pages.unwrap_or(old_target),
+                    })
+                } else {
+                    None
+                };
                 log::debug!(
                     "autoballoon: target -> {new_target} pages (some_avg10={}, avail/total={}/{})",
                     p.some_avg10,
@@ -560,6 +648,7 @@ impl BalloonPolicy {
                         st.target_pages = a;
                         st.last_change = Some(now);
                         st.gap = None;
+                        st.elastic_probe = None; // the decay is a deflate: any probe is stale
                         let backoff = now + GAP_BACKOFF;
                         st.cooldown_until =
                             Some(st.cooldown_until.map_or(backoff, |t| t.max(backoff)));
@@ -587,6 +676,7 @@ impl BalloonPolicy {
         st.target_pages = inflate_to;
         st.last_change = Some(now);
         st.gap = None; // the scrub owns the target now; stale gap timing must not survive it
+        st.elastic_probe = None; // scrub churn must not feed an elasticity verdict
         st.scrub_gen += 1;
         let gen = st.scrub_gen;
         st.scrub = Some(Scrub {
@@ -940,6 +1030,28 @@ fn gap_action(
     }
 }
 
+/// The pure elasticity verdict (unit-tested): given the probe armed at the last sent inflation
+/// step, the guest's current MemFree and the driver's current fill, decide whether that step
+/// consumed free memory or was backfilled by reclaim. Free is compared page-for-page against
+/// what the balloon absorbed: a drop under half the absorbed amount means the free list was
+/// replenished from page cache while the balloon drained it.
+fn elasticity_action(probe: &ElasticityProbe, free_kib: u64, actual: u32) -> Elasticity {
+    if actual < probe.actual_at_send {
+        return Elasticity::Stale; // deflated under the probe: no verdict possible
+    }
+    let absorbed = actual - probe.actual_at_send;
+    if absorbed < ELASTIC_MIN_FILL_PAGES {
+        return Elasticity::Judging;
+    }
+    let free_drop_pages =
+        (probe.free_kib_at_send.saturating_sub(free_kib) / 4).min(u32::MAX as u64) as u32;
+    if free_drop_pages < absorbed / 2 {
+        Elasticity::Inelastic
+    } else {
+        Elasticity::Elastic
+    }
+}
+
 /// Abandon an in-flight scrub (acute guest pressure or starvation). The caller's release
 /// decision hands the memory back; re-arming `last_scrub_end` here keeps an abort-prone guest
 /// from being re-squeezed the moment the acute report passes.
@@ -1067,6 +1179,9 @@ struct DecideInputs {
     last_change: Option<Instant>,
     /// No inflation before this instant (armed by the caller on high-pressure reports).
     cooldown_until: Option<Instant>,
+    /// An inelastic verdict is in force: the last judged inflation step was fed by reclaim
+    /// (cache), not free memory (see [`elasticity_action`]). Gates inflation at host-Normal.
+    inelastic: bool,
     now: Instant,
 }
 
@@ -1153,6 +1268,7 @@ impl Decision {
             Decision::Hold(Hold::Cooldown) => "cooldown",
             Decision::Hold(Hold::Dwell) => "dwell",
             Decision::Hold(Hold::FreeExhausted) => "free-exhausted",
+            Decision::Hold(Hold::Inelastic) => "inelastic",
         }
     }
 }
@@ -1176,6 +1292,11 @@ enum Hold {
     /// the memory urgently (Normal) — wait for the guest to free memory on its own instead of
     /// forcing cache reclaim.
     FreeExhausted,
+    /// Inflation gate: the last judged step was fed by reclaim, not free memory (see
+    /// [`elasticity_action`]) — at host-Normal further steps would keep eating page cache
+    /// through a MemFree reading the kernel holds at its watermark equilibrium. Released when
+    /// the guest's free list genuinely rises ([`INELASTIC_FREE_RISE_KIB`]).
+    Inelastic,
 }
 
 /// The pure policy decision (unit-tested): given a pressure report and the current state, return
@@ -1263,6 +1384,13 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
         let step = if p.mem_free_kib == 0 {
             INFLATE_STEP_PAGES
         } else {
+            // Elasticity gate first: when the last judged step was fed by reclaim, a healthy
+            // MemFree reading is a lie (kswapd backfills it from cache), so the headroom math
+            // below must not run at host-Normal. When memory is owed (Warn/Critical) or the
+            // mode ignores host pressure (Aggressive), digging cache is the contract — proceed.
+            if i.inelastic && i.host == HostPressure::Normal && i.mode != ReclaimMode::Aggressive {
+                return Decision::Hold(Hold::Inelastic);
+            }
             let free_pages = (p.mem_free_kib / 4).min(u32::MAX as u64) as u32;
             let headroom = free_pages.saturating_sub(free_margin_pages(i.mode));
             let cap = i.actual_pages.unwrap_or(i.current).saturating_add(headroom);
@@ -1315,6 +1443,7 @@ mod tests {
             actual_pages: None,
             room: ROOM,
             max_pages: MAX,
+            inelastic: false,
             last_change: None,
             cooldown_until: None,
             now: Instant::now(),
@@ -1509,6 +1638,80 @@ mod tests {
         }
     }
 
+    /// The elasticity verdicts: free tracking the fill is elastic; flat free under a grown fill
+    /// is reclaim backfilling from cache (inelastic); an unmoved fill is still judging; a
+    /// deflate under the probe is stale. This is the detector for the clampgrade finding: on a
+    /// cache-warm guest kswapd holds MemFree at its watermark equilibrium above every margin,
+    /// so the free-level clamp alone never binds while cache is being eaten.
+    #[test]
+    fn elasticity_action_judges_free_against_fill() {
+        let free0: u64 = 550 * 1024; // KiB (~the observed 12G-guest watermark equilibrium)
+        let probe = ElasticityProbe {
+            free_kib_at_send: free0,
+            actual_at_send: GIB_PAGES,
+        };
+        let absorbed = 64 * PAGES_PER_MIB; // one judged fill increment
+        let grown = GIB_PAGES + absorbed;
+        // Fill barely moved: no verdict yet.
+        assert_eq!(
+            elasticity_action(&probe, free0, GIB_PAGES + ELASTIC_MIN_FILL_PAGES - 1),
+            Elasticity::Judging
+        );
+        // Free surrendered the full 64 MiB the balloon absorbed: elastic.
+        assert_eq!(
+            elasticity_action(&probe, free0 - 64 * 1024, grown),
+            Elasticity::Elastic
+        );
+        // Free surrendered exactly half: still elastic (the threshold is strict).
+        assert_eq!(
+            elasticity_action(&probe, free0 - 32 * 1024, grown),
+            Elasticity::Elastic
+        );
+        // Free flat while the fill grew: reclaim fed the balloon from cache.
+        assert_eq!(
+            elasticity_action(&probe, free0, grown),
+            Elasticity::Inelastic
+        );
+        // Free ROSE while the fill grew (guest freeing concurrently): conservatively inelastic —
+        // the balloon demonstrably wasn't drawing the free list down.
+        assert_eq!(
+            elasticity_action(&probe, free0 + 128 * 1024, grown),
+            Elasticity::Inelastic
+        );
+        // The balloon deflated under the probe: no verdict possible.
+        assert_eq!(
+            elasticity_action(&probe, free0, GIB_PAGES - 1),
+            Elasticity::Stale
+        );
+    }
+
+    /// An in-force inelastic verdict gates inflation at host-Normal for the cache-respecting
+    /// modes — and ONLY there: when memory is owed (Warn) or the mode's contract is the squeeze
+    /// (Aggressive), digging cache is intended and inflation proceeds. An old agent
+    /// (mem_free_kib == 0) can never reach the gate.
+    #[test]
+    fn inelastic_holds_at_host_normal_and_yields_when_memory_is_owed() {
+        // Free far above the margin so ONLY the elasticity gate can be the reason to hold.
+        let free = free_margin_pages(ReclaimMode::Moderate) + 512 * PAGES_PER_MIB;
+        let p = report_with_free(0, 7 * GIB_PAGES, free, MAX);
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
+        i.inelastic = true;
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Inelastic));
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Warn, 0);
+        i.inelastic = true;
+        assert_eq!(decide(&p, &i), Decision::Set(INFLATE_STEP_PAGES));
+        let mut i = inputs(ReclaimMode::Aggressive, HostPressure::Normal, 0);
+        i.inelastic = true;
+        assert_eq!(decide(&p, &i), Decision::Set(INFLATE_STEP_PAGES));
+        // Old agent: the clamp block (and its gate) is bypassed entirely.
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
+        i.inelastic = true;
+        assert_eq!(
+            decide(&report_pages(0, 7 * GIB_PAGES, MAX), &i),
+            Decision::Set(INFLATE_STEP_PAGES)
+        );
+    }
+
     /// Free-list headroom is measured from the driver's ACTUAL fill when stats are available:
     /// an outstanding commanded-but-unfilled gap consumes the headroom.
     #[test]
@@ -1592,6 +1795,7 @@ mod tests {
             Decision::Hold(Hold::FreeExhausted).label(),
             "free-exhausted"
         );
+        assert_eq!(Decision::Hold(Hold::Inelastic).label(), "inelastic");
         assert_eq!(Decision::Decay(5).target(), Some(5));
     }
 
@@ -1753,6 +1957,8 @@ mod tests {
             scrub_gen: 0,
             last_scrub_end: Instant::now(),
             gap: None,
+            elastic_probe: None,
+            inelastic: None,
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -2103,6 +2309,8 @@ mod tests {
             scrub_gen: 3,
             last_scrub_end: now,
             gap: None,
+            elastic_probe: None,
+            inelastic: None,
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -2154,6 +2362,8 @@ mod tests {
             scrub_gen: 0,
             last_scrub_end: Instant::now(),
             gap: None,
+            elastic_probe: None,
+            inelastic: None,
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
