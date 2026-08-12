@@ -381,7 +381,11 @@ Not commitments — the bench decides. Ordered by expected relevance:
 7. **Debounce host-level improvements** (from S6): light drops its entire ramp on a
    single Normal sample, and the sysctl blend can flap at the 40% availability
    boundary. Demotions (toward squeezing less) can stay instant; promotions back to
-   Normal deserve a dwell.
+   Normal deserve a dwell. *(SHIPPED 2026-08-12: `HostDebounce` in balloon_policy.rs —
+   the acted-on level rises instantly, falls only after the lower blended reading
+   sustains 60 s; applied once in `on_pressure` so the allowance ladder, scrub trigger,
+   give-back and trace all see one consistent level. S6's 90 s step dwell still fits a
+   release inside the final Normal step.)*
 
 ## 11. Cross-references
 

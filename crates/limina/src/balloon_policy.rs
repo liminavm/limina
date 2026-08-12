@@ -97,6 +97,12 @@ const IO_PRESSURE_HIGH: u32 = 1000; // 10.00%
 /// fine while io-PSI stays quiet — refaults pushing io-full past this mean the squeeze is
 /// taking pages the guest still reads.
 const IO_PRESSURE_LOW: u32 = 200; // 2.00%
+/// How long a LOWER blended host level must sustain before the policy acts on it (bench
+/// lever 7). The sysctl blend flaps at the 40% availability boundary, and one stray Normal
+/// sample dumps Light's entire ramp — a rebuild the 256 MiB dwell-paced steps take minutes
+/// to complete. Worsening levels act immediately (host distress must never wait on a
+/// debounce); improving levels must prove themselves for this long.
+const HOST_DEMOTE_SUSTAIN: Duration = Duration::from_secs(60);
 
 /// Minimum time between scrub cycles — and, because the timer starts armed at construction, the
 /// minimum uptime before the first one (never scrub a freshly booted VM; this also keeps the
@@ -205,7 +211,8 @@ pub struct HostPressureSample {
     pub raw_level: Option<i32>,
     /// Raw `kern.memorystatus_level` (jetsam available %), if readable.
     pub available_percent: Option<i32>,
-    /// The level the policy acts on.
+    /// The blended level at sample time. `on_pressure` further applies the downward
+    /// debounce ([`HostDebounce`]) before anything acts on it.
     pub blended: HostPressure,
     /// True when `LIMINA_HOST_PRESSURE` pinned the level (the raw fields are still real).
     pub injected: bool,
@@ -361,6 +368,8 @@ struct State {
     /// inflation at host-Normal (see [`Hold::Inelastic`]) until the guest's free list rises
     /// [`INELASTIC_FREE_RISE_KIB`] above the level recorded here.
     inelastic: Option<InelasticHold>,
+    /// Downward hysteresis over the blended host level (see [`HOST_DEMOTE_SUSTAIN`]).
+    host_debounce: HostDebounce,
     /// `LIMINA_BALLOON_TRACE` decision journal: one JSON line per consumed report.
     trace: Option<std::fs::File>,
 }
@@ -370,6 +379,43 @@ struct State {
 struct ElasticityProbe {
     free_kib_at_send: u64,
     actual_at_send: u32,
+}
+
+/// Downward hysteresis over the blended host level (see [`HOST_DEMOTE_SUSTAIN`]): the level
+/// the policy acts on rises instantly but only falls after the lower reading sustains.
+struct HostDebounce {
+    level: HostPressure,
+    /// Since when raw has read below `level` (`None` = raw at/above it).
+    below_since: Option<Instant>,
+}
+
+impl HostDebounce {
+    fn new() -> Self {
+        Self {
+            level: HostPressure::Normal,
+            below_since: None,
+        }
+    }
+
+    /// Feed one raw blended sample; returns the level the policy acts on. A blip back to (or
+    /// past) the held level cancels any pending demotion; a demotion that fires lands on the
+    /// raw level read at fire time.
+    fn observe(&mut self, raw: HostPressure, now: Instant) -> HostPressure {
+        if raw >= self.level {
+            self.level = raw;
+            self.below_since = None;
+        } else {
+            match self.below_since {
+                None => self.below_since = Some(now),
+                Some(t) if now.duration_since(t) >= HOST_DEMOTE_SUSTAIN => {
+                    self.level = raw;
+                    self.below_since = None;
+                }
+                Some(_) => {}
+            }
+        }
+        self.level
+    }
 }
 
 /// The release baseline for an in-force inelastic verdict: the lowest free level observed
@@ -535,6 +581,7 @@ impl BalloonPolicy {
                 gap: None,
                 elastic_probe: None,
                 inelastic: None,
+                host_debounce: HostDebounce::new(),
                 trace,
             })),
         }
@@ -553,9 +600,14 @@ impl BalloonPolicy {
         if room == 0 || self.mode == ReclaimMode::Disabled {
             return;
         }
-        let host = sample_host_pressure();
+        let mut host = sample_host_pressure();
         let mut st = self.state.lock().unwrap();
         let now = Instant::now();
+        // Downward-debounce the blended level BEFORE anything acts on it: one stray Normal
+        // sample must not dump a ramp (bench lever 7), while a worsening host acts this tick.
+        // Everything downstream — the allowance ladder, the scrub trigger, the give-back's
+        // Critical exclusion, the trace — sees one consistent notion of host level.
+        host.blended = st.host_debounce.observe(host.blended, now);
         // A high-pressure or starvation report arms the re-inflation cooldown whether or not
         // there is a balloon to release: the guest just proved it needs its memory.
         let acute = p.some_avg10 >= PRESSURE_HIGH || guest_starved(p);
@@ -1706,6 +1758,85 @@ mod tests {
         p
     }
 
+    /// One stray improved sample must not demote the acted-on host level (Light dumps its
+    /// whole ramp on it — bench lever 7); worsening acts immediately, and a sustained lower
+    /// reading demotes after [`HOST_DEMOTE_SUSTAIN`].
+    #[test]
+    fn host_debounce_demotes_only_after_sustain() {
+        let t0 = Instant::now();
+        let s = Duration::from_secs(1);
+        let mut d = HostDebounce::new();
+        // Worsening is immediate, at every rung.
+        assert_eq!(d.observe(HostPressure::Warn, t0), HostPressure::Warn);
+        // One Normal blip holds Warn…
+        assert_eq!(d.observe(HostPressure::Normal, t0 + s), HostPressure::Warn);
+        // …and raw returning to the held level cancels the pending demotion entirely:
+        // the sustain clock restarts from the next below-reading.
+        assert_eq!(
+            d.observe(HostPressure::Warn, t0 + 2 * s),
+            HostPressure::Warn
+        );
+        assert_eq!(
+            d.observe(HostPressure::Normal, t0 + 3 * s),
+            HostPressure::Warn
+        );
+        assert_eq!(
+            d.observe(HostPressure::Normal, t0 + 3 * s + HOST_DEMOTE_SUSTAIN - s),
+            HostPressure::Warn
+        );
+        // The lower reading sustained: demote.
+        assert_eq!(
+            d.observe(HostPressure::Normal, t0 + 3 * s + HOST_DEMOTE_SUSTAIN),
+            HostPressure::Normal
+        );
+        // Worsening past the held level during a pending demotion snaps up immediately.
+        let mut d = HostDebounce::new();
+        assert_eq!(d.observe(HostPressure::Warn, t0), HostPressure::Warn);
+        assert_eq!(d.observe(HostPressure::Normal, t0 + s), HostPressure::Warn);
+        assert_eq!(
+            d.observe(HostPressure::Critical, t0 + 2 * s),
+            HostPressure::Critical
+        );
+    }
+
+    /// A demotion that fires lands on the raw level read at fire time — a Critical hold
+    /// over oscillating Warn/Normal readings must not skip to a level the host isn't at.
+    #[test]
+    fn host_debounce_demotion_lands_on_the_current_raw_level() {
+        let t0 = Instant::now();
+        let s = Duration::from_secs(1);
+        let mut d = HostDebounce::new();
+        assert_eq!(
+            d.observe(HostPressure::Critical, t0),
+            HostPressure::Critical
+        );
+        assert_eq!(
+            d.observe(HostPressure::Normal, t0 + s),
+            HostPressure::Critical
+        );
+        assert_eq!(
+            d.observe(HostPressure::Warn, t0 + 2 * s),
+            HostPressure::Critical
+        );
+        // Below-the-held-level readings sustained: fire on the CURRENT raw (Warn).
+        assert_eq!(
+            d.observe(HostPressure::Warn, t0 + s + HOST_DEMOTE_SUSTAIN),
+            HostPressure::Warn
+        );
+        // The next demotion (Warn -> Normal) needs its own sustain.
+        assert_eq!(
+            d.observe(HostPressure::Normal, t0 + 2 * s + HOST_DEMOTE_SUSTAIN),
+            HostPressure::Warn
+        );
+        assert_eq!(
+            d.observe(
+                HostPressure::Normal,
+                t0 + 2 * s + HOST_DEMOTE_SUSTAIN + HOST_DEMOTE_SUSTAIN
+            ),
+            HostPressure::Normal
+        );
+    }
+
     /// `report_pages` with io-PSI `full` avg10 set (hundredths of a %).
     fn report_with_io(
         some_avg10: u32,
@@ -2202,6 +2333,7 @@ mod tests {
             gap: None,
             elastic_probe: None,
             inelastic: None,
+            host_debounce: HostDebounce::new(),
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -2554,6 +2686,7 @@ mod tests {
             gap: None,
             elastic_probe: None,
             inelastic: None,
+            host_debounce: HostDebounce::new(),
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -2607,6 +2740,7 @@ mod tests {
             gap: None,
             elastic_probe: None,
             inelastic: None,
+            host_debounce: HostDebounce::new(),
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
