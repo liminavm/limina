@@ -354,8 +354,15 @@ struct State {
     target_pages: u32,
     /// When we last changed the target (for the inflation dwell).
     last_change: Option<Instant>,
-    /// No inflation before this instant (armed on every high-pressure report).
+    /// No inflation before this instant (armed on every high-pressure report, every sent
+    /// give-back, and gap decay).
     cooldown_until: Option<Instant>,
+    /// No scrub before this instant — armed ONLY by acute guest distress (memory-PSI high or
+    /// starvation), never by a give-back. The scrub gate must not share the inflation
+    /// cooldown: a guest whose own workload IO fires give-backs every few minutes would
+    /// starve the scrub exactly while host pressure grows the retention pool (the 08-12
+    /// dogfood episode — 46 min between scrubs against the 30-min Moderate cadence).
+    distress_until: Option<Instant>,
     /// In-flight scrub cycle, if any. While active it owns the balloon target; the normal
     /// [`decide`] path is bypassed.
     scrub: Option<Scrub>,
@@ -585,6 +592,7 @@ impl BalloonPolicy {
                 target_pages: 0,
                 last_change: None,
                 cooldown_until: None,
+                distress_until: None,
                 scrub: None,
                 scrub_gen: 0,
                 last_scrub_end: Instant::now(),
@@ -624,6 +632,7 @@ impl BalloonPolicy {
         let acute = p.some_avg10 >= PRESSURE_HIGH || guest_starved(p);
         if acute {
             st.cooldown_until = Some(now + RELEASE_COOLDOWN);
+            st.distress_until = Some(now + RELEASE_COOLDOWN);
             // An in-flight scrub is abandoned, not paused: falling through lets the normal
             // release decision hand the memory back this same tick.
             abort_scrub(&mut st, now);
@@ -656,7 +665,7 @@ impl BalloonPolicy {
                 acute,
                 inflate_to,
                 fill,
-                st.cooldown_until,
+                st.distress_until,
                 st.last_scrub_end,
                 now,
             ) {
@@ -717,6 +726,8 @@ impl BalloonPolicy {
                 if matches!(decision, Decision::GiveBack(_)) {
                     // Like any release: the guest just proved (through io) that it needs its
                     // memory — don't take the give-back right back the moment io settles.
+                    // Arms only the INFLATION cooldown, never `distress_until`: a give-back
+                    // must not push the scrub cadence out (08-12 limit cycle, half B).
                     let until = now + RELEASE_COOLDOWN;
                     st.cooldown_until = Some(st.cooldown_until.map_or(until, |t| t.max(until)));
                     log::info!(
@@ -1068,9 +1079,12 @@ fn scrub_target_pages(
 /// measured lever that shrinks the retention pool's phys_footprint, but inflating also costs
 /// the guest (cache, for a Full scrub) — so it runs only when the HOST is at/above the mode's
 /// trigger level, from a guest that isn't in acute pressure or starving, outside both the
-/// post-release and the mode's scrub cooldown, and only when the cycle would actually inflate
-/// meaningfully past the driver's current fill (`inflate_to` is the depth-computed target: a
-/// cache-full guest under a Bounded scrub has huge room but nothing free to capture — not due).
+/// post-distress holdoff and the mode's scrub cadence, and only when the cycle would actually
+/// inflate meaningfully past the driver's current fill (`inflate_to` is the depth-computed
+/// target: a cache-full guest under a Bounded scrub has huge room but nothing free to capture
+/// — not due). `distress_until` is the ACUTE holdoff only — deliberately not the inflation
+/// cooldown, which give-backs re-arm every few minutes under a busy guest's own IO and would
+/// starve the scrub exactly while the pool grows (the 08-12 dogfood episode).
 #[allow(clippy::too_many_arguments)]
 fn scrub_due(
     params: &ScrubParams,
@@ -1078,14 +1092,14 @@ fn scrub_due(
     acute: bool,
     inflate_to: u32,
     fill: u32,
-    cooldown_until: Option<Instant>,
+    distress_until: Option<Instant>,
     last_scrub_end: Instant,
     now: Instant,
 ) -> bool {
     host >= params.min_host
         && !acute
         && inflate_to.saturating_sub(fill) >= SCRUB_MIN_INFLATE
-        && cooldown_until.is_none_or(|t| now >= t)
+        && distress_until.is_none_or(|t| now >= t)
         && now.duration_since(last_scrub_end) >= params.cooldown
 }
 
@@ -1348,6 +1362,19 @@ fn free_margin_pages(mode: ReclaimMode) -> u32 {
     }
 }
 
+/// The smallest balloon the pressure give-back may blame (pages): max/16, never below one
+/// inflation step. The give-back's triggers read the guest's PSI, which cannot tell
+/// balloon-induced thrash from the guest's own workload IO — attribution comes from size.
+/// Every measured incident it exists for held a multi-GB balloon (21 GiB in the 07-09
+/// wedge, a 4 GiB dig on the S3 warn-dug point); a balloon under ~6% of the VM cannot
+/// plausibly be what starves the guest's cache. Without this floor, a guest whose own
+/// test suites held io-full over the bar knifed every first 256 MiB step for 2.3 h
+/// (2026-08-12 dogfood): balloon pinned at ~0, every release lever starved, the
+/// compressor retention pool grew unchecked under host Warn.
+fn giveback_floor_pages(max_pages: u32) -> u32 {
+    (max_pages / 16).max(INFLATE_STEP_PAGES)
+}
+
 /// A guest is *starved* when MemAvailable is critically low: catastrophic cache starvation
 /// manifests as IO pressure (swap-in and refault storms), NOT as memory-PSI — a wedged guest
 /// can sit at 263 MiB available / 2.3% memory-some / 44% io-full, stuck behind a
@@ -1512,8 +1539,12 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
     // (the host's need wins; the starvation release still floors it), or for Aggressive
     // (its contract ignores guest comfort). An old agent (io fields 0) lacks the io arm;
     // the memory arm rides fields every agent reports.
+    // (never for a balloon below [`giveback_floor_pages`] — the PSI triggers can't tell
+    // balloon-induced thrash from the guest's own workload IO, so a balloon too small to
+    // plausibly cause the pain must not be knifed: that was the 08-12 limit cycle, every
+    // first step given back the moment it landed and every release lever starved).
     if (p.io_full_avg10 >= IO_PRESSURE_HIGH || p.some_avg60 > PRESSURE_LOW)
-        && i.current > 0
+        && i.current >= giveback_floor_pages(i.max_pages)
         && desired >= i.current
         && i.host != HostPressure::Critical
         && i.mode != ReclaimMode::Aggressive
@@ -1916,12 +1947,14 @@ mod tests {
         let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
         i.last_change = Some(i.now);
         assert_eq!(decide(&p, &i), Decision::Hold(Hold::Dwell));
-        // Saturates at zero rather than underflowing.
-        let i = inputs(
+        // Saturates at zero rather than underflowing (a floor-sized balloon, escalated
+        // step bigger than it; the sub-floor case is the attribution test's business).
+        let mut i = inputs(
             ReclaimMode::Moderate,
             HostPressure::Normal,
-            INFLATE_STEP_PAGES / 2,
+            giveback_floor_pages(MAX),
         );
+        i.giveback_streak = GIVEBACK_MAX_SHIFT;
         assert_eq!(decide(&p, &i), Decision::GiveBack(0));
     }
 
@@ -1993,6 +2026,35 @@ mod tests {
         );
         i.giveback_streak = 2;
         assert_eq!(decide(&p, &i), Decision::GiveBack(0));
+    }
+
+    /// The trigger needs a plausibly CAUSAL balloon (the 2026-08-12 dogfood limit cycle):
+    /// a guest whose OWN workload held io-full over the bar knifed every first 256 MiB
+    /// step the moment it landed — 201 sets / 46 give-backs over 2.3 h, balloon pinned at
+    /// ~0, so no release ever flowed and the retention pool grew unchecked under host
+    /// Warn. Below [`giveback_floor_pages`] the balloon cannot be what starves the
+    /// guest's cache; the give-back stands aside and the normal flow proceeds.
+    #[test]
+    fn pressure_giveback_needs_a_plausibly_causal_balloon() {
+        let floor = MAX / 16; // 512 MiB on this VM — above one step, so the ratio governs
+        assert_eq!(giveback_floor_pages(MAX), floor);
+        let p = report_with_io(0, MAX / 2, MAX, 4400); // io-full 44%, guest otherwise calm
+                                                       // One standing step (the dogfood shape): not a plausible cause — no give-back.
+        for cur in [INFLATE_STEP_PAGES, floor - 1] {
+            let i = inputs(ReclaimMode::Moderate, HostPressure::Warn, cur);
+            let d = decide(&p, &i);
+            assert!(!matches!(d, Decision::GiveBack(_)), "cur={cur}: {d:?}");
+        }
+        // At the floor: plausibly causal — fires exactly as before.
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Warn, floor);
+        assert_eq!(
+            decide(&p, &i),
+            Decision::GiveBack(floor - INFLATE_STEP_PAGES)
+        );
+        // On a tiny VM the ratio would undercut one inflation step: the floor never does
+        // (a balloon smaller than the first step is definitionally that step — knifing it
+        // recreates the limit cycle at any size).
+        assert_eq!(giveback_floor_pages(GIB_PAGES), INFLATE_STEP_PAGES);
     }
 
     /// The streak advance: a sent give-back extends the episode, the give-back path's dwell
@@ -2417,6 +2479,7 @@ mod tests {
             target_pages: 0,
             last_change: None,
             cooldown_until: None,
+            distress_until: None,
             scrub: None,
             scrub_gen: 0,
             last_scrub_end: Instant::now(),
@@ -2547,7 +2610,9 @@ mod tests {
             base,
             now
         ));
-        // Inside the post-release cooldown: the guest just proved it needs its memory.
+        // Inside the acute-distress holdoff: the guest just proved it needs its memory.
+        // (Only acute reports arm this — a give-back arms the inflation cooldown alone, so
+        // an io-busy guest's give-back cadence can't starve the scrub: 08-12, half B.)
         assert!(!scrub_due(
             &m,
             HostPressure::Warn,
@@ -2558,7 +2623,7 @@ mod tests {
             base,
             now
         ));
-        // An expired release cooldown no longer blocks.
+        // An expired holdoff no longer blocks.
         assert!(scrub_due(
             &m,
             HostPressure::Warn,
@@ -2763,6 +2828,7 @@ mod tests {
             target_pages: ROOM,
             last_change: None,
             cooldown_until: None,
+            distress_until: None,
             scrub: Some(Scrub {
                 phase: ScrubPhase::Inflating,
                 phase_since: now,
@@ -2826,6 +2892,7 @@ mod tests {
             target_pages: 0,
             last_change: None,
             cooldown_until: None,
+            distress_until: None,
             scrub: None,
             scrub_gen: 0,
             last_scrub_end: Instant::now(),
