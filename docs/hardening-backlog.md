@@ -394,6 +394,16 @@ rects). Remaining:
 ## Dogfooding / Parallels migration
 Surfaced 2026-06-29 while planning the migration of a stock Fedora 44 Parallels VM onto limina on a
 second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`).
+- **Movable VM library + per-VM placement** — PLANNED 2026-08-12, design in
+  `docs/design/vm-definitions.md` §8. Motivation: dogfooding on a small-disk mac mini with a big
+  external APFS volume (interim: symlink `~/Library/Application Support/Limina/VMs` → the external
+  disk, which `list()` already follows). Plan, in shipping order: (1) persist a library path in
+  `config.toml` (precedence env > config > default; re-read per call) **plus the unmounted-volume
+  creation guard** — today an unplugged external library makes `create_dir_all` silently grow a
+  shadow library on the boot volume; (2) a "Change VM Library Location…" picker in the control
+  center (v1 repoints, never migrates data); (3) per-VM placement via symlink-as-registration
+  ("Add existing VM…" / create-at), with dangling links rendered greyed-out "volume not mounted"
+  instead of silently vanishing.
 - **`gvproxy` not bundled** — ✅ **DONE 2026-06-29** (`458664b`). `limina --net` resolved gvproxy only
   from `$LIMINA_GVPROXY_BIN`/Homebrew/`PATH`, so networking was dead on a Mac without Homebrew. Now
   vendored into the app (`Contents/MacOS/gvproxy`, copied + ad-hoc signed by `build-app.sh`) and

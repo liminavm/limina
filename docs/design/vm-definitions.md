@@ -162,3 +162,118 @@ Phase 3 (app): the VM library UI enumerates the same directory; no second store.
   defer until a second user of each exists.
 - Bundle-internal disk *ownership* semantics on delete (`limina rm` prompts for the bundle;
   absolute-path disks are never touched).
+
+## 8. Library location & per-VM placement — PLANNED (2026-08-12)
+
+Motivated by dogfooding on a small-disk mac mini with a big external APFS volume: the
+library should be movable, and individual VMs should be placeable outside it, without a
+hand-rolled symlink. Nothing here changes the bundle format — bundles stay self-contained
+and Finder-relocatable; this is purely about *where the library points* and *what the
+library enumerates*.
+
+### 8.0 What already works (the baseline this builds on)
+
+- `$LIMINA_VM_LIBRARY` overrides the whole library (`vmlib/bundle.rs:100-110`); all
+  consumers (`ls`, resolve, the control center's create/import/delete) funnel through the
+  one `library_dir()`.
+- `limina create --dir <path>` creates a bundle anywhere (`main.rs::cmd_create`), and
+  `resolve()` accepts an explicit path — anything with a `/` or a `.liminavm` suffix
+  (`vmlib/bundle.rs:115-124`) — so out-of-library VMs already *run*; they just don't
+  *enumerate*.
+- `list()` follows symlinks (`read_dir` + `path.is_dir()`, `vmlib/bundle.rs:163`), so a
+  `Name.liminavm` symlink inside the library enumerates and resolves like a real bundle.
+  Symlinking the whole `VMs/` dir works too (the current stop-gap).
+- `vm.toml` disk paths may be absolute (`VmBundle::resolve_path`), and `--in-place`
+  references a disk where it lies — a library bundle can already keep its big image on
+  another volume.
+- Caveat that stays true throughout: the external volume should be APFS. Import relies on
+  `clonefile(2)` with a plain-copy fallback (`vmlib/import.rs:188-202`) and raw images rely
+  on sparse files; exFAT gets slow full-size copies and fully-allocated images.
+
+### 8.1 Persisted library path (host config)
+
+A host-level config file at `~/Library/Application Support/Limina/config.toml`
+(deliberately *outside* the `VMs/` dir it points at, so it survives the library moving):
+
+```toml
+# config.toml v1 — host-side app settings; nothing here reaches a guest.
+[library]
+path = "/Volumes/Ext/Limina VMs"   # absent = the built-in default
+```
+
+Resolution precedence in `library_dir()`: **`$LIMINA_VM_LIBRARY` env > config.toml >
+default** (`~/Library/Application Support/Limina/VMs`). The env var must stay on top: the
+test suite mutates it under `ENV_LOCK` (`vmlib/bundle.rs:177`, `center/model.rs:167`) and
+config outranking it would break test isolation. `library_dir()` re-reads the file per
+call — no `OnceLock` cache — because the control center is long-running and must observe a
+settings change without a restart, and every caller is already doing directory I/O so the
+extra read is noise. A malformed config.toml is a loud warning + fall through to the
+default, never a hard error (the control center must still open so the user can fix it).
+
+Testability: the config path itself needs a scratch override (an env var, e.g.
+`$LIMINA_CONFIG`, or deriving it from `$HOME` which the tests already control) so the
+precedence tests can run under the existing `ENV_LOCK` pattern without touching the real
+`~/Library`.
+
+### 8.2 UI: change the library location
+
+The control center gets its first settings surface — either a standard Settings… window
+(Cmd-,) or, cheaper for v1, a single "Change VM Library Location…" item (app menu or a
+gear button) driving an `NSOpenPanel` directory picker. Selecting a directory writes
+`[library] path` to config.toml and refreshes the list.
+
+**v1 semantics: repoint, don't migrate** — a decision, not an omission. Bundles are
+Finder-copyable by design (§0 of this doc), so "move my VMs" is: stop VMs, drag bundles in
+Finder, repoint. An in-app migrator (multi-GB copies with progress UI, running-VM flock
+guards, partial-failure rollback) is real work for little gain and is deferred until asked
+for. The picker should *offer* to reveal the old library in Finder when it's non-empty.
+
+### 8.3 Per-VM placement: symlink-as-registration
+
+For "this one VM lives on the external disk", the mechanism is the one `list()` already
+supports: a `Name.liminavm` **symlink in the library** pointing at the real bundle. The UI
+grows two affordances that create/manage such links:
+
+- **"Add existing VM…"** — pick a `.liminavm` anywhere; if it's outside the library,
+  symlink it in (name-collision checked). Also the natural "re-attach after Finder-moving
+  a bundle" flow.
+- **Create-at** — the create/import sheet gets an optional location field; when it's not
+  the library, create the bundle there and symlink it in (CLI parity: `create --dir`
+  learns `--link`, or does this by default when `--dir` ≠ library).
+
+Rejected alternative: a `paths = […]` registry list in config.toml. It quietly violates
+§6's "not a registry" tenet — the library would no longer be self-describing as a
+directory, and every enumeration/removal path would need a second source of truth. The
+symlink *is* the registration, visible in Finder and `ls -l`, removable with the bundle
+card's existing Move-to-Trash (which must trash the *link*, not the target, for linked
+bundles).
+
+### 8.4 The unmounted-volume failure modes (the part that actually needs care)
+
+With the library (or a linked bundle) on `/Volumes/Ext`, the disk being unplugged must
+degrade legibly, not corrupt state:
+
+- **Dangling bundle symlink**: `path.is_dir()` is false → today the VM silently vanishes
+  from `ls`/the center. Plan: `list()` (or a center-side sibling) additionally surfaces
+  extension-matching entries whose target is missing, and the center renders them
+  greyed-out — "volume not mounted" — with actions disabled except "Remove from library"
+  (deletes the link only). `limina ls` marks them `unavailable`.
+- **Library volume absent + creation**: `cmd_create` and the center's create/import/
+  clone destinations all do an unconditional `create_dir_all(library_dir())`
+  (`main.rs::cmd_create`; `center/controller.rs:812,916,980`). With
+  `path = "/Volumes/Ext/…"` unmounted, that silently creates a *real* directory on the
+  boot volume, which the next mount then shadows — two divergent libraries, the worst
+  outcome. Plan: when the configured path lies under a volume root that is not mounted
+  (or the path is a symlink whose target is missing), **refuse creation** and show a
+  banner/alert ("VM library volume not mounted") instead of creating. Enumeration
+  already degrades fine (missing dir = empty library, `vmlib/bundle.rs:157`) — but the
+  center should show the same banner rather than an empty "create your first VM" state,
+  which would invite exactly the shadow-directory mistake.
+
+### 8.5 Increments
+
+1. **config.toml + precedence in `library_dir()`** + the creation guard (§8.4 bullet 2),
+   RED-first under `ENV_LOCK`. CLI-visible immediately (no UI needed to benefit).
+2. **Location picker UI** writing the config (§8.2).
+3. **Symlink registration** — "Add existing VM…", create-at, dangling-link rows (§8.3 +
+   §8.4 bullet 1).
