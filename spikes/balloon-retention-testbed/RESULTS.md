@@ -98,8 +98,12 @@ Caveat carried from the all-paths arm: post-scrub pf is truncated (8.98G still
 falling at cutoff; reus_bal 4.4G rising — the zeroed pages await the pageout
 scan), so the settled post-scrub pf endpoint remains unmeasured; the POOL
 metric (the compressed share, which is the *permanent* part) is the durable
-comparison. Fork commit bceaeb8, gate default-off; adoption (auto-setting
-`queue` in the app) is a policy decision for the user.
+comparison. Fork commit bceaeb8, gate default-off at first.
+
+**ADOPTED 08-12 (user decision): queue-only is the DEFAULT** — fork commit
+76d7d62 flips unset ⇒ `queue`; `0`/`none` disables, `1` = all paths (kept for
+comparison runs). Default-in-device rather than a supervisor-exported env so it
+cannot silently fail to reach the worker.
 
 ## No-scrub soak A/B (`SCRUB=0 SOAK_MIN=10`, 08-11): memset without a scrub buys nothing
 
