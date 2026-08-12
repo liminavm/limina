@@ -85,6 +85,18 @@ const INELASTIC_FREE_RISE_KIB: u64 = 128 * 1024;
 /// latched a permanent hold at free≈8 GiB during the dd). High-free steps need no probe:
 /// they are self-evidently drawing a deep free list, the regime the clamp already handles.
 const ELASTIC_PROBE_REGIME_PAGES: u32 = 2 * INFLATE_STEP_PAGES;
+/// Guest io-PSI `full` avg10 (hundredths of a %) at/above which a held balloon is judged to be
+/// starving the guest's page cache: every re-read misses and stalls on disk while memory-PSI
+/// stays quiet (the 2026-07-09 sticky-wedge signature read 44% here with every memory threshold
+/// "fine"). One arm of the pressure give-back's trigger disjunction (the other is sustained
+/// memory-some — see the gate in [`decide`]) — both act well before the catastrophic
+/// [`guest_starved`] release.
+const IO_PRESSURE_HIGH: u32 = 1000; // 10.00%
+/// io-PSI `full` avg10 above which a cache dig in force (an inelastic verdict at host
+/// Warn/Critical) is paced down to the trickle: dropping cold cache is free, so full speed is
+/// fine while io-PSI stays quiet — refaults pushing io-full past this mean the squeeze is
+/// taking pages the guest still reads.
+const IO_PRESSURE_LOW: u32 = 200; // 2.00%
 
 /// Minimum time between scrub cycles — and, because the timer starts armed at construction, the
 /// minimum uptime before the first one (never scrub a freshly booted VM; this also keeps the
@@ -134,8 +146,14 @@ pub const PAGES_PER_MIB: u32 = 256;
 /// pages the free list didn't surrender judges inelastic ([`elasticity_action`]) and holds
 /// further inflation ([`Hold::Inelastic`]) until MemFree genuinely rises. When memory is owed
 /// (host Warn/Critical, or Aggressive by contract) cache digging is intended and proceeds —
-/// at the trickle once the free list is exhausted. The margin clamp remains as death-spiral
-/// protection for the genuinely-unreclaimable case.
+/// paced by the guest's io-PSI (full speed while the evicted cache is cold, the trickle once
+/// refaults push io-full past [`IO_PRESSURE_LOW`]), and at the trickle once the free list is
+/// exhausted. The margin clamp remains as death-spiral protection for the genuinely-
+/// unreclaimable case. In the other direction, a guest left dug-down (say, by a past
+/// host-pressure episode) that sustainedly hurts behind the balloon — io-full past
+/// [`IO_PRESSURE_HIGH`], or the NotCalm memory band held on avg60 — gets memory back one
+/// step per dwell (the pressure give-back) at host Normal/Warn: the S3 sticky-wedge shape,
+/// caught well before the [`guest_starved`] release.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize,
 )]
@@ -626,12 +644,25 @@ impl BalloonPolicy {
         };
         let mut decision = decide(p, &inputs);
         let mut sent = false;
-        if let Decision::Set(new_target) = decision {
+        if let Decision::Set(new_target) | Decision::GiveBack(new_target) = decision {
             let old_target = st.target_pages;
             sent = send_target(&self.socket, &mut st, new_target);
             if sent {
                 st.target_pages = new_target;
                 st.last_change = Some(now);
+                if matches!(decision, Decision::GiveBack(_)) {
+                    // Like any release: the guest just proved (through io) that it needs its
+                    // memory — don't take the give-back right back the moment io settles.
+                    let until = now + RELEASE_COOLDOWN;
+                    st.cooldown_until = Some(st.cooldown_until.map_or(until, |t| t.max(until)));
+                    log::info!(
+                        "autoballoon: pressure give-back — guest sustainedly hurting behind \
+                         the balloon (io_full_avg10={}, some_avg60={}), target -> {new_target} \
+                         pages",
+                        p.io_full_avg10,
+                        p.some_avg60
+                    );
+                }
                 // Arm the elasticity probe on inflations sent from the low-free chase regime
                 // (see ELASTIC_PROBE_REGIME_PAGES); a deflate invalidates any armed one.
                 let regime_kib =
@@ -1270,6 +1301,11 @@ enum Decision {
     /// distinguishes a decay from a policy release (`first_target_decrease_after` in the bench
     /// filters on `"set"`).
     Decay(u32),
+    /// Pressure give-back: the guest is sustainedly hurting (io-full storm, or the NotCalm
+    /// memory band held on avg60) behind a held balloon while every release threshold reads
+    /// fine — deflate one step to this target (pages). Distinct from `Set` so the trace
+    /// tells a give-back from an allowance deflate.
+    GiveBack(u32),
     /// Leave the current target alone.
     Hold(Hold),
 }
@@ -1278,16 +1314,17 @@ impl Decision {
     /// The commanded target, if any (test/trace convenience).
     fn target(self) -> Option<u32> {
         match self {
-            Decision::Set(t) | Decision::Decay(t) => Some(t),
+            Decision::Set(t) | Decision::Decay(t) | Decision::GiveBack(t) => Some(t),
             Decision::Hold(_) => None,
         }
     }
 
-    /// Short stable label for the trace (`set`, `gap-decay`, or the hold gate).
+    /// Short stable label for the trace (`set`, `gap-decay`, `giveback`, or the hold gate).
     fn label(self) -> &'static str {
         match self {
             Decision::Set(_) => "set",
             Decision::Decay(_) => "gap-decay",
+            Decision::GiveBack(_) => "giveback",
             Decision::Hold(Hold::Converged) => "converged",
             Decision::Hold(Hold::NotIdle) => "not-idle",
             Decision::Hold(Hold::DeadBand) => "dead-band",
@@ -1377,6 +1414,36 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
         }
     };
 
+    // Pressure give-back: the guest is sustainedly hurting behind a balloon the allowance
+    // math would keep (desired >= current) — the sticky-wedge class, a dug-down guest
+    // thrashing at 5× while every release threshold reads "fine" and avail sits flat
+    // (re-reads swap cache page for cache page, so the shortfall deflate never engages;
+    // [`guest_starved`] only catches the catastrophic end). Cache starvation lands on
+    // either PSI side, one measured incident each: io-full (44% in the 2026-07-09 wedge —
+    // refaults past the workingset window count as plain io) or sustained memory-some
+    // (7% on the S3 warn-dug point, io-full peaking 2% on host-cached-fast storage) —
+    // hence the disjunction. The memory arm is the NotCalm band held sustainedly (avg60):
+    // inflation needs avg60 <= PRESSURE_LOW and the give-back needs avg60 > PRESSURE_LOW,
+    // so no state is both inflation-eligible and give-back-eligible — the band stops being
+    // a parking orbit for a held balloon and becomes a slow, dwell-paced deflate. Never
+    // over a real deflate (desired < current is bigger — let it through), at host Critical
+    // (the host's need wins; the starvation release still floors it), or for Aggressive
+    // (its contract ignores guest comfort). An old agent (io fields 0) lacks the io arm;
+    // the memory arm rides fields every agent reports.
+    if (p.io_full_avg10 >= IO_PRESSURE_HIGH || p.some_avg60 > PRESSURE_LOW)
+        && i.current > 0
+        && desired >= i.current
+        && i.host != HostPressure::Critical
+        && i.mode != ReclaimMode::Aggressive
+    {
+        if let Some(t) = i.last_change {
+            if i.now.duration_since(t) < DWELL {
+                return Decision::Hold(Hold::Dwell);
+            }
+        }
+        return Decision::GiveBack(i.current.saturating_sub(INFLATE_STEP_PAGES));
+    }
+
     if desired.abs_diff(i.current) < DEAD_BAND_PAGES && desired != 0 {
         return Decision::Hold(if desired == i.current {
             Hold::Converged
@@ -1418,10 +1485,27 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
             if i.inelastic && i.host == HostPressure::Normal && i.mode != ReclaimMode::Aggressive {
                 return Decision::Hold(Hold::Inelastic);
             }
+            // An inelastic dig in force at Warn/Critical proceeds (digging is the squeeze
+            // contract), but paced by the guest's io pain: dropping cold cache is free, so
+            // full speed stands while io-PSI is quiet — refaults pushing io-full up mean the
+            // dig is taking pages the guest still reads, and the trickle lets its reclaim
+            // keep up. (kswapd holds MemFree above the margin during a dig, so the headroom
+            // clamp below never paces this case on its own — the out-clampgrade warn residual.)
+            // Deliberately io-keyed only, no memory arm: NotCalm's avg10 gate above already
+            // arrests a dig the moment memory-some rises, at every host level — this covers
+            // the one shape NotCalm can't see, io-attributed pain with memory quiet.
+            let max_step = if i.inelastic
+                && i.mode != ReclaimMode::Aggressive
+                && p.io_full_avg10 > IO_PRESSURE_LOW
+            {
+                TRICKLE_STEP_PAGES
+            } else {
+                INFLATE_STEP_PAGES
+            };
             let free_pages = (p.mem_free_kib / 4).min(u32::MAX as u64) as u32;
             let headroom = free_pages.saturating_sub(free_margin_pages(i.mode));
             let cap = i.actual_pages.unwrap_or(i.current).saturating_add(headroom);
-            let cap_step = cap.saturating_sub(i.current).min(INFLATE_STEP_PAGES);
+            let cap_step = cap.saturating_sub(i.current).min(max_step);
             if cap_step >= DEAD_BAND_PAGES {
                 cap_step
             } else if i.mode == ReclaimMode::Aggressive || i.host != HostPressure::Normal {
@@ -1620,6 +1704,123 @@ mod tests {
         let mut p = report_pages(some_avg10, avail_pages, total_pages);
         p.mem_free_kib = free_pages as u64 * 4;
         p
+    }
+
+    /// `report_pages` with io-PSI `full` avg10 set (hundredths of a %).
+    fn report_with_io(
+        some_avg10: u32,
+        avail_pages: u32,
+        total_pages: u32,
+        io_full: u32,
+    ) -> MemPressure {
+        let mut p = report_pages(some_avg10, avail_pages, total_pages);
+        p.io_full_avg10 = io_full;
+        p
+    }
+
+    /// The pressure give-back: a guest sustainedly hurting behind a balloon the allowance
+    /// math would keep deflates one step per dwell — the S3 sticky-wedge shape (thrashing
+    /// at 5× while every release threshold reads fine). Either trigger arm suffices: an
+    /// io-full storm (the 2026-07-09 attribution) or the NotCalm memory band held on avg60
+    /// (the S3 warn-dug attribution).
+    #[test]
+    fn pressure_giveback_deflates_a_step_when_the_guest_sustainedly_hurts() {
+        // Converged at the 1 GiB allowance (desired == current): io-full 10% fires it.
+        let cur = 3 * GIB_PAGES;
+        let p = report_with_io(0, GIB_PAGES, MAX, 1000);
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
+        assert_eq!(decide(&p, &i), Decision::GiveBack(cur - INFLATE_STEP_PAGES));
+        // Same at host Warn: the guest's sustained pain outranks a non-critical host's want.
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Warn, cur);
+        assert_eq!(decide(&p, &i), Decision::GiveBack(cur - INFLATE_STEP_PAGES));
+        // The memory arm: sustained NotCalm (avg60 past the calm bar) with io quiet — the
+        // S3 warn-dug shape (reclaim stalls on host-cached-fast storage read ~7% here while
+        // io-full peaked at 2%). Works from any agent (memory PSI is in every report).
+        let mut p = report_pages(0, GIB_PAGES, MAX);
+        p.some_avg60 = 707;
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
+        assert_eq!(decide(&p, &i), Decision::GiveBack(cur - INFLATE_STEP_PAGES));
+        // A 10 s blip (avg10 in the neutral band, avg60 still calm) is NOT sustained pain:
+        // no give-back — converged holds, same as before the term existed.
+        let p = report_pages(500, GIB_PAGES, MAX);
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Converged));
+        // Dwell-paced: a fresh target change holds this tick (the PSI-EMA lag must not
+        // dump the whole balloon at report rate).
+        let p = report_with_io(0, GIB_PAGES, MAX, 1000);
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
+        i.last_change = Some(i.now);
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Dwell));
+        // Saturates at zero rather than underflowing.
+        let i = inputs(
+            ReclaimMode::Moderate,
+            HostPressure::Normal,
+            INFLATE_STEP_PAGES / 2,
+        );
+        assert_eq!(decide(&p, &i), Decision::GiveBack(0));
+    }
+
+    /// The give-back must never shadow a bigger release: a below-allowance shortfall deflate
+    /// is immediate and unbounded — capping it at one give-back step would slow the very
+    /// direction that is always safe.
+    #[test]
+    fn pressure_giveback_yields_to_the_allowance_deflate() {
+        let cur = 3 * GIB_PAGES;
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
+        i.last_change = Some(i.now); // deflation ignores the dwell
+        let p = report_with_io(0, GIB_PAGES / 4, MAX, 2000);
+        assert_eq!(
+            decide(&p, &i),
+            Decision::Set(cur - (GIB_PAGES - GIB_PAGES / 4))
+        );
+    }
+
+    /// Where the give-back must NOT fire: host Critical (the host's need wins — the
+    /// starvation release still floors it), Aggressive (its contract ignores guest
+    /// comfort), and both trigger arms under their bars (an old agent's io fields read 0,
+    /// so it simply lacks the io arm; the memory arm rides fields every agent reports).
+    #[test]
+    fn pressure_giveback_exclusions() {
+        let cur = 3 * GIB_PAGES;
+        // Critical, converged at the squeeze floor (512 MiB on this VM): the squeeze stands.
+        let floor = GIB_PAGES / 2;
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Critical, cur);
+        let p = report_with_io(0, floor, MAX, 4400);
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Converged));
+        // Aggressive with an idle guest inflates through io pressure (the original shape).
+        let i = inputs(ReclaimMode::Aggressive, HostPressure::Normal, cur);
+        let p = report_with_io(0, MAX * 7 / 10, MAX, 4400);
+        assert_eq!(decide(&p, &i), Decision::Set(cur + INFLATE_STEP_PAGES));
+        // io just under the bar: converged hold, no give-back.
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
+        let p = report_with_io(0, GIB_PAGES, MAX, IO_PRESSURE_HIGH - 1);
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Converged));
+        // Old agent, guest calm: io fields absent read as 0 (io arm off, clamp contract)
+        // and avg60 is calm — no give-back.
+        let p = report_pages(0, GIB_PAGES, MAX);
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Converged));
+    }
+
+    /// An inelastic dig at host Warn proceeds (digging is the squeeze contract) but paced by
+    /// the guest's io pain: full speed while the evicted cache is cold, the trickle once
+    /// refaults push io-full up — kswapd keeps MemFree above the margin during a dig, so the
+    /// headroom clamp alone never paces this case (the out-clampgrade warn residual).
+    #[test]
+    fn inelastic_dig_paced_by_io_pressure() {
+        let cur = GIB_PAGES;
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Warn, cur);
+        i.inelastic = true;
+        // Free at a deep 800 MiB (headroom > a full step): the clamp alone grants full speed.
+        let mut p = report_with_free(0, 4 * GIB_PAGES, 800 * PAGES_PER_MIB, MAX);
+        p.io_full_avg10 = 300; // refaults showing: pace to the trickle
+        assert_eq!(decide(&p, &i), Decision::Set(cur + TRICKLE_STEP_PAGES));
+        p.io_full_avg10 = 0; // cold-cache dig: full speed stands
+        assert_eq!(decide(&p, &i), Decision::Set(cur + INFLATE_STEP_PAGES));
+        // Aggressive is exempt from the pacing, like the rest of the elasticity machinery.
+        let mut i = inputs(ReclaimMode::Aggressive, HostPressure::Warn, cur);
+        i.inelastic = true;
+        let mut p = report_with_free(0, 4 * GIB_PAGES, 800 * PAGES_PER_MIB, MAX);
+        p.io_full_avg10 = 300;
+        assert_eq!(decide(&p, &i), Decision::Set(cur + INFLATE_STEP_PAGES));
     }
 
     /// The pacing clamp: a cache-heavy guest (avail huge, free small) only yields what its free

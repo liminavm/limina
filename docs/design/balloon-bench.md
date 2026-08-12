@@ -242,7 +242,11 @@ mode × host-pressure × guest tier.
 - **S3 — cache starvation (the wedge class).** A file-read working set larger than the
   mode's allowance (re-read a multi-GiB file) squeezing io-PSI up while memory-PSI stays
   quiet — the 2026-07-09 signature. Measures the `guest_starved` release path latency
-  and proves the wedge stays dead under whatever tuning follows.
+  and proves the wedge stays dead under whatever tuning follows. *(2026-08-12: gained a
+  `warn-dug` point — converge under injected Warn, flip to Normal, thrash — because the
+  free-elasticity gate stopped the classic Normal-converge from digging cache at all; the
+  dug-down state now only forms through a host-pressure episode, and that point is the
+  pressure give-back's grading vehicle, lever 6 below.)*
 - **S4 — idle-inflate convergence.** From boot, idle guest, real or synthetic idle
   reports: time-to-converge, oscillation count, stability over ≥10 min. The inflate-side
   regression guard.
@@ -365,7 +369,15 @@ Not commitments — the bench decides. Ordered by expected relevance:
 6. **An io-PSI / refault term in the give-back rule** (from S3): moderate's allowance
    charges a measured 5× I/O penalty on working sets above it while every existing
    threshold reads "fine" — cache-miss burn should be a loosening signal, not just
-   starvation.
+   starvation. *(SHIPPED 2026-08-12: the pressure give-back — sustained guest pain behind
+   a held balloon deflates one step per dwell at host Normal/Warn. Trigger is a
+   disjunction because the starvation attribution flips by storage regime: `io_full_avg10`
+   ≥ 10% (the 2026-07-09 wedge read 44% with memory quiet) OR `some_avg60` > 2% — the S3
+   `warn-dug` baseline thrashed at 5× with io-full peaking 2% and memory-some ~7% on
+   host-cached-fast virtio. The memory arm is the sustained NotCalm band, so no state is
+   both inflation-eligible and give-back-eligible. Plus the Warn-side damper: inelastic-dig
+   pacing to the trickle above 2% io-full (memory-side dig arrest is already NotCalm's
+   job). Graded on the S3 `warn-dug` point.)*
 7. **Debounce host-level improvements** (from S6): light drops its entire ramp on a
    single Normal sample, and the sysctl blend can flap at the 40% availability
    boundary. Demotions (toward squeezing less) can stay instant; promotions back to

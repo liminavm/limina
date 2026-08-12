@@ -14,14 +14,19 @@
 //! without a balloon: passes run at memory speed — the contrast IS the cache cost, the
 //! Run D number reproduced in vivo).
 //!
-//! The third point (`warn-dug`) is the io-PSI give-back vehicle: since the free-elasticity
+//! The third point (`warn-dug`) is the pressure give-back vehicle: since the free-elasticity
 //! gate (2026-08-11) a Normal-converge no longer digs the cache, so the squeeze S3 was
 //! built around only forms under host pressure. This point converges under *injected Warn*
 //! (the `LIMINA_HOST_PRESSURE=@file` seam), flips the host back to Normal, then thrashes —
-//! the state a real guest is left in after a host-pressure episode. Pre-registered
-//! outcomes: without the give-back the dug-down target holds and every pass misses cache
-//! for the whole window; with it, sustained io-full deflates step-by-step and the tail
-//! pass times converge toward the `disabled` denominator.
+//! the state a real guest is left in after a host-pressure episode. Baseline (2026-08-12,
+//! pre-give-back): the dug 4 GiB target held for the whole window at 5× pass cost (613 vs
+//! 118 ms) with io-full peaking 2% and memory-some ~7% — the starvation attribution lands
+//! on the MEMORY side on host-cached-fast storage, which is why the give-back triggers on
+//! io-full OR sustained memory-some (avg60). Pre-registered for the give-back run: ~16
+//! `giveback` decisions walk the 4 GiB down, tail passes converge toward the `disabled`
+//! denominator, and the avg60 decay tail (~60 s half-life) keeps deflating past the
+//! comfort point — an end target near 0–1 GiB is EXPECTED behavior, not over-deflation;
+//! the healthy `moderate` point stays at zero give-backs (its memory PSI is flat 0).
 //!
 //! Gated: `LIMINA_BALLOON_BENCH=1` + HVF.
 
@@ -134,12 +139,14 @@ fn run_point(run: &BenchRun, label: &str, mode: &str, dig_under_warn: bool) -> P
         ))
         .expect("creating the thrash file");
 
-    // Let the dd's writeback io-PSI drain before converging: a stale io-full reading in the
-    // relayed reports would trip the give-back mid-converge (arming its long re-inflation
-    // cooldown) and the point would grade an artifact of its own staging.
-    for _ in 0..60 {
+    // Let the dd's pressure tail drain before converging — BOTH give-back arms: its
+    // writeback io-full, and the reclaim memory-PSI from filling 3 GiB of cache on this
+    // guest (avg60 needs ~60 s to decay, hence the generous budget). A stale reading in
+    // the relayed reports would trip the give-back mid-converge (arming its long
+    // re-inflation cooldown) and the point would grade an artifact of its own staging.
+    for _ in 0..90 {
         match real_report(&guest) {
-            Some(r) if r.io_full_avg10 < 100 => break,
+            Some(r) if r.io_full_avg10 < 100 && r.some_avg60 <= 200 => break,
             _ => std::thread::sleep(Duration::from_secs(2)),
         }
     }
@@ -254,7 +261,7 @@ fn run_point(run: &BenchRun, label: &str, mode: &str, dig_under_warn: bool) -> P
         .any(|e| e.ts_ms >= t0 && e.sent && e.new_target_pages == Some(0));
     let givebacks = trace
         .iter()
-        .filter(|e| e.ts_ms >= t0 && e.decision == "io-giveback" && e.sent)
+        .filter(|e| e.ts_ms >= t0 && e.decision == "giveback" && e.sent)
         .count();
     let puff = journal
         .lines()
@@ -279,7 +286,7 @@ fn run_point(run: &BenchRun, label: &str, mode: &str, dig_under_warn: bool) -> P
         ("end_target", end_stats.target.to_string()),
         ("end_actual", end_stats.actual.to_string()),
         ("released_to_zero", released.to_string()),
-        ("io_givebacks", givebacks.to_string()),
+        ("givebacks", givebacks.to_string()),
         ("out_of_puff_lines", puff.to_string()),
     ]);
     eprintln!("  point metrics: {json}");
