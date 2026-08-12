@@ -54,6 +54,16 @@ Restore fidelity for not-online vCPUs remains the task #41 limitation (save side
 Upstream note: the deadlock is an interaction of upstream's krun_vm_pause with our carried
 PSCI CPU_ON boot-channel park (0094-era), so the fix travels with that series.
 
+**2026-08-12 fixup-squash note:** the branch was rewritten (137 → 124 commits, tree-identical;
+old tip reachable via the fork tag `pre-fixup-2026-08-12`). Rows below whose commit was folded
+now describe a delta living *inside* its parent commit rather than a standalone commit:
+0075/0077/0078 → 0074; the CreateBlob vkr_seq epoch fix → 0079; the balloon-reporting fixture,
+EDID test-import, PSCI pause/snapshot-wait, xHCI abort-doorbell, force-OFF poll, fence-wedge,
+drain-then-classify, leaked-contexts, cursor-alpha, coexist attach/detach and vsock-teardown
+fixes → their respective parent feature commits. Three composites were split first; the split-out
+non-fix halves (FLUSHDBG diagnostics, xHCI snapshot-test enrichment, eventfd-drain/mmio
+un-negotiate) remain standalone rows-to-be.
+
 | ord | subject | files | diag | need | checked | issue | mr | sec | fold | tier | disp | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 0001 | limina: software 2D virtio-gpu scanout for GL-less hosts (no renderer init) | `src/devices/src/virtio/gpu/device.rs`, `src/devices/src/virtio/gpu/virtio_gpu.rs`, `src/devices/src/virtio/gpu/worker.rs` +2 |  | yes — tip worker.rs:129 still routes RESOURCE_CREATE_2D → resource_create_3d; rutabaga is not Option, no renderer-less path | main @c652b56 2026-08-03 | adjacent #426 (fallback), #740 (gfxstream macOS) | none direct | no | standalone (base of coexist) | host (macOS/GL-less) | CARRY (macOS-shaped); the renderer-less-2D MECHANISM could interest krunkit GL-less hosts | gap is real upstream but upstream's macOS answer is gfxstream, not sw-2D |
