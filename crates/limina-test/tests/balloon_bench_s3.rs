@@ -14,6 +14,15 @@
 //! without a balloon: passes run at memory speed — the contrast IS the cache cost, the
 //! Run D number reproduced in vivo).
 //!
+//! The third point (`warn-dug`) is the io-PSI give-back vehicle: since the free-elasticity
+//! gate (2026-08-11) a Normal-converge no longer digs the cache, so the squeeze S3 was
+//! built around only forms under host pressure. This point converges under *injected Warn*
+//! (the `LIMINA_HOST_PRESSURE=@file` seam), flips the host back to Normal, then thrashes —
+//! the state a real guest is left in after a host-pressure episode. Pre-registered
+//! outcomes: without the give-back the dug-down target holds and every pass misses cache
+//! for the whole window; with it, sustained io-full deflates step-by-step and the tail
+//! pass times converge toward the `disabled` denominator.
+//!
 //! Gated: `LIMINA_BALLOON_BENCH=1` + HVF.
 
 use std::time::{Duration, Instant};
@@ -75,11 +84,21 @@ struct PointResult {
     json: String,
 }
 
-/// One S3 point: boot with `mode`, optionally converge the policy, thrash, measure.
-fn run_point(run: &BenchRun, mode: &str) -> PointResult {
-    let trace_path = run.dir().join(format!("trace-{mode}.jsonl"));
-    eprintln!("== S3 point: mode={mode} ==");
-    let cfg = GuestConfig::baseline_fedora_from_env()
+/// Write the injected host-level file ATOMICALLY (temp + rename) — a plain fs::write
+/// truncates first, and a policy sample in that window reads empty → pinned Normal
+/// (the S6 mid-staircase release incident).
+fn write_level(path: &std::path::Path, level: &str) {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, format!("{level}\n")).expect("writing the host-level temp file");
+    std::fs::rename(&tmp, path).expect("renaming the host-level file into place");
+}
+
+/// One S3 point: boot with reclaim `mode`, optionally converge the policy (under injected
+/// Warn for `dig_under_warn`, flipping back to Normal before the workload), thrash, measure.
+fn run_point(run: &BenchRun, label: &str, mode: &str, dig_under_warn: bool) -> PointResult {
+    let trace_path = run.dir().join(format!("trace-{label}.jsonl"));
+    eprintln!("== S3 point: {label} (mode={mode}) ==");
+    let mut cfg = GuestConfig::baseline_fedora_from_env()
         .expect("baseline disk (checked before)")
         .with_net()
         .with_memory(MIN_MIB, MAX_MIB)
@@ -87,6 +106,14 @@ fn run_point(run: &BenchRun, mode: &str) -> PointResult {
         .with_control_socket()
         .with_reclaim(mode)
         .with_env("LIMINA_BALLOON_TRACE", &trace_path.display().to_string());
+    let level_path = run.dir().join(format!("host-level-{label}"));
+    if dig_under_warn {
+        write_level(&level_path, "warn");
+        cfg = cfg.with_env(
+            "LIMINA_HOST_PRESSURE",
+            &format!("@{}", level_path.display()),
+        );
+    }
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
@@ -106,6 +133,16 @@ fn run_point(run: &BenchRun, mode: &str) -> PointResult {
             "df -m --output=avail /var/tmp | tail -1; dd if=/dev/zero of={THRASH_BIN} bs=1M count={FILE_MIB} 2>/dev/null; sync"
         ))
         .expect("creating the thrash file");
+
+    // Let the dd's writeback io-PSI drain before converging: a stale io-full reading in the
+    // relayed reports would trip the give-back mid-converge (arming its long re-inflation
+    // cooldown) and the point would grade an artifact of its own staging.
+    for _ in 0..60 {
+        match real_report(&guest) {
+            Some(r) if r.io_full_avg10 < 100 => break,
+            _ => std::thread::sleep(Duration::from_secs(2)),
+        }
+    }
 
     // Converge the policy on the (now idle) guest: relay real reports until the target is
     // quiet for 45 s. `disabled` skips straight to the workload.
@@ -138,6 +175,19 @@ fn run_point(run: &BenchRun, mode: &str) -> PointResult {
         );
     }
 
+    // The warn-dug point thrashes at host-Normal: flip the injected level back and give the
+    // policy a few ticks to sample it before the workload starts.
+    if dig_under_warn {
+        eprintln!("  flipping injected host level warn -> normal");
+        write_level(&level_path, "normal");
+        for _ in 0..5 {
+            if let Some(r) = real_report(&guest) {
+                let _ = conn.send(&Message::MemPressure(r));
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+
     // THE THRASH: re-read loop + real-report relay for THRASH_SECS.
     let t0 = start_thrash(&guest);
     eprintln!("  thrashing for {THRASH_SECS} s");
@@ -159,16 +209,18 @@ fn run_point(run: &BenchRun, mode: &str) -> PointResult {
     stop_thrash(&guest);
 
     let (guest_csv, guest_samples) = sampler.stop_and_fetch(&guest).expect("fetching guest CSV");
-    run.write(&format!("guest-{mode}.csv"), &guest_csv).unwrap();
-    run.write_host_samples_named(&format!("host-{mode}.csv"), &host_samples)
+    run.write(&format!("guest-{label}.csv"), &guest_csv)
+        .unwrap();
+    run.write_host_samples_named(&format!("host-{label}.csv"), &host_samples)
         .unwrap();
     let journal = fetch_balloon_journal(&guest).unwrap_or_default();
-    run.write(&format!("journal-{mode}.txt"), &journal).unwrap();
+    run.write(&format!("journal-{label}.txt"), &journal)
+        .unwrap();
     let trace = parse_trace(&std::fs::read_to_string(&trace_path).unwrap_or_default());
     if mode != "disabled" {
         assert!(
             !trace.is_empty(),
-            "no policy decisions journaled for {mode}"
+            "no policy decisions journaled for {label}"
         );
     }
 
@@ -178,6 +230,16 @@ fn run_point(run: &BenchRun, mode: &str) -> PointResult {
     let mut deltas: Vec<u64> = passes.windows(2).map(|w| w[1] - w[0]).collect();
     deltas.sort_unstable();
     let median_pass_ms = deltas.get(deltas.len() / 2).copied().unwrap_or(0);
+    // Tail median (last 45 s): the give-back needs tens of seconds to act, so the recovery
+    // shows here while the full-window median blurs it.
+    let tail_start = t_end.saturating_sub(45_000);
+    let mut tail_deltas: Vec<u64> = passes
+        .windows(2)
+        .filter(|w| w[1] >= tail_start)
+        .map(|w| w[1] - w[0])
+        .collect();
+    tail_deltas.sort_unstable();
+    let tail_pass_ms = tail_deltas.get(tail_deltas.len() / 2).copied().unwrap_or(0);
     let io_integral = psi_integral_pct_s(&guest_samples, |s| s.io_some_avg10, t0, t_end);
     let mem_integral = psi_integral_pct_s(&guest_samples, |s| s.mem_some_avg10, t0, t_end);
     let min_avail = guest_samples
@@ -190,6 +252,10 @@ fn run_point(run: &BenchRun, mode: &str) -> PointResult {
     let released = trace
         .iter()
         .any(|e| e.ts_ms >= t0 && e.sent && e.new_target_pages == Some(0));
+    let givebacks = trace
+        .iter()
+        .filter(|e| e.ts_ms >= t0 && e.decision == "io-giveback" && e.sent)
+        .count();
     let puff = journal
         .lines()
         .filter(|l| l.contains("Out of puff"))
@@ -197,20 +263,23 @@ fn run_point(run: &BenchRun, mode: &str) -> PointResult {
 
     assert!(
         pass_count > 0,
-        "mode {mode}: the thrash loop completed ZERO passes in {THRASH_SECS} s — the workload \
+        "point {label}: the thrash loop completed ZERO passes in {THRASH_SECS} s — the workload \
          never ran, the point is hollow (the S3 tmpfs incident class)"
     );
     let json = json_object(&[
+        ("label", format!("\"{label}\"")),
         ("mode", format!("\"{mode}\"")),
         ("thrash_secs", THRASH_SECS.to_string()),
         ("passes", pass_count.to_string()),
         ("median_pass_ms", median_pass_ms.to_string()),
+        ("tail_pass_ms", tail_pass_ms.to_string()),
         ("psi_io_some_pct_s", format!("{io_integral:.2}")),
         ("psi_mem_some_pct_s", format!("{mem_integral:.2}")),
         ("min_avail_kib", min_avail.to_string()),
         ("end_target", end_stats.target.to_string()),
         ("end_actual", end_stats.actual.to_string()),
         ("released_to_zero", released.to_string()),
+        ("io_givebacks", givebacks.to_string()),
         ("out_of_puff_lines", puff.to_string()),
     ]);
     eprintln!("  point metrics: {json}");
@@ -234,10 +303,14 @@ fn s3_cache_starvation() {
     }
     let run = BenchRun::create("s3").expect("creating the bench run dir");
     eprintln!("S3 cache starvation; artifacts -> {:?}", run.dir());
-    let results: Vec<String> = ["disabled", "moderate"]
-        .iter()
-        .map(|m| run_point(&run, m).json)
-        .collect();
+    let results: Vec<String> = [
+        ("disabled", "disabled", false),
+        ("moderate", "moderate", false),
+        ("warn-dug", "moderate", true),
+    ]
+    .iter()
+    .map(|(label, mode, dug)| run_point(&run, label, mode, *dug).json)
+    .collect();
     let metrics = json_object(&[
         ("scenario", "\"s3-cache-starvation\"".to_string()),
         ("guest_tier", "\"stock-4k\"".to_string()),

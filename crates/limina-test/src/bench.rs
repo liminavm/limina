@@ -642,13 +642,18 @@ pub fn join_control_as_agent(guest: &mut Guest, name: &str) -> Result<crate::Age
 /// Read the guest's REAL pressure + meminfo over ssh, as limina-agent would report them
 /// (`avg10=1.23` → `123`, the MemPressure hundredths scale).
 pub fn real_report(guest: &Guest) -> Option<limina_proto::MemPressure> {
+    // The io PSI section sits behind a marker: both pressure files have `some`/`full` lines,
+    // and a bare prefix scan over the concatenation would read memory's values for io.
     let out = guest
         .ssh_exec(
-            "cat /proc/pressure/memory; awk '/MemTotal|MemAvailable|MemFree/{print $1, $2}' /proc/meminfo",
+            "cat /proc/pressure/memory; echo IO-PSI:; cat /proc/pressure/io; \
+             awk '/MemTotal|MemAvailable|MemFree/{print $1, $2}' /proc/meminfo",
         )
         .ok()?;
-    let pct100 = |line_tag: &str, field: &str| -> u32 {
-        out.lines()
+    let (mem_psi, io_psi) = out.split_once("IO-PSI:").unwrap_or((out.as_str(), ""));
+    let pct100 = |section: &str, line_tag: &str, field: &str| -> u32 {
+        section
+            .lines()
             .find(|l| l.starts_with(line_tag))
             .and_then(|l| l.split(&format!("{field}=")).nth(1))
             .and_then(|r| r.split_whitespace().next())
@@ -664,14 +669,15 @@ pub fn real_report(guest: &Guest) -> Option<limina_proto::MemPressure> {
             .unwrap_or(0)
     };
     Some(limina_proto::MemPressure {
-        some_avg10: pct100("some", "avg10"),
-        some_avg60: pct100("some", "avg60"),
-        full_avg10: pct100("full", "avg10"),
-        full_avg60: pct100("full", "avg60"),
+        some_avg10: pct100(mem_psi, "some", "avg10"),
+        some_avg60: pct100(mem_psi, "some", "avg60"),
+        full_avg10: pct100(mem_psi, "full", "avg10"),
+        full_avg60: pct100(mem_psi, "full", "avg60"),
         mem_available_kib: mem_kib("MemAvailable:"),
         mem_total_kib: mem_kib("MemTotal:"),
         mem_free_kib: mem_kib("MemFree:"),
-        ..Default::default()
+        io_full_avg10: pct100(io_psi, "full", "avg10"),
+        io_full_avg60: pct100(io_psi, "full", "avg60"),
     })
 }
 
