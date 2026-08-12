@@ -1,0 +1,40 @@
+43.804 42923 limina-vmm
+12.398 44345 prl_vm_app
+3.186 33996 com.apple.Virtualization.VirtualMachine
+2.787 624 ControlCenter
+0.662 53338 com.apple.WebKit.WebContent
+0.607 36929 com.apple.WebKit.GPU
+0.496 404 WindowServer
+0.465 94774 com.apple.WebKit.WebContent
+0.417 6900 com.apple.WebKit.WebContent
+0.361 55213 com.apple.WebKit.WebContent
+0.351 30987 com.apple.WebKit.WebContent
+0.311 38208 com.apple.WebKit.WebContent
+0.297 53095 com.apple.WebKit.WebContent
+0.294 31501 com.apple.WebKit.WebContent
+0.280 36922 Safari
+0.271 44861 enderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+0.243 54343 enderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+0.242 47016 (private tool)
+0.236 56542 com.apple.WebKit.WebContent
+0.230 54491 enderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+0.225 44832 enderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+0.202 626 Finder
+0.202 56569 enderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+0.200 701 logioptionsplus_agent
+0.199 33930 lper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)
+0.197 81129 com.apple.WebKit.WebContent
+0.195 44649 enderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+0.192 38181 com.apple.WebKit.WebContent
+0.185 44591 enderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+0.181 57169 enderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+0.179 44375 Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+0.176 29846 Signal
+0.173 78818 com.apple.WebKit.WebContent
+0.172 38165 com.apple.WebKit.WebContent
+0.171 44594 enderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+0.169 54537 enderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+0.161 36963 com.apple.WebKit.WebContent
+0.153 29850 lper (Renderer).app/Contents/MacOS/Signal Helper (Renderer)
+0.147 53956 enderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+0.143 39228 com.apple.WebKit.WebContent

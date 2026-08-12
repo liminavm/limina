@@ -1,0 +1,8 @@
+== 2026-08-10 16:06:45 pid=68019
+Physical footprint:         9.7G
+Physical footprint (peak):  11.1G
+Writable regions: Total=34.7G written=326.3M(1%) resident=3.4G(10%) swapped_out=860.3M(2%) unallocated=30.4G(88%)
+== 2026-08-10 16:07:01 pid=68019
+Physical footprint:         9.9G
+Physical footprint (peak):  11.1G
+Writable regions: Total=34.8G written=478.3M(1%) resident=3.6G(10%) swapped_out=860.3M(2%) unallocated=30.4G(87%)
