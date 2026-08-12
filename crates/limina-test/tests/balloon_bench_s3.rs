@@ -28,6 +28,14 @@
 //! comfort point — an end target near 0–1 GiB is EXPECTED behavior, not over-deflation;
 //! the healthy `moderate` point stays at zero give-backs (its memory PSI is flat 0).
 //!
+//! Escalating-step grade (2026-08-12): 6 give-backs (256M/512M/1G×3/rest), walk-down
+//! 32 s → 12 s, passes 457 → 529, median 207 → 192 ms. The 192 is this vehicle's
+//! post-episode FLOOR, not a convergence shortfall: the fully recovered phase (cache
+//! re-warmed by ~35 s in, kswapd idle, io-some <1%, heals 0) itself runs at ~192 vs the
+//! pristine 118 — a persistent ~1.6× warm-read tax after deep reclaim, cause
+//! unidentified (leading hypothesis: page-cache folio-order collapse). No deflate
+//! pacing can move the median below it, so the give-back convergence thread ends here.
+//!
 //! Gated: `LIMINA_BALLOON_BENCH=1` + HVF.
 
 use std::time::{Duration, Instant};
@@ -237,9 +245,11 @@ fn run_point(run: &BenchRun, label: &str, mode: &str, dig_under_warn: bool) -> P
     let mut deltas: Vec<u64> = passes.windows(2).map(|w| w[1] - w[0]).collect();
     deltas.sort_unstable();
     let median_pass_ms = deltas.get(deltas.len() / 2).copied().unwrap_or(0);
-    // Tail median (last 45 s): the give-back needs tens of seconds to act, so the recovery
-    // shows here while the full-window median blurs it.
-    let tail_start = t_end.saturating_sub(45_000);
+    // Tail median (last 45 s of passes): the give-back needs tens of seconds to act, so the
+    // recovery shows here while the full-window median blurs it. Anchored to the last pass,
+    // not `t_end` — the artifact fetches above run before `now_ms()`, so a host-clock anchor
+    // silently shrinks the window by however long they took.
+    let tail_start = passes.last().copied().unwrap_or(0).saturating_sub(45_000);
     let mut tail_deltas: Vec<u64> = passes
         .windows(2)
         .filter(|w| w[1] >= tail_start)

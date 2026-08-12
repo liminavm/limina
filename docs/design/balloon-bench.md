@@ -377,7 +377,17 @@ Not commitments — the bench decides. Ordered by expected relevance:
    host-cached-fast virtio. The memory arm is the sustained NotCalm band, so no state is
    both inflation-eligible and give-back-eligible. Plus the Warn-side damper: inelastic-dig
    pacing to the trickle above 2% io-full (memory-side dig arrest is already NotCalm's
-   job). Graded on the S3 `warn-dug` point.)*
+   job). Graded on the S3 `warn-dug` point. ESCALATION added same day: the step doubles
+   per consecutive sent give-back, 256 MiB → 512 MiB → 1 GiB cap, episode reset on any
+   other decision (safe: every give-back arms the release cooldown, so no inflation dwell
+   can carry a streak) and on scrub start. Grade: 16 → 6 give-backs, walk-down 32 → 12 s,
+   passes 457 → 529, median 207 → 192 ms — and 192 is the vehicle's post-episode floor,
+   not a convergence gap: the fully recovered phase itself runs at ~192 vs the pristine
+   118 (kswapd idle, io-some <1%, zero stage-2 heals — a persistent ~1.6× warm-read tax
+   after deep reclaim, cause unidentified; leading hypothesis folio-order collapse).
+   Deflate pacing is exhausted as a lever on this number. Caveat: the escalation run also
+   carried the queue-zeroing libkrun default flip; the same-run three-point structure, not
+   the cross-run 207 comparison, is the evidence base.)*
 7. **Debounce host-level improvements** (from S6): light drops its entire ramp on a
    single Normal sample, and the sysctl blend can flap at the 40% availability
    boundary. Demotions (toward squeezing less) can stay instant; promotions back to
