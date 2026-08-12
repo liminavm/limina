@@ -71,10 +71,20 @@ const GAP_BACKOFF: Duration = Duration::from_secs(60);
 /// binds on a cache-warm guest: the 08-11 `out-clampgrade` testbed run.)
 const ELASTIC_MIN_FILL_PAGES: u32 = DEAD_BAND_PAGES;
 /// An inelastic hold at host-Normal releases only when the guest's free list rises this far
-/// (KiB; 128 MiB) above its level at verdict time: real frees show up as a rise, while the
-/// watermark equilibrium just wobbles ±tens of MiB. No timer — if free never rises, there is
-/// nothing new to take and probing again would only eat another step of cache.
+/// (KiB; 128 MiB) above the LOWEST level observed while held: real frees show up as a rise,
+/// while the watermark equilibrium just wobbles ±tens of MiB. Measured from the observed floor,
+/// not the verdict-time level — a verdict struck on a falling free list would otherwise leave a
+/// release bar nothing can ever reach again (out-clampgrade2: baseline 8 GiB mid-mix, the mix
+/// then legitimately converted that free to cache, hold permanent). No timer — if free never
+/// rises off its floor, there is nothing new to take and probing again would only eat cache.
 const INELASTIC_FREE_RISE_KIB: u64 = 128 * 1024;
+/// Arm an elasticity probe only when the step departs from the low-free chase regime: free
+/// within the mode margin plus this many pages (2 full steps). A verdict is only meaningful
+/// near the reclaim equilibrium — at high free, concurrent guest churn (writeback, allocation,
+/// process exits) dominates the free delta and produces false verdicts (out-clampgrade2
+/// latched a permanent hold at free≈8 GiB during the dd). High-free steps need no probe:
+/// they are self-evidently drawing a deep free list, the regime the clamp already handles.
+const ELASTIC_PROBE_REGIME_PAGES: u32 = 2 * INFLATE_STEP_PAGES;
 
 /// Minimum time between scrub cycles — and, because the timer starts armed at construction, the
 /// minimum uptime before the first one (never scrub a freshly booted VM; this also keeps the
@@ -344,9 +354,20 @@ struct ElasticityProbe {
     actual_at_send: u32,
 }
 
-/// The free-list level at the moment a step judged inelastic — the release baseline.
+/// The release baseline for an in-force inelastic verdict: the lowest free level observed
+/// while held. See [`InelasticHold::observe`].
 struct InelasticHold {
-    free_kib_at_verdict: u64,
+    free_kib_floor: u64,
+}
+
+impl InelasticHold {
+    /// Feed one tick's free level: the baseline decays to the lowest level seen, and the hold
+    /// releases (returns `true`) once free rises [`INELASTIC_FREE_RISE_KIB`] above that floor —
+    /// a genuine free (a process exit, a dropped mapping), not the watermark wobble.
+    fn observe(&mut self, free_kib: u64) -> bool {
+        self.free_kib_floor = self.free_kib_floor.min(free_kib);
+        free_kib >= self.free_kib_floor + INELASTIC_FREE_RISE_KIB
+    }
 }
 
 /// The pure per-tick verdict on an armed [`ElasticityProbe`] (see [`elasticity_action`]).
@@ -575,7 +596,7 @@ impl BalloonPolicy {
                     Elasticity::Inelastic => {
                         st.elastic_probe = None;
                         st.inelastic = Some(InelasticHold {
-                            free_kib_at_verdict: p.mem_free_kib,
+                            free_kib_floor: p.mem_free_kib,
                         });
                         log::info!(
                             "autoballoon: inflation judged inelastic (free did not track the \
@@ -585,8 +606,8 @@ impl BalloonPolicy {
                     }
                 }
             }
-            if let Some(h) = st.inelastic.as_ref() {
-                if p.mem_free_kib >= h.free_kib_at_verdict + INELASTIC_FREE_RISE_KIB {
+            if let Some(h) = st.inelastic.as_mut() {
+                if h.observe(p.mem_free_kib) {
                     st.inelastic = None; // the guest freed real memory: probe again
                 }
             }
@@ -611,8 +632,14 @@ impl BalloonPolicy {
             if sent {
                 st.target_pages = new_target;
                 st.last_change = Some(now);
-                // Arm the elasticity probe on inflations; a deflate invalidates any armed one.
-                st.elastic_probe = if new_target > old_target && p.mem_free_kib != 0 {
+                // Arm the elasticity probe on inflations sent from the low-free chase regime
+                // (see ELASTIC_PROBE_REGIME_PAGES); a deflate invalidates any armed one.
+                let regime_kib =
+                    (free_margin_pages(self.mode) as u64 + ELASTIC_PROBE_REGIME_PAGES as u64) * 4;
+                st.elastic_probe = if new_target > old_target
+                    && p.mem_free_kib != 0
+                    && p.mem_free_kib < regime_kib
+                {
                     Some(ElasticityProbe {
                         free_kib_at_send: p.mem_free_kib,
                         actual_at_send: actual_pages.unwrap_or(old_target),
@@ -1683,6 +1710,21 @@ mod tests {
             elasticity_action(&probe, free0, GIB_PAGES - 1),
             Elasticity::Stale
         );
+    }
+
+    /// The release baseline decays to the lowest free level observed while held: a verdict
+    /// struck on a falling free list (out-clampgrade2: 8 GiB mid-mix, all of it then
+    /// legitimately becoming cache) must not leave an unreachable release bar. Release fires
+    /// on a genuine rise off the floor; the watermark wobble stays held.
+    #[test]
+    fn inelastic_hold_releases_from_the_floor_not_the_verdict() {
+        let mut h = InelasticHold {
+            free_kib_floor: 8 * 1024 * 1024, // verdict struck at a transient 8 GiB
+        };
+        assert!(!h.observe(2 * 1024 * 1024)); // free falls: floor decays, still held
+        assert!(!h.observe(550 * 1024)); // down to the watermark equilibrium
+        assert!(!h.observe(600 * 1024)); // wobble above the floor: held
+        assert!(h.observe(550 * 1024 + INELASTIC_FREE_RISE_KIB)); // a genuine free: released
     }
 
     /// An in-force inelastic verdict gates inflation at host-Normal for the cache-respecting
