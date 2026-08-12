@@ -666,6 +666,20 @@ advertisement to a mock-mutter clipboard bridge. **If it fires again, stop treat
 the first thing to check is whether the wait for `PASTED` is bounded generously enough under a
 parallel nextest lane, since the suite has run parallel since 2026-08-03.
 
+## Suspected test flake — `venus_shell_replay_matches_llvmpipe_reference`
+
+Seen **once**, 2026-08-12, during the full HVF suite over the escalating give-back commits
+(102/103, everything else green). The guest-side `eglretrace --headless` shell-trace replay
+never printed `Rendered`: ~14 minutes of 1 Hz `capture: configure scanout` plus a
+once-a-minute `vsock muxer: unexpected dgram pkt: 3`, then the ssh command's own bound gave
+up (955 s total). Venus was live in that same guest (the X11 GL probe enumerated
+`zink … Virtio-GPU Venus`), the sibling `venus_vk_replay` passed right after, and an isolated
+rerun passed in 65 s — flake by rerun, not by analysis. Note the failing run was ~40% slower
+overall than the same-day 103/103 (3099 vs 2195 s): host load is the suspected ingredient.
+**If it fires again, stop treating it as noise:** grab the worker log at the wedge timestamps
+and check what eglretrace was waiting on (the per-minute dgram error is the one recurring
+signal — identify pkt type 3's sender first).
+
 ---
 
 When a milestone's loose ends are all closed, fold the remainder back into the roadmap milestone
