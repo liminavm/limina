@@ -11,6 +11,8 @@
 | clampgrade (clamp+decay+bounded scrub, enhanced guest, NEW 0.4.0 agent) | 08-11 | cache mix (5G kept file + 3G anon) | 4.20G | n/a (bounded scrub correctly NOT DUE) | n/a | 6.23G | 5.79G (warn-tier policy inflation, no scrub) |
 | clampgrade2 (elasticity gate v1 — FALSE LATCH) | 08-11 | cache mix | 6.72G | policy scrub FIRED (first live populated-pool cycle) | 6.52 → 5.12G | 11.62G | 8.86G |
 | clampgrade3 (elasticity gate v2 — PASS) | 08-11 | cache mix | 6.48G | n/a (correctly not due: headroom 333M) | n/a | 11.2G | 6.98G (warn-tier dig, no scrub) |
+| queueonly (zero-on-release gate `=queue`, ballast 8.3G) | 08-12 | 226/61/198 s | 7.58G | 8.29 → 1.40G | 7.58 → **0.69G** | 14.45G | 8.98G (truncated, still falling) |
+| ctl2 (same-day control, ballast 10.3G) | 08-12 | 224/61/194 s | 9.45G | 10.16 → 3.38G | 9.45 → 2.67G | 13.90G | 6.53G (settled) |
 
 All runs: fresh APFS clone of ab-run-b.raw, `MIX=full`, 2G..12G, 8 cpus, ~12.5G
 host ballast. Reproduction is tight: two independent control runs landed within
@@ -81,6 +83,23 @@ and inflate wall unchanged. (a)+(b) together = the adoption shape works: scrub
 recovery ~94% of the pool without the steady-state resident cost. If instead
 the post-scrub pool stays ~3G, the settleable residue is FRQ-sourced and the
 queue-only shape is dead.
+
+**RESULT (08-12): the adoption shape WORKS.** The host was busier than on 08-11
+(dynamic ballast 8.3G/10.3G vs the controls' ~12.5G), so a same-day control run
+(ctl2) anchors the comparison instead of the recorded one. (b) PASS — post-scrub
+pool 0.69G vs same-day control 2.67G (9% vs 28% residue; matches all-paths'
+0.65G): the settleable residue routes through the inflate queue, exactly as
+hypothesized. (a) PASS — plateau pf 14.45 vs 13.90G (+0.55G, not +3.5G), and the
+ic/int composition difference (ic −1.9G / int +2.4G) tracks the ballast delta
+(less host pressure = same dead content, less of it compressed); mechanistically
+the gate cannot fire pre-scrub (no queue releases at plateau, balloon_actual 0
+throughout). (c) PASS — mix 226/61/198 vs 224/61/194s, inflate wall ~16s both.
+Caveat carried from the all-paths arm: post-scrub pf is truncated (8.98G still
+falling at cutoff; reus_bal 4.4G rising — the zeroed pages await the pageout
+scan), so the settled post-scrub pf endpoint remains unmeasured; the POOL
+metric (the compressed share, which is the *permanent* part) is the durable
+comparison. Fork commit bceaeb8, gate default-off; adoption (auto-setting
+`queue` in the app) is a policy decision for the user.
 
 ## No-scrub soak A/B (`SCRUB=0 SOAK_MIN=10`, 08-11): memset without a scrub buys nothing
 
