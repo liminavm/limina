@@ -8,6 +8,7 @@
 | memset-ctl | 08-11 | 225/61/198 s | 10.49G | 11.21 → 3.95G | 10.49 → 3.23G | 14.53G | 6.90G |
 | memset-on | 08-11 | 226/61/198 s | 11.04G | 11.74 → 1.35G | 11.04 → 0.65G | **18.03G** | 8.99G (still falling at cutoff) |
 | oracle2 (policy scrub, enhanced guest) | 08-11 | touch mix | ~0G (16k FPR kernel retains nothing) | n/a (policy-driven) | n/a | 1.45G | 1.49G (flat — no pool to recover, by design) |
+| clampgrade (clamp+decay+bounded scrub, enhanced guest, NEW 0.4.0 agent) | 08-11 | cache mix (5G kept file + 3G anon) | 4.20G | n/a (bounded scrub correctly NOT DUE) | n/a | 6.23G | 5.79G (warn-tier policy inflation, no scrub) |
 
 All runs: fresh APFS clone of ab-run-b.raw, `MIX=full`, 2G..12G, 8 cpus, ~12.5G
 host ballast. Reproduction is tight: two independent control runs landed within
@@ -126,6 +127,46 @@ proven (recovery). Take 1–3 traps for the next runner: ab images lack the agen
 `out-<label>-<ts>/balloon.sock` must stay under ~100 chars (SUN_LEN — run.sh now
 fails fast); detach runs >30 min with `nohup … & disown` (the background-task
 reaper killed takes 1 and 3... take 1 was the suite).
+
+## Clamp grade (08-11, out-clampgrade-1786492387): the MemFree clamp does NOT preserve cache — FALSIFIED premise
+
+The tuning-arc grade run: `MIX=cache` (new — 5G file written, read twice, KEPT, + 3G anon
+churn: the cache-warm profile) on an enhanced.test clone with the 0.4.0 MemFree-reporting
+agent, `--reclaim moderate`, injected-Normal through build + plateau, warn flip at 30.5 min.
+
+- **The headline: kswapd defeats the clamp on a cache-warm guest.** The clamp's premise —
+  "low MemFree means only cache is left" — is false: as the balloon takes free pages, kswapd
+  refills the free list *from cache* faster than the balloon drains it. Guest MemFree sat at
+  its watermark equilibrium (~450–550M on this 12G guest) for the entire dig, never crossing
+  the 256M Moderate margin, so `cap_step` stayed ≥ a full 256M step and inflation sprinted at
+  the full 128 MiB/s — at **host-Normal** — converting the warm cache into balloon fill with
+  the free list as a pass-through buffer: cached 5503M → 1960M in ~60 s, converging at
+  avail ≈ 1536M = exactly the pre-clamp 12.5%-of-max allowance. Zero `free-exhausted` rows in
+  1963 trace ticks. The clamp shaved only the last couple of steps (235M/207M) cosmetically.
+  **What the clamp still is: a death-spiral protector** — it binds when free is genuinely
+  pinned below the margin (anon-heavy, no swap, nothing reclaimable), the unit-covered regime.
+  It is not a cache preserver, which is what the arc claimed. No static margin fixes this:
+  the free-list floor is watermark_boost- and guest-size-dependent (450–550M here vs Light's
+  512M margin — a coin flip), so margins above it can't be chosen reliably.
+- **Bounded scrub: correctly NOT DUE — the pre-registered legitimate outcome.** At the warn
+  flip, free headroom above margin was ~275M < SCRUB_MIN_INFLATE, so the due-gate refused
+  (the driver's "POLICY-SCRUB FAILED" line is the expected verdict in this profile, not a
+  failure). No cache-crushing scrub fired — that half of the design held.
+- **Gap decay: NOT exercised** (no gap ever stuck ≥10 s; fills kept up at these rates). Not
+  validated, not falsified.
+- **Pool: MIX=cache reproduces 4.20G on the 16k enhanced kernel** — updates oracle2's "16k
+  FPR retains ~nothing": that was touch-mix-specific (free-page content); cache-heavy content
+  under host ballast bills 5.6G ic_bal against ~1.4G live even on the host-page-aware kernel.
+- **Warn-tier behavior**: policy inflated 9076→9637M (full steps — free stayed above margin,
+  so no trickle rows either), digging cache further to the 6.25% allowance; pf 6.37→5.75G.
+- **Candidate fix directions** (design decision, not yet taken): (b) a **free-elasticity
+  detector** — if MemFree does not drop by ~the step size after a send, reclaim backfilled it
+  from cache → hold at Normal (pure host-side policy, uses the per-tick free_kib we already
+  have, no proto/agent change); or (c) report `Cached` in MemPressure and gate on
+  cache-shrinkage directly (direct measurement, but a 0.5.0 agent + redeploy right after
+  0.4.0). A static-margin bump (a) is ruled out above. Note the intent split: at
+  Warn/Critical digging cache is *intended* (memory is owed) — the elasticity hold is a
+  Normal-tier rule; Warn might get a trickle governor instead.
 
 **Protocol change (08-11 tuning arc, limina 59e40ee):** the scrub is now mode-keyed
 (Light = critical trigger / 60 min cooldown / BOUNDED depth; Moderate = warn / 30 min /

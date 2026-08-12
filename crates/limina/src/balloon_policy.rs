@@ -104,6 +104,15 @@ pub const PAGES_PER_MIB: u32 = 256;
 /// memory pressure and leaves the guest a cache allowance when the host doesn't need the RAM.
 /// Free-page reporting is unaffected by this knob: it returns only truly-free pages (no cache
 /// cost) and always runs.
+///
+/// Inflation steps are paced by the guest's reported MemFree down to a mode-keyed margin
+/// (`free_margin_pages`). NOTE this paces the RATE only — it does NOT preserve guest page
+/// cache: kswapd refills the free list from cache above the margin, so allowance-based
+/// targets still consume cache at full step rate (measured 2026-08-11,
+/// spikes/balloon-retention-testbed out-clampgrade run). The clamp binds — holding at
+/// host-Normal, trickling when memory is owed — only when the guest genuinely runs out of
+/// reclaimable pages (anon-heavy, nothing left to evict): it is death-spiral protection,
+/// not a cache preserver.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize,
 )]
@@ -112,17 +121,15 @@ pub enum ReclaimMode {
     /// Never drive the balloon (free-page reporting still returns freed guest memory).
     Disabled,
     /// Host-pressure-driven, generous cache: no inflation while the host is fine; under host
-    /// warn take free pages down to a 512 MiB margin and trickle toward a 25%-of-max cache
-    /// allowance; under critical squeeze toward the minimal working-set floor (never to zero).
+    /// warn leave the guest 25% of max as cache; under critical squeeze toward the minimal
+    /// working-set floor (never to zero).
     Light,
-    /// Host-pressure-driven (the default): while the host is fine take only what the guest
-    /// has FREE (down to a 256 MiB margin — an established page cache is left alone until the
-    /// host actually needs the RAM); under host warn trickle into cache toward a 6.25%-of-max
-    /// (min 1 GiB) allowance; under critical squeeze toward the minimal working-set floor
-    /// (never to zero).
+    /// Host-pressure-driven (the default): while the host is fine leave the guest 12.5% of
+    /// max (min 1 GiB) as cache; under host warn 6.25% (min 1 GiB); under critical squeeze
+    /// toward the minimal working-set floor (never to zero).
     Moderate,
     /// Squeeze to the floor whenever the guest is idle, ignoring host pressure (the original
-    /// M6 policy), pacing cache reclaim at the trickle past a 128 MiB free margin.
+    /// M6 policy).
     Aggressive,
 }
 
