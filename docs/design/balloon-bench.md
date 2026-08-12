@@ -354,7 +354,9 @@ Not commitments — the bench decides. Ordered by expected relevance:
    feet is its own failure mode, see Run D). *(Phase 2 upgraded this from candidate
    to mandatory-shaped: S7enh proved the driver satisfies ANY target up to guest
    death — cache, then desktop-via-zram, then OOM. The guest will not protect
-   itself; the clamp is the only wall.)*
+   itself; the clamp is the only wall. SHIPPED 2026-08-11: the MemFree−margin
+   step clamp + gap decay, then the free-elasticity gate the clamp grade forced —
+   see §6 S7enh and memory `limina-balloon-bench`.)*
 3. **Graduated release** (deflate): today's release is binary (shortfall-sized dribble
    below the allowance vs panic-to-0 at 10%); a middle tier (e.g. release proportional
    to pressure slope) may cut relief latency without full dumps.
