@@ -67,6 +67,21 @@ inflate queue) and leave FRQ releases plain — settles the pool when a scrub
 runs without the steady-state overhead. The balloon device can tell the two
 queues apart.
 
+### Queue-only arm (2026-08-12, gate `LIMINA_BALLOON_RELEASE_MEMSET=queue`)
+
+The refinement above, implemented on the fork: `ReleasedRam::release` takes
+`from_inflate_queue`, FRQ passes false, the inflate queue passes true; `queue`
+zeroes only the latter (`1` = all paths kept for comparison, default = none).
+Pre-registered against the replicated controls (10.49G plateau ± 0.02) and the
+all-paths arm, BEFORE the run: (a) plateau pf ≈ control ~14.5G — the +3.5G churn
+cost came from zeroing FRQ releases, and the plateau holds no balloon so the
+queue path never fires there; (b) post-scrub pool ≈ all-paths 0.65G — the scrub
+routes everything through the (zeroed) inflate queue; (c) compile-mix timings
+and inflate wall unchanged. (a)+(b) together = the adoption shape works: scrub
+recovery ~94% of the pool without the steady-state resident cost. If instead
+the post-scrub pool stays ~3G, the settleable residue is FRQ-sourced and the
+queue-only shape is dead.
+
 ## No-scrub soak A/B (`SCRUB=0 SOAK_MIN=10`, 08-11): memset without a scrub buys nothing
 
 Protocol: plateau, then (ballast held): 10 m idle → guest touch workload
