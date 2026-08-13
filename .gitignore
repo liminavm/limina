@@ -89,3 +89,8 @@ spikes/hv-ledger-marker/payload.bin
 
 # spikes/balloon-retention-testbed run outputs (scripts + README are kept)
 spikes/balloon-retention-testbed/out-*/
+
+# zink shadow-recursion oracle: build product + run logs (RESULTS.md has the numbers)
+spikes/zink-shadow-recursion/shadow-recursion
+spikes/zink-shadow-recursion/*.log
+spikes/sme-mask/idreg-write-probe
