@@ -319,9 +319,14 @@ rects). Remaining:
   That is the designed terminal state of a well-ballooned guest, and it is *correct*. Stranded:
   after the io give-back ladder empties the balloon (see below), the same hold fires at
   `actual_bytes` 1.12 G with the host billing 36.95 G, 24.91 G of it compressed — the balloon
-  cannot refill because everything it would take is now cache, so the host pays full guest size
-  indefinitely. A hold at a *low* balloon level with a *high* footprint is a stranded state and
-  should be distinguishable in the trace (and probably escalate), not read as convergence.
+  cannot refill because everything it would take is now cache. A hold at a *low* balloon level
+  with a *high* footprint is a stranded state and should be distinguishable in the trace, not
+  read as convergence. It is **self-limiting, not permanent**: a footprint that large drives the
+  host into `warn`, which is precisely the trickle-dig condition (`balloon_policy.rs:53-57`), and
+  the 08-13 run recovered 1.12 G → 5 G with footprint 37.8 → 30.4 G within ~5 minutes of
+  entering it. So the cost is the transient and the ugly Activity Monitor reading during it, not
+  a wedge — but note the loop only closes *because* the overshoot got bad enough to alarm the
+  host, which is a poor trigger to rely on.
   NOTE the falsified hypothesis, so it is not retried: inelastic runs are NOT downstream of
   give-backs — 0 of 27 long runs on 08-13 had a give-back in the preceding 120 s, out of 103
   give-backs that day.
