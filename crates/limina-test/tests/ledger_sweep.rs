@@ -130,10 +130,11 @@ fn settle_sweep_debits_the_task_ledger_and_leaves_the_guest_unharmed() {
         );
     };
     eprintln!(
-        "sweep #{} done: debited {} MiB in {} ms",
+        "sweep #{} done: debited {} MiB in {} ms ({} worker touches fielded in-window)",
         stats.sweeps,
         mib(stats.sweep_debited),
-        stats.sweep_ms
+        stats.sweep_ms,
+        stats.sweep_faults
     );
     assert!(
         stats.sweep_debited >= DEBIT_MIN,

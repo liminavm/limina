@@ -362,6 +362,7 @@ struct WorkerStats {
     sweeps: u64,
     sweep_debited_bytes: u64,
     sweep_ms: u64,
+    sweep_faults: u64,
 }
 
 struct State {
@@ -1003,6 +1004,7 @@ impl BalloonPolicy {
             sweeps: 0,
             sweep_debited_bytes: 0,
             sweep_ms: 0,
+            sweep_faults: 0,
         };
         for tok in line.split_whitespace() {
             let Some((k, v)) = tok.split_once('=') else {
@@ -1019,6 +1021,7 @@ impl BalloonPolicy {
                 "sweeps" => s.sweeps = v,
                 "sweep_debited" => s.sweep_debited_bytes = v,
                 "sweep_ms" => s.sweep_ms = v,
+                "sweep_faults" => s.sweep_faults = v,
                 _ => {}
             }
         }
@@ -1353,7 +1356,8 @@ fn trace_decision(
             "\"cooldown_active\":{},\"sent\":{},",
             "\"actual_bytes\":{},\"reclaimed_bytes\":{},\"heals\":{},",
             "\"released_bytes\":{},\"remapped_bytes\":{},\"stray_faults\":{},",
-            "\"sweeps\":{},\"sweep_debited_bytes\":{},\"sweep_ms\":{}}}\n"
+            "\"sweeps\":{},\"sweep_debited_bytes\":{},\"sweep_ms\":{},",
+            "\"sweep_faults\":{}}}\n"
         ),
         ts_ms,
         i.mode,
@@ -1383,6 +1387,7 @@ fn trace_decision(
         json_stat(wstats.map(|w| w.sweeps)),
         json_stat(wstats.map(|w| w.sweep_debited_bytes)),
         json_stat(wstats.map(|w| w.sweep_ms)),
+        json_stat(wstats.map(|w| w.sweep_faults)),
     );
     if f.write_all(line.as_bytes()).is_err() {
         st.trace = None;
@@ -2604,6 +2609,7 @@ mod tests {
             sweeps: 2,
             sweep_debited_bytes: 4 << 30,
             sweep_ms: 41,
+            sweep_faults: 5,
         };
         trace_decision(
             &mut st,
@@ -2640,7 +2646,8 @@ mod tests {
                 && lines[0].contains("\"heals\":7")
                 && lines[0].contains("\"stray_faults\":0")
                 && lines[0].contains("\"sweeps\":2")
-                && lines[0].contains("\"sweep_debited_bytes\":4294967296"),
+                && lines[0].contains("\"sweep_debited_bytes\":4294967296")
+                && lines[0].contains("\"sweep_faults\":5"),
             "{}",
             lines[0]
         );

@@ -1434,6 +1434,8 @@ pub struct BalloonStats {
     pub sweep_debited: u64,
     /// Wall-clock duration of the last settle sweep, in milliseconds.
     pub sweep_ms: u64,
+    /// Worker-thread guest-RAM touches fielded by the sweep fault handler, cumulative.
+    pub sweep_faults: u64,
 }
 
 /// How the supervisor (and thus the VM) ended.
@@ -1993,6 +1995,7 @@ impl Guest {
                 "sweeps" => stats.sweeps = v,
                 "sweep_debited" => stats.sweep_debited = v,
                 "sweep_ms" => stats.sweep_ms = v,
+                "sweep_faults" => stats.sweep_faults = v,
                 _ => {}
             }
         }

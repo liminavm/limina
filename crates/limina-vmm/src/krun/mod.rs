@@ -871,7 +871,8 @@ fn serve_balloon_conn(
                 if let Err(e) = writeln!(
                     writer,
                     "target={} actual={actual_bytes} reclaimed={} heals={} released={} \
-                     remapped={} strays={} sweeps={} sweep_debited={} sweep_ms={}",
+                     remapped={} strays={} sweeps={} sweep_debited={} sweep_ms={} \
+                     sweep_faults={}",
                     target_bytes.load(Ordering::Relaxed),
                     stats.reclaimed_bytes,
                     stats.heals,
@@ -880,7 +881,8 @@ fn serve_balloon_conn(
                     stats.stray_faults,
                     stats.sweeps,
                     stats.sweep_debited_bytes,
-                    stats.sweep_ms
+                    stats.sweep_ms,
+                    stats.sweep_faults
                 )
                 .and_then(|()| writer.flush())
                 {
