@@ -169,3 +169,11 @@ bills ~2×, plus anon + worker overhead ≈ the observed 33 G.
    2× (degraded, not broken). A worker-side fallback timer is a possible later item.
    Alternative doors measured shut: NO_FOOTPRINT (KERN_NO_ACCESS, private entitlement —
    Radar-worthy), PROT_READ windows (no debit), MADV_DONTNEED (no debit).
+   Hardening follow-up same day (libkrun fork 9390775, limina 027f839): the handler now
+   fields any guest-region fault regardless of `SWEEP_ACTIVE` — the old gate let a
+   last-window fault that arrived after the flag cleared chain to SIG_DFL and permanently
+   uninstall the `Once`-installed handler — plus a `sweep_faults` counter through every
+   stats surface and a hammer unit test that forces the handler to field real concurrent
+   touches (its first proven execution). GPU-live smoke: 6 sweeps against a windowed
+   venus desktop + guest vulkaninfo loop — 834/1598 MiB debited in 9/16 ms, guest and
+   venus healthy throughout.
