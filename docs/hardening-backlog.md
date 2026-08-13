@@ -311,6 +311,31 @@ rects). Remaining:
   test stock-4k separately) + host↔guest uid mapping. Roadmap M5 (~line 502).
 
 ## M6 dynamic memory
+- **`inelastic` conflates "converged" with "stranded"** (added 2026-08-13, from the io-keyed
+  give-back A/B). The hold fires whenever inflating would dig into page cache, which covers two
+  opposite states that the trace labels identically. Benign: on the 08-13 dogfood day, all 27
+  runs longer than a minute (114 min total, the largest single hold) were entered with the
+  balloon already near max — median `actual_bytes` 17.18 G of 24 G, median free 616 MB, PSI 0.
+  That is the designed terminal state of a well-ballooned guest, and it is *correct*. Stranded:
+  after the io give-back ladder empties the balloon (see below), the same hold fires at
+  `actual_bytes` 1.12 G with the host billing 36.95 G, 24.91 G of it compressed — the balloon
+  cannot refill because everything it would take is now cache, so the host pays full guest size
+  indefinitely. A hold at a *low* balloon level with a *high* footprint is a stranded state and
+  should be distinguishable in the trace (and probably escalate), not read as convergence.
+  NOTE the falsified hypothesis, so it is not retried: inelastic runs are NOT downstream of
+  give-backs — 0 of 27 long runs on 08-13 had a give-back in the preceding 120 s, out of 103
+  give-backs that day.
+- **The io-keyed give-back cannot tell disk IO from balloon thrash** (added 2026-08-13, measured).
+  A cold `md5sum` of `/usr` on the dogfood guest, with **memory PSI at 0.00% throughout**, walked
+  the balloon from 17.87 G to 1.12 G in 43 seconds — 1 GiB per report every 2 s — and the guest
+  put the freed memory straight into page cache (buff/cache 20 G at the end). It never needed the
+  memory; it was reading files. A day of ballooning undone by 100 seconds of ordinary IO. The
+  obvious lever is that `some_avg10` sits in the same report and read 0.00% for every one of the
+  18 give-backs, so requiring *some* memory pressure alongside io pain would have declined all of
+  them — but check the original io-keying rationale first (balloon thrash plausibly shows as io
+  pain *before* it shows as memory pressure, which is why it was chosen). Window data:
+  `spikes/hv-ledger-gap/dogfood-2026-08-13/io-ab-window.jsonl`; scorer:
+  `spikes/hv-ledger-gap/io-giveback-ab.py`.
 - **Post-episode warm-read tax (~1.6×)** (added 2026-08-12, from the S3 escalating give-back
   grade): after a deep balloon dig + give-back, a *fully recovered* guest (cache re-warmed,
   kswapd idle, io-some <1%, zero stage-2 heals, no swap) reads its own page cache at ~16 GB/s
