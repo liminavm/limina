@@ -118,8 +118,13 @@ framebuffer,clients}`):
 | guest state | host gfx | host regions | guest live blobs | guest fb | DRM clients |
 |---|---|---|---|---|---|
 | full session (compositor + apps) | 1929 MB | 12,296 | 67 (420 MB) | 8 | 14 |
-| logged out, greeter only | 1056 MB | 3,840 | 31 (247 MB) | 5 | 6 |
+| ~1 min after logout (teardown still draining) | 1056 MB | 3,840 | 31 (247 MB) | 5 | 6 |
 | `systemctl stop gdm` | **6.2 MB** | **16** | **0** | 1 | 0 |
+| gdm restarted, fresh greeter | 162 MB | 556 | 13 (130 MB) | 4 | 3 |
+
+Read the middle row as *mid-teardown*, not as the greeter's cost: a freshly started greeter
+(last row) sits at 162 MB / 556 regions, 7× lower. The logout sample was simply taken before
+the session's clients had finished exiting.
 
 Within 20 s of the last DRM client exiting, the pool returned to **16 regions** — the floor.
 So the host retires everything the guest actually releases; there is no unbounded accumulation
