@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Wed, 5 Aug 2026 19:00:10 -0300
-Subject: [PATCH 6/7] venus: track vn_ring_submit capacity in its own field
+Subject: [PATCH 6/8] venus: track vn_ring_submit capacity in its own field
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

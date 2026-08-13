@@ -1,0 +1,38 @@
+diff --git a/src/gallium/drivers/zink/zink_context.c b/src/gallium/drivers/zink/zink_context.c
+index e17815079ec..e581f79cbde 100644
+--- a/src/gallium/drivers/zink/zink_context.c
++++ b/src/gallium/drivers/zink/zink_context.c
+@@ -3292,6 +3292,10 @@ begin_rendering(struct zink_context *ctx, bool check_attachment_shadow)
+       ctx->rp_layout_changed = false;
+    }
+    attachment_shadow_mask &= ctx->transient_attachments;
++   if (getenv("LIMINA_ZINK_SHADOW_TRACE"))
++      fprintf(stderr, "[SHADOW] begin_rendering: mask=0x%x transient_attachments=0x%x msrtss=%d has_msrtss=%d rp_draw=%d check=%d clears_enabled=0x%x blitting=%d\n",
++              attachment_shadow_mask, ctx->transient_attachments, ctx->transient_msrtss,
++              has_msrtss, ctx->rp_draw, check_attachment_shadow, ctx->clears_enabled, ctx->blitting);
+    /* both msrtss emulation and format view shadowing use this path to populate the transient image */
+    if (((!ctx->transient_msrtss && ctx->rp_draw) || (ctx->transient_msrtss && !has_msrtss)) && attachment_shadow_mask && check_attachment_shadow) {
+       zink_render_attachment_shadow(ctx, attachment_shadow_mask);
+diff --git a/src/gallium/drivers/zink/zink_render_pass.c b/src/gallium/drivers/zink/zink_render_pass.c
+index 9bd97cf9dd2..82c6e1ab0bc 100644
+--- a/src/gallium/drivers/zink/zink_render_pass.c
++++ b/src/gallium/drivers/zink/zink_render_pass.c
+@@ -187,11 +187,18 @@ zink_render_attachment_shadow(struct zink_context *ctx, uint32_t attachment_shad
+    assert(attachment_shadow_mask);
+ 
+    bool blitting = ctx->blitting;
++   const bool trace = getenv("LIMINA_ZINK_SHADOW_TRACE") != NULL;
++   if (trace)
++      fprintf(stderr, "[SHADOW] enter mask=0x%x blitting=%d clears_enabled=0x%x rp_clears_enabled=0x%x\n",
++              attachment_shadow_mask, blitting, ctx->clears_enabled, ctx->rp_clears_enabled);
+    u_foreach_bit(i, attachment_shadow_mask) {
+       zink_create_transient_surface(ctx, &ctx->fb_state.cbufs[i], ctx->fb_state.cbufs[i].nr_samples);
+       struct pipe_resource *src = ctx->fb_state.cbufs[i].texture;
+       struct zink_resource *res = zink_resource(src);
+       struct zink_resource *transient = res->transient;
++      if (trace)
++         fprintf(stderr, "[SHADOW]   i=%u transient=%p valid=%d\n", i, (void *)transient,
++                 transient ? transient->valid : -1);
+       /* skip replicate blit if the image will be full-cleared */
+       if ((i == PIPE_MAX_COLOR_BUFS && (ctx->rp_clears_enabled & PIPE_CLEAR_DEPTHSTENCIL)) ||
+             (ctx->rp_clears_enabled >> 2) & BITFIELD_BIT(i)) {
