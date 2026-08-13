@@ -19,6 +19,30 @@ of stillness at each zero point so segment means can average through the pool's 
     host   528 MB / 3,678 regions, IOSurface 285 MB
     guest  44 blobs / 257 MB, 6 framebuffers, 6 DRM clients
 
+## Run timeline
+
+Started at epoch **1786664942** = 20:49:02 local, seat confirmed `ActiveSession=179` at launch —
+an inactive VT on this box renders at ~1 fps, which would change the allocation pattern without
+changing anything visible in the counters.
+
+| offset | phase |
+|---|---|
+| +0 | baseline, zero windows, 120 s |
+| +120 | arm 1: open (8 s to map), 300 s idle, close, 120 s at zero |
+| +~550 | arm 2: six cycles of open → 30 s → close → 60 s at zero |
+| +~1150 | tail, 120 s at zero |
+
+~1270 s total, ending ~21:10 local, inside the sampler's 60-minute window.
+
+The driver's log gives the per-cycle open cost directly: `OPEN-OK` with window count and client
+pid, `CLOSE-OK` with teardown seconds. Teardown latency creeping across the six cycles would be
+its own finding — a close that takes longer to retire is the same ratchet in a different shape.
+
+**Trap the dry run caught:** the PID returned by spawning is the `sudo` wrapper, not the client
+(wrapper 38370 vs client 38374). Verifying the wrapper would report a clean close even if the
+client survived holding its GPU context — exactly the failure mode the PID check exists to catch.
+The run takes the client pid from the window's own `pid` field in the IPC output instead.
+
 ## Intervals to EXCLUDE from scoring
 
 Recorded as they are reported, so nothing gets scored that was not part of the protocol. A
