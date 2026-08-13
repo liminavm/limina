@@ -861,19 +861,26 @@ fn serve_balloon_conn(
                 }
                 None => log::warn!("balloon: ignoring malformed target line {line:?}"),
             },
+            Some("settle") => {
+                log::info!("balloon: ledger settle sweep requested");
+                handle.settle_sweep();
+            }
             Some("stats") => {
                 let stats = handle.get_stats();
                 let actual_bytes = (stats.actual_pages as u64) << 12;
                 if let Err(e) = writeln!(
                     writer,
                     "target={} actual={actual_bytes} reclaimed={} heals={} released={} \
-                     remapped={} strays={}",
+                     remapped={} strays={} sweeps={} sweep_debited={} sweep_ms={}",
                     target_bytes.load(Ordering::Relaxed),
                     stats.reclaimed_bytes,
                     stats.heals,
                     stats.released_bytes,
                     stats.remapped_bytes,
-                    stats.stray_faults
+                    stats.stray_faults,
+                    stats.sweeps,
+                    stats.sweep_debited_bytes,
+                    stats.sweep_ms
                 )
                 .and_then(|()| writer.flush())
                 {

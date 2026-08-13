@@ -1428,6 +1428,12 @@ pub struct BalloonStats {
     pub remapped: u64,
     /// Stage-2 translation faults outside every released range (should stay 0).
     pub strays: u64,
+    /// Ledger settle sweeps completed (task-pmap double-billing debit), cumulative.
+    pub sweeps: u64,
+    /// Bytes the last settle sweep debited off the worker's phys_footprint.
+    pub sweep_debited: u64,
+    /// Wall-clock duration of the last settle sweep, in milliseconds.
+    pub sweep_ms: u64,
 }
 
 /// How the supervisor (and thus the VM) ended.
@@ -1984,10 +1990,23 @@ impl Guest {
                 "released" => stats.released = v,
                 "remapped" => stats.remapped = v,
                 "strays" => stats.strays = v,
+                "sweeps" => stats.sweeps = v,
+                "sweep_debited" => stats.sweep_debited = v,
+                "sweep_ms" => stats.sweep_ms = v,
                 _ => {}
             }
         }
         Ok(stats)
+    }
+
+    /// Request a ledger settle sweep (task-pmap double-billing debit; no reply — poll
+    /// [`Guest::balloon_stats`] for `sweeps` to advance). M6 dynamic memory / hv-ledger-gap.
+    pub fn settle_sweep(&self) -> Result<()> {
+        use std::io::Write;
+        let mut stream = self.connect_balloon()?;
+        writeln!(stream, "settle").context("sending settle sweep command")?;
+        stream.flush().ok();
+        Ok(())
     }
 
     /// Decode the current captured scanout PNG. Errors if no display was configured or no

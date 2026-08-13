@@ -140,6 +140,16 @@ const SCRUB_DONE_SLACK: u64 = 64 << 20;
 /// Comfortably above inflate-timeout + hold + deflate-timeout, so ticks always finish first.
 const SCRUB_WATCHDOG: Duration = Duration::from_secs(300);
 
+/// Cadence for the task-pmap ledger settle sweep (`settle` on the balloon socket): xnu bills
+/// resident memory once per pmap, so the guest's disk-fed pages double-bill against the worker
+/// and Activity Monitor shows up to 2× the VM's real memory (spikes/hv-ledger-marker). The
+/// sweep debits the task share with a guest-invisible mprotect NONE→RW cycle over live guest
+/// RAM; host re-touches re-bill their pages, so it runs on a cadence — this Moderate baseline,
+/// keyed by mode in [`sweep_cooldown`] like the scrub. The timer starts armed at construction
+/// (a fresh VM has nothing to settle), and every scrub completion also sweeps (the pool was
+/// just settled by the release path; the sweep catches the live side at its low point).
+const SWEEP_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+
 /// 4 KiB balloon pages per MiB.
 pub const PAGES_PER_MIB: u32 = 256;
 
@@ -331,6 +341,8 @@ pub struct BalloonPolicy {
     socket: PathBuf,
     /// `LIMINA_BALLOON_SCRUB=0` kill-switch for the scrub cycle (field safety valve).
     scrub_enabled: bool,
+    /// `LIMINA_LEDGER_SWEEP=0` kill-switch for the ledger settle sweep (field safety valve).
+    sweep_enabled: bool,
     /// Shared with the scrub watchdog threads — the only other holders.
     state: Arc<Mutex<State>>,
 }
@@ -345,6 +357,11 @@ struct WorkerStats {
     released_bytes: u64,
     remapped_bytes: u64,
     stray_faults: u64,
+    /// Ledger settle sweeps completed, and the last one's debit/duration (observability
+    /// only — the policy sends `settle` blind and reads the effect here).
+    sweeps: u64,
+    sweep_debited_bytes: u64,
+    sweep_ms: u64,
 }
 
 struct State {
@@ -371,6 +388,9 @@ struct State {
     /// End of the last scrub cycle. Initialized to construction time so a fresh VM never
     /// scrubs before [`SCRUB_COOLDOWN`] of uptime.
     last_scrub_end: Instant,
+    /// When the last ledger settle sweep was commanded (see [`SWEEP_COOLDOWN`]). Initialized
+    /// to construction time so a fresh VM never sweeps before a cooldown of uptime.
+    last_sweep: Instant,
     /// Tracking for a commanded-but-unfilled target gap (see [`gap_action`]). Only updated on
     /// ticks with a known `actual` — a failed stats query freezes it rather than resetting or
     /// advancing it.
@@ -587,6 +607,9 @@ impl BalloonPolicy {
             scrub_enabled: std::env::var("LIMINA_BALLOON_SCRUB")
                 .ok()
                 .is_none_or(|v| v.trim() != "0"),
+            sweep_enabled: std::env::var("LIMINA_LEDGER_SWEEP")
+                .ok()
+                .is_none_or(|v| v.trim() != "0"),
             state: Arc::new(Mutex::new(State {
                 conn: None,
                 target_pages: 0,
@@ -596,6 +619,7 @@ impl BalloonPolicy {
                 scrub: None,
                 scrub_gen: 0,
                 last_scrub_end: Instant::now(),
+                last_sweep: Instant::now(),
                 gap: None,
                 elastic_probe: None,
                 inelastic: None,
@@ -672,6 +696,16 @@ impl BalloonPolicy {
                 self.start_scrub(&mut st, now, inflate_to);
                 return;
             }
+        }
+        // Ledger settle sweep, on cadence. Guest-invisible and cheap for the worker (tens of
+        // ms, on its own thread), so it doesn't consume the tick or care about pressure —
+        // its only job is keeping the task ledger (Activity Monitor, jetsam) honest.
+        if self.sweep_enabled
+            && sweep_due(self.mode, st.last_sweep, now)
+            && send_settle(&self.socket, &mut st)
+        {
+            st.last_sweep = now;
+            log::info!("autoballoon: ledger settle sweep sent (cadence)");
         }
         // Free-elasticity: judge the last sent inflation step. A step whose pages the free
         // list didn't surrender was backfilled by reclaim — it came out of page cache, and the
@@ -896,6 +930,13 @@ impl BalloonPolicy {
                 st.last_scrub_end = now;
                 trace_scrub(st, "done", gen, resume_pages, actual, None);
                 log::warn!("autoballoon: scrub done (resumed {resume_pages} pages)");
+                // The release path just settled the pool's shares; sweep now to catch the
+                // live side at its low point (and reset the cadence — it would be due soon
+                // anyway, the scrub cooldown being the longer of the two).
+                if self.sweep_enabled && send_settle(&self.socket, st) {
+                    st.last_sweep = now;
+                    log::info!("autoballoon: ledger settle sweep sent (post-scrub)");
+                }
             }
         }
     }
@@ -959,6 +1000,9 @@ impl BalloonPolicy {
             released_bytes: 0,
             remapped_bytes: 0,
             stray_faults: 0,
+            sweeps: 0,
+            sweep_debited_bytes: 0,
+            sweep_ms: 0,
         };
         for tok in line.split_whitespace() {
             let Some((k, v)) = tok.split_once('=') else {
@@ -972,6 +1016,9 @@ impl BalloonPolicy {
                 "released" => s.released_bytes = v,
                 "remapped" => s.remapped_bytes = v,
                 "strays" => s.stray_faults = v,
+                "sweeps" => s.sweeps = v,
+                "sweep_debited" => s.sweep_debited_bytes = v,
+                "sweep_ms" => s.sweep_ms = v,
                 _ => {}
             }
         }
@@ -1006,6 +1053,45 @@ fn send_target(socket: &Path, st: &mut State, pages: u32) -> bool {
         st.conn = None; // broken pipe — drop and retry once
     }
     false
+}
+
+/// Write `settle` (run a ledger settle sweep; no reply) to the balloon socket, reconnecting
+/// once on failure. Returns whether the command went out. Same shape as [`send_target`].
+fn send_settle(socket: &Path, st: &mut State) -> bool {
+    for attempt in 0..2 {
+        if st.conn.is_none() {
+            match UnixStream::connect(socket) {
+                Ok(c) => st.conn = Some(c),
+                Err(e) => {
+                    if attempt == 1 {
+                        log::warn!("autoballoon: connect {socket:?}: {e}");
+                    }
+                    continue;
+                }
+            }
+        }
+        let conn = st.conn.as_mut().unwrap();
+        if writeln!(conn, "settle").and_then(|()| conn.flush()).is_ok() {
+            return true;
+        }
+        st.conn = None; // broken pipe — drop and retry once
+    }
+    false
+}
+
+/// The mode-keyed settle-sweep cadence (see [`SWEEP_COOLDOWN`]): the guest never notices a
+/// sweep, but host re-touches between sweeps re-bill, so eager modes sweep more often.
+fn sweep_cooldown(mode: ReclaimMode) -> Duration {
+    match mode {
+        ReclaimMode::Disabled | ReclaimMode::Light => 2 * SWEEP_COOLDOWN,
+        ReclaimMode::Moderate => SWEEP_COOLDOWN,
+        ReclaimMode::Aggressive => SWEEP_COOLDOWN / 2,
+    }
+}
+
+/// Whether a cadence sweep is due (pure).
+fn sweep_due(mode: ReclaimMode, last_sweep: Instant, now: Instant) -> bool {
+    now.duration_since(last_sweep) >= sweep_cooldown(mode)
 }
 
 /// How deep a scrub inflates (see [`scrub_target_pages`]).
@@ -1266,7 +1352,8 @@ fn trace_decision(
             "\"current_pages\":{},\"decision\":\"{}\",\"new_target_pages\":{},",
             "\"cooldown_active\":{},\"sent\":{},",
             "\"actual_bytes\":{},\"reclaimed_bytes\":{},\"heals\":{},",
-            "\"released_bytes\":{},\"remapped_bytes\":{},\"stray_faults\":{}}}\n"
+            "\"released_bytes\":{},\"remapped_bytes\":{},\"stray_faults\":{},",
+            "\"sweeps\":{},\"sweep_debited_bytes\":{},\"sweep_ms\":{}}}\n"
         ),
         ts_ms,
         i.mode,
@@ -1293,6 +1380,9 @@ fn trace_decision(
         json_stat(wstats.map(|w| w.released_bytes)),
         json_stat(wstats.map(|w| w.remapped_bytes)),
         json_stat(wstats.map(|w| w.stray_faults)),
+        json_stat(wstats.map(|w| w.sweeps)),
+        json_stat(wstats.map(|w| w.sweep_debited_bytes)),
+        json_stat(wstats.map(|w| w.sweep_ms)),
     );
     if f.write_all(line.as_bytes()).is_err() {
         st.trace = None;
@@ -2483,6 +2573,7 @@ mod tests {
             scrub: None,
             scrub_gen: 0,
             last_scrub_end: Instant::now(),
+            last_sweep: Instant::now(),
             gap: None,
             elastic_probe: None,
             inelastic: None,
@@ -2510,6 +2601,9 @@ mod tests {
             released_bytes: 3 << 30,
             remapped_bytes: 1 << 20,
             stray_faults: 0,
+            sweeps: 2,
+            sweep_debited_bytes: 4 << 30,
+            sweep_ms: 41,
         };
         trace_decision(
             &mut st,
@@ -2544,7 +2638,9 @@ mod tests {
                 && lines[0].contains("\"io_full_avg10\":0")
                 && lines[0].contains(&format!("\"actual_bytes\":{}", 1u64 << 30))
                 && lines[0].contains("\"heals\":7")
-                && lines[0].contains("\"stray_faults\":0"),
+                && lines[0].contains("\"stray_faults\":0")
+                && lines[0].contains("\"sweeps\":2")
+                && lines[0].contains("\"sweep_debited_bytes\":4294967296"),
             "{}",
             lines[0]
         );
@@ -2557,6 +2653,28 @@ mod tests {
             "{}",
             lines[1]
         );
+    }
+
+    /// The settle-sweep cadence: armed at construction (no boot-time sweep), mode-keyed
+    /// interval, fires exactly at the boundary.
+    #[test]
+    fn sweep_due_on_mode_keyed_cadence() {
+        let base = Instant::now();
+        for (mode, cooldown) in [
+            (ReclaimMode::Light, 2 * SWEEP_COOLDOWN),
+            (ReclaimMode::Moderate, SWEEP_COOLDOWN),
+            (ReclaimMode::Aggressive, SWEEP_COOLDOWN / 2),
+        ] {
+            assert_eq!(sweep_cooldown(mode), cooldown);
+            assert!(
+                !sweep_due(mode, base, base + cooldown - Duration::from_secs(1)),
+                "{mode:?} swept before its cooldown"
+            );
+            assert!(
+                sweep_due(mode, base, base + cooldown),
+                "{mode:?} did not sweep at its cooldown"
+            );
+        }
     }
 
     /// The scrub trigger matrix: host level × acute × cooldowns × meaningful inflate. The
@@ -2840,6 +2958,7 @@ mod tests {
             }),
             scrub_gen: 3,
             last_scrub_end: now,
+            last_sweep: now,
             gap: None,
             elastic_probe: None,
             inelastic: None,
@@ -2896,6 +3015,7 @@ mod tests {
             scrub: None,
             scrub_gen: 0,
             last_scrub_end: Instant::now(),
+            last_sweep: Instant::now(),
             gap: None,
             elastic_probe: None,
             inelastic: None,

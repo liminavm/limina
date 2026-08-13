@@ -22,7 +22,7 @@
 repo = "https://github.com/liminavm/libkrun.git"
 upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
-rev = "b042d884b3d900c0ac04b4604bbd0044aa1337d0"
+rev = "e91dca60092438127b21e8169a40dc4eaf6b896f"
 base = "07fd40dcf6da8e14dd47e16a535531f0383fe52c"
 
 # The EFI firmware (task #22, migrated 2026-08-06). The `limina` branch carries our whole
@@ -43,7 +43,7 @@ base = "13e8adac8a83141b51375c799996946082e1eb43"
 repo = "https://github.com/liminavm/imago.git"
 upstream = "https://gitlab.com/hreitz/imago.git"
 branch = "limina"
-rev = "5f2c0adba538159282b8941a3f3be61eefbc4769"
+rev = "16e9602270e5890ab8fee83bf6f9a438049dabea"
 
 # The HOST KosmicKrisp / zink-on-KK Mesa. NOT vendored by `cargo xtask vendor`: this tree lives at
 # /Volumes/mesa-cs/mesa on a case-sensitive sparse image (scripts/ensure-mesa-cs.sh), because Mesa
