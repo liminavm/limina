@@ -13,7 +13,11 @@
 # the sweep fault-handler refault loop (see docs/hardening-backlog.md).
 #
 # Usage: LIMINA_WATCH_HOST=<ssh-host> [LIMINA_WATCH_VM=Dev] [LIMINA_WATCH_GUEST_GIB=24] \
-#        [LIMINA_WATCH_INTERVAL=1200] spikes/hv-ledger-gap/watch-worker.sh
+#        [LIMINA_WATCH_INTERVAL=1200] [LIMINA_WATCH_GUEST_PORT=<n>] [LIMINA_WATCH_GUEST_USER=claude] \
+#        spikes/hv-ledger-gap/watch-worker.sh
+#
+# Setting LIMINA_WATCH_GUEST_PORT (the VM's own ssh forward, read from supervisor.log — it
+# auto-allocates from 2222 up) adds the guest end of the graphics pool to each line.
 set -eu
 
 HOST=${LIMINA_WATCH_HOST:?set LIMINA_WATCH_HOST to the ssh host running the VM}
@@ -23,7 +27,9 @@ INTERVAL=${LIMINA_WATCH_INTERVAL:-1200}
 
 prev_sw=""
 while true; do
-    out=$(ssh -o ConnectTimeout=20 "$HOST" VM="$VM" GUEST_GIB="$GUEST_GIB" sh -s <<'RS' 2>/dev/null || true
+    out=$(ssh -o ConnectTimeout=20 "$HOST" VM="$VM" GUEST_GIB="$GUEST_GIB" \
+          GPORT="${LIMINA_WATCH_GUEST_PORT:-}" GUSER="${LIMINA_WATCH_GUEST_USER:-claude}" \
+          sh -s <<'RS' 2>/dev/null || true
 PID=$(pgrep -x limina-vmm | head -1)
 LOGD="$HOME/Library/Application Support/Limina/VMs/$VM.liminavm/logs"
 if [ -z "$PID" ]; then echo "worker=none (parked or stopped)"; exit 0; fi
@@ -62,8 +68,28 @@ F=$(/usr/bin/footprint "$PID" 2>/dev/null)
 gfx=$(echo "$F" | awk '/IOAccelerator \(graphics\)/{print $1$2; exit}')
 gfxr=$(echo "$F" | awk '/IOAccelerator \(graphics\)/{for(i=1;i<=NF;i++) if($i=="IOAccelerator"){print $(i-1); exit}}')
 ios=$(echo "$F" | awk '/IOSurface/{print $1$2; exit}')
+# Guest end of the graphics pool, on the SAME line as the host end. Without it a growing pool is
+# ambiguous between "the guest holds more" and "the host won't retire" — the 2026-08-13 drain
+# settled that question only because both ends were sampled on one clock. Absent (no port, no
+# sudo, stock guest) these read `?` and the line degrades to host-only rather than failing.
+gu="?"; gfb="?"
+if [ -n "${GPORT:-}" ]; then
+    # -n is load-bearing: this whole script arrives on `sh -s`'s STDIN, and an ssh without it
+    # reads the remainder away, so every later line silently vanishes and the watch prints
+    # "target unreachable".
+    g=$(ssh -n -p "$GPORT" -o BatchMode=yes -o StrictHostKeyChecking=no \
+           -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 "${GUSER:-claude}@127.0.0.1" \
+        'sudo -n sh -c "D=/sys/kernel/debug/dri/0
+u=\$(grep -c \": used\$\" \$D/virtio-gpu-host-visible-mm 2>/dev/null)
+m=\$(awk -F: \"/: used\\\$/ {s+=\\\$2} END{printf \\\"%.0f\\\", s/1048576}\" \$D/virtio-gpu-host-visible-mm 2>/dev/null)
+c=\$(tail -n +2 \$D/clients 2>/dev/null | grep -c .)
+echo \"\$u \$m \$c\""' 2>/dev/null | tail -1)
+    set -- $g
+    [ -n "${1:-}" ] && gu="$1blob/${2:-?}MB" && gfb="${3:-?}"
+fi
 echo "pf=$(( ${fp:-0} >> 20 ))M ic=$(( ${ic:-0} >> 20 ))M gap=$(( gap >> 20 ))M \
 balloon=$(( ${act:-0} >> 30 ))G reus=${reus:-?}G | gfx=${gfx:-?}/${gfxr:-?}rgn iosurf=${ios:-?} \
+guest_gpu=${gu}/${gfb}cli \
 | sweeps=${sw:-?}(dem=${dem:-0}) debit=$(( ${swdeb:-0} >> 20 ))M faults=${swf:-?} \
 scrubs=${sc:-?}(idle=${idle:-0}) holdoff=${hold:-0} cd_run=${cdrun:-0} \
 | guest_free=$(( ${gfree:-0} / 1024 ))M psi=${psi:-?} host=${host:-?}/${hpct:-?}%"

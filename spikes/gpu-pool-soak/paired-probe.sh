@@ -33,7 +33,8 @@ echo "$F" | grep -E 'Footprint:|IOAccelerator \(graphics\)|IOSurface' | sed 's/^
 # Guest counters, all under /sys/kernel/debug/dri/0 and root-only:
 #   virtio-gpu-host-visible-mm  the guest driver's used/free map of host-visible blobs
 #   framebuffer / clients       live scanouts, and DRM clients (catches a leaked connection)
-ssh -p "$PORT" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+# -n so this nested ssh does not consume the outer `sh -s` script still queued on stdin.
+ssh -n -p "$PORT" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -o ConnectTimeout=8 "$GUSER@127.0.0.1" 'sudo -n sh -c "
 D=/sys/kernel/debug/dri/0
 used=\$(grep -c \": used\$\" \$D/virtio-gpu-host-visible-mm 2>/dev/null)
