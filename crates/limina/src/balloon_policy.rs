@@ -876,7 +876,14 @@ impl BalloonPolicy {
         // report resets it outright: whatever the free list says, a hurting guest is not the
         // one to take memory from. Measured from the driver's actual fill, like the pacing
         // clamp — the same headroom the capture would take.
-        let headroom = if p.mem_free_kib == 0 || acute {
+        // IO pain resets it too, not just memory pain. The cooldown this lift bypasses is armed
+        // by the pressure give-back, whose trigger is io-keyed — and a guest doing its own heavy
+        // disk work reports io-full pressure with memory PSI at zero and its free list untouched.
+        // Ignoring io let the lift re-inflate straight into the give-back that had just fired:
+        // 21 give-backs in one minute on the dogfood VM (2026-08-13, 19:01), balloon oscillating
+        // 1.33<->1.58 G on a 4 s period with 15.6 GiB free and io_full at 23-32%. A guest in io
+        // pain is not one to take memory from, whatever MemFree claims.
+        let headroom = if p.mem_free_kib == 0 || acute || p.io_full_avg10 > IO_PRESSURE_LOW {
             0
         } else {
             let free_pages = (p.mem_free_kib / 4).min(u32::MAX as u64) as u32;
@@ -3740,6 +3747,23 @@ mod tests {
         hurting.mem_free_kib = plenty;
         pol.on_pressure(&hurting);
         assert!(pol.state.lock().unwrap().free_settled_since.is_none());
+
+        // ...and so does IO pain, with memory PSI at zero and the free list untouched. This is
+        // the shape that regressed on the dogfood VM (2026-08-13): the guest's own disk work put
+        // io-full at 23-32%, which trips the io-keyed give-back, while MemFree sat at 15.6 GiB.
+        // Without this the lift re-inflated into the give-back it had just caused — 21 give-backs
+        // in a minute, balloon oscillating on a 4 s period.
+        p.mem_free_kib = plenty;
+        pol.on_pressure(&p);
+        assert!(pol.state.lock().unwrap().free_settled_since.is_some());
+        let mut io_pain = report_pages(0, MAX / 2, MAX);
+        io_pain.mem_free_kib = plenty;
+        io_pain.io_full_avg10 = IO_PRESSURE_LOW + 1;
+        pol.on_pressure(&io_pain);
+        assert!(
+            pol.state.lock().unwrap().free_settled_since.is_none(),
+            "io pain must reset the settle timer — the give-back it collides with is io-keyed"
+        );
     }
 
     /// The sweep/scrub markers are the field-attribution oracle: the bundled app logs at WARN,
