@@ -1,6 +1,7 @@
 # hv-ledger-marker: how stage-2 mappings gate MADV_FREE_REUSABLE's ledger debit
 
-**Date**: 2026-08-11. Host: macOS 26.5, M1 Max 32 GB, 16 KiB pages.
+**Date**: 2026-08-11 (+ the `double` mode 2026-08-12). Host: macOS 26.5, M1 Max 32 GB,
+16 KiB pages.
 **Question** (from the field arithmetic): the dogfood worker bills ~6.5 GB of
 phys_footprint that appears in NO vmmap category — guest content + graphics + malloc
 cannot reach the billed total, and the footprint peak hit 37.4 GB on a 24 GiB VM.
@@ -73,17 +74,64 @@ duration. Also unresolved: the 2.07× disagreement observed between the balloon 
 `target=actual` and the decision-trace's view of the same instant (2026-08-11 field
 snapshot) — pin that down before trusting any single instrument.
 
+## The both-touch cell (`double` mode, 2026-08-12): per-pmap double-billing CONFIRMED
+
+The original matrix touched each range from exactly ONE side (H host-only, G guest-only)
+— which is why it falsified "double-billing at touch". The cell it never measured is the
+**same range touched by both sides**, and that is the production shape of every disk-fed
+guest page: virtio-blk writes the buffer through the task mapping, the guest then faults
+the same page through stage-2. Field trigger (2026-08-12, dogfood, cold boot + gdb
+coredump analysis): ledger internal 33.0 G / phys_footprint 34.2 G while the footprint
+tool saw ~17 G real and compressed-billing ≈ 0 — an almost exact 2× on a guest whose
+page cache was built by disk reads.
+
+`./probe payload.bin double` (payload gained a retarget mailbox at RAM_BASE+0x10000):
+
+| Step | footprint Δ | takeaway |
+|---|---|---|
+| D1 host memset H | +1024.7 M | 1× at first touch, as before |
+| D2 guest dirties the SAME H | **+1024.5 M** | **CELL A: the second pmap bills again** |
+| D3 guest dirties G | +1024.5 M | 1× at first touch |
+| D4 host memset the SAME G | **+1024.5 M** | **CELL B: symmetric — order doesn't matter** |
+| D5 mprotect(H, PROT_NONE) | **−1024.5 M** | instantly debits exactly the task-pmap share |
+| D6 mprotect(H, RW) restore | ±0 | PTE re-population is lazy |
+| D7 guest re-touches H | ±0, **0 stage-2 faults** | **the guest never notices the sweep**; content intact |
+| D8 host re-memsets H | +1024.5 M | the sweep's steady-state cost on host-hot pages |
+| D10/D11 mprotect(H, PROT_READ) round-trip | ±0 | RO downgrade edits PTEs in place — **only the NONE window debits** |
+| D9 hv_vm_unmap all / munmap | −2049 / −2049 | perfectly symmetric: each pmap's teardown debits its own share |
+
+**The model, completed**: phys_footprint (and resident_size) bill **per pmap** — the task
+pmap and the HV stage-2 pmap each carry a full share for the same physical page. One
+toucher = 1×; both touchers = 2× until one side's PTEs go away (hv_vm_unmap, munmap,
+mprotect(PROT_NONE), or the compressor's pageout disconnecting both). This retroactively
+explains the historical 2.04:1 field ratios and the 08-12 cold-boot 2×: the guest's
+entire disk-fed page cache (12.3 G that night) is both-touched by construction, so it
+bills ~2×, plus anon + worker overhead ≈ the observed 33 G.
+
+**Remedy facts for the production design**:
+- An `mprotect(PROT_NONE → RW)` cycle over guest RAM debits the task share, leaves
+  stage-2 (and the guest) completely undisturbed, and preserves content. Zero guest cost.
+- The window is the hazard: any WORKER thread touching the range during the NONE window
+  takes a SIGBUS/SIGSEGV (virtio queues, blk/net buffers, gpu transfers). A sweep must
+  chunk + skip hot ranges, quiesce workers, or field the fault with a retry handler.
+- PROT_READ windows don't work (no debit), so reads can't be kept safe that way.
+- Host re-touch re-bills 1× (D8): swept pages the worker still serves IO into come back.
+  Sweep on cadence/pressure, not once.
+
 ## Production consequences
 
 1. **release() is optimal as shipped** — no janitor, no rescan, no memset, no MADV_ZERO.
 2. Pre-fix builds effectively had *scan-latency-deferred* reclaim; any historical
    measurement of "REUSABLE returned X quickly" on a stage-2-mapped range was really
    measuring the scan, not the madvise.
-3. The remaining dogfood gap on the POST-fix build still needs the planned discriminator
-   (per-tick `released−remapped` vs the guest-RAM region's billed bytes) — but the limbo
-   mechanism no longer applies to released ranges there, so the suspects narrow to live
-   content aliased by the oscillation plus anything the balloon never releases.
-4. Local probe space is exhausted without a replication; the next replication vehicles are
-   the REAL stack: (a) the deployed counters build on dogfood (outstanding-vs-billed
-   correlation), (b) a local limina run with the ledger sampler attached under the
-   compile-mix A/B workload — full scale, multi-vCPU, GPU churn included.
+3. ~~The remaining dogfood gap on the POST-fix build still needs the planned
+   discriminator~~ — RESOLVED by the `double` mode: the post-fix excess IS the both-touch
+   2× on disk-fed (and any other worker-written) guest pages. The balloon bounds it only
+   by shrinking the cache; released ranges settle because hv_vm_unmap+munmap-side debits
+   both shares.
+4. The user-facing fix is a task-pmap "settle sweep" (mprotect NONE→RW over guest RAM the
+   worker has written), gated by the hazard notes above — mechanism in libkrun, policy in
+   limina, same split as the balloon. Alternative doors: Apple's
+   MAP_MEM_LEDGER_TAGGED/NO_FOOTPRINT ownership transfer (likely private-entitlement-gated
+   — verify, then Radar) or simply reporting honest numbers in limina's own UI while AM
+   stays 2×.

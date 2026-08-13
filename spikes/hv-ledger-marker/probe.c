@@ -47,6 +47,7 @@
 #define RAM_BASE 0x80000000ULL
 #define RAM_SIZE (3ULL << 30)
 #define PAGE_16K 16384ULL
+#define MAILBOX_GPA (RAM_BASE + 0x10000ULL) /* payload re-reads the target base here */
 #define G_GPA 0x90000000ULL
 #define H_GPA 0xE0000000ULL
 #define RANGE_SIZE (1ULL << 30)
@@ -104,6 +105,9 @@ static void *watchdog_main(void *arg) {
 static uint8_t *g_ram;
 static void *gpa_to_hva(uint64_t gpa) { return g_ram + (gpa - RAM_BASE); }
 
+/* Retarget the payload's touch pass (it re-loads this at the top of every pass). */
+static void set_mailbox(uint64_t gpa) { *(volatile uint64_t *)gpa_to_hva(MAILBOX_GPA) = gpa; }
+
 struct snap {
     double fp, comp, res;
 };
@@ -144,6 +148,13 @@ static bool g_cycle_heal;
 static uint8_t g_win_mapped[N_WIN];
 static int g_heals;
 
+/* Double-bill mode: heal any stage-2 fault in guest RAM by remapping the single
+ * faulting 16 KiB page, and count them. A nonzero count after the mprotect
+ * remedy cycle means the protection change tore down stage-2, not just the
+ * task-pmap PTEs — that's the go/no-go signal for a production sweep. */
+static bool g_dbl_heal;
+static int g_dbl_faults;
+
 /* Run the vCPU until the payload's DONE MMIO store (PC is advanced past it, so a
  * later run continues into the payload's next touch pass). In cycle mode, stage-2
  * faults on the released G-range are healed production-style and retried. */
@@ -173,6 +184,21 @@ static bool run_guest_dirty_pass(hv_vcpu_t vcpu, hv_vcpu_exit_t *vexit) {
             CHECK(hv_vcpu_set_reg(vcpu, HV_REG_PC, pc + 4));
             atomic_store(&g_watch_on, false);
             return true; /* DONE */
+        }
+        if (g_dbl_heal && ec == 0x24 && pa >= RAM_BASE && pa < RAM_BASE + RAM_SIZE) {
+            uint64_t page = pa & ~(PAGE_16K - 1);
+            /* If the hv registration survived, a fresh map overlaps — replace it. */
+            if (hv_vm_map(gpa_to_hva(page), page, PAGE_16K,
+                          HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC) != HV_SUCCESS) {
+                hv_vm_unmap(page, PAGE_16K);
+                CHECK(hv_vm_map(gpa_to_hva(page), page, PAGE_16K,
+                                HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC));
+            }
+            g_dbl_faults++;
+            if (g_dbl_faults % 8192 == 0)
+                printf("  ...healed %d stage-2 faults\n", g_dbl_faults);
+            atomic_store(&g_deadline_ns, now_ns() + WATCHDOG_NS);
+            continue; /* no PC advance: retry the access */
         }
         if (g_cycle_heal && ec == 0x24 && pa >= G_GPA && pa < G_GPA + RANGE_SIZE) {
             uint64_t w = (pa - G_GPA) / HEAL_WIN;
@@ -222,9 +248,97 @@ int main(int argc, char **argv) {
                  MAP_ANON | (shared_ram ? MAP_SHARED : MAP_PRIVATE), -1, 0);
     if (g_ram == MAP_FAILED) { perror("mmap"); return 1; }
     memcpy(g_ram, payload, payload_len);
+    set_mailbox(G_GPA); /* default target; double mode retargets per pass */
     CHECK(hv_vm_map(g_ram, RAM_BASE, RAM_SIZE,
                     HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC));
     s = show("P0 vm_create + map 3G (code page dirty)", s);
+
+    /* mode "double": the cell the original matrix never measured — the SAME range
+     * touched by BOTH sides (H host-then-guest, G guest-then-host). This is the
+     * production shape of every disk-fed guest page: virtio-blk writes the buffer
+     * through the task mapping, the guest then faults it through stage-2. If the
+     * second toucher bills another 1x, the entire guest page cache double-bills
+     * phys_footprint — the 2026-08-12 field 2x (ledger 34.2G vs footprint tool 17G,
+     * compressed ~0). Then the remedy cells: an mprotect(PROT_NONE->RW) cycle over
+     * the both-touched range (does it debit the task-pmap share? does the guest
+     * keep running without stage-2 faults?), and a host re-touch (the re-double
+     * rate a production sweep would pay on hot virtio pages). */
+    if (argc > 2 && strcmp(argv[2], "double") == 0) {
+        hv_vcpu_t vcpu;
+        hv_vcpu_exit_t *vexit;
+        CHECK(hv_vcpu_create(&vcpu, &vexit, NULL));
+        g_vcpu = vcpu;
+        CHECK(hv_vcpu_set_reg(vcpu, HV_REG_CPSR, BOOT_CPSR));
+        CHECK(hv_vcpu_set_reg(vcpu, HV_REG_PC, RAM_BASE));
+
+        /* Cell A: host writes first (virtio-blk shape), guest re-touches. */
+        memset(gpa_to_hva(H_GPA), 0xa5, RANGE_SIZE);
+        s = show("D1 HOST memset H 1G (host-first)", s);
+        set_mailbox(H_GPA);
+        if (!run_guest_dirty_pass(vcpu, vexit)) return 1;
+        s = show("D2 GUEST dirties the SAME H range   << CELL A", s);
+
+        /* Cell B: guest writes first, host re-touches (virtio-net tx shape). */
+        set_mailbox(G_GPA);
+        if (!run_guest_dirty_pass(vcpu, vexit)) return 1;
+        s = show("D3 GUEST dirties G 1G (guest-first)", s);
+        memset(gpa_to_hva(G_GPA), 0x5a, RANGE_SIZE);
+        s = show("D4 HOST memset the SAME G range     << CELL B", s);
+
+        /* Remedy: drop the task-pmap PTEs over H without touching the content. */
+        if (mprotect(gpa_to_hva(H_GPA), RANGE_SIZE, PROT_NONE) != 0)
+            printf("D5 mprotect(H, NONE) failed: %s\n", strerror(errno));
+        s = show("D5 mprotect(H, PROT_NONE)", s);
+        if (mprotect(gpa_to_hva(H_GPA), RANGE_SIZE, PROT_READ | PROT_WRITE) != 0)
+            printf("D6 mprotect(H, RW) failed: %s\n", strerror(errno));
+        s = show("D6 mprotect(H, RW) restore", s);
+
+        /* Did the cycle tear stage-2? Guest re-touch with per-page healing. */
+        g_dbl_heal = true;
+        g_dbl_faults = 0;
+        set_mailbox(H_GPA);
+        if (!run_guest_dirty_pass(vcpu, vexit)) return 1;
+        g_dbl_heal = false;
+        printf("   stage-2 faults during guest re-touch: %d (0 = stage-2 survived)\n",
+               g_dbl_faults);
+        s = show("D7 GUEST re-touches H post-cycle", s);
+
+        /* Verify content survived the cycle (it must — these are guest pages). */
+        uint8_t probe_byte = *((volatile uint8_t *)gpa_to_hva(H_GPA) + 8);
+        printf("   H content spot-check: 0x%02x (0xa5 = survived; payload wrote u64[0])\n",
+               probe_byte);
+
+        /* Re-double rate: the host touching the swept range again. */
+        memset(gpa_to_hva(H_GPA), 0xb6, RANGE_SIZE);
+        s = show("D8 HOST re-memset H (re-double?)", s);
+
+        /* RO-window variant: if a downgrade to PROT_READ also debits, a sweep
+         * can leave reads safe for concurrent worker threads and only writes
+         * need the fault-retry path. No debit = pmap edits PTEs in place and
+         * only the NONE window works. */
+        if (mprotect(gpa_to_hva(H_GPA), RANGE_SIZE, PROT_READ) != 0)
+            printf("D10 mprotect(H, PROT_READ) failed: %s\n", strerror(errno));
+        s = show("D10 mprotect(H, PROT_READ)", s);
+        if (mprotect(gpa_to_hva(H_GPA), RANGE_SIZE, PROT_READ | PROT_WRITE) != 0)
+            printf("D11 mprotect(H, RW) failed: %s\n", strerror(errno));
+        s = show("D11 mprotect(H, RW) restore", s);
+        volatile uint8_t sink = *((volatile uint8_t *)gpa_to_hva(H_GPA) + 8);
+        (void)sink;
+        s = show("D12 HOST reads one byte of H", s);
+
+        CHECK(hv_vcpu_destroy(vcpu));
+        hv_vm_unmap(RAM_BASE, RAM_SIZE);
+        s = show("D9 unmap all + vcpu destroy", s);
+        CHECK(hv_vm_destroy());
+        s = show("D9b hv_vm_destroy", s);
+        munmap(g_ram, RAM_SIZE);
+        show("D9c munmap RAM", s);
+        printf("\nread the deltas: D2/D4 ~+1024M = the second pmap bills again (the\n"
+               "page-cache 2x); ~0 = double-billing falsified for the both-touch cell.\n"
+               "D5 ~-1024M with D7 faults=0 = the sweep remedy is viable; D8 = its\n"
+               "steady-state cost on host-hot pages.\n");
+        return 0;
+    }
 
     /* P1: host touch */
     memset(gpa_to_hva(H_GPA), 0xa5, RANGE_SIZE);

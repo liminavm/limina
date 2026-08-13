@@ -5,9 +5,14 @@
  * hv-ledger-marker guest payload — bare-metal arm64, MMU off, loaded at
  * RAM_BASE = 0x80000000, entered at offset 0.
  *
- * Dirties one u64 in every 16 KiB page of the G-range (0x90000000, 1 GiB =
- * 65536 pages) so each page becomes guest-touched dirty, then signals DONE via
- * an MMIO store to 0x10000000 and parks.
+ * Dirties one u64 in every 16 KiB page of a 1 GiB target range (65536 pages)
+ * so each page becomes guest-touched dirty, then signals DONE via an MMIO
+ * store to 0x10000000 and parks.
+ *
+ * The target base is re-loaded from the MAILBOX (RAM_BASE + 0x10000) at the
+ * top of every pass, so the host can retarget between DONEs (the double-bill
+ * cells run passes over H as well as G). Single-range modes just leave the
+ * mailbox at G_GPA.
  */
 
 .text
@@ -15,10 +20,11 @@
 _start:
     movz x20, #0x1000, lsl #16      // MMIO base 0x10000000
 
-    // Outer loop: touch every page of the G-range, signal DONE, repeat forever.
-    // The host decides per-DONE whether to release the range and resume (cycle
-    // mode) or stop running the vCPU (single-pass modes).
-0:  movz x21, #0x9000, lsl #16      // G-range base 0x90000000
+    // Outer loop: touch every page of the target range, signal DONE, repeat
+    // forever. The host decides per-DONE whether to release/retarget and
+    // resume (cycle/double modes) or stop running the vCPU.
+0:  movz x22, #0x8001, lsl #16      // mailbox 0x80010000
+    ldr  x21, [x22]                 // target range base
     movz x2,  #0x5a5a
     movz x3,  #1, lsl #16           // 65536 pages
 
