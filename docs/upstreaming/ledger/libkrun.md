@@ -197,15 +197,19 @@ un-negotiate) remain standalone rows-to-be.
 
 ### Post-audit commits (unaudited — added after the 2026-08-03 pass / the fork migration)
 
-The table's 126 rows are the audited series (124 commits at migration). The branch now carries
-127 commits above upstream `07fd40dc`; the three below have not been researched against upstream.
-Listed so the drift is visible rather than implied by a stale count:
+The table's 126 rows are the audited series (124 commits at migration). The branch has kept
+growing above upstream `07fd40dc`; the commits below have not been researched against upstream.
+Listed so the drift is visible rather than implied by a stale count. This list is itself
+incomplete — the 2026-08-12/13 balloon + ledger-sweep commits (`877b756`..`9390775`) are not
+here yet.
 
 | commit | subject | first guess at disposition |
 |---|---|---|
 | `aeafaf2` | vmm/macos: service pause/snapshot from the secondary boot wait | **send-later** — folded into the PSCI CPU_ON commit (`5a44abc`) at the 2026-08-12 fixup-squash; the deadlock is an interaction with our carried PSCI CPU_ON boot-channel park (0094-era), so it travels with that series; see the task #21 note above |
 | `bfc332a` | virtio-gpu: ledger the display path's scanout resources | carry (DIAG-class, `[SCANOUT-LEDGER]` at debug) — but the `stranded` count it added names a real upstream-shared bug: `unref_resource` drops a resource's metadata *before* refusing a still-scanned-out unref. Worth a standalone upstream fix if that path is ever confirmed reachable |
 | `d9afca2` | virtio/gpu: tell the display backend when a scanout resource is unref'd | carry (chains onto 0001's display-backend vtable, which is limina-shaped) — the *mechanism* (a release edge on the display callback, so a host-side backend can drop its reference) is generic and would interest any out-of-process display backend; unsendable until the vtable itself is |
+| `9fd2f8f` | virtio/gpu: trace iov backings behind an env var | carry (DIAG-class, env-gated) — debugging instrumentation, nothing to send |
+| `97f1ba7` | hvf: mask SME on every vcpu, not only the nested ones | **upstream-now** — upstream already masks `ID_AA64PFR1_EL1.SME` but only inside `if nested_enabled`, and its mask is `3 << 24` on a 4-bit field `[27:24]`. Both are plain bugs on shared code: a non-nested macOS guest on an M4-class host is told it has SME without SVE, which UNDEFs guest userspace that assumes the pair (Chrome 151's renderer SIGILLs). Small, self-contained, no limina coupling. **ACTION: file the PR** (per `README.md`, the user posts). See `spikes/sme-mask/RESULTS.md` |
 
 ### Series verdict (all 126 rows researched 2026-08-03, vs main `c652b56`) — COMPLETE
 
