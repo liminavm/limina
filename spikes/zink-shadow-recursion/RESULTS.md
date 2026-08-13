@@ -92,3 +92,11 @@ it is only there if the replicate blit really carried the old contents across.
     GREEN (after):  0 warnings, all 5 regions OK, RESULT PASS
 
 Same binary, same command, only the installed zink differs.
+
+## Not covered
+
+The probe only drives the **color** path (`i < PIPE_MAX_COLOR_BUFS`). The
+depth/stencil shadow attachment runs through the same rewritten block, and the old
+code's zs mask preserved `PIPE_CLEAR_DEPTHSTENCIL` — its own clears — exactly as the
+color case preserved bit `i`, so the same cycle and the same fix apply. That is
+reasoning, not measurement: treat the zs leg as untested-but-identical-shape.

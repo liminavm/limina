@@ -1,6 +1,6 @@
 # mesa — patch-audit ledger
 
-15 patches; `UPSTREAM_BASE` `floating — see the series README`. Schema + protocol: `README.md`.
+17 patches; `UPSTREAM_BASE` `floating — see the series README`. Schema + protocol: `README.md`.
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
 
 | ord | subject | files | diag | need | checked | issue | mr | sec | fold | tier | disp | notes |
@@ -94,4 +94,5 @@ as a build input (tombstone README; the migrated diffs deleted, the dead-in-gues
 upstream-queue rows 0001/0002/0003/0004/0006/0014 + the historical 0009/0010 remain as
 files). `scripts/build-venus.sh` archived with it. Rows above stay keyed by their OLD
 subjects; upstream-MR verdicts unchanged — dead-in-guest ≠ not-worth-sending.
-
+| 0007 | venus: allocate dma-buf import memory synchronously | `src/virtio/vulkan/vn_device_memory.c` |  | needed — main vn_device_memory.c still routes dma-buf import through `vn_device_memory_alloc_simple` (async), so a host refusal is invisible to the caller | main `2b7a72457a5` 2026-08-13 | none-yet | none-yet — **ACTION: file the MR** | no | standalone | guest-enhanced, but the bug bites ANY venus guest whose host refuses an import | **upstream-now** — small, and the argument is upstream's own: import failure is expected runtime state (unlike a plain alloc, where failure means OOM), so the error must reach the caller that can fall back. Cite the `VN_PERF(NO_ASYNC_MEM_ALLOC)` precedent | trigger = a udmabuf that is legitimately unattachable on a macOS host; without this the guest holds a ghost handle and the next command naming it kills the whole context ([[limina-venus-ghost-tombstone]]) |
+| 0008 | zink: don't recurse forever populating a shadow attachment | `src/gallium/drivers/zink/zink_render_pass.c` |  | needed — byte-identical on main: `zink_render_attachment_shadow` still masks every attachment's clears EXCEPT the one being shadowed, and still sets `transient->valid` only after the blit | main `2b7a72457a5` 2026-08-13 (fetched, diffed) | none-yet | none-yet — **ACTION: file issue + MR** | no | standalone | guest-enhanced **+ host zink-on-KK** (same fix on `limina-kk` `3c759eecf59`) | **upstream-now** — zero limina-specific content, deterministic pixel-checked reproducer, and u_blitter's own "Caught recursion. This is a driver bug." names it | reachable on ANY driver without VK_EXT_multisampled_render_to_single_sampled; found as an Epiphany/WebKit stack overflow. Reproducer + trap notes: `spikes/zink-shadow-recursion/` |
