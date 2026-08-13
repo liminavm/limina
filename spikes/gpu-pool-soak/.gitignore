@@ -1,0 +1,3 @@
+# Soak run outputs: the CSV is the deliverable and gets summarized into RESULTS.md, but the
+# raw per-run logs are large and regenerable.
+run-*/
