@@ -1785,6 +1785,57 @@ useful answer — it makes the guest's blit permanent and turns it into their op
   wedge is fixed (libkrun 0117, `f809201`: refused context fences retire as lost, plus the
   `venus_fence_lost` L2 guard) — the guest-side doc's "queued as a host-side fix" predates it.
 
+### Wave 6 — zero-copy udmabuf (guest-RAM dmabuf) import into venus
+
+**Status: 📋 planned 2026-08-13** (raised by the user while fixing the totem crash: *"is it really
+impossible to import udmabuf, or is it a matter of giving venus a new primitive?"* — the answer is
+the second, and it needs GUEST-side work first).
+
+**What a udmabuf is and why it matters.** `/dev/udmabuf` wraps plain guest anonymous pages (a
+sealed memfd) as a dmabuf. It is how every *software*-decoded media frame reaches the GPU stack:
+GStreamer allocates into a memfd, wraps it, and hands the dmabuf to zink/GL. Today the import is
+refused and the stack falls back to a raw upload — one CPU copy per frame, per player. (Before
+2026-08-13 the refusal *killed the GPU context*; that is fixed on both sides, see
+`vkr_ghost_containment.rs`, and this wave is about the performance, not correctness.)
+
+**Measured 2026-08-13, the load-bearing fact:** a foreign dmabuf PRIME-imported into virtio-gpu is
+**purely guest-side**. `DRM_IOCTL_PRIME_FD_TO_HANDLE` succeeds and `RESOURCE_INFO` reports a real
+res_id with `blob_mem=0`, but the host receives **no `RESOURCE_CREATE_*` and no
+`RESOURCE_ATTACH_BACKING`** for it (probed with `LIMINA_TRACE_ATTACH_BACKING=1`: the ids around it
+trace, it never does). So the host holds nothing at all — not the resource, not the page list —
+which is exactly why vkr answers "invalid res_id". **The bridge cannot be built host-side alone.**
+
+Three phases, each independently useful:
+
+1. **Guest kernel (`liminavm/linux`, branch `limina`) — make the import reach the host.** Teach
+   drm/virtio's PRIME-import path to register a foreign dmabuf's `sg_table` as a virtio-gpu
+   resource: create it host-side and `RESOURCE_ATTACH_BACKING` its pages. This is a real upstream
+   gap, so keep it upstreamable — and keep it a *capability*, not a requirement: a stock guest
+   simply keeps today's raw-upload fallback (two-tier guarantee). Watch out for dmabuf lifetime:
+   the resource must hold the dmabuf attachment for as long as the host has the pages.
+2. **Host (virglrenderer `limina`) — consume an iov-backed classic resource in venus.** libkrun
+   already translates the backing into **host-VA iovecs** (`virtio_gpu.rs` `attach_backing` →
+   `virgl_renderer_resource_attach_iov`), so the pages are visible in the worker; what is missing
+   is a `proxy_context_attach_resource` path for "iov-backed, no IOSurface, no map_ptr". Stitch the
+   scattered pages into ONE contiguous host VA with `mach_vm_remap` (share, don't copy), then
+   import through the existing host-pointer route (`VK_EXT_external_memory_host` → KK →
+   `newBufferWithBytesNoCopy`). Contiguity — not visibility — is the only reason a single
+   MTLBuffer can't span the pages today.
+3. **Pinning + page-size policy (the part expected to bite).** `mach_vm_remap` works at the host's
+   **16 KiB** granularity: a 16k-page enhanced guest stitches cleanly, a stock 4 KiB guest can
+   present 4 KiB fragments that cannot be remapped individually → it stays on the fallback (again,
+   the tier line falls where the two-tier guarantee wants it). While Metal has the pages wired they
+   must not move or be reclaimed, so the balloon / free-page-reporting path has to treat them as
+   pinned for the resource's lifetime — reconcile with `docs/design/m6-dynamic-memory.md` before
+   writing any of phase 2. Coherency is free (UMA, same physical pages as the existing host-pointer
+   imports).
+
+**Done test:** with a 16k enhanced guest, `vkudmabufimport.py` reports `IMPORT OK` + `ALIAS OK`
+(the pattern written into the memfd read back through the imported venus memory via a GPU copy —
+proof the two views share storage, not just that the call returned), a udmabuf frame reaches the
+GPU with **zero** guest-side copies, and a measured before/after on software-decoded playback
+(`gpu p50` + CPU per frame). A stock 4k guest still plays video via the fallback, unchanged.
+
 **Done test:** wave 1 — a seated guest on the dogfood/dev panel enumerates a 120 Hz (VRR-capable)
 mode, runs at it, and the guest frame clock tracks real latches; wave 2/3 — a fullscreen NV12
 surface reaches a CALayer with no guest-side conversion pass, stock guest unaffected; wave 4 —

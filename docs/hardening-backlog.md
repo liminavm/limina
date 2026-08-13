@@ -336,6 +336,20 @@ rects). Remaining:
   Mitigation when it matters: field only protection faults (`SEGV_ACCERR`/`BUS_ACCERR`),
   chain the rest. Already observable in the field: such a loop spins `sweep_faults` (stats
   verb / decision trace) to millions.
+- **Demand-sweep yield holdoff is too blunt** (added 2026-08-13, measured on the deployed
+  build — full write-up in `docs/memos/2026-08-13-ledger-gap-field-findings.md`): a demand
+  sweep debiting under `DEMAND_SWEEP_MIN_YIELD` arms a holdoff for a whole cadence period,
+  on the reasoning that a low yield proves the gap was honest overhead. The *measurement*
+  is right; its shelf life is not. Observed: a 449 MiB yield at 13:46 (taken mid-benchmark,
+  when the resident residue genuinely was small) suppressed demand sweeps while the
+  benchmark ended and the gap grew to 6.7–11.1 G; the first sweep after the holdoff expired
+  debited **6.05 G**. A low yield means "the gap is honest *right now*", not "for the next
+  30 min". Fix: cancel the holdoff once the gap grows materially past its level at the
+  low-yield measurement, or shorten it to a few minutes.
+- **Demand/idle trigger events are invisible in the managed app's log** (added 2026-08-13):
+  both log at INFO and the bundled app runs at WARN, so `supervisor.log` shows neither.
+  Field attribution had to infer demand pacing from sweep-counter deltas in the decision
+  trace. Give them WARN lines or trace markers shaped like the scrub's `"scrub":"start"`.
 - **Settle-sweep cadence needs a guest pressure report** (added 2026-08-13, accepted under
   the two-tier rule): the sweep fires from `on_pressure`, so a stock guest without
   limina-agent never sweeps and keeps the ~2× Activity Monitor inflation (degraded, not
@@ -582,11 +596,18 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   hit = async), inject on the second, assert the context survives *and* the "tombstoned" line
   appears. Until then the host half is proven only by the 2026-08-13 manual A/B (old async
   guest + new worker → `CONTEXT ALIVE` + the SKIPPED marker in the worker log).
-- **Zero-copy udmabuf import** — 📋 open, low priority. GStreamer's software-decode path wraps
-  memfd pages as a udmabuf and hands it to zink; on macOS those scattered guest pages cannot
-  back a single MTLBuffer, so the import is refused and the stack falls back to a raw upload
-  (correct, one copy per frame). If frame-upload cost ever shows up in a profile, this is the
-  lever — it needs a gather/staging path in vkr, not a proxy attach tweak.
+- **`vkr_ghost_containment` skips on `enhanced.test.raw`** — 📋 open, found 2026-08-13. The test
+  needs `/dev/udmabuf`; `enhanced.raw` has it (its 7.1.6-limina16k kernel is `CONFIG_UDMABUF=y`,
+  verified in-guest) but the test image comes up without it, even on the EFI vehicle (the
+  guest's own kernel), so the test skips loudly instead of asserting. Suspect the test image's
+  default BLS entry is an older enhanced kernel or stock — check `grubby --default-kernel` and
+  `uname -r` in it first, then fold the fix into the next `enhanced.test.raw` refresh. Until
+  then the seam has NO automated coverage in the suite; the 08-13 manual A/B is the evidence.
+- **Zero-copy udmabuf import** — 📋 planned as **M15 wave 6** (see `docs/roadmap.md`); the
+  refusal itself is no longer a correctness issue, only a copy per software-decoded frame.
+  Key measured fact so the next reader doesn't re-derive it: a PRIME-imported foreign dmabuf
+  never reaches the host at all (no `RESOURCE_CREATE_*`, no `RESOURCE_ATTACH_BACKING` —
+  probe with `LIMINA_TRACE_ATTACH_BACKING=1`), so it needs guest-kernel work first.
 
 ## GPU / rendering perf
 - **Should the enhanced tier stop forcing zink? (i.e. delete `/etc/environment.d/90-limina-zink.conf`)**
@@ -714,6 +735,17 @@ overall than the same-day 103/103 (3099 vs 2195 s): host load is the suspected i
 **If it fires again, stop treating it as noise:** grab the worker log at the wedge timestamps
 and check what eglretrace was waiting on (the per-minute dgram error is the one recurring
 signal — identify pkt type 3's sender first).
+
+**Second occurrence, 2026-08-13** (full suite over the demand-sweep commit, 103/104): same
+signature to the second — the replay stalled 956.6 s and the isolated rerun passed in 63.6 s,
+a 15× difference. Same host-load correlation (that suite run took 3094 s vs the same day's
+2199 s green run). Two sightings, both under a loaded host, both clean solo ⇒ this is now a
+*reproducible-under-load* condition rather than noise, and the next occurrence should be
+debugged live rather than rerun: the cheap discriminator is whether the guest-side
+`eglretrace` is starved of GPU progress (worker log at the stall timestamps) or of CPU/vCPU
+time (the suite's own parallelism starving the VM's vCPU threads — the vCPU-envelope trap
+from `limina-venus-replay-regression` is the obvious suspect, since the harness runs several
+VMs at once on a 10-core host).
 
 ---
 

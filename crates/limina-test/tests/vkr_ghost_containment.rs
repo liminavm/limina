@@ -36,8 +36,10 @@
 //!
 //! Vehicle: `guest/vkudmabufimport.py` (python3 + ctypes over /dev/udmabuf and
 //! libvulkan; nothing to install). `forcealloc` mode skips the props gate exactly
-//! as zink does, making `vkAllocateMemory` the first host refusal point. Same
-//! prereqs as the other venus L2 tests: enhanced.test disk + KosmicKrisp; SKIPs
+//! as zink does, making `vkAllocateMemory` the first host refusal point. Boots the
+//! **EFI** path on purpose — the venus tests' injected `Image-16k` has no
+//! CONFIG_UDMABUF, so on that vehicle the test could only skip. Same prereqs as the
+//! other venus L2 tests: enhanced.test disk + KosmicKrisp + GOP firmware; SKIPs
 //! cleanly if missing. Gated behind LIMINA_HVF_TESTS; run via
 //! `scripts/test-boot.sh`.
 
@@ -59,7 +61,10 @@ fn refused_venus_import_leaves_the_context_alive() {
         );
         return;
     }
-    let cfg = match GuestConfig::seated_fedora_from_env() {
+    // EFI, i.e. the guest's OWN installed kernel: the venus tests' injected 6.12
+    // `Image-16k` is built without CONFIG_UDMABUF, so on that vehicle this test can
+    // only ever skip. The enhanced images' kernel has it built in.
+    let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg.with_coexist_display(1280, 800).with_net(),
         Err(e) => {
             eprintln!("SKIPPED refused_venus_import_leaves_the_context_alive: {e}");
@@ -79,6 +84,11 @@ fn refused_venus_import_leaves_the_context_alive() {
         ))
         .expect("staging vkudmabufimport.py in the guest");
 
+    // udmabuf is a module, and nothing in a headless boot pulls it in (the desktop
+    // image has it loaded because the media stack asks for it). Load it explicitly
+    // rather than depending on whatever else happened to run first.
+    let _ = guest.ssh_exec("sudo modprobe udmabuf 2>&1 || true");
+
     // forcealloc: no props gate, so the host refusal lands on vkAllocateMemory —
     // the zink shape, and the one that mints a ghost on an async guest.
     let out = guest
@@ -89,7 +99,20 @@ fn refused_venus_import_leaves_the_context_alive() {
         .expect("running vkudmabufimport in the guest");
     eprintln!("--- vkudmabufimport forcealloc ---\n{out}");
 
-    // A guest kernel that cannot make the udmabuf at all would make the whole run
+    // A kernel built without CONFIG_UDMABUF cannot produce this import class at all,
+    // so there is nothing to assert — skip LOUDLY rather than pass vacuously. (Any
+    // OTHER udmabuf failure is a real one and falls through to the assert below.)
+    if out.contains("UDMABUF FAIL open-/dev/udmabuf") {
+        eprintln!(
+            "SKIPPED refused_venus_import_leaves_the_context_alive: this guest kernel has no \
+             /dev/udmabuf (modprobe udmabuf failed), so the refused-import class under test \
+             cannot be produced here"
+        );
+        let _ = guest.shutdown(Duration::from_secs(10));
+        return;
+    }
+
+    // A guest that cannot make the udmabuf for any other reason would make the run
     // vacuous — the import under test would never be attempted.
     assert!(
         out.contains("UDMABUF OK") && out.contains("PRIME OK"),
