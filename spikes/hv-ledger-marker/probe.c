@@ -292,6 +292,100 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    /* mode "coldwin": what does a guest FIRST-touch (stage-2 unpopulated) surface
+     * as when it lands inside a live PROT_NONE window? Host-writes H (task PTEs
+     * only, no stage-2), mprotects H to NONE, then runs the guest pass at H and
+     * prints the raw exit (ec/xfsc/pa). Then restores RW and retries the access
+     * without advancing PC — if the pass completes, the production answer is
+     * "wait out the window and retry", i.e. FaultOutcome::Retry suffices. */
+    if (argc > 2 && strcmp(argv[2], "coldwin") == 0) {
+        hv_vcpu_t vcpu;
+        hv_vcpu_exit_t *vexit;
+        CHECK(hv_vcpu_create(&vcpu, &vexit, NULL));
+        g_vcpu = vcpu;
+        CHECK(hv_vcpu_set_reg(vcpu, HV_REG_CPSR, BOOT_CPSR));
+        CHECK(hv_vcpu_set_reg(vcpu, HV_REG_PC, RAM_BASE));
+
+        memset(gpa_to_hva(H_GPA), 0xa5, RANGE_SIZE);
+        s = show("C1 HOST memset H (no stage-2 PTEs)", s);
+        if (mprotect(gpa_to_hva(H_GPA), RANGE_SIZE, PROT_NONE) != 0)
+            printf("C2 mprotect(H, NONE) failed: %s\n", strerror(errno));
+        s = show("C2 mprotect(H, PROT_NONE) — window OPEN", s);
+
+        set_mailbox(H_GPA);
+        int cold_faults = 0, restored = 0;
+        atomic_store(&g_deadline_ns, now_ns() + WATCHDOG_NS);
+        atomic_store(&g_watch_on, true);
+        for (;;) {
+            CHECK(hv_vcpu_run(vcpu));
+            if (vexit->reason == HV_EXIT_REASON_CANCELED) {
+                printf("C3 WATCHDOG fired: guest wedged inside the window "
+                       "(faults seen: %d)\n", cold_faults);
+                break;
+            }
+            if (vexit->reason != HV_EXIT_REASON_EXCEPTION) {
+                printf("C3 non-exception exit reason %u — unexpected\n", vexit->reason);
+                break;
+            }
+            uint64_t syn = vexit->exception.syndrome;
+            uint64_t ec = (syn >> 26) & 0x3f;
+            uint64_t pa = vexit->exception.physical_address;
+            if (ec == 0x24 && pa >= MMIO_BASE && pa < MMIO_BASE + 0x1000) {
+                printf("C4 DONE: guest completed the pass (cold faults: %d, "
+                       "restored mid-run: %s)\n", cold_faults, restored ? "yes" : "no");
+                break;
+            }
+            if (pa >= H_GPA && pa < H_GPA + RANGE_SIZE) {
+                cold_faults++;
+                if (cold_faults == 1)
+                    printf("C3 first cold-window fault: ec=0x%llx xfsc=0x%llx pa=0x%llx "
+                           "(translation L0-L3 is 0x4..0x7, PERMISSION L0-L3 is 0xc..0xf)\n",
+                           ec, syn & 0x3f, pa);
+                if (!restored) {
+                    if (mprotect(gpa_to_hva(H_GPA), RANGE_SIZE,
+                                 PROT_READ | PROT_WRITE) != 0)
+                        printf("   restore RW failed: %s\n", strerror(errno));
+                    restored = 1;
+                    printf("   window CLOSED (RW restored); retrying the access\n");
+                }
+                atomic_store(&g_deadline_ns, now_ns() + WATCHDOG_NS);
+                continue; /* no PC advance: retry */
+            }
+            printf("C3 unrelated exit ec=0x%llx pa=0x%llx syndrome=0x%llx\n", ec, pa, syn);
+            break;
+        }
+        atomic_store(&g_watch_on, false);
+        s = show("C5 after the pass", s);
+
+        /* C6 content verdict: did the mid-window stage-2 populate hand the
+         * guest the SAME physical pages (byte 9 still 0xa5 from the host
+         * memset, u64 at 0 = the guest's 0x5a5a marker), or fresh zero-fill
+         * (data loss — fatal for the sweep)? */
+        if (!restored &&
+            mprotect(gpa_to_hva(H_GPA), RANGE_SIZE, PROT_READ | PROT_WRITE) != 0)
+            printf("C6 restore RW failed: %s\n", strerror(errno));
+        {
+            uint64_t preserved = 0, zeroed = 0, other = 0, unmarked = 0;
+            for (uint64_t off = 0; off < RANGE_SIZE; off += PAGE_16K) {
+                uint8_t *p = gpa_to_hva(H_GPA + off);
+                if (*(uint64_t *)p != 0x5a5a) unmarked++;
+                if (p[9] == 0xa5) preserved++;
+                else if (p[9] == 0) zeroed++;
+                else other++;
+            }
+            printf("C6 content verdict over %llu pages: preserved=%llu "
+                   "zero-filled=%llu other=%llu (guest marker missing on %llu)\n",
+                   (unsigned long long)(RANGE_SIZE / PAGE_16K),
+                   (unsigned long long)preserved, (unsigned long long)zeroed,
+                   (unsigned long long)other, (unsigned long long)unmarked);
+        }
+        CHECK(hv_vcpu_destroy(vcpu));
+        hv_vm_unmap(RAM_BASE, RAM_SIZE);
+        CHECK(hv_vm_destroy());
+        munmap(g_ram, RAM_SIZE);
+        return 0;
+    }
+
     /* mode "double": the cell the original matrix never measured — the SAME range
      * touched by BOTH sides (H host-then-guest, G guest-then-host). This is the
      * production shape of every disk-fed guest page: virtio-blk writes the buffer

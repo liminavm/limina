@@ -125,6 +125,17 @@ bills ~2×, plus anon + worker overhead ≈ the observed 33 G.
   userspace memcpys (rings, GPU transfers) are covered by a spin-retry SIGBUS handler.
 - Host re-touch re-bills 1× (D8): swept pages the worker still serves IO into come back.
   Sweep on cadence/pressure, not once.
+- **Guest FIRST-touch inside a live NONE window is safe** (`coldwin` mode, 2026-08-12):
+  the one cell `double` never covered — a page host-written but never guest-touched
+  (stage-2 unpopulated; production shape: disk data the guest hasn't read yet) accessed
+  by the guest *while* the task mapping is PROT_NONE. Result: the guest completed a full
+  1 GiB pass through the open window with **zero vCPU exits, zero faults**, and the
+  content verdict is **preserved=65536 zero-filled=0** — HVF's in-kernel stage-2 populate
+  ignores UVA protection and wires the same physical pages. Ledger: the populate bills
+  the guest share (+1024.5 M), the task share stays debited until the host re-touches.
+  Consequence for the design: **no vCPU-side fault handling is needed at all** — no
+  handle_fault extension, no risk of wedging a vCPU. The only actors that can trip on a
+  window are worker threads (SIGBUS, handleable) and kernel copyio (EFAULT, barrier).
 - The Apple opt-out is CLOSED (`notag` mode): `mach_make_memory_entry_64(MAP_MEM_LEDGER_TAGGED)`
   succeeds, but `mach_memory_entry_ownership(TASK_NULL, …, VM_LEDGER_FLAG_NO_FOOTPRINT)`
   returns KERN_NO_ACCESS — gated by a private entitlement
