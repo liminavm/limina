@@ -416,9 +416,8 @@ struct State {
     /// The worker's `sweeps` counter at the last demand-triggered sweep, so the next tick that
     /// sees the counter advance can judge the debit (see [`DEMAND_SWEEP_MIN_YIELD`]).
     demand_sweep_at: Option<u64>,
-    /// No demand sweeps before this instant — armed when one yields under the floor (the gap
-    /// was honest overhead; only the cadence sweep runs until this expires).
-    demand_holdoff_until: Option<Instant>,
+    /// In-force low-yield holdoff, if any (see [`DemandHoldoff`]).
+    demand_holdoff: Option<DemandHoldoff>,
     /// Tracking for a commanded-but-unfilled target gap (see [`gap_action`]). Only updated on
     /// ticks with a known `actual` — a failed stats query freezes it rather than resetting or
     /// advancing it.
@@ -649,7 +648,7 @@ impl BalloonPolicy {
                 last_scrub_end: Instant::now(),
                 last_sweep: Instant::now(),
                 demand_sweep_at: None,
-                demand_holdoff_until: None,
+                demand_holdoff: None,
                 gap: None,
                 elastic_probe: None,
                 inelastic: None,
@@ -723,7 +722,7 @@ impl BalloonPolicy {
                 st.last_scrub_end,
                 now,
             ) {
-                self.start_scrub(&mut st, now, inflate_to);
+                self.start_scrub(&mut st, now, inflate_to, "pressure");
                 return;
             }
             // Quiet-day settle: same cycle, Bounded depth regardless of mode (never dump an
@@ -748,11 +747,11 @@ impl BalloonPolicy {
                 st.last_scrub_end,
                 now,
             ) {
-                log::info!(
+                log::warn!(
                     "autoballoon: idle scrub starting (quiet-day settle, compressed={} MiB)",
                     wstats.as_ref().map_or(0, |w| w.compressed_bytes >> 20)
                 );
-                self.start_scrub(&mut st, now, idle_to);
+                self.start_scrub(&mut st, now, idle_to, "idle");
                 return;
             }
         }
@@ -761,54 +760,69 @@ impl BalloonPolicy {
         // is keeping the task ledger (Activity Monitor, jetsam) honest. Two triggers: the
         // measured gap (demand — bounds the churn ratchet) and the clock (cadence fallback).
         if self.sweep_enabled {
-            // Judge the last demand sweep once the worker's counter shows it ran: a debit
-            // under the floor means the gap was honest overhead — hold demand sweeps off for
-            // a cadence period rather than spinning at the rate limit for nothing.
-            if let (Some(at), Some(w)) = (st.demand_sweep_at, wstats.as_ref()) {
-                if w.sweeps > at {
-                    st.demand_sweep_at = None;
-                    if w.sweep_debited_bytes < DEMAND_SWEEP_MIN_YIELD {
-                        st.demand_holdoff_until = Some(now + sweep_cooldown(self.mode));
-                        log::info!(
-                            "autoballoon: demand sweep yielded only {} MiB — gap is honest \
-                             overhead, holding demand sweeps for a cadence period",
-                            w.sweep_debited_bytes >> 20
-                        );
-                    }
-                }
-            }
             // The sensor is the RESIDENT share of the footprint: the double billing the sweep
             // debits is resident-twice, while the compressor's billing (guest cold content,
             // cold worker heap — several honest GiB on a long-lived VM) is exactly the share a
-            // sweep can't touch. Leaving it in the gap would fire wasted low-yield sweeps
-            // every holdoff period on quiet days.
+            // sweep can't touch — 2026-08-13 measured a sweep debiting 6.05 G with 15.1 G of
+            // compressed sitting untouched beside it. Leaving it in the gap would fire wasted
+            // low-yield sweeps every holdoff period on quiet days.
             let footprint = wstats
                 .as_ref()
                 .map_or(0, |w| w.footprint_bytes.saturating_sub(w.compressed_bytes));
             let guest_live = ((self.max_pages as u64) << 12)
                 .saturating_sub(wstats.as_ref().map_or(0, |w| w.actual_bytes));
-            if demand_sweep_due(
-                footprint,
-                guest_live,
-                st.last_sweep,
-                st.demand_holdoff_until,
-                now,
-            ) {
+            // Judge the last demand sweep once the worker's counter shows it ran: a debit
+            // under the floor means the gap standing NOW is honest overhead, so pause demand
+            // sweeps at that level rather than spinning at the rate limit for nothing. The
+            // level is the point — see `DemandHoldoff`.
+            if let (Some(at), Some(w)) = (st.demand_sweep_at, wstats.as_ref()) {
+                if w.sweeps > at {
+                    st.demand_sweep_at = None;
+                    if w.sweep_debited_bytes < DEMAND_SWEEP_MIN_YIELD {
+                        let proven_gap = footprint.saturating_sub(guest_live);
+                        st.demand_holdoff = Some(DemandHoldoff {
+                            until: now + sweep_cooldown(self.mode),
+                            proven_gap,
+                        });
+                        log::warn!(
+                            "autoballoon: demand sweep yielded only {} MiB — the {} MiB gap \
+                             standing now is honest overhead; pausing demand sweeps until it \
+                             grows or a cadence period passes",
+                            w.sweep_debited_bytes >> 20,
+                            proven_gap >> 20
+                        );
+                        trace_sweep(&mut st, "holdoff", proven_gap, Some(w.sweep_debited_bytes));
+                    } else {
+                        // A real debit proves there WAS reclaimable material: any standing
+                        // holdoff described a state that no longer holds.
+                        st.demand_holdoff = None;
+                    }
+                }
+            }
+            if demand_sweep_due(footprint, guest_live, st.last_sweep, st.demand_holdoff, now) {
                 if send_settle(&self.socket, &mut st) {
                     st.last_sweep = now;
                     st.demand_sweep_at = wstats.as_ref().map(|w| w.sweeps);
-                    log::info!(
-                        "autoballoon: ledger settle sweep sent (demand — footprint {} MiB is \
-                         {} MiB past the guest's {} MiB live share)",
+                    let gap = footprint.saturating_sub(guest_live);
+                    log::warn!(
+                        "autoballoon: ledger settle sweep sent (demand — resident footprint \
+                         {} MiB is {} MiB past the guest's {} MiB live share)",
                         footprint >> 20,
-                        footprint.saturating_sub(guest_live) >> 20,
+                        gap >> 20,
                         guest_live >> 20
                     );
+                    trace_sweep(&mut st, "demand", gap, None);
                 }
             } else if sweep_due(self.mode, st.last_sweep, now) && send_settle(&self.socket, &mut st)
             {
                 st.last_sweep = now;
                 log::info!("autoballoon: ledger settle sweep sent (cadence)");
+                trace_sweep(
+                    &mut st,
+                    "cadence",
+                    footprint.saturating_sub(guest_live),
+                    None,
+                );
             }
         }
         // Free-elasticity: judge the last sent inflation step. A step whose pages the free
@@ -940,7 +954,7 @@ impl BalloonPolicy {
     /// Begin a scrub cycle: inflate to `inflate_to` (the mode's [`ScrubDepth`] decided how deep
     /// — [`scrub_target_pages`]), hold, deflate back to the pre-scrub target. Driven forward by
     /// [`Self::scrub_tick`] on subsequent reports; the watchdog thread is the only other exit.
-    fn start_scrub(&self, st: &mut State, now: Instant, inflate_to: u32) {
+    fn start_scrub(&self, st: &mut State, now: Instant, inflate_to: u32, trigger: &str) {
         let resume_pages = st.target_pages;
         if !send_target(&self.socket, st, inflate_to) {
             return; // still due — retried on the next report
@@ -961,9 +975,9 @@ impl BalloonPolicy {
             last_actual_bytes: 0,
             stall_ticks: 0,
         });
-        trace_scrub(st, "start", gen, resume_pages, None, None);
+        trace_scrub(st, "start", gen, resume_pages, None, None, Some(trigger));
         log::warn!(
-            "autoballoon: scrub start (inflate to {inflate_to} pages, resume {resume_pages})"
+            "autoballoon: {trigger} scrub start (inflate to {inflate_to} pages, resume {resume_pages})"
         );
         self.spawn_scrub_watchdog(gen, resume_pages);
     }
@@ -1013,7 +1027,7 @@ impl BalloonPolicy {
                 // field debugger without timestamp correlation.
                 let pct =
                     actual.map(|a| a.min(target_bytes).saturating_mul(100) / target_bytes.max(1));
-                trace_scrub(st, "hold", gen, resume_pages, actual, pct);
+                trace_scrub(st, "hold", gen, resume_pages, actual, pct, None);
             }
             ScrubStep::ToDeflating => {
                 // Only advance once the deflate command actually went out; a failed send leaves
@@ -1026,13 +1040,13 @@ impl BalloonPolicy {
                         s.phase = ScrubPhase::Deflating;
                         s.phase_since = now;
                     }
-                    trace_scrub(st, "deflate", gen, resume_pages, actual, None);
+                    trace_scrub(st, "deflate", gen, resume_pages, actual, None, None);
                 }
             }
             ScrubStep::Done => {
                 st.scrub = None;
                 st.last_scrub_end = now;
-                trace_scrub(st, "done", gen, resume_pages, actual, None);
+                trace_scrub(st, "done", gen, resume_pages, actual, None, None);
                 log::warn!("autoballoon: scrub done (resumed {resume_pages} pages)");
                 // The release path just settled the pool's shares; sweep now to catch the
                 // live side at its low point (and reset the cadence — it would be due soon
@@ -1061,7 +1075,7 @@ impl BalloonPolicy {
                 if send_target(&socket, &mut st, resume_pages) {
                     st.target_pages = resume_pages;
                 }
-                trace_scrub(&mut st, "watchdog", gen, resume_pages, None, None);
+                trace_scrub(&mut st, "watchdog", gen, resume_pages, None, None, None);
                 log::warn!(
                     "autoballoon: scrub watchdog fired (pressure reports stalled mid-scrub) — \
                      deflated to {resume_pages} pages"
@@ -1204,20 +1218,45 @@ fn sweep_due(mode: ReclaimMode, last_sweep: Instant, now: Instant) -> bool {
     now.duration_since(last_sweep) >= sweep_cooldown(mode)
 }
 
+/// An in-force low-yield holdoff: the demand sweep measured the gap and found it honest, so
+/// demand sweeps pause. Conditional on the gap staying where it was proven — see
+/// [`demand_sweep_due`].
+#[derive(Clone, Copy)]
+struct DemandHoldoff {
+    /// When the holdoff lapses on time alone.
+    until: Instant,
+    /// The gap standing when the low yield was measured: the level PROVEN to be honest
+    /// overhead (graphics pool, cold malloc — whatever a sweep can't debit).
+    proven_gap: u64,
+}
+
 /// Whether a demand sweep is due (pure): the measured ledger gap — worker footprint past the
 /// guest's honest live share — exceeds [`DEMAND_SWEEP_GAP`], outside the rate limit and any
 /// low-yield holdoff. `footprint_bytes == 0` means the worker didn't report one (old worker):
 /// no demand sweeps, the cadence carries it (degraded, not broken).
+///
+/// The holdoff is **conditional, not absolute**. A low yield proves the gap was honest at the
+/// moment it was measured, which says nothing about a gap that has grown since; growth of
+/// [`DEMAND_SWEEP_MIN_YIELD`] past the proven level is unproven material and cancels it. The
+/// absolute form cost us the 2026-08-13 dogfood incident: a 449 MiB yield measured mid-benchmark
+/// suppressed demand sweeps for a full cadence period while the benchmark ended and the gap grew
+/// to 6.7–11.1 G — and the first sweep after the holdoff lapsed debited 6.05 G. Re-arming with a
+/// fresh (higher) `proven_gap` on each low yield is what keeps this from spinning: another sweep
+/// costs another [`DEMAND_SWEEP_MIN_YIELD`] of real growth.
 fn demand_sweep_due(
     footprint_bytes: u64,
     guest_live_bytes: u64,
     last_sweep: Instant,
-    holdoff_until: Option<Instant>,
+    holdoff: Option<DemandHoldoff>,
     now: Instant,
 ) -> bool {
+    let gap = footprint_bytes.saturating_sub(guest_live_bytes);
+    let held = holdoff.is_some_and(|h| {
+        now < h.until && gap < h.proven_gap.saturating_add(DEMAND_SWEEP_MIN_YIELD)
+    });
     footprint_bytes != 0
-        && footprint_bytes.saturating_sub(guest_live_bytes) >= DEMAND_SWEEP_GAP
-        && holdoff_until.is_none_or(|t| now >= t)
+        && gap >= DEMAND_SWEEP_GAP
+        && !held
         && now.duration_since(last_sweep) >= DEMAND_SWEEP_MIN_INTERVAL
 }
 
@@ -1449,7 +1488,7 @@ fn abort_scrub(st: &mut State, now: Instant) {
         return;
     };
     st.last_scrub_end = now;
-    trace_scrub(st, "abort", scrub.gen, scrub.resume_pages, None, None);
+    trace_scrub(st, "abort", scrub.gen, scrub.resume_pages, None, None, None);
     log::warn!("autoballoon: scrub aborted (guest under pressure)");
 }
 
@@ -1463,6 +1502,9 @@ fn trace_scrub(
     resume_pages: u32,
     actual_bytes: Option<u64>,
     reached_pct: Option<u64>,
+    // `trigger`: which trigger started this cycle (`pressure`/`idle`), on the `start` event
+    // only. The event name stays `start` for both so `"scrub":"start"` greps keep working.
+    trigger: Option<&str>,
 ) {
     let Some(f) = st.trace.as_mut() else {
         return;
@@ -1474,9 +1516,33 @@ fn trace_scrub(
     let json_stat = |v: Option<u64>| v.map_or("null".to_string(), |v| v.to_string());
     let line = format!(
         "{{\"ts_ms\":{ts_ms},\"scrub\":\"{event}\",\"gen\":{gen},\"resume_pages\":{resume_pages},\
-         \"actual_bytes\":{},\"reached_pct\":{}}}\n",
+         \"actual_bytes\":{},\"reached_pct\":{},\"trigger\":{}}}\n",
         json_stat(actual_bytes),
         json_stat(reached_pct),
+        trigger.map_or("null".to_string(), |t| format!("\"{t}\"")),
+    );
+    if f.write_all(line.as_bytes()).is_err() {
+        st.trace = None;
+    }
+}
+
+/// Mark a settle-sweep event in the decision journal: `event` is the trigger that fired
+/// (`demand`, `cadence`) or the yield verdict that paused demand sweeps (`holdoff`), with the
+/// gap that motivated it. The counters in [`trace_decision`] say a sweep *happened*; only this
+/// says *why*, which is what field attribution kept having to guess — the bundled app runs at
+/// WARN, so INFO-level log lines never reach `supervisor.log` (2026-08-13: demand pacing had to
+/// be inferred from sweep-counter deltas).
+fn trace_sweep(st: &mut State, event: &str, gap: u64, debited: Option<u64>) {
+    let Some(f) = st.trace.as_mut() else {
+        return;
+    };
+    let ts_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let line = format!(
+        "{{\"ts_ms\":{ts_ms},\"sweep\":\"{event}\",\"gap_bytes\":{gap},\"debited_bytes\":{}}}\n",
+        debited.map_or("null".to_string(), |v| v.to_string()),
     );
     if f.write_all(line.as_bytes()).is_err() {
         st.trace = None;
@@ -1907,6 +1973,34 @@ mod tests {
     const MAX: u32 = 8 * 1024 * PAGES_PER_MIB;
     const ROOM: u32 = 7 * 1024 * PAGES_PER_MIB;
     const GIB_PAGES: u32 = 1024 * PAGES_PER_MIB;
+
+    impl State {
+        /// A quiescent `State` for tests that drive the free functions directly (trace
+        /// emitters, scrub aborts) rather than going through `BalloonPolicy`. Callers
+        /// override the few fields they care about with struct-update syntax.
+        fn new_for_test() -> Self {
+            let now = Instant::now();
+            State {
+                conn: None,
+                target_pages: 0,
+                last_change: None,
+                cooldown_until: None,
+                distress_until: None,
+                scrub: None,
+                scrub_gen: 0,
+                last_scrub_end: now,
+                last_sweep: now,
+                demand_sweep_at: None,
+                demand_holdoff: None,
+                gap: None,
+                elastic_probe: None,
+                inelastic: None,
+                host_debounce: HostDebounce::new(),
+                giveback_streak: 0,
+                trace: None,
+            }
+        }
+    }
 
     fn pressure(some_avg10: u32, avail_kib: u64, total_kib: u64) -> MemPressure {
         MemPressure {
@@ -2734,22 +2828,6 @@ mod tests {
     fn trace_lines_carry_the_verdict_and_the_gate() {
         let path = std::env::temp_dir().join(format!("balloon-trace-test-{}", std::process::id()));
         let mut st = State {
-            conn: None,
-            target_pages: 0,
-            last_change: None,
-            cooldown_until: None,
-            distress_until: None,
-            scrub: None,
-            scrub_gen: 0,
-            last_scrub_end: Instant::now(),
-            last_sweep: Instant::now(),
-            demand_sweep_at: None,
-            demand_holdoff_until: None,
-            gap: None,
-            elastic_probe: None,
-            inelastic: None,
-            host_debounce: HostDebounce::new(),
-            giveback_streak: 0,
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -2757,6 +2835,7 @@ mod tests {
                     .open(&path)
                     .unwrap(),
             ),
+            ..State::new_for_test()
         };
         let host = HostPressureSample {
             raw_level: Some(2),
@@ -2887,20 +2966,46 @@ mod tests {
             None,
             now - Duration::from_secs(1)
         ));
-        // Low-yield holdoff in force blocks; an expired one doesn't.
+        // A low-yield holdoff at the gap it proved honest blocks; an expired one doesn't.
+        let holdoff = |until, proven_gap| Some(DemandHoldoff { until, proven_gap });
         assert!(!demand_sweep_due(
             live + DEMAND_SWEEP_GAP,
             live,
             base,
-            Some(now + Duration::from_secs(1)),
+            holdoff(now + Duration::from_secs(1), DEMAND_SWEEP_GAP),
             now
         ));
         assert!(demand_sweep_due(
             live + DEMAND_SWEEP_GAP,
             live,
             base,
-            Some(now),
+            holdoff(now, DEMAND_SWEEP_GAP),
             now
+        ));
+        // ...and the point of recording the level (the 08-13 incident): growth of a yield
+        // floor past what was proven honest cancels the holdoff, because the proof only ever
+        // covered the gap as it stood. One byte short of that still holds.
+        assert!(demand_sweep_due(
+            live + DEMAND_SWEEP_GAP + DEMAND_SWEEP_MIN_YIELD,
+            live,
+            base,
+            holdoff(now + Duration::from_secs(30 * 60), DEMAND_SWEEP_GAP),
+            now
+        ));
+        assert!(!demand_sweep_due(
+            live + DEMAND_SWEEP_GAP + DEMAND_SWEEP_MIN_YIELD - 1,
+            live,
+            base,
+            holdoff(now + Duration::from_secs(30 * 60), DEMAND_SWEEP_GAP),
+            now
+        ));
+        // A grown gap still respects the rate limit — the holdoff is the only gate it lifts.
+        assert!(!demand_sweep_due(
+            live + (20 << 30),
+            live,
+            base,
+            holdoff(now + Duration::from_secs(30 * 60), DEMAND_SWEEP_GAP),
+            now - Duration::from_secs(1)
         ));
         // Footprint below the live share (balloon fill mid-flight): saturates to zero gap.
         assert!(!demand_sweep_due(live / 2, live, base, None, now));
@@ -2998,10 +3103,26 @@ mod tests {
             0,
             "low-yield holdoff did not suppress the demand sweep"
         );
-        assert!(pol.state.lock().unwrap().demand_holdoff_until.is_some());
+        assert!(pol.state.lock().unwrap().demand_holdoff.is_some());
+
+        // Tick 2b — the 08-13 dogfood incident: the workload that was running when the low
+        // yield was measured ends, the guest frees, and a LARGE new gap opens. The holdoff
+        // proved the gap honest at ITS level, not at any level; growth past it must sweep.
+        let grown = fat + (6 << 30);
+        *reply.lock().unwrap() = format!(
+            "actual=0 sweeps=11 sweep_debited={} footprint={grown}",
+            DEMAND_SWEEP_MIN_YIELD - 1
+        );
+        backdate_sweep(&pol);
+        pol.on_pressure(&p);
+        assert_eq!(
+            settles(&rx),
+            1,
+            "holdoff blinded the policy to a gap that grew past the proven-honest level"
+        );
 
         // Tick 3: holdoff cleared and the last demand sweep debited well -> fires again.
-        pol.state.lock().unwrap().demand_holdoff_until = None;
+        pol.state.lock().unwrap().demand_holdoff = None;
         *reply.lock().unwrap() = format!(
             "actual=0 sweeps=12 sweep_debited={} footprint={fat}",
             8u64 << 30
@@ -3013,7 +3134,7 @@ mod tests {
             1,
             "demand sweep did not re-fire after a good yield"
         );
-        assert!(pol.state.lock().unwrap().demand_holdoff_until.is_none());
+        assert!(pol.state.lock().unwrap().demand_holdoff.is_none());
         let _ = std::fs::remove_file(&sock);
     }
 
@@ -3483,6 +3604,60 @@ mod tests {
         );
     }
 
+    /// The sweep/scrub markers are the field-attribution oracle: the bundled app logs at WARN,
+    /// so nothing below that reaches `supervisor.log` and the trace is all an investigator has.
+    /// Shapes are a contract — `"scrub":"start"` must stay greppable for both triggers.
+    #[test]
+    fn trace_markers_name_the_trigger_that_fired() {
+        let path = std::env::temp_dir().join(format!("trace-marker-test-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut st = State {
+            trace: Some(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .unwrap(),
+            ),
+            ..State::new_for_test()
+        };
+        trace_sweep(&mut st, "demand", 6 << 30, None);
+        trace_sweep(&mut st, "holdoff", 1 << 30, Some(449 << 20));
+        trace_scrub(&mut st, "start", 4, 100, None, None, Some("idle"));
+        trace_scrub(&mut st, "start", 5, 100, None, None, Some("pressure"));
+        trace_scrub(&mut st, "done", 5, 100, Some(1 << 30), None, None);
+        let out = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 5, "{out}");
+        assert!(
+            lines[0].contains("\"sweep\":\"demand\"")
+                && lines[0].contains(&format!("\"gap_bytes\":{}", 6u64 << 30))
+                && lines[0].contains("\"debited_bytes\":null"),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("\"sweep\":\"holdoff\"")
+                && lines[1].contains(&format!("\"debited_bytes\":{}", 449u64 << 20)),
+            "{}",
+            lines[1]
+        );
+        // Both triggers keep the `start` event name, and each names itself.
+        assert!(
+            lines[2].contains("\"scrub\":\"start\"") && lines[2].contains("\"trigger\":\"idle\""),
+            "{}",
+            lines[2]
+        );
+        assert!(
+            lines[3].contains("\"scrub\":\"start\"")
+                && lines[3].contains("\"trigger\":\"pressure\""),
+            "{}",
+            lines[3]
+        );
+        assert!(lines[4].contains("\"trigger\":null"), "{}", lines[4]);
+    }
+
     /// An abort must clear the scrub, re-arm the scrub cooldown (an abort-prone guest is not
     /// re-squeezed the moment the acute report passes), and trace a summarizer-invisible line.
     #[test]
@@ -3490,11 +3665,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("scrub-abort-test-{}", std::process::id()));
         let now = Instant::now();
         let mut st = State {
-            conn: None,
             target_pages: ROOM,
-            last_change: None,
-            cooldown_until: None,
-            distress_until: None,
             scrub: Some(Scrub {
                 phase: ScrubPhase::Inflating,
                 phase_since: now,
@@ -3506,14 +3677,6 @@ mod tests {
             }),
             scrub_gen: 3,
             last_scrub_end: now,
-            last_sweep: now,
-            demand_sweep_at: None,
-            demand_holdoff_until: None,
-            gap: None,
-            elastic_probe: None,
-            inelastic: None,
-            host_debounce: HostDebounce::new(),
-            giveback_streak: 0,
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -3521,6 +3684,7 @@ mod tests {
                     .open(&path)
                     .unwrap(),
             ),
+            ..State::new_for_test()
         };
         abort_scrub(&mut st, now);
         assert!(st.scrub.is_none());
@@ -3557,22 +3721,6 @@ mod tests {
     fn scrub_trace_lines_carry_progress() {
         let path = std::env::temp_dir().join(format!("scrub-trace-test-{}", std::process::id()));
         let mut st = State {
-            conn: None,
-            target_pages: 0,
-            last_change: None,
-            cooldown_until: None,
-            distress_until: None,
-            scrub: None,
-            scrub_gen: 0,
-            last_scrub_end: Instant::now(),
-            last_sweep: Instant::now(),
-            demand_sweep_at: None,
-            demand_holdoff_until: None,
-            gap: None,
-            elastic_probe: None,
-            inelastic: None,
-            host_debounce: HostDebounce::new(),
-            giveback_streak: 0,
             trace: Some(
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -3580,8 +3728,9 @@ mod tests {
                     .open(&path)
                     .unwrap(),
             ),
+            ..State::new_for_test()
         };
-        trace_scrub(&mut st, "hold", 1, 0, Some(5 << 30), Some(93));
+        trace_scrub(&mut st, "hold", 1, 0, Some(5 << 30), Some(93), None);
         let out = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).ok();
         assert!(
