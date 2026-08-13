@@ -153,13 +153,19 @@ bills ~2×, plus anon + worker overhead ≈ the observed 33 G.
    2× on disk-fed (and any other worker-written) guest pages. The balloon bounds it only
    by shrinking the cache; released ranges settle because hv_vm_unmap+munmap-side debits
    both shares.
-4. The user-facing fix is a task-pmap "settle sweep" (chunked mprotect NONE→RW over guest
-   RAM), mechanism in libkrun, policy (cadence/trigger) in limina — same split as the
-   balloon. Concurrency design per the hazard notes: publish the in-flight chunk in
-   atomics; a SIGBUS/SIGSEGV spin-retry handler covers every userspace touch (virtqueue
-   rings, GPU transfers) at zero fast-path cost; the few direct-syscall-into-guest sites
-   (blk preadv/pwritev, net/vsock readv, fs) take a sweep-barrier read lock (or retry on
-   EFAULT, which is otherwise always a bug). Hot pages re-fault (~µs) and re-bill —
-   bounded by the IO working set between sweeps. Alternative doors measured shut:
-   NO_FOOTPRINT (KERN_NO_ACCESS, private entitlement — Radar-worthy), PROT_READ windows
-   (no debit), MADV_DONTNEED (no debit).
+4. ~~The user-facing fix is a task-pmap "settle sweep"~~ — **SHIPPED 2026-08-13**
+   (limina 0b670e0; libkrun fork d36aebd..e91dca6; imago fork 16e9602). Mechanism:
+   `ReleasedRam::settle_sweep` (chunked mprotect NONE→RW over the live complement under
+   the released lock, chained SA_ONSTACK SIGBUS/SIGSEGV handler retrying worker touches
+   caught in a window, bounded EFAULT-retry at every syscall-into-guest site — blk/imago,
+   fs, vsock, console; net bounces, snapshot reads from userspace). The `coldwin` cell
+   above killed the planned vCPU-side Retry extension: no guest access ever surfaces.
+   Policy: `settle` verb on the balloon socket, mode-keyed cadence (60/30/15 min) + after
+   every scrub completion, `LIMINA_LEDGER_SWEEP=0` kill switch. L1 test measured:
+   worker footprint 4468 → 2722 MiB on a 6 GiB guest, **1752 MiB debited in 13 ms**,
+   content intact (cached + from-disk) with concurrent O_DIRECT IO through the windows.
+   Known blind spot (accepted, two-tier rule): the cadence ticks on guest pressure
+   reports, so a stock guest without limina-agent never sweeps — its AM number keeps the
+   2× (degraded, not broken). A worker-side fallback timer is a possible later item.
+   Alternative doors measured shut: NO_FOOTPRINT (KERN_NO_ACCESS, private entitlement —
+   Radar-worthy), PROT_READ windows (no debit), MADV_DONTNEED (no debit).
