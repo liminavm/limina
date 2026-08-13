@@ -37,6 +37,26 @@ guest=$((GUEST_GIB * 1024 * 1024 * 1024))
 gap=$(( ${fp:-0} - ${ic:-0} - (guest - ${act:-0}) ))
 [ "$gap" -lt 0 ] && gap=0
 sc=$(grep -c '"scrub":"start"' "$LOGD/balloon-trace.jsonl" 2>/dev/null)
+# Since limina 76ff982 the trace names the trigger that fired, so demand/cadence/idle pacing is
+# READ rather than inferred from counter deltas. Absent on older builds -> these read 0.
+dem=$(grep -c '"sweep":"demand"' "$LOGD/balloon-trace.jsonl" 2>/dev/null)
+hold=$(grep -c '"sweep":"holdoff"' "$LOGD/balloon-trace.jsonl" 2>/dev/null)
+idle=$(grep -c '"trigger":"idle"' "$LOGD/balloon-trace.jsonl" 2>/dev/null)
+# Longest run of consecutive Hold(Cooldown) still standing: the settled-free lift (0a57407)
+# should keep this short. A long run with free memory available is the defect it fixes.
+cdrun=$(python3 - "$LOGD/balloon-trace.jsonl" 2>/dev/null <<'PY'
+import json,sys
+best=cur=0
+for line in open(sys.argv[1]):
+    try: d=json.loads(line)
+    except Exception: continue
+    if "decision" not in d: continue
+    if d["decision"]=="cooldown" and d["free_kib"]*1024 > (1<<30):
+        cur+=1; best=max(best,cur)
+    else: cur=0
+print(best)
+PY
+)
 reus=$(/tmp/ledger-dump "$PID" 2>/dev/null | awk '/^reusable /{print $4}')
 F=$(/usr/bin/footprint "$PID" 2>/dev/null)
 gfx=$(echo "$F" | awk '/IOAccelerator \(graphics\)/{print $1$2; exit}')
@@ -44,7 +64,8 @@ gfxr=$(echo "$F" | awk '/IOAccelerator \(graphics\)/{for(i=1;i<=NF;i++) if($i=="
 ios=$(echo "$F" | awk '/IOSurface/{print $1$2; exit}')
 echo "pf=$(( ${fp:-0} >> 20 ))M ic=$(( ${ic:-0} >> 20 ))M gap=$(( gap >> 20 ))M \
 balloon=$(( ${act:-0} >> 30 ))G reus=${reus:-?}G | gfx=${gfx:-?}/${gfxr:-?}rgn iosurf=${ios:-?} \
-| sweeps=${sw:-?} debit=$(( ${swdeb:-0} >> 20 ))M faults=${swf:-?} scrubs=${sc:-?} \
+| sweeps=${sw:-?}(dem=${dem:-0}) debit=$(( ${swdeb:-0} >> 20 ))M faults=${swf:-?} \
+scrubs=${sc:-?}(idle=${idle:-0}) holdoff=${hold:-0} cd_run=${cdrun:-0} \
 | guest_free=$(( ${gfree:-0} / 1024 ))M psi=${psi:-?} host=${host:-?}/${hpct:-?}%"
 RS
     )
