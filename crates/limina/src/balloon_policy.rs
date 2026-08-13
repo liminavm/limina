@@ -166,6 +166,19 @@ const DEMAND_SWEEP_MIN_INTERVAL: Duration = Duration::from_secs(60);
 /// full cadence period instead of spinning uselessly at the rate limit.
 const DEMAND_SWEEP_MIN_YIELD: u64 = 512 << 20;
 
+/// How long the guest's free list must *continuously* offer [`SETTLED_FREE_MIN`] of capturable
+/// headroom before a capture may proceed inside the post-release cooldown. The cooldown's premise
+/// is "a blowout proves the guest is actively using its memory" — true when it arms, and a claim
+/// about the future that a settled free list directly contradicts. 30 s is chosen from the
+/// 2026-08-13 dogfood benchmark recovery: the transient frees during the workload's own churn
+/// held for at most ~24 s before the guest took the memory back, while the genuinely-idle stretch
+/// after it ended held flat for minutes. Shorter than this and we would have captured memory the
+/// benchmark was still cycling through.
+const SETTLED_FREE_FOR: Duration = Duration::from_secs(30);
+/// Capturable headroom (guest MemFree minus the mode's margin) that counts as settled — enough
+/// to be worth acting on inside a protective cooldown.
+const SETTLED_FREE_MIN: u32 = 1024 * PAGES_PER_MIB;
+
 /// 4 KiB balloon pages per MiB.
 pub const PAGES_PER_MIB: u32 = 256;
 
@@ -418,6 +431,10 @@ struct State {
     demand_sweep_at: Option<u64>,
     /// In-force low-yield holdoff, if any (see [`DemandHoldoff`]).
     demand_holdoff: Option<DemandHoldoff>,
+    /// Since when the guest's free list has continuously offered [`SETTLED_FREE_MIN`] of
+    /// capturable headroom (`None` = not right now). Any report that falls short resets it, so
+    /// a workload's own churn — which frees and re-takes within seconds — never accumulates.
+    free_settled_since: Option<Instant>,
     /// Tracking for a commanded-but-unfilled target gap (see [`gap_action`]). Only updated on
     /// ticks with a known `actual` — a failed stats query freezes it rather than resetting or
     /// advancing it.
@@ -649,6 +666,7 @@ impl BalloonPolicy {
                 last_sweep: Instant::now(),
                 demand_sweep_at: None,
                 demand_holdoff: None,
+                free_settled_since: None,
                 gap: None,
                 elastic_probe: None,
                 inelastic: None,
@@ -854,6 +872,22 @@ impl BalloonPolicy {
                 }
             }
         }
+        // Track how long the free list has continuously offered capturable headroom. An acute
+        // report resets it outright: whatever the free list says, a hurting guest is not the
+        // one to take memory from. Measured from the driver's actual fill, like the pacing
+        // clamp — the same headroom the capture would take.
+        let headroom = if p.mem_free_kib == 0 || acute {
+            0
+        } else {
+            let free_pages = (p.mem_free_kib / 4).min(u32::MAX as u64) as u32;
+            free_pages.saturating_sub(free_margin_pages(self.mode))
+        };
+        st.free_settled_since = if headroom >= SETTLED_FREE_MIN {
+            st.free_settled_since.or(Some(now))
+        } else {
+            None
+        };
+        let free_settled_for = st.free_settled_since.map(|t| now.duration_since(t));
         let inputs = DecideInputs {
             mode: self.mode,
             host: host.blended,
@@ -865,6 +899,7 @@ impl BalloonPolicy {
             cooldown_until: st.cooldown_until,
             inelastic: st.inelastic.is_some(),
             giveback_streak: st.giveback_streak,
+            free_settled_for,
             now,
         };
         let mut decision = decide(p, &inputs);
@@ -1585,7 +1620,8 @@ fn trace_decision(
             "\"actual_bytes\":{},\"reclaimed_bytes\":{},\"heals\":{},",
             "\"released_bytes\":{},\"remapped_bytes\":{},\"stray_faults\":{},",
             "\"sweeps\":{},\"sweep_debited_bytes\":{},\"sweep_ms\":{},",
-            "\"sweep_faults\":{},\"compressed_bytes\":{},\"footprint_bytes\":{}}}\n"
+            "\"sweep_faults\":{},\"compressed_bytes\":{},\"footprint_bytes\":{},",
+            "\"free_settled_ms\":{}}}\n"
         ),
         ts_ms,
         i.mode,
@@ -1618,6 +1654,8 @@ fn trace_decision(
         json_stat(wstats.map(|w| w.sweep_faults)),
         json_stat(wstats.map(|w| w.compressed_bytes)),
         json_stat(wstats.map(|w| w.footprint_bytes)),
+        i.free_settled_for
+            .map_or("null".to_string(), |d| d.as_millis().to_string()),
     );
     if f.write_all(line.as_bytes()).is_err() {
         st.trace = None;
@@ -1647,7 +1685,15 @@ struct DecideInputs {
     inelastic: bool,
     /// Consecutive sent give-backs in the current episode (see [`GIVEBACK_MAX_SHIFT`]).
     giveback_streak: u32,
+    /// How long the guest's free list has continuously held capturable headroom, if it has
+    /// (see [`SETTLED_FREE_FOR`]). The one thing that lets a capture through the cooldown.
+    free_settled_for: Option<Duration>,
     now: Instant,
+}
+
+/// Whether a settled free list has earned its way past the post-release cooldown (pure).
+fn settled_free_lifts_cooldown(free_settled_for: Option<Duration>) -> bool {
+    free_settled_for.is_some_and(|d| d >= SETTLED_FREE_FOR)
 }
 
 /// The cache allowance for a mode/host-pressure pair: how much of the guest's memory the policy
@@ -1902,7 +1948,15 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
         if p.some_avg10 > PRESSURE_LOW || p.some_avg60 > PRESSURE_LOW {
             return Decision::Hold(Hold::NotCalm);
         }
-        if i.cooldown_until.is_some_and(|t| i.now < t) {
+        // The post-release cooldown, unless the guest's own free list has since said otherwise.
+        // See `SETTLED_FREE_FOR`: the cooldown encodes "the guest needs this memory", and a
+        // free list sitting on capturable headroom for half a minute is a direct measurement
+        // that it does not. What proceeds is bounded by construction — the pacing clamp below
+        // caps the step at MemFree minus the mode's margin, so this captures the guest's dead
+        // pages and never digs cache, and the `NotCalm`/`Inelastic` gates still stand.
+        if i.cooldown_until.is_some_and(|t| i.now < t)
+            && !settled_free_lifts_cooldown(i.free_settled_for)
+        {
             return Decision::Hold(Hold::Cooldown);
         }
         if let Some(t) = i.last_change {
@@ -1992,6 +2046,7 @@ mod tests {
                 last_sweep: now,
                 demand_sweep_at: None,
                 demand_holdoff: None,
+                free_settled_since: None,
                 gap: None,
                 elastic_probe: None,
                 inelastic: None,
@@ -2028,6 +2083,7 @@ mod tests {
             giveback_streak: 0,
             last_change: None,
             cooldown_until: None,
+            free_settled_for: None,
             now: Instant::now(),
         }
     }
@@ -2896,7 +2952,8 @@ mod tests {
                 && lines[0].contains("\"sweep_debited_bytes\":4294967296")
                 && lines[0].contains("\"sweep_faults\":5")
                 && lines[0].contains("\"compressed_bytes\":1610612736")
-                && lines[0].contains(&format!("\"footprint_bytes\":{}", 20u64 << 30)),
+                && lines[0].contains(&format!("\"footprint_bytes\":{}", 20u64 << 30))
+                && lines[0].contains("\"free_settled_ms\":null"),
             "{}",
             lines[0]
         );
@@ -3602,6 +3659,87 @@ mod tests {
             scrub_step(Deflating, SCRUB_DEFLATE_TIMEOUT, None, t, resume, 0),
             Done
         );
+    }
+
+    /// The post-release cooldown must yield to a settled free list — the 2026-08-13 benchmark
+    /// recovery, where the policy watched 2–7 GiB of idle guest memory for a full 5 minutes
+    /// (268 consecutive `cooldown` reports) because a give-back burst had armed the cooldown.
+    /// What proceeds must still be BOUNDED: one step, capped by MemFree minus the margin.
+    #[test]
+    fn a_settled_free_list_lifts_the_release_cooldown_but_stays_bounded() {
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
+        i.cooldown_until = Some(i.now + RELEASE_COOLDOWN);
+        // 5 GiB free, calm guest, idle: exactly the recovery state.
+        let mut p = report_pages(0, MAX / 2, MAX);
+        p.mem_free_kib = 5 * GIB_PAGES as u64 * 4;
+
+        // Cooldown in force and the free list not yet settled: hold, as before.
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Cooldown));
+        i.free_settled_for = Some(SETTLED_FREE_FOR - Duration::from_secs(1));
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Cooldown));
+
+        // Settled: the capture proceeds, one INFLATE_STEP — not a grab at the whole free list.
+        i.free_settled_for = Some(SETTLED_FREE_FOR);
+        assert_eq!(decide(&p, &i), Decision::Set(INFLATE_STEP_PAGES));
+
+        // Bounded by the clamp: with only 1.2 GiB free the step is what MemFree can spare
+        // above the mode's 256 MiB margin, never a dig into cache.
+        p.mem_free_kib = (GIB_PAGES as u64 + 200 * PAGES_PER_MIB as u64) * 4;
+        let expected = GIB_PAGES + 200 * PAGES_PER_MIB - free_margin_pages(ReclaimMode::Moderate);
+        assert_eq!(
+            decide(&p, &i),
+            Decision::Set(expected.min(INFLATE_STEP_PAGES))
+        );
+
+        // The other guards are untouched: a guest that is not calm still holds, and so does an
+        // inelastic verdict at host-Normal (the free reading is a lie when reclaim feeds it).
+        let busy = report_pages(PRESSURE_LOW + 1, MAX / 2, MAX);
+        assert_eq!(decide(&busy, &i), Decision::Hold(Hold::NotCalm));
+        let mut inel = i;
+        inel.inelastic = true;
+        assert_eq!(decide(&p, &inel), Decision::Hold(Hold::Inelastic));
+    }
+
+    /// The settle timer must measure a *continuously* free list: a workload that frees and
+    /// re-takes memory within seconds (the benchmark's own churn — transients held ~24 s before
+    /// the guest took them back) must never accumulate its way past the cooldown.
+    #[test]
+    fn free_settling_resets_on_any_report_that_falls_short() {
+        let sock = std::env::temp_dir().join(format!("limina-settle-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&sock);
+        let pol = BalloonPolicy::new(GIB_PAGES, MAX, ReclaimMode::Moderate, sock, None);
+        let plenty = 5 * GIB_PAGES as u64 * 4; // 5 GiB free, well past SETTLED_FREE_MIN
+        let scarce = 100 * PAGES_PER_MIB as u64 * 4; // under the margin: nothing capturable
+
+        let mut p = report_pages(0, MAX / 2, MAX);
+        p.mem_free_kib = plenty;
+        pol.on_pressure(&p);
+        let first = pol.state.lock().unwrap().free_settled_since;
+        assert!(
+            first.is_some(),
+            "a free list past the floor starts the timer"
+        );
+
+        // Still free: the timer keeps its ORIGINAL start (it measures duration, not recency).
+        pol.on_pressure(&p);
+        assert_eq!(pol.state.lock().unwrap().free_settled_since, first);
+
+        // The guest takes it back: the timer resets outright.
+        p.mem_free_kib = scarce;
+        pol.on_pressure(&p);
+        assert!(pol.state.lock().unwrap().free_settled_since.is_none());
+
+        // Freed again: a NEW start, so the earlier stretch cannot be banked.
+        p.mem_free_kib = plenty;
+        pol.on_pressure(&p);
+        let restarted = pol.state.lock().unwrap().free_settled_since;
+        assert!(restarted.is_some() && restarted != first);
+
+        // An acute report resets it whatever MemFree claims — never squeeze a hurting guest.
+        let mut hurting = report_pages(PRESSURE_HIGH, MAX / 2, MAX);
+        hurting.mem_free_kib = plenty;
+        pol.on_pressure(&hurting);
+        assert!(pol.state.lock().unwrap().free_settled_since.is_none());
     }
 
     /// The sweep/scrub markers are the field-attribution oracle: the bundled app logs at WARN,
