@@ -351,6 +351,27 @@ int main(int argc, char **argv) {
         memset(gpa_to_hva(H_GPA), 0xb6, RANGE_SIZE);
         s = show("D8 HOST re-memset H (re-double?)", s);
 
+        /* MADV_DONTNEED variant: Darwin's DONTNEED is content-preserving
+         * (deactivates, does not discard anon-private content). If it
+         * disconnects the task-pmap PTEs it debits the task share with NO
+         * blocking window — no SIGBUS for threads, no EFAULT for kernel copyio
+         * (pread into guest buffers just faults the page back in). That would
+         * make the production sweep a plain periodic madvise. */
+        if (madvise(gpa_to_hva(H_GPA), RANGE_SIZE, MADV_DONTNEED) != 0)
+            printf("D13 madvise(H, MADV_DONTNEED) failed: %s\n", strerror(errno));
+        s = show("D13 madvise(H, MADV_DONTNEED)", s);
+        probe_byte = *((volatile uint8_t *)gpa_to_hva(H_GPA) + 8);
+        printf("   H content spot-check after DONTNEED: 0x%02x (0xb6 = preserved)\n",
+               probe_byte);
+        s = show("D14 HOST reads one byte of H", s);
+        g_dbl_heal = true;
+        g_dbl_faults = 0;
+        set_mailbox(H_GPA);
+        if (!run_guest_dirty_pass(vcpu, vexit)) return 1;
+        g_dbl_heal = false;
+        printf("   stage-2 faults during guest re-touch: %d\n", g_dbl_faults);
+        s = show("D15 GUEST re-touches H post-DONTNEED", s);
+
         /* RO-window variant: if a downgrade to PROT_READ also debits, a sweep
          * can leave reads safe for concurrent worker threads and only writes
          * need the fault-retry path. No debit = pmap edits PTEs in place and

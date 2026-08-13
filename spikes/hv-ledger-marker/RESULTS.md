@@ -115,6 +115,14 @@ bills ~2×, plus anon + worker overhead ≈ the observed 33 G.
   takes a SIGBUS/SIGSEGV (virtio queues, blk/net buffers, gpu transfers). A sweep must
   chunk + skip hot ranges, quiesce workers, or field the fault with a retry handler.
 - PROT_READ windows don't work (no debit), so reads can't be kept safe that way.
+- `MADV_DONTNEED` doesn't work either (D13–D15: no debit, content preserved, no faults)
+  — Darwin's deactivation leaves the task PTEs connected. The NONE window is the only
+  userspace debit primitive found.
+- The NONE window's second hazard, beyond thread SIGBUS: **kernel copyio doesn't signal,
+  it EFAULTs** — a `preadv` landing disk data in a swept chunk returns EFAULT to the
+  device (a guest-visible IO error), so syscall-into-guest-RAM sites (blk/net/vsock/fs)
+  need a retry guard (or a sweep-barrier rwlock around those few sites), while plain
+  userspace memcpys (rings, GPU transfers) are covered by a spin-retry SIGBUS handler.
 - Host re-touch re-bills 1× (D8): swept pages the worker still serves IO into come back.
   Sweep on cadence/pressure, not once.
 - The Apple opt-out is CLOSED (`notag` mode): `mach_make_memory_entry_64(MAP_MEM_LEDGER_TAGGED)`
@@ -134,9 +142,13 @@ bills ~2×, plus anon + worker overhead ≈ the observed 33 G.
    2× on disk-fed (and any other worker-written) guest pages. The balloon bounds it only
    by shrinking the cache; released ranges settle because hv_vm_unmap+munmap-side debits
    both shares.
-4. The user-facing fix is a task-pmap "settle sweep" (mprotect NONE→RW over guest RAM the
-   worker has written), gated by the hazard notes above — mechanism in libkrun, policy in
-   limina, same split as the balloon. Alternative doors: Apple's
-   MAP_MEM_LEDGER_TAGGED/NO_FOOTPRINT ownership transfer (likely private-entitlement-gated
-   — verify, then Radar) or simply reporting honest numbers in limina's own UI while AM
-   stays 2×.
+4. The user-facing fix is a task-pmap "settle sweep" (chunked mprotect NONE→RW over guest
+   RAM), mechanism in libkrun, policy (cadence/trigger) in limina — same split as the
+   balloon. Concurrency design per the hazard notes: publish the in-flight chunk in
+   atomics; a SIGBUS/SIGSEGV spin-retry handler covers every userspace touch (virtqueue
+   rings, GPU transfers) at zero fast-path cost; the few direct-syscall-into-guest sites
+   (blk preadv/pwritev, net/vsock readv, fs) take a sweep-barrier read lock (or retry on
+   EFAULT, which is otherwise always a bug). Hot pages re-fault (~µs) and re-bill —
+   bounded by the IO working set between sweeps. Alternative doors measured shut:
+   NO_FOOTPRINT (KERN_NO_ACCESS, private entitlement — Radar-worthy), PROT_READ windows
+   (no debit), MADV_DONTNEED (no debit).
