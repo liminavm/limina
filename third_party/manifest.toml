@@ -66,7 +66,7 @@ base = "418f2963a15"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-guest"
-rev = "5f910f4188c044ee618e76e8c4511e175369e3f5"
+rev = "500bc0f86b947dbed4ed6e0401d236cc4706e8f6"
 base = "mesa-26.1.5"
 
 [virglrenderer]

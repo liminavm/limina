@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Thu, 13 Aug 2026 13:22:27 -0300
+Subject: [PATCH 7/7] venus: allocate dma-buf import memory synchronously
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+vn_device_memory_import_dma_buf went through
+vn_device_memory_alloc_simple, which submits vkAllocateMemory
+asynchronously and returns VK_SUCCESS as soon as the ring accepts the
+command. For plain allocations that is a good trade: failure means the
+host is out of memory and everything is about to go wrong anyway. For
+imports it is not: the host can reject the import for expected runtime
+reasons (the underlying virtio-gpu resource may not be attachable in the
+renderer), and the async success leaves the application holding a ghost
+VkDeviceMemory the host never created. The next command naming that
+handle fails the renderer-side object lookup and poisons the ring — one
+failed import kills the whole context, and every subsequent command in
+it, instead of surfacing VK_ERROR_INVALID_EXTERNAL_HANDLE to the one
+vkAllocateMemory that could have handled it.
+
+Allocate synchronously on the import path, the same trade
+VN_PERF(NO_ASYNC_MEM_ALLOC) makes globally, applied unconditionally to
+the one path where failure is an expected runtime state. Imports are
+not on the hot allocation path, and the caller already does a ring
+roundtrip just before this call.
+
+Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+---
+ src/virtio/vulkan/vn_device_memory.c | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/src/virtio/vulkan/vn_device_memory.c b/src/virtio/vulkan/vn_device_memory.c
+index 213830aa9be..033d555f16a 100644
+--- a/src/virtio/vulkan/vn_device_memory.c
++++ b/src/virtio/vulkan/vn_device_memory.c
+@@ -136,7 +136,19 @@ vn_device_memory_import_dma_buf(struct vn_device *dev,
+       .allocationSize = alloc_info->allocationSize,
+       .memoryTypeIndex = alloc_info->memoryTypeIndex,
+    };
+-   result = vn_device_memory_alloc_simple(dev, mem, &memory_allocate_info);
++   /* The import allocation must be synchronous. A dma-buf import can fail
++    * host-side for expected runtime reasons (the resource may not be
++    * attachable in the renderer — unlike a plain allocation, where failure
++    * means OOM), and the async path reports VK_SUCCESS on ring-accept: a
++    * host-side rejection then leaves the app holding a ghost VkDeviceMemory,
++    * and the next command naming it poisons the ring — one failed import
++    * kills the whole context. Same trade VN_PERF(NO_ASYNC_MEM_ALLOC) makes,
++    * applied unconditionally to the one path where failure is expected.
++    */
++   VkDevice dev_handle = vn_device_to_handle(dev);
++   VkDeviceMemory mem_handle = vn_device_memory_to_handle(mem);
++   result = vn_call_vkAllocateMemory(dev->primary_ring, dev_handle,
++                                     &memory_allocate_info, NULL, &mem_handle);
+    if (result != VK_SUCCESS) {
+       vn_renderer_bo_unref(dev->renderer, bo);
+       return result;
