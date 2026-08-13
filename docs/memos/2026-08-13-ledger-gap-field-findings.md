@@ -104,6 +104,46 @@ research session active were **100% idle-gate-eligible** (`some_avg10` = 0 in 79
 all but 8; MemFree always reported). The binding constraints on idle scrubs are therefore
 the 90-minute cadence and the ≥512 MiB capturable-residue test, not the PSI gate.
 
+## Finding 6 — the graphics pool is *not* leaking: it tracks the guest's live set
+
+The day's open question was whether the IOAccelerator pool's growth (1.90 G / 9,579 regions →
+3.43 G / 13,710 over a session) is host-side retention or the guest genuinely holding more.
+Neither the host `footprint(1)` curve nor "I closed two apps and it dropped 22%" could settle
+it, because nothing measured the guest's own live set.
+
+Settled on the dogfood VM by draining the guest side in two steps and sampling both ends on
+the same clock (host `footprint`; guest `/sys/kernel/debug/dri/0/{virtio-gpu-host-visible-mm,
+framebuffer,clients}`):
+
+| guest state | host gfx | host regions | guest live blobs | guest fb | DRM clients |
+|---|---|---|---|---|---|
+| full session (compositor + apps) | 1929 MB | 12,296 | 67 (420 MB) | 8 | 14 |
+| logged out, greeter only | 1056 MB | 3,840 | 31 (247 MB) | 5 | 6 |
+| `systemctl stop gdm` | **6.2 MB** | **16** | **0** | 1 | 0 |
+
+Within 20 s of the last DRM client exiting, the pool returned to **16 regions** — the floor.
+So the host retires everything the guest actually releases; there is no unbounded accumulation
+and no orphaned-region class. The pool is a faithful (if amplified) shadow of the guest's live
+set, and the day's growth curve is the *guest* holding more, not the host failing to let go.
+
+Two things this does **not** absolve, and both are now the real questions:
+
+- **Amplification.** 67 guest-live blobs / 420 MB stand behind 12,296 host regions / 1929 MB —
+  ~180 host regions per guest blob. That ratio is where the memory actually goes, and it is a
+  host-side property (Metal heaps and command-allocator retention, see
+  `limina-vrend-gfx-region-leak`), not something the guest can bound.
+- **Per-client retention inside a long-lived compositor.** Closing one app returned only
+  ~267 MB of ~1.6 G and left ~9,000 regions standing; the full teardown then returned all of
+  it. So the retention is scoped to the *compositor process's* lifetime, not the app's — which
+  is plausibly correct behaviour, but it means an app-churning session ratchets until logout.
+
+Method note worth keeping: the first soak run read "pool flat for an hour" and that was a
+**lie** — the churn workload had died 50 minutes in (`drmModeAddFB2WithModifiers rc=-22
+stride=0` at buffer 197,601) and nothing noticed. A soak whose workload can stop silently
+measures an idle VM and reports a pass. `spikes/gpu-pool-soak/churn-keepalive.sh` now watches
+and restarts it, and logs every restart — an allocation that fails after ~200k buffers is
+itself a lead worth pulling.
+
 ## Steady-state composition, for reference
 
 A settled reading (14:24, guest idle, balloon holding 16.79 G of 24 G):
