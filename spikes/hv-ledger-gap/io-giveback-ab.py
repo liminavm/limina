@@ -11,7 +11,8 @@ balloon oscillating 1.33 <-> 1.58 G on a 4-second period.
 The fix resets the settle timer whenever io pain is present, which makes a directly
 falsifiable claim:
 
-    for every report with io_full_avg10 > IO_PRESSURE_LOW (200 = 2.00%), free_settled_ms == 0
+    for every report with io_full_avg10 > IO_PRESSURE_LOW (200 = 2.00%), the settle timer is
+    unset -- `free_settled_ms` is JSON null, not a number
 
 That is what VIOLATIONS counts, and it is the whole test -- a single violation under load
 means the fix is not doing what it says. Everything else here is context for judging severity:
@@ -57,7 +58,11 @@ def main() -> int:
     io_rows = [d for d in rows if d.get("io_full_avg10", 0) > IO_PRESSURE_LOW]
     # THE assertion. A row under io pain that still reports a settled free list means the timer
     # was not reset and the cooldown can be bypassed -- the exact 2026-08-13 regression.
-    violations = [d for d in io_rows if d.get("free_settled_ms", 0) != 0]
+    #
+    # `free_settled_ms` is an Option: JSON **null** is the reset state, and the first version of
+    # this check read null as a violation and failed a passing build. Anything numeric is a live
+    # timer, which under io pain is the defect regardless of how few ms have accrued.
+    violations = [d for d in io_rows if d.get("free_settled_ms") is not None]
 
     givebacks = [d for d in rows if d["decision"] == "giveback"]
     gb_under_io = [d for d in givebacks if d.get("io_full_avg10", 0) > IO_PRESSURE_LOW]
@@ -85,7 +90,7 @@ def main() -> int:
         print(f"        first at ts {v['ts_ms']}: io_full10={v['io_full_avg10'] / 100.0:.2f}%"
               f" free_settled_ms={v['free_settled_ms']} decision={v['decision']}")
         return 1
-    print(f"  PASS: all {len(io_rows)} reports under io pain had free_settled_ms == 0.")
+    print(f"  PASS: all {len(io_rows)} reports under io pain had the settle timer unset.")
     print("        Pre-fix baseline for comparison: 21 give-backs/min, 250 MiB swing on a 4 s period.")
     return 0
 
