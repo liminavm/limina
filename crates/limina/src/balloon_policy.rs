@@ -150,6 +150,22 @@ const SCRUB_WATCHDOG: Duration = Duration::from_secs(300);
 /// just settled by the release path; the sweep catches the live side at its low point).
 const SWEEP_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 
+/// Demand trigger for the settle sweep: heavy guest churn regrows the double-billed share at
+/// ~1 GiB/min (the 08-13 dogfood morning hit a 40 G footprint on a 24 G guest between two
+/// cadence sweeps), so the clock alone can't bound the ratchet. When the measured ledger gap —
+/// worker `footprint` minus the guest's honest live share (guest size − balloon fill) — exceeds
+/// this slack, a sweep fires immediately. The slack absorbs the worker's honest non-guest
+/// overhead (graphics + malloc, ~3 GiB observed) so a fat-but-honest footprint isn't chased.
+const DEMAND_SWEEP_GAP: u64 = 4 << 30;
+/// Rate limit between demand sweeps. A sweep costs ~10 ms/GiB of live guest RAM on its own
+/// worker thread (guest-invisible), so a tight limit is affordable: the ratchet peak is bounded
+/// by [`DEMAND_SWEEP_GAP`] plus one interval of regrowth.
+const DEMAND_SWEEP_MIN_INTERVAL: Duration = Duration::from_secs(60);
+/// A demand sweep that debited less than this proves the gap was honest overhead, not
+/// double billing (the gap sensor can't tell them apart) — demand sweeps then hold off for a
+/// full cadence period instead of spinning uselessly at the rate limit.
+const DEMAND_SWEEP_MIN_YIELD: u64 = 512 << 20;
+
 /// 4 KiB balloon pages per MiB.
 pub const PAGES_PER_MIB: u32 = 256;
 
@@ -366,6 +382,8 @@ struct WorkerStats {
     /// The worker's task-wide compressor-billed bytes (observability: the idle scrub's
     /// settle effect shows here as a drop across the cycle).
     compressed_bytes: u64,
+    /// The worker's phys_footprint — the demand sweep's gap sensor (0 = not reported).
+    footprint_bytes: u64,
 }
 
 struct State {
@@ -395,6 +413,12 @@ struct State {
     /// When the last ledger settle sweep was commanded (see [`SWEEP_COOLDOWN`]). Initialized
     /// to construction time so a fresh VM never sweeps before a cooldown of uptime.
     last_sweep: Instant,
+    /// The worker's `sweeps` counter at the last demand-triggered sweep, so the next tick that
+    /// sees the counter advance can judge the debit (see [`DEMAND_SWEEP_MIN_YIELD`]).
+    demand_sweep_at: Option<u64>,
+    /// No demand sweeps before this instant — armed when one yields under the floor (the gap
+    /// was honest overhead; only the cadence sweep runs until this expires).
+    demand_holdoff_until: Option<Instant>,
     /// Tracking for a commanded-but-unfilled target gap (see [`gap_action`]). Only updated on
     /// ticks with a known `actual` — a failed stats query freezes it rather than resetting or
     /// advancing it.
@@ -624,6 +648,8 @@ impl BalloonPolicy {
                 scrub_gen: 0,
                 last_scrub_end: Instant::now(),
                 last_sweep: Instant::now(),
+                demand_sweep_at: None,
+                demand_holdoff_until: None,
                 gap: None,
                 elastic_probe: None,
                 inelastic: None,
@@ -730,15 +756,60 @@ impl BalloonPolicy {
                 return;
             }
         }
-        // Ledger settle sweep, on cadence. Guest-invisible and cheap for the worker (tens of
-        // ms, on its own thread), so it doesn't consume the tick or care about pressure —
-        // its only job is keeping the task ledger (Activity Monitor, jetsam) honest.
-        if self.sweep_enabled
-            && sweep_due(self.mode, st.last_sweep, now)
-            && send_settle(&self.socket, &mut st)
-        {
-            st.last_sweep = now;
-            log::info!("autoballoon: ledger settle sweep sent (cadence)");
+        // Ledger settle sweep. Guest-invisible and cheap for the worker (tens of ms, on its
+        // own thread), so it doesn't consume the tick or care about pressure — its only job
+        // is keeping the task ledger (Activity Monitor, jetsam) honest. Two triggers: the
+        // measured gap (demand — bounds the churn ratchet) and the clock (cadence fallback).
+        if self.sweep_enabled {
+            // Judge the last demand sweep once the worker's counter shows it ran: a debit
+            // under the floor means the gap was honest overhead — hold demand sweeps off for
+            // a cadence period rather than spinning at the rate limit for nothing.
+            if let (Some(at), Some(w)) = (st.demand_sweep_at, wstats.as_ref()) {
+                if w.sweeps > at {
+                    st.demand_sweep_at = None;
+                    if w.sweep_debited_bytes < DEMAND_SWEEP_MIN_YIELD {
+                        st.demand_holdoff_until = Some(now + sweep_cooldown(self.mode));
+                        log::info!(
+                            "autoballoon: demand sweep yielded only {} MiB — gap is honest \
+                             overhead, holding demand sweeps for a cadence period",
+                            w.sweep_debited_bytes >> 20
+                        );
+                    }
+                }
+            }
+            // The sensor is the RESIDENT share of the footprint: the double billing the sweep
+            // debits is resident-twice, while the compressor's billing (guest cold content,
+            // cold worker heap — several honest GiB on a long-lived VM) is exactly the share a
+            // sweep can't touch. Leaving it in the gap would fire wasted low-yield sweeps
+            // every holdoff period on quiet days.
+            let footprint = wstats
+                .as_ref()
+                .map_or(0, |w| w.footprint_bytes.saturating_sub(w.compressed_bytes));
+            let guest_live = ((self.max_pages as u64) << 12)
+                .saturating_sub(wstats.as_ref().map_or(0, |w| w.actual_bytes));
+            if demand_sweep_due(
+                footprint,
+                guest_live,
+                st.last_sweep,
+                st.demand_holdoff_until,
+                now,
+            ) {
+                if send_settle(&self.socket, &mut st) {
+                    st.last_sweep = now;
+                    st.demand_sweep_at = wstats.as_ref().map(|w| w.sweeps);
+                    log::info!(
+                        "autoballoon: ledger settle sweep sent (demand — footprint {} MiB is \
+                         {} MiB past the guest's {} MiB live share)",
+                        footprint >> 20,
+                        footprint.saturating_sub(guest_live) >> 20,
+                        guest_live >> 20
+                    );
+                }
+            } else if sweep_due(self.mode, st.last_sweep, now) && send_settle(&self.socket, &mut st)
+            {
+                st.last_sweep = now;
+                log::info!("autoballoon: ledger settle sweep sent (cadence)");
+            }
         }
         // Free-elasticity: judge the last sent inflation step. A step whose pages the free
         // list didn't surrender was backfilled by reclaim — it came out of page cache, and the
@@ -1038,6 +1109,7 @@ impl BalloonPolicy {
             sweep_ms: 0,
             sweep_faults: 0,
             compressed_bytes: 0,
+            footprint_bytes: 0,
         };
         for tok in line.split_whitespace() {
             let Some((k, v)) = tok.split_once('=') else {
@@ -1056,6 +1128,7 @@ impl BalloonPolicy {
                 "sweep_ms" => s.sweep_ms = v,
                 "sweep_faults" => s.sweep_faults = v,
                 "compressed" => s.compressed_bytes = v,
+                "footprint" => s.footprint_bytes = v,
                 _ => {}
             }
         }
@@ -1129,6 +1202,23 @@ fn sweep_cooldown(mode: ReclaimMode) -> Duration {
 /// Whether a cadence sweep is due (pure).
 fn sweep_due(mode: ReclaimMode, last_sweep: Instant, now: Instant) -> bool {
     now.duration_since(last_sweep) >= sweep_cooldown(mode)
+}
+
+/// Whether a demand sweep is due (pure): the measured ledger gap — worker footprint past the
+/// guest's honest live share — exceeds [`DEMAND_SWEEP_GAP`], outside the rate limit and any
+/// low-yield holdoff. `footprint_bytes == 0` means the worker didn't report one (old worker):
+/// no demand sweeps, the cadence carries it (degraded, not broken).
+fn demand_sweep_due(
+    footprint_bytes: u64,
+    guest_live_bytes: u64,
+    last_sweep: Instant,
+    holdoff_until: Option<Instant>,
+    now: Instant,
+) -> bool {
+    footprint_bytes != 0
+        && footprint_bytes.saturating_sub(guest_live_bytes) >= DEMAND_SWEEP_GAP
+        && holdoff_until.is_none_or(|t| now >= t)
+        && now.duration_since(last_sweep) >= DEMAND_SWEEP_MIN_INTERVAL
 }
 
 /// How deep a scrub inflates (see [`scrub_target_pages`]).
@@ -1429,7 +1519,7 @@ fn trace_decision(
             "\"actual_bytes\":{},\"reclaimed_bytes\":{},\"heals\":{},",
             "\"released_bytes\":{},\"remapped_bytes\":{},\"stray_faults\":{},",
             "\"sweeps\":{},\"sweep_debited_bytes\":{},\"sweep_ms\":{},",
-            "\"sweep_faults\":{},\"compressed_bytes\":{}}}\n"
+            "\"sweep_faults\":{},\"compressed_bytes\":{},\"footprint_bytes\":{}}}\n"
         ),
         ts_ms,
         i.mode,
@@ -1461,6 +1551,7 @@ fn trace_decision(
         json_stat(wstats.map(|w| w.sweep_ms)),
         json_stat(wstats.map(|w| w.sweep_faults)),
         json_stat(wstats.map(|w| w.compressed_bytes)),
+        json_stat(wstats.map(|w| w.footprint_bytes)),
     );
     if f.write_all(line.as_bytes()).is_err() {
         st.trace = None;
@@ -2652,6 +2743,8 @@ mod tests {
             scrub_gen: 0,
             last_scrub_end: Instant::now(),
             last_sweep: Instant::now(),
+            demand_sweep_at: None,
+            demand_holdoff_until: None,
             gap: None,
             elastic_probe: None,
             inelastic: None,
@@ -2684,6 +2777,7 @@ mod tests {
             sweep_ms: 41,
             sweep_faults: 5,
             compressed_bytes: 3 << 29,
+            footprint_bytes: 20 << 30,
         };
         trace_decision(
             &mut st,
@@ -2722,7 +2816,8 @@ mod tests {
                 && lines[0].contains("\"sweeps\":2")
                 && lines[0].contains("\"sweep_debited_bytes\":4294967296")
                 && lines[0].contains("\"sweep_faults\":5")
-                && lines[0].contains("\"compressed_bytes\":1610612736"),
+                && lines[0].contains("\"compressed_bytes\":1610612736")
+                && lines[0].contains(&format!("\"footprint_bytes\":{}", 20u64 << 30)),
             "{}",
             lines[0]
         );
@@ -2757,6 +2852,169 @@ mod tests {
                 "{mode:?} did not sweep at its cooldown"
             );
         }
+    }
+
+    /// The demand trigger: fires only on a measured gap past the slack, an elapsed rate
+    /// limit, no low-yield holdoff, and a worker that actually reports a footprint.
+    #[test]
+    fn demand_sweep_due_on_measured_gap_only() {
+        let base = Instant::now();
+        let now = base + DEMAND_SWEEP_MIN_INTERVAL;
+        let live = 24u64 << 30;
+        // Gap exactly at the slack: due.
+        assert!(demand_sweep_due(
+            live + DEMAND_SWEEP_GAP,
+            live,
+            base,
+            None,
+            now
+        ));
+        // Gap one byte under the slack: the footprint is within honest overhead.
+        assert!(!demand_sweep_due(
+            live + DEMAND_SWEEP_GAP - 1,
+            live,
+            base,
+            None,
+            now
+        ));
+        // No footprint reported (old worker): never due, the cadence carries it.
+        assert!(!demand_sweep_due(0, live, base, None, now));
+        // Inside the rate limit: not due even with a huge gap.
+        assert!(!demand_sweep_due(
+            live + (20 << 30),
+            live,
+            base,
+            None,
+            now - Duration::from_secs(1)
+        ));
+        // Low-yield holdoff in force blocks; an expired one doesn't.
+        assert!(!demand_sweep_due(
+            live + DEMAND_SWEEP_GAP,
+            live,
+            base,
+            Some(now + Duration::from_secs(1)),
+            now
+        ));
+        assert!(demand_sweep_due(
+            live + DEMAND_SWEEP_GAP,
+            live,
+            base,
+            Some(now),
+            now
+        ));
+        // Footprint below the live share (balloon fill mid-flight): saturates to zero gap.
+        assert!(!demand_sweep_due(live / 2, live, base, None, now));
+    }
+
+    /// The demand sweep end-to-end through `on_pressure`: a fat footprint in the stats reply
+    /// commands `settle` on the worker socket; a sweep that then debits under the yield floor
+    /// arms the holdoff (no re-fire at the rate limit); a real debit leaves demand armed.
+    #[test]
+    fn on_pressure_demand_sweeps_and_holds_off_on_low_yield() {
+        use std::io::{BufRead, BufReader, Write as _};
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+
+        std::env::set_var("LIMINA_HOST_PRESSURE", "normal");
+        let sock = std::env::temp_dir().join(format!(
+            "limina-demand-sweep-wiring-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+        let (tx, rx) = mpsc::channel::<String>();
+        // The stats reply the fake worker serves; the test rewrites it between ticks.
+        let reply = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let reply_srv = std::sync::Arc::clone(&reply);
+        std::thread::spawn(move || {
+            let (conn, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(conn.try_clone().unwrap());
+            let mut writer = conn;
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    return;
+                }
+                if line.trim() == "stats" {
+                    let r = reply_srv.lock().unwrap().clone();
+                    if writeln!(writer, "{r}").is_err() {
+                        return;
+                    }
+                } else {
+                    let _ = tx.send(line.trim().to_string());
+                }
+            }
+        });
+
+        let pol = BalloonPolicy::new(GIB_PAGES, MAX, ReclaimMode::Moderate, sock.clone(), None);
+        let guest_size = (MAX as u64) << 12;
+        let fat = guest_size + DEMAND_SWEEP_GAP + (1 << 30);
+        let p = report_pages(0, MAX / 2, MAX);
+        let settles = |rx: &mpsc::Receiver<String>| {
+            let mut n = 0;
+            while let Ok(cmd) = rx.recv_timeout(Duration::from_millis(300)) {
+                if cmd == "settle" {
+                    n += 1;
+                }
+            }
+            n
+        };
+        let backdate_sweep = |pol: &BalloonPolicy| {
+            let mut st = pol.state.lock().unwrap();
+            st.last_sweep = Instant::now() - 2 * DEMAND_SWEEP_MIN_INTERVAL;
+        };
+
+        // Tick 0: the footprint is fat only counting the compressor's billing — a share the
+        // sweep can't debit, so it must not count toward the gap. No sweep.
+        *reply.lock().unwrap() = format!(
+            "actual=0 sweeps=10 sweep_debited=0 compressed={} footprint={fat}",
+            2u64 << 30
+        );
+        backdate_sweep(&pol);
+        pol.on_pressure(&p);
+        assert_eq!(
+            settles(&rx),
+            0,
+            "compressor billing counted toward the demand gap"
+        );
+
+        // Tick 1: fat resident footprint, rate limit elapsed -> demand sweep goes out.
+        *reply.lock().unwrap() = format!("actual=0 sweeps=10 sweep_debited=0 footprint={fat}");
+        backdate_sweep(&pol);
+        pol.on_pressure(&p);
+        assert_eq!(settles(&rx), 1, "demand sweep did not reach the socket");
+
+        // Tick 2: the sweep ran but debited under the floor -> holdoff arms, no re-fire
+        // even though the gap persists and the rate limit has elapsed again.
+        *reply.lock().unwrap() = format!(
+            "actual=0 sweeps=11 sweep_debited={} footprint={fat}",
+            DEMAND_SWEEP_MIN_YIELD - 1
+        );
+        backdate_sweep(&pol);
+        pol.on_pressure(&p);
+        assert_eq!(
+            settles(&rx),
+            0,
+            "low-yield holdoff did not suppress the demand sweep"
+        );
+        assert!(pol.state.lock().unwrap().demand_holdoff_until.is_some());
+
+        // Tick 3: holdoff cleared and the last demand sweep debited well -> fires again.
+        pol.state.lock().unwrap().demand_holdoff_until = None;
+        *reply.lock().unwrap() = format!(
+            "actual=0 sweeps=12 sweep_debited={} footprint={fat}",
+            8u64 << 30
+        );
+        backdate_sweep(&pol);
+        pol.on_pressure(&p);
+        assert_eq!(
+            settles(&rx),
+            1,
+            "demand sweep did not re-fire after a good yield"
+        );
+        assert!(pol.state.lock().unwrap().demand_holdoff_until.is_none());
+        let _ = std::fs::remove_file(&sock);
     }
 
     /// The scrub trigger matrix: host level × acute × cooldowns × meaningful inflate. The
@@ -3249,6 +3507,8 @@ mod tests {
             scrub_gen: 3,
             last_scrub_end: now,
             last_sweep: now,
+            demand_sweep_at: None,
+            demand_holdoff_until: None,
             gap: None,
             elastic_probe: None,
             inelastic: None,
@@ -3306,6 +3566,8 @@ mod tests {
             scrub_gen: 0,
             last_scrub_end: Instant::now(),
             last_sweep: Instant::now(),
+            demand_sweep_at: None,
+            demand_holdoff_until: None,
             gap: None,
             elastic_probe: None,
             inelastic: None,
