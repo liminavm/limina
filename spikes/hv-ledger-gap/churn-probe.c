@@ -32,7 +32,16 @@
  *       the buffer's segments to age to swap (segswap growth >= 1/8 of the
  *       buffer's expected segment count) before madvising — targets the
  *       freeing-a-slot-in-a-swapped-out-segment path where the dogfood
- *       residue lives
+ *       residue lives. Keeps DRIPPING ballast while segswap is short of the
+ *       goal (fresh byte pressure is what evicts the buffer's now-oldest
+ *       segments). Post-hoc classifier at the REUSABLE sample: occ dropping
+ *       by ~the freed count = slots were resident (leg missed); stored
+ *       dropping with occ flat = slots freed from disk-backed segments.
+ *   -r  sparse REUSABLE: madvise every other 16 KiB page (half the buffer,
+ *       alternating parity per cycle) instead of the whole range. This is
+ *       FRQ's real shape — thousands of discontiguous sub-ranges — and it
+ *       fragments segments so the compactor has to copy live slots around,
+ *       an ingredient whole-range frees never exercise.
  * A cycle that never reaches -t is printed as VOID and is not evidence.
  */
 
@@ -338,9 +347,10 @@ main(int argc, char **argv)
     size_t ballast_cap = 22;
     double target_frac = 0.5;
     int age_wait = 0;
+    int use_sparse = 0;
     int opt;
 
-    while ((opt = getopt(argc, argv, "g:c:RHSB:t:xXw:")) != -1) {
+    while ((opt = getopt(argc, argv, "g:c:RHSB:t:xXw:r")) != -1) {
         switch (opt) {
         case 'g': gib = (size_t)atoi(optarg); break;
         case 'c': cycles = atoi(optarg); break;
@@ -352,10 +362,11 @@ main(int argc, char **argv)
         case 'x': ballast_random = 1; break;
         case 'X': buffer_random = 1; break;
         case 'w': age_wait = atoi(optarg); break;
+        case 'r': use_sparse = 1; break;
         default:
             fprintf(stderr, "usage: %s [-g gib] [-c cycles] [-R] [-H] [-S] "
                             "[-B ballast-cap-gib] [-t frac] [-x] [-X] "
-                            "[-w secs]\n", argv[0]);
+                            "[-w secs] [-r]\n", argv[0]);
             return 2;
         }
     }
@@ -398,7 +409,8 @@ main(int argc, char **argv)
     printf("# churn-probe pid=%d buf=%zuGiB pages=%zu mode=%s%s%s%s%s cycles=%d "
            "ballast_cap=%zuGiB target_frac=%.2f age_wait=%ds\n",
            getpid(), gib, pages, use_shared ? "shared" : "private",
-           use_hv ? "+hv" : "", use_reusable ? "+REUSABLE" : "",
+           use_hv ? "+hv" : "",
+           use_reusable ? (use_sparse ? "+REUSABLE(sparse)" : "+REUSABLE") : "",
            ballast_random ? "+xballast" : "", buffer_random ? "+Xbuf" : "",
            cycles, ballast_cap, target_frac, age_wait);
     sample("start", 0, buf, len);
@@ -445,6 +457,11 @@ main(int argc, char **argv)
                 sys_sample(&sn);
                 if (sn.seg_swappedout - s0.seg_swappedout >= want)
                     break;
+                /* Swapout stalls once pressure stabilizes; keep dripping
+                 * fresh byte pressure so the buffer's (oldest) segments
+                 * get evicted. */
+                if (grown < ballast_cap && ballast_send('g'))
+                    grown++;
                 sleep(5);
             }
             printf("# cycle %d: aged %ds, segswap +%lld (want +%lld)%s\n", cy,
@@ -456,9 +473,22 @@ main(int argc, char **argv)
         }
 
         if (use_reusable) {
-            if (madvise(buf, len, MADV_FREE_REUSABLE) != 0)
+            if (use_sparse) {
+                /* FRQ's real shape: many discontiguous 16 KiB madvises.
+                 * Alternate parity per cycle so every page eventually sees
+                 * the mark-while-compressed transition. */
+                size_t parity = (size_t)(cy & 1);
+                int mrc = 0;
+                for (size_t off = parity * PAGE_SZ; off < len;
+                     off += 2 * PAGE_SZ)
+                    if (madvise(buf + off, PAGE_SZ, MADV_FREE_REUSABLE) != 0)
+                        mrc++;
+                if (mrc)
+                    fprintf(stderr, "sparse madvise: %d failures\n", mrc);
+            } else if (madvise(buf, len, MADV_FREE_REUSABLE) != 0) {
                 fprintf(stderr, "madvise(MADV_FREE_REUSABLE): %s\n",
                         strerror(errno));
+            }
             sample("reusable", cy, buf, len);
         }
 
