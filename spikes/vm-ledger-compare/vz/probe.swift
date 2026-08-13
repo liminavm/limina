@@ -36,6 +36,14 @@ let net = VZVirtioNetworkDeviceConfiguration()
 net.attachment = VZNATNetworkDeviceAttachment()
 cfg.networkDevices = [net]
 
+// Serial console -> vz-serial.log so a wedged guest isn't a black box.
+FileManager.default.createFile(atPath: "vz-serial.log", contents: nil)
+let serialOut = FileHandle(forWritingAtPath: "vz-serial.log")!
+let console = VZVirtioConsoleDeviceSerialPortConfiguration()
+console.attachment = VZFileHandleSerialPortAttachment(
+    fileHandleForReading: nil, fileHandleForWriting: serialOut)
+cfg.serialPorts = [console]
+
 try cfg.validate()
 
 let vm = VZVirtualMachine(configuration: cfg)
