@@ -326,6 +326,22 @@ rects). Remaining:
   priority: bites only after a real host-pressure episode, and 16 GB/s cached reads are
   still fast for desktop use; kernel compaction probably erodes it over time (unverified).
 
+- **Settle-sweep fault handler: filter by `si_code`** (added 2026-08-13, from the sweep
+  hardening pass): since fork 9390775 the handler fields ANY SIGBUS/SIGSEGV at a
+  guest-region address, forever after the first sweep (deliberately not gated on
+  `SWEEP_ACTIVE` — a last-window fault arriving after the flag cleared used to chain to
+  SIG_DFL and permanently uninstall the `Once`-installed handler). The widened corner: a
+  future *non-protection* fault at a guest address — e.g. `BUS_ADRALN` from a misaligned
+  atomic in some device bug — would silently refault-loop instead of crashing honestly.
+  Mitigation when it matters: field only protection faults (`SEGV_ACCERR`/`BUS_ACCERR`),
+  chain the rest. Already observable in the field: such a loop spins `sweep_faults` (stats
+  verb / decision trace) to millions.
+- **Settle-sweep cadence needs a guest pressure report** (added 2026-08-13, accepted under
+  the two-tier rule): the sweep fires from `on_pressure`, so a stock guest without
+  limina-agent never sweeps and keeps the ~2× Activity Monitor inflation (degraded, not
+  broken). Possible later item: a worker-side fallback timer so even agent-less guests
+  settle occasionally.
+
 ## M3 networking
 - **gvproxy reconnect-on-HANG_UP** — today the net worker logs FATAL and permanently disables the NIC
   on HANG_UP (`worker.rs:146`); the supervisor recreates the path. A small libkrun reconnect patch
