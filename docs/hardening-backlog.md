@@ -569,6 +569,25 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   a live balloon-hardening item (also on the upstreaming triage list) — `Queue::len`/`is_empty` should
   fail soft on a not-ready/invalid ring.
 
+## GPU / venus ghost containment (from the 2026-08-13 totem crash)
+- **Host-side fault injection for the tombstone path** — 📋 open. `vkr_ghost_containment.rs`
+  asserts the product invariant (a refused import leaves the context alive), but on an image
+  carrying mesa-guest 0007 the refusal is now *synchronous*, so the guest never mints a ghost
+  and the vkr tombstone is never exercised: the test passes for the guest fix's reason alone.
+  Proving the HOST half — the half that covers stock/older guests, which stay async forever —
+  needs an env-gated hook in vkr that fails the Nth create for a named context
+  (`LIMINA_VKR_FAIL_CREATE=<cmd>:<n>`, off by default, must not leak into normal suite runs).
+  The one async path surviving the guest fix is `vkCreateImage` on a memory-requirements-cache
+  HIT, so the probe shape is: create the same image key twice (miss = sync seeds the cache,
+  hit = async), inject on the second, assert the context survives *and* the "tombstoned" line
+  appears. Until then the host half is proven only by the 2026-08-13 manual A/B (old async
+  guest + new worker → `CONTEXT ALIVE` + the SKIPPED marker in the worker log).
+- **Zero-copy udmabuf import** — 📋 open, low priority. GStreamer's software-decode path wraps
+  memfd pages as a udmabuf and hands it to zink; on macOS those scattered guest pages cannot
+  back a single MTLBuffer, so the import is refused and the stack falls back to a raw upload
+  (correct, one copy per frame). If frame-upload cost ever shows up in a profile, this is the
+  lever — it needs a gather/staging path in vkr, not a proxy attach tweak.
+
 ## GPU / rendering perf
 - **Should the enhanced tier stop forcing zink? (i.e. delete `/etc/environment.d/90-limina-zink.conf`)**
   — 📋 open, raised by the user 2026-08-01 now that vrend is well supported. Attractive for the right
