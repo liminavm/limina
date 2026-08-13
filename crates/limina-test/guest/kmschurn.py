@@ -748,8 +748,16 @@ class VkBuffer:
             C.byref(self.fb), DRM_MODE_FB_MODIFIERS,
         )
         if rc:
+            # The 2026-08-13 soak died here at buffer 197,601 with rc=-22 and stride=0, on a guest
+            # with 6 GB free and a clean dmesg. A zero pitch means the PRODUCER handed back nothing
+            # -- vkGetImageSubresourceLayout's rowPitch -- so EINVAL from AddFB2 is the messenger,
+            # not the cause. Name the producer's returns in the failure line so the next occurrence
+            # says which call degraded rather than leaving it to be re-derived.
             fail("drmModeAddFB2WithModifiers",
-                 f"rc={rc} handle={self.handle} stride={self.stride}")
+                 f"rc={rc} handle={self.handle} stride={self.stride} "
+                 f"seq={VkBuffer.seq} rowPitch={lay.rowPitch} layout_size={lay.size} "
+                 f"layout_offset={lay.offset} alloc_size={req.size} "
+                 f"memtype={ai.memoryTypeIndex} dmabuf_fd={dmabuf.value}")
         rec.clear(self.img, VkBuffer.seq)
 
     def release(self):
