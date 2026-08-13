@@ -2978,6 +2978,94 @@ mod tests {
         ));
     }
 
+    /// The idle scrub end-to-end, not just the predicate: a calm report through the real
+    /// `on_pressure` must reach the idle branch with sane inputs (fill from a live stats
+    /// round-trip, Bounded target from the report's MemFree) and actually command the
+    /// inflate on the worker socket. A wiring slip anywhere on that path — wrong `room`,
+    /// a bad `acute` derivation, an early return upstream — passes the pure gate test and
+    /// only fails here.
+    #[test]
+    fn on_pressure_wires_the_idle_scrub_through_to_the_worker_socket() {
+        use std::io::{BufRead, BufReader, Write as _};
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+
+        // The idle cadence is real wall-clock (90 min for Moderate); the test time-travels by
+        // backdating `last_scrub_end` instead of waiting. `Instant` can't represent times
+        // before an OS-dependent epoch, so a just-booted host may not have the headroom.
+        let params = scrub_params(ReclaimMode::Moderate);
+        let Some(backdated) =
+            Instant::now().checked_sub(params.cooldown * IDLE_SCRUB_COOLDOWN_MULT)
+        else {
+            eprintln!("skipping: host not up long enough to backdate the idle cadence");
+            return;
+        };
+        // Pin the host sample: the real sysctls could read Warn on a loaded dev machine and
+        // legitimately veto the idle scrub. Only `on_pressure` reads this variable, and this
+        // is the sole test driving it.
+        std::env::set_var("LIMINA_HOST_PRESSURE", "normal");
+
+        // A fake worker on a real socket: answers `stats` with a fixed fill, records every
+        // other command. The policy keeps one connection open across commands.
+        let sock = std::env::temp_dir().join(format!(
+            "limina-idle-scrub-wiring-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+        let (tx, rx) = mpsc::channel::<String>();
+        let fill_bytes = (GIB_PAGES as u64) << 12; // the driver reports a 1 GiB fill
+        std::thread::spawn(move || {
+            let (conn, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(conn.try_clone().unwrap());
+            let mut writer = conn;
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    return;
+                }
+                if line.trim() == "stats" {
+                    if writeln!(writer, "actual={fill_bytes} compressed=1610612736").is_err() {
+                        return;
+                    }
+                } else {
+                    let _ = tx.send(line.trim().to_string());
+                }
+            }
+        });
+
+        let pol = BalloonPolicy::new(GIB_PAGES, MAX, ReclaimMode::Moderate, sock.clone(), None);
+        {
+            let mut st = pol.state.lock().unwrap();
+            st.last_scrub_end = backdated;
+            st.target_pages = GIB_PAGES; // matches the fill the fake worker reports
+        }
+
+        // A genuinely idle guest: zero PSI, half of RAM available, 2 GiB truly free.
+        let mut p = report_pages(0, MAX / 2, MAX);
+        p.mem_free_kib = 2 * GIB_PAGES as u64 * 4;
+        pol.on_pressure(&p);
+
+        let cmd = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("no target command reached the worker socket");
+        let expected = scrub_target_pages(
+            ScrubDepth::Bounded,
+            ROOM,
+            GIB_PAGES,
+            p.mem_free_kib,
+            free_margin_pages(ReclaimMode::Moderate),
+        );
+        assert_eq!(cmd, format!("target {}", (expected as u64) << 12));
+        let st = pol.state.lock().unwrap();
+        let scrub = st.scrub.as_ref().expect("scrub cycle armed in state");
+        assert_eq!(scrub.phase, ScrubPhase::Inflating);
+        assert_eq!(scrub.resume_pages, GIB_PAGES);
+        drop(st);
+        let _ = std::fs::remove_file(&sock);
+    }
+
     /// The mode key: Light scrubs only under Critical and half as often; Aggressive scrubs
     /// under Warn twice as often as Moderate. (Depth is covered by `scrub_targets_by_depth`.)
     #[test]
