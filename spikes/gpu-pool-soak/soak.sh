@@ -71,7 +71,11 @@ export LIMINA_EXTRA_ARGS="--display-resolution 1280x800"
 } > "$OUT/meta.txt"
 
 echo "==> booting the soak guest (EFI + venus on KosmicKrisp, windowed)"
-nohup "$REPO/spikes/venus-draw-probe/boot-enhanced-efi-kk.sh" > "$OUT/worker.log" 2>&1 &
+# The worker's own log goes where LIMINA_BOOT_LOG says — the boot script otherwise uses one
+# fixed /tmp path that every concurrent boot would share, and the SSH forward we need to parse
+# is announced there, not on the script's stdout.
+export LIMINA_BOOT_LOG="$OUT/worker.log"
+nohup "$REPO/spikes/venus-draw-probe/boot-enhanced-efi-kk.sh" > "$OUT/boot.log" 2>&1 &
 BOOT_PID=$!
 echo "$BOOT_PID" > "$OUT/boot.pid"
 
@@ -93,7 +97,13 @@ for _ in $(seq 1 60); do
     sleep 5
 done
 
-WORKER=$(pgrep -f "limina-vmm.*soak.raw" | head -1)
+# The WORKER, not the supervisor. `pgrep -f "limina-vmm.*soak.raw"` also matches the supervisor
+# — its argv names both the worker binary and the disk — and sampling that measures a ~16 MB
+# process for 24 h. Match the process NAME exactly, then confirm the disk from its argv.
+WORKER=""
+for p in $(pgrep -x limina-vmm); do
+    if ps -o command= -p "$p" | grep -q "soak.raw"; then WORKER=$p; break; fi
+done
 [ -n "$WORKER" ] || { echo "no worker pid for the soak disk" >&2; exit 1; }
 echo "==> worker pid $WORKER"
 echo "worker pid:  $WORKER" >> "$OUT/meta.txt"
@@ -114,31 +124,19 @@ $SSH "nohup sudo -n env $VENUS_ENV python3 /tmp/kmschurn.py churn-vk $FRAMES 2 1
       > /tmp/kmschurn.log 2>&1 & echo started"
 
 # Host-side sampler. Detached, so it survives this shell and any Claude session.
-cat > "$OUT/sample.sh" <<SAMPLER
-#!/bin/bash
-# One row every 2 min: the pool and what it is made of, plus the guest's own flip counters.
-OUT="$OUT"; WORKER=$WORKER; SSH="$SSH"; HOURS=$HOURS
-echo "ts,elapsed_min,footprint_mb,gfx_mb,gfx_regions,iosurface_mb,owned_unmapped_mb,total_regions,guest_flips,guest_created" > "\$OUT/soak.csv"
-START=\$(date +%s)
-END=\$(( START + HOURS * 3600 ))
-while [ "\$(date +%s)" -lt "\$END" ]; do
-    kill -0 "\$WORKER" 2>/dev/null || { echo "worker \$WORKER gone" >> "\$OUT/soak.err"; break; }
-    F=\$(/usr/bin/footprint "\$WORKER" 2>/dev/null)
-    fp=\$(echo "\$F"  | awk '/Footprint:/{print \$4}')
-    gfx=\$(echo "\$F" | awk '/IOAccelerator \(graphics\)/{print \$1; exit}')
-    gfxr=\$(echo "\$F"| awk '/IOAccelerator \(graphics\)/{for(i=1;i<=NF;i++) if(\$i=="IOAccelerator"){print \$(i-1); exit}}')
-    ios=\$(echo "\$F" | awk '/IOSurface/{print \$1; exit}')
-    own=\$(echo "\$F" | awk '/Owned physical footprint \(unmapped\) \(graphics\)/{print \$1; exit}')
-    rgn=\$(echo "\$F" | awk '/Owned physical footprint \(unmapped\) \(graphics\)/{for(i=1;i<=NF;i++) if(\$i=="Owned"){print \$(i-1); exit}}')
-    tail=\$(\$SSH "tail -1 /tmp/kmschurn.log" 2>/dev/null | tr -d '\r')
-    flips=\$(echo "\$tail"   | grep -o 'flips=[0-9]*'   | cut -d= -f2)
-    created=\$(echo "\$tail" | grep -o 'created=[0-9]*' | cut -d= -f2)
-    now=\$(date +%s)
-    echo "\$(date +%H:%M:%S),\$(( (now - START) / 60 )),\${fp:-},\${gfx:-},\${gfxr:-},\${ios:-},\${own:-},\${rgn:-},\${flips:-},\${created:-}" >> "\$OUT/soak.csv"
-    sleep 120
-done
-echo "sampler done \$(date +%H:%M:%S)" >> "\$OUT/soak.csv"
-SAMPLER
+#
+# The body is a QUOTED heredoc (no shell expansion at all) with the run's values prepended as
+# plain assignments. The unquoted form needed a backslash on every `$` and got one wrong on the
+# first run — the CSV logged the literal string "Footprint:" as a number for two samples. Quoted
+# + prepended config makes that class of bug impossible.
+{
+    echo '#!/bin/bash'
+    echo "OUT=\"$OUT\""
+    echo "WORKER=$WORKER"
+    echo "SSH=\"$SSH\""
+    echo "HOURS=$HOURS"
+    cat "$REPO/spikes/gpu-pool-soak/sample-body.sh"
+} > "$OUT/sample.sh"
 chmod +x "$OUT/sample.sh"
 nohup "$OUT/sample.sh" > "$OUT/sampler.log" 2>&1 &
 echo $! > "$OUT/soak.pid"

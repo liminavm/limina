@@ -15,7 +15,9 @@
 set -u
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 cd "$ROOT"
-LOG=/tmp/enhanced-efi-kk-worker.log
+# Overridable so a long-running or concurrent boot can keep its own log instead of racing
+# every other caller for the one fixed path (the 24h gpu-pool-soak needs this).
+LOG="${LIMINA_BOOT_LOG:-/tmp/enhanced-efi-kk-worker.log}"
 WORK="${LIMINA_DISK:?set LIMINA_DISK to the enhanced .raw}"
 FW="${LIMINA_FIRMWARE:-target/krun-efi/KRUN_EFI.gop.fd}"
 [ -f "$FW" ] || { echo "GOP firmware not found at $FW (build with GOP=1 scripts/build-krun-efi.sh)"; exit 1; }
