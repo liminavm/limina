@@ -33,6 +33,8 @@
 
 #include <errno.h>
 #include <mach/mach.h>
+#include <mach/mach_vm.h>
+#include <mach/memory_entry.h>
 #include <mach/mach_time.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -252,6 +254,43 @@ int main(int argc, char **argv) {
     CHECK(hv_vm_map(g_ram, RAM_BASE, RAM_SIZE,
                     HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC));
     s = show("P0 vm_create + map 3G (code page dirty)", s);
+
+    /* mode "notag": can we opt guest RAM out of phys_footprint entirely via
+     * MAP_MEM_LEDGER_TAGGED + mach_memory_entry_ownership(..., NO_FOOTPRINT)?
+     * Expected outcome under Developer ID: KERN_DENIED (private entitlement) —
+     * this cell exists to close that door with data, not to ship it. */
+    if (argc > 2 && strcmp(argv[2], "notag") == 0) {
+        memory_object_size_t mosize = RANGE_SIZE;
+        mach_port_t entry = MACH_PORT_NULL;
+        kern_return_t kr = mach_make_memory_entry_64(
+            mach_task_self(), &mosize, 0,
+            MAP_MEM_NAMED_CREATE | MAP_MEM_LEDGER_TAGGED | VM_PROT_READ | VM_PROT_WRITE,
+            &entry, MACH_PORT_NULL);
+        printf("N1 mach_make_memory_entry_64(LEDGER_TAGGED, 1G): kr=%d (%s) size=%llu\n",
+               kr, mach_error_string(kr), mosize);
+        if (kr == KERN_SUCCESS) {
+            kr = mach_memory_entry_ownership(entry, TASK_NULL, VM_LEDGER_TAG_DEFAULT,
+                                             VM_LEDGER_FLAG_NO_FOOTPRINT);
+            printf("N2 mach_memory_entry_ownership(TASK_NULL, NO_FOOTPRINT): kr=%d (%s)\n",
+                   kr, mach_error_string(kr));
+            mach_vm_address_t addr = 0;
+            kern_return_t kr2 = mach_vm_map(mach_task_self(), &addr, RANGE_SIZE, 0,
+                                            VM_FLAGS_ANYWHERE, entry, 0, FALSE,
+                                            VM_PROT_READ | VM_PROT_WRITE,
+                                            VM_PROT_READ | VM_PROT_WRITE,
+                                            VM_INHERIT_NONE);
+            printf("N3 mach_vm_map of the entry: kr=%d (%s) addr=0x%llx\n", kr2,
+                   mach_error_string(kr2), (uint64_t)addr);
+            if (kr2 == KERN_SUCCESS) {
+                s = show("N3 mapped 1G tagged entry", s);
+                memset((void *)addr, 0xa5, RANGE_SIZE);
+                s = show("N4 HOST memset the tagged 1G", s);
+                printf("   (fp +1024 = ownership transfer didn't stick; ~0 = NO_FOOTPRINT works)\n");
+            }
+        }
+        hv_vm_destroy();
+        return 0;
+    }
 
     /* mode "double": the cell the original matrix never measured — the SAME range
      * touched by BOTH sides (H host-then-guest, G guest-then-host). This is the

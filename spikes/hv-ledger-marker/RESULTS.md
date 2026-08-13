@@ -117,6 +117,11 @@ bills ~2×, plus anon + worker overhead ≈ the observed 33 G.
 - PROT_READ windows don't work (no debit), so reads can't be kept safe that way.
 - Host re-touch re-bills 1× (D8): swept pages the worker still serves IO into come back.
   Sweep on cadence/pressure, not once.
+- The Apple opt-out is CLOSED (`notag` mode): `mach_make_memory_entry_64(MAP_MEM_LEDGER_TAGGED)`
+  succeeds, but `mach_memory_entry_ownership(TASK_NULL, …, VM_LEDGER_FLAG_NO_FOOTPRINT)`
+  returns KERN_NO_ACCESS — gated by a private entitlement
+  (com.apple.private.memory.ownership_transfer), not available under Developer ID.
+  Worth a Radar; not a shipping path.
 
 ## Production consequences
 
