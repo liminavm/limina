@@ -1,0 +1,6 @@
+vz/vz-probe
+qemu-efi-vars.fd
+vz/vz-efi-vars.fd
+qemu-serial.log
+qemu.pid
+*.csv
