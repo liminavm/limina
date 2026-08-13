@@ -363,6 +363,9 @@ struct WorkerStats {
     sweep_debited_bytes: u64,
     sweep_ms: u64,
     sweep_faults: u64,
+    /// The worker's task-wide compressor-billed bytes (observability: the idle scrub's
+    /// settle effect shows here as a drop across the cycle).
+    compressed_bytes: u64,
 }
 
 struct State {
@@ -697,6 +700,35 @@ impl BalloonPolicy {
                 self.start_scrub(&mut st, now, inflate_to);
                 return;
             }
+            // Quiet-day settle: same cycle, Bounded depth regardless of mode (never dump an
+            // idle guest's cache), on the long idle cadence. Covers the pressure trigger's
+            // blind spot — a calm host otherwise never settles the dead share.
+            let idle_to = scrub_target_pages(
+                ScrubDepth::Bounded,
+                room,
+                fill,
+                p.mem_free_kib,
+                free_margin_pages(self.mode),
+            );
+            if idle_scrub_due(
+                &params,
+                host.blended,
+                acute,
+                p.some_avg10,
+                p.mem_free_kib,
+                idle_to,
+                fill,
+                st.distress_until,
+                st.last_scrub_end,
+                now,
+            ) {
+                log::info!(
+                    "autoballoon: idle scrub starting (quiet-day settle, compressed={} MiB)",
+                    wstats.as_ref().map_or(0, |w| w.compressed_bytes >> 20)
+                );
+                self.start_scrub(&mut st, now, idle_to);
+                return;
+            }
         }
         // Ledger settle sweep, on cadence. Guest-invisible and cheap for the worker (tens of
         // ms, on its own thread), so it doesn't consume the tick or care about pressure —
@@ -1005,6 +1037,7 @@ impl BalloonPolicy {
             sweep_debited_bytes: 0,
             sweep_ms: 0,
             sweep_faults: 0,
+            compressed_bytes: 0,
         };
         for tok in line.split_whitespace() {
             let Some((k, v)) = tok.split_once('=') else {
@@ -1022,6 +1055,7 @@ impl BalloonPolicy {
                 "sweep_debited" => s.sweep_debited_bytes = v,
                 "sweep_ms" => s.sweep_ms = v,
                 "sweep_faults" => s.sweep_faults = v,
+                "compressed" => s.compressed_bytes = v,
                 _ => {}
             }
         }
@@ -1162,6 +1196,44 @@ fn scrub_target_pages(
                 .min(room)
         }
     }
+}
+
+/// The idle scrub's cadence, as a multiple of the mode's pressure-scrub cooldown (Light 3 h /
+/// Moderate 90 min / Aggressive 45 min). Idle scrubs exist because the pressure trigger has a
+/// blind spot the 08-13 dogfood day exposed: a calm host never fires a scrub, so a quiet VM
+/// sits on its dead share (guest-freed content the compressor keeps billing) indefinitely —
+/// that day it took the research session's own memory demand to squeeze it out by accident.
+const IDLE_SCRUB_COOLDOWN_MULT: u32 = 3;
+
+/// Whether a quiet-day settle scrub may start (pure; unit-tested). The mirror image of
+/// [`scrub_due`]'s trigger: host fully calm and the guest itself idle, on a much longer
+/// cadence, and always at Bounded depth — an idle scrub only captures the guest's free list
+/// (the dead share); it must never dump a healthy guest's page cache just because the day is
+/// quiet. Requires a MemFree report (`mem_free_kib != 0`): without one, Bounded degrades to a
+/// full-room inflate, which is exactly the cache dump idle mode forbids — an old agent gets
+/// no idle scrubs (degraded, not broken). The `inflate_to - fill` gate doubles as the
+/// evidence-of-residue test: Bounded targets past the fill only when the guest holds
+/// substantial freed-but-uncaptured content.
+#[allow(clippy::too_many_arguments)]
+fn idle_scrub_due(
+    params: &ScrubParams,
+    host: HostPressure,
+    acute: bool,
+    some_avg10: u32,
+    mem_free_kib: u64,
+    inflate_to: u32,
+    fill: u32,
+    distress_until: Option<Instant>,
+    last_scrub_end: Instant,
+    now: Instant,
+) -> bool {
+    host == HostPressure::Normal
+        && !acute
+        && some_avg10 <= PRESSURE_LOW
+        && mem_free_kib != 0
+        && inflate_to.saturating_sub(fill) >= SCRUB_MIN_INFLATE
+        && distress_until.is_none_or(|t| now >= t)
+        && now.duration_since(last_scrub_end) >= params.cooldown * IDLE_SCRUB_COOLDOWN_MULT
 }
 
 /// Whether a pressure-triggered scrub may start (pure; unit-tested). The scrub is the only
@@ -1357,7 +1429,7 @@ fn trace_decision(
             "\"actual_bytes\":{},\"reclaimed_bytes\":{},\"heals\":{},",
             "\"released_bytes\":{},\"remapped_bytes\":{},\"stray_faults\":{},",
             "\"sweeps\":{},\"sweep_debited_bytes\":{},\"sweep_ms\":{},",
-            "\"sweep_faults\":{}}}\n"
+            "\"sweep_faults\":{},\"compressed_bytes\":{}}}\n"
         ),
         ts_ms,
         i.mode,
@@ -1388,6 +1460,7 @@ fn trace_decision(
         json_stat(wstats.map(|w| w.sweep_debited_bytes)),
         json_stat(wstats.map(|w| w.sweep_ms)),
         json_stat(wstats.map(|w| w.sweep_faults)),
+        json_stat(wstats.map(|w| w.compressed_bytes)),
     );
     if f.write_all(line.as_bytes()).is_err() {
         st.trace = None;
@@ -2610,6 +2683,7 @@ mod tests {
             sweep_debited_bytes: 4 << 30,
             sweep_ms: 41,
             sweep_faults: 5,
+            compressed_bytes: 3 << 29,
         };
         trace_decision(
             &mut st,
@@ -2647,7 +2721,8 @@ mod tests {
                 && lines[0].contains("\"stray_faults\":0")
                 && lines[0].contains("\"sweeps\":2")
                 && lines[0].contains("\"sweep_debited_bytes\":4294967296")
-                && lines[0].contains("\"sweep_faults\":5"),
+                && lines[0].contains("\"sweep_faults\":5")
+                && lines[0].contains("\"compressed_bytes\":1610612736"),
             "{}",
             lines[0]
         );
@@ -2780,6 +2855,126 @@ mod tests {
             None,
             base,
             now
+        ));
+    }
+
+    /// The idle-scrub trigger matrix: calm host + idle guest + MemFree reported + meaningful
+    /// bounded inflate, on the long idle cadence. The blind spot it closes (a calm host never
+    /// settles the dead share) and the cache-dump it must never cause (no MemFree report ⇒
+    /// Bounded degrades to full room ⇒ not due) are both load-bearing.
+    #[test]
+    fn idle_scrub_due_only_when_everything_is_quiet() {
+        let m = scrub_params(ReclaimMode::Moderate);
+        let base = Instant::now();
+        let idle = m.cooldown * IDLE_SCRUB_COOLDOWN_MULT;
+        let now = base + idle;
+        let free = 4 << 20; // 4 GiB of guest MemFree, in KiB
+        let due = |host, acute, some, free_kib, to, fill, hold, last, at| {
+            idle_scrub_due(&m, host, acute, some, free_kib, to, fill, hold, last, at)
+        };
+        assert!(due(
+            HostPressure::Normal,
+            false,
+            PRESSURE_LOW,
+            free,
+            ROOM,
+            0,
+            None,
+            base,
+            now
+        ));
+        // Host not fully calm: the pressure trigger owns anything above Normal.
+        assert!(!due(
+            HostPressure::Warn,
+            false,
+            PRESSURE_LOW,
+            free,
+            ROOM,
+            0,
+            None,
+            base,
+            now
+        ));
+        // Guest busy (acute, or PSI above the idle line): leave it alone.
+        assert!(!due(
+            HostPressure::Normal,
+            true,
+            PRESSURE_LOW,
+            free,
+            ROOM,
+            0,
+            None,
+            base,
+            now
+        ));
+        assert!(!due(
+            HostPressure::Normal,
+            false,
+            PRESSURE_LOW + 1,
+            free,
+            ROOM,
+            0,
+            None,
+            base,
+            now
+        ));
+        // No MemFree report: Bounded would degrade to a full-room cache dump — never idle.
+        assert!(!due(
+            HostPressure::Normal,
+            false,
+            PRESSURE_LOW,
+            0,
+            ROOM,
+            0,
+            None,
+            base,
+            now
+        ));
+        // Nothing meaningful to capture, distress holdoff, and the long cadence all block.
+        assert!(!due(
+            HostPressure::Normal,
+            false,
+            PRESSURE_LOW,
+            free,
+            ROOM,
+            ROOM - SCRUB_MIN_INFLATE + 1,
+            None,
+            base,
+            now
+        ));
+        assert!(!due(
+            HostPressure::Normal,
+            false,
+            PRESSURE_LOW,
+            free,
+            ROOM,
+            0,
+            Some(now + DWELL),
+            base,
+            now
+        ));
+        assert!(!due(
+            HostPressure::Normal,
+            false,
+            PRESSURE_LOW,
+            free,
+            ROOM,
+            0,
+            None,
+            base,
+            now - Duration::from_secs(1)
+        ));
+        // The pressure cooldown alone elapsing is NOT enough — idle waits the multiple out.
+        assert!(!due(
+            HostPressure::Normal,
+            false,
+            PRESSURE_LOW,
+            free,
+            ROOM,
+            0,
+            None,
+            base,
+            base + m.cooldown
         ));
     }
 

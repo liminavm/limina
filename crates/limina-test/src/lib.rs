@@ -1436,6 +1436,10 @@ pub struct BalloonStats {
     pub sweep_ms: u64,
     /// Worker-thread guest-RAM touches fielded by the sweep fault handler, cumulative.
     pub sweep_faults: u64,
+    /// The worker's task-wide compressor-billed bytes (TASK_VM_INFO).
+    pub compressed: u64,
+    /// The worker's phys_footprint as the worker itself reads it (TASK_VM_INFO).
+    pub footprint: u64,
 }
 
 /// How the supervisor (and thus the VM) ended.
@@ -1996,6 +2000,8 @@ impl Guest {
                 "sweep_debited" => stats.sweep_debited = v,
                 "sweep_ms" => stats.sweep_ms = v,
                 "sweep_faults" => stats.sweep_faults = v,
+                "compressed" => stats.compressed = v,
+                "footprint" => stats.footprint = v,
                 _ => {}
             }
         }

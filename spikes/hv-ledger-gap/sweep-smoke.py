@@ -26,7 +26,11 @@ def stats():
 
 rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 3
 s0 = stats()
-print(f"before: sweeps={s0.get('sweeps')} sweep_faults={s0.get('sweep_faults')}")
+print(
+    f"before: sweeps={s0.get('sweeps')} sweep_faults={s0.get('sweep_faults')} "
+    f"compressed={int(s0.get('compressed', 0)) >> 20}M "
+    f"footprint={int(s0.get('footprint', 0)) >> 20}M"
+)
 for n in range(rounds):
     base = int(stats()["sweeps"])
     query("settle")
@@ -41,7 +45,9 @@ for n in range(rounds):
         sys.exit(1)
     print(
         f"round {n + 1}: sweeps={s['sweeps']} debited={int(s['sweep_debited']) >> 20} MiB "
-        f"in {s['sweep_ms']} ms, sweep_faults={s['sweep_faults']}"
+        f"in {s['sweep_ms']} ms, sweep_faults={s['sweep_faults']}, "
+        f"compressed={int(s.get('compressed', 0)) >> 20}M "
+        f"footprint={int(s.get('footprint', 0)) >> 20}M"
     )
     time.sleep(5)
 print("smoke OK")

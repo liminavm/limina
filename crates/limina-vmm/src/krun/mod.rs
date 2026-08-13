@@ -829,11 +829,71 @@ fn install_balloon_listener(path: std::path::PathBuf, handle: BalloonControlHand
     Ok(())
 }
 
+/// The worker's own compressor-billed bytes and phys_footprint, from `TASK_VM_INFO`.
+/// `internal_compressed` isn't reachable from userspace without the ledger syscall, but the
+/// task-wide `compressed` tracks it closely enough for trend observability (the policy's
+/// idle-scrub evidence and the decision trace). Returns zeros on failure.
+#[cfg(target_os = "macos")]
+fn task_compressed_and_footprint() -> (u64, u64) {
+    // task_vm_info_data_t through phys_footprint (TASK_VM_INFO rev 1); the kernel fills at
+    // most the count it's handed, so older/newer kernels are both fine.
+    #[repr(C)]
+    #[derive(Default)]
+    struct TaskVmInfo {
+        virtual_size: u64,
+        region_count: i32,
+        page_size: i32,
+        resident_size: u64,
+        resident_size_peak: u64,
+        device: u64,
+        device_peak: u64,
+        internal: u64,
+        internal_peak: u64,
+        external: u64,
+        external_peak: u64,
+        reusable: u64,
+        reusable_peak: u64,
+        purgeable_volatile_pmap: u64,
+        purgeable_volatile_resident: u64,
+        purgeable_volatile_virtual: u64,
+        compressed: u64,
+        compressed_peak: u64,
+        compressed_lifetime: u64,
+        phys_footprint: i64,
+    }
+    const TASK_VM_INFO: u32 = 22;
+    unsafe extern "C" {
+        static mach_task_self_: u32;
+        fn task_info(task: u32, flavor: u32, info: *mut i32, count: *mut u32) -> i32;
+    }
+    let mut info = TaskVmInfo::default();
+    let mut count = (std::mem::size_of::<TaskVmInfo>() / std::mem::size_of::<i32>()) as u32;
+    let kr = unsafe {
+        task_info(
+            mach_task_self_,
+            TASK_VM_INFO,
+            &mut info as *mut TaskVmInfo as *mut i32,
+            &mut count,
+        )
+    };
+    if kr == 0 {
+        (info.compressed, info.phys_footprint.max(0) as u64)
+    } else {
+        (0, 0)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn task_compressed_and_footprint() -> (u64, u64) {
+    (0, 0)
+}
+
 /// Serve one balloon control connection: `target <bytes>` drives the live balloon, `stats` replies
 /// with `target=<bytes> actual=<bytes> reclaimed=<bytes> heals=<n> released=<bytes>
 /// remapped=<bytes> strays=<n>` (the commanded target vs the guest's self-reported size — a gap
 /// between the two is the guest failing/refusing to inflate; the rest are the stage-2
-/// release/heal counters). Reads until EOF.
+/// release/heal counters), plus the worker's own `compressed`/`footprint` ledger view. Reads
+/// until EOF.
 fn serve_balloon_conn(
     stream: std::os::unix::net::UnixStream,
     handle: BalloonControlHandle,
@@ -868,11 +928,12 @@ fn serve_balloon_conn(
             Some("stats") => {
                 let stats = handle.get_stats();
                 let actual_bytes = (stats.actual_pages as u64) << 12;
+                let (compressed, footprint) = task_compressed_and_footprint();
                 if let Err(e) = writeln!(
                     writer,
                     "target={} actual={actual_bytes} reclaimed={} heals={} released={} \
                      remapped={} strays={} sweeps={} sweep_debited={} sweep_ms={} \
-                     sweep_faults={}",
+                     sweep_faults={} compressed={compressed} footprint={footprint}",
                     target_bytes.load(Ordering::Relaxed),
                     stats.reclaimed_bytes,
                     stats.heals,
@@ -898,6 +959,38 @@ fn serve_balloon_conn(
 #[cfg(test)]
 mod tests {
     use super::{detect_image_type, ImageType};
+
+    /// The TASK_VM_INFO struct layout is hand-declared; prove `phys_footprint` lands on the
+    /// right offset by cross-checking against `proc_pid_rusage`'s independent reading of the
+    /// same ledger in the same process. A layout slip would land on a different (wildly
+    /// disagreeing) field, not a near-match.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn task_vm_info_layout_matches_rusage() {
+        let (compressed, footprint) = super::task_compressed_and_footprint();
+        assert!(
+            footprint > 0,
+            "task_info failed or footprint field misplaced"
+        );
+
+        let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            libc::proc_pid_rusage(
+                std::process::id() as i32,
+                libc::RUSAGE_INFO_V2,
+                &mut info as *mut libc::rusage_info_v2 as *mut libc::rusage_info_t,
+            )
+        };
+        assert_eq!(rc, 0);
+        let delta = footprint.abs_diff(info.ri_phys_footprint);
+        assert!(
+            delta < 64 << 20,
+            "TASK_VM_INFO footprint {footprint} vs rusage {} — layout offset is wrong",
+            info.ri_phys_footprint
+        );
+        // A test process may legitimately have 0 compressed; the field just mustn't be junk.
+        assert!(compressed < 1 << 40, "compressed field reads as garbage");
+    }
 
     #[test]
     fn detect_image_type_by_magic() {
