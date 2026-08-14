@@ -539,9 +539,11 @@ stopped sampling the buffer it was now free to repaint. That window is the tear.
 Fix (supervisor-only, commits c569129 + 6c28e76): the ack message now carries the
 surface each frame replaced; the dedicated ack-sender thread holds `shown <id>` until
 `IOSurfaceIsInUse(replaced)` clears (500 µs poll, 50 ms cap; worker's 150 ms fallback
-behind it). Kill switches: `LIMINA_ACK_ONGLASS=0` (run-scoped) and
-`touch /tmp/limina-ack-latch` (live, 500 ms-cached stat). Engagement oracle: first
-gated ack logs `off-glass ack gating ENGAGED` at INFO.
+behind it). Lever: `touch /tmp/limina-ack-latch` (live, 500 ms-cached stat) reverts to
+latch-only acks within a session; `rm` re-arms. (The run-scoped `LIMINA_ACK_ONGLASS=0`
+kill switch was retired 2026-08-14 — the marker covers the same A/B and is the one the
+rig runs below actually used.) Engagement oracle: first gated ack logs
+`off-glass ack gating ENGAGED` at INFO.
 
 Rig validation (new bundle, KK true-0016 vendored + verified, same rig-21.raw seat,
 release niri + async=1 + 4K@1.5 + 8 gnome-terminals, heavy ×2 per arm, marker as the

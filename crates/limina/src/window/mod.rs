@@ -1695,12 +1695,12 @@ pub fn run(
     let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel::<present::AckMsg>(64);
     {
         let conn = conn.clone();
-        // #24 off-glass gating kill switch: LIMINA_ACK_ONGLASS=0 reverts to latch-only acks
-        // (the pre-fix behavior); `touch /tmp/limina-ack-latch` does the same LIVE for
-        // within-session A/B (rm re-arms). The marker is re-stat'ed at most every 500 ms —
-        // never per ack (no sync I/O on the frame-pacing path; same treatment as the
-        // present-copy markers and libkrun 0113).
-        let onglass_env = std::env::var("LIMINA_ACK_ONGLASS").map_or(true, |v| v != "0");
+        // #24 off-glass gating is unconditional (the LIMINA_ACK_ONGLASS kill switch was
+        // retired 2026-08-14 — it had been default-on since the fix landed). What remains
+        // is the LIVE within-session A/B: `touch /tmp/limina-ack-latch` reverts to
+        // latch-only acks (the pre-fix behavior, which tears), `rm` re-arms the gate. The
+        // marker is re-stat'ed at most every 500 ms — never per ack (no sync I/O on the
+        // frame-pacing path; same treatment as the present-copy markers and libkrun 0113).
         // §29/§30 ack SPLIT: one supervisor message conflated two host events — "the new
         // frame is presented" and "the replaced buffer is off glass". They differ by
         // WindowServer's over-hold tail (useprobe2: clear-of-prev p50 16.2 ms after commit
@@ -1750,7 +1750,7 @@ pub fn run(
                     marker_at = std::time::Instant::now();
                     latch_marker = std::fs::metadata("/tmp/limina-ack-latch").is_ok();
                 }
-                let gate = onglass_env && !latch_marker;
+                let gate = !latch_marker;
                 let mut freed = true;
                 if gate {
                     if let Some(prev) = &prev {

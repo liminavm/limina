@@ -53,17 +53,13 @@ export VIRGL_LOG_LEVEL=info
 #   of compute; 16fps -> 60fps on the aquarium).
 # - LIMINA_KK_BOCACHE: cmd-pool free-BO cache cap 32 -> 512 (round 19: ~300 Metal buffer
 #   create/destroys per 10k-draw frame). Numeric value >= 64 sets a custom cap.
-# - LIMINA_KK_SLIMPUSH: size push-descriptor uploads by the per-set high-water mark
-#   instead of the full 2 KiB array (round 19; 420k -> ~550k draws/s).
-# - LIMINA_KK_EARLYZ: drop the blanket injected FS depth-write + helper-quad sample-mask
-#   write, restoring early-Z/HSR (round 18: 10.9k-case CTS A/B status-identical).
-# - LIMINA_KK_SLIMROOT: upload only the root-table prefix the bound shaders can address
-#   (~900B vs ~2.2KiB per draw on zink-shaped pipelines; round 28: bench rebind leg
-#   +43%, 14.7k-case CTS A/B status-identical).
-# - LIMINA_KK_FASTBIND: per-encoder bind cache for the hot per-draw buffer binds (root
-#   idx0, per-draw data idx2) — setBufferOffset / skip instead of full setBuffer, and
-#   per-draw-data upload dedup (round 28b).
-for knob in LIMINA_KK_NOLISTRESTART LIMINA_KK_BOCACHE LIMINA_KK_SLIMPUSH LIMINA_KK_EARLYZ LIMINA_KK_SLIMROOT LIMINA_KK_FASTBIND; do
+# - LIMINA_KK_NOROBUST: drop ALL robust-access lowering. NOT spec-conformant — an A/B
+#   sizing knob for the cost of per-scalar bounds checks, never a shipping setting.
+# RETIRED 2026-08-14 — these are now unconditional in KK and setting them does nothing:
+# LIMINA_KK_SLIMPUSH (high-water push sizing), LIMINA_KK_EARLYZ (drop the injected FS
+# depth-write + helper-quad sample-mask), LIMINA_KK_FASTBIND (per-draw upload dedup).
+# LIMINA_KK_SLIMROOT was forwarded here long after KK stopped reading it at all.
+for knob in LIMINA_KK_NOLISTRESTART LIMINA_KK_BOCACHE LIMINA_KK_NOROBUST; do
   [ -n "$(eval echo "\${$knob:-}")" ] && export "$knob"
 done
 # KK debug levers (docs/drivers/kosmickrisp.rst): MESA_KK_DEBUG=msl logs generated MSL;

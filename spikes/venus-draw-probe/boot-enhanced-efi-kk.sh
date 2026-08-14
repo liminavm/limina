@@ -70,8 +70,11 @@ done
 # supervisor-side oracles (keyboard+modifier state, pointer-grab edges, display sizing, the notch
 # overlay). They live in the same passthrough list because they are read by `limina`, not the
 # worker, and this script is what execs it.
+# Keep this list honest: a name here that nothing reads any more is forwarded silently and looks
+# like it works. LIMINA_KK_{EARLYZ,SLIMPUSH,FASTBIND} were retired 2026-08-14 (now unconditional
+# in KK) and LIMINA_KK_SLIMROOT had already stopped existing while still being forwarded here.
 for v in LIMINA_KK_STATS LIMINA_KK_RTLOG LIMINA_GLOBAL_SCANOUT MESA_KK_DEBUG MESA_KK_GPU_CAPTURE LIMINA_KK_CAPTURE \
-         LIMINA_KK_NOLISTRESTART LIMINA_KK_BOCACHE LIMINA_KK_SLIMPUSH LIMINA_KK_EARLYZ LIMINA_KK_SLIMROOT LIMINA_KK_FASTBIND \
+         LIMINA_KK_NOLISTRESTART LIMINA_KK_BOCACHE LIMINA_KK_NOROBUST \
          LIMINA_GPU_MEM_BUDGET_MIB LIMINA_GPU_MEM_BUDGET_CENSUS LIMINA_GPU_MEM_BUDGET_SOFT \
          LIMINA_INPUT_TRACE LIMINA_EDGE_TRACE LIMINA_DISPLAY_TRACE LIMINA_OVERLAY_TRACE; do
   [ -n "$(eval echo "\${$v:-}")" ] && export "$v"
