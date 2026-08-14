@@ -40,6 +40,30 @@ the difference, which is the shear.
 
 Frequency in one session: 28 `KK-MODIFIER` lines, led by `7900` (12 occurrences).
 
+### Which side is which (corrected 2026-08-14 after the local repro)
+
+The field write-up above localised the fault to "the GL/vrend import". That is the wrong half.
+**vrend is the exporter, venus is the importer**, and it takes both:
+
+- The **GL client** renders through virgl/vrend, which allocates its buffer at *vrend's* stride —
+  tight-packed `width * 4`, with no knowledge of Metal's 16-byte linear-texture row alignment.
+- The **compositor** imports that dmabuf through **Vulkan/venus**, passing the client's stride
+  verbatim as `VkImageDrmFormatModifierExplicitCreateInfoEXT.pPlaneLayouts[0].rowPitch`
+  (`testcomp/src/vk.rs:467`, transcribed from synoik's own importer).
+- KK checks `explicit >= computed && explicit % align == 0` (`kk_image_layout.c:264`), fails the
+  alignment test, and substitutes.
+
+This is why the compositor matters. **mutter composites with GL**, so a GL client's buffer never
+crosses into a Vulkan import and the path is never reached: a full mutter session at a known-bad
+width produced **zero** substitutions. That is a false negative, not a refutation — an important
+distinction, because a mutter-based "cannot reproduce" would have looked like evidence against
+the whole theory.
+
+It also names the false premise in KK's own comment at the emission site: *"in the VM stack the
+exporter's image at the same width computes the same pitch, so this stays coherent end to end."*
+That holds when both ends are KK images. It does not hold when the exporter is vrend, which
+computes its stride by a different rule entirely.
+
 ## Three independent confirmations
 
 1. **The log** shows the substitution happening, with the alignment arithmetic explicit.
@@ -96,9 +120,37 @@ Candidate fixes, in rough order of preference:
 3. Round the allocation up host-side *and* report the corrected pitch back — only if the caller
    actually honours a returned pitch, which needs checking before relying on it.
 
-## Reproducing locally (next step)
+## REPRODUCED LOCALLY, 2026-08-14
 
-Nothing here has been reproduced off the dogfood machine yet. Plan:
+On `Fedora-Workstation-44.enhanced.synoik.raw` (see `docs/images.md`): synoik as the session
+compositor, supported enhanced env verified at `/proc/<pid>/environ`, a GL client
+(`glmark2-wayland`, `GL_RENDERER: virgl (zink … MESA_KOSMICKRISP)`) driven across exact buffer
+widths by `width-sweep.sh` in this directory.
+
+| width | pitch | pitch % 16 | predicted | observed |
+|---|---|---|---|---|
+| 1972 | 7888 | 0 | clean | clean (0 substitutions) |
+| 1974 | 7896 | 8 | shear | **6 substitutions** |
+| 1975 | 7900 | 12 | shear | **6 substitutions** |
+| 1976 | 7904 | 0 | clean | clean (0) |
+| 1978 | 7912 | 8 | shear | **6 substitutions** |
+| 1980 | 7920 | 0 | clean | clean (0) |
+
+**6/6 against the falsifiable prediction**, alternating with width — a signature no confound
+mimics. The 1975 line is byte-identical to the field capture:
+`EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16)`.
+
+The dogfood machine is no longer needed for this bug.
+
+### Still open: the shear geometry
+
+The arithmetic gives a per-row drift of `align_up(w*4,16) - w*4` ∈ {4, 8, 12} bytes = **1–3 px**,
+which predicts a steep (~45°) streak at 1 px/row. The field capture looked more like ~7 px/row.
+**That ~7 was an eyeball of a cropped screenshot, never a measurement**, so it is the weakest
+number in this file and may simply be wrong. Settle it by measuring a real capture at a known
+width (`iosdump.swift` with `LIMINA_GLOBAL_SCANOUT=1`) rather than by arguing from the screenshot.
+
+## Original repro plan (superseded by the results above)
 
 - Boot a local enhanced image with the supported env (`GALLIUM_DRIVER=virgl`,
   `MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu`) via `cargo xtask run --disk <enhanced.raw>`.

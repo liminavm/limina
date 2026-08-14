@@ -413,6 +413,39 @@ both verified after the fact). A CoW safety copy was taken first as
 `Fedora-Workstation-44.enhanced.raw.pre-perftools.bak`. **`enhanced.test.raw` was NOT recloned** —
 the frozen L2 snapshot does not need perf tooling, and recloning it would churn the test baseline.
 
+#### `Fedora-Workstation-44.enhanced.synoik.raw` — the synoik compositor image (added 2026-08-14)
+
+The canonical image for anything that needs a **Vulkan compositor**. Built because a whole class
+of host bugs is only reachable when the compositor imports client dmabufs through Vulkan/venus —
+mutter composites with GL, so under mutter those paths are never exercised and every run is a
+**false negative** (the vrend/KK stride shear below is the worked example). It replaces the
+undocumented `nirirepro*` and `enhanced.testcomp` scratch images, which are deleted.
+
+- **Base**: CoW clone of `Fedora-Workstation-44.enhanced.test.raw` (mesa `26.1.5-7.limina.fc44`,
+  kernel `7.1.6-limina16k`, 16 KiB pages), already on the supported enhanced env —
+  `GALLIUM_DRIVER=virgl`, `MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu` (GL on vrend, Vulkan on venus).
+- **synoik**: cloned from `github.com/kov/synoik` into `~claude/synoik` and built **in-guest**
+  (`cargo build --release`). Installed as the session with the project's own script:
+  `sudo TEST_USER=claude PROFILE=release scripts/install-test-session.sh`, which writes the
+  `org.gnome.Shell@user.service` drop-in (`ExecStart=…/target/release/synoik --session`) and
+  compiles synoik's schemas into the private `/usr/local/share/synoik/glib-2.0/schemas`.
+  GDM autologin for `claude` was already on, so the **normal GNOME session comes up on synoik**.
+- **Iterating**: rebuild in-guest and reboot (or log out/in) — the unit always runs whatever is at
+  `target/release/synoik`. No reinstall step.
+- **Extra build deps** beyond the spec's `BuildRequires`: **`glslang`** (for `glslangValidator`).
+  The spec omits it and the build fails in `synoik-vk/build.rs` — worth an upstream fix.
+
+Two gotchas that cost a run each, both of the same "verify, don't assume" shape:
+
+- **synoik's Wayland socket is `wayland-1`, not `wayland-0`** (gdm holds `-0`). A client launched
+  with a hardcoded `WAYLAND_DISPLAY=wayland-0` never connects, so nothing is imported and every
+  measurement reads clean. **Discover the socket** (`ls /run/user/1000/wayland-*`).
+- **Restarting GDM does not re-read `/etc/environment.d`** — the systemd *user manager* survives.
+  Reboot the guest, and verify the driver env at `/proc/<compositor-pid>/environ`, not in the file.
+
+Run it like any enhanced image: `cargo xtask run --disk Fedora-Workstation-44.enhanced.synoik.raw`
+(pass `LIMINA_BOOT_LOG=<path>` when a second VM is up, or the two share one worker log).
+
 #### Rebuilding `enhanced.raw` from the accessible base (validated 2026-07-05)
 
 `install-enhanced.sh` delivers RPMs but deliberately does **NOT** resize the disk (it must also
