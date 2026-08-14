@@ -762,3 +762,26 @@ an IOSurface can be truly tiled. Related: the native-modifier path did NOT make 
 non-linear either — KK's modifier extension is LINEAR-only, so what 08-04 changed is that the
 guest now *negotiates* linear instead of vkr rewriting its create behind its back. The lie went
 away; the linearity did not.
+
+### Pixel verification of the flipped default
+
+Every arm in the table above is a LOG oracle — adoption counts prove the bind succeeded, not
+that frames are right, and this project's own rule is that proxies lie. Captured the live
+scanout IOSurface under the flipped default (`LIMINA_GLOBAL_SCANOUT=1`, `iosdump <id>`), F44
+enhanced GNOME, seated session:
+
+```
+id=225 2560x1440 bpr=10240 (w*4=10240, pad=0) nonzero=3686400 uniform=false first=(34,34,38)
+```
+
+`nonzero == 2560*1440` (every pixel written), `uniform=false` (not a flat fill), and the image
+itself — `mtltex-default-scanout-2026-08-14.png`, committed here — is the GNOME Activities
+overview with sharp text, straight window/dock/search-field edges and correct colour. No shear,
+no black, no stale frame. This is the check that the 08-04 vkmark numbers can no longer stand in
+for, since that run predates the MTL4 rebase.
+
+Note on scope: the task carried a "glmark2 at the four stride widths" item. That sweep is the
+*stride* oracle, and this pass proved stride behaviour is arm-invariant (identical create path
+and identical rowPitch/bpr in both arms, because the create is native-mod either way). It would
+have exercised a mechanism the flip does not touch. Replaced with the pixel capture above, on
+the mechanism the flip actually changes.
