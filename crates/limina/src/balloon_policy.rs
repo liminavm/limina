@@ -92,6 +92,23 @@ const ELASTIC_PROBE_REGIME_PAGES: u32 = 2 * INFLATE_STEP_PAGES;
 /// memory-some — see the gate in [`decide`]) — both act well before the catastrophic
 /// [`guest_starved`] release.
 const IO_PRESSURE_HIGH: u32 = 1000; // 10.00%
+/// Ceiling on the guest's own `MemFree` for the **io arm** of the pressure give-back (pages;
+/// 1 GiB). The give-back exists to relieve a guest starved *behind* the balloon; a guest sitting
+/// on a gigabyte of free memory is not starved, whatever io-PSI says.
+///
+/// Field-measured 2026-08-13: a cold `md5sum` of `/usr` walked the ladder from 17.87 G to 1.12 G
+/// in 43 seconds — 1 GiB per report every 2 s — with memory PSI at **0.00% throughout**, while
+/// the guest's free list GREW from 575 MiB to 5.8 GiB and the freed memory went straight to page
+/// cache (20 G of it by the end). Steps 1-3 fired at 491-590 MiB free and are defensible; steps
+/// 4-18 handed 15 GiB to a guest that already had gigabytes spare. This guard stops the ladder
+/// at step 3.
+///
+/// Only the io arm is gated. Gating on *memory* PSI instead would have missed the 2026-07-09
+/// wedge outright (io-full 44% with the memory arm silent, because refaults past the workingset
+/// window count as plain io) — but that guest was genuinely out of memory, so a free-list ceiling
+/// leaves it untouched. `mem_free_kib == 0` means "not reported", never "no free memory", so an
+/// older agent keeps the pre-guard behaviour.
+const GIVEBACK_FREE_CEILING: u32 = 1024 * PAGES_PER_MIB;
 /// io-PSI `full` avg10 above which a cache dig in force (an inelastic verdict at host
 /// Warn/Critical) is paced down to the trickle: dropping cold cache is free, so full speed is
 /// fine while io-PSI stays quiet — refaults pushing io-full past this mean the squeeze is
@@ -1749,6 +1766,14 @@ fn free_margin_pages(mode: ReclaimMode) -> u32 {
 /// test suites held io-full over the bar knifed every first 256 MiB step for 2.3 h
 /// (2026-08-12 dogfood): balloon pinned at ~0, every release lever starved, the
 /// compressor retention pool grew unchecked under host Warn.
+/// Whether io pain can plausibly be the balloon's doing (pure; unit-tested). See
+/// [`GIVEBACK_FREE_CEILING`]: a guest with a gigabyte free is reading files, not starving behind
+/// the balloon. 0 means the agent does not report `MemFree` — treat as unknown and keep firing,
+/// never as an empty free pool.
+fn io_pain_can_be_ours(mem_free_kib: u64) -> bool {
+    mem_free_kib == 0 || (mem_free_kib / 4).min(u32::MAX as u64) as u32 <= GIVEBACK_FREE_CEILING
+}
+
 fn giveback_floor_pages(max_pages: u32) -> u32 {
     (max_pages / 16).max(INFLATE_STEP_PAGES)
 }
@@ -1921,7 +1946,8 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
     // balloon-induced thrash from the guest's own workload IO, so a balloon too small to
     // plausibly cause the pain must not be knifed: that was the 08-12 limit cycle, every
     // first step given back the moment it landed and every release lever starved).
-    if (p.io_full_avg10 >= IO_PRESSURE_HIGH || p.some_avg60 > PRESSURE_LOW)
+    if ((p.io_full_avg10 >= IO_PRESSURE_HIGH && io_pain_can_be_ours(p.mem_free_kib))
+        || p.some_avg60 > PRESSURE_LOW)
         && i.current >= giveback_floor_pages(i.max_pages)
         && desired >= i.current
         && i.host != HostPressure::Critical
@@ -2317,6 +2343,53 @@ mod tests {
             ),
             HostPressure::Normal
         );
+    }
+
+    /// `report_with_io` plus the guest's own `MemFree`, for the give-back free-list guard.
+    fn report_with_io_and_free(
+        some_avg10: u32,
+        avail_pages: u32,
+        total_pages: u32,
+        io_full: u32,
+        free_mib: u64,
+    ) -> MemPressure {
+        let mut p = report_with_io(some_avg10, avail_pages, total_pages, io_full);
+        p.mem_free_kib = free_mib * 1024;
+        p
+    }
+
+    /// The io arm of the give-back must not fire for a guest that plainly is not short of
+    /// memory. Field-measured on 2026-08-13: a cold `md5sum` of /usr walked the ladder from
+    /// 17.87 G to 1.12 G in 43 s with memory PSI at 0.00% the whole way, while the guest's free
+    /// list GREW from 575 MiB to 5.8 GiB — 15 of the 18 steps handed memory to a guest that
+    /// already had gigabytes spare and turned it straight into page cache.
+    #[test]
+    fn the_io_giveback_arm_declines_a_guest_that_is_not_actually_short() {
+        let cur = 3 * GIB_PAGES;
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
+
+        // The real ladder's step 15: io-full 16%, memory PSI silent, 5.8 GiB free. The guest is
+        // reading files, not starving behind the balloon — hold, don't knife the balloon.
+        let p = report_with_io_and_free(0, GIB_PAGES, MAX, 1600, 5853);
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Converged));
+
+        // The same io storm with the guest genuinely tight (step 3 of that ladder, 590 MiB) is
+        // the 2026-07-09 wedge shape and MUST still fire — that incident had io-full at 44%
+        // with the memory arm silent, so gating the io arm on memory PSI would have missed it.
+        let p = report_with_io_and_free(0, GIB_PAGES, MAX, 1600, 590);
+        assert_eq!(decide(&p, &i), Decision::GiveBack(cur - INFLATE_STEP_PAGES));
+
+        // An agent predating MemFree reports 0, which means "not reported" and never "no free
+        // memory" — it must keep the pre-guard behaviour rather than be silently degraded.
+        let p = report_with_io(0, GIB_PAGES, MAX, 1600);
+        assert_eq!(p.mem_free_kib, 0);
+        assert_eq!(decide(&p, &i), Decision::GiveBack(cur - INFLATE_STEP_PAGES));
+
+        // The MEMORY arm is not gated: sustained memory PSI is real memory pressure by
+        // construction, whatever the free list says.
+        let mut p = report_with_io_and_free(0, GIB_PAGES, MAX, 0, 5853);
+        p.some_avg60 = 707;
+        assert_eq!(decide(&p, &i), Decision::GiveBack(cur - INFLATE_STEP_PAGES));
     }
 
     /// `report_pages` with io-PSI `full` avg10 set (hundredths of a %).
