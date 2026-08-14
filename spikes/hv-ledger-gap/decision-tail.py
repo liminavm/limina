@@ -29,6 +29,21 @@ def num(d, key):
     v = d.get(key)
     return 0 if v is None else v
 
+
+def show_mib(d, key):
+    """Render a possibly-null byte count in MiB, as '?' when it is not reported.
+
+    Do NOT route display through num(): coalescing null to 0 INVENTS DATA. On 2026-08-14 a
+    sweep START record (debited_bytes = null, the debit not yet known) printed as
+    "debited=0M against a 4158M gap" and was written up as a zero-yield sweep; that same
+    sweep went on to debit 3480 MiB. The policy itself keeps this distinction -- a
+    `mem_free_kib` of 0 means "not reported", never "no free memory" -- and a reporting tool
+    must keep it too. num() is for arithmetic that must not crash; this is for showing a
+    human what the trace actually said.
+    """
+    v = d.get(key)
+    return "?" if v is None else "%.0fM" % (v / 2**20)
+
 # A HOLD verdict repeats every tick for as long as its condition lasts. `inelastic` on a
 # settled guest emits ~1/s forever and drowns the stream (it flooded the monitor on
 # 2026-08-14). Collapse consecutive repeats of the same verdict: print the first, then stay
@@ -69,12 +84,12 @@ for line in sys.stdin:
             )
         elif "sweep" in d:
             print(
-                "%s SWEEP  %-8s debited=%.0fM gap=%.0fM"
+                "%s SWEEP  %-8s debited=%s gap=%s"
                 % (
                     ts,
                     d.get("sweep"),
-                    num(d, "debited_bytes") / 2**20,
-                    num(d, "gap_bytes") / 2**20,
+                    show_mib(d, "debited_bytes"),
+                    show_mib(d, "gap_bytes"),
                 ),
                 flush=True,
             )

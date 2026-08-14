@@ -1,0 +1,239 @@
+7:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA, type = GL_UNSIGNED_INT_8_8_8_8)
+8:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA, type = GL_UNSIGNED_INT_8_8_8_8)
+9:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ABGR_EXT, type = GL_UNSIGNED_BYTE)
+10:Mesa: error: GL_INVALID_OPERATION in glTexImage2D(format = GL_BGRA, type = GL_UNSIGNED_SHORT_4_4_4_4_REV, internalformat = GL_RGBA4)
+11:Mesa: error: GL_INVALID_OPERATION in glTexImage2D(format = GL_BGRA, type = GL_UNSIGNED_SHORT_1_5_5_5_REV, internalformat = GL_RGB5_A1)
+12:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_RGB, type = GL_UNSIGNED_BYTE_3_3_2)
+13:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_UNSIGNED_SHORT, internalformat = GL_ALPHA16)
+14:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_UNSIGNED_BYTE)
+15:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_UNSIGNED_BYTE)
+16:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_UNSIGNED_BYTE)
+17:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_BYTE)
+18:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_BYTE)
+19:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_BYTE)
+20:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_UNSIGNED_SHORT)
+21:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_UNSIGNED_SHORT)
+22:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_UNSIGNED_SHORT)
+23:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_SHORT)
+24:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_SHORT)
+25:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_SHORT)
+26:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_UNSIGNED_INT)
+27:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_UNSIGNED_INT)
+28:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_UNSIGNED_INT)
+29:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_INT)
+30:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_INT)
+31:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_INT)
+32:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_HALF_FLOAT, internalformat = GL_ALPHA16F_ARB)
+33:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE, type = GL_HALF_FLOAT, internalformat = GL_LUMINANCE16F_ARB)
+34:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_HALF_FLOAT, internalformat = GL_LUMINANCE_ALPHA16F_ARB)
+35:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_FLOAT, internalformat = GL_ALPHA32F_ARB)
+36:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE, type = GL_FLOAT, internalformat = GL_LUMINANCE32F_ARB)
+37:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_FLOAT, internalformat = GL_LUMINANCE_ALPHA32F_ARB)
+38:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_BYTE, internalformat = GL_ALPHA8_SNORM)
+39:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_BYTE, internalformat = GL_LUMINANCE8_ALPHA8_SNORM)
+40:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_SHORT, internalformat = GL_ALPHA16_SNORM)
+41:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_SHORT, internalformat = GL_LUMINANCE16_ALPHA16_SNORM)
+42:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA_INTEGER, type = GL_UNSIGNED_INT_2_10_10_10_REV)
+43:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_ALPHA8)
+44:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB32F)
+45:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_SR8_EXT)
+46:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB_S3TC_DXT1_EXT)
+47:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_S3TC_DXT1_EXT)
+48:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_S3TC_DXT3_EXT)
+49:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_S3TC_DXT5_EXT)
+50:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_S3TC_DXT1_EXT)
+51:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT)
+52:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT)
+53:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT)
+54:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RED_RGTC1)
+55:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_RED_RGTC1)
+56:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RG_RGTC2)
+57:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_RG_RGTC2)
+58:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB9_E5)
+59:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB32UI)
+60:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB32I)
+61:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_BPTC_UNORM)
+62:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM)
+63:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT)
+64:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT)
+65:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB8_ETC2)
+66:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ETC2)
+67:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2)
+68:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2)
+69:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA8_ETC2_EAC)
+70:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC)
+71:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_R11_EAC)
+72:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_R11_EAC)
+73:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RG11_EAC)
+74:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_RG11_EAC)
+75:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_4x4)
+76:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x4)
+77:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x5)
+78:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x5)
+79:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6)
+80:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x5)
+81:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x6)
+82:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x8)
+83:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x5)
+84:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x6)
+85:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x8)
+86:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10)
+87:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x10)
+88:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12)
+89:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_SR8_EXT)
+90:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_SRG8_EXT)
+91:[2026-08-14T12:00:38.368003Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+92:[2026-08-14T12:00:41.308562Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: cap 49152 MiB
+94:[2026-08-14T12:00:42.450082Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+96:[2026-08-14T12:01:33.164306Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+97:[2026-08-14T12:02:33.270035Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+99:[2026-08-14T12:03:33.374166Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+100:[2026-08-14T12:04:33.480297Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+101:[2026-08-14T12:05:33.588357Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+102:[2026-08-14T12:06:33.683862Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+103:[2026-08-14T12:07:33.770821Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+104:[2026-08-14T12:08:33.880914Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+105:[2026-08-14T12:09:33.991458Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+106:[2026-08-14T12:10:34.095489Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+107:[2026-08-14T12:11:34.200309Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+108:[2026-08-14T12:12:34.306818Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+109:[2026-08-14T12:13:34.396930Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+110:[2026-08-14T12:14:34.490305Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+111:[2026-08-14T12:15:34.591830Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+112:[2026-08-14T12:16:34.706564Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+113:[2026-08-14T12:17:34.805167Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+114:[2026-08-14T12:18:34.883930Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+115:[2026-08-14T12:19:34.974391Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+116:[2026-08-14T12:20:35.069496Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+117:[2026-08-14T12:21:35.164859Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+118:[2026-08-14T12:21:38.132947Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 13 [ghost] destroyed — lifetime 36 charges totalling 242.0 MiB, peak 153.0 MiB
+119:[2026-08-14T12:22:35.260712Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+120:[2026-08-14T12:22:58.885206Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 12 [ghost] destroyed — lifetime 36 charges totalling 385.5 MiB, peak 224.8 MiB
+121:[2026-08-14T12:22:58.926830Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 11 [ghost] destroyed — lifetime 36 charges totalling 408.0 MiB, peak 236.0 MiB
+122:[2026-08-14T12:22:58.947700Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 6 [ghost] destroyed — lifetime 36 charges totalling 393.5 MiB, peak 228.8 MiB
+123:[2026-08-14T12:22:58.952396Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 8 [ghost] destroyed — lifetime 2 charges totalling 2.0 MiB, peak 2.0 MiB
+124:[2026-08-14T12:23:08.445288Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 10 [Xwayland] destroyed — lifetime 6 charges totalling 2.1 MiB, peak 2.1 MiB
+125:[2026-08-14T12:23:08.460517Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 5 [synoik] destroyed — lifetime 1 charges totalling 4096 B, peak 4096 B
+127:[2026-08-14T12:23:08.481398Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 3 [synoik] destroyed — lifetime 439 charges totalling 1.5 GiB, peak 570.8 MiB
+134:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA, type = GL_UNSIGNED_INT_8_8_8_8)
+135:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA, type = GL_UNSIGNED_INT_8_8_8_8)
+136:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ABGR_EXT, type = GL_UNSIGNED_BYTE)
+137:Mesa: error: GL_INVALID_OPERATION in glTexImage2D(format = GL_BGRA, type = GL_UNSIGNED_SHORT_4_4_4_4_REV, internalformat = GL_RGBA4)
+138:Mesa: error: GL_INVALID_OPERATION in glTexImage2D(format = GL_BGRA, type = GL_UNSIGNED_SHORT_1_5_5_5_REV, internalformat = GL_RGB5_A1)
+139:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_RGB, type = GL_UNSIGNED_BYTE_3_3_2)
+140:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_UNSIGNED_SHORT, internalformat = GL_ALPHA16)
+141:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_UNSIGNED_BYTE)
+142:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_UNSIGNED_BYTE)
+143:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_UNSIGNED_BYTE)
+144:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_BYTE)
+145:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_BYTE)
+146:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_BYTE)
+147:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_UNSIGNED_SHORT)
+148:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_UNSIGNED_SHORT)
+149:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_UNSIGNED_SHORT)
+150:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_SHORT)
+151:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_SHORT)
+152:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_SHORT)
+153:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_UNSIGNED_INT)
+154:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_UNSIGNED_INT)
+155:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_UNSIGNED_INT)
+156:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ALPHA_INTEGER, type = GL_INT)
+157:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_INTEGER_EXT, type = GL_INT)
+158:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_LUMINANCE_ALPHA_INTEGER_EXT, type = GL_INT)
+159:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_HALF_FLOAT, internalformat = GL_ALPHA16F_ARB)
+160:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE, type = GL_HALF_FLOAT, internalformat = GL_LUMINANCE16F_ARB)
+161:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_HALF_FLOAT, internalformat = GL_LUMINANCE_ALPHA16F_ARB)
+162:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_FLOAT, internalformat = GL_ALPHA32F_ARB)
+163:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE, type = GL_FLOAT, internalformat = GL_LUMINANCE32F_ARB)
+164:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_FLOAT, internalformat = GL_LUMINANCE_ALPHA32F_ARB)
+165:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_BYTE, internalformat = GL_ALPHA8_SNORM)
+166:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_BYTE, internalformat = GL_LUMINANCE8_ALPHA8_SNORM)
+167:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_SHORT, internalformat = GL_ALPHA16_SNORM)
+168:Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_LUMINANCE_ALPHA, type = GL_SHORT, internalformat = GL_LUMINANCE16_ALPHA16_SNORM)
+169:Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA_INTEGER, type = GL_UNSIGNED_INT_2_10_10_10_REV)
+170:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_ALPHA8)
+171:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB32F)
+172:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_SR8_EXT)
+173:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB_S3TC_DXT1_EXT)
+174:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_S3TC_DXT1_EXT)
+175:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_S3TC_DXT3_EXT)
+176:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_S3TC_DXT5_EXT)
+177:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_S3TC_DXT1_EXT)
+178:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT)
+179:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT)
+180:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT)
+181:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RED_RGTC1)
+182:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_RED_RGTC1)
+183:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RG_RGTC2)
+184:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_RG_RGTC2)
+185:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB9_E5)
+186:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB32UI)
+187:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_RGB32I)
+188:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA_BPTC_UNORM)
+189:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM)
+190:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT)
+191:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT)
+192:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB8_ETC2)
+193:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ETC2)
+194:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2)
+195:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2)
+196:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RGBA8_ETC2_EAC)
+197:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC)
+198:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_R11_EAC)
+199:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_R11_EAC)
+200:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_RG11_EAC)
+201:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SIGNED_RG11_EAC)
+202:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_4x4)
+203:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x4)
+204:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x5)
+205:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x5)
+206:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6)
+207:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x5)
+208:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x6)
+209:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x8)
+210:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x5)
+211:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x6)
+212:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x8)
+213:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10)
+214:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x10)
+215:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12)
+216:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_SR8_EXT)
+217:Mesa: error: GL_INVALID_ENUM in glTexStorage2DMultisample(internalformat=GL_SRG8_EXT)
+219:[2026-08-14T12:23:22.037721Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+220:[2026-08-14T12:23:24.552213Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: cap 49152 MiB
+222:[2026-08-14T12:23:25.556539Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+227:[KK-MODIFIER] EXPLICIT rowPitch 4 unusable (minimum 16, alignment 16); using the computed pitch
+229:[KK-MODIFIER] EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16); using the computed pitch
+232:[KK-MODIFIER] EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16); using the computed pitch
+235:[KK-MODIFIER] EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16); using the computed pitch
+238:[KK-MODIFIER] EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16); using the computed pitch
+240:[KK-MODIFIER] EXPLICIT rowPitch 4 unusable (minimum 16, alignment 16); using the computed pitch
+243:[KK-MODIFIER] EXPLICIT rowPitch 4 unusable (minimum 16, alignment 16); using the computed pitch
+245:[KK-MODIFIER] EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16); using the computed pitch
+247:[KK-MODIFIER] EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16); using the computed pitch
+250:[KK-MODIFIER] EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16); using the computed pitch
+252:[KK-MODIFIER] EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16); using the computed pitch
+255:[KK-MODIFIER] EXPLICIT rowPitch 4 unusable (minimum 16, alignment 16); using the computed pitch
+279:[KK-MODIFIER] EXPLICIT rowPitch 8600 unusable (minimum 8608, alignment 16); using the computed pitch
+285:[KK-MODIFIER] EXPLICIT rowPitch 8600 unusable (minimum 8608, alignment 16); using the computed pitch
+286:[KK-MODIFIER] EXPLICIT rowPitch 8600 unusable (minimum 8608, alignment 16); using the computed pitch
+310:[KK-MODIFIER] EXPLICIT rowPitch 1112 unusable (minimum 1120, alignment 16); using the computed pitch
+323:[2026-08-14T12:24:16.892816Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+374:[KK-MODIFIER] EXPLICIT rowPitch 8300 unusable (minimum 8304, alignment 16); using the computed pitch
+375:[KK-MODIFIER] EXPLICIT rowPitch 8300 unusable (minimum 8304, alignment 16); using the computed pitch
+376:[KK-MODIFIER] EXPLICIT rowPitch 8300 unusable (minimum 8304, alignment 16); using the computed pitch
+378:[KK-MODIFIER] EXPLICIT rowPitch 5780 unusable (minimum 5792, alignment 16); using the computed pitch
+381:[KK-MODIFIER] EXPLICIT rowPitch 5780 unusable (minimum 5792, alignment 16); using the computed pitch
+384:[KK-MODIFIER] EXPLICIT rowPitch 5780 unusable (minimum 5792, alignment 16); using the computed pitch
+387:[KK-MODIFIER] EXPLICIT rowPitch 5780 unusable (minimum 5792, alignment 16); using the computed pitch
+388:[2026-08-14T12:25:04.139860Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 10 [ghost] destroyed — lifetime 36 charges totalling 242.0 MiB, peak 153.0 MiB
+389:[2026-08-14T12:25:16.066129Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 10 [ghost] destroyed — lifetime 36 charges totalling 242.0 MiB, peak 153.0 MiB
+390:[2026-08-14T12:25:17.009134Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+393:[KK-MODIFIER] EXPLICIT rowPitch 4 unusable (minimum 16, alignment 16); using the computed pitch
+395:[KK-MODIFIER] EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16); using the computed pitch
+397:[KK-MODIFIER] EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16); using the computed pitch
+400:[KK-MODIFIER] EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16); using the computed pitch
+403:[KK-MODIFIER] EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16); using the computed pitch
+404:[2026-08-14T12:26:17.111263Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+405:[2026-08-14T12:26:47.613348Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 12 [ghost] destroyed — lifetime 36 charges totalling 242.0 MiB, peak 153.0 MiB
+408:[KK-MODIFIER] EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16); using the computed pitch

@@ -16,10 +16,14 @@ kernel page size allows. Tiers degrade into one another automatically and additi
 |---|---|---|---|---|---|
 | **1 · software-2D** | llvmpipe (guest CPU) → CPU scanout | nothing (any stock guest) | libkrun (patch 0001) | any | ✅ shipped |
 | **2 · virgl** | guest virgl Gallium → host **vrend** GL → zink-on-KK → Metal | stock mesa virgl driver (the default for virtio-gpu GL) | virglrenderer **vrend** + KosmicKrisp + EGL-no-GBM patch | 4k or 16k | ✅ validated: accelerated on stock 4k (reaches the GPU); perf is **workload-dependent** — beats llvmpipe on draw-heavy WebGL, loses on upload-heavy glmark2 (see Performance) |
-| **3 · venus** | guest **zink** → **venus** Vulkan → host KosmicKrisp → Metal | 16k kernel + venus mesa RPM + zink env | virglrenderer **venus** + KosmicKrisp | **16k only** | ✅ shipped (RPM-delivered, pixel-verified) |
+| **3 · venus** | guest **venus** Vulkan → host KosmicKrisp → Metal | 16k kernel + venus mesa RPM + selection env | virglrenderer **venus** + KosmicKrisp | **16k only** | ✅ shipped (RPM-delivered, pixel-verified) |
 
-- **GL-only vs Vulkan:** tier 2 (virgl) is **GL-only**. Tier 3 (venus) does **both** GL (via
-  zink→venus) *and* native Vulkan. Tier 1 is the CPU floor under everything.
+- **GL-only vs Vulkan:** tier 2 (virgl) is **GL-only**. Tier 3 (venus) is the **Vulkan** side.
+  Tier 1 is the CPU floor under everything.
+- **Since the 2026-08-04 flip, the enhanced tier runs BOTH:** guest GL rides tier 2's
+  virgl→vrend path while Vulkan rides tier 3's venus. They are no longer alternatives stacked
+  on one ladder — an enhanced guest uses vrend for GL *and* venus for Vulkan at the same time.
+  Tier 3 previously also carried GL via guest zink; that is retired (see Tier 3, Trigger).
 - **Two-tier guarantee** (see `CLAUDE.md`): tiers 1–2 are the **stock baseline** — a fresh
   guest with *no* limina components gets software-2D always and virgl GL when the host can
   provide it. Tier 3 is the **enhanced tier**, unlocked by installing our kernel + mesa +
@@ -100,7 +104,8 @@ tier's "fast GL" path and the reason `NO_VIRGL` is off.
 - **Delivery:** **host-side only.** No RPM, no guest agent. A stock guest "just uses it" for GL.
 - **Trigger:** on by default (the coexist flags). A stock guest's GL apps select the virgl
   Gallium driver automatically for the virtio-gpu device. (On the **enhanced** tier this is
-  *overridden*: `GALLIUM_DRIVER=zink` routes GL through zink→venus instead — see tier 3.)
+  *overridden*: `GALLIUM_DRIVER=zink` routed GL through zink→venus instead — **retired
+  2026-08-04, no longer supported**; the enhanced tier now selects this vrend path explicitly.)
 - **Degradation:** if the host GL init fails (e.g. the worker linked Homebrew's virglrenderer,
   which has no render-server — the link trap below), vrend is unavailable and GL falls back to
   llvmpipe (tier 1).
@@ -120,10 +125,10 @@ tier's "fast GL" path and the reason `NO_VIRGL` is off.
 The full enhanced tier: accelerated **GL *and* Vulkan**. Pixel-verified end-to-end on a
 pristine F43 (2026-06-25).
 
-- **What renders it:** the guest's **zink** routes GL to Vulkan; **venus** is the guest Vulkan
-  driver (`libvulkan_virtio.so`) that forwards Vulkan to the host; virglrenderer's venus
-  backend hands it to **KosmicKrisp**, which runs it on **Metal**. Native guest Vulkan apps go
-  straight through venus.
+- **What renders it:** **venus** is the guest Vulkan driver (`libvulkan_virtio.so`) that
+  forwards Vulkan to the host; virglrenderer's venus backend hands it to **KosmicKrisp**, which
+  runs it on **Metal**. Guest Vulkan apps go straight through venus. (Guest **zink** used to
+  route GL through venus here too; retired 2026-08-04 — GL now rides vrend, see Trigger below.)
 - **Why 16k is mandatory:** venus uses `RESOURCE_MAP_BLOB` → `hv_vm_map`, which requires the
   host addr, guest addr, and size to all be 16 KiB-aligned. The host is 16 KiB pages (Apple
   Silicon); a stock 4 KiB guest packs blobs sub-page → can't map them independently → venus
@@ -146,11 +151,19 @@ pristine F43 (2026-06-25).
   soname than stock 25.x; an overlay can only *shadow* (not *remove*) the stock lib → a
   25.x⊕26.2 ABI blend breaks mutter's KMS EGL. An RPM removes/replaces the old soname. (The
   retired sysext builders live in `scripts/archive/`.)
-- **Trigger / upgrade:** install the three RPMs → write the zink-selection env
-  (`/etc/environment.d/90-limina-zink.conf`: `GALLIUM_DRIVER=zink`,
-  `MESA_LOADER_DRIVER_OVERRIDE=zink`, `VK_DRIVER_FILES=<venus ICD>`)
+- **Trigger / upgrade:** install the three RPMs → write the driver-selection env
+  (`/etc/environment.d/90-limina-zink.conf` — **filename kept from before the flip**:
+  `GALLIUM_DRIVER=virgl`, `MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu`,
+  `VK_DRIVER_FILES=<venus ICD>`)
   → GRUB default to the 16k kernel → reboot. venus then enumerates as
   `Virtio-GPU Venus (Apple M1 Max)`.
+
+  **GL default flipped 2026-08-04 (drop-guest-zink).** The session's GL now rides **vrend**
+  (EGLImage-backed IOSurface scanout, zero-copy since virgl `d042ed65`) and **venus stays as
+  the Vulkan side only**. `MESA_LOADER_DRIVER_OVERRIDE=zink` / `GALLIUM_DRIVER=zink` —
+  zink-as-guest-GL — **is no longer a supported configuration**. See `docs/images.md`, which
+  carries the deployment detail and the host-first prerequisite (KK ≥ `b778250986b`,
+  virglrenderer ≥ `0cc513fd`).
 - **Degradation:** on a 4 KiB kernel or with venus mesa absent, venus init fails → GL falls back
   to virgl (tier 2) or, if the venus ICD is selected but can't init, to lavapipe/llvmpipe. The
   VM still boots and the desktop is usable. **The enhanced image is still safe to boot even if
@@ -172,13 +185,14 @@ The host can't pick the guest's page size before boot, so it always offers the f
 device and lets the guest+kernel decide what initializes.
 
 **Guest (what userspace selects):** `scripts/provision/install-enhanced.sh:75-90` writes the
-zink/venus selection env on the enhanced tier. With *no* env (stock guest), GL takes the virgl
-Gallium driver (tier 2) and Vulkan has only lavapipe.
+driver-selection env on the enhanced tier — since 2026-08-04 that selects **virgl/vrend for GL**
+and venus for Vulkan. With *no* env (stock guest), GL takes the virgl Gallium driver anyway
+(tier 2) and Vulkan has only lavapipe; so the env's remaining job is Vulkan selection.
 
 **The degradation chain (best available wins):**
 
 ```
-venus (16k + venus mesa + zink env)         ─┐  Vulkan + GL, full accel        ← tier 3
+venus (16k + venus mesa + selection env)    ─┐  Vulkan (GL rides vrend below)  ← tier 3
    │ venus init fails (4k kernel / no mesa)  │
    ▼                                          │
 virgl/vrend GL (stock guest, host vrend OK)  ─┤  GL only, accelerated          ← tier 2
