@@ -169,3 +169,155 @@ to keep (`mem_free_kib == 0` means "not reported", never "no free memory").
 Lesson worth more than the retracted finding: a null-safety fix applied uniformly can manufacture
 observations. Display now renders unreported values as `?` (`show_mib`), so a start record can
 never again be read as a zero.
+
+---
+
+# The 10:33–11:24 churn, characterized (2026-08-14, afternoon)
+
+Handed over as an uncharacterized observation: 60 balloon reversals >1 G in a 50.5-min window,
+range 0.25–18.51 G, `inelastic` the modal decision at 788 of 2894, alongside a `phys_footprint`
+ratchet to 23 G. Nobody had correlated it against what the guest was doing. Analysed from the
+full boot trace (`balloon-trace.jsonl`, 09:00 deploy → 11:31), plus read-only guest journal.
+
+## Verdicts on the two premises handed over
+
+**(1) `inelastic` DOES mean what it says here, and it is not the problem.** Read the emission
+site: `Hold::Inelastic` is reachable only on the *inflation* path — the policy wanted more
+balloon, the last judged step was reclaim-fed, host is Normal (`balloon_policy.rs`, the
+`i.inelastic && i.host == Normal && i.mode != Aggressive` gate). Of all 788 rows in the window,
+**zero** are at the stranded shape: balloon actual min 12.49 G, median 16.24 G, free median
+614 MiB. Every one is the *designed terminal state* the 08-13 write-up describes — a nearly-full
+balloon declining to dig into page cache. The label's known conflation (benign vs stranded) is
+real as a documentation defect but did not mislead here; the discriminator is one field,
+`actual_bytes`, on the same row.
+
+Corroboration: 09:09–09:20, balloon pinned flat at 16.12 G, `inelastic` 59×/min for eleven
+straight minutes, guest completely quiet. That is what a *healthy* `inelastic` looks like.
+
+**(2) Not the 08-13 give-back class, not the 07-03 PSI class — a third, distinct one.**
+Of 177 sent target *decreases* in the window, **177 are `set` and 0 are `giveback`** (only 5
+give-backs fired at all). The `GIVEBACK_AVAIL_CEILING_PCT` guard deployed at 09:00 is doing its
+job. Memory PSI was ~0.00% and io-full ~0.1% through the churn, so the 07-03 PSI limit cycle is
+out too. The churn runs entirely through the **allowance-shortfall deflate**.
+
+## The mechanism: a ~19 s limit cycle on the shortfall-deflate path
+
+The guest's demand is real (see workload below); the policy's *response* to it is what
+oscillates. One full cycle, tick by tick (10:52:35–10:53:14, and it repeats near-identically
+for the whole window):
+
+```
+10:52:35 set  17.90->17.93  act 17.90  free 1.29G  avail 3.02G   <- converged: avail ~= allowance
+10:52:36 set  17.93->16.99  act 17.93  free 0.46G  avail 2.06G   <- guest takes ~0.85G; shortfall
+10:52:37 set  16.99->16.52  act 16.99  free 0.91G  avail 2.53G   <- SECOND deflate on a STALE avail
+10:52:39 dwell             act 16.52  free 2.52G  avail 4.20G   <- overshot: 1.41G given for 1.05G
+10:52:40..10:53:13   set +0.25G / dwell, x6                      <- 14 s re-inflating at 256M/2s
+10:53:14 set  17.94->17.23  ...                                  <- and again
+```
+
+**Convergence parks the system exactly on the trigger boundary.** `desired = current + (avail −
+allowance)`, so a converged Moderate balloon sits at guest `avail ≈ allowance ≈ 3.11 G` (max/8 on
+this 24 G VM) — measured convergence 3.01 G. From there *every* transient the guest takes crosses
+the boundary by construction. On a busy guest that is not an edge case, it is the steady state.
+
+**The overshoot is a staleness defect, and it has TWO sources — an actual-based clamp alone
+would only catch one.** At 10:52:37 `actual` had already reached the target sent at :36 (the
+driver deflates at ~2.5 GiB/s, well inside one 1 Hz report), so nothing was in flight: what was
+stale is **meminfo**, an `avail` of 2.53 G that had credited only 0.47 G of the 0.94 G already
+returned. But at 11:23:55–56 the other shape appears — targets 13.49 → 12.16 → 11.01 G while
+`actual` was still 14.39/14.07 G, i.e. **the driver lagging by >1 G across consecutive
+deflates**. Result either way: 1.41 G handed back for a 1.05 G shortfall — 0.36 G of pure
+overshoot per event, then 14 s of re-inflation to undo it. A RED-first fix should reproduce
+*both* shapes; settling one report after a sent shortfall deflate covers both, an actual-based
+clamp passes the 11:23 case and fails the 10:52 one.
+
+**The transient is the guest's, not the balloon's.** On the dip ticks the balloon moved ±0.02 G,
+so it is not the balloon consuming the free list. Discriminating test — 1-second MemFree drops
+>400 MiB:
+
+| window | balloon | drops >400M/min |
+|---|---|---|
+| 09:09–09:20 (flat, `inelastic`) | pinned 16.12 G | **0.0** |
+| 10:50–11:00 (churn) | 11.83–18.11 G | **4.7** |
+
+## The 10:41 release-to-0 was real, and correct
+
+The largest single event (18.51 G → 0) was not part of the cycle. Trigger row:
+
+```
+10:41:24  set 16.03G -> 0   free 395M  avail 1423M  some_avg10 10.78%  io_full 13.17%  host=warn
+```
+
+`some_avg10` crossed `PRESSURE_HIGH` (10%) on a genuinely squeezed guest, with the host itself at
+`warn`. Acute release fired as designed, preceded by one `giveback` at 10:41:22. Only **two**
+"Out of puff" lines appear in the guest kernel log for the whole window (10:41:13, 11:04:06) —
+no held-unreachable-target loop. (A `journalctl | grep -i oom` over this guest returns ~300 hits
+that are all `synoik` frame-log lines containing "head**room**". Grep for `Out of puff` or
+`oom-kill`, not `oom`.)
+
+## The footprint "ratchet" is the balloon being empty, not a leak
+
+Reconciled against the trace: the ~23 G readings sit inside 10:42–10:45, when the balloon was at
+**0** after the acute release — the worker then bills essentially the whole 24 G guest, which is
+honest. Across the full boot `pf` oscillates with the balloon rather than ratcheting (8.06 G at
+10:00 with an 18.4 G balloon; 25.7 G at 10:42 with a 0 G balloon), and it is **10.3 G live at
+11:36**. Sweeps kept up: 41 this guest-boot epoch (the counter resets on a guest reboot, as at
+09:25 and 09:35 — it is not a per-worker-lifetime total). Treat the two halves as one picture, as handed
+over — but the picture is "the balloon emptied", not "the ledger leaked".
+
+## What it cost
+
+- `released_bytes` **97 G → 203 G in 52 minutes** — 106 GB of release traffic (unmap + REUSABLE
+  + queue-zeroing) to hand back and re-take the same ~1.4 G, ~60 times.
+- `pf` sawing 10.9 ↔ 13.3 G once per cycle.
+- Demand sweeps pinned at their `DEMAND_SWEEP_MIN_INTERVAL` 60 s floor for the whole window
+  (19 in 52 min) — each cycle re-opens the ≥4 GiB gap the demand sensor watches.
+- Guest-visible harm: none measurable. PSI ~0, io-full ~0.1% between the acute events.
+
+So this is a **cost defect, not a correctness defect** — which is also why it went unnoticed:
+every guard reads healthy while it runs.
+
+## The workload (the correlation nobody had done)
+
+The churn window brackets a compositor development loop on the dogfood guest:
+`gnome-session` restarted **10:37:47–51**, four minutes into the window; the session runs
+`synoik` (the user's gnome-shell/mutter replacement) with a `journalctl -f --grep=synoik`
+attached; a Claude Code session in the guest is working in `~/Projects/gnome-shell-rs` (an abrt
+record at 10:49 names its scratchpad). Repeated `sudo` invocations 10:39–10:41. Load average had
+decayed to 0.23/1.84/2.70 by 11:36, matching the churn stopping ~11:24.
+
+A cargo build plus repeated compositor/session restarts is exactly a repeated
+allocate-~1-GiB-then-free transient on a few-second cadence. **The demand is legitimate.**
+
+## Proposed fix (not implemented — policy trade is the user's call)
+
+Two changes, both scoped strictly to the **allowance-shortfall deflate**:
+
+1. **Settle one report after a sent shortfall deflate.** Skip (or discount by the amount just
+   released) the shortfall term on the next report, so a release cannot be counted twice against
+   a meminfo sample that has not yet credited it. Kills the ~0.45 G/event overshoot.
+2. **Require the shortfall to persist** — two consecutive reports, or a small hysteresis band
+   below the allowance — before deflating on it. A sub-3-second transient inside the allowance
+   is precisely what the allowance exists to absorb; reacting to a single 1 Hz sample turns a
+   0.8 G blip into 2.8 G of balloon movement.
+
+**Guardrail, load-bearing:** this must touch *only* the allowance-shortfall path. The acute
+release-to-0 (`some_avg10 >= PRESSURE_HIGH`), `guest_starved`, and the pressure give-back stay
+immediate and unconditional. Gating deflation is what produced both the 07-03 limit cycle and
+the 07-09 sticky-Warn wedge; the whole point of "deflation is immediate at any pressure" is that
+those paths never wait. RED-first when it is implemented.
+
+**Open, for the user:** the deeper question is whether converging to `avail == allowance` is the
+right resting point at all. It guarantees that every guest transient crosses the deflate
+boundary. A resting point slightly *above* the allowance (converge to allowance + one step, say)
+would give the cycle somewhere to absorb a blip without moving the balloon — but it costs that
+much standing balloon on every VM. That is a tuning trade, not a bug fix.
+
+## Monitoring
+
+`spikes/hv-ledger-gap/balloon-watch.py` (new) replaces `decision-tail.py` for forensic watching:
+it filters **nothing**, renders every record, and emits a per-minute CENSUS line counting every
+label seen plus the balloon's range and reversal count. `decision-tail.py`'s QUIET set drops
+`dwell`/`dead-band`/`cooldown`/`not-calm` — two of this cycle's three phases — so the cycle's
+inflation half was invisible in the alert stream. Keep `decision-tail.py` as the alert stream;
+use `balloon-watch.py` when the question is "what is actually happening".
