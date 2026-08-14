@@ -58,6 +58,21 @@ struct Cli {
     #[arg(long, requires = "kernel")]
     cmdline: Option<String>,
 
+    /// Publish an SMBIOS Type 11 "OEM String" to the guest (repeatable). **EFI boot only** —
+    /// libkrun writes the SMBIOS table on the firmware path alone, so this conflicts with
+    /// `--kernel` rather than being accepted and silently ignored.
+    ///
+    /// The guest reads these from `/sys/firmware/dmi/entries`; systemd consumes any string of
+    /// the form `io.systemd.credential:<name>=<value>` as a credential. That makes a secret
+    /// **per-VM and host-set** — unlike a UKI `.cmdline`, which is per-image and readable by
+    /// every process in the guest via `/proc/cmdline`.
+    #[arg(
+        long = "smbios-oem-string",
+        value_name = "STRING",
+        conflicts_with = "kernel"
+    )]
+    smbios_oem_string: Vec<String>,
+
     /// Host directory to serve as the guest root over virtio-fs (tag `/dev/root`).
     #[arg(long)]
     rootfs: Option<PathBuf>,
@@ -964,6 +979,10 @@ fn cli_from_definition(
         kernel: None,
         initramfs: None,
         cmdline: None,
+        // Managed VMs don't set OEM strings yet: the credential *policy* (which secrets a
+        // .liminavm carries, and where they're stored) is a separate decision from the
+        // mechanism. A vm.toml key feeds this once that's settled.
+        smbios_oem_string: Vec::new(),
         rootfs: None,
         disk,
         read_only: false,
@@ -1166,6 +1185,12 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         };
         args.push("--firmware".into());
         args.push(path_arg(&firmware)?);
+        // SMBIOS lives on the firmware path only, so forward inside this arm — clap's
+        // `conflicts_with = "kernel"` already rejects the other combination up front.
+        for oem in &cli.smbios_oem_string {
+            args.push("--smbios-oem-string".into());
+            args.push(oem.clone());
+        }
     }
     if let Some(rootfs) = &cli.rootfs {
         args.push("--rootfs".into());

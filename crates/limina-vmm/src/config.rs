@@ -265,4 +265,20 @@ pub struct VmSpec {
     /// the host sleep via its own suspend), and on `didWake` it wakes a guest it put to sleep.
     /// False = leave the guest running with a frozen counter across host sleep (old behavior).
     pub host_sleep_s2idle: bool,
+    /// SMBIOS Type 11 "OEM Strings" to publish to the guest. Empty = no Type 11 structure at
+    /// all (libkrun's `write_type_11_table` returns early on `None`, so a stock guest sees
+    /// exactly the SMBIOS it saw before this existed).
+    ///
+    /// **EFI boot only.** libkrun writes SMBIOS only when guest RAM starts at the EFI base
+    /// (`arch/src/aarch64/mod.rs`: `ram_start_addr < SMBIOS_START`); a direct kernel boot starts
+    /// RAM at 0x8000_0000 and gets no table, so these strings are silently invisible there.
+    /// The worker rejects that combination rather than dropping them (see `main.rs`).
+    ///
+    /// The motivating consumer is systemd credentials: a string of the form
+    /// `io.systemd.credential:passwd.hashed-password.root=<hash>` is picked up by the guest's
+    /// systemd from `/sys/firmware/dmi/entries`. That makes a credential **per-VM and
+    /// host-controlled**, where baking it into a UKI's `.cmdline` would be per-*image* and
+    /// world-readable from `/proc/cmdline` inside the guest. Mechanism only — limina sets
+    /// what it's told to set and interprets nothing.
+    pub smbios_oem_strings: Vec<String>,
 }

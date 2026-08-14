@@ -54,6 +54,17 @@ struct Cli {
     #[arg(long, requires = "kernel")]
     cmdline: Option<String>,
 
+    /// Publish an SMBIOS Type 11 "OEM String" to the guest (repeatable). **EFI boot only** —
+    /// libkrun writes SMBIOS only on the firmware path, so this conflicts with `--kernel`
+    /// rather than being silently dropped. Chiefly a systemd-credential channel:
+    /// `io.systemd.credential:passwd.hashed-password.root=<hash>`.
+    #[arg(
+        long = "smbios-oem-string",
+        value_name = "STRING",
+        conflicts_with = "kernel"
+    )]
+    smbios_oem_string: Vec<String>,
+
     /// Host directory to serve as the guest root over virtio-fs (tag `/dev/root`).
     /// Pair with `--cmdline "... rootfstype=virtiofs rw init=/init"`. The L1 path.
     #[arg(long)]
@@ -644,6 +655,7 @@ fn main() -> Result<()> {
         snapshot_file: cli.snapshot_file,
         restore_file: cli.restore,
         host_sleep_s2idle,
+        smbios_oem_strings: cli.smbios_oem_string,
     };
 
     krun::boot(&spec)

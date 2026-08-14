@@ -136,6 +136,12 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
         BootSource::Kernel(kernel) => set_external_kernel(&mut vmr, kernel)?,
     }
 
+    // SMBIOS Type 11 OEM strings. Left `None` when empty: libkrun then writes no Type 11
+    // structure at all, so a guest that asked for nothing sees exactly the SMBIOS it always did.
+    if !spec.smbios_oem_strings.is_empty() {
+        vmr.smbios_oem_strings = Some(spec.smbios_oem_strings.clone());
+    }
+
     for disk in &spec.disks {
         add_disk(&mut vmr, disk)?;
     }
@@ -959,6 +965,72 @@ fn serve_balloon_conn(
 #[cfg(test)]
 mod tests {
     use super::{detect_image_type, ImageType};
+    use crate::config::{BootSource, VmSpec};
+    use std::path::PathBuf;
+
+    /// A minimal EFI-boot spec: firmware only, no devices. The firmware path is the one that
+    /// matters for SMBIOS (libkrun writes the table only when RAM starts at the EFI base).
+    fn efi_spec() -> VmSpec {
+        VmSpec {
+            cpus: 1,
+            ram_mib: 512,
+            balloon_control_socket: None,
+            boot: BootSource::Firmware(PathBuf::from("/nonexistent/KRUN_EFI.fd")),
+            disks: Vec::new(),
+            shares: Vec::new(),
+            vsock: None,
+            console: None,
+            virtio_console: None,
+            display: None,
+            input: None,
+            net: None,
+            battery: false,
+            snd: false,
+            mic: false,
+            usb: false,
+            fido_socket: None,
+            moc_socket: None,
+            free_page_reporting: false,
+            deflate_on_oom: false,
+            snapshot_file: None,
+            restore_file: None,
+            host_sleep_s2idle: false,
+            smbios_oem_strings: Vec::new(),
+        }
+    }
+
+    /// SMBIOS Type 11 OEM strings reach libkrun verbatim and in order. This is the transport
+    /// systemd reads `io.systemd.credential:` from, so a mangled or reordered string is a
+    /// silently-wrong credential rather than a visible failure.
+    #[test]
+    fn smbios_oem_strings_reach_vm_resources() {
+        let mut spec = efi_spec();
+        spec.smbios_oem_strings = vec![
+            "io.systemd.credential:passwd.hashed-password.root=$y$j9T$abc".to_string(),
+            "io.systemd.credential:vmm.notify_socket=vsock:2:1234".to_string(),
+        ];
+
+        let vmr = super::build_resources(&spec).expect("build_resources");
+
+        assert_eq!(
+            vmr.smbios_oem_strings.as_deref(),
+            Some(spec.smbios_oem_strings.as_slice()),
+            "OEM strings must reach libkrun unmodified and in order"
+        );
+    }
+
+    /// No strings must leave the field `None`, not `Some(vec![])`. libkrun writes the Type 11
+    /// structure only when the field is `Some` (`write_type_11_table` returns early on `None`),
+    /// so an empty `Some` would emit an empty OEM-strings structure into every VM's SMBIOS —
+    /// a gratuitous change to the stock-baseline guest for a feature it never asked for.
+    #[test]
+    fn no_oem_strings_means_no_type_11_structure() {
+        let vmr = super::build_resources(&efi_spec()).expect("build_resources");
+        assert!(
+            vmr.smbios_oem_strings.is_none(),
+            "an empty OEM-string list must not emit a Type 11 structure"
+        );
+    }
 
     /// The TASK_VM_INFO struct layout is hand-declared; prove `phys_footprint` lands on the
     /// right offset by cross-checking against `proc_pid_rusage`'s independent reading of the
