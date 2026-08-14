@@ -10,6 +10,13 @@
 # row alignment (kk_image_layout.c:264) and silently uses its own pitch otherwise
 # (kk_image.c:665).
 #
+# !! WARNING: THIS SCRIPT COUNTS WARNINGS, NOT CORRUPTION. A "clean (0)" row means only that
+# !! guest and KK agreed on a pitch -- NOT that the surface renders correctly. The actual
+# !! IOSurface stride is 256-byte aligned while KK computes a 16-byte-aligned one, so surfaces
+# !! shear at widths this script scores clean (measured: width 1976, zero warnings, 8 px/row of
+# !! shear). Use measure-shear.py on a real capture as the corruption oracle; this script is only
+# !! useful for studying the guest-vs-KK disagreement. See NOTES.md, "THE LOG LINE IS NOT THE BUG".
+#
 # Why the compositor must be synoik and not mutter: the rejected pitch arrives through
 # VkImageDrmFormatModifierExplicitCreateInfoEXT, i.e. a *Vulkan* import of the client's
 # dmabuf (testcomp/src/vk.rs:467, transcribed from synoik). Mutter composites with GL, so the

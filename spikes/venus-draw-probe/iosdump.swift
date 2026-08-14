@@ -44,5 +44,8 @@ for arg in CommandLine.arguments.dropFirst() {
     let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)!
     CGImageDestinationAddImage(dest, img, nil)
     CGImageDestinationFinalize(dest)
-    print("id=\(id) \(w)x\(h) nonzero=\(nonzero) uniform=\(uniform) first=(\(first2),\(first1),\(first0)) -> /tmp/ios-\(id).png")
+    // bpr is the surface's REAL row stride, and it is load-bearing for the vrend/KK stride bug
+    // (spikes/vrend-stride-2026-08-14): the shear is writer and reader disagreeing about this
+    // number, so print it rather than making the next person recompute w*4 and guess.
+    print("id=\(id) \(w)x\(h) bpr=\(bpr) (w*4=\(w*4), pad=\(bpr - w*4)) nonzero=\(nonzero) uniform=\(uniform) first=(\(first2),\(first1),\(first0)) -> /tmp/ios-\(id).png")
 }

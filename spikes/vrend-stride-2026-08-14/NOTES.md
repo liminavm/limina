@@ -136,19 +136,56 @@ widths by `width-sweep.sh` in this directory.
 | 1978 | 7912 | 8 | shear | **6 substitutions** |
 | 1980 | 7920 | 0 | clean | clean (0) |
 
-**6/6 against the falsifiable prediction**, alternating with width — a signature no confound
-mimics. The 1975 line is byte-identical to the field capture:
-`EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16)`.
+**6/6 against the log-line prediction**, alternating with width. The 1975 line is byte-identical
+to the field capture: `EXPLICIT rowPitch 7900 unusable (minimum 7904, alignment 16)`.
 
 The dogfood machine is no longer needed for this bug.
 
-### Still open: the shear geometry
+## THE LOG LINE IS NOT THE BUG (pixel measurement, same day)
 
-The arithmetic gives a per-row drift of `align_up(w*4,16) - w*4` ∈ {4, 8, 12} bytes = **1–3 px**,
-which predicts a steep (~45°) streak at 1 px/row. The field capture looked more like ~7 px/row.
-**That ~7 was an eyeball of a cropped screenshot, never a measurement**, so it is the weakest
-number in this file and may simply be wrong. Settle it by measuring a real capture at a known
-width (`iosdump.swift` with `LIMINA_GLOBAL_SCANOUT=1`) rather than by arguing from the screenshot.
+The table above uses `[KK-MODIFIER]` as the oracle. **It is the wrong oracle**, and following it
+would have produced a fix that changed nothing. Pixels say something different and worse.
+
+Captured the composited output (guest-side `grim` under synoik — it re-samples the imported
+texture, so the shear shows) and measured the per-row drift with `measure-shear.py`:
+
+| width | `w*4` | KK's pitch (align 16) | **real IOSurface bpr** | Δ | predicted drift | **measured** |
+|---|---|---|---|---|---|---|
+| 1968 | 7872 | 7872 | 7936 | 64 | 16 px | **16.000** |
+| 1974 | 7896 | 7904 | 7936 | 32 | 8 px | **7.999** |
+| 1976 | 7904 | 7904 | 7936 | 32 | 8 px | **8.000** |
+| 1980 | 7920 | 7920 | 7936 | 16 | 4 px | **4.014** |
+
+Three things follow, and the second one is the finding:
+
+1. **The real row stride is 256-byte aligned**, not 16: `bpr = align_up(w*4, 256) = 7936` for
+   every width above. Read straight off the surface (`iosdump` now prints `bpr`), not inferred —
+   a 1968-wide surface reports `bpr=7936 (w*4=7872, pad=64)`.
+2. **Width 1976 emits NO warning and is corrupt anyway.** Its guest pitch (7904) equals KK's
+   computed pitch, so the alignment check passes and nothing is logged — but reality is 7936, so
+   it shears by the same 8 px/row as 1974. Every one of the "clean (0)" rows in the sweep table
+   is a **false negative**. In practice *every* GL client surface is sheared; only `width % 64 == 0`
+   would be clean, and that is 1 width in 64 — which is exactly why resizing "just right" healed it.
+3. **The drift is fully explained.** `(align_up(w*4,256) - align_up(w*4,16)) / 4` predicts all four
+   measurements to within 0.02 px. The field capture's "~7 px/row" was right after all; the
+   arithmetic that called for 1–3 px was wrong, because it compared the guest's pitch to KK's
+   instead of comparing KK's to the actual allocation.
+
+So the mismatch that corrupts is **KK vs. reality**, not **guest vs. KK**. The `KK-MODIFIER` line
+reports a real inconsistency, but a *different, narrower* one that merely correlates with widths.
+Had we shipped candidate fix 1 or 2 (advertise the alignment / fail the import), the guest would
+have started sending 16-aligned pitches, the warning would have gone silent — and every window
+would still have sheared, now with no diagnostic at all.
+
+**Revised fix direction:** on import of external memory, KK must take the row stride from the
+*allocation* (the IOSurface's `bytesPerRow`), not recompute it from width and a format alignment.
+The computed pitch is only correct for memory KK allocated itself. The exporter reporting its true
+stride to the guest is a complementary fix, and the 256-vs-16 gap should be settled at the source
+rather than by teaching both sides the same magic number.
+
+**This is the "unexplained factor of ~7" the field write-up flagged as "exactly the kind of gap
+that later turns out to be the real bug".** It was. The discipline that paid off was refusing to
+accept a log line as proof of pixels.
 
 ## Original repro plan (superseded by the results above)
 
