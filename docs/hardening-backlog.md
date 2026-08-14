@@ -879,6 +879,42 @@ in both**, and md5sum/restic are one shape, not two. Either re-justify the free 
 or retire it — carrying a guard that never binds is worse than not having it, because the doc
 comment claims coverage the code does not provide.
 
+## GPU — a CPU write to a mapped LINEAR dmabuf stops being visible to the GPU
+
+Reported by synoik 2026-08-14 (`vmm-issue-dmabuf-cpu-write-coherency.md` in their tree).
+`gbm_bo_map` → write → unmap on a LINEAR `Argb8888` dmabuf, completed *before* the buffer is
+imported and sampled, is not visible to a subsequent GPU read: the sample returns the buffer's
+**previous** contents. The first write+sample always works; only a *re*-write through the mapping
+goes unseen. A GPU-written producer (bind as render target, submit, fence-wait) is unaffected on
+the same import cache, the same deferred acquire barrier and the same sampling path — which is
+what localises this under the host-visible mapping's transfer rather than in image layout, queue
+acquisition or any barrier the guest issues.
+
+**Not urgent, but not dismissable either: CPU↔GPU coherency is a guarantee we should owe.**
+Nothing in the product takes the path today — no Wayland client CPU-writes its buffer, it renders
+and commits — so synoik is not exposed and has moved its test to a GPU-writing producer. What it
+cost them was a day of misattributing a host bug to their compositor.
+
+**Reproducer (cheap, local, no dogfood needed):** boot a clone of
+`Fedora-Workstation-44.enhanced.synoik.raw`, then in-guest at synoik `77f46c5e`:
+`cargo test --workspace -- --ignored dmabuf_cpu_written`. Measured here **6/10 and 7/10 failing**,
+the same order as the reporter's 5/6 — frequent enough that a handful of runs settles a question,
+but note it is a *rate*, so a single green run proves nothing.
+
+**Already ruled out — do not re-run this:** the vrend stride fix (virglrenderer `5c76245`). It was
+the obvious suspect, since the failures were first noticed on the deploy that introduced it and it
+changes exactly how the exported IOSurface is allocated (forcing `bytesPerRow` to Metal's minimum
+linear alignment instead of IOSurface's own 256-byte choice). A/B on one guest image, one test
+binary, only the host dylib swapped: **6/10 fail with the fix, 7/10 without**. Same result. The
+reporter's own framing — the behaviour changed across a host *restart*, with no version change —
+is the accurate one, and the deployment is not the variable.
+
+Open, in the reporter's words: is the unmap's transfer-to-host not issued, issued and dropped, or
+racing the GPU read? Distinguishing those needs host-side visibility the guest does not have.
+Also unknown: whether it depends on the GPU having read the buffer before the second write (their
+sequence always samples between writes), and whether other formats/modifiers are affected —
+everything measured is `Argb8888` + LINEAR.
+
 ---
 
 When a milestone's loose ends are all closed, fold the remainder back into the roadmap milestone
