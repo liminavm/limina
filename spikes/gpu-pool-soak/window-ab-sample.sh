@@ -24,7 +24,7 @@ OUT=${4:?output csv}
 MINUTES=${5:-45}
 INTERVAL=${6:-15}
 
-echo "ts,gfx_mb,gfx_regions,iosurface_mb,guest_blobs,guest_blob_mb,guest_fb,guest_clients" > "$OUT"
+echo "ts,gfx_mb,gfx_regions,iosurface_mb,guest_blobs,guest_blob_mb,guest_fb,guest_clients,footprint_mb,compressed_mb,balloon_mb,guest_free_mb" > "$OUT"
 END=$(( $(date +%s) + MINUTES * 60 ))
 while [ "$(date +%s)" -lt "$END" ]; do
     # -n goes on the INNER ssh only. The inner one would otherwise consume the remainder of this
@@ -48,7 +48,14 @@ f=\$(grep -c \"^framebuffer\[\" \$D/framebuffer 2>/dev/null)
 c=\$(tail -n +2 \$D/clients 2>/dev/null | grep -c .)
 echo \"\$u \$m \$f \$c\""' 2>/dev/null | tail -1)
 set -- $g
-echo "${gfx:-},${rgn:-},${ios:-},${1:-},${2:-},${3:-},${4:-}"
+# Whole-VM memory alongside the pool. A graphics workload that ratchets does it in BOTH places
+# (the 08-13 gpuscore run took the footprint to 40 G), and reading only the pool would attribute
+# a memory-wide ratchet to graphics or miss it entirely. Straight from the deployed build's own
+# balloon trace, so no debug build is needed.
+t=$(tail -1 "$HOME/Library/Application Support/Limina/VMs/Dev.liminavm/logs/balloon-trace.jsonl" 2>/dev/null)
+j() { echo "$t" | sed -n "s/.*\"$1\":\([0-9]*\).*/\1/p"; }
+fp=$(j footprint_bytes); cm=$(j compressed_bytes); ba=$(j actual_bytes); gf=$(j free_kib)
+echo "${gfx:-},${rgn:-},${ios:-},${1:-},${2:-},${3:-},${4:-},$(( ${fp:-0} >> 20 )),$(( ${cm:-0} >> 20 )),$(( ${ba:-0} >> 20 )),$(( ${gf:-0} / 1024 ))"
 RS
 )
     echo "$(date +%H:%M:%S),${row:-,,,,,,}" >> "$OUT"
