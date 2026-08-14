@@ -53,14 +53,17 @@ unknown defect in it.
 |---|---|
 | 20:48:20 – ~20:48:50 | Driver's one-window dry run to validate `gnome-font-viewer` teardown before committing 27 min to it. An open and a close; moves the blob count; not protocol. |
 
-## Standing caveat: `Linger=yes` on gsrs
+## RESOLVED: `Linger=yes` on gsrs
 
 Linger was deliberately disabled for gsrs on 2026-08-09 — it keeps a permanent manager session
 for uid 1002, which pushes GDM down a reauthentication path and produces a compositor-less
 session that looks like a successful login but has no shell in it. Something re-enabled it since,
-and **it is still enabled**: the driver's `loginctl disable-linger gsrs` was blocked by its own
-permission layer and never ran. Do NOT record "linger fixed" against 2026-08-13.
+and it was **still enabled during this run** — the driver's first `loginctl disable-linger gsrs`
+was blocked by its own permission layer and never ran. It has since been disabled for real, with
+the user's explicit approval, and `Linger=no` is confirmed. Doing it mid-run was safe: the live
+session keeps `user@1002.service` up, so the compositor never noticed.
 
-The seat came up clean anyway, so this run is unaffected — but the zombie risk is live if the
-seat is logged out and back in mid-run. If that happens, treat everything after it as a separate
-segment rather than assuming continuity.
+The seat came up clean regardless, so the run is unaffected. What remains open is *what
+re-enabled it* after the 2026-08-09 decision to turn it off — that cause is unchased, so it can
+come back. If a seat is ever logged out and back in mid-run, treat everything after it as a
+separate segment rather than assuming continuity.
