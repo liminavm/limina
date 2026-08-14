@@ -16,6 +16,20 @@ import time
 
 QUIET = {"cooldown", "converged", "not-idle", "dead-band", "not-calm", "dwell"}
 
+# A HOLD verdict repeats every tick for as long as its condition lasts. `inelastic` on a
+# settled guest emits ~1/s forever and drowns the stream (it flooded the monitor on
+# 2026-08-14). Collapse consecutive repeats of the same verdict: print the first, then stay
+# silent until the verdict changes or the balloon actually moves.
+REPEAT_MOVE_BYTES = 64 * 2**20
+_last = {"dec": None, "bal": 0}
+
+
+def is_repeat(dec, actual_bytes):
+    same = dec == _last["dec"] and abs(actual_bytes - _last["bal"]) < REPEAT_MOVE_BYTES
+    if not same:
+        _last["dec"], _last["bal"] = dec, actual_bytes
+    return same
+
 for line in sys.stdin:
     try:
         d = json.loads(line)
@@ -40,11 +54,27 @@ for line in sys.stdin:
                 ),
                 flush=True,
             )
+        elif "sweep" in d:
+            print(
+                "%s SWEEP  %-8s debited=%.0fM gap=%.0fM"
+                % (
+                    ts,
+                    d.get("sweep"),
+                    d.get("debited_bytes", 0) / 2**20,
+                    d.get("gap_bytes", 0) / 2**20,
+                ),
+                flush=True,
+            )
         else:
+            # Print the shape rather than formatting it as a decision. A THIRD record type
+            # (sweep debits) turned up an hour after the scrub one, and this branch is what
+            # caught it instead of it reading as another truncated write.
             print("%s UNKNOWN-RECORD keys=%s" % (ts, ",".join(sorted(d))), flush=True)
         continue
     dec = d["decision"]
     if dec in QUIET:
+        continue
+    if is_repeat(dec, d.get("actual_bytes", 0)):
         continue
     bal = d.get("actual_bytes", 0) / 2**30
     free = d.get("free_kib", 0) / 1024

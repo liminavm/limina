@@ -109,6 +109,27 @@ const IO_PRESSURE_HIGH: u32 = 1000; // 10.00%
 /// leaves it untouched. `mem_free_kib == 0` means "not reported", never "no free memory", so an
 /// older agent keeps the pre-guard behaviour.
 const GIVEBACK_FREE_CEILING: u32 = 1024 * PAGES_PER_MIB;
+/// Companion ceiling to [`GIVEBACK_FREE_CEILING`] for the **io arm**, as a percentage of the
+/// guest's `MemTotal`: above this much `MemAvailable`, the guest is not short and io pain is not
+/// ours, whatever the free list says.
+///
+/// The free ceiling alone has a measured hole. Field-measured 2026-08-14: restic's nightly backup
+/// — a streaming whole-filesystem read — walked the balloon from 17.80 G to 8.56 G in 60 seconds
+/// with every tick passing the free guard, because a streaming reader *consumes* what it is given
+/// into page cache and so keeps `MemFree` pinned at 500-1000 MiB indefinitely. The guest was never
+/// short: `MemAvailable` 10.6 GiB of 15.65 (68%), `AnonPages` 2.07 GiB, restic's own RSS 1.30 GiB,
+/// memory PSI flat 0.00%. Every byte we handed over landed in `Cached` (8.74 GiB).
+///
+/// `MemFree` fundamentally cannot separate "starving" from "healthy with a warm cache" — keeping
+/// free low is precisely what the page cache is *for*. `MemAvailable` is the kernel's own estimate
+/// of what it could hand out without swapping, which is the question this guard is actually asking.
+///
+/// Set deliberately high (the guest must be sitting on *more than half* its RAM before we decline)
+/// because the two errors are not symmetric: declining wrongly starves a guest behind the balloon
+/// — the 2026-07-09 wedge — while firing wrongly costs a give-back we reclaim later. Both readings
+/// must agree the guest is short, so each covers the other's blind spot: free caught the
+/// accumulating reader (md5sum, free grew to 5.8 GiB), available catches the consuming one.
+const GIVEBACK_AVAIL_CEILING_PCT: u64 = 50;
 /// io-PSI `full` avg10 above which a cache dig in force (an inelastic verdict at host
 /// Warn/Critical) is paced down to the trickle: dropping cold cache is free, so full speed is
 /// fine while io-PSI stays quiet — refaults pushing io-full past this mean the squeeze is
@@ -1767,11 +1788,20 @@ fn free_margin_pages(mode: ReclaimMode) -> u32 {
 /// (2026-08-12 dogfood): balloon pinned at ~0, every release lever starved, the
 /// compressor retention pool grew unchecked under host Warn.
 /// Whether io pain can plausibly be the balloon's doing (pure; unit-tested). See
-/// [`GIVEBACK_FREE_CEILING`]: a guest with a gigabyte free is reading files, not starving behind
-/// the balloon. 0 means the agent does not report `MemFree` — treat as unknown and keep firing,
-/// never as an empty free pool.
-fn io_pain_can_be_ours(mem_free_kib: u64) -> bool {
-    mem_free_kib == 0 || (mem_free_kib / 4).min(u32::MAX as u64) as u32 <= GIVEBACK_FREE_CEILING
+/// [`GIVEBACK_FREE_CEILING`] and [`GIVEBACK_AVAIL_CEILING_PCT`]. Both readings must say the guest
+/// is short before the io arm may fire, because each alone has a measured blind spot: `MemFree`
+/// misses a streaming reader that consumes cache as fast as we hand it over (restic), and a
+/// generous `MemAvailable` alone would not have caught the accumulating reader (md5sum).
+///
+/// A zero in either field means the agent did not report it — treat as unknown and keep firing,
+/// never as "no memory".
+fn io_pain_can_be_ours(mem_free_kib: u64, mem_available_kib: u64, mem_total_kib: u64) -> bool {
+    let free_says_short = mem_free_kib == 0
+        || (mem_free_kib / 4).min(u32::MAX as u64) as u32 <= GIVEBACK_FREE_CEILING;
+    let avail_says_short = mem_available_kib == 0
+        || mem_total_kib == 0
+        || mem_available_kib.saturating_mul(100) / mem_total_kib < GIVEBACK_AVAIL_CEILING_PCT;
+    free_says_short && avail_says_short
 }
 
 fn giveback_floor_pages(max_pages: u32) -> u32 {
@@ -1946,7 +1976,8 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
     // balloon-induced thrash from the guest's own workload IO, so a balloon too small to
     // plausibly cause the pain must not be knifed: that was the 08-12 limit cycle, every
     // first step given back the moment it landed and every release lever starved).
-    if ((p.io_full_avg10 >= IO_PRESSURE_HIGH && io_pain_can_be_ours(p.mem_free_kib))
+    if ((p.io_full_avg10 >= IO_PRESSURE_HIGH
+        && io_pain_can_be_ours(p.mem_free_kib, p.mem_available_kib, p.mem_total_kib))
         || p.some_avg60 > PRESSURE_LOW)
         && i.current >= giveback_floor_pages(i.max_pages)
         && desired >= i.current
@@ -2254,6 +2285,43 @@ mod tests {
         assert_eq!(next, Decision::Set(INFLATE_STEP_PAGES));
     }
 
+    /// A streaming reader (restic's nightly backup, measured on the dogfood guest 2026-08-14)
+    /// keeps `MemFree` pinned LOW while it fills page cache, so the free-list ceiling alone
+    /// waves the whole io ladder through: 17.80 G -> 8.56 G in 60 s for a backup job. The
+    /// guest was never short — `MemAvailable` was 10.6 GiB of 15.65, anon just 2.07 GiB, and
+    /// memory PSI flat zero. Free cannot tell "starving" from "healthy with a warm cache",
+    /// because keeping free low IS what the page cache is for.
+    #[test]
+    fn the_io_giveback_arm_declines_a_cache_filling_streaming_reader() {
+        let cur = 3 * GIB_PAGES;
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
+        // The restic shape, in the field's proportions: available 68% of total, free 511 MiB
+        // (UNDER the free ceiling, which is exactly how it evaded the first guard), io-full
+        // 11.17%, memory-some quiet.
+        // The claim is only that the io arm must not KNIFE the balloon here. What the guest
+        // gets instead is the ordinary allowance path (a Set), since 5.5 GiB available against
+        // a 3 GiB balloon genuinely leaves room to inflate — pinning the exact Set would be
+        // asserting the allowance path's arithmetic, which is a different test's job.
+        let p = report_with_io_and_free(0, (11 * GIB_PAGES) / 2, MAX, 1117, 511);
+        let d = decide(&p, &i);
+        assert!(!matches!(d, Decision::GiveBack(_)), "{d:?}");
+
+        // A guest that really is short — low free AND low available, nothing reclaimable to
+        // fall back on — must still fire. This is what the io arm exists for.
+        //
+        // Note the 2026-07-09 wedge itself sat at ~263 MiB available (see `allowance_pages`),
+        // BELOW the allowance, so `desired < current` and this branch never fired for it at
+        // all — `guest_starved` catches that one. The io arm only ever operates in the window
+        // `allowance_pages <= available < GIVEBACK_AVAIL_CEILING_PCT`, so use 3 GiB (37.5%).
+        let p = report_with_io_and_free(0, 3 * GIB_PAGES, MAX, 1117, 590);
+        assert_eq!(decide(&p, &i), Decision::GiveBack(cur - INFLATE_STEP_PAGES));
+
+        // The memory arm stays ungated: real memory pressure releases whatever the cache says.
+        let mut p = report_with_io_and_free(0, 3 * GIB_PAGES, MAX, 0, 511);
+        p.some_avg60 = 707;
+        assert_eq!(decide(&p, &i), Decision::GiveBack(cur - INFLATE_STEP_PAGES));
+    }
+
     /// `report_pages` with the guest's free list set (in pages) — engages the pacing clamp.
     fn report_with_free(
         some_avg10: u32,
@@ -2527,8 +2595,13 @@ mod tests {
     fn pressure_giveback_needs_a_plausibly_causal_balloon() {
         let floor = MAX / 16; // 512 MiB on this VM — above one step, so the ratio governs
         assert_eq!(giveback_floor_pages(MAX), floor);
-        let p = report_with_io(0, MAX / 2, MAX, 4400); // io-full 44%, guest otherwise calm
-                                                       // One standing step (the dogfood shape): not a plausible cause — no give-back.
+        // io-full 44%, guest otherwise calm. `avail` must sit in the window the io arm operates
+        // in at all: at or above `allowance_pages` (1 GiB here) so `desired >= current`, and
+        // below GIVEBACK_AVAIL_CEILING_PCT so the guest reads as short. MAX/2 sat exactly ON
+        // the ceiling — incidental scaffolding for the first condition, not a claim about
+        // availability, and this test is about the give-back FLOOR.
+        let p = report_with_io(0, 3 * GIB_PAGES, MAX, 4400);
+        // One standing step (the dogfood shape): not a plausible cause — no give-back.
         for cur in [INFLATE_STEP_PAGES, floor - 1] {
             let i = inputs(ReclaimMode::Moderate, HostPressure::Warn, cur);
             let d = decide(&p, &i);
