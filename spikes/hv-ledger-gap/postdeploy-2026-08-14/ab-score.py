@@ -25,6 +25,8 @@ PAGE = 4096
 GUEST_GIB = 24
 ALLOWANCE_G = GUEST_GIB / 8
 BAND_PCT = 25
+# Below this, a window is too short for its load-scaling numbers to mean anything cross-sample.
+SHORT_WINDOW_S = 20 * 60
 
 
 def hhmmss(ms):
@@ -105,6 +107,11 @@ def main():
     print(f"{path}")
     print(f"  {hhmmss(rows[0]['ts_ms'])}..{hhmmss(rows[-1]['ts_ms'])}  "
           f"{span_s/60:.1f} min, {len(rows)} decisions, {len(sweeps)} sweep records")
+    if span_s < SHORT_WINDOW_S:
+        print(f"  !! SHORT WINDOW (<{SHORT_WINDOW_S//60} min): do NOT quote the LOAD-DEPENDENT")
+        print("     numbers below against another window. An 11-minute slice of this very build")
+        print("     read as release traffic +57% (a regression); the build's full 80 minutes read")
+        print("     as +6% (flat). The slice had straddled a burst.")
 
     census = collections.Counter(d["decision"] for d in rows)
     print(f"\n  census: {dict(census.most_common())}")
