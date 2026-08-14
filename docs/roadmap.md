@@ -1846,17 +1846,12 @@ wins ships with a before/after on the guest's heavy-band `gpu p50`.
 
 ## Milestone 16 — LiminaOS: a purpose-built guest distribution + system compositor (moonshot)
 
-**Status: 🔨 distro prototype UNDER WAY since 2026-08-13; compositor phase still 💭 unscheduled.**
-The design discussion was captured 2026-08-10; a prototype build leg started 2026-08-13 on a
-dedicated build VM and has already closed this milestone's gating unknown (see *Boot chain*).
+**Status: 🔨 distro prototype under way; compositor phase still 💭 unscheduled.** The boot chain is
+proven on real firmware; the image model below is built and boots.
 
-- **Plan of record for the prototype is `~/Projects/LiminaOS/README.md` on the LiminaOS build VM**,
-  not this section. That build VM is itself a limina guest, and the build leg runs there in its own
-  Claude session. This section is the *design memo* and the durable record of decisions — where
-  the two disagree on build detail, the README is newer.
-- **Two things below were decided in this discussion and later REVERSED by the prototype.** They
-  are corrected in place and flagged, because both were stated confidently here first: the
-  **no-initrd** call (§Boot chain) and the **boot-counting** semantics (§Image model).
+**Plan of record for build detail is `~/Projects/LiminaOS/README.md` on the LiminaOS build VM**, not
+this section. This section is the design memo and the durable record of *decisions*; where the two
+disagree on build detail, the README wins.
 
 **Goal:** our own image-based guest distro on the GNOME OS strategy — **BuildStream** builds on
 the **freedesktop-sdk** base, **systemd-sysupdate** A/B image updates (not OSTree, not packages)
@@ -1911,15 +1906,13 @@ compositor animates.
 **KRUN_EFI → systemd-boot → UKI (kernel + tiny initrd + cmdline) → verity `/usr` → systemd →
 system compositor.**
 
-**PROVEN END-TO-END 2026-08-13**, on byte-identical images across two venues: Half A under
-QEMU/TCG on the build VM, Half B under the **real KRUN_EFI** on a dev Mac. This was risk (b)
-below and the gating unknown for the whole milestone; it is closed. Serial evidence:
-`BdsDxe: loading/starting Boot0001` with **no `Shell>`** (the failure signature never appeared),
-the stub passing the UKI's embedded cmdline through verbatim, virtio-blk enumerating the disk.
-systemd-boot loads from `ESP:/EFI/BOOT/BOOTAA64.EFI` (the removable path), as predicted. Two
-findings only the real-firmware half could produce: **KRUN_EFI's ESP is writable in practice**
-(systemd-boot's boot-count rename `+2-1` → `+1-2` reached the disk through our virtio-blk), and
-our own 16 KiB kernel boots the same chain.
+**This chain is proven on real KRUN_EFI**, booting to a login prompt in ~10s on our own 16 KiB
+kernel, through verity `/usr` and switch-root. systemd-boot loads from
+`ESP:/EFI/BOOT/BOOTAA64.EFI` (the removable path). Two properties worth stating because they are
+easy to assume otherwise: **KRUN_EFI's ESP is writable**, so systemd-boot's boot-count rename
+reaches the disk; and the firmware falls through to PXE **with no error message at all** when it
+cannot read the ESP, so a silent boot failure means "firmware could not read the ESP", not "no
+bootloader".
 
 - **No simpledrm, no framebuffer inheritance:** in a VM, virtio-gpu exists from cycle zero —
   build it in, turn `CONFIG_SYSFB_SIMPLEFB` off, and `/dev/dri/card0` is there before PID 1
@@ -1927,16 +1920,13 @@ our own 16 KiB kernel boots the same chain.
   metal) simply doesn't exist. Consider `CONFIG_VT=n` outright: no fbcon, nothing to fight for
   the DRM device on panic. Text (kmsg, emergency shell, rescue) lives on serial `ttyAMA0` — and
   the Plymouth-details-mode trap that `console=ttyAMA0` causes today dies with Plymouth.
-- **A tiny initrd, inside the UKI. ⚠️ This REVERSES this section's original "no initrd" call**
-  (decision taken 2026-08-13). The reversal follows from moving verity from the *whole root* to
-  **`/usr`** (see §Image model): mounting a verity `/usr` before PID 1 on a merged-usr system
-  needs early userspace, which the ChromeOS-style `CONFIG_DM_INIT` + `dm-mod.create=` whole-root
-  trick was specifically avoiding. What we get back is worth more than the bytes: systemd's paved
-  paths — `systemd-veritysetup-generator`, sysext-in-initrd, repart-on-first-boot, credentials —
-  instead of walking a road nobody else walks. It is still **one signed, measurable UKI object**
-  for sysupdate to replace, so nothing in the update or rollback story changes. The original
-  "watch-item: systemd's blessed paths increasingly assume an initrd exists" was correct and is
-  now simply resolved in systemd's favour.
+- **A tiny initrd, inside the UKI — and do not try to remove it.** The obvious simplification is
+  the ChromeOS-style no-initrd boot (`CONFIG_DM_INIT` + `dm-mod.create=` verity on the whole root),
+  and it does not work here: verity protects **`/usr`**, not the whole root, and mounting a verity
+  `/usr` before PID 1 on a merged-usr system requires early userspace. What the initrd buys is
+  systemd's paved paths — `systemd-veritysetup-generator`, sysext-in-initrd, repart-on-first-boot,
+  credentials — instead of a road nobody else walks. It is still **one signed, measurable UKI
+  object** for sysupdate to replace, so nothing in the update or rollback story changes.
   - **Keep it genuinely tiny — `dracut --no-kernel`.** Everything needed before `/usr` is `=y` by
     our own build-it-in rule, so the initrd needs **no modules at all**. The prototype's first
     attempt shipped the entire kernel module tree and came to 64.9 MB: an initrd whose only job is
@@ -1965,6 +1955,16 @@ our own 16 KiB kernel boots the same chain.
   *is* — was declared that way and happened to resolve to `=y` from defconfig, leaving it correct
   and unprotected at the same time, indistinguishable from correct-and-protected until a defconfig
   change moves it. A module cannot mount the filesystem that contains the modules.
+  - **Two interfaces are needed by consumers that never declare a dependency on them**, so they go
+    silently absent and surface far from the cause. **`CONFIG_DMI_SYSFS=y`** — systemd reads SMBIOS
+    Type 11 credentials from `/sys/firmware/dmi/entries/11-*/raw`; without it that whole tree does
+    not exist and host-set credentials are unreadable, *while the kernel still prints its `DMI:`
+    banner* (that comes from the built-in type 0/1 scan and says nothing about Type 11). Note an
+    absent directory and an empty one look nearly identical to `ls`, so a probe that reads this
+    tree must assert the directory exists or a missing kernel interface reads as a negative result
+    about SMBIOS delivery. **`CONFIG_CRYPTO_SHA256=y`** — dm-verity resolves its hash by name
+    through the crypto API at runtime, so Kconfig happily accepts `DM_VERITY=y` beside a modular
+    SHA-256, and verity then fails at boot with the root filesystem unverified.
 - **`SECONDARY_TRUSTED_KEYRING` is load-bearing for the developer-mode policy.** "Developer mode
   enrolls an additional certificate, it never disables verification" is not just a slogan — the
   builtin keyring carries the LiminaOS key and the secondary keyring is where a locally enrolled
@@ -1972,8 +1972,8 @@ our own 16 KiB kernel boots the same chain.
 
 ### Image model — verity `/usr`, A/B, and where configuration lives
 
-Adopted wholesale from Lennart Poettering's *Fitting Everything Together* (2026-08-13), with the
-deltas our substrate forces. The build system is **BuildStream on a freedesktop-sdk base** — we
+Adopted wholesale from Lennart Poettering's *Fitting Everything Together*, with the deltas our
+substrate forces. The build system is **BuildStream on a freedesktop-sdk base** — we
 occupy `gnome-build-meta`'s position, junction fdsdk and override elements rather than forking it.
 
 - **Discoverable Partitions Spec + `systemd-repart`.** GPT type UUIDs make the image
@@ -1998,10 +1998,10 @@ occupy `gnome-build-meta`'s position, junction fdsdk and override elements rathe
   firmware blob; `--cmdline` reaches the direct-kernel path alone), so the UKI's `.cmdline` is the
   sole source, neither appended to nor overridden. For the same reason systemd-boot ships with
   `editor no`.
-- **⚠️ Boot counting sorts an exhausted entry last; it does NOT refuse it.** The original text
-  here said "exhausted ⇒ skip to the older UKI", which is only half true and misleading in the
-  single-slot case. Observed behaviour: `+3 → +2-1 → +1-2 → +0-3`, after which systemd-boot
-  **reopens `+0-3` and tries it again**. So a single-slot image with a broken UKI is an **infinite
+- **Boot counting sorts an exhausted entry last; it does NOT refuse it.** The natural reading —
+  "tries exhausted ⇒ systemd-boot skips to the older UKI" — is wrong, and wrong in the direction
+  that looks fine in testing. Observed: `+3 → +2-1 → +1-2 → +0-3`, then systemd-boot **reopens
+  `+0-3` and tries it again**. So a single-slot image with a broken UKI is an **infinite
   retry loop, not a rollback**. Protection comes from having a good slot to *prefer*, which means
   **both the bless side (`systemd-bless-boot` / `boot-complete.target`) and a populated B slot must
   exist** before boot counting protects anything at all.
@@ -2024,19 +2024,28 @@ occupy `gnome-build-meta`'s position, junction fdsdk and override elements rathe
   `/usr/lib/sysctl.d/`, …), where an update genuinely replaces it and `/etc` still outranks it for
   admin overrides. Factory `/etc` is reserved for what has no vendor search path, and that list is
   kept small enough to audit.
-  - **The trap this hides:** `systemctl --root preset-all` writes unit *enablement* symlinks into
-    `/etc/systemd/system/*.target.wants/`, which on an empty root never materialise — the image
-    boots to a normal login prompt with networkd, resolved, timesyncd and every socket unit
-    silently absent. fdsdk's own `vm/minimal-secure` has this hole. The fix is to merge preset
-    output into `/usr/lib/systemd/{system,user}` at build time and assert `/etc/systemd/*` is empty
-    afterwards; a `C`-line "fix" would seed the pristine first boot and then be permanently unable
-    to ship a *changed* set of enabled units.
-- **Per-VM secrets ride SMBIOS Type 11, not the cmdline.** ✅ Shipped host-side 2026-08-14:
+  - **Unit enablement must ship in `/usr`, not be left to first boot.** `systemctl --root
+    preset-all` at build time writes enablement symlinks into
+    `/etc/systemd/system/*.target.wants/`, which a hermetic image does not carry. A first boot
+    survives this — systemd runs `preset-all` itself when `/etc` is empty (`Populated /etc with
+    preset unit settings`) — so the defect is **invisible on day one and arrives on day two**:
+    those presets are applied *once* and frozen in `/etc`, so an update that changes the enabled
+    set never reaches an existing guest, and anything enabled at build time that no preset covers
+    is lost outright. Enablement in `/etc` is also indistinguishable from an admin's `systemctl
+    enable`, when it is a vendor default. Fix: merge preset output into
+    `/usr/lib/systemd/{system,user}` at build time and assert `/etc/systemd/*` is empty afterwards.
+    A `C`-line would seed the first boot and then be permanently unable to ship a *changed* set.
+    (`.wants/` directories are a **union** across `/usr` and `/etc`, not an override, so an update
+    can ADD an enabled unit but cannot RETRACT one frozen in `/etc` — pending empirical
+    confirmation on the build leg.)
+- **Per-VM secrets ride SMBIOS Type 11, not the cmdline.** ✅ Shipped host-side:
   `limina --smbios-oem-string` publishes OEM strings the guest's systemd imports as credentials
-  (`io.systemd.credential:<name>=<value>` → `/run/credentials/@system/<name>`), verified
-  end-to-end. Baking a secret into the UKI `.cmdline` would make it per-*image* (shared by every
-  guest built from it, changeable only by rebuilding) and world-readable from `/proc/cmdline`
-  inside the guest. EFI-boot only, since libkrun writes SMBIOS only on the firmware path.
+  (`io.systemd.credential:<name>=<value>` → `/run/credentials/@system/<name>`). Baking a secret
+  into the UKI `.cmdline` would make it per-*image* (shared by every guest built from it,
+  changeable only by rebuilding) and world-readable from `/proc/cmdline` inside the guest.
+  EFI-boot only, since libkrun writes SMBIOS only on the firmware path — and it needs
+  `CONFIG_DMI_SYSFS=y` in the guest kernel (see §Boot chain), without which the credential is
+  delivered but unreadable.
 - **Crypto tier deliberately skipped; verity kept.** KRUN_EFI has no SecureBoot and libkrun has no
   TPM, so LUKS2-sealed-to-TPM2 and PCR measurement have no substrate. We take dm-verity + signed
   images (integrity, rollback protection, measurable objects); confidentiality stays at the host
@@ -2127,12 +2136,11 @@ real cost is not the initial build but the cadence forever after (security updat
 bumps, kernel tracking) — freedesktop-sdk as the base layer is what makes that survivable for a
 small team; inherit it, don't rebuild it.
 
-**In practice the prototype inverted this order**, deliberately and with the sequencing argument
-above still intact: the distro leg started first (2026-08-13) because its gating unknown — does
-KRUN_EFI boot a UKI at all — was cheap to answer and would have invalidated the plan if it failed,
-whereas the compositor's gating unknown (exec-in-place handover) is expensive and invalidates only
-the restart story. Answer the cheap plan-killer first. The compositor remains the thing that ships
-value earliest, and can still land on the Fedora enhanced tier before LiminaOS is usable.
+**The distro leg went first anyway**, on a rule worth reusing: *answer the cheap plan-killer
+first*. "Does KRUN_EFI boot a UKI at all" was answerable in days and would have invalidated the
+whole approach; the compositor's gating unknown (exec-in-place handover) is expensive and
+invalidates only the restart story. The compositor is still what ships value earliest and can land
+on the Fedora enhanced tier before LiminaOS is usable.
 
 **Done test (compositor phase):** an enhanced Fedora guest boots with no Plymouth/GDM into the
 system compositor, host-splash→guest cross-fade is seamless, login/logout are animated with no
@@ -2148,13 +2156,11 @@ running GTK client alive.
 **Risks / spike first:**
 - (a) **exec-in-place handover** on a toy compositor — fd manifest, snapshot round-trip, exec-back
   rollback. Still open, and still the gating unknown for the restart story.
-- (b) ✅ **CLOSED 2026-08-13** — boot chain `KRUN_EFI → systemd-boot → UKI` proven on real
-  firmware, with our own 16 KiB kernel, and the ESP proven writable. Note the spike as *originally
-  scoped* ("no-initrd boot, `root=PARTUUID` + `dm-mod.create=`") was overtaken: the design moved to
-  verity `/usr` + a tiny initrd before the spike ran. Also closed alongside it: offline unprivileged
-  `systemd-repart` works (the item most likely to force a re-layout), and the kernel builds
-  byte-identically across 4 KiB and 16 KiB build hosts — an invariant worth wiring into CI, since
-  anything that breaks it is a regression in *something* even when everything still boots.
+- (b) ✅ **CLOSED** — boot chain `KRUN_EFI → systemd-boot → UKI` proven on real firmware with our
+  own 16 KiB kernel, ESP writable. Closed alongside it: offline unprivileged `systemd-repart`
+  works, and the kernel builds byte-identically across 4 KiB and 16 KiB build hosts — an invariant
+  worth wiring into CI, since anything that breaks it is a regression in *something* even when
+  everything still boots.
 - (c) **passthrough latency** — prove the system compositor adds zero frames on the fullscreen path
   (gamescope's problem) before building the animation layer on top. Still open.
 - (d) **16 KiB-clean userspace is only half-verified.** fdsdk's toolchain (gcc/binutils/glibc) is
