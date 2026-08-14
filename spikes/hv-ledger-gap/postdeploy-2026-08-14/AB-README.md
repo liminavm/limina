@@ -79,6 +79,30 @@ After settle=3 deploys, the numbers to check are the **damped:sent ratio (should
 and the sent-decrease count**, over a window of comparable length and PSI. Release traffic is a
 weak instrument here — it barely moved between two builds with very different deflate behaviour.
 
+## Pre-registered expectations for settle=3 (written 14:45, before any settle=3 data)
+
+Recorded ahead of the window on purpose: these numbers have been misread twice already, and a
+prediction made before looking is the only thing that makes the next reading falsifiable.
+
+From `shortfall_action` semantics, `SHORTFALL_SETTLE_REPORTS = 3` should produce:
+
+- **damped:sent → ~3.0** (from 1.14). This is the primary signal. The win is the transients that
+  recover within 3 reports and so produce *no deflate at all*.
+- **sent shortfalls/hour down roughly 2×.**
+- **median deflate size UP, above 0.459 G.** Counter-intuitive, and the most likely thing to be
+  misread cold: while 3 reports are settled, a persisting transient keeps sagging `avail`, so the
+  deflates that do fire, fire from a deeper shortfall. Larger-but-fewer is the mechanism working,
+  **not** the band failing. A bigger median alone is not a regression.
+- **release traffic flat-to-down; reversals modest down.** Both weak instruments — see above.
+
+The failure signature that *would* condemn settle=3: damped:sent near 3 but memory PSI up and
+`not-calm`/acute releases appearing, i.e. damping delaying real relief to a guest that is genuinely
+eating memory. That is what the 35 never-credited releases at settle=1 were warning about, and it
+is why the constant is the median credit lag and not the p90.
+
+Archive the window as `ab-band-settle3.jsonl` beside the other two **before the next deploy** —
+same one-generation rotation rule that nearly lost the baseline.
+
 A quiet trace proves nothing here. The cycle only appears while the guest is under a compositor
 dev loop; it went silent at 11:24 by itself and again at 13:33. Any future window used as evidence
 needs guest pressure in it — check the PSI columns before drawing a conclusion from calm.
