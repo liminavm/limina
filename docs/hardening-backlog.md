@@ -330,6 +330,16 @@ rects). Remaining:
   NOTE the falsified hypothesis, so it is not retried: inelastic runs are NOT downstream of
   give-backs — 0 of 27 long runs on 08-13 had a give-back in the preceding 120 s, out of 103
   give-backs that day.
+- **The settled-free cooldown lift cannot fire during an io episode, by construction** (observed
+  2026-08-14 01:04). The io-pain fix (3334ef1) resets the settle timer whenever `io_full_avg10`
+  exceeds `IO_PRESSURE_LOW`, so an episode with sustained io pain keeps the timer at zero and the
+  cooldown runs its full `RELEASE_COOLDOWN` (300 s). Measured: `cd_run` reached **226** consecutive
+  cooldown decisions with >1 GiB free during the 23:15 episode. This is the tradeoff we chose
+  deliberately — the alternative is the 21-give-backs-per-minute oscillation the fix removed — but
+  it means the lift only helps *quiet* guests, which is worth knowing before anyone reads a long
+  cooldown as a wedge. NOTE for anyone alerting on it: `cd_run` and `sweep_faults` in
+  `watch-worker.sh` are HIGH-WATER MARKS over the whole trace file, not current values, so a
+  threshold alert on the level fires forever once any single episode crosses it. Alert on growth.
 - **The allowance path overshoots the same way the give-back did** (added 2026-08-13 evening, first
   night of the `GIVEBACK_FREE_CEILING` build). The guard worked: 6 give-backs, all at 552-699 MiB
   free, and at the two ticks where free crossed the ceiling (1358 / 1416 MiB) the decision was
