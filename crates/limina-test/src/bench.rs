@@ -427,10 +427,12 @@ pub struct TraceEvent {
     /// Blended host level acted on ("normal"/"warn"/"critical").
     pub host: String,
     pub current_pages: u64,
-    /// "set", "gap-decay" (a target trimmed to the driver's actual — not a policy release),
+    /// "set", "shortfall" (an allowance deflate: guest available fell below the mode's cache
+    /// allowance), "gap-decay" (a target trimmed to the driver's actual — not a policy release),
     /// "giveback" (a step handed back because the guest sustainedly hurts — io-full storm
     /// or held memory-some — behind the balloon), or the hold gate ("converged"/"not-idle"/
-    /// "dead-band"/"not-calm"/"cooldown"/"dwell"/"free-exhausted"/"inelastic").
+    /// "dead-band"/"not-calm"/"cooldown"/"dwell"/"free-exhausted"/"inelastic"/
+    /// "shortfall-damped").
     pub decision: String,
     pub new_target_pages: Option<u64>,
     pub cooldown_active: bool,
@@ -489,16 +491,20 @@ pub fn parse_trace(jsonl: &str) -> Vec<TraceEvent> {
 }
 
 /// The first *sent* target decrease at/after `t_ms` — the policy's detection instant for a
-/// release. Returns `(ts_ms, from_pages, to_pages)`. Only `"set"` decisions count: a
+/// release. Returns `(ts_ms, from_pages, to_pages)`. Only `"set"` and `"shortfall"` count: a
 /// `"gap-decay"` trim is the driver failing to fill, not the policy detecting anything.
+///
+/// `"shortfall"` is in fact the label S2/S5 detect on — the allowance deflate IS the policy
+/// noticing the guest's burst. It split out of `"set"` when allowance deflates gained their own
+/// verdict (2026-08-14); dropping it here would have made both scenarios silently blind.
 pub fn first_target_decrease_after(trace: &[TraceEvent], t_ms: u64) -> Option<(u64, u64, u64)> {
     trace.iter().find_map(|e| {
         let new = e.new_target_pages?;
-        (e.ts_ms >= t_ms && e.sent && e.decision == "set" && new < e.current_pages).then_some((
-            e.ts_ms,
-            e.current_pages,
-            new,
-        ))
+        (e.ts_ms >= t_ms
+            && e.sent
+            && (e.decision == "set" || e.decision == "shortfall")
+            && new < e.current_pages)
+            .then_some((e.ts_ms, e.current_pages, new))
     })
 }
 
@@ -979,6 +985,31 @@ mod tests {
             Some((2000, 65536, 0))
         );
         assert_eq!(first_target_decrease_after(&trace, 2500), None);
+    }
+
+    /// An allowance deflate carries the `"shortfall"` verdict since 2026-08-14, and it is the
+    /// one S2/S5 actually detect on — filtering `"set"` alone silently blinds both scenarios.
+    #[test]
+    fn a_shortfall_deflate_counts_as_a_detection() {
+        let ev = |ts: u64, decision: &str, cur: u64, tgt: u64| TraceEvent {
+            ts_ms: ts,
+            decision: decision.to_string(),
+            current_pages: cur,
+            new_target_pages: Some(tgt),
+            sent: true,
+            ..Default::default()
+        };
+        let trace = vec![
+            ev(1000, "set", 0, 65536),
+            ev(2000, "shortfall", 65536, 16384),
+        ];
+        assert_eq!(
+            first_target_decrease_after(&trace, 0),
+            Some((2000, 65536, 16384))
+        );
+        // A gap-decay trim is still excluded: that is the driver failing to fill.
+        let decayed = vec![ev(2000, "gap-decay", 65536, 16384)];
+        assert_eq!(first_target_decrease_after(&decayed, 0), None);
     }
 
     #[test]

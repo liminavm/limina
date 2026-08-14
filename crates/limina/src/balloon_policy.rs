@@ -130,6 +130,27 @@ const GIVEBACK_FREE_CEILING: u32 = 1024 * PAGES_PER_MIB;
 /// must agree the guest is short, so each covers the other's blind spot: free caught the
 /// accumulating reader (md5sum, free grew to 5.8 GiB), available catches the consuming one.
 const GIVEBACK_AVAIL_CEILING_PCT: u64 = 50;
+/// Consecutive reports a *fresh* allowance shortfall must persist before the balloon deflates on
+/// it. Convergence parks a Moderate guest at `avail ≈ allowance` by construction (`desired =
+/// current + (avail − allowance)`), so on a busy guest **every** transient crosses the deflate
+/// boundary — that is the steady state, not an edge case. Absorbing a blip is what the allowance
+/// is *for*; acting on a single 1 Hz sample of one is what turned an 0.85 G transient into 2.8 G
+/// of balloon movement on the dogfood guest (2026-08-14, ~19 s period, 60 reversals in 50 min,
+/// 106 GB of release traffic in 52 min with guest PSI flat at 0.00%).
+const SHORTFALL_PERSIST_REPORTS: u32 = 2;
+/// Reports to skip the shortfall term after a *sent* shortfall deflate. Two independent
+/// staleness sources make a back-to-back second deflate double-count the first, and a clamp
+/// against the driver's `actual` catches only one of them:
+/// - **meminfo lag** (2026-08-14 10:52): `actual` had already reached the target sent one report
+///   earlier (the driver deflates at ~2.5 GiB/s, well inside one report), but `avail` had
+///   credited only 0.47 G of the 0.94 G already returned — so the shortfall read as still open.
+/// - **driver lag** (same day, 11:23): targets walked 13.49 → 12.16 → 11.01 G while `actual` was
+///   still 14.39/14.07 G.
+///
+/// Either way the guest received 1.41 G for a 1.05 G shortfall. One report of settle covers both
+/// shapes; both are regression-tested, because a fix that reasons from `actual` passes the second
+/// and silently fails the first.
+const SHORTFALL_SETTLE_REPORTS: u32 = 1;
 /// io-PSI `full` avg10 above which a cache dig in force (an inelastic verdict at host
 /// Warn/Critical) is paced down to the trickle: dropping cold cache is free, so full speed is
 /// fine while io-PSI stays quiet — refaults pushing io-full past this mean the squeeze is
@@ -487,6 +508,12 @@ struct State {
     /// Consecutive sent give-backs in the current episode: doubles the give-back step (see
     /// [`GIVEBACK_MAX_SHIFT`]). Advanced by [`giveback_streak_next`]; cleared by a scrub start.
     giveback_streak: u32,
+    /// Consecutive reports showing guest available below the mode's allowance. Reset by any
+    /// report that is not short (see [`shortfall_action`] / [`SHORTFALL_PERSIST_REPORTS`]).
+    shortfall_run: u32,
+    /// Reports still owed to a sent shortfall deflate before the shortfall term may act again
+    /// (see [`SHORTFALL_SETTLE_REPORTS`]).
+    shortfall_settle: u32,
     /// Downward hysteresis over the blended host level (see [`HOST_DEMOTE_SUSTAIN`]).
     host_debounce: HostDebounce,
     /// `LIMINA_BALLOON_TRACE` decision journal: one JSON line per consumed report.
@@ -710,6 +737,8 @@ impl BalloonPolicy {
                 inelastic: None,
                 host_debounce: HostDebounce::new(),
                 giveback_streak: 0,
+                shortfall_run: 0,
+                shortfall_settle: 0,
                 trace,
             })),
         }
@@ -933,6 +962,17 @@ impl BalloonPolicy {
             None
         };
         let free_settled_for = st.free_settled_since.map(|t| now.duration_since(t));
+        // Allowance-shortfall damping. Derived here rather than inside `decide` because it is
+        // per-report *state* (a run length and a settle countdown), and `decide` stays pure.
+        let shortfall_now = match allowance_pages(self.mode, host.blended, self.max_pages) {
+            Some(allow) if allow > 0 => {
+                ((p.mem_available_kib / 4).min(u32::MAX as u64) as u32) < allow
+            }
+            _ => false,
+        };
+        let sf = shortfall_action(st.shortfall_run, st.shortfall_settle, shortfall_now);
+        st.shortfall_run = sf.run;
+        st.shortfall_settle = sf.settle;
         let inputs = DecideInputs {
             mode: self.mode,
             host: host.blended,
@@ -945,16 +985,26 @@ impl BalloonPolicy {
             inelastic: st.inelastic.is_some(),
             giveback_streak: st.giveback_streak,
             free_settled_for,
+            shortfall_damped: sf.damped,
             now,
         };
         let mut decision = decide(p, &inputs);
         let mut sent = false;
-        if let Decision::Set(new_target) | Decision::GiveBack(new_target) = decision {
+        if let Decision::Set(new_target)
+        | Decision::GiveBack(new_target)
+        | Decision::Shortfall(new_target) = decision
+        {
             let old_target = st.target_pages;
             sent = send_target(&self.socket, &mut st, new_target);
             if sent {
                 st.target_pages = new_target;
                 st.last_change = Some(now);
+                if matches!(decision, Decision::Shortfall(_)) {
+                    // The next report's meminfo cannot have credited this release yet, and the
+                    // driver may still be deflating into it: either way the shortfall it reads
+                    // is partly this one, already paid.
+                    st.shortfall_settle = SHORTFALL_SETTLE_REPORTS;
+                }
                 if matches!(decision, Decision::GiveBack(_)) {
                     // Like any release: the guest just proved (through io) that it needs its
                     // memory — don't take the give-back right back the moment io settles.
@@ -1733,12 +1783,59 @@ struct DecideInputs {
     /// How long the guest's free list has continuously held capturable headroom, if it has
     /// (see [`SETTLED_FREE_FOR`]). The one thing that lets a capture through the cooldown.
     free_settled_for: Option<Duration>,
+    /// Don't act on the allowance shortfall this report: it has not persisted long enough to be
+    /// more than a transient, or a shortfall deflate we already sent has not been credited by
+    /// this reading yet (see [`shortfall_action`]). Affects ONLY the shortfall term — every
+    /// other release path is untouched.
+    shortfall_damped: bool,
     now: Instant,
 }
 
 /// Whether a settled free list has earned its way past the post-release cooldown (pure).
 fn settled_free_lifts_cooldown(free_settled_for: Option<Duration>) -> bool {
     free_settled_for.is_some_and(|d| d >= SETTLED_FREE_FOR)
+}
+
+/// One report's worth of allowance-shortfall damping state (see [`shortfall_action`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ShortfallAction {
+    /// The new consecutive-shortfall run length.
+    run: u32,
+    /// Settle reports still owed after this one.
+    settle: u32,
+    /// Do NOT act on the shortfall term this report.
+    damped: bool,
+}
+
+/// Advance the allowance-shortfall damping state for one consumed report (pure).
+///
+/// Damping is deliberately confined to the *allowance shortfall* — the one deflate driven by a
+/// derived, lagging statistic. The acute release (`some_avg10 >= PRESSURE_HIGH`), the
+/// [`guest_starved`] release and the pressure give-back all stay immediate and unconditional:
+/// gating deflation is what produced both the 2026-07-03 limit cycle and the 2026-07-09
+/// sticky-Warn wedge, and those paths must never wait on a counter.
+///
+/// A settle in force wins over the persistence run: the run may look long precisely *because*
+/// the reading has not yet caught up with the release we already sent.
+fn shortfall_action(run: u32, settle: u32, shortfall_now: bool) -> ShortfallAction {
+    let run = if shortfall_now {
+        run.saturating_add(1)
+    } else {
+        0
+    };
+    if settle > 0 {
+        ShortfallAction {
+            run,
+            settle: settle - 1,
+            damped: true,
+        }
+    } else {
+        ShortfallAction {
+            run,
+            settle: 0,
+            damped: shortfall_now && run < SHORTFALL_PERSIST_REPORTS,
+        }
+    }
 }
 
 /// The cache allowance for a mode/host-pressure pair: how much of the guest's memory the policy
@@ -1821,8 +1918,8 @@ fn guest_starved(p: &MemPressure) -> bool {
 /// the episode; `Hold(Dwell)` preserves it (the only dwells that can coexist with a nonzero
 /// streak are give-back-path dwells: every sent give-back arms [`RELEASE_COOLDOWN`], so the
 /// inflation path answers `Cooldown`, not `Dwell`, for the next 300 s); anything else — an
-/// allowance move, a decay, any other hold, or a give-back the socket failed to deliver —
-/// ends the episode and the next one starts back at the small step.
+/// allowance move (`Set` or `Shortfall`), a decay, any other hold, or a give-back the socket
+/// failed to deliver — ends the episode and the next one starts back at the small step.
 fn giveback_streak_next(streak: u32, decision: Decision, sent: bool) -> u32 {
     match decision {
         Decision::GiveBack(_) if sent => streak.saturating_add(1),
@@ -1848,6 +1945,12 @@ enum Decision {
     /// fine — deflate one step to this target (pages). Distinct from `Set` so the trace
     /// tells a give-back from an allowance deflate.
     GiveBack(u32),
+    /// Allowance shortfall: guest available fell below the mode's cache allowance, so the target
+    /// gives the difference back (pages). Distinct from `Set` for the same reason `GiveBack` is —
+    /// but here the caller also *needs* the distinction, to arm [`SHORTFALL_SETTLE_REPORTS`]
+    /// without re-deriving which release path fired. It is the one deflate driven by a derived,
+    /// lagging statistic, and the only one that is damped.
+    Shortfall(u32),
     /// Leave the current target alone.
     Hold(Hold),
 }
@@ -1856,7 +1959,10 @@ impl Decision {
     /// The commanded target, if any (test/trace convenience).
     fn target(self) -> Option<u32> {
         match self {
-            Decision::Set(t) | Decision::Decay(t) | Decision::GiveBack(t) => Some(t),
+            Decision::Set(t)
+            | Decision::Decay(t)
+            | Decision::GiveBack(t)
+            | Decision::Shortfall(t) => Some(t),
             Decision::Hold(_) => None,
         }
     }
@@ -1867,6 +1973,7 @@ impl Decision {
             Decision::Set(_) => "set",
             Decision::Decay(_) => "gap-decay",
             Decision::GiveBack(_) => "giveback",
+            Decision::Shortfall(_) => "shortfall",
             Decision::Hold(Hold::Converged) => "converged",
             Decision::Hold(Hold::NotIdle) => "not-idle",
             Decision::Hold(Hold::DeadBand) => "dead-band",
@@ -1875,6 +1982,7 @@ impl Decision {
             Decision::Hold(Hold::Dwell) => "dwell",
             Decision::Hold(Hold::FreeExhausted) => "free-exhausted",
             Decision::Hold(Hold::Inelastic) => "inelastic",
+            Decision::Hold(Hold::ShortfallDamped) => "shortfall-damped",
         }
     }
 }
@@ -1903,6 +2011,11 @@ enum Hold {
     /// through a MemFree reading the kernel holds at its watermark equilibrium. Released when
     /// the guest's free list genuinely rises ([`INELASTIC_FREE_RISE_KIB`]).
     Inelastic,
+    /// Deflation gate, and the ONLY one: an allowance shortfall was seen but not acted on — it
+    /// has not persisted [`SHORTFALL_PERSIST_REPORTS`] yet, or a shortfall deflate already sent
+    /// is still settling ([`SHORTFALL_SETTLE_REPORTS`]). The target does not move; every other
+    /// release path is still live on this same report.
+    ShortfallDamped,
 }
 
 /// The pure policy decision (unit-tested): given a pressure report and the current state, return
@@ -1931,6 +2044,11 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
         };
     }
 
+    // Set by the allowance arm below: whether this report's `desired` came from a shortfall (so
+    // the verdict is labelled `Shortfall` and the caller arms the settle), and whether a
+    // shortfall was seen but deliberately not acted on.
+    let mut from_shortfall = false;
+    let mut damped = false;
     let desired = match allowance_pages(i.mode, i.host, i.max_pages) {
         // Host is fine and the mode says don't hold a balloon at all: give it all back.
         None => 0,
@@ -1950,7 +2068,14 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
             let avail_pages = (p.mem_available_kib / 4).min(u32::MAX as u64) as u32;
             if avail_pages >= allow {
                 i.current.saturating_add(avail_pages - allow).min(i.room)
+            } else if i.shortfall_damped {
+                // Leave the target where it is. `desired == current` deliberately, so the
+                // give-back arm below (which needs `desired >= i.current`) stays reachable on
+                // this report — damping the allowance term must not also mute the give-back.
+                damped = true;
+                i.current
             } else {
+                from_shortfall = true;
                 i.current.saturating_sub(allow - avail_pages)
             }
         }
@@ -1994,6 +2119,15 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
         // means the shortfall is deep — walk it down in dwells-log time, not dwells-linear.
         let step = INFLATE_STEP_PAGES << i.giveback_streak.min(GIVEBACK_MAX_SHIFT);
         return Decision::GiveBack(i.current.saturating_sub(step));
+    }
+
+    // Placed after the give-back arm on purpose: a damped report must still be able to give back
+    // on its own trigger. Purely a labelling return — with `desired == current` the fall-through
+    // would answer `Hold(Converged)` and move nothing either way, and "converged" would hide the
+    // one state a reader needs to see here (same conflation family as `free-exhausted` reading
+    // as "the guest has nothing left" when it means "the pacing clamp bound this step").
+    if damped {
+        return Decision::Hold(Hold::ShortfallDamped);
     }
 
     if desired.abs_diff(i.current) < DEAD_BAND_PAGES && desired != 0 {
@@ -2076,10 +2210,12 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
         };
         i.current.saturating_add(step).min(desired)
     };
-    if next != i.current {
-        Decision::Set(next)
-    } else {
+    if next == i.current {
         Decision::Hold(Hold::Converged)
+    } else if from_shortfall && next < i.current {
+        Decision::Shortfall(next)
+    } else {
+        Decision::Set(next)
     }
 }
 
@@ -2116,6 +2252,8 @@ mod tests {
                 inelastic: None,
                 host_debounce: HostDebounce::new(),
                 giveback_streak: 0,
+                shortfall_run: 0,
+                shortfall_settle: 0,
                 trace: None,
             }
         }
@@ -2148,6 +2286,10 @@ mod tests {
             last_change: None,
             cooldown_until: None,
             free_settled_for: None,
+            // Default = "the shortfall has already earned the right to act". These tests drive
+            // the pure `decide`; the persistence/settle counters are the caller's state and are
+            // exercised through `shortfall_action` and the cases that set this explicitly.
+            shortfall_damped: false,
             now: Instant::now(),
         }
     }
@@ -2213,6 +2355,140 @@ mod tests {
         assert_eq!(next, Decision::Hold(Hold::Converged));
     }
 
+    // ------------------------------------------------------------------
+    // Allowance-shortfall damping (2026-08-14 limit cycle). Field write-up:
+    // spikes/hv-ledger-gap/postdeploy-2026-08-14/NOTES.md.
+    // ------------------------------------------------------------------
+
+    /// A transient that clears on the next report must never move the balloon. On the dogfood
+    /// guest these arrived every ~19 s (a compositor dev loop allocating ~0.85 G and freeing it
+    /// within ~3 s) and each one cost a 1.41 G deflate plus 14 s of re-inflation.
+    #[test]
+    fn a_one_report_shortfall_never_deflates() {
+        // Report 1: short, but this is the first sighting — damped.
+        let a = shortfall_action(0, 0, true);
+        assert!(a.damped);
+        assert_eq!(a.run, 1);
+        // Report 2: the guest freed it again. The run resets, so nothing was ever acted on.
+        let b = shortfall_action(a.run, a.settle, false);
+        assert!(!b.damped);
+        assert_eq!(b.run, 0);
+    }
+
+    /// Damping delays a real shortfall by one report; it must not suppress it.
+    #[test]
+    fn a_sustained_shortfall_deflates_on_the_second_report() {
+        let a = shortfall_action(0, 0, true);
+        assert!(a.damped, "first sighting is damped");
+        let b = shortfall_action(a.run, a.settle, true);
+        assert!(!b.damped, "the second consecutive report acts");
+        assert_eq!(b.run, SHORTFALL_PERSIST_REPORTS);
+        // …and it keeps acting while the shortfall stands (the caller arms the settle on a SENT
+        // deflate; this path is the un-sent case, e.g. the socket write failed).
+        let c = shortfall_action(b.run, b.settle, true);
+        assert!(!c.damped);
+    }
+
+    /// The **meminfo-lag** shape (2026-08-14 10:52): `actual` had already reached the target sent
+    /// one report earlier, but `avail` had credited only half the release, so the shortfall still
+    /// read as open and a second deflate double-counted the first — 1.41 G handed back for a
+    /// 1.05 G shortfall. A clamp against the driver's `actual` cannot see this at all.
+    #[test]
+    fn a_sent_shortfall_deflate_settles_for_one_report() {
+        // The shortfall has persisted and just been acted on: caller armed the settle.
+        let a = shortfall_action(SHORTFALL_PERSIST_REPORTS, SHORTFALL_SETTLE_REPORTS, true);
+        assert!(a.damped, "the reading has not credited the release yet");
+        assert_eq!(
+            a.settle, 0,
+            "one report of settle, then re-arm on the next send"
+        );
+        // The report after that acts again if the shortfall is genuinely still there.
+        let b = shortfall_action(a.run, a.settle, true);
+        assert!(!b.damped);
+    }
+
+    /// A settle in force outranks the persistence run: a long run is exactly what a stale
+    /// reading produces, so the run must not be able to override the settle.
+    #[test]
+    fn the_settle_outranks_a_long_persistence_run() {
+        let a = shortfall_action(99, SHORTFALL_SETTLE_REPORTS, true);
+        assert!(a.damped);
+    }
+
+    /// The **driver-lag** shape (2026-08-14 11:23): targets walked 13.49 → 12.16 → 11.01 G while
+    /// the driver's `actual` was still 14.39/14.07 G. Same settle covers it — kept as its own
+    /// case because a fix reasoning from `actual` passes this one and fails the meminfo-lag test
+    /// above, and the pair is what stops that fix from looking correct.
+    #[test]
+    fn a_damped_report_does_not_deflate_even_with_the_driver_lagging() {
+        let cur = 3 * GIB_PAGES;
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
+        i.last_change = Some(i.now);
+        i.actual_pages = Some(cur + GIB_PAGES); // driver still deflating into the last target
+        i.shortfall_damped = true;
+        let p = report_pages(0, GIB_PAGES / 4, MAX); // deep shortfall against the 1 GiB allowance
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::ShortfallDamped));
+    }
+
+    /// The damped verdict gets its own label rather than reading as `converged`. The
+    /// `free-exhausted`/`inelastic` conflations both cost real debugging time by naming a state
+    /// something a reader would reasonably misread; this one does not repeat that.
+    #[test]
+    fn a_damped_shortfall_holds_without_moving_the_target() {
+        let cur = 5 * GIB_PAGES;
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
+        i.last_change = Some(i.now);
+        i.shortfall_damped = true;
+        let d = decide(&report_pages(0, GIB_PAGES / 4, MAX), &i);
+        assert_eq!(d, Decision::Hold(Hold::ShortfallDamped));
+        assert_eq!(d.target(), None, "a damped report must command nothing");
+        assert_eq!(d.label(), "shortfall-damped");
+    }
+
+    /// GUARDRAIL. Damping is confined to the allowance term: the acute release must fire at any
+    /// damping state, in every mode. Gating deflation is what produced the 2026-07-03 limit cycle
+    /// and the 2026-07-09 sticky-Warn wedge.
+    #[test]
+    fn damping_never_reaches_the_acute_release() {
+        for mode in [
+            ReclaimMode::Light,
+            ReclaimMode::Moderate,
+            ReclaimMode::Aggressive,
+        ] {
+            let mut i = inputs(mode, HostPressure::Normal, 3 * GIB_PAGES);
+            i.shortfall_damped = true;
+            // avg10 at the panic threshold.
+            let p = report_pages(PRESSURE_HIGH, GIB_PAGES, MAX);
+            assert_eq!(decide(&p, &i), Decision::Set(0), "{mode:?}");
+        }
+    }
+
+    /// GUARDRAIL. Same for the starvation release, whose whole point is that it fires when the
+    /// memory-PSI arm is silent.
+    #[test]
+    fn damping_never_reaches_the_starvation_release() {
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 3 * GIB_PAGES);
+        i.shortfall_damped = true;
+        // Available under max(256 MiB, total/64) with PSI quiet: `guest_starved`.
+        let p = report_pages(0, PAGES_PER_MIB, MAX);
+        assert!(guest_starved(&p));
+        assert_eq!(decide(&p, &i), Decision::Set(0));
+    }
+
+    /// GUARDRAIL. A damped report sets `desired == current`, which keeps the give-back arm's
+    /// `desired >= i.current` precondition satisfied — damping the allowance term must not
+    /// silently mute the give-back, which answers a different question (is the guest hurting
+    /// *behind* the balloon) on evidence the allowance never sees.
+    #[test]
+    fn a_damped_report_can_still_give_back() {
+        let cur = 3 * GIB_PAGES;
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
+        i.shortfall_damped = true;
+        // io-full storm, free list under the ceiling, available under the ceiling: the io arm.
+        let p = report_with_io_and_free(0, GIB_PAGES / 4, MAX, IO_PRESSURE_HIGH, 128);
+        assert_eq!(decide(&p, &i), Decision::GiveBack(cur - INFLATE_STEP_PAGES));
+    }
+
     #[test]
     fn moderate_gives_cache_back_when_guest_dips_below_allowance() {
         // Guest available fell to 256 MiB (< 1 GiB allowance) while idle: deflate by the
@@ -2222,7 +2498,7 @@ mod tests {
         let next = decide(&report_pages(0, GIB_PAGES / 4, MAX), &i);
         assert_eq!(
             next,
-            Decision::Set(3 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4))
+            Decision::Shortfall(3 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4))
         );
     }
 
@@ -2526,7 +2802,7 @@ mod tests {
         let p = report_with_io(0, GIB_PAGES / 4, MAX, 2000);
         assert_eq!(
             decide(&p, &i),
-            Decision::Set(cur - (GIB_PAGES - GIB_PAGES / 4))
+            Decision::Shortfall(cur - (GIB_PAGES - GIB_PAGES / 4))
         );
     }
 
@@ -2899,7 +3175,7 @@ mod tests {
         let next = decide(&report_pages(700, GIB_PAGES / 4, MAX), &i);
         assert_eq!(
             next,
-            Decision::Set(5 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4))
+            Decision::Shortfall(5 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4))
         );
     }
 
@@ -2944,7 +3220,7 @@ mod tests {
         let next = decide(&report_pages(700, GIB_PAGES / 4, MAX), &i);
         assert_eq!(
             next,
-            Decision::Set(5 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4))
+            Decision::Shortfall(5 * GIB_PAGES - (GIB_PAGES - GIB_PAGES / 4))
         );
     }
 
@@ -3028,7 +3304,7 @@ mod tests {
         let avail = 600 * PAGES_PER_MIB;
         let allow = max / 16;
         let next = decide(&report_pages(300, avail, max), &i);
-        assert_eq!(next, Decision::Set(21 * GIB_PAGES - (allow - avail)));
+        assert_eq!(next, Decision::Shortfall(21 * GIB_PAGES - (allow - avail)));
     }
 
     /// The trace line is consumed by the bench summarizer: keys and shapes are a contract.
