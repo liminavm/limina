@@ -446,6 +446,36 @@ Two gotchas that cost a run each, both of the same "verify, don't assume" shape:
 Run it like any enhanced image: `cargo xtask run --disk Fedora-Workstation-44.enhanced.synoik.raw`
 (pass `LIMINA_BOOT_LOG=<path>` when a second VM is up, or the two share one worker log).
 
+##### Rebuilding it (and retargeting to F45)
+
+The guest-side work is scripted: **`scripts/provision/f44/install-synoik-session.sh`**, which
+runs **in the guest** and is idempotent (re-run it to update synoik). It installs the build
+deps, clones/updates `~/synoik`, builds, and calls synoik's own `install-test-session.sh` —
+never hand-roll the systemd drop-in, since the installer is the source of truth for it and for
+the private GSettings schema dir.
+
+Host-side bracket, from the repo root:
+
+```sh
+cp -c Fedora-Workstation-44.enhanced.test.raw Fedora-Workstation-44.enhanced.synoik.raw  # APFS CoW, instant
+cargo xtask run --disk Fedora-Workstation-44.enhanced.synoik.raw                          # boots with --net
+# read the auto-allocated port from the worker log: "guest SSH forward ready: ssh -p N ..."
+scp -P <N> scripts/provision/f44/install-synoik-session.sh claude@127.0.0.1:
+ssh -p <N> claude@127.0.0.1 './install-synoik-session.sh'
+# then reboot the guest; power it off cleanly before using the image
+```
+
+`cp -c` is load-bearing: it CoW-clones 40 G instantly, and the image **boots in place**, so
+always clone before a run you don't want persisted.
+
+**For a Fedora 45 test target**, the script itself should carry over unchanged — it installs by
+package name and builds from source, with nothing F44-specific in it. What needs re-deciding is
+the *base*: build the F45 enhanced image first (kernel + mesa RPMs against F45 SRPMs, per this
+directory's README), then point the clone at that instead of `enhanced.test.raw`. Expect the
+dep list to be the drift point — it mirrors `synoik.spec.rpkg`'s `BuildRequires` by hand
+(the `.rpkg` macros don't expand outside an rpkg checkout, so `dnf builddep` isn't usable),
+so re-check it against the spec when the base moves.
+
 #### Rebuilding `enhanced.raw` from the accessible base (validated 2026-07-05)
 
 `install-enhanced.sh` delivers RPMs but deliberately does **NOT** resize the disk (it must also
