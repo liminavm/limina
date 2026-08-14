@@ -330,6 +330,15 @@ rects). Remaining:
   NOTE the falsified hypothesis, so it is not retried: inelastic runs are NOT downstream of
   give-backs — 0 of 27 long runs on 08-13 had a give-back in the preceding 120 s, out of 103
   give-backs that day.
+- **Cadence sweeps keep firing at near-zero yield on a settled idle guest** (observed overnight
+  2026-08-14, low priority). On an idle dogfood guest the cadence sweep ran every ~30 min for
+  hours, debiting **44 / 47 / 54 MiB** per run — against 1,893-3,042 MiB for the demand sweeps
+  during the evening's activity. The sweep is cheap (13 ms for 1,752 MiB historically) so this is
+  waste, not harm, and the `DemandHoldoff` yield-guard machinery already knows how to recognise a
+  low-yield sweep — it just isn't applied to the *cadence* path. Cheapest fix is probably to let a
+  cadence sweep that yields under `DEMAND_SWEEP_MIN_YIELD` push its own next-due time out, so a
+  settled guest stops paying for a walk that reclaims nothing. Do not treat this as urgent: on a
+  16 KiB-page host the walk is short, and the counters above are the whole evidence base.
 - **The settled-free cooldown lift cannot fire during an io episode, by construction** (observed
   2026-08-14 01:04). The io-pain fix (3334ef1) resets the settle timer whenever `io_full_avg10`
   exceeds `IO_PRESSURE_LOW`, so an episode with sustained io pain keeps the timer at zero and the
