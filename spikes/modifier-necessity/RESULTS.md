@@ -624,3 +624,141 @@ measurement arms later; the residual-0015 section above).
 Lesson, again: **the masked path is the one that breaks.** 0010(b) didn't just fabricate an
 extension table — it locally answered queries the host was never asked, and every consumer of
 those answers was untested against the real host until the fabrication died.
+
+## 2026-08-14 — re-measuring the MTLTEXTURE gate before flipping its default (task #26)
+
+The 08-04 A/B above (gate-on 1518 vs gate-off 1527 on vkmark, "adoption counts 3→16") was taken
+the same day KK's **native** `VK_EXT_image_drm_format_modifier` landed, and one day before the
+MTL4 rebase. Re-measured both from scratch rather than re-read, and the shape has changed.
+
+### The gate has two halves and only ONE is still reachable
+
+`LIMINA_KK_MTLTEXTURE_SCANOUT` is read at five sites: two in `vkr_image.c` (the create-side
+export half + its import twin) and three in `vkr_device_memory.c` (the memory-import half).
+In `vkr_image.c` the `else if (limina_native_mod)` branch now sits **ahead** of the `else` that
+holds the create-side gate, so on KK every modifier-tiled create — i.e. every scanout image a
+GBM/venus client allocates — takes the native-modifier branch and the create-side gate is
+never evaluated.
+
+Measured on the F44 enhanced GNOME image, seated desktop, gate ON:
+
+| path (log line)                            | count |
+|--------------------------------------------|-------|
+| `KK linear scanout image` (native-mod)     | 3     |
+| `KK MTLTEXTURE scanout` (create-side gate) | **0** |
+| `scanout memory <- MTLTEXTURE` (mem half)  | 3     |
+| `LIMINA-KK-IMPORT adopted MTLTexture` (KK) | 3     |
+| `no zero-copy` (pitch-mismatch drop)       | 0     |
+
+So the live configuration is a **hybrid**: the image is created by the native-modifier path
+(LINEAR, KK's own truthful pitch, IOSurface allocated to match), and then the memory-side gate
+hands KK that IOSurface's **MTLTexture** instead of host-pointer-importing its bytes. KK adopts
+it (`linear=1`) and the desktop renders. This hybrid — not the create-side path — is what the
+08-04 "3→16 adoptions" actually measured.
+
+### The A/B at an unaligned width: no differential
+
+The gate's design claim is "no pitch to match, so the *IOSurface pitch != image rowPitch → no
+zero-copy* failure mode goes away". That claim belongs to the **create-side** half, which is
+now dead. Tested at `--display-resolution 1974x1200` (1974*4 = 7896, not 256-aligned — the
+width class that sheared GTK4 windows on 08-04):
+
+| arm      | create path | rowPitch | IOSurface bpr | drops | KK adoptions |
+|----------|-------------|---------:|--------------:|------:|-------------:|
+| gate OFF | native-mod  | 7904     | 7904          | 0     | 0            |
+| gate ON  | native-mod  | 7904     | 7904          | 0     | 3            |
+
+Identical create-side behaviour; the pitches **match in both arms**. They match because the
+stride fix (virglrenderer limina `5c76245`) forces the IOSurface's `bytesPerRow` to Metal's
+minimum linear alignment, which is what KK computes too. The failure mode MTLTEXTURE was meant
+to design away has already been closed by a different fix, on the path that is still live.
+
+**Conclusion: flipping the default is a mechanism swap, not a coverage or perf win.** Off-gate
+the memory aliases the IOSurface's bytes via `VK_EXT_external_memory_host`; on-gate it adopts
+the IOSurface's texture via `VK_EXT_external_memory_metal`. Both work at both widths. The one
+real argument for the swap is failure behaviour, not capability: KK validates the texture
+against the image at bind and **fails loudly** on a mismatch, whereas the host-pointer path is
+the one whose mismatches Metal can silently no-op (the MoltenVK note in `vkr_image.c`).
+The stride fix stays load-bearing either way — the flip does not retire it.
+
+### Measurement trap: TWO log filters, and only `fprintf` is trustworthy
+
+The first three runs of this measurement read "create-side dead AND native-mod dead", which is
+false. `vkr_log` is INFO-level (`vkr_common.c:261`) and gets dropped **twice**: virglrenderer's
+own `virgl_log_level` defaults to WARNING/ERROR (`virgl_util.c:196`) and drops the message
+before it is ever handed to rutabaga, and whatever survives then meets the Rust `RUST_LOG=warn`
+default. `vkr_log_error` is the ERROR twin and always shows, which is why the GPU-budget lines
+were visible and made the log look healthy. Both filters must be opened —
+`VIRGL_LOG_LEVEL=info RUST_LOG=krun_rutabaga_gfx=info` — and `RUST_LOG=debug` alone is worse
+than useless here: it floods with per-MMIO `EC_DATAABORT` traces and strangles the boot.
+
+The only lines that never lie are the raw `fprintf(stderr, ...)` ones, which is what made the
+create-side-vs-memory-side asymmetry provable: same env var, same process, memory half fired
+3×, create half 0×, with no logging in the path.
+
+### Independent corroboration: the 300-flip IOSurface site census
+
+`spikes/venus-churn-retention/RESULTS.md` had already tagged every IOSurface allocation site in
+vkr and counted them across a 300-flip churn, months before this pass:
+
+| site | allocations |
+|---|---|
+| B `vkr_image.c` mtltexture (create-side gate) | **0** |
+| C `vkr_image.c` kk_linear (native modifier)   | **602** |
+
+That was read at the time as "0 because the gate is off". It is 0 for a *structural* reason —
+row C claims every modifier-tiled create before row B is reached — and would still read 0 with
+the gate on, which is exactly what this pass measured directly. Worth noting as a reading
+failure, not a measurement failure: the number was right and sitting in the repo, but a gated
+feature next to a zero invites the lazy explanation and nobody checked which one was true.
+
+### What was flipped, and what was deliberately NOT
+
+Flipped: the default is now ON, `LIMINA_KK_MTLTEXTURE_SCANOUT=0` opts out. All four parse sites
+were replaced by ONE cached parse (`vkr_limina_mtltex_scanout()` in `vkr_common.c`) — the halves
+must agree, since an image created down the MTLTEXTURE branch bound to host-pointer memory is
+corruption rather than a fallback, and a single answer makes that unrepresentable.
+
+NOT done, on purpose: the two shadowed create-side branches were left in place. They are dead
+under every client measured (GNOME + synoik), but they are the only path for an external-memory
+create carrying no modifier struct, and "measured on two clients" is not "cannot happen".
+Retiring them is a candidate for its own pass — the `LIMINA_KK_SLIMROOT` lesson (a flag forwarded
+long after anything read it) argues for doing it eventually, and equally for not bundling it into
+an unrelated change.
+
+### Verification of the flip
+
+| arm | scanout creates | MTLTEX mem imports | KK adoptions | create-side | drops | ring FATAL |
+|---|---:|---:|---:|---:|---:|---:|
+| F44 GNOME, default (no env)   | 3 | 3 | 3 | 0 | 0 | 0 |
+| F44 GNOME, `=0` override      | 3 | 0 | 0 | 0 | 0 | 0 |
+| F44 GNOME, `=1` @1974 wide    | 3 | 3 | 3 | 0 | 0 | 0 |
+| F44 GNOME, off @1974 wide     | 3 | 0 | 0 | 0 | 0 | 0 |
+| synoik (Vulkan compositor)    | 2 | 4 | 4 | 0 | 0 | 0 |
+
+The `=0` arm is the override proof: the gate genuinely reaches the worker in the direction that
+now matters. Full HVF suite run after the flip; result read from the log, not from the launch
+command's exit status.
+
+### Decision (2026-08-14)
+
+Shipped ON despite the neutral A/B, on error-handling grounds: a mismatch that returns
+`VK_ERROR_INVALID_EXTERNAL_HANDLE` from `vkBindImageMemory` — naming which of geometry/format/
+usage failed, with both sides' dimensions, type, format and usage masks — is worth real debugging
+time later, against a failure mode where every layer reports success and the only evidence is a
+window that renders stale or sheared. The magenta-surface incident is the precedent: a
+prefilled scanout stayed pure magenta while the guest believed it had drawn.
+
+Note what "loud" does and does not buy. It is an **error return, not a host abort** — the VMM
+survives (checked deliberately: an abort would have been a worse trade than sheared pixels). But
+it is diagnosable, not recoverable: a rejected bind fails the compositor's surface import, so the
+guest-visible result is a failed window, just one with a precise cause attached.
+
+Also corrected while here: the create-side comment claimed "the guest's own tiling survives". It
+does not and cannot. The texture is built with `-newTextureWithDescriptor:iosurface:plane:`, so
+its storage IS the IOSurface's — linear, with a `bytesPerRow`. Declaring OPTIMAL buys KK's
+plain-2D layout bookkeeping, not a tiled surface, and nothing that crosses to the compositor as
+an IOSurface can be truly tiled. Related: the native-modifier path did NOT make scanout
+non-linear either — KK's modifier extension is LINEAR-only, so what 08-04 changed is that the
+guest now *negotiates* linear instead of vkr rewriting its create behind its back. The lie went
+away; the linearity did not.

@@ -66,7 +66,7 @@ export VIRGL_LOG_LEVEL=info
 # LIMINA_KK_SLIMPUSH (high-water push sizing), LIMINA_KK_EARLYZ (drop the injected FS
 # depth-write + helper-quad sample-mask), LIMINA_KK_FASTBIND (per-draw upload dedup).
 # LIMINA_KK_SLIMROOT was forwarded here long after KK stopped reading it at all.
-for knob in LIMINA_KK_NOLISTRESTART LIMINA_KK_BOCACHE LIMINA_KK_NOROBUST; do
+for knob in LIMINA_KK_NOLISTRESTART LIMINA_KK_BOCACHE LIMINA_KK_NOROBUST LIMINA_KK_MTLTEXTURE_SCANOUT; do
   [ -n "$(eval echo "\${$knob:-}")" ] && export "$knob"
 done
 # KK debug levers (docs/drivers/kosmickrisp.rst): MESA_KK_DEBUG=msl logs generated MSL;

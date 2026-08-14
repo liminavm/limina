@@ -222,9 +222,16 @@ open question. Answered by tagging every allocation site in vkr and counting acr
 | site | what it is | allocations |
 |---|---|---|
 | A `vkr_image.c` metal_objects | MoltenVK `VkImportMetalIOSurfaceInfoEXT` | **0** (backend retired) |
-| B `vkr_image.c` mtltexture | `LIMINA_KK_MTLTEXTURE_SCANOUT` | **0** (gated off) |
+| B `vkr_image.c` mtltexture | `LIMINA_KK_MTLTEXTURE_SCANOUT` | **0** (see below) |
 | C `vkr_image.c` kk_linear | the KK native-modifier path | **602** |
 | D `vrend_renderer.c` plain | classic/EGL-backed scanout | **3** (modeset only) |
+
+(Row B was read at the time as "0 because the gate is off". That reading was incomplete, and
+this census is the earliest evidence of it: site B stays **0 even with the gate ON**, because
+row C's native-modifier branch sits ahead of it and claims every modifier-tiled create. The gate
+was flipped ON by default on 2026-08-14 and row B would still read 0 — see
+spikes/modifier-necessity/RESULTS.md §2026-08-14. A zero next to a gated feature invites the
+lazy explanation; this one had a structural cause underneath it.)
 
 So it is not vkr allocating twice for one image — it is **one allocation per image, and the
 guest creating two images per buffer**. The tag prints the usage flags, and they alternate:

@@ -194,8 +194,10 @@ implementable at KosmicKrisp**, and the reason is worth recording: the client bu
 `VkImportMemoryHostPointerInfoEXT` / `HOST_ALLOCATION_BIT_EXT` (`vkr_device_memory.c`, the
 `else if (ptr)` branch) — a raw pointer and a length. No IOSurface handle crosses, and there is no
 way to recover one from an address, so KK has nothing to read the stride *from*. (The MTLTEXTURE
-import right above it, which *would* carry the layout, is env-gated off behind
-`LIMINA_KK_MTLTEXTURE_SCANOUT` and only covers the compositor's own scanout image.)
+import right above it, which *would* carry the layout, only covers the compositor's own scanout
+image. It was env-gated off when this was written; the default flipped ON on 2026-08-14, which
+does **not** change this conclusion — client buffers still arrive as a bare host pointer, so the
+stride fix below remains the load-bearing one. See spikes/modifier-necessity/RESULTS.md.)
 
 So the fix went in on **the opposite side**: `vkr_mtl_iosurface_alloc_plain` now **forces** the
 IOSurface's `bytesPerRow` to the pitch a Metal linear texture will use —
