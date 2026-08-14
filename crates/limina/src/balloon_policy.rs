@@ -138,6 +138,31 @@ const GIVEBACK_AVAIL_CEILING_PCT: u64 = 50;
 /// of balloon movement on the dogfood guest (2026-08-14, ~19 s period, 60 reversals in 50 min,
 /// 106 GB of release traffic in 52 min with guest PSI flat at 0.00%).
 const SHORTFALL_PERSIST_REPORTS: u32 = 2;
+/// How far above the mode's cache allowance the balloon stops inflating, as a percentage of that
+/// allowance. Deflation still uses the plain allowance, so the two bounds form a **hysteresis
+/// band** the guest can move inside without the balloon reacting at all.
+///
+/// Damping (above) stops the policy reacting to a transient; this stops the policy *resting on
+/// the trigger*. Without it, `desired = current + (avail − allowance)` converges to
+/// `avail == allowance` exactly — so every guest transient crosses the deflate bound by
+/// construction, which is why a busy guest churned continuously (2026-08-14) while an idle one
+/// sat perfectly still.
+///
+/// The band also shrinks the deflates it does not prevent: the shortfall deflate is sized *by*
+/// the shortfall, so starting a transient from `allowance + band` instead of `allowance` takes
+/// the band width off every deflate. On the measured 24 GiB Moderate guest (allowance 3.11 GiB,
+/// band 796 MiB) the observed ~0.85 GiB transients would have deflated by ~0.07 GiB instead of
+/// 1.41 GiB even in the cases the band fails to absorb outright.
+///
+/// Cost is exactly the band width in standing balloon. Expressed as a fraction of the allowance
+/// rather than of guest RAM so it inherits the allowance ladder's shape: under host Warn/Critical
+/// the allowance shrinks and the band shrinks with it, tolerating more churn precisely when the
+/// host needs the memory more than the guest needs the calm.
+///
+/// 25% is a first field value, not a measured optimum — chosen because the dogfood transients ran
+/// ~28% of the allowance. The deployment supplies the data to retune it (user's call, 2026-08-14:
+/// ship a percentage, read it from the field).
+const INFLATE_BAND_PCT: u32 = 25;
 /// Reports to skip the shortfall term after a *sent* shortfall deflate. Two independent
 /// staleness sources make a back-to-back second deflate double-count the first, and a clamp
 /// against the driver's `actual` catches only one of them:
@@ -1796,6 +1821,16 @@ fn settled_free_lifts_cooldown(free_settled_for: Option<Duration>) -> bool {
     free_settled_for.is_some_and(|d| d >= SETTLED_FREE_FOR)
 }
 
+/// The upper bound of the resting band: the guest availability at/above which the balloon may
+/// still inflate. Deflation keys off the plain `allow`, so `allow ..= inflate_bound(allow)` is a
+/// band in which neither direction fires (see [`INFLATE_BAND_PCT`]). Saturating: a colossal
+/// allowance must widen the band, never wrap it to a bound below `allow`.
+fn inflate_bound(allow: u32) -> u32 {
+    allow.saturating_add(
+        ((allow as u64 * INFLATE_BAND_PCT as u64) / 100).min(u32::MAX as u64) as u32,
+    )
+}
+
 /// One report's worth of allowance-shortfall damping state (see [`shortfall_action`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ShortfallAction {
@@ -1983,6 +2018,7 @@ impl Decision {
             Decision::Hold(Hold::FreeExhausted) => "free-exhausted",
             Decision::Hold(Hold::Inelastic) => "inelastic",
             Decision::Hold(Hold::ShortfallDamped) => "shortfall-damped",
+            Decision::Hold(Hold::AllowanceBand) => "allowance-band",
         }
     }
 }
@@ -2016,6 +2052,11 @@ enum Hold {
     /// is still settling ([`SHORTFALL_SETTLE_REPORTS`]). The target does not move; every other
     /// release path is still live on this same report.
     ShortfallDamped,
+    /// Guest availability sits inside the resting band — above the allowance (so nothing is
+    /// owed back) but below [`inflate_bound`] (so nothing more is taken). The steady state of a
+    /// converged guest, and deliberately NOT `Converged`: this one says the guest has room to
+    /// move without the balloon reacting, which is the whole point of the band.
+    AllowanceBand,
 }
 
 /// The pure policy decision (unit-tested): given a pressure report and the current state, return
@@ -2049,6 +2090,7 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
     // shortfall was seen but deliberately not acted on.
     let mut from_shortfall = false;
     let mut damped = false;
+    let mut in_band = false;
     let desired = match allowance_pages(i.mode, i.host, i.max_pages) {
         // Host is fine and the mode says don't hold a balloon at all: give it all back.
         None => 0,
@@ -2066,8 +2108,14 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
             // The balloon may take what the guest has available beyond the allowance; if the
             // guest's available has dropped below the allowance, give some back.
             let avail_pages = (p.mem_available_kib / 4).min(u32::MAX as u64) as u32;
-            if avail_pages >= allow {
-                i.current.saturating_add(avail_pages - allow).min(i.room)
+            let bound = inflate_bound(allow);
+            if avail_pages >= bound {
+                i.current.saturating_add(avail_pages - bound).min(i.room)
+            } else if avail_pages >= allow {
+                // Inside the resting band: above the deflate bound, below the inflate bound.
+                // Neither direction fires — this is the room the guest gets to move in.
+                in_band = true;
+                i.current
             } else if i.shortfall_damped {
                 // Leave the target where it is. `desired == current` deliberately, so the
                 // give-back arm below (which needs `desired >= i.current`) stays reachable on
@@ -2128,6 +2176,9 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
     // as "the guest has nothing left" when it means "the pacing clamp bound this step").
     if damped {
         return Decision::Hold(Hold::ShortfallDamped);
+    }
+    if in_band {
+        return Decision::Hold(Hold::AllowanceBand);
     }
 
     if desired.abs_diff(i.current) < DEAD_BAND_PAGES && desired != 0 {
@@ -2349,16 +2400,86 @@ mod tests {
         let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
         let next = decide(&report_pages(0, 4 * GIB_PAGES, MAX), &i);
         assert_eq!(next, Decision::Set(INFLATE_STEP_PAGES));
-        // Fully converged: current already at avail − allowance → hold (sub-dead-band).
+        // Fully converged: availability sits on the allowance, i.e. inside the resting band
+        // (nothing owed back, nothing more to take).
         let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 3 * GIB_PAGES);
         let next = decide(&report_pages(0, GIB_PAGES, MAX), &i);
-        assert_eq!(next, Decision::Hold(Hold::Converged));
+        assert_eq!(next, Decision::Hold(Hold::AllowanceBand));
     }
 
     // ------------------------------------------------------------------
     // Allowance-shortfall damping (2026-08-14 limit cycle). Field write-up:
     // spikes/hv-ledger-gap/postdeploy-2026-08-14/NOTES.md.
     // ------------------------------------------------------------------
+
+    /// The band's reason for existing: a converged guest must NOT rest on the deflate bound.
+    /// Inflation stops at [`inflate_bound`], deflation starts at the allowance, and in between
+    /// the balloon does not move at all — so ordinary guest movement costs nothing.
+    #[test]
+    fn the_balloon_rests_above_the_allowance_not_on_it() {
+        let allow = GIB_PAGES; // Moderate @ Normal on this 8 GiB VM
+        let bound = inflate_bound(allow);
+        assert!(bound > allow, "the band must have width");
+        let cur = 3 * GIB_PAGES;
+        let at = |avail| {
+            decide(
+                &report_pages(0, avail, MAX),
+                &inputs(ReclaimMode::Moderate, HostPressure::Normal, cur),
+            )
+        };
+        // Above the bound: still inflating, by the excess over the BOUND (not the allowance).
+        assert_eq!(
+            at(bound + INFLATE_STEP_PAGES),
+            Decision::Set(cur + INFLATE_STEP_PAGES)
+        );
+        // The two ends of the band and a point inside it: nothing moves.
+        for avail in [allow, allow + (bound - allow) / 2, bound - 1] {
+            assert_eq!(at(avail), Decision::Hold(Hold::AllowanceBand), "{avail}");
+        }
+        // Below the allowance: the shortfall deflate still owns that side, undamped.
+        assert_eq!(
+            at(allow - GIB_PAGES / 4),
+            Decision::Shortfall(cur - GIB_PAGES / 4)
+        );
+    }
+
+    /// The band shrinks the deflates it fails to prevent, which is half its value: the shortfall
+    /// is measured from the allowance, so a transient starting from `allowance + band` gives back
+    /// the band width less than one starting from `allowance`. (Dogfood 2026-08-14: ~0.85 G
+    /// transients against a 3.11 G allowance drove 1.41 G deflates.)
+    #[test]
+    fn the_band_shrinks_a_transient_that_pierces_it() {
+        let allow = GIB_PAGES;
+        let bound = inflate_bound(allow);
+        let band = bound - allow;
+        let cur = 3 * GIB_PAGES;
+        let transient = band + GIB_PAGES / 8; // bigger than the band: it pierces
+        let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
+        // Resting at the bound, the guest takes `transient`: availability lands below the
+        // allowance by exactly the amount the band failed to cover.
+        let next = decide(&report_pages(0, bound - transient, MAX), &i);
+        assert_eq!(next, Decision::Shortfall(cur - (transient - band)));
+        // Without the band it would have given back the whole transient.
+        assert!(transient - band < transient);
+    }
+
+    /// The band scales with the allowance rather than with guest RAM, so it inherits the
+    /// allowance ladder: under host pressure the allowance shrinks and the band shrinks with it.
+    #[test]
+    fn the_band_follows_the_allowance_ladder() {
+        // Sized like the field VM (24 GiB): on the 8 GiB `MAX` used elsewhere both rungs clamp
+        // to the same 1 GiB floor, so the ladder has no separation to inherit.
+        let max = 24 * 1024 * PAGES_PER_MIB;
+        let normal = allowance_pages(ReclaimMode::Moderate, HostPressure::Normal, max).unwrap();
+        let warn = allowance_pages(ReclaimMode::Moderate, HostPressure::Warn, max).unwrap();
+        assert!(warn < normal, "the ladder squeezes at warn");
+        assert!(
+            inflate_bound(warn) - warn < inflate_bound(normal) - normal,
+            "so must the band"
+        );
+        // A pathological allowance saturates rather than wrapping to a bound below `allow`.
+        assert_eq!(inflate_bound(u32::MAX), u32::MAX);
+    }
 
     /// A transient that clears on the next report must never move the balloon. On the dogfood
     /// guest these arrived every ~19 s (a compositor dev loop allocating ~0.85 G and freeing it
@@ -2715,7 +2836,7 @@ mod tests {
         // The real ladder's step 15: io-full 16%, memory PSI silent, 5.8 GiB free. The guest is
         // reading files, not starving behind the balloon — hold, don't knife the balloon.
         let p = report_with_io_and_free(0, GIB_PAGES, MAX, 1600, 5853);
-        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Converged));
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::AllowanceBand));
 
         // The same io storm with the guest genuinely tight (step 3 of that ladder, 590 MiB) is
         // the 2026-07-09 wedge shape and MUST still fire — that incident had io-full at 44%
@@ -2771,9 +2892,9 @@ mod tests {
         let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
         assert_eq!(decide(&p, &i), Decision::GiveBack(cur - INFLATE_STEP_PAGES));
         // A 10 s blip (avg10 in the neutral band, avg60 still calm) is NOT sustained pain:
-        // no give-back — converged holds, same as before the term existed.
+        // no give-back — the resting band holds, same as before the term existed.
         let p = report_pages(500, GIB_PAGES, MAX);
-        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Converged));
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::AllowanceBand));
         // Dwell-paced: a fresh target change holds this tick (the PSI-EMA lag must not
         // dump the whole balloon at report rate).
         let p = report_with_io(0, GIB_PAGES, MAX, 1000);
@@ -2817,19 +2938,19 @@ mod tests {
         let floor = GIB_PAGES / 2;
         let i = inputs(ReclaimMode::Moderate, HostPressure::Critical, cur);
         let p = report_with_io(0, floor, MAX, 4400);
-        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Converged));
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::AllowanceBand));
         // Aggressive with an idle guest inflates through io pressure (the original shape).
         let i = inputs(ReclaimMode::Aggressive, HostPressure::Normal, cur);
         let p = report_with_io(0, MAX * 7 / 10, MAX, 4400);
         assert_eq!(decide(&p, &i), Decision::Set(cur + INFLATE_STEP_PAGES));
-        // io just under the bar: converged hold, no give-back.
+        // io just under the bar: the resting band holds, no give-back.
         let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
         let p = report_with_io(0, GIB_PAGES, MAX, IO_PRESSURE_HIGH - 1);
-        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Converged));
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::AllowanceBand));
         // Old agent, guest calm: io fields absent read as 0 (io arm off, clamp contract)
         // and avg60 is calm — no give-back.
         let p = report_pages(0, GIB_PAGES, MAX);
-        assert_eq!(decide(&p, &i), Decision::Hold(Hold::Converged));
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::AllowanceBand));
     }
 
     /// The give-back step doubles per consecutive give-back (256 MiB → 512 MiB → 1 GiB cap):
@@ -3226,10 +3347,14 @@ mod tests {
 
     #[test]
     fn dead_band_swallows_dribble() {
-        // A 8 MiB adjustment (< 16 MiB dead band) is held.
+        // An 8 MiB adjustment (< 16 MiB dead band) is held. Measured from the INFLATE BOUND,
+        // not the allowance: since the resting band exists, availability a dribble above the
+        // allowance is inside the band and answers `AllowanceBand` — the dead band's own job
+        // (swallowing a sub-threshold *move*) only starts past the bound.
         let cur = 2 * GIB_PAGES;
         let i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
-        let next = decide(&report_pages(0, GIB_PAGES + 2048, MAX), &i);
+        let bound = inflate_bound(GIB_PAGES);
+        let next = decide(&report_pages(0, bound + 2048, MAX), &i);
         assert_eq!(next, Decision::Hold(Hold::DeadBand));
     }
 

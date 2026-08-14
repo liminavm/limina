@@ -216,8 +216,9 @@ for the whole window):
 ```
 
 **Convergence parks the system exactly on the trigger boundary.** `desired = current + (avail −
-allowance)`, so a converged Moderate balloon sits at guest `avail ≈ allowance ≈ 3.11 G` (max/8 on
-this 24 G VM) — measured convergence 3.01 G. From there *every* transient the guest takes crosses
+allowance)`, so a converged Moderate balloon sits at guest `avail ≈ allowance = 3 G` — max/8 of
+the **24 G the VM was given**, not of the guest's own 23.7 G `MemTotal`, which is the easy slip
+here — measured convergence 3.01 G. From there *every* transient the guest takes crosses
 the boundary by construction. On a busy guest that is not an edge case, it is the steady state.
 
 **The overshoot is a staleness defect, and it has TWO sources — an actual-based clamp alone
@@ -321,3 +322,36 @@ label seen plus the balloon's range and reversal count. `decision-tail.py`'s QUI
 `dwell`/`dead-band`/`cooldown`/`not-calm` — two of this cycle's three phases — so the cycle's
 inflation half was invisible in the alert stream. Keep `decision-tail.py` as the alert stream;
 use `balloon-watch.py` when the question is "what is actually happening".
+
+## The fix as shipped (2026-08-14 afternoon)
+
+Two commits, both confined to the allowance-shortfall path. Acute release, `guest_starved` and
+the pressure give-back stay immediate and unconditional, each with its own regression test.
+
+**Damping** (`SHORTFALL_PERSIST_REPORTS` = 2, `SHORTFALL_SETTLE_REPORTS` = 1) stops the policy
+*reacting* to a transient, and stops a sent deflate being counted twice against a reading that has
+not credited it.
+
+**A resting band** (`INFLATE_BAND_PCT` = 25) stops the policy *resting on the trigger*. Inflation
+now stops at `allowance × 1.25` while deflation still starts at the allowance, so the two bounds
+form a hysteresis band the guest moves inside for free. Expressed as a fraction of the allowance,
+so it inherits the ladder: at host Warn the allowance shrinks and the band shrinks with it.
+
+The band's second effect matters as much as the first and was not obvious going in: **the
+shortfall deflate is sized by the shortfall**, so resting at `allowance + band` takes the band
+width off every deflate that fires anyway. On this VM (allowance 3 G, band 768 MiB) an 0.85 G
+transient would deflate ~0.08 G instead of 1.41 G — a ~17× amplitude cut even when the band fails
+to absorb it outright.
+
+25% is a first field value, not a measured optimum (the dogfood transients ran ~28% of the
+allowance). Deliberately shipped un-tuned to read the answer off the deployment — user's call.
+
+**What to look for in the trace after the next bundle deploy:**
+- `allowance-band` should become the modal decision of a converged guest, in place of the
+  `set`/`dead-band` churn.
+- `shortfall` deflates should be rarer AND much smaller (watch `current_pages − new_target_pages`).
+- `shortfall-damped` appearing at all means a transient was caught by the damping rather than the
+  band — the two are separable in the trace on purpose.
+- Reversals >1 G per hour is the headline metric; 60 in 50 minutes was the baseline.
+- The cost side: standing balloon should sit ~768 MiB lower on a 24 G Moderate guest. If it costs
+  materially more than that, the band is not the reason and something else moved.
