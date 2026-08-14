@@ -16,6 +16,19 @@ import time
 
 QUIET = {"cooldown", "converged", "not-idle", "dead-band", "not-calm", "dwell"}
 
+
+def num(d, key):
+    """Numeric field, defaulting to 0 for BOTH missing and null.
+
+    The trace serializes Rust `Option` fields as JSON null, so `d.get(key, 0)` returns None
+    -- the default only applies to a MISSING key, not a present-but-null one -- and the next
+    arithmetic raises TypeError. That killed this monitor on `debited_bytes`, and the same
+    mistake scored a passing build as FAIL on `free_settled_ms` the day before. Any numeric
+    field read out of this trace goes through here.
+    """
+    v = d.get(key)
+    return 0 if v is None else v
+
 # A HOLD verdict repeats every tick for as long as its condition lasts. `inelastic` on a
 # settled guest emits ~1/s forever and drowns the stream (it flooded the monitor on
 # 2026-08-14). Collapse consecutive repeats of the same verdict: print the first, then stay
@@ -35,7 +48,7 @@ for line in sys.stdin:
         d = json.loads(line)
     except Exception:
         continue
-    ts = time.strftime("%H:%M:%S", time.localtime(d.get("ts_ms", 0) / 1000))
+    ts = time.strftime("%H:%M:%S", time.localtime(num(d, "ts_ms") / 1000))
     # The trace carries more than one record shape. Scrub records have no `decision` key at
     # all -- rendering them through the decision formatter prints an all-None line that reads
     # exactly like a truncated write, which is how a scrub firing mid-benchmark got waved off
@@ -47,7 +60,7 @@ for line in sys.stdin:
                 % (
                     ts,
                     d.get("scrub"),
-                    d.get("actual_bytes", 0) / 2**30,
+                    num(d, "actual_bytes") / 2**30,
                     d.get("reached_pct"),
                     d.get("resume_pages"),
                     d.get("gen"),
@@ -60,8 +73,8 @@ for line in sys.stdin:
                 % (
                     ts,
                     d.get("sweep"),
-                    d.get("debited_bytes", 0) / 2**20,
-                    d.get("gap_bytes", 0) / 2**20,
+                    num(d, "debited_bytes") / 2**20,
+                    num(d, "gap_bytes") / 2**20,
                 ),
                 flush=True,
             )
@@ -74,10 +87,10 @@ for line in sys.stdin:
     dec = d["decision"]
     if dec in QUIET:
         continue
-    if is_repeat(dec, d.get("actual_bytes", 0)):
+    if is_repeat(dec, num(d, "actual_bytes")):
         continue
-    bal = d.get("actual_bytes", 0) / 2**30
-    free = d.get("free_kib", 0) / 1024
+    bal = num(d, "actual_bytes") / 2**30
+    free = num(d, "free_kib") / 1024
     print(
         "%s %-14s bal=%.2fG tgt=%s free=%.0fM some60=%s io=%s host=%s"
         % (

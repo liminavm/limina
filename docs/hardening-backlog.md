@@ -811,6 +811,74 @@ time (the suite's own parallelism starving the VM's vCPU threads — the vCPU-en
 from `limina-venus-replay-regression` is the obvious suspect, since the harness runs several
 VMs at once on a 10-core host).
 
+## Flaky test — `l1_silent_agent_is_reported_and_recovers` has zero timing margin
+
+Failed in the 2026-08-14 suite (105/106) on its final assertion, that the *healthy* seed agent is
+never reported silent:
+
+```
+11:24:46 WARN  agent limina-init/0.1.0 silent for 1.0s (no heartbeat)
+11:24:47 INFO  agent limina-init/0.1.0 heartbeating again
+```
+
+**Reproduces solo, so it is not the load-induced family** (that was the first guess, and it was
+wrong): **1 failure in 11 isolated runs**, ~9%. The test sets `LIMINA_AGENT_SILENT_SECS=1` while
+the liveness sweep also runs at 1 s, so "silent for 1.0s" is a tie, not a lateness — the same
+zero-margin phase race the test's own comment records losing once already, on the *other* agent.
+The mechanism works (recovery logged one second later); only the never-falsely-reported invariant
+trips. Fix by giving the threshold margin over the sweep interval rather than by re-running.
+
+Independent of the balloon work: `GuestConfig::l1_from_env` sets `memory: None`, so no
+`--memory MIN..MAX` reaches the supervisor, the PSI autoballoon policy is never started, and
+`balloon_policy::decide` is never called in this test.
+
+**Method note.** The first attempt to A/B this against the pre-change policy proved nothing:
+`resolve_bin` runs a *pre-built* binary from `target/debug/`, and `cargo test -p limina-test`
+does not rebuild it — so reverting the source file left all runs executing the identical binary.
+Any A/B of shipped behaviour through this harness must rebuild **and re-codesign** between arms,
+or compare something other than the binary.
+
+## M6 — the io give-back's availability denominator is the balloon itself
+
+`GIVEBACK_AVAIL_CEILING_PCT` compares `mem_available_kib` against `mem_total_kib`, and
+`mem_total_kib` is the *guest-visible* total, which the balloon controls. Measured on the
+2026-08-14 restic ladder, balloon and total are near-perfectly anticorrelated (they sum to the
+VM max):
+
+| balloon | guest total | decline threshold = total/2 |
+|---|---|---|
+| 16.06 G | 7.65 G | 3.8 G |
+| 8.56 G | 15.15 G | 7.6 G |
+
+So the absolute bar for "this guest is comfortable" is **3.1 GiB when the balloon is at rest and
+7.8 GiB when it is half empty** — the guard is most restrictive exactly when the balloon is
+largest and so most likely to be the cause. That is the actuator-coupled-sensor defect from the
+same day's `lead-lag` finding, rebuilt into the fix for it.
+
+It is not purely a bug: the coupling is *why* the guard is self-limiting (each give-back raises
+availability toward the ceiling and ends the ladder). Decoupling to `max_pages` or an absolute
+figure loses that and, run against the same traces, is more permissive at rest. **Do not change
+the denominator on intuition** — decide it against the stress-test trace, which will have many
+episodes at different balloon fills rather than the two we have.
+
+Also note the first give-back of any episode always fires, because availability starts below the
+bar. The guard bounds a ladder; it does not prevent one starting.
+
+## M6 — `MemFree` contributes almost nothing to the io guard
+
+The `GIVEBACK_FREE_CEILING` doc comment and commit 7994695 both describe md5sum as the
+*accumulating* reader that the free ceiling catches ("free grew 575 MiB -> 5.8 GiB"), against
+restic as the *consuming* one that only availability catches. Replaying the 08-13 trace, that is
+wrong: `MemFree` sat at **461-615 MiB through nearly every step of the md5sum ladder** — under
+the ceiling, `free_ok = true` — and only spiked to 6.7 GiB *after* the ladder finished. The
+endpoint reading was mistaken for the trajectory.
+
+Of 103 give-backs in that trace the free guard alone would have fired 39; the combined guard
+fires 17. On the restic ladder: 17 -> 17 -> 5. **`MemAvailable` is doing essentially all the work
+in both**, and md5sum/restic are one shape, not two. Either re-justify the free half on evidence
+or retire it — carrying a guard that never binds is worse than not having it, because the doc
+comment claims coverage the code does not provide.
+
 ---
 
 When a milestone's loose ends are all closed, fold the remainder back into the roadmap milestone
