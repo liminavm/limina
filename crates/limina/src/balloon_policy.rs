@@ -172,10 +172,18 @@ const INFLATE_BAND_PCT: u32 = 25;
 /// - **driver lag** (same day, 11:23): targets walked 13.49 → 12.16 → 11.01 G while `actual` was
 ///   still 14.39/14.07 G.
 ///
-/// Either way the guest received 1.41 G for a 1.05 G shortfall. One report of settle covers both
-/// shapes; both are regression-tested, because a fix that reasons from `actual` passes the second
-/// and silently fails the first.
-const SHORTFALL_SETTLE_REPORTS: u32 = 1;
+/// Either way the guest received 1.41 G for a 1.05 G shortfall. Both shapes are regression-tested,
+/// because a fix that reasons from `actual` passes the second and silently fails the first.
+///
+/// The length is FIELD-MEASURED, and it has already moved once. Shipped at 1 from the two clean
+/// examples above; the deployed build then gave a distribution: reports until `MemAvailable`
+/// reflects 90% of a release ran **median 3, p90 7** (n=39). At 1, the next deflate fired on a
+/// reading that had credited roughly a third of the previous release — an alternating
+/// shortfall/shortfall-damped staircase (51:57) that walked the balloon 10.31 -> 8.22 G in 14 s.
+/// Set to the median rather than p90: 12 of 51 deflates were never credited within ten reports
+/// because the guest genuinely consumed the memory, and over-settling delays real relief to a
+/// guest that needs it.
+const SHORTFALL_SETTLE_REPORTS: u32 = 3;
 /// io-PSI `full` avg10 above which a cache dig in force (an inelastic verdict at host
 /// Warn/Critical) is paced down to the trickle: dropping cold cache is free, so full speed is
 /// fine while io-PSI stays quiet — refaults pushing io-full past this mean the squeeze is
@@ -2515,14 +2523,18 @@ mod tests {
     /// read as open and a second deflate double-counted the first — 1.41 G handed back for a
     /// 1.05 G shortfall. A clamp against the driver's `actual` cannot see this at all.
     #[test]
-    fn a_sent_shortfall_deflate_settles_for_one_report() {
+    fn a_sent_shortfall_deflate_settles_for_the_measured_lag() {
         // The shortfall has persisted and just been acted on: caller armed the settle.
-        let a = shortfall_action(SHORTFALL_PERSIST_REPORTS, SHORTFALL_SETTLE_REPORTS, true);
-        assert!(a.damped, "the reading has not credited the release yet");
-        assert_eq!(
-            a.settle, 0,
-            "one report of settle, then re-arm on the next send"
-        );
+        // Generic over the constant on purpose — the settle length is a measured field value
+        // that has already moved once (1 -> 3), so a test naming the number has to be rewritten
+        // on every retune instead of checking what the settle is FOR.
+        let mut a = shortfall_action(SHORTFALL_PERSIST_REPORTS, SHORTFALL_SETTLE_REPORTS, true);
+        for i in 1..SHORTFALL_SETTLE_REPORTS {
+            assert!(a.damped, "report {i} of the settle must not act");
+            a = shortfall_action(a.run, a.settle, true);
+        }
+        assert!(a.damped, "the last settle report must not act");
+        assert_eq!(a.settle, 0, "the settle is spent");
         // The report after that acts again if the shortfall is genuinely still there.
         let b = shortfall_action(a.run, a.settle, true);
         assert!(!b.damped);
