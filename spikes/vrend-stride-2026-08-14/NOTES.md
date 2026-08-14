@@ -187,6 +187,61 @@ rather than by teaching both sides the same magic number.
 that later turns out to be the real bug".** It was. The discipline that paid off was refusing to
 accept a log line as proof of pixels.
 
+## FIXED 2026-08-14 (virglrenderer `limina` 5c76245)
+
+The approved direction — "read the stride from the allocation" — turned out to be **not
+implementable at KosmicKrisp**, and the reason is worth recording: the client buffer reaches KK as
+`VkImportMemoryHostPointerInfoEXT` / `HOST_ALLOCATION_BIT_EXT` (`vkr_device_memory.c`, the
+`else if (ptr)` branch) — a raw pointer and a length. No IOSurface handle crosses, and there is no
+way to recover one from an address, so KK has nothing to read the stride *from*. (The MTLTEXTURE
+import right above it, which *would* carry the layout, is env-gated off behind
+`LIMINA_KK_MTLTEXTURE_SCANOUT` and only covers the compositor's own scanout image.)
+
+So the fix went in on **the opposite side**: `vkr_mtl_iosurface_alloc_plain` now **forces** the
+IOSurface's `bytesPerRow` to the pitch a Metal linear texture will use —
+`align(width * bpe, minimumLinearTextureAlignmentForPixelFormat:)`, queried from Metal rather than
+hardcoded, so it cannot drift out of step with KK's own computation. Same end state (KK's pitch ==
+reality), reached from the exporter.
+
+**This is also the better fix, not merely the possible one.** It needs no guest change: a stock
+guest still fabricates a tight-packed explicit pitch, KK still rejects it and substitutes its
+computed one — and that substitution is now *the truth*. Correct pixels on both tiers for free, and
+the guest-goes-truthful arc stays an upstream nicety rather than a prerequisite.
+
+Verified on `Fedora-Workstation-44.enhanced.synoik.raw` (a CoW clone), glmark2-wayland under synoik,
+`grim` capture, `measure-shear.py`:
+
+| width | pre-fix drift | **post-fix** | `KK-MODIFIER` lines |
+|---|---|---|---|
+| 1968 | 16.000 px/row | **-0.002** | 0 |
+| 1974 | 7.999 | **-0.051** | **6** |
+| 1976 | 8.000 | **-0.002** | 0 |
+| 1980 | 4.014 | **-0.002** | 0 |
+
+`iosdump` on a live client surface reads `bpr=7872 (w*4=7872, pad=0)` at width 1968 — align16, where
+it was 7936 before. Zero `[KK-STRIDE]` override warnings across 16 production allocations. The user
+confirmed by hand that **resizing a Firefox window is now clean at arbitrary widths**, which is the
+original field symptom ("resizing just right heals it") inverted.
+
+**Read the 1974 row carefully — it is the whole point.** The warning still fires six times *and the
+pixels are clean*. Anyone who takes `[KK-MODIFIER]` as the corruption oracle will read that as a
+live bug and "fix" it back. The line reports a real guest-vs-KK disagreement; it never reported the
+corruption.
+
+### Does IOSurface honor a forced, non-256 pitch?
+
+The whole approach dies if it doesn't, so it was probed before implementing rather than assumed:
+`iosurface-bpr-probe.swift` in this directory, **8/8 HONORED** across widths 1968/1974/1976/1980 at
+both 16- and 256-byte alignment. Production then agreed 16/16.
+
+### Not fixed, deliberately
+
+The **256-vs-16 gap itself** is untouched: IOSurface's own default is still 256 and KK still
+computes 16. This fix makes the two agree at the one place they meet. A path that allocates an
+IOSurface *without* going through `alloc_plain`, and whose bytes are then imported as a linear host
+pointer, would reintroduce the same shear — the `[KK-STRIDE]` line exists to make that loud rather
+than silent.
+
 ## Original repro plan (superseded by the results above)
 
 - Boot a local enhanced image with the supported env (`GALLIUM_DRIVER=virgl`,
