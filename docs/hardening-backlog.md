@@ -330,6 +330,21 @@ rects). Remaining:
   NOTE the falsified hypothesis, so it is not retried: inelastic runs are NOT downstream of
   give-backs — 0 of 27 long runs on 08-13 had a give-back in the preceding 120 s, out of 103
   give-backs that day.
+- **The allowance path overshoots the same way the give-back did** (added 2026-08-13 evening, first
+  night of the `GIVEBACK_FREE_CEILING` build). The guard worked: 6 give-backs, all at 552-699 MiB
+  free, and at the two ticks where free crossed the ceiling (1358 / 1416 MiB) the decision was
+  `cooldown`, **not** `giveback` — the ladder stopped at 14.50 G where the unguarded build had run
+  to 1.12 G. But ~4 minutes later the balloon still reached **2.25 G with 15,993 MiB free**, this
+  time through ordinary `set` decisions as the allowance target walked down after `some_avg60`
+  peaked at 2.56%. So the give-back path is now bounded and the allowance path is not.
+  Distinguishing it from the morning case: there WAS real memory pressure (2.56% vs 0.00%), and it
+  recovered on its own (balloon back to 18.00 G, footprint 17.2 -> 9.3 G). Whether it is a defect
+  at all turns on whether a guest that ends with 16 GiB free ever needed the release.
+  **Leading candidate for the trigger: `localsearch-3`** (the GNOME file indexer), active through
+  the whole window — an indexing pass fits both phases, read IO then memory pressure. Unconfirmed;
+  catching it needs per-process memory at the time. It matters because it is an ordinary
+  background job on a daily driver, not a benchmark. Trace: the dogfood `balloon-trace.jsonl`
+  around 23:15-23:30 local.
 - **The io-keyed give-back cannot tell disk IO from balloon thrash** (added 2026-08-13, measured).
   A cold `md5sum` of `/usr` on the dogfood guest, with **memory PSI at 0.00% throughout**, walked
   the balloon from 17.87 G to 1.12 G in 43 seconds — 1 GiB per report every 2 s — and the guest
