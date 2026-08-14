@@ -192,6 +192,21 @@ tracks claims still needing verification.
   deliberately **skips** the HVF tests (no codesign / sandbox) — green there means
   almost nothing for boot behavior, so always run the full suite before
   declaring something works. It needs `dangerouslyDisableSandbox` (hits `hv_vm_*`).
+  - **It takes ~28 min, so run it detached and monitor it — and know that detaching hands you a
+    fake exit code.** `nohup cargo xtask test > <log> 2>&1 &` returns **immediately with exit 0**:
+    that status is the *backgrounding shell*, not the suite. A tool-completion notification for
+    that command says "completed, exit code 0" seconds after launch, and reads exactly like a green
+    suite. **Never report a suite result from the launch command's status.** Wait on the real
+    process (`until ! kill -0 <pid>; do sleep 10; done`) and then read the log:
+    `grep -E "^ *Summary|test result:|FAILED" <log>`. Nearly shipped a "green suite" this way on
+    2026-08-14 — same disease as a check that reports success by construction, in our own tooling.
+  - **Never `cargo build` (or `git commit` — the pre-commit hook runs clippy) while the suite is
+    running**; a concurrent build relinks the binaries under the running tests. Hold commits until
+    it finishes, or use `--no-verify` deliberately for a docs-only change.
+  - **Do not kill stray `limina-vmm` processes without confirming they are yours.** Other sessions
+    run VMs on this host. Match on something unique to your own run (the disk path), and confirm
+    with a full, untruncated `ps -o pid,lstart,command -p <pid>` *before* the kill — a truncated
+    listing hid `--cpus 8 --ram-mib 12288` once and killed the shared build VM.
 - **The worker MUST link our `third_party/virgl-prefix` virglrenderer, not Homebrew's.**
   This is a costly silent trap: a plain `cargo build -p limina-vmm` with no `PKG_CONFIG_PATH`
   used to relink the worker against Homebrew's stock `virglrenderer` (whose `.pc` pkg-config
