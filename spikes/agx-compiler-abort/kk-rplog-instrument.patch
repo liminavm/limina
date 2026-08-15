@@ -1,0 +1,98 @@
+diff --git a/src/kosmickrisp/bridge/mtl_encoder.m b/src/kosmickrisp/bridge/mtl_encoder.m
+index 5a02238fcf7..5dada81a142 100644
+--- a/src/kosmickrisp/bridge/mtl_encoder.m
++++ b/src/kosmickrisp/bridge/mtl_encoder.m
+@@ -13,12 +13,17 @@
+ #include <Metal/MTL4ComputeCommandEncoder.h>
+ #include <Metal/MTL4Counters.h>
+ #include <Metal/MTL4RenderCommandEncoder.h>
++/* limina: the full MTL4RenderPassDescriptor interface (MTL4CommandBuffer.h only forward-declares
++ * it), needed by the LIMINA_KK_RPLOG dump below. */
++#include <Metal/MTL4RenderPass.h>
+ #include <Metal/MTLRenderPass.h>
+ 
+ /* limina: LIMINA_KK_STATS=1 — once-per-second aggregate counters to stderr.
+  * Measures render-pass split rate (renc + Load-action reloads) vs draw rate. */
+ #include <stdatomic.h>
+ #include <time.h>
++/* limina: pthread_threadid_np for the LIMINA_KK_RPLOG thread tag. */
++#include <pthread.h>
+ 
+ /* limina: RTLOG knob, cached — a getenv here sat on the per-draw path (round 24:
+  * ~7% of the hot ring core in __findenv_locked). */
+@@ -289,6 +294,46 @@
+ /* MTLRenderEncoder */
+ 
+ /* Encoder commands */
++/* limina: LIMINA_KK_RPLOG=1 — dump the fully-resolved render pass right BEFORE the encoder is
++ * created. Creating the encoder is what makes Metal compile its background object, and that
++ * compile is where MTLCompilerService aborts on `bitcode_url is NULL ... extension 'ds'`
++ * (spikes/agx-compiler-abort). The abort takes the whole process down from inside Metal, so the
++ * last line this prints on the aborting thread IS the trigger -- hence print before, and flush.
++ *
++ * Kept off the RTLOG knob on purpose: RTLOG is per-draw and would bury this in the compositor's
++ * traffic. Thread id is logged because several threads encode concurrently and only one aborts. */
++static inline bool
++limina_kk_rplog_cached(void)
++{
++   static int v = -1;
++   if (v < 0)
++      v = getenv("LIMINA_KK_RPLOG") != NULL;
++   return v;
++}
++
++static void
++limina_log_attachment(const char *what, uint32_t idx,
++                      MTLRenderPassAttachmentDescriptor *att)
++{
++   id<MTLTexture> t = att.texture;
++   if (!t)
++      return;
++   /* Two different "not an ordinary private texture" flags, and conflating them cost a run:
++    *   linear  = tex.buffer non-nil, i.e. buffer-backed.
++    *   iosurf  = tex.iosurface non-nil, i.e. what the scanout path
++    *             (LIMINA_KK_MTLTEXTURE_SCANOUT) produces.
++    * An IOSurface-backed texture has buffer == nil, so logging only `linear` reported 0 for
++    * every scanout attachment and made them look absent from every render pass. */
++   fprintf(stderr,
++           "[LIMINA-KK-RP]   %s[%u] tex=%p fmt=%lu storage=%lu usage=0x%lx %lux%lu "
++           "samples=%lu linear=%d iosurf=%d load=%lu store=%lu\n",
++           what, idx, (void *)t, (unsigned long)t.pixelFormat,
++           (unsigned long)t.storageMode, (unsigned long)t.usage,
++           (unsigned long)t.width, (unsigned long)t.height,
++           (unsigned long)t.sampleCount, t.buffer ? 1 : 0, t.iosurface ? 1 : 0,
++           (unsigned long)att.loadAction, (unsigned long)att.storeAction);
++}
++
+ mtl_render_encoder *
+ mtl_new_render_command_encoder_with_descriptor(
+    mtl_command_buffer *command_buffer, mtl_render_pass_descriptor *descriptor)
+@@ -296,6 +341,28 @@
+    @autoreleasepool {
+       id<MTL4CommandBuffer> cmd = (id<MTL4CommandBuffer>)command_buffer;
+       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
++      if (limina_kk_rplog_cached()) {
++         uint64_t tid = 0;
++         pthread_threadid_np(NULL, &tid);
++         /* imageblockSampleLength is the per-sample tile byte size -- the one field that could
++          * plausibly index Apple's blit_fast_clear_gen2_{1,2,4,5,8,16} family directly. */
++         fprintf(stderr,
++                 "[LIMINA-KK-RP] tid=0x%llx rt=%lux%lu arraylen=%lu samples=%lu "
++                 "imageblock=%lu tile=%lux%lu tgmem=%lu\n",
++                 (unsigned long long)tid,
++                 (unsigned long)desc.renderTargetWidth,
++                 (unsigned long)desc.renderTargetHeight,
++                 (unsigned long)desc.renderTargetArrayLength,
++                 (unsigned long)desc.defaultRasterSampleCount,
++                 (unsigned long)desc.imageblockSampleLength,
++                 (unsigned long)desc.tileWidth, (unsigned long)desc.tileHeight,
++                 (unsigned long)desc.threadgroupMemoryLength);
++         for (uint32_t i = 0; i < 8; i++)
++            limina_log_attachment("color", i, desc.colorAttachments[i]);
++         limina_log_attachment("depth", 0, desc.depthAttachment);
++         limina_log_attachment("stencil", 0, desc.stencilAttachment);
++         fflush(stderr);
++      }
+       return (mtl_render_encoder *)limina_mtl_note_new([[cmd renderCommandEncoderWithDescriptor:desc] retain]);
+    }
+ }

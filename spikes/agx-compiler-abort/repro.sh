@@ -35,6 +35,20 @@ nohup cargo xtask run --disk "$DISK" > "$OUT/vm.log" 2>&1 &
 echo "[$LABEL] booting (LIMINA_KK_MTLTEXTURE_SCANOUT=${LIMINA_KK_MTLTEXTURE_SCANOUT:-default})" >&2
 
 deadline=$(( $(date +%s) + TIMEOUT ))
+
+# Other sessions run VMs on this host, so NOTHING here may match on a bare process name: a
+# global `pgrep -x limina-vmm` would see their worker and a `pkill` would take down their
+# supervisor. Scope everything to the supervisor pid this run printed, and take the worker as
+# its child. Same reason the shared /tmp/enhanced-efi-kk-worker.log is only consulted for the
+# ssh port and only via this run's own log line -- a concurrent boot overwrites that file.
+sup=""
+while [ -z "$sup" ] && [ "$(date +%s)" -lt "$deadline" ]; do
+  sup=$(grep -oE '^limina pid=[0-9]+' "$OUT/vm.log" 2>/dev/null | tail -1 | cut -d= -f2)
+  [ -z "$sup" ] && sleep 2
+done
+[ -z "$sup" ] && { echo "[$LABEL] never got a supervisor pid" >&2; exit 2; }
+echo "[$LABEL] supervisor pid=$sup" >&2
+
 port=""
 while [ -z "$port" ] && [ "$(date +%s)" -lt "$deadline" ]; do
   port=$(grep -oE 'ssh -p [0-9]+' /tmp/enhanced-efi-kk-worker.log 2>/dev/null | tail -1 | awk '{print $3}')
@@ -65,19 +79,23 @@ GUEST
 
 start=$(date +%s)
 while [ "$(date +%s)" -lt "$deadline" ]; do
-  if ! pgrep -x limina-vmm >/dev/null 2>&1; then
+  if ! kill -0 "$sup" 2>/dev/null; then
     took=$(( $(date +%s) - start ))
+    # Snapshot the worker log: /tmp/enhanced-efi-kk-worker.log is a fixed path that the NEXT run
+    # overwrites, and with LIMINA_KK_RPLOG on it is the whole point of the run.
+    cp /tmp/enhanced-efi-kk-worker.log "$OUT/worker.log" 2>/dev/null
     # signal 6 is the abort; anything else is some other death and must not be scored as a repro.
-    if grep -q "terminated by signal 6" /tmp/enhanced-efi-kk-worker.log 2>/dev/null; then
+    if grep -q "terminated by signal 6" "$OUT/vm.log" "$OUT/worker.log" 2>/dev/null; then
       echo "[$LABEL] REPRODUCED: worker aborted ${took}s after load start"
       exit 0
     fi
-    echo "[$LABEL] worker exited WITHOUT signal 6 after ${took}s -- not this bug" >&2
+    echo "[$LABEL] supervisor $sup exited WITHOUT signal 6 after ${took}s -- not this bug" >&2
     exit 1
   fi
   sleep 3
 done
 
 echo "[$LABEL] survived ${TIMEOUT}s -- did not reproduce"
-pkill -x limina >/dev/null 2>&1
+cp /tmp/enhanced-efi-kk-worker.log "$OUT/worker.log" 2>/dev/null
+kill "$sup" 2>/dev/null   # only ever this run's supervisor -- never a name match
 exit 1

@@ -25,12 +25,70 @@ Two things make this differential trustworthy rather than a coincidence of timin
 sat on its Start button, so the trigger is in ordinary compositor/venus traffic, not in the
 benchmark's own draws. That widens the blast radius: any enhanced-tier session can hit this.
 
-Working hypothesis for *why*: the scanout path has KK adopt an imported **linear**
-(IOSurface-backed) MTLTexture as a render target — the log's last lines before every abort are
-`[LIMINA-KK-IMPORT] adopted MTLTexture … linear=1`. A render pass that clears into a linear,
-non-tiled target plausibly asks Metal for a background-object variant Apple does not ship. Not yet
-proven — the next step is to log the render-pass configuration and read the last one before the
-abort.
+## What the abort actually is
+
+`MTLCompilerService`'s own crash report names the failing call precisely — this is worth more
+than the worker's, which only shows the downstream retry loop:
+
+```
+AGCLLVMBackgroundObjectFragmentShader::AGCLLVMBackgroundObjectFragmentShader(
+    AGCLLVMCtx&, llvm::LLVMContext&, _AGCDrawBufferState const*, _AGCBackgroundObjectState const*)
+  → AGCLLVMBackgroundObjectFragmentShader::buildStateless(...)
+  → AGCLLVMObject::readBitcode(...)          [Failed assertion "bitcode_url"]
+```
+
+So it is the **background object fragment shader** — the program Metal runs at tile load to
+honour the load actions — and it is built from `_AGCDrawBufferState`, i.e. it *is* keyed on the
+render pass's attachment layout. The request type in the log (`MTLBuildOpaqueRequest - opaque`)
+is the driver's internal-library path, not app shader compilation.
+
+Read it from any future instance with:
+
+```sh
+ls -t ~/Library/Logs/DiagnosticReports/MTLCompilerService-*.ips | head -1
+```
+
+## Instrumentation and what it found
+
+`kk-rplog-instrument.patch` (against the `limina-kk` branch; the checkout is gitignored) adds
+`LIMINA_KK_RPLOG=1` to KosmicKrisp: it dumps the fully-resolved render pass — per attachment
+format, storage, usage, size, sample count, load/store, plus `imageblockSampleLength` and the
+tile config — immediately *before* the encoder is created, and flushes.
+
+Two things had to be got right, both of which cost a run:
+
+- **Thread correlation does not work.** The abort is reported on a Metal-internal
+  compiler-connection thread that never appears in the dump, because Metal issues the compile off
+  the thread that created the encoder. `rplog-firstseen.py` therefore uses the property the
+  compile does have: Metal builds a background object **lazily, on first sight** of a
+  configuration, so the trigger is one first seen near the end.
+- **`tex.buffer` does not detect IOSurface-backed textures** (they report `buffer == nil`), so the
+  first version logged `linear=0` for every scanout attachment and made them look absent from
+  every render pass. The dump now logs `iosurf=` separately.
+
+With that, one configuration stands out — **unique in 404,630 render passes**, first and only
+sighting ~9,300 passes before the abort:
+
+```
+rt=800x600 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+color[0] fmt=70 (RGBA8Unorm)   2048x2048 usage=0x17 load=Load  store=Store
+depth[0] fmt=252 (Depth32Float) 800x600  usage=0x04 load=Clear store=Store
+```
+
+Anomalous in two ways: the colour attachment is **2048×2048 while the render target and the depth
+attachment are 800×600**, and the depth usage is `0x4` where every other pass uses `0x7`. Both
+formats are 4 bytes, so the per-pixel total is a perfectly ordinary 8.
+
+**But it does not reproduce in isolation.** `mtlrp.m` drives that exact configuration — matching
+usages verbatim — directly against Metal with no Vulkan and no VM, through **both** the classic
+API and **MTL4** (the one KosmicKrisp actually encodes with), alongside its neighbours (mismatch
+in the other direction, all three load actions, odd render-target windows). 17 cases, no abort.
+So the render-pass shape alone is **necessary at most, not sufficient** — something about the
+surrounding state (the imported IOSurface textures elsewhere in the session, driver state built up
+over 79 s, or concurrent encoding on four threads) is part of the trigger.
+
+`imageblockSampleLength` was 0 on every one of the 404,630 passes, so that field is not the index
+into `blit_fast_clear_gen2_N` either.
 
 ## What actually happened
 
@@ -103,14 +161,22 @@ If the parameter really is the tile byte size, the fix belongs at the KK/vkr tru
 
 ## Not yet done
 
-- Reproduce, with `sample-worker.sh` armed. The reporter's recipe: `https://web.gpuscore.com/run`
-  in Firefox with `vkmark`, `glmark2-wayland` and `vkcube` all running alongside.
-- Get the actual filename. **`sudo log config --mode "private_data:on"` no longer exists** —
-  macOS 26's `log config` accepts only `level`, `persist`, `stream`, `signpost-*` and
-  `oversize-enabled`; un-redacting now needs a `com.apple.system.logging` configuration profile
-  with `Enable-Private-Data`, which is a manual install on the user's Mac. So the practical route
-  is the one that was preferable anyway: **instrument KK** to log the render-pass attachment
-  formats at the failing compile, per "instrument the stack you own".
+- **Decide the mitigation** — the user's call, not ours. `LIMINA_KK_MTLTEXTURE_SCANOUT=0` avoids
+  the abort today but gives up what #26 turned on by default. Reverting that default is a real
+  regression and should not be done unilaterally.
+- **Find what makes the candidate configuration fire.** It does not abort in isolation, so pair it
+  with the rest of the session's state: run `mtlrp.m` with IOSurface-backed textures live in the
+  process, or with several threads encoding concurrently. Alternatively narrow from the other end
+  — the workload mix is four apps, and dropping one at a time (the abort is deterministic at 79 s)
+  isolates which one emits that pass in ~3 runs.
+- **Get the filename.** Still redacted, and **`sudo log config --mode "private_data:on"` no longer
+  exists** — macOS 26's `log config` accepts only `level`, `persist`, `stream`, `signpost-*` and
+  `oversize-enabled`. Un-redacting now needs a `com.apple.system.logging` configuration profile
+  with `Enable-Private-Data`, a manual install on the user's Mac. Ask before going that route.
+- **Report it to Apple.** The assert is reachable from an ordinary Metal render pass and takes the
+  whole process down from inside the framework, so there is nothing we can catch — only avoid.
+- `lldb` attach is not available non-interactively on this host ("cannot get permission to debug
+  processes"), so the requesting stack has to come from instrumentation, not a debugger.
 - A/B once with `LIMINA_VREND_SHARED_TRANSFER_SYNC=0` to retire by measurement the question of
   whether the same-day dmabuf coherency fix is implicated. Reasoning says no (nothing in the stack
   touches it, and a `glFinish` after a texture upload has no path into Apple's shader compiler),
