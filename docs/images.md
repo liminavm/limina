@@ -22,11 +22,16 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 - **Release selector + naming.** The set is mirrored per Fedora release under a uniform scheme
   `Fedora-Workstation-<REL>.<role>.raw`, roles: `vanilla` (pristine), `accessible` (stock base +
   user/autologin), `stock.test` (frozen stock-tier L2 snapshot), `enhanced` (venus base),
-  `enhanced.test` (frozen enhanced-tier L2 snapshot). **`LIMINA_FEDORA_REL=43|44` (default `43`)**
-  picks the release for the run scripts (`run-fedora-window.sh`, `run-enhanced.sh`,
+  `enhanced.test` (frozen enhanced-tier L2 snapshot). **`LIMINA_FEDORA_REL=43|44`** picks the
+  release for the run scripts (`run-fedora-window.sh`, `run-enhanced.sh`,
   `run-venus-window.sh`) and the L2 harness (`crates/limina-test`); per-image overrides
   (`LIMINA_TEST_DISK`, `LIMINA_TEST_DISK_ENH`, `LIMINA_TEST_DISK_BASELINE`) still win. This is the
   template for future releases (F45): produce the five roles, flip the selector.
+  **The L2 harness default moved `43` → `44` on 2026-08-15** (the run scripts still default to 43).
+  F44 is the family the guest components are built for, and the F43 pair had drifted a release
+  behind (task #31), so the suite was certifying stale guests — concretely, F43's 6.12 kernel has
+  no `uinput`, which `spice-vdagentd` treats as fatal, so the stock-tier clipboard cannot work
+  there at all. Pass `LIMINA_FEDORA_REL=43` to run the old family deliberately.
 
 ## The two tiers (see `CLAUDE.md`)
 

@@ -74,12 +74,20 @@ fn default_firmware() -> PathBuf {
 /// test SKIPs when it (or `LIMINA_TEST_ISO`) is absent. Fetch from dl.fedoraproject.org.
 const DEFAULT_TEST_ISO: &str = "Fedora-Server-netinst-aarch64-43-1.6.iso";
 
-/// The Fedora release the L2 image set targets — `LIMINA_FEDORA_REL` (default `"43"`). The image
+/// The Fedora release the L2 image set targets — `LIMINA_FEDORA_REL` (default `"44"`). The image
 /// set is mirrored per release (`vanilla`/`accessible`/`stock.test`/`enhanced`/`enhanced.test`), so
 /// the suite runs against either F43 or F44 by flipping this one var. Per-image overrides
 /// (`LIMINA_TEST_DISK`, `LIMINA_TEST_DISK_ENH`, …) still win when set.
+///
+/// **Default moved 43 → 44 on 2026-08-15.** F44 is the dogfood/dev family the guest components are
+/// actually built for, and the F43 pair had drifted a release behind (r9-era bases never landed
+/// there, task #31) — so the suite was quietly certifying stale guests. It cost a real
+/// investigation: the vdagent clipboard test failed only because F43's 6.12 kernel has no
+/// `uinput`, which `spice-vdagentd` treats as fatal. Tests that pin F44 explicitly
+/// ([`GuestConfig::seated_efi_synoik_from_env`], [`bench::tier_config`](crate::bench::tier_config))
+/// did so to escape this default; their pins are now redundant but harmless.
 fn fedora_rel() -> String {
-    std::env::var("LIMINA_FEDORA_REL").unwrap_or_else(|_| "43".to_string())
+    std::env::var("LIMINA_FEDORA_REL").unwrap_or_else(|_| "44".to_string())
 }
 
 /// Resolve a release-specific guest image by ROLE → `Fedora-Workstation-<REL>.<role>.raw` in the
@@ -861,9 +869,11 @@ impl GuestConfig {
     /// gnome-shell/mutter.
     ///
     /// The disk is **pinned to the F44 family** (`Fedora-Workstation-44.enhanced.synoik.raw`), the
-    /// same way [`bench::tier_config`](crate::bench::tier_config) pins the enhanced golden:
-    /// `LIMINA_FEDORA_REL` defaults to 43 and synoik is only produced for F44, so honouring the env
-    /// would just SKIP the guard out of the default suite. `LIMINA_TEST_DISK_SYNOIK` still
+    /// same way [`bench::tier_config`](crate::bench::tier_config) pins the enhanced golden. The pin
+    /// predates the 2026-08-15 default flip (`LIMINA_FEDORA_REL` used to default to 43, and synoik
+    /// is only produced for F44, so honouring the env would have SKIPped the guard out of the
+    /// default suite); it is now redundant, and kept because synoik genuinely exists for one
+    /// release only. `LIMINA_TEST_DISK_SYNOIK` still
     /// overrides for a deliberate different disk (e.g. an older clone, to check the test
     /// discriminates).
     ///
