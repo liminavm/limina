@@ -461,12 +461,19 @@ reporting `helper yielded the clipboard to vdagent (1 HELLO)`.
 **NOT yet in the guest-tools payload tarball** — `scripts/provision/f44/build-all.sh` still packages
 the pre-arbitration helper, so the next payload build (r10) must pick this up or a fresh
 `install-enhanced.sh` will regress these images.
-**Finding on the synoik image**: `xwayland-satellite` gives the session a `DISPLAY=:0`, so
-`spice-vdagent` starts and stays alive there and the helper yields to it. Whether X11 selections
-actually bridge to Wayland clients under synoik is **unverified** — that is the known limit of a
-liveness probe, which proves vdagent reached an X server, not that the compositor bridges
-selections. If synoik's clipboard turns out to be split, the probe needs a functional check (or
-that image needs `LIMINA_CLIPBOARD_IGNORE_VDAGENT=1`).
+**The synoik image needs the override — MEASURED, not hypothetical (2026-08-15)**:
+`xwayland-satellite` gives that session a `DISPLAY=:0`, so `spice-vdagent` starts and stays alive
+and the helper would yield to it — but selections do **not** bridge: with the Wayland selection
+owned (`wl-copy TOKEN1`, confirmed by `wl-paste`), `xclip -o -selection clipboard` answers
+*"There is no owner for the CLIPBOARD selection"*. vdagent's clipboard is X11-only, so it sees
+nothing in the direction it must read for guest→host. That is exactly the limit of a liveness
+probe: it proves vdagent reached an X server, not that the compositor bridges selections. The
+image therefore carries
+`/etc/systemd/user/limina-agent-session.service.d/10-ignore-vdagent.conf` with
+`LIMINA_CLIPBOARD_IGNORE_VDAGENT=1`, and the helper claims the clipboard there (verified:
+ext-data-control backend up right after the restart). Task #44 tracks the real fix — either
+selection bridging on the synoik/satellite side, or a functional probe that replaces the
+per-image override.
 
 ## Images
 
