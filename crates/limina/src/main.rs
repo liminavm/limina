@@ -18,6 +18,7 @@ mod moc;
 mod sep;
 mod session;
 mod supervisor;
+mod vdagent;
 mod venus_env;
 mod vmlib;
 mod window;
