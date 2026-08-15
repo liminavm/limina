@@ -189,8 +189,14 @@ reinstating one — the direction `docs/design/16k-page-requirement.md` argues f
 because of a property of *this* stack, which should not be generalised: virtio-gpu has no tiling,
 so its buffers are linear by construction, and the plane is not real hardware — scanout is whatever
 CALayer does with an IOSurface the **host already created and whose layout it already knows**.
-Nothing downstream infers layout from the modifier. Tracking: task #39 (fixed synoik-side 2026-08-15;
-a patched build still has to be delivered into the local `enhanced.synoik*` images).
+Nothing downstream infers layout from the modifier. Tracking: task #39 — **CLOSED 2026-08-15**:
+fixed synoik-side (`808bfcd` accept implicit-modifier planes for scanout, `9e4148a` enable
+pass-through scanout on one) and **delivered** into `Fedora-Workstation-44.enhanced.synoik.raw`,
+which now runs synoik `efbb2b8`. Delivery was the idempotent in-guest
+`scripts/provision/f44/install-synoik-session.sh` (pull + rebuild + reinstall, ~2m40s of cargo),
+then a reboot; the guest now exports 2560x1440 scanout buffers with no *"No supported plane buffer
+format found"*, and `synoik_session_reaches_a_rendered_desktop` goes **GREEN in 28 s** on the image
+that was RED before it.
 
 **Now guarded (2026-08-15, task #40): `crates/limina-test/tests/synoik_session.rs`.** The suite had
 never booted synoik, so this whole class shipped unwatched. The test EFI-boots the synoik image —
@@ -471,6 +477,11 @@ both verified after the fact). A CoW safety copy was taken first as
 the frozen L2 snapshot does not need perf tooling, and recloning it would churn the test baseline.
 
 #### `Fedora-Workstation-44.enhanced.synoik.raw` — the synoik compositor image (added 2026-08-14)
+
+**synoik updated to `efbb2b8` on 2026-08-15** — carries `808bfcd`/`9e4148a`, the implicit-modifier
+scanout fix (task #39). Before it, this image was RED on the r9 7.1.8 kernel: the plane advertises
+XR24+INVALID, synoik allocated XR24+LINEAR, the intersection was empty and no compositor took the
+display. `synoik_session_reaches_a_rendered_desktop` is GREEN on it again (28 s).
 
 **Mesa refreshed to `26.1.5-8.limina.fc44` on 2026-08-14** (same `install-enhanced.sh` pass as
 `enhanced.raw` / `enhanced.test.raw`) — the CPU→GPU dmabuf coherency fix. This image is the
