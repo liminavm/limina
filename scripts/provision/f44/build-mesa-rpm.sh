@@ -127,8 +127,23 @@ echo "==> [4/5] rpmbuild"
 rpmbuild -bb "$SPEC"
 
 echo "==> [5/5] collect RPMs -> $OUT"
-cp -f "$HOME"/rpmbuild/RPMS/aarch64/*.rpm "$OUT"/ 2>/dev/null || true
-cp -f "$HOME"/rpmbuild/RPMS/noarch/*.rpm  "$OUT"/ 2>/dev/null || true
+# ~/rpmbuild/RPMS is rpmbuild's ACCUMULATING output dir: it keeps every RPM ever built in this
+# guest, including superseded mesa releases and the kernels build-kernel-rpm.sh produced. Copying
+# it wholesale into a never-cleaned $OUT is how the r9 payload picked up a stale 26.1.5-9 mesa and
+# three obsolete kernels alongside the ones this run actually built (2026-08-15). dnf would have
+# resolved to the newest NEVRA anyway, so it "worked" — which is exactly why it went unnoticed
+# until someone read the manifest. Collect only what THIS run produced, into a cleaned $OUT.
+rm -f "$OUT"/*.rpm
+NEVR="${MESA_VER}-${LIMINA_REL}.limina"
+found=0
+for d in aarch64 noarch; do
+  for f in "$HOME"/rpmbuild/RPMS/"$d"/*-"$NEVR".*.rpm; do
+    [ -f "$f" ] || continue
+    cp -f "$f" "$OUT"/ && found=$((found+1))
+  done
+done
+[ "$found" -gt 0 ] || { echo "(no RPMs matching $NEVR — check the build log above)"; exit 1; }
+echo "    collected $found RPM(s) for mesa $NEVR"
 ls -la "$OUT"/*.rpm 2>/dev/null || { echo "(no RPMs produced — check the build log above)"; exit 1; }
 
 # Venus sanity: the enhanced tier is pointless without the virtio (venus) Vulkan ICD. F44 mesa

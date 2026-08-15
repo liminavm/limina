@@ -196,6 +196,10 @@ rpmbuild -bb "$SPEC"
 # version. That made a build "succeed" while the payload carried a stale kernel, twice (2026-08-03).
 RPM="$HOME/rpmbuild/RPMS/aarch64/limina-kernel-16k-$BASE-$RELEASE.fc$(rpm -E %{fedora}).aarch64.rpm"
 [ -f "$RPM" ] || { echo "expected RPM not found: $RPM" >&2; exit 1; }
+# ...and CLEAN $OUT first, or the same head -1 bug returns by the other door: copying only this
+# run's RPM still leaves every PREVIOUS run's kernel sitting in $OUT, and build-all.sh globs the
+# whole directory into the payload. $OUT is this run's output, not an archive of past ones.
+rm -f "$OUT"/*.rpm
 cp -f "$RPM" "$OUT"/
 ls -la "$OUT"/*.rpm 2>/dev/null || { echo "(no kernel RPM produced)"; exit 1; }
 echo "    KREL=$KREL"
