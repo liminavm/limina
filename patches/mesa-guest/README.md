@@ -3,7 +3,17 @@
 This directory is the **exported form of the fork branch** `liminavm/mesa` **`limina-guest`**
 (fork model, task #11, 2026-08-05). The branch is the source of truth: one commit per patch,
 rationale in the commit message, based on the tag `third_party/manifest.toml [mesa-guest]`
-records (`base`, currently `mesa-26.1.7` — the same Fedora SRPM base both RPM tracks build).
+records (`base`, currently `mesa-26.1.7`).
+
+**`base` is the branch's GIT base, which is not always the SRPM the RPM build uses.** These were
+the same thing for a long time and the README used to conflate them; they came apart on
+2026-08-15. F44 dist-git had `Version: 26.1.7` while the SRPM actually built and pushed to the
+repos was still `mesa-26.1.6-1.fc44`, so the r9 mesa is *our 26.1.7-based series applied onto
+26.1.6*. That is fine, and it is checkable rather than hopeful: the spec applies these with
+`patch --fuzz=0`, so a series that survives the build applies to that base with zero context
+slop. When the two diverge, **verify anything you retire against the SRPM base, not just the git
+base** — the freelist retirement below was first checked at 26.1.7 and had to be re-checked at
+26.1.6, which is the version users would actually have run.
 `scripts/export-mesa-guest-patches.sh` regenerates this series from `base..rev`; **never edit
 the `.patch` files directly** — commit on the fork, push, bump the manifest rev, re-export,
 and commit the regenerated series together with the manifest.
