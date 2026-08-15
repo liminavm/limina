@@ -895,11 +895,33 @@ Nothing in the product takes the path today — no Wayland client CPU-writes its
 and commits — so synoik is not exposed and has moved its test to a GPU-writing producer. What it
 cost them was a day of misattributing a host bug to their compositor.
 
-**Reproducer (cheap, local, no dogfood needed):** boot a clone of
-`Fedora-Workstation-44.enhanced.synoik.raw`, then in-guest at synoik `77f46c5e`:
-`cargo test --workspace -- --ignored dmabuf_cpu_written`. Measured here **6/10 and 7/10 failing**,
-the same order as the reporter's 5/6 — frequent enough that a handful of runs settles a question,
-but note it is a *rate*, so a single green run proves nothing.
+**ROOT-CAUSED 2026-08-14 — the transfer is issued and lands, it just runs too late.** Full
+evidence, reproducer and fix plan: `spikes/dmabuf-cpu-coherency/RESULTS.md`. The guest's write
+reaches the host as a virtio-gpu **control-queue** command executed by libkrun's gpu worker
+thread; the venus read is executed by virglrenderer's **own ring thread**
+(`src/venus/vkr_ring.c:811`) directly out of the shared ring memory. Two host execution paths,
+no ordering between them, and the guest cannot impose one — `VIRTGPU_EXECBUFFER` is
+fire-and-forget, so `gbm_bo_unmap()` returns long before the transfer is dequeued. Timestamped
+on both sides: the upload *begins* 8 µs after the guest submitted the read and completes after
+the read is done. The reporter's trichotomy answer is therefore **racing**, and their "the first
+one always works" is the first venus submission's ~9 ms of pipeline setup letting the worker
+thread win once.
+
+**The fix is guest-side** (host-side ordering is not available: the vrend GL context is current
+on the worker thread, so a ring-side barrier degenerates into ring-waits-for-worker — the
+`try_park_present` deadlock shape — and would tax every venus batch in the default coexist
+config). In guest mesa virgl, on unmap of a *write* map of a `PIPE_BIND_SHARED` resource, flush
+and wait for the bo to go idle; that gate mirrors the host's own in
+`vrend_resource_iosurface_init`. Proven by `probe --touch-after-write`: **0/10 stale, three
+runs, on an unmodified host**, against 8–10/10 baseline. Not yet implemented — it lands on the
+`limina-guest` mesa branch and carries the whole RPM + image-bake delivery chain. The stock tier
+keeps the bug (documented degradation); the long-term erase is host-visible-blob backing for
+shared bos, which removes the transfer entirely and its upload cost with it.
+
+**Reproducer (cheap, local, no dogfood needed):** `spikes/dmabuf-cpu-coherency/probe.c`, built
+and run in a clone of `Fedora-Workstation-44.enhanced.synoik.raw` — self-contained gbm+Vulkan,
+no synoik checkout needed (the image's synoik predates the reporter's test). It is far crisper
+than a rate: each failing pass returns *exactly* the previous pass's colour.
 
 **Already ruled out — do not re-run this:** the vrend stride fix (virglrenderer `5c76245`). It was
 the obvious suspect, since the failures were first noticed on the deploy that introduced it and it
@@ -909,11 +931,15 @@ binary, only the host dylib swapped: **6/10 fail with the fix, 7/10 without**. S
 reporter's own framing — the behaviour changed across a host *restart*, with no version change —
 is the accurate one, and the deployment is not the variable.
 
-Open, in the reporter's words: is the unmap's transfer-to-host not issued, issued and dropped, or
-racing the GPU read? Distinguishing those needs host-side visibility the guest does not have.
-Also unknown: whether it depends on the GPU having read the buffer before the second write (their
-sequence always samples between writes), and whether other formats/modifiers are affected —
-everything measured is `Argb8888` + LINEAR.
+**Also ruled out:** a completion barrier (`glFinish`) on the host's shared-transfer path. Tried,
+verified loaded and hit, still 10/10 stale — the problem is when the upload *starts*, not whether
+it has finished.
+
+Still open: the seam is **not transfer-specific**. Any control-queue work races the ring, so a
+vrend GL render into a shared bo consumed by venus carries the same hazard for a consumer that
+skips implicit sync. That the guest-side bo wait fixes this proves the guest kernel tracks the
+fence on the bo, so `VIRTGPU_WAIT`/sync-file consumers are safe and a bare Vulkan importer is
+not — unprobed. Formats/modifiers beyond `Argb8888` + LINEAR are also unmeasured.
 
 ---
 

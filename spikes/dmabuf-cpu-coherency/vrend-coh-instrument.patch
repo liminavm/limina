@@ -1,0 +1,83 @@
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index 304c73e4..61309f8c 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -8772,6 +8772,24 @@ static bool vrend_shared_iosurface_enabled(void)
+    return cached != 0;
+ }
+ 
++/* LIMINA_VREND_SHARED_TRANSFER_SYNC=0 drops the completion barrier a guest CPU write
++ * into a venus-shared IOSurface owes its consumer (see the comment at the end of
++ * vrend_renderer_transfer_write_iov) -- the A/B lever for its cost, and the escape
++ * hatch if a workload regresses. */
++static bool vrend_shared_transfer_sync_enabled(void)
++{
++   static int cached = -1;
++   if (cached < 0) {
++      const char *env = getenv("LIMINA_VREND_SHARED_TRANSFER_SYNC");
++      cached = !(env && !strcmp(env, "0"));
++      if (!cached)
++         virgl_info("iosurface: shared-transfer completion barrier disabled "
++                    "(LIMINA_VREND_SHARED_TRANSFER_SYNC=0) -- a CPU-written client "
++                    "buffer may be sampled one write behind\n");
++   }
++   return cached != 0;
++}
++
+ static void vrend_resource_iosurface_init(struct vrend_resource *gr,
+                                           enum virgl_formats format)
+ {
+@@ -9600,6 +9618,18 @@ static int vrend_renderer_transfer_write_iov(struct vrend_context *ctx,
+ {
+    void *data;
+ 
++   /* LIMINA_COH_TRACE=1: which transfer path a guest CPU write into a shared buffer
++    * actually takes (spikes/dmabuf-cpu-coherency). */
++   if (getenv("LIMINA_COH_TRACE"))
++   {
++      struct timespec _ts;
++      clock_gettime(CLOCK_REALTIME, &_ts);
++      fprintf(stderr,
++              "[COH] %ld.%06ld transfer_write res=%p %ux%u bits=%#x ios=%p pbo=%u\n",
++              (long)_ts.tv_sec, _ts.tv_nsec / 1000, (void *)res, res->base.width0,
++              res->base.height0, res->storage_bits, res->iosurface, res->iosurf_pbo);
++   }
++
+    if ((is_only_bit(res->storage_bits, VREND_STORAGE_GUEST_MEMORY) ||
+        has_bit(res->storage_bits, VREND_STORAGE_HOST_SYSTEM_MEMORY)) && res->iov) {
+       return vrend_copy_iovec(iov, num_iovs, info->offset,
+@@ -9913,6 +9943,34 @@ static int vrend_renderer_transfer_write_iov(struct vrend_context *ctx,
+ 
+       if (need_temp)
+          free(data);
++
++      /* LIMINA: a guest CPU write into a buffer SHARED with another context must be
++       * complete before that context reads it, and nothing else will make it so.
++       *
++       * An iosurface-backed resource has no host-side copy: the texture's storage IS
++       * the IOSurface, which venus imports directly. The glTexSubImage2D above is
++       * therefore a Metal blit queued on the vrend context's own queue, while the
++       * consumer (a Vulkan compositor sampling the same IOSurface) submits on venus's
++       * queue. Metal does not order work across queues, and the guest cannot wait for
++       * us: the virtio-gpu EXECBUFFER carrying the transfer is fire-and-forget, so
++       * gbm_bo_unmap() returns long before the blit runs. The consumer then samples
++       * the surface's PREVIOUS contents -- deterministically one write behind
++       * (spikes/dmabuf-cpu-coherency: 6/6 stale, and any pause >=1ms hides it).
++       *
++       * A GPU-writing producer is unaffected because its render and the guest's
++       * subsequent commands share one context and are ordered by it. Only the
++       * host-visible mapping's transfer lands outside that order, so this is the one
++       * place the barrier is owed. Scoped to the shared case: normal transfers keep
++       * their async upload. LIMINA_VREND_SHARED_TRANSFER_SYNC=0 is the A/B lever. */
++      if (res->iosurface && !res->iosurf_pbo && vrend_shared_transfer_sync_enabled()) {
++         glFinish();
++         if (getenv("LIMINA_COH_TRACE")) {
++            struct timespec _ts;
++            clock_gettime(CLOCK_REALTIME, &_ts);
++            fprintf(stderr, "[COH] %ld.%06ld barrier-done res=%p\n", (long)_ts.tv_sec,
++                    _ts.tv_nsec / 1000, (void *)res);
++         }
++      }
+    }
+    return 0;
+ }
