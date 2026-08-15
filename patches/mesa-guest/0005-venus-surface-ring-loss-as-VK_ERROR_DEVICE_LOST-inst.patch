@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Wed, 5 Aug 2026 18:54:24 -0300
-Subject: [PATCH 5/9] venus: surface ring loss as VK_ERROR_DEVICE_LOST instead
+Subject: [PATCH 5/8] venus: surface ring loss as VK_ERROR_DEVICE_LOST instead
  of abort()
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -121,7 +121,7 @@ index 383eea694b9..74472f5aa1b 100644
              return result;
  
 diff --git a/src/virtio/vulkan/vn_queue.c b/src/virtio/vulkan/vn_queue.c
-index 1ab9f41b8cf..3faebc9956c 100644
+index ad288ace3df..56241088bf0 100644
 --- a/src/virtio/vulkan/vn_queue.c
 +++ b/src/virtio/vulkan/vn_queue.c
 @@ -1770,10 +1770,8 @@ vn_get_fence_status(VkDevice dev_handle,
@@ -162,10 +162,10 @@ index 1ab9f41b8cf..3faebc9956c 100644
              return result;
        }
 diff --git a/src/virtio/vulkan/vn_ring.c b/src/virtio/vulkan/vn_ring.c
-index ff72774d243..a0b39dcea53 100644
+index 2d75f051ed7..5edca8b2390 100644
 --- a/src/virtio/vulkan/vn_ring.c
 +++ b/src/virtio/vulkan/vn_ring.c
-@@ -178,7 +178,7 @@ vn_ring_get_seqno_status(struct vn_ring *ring, uint32_t seqno)
+@@ -186,7 +186,7 @@ vn_ring_get_seqno_status(struct vn_ring *ring, uint32_t seqno)
     return vn_ring_ge_seqno(ring, vn_ring_load_head(ring), seqno);
  }
  
@@ -174,7 +174,7 @@ index ff72774d243..a0b39dcea53 100644
  vn_ring_wait_seqno(struct vn_ring *ring, uint32_t seqno)
  {
     /* A renderer wait incurs several hops and the renderer might poll
-@@ -191,19 +191,31 @@ vn_ring_wait_seqno(struct vn_ring *ring, uint32_t seqno)
+@@ -199,19 +199,31 @@ vn_ring_wait_seqno(struct vn_ring *ring, uint32_t seqno)
     do {
        if (vn_ring_get_seqno_status(ring, seqno)) {
           vn_relax_fini(&relax_state);
@@ -210,7 +210,7 @@ index ff72774d243..a0b39dcea53 100644
  }
  
  static bool
-@@ -220,14 +232,14 @@ vn_ring_has_space(const struct vn_ring *ring,
+@@ -228,14 +240,14 @@ vn_ring_has_space(const struct vn_ring *ring,
     return false;
  }
  
@@ -230,7 +230,7 @@ index ff72774d243..a0b39dcea53 100644
  
     {
        VN_TRACE_FUNC();
-@@ -236,10 +248,15 @@ vn_ring_wait_space(struct vn_ring *ring, uint32_t size)
+@@ -244,10 +256,15 @@ vn_ring_wait_space(struct vn_ring *ring, uint32_t size)
        struct vn_relax_state relax_state =
           vn_relax_init(ring->instance, VN_RELAX_REASON_RING_SPACE);
        do {
@@ -249,8 +249,8 @@ index ff72774d243..a0b39dcea53 100644
           }
        } while (true);
     }
-@@ -432,11 +449,12 @@ vn_ring_get_submit(struct vn_ring *ring, uint32_t shmem_count)
-    return malloc(submit_size);
+@@ -443,11 +460,12 @@ vn_ring_get_submit(struct vn_ring *ring, uint32_t shmem_count)
+    return submit;
  }
  
 -static bool
@@ -264,7 +264,7 @@ index ff72774d243..a0b39dcea53 100644
  {
     /* write cs to the ring */
     assert(!vn_cs_encoder_is_empty(cs));
-@@ -444,17 +462,24 @@ vn_ring_submit_internal(struct vn_ring *ring,
+@@ -455,17 +473,24 @@ vn_ring_submit_internal(struct vn_ring *ring,
     /* avoid -Wmaybe-unitialized */
     uint32_t cur_seqno = 0;
  
@@ -292,7 +292,7 @@ index ff72774d243..a0b39dcea53 100644
     }
  
     vn_ring_retire_submits(ring, cur_seqno);
-@@ -473,10 +498,10 @@ vn_ring_submit_internal(struct vn_ring *ring,
+@@ -484,10 +509,10 @@ vn_ring_submit_internal(struct vn_ring *ring,
        if (os_time_timeout(ring->last_notify, ring->next_notify, now)) {
           ring->last_notify = now;
           ring->next_notify = now + VN_RING_IDLE_TIMEOUT_NS;
@@ -305,7 +305,7 @@ index ff72774d243..a0b39dcea53 100644
  }
  
  static const struct vn_cs_encoder *
-@@ -619,6 +644,10 @@ vn_ring_submit_locked(struct vn_ring *ring,
+@@ -630,6 +655,10 @@ vn_ring_submit_locked(struct vn_ring *ring,
                        struct vn_renderer_shmem *extra_shmem,
                        uint32_t *ring_seqno)
  {
@@ -316,7 +316,7 @@ index ff72774d243..a0b39dcea53 100644
     const bool direct = vn_ring_submission_can_direct(ring, cs);
     if (!direct && cs->storage_type == VN_CS_ENCODER_STORAGE_POINTER) {
        cs = vn_ring_cs_upload_locked(ring, cs);
-@@ -634,8 +663,20 @@ vn_ring_submit_locked(struct vn_ring *ring,
+@@ -645,8 +674,20 @@ vn_ring_submit_locked(struct vn_ring *ring,
        return result;
  
     uint32_t seqno;
@@ -339,7 +339,7 @@ index ff72774d243..a0b39dcea53 100644
     if (notify) {
        uint32_t notify_ring_data[8];
        struct vn_cs_encoder local_enc = VN_CS_ENCODER_INITIALIZER_LOCAL(
-@@ -716,12 +757,16 @@ vn_ring_submit_command(struct vn_ring *ring,
+@@ -727,12 +768,16 @@ vn_ring_submit_command(struct vn_ring *ring,
     mtx_unlock(&ring->mutex);
  
     if (submit->reply_size) {

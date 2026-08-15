@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Wed, 5 Aug 2026 18:53:49 -0300
-Subject: [PATCH 1/9] venus/wsi: linear-modifier fallback + 16F swapchain block
+Subject: [PATCH 1/8] venus/wsi: linear-modifier fallback + 16F swapchain block
  for virtio-gpu presents
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -82,7 +82,7 @@ index 8c9f1f1da50..9110dc4d204 100644
     uint32_t optimalBufferCopyRowPitchAlignment;
     VkPresentModeKHR override_present_mode;
 diff --git a/src/vulkan/wsi/wsi_common_wayland.c b/src/vulkan/wsi/wsi_common_wayland.c
-index 73cc78c4c2d..19a381274a0 100644
+index 38ec3cd8528..bec50f1c070 100644
 --- a/src/vulkan/wsi/wsi_common_wayland.c
 +++ b/src/vulkan/wsi/wsi_common_wayland.c
 @@ -375,7 +375,7 @@ wsi_wl_display_add_vk_format(struct wsi_wl_display *display,

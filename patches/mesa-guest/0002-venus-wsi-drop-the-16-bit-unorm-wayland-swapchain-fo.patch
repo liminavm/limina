@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Wed, 5 Aug 2026 18:54:24 -0300
-Subject: [PATCH 2/9] venus/wsi: drop the 16-bit-unorm wayland swapchain format
+Subject: [PATCH 2/8] venus/wsi: drop the 16-bit-unorm wayland swapchain format
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -18,7 +18,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
  1 file changed, 8 insertions(+), 7 deletions(-)
 
 diff --git a/src/vulkan/wsi/wsi_common_wayland.c b/src/vulkan/wsi/wsi_common_wayland.c
-index 19a381274a0..0edcffd107b 100644
+index bec50f1c070..a626e90bf1b 100644
 --- a/src/vulkan/wsi/wsi_common_wayland.c
 +++ b/src/vulkan/wsi/wsi_common_wayland.c
 @@ -577,15 +577,16 @@ wsi_wl_display_add_drm_format_modifier(struct wsi_wl_display *display,
