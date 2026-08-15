@@ -879,7 +879,7 @@ in both**, and md5sum/restic are one shape, not two. Either re-justify the free 
 or retire it — carrying a guard that never binds is worse than not having it, because the doc
 comment claims coverage the code does not provide.
 
-## GPU — a CPU write to a mapped LINEAR dmabuf stops being visible to the GPU
+## GPU — a CPU write to a mapped LINEAR dmabuf stops being visible to the GPU — FIXED 2026-08-14
 
 Reported by synoik 2026-08-14 (`vmm-issue-dmabuf-cpu-write-coherency.md` in their tree).
 `gbm_bo_map` → write → unmap on a LINEAR `Argb8888` dmabuf, completed *before* the buffer is
@@ -907,16 +907,19 @@ the read is done. The reporter's trichotomy answer is therefore **racing**, and 
 one always works" is the first venus submission's ~9 ms of pipeline setup letting the worker
 thread win once.
 
-**The fix is guest-side** (host-side ordering is not available: the vrend GL context is current
-on the worker thread, so a ring-side barrier degenerates into ring-waits-for-worker — the
-`try_park_present` deadlock shape — and would tax every venus batch in the default coexist
-config). In guest mesa virgl, on unmap of a *write* map of a `PIPE_BIND_SHARED` resource, flush
-and wait for the bo to go idle; that gate mirrors the host's own in
-`vrend_resource_iosurface_init`. Proven by `probe --touch-after-write`: **0/10 stale, three
-runs, on an unmodified host**, against 8–10/10 baseline. Not yet implemented — it lands on the
-`limina-guest` mesa branch and carries the whole RPM + image-bake delivery chain. The stock tier
-keeps the bug (documented degradation); the long-term erase is host-visible-blob backing for
-shared bos, which removes the transfer entirely and its upload cost with it.
+**FIXED in two halves, and neither works alone.** (1) Guest mesa virgl — on unmap of a *write*
+map of a `PIPE_BIND_SHARED` resource, flush and wait for the bo to go idle, which restores the
+ordering; shipped as `mesa 26.1.5-8.limina.fc44`. (2) Host vrend — complete the upload before
+returning, because the virtio-gpu fence the guest waits on signals when vrend *returns*, not
+when the queued Metal upload executes, so half 1 alone can be satisfied with the bytes still in
+flight. Measured with `LIMINA_VREND_SHARED_TRANSFER_SYNC` as the A/B lever: guest half alone was
+clean warm (250 consecutive passes) but **failed the first write after a guest boot in 5 of 6
+boots**; both halves, **0 of 7 boots**. Host-side *ordering* was never available (the vrend GL
+context is current on the worker thread, so a ring-side barrier degenerates into
+ring-waits-for-worker — the `try_park_present` deadlock shape). The stock tier keeps the bug,
+since the host barrier alone does not fix it — a documented degradation; the long-term erase is
+host-visible-blob backing for shared bos, which removes the transfer entirely and its upload
+cost with it.
 
 **Reproducer (cheap, local, no dogfood needed):** `spikes/dmabuf-cpu-coherency/probe.c`, built
 and run in a clone of `Fedora-Workstation-44.enhanced.synoik.raw` — self-contained gbm+Vulkan,
@@ -931,9 +934,10 @@ binary, only the host dylib swapped: **6/10 fail with the fix, 7/10 without**. S
 reporter's own framing — the behaviour changed across a host *restart*, with no version change —
 is the accurate one, and the deployment is not the variable.
 
-**Also ruled out:** a completion barrier (`glFinish`) on the host's shared-transfer path. Tried,
-verified loaded and hit, still 10/10 stale — the problem is when the upload *starts*, not whether
-it has finished.
+**Trap worth keeping:** the host completion barrier, tried *first* and alone, was verified loaded
+and hit and still failed 10/10 — because the problem was when the upload *starts*. It looked like
+a dead end and was reverted; it only earns its place after the guest half fixes the ordering.
+"This change did nothing" can mean "not yet", not "wrong".
 
 Still open: the seam is **not transfer-specific**. Any control-queue work races the ring, so a
 vrend GL render into a shared bo consumed by venus carries the same hazard for a consumer that

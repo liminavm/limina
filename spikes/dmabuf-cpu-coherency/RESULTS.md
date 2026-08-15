@@ -1,4 +1,4 @@
-# CPU-written LINEAR dmabuf loses GPU visibility — root-caused 2026-08-14
+# CPU-written LINEAR dmabuf loses GPU visibility — root-caused and FIXED 2026-08-14
 
 Reported by synoik (`vmm-issue-dmabuf-cpu-write-coherency.md` in their tree): a
 `gbm_bo_map` → write → `gbm_bo_unmap` on a LINEAR `Argb8888` dmabuf is not visible to a
@@ -91,10 +91,10 @@ images → `docs/images.md` component versions.
 
 Two consequences to accept rather than fight:
 
-- **The stock tier keeps the bug** (stock mesa has no such wait). Consistent with the
-  two-tier guarantee — a degradation, not a boot failure — and the long-term erase is
-  backing shared bos with host-visible blobs so there is no transfer to order at all (and
-  no upload cost either).
+- **The stock tier keeps the bug** (stock mesa has no such wait; the host barrier alone does
+  not fix it, as the table shows). Consistent with the two-tier guarantee — a degradation,
+  not a boot failure — and the long-term erase is backing shared bos with host-visible blobs
+  so there is no transfer to order at all, and no upload cost either.
 - **The seam is not transfer-specific — but only the CPU case is our bug.** Probed:
   `--gl-writer` (render into the same shared bo through vrend, hand off with `glFlush`) also
   races, at **0/10, 3/10, 8/10** — a true timing spread, unlike the CPU path's determinism.
