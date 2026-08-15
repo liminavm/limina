@@ -1,0 +1,81 @@
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=512x512 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ce9400 fmt=10 storage=0 usage=0x7 512x512 samples=1 linear=0 iosurf=0 load=2 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=195x64 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ce9b80 fmt=80 storage=0 usage=0x7 195x64 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2560x1440 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791cea300 fmt=80 storage=0 usage=0x17 2560x1440 samples=1 linear=0 iosurf=1 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2807x64 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceaa80 fmt=80 storage=0 usage=0x7 2807x64 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=1403x32 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceb980 fmt=80 storage=0 usage=0x5 1403x32 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=701x16 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791530280 fmt=80 storage=0 usage=0x5 701x16 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=350x8 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791530a00 fmt=80 storage=0 usage=0x5 350x8 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=701x16 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791530280 fmt=80 storage=0 usage=0x5 701x16 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=1403x32 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceb980 fmt=80 storage=0 usage=0x5 1403x32 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2807x64 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceb200 fmt=80 storage=0 usage=0x5 2807x64 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2560x1440 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791cea300 fmt=80 storage=0 usage=0x17 2560x1440 samples=1 linear=0 iosurf=1 load=1 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=195x64 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791532800 fmt=80 storage=0 usage=0x7 195x64 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2560x1440 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791533700 fmt=80 storage=0 usage=0x17 2560x1440 samples=1 linear=0 iosurf=1 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2807x64 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceaa80 fmt=80 storage=0 usage=0x7 2807x64 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=1403x32 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceb980 fmt=80 storage=0 usage=0x5 1403x32 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=701x16 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791530280 fmt=80 storage=0 usage=0x5 701x16 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=350x8 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791530a00 fmt=80 storage=0 usage=0x5 350x8 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=701x16 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791530280 fmt=80 storage=0 usage=0x5 701x16 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=1403x32 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceb980 fmt=80 storage=0 usage=0x5 1403x32 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2807x64 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceb200 fmt=80 storage=0 usage=0x5 2807x64 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2560x1440 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791533700 fmt=80 storage=0 usage=0x17 2560x1440 samples=1 linear=0 iosurf=1 load=1 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2560x1440 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791cea300 fmt=80 storage=0 usage=0x17 2560x1440 samples=1 linear=0 iosurf=1 load=1 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2807x64 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceaa80 fmt=80 storage=0 usage=0x7 2807x64 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=1403x32 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceb980 fmt=80 storage=0 usage=0x5 1403x32 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=701x16 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791530280 fmt=80 storage=0 usage=0x5 701x16 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=350x8 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791530a00 fmt=80 storage=0 usage=0x5 350x8 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=701x16 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791530280 fmt=80 storage=0 usage=0x5 701x16 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=1403x32 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceb980 fmt=80 storage=0 usage=0x5 1403x32 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2807x64 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceb200 fmt=80 storage=0 usage=0x5 2807x64 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2560x1440 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791cea300 fmt=80 storage=0 usage=0x17 2560x1440 samples=1 linear=0 iosurf=1 load=1 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2560x1440 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791533700 fmt=80 storage=0 usage=0x17 2560x1440 samples=1 linear=0 iosurf=1 load=1 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2560x1440 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791cea300 fmt=80 storage=0 usage=0x17 2560x1440 samples=1 linear=0 iosurf=1 load=1 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2807x64 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceaa80 fmt=80 storage=0 usage=0x7 2807x64 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=1403x32 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceb980 fmt=80 storage=0 usage=0x5 1403x32 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=701x16 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791530280 fmt=80 storage=0 usage=0x5 701x16 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=350x8 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791530a00 fmt=80 storage=0 usage=0x5 350x8 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=701x16 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791530280 fmt=80 storage=0 usage=0x5 701x16 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=1403x32 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceb980 fmt=80 storage=0 usage=0x5 1403x32 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2807x64 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791ceb200 fmt=80 storage=0 usage=0x5 2807x64 samples=1 linear=0 iosurf=0 load=0 store=4
+[LIMINA-KK-RP] tid=0x6e2ef9 rt=2560x1440 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[LIMINA-KK-RP]   color[0] tex=0x791cea300 fmt=80 storage=0 usage=0x17 2560x1440 samples=1 linear=0 iosurf=1 load=1 store=4
+[LIMINA-KK-RP] tid=0x6e2f3f rt=800x600 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0

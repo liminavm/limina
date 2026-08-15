@@ -2,3 +2,4 @@ rpcombo
 *.dSYM/
 worker-samples.tsv
 mtlrp
+mtlrp-min

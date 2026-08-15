@@ -227,18 +227,23 @@ try_iosurf(const char *what, NSUInteger w, NSUInteger h, MTLLoadAction cload, bo
 }
 
 /* A render pass with NO attachments -- the configuration the minimal repro ends on. */
+/* `samples` is defaultRasterSampleCount. Passing 1 here was a real mistake the first time: EVERY
+ * header in the repro's dump reads samples=0, because KosmicKrisp never sets the field. An
+ * attachment-less pass with sample count 0 is the "0-byte, 0-sample draw-buffer state" case, and
+ * it is the one configuration nothing had tested. Keep it parameterised so the difference stays
+ * visible rather than baked in. */
 static void
-try_empty(const char *what, NSUInteger rtw, NSUInteger rth)
+try_empty_s(const char *what, NSUInteger rtw, NSUInteger rth, NSUInteger samples)
 {
    @autoreleasepool {
-      printf("TRY %-22s no attachments            rt=%lux%lu\n", what,
-             (unsigned long)rtw, (unsigned long)rth);
+      printf("TRY %-22s no attachments  samples=%lu  rt=%lux%lu\n", what,
+             (unsigned long)samples, (unsigned long)rtw, (unsigned long)rth);
       fflush(stdout);
 
       MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
       rp.renderTargetWidth = rtw;
       rp.renderTargetHeight = rth;
-      rp.defaultRasterSampleCount = 1;
+      rp.defaultRasterSampleCount = samples;
 
       id<MTLCommandBuffer> cb = [queue commandBuffer];
       id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
@@ -254,17 +259,17 @@ try_empty(const char *what, NSUInteger rtw, NSUInteger rth)
 }
 
 static void
-try_empty4(const char *what, NSUInteger rtw, NSUInteger rth)
+try_empty4_s(const char *what, NSUInteger rtw, NSUInteger rth, NSUInteger samples)
 {
    @autoreleasepool {
-      printf("TRY4 %-21s no attachments            rt=%lux%lu\n", what,
-             (unsigned long)rtw, (unsigned long)rth);
+      printf("TRY4 %-21s no attachments  samples=%lu  rt=%lux%lu\n", what,
+             (unsigned long)samples, (unsigned long)rtw, (unsigned long)rth);
       fflush(stdout);
 
       MTL4RenderPassDescriptor *rp = [[MTL4RenderPassDescriptor alloc] init];
       rp.renderTargetWidth = rtw;
       rp.renderTargetHeight = rth;
-      rp.defaultRasterSampleCount = 1;
+      rp.defaultRasterSampleCount = samples;
 
       [alloc4 reset];
       [cb4 beginCommandBufferWithAllocator:alloc4];
@@ -330,14 +335,24 @@ main(void)
    }
 
    printf("\n-- attachment-less render passes --\n");
-   try_empty("empty-rt-800x600", 800, 600);
-   try_empty("empty-rt-1x1", 1, 1);
-   try_empty("empty-rt-unset", 0, 0);
+   try_empty_s("empty-rt-800x600", 800, 600, 1);
+   try_empty_s("empty-rt-1x1", 1, 1, 1);
+   try_empty_s("empty-rt-unset", 0, 0, 1);
+
+   /* samples=0 is what KosmicKrisp actually leaves in the descriptor -- every header in the
+    * repro's dump reads samples=0. Attachment-less AND sample-count-zero together is the one
+    * configuration no sweep had tried: a draw-buffer state with neither a tile layout nor a
+    * sample count for the background-object compiler to key on. */
+   printf("\n-- attachment-less WITH samples=0 (what KK really emits) --\n");
+   try_empty_s("empty-s0-rt-800x600", 800, 600, 0);
+   try_empty_s("empty-s0-rt-unset", 0, 0, 0);
 
    if (q4 && alloc4 && cb4) {
       printf("\n-- attachment-less through MTL4 --\n");
-      try_empty4("empty4-rt-800x600", 800, 600);
-      try_empty4("empty4-rt-unset", 0, 0);
+      try_empty4_s("empty4-rt-800x600", 800, 600, 1);
+      try_empty4_s("empty4-rt-unset", 0, 0, 1);
+      try_empty4_s("empty4-s0-rt-800x600", 800, 600, 0);
+      try_empty4_s("empty4-s0-rt-unset", 0, 0, 0);
    }
 
    if (q4 && alloc4 && cb4) {
