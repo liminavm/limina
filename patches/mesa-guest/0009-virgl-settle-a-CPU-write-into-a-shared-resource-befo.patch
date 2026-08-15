@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Fri, 14 Aug 2026 22:35:19 -0300
+Subject: [PATCH 9/9] virgl: settle a CPU write into a shared resource before
+ unmap returns
+
+Mapping a LINEAR bo through gbm is a direct mmap on real hardware: when unmap
+returns the write IS the buffer, and there is no GPU work for a consumer to
+synchronize against -- nor any fence it could wait on if it wanted one. virgl
+breaks that contract by turning the write into a deferred transfer-to-host that
+the guest cannot order, since VIRTGPU_EXECBUFFER is fire-and-forget and unmap
+returns long before the host dequeues it. A consumer in another context reads
+the buffer's previous contents.
+
+That is not merely theoretical scheduling luck. On a host where the Vulkan side
+executes on the renderer's own ring thread while the transfer waits on the
+virtio-gpu control queue, a CPU-written dmabuf sampled through Vulkan came back
+deterministically one write behind, 8-10 times out of 10.
+
+So restore the contract where it was broken: submit the transfer and wait for
+the resource to go idle. Scoped to PIPE_BIND_SHARED, the set that can be
+observed from another context; every gbm bo carries it, but a GPU-rendered
+client buffer never takes the CPU map-write-unmap path, so the cost -- one round
+trip per unmap -- lands only on producers that actually CPU-write.
+
+Deliberately not extended to the GL flush path: a render handed off with glFlush
+and sampled without synchronization reads stale on real hardware too, so that is
+the consumer's to synchronize rather than ours to wait for.
+---
+ src/gallium/drivers/virgl/virgl_texture.c | 39 +++++++++++++++++++++++
+ 1 file changed, 39 insertions(+)
+
+diff --git a/src/gallium/drivers/virgl/virgl_texture.c b/src/gallium/drivers/virgl/virgl_texture.c
+index 7412d86b35e..61d9b57cbc4 100644
+--- a/src/gallium/drivers/virgl/virgl_texture.c
++++ b/src/gallium/drivers/virgl/virgl_texture.c
+@@ -258,11 +258,46 @@ static void flush_data(struct pipe_context *ctx,
+                      trans->base.level);
+ }
+ 
++/* limina: settle a CPU write into a buffer that is shared with another context.
++ *
++ * On real hardware, mapping a LINEAR bo through gbm is a direct mmap: when unmap
++ * returns, the write IS the buffer, and there is no GPU work for a consumer to
++ * synchronize against -- nor any fence it could wait on if it wanted to. virgl
++ * breaks that contract by turning the write into a deferred transfer-to-host,
++ * and the guest cannot order it: VIRTGPU_EXECBUFFER is fire-and-forget, so unmap
++ * returns long before the host dequeues the transfer. A consumer in another
++ * context then reads the buffer's PREVIOUS contents -- on the limina host,
++ * deterministically one write behind, because the venus side executes on the
++ * renderer's own ring thread while the transfer waits on the control queue
++ * (spikes/dmabuf-cpu-coherency/RESULTS.md).
++ *
++ * So restore the contract where it was broken: submit the transfer and wait for
++ * the resource to go idle, which is what the API's callers already assume.
++ *
++ * Scoped to PIPE_BIND_SHARED, which is exactly the set that can be observed from
++ * another context (and mirrors the gate the host uses to give these resources
++ * their shared backing). Every gbm bo carries it, but a GPU-rendered client
++ * buffer never reaches this path -- the cost lands only on a producer that
++ * actually CPU-writes through the map, and it is one round trip per unmap.
++ *
++ * Note this does NOT belong on the GL flush path: a render handed off with
++ * glFlush and sampled without synchronization reads stale on real hardware too,
++ * so that one is the consumer's to synchronize, not ours to wait for. */
++static void virgl_settle_shared_write(struct virgl_context *vctx,
++                                      struct virgl_resource *res)
++{
++   struct virgl_screen *vs = virgl_screen(vctx->base.screen);
++
++   virgl_flush_eq(vctx, vctx, NULL);
++   vs->vws->resource_wait(vs->vws, res->hw_res);
++}
++
+ void virgl_texture_transfer_unmap(struct pipe_context *ctx,
+                                   struct pipe_transfer *transfer)
+ {
+    struct virgl_context *vctx = virgl_context(ctx);
+    struct virgl_transfer *trans = virgl_transfer(transfer);
++   struct virgl_resource *res = virgl_resource(transfer->resource);
+    bool queue_unmap = false;
+ 
+    if (transfer->usage & PIPE_MAP_WRITE &&
+@@ -304,6 +339,10 @@ void virgl_texture_transfer_unmap(struct pipe_context *ctx,
+       } else {
+          virgl_transfer_queue_unmap(&vctx->queue, trans);
+       }
++
++      /* limina: see virgl_settle_shared_write(). */
++      if (res->b.bind & PIPE_BIND_SHARED)
++         virgl_settle_shared_write(vctx, res);
+    } else {
+       virgl_resource_destroy_transfer(vctx, trans);
+    }
