@@ -487,10 +487,14 @@ flip straight to the primary plane). Converged truth + open-threads ledger live 
   blobs sharing one host page) needs the guest to keep an aligned lattice, which a 16 KiB kernel
   gets for free but is *not* the only way to get: `guest/virtio-gpu-dkms/` does it on stock 4 KiB
   guests (validated 2026-07-03 — venus enumerates on the stock tier), and upstream has since merged
-  the negotiated form, `VIRTIO_GPU_F_BLOB_ALIGNMENT` (in 7.2-rc). **16 KiB is still right for the
-  enhanced tier**, but for the page-size-granularity features (udmabuf `mach_vm_remap` stitching,
-  virtiofs DAX, balloon reclaim) — not for venus. Full analysis, the three-link chain, and the
-  ordering hazard: `docs/design/16k-page-requirement.md`.
+  the negotiated form, `VIRTIO_GPU_F_BLOB_ALIGNMENT` (in 7.2-rc). **16 KiB stays *the* enhanced
+  tier because it is better — but nothing hard-requires it any more.** The other things 16 KiB buys
+  (udmabuf `mach_vm_remap` stitching, virtiofs DAX, balloon reclaim granularity) all degrade
+  gracefully on 4 KiB, and the balloon's sub-page coalescing is already implemented
+  (`virtio/balloon/device.rs:83-140`). venus was the sole hard failure — and the sole one because
+  its failure mode poisoned the whole Vulkan loader rather than degrading. Full analysis, the
+  three-link chain, the ordering hazard, and the short upstream list that would make a stock distro
+  work unaided: `docs/design/16k-page-requirement.md`.
   libkrun **0011** logs `hv_vm_map` failures with the alignment breakdown (diagnostic only).
 - **Zero-copy present + the B/D insight: IOSurface is the macOS dmabuf.** "Zero-copy end-to-end" has
   four crossings; the desktop needs **B** (rendered image → display) and **D** (mutter can create a

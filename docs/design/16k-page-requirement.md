@@ -8,10 +8,14 @@ kernel RPM whose *only* load-bearing difference from Fedora's is one config symb
 block confirms it: everything else there is build hygiene or `=y` VM drivers). That is a good moment
 to ask whether the 16 KiB requirement is still real.
 
-**Short answer: the venus reason is gone, the page-size reasons are not.** 16 KiB is no longer the
-only way to make venus work — but it is still the only way to make `mach_vm_remap` stitching,
-virtiofs DAX, and balloon reclaim work at their natural granularity. Keep 16k; retire the
-*justification*, which is stale in `docs/roadmap.md` and in older memory.
+**Short answer: there is no hard 16 KiB requirement left.** venus was the only thing that truly
+*failed* without it, and that is fixed. Everything else 16 KiB buys — `mach_vm_remap` stitching,
+virtiofs DAX, balloon reclaim granularity, TLB pressure — already degrades gracefully on 4 KiB, and
+in the balloon's case the coalescing is implemented and shipping. So: **keep 16 KiB as *the*
+enhanced tier because it is better, not because anything is impossible without it**, and note that
+a stock distro working unaided is a reachable goal gated on a short list of *userspace* upstream
+work (§ "Just works on a regular distro"). The justification in `docs/roadmap.md` and older memory
+is stale.
 
 ## What actually drove the requirement
 
@@ -90,26 +94,71 @@ real upstream bug for any host-visible-less configuration, and it is worth repor
 whatever we write for link 3. It also means link 1 and link 3 must not be considered independent:
 advertising the granule perturbs an unrelated Mesa code path.
 
-## What still genuinely needs 16 KiB pages
+## What 16 KiB buys — and why none of it is a *blocker*
 
-None of the above touches these. They need **guest page size == host page size**, which no protocol
-negotiation can supply:
+An earlier draft of this document listed the items below as "what still genuinely needs 16 KiB".
+That was wrong, and the distinction it blurred is the important one: **venus was a hard failure,
+these are all degradations that already have best-effort paths.** Several of those paths are
+implemented and shipping today.
 
-- **udmabuf / zero-copy video import** (`docs/roadmap.md:1825`): `mach_vm_remap` works at the host's
-  16 KiB granularity, so a 4 KiB guest presents fragments that cannot be remapped individually and
-  falls back to a copy.
-- **virtiofs DAX** (`docs/roadmap.md:651`): the FUSE_SETUPMAPPING/SHM window wants guest-page ==
-  host-page; stock-4k DAX is explicitly an untested separate case.
-- **Balloon reclaim granularity** (`docs/design/m6-dynamic-memory.md:230,472`): `MADV_FREE_REUSABLE`
-  needs 16 KiB-aligned, 16 KiB-multiple, fully-free runs. Host-side coalescing makes 4 KiB *work*,
-  but at a measurable loss — the whole `limina-hv-ledger-gap` 2× ledger story lives here.
-- Plus the ordinary TLB win of matching the host.
+- **Balloon reclaim granularity** (`docs/design/m6-dynamic-memory.md:230,472`):
+  `MADV_FREE_REUSABLE` needs 16 KiB-aligned, 16 KiB-multiple, fully-free runs — and libkrun
+  **already coalesces** to get them. `virtio/balloon/device.rs:83-140` keeps a per-host-page
+  sub-page bitmap with an all-free mask (`(1 << (host_page / GUEST_PAGE)) - 1` = `0b1111` on
+  16K/4K) and drains only host pages whose every sub-page is free. A 4 KiB guest reclaims less of
+  what it frees; it does not fail.
+- **udmabuf / zero-copy video import** (`docs/roadmap.md:1825`): `mach_vm_remap` works at 16 KiB, so
+  a 4 KiB guest's fragments can't be remapped individually — and the roadmap's own done-test says
+  so in as many words: *"A stock 4k guest still plays video via the fallback, unchanged."* Designed
+  as best-effort from the start.
+- **virtiofs DAX** (`docs/roadmap.md:651`): not implemented yet — it is a listed follow-up, not a
+  live dependency. When it lands, the degradation is "DAX doesn't engage, plain FUSE read/write
+  does", which is where every non-DAX guest already lives.
+- **TLB pressure**: a perf difference, never a correctness gate.
+
+So, post-venus-fix, **there is no hard 16 KiB blocker left anywhere in the stack.** 16 KiB is what
+makes the enhanced tier *good*, not what makes anything *possible* — which is exactly the shape the
+two-tier guarantee asks for.
+
+The one genuine hard failure was always venus, and it failed in the worst available way: without a
+working blob map, `vkCreateInstance` returns `VK_ERROR_OUT_OF_HOST_MEMORY`, and the Vulkan loader
+treats OOM as fatal for the whole instance chain — so it took healthy lavapipe down with it. Stock
+Vulkan wasn't degraded, it was *dead*. That asymmetry is why this one item earned "THE constraint"
+while the others never did.
+
+## "Just works on a regular distro" — the actual shopping list
+
+Given the above, the goal of a stock distro working unaided (with the enhanced tier still being
+16 KiB, and still better) is reachable, and the gate is a short list of **userspace** items:
+
+1. **Mesa: venus degrades to its stub instance when ring setup fails.** This is our series patch
+   0003 (`d517a1b49d1`) and it is the one that converts "all Vulkan dead" into "llvmpipe works" —
+   the difference between a broken distro and a degraded one. Not upstream: the 26.1.7 rebase
+   auto-dropped our kernel patch as "already upstream" and did *not* drop this, and
+   `docs/upstreaming/ledger/mesa.md` has it queued as Wave 1. **This is the highest-value upstream
+   item in the whole plan** and it is worth pursuing independently of everything else here.
+2. **Mesa: query `VIRTGPU_PARAM_BLOB_ALIGNMENT` and round blob sizes to it** — unwritten anywhere
+   (§ above), and the piece that makes stock-tier venus actually work rather than merely fail
+   politely.
+3. **Mesa: fix the param-9 collision** (`VIRTGPU_PARAM_GUEST_VRAM` vs the kernel's
+   `BLOB_ALIGNMENT`), which becomes live the moment anything advertises the granule.
+4. **libkrun advertises `blob_alignment = 16384`** — ours, and strictly after 2.
+5. **Distro kernel ≥ 7.2** — just time.
+
+Items 1-3 are all Mesa, all upstreamable, and 1 is independently valuable today. That is a
+tractable list, and it is the honest answer to "what would it take for everything to just work on
+regular distros".
 
 ## Recommendation
 
-**Keep the 16 KiB kernel for the enhanced tier.** Nothing here argues for dropping it; the venus
-argument simply stops being the reason. Rewrite the roadmap's "THE constraint / no host-only fix
-exists" paragraph accordingly, so the next reader doesn't re-derive a solved problem.
+**Keep the 16 KiB kernel as *the* enhanced tier** — but keep it because it is the better tier, not
+because anything requires it. Rewrite the roadmap's "THE constraint / no host-only fix exists"
+paragraph accordingly, so the next reader doesn't re-derive a solved problem.
+
+**Treat "a stock distro just works" as an explicit goal, not a side effect.** It is reachable, the
+list is short and entirely upstreamable (§ above), and item 1 — venus degrading to its stub instance
+instead of poisoning the loader — pays off on every stock guest immediately, with or without any of
+the alignment work.
 
 **The question worth actually pursuing is the adjacent one: can the enhanced tier stop shipping a
 custom kernel at all?** With the fork at zero delta we are building a multi-GB kernel for one config
