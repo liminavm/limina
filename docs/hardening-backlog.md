@@ -589,6 +589,17 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
 
 ## M9 snapshot hardening (from the 2026-07-18 transport-restore removal)
 
+- **NOTE 2026-08-15: a VM suspended before `1e6895b` cannot be resumed after it.** Every worker
+  spawn now carries an extra virtio-serial port (`com.redhat.spice.0`, the clipboard's stock-tier
+  transport), so the device topology a pre-change snapshot was taken against no longer matches the
+  one it would restore into. The suite is self-consistent — its snapshots are taken and restored
+  on the same build — so the restore tests cover "restore works *with* the port", not this
+  cross-version case. Practical rule when upgrading a machine past that commit (the dogfood Mac
+  included): **resume and shut down any parked VMs first.** Generalizes beyond this commit: any
+  change to the spawn-time device list has the same one-way cost, which is an argument for
+  eventually versioning the topology in the snapshot header and refusing a mismatch loudly
+  instead of restoring into a surprise.
+
 - **OPEN 2026-07-28: gen-2 restore loses buffer creates → `seated_gnome_session_survives_snapshot_restore`
   FAILS INTERMITTENTLY (pre-existing, NOT the virgl-0054/0055 journal batching).** Failed
   3 consecutive runs on 2026-07-28 (including once on the pre-0054 baseline dylib), then

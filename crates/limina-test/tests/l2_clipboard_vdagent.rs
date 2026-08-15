@@ -95,6 +95,13 @@ fn a_seated_guest_shares_the_clipboard_through_spice_vdagent() {
     let pb_name = format!("limina-l2-vdagent-{}", std::process::id());
     let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg
+            // A GPU is not optional here even though nothing draws: without a display device
+            // gdm has no seat to start a session on, dies with "no session desktop files
+            // installed", and systemd restarts it forever — which surfaces as a pile of
+            // sequential tty sessions and no spice-vdagent, i.e. looking exactly like a
+            // broken clipboard (2026-08-15). The agent rides the graphical session, so the
+            // session is a prerequisite, not scenery.
+            .with_coexist_display(1280, 800)
             .with_net()
             .with_supervisor_log()
             .with_env("LIMINA_PASTEBOARD", &pb_name)
@@ -113,6 +120,14 @@ fn a_seated_guest_shares_the_clipboard_through_spice_vdagent() {
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
 
+    // --- Oracle 0: there IS a seated session ---
+    //
+    // Ahead of anything clipboard-shaped, because every oracle below is downstream of it and
+    // would otherwise mis-report a dead session as a clipboard failure.
+    guest
+        .ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
+        .expect("gnome-shell never appeared — the seated session didn't come up");
+
     // --- Oracle 1: the port reached the guest ---
     let port = ssh_soft(&guest, &format!("ls -l {PORT}"));
     assert!(
@@ -123,16 +138,43 @@ fn a_seated_guest_shares_the_clipboard_through_spice_vdagent() {
     );
     eprintln!("spice port present: {port}");
 
-    // --- Oracle 2: udev started the system daemon, with no help from us ---
-    let daemon = ssh_soft(
+    // --- Precondition: the guest kernel can host vdagentd at all ---
+    //
+    // `spice-vdagentd` opens /dev/uinput (it injects pointer/tablet events) and treats a
+    // failure as FATAL — it quits, and the session agent exits cleanly right after because
+    // its socket closed. A guest kernel without uinput therefore cannot serve the stock-tier
+    // clipboard no matter what we do, so this is a SKIP (the subject under test is
+    // unreachable), never a pass. The F44 enhanced kernel has it; the stale F43 pair's
+    // 6.12 kernel does not — see task #31.
+    if ssh_soft(&guest, "test -e /dev/uinput && echo yes").trim() != "yes" {
+        let kernel = ssh_soft(&guest, "uname -r");
+        eprintln!(
+            "SKIPPED a_seated_guest_shares_the_clipboard_through_spice_vdagent: guest kernel \
+             {kernel} has no /dev/uinput, so spice-vdagentd dies on startup (\"Fatal uinput \
+             error\") and no session agent can survive. This is an IMAGE property, not a \
+             clipboard bug — run against the F44 family (LIMINA_FEDORA_REL=44), or refresh \
+             the F43 pair (task #31)."
+        );
+        return;
+    }
+
+    // --- Oracle 2: the stock trigger fired, with no help from us ---
+    //
+    // The SOCKET, not the service: Fedora socket-activates `spice-vdagentd`, so the service
+    // is legitimately `inactive (dead)` until a session client connects to it. Asserting on
+    // the service here failed a guest that was in fact perfectly healthy (2026-08-15) — the
+    // unit was loaded, the package installed, and `TriggeredBy: ● spice-vdagentd.socket`
+    // said so in the very output the assertion printed. The service does have to come up,
+    // but that is oracle 3b, after the client exists to trigger it.
+    let sock = ssh_soft(
         &guest,
-        "systemctl is-active spice-vdagentd || systemctl status spice-vdagentd --no-pager | tail -20",
+        "systemctl is-active spice-vdagentd.socket || systemctl status spice-vdagentd.socket --no-pager",
     );
     assert!(
-        daemon.starts_with("active"),
-        "spice-vdagentd is not active even though {PORT} exists. Either the guest has no \
+        sock.starts_with("active"),
+        "spice-vdagentd.socket is not active even though {PORT} exists. Either the guest has no \
          spice-vdagent package installed (then this image cannot serve the stock tier — install \
-         it, it is in Fedora's default Workstation set) or its udev rule did not fire:\n{daemon}"
+         it, it is in Fedora's default Workstation set) or its udev rule did not fire:\n{sock}"
     );
 
     // --- Oracle 3: the SESSION agent is the one that owns the clipboard ---
@@ -144,21 +186,80 @@ fn a_seated_guest_shares_the_clipboard_through_spice_vdagent() {
             break;
         }
         if Instant::now() >= deadline {
-            let sessions = ssh_soft(&guest, "loginctl list-sessions --no-pager");
-            let units = ssh_soft(
+            // The agent is started by /etc/xdg/autostart/spice-vdagent.desktop, i.e. by the
+            // graphical session — so when it is missing, the question is almost always "is
+            // there a healthy session at all?", not "is the clipboard broken?". Collect
+            // enough to tell those apart in one go: a session that keeps restarting shows up
+            // as a pile of sequential VTs in loginctl and as repeated gdm entries.
+            // Which guest is this, and does it have the one device vdagentd refuses to live
+            // without? `spice-vdagentd` opens /dev/uinput (it injects pointer/tablet events)
+            // and treats a failure as fatal, taking the session agent down with it.
+            let ident = ssh_soft(
                 &guest,
-                "systemctl --user list-units 'spice*' --no-pager || true",
+                "uname -r; ls -l /dev/uinput 2>&1; lsmod | grep -c uinput; \
+                 grep -c uinput /lib/modules/$(uname -r)/modules.devname 2>&1",
+            );
+            let sessions = ssh_soft(&guest, "loginctl list-sessions --no-pager");
+            let procs = ssh_soft(&guest, "pgrep -a -f vdagent");
+            // Fedora ships BOTH an XDG autostart entry and a user unit (the .desktop carries
+            // X-systemd-skip=true), so "why didn't it start" is a question about the unit's
+            // conditions and the agent's own log, not about us.
+            let unit = ssh_soft(
+                &guest,
+                &in_session(
+                    "export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus; \
+                     systemctl --user status spice-vdagent.service --no-pager; \
+                     systemctl --user cat spice-vdagent.service --no-pager",
+                ),
+            );
+            let agent_log = ssh_soft(
+                &guest,
+                "journalctl -b --no-pager -t spice-vdagent | tail -20",
+            );
+            // The session agent exits when its connection to the system daemon closes, so the
+            // daemon's own account (and ours — it is talking to OUR broker over the port) is
+            // what explains a clean early exit.
+            let daemon_log = ssh_soft(
+                &guest,
+                "journalctl -b --no-pager -u spice-vdagentd -t spice-vdagentd | tail -30",
+            );
+            let ours: String = guest
+                .supervisor_log()
+                .lines()
+                .filter(|l| l.contains("vdagent") || l.contains("clipboard"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let gdm = ssh_soft(&guest, "journalctl -b --no-pager -u gdm | tail -40");
+            let shell = ssh_soft(
+                &guest,
+                "journalctl -b --no-pager -t gnome-shell -t gnome-session-binary | tail -40",
             );
             panic!(
-                "no per-session `spice-vdagent` process. spice-vdagentd (the system daemon) is \
-                 active, but it is the session agent that owns the guest clipboard — without it \
-                 both directions fail while everything else looks healthy.\n\
-                 == loginctl ==\n{sessions}\n== user units ==\n{units}"
+                "no per-session `spice-vdagent` process. It is started by the graphical \
+                 session's XDG autostart, so check the session's health FIRST — many \
+                 sequential tty sessions below means the session is restarting and the \
+                 clipboard is a symptom, not the disease.\n\
+                 == guest / uinput ==\n{ident}\n== loginctl ==\n{sessions}\n\
+                 == vdagent processes ==\n{procs}\n\
+                 == spice-vdagent user unit ==\n{unit}\n== agent log ==\n{agent_log}\n\
+                 == vdagentd ==\n{daemon_log}\n== our broker ==\n{ours}\n\
+                 == gdm ==\n{gdm}\n== session ==\n{shell}"
             );
         }
         std::thread::sleep(Duration::from_secs(3));
     }
     eprintln!("session agent running");
+
+    // --- Oracle 3b: the client's connection actually brought the daemon up ---
+    let daemon = ssh_soft(
+        &guest,
+        "systemctl is-active spice-vdagentd || systemctl status spice-vdagentd --no-pager",
+    );
+    assert!(
+        daemon.starts_with("active"),
+        "the session agent is running but socket activation never started spice-vdagentd, so \
+         nothing is bridging the port to the guest selection:\n{daemon}"
+    );
 
     // --- 3.5: silence the OTHER transport, so the round trip can only mean vdagent ---
     //
@@ -173,7 +274,10 @@ fn a_seated_guest_shares_the_clipboard_through_spice_vdagent() {
         ),
     );
     std::thread::sleep(Duration::from_secs(2)); // longer than RestartSec, so a respawn shows
-    let still_up = ssh_soft(&guest, "pgrep -x limina-agent-session");
+                                                // `pgrep -x` refuses names longer than 15 characters (it warns and matches nothing), and
+                                                // "limina-agent-session" is 20 — so match the command line instead. The bracket keeps the
+                                                // pattern from matching the shell that carries it.
+    let still_up = ssh_soft(&guest, "pgrep -f '[l]imina-agent-session'");
     assert!(
         still_up.is_empty(),
         "limina-agent-session is still running (pids {still_up:?}) after being stopped, so a \
@@ -206,7 +310,16 @@ fn a_seated_guest_shares_the_clipboard_through_spice_vdagent() {
 
     // --- Oracle 5: guest → host ---
     let to_host = "limina-guest-copy-9265";
-    ssh_soft(&guest, &in_session(&format!("wl-copy '{to_host}'")));
+    // `wl-copy` must STAY RESIDENT to serve the selection, so it has to be detached from the
+    // ssh channel: left attached it holds the channel's fds open and ssh never returns, which
+    // looks like a hung test rather than a working clipboard (it hung for 10 minutes on
+    // 2026-08-15 while the copy itself was perfectly fine).
+    ssh_soft(
+        &guest,
+        &in_session(&format!(
+            "setsid --fork wl-copy '{to_host}' >/dev/null 2>&1 </dev/null"
+        )),
+    );
     let deadline = Instant::now() + CROSS;
     loop {
         if limina_test::pasteboard_text(&pb_name).as_deref() == Some(to_host) {
