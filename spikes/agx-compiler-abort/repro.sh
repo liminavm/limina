@@ -62,19 +62,28 @@ while ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=3 -p "$port" claude@12
 done
 echo "[$LABEL] guest up on port $port; starting load" >&2
 
-ssh -p "$port" claude@127.0.0.1 'bash -s' <<'GUEST'
+# WORKLOAD selects which of the reporter's four apps to start, so the trigger can be narrowed by
+# leaving one out at a time -- the abort is deterministic at 79s, which makes that cheap.
+WORKLOAD="${WORKLOAD:-vkcube,vkmark,glmark2,firefox}"
+# VKMARK_ARGS narrows to a single vkmark scene once one is implicated.
+VKMARK_ARGS="${VKMARK_ARGS:-}"
+echo "[$LABEL] workload: $WORKLOAD" >&2
+
+ssh -p "$port" claude@127.0.0.1 "WORKLOAD='$WORKLOAD' VKMARK_ARGS='$VKMARK_ARGS' bash -s" <<'GUEST'
 export XDG_RUNTIME_DIR=/run/user/1000
 export WAYLAND_DISPLAY=$(basename /run/user/1000/wayland-[0-9] | head -1)
 export GALLIUM_DRIVER=virgl MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu
 export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json
 export MOZ_ENABLE_WAYLAND=1
 cd /tmp
-nohup vkcube          > /tmp/vkcube.log  2>&1 &
-nohup vkmark          > /tmp/vkmark.log  2>&1 &
-nohup glmark2-wayland > /tmp/glmark2.log 2>&1 &
+case ",$WORKLOAD," in *,vkcube,*)  nohup vkcube          > /tmp/vkcube.log  2>&1 & ;; esac
+case ",$WORKLOAD," in *,vkmark,*)  nohup vkmark $VKMARK_ARGS > /tmp/vkmark.log 2>&1 & ;; esac
+case ",$WORKLOAD," in *,glmark2,*) nohup glmark2-wayland > /tmp/glmark2.log 2>&1 & ;; esac
 sleep 3
-nohup firefox --new-window "https://web.gpuscore.com/run" > /tmp/firefox.log 2>&1 &
-echo "guest load started"
+case ",$WORKLOAD," in *,firefox,*)
+  nohup firefox --new-window "https://web.gpuscore.com/run" > /tmp/firefox.log 2>&1 & ;;
+esac
+echo "guest load started: $WORKLOAD"
 GUEST
 
 start=$(date +%s)

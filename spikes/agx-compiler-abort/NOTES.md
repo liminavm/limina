@@ -25,6 +25,52 @@ Two things make this differential trustworthy rather than a coincidence of timin
 sat on its Start button, so the trigger is in ordinary compositor/venus traffic, not in the
 benchmark's own draws. That widens the blast radius: any enhanced-tier session can hit this.
 
+## Minimal reproducer: `vkmark -b effect2d`
+
+Leave-one-out over the four-app workload (`WORKLOAD=` in `repro.sh`) isolates it to **vkmark**:
+
+| dropped | result |
+|---|---|
+| firefox | aborted at 79 s |
+| glmark2 | aborted at 79 s |
+| vkcube | aborted at 79 s |
+| **vkmark** | **survived 240 s** |
+
+The invariant 79 s was itself the clue and should have been read sooner: an abort that lands at
+the *same second* under three quite different workloads is not being driven by the workload. It is
+vkmark's scene schedule — seven scenes at ~10 s each, and the abort falls exactly at the
+`shading=cel` → `effect2d` transition. `effect2d` renders offscreen and then convolves, which is
+the shape the anomalous configuration suggested.
+
+```sh
+WORKLOAD=vkmark VKMARK_ARGS="-b effect2d" spikes/agx-compiler-abort/repro.sh effect2d 180
+```
+
+**Aborts in 0 s**, with **41 render passes in 10 distinct configurations** — down from 404,630
+passes and 76 configurations. Use this for all further work; the four-app recipe is now only
+history.
+
+**Do not read the truncated last block as an attachment-less pass.** The final `LIMINA-KK-RP`
+header in the log has no attachment lines after it, which looks like a render pass with no
+attachments — a tempting "0 bytes per pixel, and Apple ships no `_0`" story. It is a truncation
+artifact: the abort happens on another thread and kills the process mid-dump. Attachment-less
+passes were tested directly (below) and are fine.
+
+## It may be M1-only
+
+The user reports the dogfood Mac — an **M4 Pro** — has run this stack for a long time without ever
+aborting, while the dev Mac (**M1 Max**) aborts deterministically at 79 s. That fits the failing
+call: the worker's error comes from `AGXMetalG13X`, the G13 driver, and several `ds` resource
+families in `AGXCompilerCore.framework` are explicitly **GPU-generation-keyed**
+(`compute_control_flow_predicate_g13`, `_g14`, `_g15*`, `_g16p_*`, `_hal200`, `_hal300`, and the
+same suffixes on `late_latched_vrr_*`). A background-object variant that exists for later
+generations but not for G13 would produce exactly this: a NULL bundle lookup on one machine and
+silence on another.
+
+Not confirmed — the two machines differ in more than GPU generation, and the dogfood Mac is not
+ours to run experiments on. But it reframes the search: **the trigger may be a G13-specific gap**,
+in which case the fix is avoidance on G13 rather than a universally-wrong render pass.
+
 ## What the abort actually is
 
 `MTLCompilerService`'s own crash report names the failing call precisely — this is worth more
@@ -79,13 +125,22 @@ Anomalous in two ways: the colour attachment is **2048×2048 while the render ta
 attachment are 800×600**, and the depth usage is `0x4` where every other pass uses `0x7`. Both
 formats are 4 bytes, so the per-pixel total is a perfectly ordinary 8.
 
-**But it does not reproduce in isolation.** `mtlrp.m` drives that exact configuration — matching
-usages verbatim — directly against Metal with no Vulkan and no VM, through **both** the classic
-API and **MTL4** (the one KosmicKrisp actually encodes with), alongside its neighbours (mismatch
-in the other direction, all three load actions, odd render-target windows). 17 cases, no abort.
-So the render-pass shape alone is **necessary at most, not sufficient** — something about the
-surrounding state (the imported IOSurface textures elsewhere in the session, driver state built up
-over 79 s, or concurrent encoding on four threads) is part of the trigger.
+**But no render-pass configuration reproduces in isolation.** `mtlrp.m` drives them straight at
+Metal with no Vulkan and no VM, through **both** the classic API and **MTL4** (the one KosmicKrisp
+actually encodes with). 26 cases, no abort:
+
+- the candidate configuration verbatim, usages included, plus its neighbours — mismatch in the
+  other direction, all three load actions, odd and tiny render-target windows;
+- **IOSurface-backed** colour attachments, 2560×1440 BGRA8Unorm usage 0x17, all three load
+  actions. This one mattered most to test, since the whole bug bisects to the scanout flag and a
+  vehicle with no IOSurface attachment was not testing the configuration that matters. Still green;
+- **attachment-less** passes (`renderTargetWidth/Height` set, no colour/depth/stencil), which
+  would have a 0-byte tile layout. Metal accepts them; only a 0×0 render target is rejected, with
+  a nil encoder rather than an abort.
+
+So the render-pass shape alone is **necessary at most, not sufficient**. Something about the
+surrounding state — driver state accumulated across the session, concurrent encoding on several
+threads, or a resource property not visible in the descriptor — is part of the trigger.
 
 `imageblockSampleLength` was 0 on every one of the 404,630 passes, so that field is not the index
 into `blit_fast_clear_gen2_N` either.
@@ -164,11 +219,13 @@ If the parameter really is the tile byte size, the fix belongs at the KK/vkr tru
 - **Decide the mitigation** — the user's call, not ours. `LIMINA_KK_MTLTEXTURE_SCANOUT=0` avoids
   the abort today but gives up what #26 turned on by default. Reverting that default is a real
   regression and should not be done unilaterally.
-- **Find what makes the candidate configuration fire.** It does not abort in isolation, so pair it
-  with the rest of the session's state: run `mtlrp.m` with IOSurface-backed textures live in the
-  process, or with several threads encoding concurrently. Alternatively narrow from the other end
-  — the workload mix is four apps, and dropping one at a time (the abort is deterministic at 79 s)
-  isolates which one emits that pass in ~3 runs.
+- **Work the 10 configurations of the `effect2d` repro.** That is the whole search space now.
+  The obvious next move is to bisect *within* it: have `LIMINA_KK_RPLOG` also skip or alter one
+  configuration at a time (e.g. force `loadAction=Clear`, or drop the render-target window) and
+  see which change makes the abort go away. That names the trigger without needing to guess it.
+- **What `mtlrp.m` has not yet varied**, now that single passes are exhausted: several threads
+  encoding concurrently (the repro has two threads), a real draw with a fragment shader inside the
+  pass, and passes issued back-to-back in one command buffer the way KK batches them.
 - **Get the filename.** Still redacted, and **`sudo log config --mode "private_data:on"` no longer
   exists** — macOS 26's `log config` accepts only `level`, `persist`, `stream`, `signpost-*` and
   `oversize-enabled`. Un-redacting now needs a `com.apple.system.logging` configuration profile

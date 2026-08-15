@@ -27,6 +27,7 @@
 #import <Metal/MTL4CommandBuffer.h>
 #import <Metal/MTL4CommandQueue.h>
 #import <Metal/MTL4RenderPass.h>
+#import <IOSurface/IOSurface.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -156,6 +157,130 @@ try_pass4(const char *what, NSUInteger cw, NSUInteger ch, MTLLoadAction cload,
    }
 }
 
+/* IOSurface-backed colour attachment. This is what LIMINA_KK_MTLTEXTURE_SCANOUT produces, and
+ * the whole bug bisects to that flag -- so a vehicle without an IOSurface-backed attachment was
+ * never testing the configuration that matters. Note such a texture reports buffer == nil, so it
+ * is NOT what Metal calls "linear"; iosurface != nil is the distinguishing property. */
+static id<MTLTexture>
+make_iosurf_tex(NSUInteger w, NSUInteger h, MTLPixelFormat fmt, MTLTextureUsage usage)
+{
+   NSDictionary *props = @{
+      (id)kIOSurfaceWidth : @(w),
+      (id)kIOSurfaceHeight : @(h),
+      (id)kIOSurfaceBytesPerElement : @4,
+      (id)kIOSurfacePixelFormat : @((unsigned)'BGRA'),
+   };
+   IOSurfaceRef surf = IOSurfaceCreate((__bridge CFDictionaryRef)props);
+   if (!surf)
+      return nil;
+   MTLTextureDescriptor *d = [MTLTextureDescriptor
+      texture2DDescriptorWithPixelFormat:fmt width:w height:h mipmapped:NO];
+   d.usage = usage;
+   d.storageMode = MTLStorageModeShared;
+   id<MTLTexture> t = [dev newTextureWithDescriptor:d iosurface:surf plane:0];
+   CFRelease(surf);
+   return t;
+}
+
+static void
+try_iosurf(const char *what, NSUInteger w, NSUInteger h, MTLLoadAction cload, bool mtl4)
+{
+   @autoreleasepool {
+      printf("TRY%s %-20s iosurface color=%lux%lu/%-8s\n", mtl4 ? "4" : " ", what,
+             (unsigned long)w, (unsigned long)h, load_name(cload));
+      fflush(stdout);
+
+      id<MTLTexture> color = make_iosurf_tex(w, h, MTLPixelFormatBGRA8Unorm, COLOR_USAGE);
+      if (!color) {
+         printf("    skipped (IOSurface texture failed)\n");
+         return;
+      }
+
+      if (mtl4) {
+         MTL4RenderPassDescriptor *rp = [[MTL4RenderPassDescriptor alloc] init];
+         rp.colorAttachments[0].texture = color;
+         rp.colorAttachments[0].loadAction = cload;
+         rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+         rp.renderTargetWidth = w;
+         rp.renderTargetHeight = h;
+         [alloc4 reset];
+         [cb4 beginCommandBufferWithAllocator:alloc4];
+         id<MTL4RenderCommandEncoder> enc = [cb4 renderCommandEncoderWithDescriptor:rp];
+         [enc endEncoding];
+         [cb4 endCommandBuffer];
+         [q4 commit:&cb4 count:1];
+      } else {
+         MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+         rp.colorAttachments[0].texture = color;
+         rp.colorAttachments[0].loadAction = cload;
+         rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+         rp.renderTargetWidth = w;
+         rp.renderTargetHeight = h;
+         id<MTLCommandBuffer> cb = [queue commandBuffer];
+         id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+         [enc endEncoding];
+         [cb commit];
+         [cb waitUntilCompleted];
+      }
+      cases_run++;
+   }
+}
+
+/* A render pass with NO attachments -- the configuration the minimal repro ends on. */
+static void
+try_empty(const char *what, NSUInteger rtw, NSUInteger rth)
+{
+   @autoreleasepool {
+      printf("TRY %-22s no attachments            rt=%lux%lu\n", what,
+             (unsigned long)rtw, (unsigned long)rth);
+      fflush(stdout);
+
+      MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+      rp.renderTargetWidth = rtw;
+      rp.renderTargetHeight = rth;
+      rp.defaultRasterSampleCount = 1;
+
+      id<MTLCommandBuffer> cb = [queue commandBuffer];
+      id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+      if (!enc) {
+         printf("    rejected (nil encoder)\n");
+         return;
+      }
+      [enc endEncoding];
+      [cb commit];
+      [cb waitUntilCompleted];
+      cases_run++;
+   }
+}
+
+static void
+try_empty4(const char *what, NSUInteger rtw, NSUInteger rth)
+{
+   @autoreleasepool {
+      printf("TRY4 %-21s no attachments            rt=%lux%lu\n", what,
+             (unsigned long)rtw, (unsigned long)rth);
+      fflush(stdout);
+
+      MTL4RenderPassDescriptor *rp = [[MTL4RenderPassDescriptor alloc] init];
+      rp.renderTargetWidth = rtw;
+      rp.renderTargetHeight = rth;
+      rp.defaultRasterSampleCount = 1;
+
+      [alloc4 reset];
+      [cb4 beginCommandBufferWithAllocator:alloc4];
+      id<MTL4RenderCommandEncoder> enc = [cb4 renderCommandEncoderWithDescriptor:rp];
+      if (!enc) {
+         printf("    rejected (nil encoder)\n");
+         [cb4 endCommandBuffer];
+         return;
+      }
+      [enc endEncoding];
+      [cb4 endCommandBuffer];
+      [q4 commit:&cb4 count:1];
+      cases_run++;
+   }
+}
+
 int
 main(void)
 {
@@ -186,6 +311,34 @@ main(void)
    /* A few odd render-target windows, in case it is the window rather than the mismatch. */
    try_pass("rt-tiny", 2048, 2048, MTLLoadActionLoad, 800, 600, MTLLoadActionClear, 1, 1);
    try_pass("rt-odd", 2048, 2048, MTLLoadActionLoad, 800, 600, MTLLoadActionClear, 33, 17);
+
+   /* THE CANDIDATE. The minimal in-guest reproducer (`vkmark -b effect2d`) ends on a render pass
+    * whose LIMINA_KK_RPLOG header printed with no attachment lines after it at all: renderTarget
+    * width/height set, and no colour, depth or stencil attachment. A pass with no attachments has
+    * a tile layout of 0 bytes per pixel -- and Apple ships blit_fast_clear_gen2_{1,2,4,5,8,16},
+    * with no _0. Neither earlier sweep could have found this: rpcombo and the cases above always
+    * had at least one colour attachment. */
+   /* The two IOSurface-backed configurations the minimal repro actually used, verbatim. */
+   printf("\n-- IOSurface-backed colour attachment (the scanout path) --\n");
+   try_iosurf("iosurf-dontcare", 2560, 1440, MTLLoadActionDontCare, false);
+   try_iosurf("iosurf-load", 2560, 1440, MTLLoadActionLoad, false);
+   try_iosurf("iosurf-clear", 2560, 1440, MTLLoadActionClear, false);
+   if (q4 && alloc4 && cb4) {
+      try_iosurf("iosurf-dontcare", 2560, 1440, MTLLoadActionDontCare, true);
+      try_iosurf("iosurf-load", 2560, 1440, MTLLoadActionLoad, true);
+      try_iosurf("iosurf-clear", 2560, 1440, MTLLoadActionClear, true);
+   }
+
+   printf("\n-- attachment-less render passes --\n");
+   try_empty("empty-rt-800x600", 800, 600);
+   try_empty("empty-rt-1x1", 1, 1);
+   try_empty("empty-rt-unset", 0, 0);
+
+   if (q4 && alloc4 && cb4) {
+      printf("\n-- attachment-less through MTL4 --\n");
+      try_empty4("empty4-rt-800x600", 800, 600);
+      try_empty4("empty4-rt-unset", 0, 0);
+   }
 
    if (q4 && alloc4 && cb4) {
       printf("\n-- same cases through MTL4, the API KosmicKrisp actually uses --\n");
