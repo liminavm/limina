@@ -3,6 +3,32 @@
 The worker died with SIGABRT on 2026-08-14 while the user ran the basemark web benchmark on
 `Fedora-Workstation-44.enhanced.synoik.raw`. This is the working file for chasing it.
 
+## SOLVED 2026-08-15 — read this section, the rest is the trail
+
+The abort is a render pass with **no attachments** whose **`defaultRasterSampleCount` is still 0**.
+`mtlrp-min.m` reproduces it in ~40 lines of pure Metal, no Vulkan and no VM, on both the classic
+API and MTL4: sample count 0 aborts, 1 and 2 are green. It is **invalid input** — `MTL_DEBUG_LAYER=1`
+says *"no sampleCount for color and raster available, either set defaultColorSampleCount or set
+defaultRasterSampleCount or set appropriate attachments"* — but the release driver asserts inside
+`MTLCompilerService` instead of erroring, so the client dies uncatchably.
+
+How KosmicKrisp got there:
+
+1. venus imports the scanout IOSurface as **BGRA8Unorm** (fmt 80); the guest binds a
+   **BGRA8Unorm_sRGB** image (fmt 81) to it.
+2. `kk_image_plane_bind` **rejected** that adoption, leaving the plane with a **NULL texture**.
+3. The attachment therefore had a nil Metal texture ⟹ **zero-attachment descriptor**, while
+   `no_framebuffer` was false ⟹ sample count never set ⟹ **AGX aborts**.
+
+Fixed on `limina-kk` in three parts, folded into their feature commits: accept the sRGB/linear
+pair through a texture view (root cause), clamp sample count at the encoder boundary (so this
+class can never kill the process again), and judge "attachment-less" on the descriptor rather than
+on the Vulkan iviews. Verified: the 0-second repro survives 240 s and the full four-app recipe
+survives 300 s, with **zero** rejections, **zero** attachment-less passes, and vkmark completing
+every scene at ~2200 FPS.
+
+**Still owed: the Radar to Apple**, and confirming whether it is G13-only (see below).
+
 ## Status 2026-08-15: reproduced deterministically, and bisected to one flag
 
 `repro.sh` reproduces it on demand, and the trigger is **`LIMINA_KK_MTLTEXTURE_SCANOUT`** — the
@@ -50,11 +76,21 @@ WORKLOAD=vkmark VKMARK_ARGS="-b effect2d" spikes/agx-compiler-abort/repro.sh eff
 passes and 76 configurations. Use this for all further work; the four-app recipe is now only
 history.
 
-**Do not read the truncated last block as an attachment-less pass.** The final `LIMINA-KK-RP`
-header in the log has no attachment lines after it, which looks like a render pass with no
-attachments — a tempting "0 bytes per pixel, and Apple ships no `_0`" story. It is a truncation
-artifact: the abort happens on another thread and kills the process mid-dump. Attachment-less
-passes were tested directly (below) and are fine.
+**~~Do not read the truncated last block as an attachment-less pass.~~ That was wrong, and it was
+the trigger.** For a whole round this file said the final `LIMINA-KK-RP` header having no
+attachment lines after it was a truncation artifact — the abort firing on another thread mid-dump
+— and told the next reader not to build a theory on it. It was the log printing honestly: that
+pass really had no attachments. Two tells were sitting in the data:
+
+- The cut landed **between the header and the first attachment line in every single run**.
+  Truncation by a concurrent abort would wander.
+- The final header carried a **different thread id** than the stream before it. Truncation of one
+  thread's dump cannot produce that.
+
+Kept here rather than deleted because the shape of the mistake is the reusable part: *absence of
+output was read as evidence of an interrupted write, when it was evidence of an empty list.* The
+fix was to stop inferring and **count** — the header now prints `natt=`, so "no attachments" and
+"dump cut short" can never look alike again.
 
 ## It may be M1-only
 
@@ -216,28 +252,32 @@ If the parameter really is the tile byte size, the fix belongs at the KK/vkr tru
 
 ## Not yet done
 
-- **Decide the mitigation** — the user's call, not ours. `LIMINA_KK_MTLTEXTURE_SCANOUT=0` avoids
-  the abort today but gives up what #26 turned on by default. Reverting that default is a real
-  regression and should not be done unilaterally.
-- **Work the 10 configurations of the `effect2d` repro.** That is the whole search space now.
-  The obvious next move is to bisect *within* it: have `LIMINA_KK_RPLOG` also skip or alter one
-  configuration at a time (e.g. force `loadAction=Clear`, or drop the render-target window) and
-  see which change makes the abort go away. That names the trigger without needing to guess it.
-- **What `mtlrp.m` has not yet varied**, now that single passes are exhausted: several threads
-  encoding concurrently (the repro has two threads), a real draw with a fragment shader inside the
-  pass, and passes issued back-to-back in one command buffer the way KK batches them.
-- **Get the filename.** Still redacted, and **`sudo log config --mode "private_data:on"` no longer
-  exists** — macOS 26's `log config` accepts only `level`, `persist`, `stream`, `signpost-*` and
-  `oversize-enabled`. Un-redacting now needs a `com.apple.system.logging` configuration profile
-  with `Enable-Private-Data`, a manual install on the user's Mac. Ask before going that route.
-- **Report it to Apple.** The assert is reachable from an ordinary Metal render pass and takes the
-  whole process down from inside the framework, so there is nothing we can catch — only avoid.
+- **Report it to Apple.** The trigger is now a 40-line self-contained Metal program
+  (`mtlrp-min.m`), which is what the user was waiting for. Frame it as: *the release driver aborts
+  the host process from inside `MTLCompilerService` on a render pass descriptor that its own
+  validation layer rejects cleanly*. The right behaviour is the validation layer's — refuse the
+  encoder — not an assert in a helper process that the client cannot catch.
+- **Confirm or kill the G13-only theory.** One `mtlrp-min` run on an M4 Pro settles it, and its
+  exit code is the whole answer (0 = survived, 134 = aborted). **Ask the user to run it** — the
+  dogfood Mac is not ours to experiment on.
+
+Resolved and no longer open:
+
+- ~~Decide the mitigation~~ — moot. The root cause is fixed, so `LIMINA_KK_MTLTEXTURE_SCANOUT`
+  stays on by default as task #26 intended; nothing has to be given up.
+- ~~Work the 10 configurations / vary `mtlrp.m` further~~ — unnecessary. The missing **sample
+  count**, not the pass *shape*, was the trigger, which is why every shape-based sweep came back
+  green.
+- ~~Get the filename~~ — never needed. The stack from `MTLCompilerService`'s own `.ips`
+  (`AGCLLVMBackgroundObjectFragmentShader`) plus the validation-layer message identified it
+  completely, so no `com.apple.system.logging` profile has to be installed on the user's Mac.
+- ~~A/B `LIMINA_VREND_SHARED_TRANSFER_SYNC=0`~~ — exonerated by the actual cause; the dmabuf
+  coherency fix has no path into any of this.
 - `lldb` attach is not available non-interactively on this host ("cannot get permission to debug
-  processes"), so the requesting stack has to come from instrumentation, not a debugger.
-- A/B once with `LIMINA_VREND_SHARED_TRANSFER_SYNC=0` to retire by measurement the question of
-  whether the same-day dmabuf coherency fix is implicated. Reasoning says no (nothing in the stack
-  touches it, and a `glFinish` after a texture upload has no path into Apple's shader compiler),
-  but that is reasoning, not a measurement.
+  processes"), so the requesting stack has to come from instrumentation, not a debugger. **A
+  `backtrace_symbols_fd` at the offending call was worth more than the debugger would have been**
+  — it named the caller in one run, after a round of reasoning about which path it "must" be had
+  already produced a wrong fix.
 
 ## Unrelated finding, worth its own look
 

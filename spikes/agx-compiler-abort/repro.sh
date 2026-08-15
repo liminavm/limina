@@ -106,5 +106,12 @@ done
 
 echo "[$LABEL] survived ${TIMEOUT}s -- did not reproduce"
 cp /tmp/enhanced-efi-kk-worker.log "$OUT/worker.log" 2>/dev/null
+# Surviving is only half the bar: the fix for this bug was in the scanout import path, so a
+# regression there could keep the process alive while rendering nothing. Pull the guest-side app
+# logs before teardown so the FPS numbers can be read as evidence that pixels really moved.
+for f in vkmark glmark2 vkcube firefox; do
+  ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p "$port" claude@127.0.0.1 \
+      "cat /tmp/$f.log" > "$OUT/guest-$f.log" 2>/dev/null
+done
 kill "$sup" 2>/dev/null   # only ever this run's supervisor -- never a name match
 exit 1

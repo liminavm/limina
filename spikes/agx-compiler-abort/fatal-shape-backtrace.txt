@@ -1,0 +1,24 @@
+[LIMINA-VKR-MTLTEX] scanout memory <- MTLTEXTURE import of IOSurface id=585 (tex=0x78929cf00)
+[LIMINA-KK-IMPORT] REJECTED MTLTexture (geom=1 fmt=0 usage=1): tex 800x600 type=2 samples=1 lv=1 ly=1 fmt=80 usage=0x17 | image 800x600 type=2 samples=1 lv=1 ly=1 fmt=81 usage=0x6
+[LIMINA-KK-RP] FATAL SHAPE: no attachments and defaultRasterSampleCount=0 (rt=800x600) -- AGX will abort
+0   libvulkan_kosmickrisp.dylib         0x000000010b48806c mtl_new_render_command_encoder_with_descriptor + 596
+1   libvulkan_kosmickrisp.dylib         0x000000010b2b5d20 cs_start_render + 112
+2   libvulkan_kosmickrisp.dylib         0x000000010b2b879c kk_CmdBeginRendering + 1436
+3   libvulkan_kosmickrisp.dylib         0x000000010b210ed4 begin_subpass + 3296
+4   libvulkan_kosmickrisp.dylib         0x000000010b2101d0 vk_common_CmdBeginRenderPass2 + 2116
+5   libvulkan_kosmickrisp.dylib         0x000000010b20d9ac vk_common_CmdBeginRenderPass + 48
+6   libvulkan_kosmickrisp.dylib         0x000000010b2ad910 kk_cmd_tramp_CmdBeginRenderPass + 64
+7   libvirglrenderer.1.dylib            0x0000000102272bb8 vn_dispatch_vkCmdBeginRenderPass + 456
+8   libvirglrenderer.1.dylib            0x0000000102243734 vn_dispatch_command + 112
+9   libvirglrenderer.1.dylib            0x0000000102244518 vkr_ring_thread + 2864
+10  libvirglrenderer.1.dylib            0x00000001023131d0 impl_thrd_routine + 28
+11  libsystem_pthread.dylib             0x0000000184339c58 _pthread_start + 136
+12  libsystem_pthread.dylib             0x0000000184334c1c thread_start + 8
+[LIMINA-KK-RP] natt=0 tid=0x6e8c5b rt=800x600 arraylen=1 samples=0 imageblock=0 tile=0x0 tgmem=0
+[2026-08-15T11:53:55Z WARN  limina::supervisor] VM stopped — worker terminated by signal 6
+time="2026-08-15T08:53:55-03:00" level=error msg="cannot receive packets from /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/krun-net-35552-0.sock, disconnecting: cannot read size from socket: read unixgram /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-35547.sock: use of closed network connection"
+time="2026-08-15T08:53:55-03:00" level=error msg="gvproxy exiting: signal caught"
+
+--- the rejected adoption that produced the nil-texture attachment ---
+[LIMINA-KK-IMPORT] REJECTED MTLTexture (geom=1 fmt=0 usage=1): tex 800x600 type=2 samples=1 lv=1 ly=1 fmt=80 usage=0x17 | image 800x600 type=2 samples=1 lv=1 ly=1 fmt=81 usage=0x6
+[LIMINA-KK-IMPORT] REJECTED MTLTexture (geom=1 fmt=0 usage=1): tex 800x600 type=2 samples=1 lv=1 ly=1 fmt=80 usage=0x17 | image 800x600 type=2 samples=1 lv=1 ly=1 fmt=81 usage=0x6
