@@ -157,19 +157,46 @@ hardlinked). `enhanced.raw` took an `install-enhanced.sh` pass (venus enumerates
 `Virtio-GPU Venus (Apple M1 Max)`, trial boot auto-promoted, clean poweroff);
 `enhanced.test.raw` recloned from it. NOT on dogfood-guest.
 
-**KNOWN DRIFT (2026-08-04): the shipped images are one commit-set AHEAD of the branch pin.** The
-two DRM format/modifier commits were **dropped from `liminavm/linux` `limina`** the same day (the
-branch is now a single commit, rev `07db31df`; tag `limina/2026-08-04-modifiers` recovers them —
-rationale in `docs/upstreaming/ledger/linux.md`). The installed `limina-kernel-16k-7.1.6-2` still
-*contains* them, and no respin was done: nothing is broken, the images keep working exactly as
-measured, but **the next kernel build from the pin will not have them**. Two consequences to carry
-into that respin:
+**~~KNOWN DRIFT (2026-08-04)~~ — RESOLVED 2026-08-15 by r9, and it went exactly as predicted.**
+The two DRM format/modifier commits were **dropped from `liminavm/linux` `limina`** on 2026-08-04
+(tag `limina/2026-08-04-modifiers` recovers them; rationale in
+`docs/upstreaming/ledger/linux.md`), but no kernel was built for eleven days — so every image and
+the dogfood guest kept running the pre-drop `limina-kernel-16k-7.1.6-2` binary, which still
+*contained* them. **r9's `7.1.8-1` is the first kernel binary ever built without them**, and the
+prediction below came true the moment it booted: the Vulkan-compositor guest lost its display.
 
-- Bump `RELEASE` to **3** — `7.1.6-2` is taken, and same-NEVRA-different-content is the trap below.
-- **A guest running our Vulkan compositor needs the one-line `MOD_INVALID` → LINEAR fallback first**
-  (`spikes/modifier-necessity/niri-mod-invalid-linear-fallback.patch`), or it will fail to render
-  every frame on the new kernel. Stock mutter guests are unaffected — they never name a scanout
-  modifier.
+Measured on the dogfood guest (`drm_info`, same mesa, kernel the only variable):
+
+| kernel | `DRM_CAP_ADDFB2_MODIFIERS` | primary plane formats |
+|---|---|---|
+| `7.1.6-2` (pre-drop binary) | 1 | XR24, AR24, XB24, AB24 |
+| `7.1.8-1` (post-drop build) | 0 | XR24 only |
+
+Upstream `virtio_gpu_formats[]` at v7.1.8 is literally `{ DRM_FORMAT_HOST_XRGB8888 }`.
+
+- ~~Bump `RELEASE` to **3**~~ — moot, r9 built `7.1.8-1`, a new version.
+- ~~**A guest running our Vulkan compositor needs the one-line `MOD_INVALID` → LINEAR fallback
+  first**~~ — **DO NOT apply that patch to synoik.** The failure is not "renders every frame
+  wrong", it is `DrmCompositor::new` failing outright with *"No supported plane buffer format
+  found"*: synoik allocates LINEAR through Vulkan, the stock plane advertises the IMPLICIT/INVALID
+  modifier, and `XR24+LINEAR ∩ XR24+INVALID` is empty. The fourcc matches; only the modifier does
+  not.
+
+**Resolution (user's call, 2026-08-15): fix synoik, not the kernel** — accept `INVALID` and take
+what the Vulkan allocation provides; proper modifier support comes later. That is the better fix
+because it makes synoik work on **stock** virtio-gpu, removing a kernel-patch dependency instead of
+reinstating one — the direction `docs/design/16k-page-requirement.md` argues for. It is safe
+because of a property of *this* stack, which should not be generalised: virtio-gpu has no tiling,
+so its buffers are linear by construction, and the plane is not real hardware — scanout is whatever
+CALayer does with an IOSurface the **host already created and whose layout it already knows**.
+Nothing downstream infers layout from the modifier. Tracking: task #39.
+
+> A note on how this was nearly mis-fixed. synoik's own comment says *"INVALID is refused at
+> allocation rather than papered over"*, which reads as a live design constraint defending against
+> a known bug. It is **stale**: it dates from a period when LINEAR was forced everywhere, so an
+> INVALID fallback genuinely did not apply. Reading it as current nearly produced a kernel patch to
+> preserve a decision that had already been abandoned. A confident code comment is a claim with a
+> timestamp.
 
 > **TRAP found here — a Release bump does NOT let two builds of the same KREL coexist.** RPM
 > `Release` is what makes rpm/dnf *see* a content change at the same version, so the bump is
