@@ -196,16 +196,56 @@ Items 1-3 are all Mesa, all upstreamable, and 1 is independently valuable today.
 tractable list, and it is the honest answer to "what would it take for everything to just work on
 regular distros".
 
+## The strategy this serves: two tiers that diverge, and a stock tier that converges on "agent only"
+
+Settled with the user 2026-08-15. This is not a plan to *drop* 16 KiB — it is a plan to stop 16 KiB
+being load-bearing, so the two tiers can move in opposite directions on purpose:
+
+- **The enhanced tier keeps the 16 KiB kernel and gets *more* custom over time**, not less. It is
+  heading toward a fully-owned image — our kernel, bootloader, update mechanism, default compositor
+  (see the LiminaOS work; the plan of record lives outside this repo, per the
+  `limina-liminaos-prototype` memory). 16 KiB is one of many things we control there, and we keep it
+  because it is better: exact 1:1 balloon reclaim, `mach_vm_remap` stitching with no hybrid path,
+  matching TLB behaviour.
+- **The stock tier converges on shipping nothing but `limina-agent`.** Every other component we
+  install into a guest today exists to fill a gap upstream hasn't closed. As each gap closes, we
+  stop shipping that component — and a stock Fedora gets the full feature set with only the agent
+  added, which is the piece that is *inherently* ours (it speaks our control plane; there is
+  nothing to upstream it into).
+
+That reframes most of the work in this document as **upstreaming**, and makes the value of each
+upstream patch measurable in the same unit: does it remove something from the payload?
+
+### What we ship into a guest today, and what retires it
+
+| component | why we ship it | what retires it |
+|---|---|---|
+| **`limina-agent`** + `limina-agent-session` | clipboard, dynamic memory reporting, timesync, FIDO, lifecycle — our control plane | **nothing. This is the permanent floor**, and the target end state is that it is the *only* thing we ship. |
+| **`limina-kernel-16k`** | 16 KiB pages (one config symbol — the fork branch carries zero patches as of v7.1.8) | for the *stock* tier: distro kernel ≥ 7.2 plus the blob-alignment chain below. For the *enhanced* tier: nothing — we keep building it deliberately. |
+| **mesa RPM** (8 venus/virgl/zink patches) | venus correctness + WSI + the CPU-write coherency fix | all 8 landing upstream and reaching a distro release. Four are already flagged **upstream-now** in `docs/upstreaming/ledger/mesa.md` (rows 0012, 0013, 0007, 0008); the rest need design work or a conversation. |
+| **`guest/virtio-gpu-dkms`** | 16 KiB blob-offset lattice on stock 4 KiB guests | the blob-alignment chain (§ above). Same trigger as the kernel. Currently not even wired into the payload. |
+| **`clipboard@limina`** shell extension | GNOME has no `ext-data-control`, so an unfocused agent cannot touch the clipboard | **nothing, on stock GNOME — this one does not converge.** Upstream mutter rejected `ext-data-control` by name (ledger `mutter.md` 0003: no implementation, no MR, and a work item filed *against* adopting it). So on stock GNOME the honest options stay the extension or the RemoteDesktop opt-in tier. It retires only where we control the compositor — i.e. on the enhanced tier, which is exactly where the LiminaOS direction is heading. |
+
+The asterisk on the last row is worth keeping visible: **"stock distro, agent only" is reachable for
+graphics and memory, but not for clipboard on GNOME.** Don't let the slogan quietly promise it.
+
 ## Recommendation
 
-**Keep the 16 KiB kernel as *the* enhanced tier** — but keep it because it is the better tier, not
-because anything requires it. Rewrite the roadmap's "THE constraint / no host-only fix exists"
-paragraph accordingly, so the next reader doesn't re-derive a solved problem.
+**Keep the 16 KiB kernel as *the* enhanced tier** — because it is the better tier and because that
+tier is getting *more* custom, not because anything requires it. Rewrite the roadmap's "THE
+constraint / no host-only fix exists" paragraph accordingly, so the next reader doesn't re-derive a
+solved problem.
 
-**Treat "a stock distro just works" as an explicit goal, not a side effect.** It is reachable, the
-list is short and entirely upstreamable (§ above), and item 1 — venus degrading to its stub instance
-instead of poisoning the loader — pays off on every stock guest immediately, with or without any of
-the alignment work.
+**Treat "a stock distro needs only the agent" as an explicit goal with a scoreboard.** The table
+above is that scoreboard: each upstream landing removes a row. Item 1 of the shopping list — venus
+degrading to its stub instance instead of poisoning the loader — pays off on every stock guest
+immediately, with or without any of the alignment work, and it is already marked **upstream-now**
+in the ledger with a precedent MR cited. It is the obvious first send.
+
+**Do not let the goal overstate itself.** Clipboard on stock GNOME does not converge (see the table
+asterisk), and until a distro ships a ≥7.2 kernel *and* a Mesa carrying the rounding patch, stock
+guests still need either our kernel or the DKMS module for venus. "Better and better as things land"
+is the accurate framing; "works today with only the agent" is not.
 
 **The question worth actually pursuing is the adjacent one: can the enhanced tier stop shipping a
 custom kernel at all?** With the fork at zero delta we are building a multi-GB kernel for one config
