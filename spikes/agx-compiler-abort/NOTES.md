@@ -27,7 +27,8 @@ on the Vulkan iviews. Verified: the 0-second repro survives 240 s and the full f
 survives 300 s, with **zero** rejections, **zero** attachment-less passes, and vkmark completing
 every scene at ~2200 FPS.
 
-**Still owed: the Radar to Apple**, and confirming whether it is G13-only (see below).
+**Still owed: the Radar to Apple** (`RADAR-DRAFT.md` is written and complete). The G13-only
+question is settled — it is not G13-only; see below.
 
 ## Status 2026-08-15: reproduced deterministically, and bisected to one flag
 
@@ -92,7 +93,19 @@ output was read as evidence of an interrupted write, when it was evidence of an 
 fix was to stop inferring and **count** — the header now prints `natt=`, so "no attachments" and
 "dump cut short" can never look alike again.
 
-## It may be M1-only
+## It is NOT M1-only — theory killed 2026-08-15
+
+`mtlrp-min` was run on the dogfood M4 Pro (macOS 26.5.2) at the user's request: **exit 134 on
+both the classic and the MTL4 path, exit 0 for sample counts 1 and 2** — byte-for-byte the M1 Max
+result. The generation-keyed `ds` families below are real, but the missing background-object
+bitcode is not one of the things that differs between G13 and the M4 Pro.
+
+So the asymmetry the user observed was never about the GPU: the dogfood Mac simply never drove
+KosmicKrisp down the rejected-import path that emits the attachment-less descriptor. The *driver*
+bug is universal; the *reachability* was ours, and it is fixed. A satisfying reminder that "machine
+A does it, machine B doesn't" points at the input, not necessarily at the hardware.
+
+The theory as it stood, kept because the reasoning was sound and only the conclusion was wrong:
 
 The user reports the dogfood Mac — an **M4 Pro** — has run this stack for a long time without ever
 aborting, while the dev Mac (**M1 Max**) aborts deterministically at 79 s. That fits the failing
@@ -257,11 +270,11 @@ If the parameter really is the tile byte size, the fix belongs at the KK/vkr tru
   the host process from inside `MTLCompilerService` on a render pass descriptor that its own
   validation layer rejects cleanly*. The right behaviour is the validation layer's — refuse the
   encoder — not an assert in a helper process that the client cannot catch.
-- **Confirm or kill the G13-only theory.** One `mtlrp-min` run on an M4 Pro settles it, and its
-  exit code is the whole answer (0 = survived, 134 = aborted). **Ask the user to run it** — the
-  dogfood Mac is not ours to experiment on.
 
 Resolved and no longer open:
+
+- ~~Confirm or kill the G13-only theory~~ — **killed 2026-08-15**. The M4 Pro aborts identically
+  (134/134/0/0 across the four arguments). See the section above.
 
 - ~~Decide the mitigation~~ — moot. The root cause is fixed, so `LIMINA_KK_MTLTEXTURE_SCANOUT`
   stays on by default as task #26 intended; nothing has to be given up.
