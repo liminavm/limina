@@ -20,7 +20,7 @@ long before the transfer is dequeued. The consumer samples one write behind.
 `vkCmdCopyImageToBuffer`, compare. Build and run **in-guest** (enhanced tier):
 
 ```sh
-gcc -O1 -g -o probe probe.c $(pkg-config --cflags --libs gbm) -lvulkan
+gcc -O1 -g -o probe probe.c $(pkg-config --cflags --libs gbm egl glesv2) -lvulkan
 export GALLIUM_DRIVER=virgl MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu \
        VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json
 ./probe --passes 10
@@ -38,6 +38,8 @@ Measured on `Fedora-Workstation-44.enhanced.synoik.raw` (clone), host at virglre
 | `--sleep-ms 1` (or more) | 0/10 |
 | `--touch-after-write` (guest waits for the bo to go idle) | 0/10, three runs |
 | `--gpu-writer` (GPU clear as producer) | 0/10 |
+| `--gl-writer` (vrend GL render, `glFlush` hand-off) | 0/10, 3/10, 8/10 — races too, see below |
+| `--gl-writer-finish` (same, `glFinish` hand-off) | 0/10, three runs |
 | `--reimport` (fresh VkImage every pass) | 7/10 stale |
 
 Read the table as: not a dropped transfer (a 1 ms pause is enough), not an import-time
@@ -93,8 +95,27 @@ Two consequences to accept rather than fight:
   two-tier guarantee — a degradation, not a boot failure — and the long-term erase is
   backing shared bos with host-visible blobs so there is no transfer to order at all (and
   no upload cost either).
-- **The seam is not transfer-specific.** *Any* control-queue work races the ring, so a
-  vrend GL render into a shared bo consumed by venus has the same hazard for a consumer
-  that skips implicit sync. `--touch-after-write` working proves the guest kernel does
-  track the fence on the bo, so `VIRTGPU_WAIT`/sync-file consumers are safe; a bare Vulkan
-  importer is not. Open question, not yet probed.
+- **The seam is not transfer-specific — but only the CPU case is our bug.** Probed:
+  `--gl-writer` (render into the same shared bo through vrend, hand off with `glFlush`) also
+  races, at **0/10, 3/10, 8/10** — a true timing spread, unlike the CPU path's determinism.
+  `--gl-writer-finish` is 0/10 three times.
+
+  It is not ours to fix, and the discriminator is *would this probe behave the same on real
+  hardware?*
+
+  - **CPU producer:** on real hardware `gbm_bo_map` of a LINEAR bo is a direct mmap. There is
+    no GPU work at unmap, so nothing *can* race, and there is no fence an app could wait on
+    even if it wanted to — the API's contract is synchronous. virgl replaces that with a
+    deferred transfer, so an app that is correct on bare metal breaks only under our
+    virtualization. **Fidelity gap, ours.**
+  - **GL producer:** `glFlush` then sample with no synchronization reads stale on real Intel
+    and AMD too; the render is genuinely in flight and Vulkan importers do not take part in
+    implicit sync. The probe deliberately skips the synchronization the ecosystem requires
+    everywhere. **Same as bare metal, the consumer's responsibility.**
+
+  And the guest kernel is not the problem for either: `--touch-after-write` working proves it
+  *already* attaches the transfer fence to the bo, so implicit-sync consumers (`VIRTGPU_WAIT`,
+  sync_file, dmabuf poll) are safe today against both producers. The one broken pairing is
+  CPU-producer → bare-Vulkan-consumer, which is exactly what the unmap fix covers. **Do not
+  add waits to the GL flush path** — that would tax every frame to fix behaviour that matches
+  real hardware.

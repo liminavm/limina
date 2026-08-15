@@ -26,6 +26,11 @@
 #include <gbm.h>
 #include <vulkan/vulkan.h>
 
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
+
 #define W 256
 #define H 64
 #define DRM_FORMAT_MOD_LINEAR 0ull
@@ -320,6 +325,93 @@ static void gpu_write(struct import *im, uint32_t color) {
   VKOK(vkWaitForFences(dev, 1, &fence, VK_TRUE, UINT64_MAX));
 }
 
+// ---------------------------------------------------------------------------
+// GL producer: render into the SAME shared bo through vrend, then let venus read
+// it. Same control-queue-vs-ring seam as the CPU map, minus the transfer -- the
+// question is whether the hazard is broader than the host-visible mapping.
+// ---------------------------------------------------------------------------
+static EGLDisplay egl_dpy = EGL_NO_DISPLAY;
+static EGLContext egl_ctx = EGL_NO_CONTEXT;
+static GLuint gl_tex, gl_fbo;
+
+static void gl_init(struct gbm_device *gbm, struct gbm_bo *bo) {
+  PFNEGLGETPLATFORMDISPLAYEXTPROC get_dpy =
+      (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress(
+          "eglGetPlatformDisplayEXT");
+  egl_dpy = get_dpy ? get_dpy(EGL_PLATFORM_GBM_KHR, gbm, NULL)
+                    : eglGetDisplay((EGLNativeDisplayType)gbm);
+  if (egl_dpy == EGL_NO_DISPLAY || !eglInitialize(egl_dpy, NULL, NULL)) {
+    fprintf(stderr, "eglInitialize failed\n");
+    exit(1);
+  }
+  eglBindAPI(EGL_OPENGL_ES_API);
+  EGLint cattr[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
+  egl_ctx = eglCreateContext(egl_dpy, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, cattr);
+  if (egl_ctx == EGL_NO_CONTEXT) {
+    fprintf(stderr, "eglCreateContext failed (0x%x)\n", eglGetError());
+    exit(1);
+  }
+  if (!eglMakeCurrent(egl_dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, egl_ctx)) {
+    fprintf(stderr, "eglMakeCurrent failed (0x%x)\n", eglGetError());
+    exit(1);
+  }
+
+  int fd = gbm_bo_get_fd(bo);
+  EGLint iattr[] = {EGL_WIDTH,
+                    W,
+                    EGL_HEIGHT,
+                    H,
+                    EGL_LINUX_DRM_FOURCC_EXT,
+                    (EGLint)GBM_FORMAT_ARGB8888,
+                    EGL_DMA_BUF_PLANE0_FD_EXT,
+                    fd,
+                    EGL_DMA_BUF_PLANE0_OFFSET_EXT,
+                    (EGLint)gbm_bo_get_offset(bo, 0),
+                    EGL_DMA_BUF_PLANE0_PITCH_EXT,
+                    (EGLint)gbm_bo_get_stride(bo),
+                    EGL_NONE};
+  PFNEGLCREATEIMAGEKHRPROC create_image =
+      (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+  EGLImageKHR img = create_image(egl_dpy, EGL_NO_CONTEXT,
+                                 EGL_LINUX_DMA_BUF_EXT, NULL, iattr);
+  close(fd);
+  if (img == EGL_NO_IMAGE_KHR) {
+    fprintf(stderr, "eglCreateImageKHR failed (0x%x)\n", eglGetError());
+    exit(1);
+  }
+
+  PFNGLEGLIMAGETARGETTEXTURE2DOESPROC image_target =
+      (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress(
+          "glEGLImageTargetTexture2DOES");
+  glGenTextures(1, &gl_tex);
+  glBindTexture(GL_TEXTURE_2D, gl_tex);
+  image_target(GL_TEXTURE_2D, img);
+  glGenFramebuffers(1, &gl_fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, gl_fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         gl_tex, 0);
+  GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+  if (st != GL_FRAMEBUFFER_COMPLETE) {
+    fprintf(stderr, "FBO incomplete (0x%x)\n", st);
+    exit(1);
+  }
+}
+
+// `finish` picks the hand-off a producer performs: glFlush is the cheap one a
+// compositor does before handing the buffer over; glFinish waits for the virgl
+// fence, i.e. the same wait the CPU path needs.
+static void gl_write(uint32_t color, bool finish) {
+  glBindFramebuffer(GL_FRAMEBUFFER, gl_fbo);
+  glViewport(0, 0, W, H);
+  glClearColor(((color >> 16) & 0xff) / 255.0f, ((color >> 8) & 0xff) / 255.0f,
+               (color & 0xff) / 255.0f, ((color >> 24) & 0xff) / 255.0f);
+  glClear(GL_COLOR_BUFFER_BIT);
+  if (finish)
+    glFinish();
+  else
+    glFlush();
+}
+
 static void cpu_write(struct gbm_bo *bo, uint32_t color) {
   void *map_data = NULL;
   uint32_t stride = 0;
@@ -350,6 +442,7 @@ int main(int argc, char **argv) {
   int passes = 6, sleep_ms = 0;
   bool reimport = false, gpu_producer = false, read_between = true;
   bool touch_after_write = false;
+  bool gl_producer = false, gl_finish = false;
   bool trace = getenv("LIMINA_COH_TRACE") != NULL;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--reimport"))
@@ -360,6 +453,10 @@ int main(int argc, char **argv) {
       read_between = false;
     else if (!strcmp(argv[i], "--touch-after-write"))
       touch_after_write = true;
+    else if (!strcmp(argv[i], "--gl-writer"))
+      gl_producer = true;
+    else if (!strcmp(argv[i], "--gl-writer-finish"))
+      gl_producer = gl_finish = true;
     else if (!strcmp(argv[i], "--sleep-ms") && i + 1 < argc)
       sleep_ms = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--passes") && i + 1 < argc)
@@ -367,7 +464,8 @@ int main(int argc, char **argv) {
     else {
       fprintf(stderr,
               "usage: %s [--passes N] [--reimport] [--gpu-writer] "
-              "[--no-read-between] [--touch-after-write] [--sleep-ms N]\n",
+              "[--no-read-between] [--touch-after-write] [--sleep-ms N] "
+              "[--gl-writer] [--gl-writer-finish]\n",
               argv[0]);
       return 2;
     }
@@ -397,22 +495,27 @@ int main(int argc, char **argv) {
   printf("bo: %ux%u stride=%u modifier=%#llx\n", W, H, gbm_bo_get_stride(bo),
          (unsigned long long)gbm_bo_get_modifier(bo));
 
+  if (gl_producer)
+    gl_init(gbm, bo);
+
   vk_init();
   make_readback();
 
   struct import im;
   if (!reimport)
-    import_bo(bo, &im, gpu_producer);
+    import_bo(bo, &im, gpu_producer || gl_producer);
 
   int failures = 0;
   for (int i = 0; i < passes; i++) {
     uint32_t color = 0xff000000u | ((uint32_t)(i * 37 + 1) << 16) |
                      ((uint32_t)(i * 53 + 7) << 8) | (uint32_t)(i * 11 + 3);
     if (reimport)
-      import_bo(bo, &im, gpu_producer);
+      import_bo(bo, &im, gpu_producer || gl_producer);
 
     if (gpu_producer)
       gpu_write(&im, color);
+    else if (gl_producer)
+      gl_write(color, gl_finish);
     else
       cpu_write(bo, color);
     if (trace)
