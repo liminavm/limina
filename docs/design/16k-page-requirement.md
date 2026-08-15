@@ -107,10 +107,10 @@ implemented and shipping today.
   sub-page bitmap with an all-free mask (`(1 << (host_page / GUEST_PAGE)) - 1` = `0b1111` on
   16K/4K) and drains only host pages whose every sub-page is free. A 4 KiB guest reclaims less of
   what it frees; it does not fail.
-- **udmabuf / zero-copy video import** (`docs/roadmap.md:1825`): `mach_vm_remap` works at 16 KiB, so
-  a 4 KiB guest's fragments can't be remapped individually — and the roadmap's own done-test says
-  so in as many words: *"A stock 4k guest still plays video via the fallback, unchanged."* Designed
-  as best-effort from the start.
+- **udmabuf / zero-copy video import** (`docs/roadmap.md:1825`): the roadmap says a 4 KiB guest
+  "can present 4 KiB fragments that cannot be remapped individually" and falls back. That is a
+  worst case being described as a necessity — **guest page size is the wrong variable**. See
+  § "udmabuf: the real variable is allocation granularity" below; a 4 KiB guest can stitch fully.
 - **virtiofs DAX** (`docs/roadmap.md:651`): not implemented yet — it is a listed follow-up, not a
   live dependency. When it lands, the degradation is "DAX doesn't engage, plain FUSE read/write
   does", which is where every non-DAX guest already lives.
@@ -125,6 +125,53 @@ working blob map, `vkCreateInstance` returns `VK_ERROR_OUT_OF_HOST_MEMORY`, and 
 treats OOM as fatal for the whole instance chain — so it took healthy lavapipe down with it. Stock
 Vulkan wasn't degraded, it was *dead*. That asymmetry is why this one item earned "THE constraint"
 while the others never did.
+
+## udmabuf: the real variable is allocation granularity, not page size
+
+Worth deriving, because "16 KiB host pages vs 4 KiB guest pages" is the wrong frame and it leads
+straight to an unnecessary fallback.
+
+`mach_vm_remap` moves **whole host pages to host-page-aligned destinations**. We are building one
+contiguous destination VA in which the fragment belonging at buffer offset `O` must land at `O`. So
+a fragment is remappable exactly when:
+
+- `O` is 16 KiB-aligned — and since the buffer is laid out linearly, `O = page_index * 4096`, so
+  this just picks out every 4th guest page; **and**
+- the source is 16 KiB-aligned and 16 KiB-contiguous in host VA. Guest PA → host VA is a fixed
+  offset from a 16 KiB-aligned RAM base, so this means the four consecutive guest pages at `O` are
+  **physically contiguous and 16 KiB-aligned**.
+
+Which is to say: the buffer must be composed of 16 KiB-aligned, physically-contiguous quads. A
+16 KiB guest gets that because every page *is* such a quad — but that is a sufficient condition,
+not a necessary one, and a 4 KiB guest reaches it by ordinary means:
+
+- Linux's buddy allocator gives **natural alignment**: any order-2 (16 KiB) allocation is 16 KiB-
+  aligned and contiguous by construction.
+- shmem/memfd **large folios** produce multi-page runs, and a hugetlb memfd produces 2 MiB ones.
+- udmabuf is already folio-based and explicitly takes both:
+  `drivers/dma-buf/udmabuf.c` pins via `memfd_pin_folios()` into a `pinned_folios` array, and
+  `udmabuf_create` accepts `shmem_file(memfd) || is_file_hugepages(memfd)` (v7.2-rc7, line 276).
+
+So a THP- or hugetlb-backed memfd on a stock 4 KiB guest stitches **exactly as well as** a 16 KiB
+guest. The frame is scattered in 2 MiB runs, not 4 KiB ones.
+
+**And the fallback need not be all-or-nothing anyway.** The destination range is ours: allocate it,
+then `mach_vm_remap` (with `VM_FLAGS_OVERWRITE`) every 16 KiB slot that qualifies and `memcpy` only
+the ragged remainder. libkrun already hands the worker **host-VA iovecs**
+(`virtio_gpu.rs attach_backing` → `virgl_renderer_resource_attach_iov`), so the qualification test
+is a cheap runtime scan of the iov list, not a guess about the guest. Degradation becomes
+proportional to actual misalignment instead of binary.
+
+One caveat that decides where the hybrid is legitimate: **a copied slot is a snapshot, not shared
+storage.** For write-once media frames — the case this wave exists for — that is fine. For a buffer
+the guest rewrites in place, the copied slots go stale, so either re-copy just the ragged fraction
+per frame (still far cheaper than today's whole-frame upload) or gate reused buffers on
+fully-remappable. Do not let the hybrid quietly break the share-don't-copy invariant.
+
+Practical consequence: phase 1 of Wave 6 already requires a guest kernel change (teaching
+drm/virtio's PRIME import to register a foreign dmabuf), so asking the allocation path for 16 KiB
+granularity is a small addition in a place we are already opening — and it should be a **hint**,
+with the host-side scan above as the safety net, so a guest that ignores it still works.
 
 ## "Just works on a regular distro" — the actual shopping list
 

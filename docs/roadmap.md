@@ -1830,10 +1830,20 @@ Three phases, each independently useful:
    import through the existing host-pointer route (`VK_EXT_external_memory_host` → KK →
    `newBufferWithBytesNoCopy`). Contiguity — not visibility — is the only reason a single
    MTLBuffer can't span the pages today.
-3. **Pinning + page-size policy (the part expected to bite).** `mach_vm_remap` works at the host's
-   **16 KiB** granularity: a 16k-page enhanced guest stitches cleanly, a stock 4 KiB guest can
-   present 4 KiB fragments that cannot be remapped individually → it stays on the fallback (again,
-   the tier line falls where the two-tier guarantee wants it). While Metal has the pages wired they
+3. **Pinning + allocation-granularity policy (the part expected to bite).** `mach_vm_remap` works at
+   the host's **16 KiB** granularity — but **guest page size is the wrong variable here** (corrected
+   2026-08-15; the earlier text said a stock 4 KiB guest "stays on the fallback"). What a remap
+   needs is that each 16 KiB-aligned *buffer offset* sit on 16 KiB-aligned, physically-contiguous
+   backing. A 16k guest gets that because every page is such a quad, but that is sufficient, not
+   necessary: buddy-order-2 allocations are naturally aligned, and shmem large folios / hugetlb
+   memfds give 2 MiB runs — udmabuf already pins via `memfd_pin_folios()` and accepts
+   `shmem_file() || is_file_hugepages()`. So a THP-backed memfd on a stock 4 KiB guest stitches as
+   well as an enhanced one. Make the granularity a **hint** on the phase-1 guest path, and make the
+   host scan the iov list and hybridise — remap the qualifying 16 KiB slots (`VM_FLAGS_OVERWRITE`),
+   `memcpy` only the ragged remainder — so degradation is proportional rather than binary. Caveat:
+   a copied slot is a snapshot, not shared storage, so that hybrid is sound for write-once frames
+   and needs a per-frame re-copy (or a fully-remappable gate) for buffers the guest rewrites in
+   place. Rationale and derivation: `docs/design/16k-page-requirement.md`. While Metal has the pages wired they
    must not move or be reclaimed, so the balloon / free-page-reporting path has to treat them as
    pinned for the resource's lifetime — reconcile with `docs/design/m6-dynamic-memory.md` before
    writing any of phase 2. Coherency is free (UMA, same physical pages as the existing host-pointer
@@ -1843,7 +1853,9 @@ Three phases, each independently useful:
 (the pattern written into the memfd read back through the imported venus memory via a GPU copy —
 proof the two views share storage, not just that the call returned), a udmabuf frame reaches the
 GPU with **zero** guest-side copies, and a measured before/after on software-decoded playback
-(`gpu p50` + CPU per frame). A stock 4k guest still plays video via the fallback, unchanged.
+(`gpu p50` + CPU per frame). A stock 4k guest **on a THP/hugetlb-backed memfd should reach the same
+zero-copy result** — test it explicitly rather than assuming the fallback; a 4k guest whose backing
+is genuinely fragmented exercises the hybrid path (proportional copy) and must still play cleanly.
 
 **Done test:** wave 1 — a seated guest on the dogfood/dev panel enumerates a 120 Hz (VRR-capable)
 mode, runs at it, and the guest frame clock tracks real latches; wave 2/3 — a fullscreen NV12
