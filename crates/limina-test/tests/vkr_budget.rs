@@ -194,6 +194,52 @@ fn heap_line(out: &str, index: u32, when: &str) -> Option<(u64, u64)> {
     Some((field("budget=")?, field("usage=")?))
 }
 
+/// One host-side `memory_budget` trace line: what we answered *before* KosmicKrisp got a vote.
+///
+/// Emitted by `vkr_budget_trace_heap` (virglrenderer fork, `src/venus/vkr_physical_device.c`)
+/// under `LIMINA_GPU_MEM_BUDGET_TRACE=1`. Only `ours` is limina's arithmetic; `driver` is the
+/// host Vulkan driver's own answer and `final` is `min` of the two.
+#[derive(Debug, Clone, Copy)]
+struct BudgetTrace {
+    ctx: u32,
+    own: u64,
+    ours: u64,
+    driver: u64,
+    final_budget: u64,
+    clamped: bool,
+}
+
+/// Parse the host trace lines for one heap, in emission order.
+fn budget_traces(log: &str, heap: u32) -> Vec<BudgetTrace> {
+    let marker = "limina GPU budget: memory_budget ctx ";
+    log.lines()
+        .filter_map(|l| l.split_once(marker).map(|(_, rest)| rest))
+        .filter_map(|rest| {
+            let field = |k: &str| -> Option<u64> {
+                rest.split_whitespace()
+                    .find_map(|f| f.strip_prefix(k))?
+                    .parse()
+                    .ok()
+            };
+            let mut words = rest.split_whitespace();
+            let ctx: u32 = words.next()?.parse().ok()?;
+            // "heap" then the index
+            let this_heap: u32 = words.nth(1)?.parse().ok()?;
+            if this_heap != heap {
+                return None;
+            }
+            Some(BudgetTrace {
+                ctx,
+                own: field("own=")?,
+                ours: field("ours=")?,
+                driver: field("driver=")?,
+                final_budget: field("final=")?,
+                clamped: field("clamped=")? != 0,
+            })
+        })
+        .collect()
+}
+
 /// The guest is told the truth about *our* cap, not about Metal's heap.
 ///
 /// The sibling test above exists because a refusal cannot be delivered: venus submits
@@ -214,6 +260,13 @@ fn heap_line(out: &str, index: u32, when: &str) -> Option<(u64, u64)> {
 /// 2. **Usage tracks what this client actually holds**, so the number moves when the guest
 ///    allocates. A budget that never changes is indistinguishable from a constant, and a
 ///    client cannot back off against a constant.
+///
+/// A third property — **the budget we answer never grows as the client allocates** — is
+/// asserted against the HOST's pre-clamp trace rather than the guest-visible number, because
+/// what reaches the guest is `min(our answer, the host Vulkan driver's answer)` and the
+/// driver's half tracks host GPU pressure we neither control nor can observe from inside the
+/// guest. Asserting it guest-side made this test flaky (task #38); see the assertion for the
+/// measured numbers.
 ///
 /// `VN_DEBUG=mem_budget` is set explicitly in the client's environment: venus gates the
 /// extension on it (`.EXT_memory_budget = VN_DEBUG(MEM_BUDGET)`) and reads it once per
@@ -237,7 +290,10 @@ fn the_guest_sees_our_cap_through_vk_ext_memory_budget() {
             .with_coexist_display(1280, 800)
             .with_net()
             .with_supervisor_log()
-            .with_env("LIMINA_GPU_MEM_BUDGET_MIB", &BUDGET_MIB.to_string()),
+            .with_env("LIMINA_GPU_MEM_BUDGET_MIB", &BUDGET_MIB.to_string())
+            // Makes the host log what IT answered, before the driver's clamp — see the
+            // monotonicity assertion below for why the guest-visible number cannot carry it.
+            .with_env("LIMINA_GPU_MEM_BUDGET_TRACE", "1"),
         Err(e) => {
             eprintln!("SKIPPED the_guest_sees_our_cap_through_vk_ext_memory_budget: {e}");
             return;
@@ -315,11 +371,70 @@ fn the_guest_sees_our_cap_through_vk_ext_memory_budget() {
          budget that does not track what the client holds is a constant, and a client \
          cannot back off against a constant.\n{out}"
     );
+    // (3) The budget we ANSWER never grows as the client allocates.
+    //
+    // Asserted on the host's pre-clamp number, not the guest-visible one, because the guest
+    // sees `min(our answer, the host Vulkan driver's answer)` and the second term is not
+    // ours: KosmicKrisp's budget tracks real host GPU pressure and has been observed at
+    // 5,144,576 / 93,487,104 / 300,695,552 bytes across three runs of THIS test on the same
+    // binary. A small driver number before and a larger one after makes the guest-visible
+    // budget grow with nothing wrong on our side — which is exactly how this assertion
+    // failed the 2026-08-15 r9 suite (task #38). Assertions (1) and (2) above still hold the
+    // guest-visible contract; this one holds the arithmetic limina actually owns.
+    //
+    // `ours` is `max(cap - others, own)` clamped to the heap size. `others` excludes the
+    // asking context, so allocating cannot lower it; the only legitimate rise is the
+    // spec-required `own` floor once a client's own usage passes what is left for it. Hence
+    // the bound below rather than a bare `<=`.
+    let log = guest.supervisor_log();
+    let traces = budget_traces(&log, target);
     assert!(
-        after_budget <= before_budget,
-        "the reported budget did not shrink after the client allocated {allocated} bytes \
-         ({before_budget} -> {after_budget}).\n{out}"
+        !traces.is_empty(),
+        "no `limina GPU budget: memory_budget` trace lines in the worker log for heap \
+         {target}. LIMINA_GPU_MEM_BUDGET_TRACE=1 was set, so either the worker is linked \
+         against a virglrenderer without `vkr_budget_trace_heap` (check \
+         `otool -L target/debug/limina-vmm | grep virgl` — it must be third_party/virgl-prefix, \
+         see `limina-virgl-link-trap`) or the query never reached the host."
     );
+    // The probe is the context that ends up holding the most: it allocates `allocated`
+    // bytes, far past anything an idle enhanced guest keeps.
+    let probe_ctx = traces
+        .iter()
+        .max_by_key(|t| t.own)
+        .expect("traces is non-empty")
+        .ctx;
+    let mine: Vec<_> = traces.iter().filter(|t| t.ctx == probe_ctx).collect();
+    for t in &mine {
+        eprintln!(
+            "host trace ctx {} heap {target}: own {} ours {} driver {} -> final {}{}",
+            t.ctx,
+            t.own,
+            t.ours,
+            t.driver,
+            t.final_budget,
+            if t.clamped { " (DRIVER CLAMP WON)" } else { "" }
+        );
+    }
+    let first = mine.first().expect("probe ctx has at least one trace");
+    let last = mine.last().expect("probe ctx has at least one trace");
+    assert!(
+        last.ours <= first.ours.max(last.own),
+        "the budget we answer GREW as the client allocated: ours {} -> {} while its own \
+         usage went {} -> {}. `others` excludes the asking context, so allocating cannot \
+         free budget — either the ledger is crediting the wrong context or `cap - others` \
+         is being computed against a moving `others`.\nfull trace: {mine:#?}\n{out}",
+        first.ours,
+        last.ours,
+        first.own,
+        last.own
+    );
+    if mine.iter().any(|t| t.clamped) {
+        eprintln!(
+            "note: the host Vulkan driver's own budget clamped our answer during this run, so \
+             the guest-visible number ({before_budget} -> {after_budget}) is the driver's, not \
+             ours — see assertion (3)."
+        );
+    }
 
     let outcome = guest
         .shutdown(Duration::from_secs(10))
