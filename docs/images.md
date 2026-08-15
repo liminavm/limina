@@ -447,6 +447,27 @@ installed `-devel/-tests` forward in the same transaction (else `--allowerasing`
 them). Takes effect from the NEXT payload build; existing guests can install matching devel RPMs
 by file path (dogfood-guest has the `-3` set at `~/mesa-26.1.3-3.limina/`).
 
+**`limina-agent-session` rebuilt with vdagent arbitration and hand-delivered to all three F44
+enhanced images (2026-08-15, limina `0564e6c`, #37 step 3)** — `Fedora-Workstation-44.enhanced.raw`,
+`.enhanced.test.raw` and `.enhanced.synoik.raw` each got the new binary at
+`/usr/local/bin/limina-agent-session` via `scripts/install-session-helper.sh` (musl static,
+cross-built on the host — no build guest needed for this binary). The helper now withholds the
+`clipboard` capability while a `spice-vdagent` serves the session, so the two transports no longer
+both own the selection. Verified live on the test golden, all three transitions: yields at startup
+with vdagent up → claims ~5 s after vdagent is killed (ext-data-control backend comes up) → hands
+back within one probe when vdagent returns. The L2 gate
+(`a_seated_guest_shares_the_clipboard_through_spice_vdagent`) passes in 38 s with its new oracle 3c
+reporting `helper yielded the clipboard to vdagent (1 HELLO)`.
+**NOT yet in the guest-tools payload tarball** — `scripts/provision/f44/build-all.sh` still packages
+the pre-arbitration helper, so the next payload build (r10) must pick this up or a fresh
+`install-enhanced.sh` will regress these images.
+**Finding on the synoik image**: `xwayland-satellite` gives the session a `DISPLAY=:0`, so
+`spice-vdagent` starts and stays alive there and the helper yields to it. Whether X11 selections
+actually bridge to Wayland clients under synoik is **unverified** — that is the known limit of a
+liveness probe, which proves vdagent reached an X server, not that the compositor bridges
+selections. If synoik's clipboard turns out to be split, the probe needs a functional check (or
+that image needs `LIMINA_CLIPBOARD_IGNORE_VDAGENT=1`).
+
 ## Images
 
 ### Fedora 44 — mirrored image set (in progress, started 2026-06-29)
