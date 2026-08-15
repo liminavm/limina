@@ -479,13 +479,18 @@ flip straight to the primary plane). Converged truth + open-threads ledger live 
   rutabaga/venus), and **degrades gracefully to software-2D on renderer-init failure** (no panic).
   **Coexist is the DEFAULT** (`--gpu-software-2d` overrides for the capture oracle). Design:
   `docs/design/tier2-coexist-gpu.md`.
-- **The 16 KiB-host / 4 KiB-guest blob map is THE constraint, and the fix is guest-side (enhanced
-  tier).** venus RESOURCE_MAP_BLOB → `hv_vm_map` requires host addr, guest addr, AND size to be
-  16 KiB-multiples; a stock 4 KiB guest packs host-visible blobs at 4 KiB granularity so two blobs
-  share one host page and can't be mapped independently. No host-only fix exists. A **16 KiB-page
-  guest kernel** (`build-test-kernel.sh PAGESIZE=16k`) makes venus blobs 16 KiB-sized AND -spaced →
-  `hv_vm_map` works with zero host changes; `vulkaninfo` enumerates `Virtio-GPU Venus (Apple M1
-  Max)`. On stock 4 KiB Fedora, venus stays unachievable → llvmpipe degraded baseline (floor holds).
+- **The 16 KiB-host / 4 KiB-guest blob map — SOLVED, and no longer a reason for 16 KiB pages.**
+  venus RESOURCE_MAP_BLOB → `hv_vm_map` requires host addr, guest addr, AND size to be
+  16 KiB-multiples, and a 4 KiB guest breaks that two ways. The **size** half was fixed *host-only*
+  (libkrun `0043` rounds map/unmap identically; virglrenderer `0023` opens the zink map-info gate) —
+  so the old "no host-only fix exists" line here was wrong. The **offset** half (two 4 KiB-packed
+  blobs sharing one host page) needs the guest to keep an aligned lattice, which a 16 KiB kernel
+  gets for free but is *not* the only way to get: `guest/virtio-gpu-dkms/` does it on stock 4 KiB
+  guests (validated 2026-07-03 — venus enumerates on the stock tier), and upstream has since merged
+  the negotiated form, `VIRTIO_GPU_F_BLOB_ALIGNMENT` (in 7.2-rc). **16 KiB is still right for the
+  enhanced tier**, but for the page-size-granularity features (udmabuf `mach_vm_remap` stitching,
+  virtiofs DAX, balloon reclaim) — not for venus. Full analysis, the three-link chain, and the
+  ordering hazard: `docs/design/16k-page-requirement.md`.
   libkrun **0011** logs `hv_vm_map` failures with the alignment breakdown (diagnostic only).
 - **Zero-copy present + the B/D insight: IOSurface is the macOS dmabuf.** "Zero-copy end-to-end" has
   four crossings; the desktop needs **B** (rendered image → display) and **D** (mutter can create a
@@ -1992,6 +1997,22 @@ occupy `gnome-build-meta`'s position, junction fdsdk and override elements rathe
   and **unbootable** — our kernel has `CONFIG_EROFS_FS_ZIP_ZSTD` unset, and it built cleanly *and*
   passed `veritysetup verify`, failing only at mount. The filesystem writer and the kernel that
   reads it are configured independently and nothing cross-checks them.
+  - **⚠️ dm-verity validates LAZILY, per block, on read — it is not a gate the image passes at
+    boot.** Activation checks only the hash tree's root; a data block is hashed when something
+    actually reads it. Demonstrated: a `/usr` with 4 KiB of garbage 50 MiB into a 166 MB
+    filesystem **booted cleanly and was blessed on the first attempt**, because nothing touched
+    that block during boot. Three consequences that shape the design rather than just the tests:
+    (a) a guest can boot, pass every check, run for days, and then throw EIO when an application
+    first opens a damaged file — with no event at update time and none at boot; (b) **corruption
+    therefore does not reliably trigger rollback**, since boot counting only catches failures that
+    happen *during* boot, and a broken-but-running system is the one state A/B has no answer for;
+    (c) the guest-side `sha256sum -c` of the update share is consequently **the only whole-image
+    check that ever happens** — verity never validates the whole image at any single moment, so
+    that pre-check is not defence in depth behind verity, it is the only belt.
+  - **A host-side lever worth building:** limina can verify a slot's whole `/usr` against its root
+    hash **offline, from outside, with the guest powered off** — the complete check the guest
+    never performs, on an image it cannot tamper with while stopped. That belongs in the same
+    powered-off slot-health path that reads `.osrel`/`.cmdline` from the ESP.
 - **The cmdline must be embedded in the UKI**, since without a SecureBoot chain an externally
   supplied cmdline is unauthenticated and could simply drop `usrhash=`, making verity decorative.
   This is safe on our stack: **limina passes no cmdline at all on the EFI path** (it sets only the
@@ -2011,9 +2032,24 @@ occupy `gnome-build-meta`'s position, junction fdsdk and override elements rathe
 - **`systemd-sysupdate` A/B** on partitions + UKIs in the ESP, with **the limina twist: the host
   serves updates over virtiofs** — sysupdate takes local paths, so a LiminaOS guest needs no
   network and no update server. Host contract: `--share updates=<dir>` → tag `limina-updates`,
-  a flat directory plus `SHA256SUMS` which sysupdate verifies itself. The guest should mount it
-  **on demand and unmount after**: a permanently-mounted virtiofs share blocks guest s2idle, which
-  would make every LiminaOS guest unsuspendable.
+  a flat directory of payload files. The guest should mount it **on demand and unmount after**: a
+  permanently-mounted virtiofs share blocks guest s2idle, which would make every LiminaOS guest
+  unsuspendable. Proven end-to-end on real KRUN_EFI: the guest installs into the free slot, the
+  running slot is untouched, and the counter clears on the next successful boot.
+  - **⚠️ The directory transport carries NO integrity checking, and no setting turns it on.**
+    sysupdate's `SHA256SUMS` manifest is an **HTTP-source mechanism** — read for `Type=url-file` /
+    `Type=url-tar` only, with `Verify=` controlling that manifest's *signature*. Against a plain
+    directory (`Type=regular-file`) there is no manifest step at all, so the man page's
+    "downloaded payload files are unconditionally checked against the SHA256 hashes" is true and
+    **vacuous for us** — it quantifies over an empty set, and `Verify=true` would have nothing to
+    verify. A corrupt payload beside a stale manifest installs cleanly, `RC=0`. **Verifying the
+    share is therefore ours to do**, in the guest, before sysupdate runs. This is a real cost of
+    choosing a directory over HTTP and it was not visible when that call was made.
+  - **Ceiling to know about before signing matters:** this transport can never carry
+    sysupdate-*native* signature verification, because `Verify=` only ever applies to a manifest
+    that a directory source never fetches. Integrity against corruption is solvable in the guest;
+    **authenticity is not**, without either our own verification step or an HTTP source. Worth
+    settling when "signed images" stops being a design word and becomes a shipped mechanism.
 - **Configuration lives in `/usr`, not in factory `/etc`.** Factory `/etc` is a **first-boot
   seeding mechanism, full stop** — no `systemd-tmpfiles` `C` variant ever overwrites an existing
   file (`C` skips a non-empty destination entirely; `C+` descends into it; the `!` suffix means
