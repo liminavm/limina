@@ -224,10 +224,60 @@ upstream patch measurable in the same unit: does it remove something from the pa
 | **`limina-kernel-16k`** | 16 KiB pages (one config symbol — the fork branch carries zero patches as of v7.1.8) | for the *stock* tier: distro kernel ≥ 7.2 plus the blob-alignment chain below. For the *enhanced* tier: nothing — we keep building it deliberately. |
 | **mesa RPM** (8 venus/virgl/zink patches) | venus correctness + WSI + the CPU-write coherency fix | all 8 landing upstream and reaching a distro release. Four are already flagged **upstream-now** in `docs/upstreaming/ledger/mesa.md` (rows 0012, 0013, 0007, 0008); the rest need design work or a conversation. |
 | **`guest/virtio-gpu-dkms`** | 16 KiB blob-offset lattice on stock 4 KiB guests | the blob-alignment chain (§ above). Same trigger as the kernel. Currently not even wired into the payload. |
-| **`clipboard@limina`** shell extension | GNOME has no `ext-data-control`, so an unfocused agent cannot touch the clipboard | **nothing, on stock GNOME — this one does not converge.** Upstream mutter rejected `ext-data-control` by name (ledger `mutter.md` 0003: no implementation, no MR, and a work item filed *against* adopting it). So on stock GNOME the honest options stay the extension or the RemoteDesktop opt-in tier. It retires only where we control the compositor — i.e. on the enhanced tier, which is exactly where the LiminaOS direction is heading. |
+| **`clipboard@limina`** shell extension | GNOME has no `ext-data-control`, so an unfocused agent cannot touch the clipboard | **M12 — `spice-vdagent`.** This row converges *better* than any other, because the guest component is already installed: `spice-vdagent` ships in the default Fedora Workstation set (verified in the dogfood guest's rpmdb, `0.23.0-1.fc43.aarch64`) and sits dormant purely for want of a named virtio-serial port. Waking it is **~40 lines of host-side limina code** — no guest component, and (contrary to the roadmap's original premise) no new libkrun device either, since `PortConfig::InOut` already announces `VIRTIO_CONSOLE_PORT_NAME`. Spike #1 was GREEN on an unmodified F43 guest with zero limina components. Remaining work is the host-side broker. |
 
-The asterisk on the last row is worth keeping visible: **"stock distro, agent only" is reachable for
-graphics and memory, but not for clipboard on GNOME.** Don't let the slogan quietly promise it.
+Note what that last row means for the framing: the `ext-data-control` route is upstream-rejected
+(ledger `mutter.md` 0003 — no implementation, no MR, a work item filed *against* adopting it), and
+an earlier draft of this table therefore concluded clipboard "does not converge". **That was wrong**
+— it anchored on the GNOME-native route and missed that vdagent sidesteps GNOME entirely (the guest
+copy arrives as a real `CLIPBOARD_GRAB` via XWayland, verified on Wayland). The shell extension is
+the **interim** tier, not the destination. Worth remembering as a shape: a rejected upstream is only
+a dead end for the route it rejected.
+
+The two live caveats on that route, both from the M12 spike: `vdagentd` is socket-activated by the
+*session* agent, so it needs a **graphical** session (a headless boot has `CanGraphical=no` and it
+exits); and its caps offer `CLIPBOARD_BY_DEMAND` + `CLIPBOARD_SELECTION` but **not** legacy
+`CLIPBOARD`, so the broker must speak by-demand + selection.
+
+## Open question for the same investigation: 16 KiB vs 64 KiB guest pages
+
+Raised by the user 2026-08-15. Red Hat already ships a 64 KiB-page aarch64 kernel (`kernel-64k`),
+so 64 KiB is a *standardised* option in a way 16 KiB is not — if the ecosystem converges there, the
+enhanced tier might be better off following it than holding a bespoke page size. Worth measuring
+before assuming either way, on three axes: **fragmentation, balloon behaviour, memory usage.**
+
+What we can reason about up front, so the measurement targets the parts that are actually uncertain:
+
+- **Alignment gets *easier*, not harder.** The host is 16 KiB, and 64 KiB is an exact multiple — so
+  every guest page is host-page-aligned and spans exactly 4 host pages. Every lattice concern in
+  this document dissolves even more thoroughly than at 16 KiB. This axis is not the risk.
+- **Balloon reclaim stays exact but gets coarse.** The coalescer degenerates the other way: one
+  guest page = 4 host pages, so reclaim is 1:4 and exact, with fewer reports for the same memory
+  (less CPU). Fine in principle.
+- **The real risk is `page_reporting_order`, and it may bite hard.** Reporting granularity follows
+  `pageblock_order`, which follows the PMD size — and on arm64 the PMD is **2 MiB at 4 KiB pages but
+  512 MiB at 64 KiB pages**. If reporting granularity really becomes 512 MiB, free-page reporting
+  could report essentially *nothing* in a 4–8 GiB desktop VM, which would gut dynamic memory. This
+  is the single most important thing to measure, and it is cheap: boot a `kernel-64k` guest and read
+  `/sys/module/page_reporting/parameters/page_reporting_order`. **Measure this before anything
+  else** — a bad answer here decides the whole question on its own.
+- **Internal fragmentation is the classic 64 KiB tax**, and a desktop guest is close to the worst
+  case for it: page-cache and small-file granularity of 64 KiB means a 1 KiB file occupies 64 KiB of
+  page cache. RHEL ships 64k for large-memory/HPC workloads, not for desktops — so their shipping it
+  is *not* evidence it suits our workload. Measure RSS and page-cache footprint on a real seated
+  session, not a synthetic benchmark, and note that `limina-mem-overhead` already identifies page
+  cache as the ratchet in `phys_footprint`.
+- **A second-order balloon subtlety worth checking:** virtio-balloon's PFN unit is fixed at 4 KiB by
+  the spec (`VIRTIO_BALLOON_PFN_SHIFT` = 12) regardless of guest page size, so a 64 KiB guest must
+  inflate in 16-PFN groups. Confirm our inflate/deflate path handles that grouping — it is a
+  plausible place for a silent off-by-16.
+- **Userspace 64 KiB-cleanliness is unverified**, exactly as 16 KiB-cleanliness is only
+  half-verified today (`docs/roadmap.md:2197` — the toolchain is clean, Mesa and the graphics stack
+  have not been built). A page-size move re-opens that question for the whole graphics stack.
+
+The honest prior: 64 KiB looks better on alignment, neutral-to-better on balloon *mechanics*, and
+potentially much worse on memory footprint — which is one of limina's headline goals. Measure, then
+decide; do not adopt it on standardisation grounds alone.
 
 ## Recommendation
 
