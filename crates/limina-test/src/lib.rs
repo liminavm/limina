@@ -856,6 +856,47 @@ impl GuestConfig {
         Ok(cfg)
     }
 
+    /// Like [`GuestConfig::seated_efi_fedora_from_env`], but booting the **synoik** enhanced image
+    /// — the same enhanced userspace with synoik, our Vulkan compositor, in place of
+    /// gnome-shell/mutter.
+    ///
+    /// The disk is **pinned to the F44 family** (`Fedora-Workstation-44.enhanced.synoik.raw`), the
+    /// same way [`bench::tier_config`](crate::bench::tier_config) pins the enhanced golden:
+    /// `LIMINA_FEDORA_REL` defaults to 43 and synoik is only produced for F44, so honouring the env
+    /// would just SKIP the guard out of the default suite. `LIMINA_TEST_DISK_SYNOIK` still
+    /// overrides for a deliberate different disk (e.g. an older clone, to check the test
+    /// discriminates).
+    ///
+    /// **EFI is load-bearing here, not stylistic.** The injected-kernel seated path
+    /// ([`seated_fedora_from_env`](GuestConfig::seated_fedora_from_env)) boots the test
+    /// `Image-16k`, a 6.12 binary built *before* the 2026-08-04 drop of our two virtio-gpu plane
+    /// commits (`74ae69adc645` advertise `DRM_FORMAT_MOD_LINEAR`, `1f4c2049b30b` widen the primary
+    /// plane format list). That kernel still advertises LINEAR, so synoik's format negotiation
+    /// succeeds on it whatever the compositor does — a test on that path would be green today and
+    /// blind to the whole failure class. Only the guest's **own installed kernel**, booted through
+    /// the GOP firmware, meets a stock virtio-gpu plane. See `docs/images.md` §KNOWN DRIFT.
+    ///
+    /// Overrides: `LIMINA_TEST_DISK_SYNOIK`, `LIMINA_GOP_FIRMWARE`, plus the usual
+    /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the GOP firmware
+    /// or the synoik image is missing — it is a machine-local golden, see `docs/images.md`.
+    pub fn seated_efi_synoik_from_env() -> Result<GuestConfig> {
+        let disk = match std::env::var("LIMINA_TEST_DISK_SYNOIK") {
+            Ok(p) => PathBuf::from(p),
+            Err(_) => repo_root().join("Fedora-Workstation-44.enhanced.synoik.raw"),
+        };
+        anyhow::ensure!(
+            disk.exists(),
+            "synoik enhanced disk not found at {disk:?} (set LIMINA_TEST_DISK_SYNOIK); this is a \
+             machine-local golden, see docs/images.md"
+        );
+        let mut cfg = GuestConfig::seated_efi_fedora_from_env()?;
+        match &mut cfg.boot {
+            Boot::Firmware { disk: d, .. } => *d = disk,
+            other => anyhow::bail!("seated_efi_fedora_from_env built an unexpected boot {other:?}"),
+        }
+        Ok(cfg)
+    }
+
     /// L2 config for the **≥7.1-kernel virtiofs share guard** (task #36): the same injected-kernel
     /// enhanced path as [`enhanced_fedora_from_env`](GuestConfig::enhanced_fedora_from_env), but
     /// booting a **≥7.1** 16 KiB test kernel instead of the venus tests' 6.12 `Image-16k`.

@@ -189,7 +189,14 @@ reinstating one — the direction `docs/design/16k-page-requirement.md` argues f
 because of a property of *this* stack, which should not be generalised: virtio-gpu has no tiling,
 so its buffers are linear by construction, and the plane is not real hardware — scanout is whatever
 CALayer does with an IOSurface the **host already created and whose layout it already knows**.
-Nothing downstream infers layout from the modifier. Tracking: task #39.
+Nothing downstream infers layout from the modifier. Tracking: task #39 (fixed synoik-side 2026-08-15;
+a patched build still has to be delivered into the local `enhanced.synoik*` images).
+
+**Now guarded (2026-08-15, task #40): `crates/limina-test/tests/synoik_session.rs`.** The suite had
+never booted synoik, so this whole class shipped unwatched. The test EFI-boots the synoik image —
+load-bearing, since the injected-kernel seated path runs a 6.12 test kernel that still advertises
+LINEAR and would be green regardless — and fails fast on the marker. Verified to discriminate:
+**RED** in 26 s on the 7.1.8 image, **GREEN** in 26 s on the `bak-pre-r9` (7.1.6) clone.
 
 > A note on how this was nearly mis-fixed. synoik's own comment says *"INVALID is refused at
 > allocation rather than papered over"*, which reads as a live design constraint defending against
