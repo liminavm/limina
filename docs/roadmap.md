@@ -1347,13 +1347,21 @@ limina speaks the vdagent protocol.
      library — its clipboard is X11-only (`src/vdagent/x11.c`), so on Wayland it rides XWayland +
      mutter's X11↔Wayland selection bridging, exactly as Boxes does. No XWayland ⇒ no SPICE clipboard
      in that session.
-   - **This makes the tiers fit together well:** the compositors vdagent *can't* serve (niri, wlroots,
-     KDE) are the ones that ship **ext-data-control**, our cheapest native tier; and the rung that
-     costs us the most maintenance — the `clipboard@limina` shell extension — exists only for GNOME,
-     which always has XWayland available. So the ladder collapses to *ext-data-control where the
-     compositor has it, vdagent on GNOME*, and the extension becomes the vestigial rung for
-     GNOME-without-XWayland. Retiring it is the prize here (it is what breaks on GNOME updates —
-     see the mutter-left-the-delivery history in `limina-enh-delivery`).
+   - **CORRECTED 2026-08-15 — do not group compositors by capability.** This bullet used to claim
+     "the compositors vdagent *can't* serve (niri, wlroots, KDE) are the ones that ship
+     **ext-data-control**", so the tiers fit together neatly. That is two independent properties
+     welded together, and only one of them was measured. Shipping `ext-data-control` (niri,
+     wlroots, KDE — true) says nothing about whether a session has **XWayland with X11↔Wayland
+     selection bridging**, which is the actual dependency. KDE Plasma ships XWayland by default and
+     bridges selections; so do sway and most wlroots compositors — vdagent very likely serves both.
+     The only *verified* gap is **niri**, where the dogfood guest had no XWayland process at all
+     (2026-08-01), and niri needs `xwayland-satellite` as a separate component.
+     Note the self-contradiction this produced: the very next task says **probe positively, never
+     infer from "is XWayland installed"** — and then this bullet inferred coverage from compositor
+     *identity*, which is the same error a level up. The tiers may still fit together; we have not
+     shown that they do, and the arbitration must rest on a per-session probe either way.
+     Retiring the `clipboard@limina` extension remains the prize (it is what breaks on GNOME
+     updates — see the mutter-left-the-delivery history in `limina-enh-delivery`).
    - **The decision must be made IN THE GUEST, per session, and merely honored by the host.** The
      facts it needs (which compositor, is there an XWayland, did vdagent actually get the selection)
      exist only inside a session; the host sees one vdagent channel plus N helper connections and
@@ -1397,7 +1405,8 @@ clipboard bridge are pure limina code.
 under limina; `spice-vdagentd` comes up against `/dev/virtio-ports/com.redhat.spice.0`; copy text in
 the host and paste it in the guest and vice-versa. Baseline-tier compatibility floor (L2) stays green.
 **Second done test (task 4, the mixed guest):** one guest running two sessions on different
-compositors — GNOME (XWayland-capable, SPICE-covered) and niri (no XWayland, ext-data-control) —
+compositors — GNOME (XWayland-capable, SPICE-covered) and niri (no XWayland observed in that
+session, ext-data-control) —
 copies and pastes in **both**, with exactly one clipboard owner per session and no ownership
 ping-pong. dogfood-guest is already shaped like this, so it is a real configuration, not a contrived one.
 
