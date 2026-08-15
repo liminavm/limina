@@ -25,6 +25,10 @@ use super::codec::Reassembler;
 use super::session::{Effect, Event, Session};
 use crate::clipboard::Clipboard;
 
+/// How long a write to the port may block before we give up on the agent. A guest that
+/// stopped reading is a broken clipboard, not a reason to stall the host.
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// A live vdagent conversation. Held by the control plane, which pokes it when the host
 /// pasteboard changes; the guest side drives itself from the reader thread.
 pub struct VdAgent {
@@ -42,6 +46,14 @@ impl VdAgent {
     /// a broker that waits to be spoken to waits forever.
     pub fn start(host_fd: OwnedFd, clipboard: Arc<Clipboard>) -> Result<Arc<VdAgent>> {
         let stream = UnixStream::from(host_fd);
+        // A guest agent that stops draining the port must not be able to wedge us. Without
+        // a bound, a full socket buffer blocks `write_all` forever on whichever thread is
+        // sending — and for a host copy that is the SHARED clipboard poller, so a sick
+        // vdagentd would take the control-plane transport down with it. Same reasoning as
+        // `control::write_timeout` for peers.
+        stream
+            .set_write_timeout(Some(WRITE_TIMEOUT))
+            .context("bounding writes to the vdagent port")?;
         let reader = stream
             .try_clone()
             .context("cloning the vdagent port for the reader thread")?;
@@ -55,7 +67,8 @@ impl VdAgent {
         // The guest may not have opened its end yet — that is fine. The bytes sit in the
         // socket buffer until the port opens, and the agent's own greeting (which arrives
         // whenever it starts) re-synchronizes us either way.
-        agent.apply(agent.session.lock().unwrap().on_event(Event::PortOpened));
+        let opening = agent.session.lock().unwrap().on_event(Event::PortOpened);
+        agent.apply(opening);
 
         let thread_agent = agent.clone();
         std::thread::Builder::new()
@@ -70,7 +83,11 @@ impl VdAgent {
     /// change-count bookkeeping for *both* transports — two pollers would race each other
     /// for the same change and each would see only half of them.
     pub fn host_copy(&self, text: String) {
-        self.apply(self.session.lock().unwrap().on_event(Event::HostCopy(text)));
+        // Bind first: as a temporary inside the call, the session guard would live until the
+        // end of the statement — i.e. across the write — which is the whole thing the two
+        // separate locks exist to prevent.
+        let effects = self.session.lock().unwrap().on_event(Event::HostCopy(text));
+        self.apply(effects);
     }
 
     fn read_loop(self: Arc<Self>, mut reader: UnixStream) {
@@ -123,8 +140,15 @@ impl VdAgent {
         for effect in effects {
             match effect {
                 Effect::Send(bytes) => {
-                    if let Err(e) = self.out.lock().unwrap().write_all(&bytes) {
-                        log::warn!("vdagent: write failed: {e}");
+                    let out = self.out.lock().unwrap();
+                    if let Err(e) = (&*out).write_all(&bytes) {
+                        // Either the port died or the agent stopped draining it past
+                        // WRITE_TIMEOUT. A timed-out `write_all` may have written part of a
+                        // message, so the stream is no longer parseable in either direction:
+                        // shut it down, which also wakes the reader thread out of its blocking
+                        // read. The clipboard degrades; the VM is untouched.
+                        log::warn!("vdagent: write failed ({e}); abandoning the port");
+                        let _ = out.shutdown(std::net::Shutdown::Both);
                         return;
                     }
                 }
