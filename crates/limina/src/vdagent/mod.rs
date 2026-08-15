@@ -14,9 +14,6 @@
 //! it lands next; until then the port is still the `LIMINA_SPICE_PORT=1` probe in
 //! `limina-vmm`.
 
-// The codec lands before its consumer so the wire format can be reviewed and tested on its
-// own (13 unit tests, no VM). Nothing calls it until the broker wiring commit, which drops
-// this allow — if it is still here once `broker` exists, something went unwired.
-#![allow(dead_code)]
-
+pub mod broker;
 pub mod codec;
+pub mod session;

@@ -72,11 +72,16 @@ pub mod msg_type {
     pub const CLIPBOARD_GRAB: u32 = 7;
     pub const CLIPBOARD_REQUEST: u32 = 8;
     pub const CLIPBOARD_RELEASE: u32 = 9;
-    pub const CLIENT_DISCONNECTED: u32 = 13;
 }
 
 /// `VD_AGENT_CAP_*` bit indices (`vd_agent.h`; the enum starts at 0).
+///
+/// Includes the bits we deliberately do NOT announce: they are the choices this transport
+/// made, and naming them is what lets `our_caps` be checked against them in a test rather
+/// than in a comment.
 pub mod cap {
+    #![allow(dead_code)]
+
     /// The legacy push-on-copy clipboard. We never announce it — see the module docs.
     pub const CLIPBOARD: u32 = 3;
     pub const CLIPBOARD_BY_DEMAND: u32 = 5;
@@ -86,7 +91,14 @@ pub mod cap {
 }
 
 /// `VD_AGENT_CLIPBOARD_*` data formats. Text is the only one M12 carries.
+///
+/// `NONE` is not a format one asks for: it is how the protocol says "I cannot produce
+/// that" in a `VD_AGENT_CLIPBOARD` reply, which is why an answer must always be sent.
+pub const CLIPBOARD_NONE: u32 = 0;
 pub const CLIPBOARD_UTF8_TEXT: u32 = 1;
+/// Not carried yet — named so "a format we cannot represent" is testable with a real one.
+#[allow(dead_code)]
+pub const CLIPBOARD_IMAGE_PNG: u32 = 2;
 
 /// `VD_AGENT_CLIPBOARD_SELECTION_CLIPBOARD` — the ordinary Ctrl-C/Ctrl-V selection.
 pub const SELECTION_CLIPBOARD: u8 = 0;
@@ -183,11 +195,6 @@ pub fn encode_clipboard(selection: u8, format: u32, data: &[u8]) -> Vec<u8> {
     body.extend_from_slice(&format.to_le_bytes());
     body.extend_from_slice(data);
     encode(msg_type::CLIPBOARD, &body)
-}
-
-/// `VD_AGENT_CLIPBOARD_RELEASE` — we no longer own the clipboard.
-pub fn encode_release(selection: u8) -> Vec<u8> {
-    encode(msg_type::CLIPBOARD_RELEASE, &selection_prefix(selection))
 }
 
 /// The 4-byte selection prefix the `CLIPBOARD_SELECTION` capability adds to every
@@ -470,7 +477,10 @@ mod tests {
     fn several_messages_in_one_read_all_come_out() {
         let mut wire = encode_announce(true);
         wire.extend(encode_grab(SELECTION_CLIPBOARD, &[CLIPBOARD_UTF8_TEXT]));
-        wire.extend(encode_release(SELECTION_CLIPBOARD));
+        wire.extend(encode(
+            msg_type::CLIPBOARD_RELEASE,
+            &[SELECTION_CLIPBOARD, 0, 0, 0],
+        ));
 
         assert_eq!(
             roundtrip(&wire),

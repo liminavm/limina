@@ -204,6 +204,10 @@ pub struct VmSpec {
     pub console: Option<ConsoleSpec>,
     /// Optional virtio-console (`hvc0`) for a robust interactive bidirectional console.
     pub virtio_console: Option<VirtioConsoleSpec>,
+    /// fd of the host end of the SPICE agent port (`com.redhat.spice.0`), inherited from
+    /// the supervisor, which speaks the vdagent protocol on the other side. None = no port
+    /// (an old supervisor, or a direct worker invocation).
+    pub spice_fd: Option<std::os::fd::RawFd>,
     /// Optional virtio-gpu display (M2). None = headless (no GPU device).
     pub display: Option<DisplaySpec>,
     /// Optional virtio-input devices (M2). None = no keyboard/pointer.

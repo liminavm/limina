@@ -21,6 +21,7 @@
 //! fresh boot) on reboot, while the supervisor — and the resources it owns (gvproxy, the
 //! control plane) — survive. A boot-loop guard stops endless relaunches.
 
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -271,13 +272,60 @@ pub fn take_pending_resume(
     }
 }
 
+/// Create a socketpair of the given type; set CLOEXEC on the supervisor end (fd.0) so the
+/// worker doesn't inherit it. Returns `(supervisor_end, worker_end)` as **owned** fds, so
+/// every path that drops them (notably an error return before the spawn completes) closes
+/// them instead of leaking.
+pub fn socketpair(sock_type: libc::c_int) -> Result<(OwnedFd, OwnedFd)> {
+    let mut fds = [0 as libc::c_int; 2];
+    if unsafe { libc::socketpair(libc::AF_UNIX, sock_type, 0, fds.as_mut_ptr()) } != 0 {
+        anyhow::bail!("socketpair: {}", std::io::Error::last_os_error());
+    }
+    // SAFETY: on success the kernel handed us two fresh, open fds; we take sole ownership.
+    let (sup_fd, worker_fd) =
+        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+    unsafe {
+        let f = libc::fcntl(sup_fd.as_raw_fd(), libc::F_GETFD);
+        libc::fcntl(sup_fd.as_raw_fd(), libc::F_SETFD, f | libc::FD_CLOEXEC);
+        // Writing to a socket whose peer (the worker) has exited must fail with an error,
+        // not raise SIGPIPE and kill the supervisor (macOS has no MSG_NOSIGNAL).
+        let on: libc::c_int = 1;
+        libc::setsockopt(
+            sup_fd.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_NOSIGPIPE,
+            &on as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+    }
+    Ok((sup_fd, worker_fd))
+}
+
+/// A spawned worker, plus the host ends of the channels this function created for it.
+pub struct Spawned {
+    pub child: std::process::Child,
+    /// Host end of the guest's `com.redhat.spice.0` port — hand it to
+    /// [`crate::control::ControlPlane::attach_vdagent`] to get a clipboard.
+    pub spice_host: OwnedFd,
+}
+
 /// Spawn the worker in its own process group. `inherit_fds` are extra file descriptors
 /// the child should keep open across exec (the windowed control channel) — Rust sets
 /// `O_CLOEXEC` on fds it doesn't know about, so we clear it via `pre_exec`.
-pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<std::process::Child> {
+///
+/// The SPICE agent port is created **here**, for every spawn, rather than at each call
+/// site. Two reasons: the guest's device topology must not depend on how the VM was
+/// started (a headless run and a windowed run that differ in device count would restore
+/// each other's snapshots wrong), and "one port per spawn" is what makes the broker's
+/// announce-once-per-open rule fall out for free on reboot and resume.
+pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     install_signal_handlers()?;
     let mut cmd = Command::new(&spec.vmm_bin);
     cmd.args(&spec.args).process_group(0);
+
+    let (spice_host, spice_worker) = socketpair(libc::SOCK_STREAM)?;
+    cmd.arg("--spice-fd")
+        .arg(spice_worker.as_raw_fd().to_string());
     // Auto-resume (M9.4): decided HERE, per spawn, never via spec.args — see
     // `take_pending_resume` for why (a reboot relaunch must cold-boot, not re-restore).
     if let Some(snap) = &spec.snapshot_file {
@@ -302,8 +350,9 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<std::proce
             }
         }
     }
-    if !inherit_fds.is_empty() {
-        let fds = inherit_fds.to_vec();
+    {
+        let mut fds = inherit_fds.to_vec();
+        fds.push(spice_worker.as_raw_fd());
         // SAFETY: only async-signal-safe fcntl calls between fork and exec.
         unsafe {
             cmd.pre_exec(move || {
@@ -324,7 +373,10 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<std::proce
         "VM worker started (pid {}); Ctrl-C to power off",
         child.id()
     );
-    Ok(child)
+    // The worker holds its own copy now; dropping ours means the broker's reader sees EOF
+    // when the worker exits, which is how a reboot relaunch unblocks the old reader thread.
+    drop(spice_worker);
+    Ok(Spawned { child, spice_host })
 }
 
 /// Monitor an already-spawned worker until it exits, honoring the stop signal and grace
@@ -444,8 +496,15 @@ pub fn run(
     let mut guard = RebootGuard::new();
     loop {
         let started = Instant::now();
-        let child = spawn_worker(spec, &[])?;
-        let code = monitor(child, spec.shutdown_grace, control)?;
+        let spawned = spawn_worker(spec, &[])?;
+        // Clipboard for a stock guest: hand the fresh port to the broker. A relaunch
+        // (reboot) replaces the previous one — the guest that owned it is gone.
+        if let Some(cp) = control {
+            if let Err(e) = cp.attach_vdagent(spawned.spice_host) {
+                log::warn!("clipboard: no SPICE agent transport: {e:#}");
+            }
+        }
+        let code = monitor(spawned.child, spec.shutdown_grace, control)?;
 
         // Relaunch only on a guest reboot (not power-off / error / stop / boot loop).
         if !guard.should_relaunch(code, started.elapsed()) {

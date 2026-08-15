@@ -9,7 +9,7 @@
 //! machinery is exactly what the future M9 `--restore` path must reuse — a session that can
 //! (re)spawn a worker and retarget the live window's connection onto it.
 
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -106,6 +106,9 @@ struct WindowedWorker {
     /// snapshot of the set drops ([`window::WorkerConn::swap`]) — no manual close on relaunch,
     /// and no leak on an error path.
     io: window::WorkerIo,
+    /// Host end of this worker's SPICE agent port (created by `spawn_worker`), handed to
+    /// the control plane so a stock guest gets a clipboard.
+    spice_host: OwnedFd,
 }
 
 /// Spawn a worker in `--display-window` mode and wire fresh scanout/input/ack socketpairs to
@@ -125,15 +128,15 @@ fn spawn_windowed_worker(
     // since it carries newline-delimited text. All ends are OwnedFd from creation, so any
     // error path out of this function (including a failed spawn below) closes every end on
     // drop — the old raw-int version leaked all eight if `spawn_worker` failed.
-    let (sup, worker_fd) = socketpair(libc::SOCK_STREAM)?;
+    let (sup, worker_fd) = supervisor::socketpair(libc::SOCK_STREAM)?;
     // Input channels (supervisor→worker evdev events): one datagram per event, so SOCK_DGRAM
     // preserves the 8-byte record boundaries the worker's backends rely on.
-    let (kbd_sup, kbd_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
-    let (ptr_sup, ptr_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
+    let (kbd_sup, kbd_worker_fd) = supervisor::socketpair(libc::SOCK_DGRAM)?;
+    let (ptr_sup, ptr_worker_fd) = supervisor::socketpair(libc::SOCK_DGRAM)?;
     // The relative-pointer (mouse) device — same datagram model. Captured motion drives the
     // absolute tablet (native feel); this device carries only the edge-clamped overflow as
     // pressure (mutter barriers / GNOME hot corner), and seeds a future explicit mouselook mode.
-    let (rel_ptr_sup, rel_ptr_worker_fd) = socketpair(libc::SOCK_DGRAM)?;
+    let (rel_ptr_sup, rel_ptr_worker_fd) = supervisor::socketpair(libc::SOCK_DGRAM)?;
     // Input events are tiny (8 bytes) but bursty (a key chord, a fast drag). Give the
     // datagram pipes a deep buffer (~32k events) so a momentary worker lag never drops
     // input, and make the supervisor *send* ends non-blocking so a pathological full
@@ -182,7 +185,7 @@ fn spawn_windowed_worker(
         snapshot_file: resume.snapshot_file.map(|p| p.to_path_buf()),
         suspend_state_file: resume.suspend_state_file.map(|p| p.to_path_buf()),
     };
-    let child = supervisor::spawn_worker(
+    let spawned = supervisor::spawn_worker(
         &spec,
         &[
             worker_fd.as_raw_fd(),
@@ -191,6 +194,7 @@ fn spawn_windowed_worker(
             rel_ptr_worker_fd.as_raw_fd(),
         ],
     )?;
+    let child = spawned.child;
     let pid = child.id() as i32;
     // The worker holds its own copies now; drop ours so it sees EOF / owns the read ends
     // (OwnedFd drop closes them).
@@ -208,6 +212,7 @@ fn spawn_windowed_worker(
         child,
         sup,
         io: window::WorkerIo::new(pid, kbd_sup, ptr_sup, rel_ptr_sup, ack),
+        spice_host: spawned.spice_host,
     })
 }
 
@@ -317,7 +322,12 @@ impl WindowedSession {
         };
 
         // Spawn the first worker and wire its scanout/input/ack channels into a swappable conn.
-        let WindowedWorker { child, sup, io } = spawn_windowed_worker(
+        let WindowedWorker {
+            child,
+            sup,
+            io,
+            spice_host,
+        } = spawn_windowed_worker(
             &vmm_bin,
             &base_args,
             grace,
@@ -329,6 +339,7 @@ impl WindowedSession {
                 suspend_state_file: suspend_state_file.as_deref(),
             },
         )?;
+        attach_vdagent(control.as_ref(), spice_host);
         let conn = window::WorkerConn::new(io);
         let shared = window::Shared::new();
         window::spawn_reader(sup, shared.clone());
@@ -471,6 +482,9 @@ impl WindowedSession {
                 // keeps showing its frame across the resume.
                 monitor_surface_map.lock().unwrap().clear_for_new_worker();
                 monitor_conn.swap(next.io);
+                // The fresh worker owns a fresh SPICE port; the old broker's reader is
+                // already unblocking on the dead worker's closed end.
+                attach_vdagent(monitor_control.as_ref(), next.spice_host);
                 window::spawn_reader(next.sup, monitor_shared.clone());
                 if resuming {
                     // The exit flags described the suspended (dead) worker; clear them AFTER
@@ -561,33 +575,16 @@ pub fn run_windowed(config: SessionConfig) -> Result<()> {
     session.run(mtm)
 }
 
-/// Create a socketpair of the given type; set CLOEXEC on the supervisor end (fd.0) so the
-/// worker doesn't inherit it. Returns `(supervisor_end, worker_end)` as **owned** fds, so
-/// every path that drops them (notably an error return before the spawn completes) closes
-/// them instead of leaking.
-fn socketpair(sock_type: libc::c_int) -> Result<(OwnedFd, OwnedFd)> {
-    let mut fds = [0 as libc::c_int; 2];
-    if unsafe { libc::socketpair(libc::AF_UNIX, sock_type, 0, fds.as_mut_ptr()) } != 0 {
-        anyhow::bail!("socketpair: {}", std::io::Error::last_os_error());
+/// Hand a freshly-spawned worker's SPICE port to the control plane's clipboard broker.
+///
+/// Best-effort by design: without a control plane there is no pasteboard owner to feed, and
+/// a broker that fails to start costs the stock-tier clipboard and nothing else. Dropping
+/// the fd here closes the host end, which the guest simply sees as a port nobody is on.
+fn attach_vdagent(control: Option<&control::ControlPlane>, spice_host: OwnedFd) {
+    let Some(cp) = control else { return };
+    if let Err(e) = cp.attach_vdagent(spice_host) {
+        log::warn!("clipboard: no SPICE agent transport: {e:#}");
     }
-    // SAFETY: on success the kernel handed us two fresh, open fds; we take sole ownership.
-    let (sup_fd, worker_fd) =
-        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
-    unsafe {
-        let f = libc::fcntl(sup_fd.as_raw_fd(), libc::F_GETFD);
-        libc::fcntl(sup_fd.as_raw_fd(), libc::F_SETFD, f | libc::FD_CLOEXEC);
-        // Writing to a socket whose peer (the worker) has exited must fail with an error,
-        // not raise SIGPIPE and kill the supervisor (macOS has no MSG_NOSIGNAL).
-        let on: libc::c_int = 1;
-        libc::setsockopt(
-            sup_fd.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_NOSIGPIPE,
-            &on as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        );
-    }
-    Ok((sup_fd, worker_fd))
 }
 
 /// Mark `fd` non-blocking so a write to a full socket fails fast (EAGAIN) instead of

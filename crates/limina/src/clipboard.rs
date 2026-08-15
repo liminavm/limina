@@ -67,11 +67,16 @@ impl Clipboard {
         std::time::Duration::from_millis(ms)
     }
 
-    /// One poller tick: returns an OFFER to broadcast if the pasteboard changed since
-    /// the last look (and caches the content backing it).
-    pub fn poll_local_change(&self) -> Option<Message> {
-        let text = self.pasteboard.lock().unwrap().take_changed_text()?;
-        Some(self.make_offer(text))
+    /// One poller tick: the new host clipboard text if the pasteboard changed since the
+    /// last look, else `None`.
+    ///
+    /// Returns the *text* rather than a ready-made OFFER because two transports now want
+    /// it (the control plane's peers and the vdagent port), and the change may only be
+    /// consumed once: `take_changed_text` advances the change-count high-water mark, so a
+    /// second poller would see "no change" and that transport would silently never learn
+    /// about the copy. One poller, one consumption, fan out afterwards.
+    pub fn poll_local_change(&self) -> Option<String> {
+        self.pasteboard.lock().unwrap().take_changed_text()
     }
 
     /// The host's current content as a fresh offer for a newly-connected peer (None if
@@ -82,7 +87,24 @@ impl Clipboard {
         Some(self.make_offer(text))
     }
 
-    fn make_offer(&self, text: String) -> Message {
+    /// Put guest-sourced text on the host pasteboard, whichever transport carried it.
+    /// The write records its own change count, so the poller does not read it back as a
+    /// fresh host copy and bounce it to the guest again.
+    pub fn set_from_guest(&self, text: &str) {
+        self.pasteboard.lock().unwrap().set_text(text);
+    }
+
+    /// Whatever is on the host pasteboard right now, without consuming a change. Only the
+    /// vdagent broker's tests read this — the product code learns about content through
+    /// the poller, which must consume the change exactly once.
+    #[cfg(test)]
+    pub fn current_text(&self) -> Option<String> {
+        self.pasteboard.lock().unwrap().current_text()
+    }
+
+    /// Wrap host text as a control-plane OFFER, bumping the host serial and caching the
+    /// content behind it for the REQUESTs that follow.
+    pub fn make_offer(&self, text: String) -> Message {
         let serial = self.host_serial.fetch_add(1, Ordering::Relaxed) + 1;
         *self.host_text.lock().unwrap() = Some(text);
         Message::ClipOffer(ClipOffer {

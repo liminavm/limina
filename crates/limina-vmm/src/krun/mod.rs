@@ -186,9 +186,12 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
         console::attach_virtio(&mut vmr, vc).context("attaching virtio-console")?;
     }
 
-    // SPIKE (M12 #1): opt-in named `com.redhat.spice.0` port — see `attach_spice_probe_port`.
-    if std::env::var("LIMINA_SPICE_PORT").is_ok_and(|v| v == "1") {
-        console::attach_spice_probe_port(&mut vmr).context("attaching the spice probe port")?;
+    // M12: the named `com.redhat.spice.0` port that starts a stock guest's spice-vdagent.
+    // The supervisor holds the other end and speaks the protocol (crate::vdagent); we only
+    // put the device on the bus. Always present when the supervisor made a port for it, so
+    // the guest's device topology does not depend on how the VM was launched.
+    if let Some(fd) = spec.spice_fd {
+        console::attach_spice_port(&mut vmr, fd).context("attaching the spice agent port")?;
     }
 
     // Native virtio-snd audio device (device ID 25). On by default; the guest's stock
@@ -981,6 +984,7 @@ mod tests {
             vsock: None,
             console: None,
             virtio_console: None,
+            spice_fd: None,
             display: None,
             input: None,
             net: None,

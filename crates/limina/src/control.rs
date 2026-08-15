@@ -110,7 +110,12 @@ fn write_timeout() -> Option<Duration> {
 struct Inner {
     peers: Mutex<Vec<Arc<Peer>>>,
     next_id: AtomicU64,
-    clipboard: crate::clipboard::Clipboard,
+    /// The one pasteboard owner, shared with the vdagent transport (M12 #37): both the
+    /// control plane's peers and `spice-vdagent` feed the same clipboard state.
+    clipboard: Arc<crate::clipboard::Clipboard>,
+    /// The vdagent conversation, once a worker spawn has handed us the port's host end.
+    /// `None` before that, and on a guest with no spice port at all.
+    vdagent: Mutex<Option<Arc<crate::vdagent::broker::VdAgent>>>,
     /// M6 PSI autoballoon policy, driven by guest `MemPressure` reports. `None` unless `--memory`
     /// configured a dynamic range.
     balloon_policy: Option<crate::balloon_policy::BalloonPolicy>,
@@ -141,7 +146,8 @@ impl ControlPlane {
         let inner = Arc::new(Inner {
             peers: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
-            clipboard: crate::clipboard::Clipboard::new(),
+            clipboard: Arc::new(crate::clipboard::Clipboard::new()),
+            vdagent: Mutex::new(None),
             balloon_policy,
             fido_store,
         });
@@ -152,7 +158,12 @@ impl ControlPlane {
             .context("spawning the control-plane thread")?;
 
         // The clipboard poller: macOS has no pasteboard-change notification, so watch
-        // changeCount and broadcast host copies to clipboard-capable peers.
+        // changeCount and tell every transport about host copies.
+        //
+        // ONE poller for both transports, on purpose. `poll_local_change` consumes the
+        // change (it advances the change-count high-water mark), so a second poller for
+        // the vdagent port would see "no change" for copies this one already took, and
+        // guests would get whichever half of the copies happened to land on their poller.
         let poll_inner = inner.clone();
         std::thread::Builder::new()
             .name("limina-clipboard".into())
@@ -160,9 +171,14 @@ impl ControlPlane {
                 let every = crate::clipboard::Clipboard::poll_interval();
                 loop {
                     std::thread::sleep(every);
-                    if let Some(offer) = poll_inner.clipboard.poll_local_change() {
-                        poll_inner.broadcast_clipboard(&offer);
+                    let Some(text) = poll_inner.clipboard.poll_local_change() else {
+                        continue;
+                    };
+                    if let Some(vdagent) = poll_inner.vdagent.lock().unwrap().clone() {
+                        vdagent.host_copy(text.clone());
                     }
+                    let offer = poll_inner.clipboard.make_offer(text);
+                    poll_inner.broadcast_clipboard(&offer);
                 }
             })
             .context("spawning the clipboard poll thread")?;
@@ -265,6 +281,22 @@ impl ControlPlane {
             sent = true;
         }
         sent
+    }
+
+    /// Adopt the host end of a worker's `com.redhat.spice.0` port and start brokering the
+    /// clipboard over it (M12 #37).
+    ///
+    /// Called once per worker *spawn*: a relaunch (guest reboot, resume) creates a new
+    /// socketpair and calls this again, which drops the previous broker — its reader
+    /// thread is already unblocking on the closed socket — and greets the new guest from a
+    /// clean state. That is the "announce once per port open" boundary.
+    ///
+    /// A failure here costs the stock-tier clipboard and nothing else, so callers log and
+    /// carry on rather than failing the VM.
+    pub fn attach_vdagent(&self, host_fd: std::os::fd::OwnedFd) -> Result<()> {
+        let agent = crate::vdagent::broker::VdAgent::start(host_fd, self.inner.clipboard.clone())?;
+        *self.inner.vdagent.lock().unwrap() = Some(agent);
+        Ok(())
     }
 }
 

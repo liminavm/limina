@@ -136,6 +136,12 @@ struct Cli {
     #[arg(long)]
     display_window: bool,
 
+    /// fd of the guest's SPICE agent port (`com.redhat.spice.0`), created and brokered by
+    /// the supervisor. The device is attached only when this is present, so a worker run
+    /// by hand simply has no agent port.
+    #[arg(long)]
+    spice_fd: Option<i32>,
+
     /// fd of the worker→supervisor control channel (used with --display-window).
     #[arg(long, requires = "display_window")]
     control_fd: Option<i32>,
@@ -641,6 +647,7 @@ fn main() -> Result<()> {
             output,
             input: cli.virtio_console_input,
         }),
+        spice_fd: cli.spice_fd,
         display,
         input,
         net,
