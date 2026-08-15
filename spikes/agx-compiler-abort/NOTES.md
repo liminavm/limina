@@ -1,8 +1,36 @@
 # AGX Metal compiler `bitcode_url` abort — investigation notes
 
 The worker died with SIGABRT on 2026-08-14 while the user ran the basemark web benchmark on
-`Fedora-Workstation-44.enhanced.synoik.raw`. This is the working file for chasing it; nothing here
-is fixed yet.
+`Fedora-Workstation-44.enhanced.synoik.raw`. This is the working file for chasing it.
+
+## Status 2026-08-15: reproduced deterministically, and bisected to one flag
+
+`repro.sh` reproduces it on demand, and the trigger is **`LIMINA_KK_MTLTEXTURE_SCANOUT`** — the
+imported-MTLTexture scanout path that task #26 turned on by default:
+
+| arm | runs | result |
+|---|---|---|
+| default (scanout path **on**) | 2 | **aborted, both at exactly 79 s** after load start |
+| `LIMINA_KK_MTLTEXTURE_SCANOUT=0` | 2 | survived 300 s |
+
+Two things make this differential trustworthy rather than a coincidence of timing:
+
+- The two reproductions aborted at *identical* 79 s marks — this is deterministic, not a race.
+- **The off-arm was verified to be doing real GPU work**, which is the way an "off" arm passes for
+  free: sampled mid-run it had venus live (`Device Name: Virtio-GPU Venus (Apple M1 Max)`),
+  vkmark at ~2200 FPS and glmark2 running. A silent degrade to software-2D would mean no Metal
+  compiles at all and a meaningless pass.
+
+**The benchmark is not required.** The first reproduction aborted while the gpuscore page merely
+sat on its Start button, so the trigger is in ordinary compositor/venus traffic, not in the
+benchmark's own draws. That widens the blast radius: any enhanced-tier session can hit this.
+
+Working hypothesis for *why*: the scanout path has KK adopt an imported **linear**
+(IOSurface-backed) MTLTexture as a render target — the log's last lines before every abort are
+`[LIMINA-KK-IMPORT] adopted MTLTexture … linear=1`. A render pass that clears into a linear,
+non-tiled target plausibly asks Metal for a background-object variant Apple does not ship. Not yet
+proven — the next step is to log the render-pass configuration and read the last one before the
+abort.
 
 ## What actually happened
 
@@ -37,12 +65,30 @@ files. The background-object (fast-clear) family ships exactly **six** sizes —
 string literals in the dyld shared cache. So the driver asked for a size Apple does not ship, the
 bundle lookup returned NULL, and the assert fired.
 
-**Leading hypothesis:** the number is per-pixel **bytes** of the render pass's tile layout — 1, 2,
-4, 8, 16 are the standard colour sizes and 5 is D32S8. Summed across attachments, unsupported
-totals are easy to reach (RGBA8 + D32S8 = 9; also 3, 6, 7, 10, 12). If that holds, KosmicKrisp is
-configuring an attachment combination Apple's compiler has no background shader for, which puts
-this in the guest-triggerable host abort class (see the `limina-kk-empty-clear-rect` memory) and
-the fix belongs at the KK/vkr trust boundary.
+**Hypothesis 1 (FALSIFIED): the number is the per-pixel byte total of the tile layout.** 1, 2, 4,
+8, 16 are the standard colour sizes and 5 is D32S8, so summing across attachments would reach
+unsupported totals easily (RGBA8 + D32S8 = 9; also 3, 6, 7, 10, 12). `rpcombo.c` sweeps render
+passes through KK — 9 colour formats × 6 depth/stencil × 1–4 colour attachments × CLEAR/LOAD,
+optionally × MSAA — printing each `TRY` line before executing so an abort names its own trigger:
+
+```
+swept 360 combinations (72 skipped as unsupported), no abort
+swept 720 combinations (144 skipped as unsupported), no abort   # --msaa
+```
+
+Totals of 9, 12 and 13 all passed. **The naive byte-sum is not the parameter.** Keep the sweep —
+it is the vehicle for the next hypothesis, and re-running it is wasted time.
+
+Two follow-ups the falsification suggests, both cheap:
+
+- A **24bpp / 96bpp attachment** would give a genuinely unsupported 3 or 12. Checked and **ruled
+  out at the KK layer**: `src/kosmickrisp/vulkan/kk_format.c` has no `R8G8B8_*`, `R16G16B16_*` or
+  `R32G32B32_*` entries at all, so KK never offers one as a colour attachment.
+- **Size 0** — an attachment with a nil texture or a format KK maps to nothing — would also miss
+  the table, and would fit the guest-triggerable host abort class (see `limina-kk-empty-clear-rect`).
+  The sweep only ever used valid supported formats, which is exactly why it came back clean.
+
+If the parameter really is the tile byte size, the fix belongs at the KK/vkr trust boundary.
 
 ## Already ruled out — do not re-run these
 
@@ -57,10 +103,14 @@ the fix belongs at the KK/vkr trust boundary.
 
 ## Not yet done
 
-- Reproduce, with `sample-worker.sh` armed.
-- Get the actual filename: either `sudo log config --mode "private_data:on"` (system-wide and
-  reversible, so **ask first**) or instrument KK to log the render-pass attachment formats at the
-  failing compile — the better option, per "instrument the stack you own".
+- Reproduce, with `sample-worker.sh` armed. The reporter's recipe: `https://web.gpuscore.com/run`
+  in Firefox with `vkmark`, `glmark2-wayland` and `vkcube` all running alongside.
+- Get the actual filename. **`sudo log config --mode "private_data:on"` no longer exists** —
+  macOS 26's `log config` accepts only `level`, `persist`, `stream`, `signpost-*` and
+  `oversize-enabled`; un-redacting now needs a `com.apple.system.logging` configuration profile
+  with `Enable-Private-Data`, which is a manual install on the user's Mac. So the practical route
+  is the one that was preferable anyway: **instrument KK** to log the render-pass attachment
+  formats at the failing compile, per "instrument the stack you own".
 - A/B once with `LIMINA_VREND_SHARED_TRANSFER_SYNC=0` to retire by measurement the question of
   whether the same-day dmabuf coherency fix is implicated. Reasoning says no (nothing in the stack
   touches it, and a `glFinish` after a texture upload has no path into Apple's shader compiler),
