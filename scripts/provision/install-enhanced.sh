@@ -656,5 +656,6 @@ else
   echo "   Reboot now. The 16k + venus desktop boots ONCE on trial:"
   echo "     - reaches the desktop -> auto-promoted to the default kernel;"
   echo "     - fails to boot       -> force a power-cycle; the guest auto-returns to stock."
-  echo "   (limina has no keyboard at GRUB/emergency yet, so this trial-boot is the safe path.)"
+  echo "   (The trial-boot exists so an unbootable kernel cannot become the permanent default;"
+  echo "    GRUB IS typeable under limina, so you can also just pick an entry by hand.)"
 fi
