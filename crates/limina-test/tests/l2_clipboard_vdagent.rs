@@ -261,6 +261,56 @@ fn a_seated_guest_shares_the_clipboard_through_spice_vdagent() {
          nothing is bridging the port to the guest selection:\n{daemon}"
     );
 
+    // --- Oracle 3c: arbitration — the helper YIELDED to vdagent (#37 step 3) ---
+    //
+    // Both transports are present on this guest, and two selection owners in one session
+    // fight through mutter's X11<->Wayland bridging. The switch is thrown at capability
+    // negotiation: with a live spice-vdagent, limina-agent-session must HELLO with NO
+    // `clipboard` capability, so the host never routes clipboard traffic to it. The host
+    // log line is the oracle because it records what the guest actually announced.
+    //
+    // A helper that never connects at all is not a pass — it would make the assertion
+    // vacuous — so we require the HELLO to be there, and to be capability-less. Guests
+    // that simply have no helper installed are excluded first, positively.
+    let helper_installed = !ssh_soft(&guest, "command -v limina-agent-session").is_empty();
+    if helper_installed {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let hellos = loop {
+            let hellos: Vec<String> = guest
+                .supervisor_log()
+                .lines()
+                .filter(|l| l.contains("guest agent connected") && l.contains("agent-session"))
+                .map(|l| l.to_string())
+                .collect();
+            if !hellos.is_empty() || Instant::now() >= deadline {
+                break hellos;
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        };
+        assert!(
+            !hellos.is_empty(),
+            "limina-agent-session is installed but never connected to the control plane, so \
+             the arbitration below would assert nothing. Check the user unit in the session."
+        );
+        let claimed: Vec<&String> = hellos.iter().filter(|l| l.contains("clipboard")).collect();
+        assert!(
+            claimed.is_empty(),
+            "limina-agent-session announced the clipboard capability while spice-vdagent is \
+             serving this session — two selection owners, the exact fight #37 step 3 forbids. \
+             If the code is right, this image is carrying a pre-arbitration helper: rebuild \
+             the guest tools and re-run install-enhanced.sh.\n{}",
+            claimed
+                .iter()
+                .map(|l| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        eprintln!(
+            "helper yielded the clipboard to vdagent ({} HELLO)",
+            hellos.len()
+        );
+    }
+
     // --- 3.5: silence the OTHER transport, so the round trip can only mean vdagent ---
     //
     // `systemctl --user`, not `pkill`: the unit is `Restart=always`, so a killed helper is

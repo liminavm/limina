@@ -10,6 +10,12 @@
 //! connection to the host control plane (no root needed), advertising the `clipboard`
 //! capability.
 //!
+//! It is the *second* clipboard transport, not the only one: stock `spice-vdagent` is
+//! preferred wherever it works, and this helper covers the sessions it cannot serve.
+//! The two are arbitrated at capability negotiation — see [`vdagent`] and the
+//! `yield_phase`/`claim_phase` pair below — never downstream, because two selection
+//! owners in one session fight through mutter's X11↔Wayland bridging.
+//!
 //! Three backends, probed in tier order (see [`wayland_clip`] and [`ext_bridge`]):
 //! - **ext-data-control-v1** Wayland client — focusless selection management with no
 //!   side effects, on compositors that ship the protocol (KDE, wlroots; GNOME
@@ -52,6 +58,7 @@ use limina_proto::{
 };
 
 mod ext_bridge;
+mod vdagent;
 mod wayland_clip;
 use ext_bridge::BridgeClip;
 use wayland_clip::WaylandClip;
@@ -74,6 +81,19 @@ const RD_GRACE_ATTEMPTS: u32 = 10;
 const QUIET_RETRY_AFTER: u32 = 30;
 /// Retry cadence after [`QUIET_RETRY_AFTER`] unanswered probes.
 const QUIET_RETRY_EVERY: Duration = Duration::from_secs(10);
+/// Cadence of the [`vdagent`] arbitration probe, in both phases.
+const VDAGENT_PROBE_EVERY: Duration = Duration::from_secs(1);
+/// How long we wait at startup for a stock `spice-vdagent` to show up before claiming
+/// the clipboard ourselves. Both are user units racing at `graphical-session.target`,
+/// and claim-then-yield would put two selection owners in one session — so we yield
+/// first and only claim once the window closes. The cost is a few clipboard-less
+/// seconds at login on sessions that have no vdagent (GNOME pays nothing: its vdagent
+/// is up well inside the window).
+const VDAGENT_SETTLE_ROUNDS: u32 = 10;
+/// Consecutive absent probes before we take the clipboard over from a vdagent that WAS
+/// serving. A vdagent restart (or a session switch) must not hand the selection back
+/// and forth; ~5 s of continuous absence means it is really gone.
+const VDAGENT_GONE_ROUNDS: u32 = 5;
 
 /// The RemoteDesktop fallback is OPT-IN (`LIMINA_CLIPBOARD_RD=1`): a resident
 /// RemoteDesktop session lights GNOME's screen-share indicator for the whole session,
@@ -111,6 +131,103 @@ fn main() {
         .unwrap_or(CONTROL_PORT);
     eprintln!("limina-agent-session {}: starting", version());
 
+    // Arbitration with the stock SPICE agent (see [`vdagent`]): where spice-vdagent
+    // serves this user, it owns the clipboard and we announce no `clipboard`
+    // capability, so the host simply never routes clipboard traffic our way. The two
+    // phases alternate for the life of the session — a vdagent that dies hands us the
+    // clipboard, and one that comes back takes it away again.
+    loop {
+        yield_phase(port);
+        claim_phase(port);
+    }
+}
+
+/// Stay out of the way while a `spice-vdagent` serves this user. Returns once none has
+/// been seen for long enough to claim: immediately at startup if the settle window
+/// closes with no vdagent, or after [`VDAGENT_GONE_ROUNDS`] once one has been serving.
+///
+/// We stay *connected* throughout (heartbeats, no `clipboard` capability) so the host
+/// still sees a live session helper — only the clipboard is withheld.
+fn yield_phase(port: u32) {
+    // No agent installed, no reason to wait for one: claim straight away.
+    if !vdagent::installed() {
+        return;
+    }
+    let mut host: Option<File> = None;
+    let mut seq: u64 = 0;
+    let mut absent: u32 = 0;
+    let mut ever_seen = false;
+    let mut logged = false;
+    // Before any vdagent has been seen this phase, the bar is the (longer) startup
+    // settle window; after one has served, a shorter continuous absence suffices.
+    loop {
+        if vdagent::serving() {
+            if !ever_seen {
+                eprintln!(
+                    "limina-agent-session: spice-vdagent is serving this session; \
+                     yielding the clipboard to it"
+                );
+            }
+            ever_seen = true;
+            absent = 0;
+        } else {
+            absent += 1;
+            let bar = if ever_seen {
+                VDAGENT_GONE_ROUNDS
+            } else {
+                VDAGENT_SETTLE_ROUNDS
+            };
+            if absent >= bar {
+                if ever_seen {
+                    eprintln!(
+                        "limina-agent-session: spice-vdagent gone for {absent} probes; \
+                         claiming the clipboard"
+                    );
+                }
+                return;
+            }
+        }
+
+        // Keep the control channel alive without the clipboard capability.
+        if host.is_none() {
+            host = vsock_connect(port).and_then(|mut s| {
+                if write_message(&mut s, CHANNEL_CONTROL, &hello_msg(&[])).is_err() {
+                    return None;
+                }
+                if !logged {
+                    eprintln!("limina-agent-session: connected to host (clipboard withheld)");
+                    logged = true;
+                }
+                Some(s)
+            });
+        }
+        if let Some(stream) = host.as_mut() {
+            seq += 1;
+            let beat = Message::Heartbeat(Heartbeat { seq });
+            if write_message(stream, CHANNEL_CONTROL, &beat).is_err() {
+                host = None;
+                logged = false;
+            }
+        }
+        std::thread::sleep(VDAGENT_PROBE_EVERY);
+    }
+}
+
+/// The HELLO we introduce ourselves with. `caps` is the arbitration seam: empty while a
+/// vdagent serves, `["clipboard"]` when we carry it.
+fn hello_msg(caps: &[&str]) -> Message {
+    let pagesize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+    Message::Hello(Hello {
+        agent: format!("limina-agent-session/{}", version()),
+        caps: caps.iter().map(|c| c.to_string()).collect(),
+        pagesize,
+    })
+}
+
+/// Carry the clipboard: acquire a backend, announce the capability, run the bridge.
+/// Returns if a `spice-vdagent` appears — dropping the bridge releases both the backend
+/// and the vsock channel, so the host sees the capability withdrawn by reconnection.
+fn claim_phase(port: u32) {
     // Pick a clipboard backend (retry: gnome-shell may still be coming up when the
     // user unit starts). Tier order: ext-data-control → the clipboard@limina
     // extension bridge → mutter's RemoteDesktop D-Bus API (OPT-IN only, see
@@ -129,6 +246,11 @@ fn main() {
     let mut attempts: u32 = 0;
     let clip = loop {
         attempts += 1;
+        // A vdagent that turns up while we are still hunting for a backend takes the
+        // clipboard back before we ever grab a selection.
+        if vdagent::serving() {
+            return;
+        }
         let wl_err = match WaylandClip::connect(tx.clone()) {
             Ok(w) => {
                 eprintln!("limina-agent-session: ext-data-control backend up (enhanced tier)");
@@ -197,7 +319,20 @@ fn main() {
         }
         match rx.recv_timeout(HEARTBEAT_EVERY) {
             Ok(ev) => bridge.handle(ev),
-            Err(mpsc::RecvTimeoutError::Timeout) => bridge.heartbeat(),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // A vdagent appearing mid-session (its daemon came back, XWayland
+                // started) takes the clipboard back: hand it over rather than fight
+                // for the selection. Dropping `bridge` closes the channel, so the
+                // capability is withdrawn the only way the protocol allows — by
+                // reconnecting without it.
+                if vdagent::serving() {
+                    eprintln!(
+                        "limina-agent-session: spice-vdagent appeared; handing the clipboard back"
+                    );
+                    return;
+                }
+                bridge.heartbeat();
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 // All signal threads died — the D-Bus session is gone. Let systemd
                 // restart us into a live session.
@@ -221,6 +356,9 @@ limina-agent-session.service user unit and configured through the environment:
   LIMINA_AGENT_PORT   host vsock control port (default: the well-known port)
   LIMINA_CLIPBOARD_RD =1 opts into the RemoteDesktop fallback tier (screen-share
                       indicator); unset keeps the quiet tiers only
+  LIMINA_CLIPBOARD_IGNORE_VDAGENT
+                      =1 claims the clipboard even where a stock spice-vdagent is
+                      serving this session (default: yield to it)
 ";
 
 /// Handle `--version`/`--help`; reject anything else. `Some(code)` means exit now.
@@ -335,12 +473,8 @@ impl Bridge {
             std::thread::sleep(RECONNECT_EVERY);
             return;
         };
-        let pagesize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
-        let hello = Message::Hello(Hello {
-            agent: format!("limina-agent-session/{}", version()),
-            caps: vec!["clipboard".to_string()],
-            pagesize,
-        });
+        // We only ever reach here in the claim phase, so the capability is announced.
+        let hello = hello_msg(&["clipboard"]);
         if write_message(&mut stream, CHANNEL_CONTROL, &hello).is_err() {
             return;
         }
