@@ -49,7 +49,7 @@ memories before anyone noticed. Verified 2026-06-27 by reading each image's rpmd
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` *(co-installed beside stock `6.17.1`)* | 16 KiB | `26.1.5-1.limina.fc43` *(REPOINTED 2026-08-05: base moved from the 26.2.0 main snapshot to the F44 koji `mesa-26.1.5-1.fc44` SRPM — a deliberate one-time version DOWNGRADE, delivered via install-enhanced.sh's new `dnf downgrade` branch; patch set now the venus-only set identical to F44's next respin [0015+0011–0013+0016+0017 — 0001/0009/0010/0014/0016-pre all retired from this build]; **GL flipped to virgl/vrend** [same 90-limina-zink.conf as F44], venus = Vulkan side; validated: venus 26.1.5 enumerates in the rebooted seated session, desktop human-eyeballed, `.test` recloned)* | `49.6-1.limina.fc43` | `49.1` *(stock, unbumped)* |
 | **F44 stock** (`*.raw`, `*.boot.raw`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.6-2` *(respun 2026-08-04: the blob-scanout fence DROPPED — 86% of frames under async scanout, see below; respun 2026-08-03: **first fork-model kernel** — built from `liminavm/linux` branch `limina` at the rev pinned in `third_party/manifest.toml`, no patch series; co-installed beside `7.1.4`/`7.1.2-limina16k` [fallbacks] + stock `6.19.10-300`)* | 16 KiB | `26.1.5-7.limina.fc44` *(respun 2026-08-05, **first fork-model mesa** — built from the `liminavm/mesa` `limina-guest` branch via the exported `patches/mesa-guest/` series [6 venus patches; the freelist-capacity fix KEPT — the "09fb7ca8 is in 26.1.5" retirement claim was verified false]; vs -6 it drops the dead-in-guest zink rows 0001/0014 [drop-guest-zink], venus content unchanged; validated seated: shell on `libgallium-26.1.5.so` vrend GL, seated vulkaninfo = Virtio-GPU Venus. Prior: -6 2026-08-04 base 26.1.5 + 0010 deleted + 0015 slimmed)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
+| **F44 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-7.1.6-2` *(respun 2026-08-04: the blob-scanout fence DROPPED — 86% of frames under async scanout, see below; respun 2026-08-03: **first fork-model kernel** — built from `liminavm/linux` branch `limina` at the rev pinned in `third_party/manifest.toml`, no patch series; co-installed beside `7.1.4`/`7.1.2-limina16k` [fallbacks] + stock `6.19.10-300`)* | 16 KiB | `26.1.5-8.limina.fc44` *(respun 2026-08-14: adds **0009 virgl — settle a CPU write into a shared resource before unmap returns**, the guest half of the CPU→GPU dmabuf coherency fix; a CPU write through `gbm_bo_map` into a buffer shared with venus was read one write behind. Pairs with the host half in virglrenderer `a6a36c93` — NEITHER half works alone; evidence in `spikes/dmabuf-cpu-coherency/`. Base PINNED to the koji `mesa-26.1.5-1.fc44` SRPM: F44 has moved to 26.1.6, where patch 0006 no longer applies (its documented retirement signal). Prior: -7 2026-08-05, **first fork-model mesa** — built from the `liminavm/mesa` `limina-guest` branch via the exported `patches/mesa-guest/` series [6 venus patches; the freelist-capacity fix KEPT — the "09fb7ca8 is in 26.1.5" retirement claim was verified false]; vs -6 it drops the dead-in-guest zink rows 0001/0014 [drop-guest-zink], venus content unchanged; validated seated: shell on `libgallium-26.1.5.so` vrend GL, seated vulkaninfo = Virtio-GPU Venus. Prior: -6 2026-08-04 base 26.1.5 + 0010 deleted + 0015 slimmed)* | `50.1-1.limina.fc44` | `50.0` *(stock)* |
 | **F44 dogfood deployment** *(the user's Dev VM + upgraded dev clones — deployed via guest-tools; full `mesa2615r6` pass 2026-08-04)* | `limina-kernel-16k-7.1.6-2` *(installed 2026-08-04 as a ONE-SHOT TRIAL boot — `7.1.5` stays the permanent default until the trial desktop comes up and auto-promotes; user reboots at their convenience; 7.0.13/7.1.2/7.1.4 kept as fallbacks; NO stock `kernel-core`)* | 16 KiB | `26.1.5-6.limina.fc44` *(deployed 2026-08-04 with the host .app carrying the modifier/IOSurface work — host-first order respected; running session picks it up at next login; **GL default flipped to virgl/vrend**, venus = Vulkan side)* | **stock** `50.3-3.fc44` *(since 2026-07-11: distro update displaced the patched build; clipboard rides the clipboard@limina extension at `/usr/share/gnome-shell/extensions`)* | `50.3` *(stock)* |
 
 Notes: enhanced **mesa + kernel** are pinned to *our* version and `dnf versionlock`ed; enhanced
@@ -408,12 +408,17 @@ than silently dropping the `vk-replay` row if this binary is missing, so if that
 has drifted from this baseline (`LIMINA_PERF_SKIP_VK=1` overrides deliberately).
 
 The toolchain install pulled a routine `glibc`/`libgcc` dependency upgrade into the base; the
-versionlocked components are unaffected (mesa `26.1.5-7.limina.fc44`, kernel `7.1.6-limina16k`
+versionlocked components are unaffected (mesa `26.1.5-8.limina.fc44`, kernel `7.1.6-limina16k`
 both verified after the fact). A CoW safety copy was taken first as
 `Fedora-Workstation-44.enhanced.raw.pre-perftools.bak`. **`enhanced.test.raw` was NOT recloned** —
 the frozen L2 snapshot does not need perf tooling, and recloning it would churn the test baseline.
 
 #### `Fedora-Workstation-44.enhanced.synoik.raw` — the synoik compositor image (added 2026-08-14)
+
+**Mesa refreshed to `26.1.5-8.limina.fc44` on 2026-08-14** (same `install-enhanced.sh` pass as
+`enhanced.raw` / `enhanced.test.raw`) — the CPU→GPU dmabuf coherency fix. This image is the
+vehicle that reproduced it; `spikes/dmabuf-cpu-coherency/probe.c` runs clean here now, including
+the first run after a guest boot.
 
 The canonical image for anything that needs a **Vulkan compositor**. Built because a whole class
 of host bugs is only reachable when the compositor imports client dmabufs through Vulkan/venus —
@@ -421,8 +426,8 @@ mutter composites with GL, so under mutter those paths are never exercised and e
 **false negative** (the vrend/KK stride shear below is the worked example). It replaces the
 undocumented `nirirepro*` and `enhanced.testcomp` scratch images, which are deleted.
 
-- **Base**: CoW clone of `Fedora-Workstation-44.enhanced.test.raw` (mesa `26.1.5-7.limina.fc44`,
-  kernel `7.1.6-limina16k`, 16 KiB pages), already on the supported enhanced env —
+- **Base**: CoW clone of `Fedora-Workstation-44.enhanced.test.raw` (kernel `7.1.6-limina16k`,
+  16 KiB pages), already on the supported enhanced env —
   `GALLIUM_DRIVER=virgl`, `MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu` (GL on vrend, Vulkan on venus).
 - **synoik**: cloned from `github.com/kov/synoik` into `~claude/synoik` and built **in-guest**
   (`cargo build --release`). Installed as the session with the project's own script:
