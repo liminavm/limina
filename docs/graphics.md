@@ -267,6 +267,16 @@ VN_DEBUG=mem_budget          # venus only advertises VK_EXT_memory_budget under 
 then sets GRUB's default to the 16 KiB kernel and reboots. `MESA_LOADER_DRIVER_OVERRIDE=zink` /
 `GALLIUM_DRIVER=zink` — zink as the *guest's* GL driver — is no longer a supported configuration.
 
+**Two naming hazards in that file, flagged by the synoik guest session (2026-08-16) after one of
+them cost them a false claim in their own code.** `VN_DEBUG=mem_budget` reads like a debug flag any
+tidy-up would drop, but it is the gate on the *only* backpressure channel the venus transport does
+not throw away (§5) — without it `VK_EXT_memory_budget` simply is not advertised, and a guest that
+tests for the extension concludes venus lacks it. They measured the difference directly:
+`vulkaninfo` lists 1102 lines with `VN_DEBUG` unset and 1105 with it set, the extension appearing
+only in the second. And the whole file is named `90-limina-zink.conf` while zink-as-guest-GL has
+not been a supported configuration since 2026-08-04. Neither is load-bearing to rename, but both
+invite exactly the mistake that was made.
+
 An enhanced image is safe to boot even if the 16 KiB kernel is not the selected one: venus init
 fails, GL keeps working on vrend, and the desktop comes up degraded rather than broken. Component
 versions and the host-first ordering prerequisite are in `docs/images.md`.
@@ -301,7 +311,13 @@ These are the ones that have actually cost days. Most are epistemic, not technic
 code for "could not get a buffer": `vn_call_*` returns OOM whenever `vn_ring_get_command_reply`
 comes back NULL, for any reason. Distinct causes so far: a poisoned context from a slow ring wait, a
 host address-space leak (vm regions 3.5k→23.6k, RSS flat), launchd's 256-fd limit on Dock-launched
-apps, and the budget cap refusing deliberately. It is a symptom class, never a diagnosis. Ask **what
+apps, the budget cap refusing deliberately, and — reported by the synoik guest session on
+2026-08-16 — **a guest-side spec violation**: a destroyed `VkImage` still referenced by a recording
+command buffer made *every* subsequent allocation return OOM, and the Khronos validation layer
+named it in one run after hours of falsified memory-pressure theories. It is a symptom class, never
+a diagnosis — and note it cuts both ways: a guest reporting OOM is not evidence of host pressure
+until it has run with validation on, and a host seeing OOM should not assume the guest is at fault.
+Ask **what
 refused the allocation**: read the worker log at the timestamp of the guest symptom — the cause is
 usually a different, earlier line there — and check the exhaustible resource that is not RAM
 (vm regions, fds, mappings). Consider real memory pressure last.

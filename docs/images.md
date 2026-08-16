@@ -155,6 +155,17 @@ synoik image (load-bearing: the injected-kernel seated path runs a 6.12 test ker
 advertises LINEAR and would be green regardless) and fails fast on the marker. Verified to
 discriminate: RED in 26 s on the 7.1.8 image, GREEN on a pre-drop clone.
 
+**Accepting INVALID gets the compositor up; a fourth fix is needed before a client buffer reaches
+the plane at all** (reported by the synoik session, 2026-08-16). smithay's `DrmCompositor` gates
+every plane promotion on `plane.formats.contains(&format)`, which on an implicit-modifier plane
+compares a buffer naming LINEAR against a plane naming nothing and refuses everything — including
+the **primary** plane, so it is not steerable by the caller (`try_assign_primary_plane` reads
+`surface.plane_info()`, which the `planes:` argument to `DrmCompositor::new` cannot reach). synoik
+carries a smithay fork patch matching on fourcc alone when every plane entry is INVALID.
+**Consequence for us: a guest without that patch gets zero direct scan-out, so the venus present
+path never engages for client buffers** — worth knowing before reading a trace from such a guest as
+evidence about our present path.
+
 ## Traps that keep biting
 
 - **An RPM `Release` bump does not let two builds of the same KREL coexist.** The bump is necessary
