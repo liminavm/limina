@@ -322,6 +322,22 @@ refused the allocation**: read the worker log at the timestamp of the guest symp
 usually a different, earlier line there — and check the exhaustible resource that is not RAM
 (vm regions, fds, mappings). Consider real memory pressure last.
 
+**A guest can take the whole VM down through the renderer.** Invalid Vulkan usage from the guest
+reaches vkr on the ring thread, and four incidents so far turned that into a host-side abort that
+killed the VM rather than the offending context: degenerate `vkCmdClearAttachments` rects (×3),
+`vkCreateBuffer` size==0, a render-pass format mismatch, and an attachment-less AGX pass with
+`defaultRasterSampleCount == 0`. **Fix at the vkr trust boundary every time** — a boundary check
+produces a loggable, attributable refusal. Regression tests live in
+`crates/limina-test/tests/venus_bad_usage.rs`, one arm per incident.
+
+The mesa/KK asserts that used to *catch* these are **compiled out now**: KK builds with
+`b_ndebug=true` (verified 2026-08-16 — the devenv library has zero `assert` symbol references and
+zero assertion-failure strings, and the dogfood bundle builds release). Older notes saying "~820
+asserts are live, shipping `-Db_ndebug=true` is still TODO" are stale. Note this is not purely good
+news: removing the tripwire means an unchecked bad command now runs on into undefined behaviour
+instead of aborting loudly, so the trust-boundary checks are no longer defence in depth — they are
+the only defence.
+
 **A scary warning is a lead, not a cause.** We nearly "fixed" two non-bugs by reasoning from a log
 line. Before acting on a warning, read its emission site in the source we own and see whether it is
 even fatal, then confirm by observation. The `[KK-MODIFIER]` warning is the standing example: a
