@@ -85,6 +85,12 @@ ledger's last recorded `glmark2-wayland-venus` was 2931–2972 on 2026-08-09.
 `limina-perf-display-pinning` exists for. They are sufficient to retire a stale ranking, not to
 replace it.
 
+### Tearing (human oracle, 2026-08-16)
+
+| # | Claim | Source | Verdict |
+|---|---|---|---|
+| 20 | vrend has no fence-accurate present (`try_park_present` unreached, `FENCEPRESENT` never fires), so the #24 tear/pacing arc does not cover the tier the desktop runs on | `docs/hardening-backlog.md` | **MECHANISM UNCHANGED — SYMPTOM ABSENT.** The user stress-tested the GNOME overview in and out repeatedly on **both** present paths and reports it smooth, no tearing: the vrend path (`gfxtear.raw`, a clone of `enhanced.raw`; `gnome-shell` maps `libgallium-26.1.6.so` and no venus ICD; scanout `2560x1440 … EGL-backed (IOSurface id 175)` at `2560×1440@59.99`) and the venus path (`gfxsynoik.raw`, MTLTEXTURE import). Overview toggling is the workload the user identifies as historically the most tear-prone, so this is the right stress, not an easy one. **What this does NOT show:** the mechanism gap is read from source and was not re-tested — `FENCEPRESENT` is absent from both logs, but those DIAGs are `RUST_LOG=trace`-gated and both workers ran at the default `warn`, so their absence is not evidence. The honest state moves from "open, tearing risk" to "mechanism absent, no observable symptom on this rig". |
+
 ## New observations the docs did not have
 
 - **vrend refuses `CREATE_VIDEO_BUFFER`**, on both tiers, at every boot:

@@ -402,7 +402,7 @@ or commit while it runs.
 |---|---|
 | **Stock-tier Vulkan is dead, not degraded** — upstream the venus stub-instance patch so a stock guest keeps llvmpipe | §3.3, `docs/design/16k-page-requirement.md`, `docs/upstreaming/ledger/mesa.md` |
 | Retire the 16 KiB requirement for venus on stock guests (`VIRTGPU_PARAM_BLOB_ALIGNMENT` chain) | `docs/design/16k-page-requirement.md` |
-| **Fence-accurate present is not wired for vrend** — vrend's flush path never reaches `try_park_present`, so `FENCEPRESENT` never fires and the #24 tear/pacing work does not apply to the tier the desktop actually runs on. Tearing here is a human-eyeball verdict. | `docs/hardening-backlog.md` |
+| **Fence-accurate present is not wired for vrend** — vrend's flush path never reaches `try_park_present`, so `FENCEPRESENT` never fires and the #24 tear/pacing work does not apply to the tier the desktop actually runs on. **No observable symptom, though:** the overview-toggle stress (historically the most tear-prone workload) was human-verified smooth on both present paths on 2026-08-16, so this is a missing mechanism rather than a live defect. Re-open it if tearing is ever reported. | `docs/hardening-backlog.md`, `spikes/graphics-doc-audit/RESULTS.md` row 20 |
 | zink reads `heap.size − heapUsage` instead of `heapBudget`, so GL clients do not see our cap | `docs/design/gpu-memory-budget.md` §Known limits |
 | Pure-GL guests are unbounded — the cap is only enforced at `vkAllocateMemory` | same |
 | Explicit sync: only binary `SYNC_FD` external semaphores exist; timeline/`OPAQUE_FD` do not | `docs/research/venus-explicit-sync-gap.md` (and read §5–6 before chasing `OPAQUE_FD`) |
