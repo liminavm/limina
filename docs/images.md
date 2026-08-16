@@ -458,9 +458,18 @@ with vdagent up → claims ~5 s after vdagent is killed (ext-data-control backen
 back within one probe when vdagent returns. The L2 gate
 (`a_seated_guest_shares_the_clipboard_through_spice_vdagent`) passes in 38 s with its new oracle 3c
 reporting `helper yielded the clipboard to vdagent (1 HELLO)`.
-**NOT yet in the guest-tools payload tarball** — `scripts/provision/f44/build-all.sh` still packages
-the pre-arbitration helper, so the next payload build (r10) must pick this up or a fresh
-`install-enhanced.sh` will regress these images.
+**Payload `r10` (2026-08-15, limina `b6cb818`, #37 step 4)** — `payload/limina-guest-tools-f44-r10.tar.zst`,
+a **host-side repack of r9**, not a rebuild: kernel + mesa RPMs, srpms and the local repo are r9's
+byte-for-byte (nothing about them changed), while `limina-agent-session` is the new arbitration
+build (musl static, cross-built on the host), `install-enhanced.sh` is refreshed from the repo, and
+`clipboard@limina/` is **gone** from the payload. `manifest.txt` records all of that. Applied with
+the **real installer** to all three F44 enhanced images (`enhanced.raw`, `enhanced.test.raw`,
+`enhanced.synoik.raw`), each printing `removing the retired clipboard@limina gnome-shell extension`
+and leaving `/usr/share/gnome-shell/extensions/clipboard@limina` absent; kernel/mesa steps
+short-circuited as already-installed, as intended. The synoik image's
+`LIMINA_CLIPBOARD_IGNORE_VDAGENT=1` drop-in survives the installer (it lives in `/etc/systemd/user`,
+which the payload does not touch). Note the payload moves over gvproxy at ~90 MB/s — 440 MB lands in
+under 5 s, so copying it into a guest is not the slow part of a delivery.
 **The synoik image needs the override — MEASURED, not hypothetical (2026-08-15)**:
 `xwayland-satellite` gives that session a `DISPLAY=:0`, so `spice-vdagent` starts and stays alive
 and the helper would yield to it — but selections do **not** bridge: with the Wayland selection
