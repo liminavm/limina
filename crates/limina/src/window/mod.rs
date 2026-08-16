@@ -2274,6 +2274,11 @@ pub fn run(
             // global `IOSurfaceLookup` for the venus zero-copy path (still global) and the legacy
             // no-receiver mode. A failed resolve (the worker freed it during a rapid remodeset
             // before we caught up) is not fatal — skip this frame rather than panic the UI.
+            // Protect the id the guest is presenting from the store's cap. Unconditional, not
+            // just on a cache miss: the frame cache in front means a hot id would otherwise never
+            // touch the store and would look idle to any eviction policy — which is exactly how
+            // the compositor's ring got evicted while in continuous use.
+            surface_map.lock().unwrap().pin_presented(id);
             let Some(surface) = cache.get_or_insert_with(id, || {
                 surface_map
                     .lock()

@@ -74,6 +74,15 @@ pub struct SurfaceStore {
     /// alone does not distinguish a release we acted on too eagerly from a cap that is too small,
     /// and those have opposite fixes.
     gone: VecDeque<(u32, GoneReason)>,
+    /// Ids the guest is currently presenting, most recent last. **Never evicted.** A compositor
+    /// publishes its permanent scanout ring first and then churns client buffers forever, so
+    /// FIFO-by-insertion evicts precisely the surfaces in continuous use — and a non-global
+    /// surface that leaves the store has no `IOSurfaceLookup` to fall back on, so the display
+    /// freezes for that id permanently. See `spikes/scanout-blob-freeze/RESULTS.md`.
+    ///
+    /// Bounded, so a guest that presents a fresh id every frame cannot pin the store open and
+    /// re-create the retention leak the cap exists to stop.
+    pinned: VecDeque<u32>,
 }
 
 /// Why an id left the store. See [`SurfaceStore::gone`].
@@ -84,6 +93,10 @@ pub(crate) enum GoneReason {
     /// The cap pushed it out to bound the supervisor's hold on host memory.
     Evicted,
 }
+
+/// How many actively-presented ids to protect from eviction. A swapchain ring is 2–4; this holds
+/// a full ring plus a transition without letting a pathological guest pin the store open.
+const PINNED_CAP: usize = 6;
 
 /// How many departed ids to remember for diagnostics. Only needs to outlive the gap between a
 /// departure and the frames that trip over it, which is one frame in the observed fault.
@@ -111,6 +124,7 @@ impl SurfaceStore {
             cap,
             released: Vec::new(),
             gone: VecDeque::new(),
+            pinned: VecDeque::new(),
         }
     }
 
@@ -121,17 +135,45 @@ impl SurfaceStore {
                 self.map.len()
             );
             self.order.push_back(id);
-            while self.order.len() > self.cap {
-                if let Some(old) = self.order.pop_front() {
-                    self.map.remove(&old);
-                    self.note_gone(old, GoneReason::Evicted);
-                    log::debug!(
-                        "surface store: evicted surface {old} at cap {} — if the guest still \
-                         presents it, every later frame naming it is skipped",
-                        self.cap
-                    );
-                }
+            self.evict_to_cap();
+        }
+    }
+
+    /// Evict oldest-first until the cap is met, **skipping ids the guest is presenting**. Those
+    /// are moved to the back rather than dropped: they are the hot set, and evicting one freezes
+    /// the display for it. If everything left is pinned we stop and go over the cap — a bounded
+    /// overshoot (`PINNED_CAP` entries) is strictly better than a frozen screen.
+    fn evict_to_cap(&mut self) {
+        let mut skipped = 0usize;
+        while self.order.len() > self.cap && skipped < self.order.len() {
+            let Some(old) = self.order.pop_front() else {
+                break;
+            };
+            if self.pinned.contains(&old) {
+                self.order.push_back(old);
+                skipped += 1;
+                continue;
             }
+            self.map.remove(&old);
+            self.note_gone(old, GoneReason::Evicted);
+            log::debug!(
+                "surface store: evicted surface {old} at cap {} — if the guest still presents \
+                 it, every later frame naming it is skipped",
+                self.cap
+            );
+        }
+    }
+
+    /// The guest is presenting `id` right now: protect it from eviction. Idempotent, and bounded
+    /// at [`PINNED_CAP`] so the protection cannot grow without limit.
+    pub(crate) fn pin_presented(&mut self, id: u32) {
+        if self.pinned.back() == Some(&id) {
+            return;
+        }
+        self.pinned.retain(|&p| p != id);
+        self.pinned.push_back(id);
+        while self.pinned.len() > PINNED_CAP {
+            self.pinned.pop_front();
         }
     }
 
@@ -659,6 +701,36 @@ mod tests {
         assert!(
             store.take_released().is_empty(),
             "taking the released list must drain it"
+        );
+    }
+
+    /// **The scanout-blob freeze, at unit scale.** A surface the guest is actively presenting must
+    /// survive the cap, however much unrelated churn arrives. FIFO-by-insertion evicts exactly
+    /// backwards for a compositor: it publishes its permanent ring FIRST and then churns client
+    /// buffers forever, so the oldest-inserted surfaces are the ones in continuous use. Losing one
+    /// freezes the display permanently for that id, because non-global surfaces have no
+    /// `IOSurfaceLookup` fallback. See `spikes/scanout-blob-freeze/RESULTS.md`.
+    #[test]
+    fn a_presented_surface_survives_eviction_pressure() {
+        let mut store = SurfaceStore::with_cap(2);
+        store.insert(7, make_surface());
+        store.insert(12, make_surface());
+        // The guest is scanning these two out, alternating, as a compositor ring does.
+        store.pin_presented(7);
+        store.pin_presented(12);
+
+        // Now a client churns buffers past the cap — Firefox reallocating on fullscreen.
+        for id in 100..110 {
+            store.insert(id, make_surface());
+        }
+
+        assert!(
+            store.get(7).is_some(),
+            "surface 7 is being presented and was evicted anyway — this is the freeze"
+        );
+        assert!(
+            store.get(12).is_some(),
+            "surface 12 is being presented and was evicted anyway — this is the freeze"
         );
     }
 
