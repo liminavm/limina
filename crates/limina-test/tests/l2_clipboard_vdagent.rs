@@ -25,14 +25,18 @@
 //!
 //! # The discriminator, and why it is load-bearing
 //!
-//! The suite boots the *enhanced* image, where the old transport (`limina-agent-session` +
-//! the `clipboard@limina` shell extension, over the control plane) is still installed and
-//! live. A round trip proves *a* clipboard works — not *which* one carried it. If the
-//! vdagent broker were entirely broken, the old path would deliver both tokens and this
-//! test would go green, and #37's step 4 would then delete the only working transport on
-//! the strength of that green. So oracle 3.5 **stops the session helper first** and proves
-//! it stayed stopped: with no control-plane clipboard peer left, only vdagent can move the
-//! text. Passing for the right reason is the entire point of this file.
+//! The suite boots the *enhanced* image, where the other transport (`limina-agent-session`
+//! over the control plane) is installed and live. A round trip proves *a* clipboard works
+//! — not *which* one carried it. If the vdagent broker were entirely broken, the other path
+//! would deliver both tokens and this test would go green; #37's step 4 deleted the GNOME
+//! shell-extension tier on the strength of this green, so a green that could come from
+//! elsewhere would have been worth nothing. So oracle 3.5 **stops the session helper first**
+//! and proves it stayed stopped: with no control-plane clipboard peer left, only vdagent can
+//! move the text. Passing for the right reason is the entire point of this file.
+//!
+//! Oracle 3c is the other half of that: it asserts the helper *yielded* on its own (a HELLO
+//! with no `clipboard` capability) before 3.5 stops anything, which is what keeps the two
+//! transports from both owning the selection in normal operation.
 //!
 //! # Traps this test is shaped around
 //!

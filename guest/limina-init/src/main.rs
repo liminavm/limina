@@ -210,12 +210,6 @@ fn spawn_dbus_stack() {
         let mut cmd = std::process::Command::new("/limina-mock-mutter");
         cmd.env("DBUS_SESSION_BUS_ADDRESS", DBUS_ADDR)
             .env("LIMINA_MOCK_ID", &mock_id);
-        // `limina.mock_bridge`: the mock also claims org.limina.Clipboard (the
-        // clipboard@limina extension stand-in), so tests can drive/assert the
-        // helper's middle backend and its tier preference.
-        if cmdline_has("limina.mock_bridge") {
-            cmd.env("LIMINA_MOCK_BRIDGE", "1");
-        }
         match cmd.spawn() {
             Ok(_) => klog(b"[limina-init] spawned /limina-mock-mutter"),
             Err(_) => klog(b"[limina-init] failed to spawn /limina-mock-mutter"),

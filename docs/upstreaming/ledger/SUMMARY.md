@@ -102,8 +102,8 @@ The macOS GPU coexist/venus/IOSurface stack, the M9.3 GPU snapshot-replay journa
 device-advertised modifiers, not with MRs), the KK monolith's Metal-bridge core, all log-taste and
 DIAG-probe rows. **mutter is no longer in scope** — the series was retired 2026-08-03 (limina is
 writing a drop-in gnome-shell/mutter replacement), so the ext-data-control patch and its two retired
-robustness fixes are moot. The `clipboard@limina` shell-extension bridge remains the GNOME clipboard
-path until the replacement compositor subsumes it.
+robustness fixes are moot. GNOME's clipboard rides stock `spice-vdagent` since #37 (2026-08-15);
+the `clipboard@limina` shell-extension bridge that used to fill that role was deleted with it.
 
 ### 5. NEW-FEATURE RFC — no upstream prior art or demand; offer as RFC, expect a passthrough objection
 

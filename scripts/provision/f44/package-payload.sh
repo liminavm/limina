@@ -5,8 +5,9 @@
 # Package an already-assembled enhanced-tier payload into a SHIPPABLE tarball with SOURCE RPMs.
 # Run in the build guest AFTER build-all.sh has produced $PAYLOAD (~/limina-guest-tools):
 #   - generate the PATCHED source RPM for mesa (rpmbuild -bs on the spec build-mesa-rpm.sh
-#     staged in ~/rpmbuild) -> $PAYLOAD/srpms/  (mutter left the payload 2026-07-11: the GNOME
-#     clipboard tier is the clipboard@limina shell extension now, stock mutter stays stock)
+#     staged in ~/rpmbuild) -> $PAYLOAD/srpms/  (mutter left the payload 2026-07-11 and the
+#     clipboard@limina shell extension followed 2026-08-15 — the GNOME clipboard is stock
+#     spice-vdagent now, so stock mutter and stock gnome-shell both stay untouched)
 #   - bundle the kernel SOURCE reference (config + patches + build script + tag); the kernel has
 #     no rebuildable Fedora SRPM (built from stable.git + Fedora config, not a distro SRPM)
 #   - build $PAYLOAD/repo: a createrepo_c'd local dnf repo with EVERY mesa subpackage

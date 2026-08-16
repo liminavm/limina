@@ -7,13 +7,13 @@
 #
 # Builds: kernel-16k, mesa (venus/zink), and the native limina-agent +
 # limina-agent-session; then collects the RPMs + agents (+ units + gschema override) +
-# the clipboard@limina gnome-shell extension (plain files, nothing to build) +
 # install-enhanced.sh + a manifest into $PAYLOAD.
 #
-# mutter is NOT part of the payload anymore (2026-07-11): the clipboard bridge's GNOME
-# tier is the shell extension (guest/gnome-shell-extension/), so stock mutter stays
-# stock — no patched rebuild to rebase, no distro update displacing it. The optional
-# build-mutter-rpm.sh remains for experiments (patches/mutter/0003 ext-data-control).
+# Neither mutter nor a gnome-shell extension is part of the payload: mutter left
+# 2026-07-11, and the clipboard@limina extension was retired 2026-08-15 (#37 step 4) once
+# stock spice-vdagent took over the clipboard on GNOME — install-enhanced.sh now REMOVES
+# it from guests that still carry it. The optional build-mutter-rpm.sh remains for
+# experiments (patches/mutter/0003 ext-data-control).
 #
 # Usage (in the guest):  scripts/provision/f44/build-all.sh
 # Then:                  sudo scripts/provision/install-enhanced.sh "$PAYLOAD" && sudo reboot
@@ -67,10 +67,6 @@ if [ -n "$SESSION_OK" ]; then
   cp -f "$SESSION_BIN" "$PAYLOAD"/
   cp -f "$REPO/guest/limina-agent-session/limina-agent-session.service" "$PAYLOAD"/ 2>/dev/null || true
 fi
-# The clipboard@limina gnome-shell extension (the GNOME tier of the clipboard bridge):
-# plain GJS files, no build step. install-enhanced.sh drops it under
-# /usr/share/gnome-shell/extensions; limina-agent-session self-enables it per user.
-cp -rf "$REPO/guest/gnome-shell-extension/clipboard@limina" "$PAYLOAD"/
 # Manifest: the target release + the component versions, so the payload is self-describing
 # (and a future install-enhanced.sh version check can read it).
 {
@@ -80,7 +76,6 @@ cp -rf "$REPO/guest/gnome-shell-extension/clipboard@limina" "$PAYLOAD"/
   echo "rpms:"; ls -1 "$PAYLOAD"/*.rpm 2>/dev/null | sed 's#.*/#  - #'
   [ -n "$AGENT_OK" ] && echo "agent: limina-agent ($AGENT_TGT)"
   [ -n "$SESSION_OK" ] && echo "agent: limina-agent-session ($AGENT_TGT)" || true
-  echo "extension: clipboard@limina (gnome-shell)"
 } > "$PAYLOAD/manifest.txt"
 cat "$PAYLOAD/manifest.txt"
 

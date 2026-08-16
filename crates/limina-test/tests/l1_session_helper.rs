@@ -112,103 +112,13 @@ fn l1_real_session_helper_bridges_clipboard_via_mock_mutter() {
     let _ = std::fs::remove_file(&mock_copy);
 }
 
-/// The middle backend: with `limina.mock_bridge` the mock ALSO claims
-/// org.limina.Clipboard (the clipboard@limina extension stand-in). The real helper
-/// must (a) prefer it over the also-present RemoteDesktop API — no session is ever
-/// created, so no screen-share indicator on a real desktop — and (b) bridge both
-/// directions through it: host→guest is a direct `Set` (`BRIDGE_SET` in the mock log;
-/// the compositor-parked source serves pastes, no transfer choreography), guest→host
-/// is OwnerChanged → OFFER → `Read` (`BRIDGE_READ`) → pasteboard.
-#[test]
-fn l1_real_session_helper_prefers_extension_bridge() {
-    if !limina_test::require_hvf_or_skip("l1_real_session_helper_prefers_extension_bridge") {
-        return;
-    }
-
-    let uniq = format!("{}b", std::process::id()); // distinct mock files from the RD test
-    let pb_name = format!("limina-test-pb-bridge-{uniq}");
-    let cfg = GuestConfig::l1_from_env()
-        .expect("resolving L1 guest config")
-        .with_control_agent()
-        .with_cmdline_token("limina.dbus")
-        .with_cmdline_token("limina.mock_mutter")
-        .with_cmdline_token("limina.mock_bridge")
-        .with_cmdline_token("limina.session_helper")
-        // RD opted in so the preference assertion is meaningful: the bridge must win
-        // over an AVAILABLE RemoteDesktop backend, not a disabled one.
-        .with_cmdline_token("limina.clipboard_rd")
-        .with_cmdline_token(&format!("limina.mock_id={uniq}"))
-        .with_supervisor_log()
-        .with_env("LIMINA_PASTEBOARD", &pb_name)
-        .with_env("LIMINA_CLIP_POLL_MS", "50");
-    let rootfs = rootfs_of(&cfg);
-    let mock_log = rootfs.join(format!("mock-{uniq}.log"));
-    let mock_copy = rootfs.join(format!("mock-{uniq}.copy"));
-    let _ = std::fs::remove_file(&mock_log);
-    let _ = std::fs::remove_file(&mock_copy);
-
-    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
-    // Post-boot rootfs-channel traffic goes through the guest's per-guest clone (see above).
-    let mock_log = guest.rootfs_dir().join(format!("mock-{uniq}.log"));
-    let mock_copy = guest.rootfs_dir().join(format!("mock-{uniq}.copy"));
-    guest
-        .wait_for_supervisor_log(
-            "guest agent connected: limina-agent-session/",
-            Duration::from_secs(30),
-        )
-        .expect("the real limina-agent-session never connected (dbus/mock/helper chain)");
-
-    // --- host→guest: a host copy arrives as a direct bridge Set. --------------------
-    limina_test::set_pasteboard_text(&pb_name, "bridge-host-to-guest-42");
-    wait_for_file_contains(
-        &mock_log,
-        "BRIDGE_SET bridge-host-to-guest-42",
-        Duration::from_secs(10),
-    );
-    eprintln!("host→guest OK: the bridge received the host text via Set");
-
-    // --- guest→host: a scripted guest copy must land on the pasteboard. -------------
-    std::fs::write(&mock_copy, "bridge-guest-to-host-77").expect("writing the copy trigger");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while limina_test::pasteboard_text(&pb_name).as_deref() != Some("bridge-guest-to-host-77") {
-        assert!(
-            Instant::now() < deadline,
-            "pasteboard never received the guest copy (currently {:?}); mock log:\n{}",
-            limina_test::pasteboard_text(&pb_name),
-            std::fs::read_to_string(&mock_log).unwrap_or_default()
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    let log = std::fs::read_to_string(&mock_log).expect("reading mock log");
-    assert!(
-        log.contains("BRIDGE_READ"),
-        "guest→host content did not travel through the bridge backend:\n{log}"
-    );
-    eprintln!("guest→host OK: the scripted guest copy landed on the pasteboard via Read");
-
-    // --- tier preference: RemoteDesktop must never have been touched. ---------------
-    assert!(
-        !log.contains("CREATE_SESSION"),
-        "helper fell back to RemoteDesktop despite a live extension bridge:\n{log}"
-    );
-
-    let outcome = guest
-        .shutdown(Duration::from_secs(10))
-        .expect("supervisor did not stop");
-    assert!(!outcome.forced, "harness had to force teardown");
-    assert_eq!(outcome.code, Some(0), "expected orderly power-off");
-
-    let _ = std::fs::remove_file(&mock_log);
-    let _ = std::fs::remove_file(&mock_copy);
-}
-
 /// Production default (user-decided): withOUT the RD opt-in
 /// (`LIMINA_CLIPBOARD_RD=1`), the helper must NEVER create a RemoteDesktop session —
 /// even when that API is the only backend on offer and the probe grace has long
 /// expired. A resident RemoteDesktop session lights GNOME's screen-share indicator for
-/// the whole session; the clipboard@limina extension bridge supersedes it. The mock
-/// claims only the RemoteDesktop API here (no bridge), so the helper has nothing quiet
-/// to land on and must park forever rather than go loud.
+/// the whole session, and on GNOME the clipboard rides stock spice-vdagent now. The mock
+/// claims only the RemoteDesktop API here, so the helper has nothing quiet to land on and
+/// must park forever rather than go loud.
 #[test]
 fn l1_real_session_helper_never_takes_remotedesktop_without_optin() {
     if !limina_test::require_hvf_or_skip(

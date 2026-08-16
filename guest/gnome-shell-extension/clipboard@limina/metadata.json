@@ -1,7 +1,0 @@
-{
-    "uuid": "clipboard@limina",
-    "name": "Limina Clipboard Bridge",
-    "description": "Guest side of limina's host↔guest clipboard sync: exposes the compositor selection to limina-agent-session over the session bus, so the bridge needs neither a patched mutter (ext-data-control) nor a RemoteDesktop session (which keeps GNOME's screen-share indicator lit).",
-    "shell-version": ["49", "50"],
-    "url": "https://github.com/limina/limina"
-}

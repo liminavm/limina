@@ -608,11 +608,11 @@ channel between limina and a guest agent.
   poller, self-change suppression, `LIMINA_PASTEBOARD` test override). **Two-tier guest mechanism:**
   the plan was **ext-data-control-v1** in a carried mutter (GNOME refuses it upstream, mutter#524),
   giving a focusless client with no "screen is being shared" indicator. **That patch is retired and
-  guest mutter is stock** (since 2026-07-11): under GNOME the bridge is now the `clipboard@limina`
-  shell extension (`guest/gnome-shell-extension`), with the
+  guest mutter is stock** (since 2026-07-11). The `clipboard@limina` shell extension that took
+  its place was itself retired 2026-08-15 (#37 step 4): under GNOME the clipboard now rides stock
+  `spice-vdagent`, and `limina-agent-session` — ext-data-control, with the
   `org.gnome.Mutter.RemoteDesktop` D-Bus clipboard API as the opt-in fallback (the orange
-  indicator is its documented cosmetic cost). Both are **interim** — the user's compositor
-  replacement is expected to implement the protocol directly. Loop prevention = track our own live source / `is_owner` echo.
+  indicator is its documented cosmetic cost) — covers the sessions vdagent cannot serve. Loop prevention = track our own live source / `is_owner` echo.
   The Wayland foundation is also the stepping stone for future drag-n-drop.
 - **virtiofs sharing (shm-less):** `limina --share '[NAME=]PATH[:ro]'` (repeatable) attaches a host
   dir as virtiofs tag `limina-NAME`; the agent auto-mounts every `limina-`-tagged device at
@@ -1360,8 +1360,9 @@ limina speaks the vdagent protocol.
      infer from "is XWayland installed"** — and then this bullet inferred coverage from compositor
      *identity*, which is the same error a level up. The tiers may still fit together; we have not
      shown that they do, and the arbitration must rest on a per-session probe either way.
-     Retiring the `clipboard@limina` extension remains the prize (it is what breaks on GNOME
-     updates — see the mutter-left-the-delivery history in `limina-enh-delivery`).
+     Retiring the `clipboard@limina` extension was the prize (it is what breaks on GNOME
+     updates — see the mutter-left-the-delivery history in `limina-enh-delivery`); DONE
+     2026-08-15, #37 step 4.
    - **The decision must be made IN THE GUEST, per session, and merely honored by the host.** The
      facts it needs (which compositor, is there an XWayland, did vdagent actually get the selection)
      exist only inside a session; the host sees one vdagent channel plus N helper connections and

@@ -253,8 +253,9 @@ tracks claims still needing verification.
   size surprises you, something got swept in. A scoped `git add -A <dir>` is acceptable only
   when you have just looked at `git status` for that directory and every entry belongs.
 - **When guest components change, refresh the deliverables AND the enhanced images.** Any
-  rebuild of a guest-side component (16k kernel, mesa, limina-agent, the clipboard@limina
-  shell extension — guest mutter is stock since 2026-07-11) must flow into
+  rebuild of a guest-side component (16k kernel, mesa, limina-agent, limina-agent-session —
+  guest mutter is stock since 2026-07-11 and the clipboard@limina shell extension was
+  retired 2026-08-15) must flow into
   (a) the guest-tools tarball (`scripts/provision/f44/package-payload.sh`) and (b) an
   `install-enhanced.sh` pass over the enhanced-tier images (`enhanced.raw` /
   `enhanced.test.raw`), then update `docs/images.md` §Component versions. Stale images cost

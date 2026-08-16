@@ -30,10 +30,10 @@ position hasn't moved. This matches and refreshes the series README's mutter#524
 (#524 is the older wlr-data-control rejection, closed 2019).
 
 Consequences for limina: **do not submit** — the wlroots pedigree doesn't help; mutter
-rejected this exact protocol post-ratification. No native GNOME path is coming, so the
-`clipboard@limina` shell-extension bridge remains the load-bearing GNOME clipboard tier
-indefinitely (the agent's ext-data-control backend still lights up on KDE/wlroots
-guests). GNOME's sanctioned alternative is the portal/RemoteDesktop clipboard — already
+rejected this exact protocol post-ratification. No native GNOME path is coming, which is
+why GNOME's clipboard landed on stock `spice-vdagent` (#37, 2026-08-15) rather than on
+anything of ours; the agent's ext-data-control backend still lights up on KDE/wlroots
+guests. GNOME's sanctioned alternative is the portal/RemoteDesktop clipboard — already
 limina's opt-in RD rung (`limina-clipboard-rd-optin`). The patch stays as an unshipped
 experiment (`scripts/build-mutter-rpm.sh` applies whatever sits here); `need` = needed
 in the sense that no upstream equivalent exists to retire it, `disp` = carry.

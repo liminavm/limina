@@ -23,10 +23,9 @@
 #                          kernel is locked (not ours) so a stock update can't steal the default.
 #   2. mesa RPMs        -> replace stock mesa at /usr (venus Vulkan; GL stays virgl); LOCKED, but the
 #                          installer lifts the lock to UPDATE it, then re-locks (re-runnable).
-#   3. clipboard@limina  -> the gnome-shell extension (GNOME tier of the clipboard bridge) at
-#                          /usr/share/gnome-shell/extensions; limina-agent-session self-enables
-#                          it per user. Replaces the patched-mutter delivery (2026-07-11):
-#                          stock mutter stays stock, nothing for a distro update to displace.
+#   3. clipboard@limina  -> REMOVED, not installed: the gnome-shell extension was retired
+#                          2026-08-15 (#37 step 4) now that stock spice-vdagent carries the
+#                          clipboard on GNOME. This step deletes it from guests that have it.
 #   3b. local dnf repo   -> /usr/share/limina-guest-tools/repo + a .repo file: EVERY mesa
 #                          subpackage Fedora ships (-devel/-tests included, debuginfo excluded),
 #                          at OUR NEVRA. Installed on demand (`dnf install mesa-libgbm-devel`) —
@@ -371,29 +370,23 @@ done
 echo "   mesa installed + (re-)versionlocked"
 rpm -q mesa-vulkan-drivers --qf '   venus ICD pkg: %{NVRA}\n' 2>/dev/null || true
 
-### 3. clipboard@limina gnome-shell extension -> /usr/share/gnome-shell/extensions ###
-# The GNOME tier of the clipboard bridge (guest/gnome-shell-extension/): plain GJS
-# files scripting Meta.Selection inside the compositor — quiet (no screen-share
-# indicator) without the retired patched-mutter carry, and immune to distro mutter
-# updates. Enabling is per-user dconf state with no session at install time, so
-# limina-agent-session enables it on its first probe (once per user; a later user
-# disable is respected). A previously-installed patched mutter (older enhanced
-# guests) is left alone: harmless while present, and the next distro update
-# replaces it with stock — the helper's tier ladder absorbs either state.
+### 3. clipboard@limina gnome-shell extension -> REMOVED (retired 2026-08-15, #37 step 4) ###
+# The extension was the GNOME tier of our own clipboard bridge. Stock spice-vdagent
+# carries the clipboard on GNOME now, and limina-agent-session yields to it wherever it
+# serves, so the extension has no peer left to talk to. Upgrading guests get it deleted
+# here rather than left as a dead enabled extension in every session; the shell drops it
+# at the next login. The per-user "we enabled it once" stamp goes too, so a future
+# reinstall (should the tier ever come back) starts from a clean verdict.
 EXT_UUID="clipboard@limina"
-if [ -d "$PAYLOAD/$EXT_UUID" ]; then
-  echo "-- installing the $EXT_UUID gnome-shell extension"
-  EXT_DST="/usr/share/gnome-shell/extensions/$EXT_UUID"
+EXT_DST="/usr/share/gnome-shell/extensions/$EXT_UUID"
+if [ -d "$EXT_DST" ]; then
+  echo "-- removing the retired $EXT_UUID gnome-shell extension"
   rm -rf "$EXT_DST"
-  install -d "$(dirname "$EXT_DST")"
-  cp -a "$PAYLOAD/$EXT_UUID" "$EXT_DST"
-  # cp -a from the virtiofs share preserves xattrs — relabel for enforcing guests.
-  if command -v restorecon >/dev/null 2>&1; then
-    restorecon -R "$EXT_DST" 2>/dev/null || true
-  fi
-  echo "   installed at $EXT_DST (limina-agent-session enables it at next login)"
-else
-  echo "-- no $EXT_UUID in the payload — skipped (clipboard rides the RemoteDesktop fallback)"
+  for home in /home/* /root; do
+    [ -d "$home" ] || continue
+    rm -f "$home/.local/state/limina/clipboard-extension-enabled"
+  done
+  echo "   removed $EXT_DST (the clipboard rides spice-vdagent / ext-data-control now)"
 fi
 
 ### 3b. local dnf repo: every mesa subpackage Fedora ships, installable on demand ###
@@ -462,12 +455,12 @@ else
   echo "-- no limina-agent in payload; skipping (dynamic resize / PSI stay inactive)"
 fi
 
-# limina-agent-session: the per-user clipboard bridge. It is session state (an
-# ext-data-control Wayland client, the clipboard@limina extension bridge on GNOME, or
-# mutter's RemoteDesktop D-Bus API as the last resort), so it runs as a systemd USER
-# unit inside the graphical session — the system-level limina-agent cannot do
-# clipboard, and without this helper host<->guest copy/paste is silently inert (no guest peer
-# ever advertises the `clipboard` cap; found on the 2026-07-01 dogfooding VM).
+# limina-agent-session: the per-user clipboard helper for the sessions stock
+# spice-vdagent cannot serve. It is session state (an ext-data-control Wayland client, or
+# mutter's RemoteDesktop D-Bus API as an opt-in last resort), so it runs as a systemd USER
+# unit inside the graphical session — the system-level limina-agent cannot do clipboard.
+# Where a spice-vdagent is alive it yields to it and announces no `clipboard` cap, so
+# installing this never puts two selection owners in one session.
 SESSION_BIN="$PAYLOAD/limina-agent-session"
 if [ -f "$SESSION_BIN" ]; then
   echo "-- installing limina-agent-session + user unit (clipboard bridge)"
