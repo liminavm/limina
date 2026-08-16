@@ -20,7 +20,6 @@ into the local `third_party/` checkouts).
 - [00 — Architecture overview](research/00-overview.md)
 - [01 — libkrun internals & C API](research/01-libkrun-internals-and-api.md)
 - [02 — macOS Hypervisor.framework (HVF)](research/02-macos-hvf.md)
-- [03 — Graphics: virtio-gpu & 3D](research/03-graphics-virtio-gpu-3d.md)
 - [04 — Input & keyboard](research/04-input-and-keyboard.md)
 - [05 — Clipboard sharing](research/05-clipboard.md)
 - [06 — USB passthrough](research/06-usb-passthrough.md)
@@ -38,10 +37,10 @@ Decision-oriented design docs — the founding one plus one per major feature
 
 - [Architecture](design/architecture.md) — process model, libkrun patch strategy,
   crate/module layout, FFI boundary, feature→component mapping.
-- [Tier-2 coexist GPU](design/tier2-coexist-gpu.md), with deep dives:
-  [zero-copy IOSurface present](design/tier2-iosurface-zerocopy-present.md),
-  [host-visible coherency](design/tier2-host-visible-coherency.md),
-  [cogl batched-render bug](design/tier2-cogl-batched-render-bug.md),
+- [Graphics](graphics.md) — **the** render/present document: the tier ladder, the coexist
+  device, IOSurface scanout, blob mapping, the GPU-memory budget, pitfalls and open items.
+  Deep dives: [16 KiB page requirement](design/16k-page-requirement.md),
+  [GPU memory budget](design/gpu-memory-budget.md),
   [venus ring idle wakeups](design/venus-ring-idle-wakeups.md).
 - [Runtime display resize](design/runtime-display-resize.md) — shipped.
 - [M6 dynamic memory](design/m6-dynamic-memory.md) — shipped.
@@ -66,8 +65,8 @@ Decision-oriented design docs — the founding one plus one per major feature
 
 - [images.md](images.md) — the source of truth for the Fedora guest disk images we develop and
   test against: what each is, which tier it exercises, pristine-vs-modified, and how it's produced.
-- [tiers.md](tiers.md) — the two-tier guarantee as shipped (stock floor vs enhanced),
-  including the RPM-replace delivery rationale.
+- [graphics.md](graphics.md) — the tier ladder as shipped (software-2D / vrend GL / venus
+  Vulkan), what each tier requires of the guest, and where the stock floor currently breaks.
 - [Hardening backlog](hardening-backlog.md) — "finish what's shipped" ledger.
 - [Parallels migration runbook](dogfooding-parallels-migration.md).
 

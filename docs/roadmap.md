@@ -470,15 +470,14 @@ flip straight to the primary plane). Converged truth + open-threads ledger live 
   and `NO_VIRGL` **on** ("no GL context on Apple Silicon"). That was true *before* zink-on-KK. It is
   now reversed: `NO_VIRGL` is **OFF** and `USE_EGL | USE_GLES | USE_SURFACELESS` are **ON**, because
   zink-on-KK gives virglrenderer a host GL context — so **vrend GL (the virgl tier) is enabled
-  alongside venus**. **See `docs/tiers.md` for the authoritative, current tier model** (this bullet
+  alongside venus**. **See `docs/graphics.md` for the authoritative, current tier model** (this bullet
   is kept only to flag the reversal that confused past readers).
 - **Tier-2/3 is a "coexist" device, not a flag flip.** The rutabaga serves Vulkan (venus) **and** GL
   (vrend); it does NOT implement the 2D commands the firmware GOP / efifb / fbcon / scanout-present use.
   Our software-2D patch (0001) serves exactly those. **libkrun patch 0010** makes both live in one
   virtio-gpu, routed by ring/command type (2D → software-2D CPU path; 3D ctx/submit/capset →
   rutabaga/venus), and **degrades gracefully to software-2D on renderer-init failure** (no panic).
-  **Coexist is the DEFAULT** (`--gpu-software-2d` overrides for the capture oracle). Design:
-  `docs/design/tier2-coexist-gpu.md`.
+  **Coexist is the DEFAULT** (`--gpu-software-2d` overrides for the capture oracle). Design: `docs/graphics.md` §2.
 - **The 16 KiB-host / 4 KiB-guest blob map — SOLVED, and no longer a reason for 16 KiB pages.**
   venus RESOURCE_MAP_BLOB → `hv_vm_map` requires host addr, guest addr, AND size to be
   16 KiB-multiples, and a 4 KiB guest breaks that two ways. The **size** half was fixed *host-only*
@@ -563,7 +562,7 @@ flip straight to the primary plane). Converged truth + open-threads ledger live 
 
 **The virgl tier IS shipped (not parked).** GL via virgl → host **vrend** → zink-on-KK runs on a
 stock 4k guest (its copy/transfer model is immune to the 16k/4k blob problem) and is **enabled by
-default** in the coexist flags — see `docs/tiers.md` (tier 2). What *was* parked is the unrelated
+default** in the coexist flags — see `docs/graphics.md` §3.2. What *was* parked is the unrelated
 **virgl-over-ANGLE** variant (a separate GL→VK→Metal translation stack); zink-on-KK replaced the need
 for it. Native-context (vdrm) backed by Metal is recorded only as a curiosity — venus is the top tier.
 
@@ -636,8 +635,8 @@ SSH — RED/GREEN-verified against the pre/post-0090 worker.
 ### Productization: ✅ SHIPPED as RPMs replacing stock at `/usr` (2026-06-25, re-validated on F44 2026-06-29)
 
 The sysext design originally written here was **rejected during implementation** and the section
-rewritten after the fact (2026-07-01) — the authoritative rationale lives in `docs/tiers.md`
-(§"Why RPM-replace, not a sysext overlay") and `docs/images.md`. Short form:
+rewritten after the fact (2026-07-01) — the authoritative rationale lives in `docs/graphics.md`
+(§5.1 Delivery) and `docs/images.md`. Short form:
 
 - **Userspace = rebuilt Fedora SRPMs replacing stock at `/usr`** (mesa pinned to our version +
   dnf-versionlocked; mutter is **stock** since 2026-07-11 — the carried patches are retired). Why not sysext for mesa: our-mesa-vs-stock **libgallium SONAME mismatch**,

@@ -84,7 +84,7 @@ vsock control plane + a shutdown eventfd.
    *commands*, not the buffers); the **only** copy on the graphics hot path is the
    scanout->window present (a full-frame `read_2d_resource`). Removing that —
    `SET_SCANOUT_BLOB` + a `present_texture` display-vtable callback — is a
-   **scheduled M4 task**, not deferred. See [03](03-graphics-virtio-gpu-3d.md),
+   **scheduled M4 task**, not deferred. See [graphics](../graphics.md),
    [04](04-input-and-keyboard.md), [09](09-display-host-integration.md).
 
 2. **The process dies on guest shutdown.** `krun_start_enter` never returns
@@ -156,10 +156,10 @@ vsock control plane + a shutdown eventfd.
 
 | Feature | Exists in libkrun today? | What limina builds / patches | Doc |
 |---|---|---|---|
-| Boot Fedora .raw (M1) | EFI firmware + `krun_add_disk` path exists | EFI firmware sourcing; child-process VMM; boot bring-up | [01](01-libkrun-internals-and-api.md), [03](03-graphics-virtio-gpu-3d.md) |
+| Boot Fedora .raw (M1) | EFI firmware + `krun_add_disk` path exists | EFI firmware sourcing; child-process VMM; boot bring-up | [01](01-libkrun-internals-and-api.md) |
 | HVF backend / SMP / GIC | Yes — run loop, hv_gic, vtimer, WFI park | Harden panic paths; QoS hints; codesign exe | [02](02-macos-hvf.md) |
-| Display / present | virtio-gpu + display vtable (CPU pull, full-frame) | **Native NSWindow + CAMetalLayer presenter** (biggest new piece) | [09](09-display-host-integration.md), [03](03-graphics-virtio-gpu-3d.md) |
-| 3D accel | Venus->MoltenVK->Metal via rutabaga; bulk GPU buffers already zero-copy/shared via hv_vm_map | Pass virgl flags; verify Apple blob patches in virglrenderer; add zero-copy scanout (SET_SCANOUT_BLOB + present_texture) in **M4** | [03](03-graphics-virtio-gpu-3d.md) |
+| Display / present | virtio-gpu + display vtable (CPU pull, full-frame) | **Native NSWindow + CAMetalLayer presenter** (biggest new piece) | [09](09-display-host-integration.md), [graphics](../graphics.md) |
+| 3D accel | Venus->MoltenVK->Metal via rutabaga; bulk GPU buffers already zero-copy/shared via hv_vm_map | Pass virgl flags; verify Apple blob patches in virglrenderer; add zero-copy scanout (SET_SCANOUT_BLOB + present_texture) in **M4** | [graphics](../graphics.md) |
 | Fullscreen / HiDPI | display geometry + EDID config (pre-boot only) | NSWindow toggleFullScreen; patch runtime resize/EDID/hotplug | [09](09-display-host-integration.md), [04](04-input-and-keyboard.md) |
 | Mouse / abs+rel pointer | virtio-input vtable, shape set by capability bitmaps | Register abs tablet + rel mouse; switch on capture | [04](04-input-and-keyboard.md) |
 | Keyboard + macOS combos | virtio-input vtable (verbatim events) | NSView events -> CGEventTap (toggle); host kVK->KEY_* table | [04](04-input-and-keyboard.md) |
@@ -199,7 +199,6 @@ vsock control plane + a shutdown eventfd.
 
 - [01 — libkrun internals & API](01-libkrun-internals-and-api.md)
 - [02 — macOS Hypervisor.framework](02-macos-hvf.md)
-- [03 — Graphics: virtio-gpu & 3D](03-graphics-virtio-gpu-3d.md)
 - [04 — Input & keyboard](04-input-and-keyboard.md)
 - [05 — Clipboard](05-clipboard.md)
 - [06 — USB passthrough](06-usb-passthrough.md)

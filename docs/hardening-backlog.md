@@ -698,7 +698,7 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
     fences retiring at decode (`glFinish` waited for nothing). That belief died on measurement — the
     reverse belief has to clear the same bar. See `limina-virgl-vrend-perf`.
   - **The real blocker is pacing, not throughput:** fence-accurate present for vrend is still OPEN
-    (`docs/design/vrend-iosurface-scanout.md`) — vrend's flush path never reaches `try_park_present`,
+    (`docs/graphics.md` §9) — vrend's flush path never reaches `try_park_present`,
     so `FENCEPRESENT` never fires and the whole #24 tear/pacing arc (`c569129`, `c33d9a0`) does not
     apply. Moving the desktop to vrend today gives that up, and tearing is a human-eyeball verdict.
   - **`VK_DRIVER_FILES` is a SEPARATE knob and should stay regardless.** Unset, the loader enumerates

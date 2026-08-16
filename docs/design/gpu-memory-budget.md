@@ -192,8 +192,9 @@ The guest half is **configuration, not code**: venus advertises the extension on
 via `os_get_option`), so `install-enhanced.sh` ships `VN_DEBUG=mem_budget` in
 `/etc/environment.d/90-limina-zink.conf` next to the driver selection. Two consequences
 worth remembering: it must be in the client's environment *before* the process starts, and
-a **non-login ssh shell does not source `environment.d`** — the same false-negative shape as
-an empty `vulkaninfo` over ssh. The test sets the variable explicitly for that reason.
+**a non-login shell is not guaranteed to have `environment.d`'s variables** — on the current F44
+enhanced image it does inherit them from the user manager, but that is an image property, not a
+rule, so the test sets the variable explicitly rather than relying on it (`docs/graphics.md` §8).
 
 ## Known limits
 

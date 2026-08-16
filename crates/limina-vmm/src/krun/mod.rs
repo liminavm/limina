@@ -69,7 +69,7 @@ const NET_COMPAT_FEATURES: u32 = NET_FEATURE_CSUM
 /// locally-administered, unicast.)
 const NET_GUEST_MAC: [u8; 6] = [0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee];
 
-// virglrenderer init flag bits (see docs/research/03 §1.3).
+// virglrenderer init flag bits (see docs/graphics.md §2).
 const VIRGLRENDERER_USE_EGL: u32 = 1 << 0;
 #[allow(dead_code)]
 const VIRGLRENDERER_THREAD_SYNC: u32 = 1 << 1;

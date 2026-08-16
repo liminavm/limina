@@ -107,5 +107,5 @@ dev Mac.
 
 `docs/roadmap.md` (milestone status) · `docs/codebases.md` (the source-tree map: host vs
 guest, which script builds what) · `docs/images.md` (disk-image inventory + component
-versions) · `docs/tiers.md` (the stock/enhanced tier model) · `CLAUDE.md` (project tenets,
+versions) · `docs/graphics.md` (the GPU tier ladder, present path, pitfalls) · `CLAUDE.md` (project tenets,
 working conventions, environment quirks).

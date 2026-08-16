@@ -170,7 +170,8 @@ Two refinements that are easy to forget:
   channel for clipboard, dynamic display resize, memory-pressure reporting,
   time sync, and lifecycle.
 
-See `docs/research/00-overview.md` for the full picture and `docs/roadmap.md` for
+See `docs/research/00-overview.md` for the full picture, `docs/graphics.md` for the whole
+render/present stack (tier ladder, scanout, pitfalls, open items), and `docs/roadmap.md` for
 the milestone plan (M1 boot → M15 display pipeline). `docs/research/GAPS-and-verification.md`
 tracks claims still needing verification.
 
@@ -355,11 +356,14 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   KosmicKrisp + the zink-on-KK DYLD/Mesa selectors); a *bare* `target/debug/limina --window` with
   NONE of that env **aborts on GPU init** (`Couldn't open libEGL.dylib` → SIGABRT) — that's the
   missing env, **not** a coexist problem, and **not** a reason to fall back to software-2D.
-  - **Verify venus is live in the GNOME SESSION, not over a non-login ssh shell.** `vulkaninfo` in the
-    seated desktop shows `Virtio-GPU Venus`; the same command over `ssh` enumerates **nothing** because
-    a non-login shell doesn't source `/etc/environment.d/90-limina-zink.conf` (the venus ICD selection)
-    — an empty ssh `vulkaninfo` is a false negative, not a venus failure. The other host-side tell:
-    active `Mesa:` GL errors in the worker log mean venus **is** rendering.
+  - **Verifying venus is live: print the env in the shell you are actually using.** `vulkaninfo` in
+    the seated desktop shows `Virtio-GPU Venus`. Over plain non-login `ssh` it *also* enumerates venus
+    on the current F44 enhanced image (measured 2026-08-16 — the user manager holds
+    `/etc/environment.d/90-limina-zink.conf`'s vars, and the venus ICD is a normal entry in
+    `/usr/share/vulkan/icd.d/` anyway), so the long-standing "an empty ssh `vulkaninfo` is expected"
+    rule is **not** unconditional. Treat an *empty* result as "echo `$VK_DRIVER_FILES` and check the
+    env", not as "venus is broken". The other host-side tell: active `Mesa:` GL errors in the worker
+    log mean venus **is** rendering. Full picture: `docs/graphics.md`.
   - **FRINGE — `--kernel` injection** (`spikes/venus-draw-probe/boot-seated-kk.sh`,
     `scripts/run-venus-window.sh`): direct-boots an *external* `Image-16k` with `selinux=0`, bypassing
     the guest's GRUB and SELinux. Use **only** when you need a deterministic test kernel (the L2 venus
