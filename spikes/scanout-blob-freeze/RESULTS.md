@@ -239,11 +239,18 @@ the miss above was the *cache's*, immediately after the store's.
 
 ## Still open
 
-**The publish/release asymmetry**: 103 publishes against 19 releases in the run-2 session. Two
-candidates, neither asserted: (a) benign — those surfaces really are still alive; (b) structural —
-the guest creates two exportable images per buffer and vkr publishes per `IOSurfaceCreate` while a
-release carries one id per resource. If (b), *any* cap is eventually reached, which changes how
-generous 32 really is. Worth measuring before trusting the cap as a memory bound.
+~~**The publish/release asymmetry**~~ **— RESOLVED 2026-08-16, benign.** 103 publishes against 19
+releases looked like it might be structural (two exportable images per buffer, publish per
+`IOSurfaceCreate` against one release per resource) — in which case *any* cap is eventually
+reached. It is not. `limina_publish_surface` has exactly two call sites, both inside
+`IOSurfaceCreate` paths; the import path (`vkr_mtl_texture_from_iosurface`) publishes nothing, so
+we count **creates, not bindings**. The guest session supplied the decisive test: their scanout
+ring is 2 buffers and each takes one export plus one dmabuf *import*, so counting exports shows 2
+ids and counting bindings would show 4. The log shows **2** (139 and 141, the pair
+`SET_SCANOUT_BLOB` binds). The ratio is a session's worth of client transients measured against a
+ring that is allocated once and legitimately never releases — 52 distinct ids published, 48
+evicted, 38 released in the shape-2 run. **The cap is a memory bound on transients, not a
+correctness parameter.**
 
 **The per-frame warn for a genuinely unrecoverable id** still fires at 60 Hz (a surface the worker
 no longer has registered). Pre-existing; the request itself is throttled, the log line is not.

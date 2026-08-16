@@ -220,6 +220,17 @@ Any older statement that present is "a full-frame CPU readback per flush", that 
 panics, or that "there is no zero-copy scanout of a GPU texture" describes the pre-KosmicKrisp
 stack and is wrong.
 
+**The guarantee a guest may build on: presenting a surface id keeps it resolvable, and a dropped id
+self-heals.** The supervisor holds Mach-published surfaces in a bounded, evicting store
+(`SurfaceStore`, `crates/limina/src/window/present.rs`), and a non-global surface it drops cannot be
+recovered from that side — `IOSurfaceLookup` fails by design, and only the worker can mint a port
+for one. Two things make that safe: an id the guest is currently presenting is **never evicted**,
+and a failed resolve asks the worker to re-publish (`resurface <id>` → the registry every publish
+populates), which costs one frame. A guest therefore does **not** need to re-create swapchain
+buffers on a transition to keep its scanout alive; a compositor that does so is working around a
+bug that no longer exists. The cap is a memory bound on client transients, not a budget guests
+share. History: `spikes/scanout-blob-freeze/RESULTS.md`.
+
 ### Format modifiers
 
 KK implements `VK_EXT_image_drm_format_modifier` for real, LINEAR-only, over the
@@ -321,6 +332,18 @@ Ask **what
 refused the allocation**: read the worker log at the timestamp of the guest symptom — the cause is
 usually a different, earlier line there — and check the exhaustible resource that is not RAM
 (vm regions, fds, mappings). Consider real memory pressure last.
+
+**The frame can be dropped one process after the one you are instrumenting.** A guest reported
+`SET_SCANOUT_BLOB` consumed and ACKed but never applied, on a display frozen while it rendered
+correctly at 60 Hz. Everything either side could see was healthy, because the worker *did* apply and
+ACK every flip — the **supervisor** discarded the frame afterwards, having evicted the surface from
+its bounded store. Six mechanisms were proposed and died before anyone looked in the right process.
+Two habits fall out. **A ruling-out is only as good as the population it counted**: "eviction is
+ruled out, only 20 distinct ids exist" counted a log line that covers venus scanout imports only,
+while the store receives every published surface (41 that run). And **an unlogged exit path is where
+the wrong answer lives** — both ways an id could leave the store were silent, which is precisely
+why the fault was invisible from the host and unreachable from the guest. The instrument that ended
+it makes a failed resolve *name its own cause*.
 
 **A guest can take the whole VM down through the renderer.** Invalid Vulkan usage from the guest
 reaches vkr on the ring thread, and four incidents so far turned that into a host-side abort that
