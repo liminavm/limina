@@ -46,7 +46,16 @@ impl SendSurface {
 /// worker's fence completion stands on (#24: the CATransaction completion block alone fires
 /// ~one refresh BEFORE WindowServer stops sampling the old buffer; see
 /// spikes/present-pacing/).
-pub(crate) type AckMsg = (u32, Option<SendSurface>);
+#[derive(Clone)]
+pub(crate) enum AckMsg {
+    /// The presented frame's surface id + the surface it replaced.
+    Shown(u32, Option<SendSurface>),
+    /// We could not resolve `id` and the guest is still presenting it: ask the worker to publish
+    /// it again. Rides the same socket as `Shown` because the *answer* must ride the surface port
+    /// — one FIFO queue is what makes IOSurface id recycling safe — and this is only the request.
+    /// See [`SurfaceStore::request_resurface`].
+    Resurface(u32),
+}
 
 /// Scanout/cursor IOSurfaces the worker handed us by Mach port, keyed by `IOSurfaceGetID`. The
 /// present + cursor paths resolve ids here first (the non-global, capability-scoped surfaces),
@@ -83,6 +92,10 @@ pub struct SurfaceStore {
     /// Bounded, so a guest that presents a fresh id every frame cannot pin the store open and
     /// re-create the retention leak the cap exists to stop.
     pinned: VecDeque<u32>,
+    /// Ids we have asked the worker to re-publish and have not seen come back, with when we
+    /// asked. The guest presents a missing id at 60 Hz, so without this every frame would put a
+    /// request on the wire while the first one is still in flight.
+    pending_resurface: std::collections::HashMap<u32, std::time::Instant>,
 }
 
 /// Why an id left the store. See [`SurfaceStore::gone`].
@@ -103,6 +116,11 @@ const PINNED_CAP: usize = 6;
 const GONE_HISTORY_CAP: usize = 64;
 
 const SURFACE_STORE_CAP: usize = 32;
+
+/// How long a re-publish request is considered in flight. Long enough that a healthy round trip
+/// (a line on the ack socket, a registry lookup, a Mach send) lands well inside it; short enough
+/// that a request lost to a worker relaunch is retried within a few frames rather than never.
+const RESURFACE_RETRY: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Cap for the main-thread frame-apply cache (see [`SurfaceStore::get_or_insert_with`]). Smaller
 /// than the store's: the cache only saves a mutex + lookup per frame, a miss costs a re-resolve,
@@ -125,10 +143,14 @@ impl SurfaceStore {
             released: Vec::new(),
             gone: VecDeque::new(),
             pinned: VecDeque::new(),
+            pending_resurface: std::collections::HashMap::new(),
         }
     }
 
     pub(crate) fn insert(&mut self, id: u32, surface: CFRetained<IOSurfaceRef>) {
+        // Whatever brought this surface in — a fresh publish or an answer to our request — the
+        // id is resolvable again, so any request we were holding down is finished.
+        self.pending_resurface.remove(&id);
         if self.map.insert(id, SendSurface(surface)).is_none() {
             log::debug!(
                 "surface store: published surface {id} ({} held)",
@@ -164,9 +186,38 @@ impl SurfaceStore {
         }
     }
 
+    /// Should we ask the worker to re-publish `id`? True at most once per [`RESURFACE_RETRY`],
+    /// per id.
+    ///
+    /// The store is bounded and the worker's scanout IOSurfaces are **non-global** — capability
+    /// scoped, handed over by Mach port — so once one leaves the store, `IOSurfaceLookup` cannot
+    /// bring it back and only the process that created it can mint a port for it. Asking is the
+    /// only recovery there is; without it a dropped id is a permanent freeze
+    /// (`spikes/scanout-blob-freeze/RESULTS.md`).
+    pub(crate) fn request_resurface(&mut self, id: u32) -> bool {
+        let now = std::time::Instant::now();
+        match self.pending_resurface.get(&id) {
+            Some(asked) if now.duration_since(*asked) < RESURFACE_RETRY => false,
+            _ => {
+                self.pending_resurface.insert(id, now);
+                true
+            }
+        }
+    }
+
     /// The guest is presenting `id` right now: protect it from eviction. Idempotent, and bounded
     /// at [`PINNED_CAP`] so the protection cannot grow without limit.
+    ///
+    /// `LIMINA_PIN_PRESENTED=0` disables the protection. It exists because the pin is a *first*
+    /// line of defence and the re-publish recovery behind it is otherwise unreachable — with the
+    /// pin on, no workload evicts a presented surface, so nothing ever exercises the path that
+    /// heals one. Turning it off is how [`request_resurface`](Self::request_resurface) gets tested
+    /// against a real guest.
     pub(crate) fn pin_presented(&mut self, id: u32) {
+        static PIN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if !*PIN.get_or_init(|| std::env::var("LIMINA_PIN_PRESENTED").as_deref() != Ok("0")) {
+            return;
+        }
         if self.pinned.back() == Some(&id) {
             return;
         }
@@ -731,6 +782,40 @@ mod tests {
         assert!(
             store.get(12).is_some(),
             "surface 12 is being presented and was evicted anyway — this is the freeze"
+        );
+    }
+
+    /// A resolve miss asks the worker to re-publish the surface — but the guest presents at
+    /// 60 Hz, so an unthrottled request would put one line per frame on the ack socket while the
+    /// re-publish is still in flight. Ask once, then stay quiet until the request has had time to
+    /// land or fail.
+    #[test]
+    fn resurface_requests_are_throttled_per_id() {
+        let mut store = SurfaceStore::with_cap(2);
+        assert!(store.request_resurface(9), "the first miss must ask");
+        assert!(
+            !store.request_resurface(9),
+            "the next frame's miss must not ask again — the first request is still in flight"
+        );
+        assert!(
+            store.request_resurface(10),
+            "a different id is a different request"
+        );
+    }
+
+    /// Once the worker hands the surface back, the id is resolvable again — and if it is later
+    /// lost a second time, the throttle must not still be holding the old request down.
+    #[test]
+    fn a_republished_surface_clears_its_pending_request() {
+        let mut store = SurfaceStore::with_cap(4);
+        assert!(store.request_resurface(9));
+        store.insert(9, make_surface());
+        assert!(store.get(9).is_some());
+        store.note_released(9);
+        let _ = store.take_released();
+        assert!(
+            store.request_resurface(9),
+            "the surface came back and went again — this is a new request, not the old one"
         );
     }
 

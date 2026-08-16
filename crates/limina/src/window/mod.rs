@@ -1737,7 +1737,21 @@ pub fn run(
                     );
                 }
             };
-            while let Ok((id, prev)) = ack_rx.recv() {
+            while let Ok(msg) = ack_rx.recv() {
+                let (id, prev) = match msg {
+                    present::AckMsg::Shown(id, prev) => (id, prev),
+                    // Out-of-band and unpaced: this is only the *request*. The worker answers by
+                    // publishing on the surface port, which is what keeps the ordering that makes
+                    // recycled IOSurface ids safe.
+                    present::AckMsg::Resurface(id) => {
+                        log::warn!(
+                            "window: asking the worker to re-publish surface {id} — we dropped it \
+                             and the guest is still presenting it"
+                        );
+                        send_line(format!("resurface {id}\n"));
+                        continue;
+                    }
+                };
                 // #24: the completion block (latch) fires ~one refresh BEFORE WindowServer
                 // stops sampling the surface this frame replaced (measured p50 17 ms / max
                 // 33 ms, spikes/present-pacing/). Acking at latch hands the guest its
@@ -2291,17 +2305,27 @@ pub fn run(
                 // worker told us it released — a permanent skip, not a transient one. Naming the
                 // cause at the point of failure is what separates the two.
                 // See `spikes/scanout-blob-freeze/RESULTS.md`.
-                let why = surface_map.lock().unwrap().why_gone(id);
+                // Ask for it back. These scanouts are non-global, so no lookup can recover one
+                // — only the worker can publish it again, and until it does every frame naming
+                // this id is skipped. Throttled per id inside the store; the request goes to the
+                // dedicated ack thread (never a socket write on the AppKit main thread).
+                let (why, ask) = {
+                    let mut map = surface_map.lock().unwrap();
+                    (map.why_gone(id), map.request_resurface(id))
+                };
+                if ask {
+                    let _ = ack_tx.try_send(present::AckMsg::Resurface(id));
+                }
                 match why {
                     Some(present::GoneReason::Released) => log::warn!(
                         "window: surface {id} unresolved; skipping frame — the worker RELEASED \
-                         this surface and the guest is still presenting it. Permanent for this \
-                         id: nothing re-publishes it."
+                         this surface and the guest is still presenting it. Recoverable only if \
+                         the worker still has it registered."
                     ),
                     Some(present::GoneReason::Evicted) => log::warn!(
                         "window: surface {id} unresolved; skipping frame — the store EVICTED this \
-                         surface at its cap and the guest is still presenting it. Permanent for \
-                         this id: nothing re-publishes it."
+                         surface at its cap and the guest is still presenting it. Asking for it \
+                         back."
                     ),
                     None => log::warn!(
                         "window: surface {id} unresolved; skipping frame — we never held it, and \
@@ -2326,7 +2350,10 @@ pub fn run(
                     .borrow_mut()
                     .replace(shown.clone())
                     .filter(|p| !std::ptr::eq::<IOSurfaceRef>(&**p, &**shown));
-                Some((ack_tx.clone(), (id, prev.map(present::SendSurface::new))))
+                Some((
+                    ack_tx.clone(),
+                    present::AckMsg::Shown(id, prev.map(present::SendSurface::new)),
+                ))
             };
             // Hand a frame to the carrier's layer and, when the `extend` strip is up, to its copy
             // of it. The strip's transaction carries NO ack: one presented frame must produce

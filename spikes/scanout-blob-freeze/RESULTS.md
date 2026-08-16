@@ -187,3 +187,63 @@ still name — but the trigger is theirs.
 `evidence/` holds a decimated host-log slice (every 40th routine line, every `unresolved`), the
 per-minute skip and scanout rates, and the distinct IOSurface ids. The full 262k-line worker log is
 not committed; regenerate with the boot command above.
+
+## The fix, shipped 2026-08-16 — two shapes, verified in that order
+
+**Shape 1 — never evict an id the guest is presenting.** `pin_presented(id)` runs on every frame
+apply (unconditionally, *not* only on a cache miss: the frame cache in front means a hot id would
+never touch the store and would look idle to any eviction policy — which is exactly how the
+compositor's ring got evicted while in continuous use). Pinned ids are skipped by `evict_to_cap`,
+bounded at `PINNED_CAP = 6` so a guest that mints a fresh id every frame cannot pin the store open
+and re-create the retention leak the cap exists to stop.
+
+Verified under the same workload: **0 unresolved frames against 833 before**, over a 30-minute
+session with 365 evictions — the cap keeps doing its job, it just no longer aims at the ring.
+
+**Shape 2 — ask for it back on a resolve miss.** The pin is a first line of defence, not a proof:
+an id the guest stops presenting falls out of the LRU pin and can be evicted, and the store cannot
+recover a non-global surface by itself. So a failed resolve now sends `resurface <id>` to the
+worker, which looks the id up in the registry every publish already populates
+(`virgl_renderer_republish_iosurface`) and publishes it again. Throttled to one request per id per
+250 ms — the guest presents a missing id at 60 Hz.
+
+**The answer must ride the surface Mach port, never the control socket.** IOSurface ids recycle
+(39 distinct ids across 301 guest buffers in `spikes/venus-churn-retention/`), and the ordering
+hazard that creates was closed by putting publishes and releases on one FIFO port. The *request*
+may go out of band; the *answer* is an ordinary publish.
+
+### Shape 2, verified end-to-end 2026-08-16
+
+Shape 1 masks shape 2 by design — with the pin on, no workload evicts a presented surface, so
+nothing exercises the recovery. `LIMINA_PIN_PRESENTED=0` disables the pin for exactly this reason
+and is kept as a permanent test lever. Same image, same repro (launch Firefox → fullscreen →
+Super), pin off:
+
+```
+13:02:08 DEBUG surface store: evicted surface 139 at cap 8 …
+13:02:08 WARN  window: surface 139 unresolved; skipping frame — the store EVICTED this surface …
+13:02:08 WARN  window: asking the worker to re-publish surface 139 …
+13:02:08.928 DEBUG gpu: re-published surface 139 on request
+13:02:08 DEBUG surface store: published surface 139 (33 held)
+```
+
+Three evictions of presented ids, three requests, three re-publishes, each round trip inside the
+same second — and **one skipped frame per event** rather than a permanent freeze. The user, driving
+the window, could not see the hitch at all.
+
+**A side observation this run explains**, previously unexplained: the "held" counter appears to run
+two interleaved sequences (`33 held` and `9 held` for the same id, one second apart). There are two
+`SurfaceStore`s — the Mach store at `SURFACE_STORE_CAP = 32` and the main-thread frame-apply cache
+at `FRAME_CACHE_CAP = 8`. Both log through the same lines. Not a bug; the eviction that produced
+the miss above was the *cache's*, immediately after the store's.
+
+## Still open
+
+**The publish/release asymmetry**: 103 publishes against 19 releases in the run-2 session. Two
+candidates, neither asserted: (a) benign — those surfaces really are still alive; (b) structural —
+the guest creates two exportable images per buffer and vkr publishes per `IOSurfaceCreate` while a
+release carries one id per resource. If (b), *any* cap is eventually reached, which changes how
+generous 32 really is. Worth measuring before trusting the cap as a memory bound.
+
+**The per-frame warn for a genuinely unrecoverable id** still fires at 60 Hz (a surface the worker
+no longer has registered). Pre-existing; the request itself is throttled, the log line is not.
