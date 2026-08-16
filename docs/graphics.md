@@ -85,7 +85,7 @@ check the link before suspecting anything else.
 ### 3.1 Software-2D — a probe mode, not a desktop
 
 `--gpu-software-2d` gives the guest a virtio-gpu with no 3D capability. `/dev/dri/card0` and
-`renderD128 `still appear and `drm_info` reports a full mode list, but gbm has no driver behind it,
+`renderD128` still appear and `drm_info` reports a full mode list, but gbm has no driver behind it,
 so a GNOME session **cannot start at all**:
 
 ```
