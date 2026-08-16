@@ -110,12 +110,18 @@ Gdm: GdmLocalDisplayFactory: maximum number of display failures reached. Giving 
 ```
 
 Measured 2026-08-16 with a clean differential: on the same image and the same device, moving that
-one file aside and restarting gdm brings a greeter up on `seat0` immediately. So the driver
-override is a **hard pin where it should be a preference** — an enhanced guest is more brittle than
-a stock one on a GL-less host, which inverts the two-tier intent. See §9.
+one file aside and restarting gdm brings a greeter up on `seat0` immediately. So the cause is the
+unconditional driver pin, not the device.
 
-Software-2D is never the right answer to "venus is misbehaving", and on an enhanced guest today it
-will not give you a desktop — but it is not a broken mode, and it is not removable (§9).
+**That combination is an unsupported configuration — wontfix (user's call, 2026-08-16).** The
+enhanced tier exists to use the 3D device; running it against a device that has none is not a
+scenario limina serves. The floor that must work on a GL-less host is the **stock** tier, and it
+does. Do not "fix" the override to make this case boot — the diagnosis is recorded here only so the
+next person who sees `Failed to setup: No GPUs found` on an enhanced guest recognises it in seconds
+instead of chasing gbm.
+
+Software-2D is never the right answer to "venus is misbehaving", and it is not removable — the
+compatibility floor is tested through it.
 
 ### 3.2 vrend — accelerated GL, on any guest, with nothing installed
 
@@ -396,7 +402,6 @@ or commit while it runs.
 |---|---|
 | **Stock-tier Vulkan is dead, not degraded** — upstream the venus stub-instance patch so a stock guest keeps llvmpipe | §3.3, `docs/design/16k-page-requirement.md`, `docs/upstreaming/ledger/mesa.md` |
 | Retire the 16 KiB requirement for venus on stock guests (`VIRTGPU_PARAM_BLOB_ALIGNMENT` chain) | `docs/design/16k-page-requirement.md` |
-| **The enhanced image's driver override is a hard pin, not a preference** — `MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu` makes an enhanced guest fail to start a session on a GL-less host, where a stock guest comes up fine. Wanted: select the driver only when the 3D device is actually there, so the enhanced tier degrades at least as gracefully as the stock one. | §3.1 |
 | **Fence-accurate present is not wired for vrend** — vrend's flush path never reaches `try_park_present`, so `FENCEPRESENT` never fires and the #24 tear/pacing work does not apply to the tier the desktop actually runs on. Tearing here is a human-eyeball verdict. | `docs/hardening-backlog.md` |
 | zink reads `heap.size − heapUsage` instead of `heapBudget`, so GL clients do not see our cap | `docs/design/gpu-memory-budget.md` §Known limits |
 | Pure-GL guests are unbounded — the cap is only enforced at `vkAllocateMemory` | same |
