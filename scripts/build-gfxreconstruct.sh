@@ -20,9 +20,15 @@ set -euxo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
 
-# Pin for reproducibility; override with GFXR_TAG=<tag>. Resolved against the repo's
-# release tags at clone time when set to "latest".
-GFXR_TAG="${GFXR_TAG:-latest}"
+# Pin for reproducibility; override with GFXR_TAG=<tag-or-sha>. "latest" resolves against
+# the repo's release TAGS at clone time — which is why the default is a commit, not
+# "latest": the newest tag (v1.0.4) is far behind main and its replay summary line still
+# says "Replay FPS", while `crates/limina-test/tests/venus_replay.rs` greps for the
+# current "Measured FPS". A "latest" build therefore replays perfectly and fails the test
+# on wording alone (2026-08-16 — it cost a rebuild to notice the tag was the old one).
+# 765c3d6 is the commit the enhanced goldens' /opt/gfxreconstruct was built from; move
+# this pin and the test's grep together, never one alone.
+GFXR_TAG="${GFXR_TAG:-765c3d6}"
 GFXR_GIT="${GFXR_GIT:-https://github.com/LunarG/gfxreconstruct.git}"
 
 OUT="$REPO/target/test-guest/gfxreconstruct"
@@ -34,7 +40,7 @@ container volume inspect "$VOL" >/dev/null 2>&1 || container volume create "$VOL
 
 scripts/build-image.sh   # ensure the unified limina-build image (cmake/xcb/X11/wayland deps baked)
 container run --rm \
-  --cpus 8 --memory 8g \
+  --cpus 8 --memory 12g \
   -v "$OUT:/out" \
   -v "$OUTROOT:/outroot" \
   -v "$VOL:/build" \
@@ -61,7 +67,12 @@ container run --rm \
       -DCMAKE_INSTALL_PREFIX=/opt/gfxreconstruct \
       -DCMAKE_INSTALL_LIBDIR=lib64 \
       -DCMAKE_CXX_FLAGS="-Wno-error=deprecated-declarations"
-    ninja -C build
+    # -j4, rather than the default width: at 765c3d6 the generated Vulkan/OpenXR encoder
+    # translation units each want >2 GB in cc1plus, and eight of them in parallel OOM the
+    # container ("c++: fatal error: Killed signal terminated program cc1plus", 2026-08-16).
+    # The memory bump above is not enough on its own — the limit is per-compile, so the
+    # width is what has to come down.
+    ninja -C build -j4
     DESTDIR=/tmp/stage ninja -C build install
 
     # The layer manifest must point at the layer .so by absolute path (we install

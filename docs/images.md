@@ -504,11 +504,21 @@ needs no ad-hoc installs (which perturb the very thing being measured, and on 20
 | `apitrace` (`eglretrace`) | Fedora `apitrace-13.0-6.fc44` | `gl-replay-venus`, `gl-replay-llvmpipe` |
 | `vkmark` | Fedora `vkmark-2025.01-3.20250123git2bf2ca7.fc44` | `vkmark-default-venus` — note this is the **distro** binary, so compare only against `vkmark-default-venus` rows, never the `vkmark-3scene-venus` ones |
 | `fio` | Fedora | virtio-blk path numbers |
-| `gfxrecon-replay` | **built in-guest** at `~claude/gfxreconstruct/build/tools/replay/`, upstream `765c3d6` | `vk-replay-venus-headless` |
+| `gfxrecon-replay` | **built in-guest** at `~claude/gfxreconstruct/build/tools/replay/`, upstream `765c3d6`; on the F44 `enhanced.test` golden it is `/opt/gfxreconstruct`, cross-built on the host by `scripts/build-gfxreconstruct.sh` at the **same** `765c3d6` (2026-08-16) | `vk-replay-venus-headless`, and the L2 `venus_vk_replay_matches_lavapipe_reference` |
 
 `gfxrecon-replay` is not packaged for Fedora; the build recipe (and its F44-specific dependency
 set, without which OpenXR aborts cmake) lives in the header of `scripts/perf-ledger.sh`. Build
-with **`-j2`** — `-j4` OOMs a 4 GiB guest. Since 2026-08-08 `perf-ledger.sh` **aborts** rather
+with **`-j2`** — `-j4` OOMs a 4 GiB guest. (The host-side container build in
+`scripts/build-gfxreconstruct.sh` has the same appetite at 12 GiB and 8 CPUs: it needs `-j4`,
+because each generated Vulkan/OpenXR encoder unit wants >2 GB in `cc1plus` and the default width
+gets them OOM-killed.)
+
+**PIN THE COMMIT, NOT THE TAG (2026-08-16).** `build-gfxreconstruct.sh` used to default to
+`GFXR_TAG=latest`, which resolves against release *tags* — the newest is `v1.0.4`, far behind
+main. That build replays perfectly (200 frames, exit 0) but ends its summary with `Replay FPS`,
+while `crates/limina-test/tests/venus_replay.rs` greps for the current `Measured FPS`, so the test
+fails on wording with nothing wrong underneath. The script now defaults to `765c3d6`, the commit
+the goldens were built from. Move this pin and that grep together, never one alone. Since 2026-08-08 `perf-ledger.sh` **aborts** rather
 than silently dropping the `vk-replay` row if this binary is missing, so if that fires, the guest
 has drifted from this baseline (`LIMINA_PERF_SKIP_VK=1` overrides deliberately).
 
