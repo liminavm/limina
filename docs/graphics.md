@@ -9,12 +9,11 @@ cutouts, fullscreen and input policy — are a different subsystem and live in
 
 **Provenance.** Every claim below was re-derived from booted VMs on 2026-08-16 rather than carried
 forward from older notes; the measurements and the falsified claims they replaced are in
-`spikes/graphics-doc-audit/RESULTS.md`. The one exception, named because a document claiming
-"measured, not carried" must not hide one: the **venus present path** (§4) was not exercised by
-those boots — mutter composites on vrend, so a GNOME guest structurally cannot reach it. Its
-evidence is the L2 test `synoik_session_reaches_a_rendered_desktop`, which boots the
-Vulkan-compositor image through exactly that path and was green on 2026-08-15. Where this document
-and an older one disagree, this one is right — that is why the older ones were deleted.
+`spikes/graphics-doc-audit/RESULTS.md`. Four guests were involved, deliberately: enhanced and stock
+F44 for the tiers, the **synoik** Vulkan-compositor image for the venus present path (a GNOME guest
+composites on vrend and structurally cannot reach it), and an enhanced guest forced onto
+software-2D for the floor differential. Where this document and an older one disagree, this one is
+right — that is why the older ones were deleted.
 
 ---
 
@@ -86,11 +85,21 @@ check the link before suspecting anything else.
 
 ## 3. The three tiers
 
-### 3.1 Software-2D — a probe mode, not a desktop
+### 3.1 Software-2D — the compatibility floor, and the GL-less-host path
 
-`--gpu-software-2d` gives the guest a virtio-gpu with no 3D capability. `/dev/dri/card0` and
-`renderD128` still appear and `drm_info` reports a full mode list, but gbm has no driver behind it,
-so a GNOME session **cannot start at all**:
+`--gpu-software-2d` gives the guest a virtio-gpu with no 3D capability at all: no venus, no vrend,
+no host GL, no KosmicKrisp. Everything renders on llvmpipe in the guest. This is the two-tier
+guarantee's actual floor, and it is guarded:
+`crates/limina-test/tests/boot.rs::fedora_stock_image_software_2d_floor_renders_desktop` boots a
+**stock** Fedora guest on this device and asserts a usable GNOME desktop paints. It is also what
+the capture oracle (`--display-capture`), the EFI image-prep script, and ISO/GRUB boot work all run
+on, since none of them can assume a working host GL.
+
+**But an *enhanced* guest does not come up on it, and that is our doing, not software-2D's.** The
+enhanced image's `/etc/environment.d/90-limina-zink.conf` pins
+`MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu` + `GALLIUM_DRIVER=virgl`, so mesa is forced onto a driver
+that requires the 3D device. With no 3D device, gbm has no driver behind `/dev/dri/card0` (which
+still exists, and `drm_info` still reports a full mode list), and mutter dies in a loop:
 
 ```
 libEGL warning: egl: failed to create dri2 screen
@@ -100,9 +109,13 @@ org.gnome.Shell@gdm.service: Failed with result 'protocol'
 Gdm: GdmLocalDisplayFactory: maximum number of display failures reached. Giving up.
 ```
 
-The window shows a blinking console cursor. That is the expected outcome, not a bug — but it means
-software-2D is for **GL-less hosts, the capture oracle, and early-boot/console work**, and it is
-never the right answer to "venus is misbehaving". Do not describe it as a degraded desktop tier.
+Measured 2026-08-16 with a clean differential: on the same image and the same device, moving that
+one file aside and restarting gdm brings a greeter up on `seat0` immediately. So the driver
+override is a **hard pin where it should be a preference** — an enhanced guest is more brittle than
+a stock one on a GL-less host, which inverts the two-tier intent. See §9.
+
+Software-2D is never the right answer to "venus is misbehaving", and on an enhanced guest today it
+will not give you a desktop — but it is not a broken mode, and it is not removable (§9).
 
 ### 3.2 vrend — accelerated GL, on any guest, with nothing installed
 
@@ -383,6 +396,7 @@ or commit while it runs.
 |---|---|
 | **Stock-tier Vulkan is dead, not degraded** — upstream the venus stub-instance patch so a stock guest keeps llvmpipe | §3.3, `docs/design/16k-page-requirement.md`, `docs/upstreaming/ledger/mesa.md` |
 | Retire the 16 KiB requirement for venus on stock guests (`VIRTGPU_PARAM_BLOB_ALIGNMENT` chain) | `docs/design/16k-page-requirement.md` |
+| **The enhanced image's driver override is a hard pin, not a preference** — `MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu` makes an enhanced guest fail to start a session on a GL-less host, where a stock guest comes up fine. Wanted: select the driver only when the 3D device is actually there, so the enhanced tier degrades at least as gracefully as the stock one. | §3.1 |
 | **Fence-accurate present is not wired for vrend** — vrend's flush path never reaches `try_park_present`, so `FENCEPRESENT` never fires and the #24 tear/pacing work does not apply to the tier the desktop actually runs on. Tearing here is a human-eyeball verdict. | `docs/hardening-backlog.md` |
 | zink reads `heap.size − heapUsage` instead of `heapBudget`, so GL clients do not see our cap | `docs/design/gpu-memory-budget.md` §Known limits |
 | Pure-GL guests are unbounded — the cap is only enforced at `vkAllocateMemory` | same |
