@@ -272,7 +272,7 @@ Two gotchas that cost a run each, both of the same "verify, don't assume" shape:
   Reboot the guest, and verify the driver env at `/proc/<compositor-pid>/environ`, not in the file.
 
 Run it like any enhanced image: `cargo xtask run --disk Fedora-Workstation-44.enhanced.synoik.raw`
-(pass `LIMINA_BOOT_LOG=<path>` when a second VM is up, or the two share one worker log).
+(the worker log is per-disk — `/tmp/limina-worker-<disk>.log` — and `/tmp/enhanced-efi-kk-worker.log` is a symlink to whichever VM booted last; `LIMINA_BOOT_LOG=<path>` still overrides).
 
 ##### Rebuilding it (and retargeting to F45)
 

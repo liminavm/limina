@@ -15,10 +15,22 @@
 set -u
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 cd "$ROOT"
-# Overridable so a long-running or concurrent boot can keep its own log instead of racing
-# every other caller for the one fixed path (the 24h gpu-pool-soak needs this).
-LOG="${LIMINA_BOOT_LOG:-/tmp/enhanced-efi-kk-worker.log}"
 WORK="${LIMINA_DISK:?set LIMINA_DISK to the enhanced .raw}"
+# The worker log is PER-DISK by default, because the old fixed default silently destroyed the
+# evidence of any VM that was already running: this script `rm -f`s its log, so booting a second
+# VM truncated the first one's log out from under a live worker (which keeps writing at its old
+# offset, leaving a sparse hole where the history was). Lost the synoik VM's whole boot log that
+# way on 2026-08-16. Two VMs can never share a disk (limina refuses a second read-write attach),
+# so keying the name on the disk makes collisions impossible.
+#
+# WELL_KNOWN stays valid: a pile of tools default to reading /tmp/enhanced-efi-kk-worker.log
+# (scripts/check-gpu-context-health.sh, spikes/display-monitor/*, spikes/wakeup-probe/*, …), and
+# what they mean by it is "the VM I just booted". So point it at this boot's real log instead of
+# being it. Only when using the default — an explicit LIMINA_BOOT_LOG (the 24h gpu-pool-soak)
+# never touches shared state. CAVEAT with two VMs up: the symlink names the LAST one booted, and
+# nothing repoints it when that one exits, so read the per-disk path directly when it matters.
+WELL_KNOWN=/tmp/enhanced-efi-kk-worker.log
+LOG="${LIMINA_BOOT_LOG:-/tmp/limina-worker-$(basename "${WORK%.raw}").log}"
 FW="${LIMINA_FIRMWARE:-target/krun-efi/KRUN_EFI.gop.fd}"
 [ -f "$FW" ] || { echo "GOP firmware not found at $FW (build with GOP=1 scripts/build-krun-efi.sh)"; exit 1; }
 # LIMINA_KK_ICD pins a specific KosmicKrisp ICD json instead of the devenv build — use it to boot
@@ -29,6 +41,10 @@ ICD="${LIMINA_KK_ICD:-$(ls /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/kosm
 [ -n "$ICD" ] || { echo "no KosmicKrisp ICD under /Volumes/mesa-cs/build-kk"; exit 1; }
 [ -f "$ICD" ] || { echo "KosmicKrisp ICD not found: $ICD"; exit 1; }
 rm -f "$LOG"
+if [ -z "${LIMINA_BOOT_LOG:-}" ]; then
+  rm -f "$WELL_KNOWN"          # may be a stale regular file from before the per-disk split
+  ln -sfn "$LOG" "$WELL_KNOWN"
+fi
 # Host KK + zink-on-KK env (matches boot-seated-kk.sh): venus render server -> KK; the coexist
 # device's vrend half gets host GL via zink-on-KK (needs the zink-kk Mesa libEGL by bare name on the
 # DYLD path + the loader/gallium selectors). /bin/bash strips DYLD_* (SIP); the codesigned worker
