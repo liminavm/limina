@@ -10,6 +10,11 @@ new resources can knock another participant out. Their writeup:
 guest.** That is why five successive theories (four theirs, one mine) all fitted the evidence and
 all died: every instrument either side had was pointed at a healthy component.
 
+**ANSWER (run 2, instrumented): the supervisor's surface store EVICTS the compositor's scanout
+buffers at its 32-entry cap while they are still being presented.** Jump to §"CONFIRMED" — the
+sections before it are the first run's reasoning, which reached the right subsystem and the wrong
+mechanism, and are kept for the two hypotheses they kill.
+
 ## Reproduction
 
 `gfxsynoik.raw` (clone of `Fedora-Workstation-44.enhanced.synoik.raw`), M1 Max, 6 vCPU / 8 GiB,
@@ -66,11 +71,17 @@ suspected:
   return `Ok(OkNoData)` unconditionally — so the code path is as suspicious as it looked. It is
   simply not what happened: the mapping was correct for the entire session. A suspicious code path
   is a lead until observed, and this one did not survive observation.
-- **Surface-store eviction.** `SurfaceStore` is capped at 32 with FIFO eviction, and synoik mints
-  fresh scanout resources, so overflow was plausible. Only **20** distinct IOSurface ids exist in
-  the whole session (`evidence/distinct-iosurface-ids.txt`). Not eviction.
+- **Surface-store eviction.** ~~`SurfaceStore` is capped at 32 with FIFO eviction… only **20**
+  distinct IOSurface ids exist in the whole session. Not eviction.~~ **WRONG, and this was the
+  answer.** The count came from `[LIMINA-VKR-MTLTEX]` lines, which cover only venus *scanout
+  imports*; the store receives every published surface, and run 2 published 41. A ruling-out is
+  only as good as the population it counted.
 
-## The mechanism
+## The mechanism, as reasoned in run 1 — SUPERSEDED by §CONFIRMED
+
+Right subsystem, right failure shape, wrong exit path: the store does drop surfaces the guest still
+presents, but by eviction rather than by release. The release hazard below is nonetheless **real
+and latent** — a guest that presents a released id fails identically — so this stays on the record.
 
 `crates/limina/src/window/present.rs`. The supervisor holds guest surface id → retained
 `IOSurfaceRef`, and the worker tells it when the guest lets go of a resource:
@@ -112,6 +123,54 @@ Every reported observation follows:
 | only a genuinely new resource heals a participant | a new resource publishes a new surface into the map — the only thing that repopulates it |
 | creating new resources can knock another out | releases follow the guest's unref pattern; re-creating one participant's resources unrefs others |
 | fullscreen toggle at identical size stayed wedged, resize healed | SDL reusing its swapchain publishes nothing new; a resize forces new buffers |
+
+## CONFIRMED 2026-08-16, run 2: it is EVICTION, not release
+
+The instrument (`299cdad`) makes the failed resolve name its own cause. Second reproduction, same
+image, same workload — and the answer is unambiguous:
+
+```
+window: surface 142 unresolved; skipping frame — the store EVICTED this surface at its cap
+and the guest is still presenting it. Permanent for this id: nothing re-publishes it.
+```
+
+**833 skipped frames, every one an eviction. Zero of them a release.** The inferred step in the
+section below was wrong, and the guest session is who forced the check: they showed nothing in
+their compositor can release those buffers mid-session, which is why the instrument was widened to
+cover both exits instead of only the one I expected.
+
+The numbers:
+
+| | |
+|---|---|
+| surfaces published this session | 103 publishes, **41 distinct** |
+| `SURFACE_STORE_CAP` | **32** |
+| evictions | 43 |
+| releases | 19 |
+| scanout-bound surfaces | IOSurface **142** (`res 7`), **145** (`res 12`) |
+| ids that went unresolved | **142 and 145** — exactly the scanout pair |
+
+**The policy is the bug, not the cap.** `SurfaceStore` evicts FIFO on *insertion order*
+(`order.push_back` at insert, `pop_front` at eviction). A compositor publishes its permanent
+scanout ring **first**, at startup, and then churns transient client buffers — so the oldest-inserted
+surfaces are precisely the ones in continuous use, and the churn pushes them out. Eviction is
+ordered by age when the thing that matters is use.
+
+This also explains the trigger, which nothing had pinned down: it is **surface publication volume,
+not time under scan-out**. Run 2 reproduced in seconds rather than minutes — launch Firefox,
+fullscreen it, hit Super — because that mints a burst of new surfaces and crosses the cap
+immediately. The earlier correlation with "time under client pass-through scan-out" was
+publication volume wearing a disguise.
+
+My earlier "eviction is ruled out" was wrong on its own terms: it counted 20 distinct ids from
+`[LIMINA-VKR-MTLTEX]` lines, which cover only **venus scanout imports**, while the store receives
+**every** published surface. This run published 41.
+
+## Superseded: the release hypothesis
+
+Kept because the reasoning below is still correct about `note_released` — a guest that presents a
+released id would fail identically, and that latent hazard is real even though it is not what fired
+here.
 
 ## Still inferred, not observed
 
