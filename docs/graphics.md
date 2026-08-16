@@ -9,8 +9,12 @@ cutouts, fullscreen and input policy — are a different subsystem and live in
 
 **Provenance.** Every claim below was re-derived from booted VMs on 2026-08-16 rather than carried
 forward from older notes; the measurements and the falsified claims they replaced are in
-`spikes/graphics-doc-audit/RESULTS.md`. Where this document and an older one disagree, this one is
-right — that is why the older ones were deleted.
+`spikes/graphics-doc-audit/RESULTS.md`. The one exception, named because a document claiming
+"measured, not carried" must not hide one: the **venus present path** (§4) was not exercised by
+those boots — mutter composites on vrend, so a GNOME guest structurally cannot reach it. Its
+evidence is the L2 test `synoik_session_reaches_a_rendered_desktop`, which boots the
+Vulkan-compositor image through exactly that path and was green on 2026-08-15. Where this document
+and an older one disagree, this one is right — that is why the older ones were deleted.
 
 ---
 
