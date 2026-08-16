@@ -221,6 +221,47 @@ def load_gbm():
     return gbm
 
 
+# --- scanout FB creation, on a kernel that does NOT advertise fb modifiers ---------------
+#
+# virtio-gpu upstream (and our fork, which carries no delta since v7.1.8) does NOT support
+# fb modifiers: `drmModeAddFB2WithModifiers` fails EINVAL with
+# `drm_internal_framebuffer_create: driver does not support fb modifiers` in dmesg. That is
+# the deliberate direction — synoik was patched to accept INVALID-modifier planes rather
+# than the kernel taught to advertise them (#39) — so a presenter must be able to scan out
+# with the plain, modifier-less ioctl. This vehicle used to hard-require the modifier path
+# whenever its producer named a real modifier (gbm returning LINEAR, venus always), which
+# turned an intentional kernel change into a test failure.
+#
+# The verdict is discovered once per process, from the kernel rather than assumed: try the
+# modifier call, and on EINVAL fall back and remember. LINEAR is the only modifier this
+# vehicle ever passes, and LINEAR is exactly what a modifier-less AddFB2 means, so the
+# fallback describes the same buffer — it is not a weaker test.
+_MODIFIERS_OK = None
+
+
+def add_scanout_fb(drm, fd, w, h, handles, pitches, offsets, modifier, fb):
+    """drmModeAddFB2[WithModifiers] with a one-time modifier-support probe. Returns rc."""
+    global _MODIFIERS_OK
+    plain = lambda: drm.drmModeAddFB2(
+        fd, w, h, DRM_FORMAT_XRGB8888, handles, pitches, offsets, C.byref(fb), 0,
+    )
+    if modifier == DRM_FORMAT_MOD_INVALID or _MODIFIERS_OK is False:
+        return plain()
+    mods = (C.c_uint64 * 4)(modifier, 0, 0, 0)
+    rc = drm.drmModeAddFB2WithModifiers(
+        fd, w, h, DRM_FORMAT_XRGB8888, handles, pitches, offsets, mods,
+        C.byref(fb), DRM_MODE_FB_MODIFIERS,
+    )
+    if rc == 0:
+        _MODIFIERS_OK = True
+        return 0
+    if _MODIFIERS_OK is None and rc in (-22, -95):  # EINVAL / EOPNOTSUPP
+        _MODIFIERS_OK = False
+        print("KMS MODIFIERS unsupported by the driver; using plain drmModeAddFB2", flush=True)
+        return plain()
+    return rc
+
+
 class Buffer:
     """One gbm buffer object with the KMS framebuffer bound to it."""
 
@@ -241,17 +282,7 @@ class Buffer:
         pitches = (C.c_uint32 * 4)(self.stride, 0, 0, 0)
         offsets = (C.c_uint32 * 4)(gbm.gbm_bo_get_offset(self.bo, 0), 0, 0, 0)
         self.fb = C.c_uint32(0)
-        if self.modifier != DRM_FORMAT_MOD_INVALID:
-            mods = (C.c_uint64 * 4)(self.modifier, 0, 0, 0)
-            rc = drm.drmModeAddFB2WithModifiers(
-                fd, w, h, DRM_FORMAT_XRGB8888, handles, pitches, offsets, mods,
-                C.byref(self.fb), DRM_MODE_FB_MODIFIERS,
-            )
-        else:
-            rc = drm.drmModeAddFB2(
-                fd, w, h, DRM_FORMAT_XRGB8888, handles, pitches, offsets,
-                C.byref(self.fb), 0,
-            )
+        rc = add_scanout_fb(drm, fd, w, h, handles, pitches, offsets, self.modifier, self.fb)
         if rc:
             fail("drmModeAddFB2", f"rc={rc} handle={self.handle} stride={self.stride}")
 
@@ -742,11 +773,8 @@ class VkBuffer:
         handles = (C.c_uint32 * 4)(self.handle, 0, 0, 0)
         pitches = (C.c_uint32 * 4)(self.stride, 0, 0, 0)
         offsets = (C.c_uint32 * 4)(lay.offset, 0, 0, 0)
-        modarr = (C.c_uint64 * 4)(DRM_FORMAT_MOD_LINEAR, 0, 0, 0)
-        rc = drm.drmModeAddFB2WithModifiers(
-            fd, w, h, DRM_FORMAT_XRGB8888, handles, pitches, offsets, modarr,
-            C.byref(self.fb), DRM_MODE_FB_MODIFIERS,
-        )
+        rc = add_scanout_fb(drm, fd, w, h, handles, pitches, offsets,
+                            DRM_FORMAT_MOD_LINEAR, self.fb)
         if rc:
             # The 2026-08-13 soak died here at buffer 197,601 with rc=-22 and stride=0, on a guest
             # with 6 GB free and a clean dmesg. A zero pitch means the PRODUCER handed back nothing
