@@ -62,7 +62,32 @@ pub struct SurfaceStore {
     /// cache. Carried here rather than in a second channel so the release needs no new plumbing:
     /// the store is already shared between the receive thread and the main thread.
     released: Vec<u32>,
+    /// Diagnostic-only: why ids left the map, most recent last, bounded. Drained `released` cannot
+    /// answer "why is this id unresolvable?" because the main thread takes it every frame; this
+    /// survives so a failed resolve can name its own cause. See
+    /// `spikes/scanout-blob-freeze/RESULTS.md` — a guest presenting an id that has left the map
+    /// gets every later frame skipped, and both exit paths logged nothing at all, so the fault was
+    /// invisible from the host and unreachable from the guest.
+    ///
+    /// There are exactly **two** ways an id leaves: the worker says the guest released it, or the
+    /// cap evicts it. Recording which is what makes the failure self-diagnosing — "unresolved"
+    /// alone does not distinguish a release we acted on too eagerly from a cap that is too small,
+    /// and those have opposite fixes.
+    gone: VecDeque<(u32, GoneReason)>,
 }
+
+/// Why an id left the store. See [`SurfaceStore::gone`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum GoneReason {
+    /// The worker reported the guest let the resource go.
+    Released,
+    /// The cap pushed it out to bound the supervisor's hold on host memory.
+    Evicted,
+}
+
+/// How many departed ids to remember for diagnostics. Only needs to outlive the gap between a
+/// departure and the frames that trip over it, which is one frame in the observed fault.
+const GONE_HISTORY_CAP: usize = 64;
 
 const SURFACE_STORE_CAP: usize = 32;
 
@@ -85,18 +110,37 @@ impl SurfaceStore {
             order: VecDeque::new(),
             cap,
             released: Vec::new(),
+            gone: VecDeque::new(),
         }
     }
 
     pub(crate) fn insert(&mut self, id: u32, surface: CFRetained<IOSurfaceRef>) {
         if self.map.insert(id, SendSurface(surface)).is_none() {
+            log::debug!(
+                "surface store: published surface {id} ({} held)",
+                self.map.len()
+            );
             self.order.push_back(id);
             while self.order.len() > self.cap {
                 if let Some(old) = self.order.pop_front() {
                     self.map.remove(&old);
+                    self.note_gone(old, GoneReason::Evicted);
+                    log::debug!(
+                        "surface store: evicted surface {old} at cap {} — if the guest still \
+                         presents it, every later frame naming it is skipped",
+                        self.cap
+                    );
                 }
             }
         }
+    }
+
+    /// Record why an id left, for the failed-resolve diagnostic.
+    fn note_gone(&mut self, id: u32, reason: GoneReason) {
+        if self.gone.len() == GONE_HISTORY_CAP {
+            self.gone.pop_front();
+        }
+        self.gone.push_back((id, reason));
     }
 
     /// Drop `id`. **Both structures**: leaving a stale entry in `order` would make the cap count
@@ -115,8 +159,22 @@ impl SurfaceStore {
     /// from under the window. And the guest will not present it again, so no later resolve can
     /// miss because of this.
     pub(crate) fn note_released(&mut self, id: u32) {
+        let was_held = self.map.contains_key(&id);
         self.remove(id);
         self.released.push(id);
+        self.note_gone(id, GoneReason::Released);
+        log::debug!("surface store: worker released surface {id} (was_held={was_held})");
+    }
+
+    /// Diagnostic: why did `id` leave the store, if it did? Answers "why can I not resolve this?"
+    /// at the point of failure. `None` means we never held it (or it left longer ago than the
+    /// history keeps), which is a different fault from either departure.
+    pub(crate) fn why_gone(&self, id: u32) -> Option<GoneReason> {
+        self.gone
+            .iter()
+            .rev()
+            .find(|(gid, _)| *gid == id)
+            .map(|(_, r)| *r)
     }
 
     /// Take the ids released since the last call (main thread; purges the frame cache).
@@ -478,7 +536,9 @@ mod tests {
         kIOSurfaceWidth, IOSurfaceCreate,
     };
 
-    use super::{parse_cursor_coord, CFRetained, IOSurfaceRef, SurfaceStore, FRAME_CACHE_CAP};
+    use super::{
+        parse_cursor_coord, CFRetained, GoneReason, IOSurfaceRef, SurfaceStore, FRAME_CACHE_CAP,
+    };
 
     fn cfnum(v: i32) -> CFRetained<CFNumber> {
         unsafe {
@@ -599,6 +659,36 @@ mod tests {
         assert!(
             store.take_released().is_empty(),
             "taking the released list must drain it"
+        );
+    }
+
+    /// The failed-resolve diagnostic must name the *reason* an id left, because the two reasons
+    /// have opposite fixes: a release acted on too eagerly vs. a cap that is too small. Getting
+    /// "unresolved" with no reason is what made `spikes/scanout-blob-freeze` invisible for days.
+    #[test]
+    fn why_gone_distinguishes_a_release_from_an_eviction() {
+        let mut store = SurfaceStore::with_cap(2);
+        store.insert(1, make_surface());
+        store.insert(2, make_surface());
+        assert_eq!(
+            store.why_gone(1),
+            None,
+            "still held, so it has not gone anywhere"
+        );
+
+        store.note_released(1);
+        assert_eq!(store.why_gone(1), Some(GoneReason::Released));
+
+        // Refill past the cap: 2 is the oldest survivor, so it is the one pushed out.
+        store.insert(3, make_surface());
+        store.insert(4, make_surface());
+        assert_eq!(store.why_gone(2), Some(GoneReason::Evicted));
+        assert!(store.get(2).is_none(), "an evicted id must really be gone");
+
+        assert_eq!(
+            store.why_gone(999),
+            None,
+            "an id we never held is a third case and must not be reported as either departure"
         );
     }
 

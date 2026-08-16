@@ -2281,7 +2281,28 @@ pub fn run(
                     .get(id)
                     .or_else(|| IOSurfaceLookup(id))
             }) else {
-                log::warn!("window: surface {id} unresolved; skipping frame");
+                // Say WHY, not just that. "Unresolved" alone cost days: it reads as a rare race
+                // with a remodeset, while the observed fault is the guest presenting an id the
+                // worker told us it released — a permanent skip, not a transient one. Naming the
+                // cause at the point of failure is what separates the two.
+                // See `spikes/scanout-blob-freeze/RESULTS.md`.
+                let why = surface_map.lock().unwrap().why_gone(id);
+                match why {
+                    Some(present::GoneReason::Released) => log::warn!(
+                        "window: surface {id} unresolved; skipping frame — the worker RELEASED \
+                         this surface and the guest is still presenting it. Permanent for this \
+                         id: nothing re-publishes it."
+                    ),
+                    Some(present::GoneReason::Evicted) => log::warn!(
+                        "window: surface {id} unresolved; skipping frame — the store EVICTED this \
+                         surface at its cap and the guest is still presenting it. Permanent for \
+                         this id: nothing re-publishes it."
+                    ),
+                    None => log::warn!(
+                        "window: surface {id} unresolved; skipping frame — we never held it, and \
+                         no release or eviction was recorded for it."
+                    ),
+                }
                 return;
             };
             let surface = &surface;
