@@ -1633,6 +1633,11 @@ pub fn run(
     // which no real display hashes to, so the first poll after the guest presents a frame
     // hands over the identity of whichever display it booted on.
     let identity_sent: Cell<u64> = Cell::new(0);
+    // What that display was last doing (refresh, and the VRR range derived from it). Separate
+    // from the identity so the same panel changing rate is an in-place adjustment rather than a
+    // connector cycle. Seeded to 0, which `refresh_of` never yields — it floors to 60 — so the
+    // first poll always pushes.
+    let mode_sent: Cell<u64> = Cell::new(0);
     // The scanout layer's current placement inside the content view, recomputed every tick
     // (dynamic: the full view — CA stretches the stale surface during a live drag exactly as
     // before; host/fixed: the guest resolution aspect-fit onto the black background). Shared
@@ -2176,9 +2181,20 @@ pub fn run(
                     let inset = notch_inset_for(&s, cfg_notch);
                     hostdisplay::describe(&s, scale_for(&window, hidpi), inset)
                 });
+                // Two distinct events, deliberately not merged. A *migration* is a different
+                // physical panel and earns the connector cycle; an *adjustment* is the same panel
+                // changing what it is doing (its refresh rate, and with it the VRR range) and
+                // must travel in place — cycling there would black the guest out for the settle
+                // every time a ProMotion display changed rate on a monitor the user never
+                // touched. Both still have to reach the guest: the refresh and range live in the
+                // EDID, so a swallowed adjustment is a guest that can never drive variable
+                // refresh.
                 let migrated = host
                     .as_ref()
                     .is_some_and(|h| h.identity_key() != identity_sent.get());
+                let adjusted = host
+                    .as_ref()
+                    .is_some_and(|h| !migrated && h.mode_key() != mode_sent.get());
 
                 match mode {
                     // Dynamic: push the window's content size ONCE the resize gesture ENDS —
@@ -2221,13 +2237,18 @@ pub fn run(
                         if let (Some(screen), Some(host)) = (window.screen(), host.as_ref()) {
                             let want = host.size;
                             let key = host.identity_key();
+                            // `adjusted` joins the gate so a refresh-only change still gets
+                            // through: it moves neither the size nor the identity, so without it
+                            // the push would be skipped and the guest would keep a stale refresh
+                            // and VRR range forever.
                             if geom.get() != (0, 0)
                                 && want.0 >= 64
                                 && want.1 >= 64
-                                && (want, key) != screen_sent.get()
+                                && ((want, key) != screen_sent.get() || adjusted)
                             {
                                 screen_sent.set((want, key));
                                 identity_sent.set(key);
+                                mode_sent.set(host.mode_key());
                                 // Migrated to a differently-shaped display: re-lock resize to
                                 // the new screen's aspect so the constraint tracks the screen.
                                 apply_aspect_lock(&window, want);
@@ -2271,13 +2292,18 @@ pub fn run(
                                     crate::session::pack_size(want.0, want.1),
                                     std::sync::atomic::Ordering::Relaxed,
                                 );
-                                // On a migration, hand the guest the new display's whole
-                                // identity — name, serial, refresh rate, density, VRR range —
-                                // together with the size, so its compositor recognizes the
-                                // monitor and applies that monitor's remembered configuration
-                                // rather than treating it as the same panel resized. A plain
-                                // size change (the host reconfigured this display) carries no
-                                // EDID, leaving the identity exactly where it was.
+                                // Three different events, three different pushes:
+                                //
+                                // - migration: hand over the new display's whole identity —
+                                //   name, serial, refresh, density, VRR range — with the size,
+                                //   so the guest's compositor recognizes the monitor and applies
+                                //   that monitor's remembered configuration. Connector cycles.
+                                // - adjustment: the same panel changed its refresh; push the new
+                                //   EDID with the size, in place, so the range travels without
+                                //   the guest ever losing its display.
+                                // - plain resize: the host reconfigured this display's size and
+                                //   nothing else, so send no EDID at all and leave the identity
+                                //   exactly where it is.
                                 if migrated {
                                     send_display_commands(
                                         sock,
@@ -2286,6 +2312,11 @@ pub fn run(
                                             true,
                                             hostdisplay::HotplugPolicy::from_env(),
                                         ),
+                                    );
+                                } else if adjusted {
+                                    send_display_command(
+                                        sock,
+                                        hostdisplay::adjustment_command(host, true),
                                     );
                                 } else {
                                     send_display_command(
@@ -2305,22 +2336,33 @@ pub fn run(
                     DisplayResolution::Fixed(..) => {}
                 }
 
-                // Identity-only push, for the modes whose size policy has nothing to fold it
-                // into. Without this, a dynamic or fixed VM keeps the anonymous boot identity
-                // and a flat 300 DPI on every display it is ever dragged to — so an ordinary
-                // external monitor reads as Retina to the guest and it picks the wrong scale.
+                // Identity/mode push for the modes whose size policy has nothing to fold it into.
+                // Without this, a dynamic or fixed VM keeps the anonymous boot identity and a
+                // flat 300 DPI on every display it is ever dragged to — so an ordinary external
+                // monitor reads as Retina to the guest and it picks the wrong scale. These modes
+                // may not dictate the guest's resolution, so both pushes go without a size; the
+                // guest re-reads either way.
                 // Gated on the guest having presented a frame, like every other push here.
-                if migrated && !matches!(mode, DisplayResolution::Host) && geom.get() != (0, 0) {
+                if !matches!(mode, DisplayResolution::Host) && geom.get() != (0, 0) {
                     if let Some(host) = host.as_ref() {
-                        identity_sent.set(host.identity_key());
-                        send_display_commands(
-                            sock,
-                            hostdisplay::migration_commands(
-                                host,
-                                false,
-                                hostdisplay::HotplugPolicy::from_env(),
-                            ),
-                        );
+                        if migrated {
+                            identity_sent.set(host.identity_key());
+                            mode_sent.set(host.mode_key());
+                            send_display_commands(
+                                sock,
+                                hostdisplay::migration_commands(
+                                    host,
+                                    false,
+                                    hostdisplay::HotplugPolicy::from_env(),
+                                ),
+                            );
+                        } else if adjusted {
+                            mode_sent.set(host.mode_key());
+                            send_display_command(
+                                sock,
+                                hostdisplay::adjustment_command(host, false),
+                            );
+                        }
                     }
                 }
             }

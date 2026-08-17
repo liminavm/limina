@@ -101,16 +101,27 @@ as the new monitor's property rather than a mode-change surprise.
 
 ## When we change what, and which event we raise
 
-Three distinct transitions, three behaviors:
+Four distinct transitions, four behaviors. **Which physical panel** the window is on and **what
+that panel is doing** are separate questions, tracked by separate keys
+(`HostDisplay::{identity_key, mode_key}`), because only the first warrants taking the connector
+down:
 
 | transition | what changes | event to the guest |
 |---|---|---|
-| window resize / guest modeset (same display) | detailed timing #0, physical mm | today's path: display-info rect + EDID, one config-change |
-| window moves to another host display | identity + range limits + mode list + timing | **disconnect, then reconnect carrying the new EDID** — two config-changes |
+| window resize / guest modeset (same display) | detailed timing #0, physical mm | display-info rect, no EDID — the identity stays put |
+| **adjustment**: same panel changes refresh (ProMotion rate switch, host mode change) | refresh + range limits, inside the EDID | in-place EDID push, connector untouched |
+| **migration**: window moves to another host display | identity + range limits + mode list + timing | **disconnect, settle, reconnect carrying the new EDID** — two config-changes |
 | display genuinely removed / added | the scanout exists or not | `connected` toggled, config-change |
 
-The middle row is the load-bearing decision: **a migration is a genuine connector cycle, because
-that is the only event both tiers act on.**
+Rows two and three are the load-bearing pair. **A migration is a genuine connector cycle, because
+that is the only event both tiers act on** — but an adjustment must *not* be, or a panel changing
+its own refresh would black the guest out for the settle on a display the user never touched. The
+adjustment still has to be sent: refresh and the VRR range live in the EDID, so a guest that never
+receives it can never drive variable refresh.
+
+This is why the identity key excludes refresh *and* size. Refresh is what a panel is doing; size is
+too (and two same-sized displays are still two displays). Only vendor/model/serial answer "which
+monitor is this".
 
 An in-place EDID swap — rewriting the identity with the connector left up — is enough for mutter,
 which re-reads the connector and re-applies the arriving display's remembered configuration. It is

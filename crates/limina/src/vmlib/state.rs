@@ -201,8 +201,18 @@ mod tests {
         assert!(win.fullscreen);
         let key = win.fullscreen_display.expect("identity key preserved");
         assert_eq!(key, 3_964_565_773_887_406_140);
-        // The identity_key layout: serial << 32 | product << 16 | refresh.
-        assert_eq!(key & 0xffff, 60, "60 Hz panel");
+        // A key written by the older layout, which folded the refresh into the low 16 bits
+        // (`serial << 32 | product << 16 | refresh`). It still round-trips bit-for-bit, which is
+        // all this test is about. It no longer *matches* a live display — the current layout
+        // leaves those bits zero, since refresh is a mode property and not part of a panel's
+        // identity — so such a record falls through to the frame/main-display path and re-saves
+        // in the new layout on the next fullscreen. It can never mis-match: a live key has zeros
+        // exactly where this one carries 60.
+        assert_eq!(
+            key & 0xffff,
+            60,
+            "the old layout's refresh field, preserved"
+        );
         assert_eq!((key >> 16) & 0xffff, 0xf13b, "product code");
         std::fs::remove_dir_all(&dir).ok();
     }

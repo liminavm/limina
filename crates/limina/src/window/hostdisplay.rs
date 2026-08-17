@@ -45,13 +45,32 @@ pub struct HostDisplay {
 }
 
 impl HostDisplay {
-    /// A cheap value that changes exactly when the *identity* does. Used to decide whether the
-    /// window has actually migrated, rather than merely been resized: two displays of the same
-    /// size are a migration, and today's size-only check misses that.
+    /// **Which physical panel this is** — vendor/model/serial, nothing else. Changes exactly when
+    /// the window moves to a different display, which is the only event that warrants cycling the
+    /// guest's connector.
+    ///
+    /// Deliberately *excludes* the refresh rate. Refresh is what a panel is currently doing, not
+    /// which panel it is: a ProMotion display dropping 120 → 60 is the same monitor, and treating
+    /// it as a swap would black the guest out for the reconnect settle on a display that never
+    /// left. Size is excluded for the same reason — two displays of the same size are still two
+    /// displays, and one display resized is still one display.
+    ///
+    /// Also persisted, as `window.fullscreen_display` in `vm.toml`, to remember which panel a VM
+    /// was fullscreen on (`vmlib::state`). A key written by a build whose layout included the
+    /// refresh simply matches no attached screen and falls through to the frame/main-display
+    /// path — the same graceful route as a display that has been unplugged — then re-saves in
+    /// this layout on the next fullscreen. It cannot *mis*-match: those keys carry a non-zero
+    /// refresh in the low bits where this layout has zeros.
     pub fn identity_key(&self) -> u64 {
-        (u64::from(self.edid.serial) << 32)
-            | (u64::from(self.edid.product_id) << 16)
-            | u64::from(self.edid.refresh_hz.min(u32::from(u16::MAX)) as u16)
+        (u64::from(self.edid.serial) << 32) | (u64::from(self.edid.product_id) << 16)
+    }
+
+    /// **What that panel is currently doing** — the properties that belong to the mode rather
+    /// than the monitor. A change here is an *adjustment*: the guest still needs it (the refresh
+    /// and the VRR range ride in the EDID, and variable refresh is unreachable without them),
+    /// but it travels in place, with the connector left up.
+    pub fn mode_key(&self) -> u64 {
+        u64::from(self.edid.refresh_hz)
     }
 }
 
@@ -114,6 +133,25 @@ impl HotplugPolicy {
 /// milliseconds — the guest is at zero monitors only between two socket writes, which is why the
 /// original "that is a real session state" objection to it does not hold. Measured both ways in
 /// `spikes/display-identity-hotplug/`.
+/// The command for a change to the display the guest is **already on** — a new refresh rate, or a
+/// new size in the modes that drive one. In place, connector untouched.
+///
+/// This is the counterpart to [`migration_commands`], and the split is the whole point: a swap
+/// gets the connector cycle, an adjustment must not. Cycling here would black the guest out for
+/// the settle every time a panel changed its own refresh — a ProMotion display switching rates,
+/// or a host mode change — on a monitor the user never touched.
+///
+/// It still has to be *sent*: the EDID is where the refresh and the VRR range descriptor live, so
+/// a guest that never receives this can never drive variable refresh.
+pub fn adjustment_command(host: &HostDisplay, drives_size: bool) -> DisplayCommand {
+    DisplayCommand::Display(DisplayControl {
+        display_id: 0,
+        size: drives_size.then_some(host.size),
+        connected: None,
+        edid: Some(host.edid.clone()),
+    })
+}
+
 pub fn migration_commands(
     host: &HostDisplay,
     drives_size: bool,
@@ -813,7 +851,7 @@ mod tests {
 
     /// ...and to a refresh-rate change on the same display (a mode switch on the host).
     #[test]
-    fn the_identity_key_reacts_to_a_refresh_change() {
+    fn a_refresh_change_is_an_adjustment_not_a_different_panel() {
         let make = |refresh_hz: u32| HostDisplay {
             size: (1512, 982),
             edid: EdidSpec {
@@ -822,6 +860,55 @@ mod tests {
                 ..EdidSpec::default()
             },
         };
-        assert_ne!(make(60).identity_key(), make(120).identity_key());
+        // Refresh is what the panel is *doing*, not which panel it is. A ProMotion display
+        // dropping 120 → 60 must not read as "the user swapped monitors" and cycle the
+        // connector — the guest would black out for the settle on a display that never left.
+        assert_eq!(
+            make(60).identity_key(),
+            make(120).identity_key(),
+            "the same panel keeps one identity across a refresh change"
+        );
+        // ...but the change still has to reach the guest: the EDID carries the refresh and the
+        // VRR range descriptor, which is what a guest needs to ever drive variable refresh.
+        assert_ne!(
+            make(60).mode_key(),
+            make(120).mode_key(),
+            "a refresh change is a mode change and must still be pushed"
+        );
+    }
+
+    /// The two keys answer different questions, and a swap is both at once.
+    #[test]
+    fn a_different_panel_changes_the_identity() {
+        let make = |serial: u32| HostDisplay {
+            size: (1512, 982),
+            edid: EdidSpec {
+                serial,
+                refresh_hz: 60,
+                ..EdidSpec::default()
+            },
+        };
+        assert_ne!(make(9).identity_key(), make(10).identity_key());
+    }
+
+    /// An adjustment is the cheap event: same panel, so the connector never goes down.
+    #[test]
+    fn an_adjustment_carries_the_edid_without_touching_connectivity() {
+        let command = adjustment_command(&host(), true);
+        let adjusted = control(&command);
+        assert_eq!(
+            adjusted.connected, None,
+            "an adjustment must never unplug the connector"
+        );
+        assert_eq!(adjusted.size, Some((2560, 1440)));
+        assert!(
+            adjusted.edid.is_some(),
+            "the new refresh/range rides in the EDID"
+        );
+
+        // The modes that don't drive the guest's resolution still push the EDID alone.
+        let sizeless = adjustment_command(&host(), false);
+        assert!(control(&sizeless).size.is_none());
+        assert!(control(&sizeless).edid.is_some());
     }
 }
