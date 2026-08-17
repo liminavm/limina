@@ -137,10 +137,10 @@ Two consequences worth keeping in view:
 
 - **The new EDID rides with the reconnect, atomically**, never with the disconnect. A connector
   that comes back still advertising the old EDID is precisely the stale case.
-- **A cycle with no size in the reconnect does not make synoik re-read** (mutter is fine with it).
-  That is the shape the `dynamic` and `fixed` modes send, since neither may dictate the guest's
-  resolution. `host` — the default — folds the size in and works on both. Closing that gap is
-  synoik's side; limina must not start driving the resolution in modes that promise not to.
+- **The size is optional.** A reconnect carrying identity alone re-reads on both compositors, so
+  `dynamic` and `fixed` — which may not dictate the guest's resolution and therefore have no size
+  to send — work as well as `host`, which folds one in. Verified through the shipped code by
+  dragging a dynamic-mode VM between two physical displays.
 
 `LIMINA_DISPLAY_HOTPLUG=inplace` selects the in-place swap. It stays supported because it is the
 cheaper event where a guest honours it; unset or unrecognized means the cycle.

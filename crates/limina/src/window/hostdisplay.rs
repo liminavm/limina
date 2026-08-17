@@ -567,9 +567,9 @@ mod tests {
         assert_eq!(up.size, Some((2560, 1440)));
     }
 
-    /// Without a size in the replug, synoik does not re-read the identity at all (measured).
-    /// The modes that don't drive the guest's resolution have no size to send, so they get the
-    /// cycle without one — correct for mutter, and no worse than the in-place swap elsewhere.
+    /// `dynamic` and `fixed` may not dictate the guest's resolution, so their reconnect carries
+    /// the identity alone. That is enough: both compositors re-read a sizeless reconnect,
+    /// verified end-to-end by dragging a dynamic-mode VM between two physical displays.
     #[test]
     fn a_cycle_that_does_not_drive_the_size_still_replugs_with_the_identity() {
         let commands = migration_commands(&host(), false, HotplugPolicy::Cycle);

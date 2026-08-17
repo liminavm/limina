@@ -14,11 +14,9 @@ display-control socket, then end-to-end by dragging the window between two physi
 | mutter | **re-reads**: new identity, new scale, previous display's remembered scale restored on return | re-reads, same outcome |
 | synoik | **stale identity** (mode list does update) | **re-reads** the identity |
 
-Two things the cycle does *not* fix, both synoik's and both filed:
-
-- a reconnect carrying **no size** leaves the identity stale (the shape `dynamic`/`fixed` send);
-- synoik's config store keeps exactly **one** `<configuration>`, so per-display memory fails even
-  with a correct identity. Unreachable from limina at any EDID or event.
+One thing the cycle does *not* fix, and it is synoik's: their config store keeps exactly **one**
+`<configuration>`, so per-display memory fails even with a correct identity. Unreachable from
+limina at any EDID or event — one stanza cannot hold two displays.
 
 ## What "stale" looks like
 
@@ -36,19 +34,23 @@ lost even though each individual save is internally consistent.
 Under a cycle the same push yields `('Virtual-1', 'PNP(LMN)', 'DELL P2723QE', '0x370D1790')`,
 scale 1.5, and cycling back restores BenQ at its remembered 1.25.
 
-## Ship the two-message form, and it needs a size
+## Ship the two-message form
 
-The reconnect must carry the new EDID itself — `connected=0`, then
-`connected=1` + EDID (+ size). Verified 3/3 on synoik and 2/2 on mutter. It is also the
-structurally right shape: the new EDID and the reconnect are one atomic update, so a reconnected
-connector can never be probed while still advertising the old EDID.
+The reconnect must carry the new EDID itself — `connected=0`, then `connected=1` + EDID (+ size
+when the mode has one). Verified 3/3 on synoik and 2/2 on mutter. It is also the structurally right
+shape: the new EDID and the reconnect are one atomic update, so a reconnected connector can never
+be probed while still advertising the old EDID.
 
-**A reconnect with no `size` does not make synoik re-read** (mutter does): pushed a fresh identity
-with no size field, synoik stayed on the previous one. So `host` mode — which folds the screen size
-in — works on both, while `dynamic` and `fixed`, which must not dictate the guest's resolution, are
-stale on synoik. The host side is not the problem: the worker applies `size`, `edid` and `connected`
-independently and mutter picks up the sizeless EDID, so the EDID *did* change
-(`third_party/libkrun/src/devices/src/virtio/gpu/worker.rs`).
+**The `size` field is not required.** A reconnect carrying identity alone re-reads on both
+compositors, verified through the shipped code by dragging a `--display-resolution dynamic` VM
+between two physical displays in both directions. This matters because `dynamic` and `fixed` may
+not dictate the guest's resolution, so they have no size to send; `host` folds one in. All three
+modes work.
+
+An earlier version of this document claimed a sizeless reconnect left synoik stale. That was the
+settle bug below, measured before it was understood: the sizeless probe ran its two `nc` pushes with
+no `sleep` between them, and the with-size probe happened to be slower. Same root cause, same
+harness artifact, found twice — see the trap in the next section, which is the real lesson here.
 
 ## The cycle needs a real delay, ~50 ms, and a `nc`-driven test hides that
 
@@ -93,14 +95,17 @@ window dragged between a 2560x1440 external panel and a 3024x1964 built-in Retin
 | | mutter | synoik |
 |---|---|---|
 | identity follows the window both ways | yes | yes (**needs the 60 ms settle**; without it the mode list updates and the identity stays stale) |
+| …in `host` mode (reconnect carries a size) | yes | yes |
+| …in `dynamic` mode (sizeless reconnect) | yes | yes |
 | each display's own scale re-applied on arrival | yes — 1.333 external / 2.0 built-in, every switch | no |
 | `monitors.xml` stanzas | **2**, one per display, both retained | **1** — configuring a display *replaces* the other |
 
-So limina's half is done: both compositors now learn which physical display they are on. Per-display
-memory works on mutter and still does not on synoik, for a **second and independent** reason — its
-config store keeps exactly one `<configuration>`. With the built-in configured to 1.75, the external
-panel's stanza is gone and its remembered 1.333-equivalent never returns. That one is not reachable
-from limina at any EDID or event: one stanza cannot hold two displays.
+So limina's half is done in every display mode: both compositors now learn which physical display
+they are on. Per-display memory works on mutter and still does not on synoik, for a **second and
+independent** reason — its config store keeps exactly one `<configuration>`. With the built-in
+configured to 1.75, the external panel's stanza is gone and its remembered 1.333-equivalent never
+returns. That one is not reachable from limina at any EDID or event: one stanza cannot hold two
+displays.
 
 A useful property of the sequence: the boot-time identity push is itself a migration, so it cycles
 too. A compositor that starts before the push lands would otherwise latch the anonymous boot
