@@ -244,7 +244,14 @@ the frozen L2 snapshot does not need perf tooling, and recloning it would churn 
 
 #### `Fedora-Workstation-44.enhanced.synoik.raw` — the synoik compositor image (added 2026-08-14)
 
-**synoik updated to `efbb2b8` on 2026-08-15** — carries `808bfcd`/`9e4148a`, the implicit-modifier
+**synoik updated to `2ef727c` on 2026-08-17** — carries the per-display config fixes ("An applied
+scale belongs to the display it was applied to", "An off-ladder stored scale is honored, on
+purpose", "An unresolved PNP id shows as GNOME shows it"). With them synoik matches mutter on the
+connector-cycle path: one `<configuration>` stanza per host display, each display's own scale
+re-applied on every migration, and the vendor rendered as `LMN` with a lowercase serial. Verified
+on two physical displays in **both** `host` and `dynamic` modes (`spikes/display-identity-hotplug/`).
+
+`efbb2b8` (2026-08-15) carried `808bfcd`/`9e4148a`, the implicit-modifier
 scanout fix (task #39). Before it, this image was RED on the r9 7.1.8 kernel: the plane advertises
 XR24+INVALID, synoik allocated XR24+LINEAR, the intersection was empty and no compositor took the
 display. `synoik_session_reaches_a_rendered_desktop` is GREEN on it again (28 s).

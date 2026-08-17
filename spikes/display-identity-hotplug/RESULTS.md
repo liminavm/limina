@@ -97,15 +97,19 @@ window dragged between a 2560x1440 external panel and a 3024x1964 built-in Retin
 | identity follows the window both ways | yes | yes (**needs the 60 ms settle**; without it the mode list updates and the identity stays stale) |
 | …in `host` mode (reconnect carries a size) | yes | yes |
 | …in `dynamic` mode (sizeless reconnect) | yes | yes |
-| each display's own scale re-applied on arrival | yes — 1.333 external / 2.0 built-in, every switch | no |
-| `monitors.xml` stanzas | **2**, one per display, both retained | **1** — configuring a display *replaces* the other |
+| each display's own scale re-applied on arrival | yes — 1.333 external / 2.0 built-in, every switch | yes (synoik ≥ `2ef727c`) |
+| `monitors.xml` stanzas | **2**, one per display, both retained | one per display, all retained |
 
-So limina's half is done in every display mode: both compositors now learn which physical display
-they are on. Per-display memory works on mutter and still does not on synoik, for a **second and
-independent** reason — its config store keeps exactly one `<configuration>`. With the built-in
-configured to 1.75, the external panel's stanza is gone and its remembered 1.333-equivalent never
-returns. That one is not reachable from limina at any EDID or event: one stanza cannot hold two
-displays.
+So limina's half is done in every display mode, and both compositors now get the full behaviour:
+they learn which physical display they are on, and each display's own configuration returns when
+the window comes back to it.
+
+synoik needed a second, independent fix for the last row — its config store kept exactly one
+`<configuration>`, so configuring one display deleted the other's. Landed in `2ef727c` and
+re-measured here on both modes: `host` (external 1.75 / built-in 3.0) and `dynamic` (external 1.0
+/ built-in 2.0), four migrations each, every switch restoring the display's own scale and the
+stanza count holding steady. The same series also made synoik render the vendor as mutter does
+(raw `LMN`, lowercase serial), so a `monitors.xml` is now portable between the two.
 
 A useful property of the sequence: the boot-time identity push is itself a migration, so it cycles
 too. A compositor that starts before the push lands would otherwise latch the anonymous boot
@@ -123,10 +127,10 @@ Same connector, same status, same mode list, same 128-byte EDID blob, same kerne
   it keeps only scales that divide the mode into an integer logical size. synoik offers a plain
   quarter-step ladder `1.0 1.25 1.5 1.75 … 3.0`. So 133% exists in mutter's Settings and 150% in
   synoik's, from one identical EDID.
-- **The vendor field is rendered differently.** mutter prints the raw PNP id `LMN` and lowercases
-  the serial (`0x6c42fae5`); synoik prints `PNP(LMN)` and uppercases it (`0x6C42FAE5`). The same
-  physical display therefore gets a different `<monitorspec>`, so a `monitors.xml` is not portable
-  between the two compositors.
+- **The vendor field used to be rendered differently.** mutter prints the raw PNP id `LMN` and
+  lowercases the serial (`0x6c42fae5`); synoik printed `PNP(LMN)` and uppercased it. Fixed on
+  synoik's side in the `2ef727c` series, so the same physical display now yields the same
+  `<monitorspec>` under both and a `monitors.xml` is portable between them.
 
 `/sys/class/drm/card0-Virtual-1/edid` reads **0 bytes** on both while both compositors have the
 full identity and mode list — they read the DRM connector property, so nothing is broken, but
