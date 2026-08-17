@@ -5,7 +5,7 @@ Copyright © 2026 Gustavo Noronha Silva
 
 # Guest audio is destroyed for small-buffer clients: PipeWire cannot tell it is in a VM
 
-**CONFIRMED 2026-08-16, both tiers affected, fix not yet chosen.**
+**FIXED in libkrun's SMBIOS Type 1 table. Both tiers, no guest-side change needed.**
 
 An audio client that asks for a small buffer drags the entire PipeWire graph — the ALSA
 sink included — down to its quantum, and the virtio-snd sink then starves continuously.
@@ -96,16 +96,58 @@ Each was matched to the failing guest and listened to; all clean. None is the ca
   WirePlumber 0.4 `main.lua.d` config, and `default.configured.audio.sink` pointing at a
   device absent from the VM. Transplanted wholesale onto a clean guest: clean.
 
-## Fix options (undecided)
+## The fix
 
-1. **Present a recognized DMI identity** from libkrun's SMBIOS. The only option that fixes
-   the **stock tier**, where the guest has no limina components to carry a drop-in — and the
-   stock tier is precisely where destroyed game audio is least acceptable. Costs honesty in
-   `sys_vendor`/`product_name`.
-2. **Upstream `libkrun` into spa's table and `systemd-detect-virt`.** Correct, and it fixes
-   the systemic gap rather than one symptom, but slow and does nothing for guests running
-   today's software.
-3. **Ship a pipewire drop-in in the enhanced tier.** Cheap and immediate, but enhanced-only,
-   so it violates nothing while fixing nothing for a stock guest.
+`third_party/libkrun/src/smbios/src/lib.rs`, SMBIOS Type 1:
 
-(1) and (2) are complementary and probably both wanted. (3) alone is not sufficient.
+```
+sys_vendor   = "Limina"
+product_name = "KVM Virtual Machine (Limina, libkrun)"
+```
+
+Both matchers **prefix**-match (`startswith` in systemd, `spa_strstartswith` in spa) and read
+`product_name` **before** `sys_vendor`, so leading with a recognized name is what counts and
+the manufacturer stays ours. A User-Agent-style `"Limina (like Parallels)"` does **not** work:
+the token has to come first. Measured with a bind-mounted fake `product_name`:
+
+| `product_name` | `systemd-detect-virt` |
+|---|---|
+| `libkrun Virtual Machine` | `vm-other` |
+| `Limina (like Parallels)` | `vm-other` |
+| `Limina Virtual Machine` | `vm-other` |
+| `Parallels (Limina)` | `parallels` |
+| `KVM Virtual Machine (limina)` | `kvm` |
+
+Verified in a booted guest with no config drop-in anywhere: `systemd-detect-virt` `vm-other`
+-> `kvm`, `cpu.vm.name` unset -> `kvm`, `clock.min-quantum` 32 -> 1024, audio clean.
+
+**Why `KVM` and not another name.** PipeWire's rule is presence-only (`cpu.vm.name = !null`),
+so every recognized name behaves identically there — the choice is decided entirely by what
+*else* keys on the name:
+
+- `vmware` starts `vmtoolsd`/`vgauthd` — open-vm-tools is installed **and enabled** on the F44
+  images, gated purely on `ConditionVirtualization=vmware`.
+- `microsoft` starts the Hyper-V daemons the same way.
+- `qemu-guest-agent` is **not** name-gated: it is udev-triggered on a `virtio-ports` device
+  named `org.qemu.guest_agent.0`, which we do not expose, so it stays inactive under `kvm`.
+- WirePlumber has two name-specific rules (`~^(vmware)|(oracle)$`), and they only match
+  `alsa_*.pci.*` nodes — ours is `alsa_output.platform-a016000.virtio_mmio.*`, so they would
+  not apply to us anyway.
+
+`kvm`, `qemu`, `parallels` and `bochs` activate nothing. `KVM` is also the honest one: libkrun
+is a KVM VMM on Linux and HVF is the same abstraction on macOS.
+
+## Still owed upstream
+
+spa has **no generic fallback**: only the vendor table. systemd does have one — it reads the
+SMBIOS BIOS Characteristics VM bit, which is why we were detected as `vm-other` before this
+change at all. Teaching spa to honor that bit fixes every VMM that is not on the list, not
+just us, and is the mechanism-shaped patch to send. Adding `libkrun` to both tables is the
+smaller version.
+
+## A second gap this exposed, not yet addressed
+
+WirePlumber's VM ALSA defaults (`api.alsa.period-size = 1024`, `headroom = 2048`) only match
+`alsa_*.pci.*`. Our virtio-mmio sound node never matches them on any hypervisor name, so the
+guest still negotiates its period without those guardrails — which is why it drifts between
+480 and 512.
