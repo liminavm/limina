@@ -2657,8 +2657,7 @@ pub fn run(
             }
             save_state_final(timer_state_path.as_deref(), &window);
             kill_worker_group(timer_conn.pid());
-            crate::gateway::cleanup();
-            crate::control::cleanup();
+            crate::exit_cleanup();
             std::process::exit(0);
         }
 
@@ -2691,8 +2690,7 @@ pub fn run(
                         // next start restores).
                         log::error!("resume channel dead; closing the parked window");
                         save_state_final(timer_state_path.as_deref(), &window);
-                        crate::gateway::cleanup();
-                        crate::control::cleanup();
+                        crate::exit_cleanup();
                         std::process::exit(0);
                     }
                 }
@@ -2724,8 +2722,7 @@ pub fn run(
                     alert.addButtonWithTitle(&NSString::from_str("OK"));
                     alert.runModal();
                     save_state_final(timer_state_path.as_deref(), &window);
-                    crate::gateway::cleanup();
-                    crate::control::cleanup();
+                    crate::exit_cleanup();
                     std::process::exit(1);
                 }
                 if frames > resume_frames_baseline.get() {
@@ -2922,8 +2919,7 @@ pub fn run(
             // now — kill(-pid) could hit an innocent process.
             if PARK_STATE.with(|p| p.get()) == ParkPhase::Parked {
                 save_state_final(timer_state_path.as_deref(), &window);
-                crate::gateway::cleanup();
-                crate::control::cleanup();
+                crate::exit_cleanup();
                 std::process::exit(0);
             }
             use crate::vmlib::schema::WindowCloseAction;
@@ -2997,8 +2993,7 @@ pub fn run(
                     if force_now {
                         save_state_final(timer_state_path.as_deref(), &window);
                         kill_worker_group(timer_conn.pid());
-                        crate::gateway::cleanup();
-                        crate::control::cleanup();
+                        crate::exit_cleanup();
                         std::process::exit(0);
                     }
                 }
@@ -3157,8 +3152,7 @@ pub fn run(
     app.run();
     // The run loop only returns if AppKit tears down unexpectedly; the timer is what
     // normally exits us. Either way, don't fall through.
-    crate::gateway::cleanup();
-    crate::control::cleanup();
+    crate::exit_cleanup();
     std::process::exit(0);
 }
 

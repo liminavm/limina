@@ -956,6 +956,39 @@ skips implicit sync. That the guest-side bo wait fixes this proves the guest ker
 fence on the bo, so `VIRTGPU_WAIT`/sync-file consumers are safe and a bare Vulkan importer is
 not — unprobed. Formats/modifiers beyond `Argb8888` + LINEAR are also unmeasured.
 
+## The supervisor⇄worker control sockets should probably be Mach ports
+
+Five UNIX sockets in the temp dir carry the whole supervisor⇄worker control plane: `limina-ctrl`
+(the agent control plane), `limina-resize` (display control), `limina-balloon`, `limina-fido-usb`
+and `limina-moc-usb`. Each is `srwxr-xr-x` at a **predictable path** — `$TMPDIR/limina-<kind>-<pid>.sock` —
+so any process running as the same user can connect to them. That is the real objection, and it is
+sharpest for the two that exist to carry authentication traffic: the FIDO gadget socket proxies
+CTAPHID for a SEP-backed passkey store, and the MOC one carries fingerprint-reader protocol
+gated on Touch ID. A local process that connects first, or that reaches them while a VM is up,
+is talking to the authenticator path. Filesystem permissions are the only gate today.
+
+**Mach ports would replace the gate with an unforgeable capability** and would also delete the
+lifetime problem rather than managing it: a bootstrap-registered receive right dies with the
+process, so there is no filesystem residue to clean up and no path for anyone else to find. Both
+properties come from the same change.
+
+There is prior art in-tree to copy: the scanout surface already does exactly this
+(`window/present.rs`, `surface_rendezvous` — a per-process bootstrap name, `--surface-port-name`
+to the worker, survives worker relaunches, with a graceful fallback when registration fails).
+
+Worth checking before committing to it: whether a bootstrap name is meaningfully harder for
+another same-user process to reach than a socket path (same-user bootstrap namespace lookup is
+not obviously privileged); how the test harness, which connects to these sockets from outside,
+would drive a port instead; and that the death/relaunch semantics survive the worker exiting via
+`libc::_exit` on every guest power-off.
+
+Until then the leak is *managed*, not gone: `tmpsock` removes what the run allocated, from all
+seven `process::exit` sites via `exit_cleanup()`. A SIGKILLed supervisor still leaves a stray
+socket, harmless because every binder unlinks before `bind()`. **Do not add a startup sweep that
+reaps sockets whose embedded pid is dead — pids are recycled.** Sweeping the 6450 that had
+accumulated here left five "live" survivors that had all been reassigned to unrelated system
+daemons.
+
 ## Per-display layout memory: limina's half is fixed, two synoik faults remain
 
 limina's side of the "only one host display's layout is kept" report is **fixed and verified

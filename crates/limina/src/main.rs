@@ -18,6 +18,7 @@ mod moc;
 mod sep;
 mod session;
 mod supervisor;
+mod tmpsock;
 mod vdagent;
 mod venus_env;
 mod vmlib;
@@ -1056,6 +1057,17 @@ fn cli_from_definition(
 /// invocation today, or (later) one synthesized from a managed VM definition. On
 /// success it never returns to the caller: the windowed path runs the AppKit loop
 /// forever and the headless path ends in `process::exit`.
+/// Everything that must be torn down before the process leaves, from any exit path.
+///
+/// One call rather than a list at each site: the supervisor exits from seven places (the headless
+/// tail of [`run_vm`] plus six in the windowed AppKit timer), all via `process::exit`, so a
+/// teardown step added to only six of them is the natural bug. Each callee is idempotent.
+fn exit_cleanup() {
+    gateway::cleanup();
+    control::cleanup();
+    tmpsock::cleanup();
+}
+
 fn run_vm(mut cli: Cli) -> Result<()> {
     // Task #20: flat runs get suspend armed by default (and --discard-suspend honored) before
     // anything below reads cli.snapshot_file.
@@ -1090,7 +1102,10 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // Balloon control socket (M6): explicit flag wins; else auto-allocate when --memory is given.
     let balloon_socket = cli.balloon_control_socket.clone().or_else(|| {
         mem_range.is_some().then(|| {
-            std::env::temp_dir().join(format!("limina-balloon-{}.sock", std::process::id()))
+            let path =
+                std::env::temp_dir().join(format!("limina-balloon-{}.sock", std::process::id()));
+            tmpsock::own(&path);
+            path
         })
     });
 
@@ -1266,7 +1281,10 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         None
     } else {
         let socket = cli.control_socket.clone().unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("limina-ctrl-{}.sock", std::process::id()))
+            let path =
+                std::env::temp_dir().join(format!("limina-ctrl-{}.sock", std::process::id()));
+            tmpsock::own(&path);
+            path
         });
         match control::ControlPlane::start(&socket, balloon_policy, fido_store.clone()) {
             Ok(cp) => {
@@ -1336,6 +1354,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         if let Some(store) = &fido_store {
             let fido_socket =
                 std::env::temp_dir().join(format!("limina-fido-usb-{}.sock", std::process::id()));
+            tmpsock::own(&fido_socket);
             args.push("--fido-socket".into());
             args.push(path_arg(&fido_socket)?);
             fido::usb::serve(fido_socket, store.clone());
@@ -1348,6 +1367,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         if let Some(store) = &moc_store {
             let moc_socket =
                 std::env::temp_dir().join(format!("limina-moc-usb-{}.sock", std::process::id()));
+            tmpsock::own(&moc_socket);
             args.push("--moc-socket".into());
             args.push(path_arg(&moc_socket)?);
             moc::usb::serve(
@@ -1367,7 +1387,10 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // windowed boot we auto-allocate one if not given, so dragging the window Just Works.
     let resize_socket = cli.display_control_socket.clone().or_else(|| {
         cli.window.then(|| {
-            std::env::temp_dir().join(format!("limina-resize-{}.sock", std::process::id()))
+            let path =
+                std::env::temp_dir().join(format!("limina-resize-{}.sock", std::process::id()));
+            tmpsock::own(&path);
+            path
         })
     });
     if let Some(path) = &resize_socket {
@@ -1608,7 +1631,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // Explicit: process::exit skips destructors, so tear the gateway + control socket
     // down before exiting.
     drop(gateway);
-    control::cleanup();
+    exit_cleanup();
     std::process::exit(code);
 }
 
