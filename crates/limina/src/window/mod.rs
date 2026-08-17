@@ -426,6 +426,21 @@ fn send_display_command(path: &Path, command: DisplayCommand) {
     send_display_commands(path, vec![command]);
 }
 
+/// How long to leave the connector down before advertising the new display.
+///
+/// **The guest needs to *observe* the down state, and that takes wall-clock time.** Our device
+/// layer delivers the unplug and the replug as two distinct, ordered config-change events no
+/// matter how fast they are written — but a guest that receives both within microseconds
+/// coalesces its own re-probe and only ever sees the end state: it picks up the new mode list
+/// and keeps the previous monitor's identity, which is exactly the staleness the cycle exists to
+/// prevent. Measured on synoik: back-to-back writes leave the identity stale while the modes
+/// update; ≥50 ms re-reads it, 3/3. 60 ms buys margin over that floor and is still far below
+/// anything visible — the user watched a cycle and saw nothing.
+///
+/// This is also why an experiment driven by one `nc` per command "proves" no delay is needed:
+/// process spawn silently supplies milliseconds. See `spikes/display-identity-hotplug/`.
+const CONNECTOR_DOWN_SETTLE: std::time::Duration = std::time::Duration::from_millis(60);
+
 /// Push a sequence of display commands **in order**, one connection each, on a single thread.
 ///
 /// The ordering is the whole point: a migration cycle is an unplug followed by a replug, and
@@ -434,7 +449,8 @@ fn send_display_command(path: &Path, command: DisplayCommand) {
 /// connector down with nothing queued to bring it back. So the sequence gets one thread and
 /// blocking writes. The worker applies one update per wake and re-kicks its own eventfd while
 /// any remain, so each command still reaches the guest as its own config-change event
-/// (`third_party/libkrun/src/devices/src/virtio/gpu/{device,worker}.rs`) — we owe it only order.
+/// (`third_party/libkrun/src/devices/src/virtio/gpu/{device,worker}.rs`) — we owe it order, and
+/// [`CONNECTOR_DOWN_SETTLE`] after an unplug.
 fn send_display_commands(path: &Path, commands: Vec<DisplayCommand>) {
     if commands.is_empty() {
         return;
@@ -485,6 +501,10 @@ fn send_display_commands(path: &Path, commands: Vec<DisplayCommand>) {
             if let DisplayCommand::Display(control) = command {
                 if control.connected == Some(false) {
                     left_disconnected = true;
+                    // Give the guest time to actually process the unplug before the display
+                    // comes back — see CONNECTOR_DOWN_SETTLE. This runs on the spawned thread,
+                    // never the main thread, so the window does not stall for it.
+                    std::thread::sleep(CONNECTOR_DOWN_SETTLE);
                 } else if control.connected == Some(true) {
                     left_disconnected = false;
                 }

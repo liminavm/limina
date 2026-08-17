@@ -956,23 +956,27 @@ skips implicit sync. That the guest-side bo wait fixes this proves the guest ker
 fence on the bo, so `VIRTGPU_WAIT`/sync-file consumers are safe and a bare Vulkan importer is
 not — unprobed. Formats/modifiers beyond `Argb8888` + LINEAR are also unmeasured.
 
-## A sizeless reconnect does not make synoik re-read the display identity
+## Per-display layout memory: limina's half is fixed, two synoik faults remain
 
-limina's side of the "only one host display's layout is kept" report is **fixed**: a migration is
-now a connector cycle, which both compositors act on (`docs/design/stable-edid-hotplug.md`,
-`spikes/display-identity-hotplug/`). What remains is one shape that is still stale, and it is
-synoik's to close — handed over as `LIMINA-display-identity-reread.md` in the synoik tree on the
-dogfood guest.
+limina's side of the "only one host display's layout is kept" report is **fixed and verified
+end-to-end** by dragging the window between two physical displays: a migration is now a connector
+cycle and both compositors learn which display they are on
+(`docs/design/stable-edid-hotplug.md`, `spikes/display-identity-hotplug/`). Per-display memory works
+on mutter — each display's own scale returns on every switch, both stanzas retained.
 
-A cycle whose reconnect carries **no size** leaves synoik on the old identity (mutter re-reads it
-fine). That is exactly what the `dynamic` and `fixed` display modes send, because neither may
-dictate the guest's resolution — so on those modes a synoik guest keeps the previous display's
-identity, and a layout saved there lands under the wrong monitor. `host`, the default, folds the
-size into the reconnect and works.
+It still does not work on synoik, for two reasons that are synoik's, handed over as
+`LIMINA-display-identity-reread.md` in the synoik tree on the dogfood guest:
 
-limina must not paper over it by pushing a size in modes that promise not to. If synoik still needs
-one after re-reading on every config-change, the honest fix would be a way to say "re-read the
-EDID" without asserting a mode.
+1. **The config store keeps exactly one `<configuration>`.** Configuring one display *replaces* the
+   other's stanza, so the display you return to has nothing remembered. This is the one that
+   actually causes the reported symptom, and **no EDID or event limina can send reaches it** — one
+   stanza cannot hold two displays. mutter keys its store on the whole monitor-spec set and
+   accumulates.
+2. **A reconnect carrying no size leaves the identity stale** (mutter re-reads it fine). That is
+   exactly what the `dynamic` and `fixed` display modes send, since neither may dictate the guest's
+   resolution; `host`, the default, folds the size in and works. limina must not paper over it by
+   pushing a resolution in modes that promise not to — if synoik needs a mode to re-read, the honest
+   fix is a way to say "re-read the EDID" without asserting one.
 
 Also open, and unrelated to the above: `/sys/class/drm/card0-Virtual-1/edid` reads **0 bytes**
 under both compositors while both have the full identity and mode list. They read the DRM connector

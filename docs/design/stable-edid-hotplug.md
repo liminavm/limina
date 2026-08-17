@@ -120,13 +120,18 @@ the new mode, so it plainly saw the change), and any layout the user then sets i
 wrong monitor — which is how per-display memory is lost across a dock plug/unplug even though every
 individual save is internally consistent.
 
-The cycle's cost is what settles it. The guest is at zero monitors only between two socket writes:
-what makes it re-read is the two commands arriving as separate `DisplayUpdate`s, not any elapsed
-time, and single-digit milliseconds is the demonstrated floor. Nothing is observable in the window.
-So the objection that once chose in-place — that zero monitors is a real session state, with windows
-relocated, for a transition the user experiences as dragging a window — does not survive
-measurement. Both arms, both compositors, and the gap sweep are in
-`spikes/display-identity-hotplug/`.
+The cycle's cost is what settles it: the guest is at zero monitors for **60 ms**
+(`CONNECTOR_DOWN_SETTLE`), and nothing is observable in the window — the user watched both
+compositors cycle with the resolution held constant and saw nothing. So the objection that once
+chose in-place — that zero monitors is a real session state, with windows relocated, for a
+transition the user experiences as dragging a window — does not survive measurement.
+
+That delay is **required, not padding**: the guest has to re-probe while the connector is down, and
+back-to-back writes let it coalesce its own re-probe into the end state — picking up the new mode
+list and keeping the old identity. 50 ms was the measured floor. Our device layer is not the
+constraint (it never merges an update carrying a connection change, and the GPU worker takes one
+update per wake, re-kicking its own eventfd while any remain), so what the supervisor owes is order
+plus that settle.
 
 Two consequences worth keeping in view:
 

@@ -1,16 +1,24 @@
 # Which display-change event makes a guest compositor re-read the EDID?
 
-An in-place EDID swap is enough for **mutter**. It is **not** enough for **synoik**, which re-reads
-the connector only on a genuine disconnect→reconnect. Measured 2026-08-17 on the F44 enhanced
-images (`enhanced` = mutter, `enhanced.synoik` = synoik), both booted EFI+venus on the same host,
-identities pushed over the display-control socket.
+An in-place EDID swap is enough for **mutter**. It is **not** enough for **synoik**, which updates a
+monitor's *mode list* from a new EDID but refreshes the *identity* it reports and keys on only across
+a connector cycle with a real gap in it. So only the cycle satisfies both tiers, and it is limina's
+default.
 
-| compositor | in-place EDID swap | disconnect → new EDID → reconnect |
+Measured 2026-08-17 on the F44 enhanced images (`enhanced` = mutter 50.0, `enhanced.synoik` =
+synoik), both booted EFI+venus on the same host — first with identities pushed over the
+display-control socket, then end-to-end by dragging the window between two physical displays.
+
+| compositor | in-place EDID swap | cycle: disconnect → settle → reconnect + EDID |
 |---|---|---|
-| mutter 50.0 | **re-reads**: new identity, new scale, and the previous display's remembered scale restored on return | re-reads, same outcome |
-| synoik | **stale**: re-picks a scale for the new *mode* but keeps reporting the OLD identity | **re-reads**: new identity, and the remembered scale restored on return |
+| mutter | **re-reads**: new identity, new scale, previous display's remembered scale restored on return | re-reads, same outcome |
+| synoik | **stale identity** (mode list does update) | **re-reads** the identity |
 
-So the two tiers need different events, and only the cycle satisfies both.
+Two things the cycle does *not* fix, both synoik's and both filed:
+
+- a reconnect carrying **no size** leaves the identity stale (the shape `dynamic`/`fixed` send);
+- synoik's config store keeps exactly **one** `<configuration>`, so per-display memory fails even
+  with a correct identity. Unreachable from limina at any EDID or event.
 
 ## What "stale" looks like
 
@@ -42,32 +50,61 @@ stale on synoik. The host side is not the problem: the worker applies `size`, `e
 independently and mutter picks up the sizeless EDID, so the EDID *did* change
 (`third_party/libkrun/src/devices/src/virtio/gpu/worker.rs`).
 
-## The cycle needs two messages, not a delay
+## The cycle needs a real delay, ~50 ms, and a `nc`-driven test hides that
 
-Sweeping the disconnect window on synoik (`gap-floor.sh`, every step a genuine identity change so
-no step can pass by already being on the target):
+The guest must *observe* the connector down, and that takes wall-clock time. Sweeping the
+disconnect window on synoik (`gap-floor.sh`, every step a genuine identity change so no step can
+pass by already being on the target):
 
 | disconnect window | result |
 |---|---|
 | all three commands in **one socket write** | **STALE** (3/3) |
-| separate writes, no added delay | RE-READ (3/3) |
+| two writes from the shipped sender, back to back | **STALE** — modes update, identity does not |
+| separate `nc` invocations, no added `sleep` | RE-READ (3/3) |
 | 50 ms | RE-READ (3/3) |
 | 100 ms – 2 s | RE-READ |
 
-No wall-clock gap is needed — though the "no added delay" runs still had the few milliseconds of a
-process spawn between writes, so treat single-digit ms as the demonstrated floor rather than zero.
+**The `nc` row is a trap and it fooled us once.** One process spawn per command silently supplies
+milliseconds, so "no added delay" measured as a pass and the first version of this document
+concluded no delay was needed. The shipped sender writes both commands from one thread microseconds
+apart and reproduced the stale identity through the real window-migration path. An experiment whose
+harness contributes the very quantity under test cannot measure it: the passing configuration and
+the shipped configuration were not the same experiment. Hence `CONNECTOR_DOWN_SETTLE` = 60 ms in
+`window/mod.rs`, on the sender's own thread so the window never stalls for it.
 
-The single-write failure is **not** our device layer coalescing. `DisplayUpdate::can_merge` refuses
-to fold any update carrying a connection change, and the GPU worker takes exactly one update per
-wake, re-kicking its own eventfd while any remain — so all three arrived as distinct, ordered
-config-change events. Something on the guest side coalesced its own re-probe. Not chased further,
-because the two-message form is both reliable and structurally better.
+The failure is **not** our device layer coalescing. `DisplayUpdate::can_merge` refuses to fold any
+update carrying a connection change, and the GPU worker takes exactly one update per wake, re-kicking
+its own eventfd while any remain — so the commands do arrive as distinct, ordered config-change
+events. The coalescing is the guest's own re-probe.
 
-What the *supervisor* owes is only **order**, and that is a real hazard: `send_display_command`
-spawns a thread per call, so two independent calls can invert. Losing that race tells the guest to
-reconnect before it is told to disconnect and leaves the connector down with nothing queued to
-raise it — hence `send_display_commands`, one thread, blocking writes, with a forced reconnect if
-the pair fails half-way.
+The supervisor also owes **order**, and that is a real hazard: `send_display_command` spawns a
+thread per call, so two independent calls can invert. Losing that race tells the guest to reconnect
+before it is told to disconnect and leaves the connector down with nothing queued to raise it —
+hence `send_display_commands`, one thread, blocking writes, with a forced reconnect if the pair
+fails half-way.
+
+## End to end, through the real window-migration path, on two physical displays
+
+Everything above pushes identities at the socket by hand. This is the shipped path — window
+position → `hostdisplay::describe` → `migration_commands` → socket → libkrun → guest — with the
+window dragged between a 2560x1440 external panel and a 3024x1964 built-in Retina
+(`migrate-window.sh`, `per-display-memory.sh`).
+
+| | mutter | synoik |
+|---|---|---|
+| identity follows the window both ways | yes | yes (**needs the 60 ms settle**; without it the mode list updates and the identity stays stale) |
+| each display's own scale re-applied on arrival | yes — 1.333 external / 2.0 built-in, every switch | no |
+| `monitors.xml` stanzas | **2**, one per display, both retained | **1** — configuring a display *replaces* the other |
+
+So limina's half is done: both compositors now learn which physical display they are on. Per-display
+memory works on mutter and still does not on synoik, for a **second and independent** reason — its
+config store keeps exactly one `<configuration>`. With the built-in configured to 1.75, the external
+panel's stanza is gone and its remembered 1.333-equivalent never returns. That one is not reachable
+from limina at any EDID or event: one stanza cannot hold two displays.
+
+A useful property of the sequence: the boot-time identity push is itself a migration, so it cycles
+too. A compositor that starts before the push lands would otherwise latch the anonymous boot
+identity (`RHT / krun-display`) permanently — visible as the first stanza in the mutter arm's file.
 
 This matters for the cost of a cycle: the zero-monitor interval is milliseconds, not the visible
 outage the original design assumed when it chose the in-place swap.
