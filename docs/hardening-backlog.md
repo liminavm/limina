@@ -956,6 +956,45 @@ skips implicit sync. That the guest-side bo wait fixes this proves the guest ker
 fence on the bo, so `VIRTGPU_WAIT`/sync-file consumers are safe and a bare Vulkan importer is
 not — unprobed. Formats/modifiers beyond `Argb8888` + LINEAR are also unmeasured.
 
+## GNOME keeps only one host display's layout — REGRESSION, it used to keep both
+
+**Observed 2026-08-16 on the dogfood guest. Was verified working when the identity swap
+shipped, so this is a regression or an uncovered edge case, not the known transition cost.**
+
+With one virtual connector whose identity mirrors the host display, GNOME should hold a
+`<configuration>` stanza per host display and re-match on the new vendor/product/serial. It
+now holds exactly one, and configuring a display **replaces** the other rather than joining
+it — so the layout is forgotten on every switch, not just the first meeting of each display.
+
+Evidence, `~/.config/monitors.xml` on the dogfood guest, one boot:
+
+| time | single stanza it contained |
+|---|---|
+| 22:35 | `PNP(LMN)` / `Built-in` / `0x96EBCEB1`, scale 1.25 |
+| 22:43 (after configuring in Settings) | `PNP(LMN)` / `DELL P2723QE` / `0x3704F790`, scale 1.25 |
+
+The `Built-in` stanza is gone, not appended to. The save itself is correct — the surviving
+entry matches the live monitor exactly and does get restored for that display.
+
+Ruled out already: the identity is **not** unstable per boot. It derives from the host panel's
+own EDID vendor/model/serial via CoreGraphics (`hostdisplay.rs`, name-hash only as the
+all-zero fallback), so a given display keeps its identity across reboots and hotplugs. And
+nothing in the 08-16 builds touched EDID — the only `window/*` commits that day are the
+scanout-surface fixes, and `hostdisplay.rs` carries no env gate.
+
+**Start here:** `docs/design/stable-edid-hotplug.md` predicted this exact failure and left the
+fallback in place — *"if in-place identity swap turns out not to make mutter re-apply
+per-monitor config, the cycle is the fallback, and the L1 test covers both"*. The default is an
+in-place EDID swap with no `enabled` toggle; `LIMINA_DISPLAY_HOTPLUG=cycle` forces a genuine
+disconnect→reconnect. If `cycle` restores per-display memory, the in-place swap is the culprit
+and the question becomes which of the two mutter actually needs — weighed against why in-place
+was chosen (a cycle leaves GNOME at zero monitors, relocating windows, for what the user
+experiences as dragging a window between screens).
+
+Worth checking at the same time why `/sys/class/drm/card0-Virtual-1/edid` reads **0 bytes**
+while mutter has the full identity and mode list. Mutter is evidently reading the DRM connector
+property, so nothing is broken, but anything reading EDID from sysfs would see nothing.
+
 ---
 
 When a milestone's loose ends are all closed, fold the remainder back into the roadmap milestone
