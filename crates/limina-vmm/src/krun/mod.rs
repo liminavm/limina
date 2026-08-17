@@ -747,7 +747,8 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
 /// Bind a UNIX-socket listener that applies newline-delimited display commands to the live GPU
 /// via `handle`: `resize <w> <h>` (display 0) and the general `display id=… …` form carrying
 /// identity, mode list, refresh range and connection state. Each accepted connection is read to
-/// EOF — the supervisor keeps one long-lived connection; the test harness connects per call.
+/// EOF; both the supervisor and the test harness connect per command, so a migration cycle
+/// arrives as two connections in order (see `limina::window::send_display_commands`).
 /// Runs on a detached thread for the VMM's lifetime. The wire format lives in
 /// `limina-displayctl`. See docs/design/runtime-display-resize.md and
 /// docs/design/stable-edid-hotplug.md.

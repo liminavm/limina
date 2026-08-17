@@ -28,6 +28,20 @@ lost even though each individual save is internally consistent.
 Under a cycle the same push yields `('Virtual-1', 'PNP(LMN)', 'DELL P2723QE', '0x370D1790')`,
 scale 1.5, and cycling back restores BenQ at its remembered 1.25.
 
+## Ship the two-message form, and it needs a size
+
+The reconnect must carry the new EDID itself — `connected=0`, then
+`connected=1` + EDID (+ size). Verified 3/3 on synoik and 2/2 on mutter. It is also the
+structurally right shape: the new EDID and the reconnect are one atomic update, so a reconnected
+connector can never be probed while still advertising the old EDID.
+
+**A reconnect with no `size` does not make synoik re-read** (mutter does): pushed a fresh identity
+with no size field, synoik stayed on the previous one. So `host` mode — which folds the screen size
+in — works on both, while `dynamic` and `fixed`, which must not dictate the guest's resolution, are
+stale on synoik. The host side is not the problem: the worker applies `size`, `edid` and `connected`
+independently and mutter picks up the sizeless EDID, so the EDID *did* change
+(`third_party/libkrun/src/devices/src/virtio/gpu/worker.rs`).
+
 ## The cycle needs two messages, not a delay
 
 Sweeping the disconnect window on synoik (`gap-floor.sh`, every step a genuine identity change so
@@ -40,10 +54,20 @@ no step can pass by already being on the target):
 | 50 ms | RE-READ (3/3) |
 | 100 ms – 2 s | RE-READ |
 
-The requirement is that `connected=0` and `connected=1` arrive as **separate `DisplayUpdate`s**;
-batched into one write, the guest only ever observes the final state. No wall-clock gap is needed —
-the "no added delay" runs still had the few milliseconds of a process spawn between writes, so
-treat single-digit ms as the demonstrated floor rather than zero.
+No wall-clock gap is needed — though the "no added delay" runs still had the few milliseconds of a
+process spawn between writes, so treat single-digit ms as the demonstrated floor rather than zero.
+
+The single-write failure is **not** our device layer coalescing. `DisplayUpdate::can_merge` refuses
+to fold any update carrying a connection change, and the GPU worker takes exactly one update per
+wake, re-kicking its own eventfd while any remain — so all three arrived as distinct, ordered
+config-change events. Something on the guest side coalesced its own re-probe. Not chased further,
+because the two-message form is both reliable and structurally better.
+
+What the *supervisor* owes is only **order**, and that is a real hazard: `send_display_command`
+spawns a thread per call, so two independent calls can invert. Losing that race tells the guest to
+reconnect before it is told to disconnect and leaves the connector down with nothing queued to
+raise it — hence `send_display_commands`, one thread, blocking writes, with a forced reconnect if
+the pair fails half-way.
 
 This matters for the cost of a cycle: the zero-monitor interval is milliseconds, not the visible
 outage the original design assumed when it chose the in-place swap.

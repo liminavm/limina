@@ -106,19 +106,39 @@ Three distinct transitions, three behaviors:
 | transition | what changes | event to the guest |
 |---|---|---|
 | window resize / guest modeset (same display) | detailed timing #0, physical mm | today's path: display-info rect + EDID, one config-change |
-| window moves to another host display | identity + range limits + mode list + timing | EDID swap, one config-change — **no `enabled` toggle** |
-| display genuinely removed / added (later) | the scanout exists or not | `enabled` toggled, config-change |
+| window moves to another host display | identity + range limits + mode list + timing | **disconnect, then reconnect carrying the new EDID** — two config-changes |
+| display genuinely removed / added | the scanout exists or not | `connected` toggled, config-change |
 
-The middle row is the load-bearing decision. The obvious implementation of "the monitor changed"
-is a disconnect→reconnect pair, and we can do it (fact 3). We **don't**, by default: with one
-scanout it leaves GNOME with *zero* monitors for the duration, which is a real session state
-(windows get relocated, the shell may reconfigure) for a transition the user perceives as "I
-dragged my window". An in-place EDID swap plus the hpd event the driver already fires gets mutter
-to re-read the connector and re-match `monitors.xml` on the new vendor/product/serial, without ever
-passing through zero monitors. The `enabled` toggle stays implemented and reachable
-(`LIMINA_DISPLAY_HOTPLUG=cycle`) because genuine attach/detach needs it — and because if in-place
-identity swap turns out not to make mutter re-apply per-monitor config, the cycle is the fallback,
-and the L1 test covers both.
+The middle row is the load-bearing decision: **a migration is a genuine connector cycle, because
+that is the only event both tiers act on.**
+
+An in-place EDID swap — rewriting the identity with the connector left up — is enough for mutter,
+which re-reads the connector and re-applies the arriving display's remembered configuration. It is
+**not** enough for a compositor that refreshes a monitor's identity only on a reconnect. synoik
+keeps reporting the *previous* display's identity after an in-place swap (it re-picks a scale for
+the new mode, so it plainly saw the change), and any layout the user then sets is saved under the
+wrong monitor — which is how per-display memory is lost across a dock plug/unplug even though every
+individual save is internally consistent.
+
+The cycle's cost is what settles it. The guest is at zero monitors only between two socket writes:
+what makes it re-read is the two commands arriving as separate `DisplayUpdate`s, not any elapsed
+time, and single-digit milliseconds is the demonstrated floor. Nothing is observable in the window.
+So the objection that once chose in-place — that zero monitors is a real session state, with windows
+relocated, for a transition the user experiences as dragging a window — does not survive
+measurement. Both arms, both compositors, and the gap sweep are in
+`spikes/display-identity-hotplug/`.
+
+Two consequences worth keeping in view:
+
+- **The new EDID rides with the reconnect, atomically**, never with the disconnect. A connector
+  that comes back still advertising the old EDID is precisely the stale case.
+- **A cycle with no size in the reconnect does not make synoik re-read** (mutter is fine with it).
+  That is the shape the `dynamic` and `fixed` modes send, since neither may dictate the guest's
+  resolution. `host` — the default — folds the size in and works on both. Closing that gap is
+  synoik's side; limina must not start driving the resolution in modes that promise not to.
+
+`LIMINA_DISPLAY_HOTPLUG=inplace` selects the in-place swap. It stays supported because it is the
+cheaper event where a guest honours it; unset or unrecognized means the cycle.
 
 ## As built
 

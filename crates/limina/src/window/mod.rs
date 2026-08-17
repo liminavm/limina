@@ -423,19 +423,72 @@ fn send_resize(path: &Path, width: u32, height: u32) {
 /// thread — a brief connect/write must never beachball the UI). Best-effort: a failure just
 /// means this gesture's update is dropped; the next one retries.
 fn send_display_command(path: &Path, command: DisplayCommand) {
+    send_display_commands(path, vec![command]);
+}
+
+/// Push a sequence of display commands **in order**, one connection each, on a single thread.
+///
+/// The ordering is the whole point: a migration cycle is an unplug followed by a replug, and
+/// `send_display_command` used to spawn a thread per call — two of those race, and losing the
+/// race means the guest is told to reconnect *before* it is told to disconnect, leaving the
+/// connector down with nothing queued to bring it back. So the sequence gets one thread and
+/// blocking writes. The worker applies one update per wake and re-kicks its own eventfd while
+/// any remain, so each command still reaches the guest as its own config-change event
+/// (`third_party/libkrun/src/devices/src/virtio/gpu/{device,worker}.rs`) — we owe it only order.
+fn send_display_commands(path: &Path, commands: Vec<DisplayCommand>) {
+    if commands.is_empty() {
+        return;
+    }
     let path = path.to_path_buf();
-    let line = command.to_wire();
     std::thread::spawn(move || {
         use std::io::Write;
-        match std::os::unix::net::UnixStream::connect(&path) {
-            Ok(mut stream) => {
-                if let Err(e) = writeln!(stream, "{line}") {
-                    log::warn!("display-control: send {line:?} failed: {e}");
-                } else {
-                    log::info!("display-control: pushed {line:?} to the guest");
+        let mut left_disconnected = false;
+        for command in &commands {
+            let line = command.to_wire();
+            let sent = match std::os::unix::net::UnixStream::connect(&path) {
+                Ok(mut stream) => match writeln!(stream, "{line}") {
+                    Ok(()) => {
+                        log::info!("display-control: pushed {line:?} to the guest");
+                        true
+                    }
+                    Err(e) => {
+                        log::warn!("display-control: send {line:?} failed: {e}");
+                        false
+                    }
+                },
+                Err(e) => {
+                    log::warn!("display-control: connect {path:?} failed: {e}");
+                    false
+                }
+            };
+            if !sent {
+                // Abandoning a cycle half-way is worse than not starting it: a guest left
+                // disconnected has no display at all, where a stale identity is merely wrong.
+                // Recovery is unconditional — a bare reconnect is harmless on a connector that
+                // is already up.
+                if left_disconnected {
+                    log::error!(
+                        "display-control: a migration cycle failed after the unplug; \
+                         forcing the connector back up"
+                    );
+                    let bare = DisplayCommand::Display(limina_displayctl::DisplayControl {
+                        display_id: 0,
+                        connected: Some(true),
+                        ..Default::default()
+                    });
+                    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&path) {
+                        let _ = writeln!(stream, "{}", bare.to_wire());
+                    }
+                }
+                return;
+            }
+            if let DisplayCommand::Display(control) = command {
+                if control.connected == Some(false) {
+                    left_disconnected = true;
+                } else if control.connected == Some(true) {
+                    left_disconnected = false;
                 }
             }
-            Err(e) => log::warn!("display-control: connect {path:?} failed: {e}"),
         }
     });
 }
@@ -2205,15 +2258,24 @@ pub fn run(
                                 // rather than treating it as the same panel resized. A plain
                                 // size change (the host reconfigured this display) carries no
                                 // EDID, leaving the identity exactly where it was.
-                                let command = if migrated {
-                                    hostdisplay::migration_command(host, true)
+                                if migrated {
+                                    send_display_commands(
+                                        sock,
+                                        hostdisplay::migration_commands(
+                                            host,
+                                            true,
+                                            hostdisplay::HotplugPolicy::from_env(),
+                                        ),
+                                    );
                                 } else {
-                                    DisplayCommand::Resize {
-                                        width: want.0,
-                                        height: want.1,
-                                    }
-                                };
-                                send_display_command(sock, command);
+                                    send_display_command(
+                                        sock,
+                                        DisplayCommand::Resize {
+                                            width: want.0,
+                                            height: want.1,
+                                        },
+                                    );
+                                }
                             }
                         }
                     }
@@ -2231,7 +2293,14 @@ pub fn run(
                 if migrated && !matches!(mode, DisplayResolution::Host) && geom.get() != (0, 0) {
                     if let Some(host) = host.as_ref() {
                         identity_sent.set(host.identity_key());
-                        send_display_command(sock, hostdisplay::migration_command(host, false));
+                        send_display_commands(
+                            sock,
+                            hostdisplay::migration_commands(
+                                host,
+                                false,
+                                hostdisplay::HotplugPolicy::from_env(),
+                            ),
+                        );
                     }
                 }
             }
@@ -3076,6 +3145,66 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A migration cycle is an unplug followed by a replug, and inverting them leaves the guest
+    /// with the connector DOWN and nothing queued to raise it — no display at all, which is far
+    /// worse than the stale identity the cycle exists to fix. The old sender spawned a thread per
+    /// command, so two calls could invert; this pins the order on the wire.
+    #[test]
+    fn a_cycle_reaches_the_socket_as_two_commands_in_order() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::net::UnixListener;
+
+        let dir = std::env::temp_dir().join(format!("limina-cycle-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let path = dir.join("display.sock");
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).expect("bind");
+
+        let host = hostdisplay::HostDisplay {
+            size: (2560, 1440),
+            edid: limina_displayctl::EdidSpec {
+                serial: 0xFEED_FACE,
+                name: "Test Panel".into(),
+                ..Default::default()
+            },
+        };
+        send_display_commands(
+            &path,
+            hostdisplay::migration_commands(&host, true, hostdisplay::HotplugPolicy::Cycle),
+        );
+
+        // One connection per command; the order they arrive in is the whole assertion.
+        let mut lines = Vec::new();
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read");
+            lines.push(line.trim().to_string());
+        }
+
+        assert!(
+            lines[0].contains("connected=0"),
+            "the unplug must arrive FIRST, got {lines:?}"
+        );
+        assert!(
+            !lines[0].contains("serial="),
+            "the unplug must not carry the new identity, got {:?}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("connected=1"),
+            "the replug must arrive second, got {lines:?}"
+        );
+        assert!(
+            lines[1].contains(&format!("serial={}", 0xFEED_FACEu32)),
+            "the replug must carry the new EDID, got {:?}",
+            lines[1]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Longer than `OVERLAY_SETTLE`: the condition has held.
 

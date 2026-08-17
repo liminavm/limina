@@ -55,20 +55,89 @@ impl HostDisplay {
     }
 }
 
-/// The command to push when the window has migrated to this display.
+/// Which event the guest gets when the window migrates to another host display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotplugPolicy {
+    /// Take the connector down and bring it back up carrying the new EDID. The default,
+    /// because it is the only event **both** tiers act on.
+    Cycle,
+    /// Rewrite the EDID with the connector left connected. Cheaper — the guest never passes
+    /// through zero monitors — and enough for a compositor that re-reads an in-place change.
+    InPlace,
+}
+
+/// `LIMINA_DISPLAY_HOTPLUG`: `cycle` (default) or `inplace`.
+const HOTPLUG_ENV: &str = "LIMINA_DISPLAY_HOTPLUG";
+
+impl HotplugPolicy {
+    /// The policy for this process, read once.
+    pub fn from_env() -> Self {
+        use std::sync::OnceLock;
+        static POLICY: OnceLock<HotplugPolicy> = OnceLock::new();
+        *POLICY.get_or_init(|| Self::parse(std::env::var(HOTPLUG_ENV).ok().as_deref()))
+    }
+
+    /// Unset or unrecognized means the default. A typo must not silently select the other
+    /// behavior, so it warns and cycles rather than guessing.
+    fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            None | Some("") => Self::Cycle,
+            Some(v) if v.eq_ignore_ascii_case("cycle") => Self::Cycle,
+            Some(v) if v.eq_ignore_ascii_case("inplace") || v.eq_ignore_ascii_case("in-place") => {
+                Self::InPlace
+            }
+            Some(other) => {
+                log::warn!("{HOTPLUG_ENV}={other:?} is not `cycle` or `inplace`; using `cycle`");
+                Self::Cycle
+            }
+        }
+    }
+}
+
+/// The commands to push, **in order**, when the window has migrated to this display.
 ///
 /// `drives_size` is whether the *display mode* lets the host screen decide the guest's
 /// resolution — true only for match-host. The identity half is pushed in **every** mode:
 /// which physical panel the window is on is not a sizing policy, and a dynamic or fixed VM
 /// that never learns it keeps a flat 300 DPI on every display it is dragged to, so an ordinary
 /// external monitor reads as Retina and the guest picks the wrong scale.
-pub fn migration_command(host: &HostDisplay, drives_size: bool) -> DisplayCommand {
-    DisplayCommand::Display(DisplayControl {
+///
+/// A `Cycle` is two commands and the order is load-bearing, so the caller must send them
+/// sequentially over the same socket rather than firing them off independently — see
+/// [`super::send_display_commands`].
+///
+/// **Why the cycle is the default.** An in-place EDID swap is enough for mutter, which re-reads
+/// the connector and re-applies the arriving display's remembered configuration. It is *not*
+/// enough for a compositor that refreshes a monitor's identity only on a reconnect: it keeps
+/// reporting the previous display's identity, so the layout the user then sets is saved under the
+/// wrong monitor and per-display memory is lost. Both tiers act on the cycle, and it costs
+/// milliseconds — the guest is at zero monitors only between two socket writes, which is why the
+/// original "that is a real session state" objection to it does not hold. Measured both ways in
+/// `spikes/display-identity-hotplug/`.
+pub fn migration_commands(
+    host: &HostDisplay,
+    drives_size: bool,
+    policy: HotplugPolicy,
+) -> Vec<DisplayCommand> {
+    let arrive = DisplayControl {
         display_id: 0,
         size: drives_size.then_some(host.size),
-        connected: None,
+        connected: matches!(policy, HotplugPolicy::Cycle).then_some(true),
         edid: Some(host.edid.clone()),
-    })
+    };
+    match policy {
+        HotplugPolicy::InPlace => vec![DisplayCommand::Display(arrive)],
+        // The EDID rides with the replug, not with the unplug: a connector that comes back
+        // still advertising the old EDID is the stale case we are trying to avoid.
+        HotplugPolicy::Cycle => vec![
+            DisplayCommand::Display(DisplayControl {
+                display_id: 0,
+                connected: Some(false),
+                ..DisplayControl::default()
+            }),
+            DisplayCommand::Display(arrive),
+        ],
+    }
 }
 
 /// The camera-housing ("notch") height of a screen in points, or 0 on a screen without one.
@@ -448,6 +517,105 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 mod tests {
     use super::*;
 
+    fn host() -> HostDisplay {
+        HostDisplay {
+            size: (2560, 1440),
+            edid: EdidSpec {
+                refresh_hz: 60,
+                dpi: 109,
+                vendor: LIMINA_VENDOR,
+                product_id: 7,
+                serial: 0xDEAD_BEEF,
+                name: "BenQ LCD".into(),
+                ..EdidSpec::default()
+            },
+        }
+    }
+
+    fn control(command: &DisplayCommand) -> &DisplayControl {
+        match command {
+            DisplayCommand::Display(control) => control,
+            other => panic!("expected a display command, got {other:?}"),
+        }
+    }
+
+    /// The migration cycle: the guest has to see the connector go away and come back, or a
+    /// compositor that only refreshes a monitor's identity on a reconnect keeps serving the
+    /// previous display's identity — and then saves the new display's layout under it.
+    /// Measured in `spikes/display-identity-hotplug/`.
+    #[test]
+    fn a_cycle_takes_the_connector_down_then_back_up_with_the_new_edid() {
+        let commands = migration_commands(&host(), true, HotplugPolicy::Cycle);
+        assert_eq!(commands.len(), 2, "a cycle is exactly two commands");
+
+        let down = control(&commands[0]);
+        assert_eq!(down.connected, Some(false), "the first command unplugs");
+        assert!(
+            down.edid.is_none() && down.size.is_none(),
+            "the unplug carries nothing else: the guest must not learn the new identity \
+             until the connector comes back"
+        );
+
+        let up = control(&commands[1]);
+        assert_eq!(up.connected, Some(true), "the second command replugs");
+        assert_eq!(
+            up.edid.as_ref().map(|e| e.serial),
+            Some(0xDEAD_BEEF),
+            "the new EDID rides WITH the replug, atomically — a connector that comes back \
+             still carrying the old EDID is exactly the stale case"
+        );
+        assert_eq!(up.size, Some((2560, 1440)));
+    }
+
+    /// Without a size in the replug, synoik does not re-read the identity at all (measured).
+    /// The modes that don't drive the guest's resolution have no size to send, so they get the
+    /// cycle without one — correct for mutter, and no worse than the in-place swap elsewhere.
+    #[test]
+    fn a_cycle_that_does_not_drive_the_size_still_replugs_with_the_identity() {
+        let commands = migration_commands(&host(), false, HotplugPolicy::Cycle);
+        assert_eq!(commands.len(), 2);
+        let up = control(&commands[1]);
+        assert_eq!(up.connected, Some(true));
+        assert!(
+            up.size.is_none(),
+            "dynamic and fixed keep their own resolution"
+        );
+        assert!(up.edid.is_some(), "but they still hand over the identity");
+    }
+
+    /// The escape hatch: one command, no connectivity change — what limina shipped before, and
+    /// still the cheaper event for a guest that re-reads an in-place change.
+    #[test]
+    fn in_place_stays_a_single_command_that_never_touches_connectivity() {
+        let commands = migration_commands(&host(), true, HotplugPolicy::InPlace);
+        assert_eq!(commands.len(), 1);
+        let only = control(&commands[0]);
+        assert_eq!(only.connected, None);
+        assert_eq!(only.size, Some((2560, 1440)));
+        assert!(only.edid.is_some());
+    }
+
+    #[test]
+    fn the_hotplug_policy_defaults_to_cycle_and_reads_its_opt_out() {
+        assert_eq!(HotplugPolicy::parse(None), HotplugPolicy::Cycle);
+        assert_eq!(HotplugPolicy::parse(Some("cycle")), HotplugPolicy::Cycle);
+        assert_eq!(
+            HotplugPolicy::parse(Some("inplace")),
+            HotplugPolicy::InPlace
+        );
+        assert_eq!(
+            HotplugPolicy::parse(Some("in-place")),
+            HotplugPolicy::InPlace
+        );
+        assert_eq!(
+            HotplugPolicy::parse(Some("InPlace")),
+            HotplugPolicy::InPlace
+        );
+        // Garbage must not silently pick the non-default behavior.
+        assert_eq!(HotplugPolicy::parse(Some("nonsense")), HotplugPolicy::Cycle);
+        assert_eq!(HotplugPolicy::parse(Some("")), HotplugPolicy::Cycle);
+    }
+
     /// A Retina panel must keep reporting a Retina-class density, or the guest would drop to
     /// 1× and everything in it would halve in apparent size.
     #[test]
@@ -616,22 +784,31 @@ mod tests {
             },
         };
 
-        let DisplayCommand::Display(host_mode) = migration_command(&host, true) else {
-            panic!("expected a display command");
-        };
-        assert_eq!(host_mode.size, Some((1512, 982)));
-        assert_eq!(host_mode.edid.expect("edid").serial, 42);
+        // Under either policy the arriving display is described by the LAST command.
+        for policy in [HotplugPolicy::Cycle, HotplugPolicy::InPlace] {
+            let commands = migration_commands(&host, true, policy);
+            let host_mode = control(commands.last().expect("a command"));
+            assert_eq!(host_mode.size, Some((1512, 982)), "{policy:?}");
+            assert_eq!(
+                host_mode.edid.as_ref().expect("edid").serial,
+                42,
+                "{policy:?}"
+            );
 
-        // Dynamic/fixed: the guest's resolution is theirs to decide, but it still must learn
-        // which display it is on.
-        let DisplayCommand::Display(other_mode) = migration_command(&host, false) else {
-            panic!("expected a display command");
-        };
-        assert_eq!(
-            other_mode.size, None,
-            "must not override the mode's own size"
-        );
-        assert_eq!(other_mode.edid.expect("edid").serial, 42);
+            // Dynamic/fixed: the guest's resolution is theirs to decide, but it still must
+            // learn which display it is on.
+            let commands = migration_commands(&host, false, policy);
+            let other_mode = control(commands.last().expect("a command"));
+            assert_eq!(
+                other_mode.size, None,
+                "{policy:?} must not override the mode's own size"
+            );
+            assert_eq!(
+                other_mode.edid.as_ref().expect("edid").serial,
+                42,
+                "{policy:?}"
+            );
+        }
     }
 
     /// ...and to a refresh-rate change on the same display (a mode switch on the host).
