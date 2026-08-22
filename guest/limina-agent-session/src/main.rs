@@ -60,8 +60,10 @@ use limina_proto::{
     CHANNEL_CLIPBOARD, CHANNEL_CONTROL, CONTROL_PORT,
 };
 
+mod layout_gate;
 mod vdagent;
 mod wayland_clip;
+mod wayland_outputs;
 use wayland_clip::WaylandClip;
 
 const TEXT_MIME: &str = "text/plain;charset=utf-8";
@@ -119,6 +121,8 @@ enum Event {
     Transfer { serial: u32 },
     /// The session (compositor / D-Bus) is gone: exit, systemd restarts us.
     SessionGone,
+    /// The compositor's monitor arrangement changed (or was seen for the first time).
+    Layout(limina_proto::DisplayLayout),
 }
 
 fn main() {
@@ -137,9 +141,18 @@ fn main() {
     // capability, so the host simply never routes clipboard traffic our way. The two
     // phases alternate for the life of the session — a vdagent that dies hands us the
     // clipboard, and one that comes back takes it away again.
+    // One watcher for the process, started before the clipboard question is settled and
+    // outliving the alternation: the arrangement is needed whichever phase we are in, and a
+    // guest running spice-vdagent never leaves the yield phase at all.
+    let (layout_tx, layout_rx) = mpsc::channel();
+    spawn_output_watcher(layout_tx);
+    // One gate for the process, like the watcher: the layout learned in one phase must
+    // still be there for the other phase's (re)connects, and the active-session
+    // arbitration (see [`layout_gate`]) has to survive the alternation too.
+    let mut gate = layout_gate::LayoutGate::new();
     loop {
-        yield_phase(port);
-        claim_phase(port);
+        yield_phase(port, &layout_rx, &mut gate);
+        claim_phase(port, &layout_rx, &mut gate);
     }
 }
 
@@ -149,7 +162,11 @@ fn main() {
 ///
 /// We stay *connected* throughout (heartbeats, no `clipboard` capability) so the host
 /// still sees a live session helper — only the clipboard is withheld.
-fn yield_phase(port: u32) {
+fn yield_phase(
+    port: u32,
+    layouts: &mpsc::Receiver<limina_proto::DisplayLayout>,
+    gate: &mut layout_gate::LayoutGate,
+) {
     // No agent installed, no reason to wait for one: claim straight away.
     if !vdagent::installed() {
         return;
@@ -189,12 +206,26 @@ fn yield_phase(port: u32) {
             }
         }
 
-        // Keep the control channel alive without the clipboard capability.
+        // The arrangement is reported in this phase too. It has nothing to do with the
+        // clipboard, and a guest running spice-vdagent stays here for the whole session — so
+        // gating it on winning the clipboard would mean never reporting at all on exactly the
+        // guests that have an agent installed. Whether it goes out NOW is the gate's call
+        // (only the active seat session writes); a send lost to a dead channel is fine — the
+        // reconnect below re-seeds from the gate.
+        let active = layout_gate::seat_active();
+        if let Some(layout) = gate.poll(layouts.try_iter(), active) {
+            if let Some(mut h) = host.take() {
+                if write_message(&mut h, CHANNEL_CONTROL, &Message::DisplayLayout(layout)).is_ok() {
+                    host = Some(h);
+                }
+            }
+        }
+        // Keep the control channel alive without the clipboard capability. A fresh channel
+        // is seeded with the arrangement (if we may write it): the host's copy died with
+        // the old one and the compositor will not repeat itself.
         if host.is_none() {
             host = vsock_connect(port).and_then(|mut s| {
-                if write_message(&mut s, CHANNEL_CONTROL, &hello_msg(&[])).is_err() {
-                    return None;
-                }
+                open_channel(&mut s, &hello_msg(&[]), gate.for_new_channel(active)).ok()?;
                 if !logged {
                     eprintln!("limina-agent-session: connected to host (clipboard withheld)");
                     logged = true;
@@ -225,10 +256,30 @@ fn hello_msg(caps: &[&str]) -> Message {
     })
 }
 
+/// Introduce ourselves on a fresh channel. HELLO goes first — the host drops a peer whose
+/// first message is anything else, and a dropped channel is reconnected at once, so a seed
+/// written ahead of the HELLO is not a lost report but a connect storm (it once exhausted the
+/// worker's descriptors in 150 s). The arrangement seed follows when the gate lets it out.
+fn open_channel(
+    stream: &mut impl std::io::Write,
+    hello: &Message,
+    seed: Option<limina_proto::DisplayLayout>,
+) -> std::io::Result<()> {
+    write_message(stream, CHANNEL_CONTROL, hello)?;
+    if let Some(layout) = seed {
+        write_message(stream, CHANNEL_CONTROL, &Message::DisplayLayout(layout))?;
+    }
+    Ok(())
+}
+
 /// Carry the clipboard: acquire a backend, announce the capability, run the bridge.
 /// Returns if a `spice-vdagent` appears — dropping the bridge releases both the backend
 /// and the vsock channel, so the host sees the capability withdrawn by reconnection.
-fn claim_phase(port: u32) {
+fn claim_phase(
+    port: u32,
+    layouts: &mpsc::Receiver<limina_proto::DisplayLayout>,
+    gate: &mut layout_gate::LayoutGate,
+) {
     // Pick a clipboard backend (retry: the compositor may still be coming up when the
     // user unit starts). Tier order: ext-data-control → mutter's RemoteDesktop D-Bus API
     // (OPT-IN only, see [`rd_enabled`]). A failure falls through to the next probe —
@@ -301,7 +352,10 @@ fn claim_phase(port: u32) {
 
     loop {
         if bridge.host.is_none() {
-            bridge.try_connect(port, &tx);
+            bridge.try_connect(port, &tx, gate);
+        }
+        if let Some(layout) = gate.poll(layouts.try_iter(), layout_gate::seat_active()) {
+            bridge.handle(Event::Layout(layout));
         }
         match rx.recv_timeout(HEARTBEAT_EVERY) {
             Ok(ev) => bridge.handle(ev),
@@ -425,6 +479,62 @@ impl Clip {
     }
 }
 
+/// Watch `wl_output` and report the arrangement whenever it settles.
+///
+/// Failing to connect is not an error worth retrying loudly: a session without a Wayland
+/// display (or a compositor whose `wl_output` predates connector names) simply produces no
+/// layout, and the host stays on its own assumption — the documented degraded floor.
+fn spawn_output_watcher(tx: mpsc::Sender<limina_proto::DisplayLayout>) {
+    std::thread::spawn(move || {
+        let Ok(conn) = wayland_client::Connection::connect_to_env() else {
+            eprintln!("limina-agent-session: no Wayland display; not reporting the arrangement");
+            return;
+        };
+        let Ok((globals, mut queue)) =
+            wayland_client::globals::registry_queue_init::<wayland_outputs::Outputs>(&conn)
+        else {
+            eprintln!("limina-agent-session: could not read the Wayland registry");
+            return;
+        };
+        let mut outputs = wayland_outputs::Outputs::new();
+        // Bind the outputs that ALREADY exist. `registry_queue_init` swallows the initial
+        // global burst into the returned list, so the registry Dispatch below only ever sees
+        // later arrivals — relying on it alone found no monitors at all on a session that was
+        // already running, which is every session we attach to.
+        outputs.bind_existing(&globals, &queue.handle());
+        let mut sent: Option<limina_proto::DisplayLayout> = None;
+        loop {
+            if queue.blocking_dispatch(&mut outputs).is_err() {
+                return; // the compositor went away; the session is ending
+            }
+            if !outputs.take_dirty() {
+                continue;
+            }
+            // Only on a real change: `done` also fires for things the host does not care about
+            // (a refresh-rate switch, a mode list), and re-sending an identical arrangement
+            // would make the host re-plan its pointer mapping for nothing.
+            let Some(layout) = outputs.layout() else {
+                continue;
+            };
+            if sent.as_ref() == Some(&layout) {
+                continue;
+            }
+            eprintln!(
+                "limina-agent-session: reporting arrangement {:?}",
+                layout
+                    .monitors
+                    .iter()
+                    .map(|m| (m.connector.as_str(), m.x))
+                    .collect::<Vec<_>>()
+            );
+            sent = Some(layout.clone());
+            if tx.send(layout).is_err() {
+                return;
+            }
+        }
+    });
+}
+
 /// The bridge state machine (single-threaded: everything arrives as an [`Event`]).
 struct Bridge {
     clip: Clip,
@@ -443,7 +553,7 @@ struct Bridge {
 
 impl Bridge {
     /// One vsock connect + HELLO attempt; spawns the reader thread on success.
-    fn try_connect(&mut self, port: u32, tx: &mpsc::Sender<Event>) {
+    fn try_connect(&mut self, port: u32, tx: &mpsc::Sender<Event>, gate: &layout_gate::LayoutGate) {
         let Some(mut stream) = vsock_connect(port) else {
             if !self.logged_waiting {
                 eprintln!("limina-agent-session: host not reachable yet; retrying quietly");
@@ -454,7 +564,8 @@ impl Bridge {
         };
         // We only ever reach here in the claim phase, so the capability is announced.
         let hello = hello_msg(&["clipboard"]);
-        if write_message(&mut stream, CHANNEL_CONTROL, &hello).is_err() {
+        let seed = gate.for_new_channel(layout_gate::seat_active());
+        if open_channel(&mut stream, &hello, seed).is_err() {
             return;
         }
         let Ok(reader) = stream.try_clone() else {
@@ -501,6 +612,11 @@ impl Bridge {
     fn handle(&mut self, ev: Event) {
         match ev {
             Event::HostGone => self.host = None,
+            Event::Layout(layout) => {
+                // Storage and arbitration live in the [`layout_gate`]; by the time a
+                // layout reaches the bridge it has already been cleared to go out.
+                self.send(CHANNEL_CONTROL, &Message::DisplayLayout(layout));
+            }
             // --- guest→host -----------------------------------------------------
             Event::OwnerChanged { has_text, is_owner } => {
                 // Our own SetSelection echoes back with session-is-owner: ignore it,
@@ -784,6 +900,51 @@ fn write_ignoring_epipe(file: &mut File, data: &[u8]) -> std::io::Result<()> {
     match file.write_all(data) {
         Err(e) if e.kind() == ErrorKind::BrokenPipe => Ok(()),
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::{hello_msg, open_channel};
+    use limina_proto::{read_message, DisplayLayout, GuestMonitor, Message};
+
+    fn seed() -> DisplayLayout {
+        DisplayLayout {
+            monitors: vec![GuestMonitor {
+                connector: "Virtual-1".into(),
+                x: 0,
+                y: 0,
+                width: 960,
+                height: 600,
+            }],
+        }
+    }
+
+    /// The host's contract: the first frame on a channel is the HELLO, or the peer is
+    /// dropped. The arrangement seed rides second.
+    #[test]
+    fn the_hello_goes_on_the_wire_before_the_arrangement_seed() {
+        let mut wire = Vec::new();
+        open_channel(&mut wire, &hello_msg(&["clipboard"]), Some(seed())).unwrap();
+        let mut r = std::io::Cursor::new(wire);
+        let (_, first) = read_message(&mut r).unwrap();
+        let (_, second) = read_message(&mut r).unwrap();
+        assert!(
+            matches!(first, Message::Hello(_)),
+            "first frame was {first:?}"
+        );
+        assert_eq!(second, Message::DisplayLayout(seed()));
+        assert!(read_message(&mut r).is_err(), "exactly two frames");
+    }
+
+    #[test]
+    fn without_a_seed_the_hello_is_the_only_frame() {
+        let mut wire = Vec::new();
+        open_channel(&mut wire, &hello_msg(&[]), None).unwrap();
+        let mut r = std::io::Cursor::new(wire);
+        let (_, first) = read_message(&mut r).unwrap();
+        assert!(matches!(first, Message::Hello(_)));
+        assert!(read_message(&mut r).is_err());
     }
 }
 
