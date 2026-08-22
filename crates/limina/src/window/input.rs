@@ -342,6 +342,21 @@ impl WearState {
         (self.inside && !self.captured).then(|| self.stored())
     }
 
+    /// The view the pointer was over is no longer on screen — its Space was swiped away, or
+    /// its window went. The pointer is over macOS now, whatever it was over before.
+    ///
+    /// This exists because `inside` is only ever moved by [`Self::on_motion`], and a Space
+    /// switch produces no motion: nothing tells this machine the pointer left. So the wear it
+    /// had stayed on — the transparent blank of a capture, or the guest's own shape when the
+    /// guest was hiding its cursor — and the pointer was invisible on the Space the user had
+    /// just switched to, for as long as it took some other app to set a cursor of its own.
+    /// The arrow is unconditional here for the same reason: there is no state in which
+    /// wearing the guest's cursor over another Space is right.
+    fn on_view_gone(&mut self) -> Option<Wear> {
+        self.inside = false;
+        Some(Wear::Arrow)
+    }
+
     /// The pointer moved, inside or outside the view.
     fn on_motion(&mut self, inside: bool) -> Option<Wear> {
         let was = self.inside;
@@ -494,6 +509,18 @@ impl HostCursor {
     pub(crate) fn reassert(&self) {
         let w = self.wear.borrow().on_reassert();
         self.wear(w);
+    }
+
+    /// Hand the pointer back to macOS because the view it was over has left the screen —
+    /// see [`WearState::on_view_gone`].
+    pub(crate) fn view_gone(&self) {
+        let w = self.wear.borrow_mut().on_view_gone();
+        self.wear(w);
+        // BOTH `inside` flags, or the arrow does not survive the next tick: `verify_free` asks
+        // this one (not the wear machine's) and re-asserts the guest's shape onto a pointer
+        // that is no longer over the guest — measured 2026-08-22, the "stopped wearing the
+        // guest's cursor — re-worn" warning firing in the same instant as the release.
+        self.inside.set(false);
     }
 
     /// Track the pointer crossing the view boundary. Re-asserts the guest cursor on every
@@ -1078,6 +1105,16 @@ impl InputState {
         }
     }
 
+    /// Release a grab whose window has left the screen — a Space swiped away, a window with no
+    /// screen ([`super::grab_policy::must_drop_grab`]). Nothing about this release is the user
+    /// asking for the pointer back at a place they can see, so it hands back
+    /// [`super::warp::Handback::Gone`]: no warp, and the system arrow.
+    pub fn release_capture_gone(&self, view: &NSView) {
+        if self.is_captured() {
+            self.toggle_capture_full(view, None, super::warp::Handback::Gone);
+        }
+    }
+
     /// Toggle pointer capture. On grab: decouple the hardware mouse from the cursor (so deltas
     /// flow while the cursor stays frozen) and hide the cursor. On release: restore both and put
     /// the host cursor where the virtual cursor ended, so the transition is seamless in both
@@ -1094,6 +1131,16 @@ impl InputState {
         &self,
         view: &NSView,
         release_to: Option<(NSPoint, super::warp::Aim)>,
+    ) -> bool {
+        self.toggle_capture_full(view, release_to, super::warp::Handback::Seamless)
+    }
+
+    /// As [`Self::toggle_capture_to`], with the handback named — see [`super::warp::Handback`].
+    fn toggle_capture_full(
+        &self,
+        view: &NSView,
+        release_to: Option<(NSPoint, super::warp::Aim)>,
+        handback: super::warp::Handback,
     ) -> bool {
         let now = !self.is_captured();
         let release_to = if now {
@@ -1219,7 +1266,7 @@ impl InputState {
                 self.send_abs_unit(self.capture_slot.get(), u, true);
             }
         } else {
-            self.warp.disengage(release_to, &self.host_cursor);
+            self.warp.disengage(release_to, &self.host_cursor, handback);
         }
         self.ungrab_armed.set(false);
         // Anything the chord withheld dies here rather than being replayed: both branches below
@@ -3382,6 +3429,47 @@ mod tests {
             "but it is not a press the guest was told about"
         );
         assert!(!l.noted_by_tap(1, false).any_down());
+    }
+
+    /// A pointer whose view left the screen gets the arrow back, from any wear.
+    ///
+    /// The fault (measured 2026-08-22): switching macOS Spaces away from a captured guest, the
+    /// pointer kept the transparent blank — `inside` only moves on motion and a Space switch
+    /// produces none, so the release re-asserted a shape that was blank, or nothing at all.
+    /// The pointer was then invisible on the Space the user had just arrived at, until some
+    /// other app happened to set a cursor. Both starting states are the real ones: `inside`
+    /// still true because no motion said otherwise, and already false with the capture's blank
+    /// on top.
+    #[test]
+    fn a_view_that_left_the_screen_hands_the_pointer_back_wearing_the_arrow() {
+        let mut w = WearState::new();
+        w.on_motion(true);
+        w.on_set_captured(true);
+        assert_eq!(
+            w.on_reassert(),
+            None,
+            "captured, the release's own re-assert offers nothing"
+        );
+        w.on_set_captured(false);
+        assert_eq!(
+            w.on_view_gone(),
+            Some(Wear::Arrow),
+            "the guest's Space is gone — the pointer is over macOS now"
+        );
+        assert_eq!(
+            w.on_reassert(),
+            None,
+            "and it is no longer inside anything to re-assert into"
+        );
+    }
+
+    #[test]
+    fn the_arrow_comes_back_even_when_the_machine_already_thought_it_was_outside() {
+        // `inside` false and the blank worn is the other half of the same fault: `on_motion`
+        // would return None here (nothing to restore from), so the wear would simply stay.
+        let mut w = WearState::new();
+        assert_eq!(w.on_motion(false), None, "not inside, nothing to change");
+        assert_eq!(w.on_view_gone(), Some(Wear::Arrow));
     }
 
     /// Where the guest's cursor was before the grab is not an answer to the grab.

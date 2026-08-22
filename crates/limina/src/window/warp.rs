@@ -146,6 +146,18 @@ fn warp_checked(target: NSPoint, aim: &Aim) {
 /// (a reference count) balanced no matter how the toggle is driven.
 static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
 
+/// How a release hands the pointer back — the two are different *situations*, not preferences.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Handback {
+    /// The user is looking at the guest's picture and asked for the pointer back (Cmd-Ctrl-G,
+    /// the grab's edge release). Put it where the captured cursor ended, wearing the guest's
+    /// shape, so the two line up: leaving capture is as seamless as entering it.
+    Seamless,
+    /// The guest's picture is gone — its Space was swiped away, its window has no screen. The
+    /// pointer belongs to macOS now: leave it where the hand has it, wearing the arrow.
+    Gone,
+}
+
 /// Re-attach the hardware mouse to the cursor.
 ///
 /// Called right after a warp, for a reason that has nothing to do with association: a warp also
@@ -271,8 +283,22 @@ impl WarpBroker {
     /// Leave capture: warp the cursor to `release_to` (where the captured virtual cursor
     /// ended, so leaving capture is as seamless as entering it), re-couple the mouse, show
     /// the cursor, and re-assert the guest shape.
-    pub(crate) fn disengage(&self, release_to: Option<(NSPoint, Aim)>, host_cursor: &HostCursor) {
+    pub(crate) fn disengage(
+        &self,
+        release_to: Option<(NSPoint, Aim)>,
+        host_cursor: &HostCursor,
+        handback: Handback,
+    ) {
         self.pending.set(None);
+        // Nothing to be seamless with: the guest's picture is not on screen to line up against,
+        // and the warp would be paid for twice over — it teleports the pointer away from the
+        // hand on a Space the user is already looking at, and its suppression interval freezes
+        // real motion for a quarter second at the exact moment the switch animates (measured
+        // 2026-08-22: deltas flowing, `CGEventGetLocation` pinned for 252 ms).
+        let release_to = match handback {
+            Handback::Seamless => release_to,
+            Handback::Gone => None,
+        };
         // Warp BEFORE re-associating, and while still hidden: the cursor *appears* at the
         // release point rather than visibly jumping there from the park, and — the part that
         // was a real bug — the hardware cannot move it in between. Associating first made the
@@ -296,7 +322,10 @@ impl WarpBroker {
             NSCursor::unhide();
         }
         host_cursor.set_captured(false);
-        host_cursor.reassert();
+        match handback {
+            Handback::Seamless => host_cursor.reassert(),
+            Handback::Gone => host_cursor.view_gone(),
+        }
         log::info!("pointer capture: OFF");
     }
 

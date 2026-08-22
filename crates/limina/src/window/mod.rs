@@ -31,7 +31,7 @@ use objc2_app_kit::{
     NSApplicationActivationPolicy, NSApplicationDelegate, NSApplicationTerminateReply,
     NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSEventType, NSMenu, NSMenuDelegate,
     NSMenuItem, NSScreen, NSView, NSViewLayerContentsRedrawPolicy, NSWindow,
-    NSWindowCollectionBehavior, NSWindowDelegate, NSWindowStyleMask,
+    NSWindowCollectionBehavior, NSWindowDelegate, NSWindowOcclusionState, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer,
@@ -1095,8 +1095,9 @@ define_class!(
     }
 );
 
-/// One `[GRABSTATE]` sample: `(captured, key, on_active_space, has_screen, app_active)`.
-type GrabStateTrace = (bool, bool, bool, bool, bool);
+/// One `[GRABSTATE]` sample: `(captured, key, on_active_space, has_screen, app_active,
+/// occlusion_visible)`.
+type GrabStateTrace = (bool, bool, bool, bool, bool, bool);
 
 /// Window level for the `extend` overlay: above the menu bar, so the chrome cannot reveal over
 /// the guest. `NSMainMenuWindowLevel` is 24.
@@ -3123,7 +3124,7 @@ pub fn run(
             grab_policy::capture_owner(&facts, timer_input.capture_slot()),
         ) {
             log::debug!("pointer grab released: the cursor's window is not on screen");
-            timer_input.release_capture(&timer_view);
+            timer_input.release_capture_gone(&timer_view);
         }
         // Backstop for the tap's per-event key-loss release: without the tap (no Accessibility
         // grant) the local monitor stops seeing events the instant focus leaves, so nothing
@@ -3152,18 +3153,25 @@ pub fn run(
                 on_active_space,
                 pf.has_screen,
                 NSApplication::sharedApplication(mtm).isActive(),
+                // Does occlusion move BEFORE the Space switch commits? Every other bit here is
+                // known to move at the commit, which is why a captured pointer stays hidden and
+                // pinned through the whole animation.
+                window
+                    .occlusionState()
+                    .contains(NSWindowOcclusionState::Visible),
             );
             if grab_traced.get() != Some(now) {
                 grab_traced.set(Some(now));
                 eprintln!(
                     "[GRABSTATE] t={:.1} captured={} key={} on_active_space={} \
-                     has_screen={} app_active={}",
+                     has_screen={} app_active={} occl_visible={}",
                     capture_tap::trace_ms(),
                     now.0,
                     now.1,
                     now.2,
                     now.3,
                     now.4,
+                    now.5,
                 );
             }
         }
