@@ -33,12 +33,29 @@ const CTAP2_ERR_INVALID_CBOR: u8 = 0x12;
 const CTAP2_ERR_MISSING_PARAMETER: u8 = 0x14;
 const CTAP2_ERR_UNSUPPORTED_ALGORITHM: u8 = 0x26;
 const CTAP2_ERR_NO_CREDENTIALS: u8 = 0x2E;
+const CTAP2_ERR_CREDENTIAL_EXCLUDED: u8 = 0x19;
+const CTAP2_ERR_INVALID_OPTION: u8 = 0x2C;
 
 /// ES256 COSE algorithm id.
 const ALG_ES256: i64 = -7;
 
-/// Our AAGUID (16 bytes). Self-attested authenticators may pick any stable value.
-const AAGUID: [u8; 16] = *b"limina-touchid!!";
+/// Our AAGUID: `c2852a39-665e-4017-aef0-21d709f98b1d`, this authenticator model's public identity.
+///
+/// A random v4 UUID rather than the ASCII string it used to be, because an AAGUID is a value other
+/// people's software looks up, not a label we read: relying parties resolve it against the FIDO
+/// metadata service and the community passkey-AAGUID list to show "which passkey provider is this",
+/// and a value shaped like a UUID is the price of ever appearing in either. (Until an entry lands
+/// there, sites show the AAGUID with no name — which is what a lookup miss looks like, not a bug.)
+///
+/// **Stable forever.** Changing it makes every credential already registered against it look like
+/// it came from a different authenticator model to any RP that recorded it.
+///
+/// The zero AAGUID is NOT available to us as an alternative: 16 zero bytes is how WebAuthn spells
+/// "self-attested, identify me by nothing", and choosing it would pass our `packed` attestation
+/// through the client untouched — but permanently forecloses being named.
+const AAGUID: [u8; 16] = [
+    0xc2, 0x85, 0x2a, 0x39, 0x66, 0x5e, 0x40, 0x17, 0xae, 0xf0, 0x21, 0xd7, 0x09, 0xf9, 0x8b, 0x1d,
+];
 
 // authenticatorData flag bits.
 const FLAG_UP: u8 = 0x01; // user present
@@ -96,6 +113,40 @@ fn get_info() -> Vec<u8> {
     w.finish()
 }
 
+/// The `options` map (`makeCredential` key 7, `getAssertion` key 5) as far as we care about it:
+/// the `up` value, if the platform sent one. `None` means "not specified", which CTAP2 defines as
+/// `up: true` — the ordinary consent-required ceremony.
+fn requested_up(root: &[(Value, Value)], options_key: i128) -> Option<bool> {
+    map_get(root, options_key)
+        .and_then(as_map)
+        .and_then(|opts| text_key(opts, "up"))
+        .and_then(|v| match v {
+            Value::Bool(b) => Some(*b),
+            _ => None,
+        })
+}
+
+/// Does `list` (a CTAP credential-descriptor array) name a credential we hold for `rp_id`?
+/// Used for `makeCredential`'s excludeList — the RP saying "this account already has a passkey
+/// on some authenticator; if it is you, refuse". Without this a repeat registration mints a
+/// second credential for the same account, and the site only ever learns about the newest.
+fn holds_any(store: &FidoStore, rp_id: &str, list: &[Value]) -> bool {
+    list.iter()
+        .filter_map(|d| as_map(d).and_then(|m| text_key_bytes(m, "id")))
+        .any(|id| store.find(rp_id, id).is_some())
+}
+
+/// Put a Touch ID sheet up purely for consent — no signature, no enclave key involved. This is
+/// CTAP2's "wait for user presence" step, which excludeList needs: the spec makes the authenticator
+/// take consent *before* admitting a credential exists, so a site cannot silently probe which
+/// accounts live on this Mac. `LIMINA_FIDO_TEST_APPROVE` skips the sheet, as everywhere else.
+fn user_presence(reason: &str) -> bool {
+    if super::test_approve() {
+        return true;
+    }
+    crate::sep::sep_verify(crate::sep::next_token(), reason) == crate::sep::VerifyOutcome::Matched
+}
+
 fn make_credential(store: &FidoStore, cbor: &[u8]) -> Result<Vec<u8>, u8> {
     let root = parse_map(cbor)?;
     let client_data_hash = map_bytes(&root, 1).ok_or(CTAP2_ERR_MISSING_PARAMETER)?;
@@ -121,6 +172,25 @@ fn make_credential(store: &FidoStore, cbor: &[u8]) -> Result<Vec<u8>, u8> {
     });
     if !wants_es256 {
         return Err(CTAP2_ERR_UNSUPPORTED_ALGORITHM);
+    }
+
+    // `up: false` is meaningless for registration — a credential nobody consented to is not a
+    // credential — and CTAP2.1 spells the answer out: end the operation with CTAP2_ERR_INVALID_OPTION.
+    if requested_up(&root, 7) == Some(false) {
+        return Err(CTAP2_ERR_INVALID_OPTION);
+    }
+
+    // excludeList (key 5): consent first, then admit we hold one. Doing it in this order is the
+    // spec's, and the reason is privacy — the error itself reveals that this account has a passkey
+    // here, so the human authorizes the disclosure. Checked before minting anything, so a refused
+    // registration leaves no key behind.
+    if let Some(list) = map_get(&root, 5).and_then(as_array) {
+        if holds_any(store, rp_id, list) {
+            if !user_presence(&format!("{rp_id} already has a passkey on this Mac")) {
+                return Err(CTAP2_ERR_OPERATION_DENIED);
+            }
+            return Err(CTAP2_ERR_CREDENTIAL_EXCLUDED);
+        }
     }
 
     // Mint the enclave key and a random credential id.
@@ -189,6 +259,13 @@ fn get_assertion(store: &FidoStore, cbor: &[u8]) -> Result<Vec<u8>, u8> {
     }
     .ok_or(CTAP2_ERR_NO_CREDENTIALS)?;
 
+    // A CTAP2 "pre-flight" carries `up: false`: the client asks *silently* which of an allow-list's
+    // credentials this authenticator holds, then re-runs the ceremony for real against the one that
+    // matched. Answering it with a full signature is what made signing in cost an extra Touch ID.
+    if requested_up(&root, 5) == Some(false) {
+        return Ok(silent_assertion(rp_id, &cred));
+    }
+
     let count = store
         .bump_count(&cred.cred_id)
         .ok_or(CTAP2_ERR_NO_CREDENTIALS)?;
@@ -203,7 +280,11 @@ fn get_assertion(store: &FidoStore, cbor: &[u8]) -> Result<Vec<u8>, u8> {
         .sign(&signed, &reason)
         .map_err(|_| CTAP2_ERR_OPERATION_DENIED)?;
 
-    // Response: {1: credential, 2: authData, 3: signature, 4: user}.
+    Ok(assertion_response(&cred, &auth_data, &sig))
+}
+
+/// A getAssertion response: {1: credential, 2: authData, 3: signature, 4: user}.
+fn assertion_response(cred: &Credential, auth_data: &[u8], sig: &[u8]) -> Vec<u8> {
     let mut w = CborWriter::new();
     w.map_header(4);
     w.uint(1);
@@ -213,14 +294,41 @@ fn get_assertion(store: &FidoStore, cbor: &[u8]) -> Result<Vec<u8>, u8> {
     w.text("type");
     w.text("public-key");
     w.uint(2);
-    w.bytes(&auth_data);
+    w.bytes(auth_data);
     w.uint(3);
-    w.bytes(&sig);
+    w.bytes(sig);
     w.uint(4);
     w.map_header(1);
     w.text("id");
     w.bytes(&cred.user_handle);
-    Ok(w.finish())
+    w.finish()
+}
+
+/// The answer to a silent pre-flight: "yes, this credential is mine" and nothing else.
+///
+/// The client is not asking us to authenticate anybody. It is choosing which credential to run the
+/// real ceremony against — Chromium re-issues `getAssertion` for exactly the credential this
+/// response names, with user presence enforced, and libfido2-family clients likewise use it only to
+/// pick a descriptor. Neither ever verifies the signature, and neither *can*: the public key lives
+/// with the relying party, and the probe's clientDataHash is a block of zeros the client made up.
+///
+/// So the signature here is a placeholder, and that is a deliberate, bounded lie with no way to
+/// become an authentication. Everything a relying party checks fails on it independently: `flags`
+/// carries neither UP nor UV, which WebAuthn requires; the challenge is the client's dummy, not the
+/// RP's; and the bytes do not verify against the credential's public key. What we cannot do is
+/// produce a *real* signature — every key here is enclave-held and presence-gated, so signing means
+/// a Touch ID sheet, which is precisely the prompt the pre-flight exists to avoid.
+///
+/// The alternative — refusing the probe with an error — is what we shipped first, and it broke
+/// signing in outright: to Chromium any error means "credential not recognised", so it moves to the
+/// next batch and, finding none, fails the ceremony as NotAllowedError.
+///
+/// The counter is reported as-is and never advanced: a probe is not an authentication, and a
+/// counter that moves without one is what an RP reads as a cloned authenticator.
+fn silent_assertion(rp_id: &str, cred: &Credential) -> Vec<u8> {
+    const PLACEHOLDER_SIG: &[u8] = &[0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01];
+    let auth_data = build_auth_data(rp_id, 0, cred.sign_count, None);
+    assertion_response(cred, &auth_data, PLACEHOLDER_SIG)
 }
 
 /// authenticatorData = rpIdHash(32) || flags(1) || signCount(4 BE) ||
@@ -503,6 +611,159 @@ mod tests {
         w.bytes(&[0u8; 32]);
         let req = w.finish();
         assert_eq!(get_assertion(&store, &req), Err(CTAP2_ERR_NO_CREDENTIALS));
+    }
+
+    /// A stored credential whose blob is never touched (these tests never reach the enclave).
+    fn stored(store: &FidoStore, rp: &str, cred_id: &[u8]) {
+        store.add(Credential {
+            cred_id: cred_id.to_vec(),
+            rp_id: rp.to_string(),
+            user_handle: vec![1, 2, 3],
+            user_name: "alice".into(),
+            blob: vec![0xAB; 8],
+            sign_count: 0,
+        });
+    }
+
+    /// A getAssertion with an allow-list and `options: {up: <up>}`.
+    fn assertion_request_up(rp: &str, cred_id: &[u8], up: bool) -> Vec<u8> {
+        let mut w = CborWriter::new();
+        w.map_header(4);
+        w.uint(1);
+        w.text(rp);
+        w.uint(2);
+        w.bytes(&[0x22u8; 32]);
+        w.uint(3);
+        w.array_header(1);
+        w.map_header(2);
+        w.text("id");
+        w.bytes(cred_id);
+        w.text("type");
+        w.text("public-key");
+        w.uint(5);
+        w.map_header(1);
+        w.text("up");
+        w.bool(up);
+        w.finish()
+    }
+
+    /// The client's silent pre-flight (`up: false`) must answer "this one is mine" without a Touch
+    /// ID — it is choosing a credential, not authenticating anyone. It must also *succeed*: to
+    /// Chromium any error means "credential not recognised", so it moves to the next batch and,
+    /// finding none, fails the sign-in as NotAllowedError. Refusing the probe is what we shipped
+    /// first, and that is exactly what a real browser did with it.
+    #[test]
+    fn a_silent_preflight_answers_without_a_touch_id() {
+        let store = FidoStore::in_memory();
+        stored(&store, "webauthn.io", b"cred-1");
+        // No enclave is reachable from a plain test binary, so a response at all proves the probe
+        // short-circuits before any signing.
+        let resp = get_assertion(
+            &store,
+            &assertion_request_up("webauthn.io", b"cred-1", false),
+        )
+        .unwrap();
+        let v: Value = ciborium::from_reader(&resp[..]).unwrap();
+        let m = as_map(&v).unwrap();
+        // It names the credential the client asked about — that is the whole payload of the answer.
+        let cred = map_get(m, 1).and_then(as_map).unwrap();
+        assert_eq!(text_key_bytes(cred, "id"), Some(&b"cred-1"[..]));
+        // Neither presence nor verification is claimed: nobody touched anything.
+        let auth_data = map_bytes(m, 2).unwrap();
+        assert_eq!(
+            auth_data[32] & (FLAG_UP | FLAG_UV),
+            0,
+            "silent means silent"
+        );
+        // And the counter does not move — one that advances without an authentication is what an
+        // RP reads as a cloned authenticator.
+        assert_eq!(&auth_data[33..37], &[0, 0, 0, 0]);
+        assert_eq!(store.find("webauthn.io", b"cred-1").unwrap().sign_count, 0);
+    }
+
+    /// ...but a pre-flight for a credential we do NOT hold still gets the honest answer, which is
+    /// the whole information the probe came for. (Refusing the option first would tell every
+    /// probe the same thing and hide it.)
+    #[test]
+    fn a_silent_preflight_for_a_stranger_still_says_no_credentials() {
+        let store = FidoStore::in_memory();
+        stored(&store, "webauthn.io", b"cred-1");
+        assert_eq!(
+            get_assertion(
+                &store,
+                &assertion_request_up("webauthn.io", b"other", false)
+            ),
+            Err(CTAP2_ERR_NO_CREDENTIALS)
+        );
+    }
+
+    /// `up: false` on registration is nonsense (nobody consented to the credential), and CTAP2.1
+    /// names the error. It must be refused before any enclave key is minted.
+    #[test]
+    fn registration_refuses_up_false() {
+        let store = FidoStore::in_memory();
+        let mut req = make_credential_request("example.com", &[7, 7, 7]);
+        // Re-encode with an options map (key 7) carrying up:false.
+        let body = {
+            let mut w = CborWriter::new();
+            w.map_header(5);
+            w.uint(1);
+            w.bytes(&[0x11u8; 32]);
+            w.uint(2);
+            w.map_header(1);
+            w.text("id");
+            w.text("example.com");
+            w.uint(3);
+            w.map_header(2);
+            w.text("id");
+            w.bytes(&[7, 7, 7]);
+            w.text("name");
+            w.text("alice");
+            w.uint(4);
+            w.array_header(1);
+            w.map_header(2);
+            w.text("alg");
+            w.nint(ALG_ES256);
+            w.text("type");
+            w.text("public-key");
+            w.uint(7);
+            w.map_header(1);
+            w.text("up");
+            w.bool(false);
+            w.finish()
+        };
+        req.truncate(1);
+        req.extend(body);
+        assert_eq!(
+            make_credential(&store, &req[1..]),
+            Err(CTAP2_ERR_INVALID_OPTION)
+        );
+        assert!(store.for_rp("example.com").is_empty(), "no key was minted");
+    }
+
+    /// excludeList is how an RP says "this account already has a passkey; if it is on you, refuse".
+    /// Without it a repeat registration mints a second credential for the same account and the
+    /// site only ever hears about the newest — which is how one store ended up with three
+    /// credentials for one webauthn.io account.
+    #[test]
+    fn exclude_list_recognises_our_own_credentials() {
+        let store = FidoStore::in_memory();
+        stored(&store, "webauthn.io", b"cred-1");
+        let descriptor = |id: &[u8]| {
+            let mut w = CborWriter::new();
+            w.map_header(2);
+            w.text("id");
+            w.bytes(id);
+            w.text("type");
+            w.text("public-key");
+            ciborium::from_reader(&w.finish()[..]).unwrap()
+        };
+        let ours: Vec<Value> = vec![descriptor(b"cred-1")];
+        let theirs: Vec<Value> = vec![descriptor(b"cred-9")];
+        assert!(holds_any(&store, "webauthn.io", &ours));
+        assert!(!holds_any(&store, "webauthn.io", &theirs));
+        // Same credential id, different RP: not ours to exclude.
+        assert!(!holds_any(&store, "example.com", &ours));
     }
 
     fn as_bool_v(v: &Value) -> Option<bool> {

@@ -491,7 +491,12 @@ mod tests {
         assert_eq!(out[0][7], 0x00); // CTAP2_OK
         let body = &out[0][8..8 + u16::from_be_bytes([out[0][5], out[0][6]]) as usize - 1];
         assert!(body.windows(8).any(|w| w == b"FIDO_2_0"));
-        assert!(body.windows(16).any(|w| w == b"limina-touchid!!"));
+        // Our AAGUID, the identity relying parties look up (`ctap2::AAGUID`).
+        assert!(body.windows(16).any(|w| w
+            == [
+                0xc2, 0x85, 0x2a, 0x39, 0x66, 0x5e, 0x40, 0x17, 0xae, 0xf0, 0x21, 0xd7, 0x09, 0xf9,
+                0x8b, 0x1d
+            ]));
     }
 
     /// Unknown CTAPHID commands answer CTAPHID_ERROR, never silence.

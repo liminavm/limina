@@ -88,28 +88,25 @@ pub trait Verifier: Send + Sync {
 ///
 /// It publishes the token of the prompt currently on screen into a shared cell so a
 /// [`PromptCanceller`] on another thread can dismiss it (the guest cancelled the request that
-/// opened it). Tokens are allocated from a counter and never reused, so a cancel that races the
-/// prompt's own completion is inert rather than eating the next one.
+/// opened it). Tokens come from the process-wide allocator ([`crate::sep::next_token`]) and are
+/// never reused, so a cancel that races the prompt's own completion is inert rather than eating
+/// the next one — and can never land on the FIDO authenticator's sheet either.
 pub struct SepVerifier {
     /// Token of the prompt in flight; 0 = none.
     inflight: Arc<AtomicU64>,
-    next: AtomicU64,
 }
 
 impl SepVerifier {
     /// Build a verifier publishing into `inflight`; pair it with
     /// [`PromptCanceller::new`] over the same cell.
     pub fn new(inflight: Arc<AtomicU64>) -> SepVerifier {
-        SepVerifier {
-            inflight,
-            next: AtomicU64::new(1),
-        }
+        SepVerifier { inflight }
     }
 }
 
 impl Verifier for SepVerifier {
     fn verify(&self, reason: &str) -> VerifyOutcome {
-        let token = self.next.fetch_add(1, Ordering::Relaxed);
+        let token = crate::sep::next_token();
         // Publish *before* prompting: a cancel arriving in the window before the sheet is up
         // still names this prompt, and the shim honours it the moment the prompt starts.
         self.inflight.store(token, Ordering::SeqCst);

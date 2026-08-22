@@ -88,6 +88,15 @@ pub fn sep_verify(token: u64, reason: &str) -> VerifyOutcome {
     }
 }
 
+/// A token no other Touch ID prompt in this process will use. Prompt tokens name a *sheet*, and
+/// [`cancel_verify`] dismisses by token — so the fingerprint reader and the FIDO authenticator
+/// must draw from one counter, or a cancel meant for one could dismiss the other's prompt.
+pub fn next_token() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Dismiss the Touch ID sheet [`sep_verify`] put up for `token`, making it return
 /// [`VerifyOutcome::Cancelled`]. Call this when whoever asked for the prompt has gone away —
 /// the guest cancelling its fingerprint request — so the Mac stops asking on behalf of nobody.
