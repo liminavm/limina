@@ -301,19 +301,47 @@ pub(crate) fn aspect_fit(gw: u32, gh: u32, vw: f64, vh: f64) -> FitRect {
     }
 }
 
-/// Map a view point (bottom-left origin) to evdev absolute coordinates through the
-/// fit rect: subtract the letterbox offset, normalize by the fitted size, clamp into
-/// the content (drag semantics — a drag that leaves the content pins to its edge),
-/// and flip Y (AppKit bottom-left → evdev top-left).
-pub(crate) fn abs_through_fit(px: f64, py: f64, fit: FitRect, abs_max: i32) -> (i32, i32) {
+/// THE letterbox rule, one for every guest window: from a window's usable box (its view,
+/// already shortened by any cover inset) and the housing-strip inset, the guest's drawing
+/// area and the rect the scanout layer must occupy.
+///
+/// Returns `((area_w, area_h), target)` — the area is the [`panel_size`] result (what the
+/// guest is asked to render into; also what callers trace), the target is where those pixels
+/// sit in the view: the full area under `dynamic` (the guest follows the window, no bars),
+/// an [`aspect_fit`] of `geom` otherwise.
+///
+/// Pure so the two windows that used to hand-maintain copies of this (the primary's tick and
+/// `SecondaryWindow::refit` — they once disagreed on the panel height and drew the guest's
+/// top bar twice, 33 pt apart) can only diverge in what they pass in, never in the rule.
+pub(crate) fn refit_target(
+    usable: (f64, f64),
+    strip_inset: f64,
+    dynamic: bool,
+    geom: (u32, u32),
+) -> ((f64, f64), FitRect) {
+    let (aw, ah) = panel_size(usable, strip_inset);
+    let target = if dynamic {
+        FitRect::full(aw, ah)
+    } else {
+        aspect_fit(geom.0, geom.1, aw, ah)
+    };
+    ((aw, ah), target)
+}
+
+/// A window-local point as a `0.0..=1.0` position
+/// **within this window's content**, Y already flipped to the guest's top-left origin.
+///
+/// This is the half a single window can answer on its own. Turning it into a position the
+/// guest's absolute device understands needs the guest's layout, which is
+/// [`super::arrangement::abs_through_report`]'s job — with several connectors, one window's
+/// content is only part of the range.
+pub(crate) fn unit_through_fit(px: f64, py: f64, fit: FitRect) -> (f64, f64) {
     if fit.w <= 0.0 || fit.h <= 0.0 {
-        return (0, 0);
+        return (0.0, 0.0);
     }
-    let fx = ((px - fit.x) / fit.w).clamp(0.0, 1.0);
-    let fy = (1.0 - (py - fit.y) / fit.h).clamp(0.0, 1.0);
     (
-        (fx * f64::from(abs_max)).round() as i32,
-        (fy * f64::from(abs_max)).round() as i32,
+        ((px - fit.x) / fit.w).clamp(0.0, 1.0),
+        (1.0 - (py - fit.y) / fit.h).clamp(0.0, 1.0),
     )
 }
 
@@ -351,6 +379,77 @@ pub(crate) fn capture_step(pos: Option<(f64, f64)>, dx: f64, dy: f64, fit: FitRe
         pos: (cx, cy),
         overflow: (bound(ux - cx, dx), bound(-(uy - cy), dy)),
     }
+}
+
+/// Range units per view point on one slot ([`range_gain`], [`range_step`]).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct RangeGain {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// The gain that turns a host delta in `fit` into device-range units: this slot's scanout
+/// pixels per fit point, times the range over the guest desktop's pixel extent — the
+/// connected scanouts' widths summed (`row_w`) and the tallest height (`row_h`), the
+/// side-by-side, top-aligned row mutter lays out by default. Pixels in, pixels out: the
+/// guest's logical scale never enters. A wrong row shape only changes the cursor's speed on
+/// that display, never which display it lands on — the guest decides that. `None` until the
+/// sizes exist.
+pub(crate) fn range_gain(
+    fit: FitRect,
+    scanout: (u32, u32),
+    row_w: u32,
+    row_h: u32,
+    abs_max: f64,
+) -> Option<RangeGain> {
+    if fit.w <= 0.0 || fit.h <= 0.0 || scanout.0 == 0 || scanout.1 == 0 || row_w == 0 || row_h == 0
+    {
+        return None;
+    }
+    Some(RangeGain {
+        x: f64::from(scanout.0) / fit.w * abs_max / f64::from(row_w),
+        y: f64::from(scanout.1) / fit.h * abs_max / f64::from(row_h),
+    })
+}
+
+/// One captured step in the device range: the clamped position, and the motion the range's
+/// ends ate, back in view points (delta convention) — the push against the guest desktop's
+/// outer edges, which is the only place a captured cursor is ever pinned.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct RangeStep {
+    pub pos: (f64, f64),
+    pub overflow: (f64, f64),
+}
+
+/// Integrate a host delta into the range position (y grows down on both sides, so no flip),
+/// clamped to `0..=abs_max`. Overflow is bounded by this event's own delta, as in
+/// [`capture_step`].
+pub(crate) fn range_step(
+    pos: (f64, f64),
+    dx: f64,
+    dy: f64,
+    gain: RangeGain,
+    abs_max: f64,
+) -> RangeStep {
+    let (ux, uy) = (pos.0 + dx * gain.x, pos.1 + dy * gain.y);
+    let cx = ux.clamp(0.0, abs_max);
+    let cy = uy.clamp(0.0, abs_max);
+    let bound = |v: f64, d: f64| v.clamp(d.min(0.0), d.max(0.0));
+    RangeStep {
+        pos: (cx, cy),
+        overflow: (bound((ux - cx) / gain.x, dx), bound((uy - cy) / gain.y, dy)),
+    }
+}
+
+/// A guest pixel on a slot's scanout as a point in that slot's fit (view space, y up),
+/// clamped into the fit — the cursor echo's pixel turned into the captured cursor's estimate.
+pub(crate) fn fit_point_of_pixel(px: (i32, i32), scanout: (u32, u32), fit: FitRect) -> (f64, f64) {
+    if scanout.0 == 0 || scanout.1 == 0 {
+        return (fit.x, fit.y);
+    }
+    let u = (f64::from(px.0) / f64::from(scanout.0)).clamp(0.0, 1.0);
+    let v = (f64::from(px.1) / f64::from(scanout.1)).clamp(0.0, 1.0);
+    (fit.x + u * fit.w, fit.y + (1.0 - v) * fit.h)
 }
 
 /// How far inside the content the captured cursor is parked. Clear of any screen-edge trigger
@@ -771,7 +870,73 @@ pub(crate) fn point_in_fit(px: f64, py: f64, fit: FitRect) -> bool {
 mod tests {
     use super::*;
 
-    const ABS_MAX: i32 = 32767;
+    // ---- the captured cursor in the device range -------------------------------------------
+
+    fn rig_fit() -> FitRect {
+        // A 2560x1440 scanout shown at 1280x720 points, beside a 3024x1960 one.
+        FitRect {
+            x: 0.0,
+            y: 0.0,
+            w: 1280.0,
+            h: 720.0,
+        }
+    }
+
+    #[test]
+    fn the_gain_is_pixels_per_point_over_the_pixel_row() {
+        let g = range_gain(rig_fit(), (2560, 1440), 2560 + 3024, 1960, 32767.0).unwrap();
+        assert!((g.x - 2.0 * 32767.0 / 5584.0).abs() < 1e-9);
+        assert!((g.y - 2.0 * 32767.0 / 1960.0).abs() < 1e-9);
+        assert_eq!(range_gain(rig_fit(), (0, 0), 5584, 1960, 32767.0), None);
+        assert_eq!(range_gain(rig_fit(), (2560, 1440), 0, 1960, 32767.0), None);
+    }
+
+    #[test]
+    fn a_step_moves_in_range_units_and_only_the_range_ends_pin() {
+        let g = RangeGain { x: 2.0, y: 2.0 };
+        let s = range_step((100.0, 100.0), 10.0, -5.0, g, 32767.0);
+        assert_eq!(s.pos, (120.0, 90.0));
+        assert_eq!(s.overflow, (0.0, 0.0));
+        // Past the right end: the position pins and the eaten motion comes back in points.
+        let s = range_step((32760.0, 0.0), 10.0, -3.0, g, 32767.0);
+        assert_eq!(s.pos, (32767.0, 0.0));
+        assert!((s.overflow.0 - 6.5).abs() < 1e-9);
+        assert!((s.overflow.1 - (-3.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_echo_pixel_lands_where_the_unit_says() {
+        let fit = FitRect {
+            x: 10.0,
+            y: 20.0,
+            w: 1280.0,
+            h: 720.0,
+        };
+        let p = fit_point_of_pixel((640, 360), (2560, 1440), fit);
+        assert_eq!(unit_through_fit(p.0, p.1, fit), (0.25, 0.25));
+        // The plane origin can sit past the scanout's edge; the estimate stays in the fit.
+        let p = fit_point_of_pixel((-4, 1500), (2560, 1440), fit);
+        assert_eq!(p, (10.0, 20.0));
+    }
+
+    /// The one letterbox rule: `dynamic` fills the whole guest area — view plus the housing
+    /// band the strip shows — with no bars; a fixed mode aspect-fits into the same area.
+    #[test]
+    fn refit_target_is_the_one_letterbox_rule() {
+        // Dynamic under `extend`: the guest's area is the view plus the strip inset, and the
+        // layer overshoots the view's top by exactly that inset (the strip window shows it).
+        let ((aw, ah), t) = refit_target((1512.0, 949.0), 33.0, true, (0, 0));
+        assert_eq!((aw, ah), (1512.0, 982.0));
+        assert_eq!(t, FitRect::full(1512.0, 982.0));
+
+        // Fixed mode: same area, aspect-fit of the guest's mode into it — top/bottom bars for
+        // a wider guest, and the width fills.
+        let ((aw, ah), t) = refit_target((1600.0, 1000.0), 0.0, false, (1600, 900));
+        assert_eq!((aw, ah), (1600.0, 1000.0));
+        assert_eq!(t, aspect_fit(1600, 900, 1600.0, 1000.0));
+        assert_eq!(t.w, 1600.0);
+        assert!(t.h < 1000.0);
+    }
 
     /// The measured geometry of a 14" MacBook Pro built-in display (`spikes/notch-fullscreen/`):
     /// the fullscreen content view is the full panel under the compatibility key, and the
@@ -1321,20 +1486,18 @@ mod tests {
     }
 
     #[test]
-    fn abs_corners_map_to_extremes() {
+    fn unit_corners_map_to_extremes() {
         let fit = FitRect {
             x: 100.0,
             y: 50.0,
             w: 800.0,
             h: 600.0,
         };
-        // Bottom-left of the content = X min, Y MAX (evdev Y grows downward).
-        assert_eq!(abs_through_fit(100.0, 50.0, fit, ABS_MAX), (0, ABS_MAX));
+        // Bottom-left of the content = X min, Y MAX (the guest's Y grows downward).
+        assert_eq!(unit_through_fit(100.0, 50.0, fit), (0.0, 1.0));
         // Top-right of the content = X max, Y min.
-        assert_eq!(abs_through_fit(900.0, 650.0, fit, ABS_MAX), (ABS_MAX, 0));
-        // Center maps to the middle of both axes.
-        let (cx, cy) = abs_through_fit(500.0, 350.0, fit, ABS_MAX);
-        assert_eq!((cx, cy), (ABS_MAX / 2 + 1, ABS_MAX / 2 + 1));
+        assert_eq!(unit_through_fit(900.0, 650.0, fit), (1.0, 0.0));
+        assert_eq!(unit_through_fit(500.0, 350.0, fit), (0.5, 0.5));
     }
 
     #[test]
@@ -1345,22 +1508,9 @@ mod tests {
             w: 800.0,
             h: 600.0,
         };
-        // A point in the left pillarbox bar clamps to X = 0.
-        assert_eq!(abs_through_fit(20.0, 300.0, fit, ABS_MAX).0, 0);
-        // A point in the right bar clamps to X = max.
-        assert_eq!(abs_through_fit(950.0, 300.0, fit, ABS_MAX).0, ABS_MAX);
-    }
-
-    #[test]
-    fn full_view_fit_matches_the_legacy_mapping() {
-        // In dynamic mode fit ≡ the full view; the transform must equal the historic
-        // (p / bounds, Y-flipped) mapping bit-for-bit.
-        let fit = FitRect::full(1024.0, 768.0);
-        let (x, y) = abs_through_fit(512.0, 192.0, fit, ABS_MAX);
-        let fx = (512.0 / 1024.0f64).clamp(0.0, 1.0);
-        let fy = (1.0 - 192.0 / 768.0f64).clamp(0.0, 1.0);
-        assert_eq!(x, (fx * f64::from(ABS_MAX)).round() as i32);
-        assert_eq!(y, (fy * f64::from(ABS_MAX)).round() as i32);
+        // A point in the left pillarbox bar clamps to X = 0; one in the right bar to X = max.
+        assert_eq!(unit_through_fit(20.0, 300.0, fit).0, 0.0);
+        assert_eq!(unit_through_fit(950.0, 300.0, fit).0, 1.0);
     }
 
     #[test]

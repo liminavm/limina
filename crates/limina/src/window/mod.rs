@@ -29,44 +29,51 @@ use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSApplication,
     NSApplicationActivationPolicy, NSApplicationDelegate, NSApplicationTerminateReply,
-    NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSEventType, NSMenu, NSMenuItem, NSScreen,
-    NSView, NSViewLayerContentsRedrawPolicy, NSWindow, NSWindowCollectionBehavior,
-    NSWindowDelegate, NSWindowStyleMask,
+    NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSEventType, NSMenu, NSMenuDelegate,
+    NSMenuItem, NSScreen, NSView, NSViewLayerContentsRedrawPolicy, NSWindow,
+    NSWindowCollectionBehavior, NSWindowDelegate, NSWindowStyleMask,
 };
-use objc2_core_foundation::CFRetained;
 use objc2_foundation::{
     NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer,
 };
-use objc2_io_surface::{IOSurfaceLookup, IOSurfaceRef};
+use objc2_io_surface::IOSurfaceLookup;
 use objc2_quartz_core::{CALayer, CATransaction};
 
+pub(crate) mod absfit;
+pub(crate) mod arrangement;
 mod capture_tap;
 mod cursor;
 mod diag;
+mod displays;
+mod echo;
 pub(crate) mod fit;
+/// Recorded-gesture replay for the grab policy (`LIMINA_EDGE_TRACE` fixtures).
+#[cfg(test)]
+mod grab_fixture;
 mod grab_policy;
+mod guestwindow;
 mod hostdisplay;
 mod input;
 mod lifecycle;
 mod overlay;
 mod present;
+mod warp;
+mod windows;
 
 pub use lifecycle::{WorkerConn, WorkerIo};
 pub use present::{
     empty_surface_map, mark_resume_dead, mark_worker_exited, mark_worker_running,
-    mark_worker_suspended, spawn_reader, surface_rendezvous, Shared, SurfaceMap,
+    mark_worker_suspended, mark_worker_swapped, spawn_reader, surface_rendezvous, Shared,
+    SurfaceMap,
 };
 
 // `input` builds the host pointer's default (blank) shape from the cursor module; re-exported
 // here so its `super::blank_cursor()` call keeps working across the split.
 pub(crate) use cursor::blank_cursor;
 
-use cursor::{apply_cursor, update_capture_cursor};
-use diag::{
-    capture_ids_from_env, capture_iosurface, copy_surface, create_local_iosurface, sync_surface,
-};
+use cursor::apply_cursor;
 use lifecycle::{kill_worker_group, should_initiate_quit};
-use present::{register_apply_hook, set_layer_surface};
+use present::register_apply_hook;
 
 use limina_displayctl::DisplayCommand;
 
@@ -133,6 +140,10 @@ pub struct WindowOptions {
     /// grab). This is the top-edge hold; the sides release sooner — see `fit::edge_timing` and
     /// [`crate::vmlib::schema::DisplayCfg::edge_resistance`].
     pub edge_resistance: f64,
+    /// How many virtio-gpu scanouts the worker was given (`--display-pool`). The count is fixed
+    /// at boot — `num_scanouts` is device-config state read once at probe — so it bounds how
+    /// many host panels this VM can ever show.
+    pub display_pool: u32,
 }
 
 /// The point-to-guest-pixel scale for the screen a window is currently on. Recomputed per use
@@ -372,6 +383,31 @@ fn window_state_snapshot(window: &NSWindow, prev: Option<WindowState>) -> Option
 
 /// Best-effort synchronous state save for the exit paths (the periodic saver is async,
 /// so a close right after a move could otherwise lose the final position).
+fn save_display_slots(path: Option<&Path>, assignment: Vec<(u64, u32)>) {
+    let Some(path) = path else { return };
+    let slots: Vec<(i64, u32)> = assignment.into_iter().map(|(k, s)| (k as i64, s)).collect();
+    if let Err(e) = crate::vmlib::state::set_display_slots(path, slots) {
+        log::warn!("display slot assignment save failed: {e}");
+    }
+}
+
+/// The fullscreen-uses-other-screens switch, saved beside the assignment.
+fn save_fullscreen_all(path: Option<&Path>, on: bool) {
+    let Some(path) = path else { return };
+    if let Err(e) = crate::vmlib::state::set_fullscreen_all_displays(path, on) {
+        log::warn!("fullscreen-all-displays save failed: {e}");
+    }
+}
+
+/// The set of displays the user has switched off, saved beside the assignment.
+fn save_display_disabled(path: Option<&Path>, disabled: Vec<u64>) {
+    let Some(path) = path else { return };
+    let keys: Vec<i64> = disabled.into_iter().map(|k| k as i64).collect();
+    if let Err(e) = crate::vmlib::state::set_display_disabled(path, keys) {
+        log::warn!("switched-off display save failed: {e}");
+    }
+}
+
 fn save_state_final(path: Option<&Path>, window: &NSWindow) {
     let Some(path) = path else { return };
     // The on-disk record is `prev`: the fullscreen branch needs the windowed frame it must not
@@ -415,8 +451,20 @@ fn ask_close_action(
 }
 
 /// Push a window-resize to the worker over its display-control socket.
-fn send_resize(path: &Path, width: u32, height: u32) {
-    send_display_command(path, DisplayCommand::Resize { width, height });
+fn send_resize(path: &Path, slot: u32, width: u32, height: u32) {
+    // `Resize` is the short form for connector 0. A window on a panel that owns another slot
+    // must not use it — it would modeset whichever connector happens to be slot 0, which in a
+    // two-panel arrangement is a display the user is not resizing.
+    let command = if slot == 0 {
+        DisplayCommand::Resize { width, height }
+    } else {
+        DisplayCommand::Display(limina_displayctl::DisplayControl {
+            display_id: slot,
+            size: Some((width, height)),
+            ..Default::default()
+        })
+    };
+    send_display_command(path, command);
 }
 
 /// Push a display command to the worker over its display-control socket (off the AppKit main
@@ -441,27 +489,53 @@ fn send_display_command(path: &Path, command: DisplayCommand) {
 /// process spawn silently supplies milliseconds. See `spikes/display-identity-hotplug/`.
 const CONNECTOR_DOWN_SETTLE: std::time::Duration = std::time::Duration::from_millis(60);
 
-/// Push a sequence of display commands **in order**, one connection each, on a single thread.
+/// Push a sequence of display commands **in order**, one connection each, serialized with every
+/// other sequence.
 ///
-/// The ordering is the whole point: a migration cycle is an unplug followed by a replug, and
-/// `send_display_command` used to spawn a thread per call — two of those race, and losing the
-/// race means the guest is told to reconnect *before* it is told to disconnect, leaving the
-/// connector down with nothing queued to bring it back. So the sequence gets one thread and
-/// blocking writes. The worker applies one update per wake and re-kicks its own eventfd while
-/// any remain, so each command still reaches the guest as its own config-change event
-/// (`third_party/libkrun/src/devices/src/virtio/gpu/{device,worker}.rs`) — we owe it order, and
-/// [`CONNECTOR_DOWN_SETTLE`] after an unplug.
+/// The ordering is the whole point, at both levels. Within a batch: a migration cycle is an
+/// unplug followed by a replug, and losing that order leaves the connector down with nothing
+/// queued to bring it back — so a batch is written by one thread with blocking writes. Across
+/// batches: the settle sleep below parks a batch mid-cycle, and a batch spawned for a later
+/// event (a second migration, a dynamic-mode resize) overtaking it lands the earlier replug
+/// LAST — the guest keeps a stale identity that nothing repairs, because `identity_sent` was
+/// already advanced on the main thread. So all batches drain through ONE queue and one sender
+/// thread, submission order = wire order. The worker applies one update per wake and re-kicks
+/// its own eventfd while any remain, so each command still reaches the guest as its own
+/// config-change event (`third_party/libkrun/src/devices/src/virtio/gpu/{device,worker}.rs`) —
+/// we owe it order, and [`CONNECTOR_DOWN_SETTLE`] after an unplug.
 fn send_display_commands(path: &Path, commands: Vec<DisplayCommand>) {
     if commands.is_empty() {
         return;
     }
-    let path = path.to_path_buf();
-    std::thread::spawn(move || {
+    type Batch = (PathBuf, Vec<DisplayCommand>);
+    static SENDER: std::sync::OnceLock<std::sync::mpsc::Sender<Batch>> = std::sync::OnceLock::new();
+    let tx = SENDER.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Batch>();
+        std::thread::spawn(move || {
+            while let Ok((path, commands)) = rx.recv() {
+                run_display_batch(&path, &commands);
+            }
+        });
+        tx
+    });
+    if tx.send((path.to_path_buf(), commands)).is_err() {
+        log::error!("display-control: the sender thread is gone; commands dropped");
+    }
+}
+
+/// One batch's wire session: a connection per command, blocking writes, the settle after an
+/// unplug, and the bring-the-connector-back recovery if the cycle dies half-way. Runs only on
+/// [`send_display_commands`]'s single sender thread — an early return abandons this batch, not
+/// the queue.
+fn run_display_batch(path: &Path, commands: &[DisplayCommand]) {
+    {
         use std::io::Write;
-        let mut left_disconnected = false;
-        for command in &commands {
+        // Which connector this batch has taken down and not yet brought back, so the recovery
+        // below re-connects the one that is actually dark rather than assuming slot 0.
+        let mut left_disconnected: Option<u32> = None;
+        for command in commands {
             let line = command.to_wire();
-            let sent = match std::os::unix::net::UnixStream::connect(&path) {
+            let sent = match std::os::unix::net::UnixStream::connect(path) {
                 Ok(mut stream) => match writeln!(stream, "{line}") {
                     Ok(()) => {
                         log::info!("display-control: pushed {line:?} to the guest");
@@ -482,17 +556,17 @@ fn send_display_commands(path: &Path, commands: Vec<DisplayCommand>) {
                 // disconnected has no display at all, where a stale identity is merely wrong.
                 // Recovery is unconditional — a bare reconnect is harmless on a connector that
                 // is already up.
-                if left_disconnected {
+                if let Some(dark) = left_disconnected {
                     log::error!(
                         "display-control: a migration cycle failed after the unplug; \
-                         forcing the connector back up"
+                         forcing connector {dark} back up"
                     );
                     let bare = DisplayCommand::Display(limina_displayctl::DisplayControl {
-                        display_id: 0,
+                        display_id: dark,
                         connected: Some(true),
                         ..Default::default()
                     });
-                    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&path) {
+                    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(path) {
                         let _ = writeln!(stream, "{}", bare.to_wire());
                     }
                 }
@@ -500,17 +574,19 @@ fn send_display_commands(path: &Path, commands: Vec<DisplayCommand>) {
             }
             if let DisplayCommand::Display(control) = command {
                 if control.connected == Some(false) {
-                    left_disconnected = true;
+                    left_disconnected = Some(control.display_id);
                     // Give the guest time to actually process the unplug before the display
-                    // comes back — see CONNECTOR_DOWN_SETTLE. This runs on the spawned thread,
+                    // comes back — see CONNECTOR_DOWN_SETTLE. This runs on the sender thread,
                     // never the main thread, so the window does not stall for it.
                     std::thread::sleep(CONNECTOR_DOWN_SETTLE);
-                } else if control.connected == Some(true) {
-                    left_disconnected = false;
+                } else if control.connected == Some(true)
+                    && left_disconnected == Some(control.display_id)
+                {
+                    left_disconnected = None;
                 }
             }
         }
-    });
+    }
 }
 
 /// What the VM menu's items need to know about THIS VM (M9.4). Set once by `run` before
@@ -529,6 +605,46 @@ pub(crate) struct MenuCtx {
 
 thread_local! {
     static MENU_CTX: RefCell<MenuCtx> = RefCell::new(MenuCtx::default());
+
+    /// What the Displays menu shows, republished by the render timer whenever it changes.
+    /// The menu is built from this rather than from the slot table directly, because the table
+    /// lives inside the timer's closure and AppKit asks for the menu on its own schedule.
+    static DISPLAY_MENU: RefCell<Vec<DisplayMenuRow>> = const { RefCell::new(Vec::new()) };
+
+    /// Displays the user clicked, `(panel key, wanted on)`, drained by the render timer. The
+    /// click cannot act directly: switching a display off is a connector cycle, and those are
+    /// planned in one place.
+    static DISPLAY_TOGGLES: RefCell<Vec<(u64, bool)>> = const { RefCell::new(Vec::new()) };
+
+    /// The Displays menu's "Use Other Screens When Fullscreen" switch — whether fullscreen
+    /// lights up every attached panel or takes only the window's own. Off by default; restored
+    /// from the VM's state and persisted on change by the render timer, which also reads it
+    /// each tick when deciding the presentation (no drain queue needed: a mode bool is not a
+    /// connector cycle, the next tick's plan is where it takes effect).
+    static FULLSCREEN_ALL_DISPLAYS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Find the menu row a clicked item names. The item's tag is the row's PANEL KEY (bit-cast),
+/// never its index: the render timer republishes `DISPLAY_MENU` while the menu can be open, so
+/// by click time the list may have shifted (a panel unplugged) — an index would land on a
+/// different, still-valid row and silently switch the wrong display. Identity either finds the
+/// same display or, for a panel that has since gone, nothing.
+fn menu_row_for_tag(rows: &[DisplayMenuRow], tag: isize) -> Option<&DisplayMenuRow> {
+    let panel = tag as u64;
+    rows.iter().find(|r| r.panel == panel)
+}
+
+/// One row of the Displays menu.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DisplayMenuRow {
+    /// The host panel this row switches, keyed the way the slot table keys it.
+    pub(crate) panel: u64,
+    /// What to call it — the panel's own name, as the guest is told it.
+    pub(crate) name: String,
+    pub(crate) enabled: bool,
+    /// The panel the VM's window is on. Its row is checked and dead: switching off the display
+    /// you are looking at has no sensible outcome.
+    pub(crate) primary: bool,
 }
 
 define_class!(
@@ -560,6 +676,15 @@ define_class!(
         #[unsafe(method_id(applicationDockMenu:))]
         fn application_dock_menu(&self, _app: &NSApplication) -> Option<Retained<NSMenu>> {
             Some(build_vm_menu(self.mtm(), self))
+        }
+    }
+
+    // The Displays submenu is rebuilt every time it opens: its rows are the host's attached
+    // panels, which change while the app runs.
+    unsafe impl NSMenuDelegate for VmMenuActions {
+        #[unsafe(method(menuNeedsUpdate:))]
+        fn menu_needs_update(&self, menu: &NSMenu) {
+            populate_displays_menu(menu, self.mtm(), self);
         }
     }
 
@@ -611,6 +736,12 @@ define_class!(
             {
                 return (phase != ParkPhase::Parked).into();
             }
+            if action == Some(objc2::sel!(toggleDisplay:)) {
+                let tag = item.tag();
+                let primary = DISPLAY_MENU
+                    .with(|r| menu_row_for_tag(&r.borrow(), tag).is_some_and(|row| row.primary));
+                return (!primary).into();
+            }
             objc2::runtime::Bool::YES
         }
 
@@ -627,6 +758,40 @@ define_class!(
         fn force_stop_vm(&self, _sender: &NSMenuItem) {
             log::warn!("menu: Force Stop (no grace)");
             crate::supervisor::request_force_stop();
+        }
+
+        // Displays ▸ a host panel: switch that display on or off for the guest. The click only
+        // records the intent — the render timer drains it into the slot table, which is where
+        // every connector cycle is planned.
+        #[unsafe(method(toggleDisplay:))]
+        fn toggle_display(&self, sender: &NSMenuItem) {
+            let tag = sender.tag();
+            let Some(row) = DISPLAY_MENU.with(|r| menu_row_for_tag(&r.borrow(), tag).cloned())
+            else {
+                return;
+            };
+            if row.primary {
+                return;
+            }
+            log::info!(
+                "menu: display {} switched {}",
+                row.name,
+                if row.enabled { "off" } else { "on" }
+            );
+            DISPLAY_TOGGLES.with(|t| t.borrow_mut().push((row.panel, !row.enabled)));
+        }
+
+        // Displays ▸ Use Other Screens When Fullscreen: whether fullscreen takes over the
+        // other panels. The flip is read by the render timer's next plan, in or out of
+        // fullscreen alike.
+        #[unsafe(method(toggleFullscreenAllDisplays:))]
+        fn toggle_fullscreen_all_displays(&self, _sender: &NSMenuItem) {
+            let on = !FULLSCREEN_ALL_DISPLAYS.with(|f| f.get());
+            log::info!(
+                "menu: fullscreen {} other screens",
+                if on { "takes" } else { "leaves" }
+            );
+            FULLSCREEN_ALL_DISPLAYS.with(|f| f.set(on));
         }
 
         // Show in Finder: reveal the .liminavm bundle.
@@ -660,6 +825,105 @@ define_class!(
         }
     }
 );
+
+/// Republish what the Displays menu shows, if it changed. Called from the render timer, which
+/// is the only place that knows both the slot table and which panel the window is on.
+fn publish_display_menu(
+    table: &displays::DisplayTable,
+    names: &[(u64, String)],
+    primary: Option<u64>,
+) {
+    let attached: Vec<u64> = names.iter().map(|(k, _)| *k).collect();
+    let rows: Vec<DisplayMenuRow> = table
+        .rows(&attached)
+        .into_iter()
+        .map(|row| DisplayMenuRow {
+            panel: row.panel,
+            name: names
+                .iter()
+                .find(|(k, _)| *k == row.panel)
+                .map(|(_, n)| n.clone())
+                .unwrap_or_default(),
+            enabled: row.enabled,
+            primary: primary == Some(row.panel),
+        })
+        .collect();
+    DISPLAY_MENU.with(|r| {
+        if *r.borrow() != rows {
+            *r.borrow_mut() = rows;
+        }
+    });
+}
+
+/// Build the "Displays" menu: one checkable row per host panel the guest has a connector for.
+///
+/// Empty until the guest's own driver is up and the panels have been given slots, which is also
+/// exactly when switching one off would mean anything.
+fn build_displays_menu(mtm: MainThreadMarker, actions: &VmMenuActions) -> Retained<NSMenu> {
+    let menu = NSMenu::new(mtm);
+    menu.setTitle(&NSString::from_str("Displays"));
+    // Rows come and go with the host's monitors, so they are built on open, not once.
+    menu.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(actions)));
+    populate_displays_menu(&menu, mtm, actions);
+    menu
+}
+
+fn populate_displays_menu(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenuActions) {
+    menu.removeAllItems();
+    // The mode switch first: it is what decides whether the rows below ever light up.
+    let all = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Use Other Screens When Fullscreen"),
+            Some(objc2::sel!(toggleFullscreenAllDisplays:)),
+            &NSString::from_str(""),
+        )
+    };
+    all.setState(if FULLSCREEN_ALL_DISPLAYS.with(|f| f.get()) {
+        objc2_app_kit::NSControlStateValueOn
+    } else {
+        objc2_app_kit::NSControlStateValueOff
+    });
+    unsafe { all.setTarget(Some(actions)) };
+    menu.addItem(&all);
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    let rows = DISPLAY_MENU.with(|r| r.borrow().clone());
+    if rows.is_empty() {
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("No displays yet"),
+                None,
+                &NSString::from_str(""),
+            )
+        };
+        item.setEnabled(false);
+        menu.addItem(&item);
+        return;
+    }
+    for row in rows.iter() {
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&row.name),
+                Some(objc2::sel!(toggleDisplay:)),
+                &NSString::from_str(""),
+            )
+        };
+        // The tag is the PANEL KEY (bit-cast; isize round-trips u64 exactly), which is how the
+        // action and the validation find their way back to a display without the menu holding
+        // one — and without an index that goes stale when the render timer republishes the rows
+        // under an open menu. See `menu_row_for_tag`.
+        item.setTag(row.panel as isize);
+        item.setState(if row.enabled {
+            objc2_app_kit::NSControlStateValueOn
+        } else {
+            objc2_app_kit::NSControlStateValueOff
+        });
+        unsafe { item.setTarget(Some(actions)) };
+        menu.addItem(&item);
+    }
+}
 
 /// Build the "Virtual Machine" verbs menu (shared between the menu bar and the Dock menu).
 /// Items whose prerequisite is absent (no bundle, no SSH forward, suspend unarmed) are
@@ -743,6 +1007,22 @@ pub(crate) fn parked() -> bool {
     PARK_STATE.with(|p| p.get()) == ParkPhase::Parked
 }
 
+/// Is there a guest behind this window for the tick to act for? Pure policy.
+///
+/// The pointer work the tick polls — the grab, the echo follow, the repark, the blank's upkeep,
+/// the mapping probe — all serve a guest, and a window parked on a snapshot has none. Nor does
+/// one mid-resume: the fresh worker has not presented yet. Both event paths already carry this
+/// rule (`capture_tap`'s early return, the NSEvent monitor's parked arm); the tick is the third
+/// place it has to hold.
+///
+/// Rig 2026-08-22: without it, a suspended VM's fullscreen window "gained the screen" on every
+/// visit to its Space and took the pointer with it — hidden and pinned, over a guest that did
+/// not exist. `parked()` alone is not the question, because the grabs continued through the
+/// Resuming phase too.
+pub(crate) fn speaks_for_a_guest(phase: ParkPhase) -> bool {
+    matches!(phase, ParkPhase::Live)
+}
+
 /// What a suspend exit does with the window: park it (menu/CLI suspend — the user kept the
 /// window, so keep the VM one click away), or quit the process (the user closed the window
 /// or asked to stop — the window's disappearance is the point). Pure policy, decided once
@@ -756,6 +1036,18 @@ pub(crate) fn should_park_on_suspend(
     can_park: bool,
 ) -> bool {
     can_park && !close_requested && !stop_requested
+}
+
+/// Has the resume's fresh worker presented? Pure policy for the timer's Resuming arm — what
+/// takes the "Resuming…" overlay down and makes the window live again.
+///
+/// The epoch is the discriminator, not the frame count. A per-slot counter cannot carry the
+/// question across the swap: `mark_worker_swapped` clears the slots, so the fresh worker starts
+/// counting from zero, and comparing against the count at the play click asks it to out-present
+/// the whole suspended session first. Rig 2026-08-22: the guest came back on both panels and the
+/// overlay stayed up regardless — on an idle desktop it need never come down at all.
+pub(crate) fn resume_first_frame(worker_epoch: u64, epoch_at_click: u64, frames: u64) -> bool {
+    worker_epoch > epoch_at_click && frames > 0
 }
 
 /// Did the RESUME's fresh worker die before its first frame? Pure policy for the timer's
@@ -816,7 +1108,7 @@ type GrabStateTrace = (bool, bool, bool, bool, bool);
 /// empty placeholder [`ExtendOverlay::show`] leaves behind, so the guest did not shrink below the
 /// housing, it disappeared — a whole-screen black flash for as long as the yield lasted.
 /// [`overlay_yields`] now decides whether the overlay is up at all.
-const OVERLAY_LEVEL: isize = 25;
+pub(crate) const OVERLAY_LEVEL: isize = 25;
 
 /// One tick's worth of overlay stacking state, compared to suppress repeats in the trace.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1026,6 +1318,24 @@ impl ExtendOverlay {
         self.window.borrow().is_some()
     }
 
+    /// The strip window itself, if it has been built — every window registers it in the
+    /// per-slot input registry so band clicks resolve to its slot (a secondary in
+    /// `reconcile_extend`, the primary in `PrimaryDisplay::register`).
+    fn strip_window(&self) -> Option<Retained<NSWindow>> {
+        self.window.borrow().clone()
+    }
+
+    /// Tear the strip down for good — a secondary's overlay dies with its window, unlike the
+    /// primary's, which lives for the app. The caller deregisters the strip from the input
+    /// registry FIRST (this consumes the window).
+    fn close(&self) {
+        self.active
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        if let Some(strip) = self.window.borrow_mut().take() {
+            strip.close();
+        }
+    }
+
     /// Whether the guest owns the housing band **as policy** — `extend`, fullscreen, on a notched
     /// panel, with neither the chrome ask nor a yield standing it down. Deliberately blind to
     /// whether the strip window is on screen right now, because that flips for a reason the guest
@@ -1212,8 +1522,9 @@ impl ExtendOverlay {
         strip.setContentView(Some(&host));
         // The guest's top bar lives in this band, so its clicks have to land — but the carrier
         // stays the key window: the strip is `orderFront`, never `makeKeyAndOrderFront`, and the
-        // input monitor is app-wide, so an event delivered here is decoded into the carrier
-        // view's space by `input::event_point_in_view` exactly as if the carrier had received it.
+        // input monitor is app-wide. The strip registers in the per-slot input registry under
+        // its window's slot, so an event delivered here decodes against the strip's own layer
+        // (the shifted guest-image rect) — the same math as the carrier's, one rule.
         strip.setAcceptsMouseMovedEvents(true);
         strip.orderFront(None);
         self.active
@@ -1462,6 +1773,9 @@ fn install_main_menu(mtm: MainThreadMarker, app: &NSApplication) {
     let vm_item = NSMenuItem::new(mtm);
     menubar.addItem(&vm_item);
     vm_item.setSubmenu(Some(&build_vm_menu(mtm, &actions)));
+    let displays_item = NSMenuItem::new(mtm);
+    menubar.addItem(&displays_item);
+    displays_item.setSubmenu(Some(&build_displays_menu(mtm, &actions)));
     app.setMainMenu(Some(&menubar));
     // NSMenuItem targets are weak; the actions object must live as long as the menu.
     std::mem::forget(actions);
@@ -1500,6 +1814,7 @@ pub fn run(
         hidpi,
         notch: cfg_notch,
         edge_resistance,
+        display_pool,
     } = opts;
 
     // The VM menu reads this when install_main_menu (below) builds it — set it first.
@@ -1545,34 +1860,17 @@ pub fn run(
     // use the housing strip. Two doors to two different fullscreens is worse than one door to
     // the good one, so this is a wart to revisit — noted in docs/design/display-modes.md.
     window.setCollectionBehavior(NSWindowCollectionBehavior::FullScreenPrimary);
-    let view = window.contentView().expect("content view");
-    // Layer-HOSTING (not layer-backed): we own the layer, so AppKit never draws over the
-    // IOSurface we set as its contents. Order matters: setLayer before setWantsLayer.
-    let layer = CALayer::new();
-    // The guest scanout is XRGB (opaque; the X/alpha channel is "don't care" and Venus/zink
-    // leaves it 0). Our IOSurface is BGRA, so without this Core Animation alpha-blends the
-    // surface and a 0 alpha makes the whole desktop composite transparent (reads as black/
-    // white depending on the backdrop). Mark the scanout layer opaque so CA ignores alpha.
-    layer.setOpaque(true);
-    // Pointer-capture cursor overlay: a sublayer we composite the guest cursor into at its
-    // guest-reported position while captured (the host NSCursor is hidden then, so without this
-    // the cursor would vanish). Hidden by default; positioned/shown by `update_capture_cursor`.
-    let cursor_layer = CALayer::new();
-    cursor_layer.setHidden(true);
-    layer.addSublayer(&cursor_layer);
-    view.setLayer(Some(&layer));
-    view.setWantsLayer(true);
-    // We OWN the layer's contents (the guest IOSurface) — AppKit must never invalidate or redraw
-    // them. Without `Never`, the default policy lets AppKit manage the layer across a live window
-    // resize, and at the end of the drag it leaves the layer blank (the IOSurface contents are
-    // dropped) until a large enough frame change reallocates the backing. `Never` tells AppKit to
-    // keep its hands off so our present is the sole authority on what the layer shows.
-    view.setLayerContentsRedrawPolicy(NSViewLayerContentsRedrawPolicy::Never);
-    // The letterbox bars ARE the window background: in host/fixed modes the scanout layer
-    // aspect-fits inside the content view and the uncovered margin shows the window
-    // background — black so the bars read as bars. (In dynamic mode the layer fills the
-    // window, so this is invisible.)
-    window.setBackgroundColor(Some(&NSColor::blackColor()));
+    // The shared presentation wiring — layer-hosting view, opaque scanout layer, the capture
+    // cursor sublayer, black letterbox background — is `GuestWindow::wire`, the same core a
+    // secondary window is built on. The primary carries everything else (input, fit,
+    // fullscreen, lifecycle) around this core; those migrate into `GuestWindow` as the
+    // primary/secondary split narrows.
+    // `Rc`: the frame-apply closure and the render timer both present through the core, and
+    // both are `Fn` captures on the main thread.
+    let primary_core = std::rc::Rc::new(guestwindow::GuestWindow::wire(window));
+    let window = primary_core.window.clone();
+    let view = primary_core.view.clone();
+    let layer = primary_core.layer.clone();
     // The runtime resize path never asks the guest for less than 64 pt; don't let the
     // window shrink below what the guest can be driven to.
     window.setContentMinSize(NSSize::new(64.0, 64.0));
@@ -1606,14 +1904,11 @@ pub fn run(
     // guest is already sized for this screen's fullscreen content (`initial_display_size`), so
     // the transition costs no re-modeset.
     let pending_fullscreen = Cell::new(start_fullscreen);
-    let last_gen = Cell::new(0u64);
-    let geom = Cell::new((0u32, 0u32));
-    // Diagnostic: dump the presented IOSurface to a PNG (no screen-record perm). LIMINA_WINDOW_CAPTURE.
-    let capture_path = std::env::var("LIMINA_WINDOW_CAPTURE").ok();
-    // Diagnostic: ids to ALSO dump by global lookup each tick (LIMINA_CAPTURE_IDS — see
-    // diag::capture_ids_from_env for the format and why).
-    let capture_ids: Vec<u32> = capture_ids_from_env();
-    let applies = Cell::new(0u64);
+    // The primary's per-tick presentation state (gen gate, present/capture diagnostics)
+    // lives in its `PrimaryDisplay` role, constructed with the window collection below.
+    // `geom` — the guest's current resolution on the primary's slot — is shared with the
+    // control plane here, whose pushes gate on "the guest has presented" (`!= (0, 0)`).
+    let geom: std::rc::Rc<Cell<(u32, u32)>> = std::rc::Rc::new(Cell::new((0u32, 0u32)));
     // Dynamic mode's runtime window-resize → guest. The 60 Hz timer debounces the window's
     // content size and, once a drag settles, pushes the new size to the worker over
     // `resize_socket` (which forwards it to the live virtio-gpu → the guest re-modesets).
@@ -1638,76 +1933,27 @@ pub fn run(
     // connector cycle. Seeded to 0, which `refresh_of` never yields — it floors to 60 — so the
     // first poll always pushes.
     let mode_sent: Cell<u64> = Cell::new(0);
-    // The scanout layer's current placement inside the content view, recomputed every tick
-    // (dynamic: the full view — CA stretches the stale surface during a live drag exactly as
-    // before; host/fixed: the guest resolution aspect-fit onto the black background). Shared
-    // with the input path so the pointer transform can never disagree with the pixels.
-    let fit_cell: std::rc::Rc<Cell<fit::FitRect>> = std::rc::Rc::new(Cell::new(
-        fit::FitRect::full(f64::from(initial_size.0), f64::from(initial_size.1)),
-    ));
+    // The guest-desktop position each slot was last told to suggest (the arrangement relay).
+    // Cleared when the guest reboots to firmware, so the re-entered OS phase is told again.
+    let positions_sent: RefCell<std::collections::HashMap<u32, (u32, u32)>> =
+        RefCell::new(std::collections::HashMap::new());
+    // A fresh worker was swapped in and the arrangement it inherited is a fiction, but nothing
+    // can be said to it until it is listening: the pushes travel over the display-control
+    // socket, which the restored worker only creates once its snapshot is loaded, and a batch
+    // sent into a socket that is not there yet is dropped with the table believing it was sent.
+    // So the flag is taken when it is raised and acted on when the new worker presents.
+    let reassert_pending: Cell<bool> = Cell::new(false);
     // Window-state persistence (state.toml): the settle-debounced candidate + what's on disk.
     let pending_state: Cell<Option<WindowState>> = Cell::new(None);
     let stable_ticks: Cell<u32> = Cell::new(0);
     let saved_state: Cell<Option<WindowState>> = Cell::new(None);
-    // Diagnostic (LIMINA_PRESENT_COPY=1): never hand the GUEST's scanout surface to Core
-    // Animation — copy it into a private 3-deep ring and show the copy. The zero-copy venus
-    // path shares mutter's own double-buffered swapchain with the window server; with no
-    // flip-completion feedback the guest reuses/repaints a buffer while CA may still be
-    // compositing it (IOSurfaceLock is advisory), so mid-repaint states reach glass — seen
-    // as the damaged region (a busy window) blinking out while the rest stays intact. The
-    // copy decouples CA from the guest's write cycle entirely; if the flicker vanishes with
-    // this on, that race is convicted (the real fix is flip-completion pacing, roadmap #8).
-    // Env arms it for the whole run; the marker file toggles it LIVE (touch/rm
-    // /tmp/limina-present-copy) so an intermittent flicker can be A/B'd within one session —
-    // flicker present → touch → gone → rm → returns is the within-session conviction.
-    let present_copy_env = std::env::var_os("LIMINA_PRESENT_COPY").is_some();
-    // Lock-only variant (LIMINA_PRESENT_LOCK / touch /tmp/limina-present-lock): keep zero-copy,
-    // but IOSurfaceLock+Unlock the guest surface before handing it to CA.
-    // A/B VERDICT: FAILED — visibly worse than no mitigation at all (several
-    // anomalies within seconds vs ~5 bursts/hour untreated). Kept as a documented negative
-    // result: the copy's load-bearing property is IMMUTABILITY, not the GPU-write sync.
-    // (a) At present time the repaint may not be submitted to Metal yet (venus ring decode
-    // is async), so the lock has nothing to wait on exactly when it matters; (b) even a
-    // complete-at-lock frame is repainted by the guest ~33ms later while CA still samples
-    // it (the SURFACE_RING reuse race). Do not enable; use LIMINA_PRESENT_COPY. COPY wins if
-    // both are set.
-    let present_lock_env = std::env::var_os("LIMINA_PRESENT_LOCK").is_some();
-    // The live /tmp marker toggles are re-stat'ed at most every 500 ms, NOT per frame:
-    // a synchronous /tmp stat on the main-thread frame apply is a present-path stall
-    // source of exactly the hard-to-attribute kind (same class as libkrun 0113; the
-    // worker's fence-present toggle got the same treatment).
-    let marker_poll_at: Cell<std::time::Instant> = Cell::new(std::time::Instant::now());
-    let copy_marker = Cell::new(std::fs::metadata("/tmp/limina-present-copy").is_ok());
-    let lock_marker = Cell::new(std::fs::metadata("/tmp/limina-present-lock").is_ok());
-    let copy_ring: RefCell<Vec<CFRetained<IOSurfaceRef>>> = RefCell::new(Vec::new());
-    let copy_geom = Cell::new((0u32, 0u32));
-    let copy_idx = Cell::new(0usize);
-    // Cache looked-up surfaces by id. BOUNDED, and that bound is load-bearing: each entry
-    // retains a whole framebuffer, and a compositor that mints a fresh scanout resource per
-    // frame supplies a fresh id per frame (see `SurfaceStore::get_or_insert_with`).
-    // `Rc` because the render timer purges it too: releases arrive whenever the guest frees a
-    // scanout, including long after the last frame — a compositor that quits stops presenting,
-    // so a purge that only ran on frame-apply would never run again and its framebuffers would
-    // stay pinned for the supervisor's life. That is the bug being fixed, so the drain has to
-    // sit on a path that keeps ticking when nothing is being drawn.
-    let cache: std::rc::Rc<RefCell<present::SurfaceStore>> = std::rc::Rc::new(RefCell::new(
-        present::SurfaceStore::with_cap(present::FRAME_CACHE_CAP),
-    ));
-    // The surface last handed to Core Animation (copy-ring or guest, whichever actually became
-    // layer contents). Each frame's shown-ack carries the surface it REPLACED so the ack sender
-    // can hold the ack until WindowServer stops sampling it (#24 off-glass gating; see the ack
-    // thread above).
-    let last_ca: RefCell<Option<CFRetained<IOSurfaceRef>>> = RefCell::new(None);
-    // Whether the `extend` strip was up last tick — see the seed in the render tick.
-    let strip_was_up = Cell::new(false);
-    // Last `[GEOM]` state logged, so a 60 Hz tick reports transitions rather than a firehose.
-    let geom_traced: Cell<Option<(u32, u32, u32, bool)>> = Cell::new(None);
-    // Last `[LAYER]` state logged — the two layer frames as CA actually holds them.
-    let layer_traced: Cell<Option<(i32, i32, i32, i32)>> = Cell::new(None);
     // Guest-cursor per-timer state: the last applied cursor gen and the (IOSurface id,
     // content scale) of the shape the host pointer currently wears (so we rebuild only on
     // an actual shape or window-scale change).
-    let last_cursor_gen = Cell::new(0u64);
+    // `(slot, gen)`, not just the gen: each scanout counts its own cursor changes, so the
+    // pointer crossing to a display whose counter happens to match would skip the re-apply and
+    // leave the previous display's shape on.
+    let last_cursor_gen = Cell::new((usize::MAX, 0u64));
     let built_cursor: Cell<Option<(u32, u32)>> = Cell::new(None);
     // The host pointer's guest-shape adoption, shared with the input monitor (which
     // tracks the pointer crossing the view boundary and asserts/clears the shape).
@@ -1715,16 +1961,11 @@ pub fn run(
     // Pointer-capture flag, shared between the input monitor (which toggles it on Cmd-Ctrl-G),
     // the render timer (which composites the guest cursor while it's set), and the capture tap.
     let captured = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    // The captured-mode virtual cursor (view points): seeded by uncaptured motion with the
-    // pointer's last position over the content, stepped by the macOS-accelerated deltas while
-    // captured, and driven through the SAME absolute-tablet mapping as uncaptured motion — so
-    // captured movement feels exactly like the host cursor. Shared between the input translator
-    // and the capture tap (both main thread).
-    let capture_pos: std::rc::Rc<Cell<Option<(f64, f64)>>> = std::rc::Rc::new(Cell::new(None));
     // The `notch = extend` overlay (see [`ExtendOverlay`]), reconciled from the render tick. The
     // capture tap reads its flag: a guest hosted in the overlay is fullscreen as far as edge
     // resistance is concerned, even though the overlay carries no fullscreen style bit.
-    let overlay = std::rc::Rc::new(ExtendOverlay::default());
+    // The primary's strip overlay is its window core's, like every window's.
+    let overlay = primary_core.overlay.clone();
     let overlay_flag = overlay.flag();
     // Set by the capture tap when the user deliberately shoves at the top edge: the gesture that
     // asks for the menu bar and the window's own controls back. See `ExtendOverlay::reconcile`.
@@ -1739,23 +1980,27 @@ pub fn run(
     // held keys on focus loss, the local event monitor drives it per event, and the tap
     // delegates capture toggles + the ungrab chord to it (one source of truth for the
     // capture-boundary modifier bookkeeping).
+    // Which slot the primary window shows: written by the render path and read by the input
+    // path, which is why it is declared here rather than beside the arrangement code that
+    // maintains it.
+    let primary_slot: std::rc::Rc<Cell<u32>> = std::rc::Rc::new(Cell::new(0));
+    let pointer_slot: std::rc::Rc<Cell<(usize, f64)>> = std::rc::Rc::new(Cell::new((0, 0.0)));
     let input_state = std::rc::Rc::new(input::InputState::new(
         conn.clone(),
         host_cursor.clone(),
         remap,
         captured.clone(),
-        fit_cell.clone(),
-        capture_pos.clone(),
+        primary_core.clone(),
         overlay_flag.clone(),
         reveal_chrome.clone(),
+        primary_slot.clone(),
+        pointer_slot.clone(),
     ));
     let _capture_tap = capture_tap::install(
         conn.clone(),
         captured.clone(),
         input_state.clone(),
         soft_kbd_grab,
-        fit_cell.clone(),
-        capture_pos.clone(),
         view.clone(),
         edge_resistance,
         overlay_flag,
@@ -1907,267 +2152,81 @@ pub fn run(
         });
     }
 
-    /// Drop, from the main thread's frame cache, the surfaces the guest has let go of.
-    ///
-    /// The receive thread has already dropped the store's reference (`note_released`); this is
-    /// the other half, and it has to happen on the main thread because the cache is main-thread
-    /// state. Called from both the frame-apply and the render timer — see the note on `cache`.
-    fn drain_releases(map: &SurfaceMap, cache: &RefCell<present::SurfaceStore>) {
-        let released = map.lock().unwrap().take_released();
-        if released.is_empty() {
-            return;
-        }
-        let mut cache = cache.borrow_mut();
-        for id in released {
-            cache.remove(id);
-        }
-    }
-
     // The frame-apply path, shared by the 60 Hz timer (fallback/liveness) and the
     // dispatch wake-up from the reader thread (event-driven, leg 1 of the latency
     // collapse): applying the moment a frame arrives instead of at the next tick.
+    // EVERY guest window, walked uniformly per tick: the primary (this window, wearing its
+    // role state) plus one per other connected slot — those stay empty until the guest's
+    // second connector is configured, so a single-display VM allocates nothing extra.
+    let guest_windows: std::rc::Rc<RefCell<windows::GuestWindows>> = std::rc::Rc::new(
+        RefCell::new(windows::GuestWindows::new(windows::PrimaryDisplay::new(
+            primary_core.clone(),
+            primary_slot.clone(),
+            geom.clone(),
+            desired_size.clone(),
+            hidpi,
+            reveal_chrome.clone(),
+        ))),
+    );
+    // Which panel owns which guest connector. Slots are handed out here and nowhere else, so a
+    // panel keeps the same connector for as long as the VM runs — see `displays`.
+    // Which pool slot the PRIMARY window presents. A panel owns a slot for the life of the VM
+    // and slot 0 belongs to whichever panel claimed it first, so the primary window is not
+    // pinned to 0: open on the studio display, or drag the window there, and the desktop lives
+    // on slot 1 while slot 0 is dark or shows another panel's picture. Everything that reads
+    // "the window's guest display" — the present path, the cursor, the liveness probe — goes
+    // through this, and `secondary` presents every OTHER connected slot, slot 0 included.
+    let display_table: std::rc::Rc<RefCell<displays::DisplayTable>> = {
+        let mut table = displays::DisplayTable::new(display_pool);
+        // Give every panel the connector it had last run, so the guest sees the same monitors it
+        // saw then — connector included, which is half of how a compositor identifies one.
+        if let Some(saved) = state_path.as_deref().and_then(crate::vmlib::state::load) {
+            let slots: Vec<(u64, u32)> = saved
+                .display_slots
+                .into_iter()
+                .map(|(k, i)| (k as u64, i))
+                .collect();
+            table.restore_assignment(&slots);
+            let off: Vec<u64> = saved
+                .display_disabled
+                .into_iter()
+                .map(|k| k as u64)
+                .collect();
+            table.restore_disabled(&off);
+            // Before the timer's first tick: a start_fullscreen restore reaches the
+            // presentation decision on tick one, and it must see the remembered switch.
+            FULLSCREEN_ALL_DISPLAYS.with(|f| f.set(saved.fullscreen_all_displays));
+        }
+        std::rc::Rc::new(RefCell::new(table))
+    };
     let apply: std::rc::Rc<dyn Fn()> = std::rc::Rc::new({
         let shared = shared.clone();
+        let guest_windows = guest_windows.clone();
+        let display_table = display_table.clone();
+        let primary_slot = primary_slot.clone();
+        let slots_state_path = state_path.clone();
+        let slots_saved: RefCell<Vec<(u64, u32)>> = RefCell::new(Vec::new());
+        let disabled_saved: RefCell<Vec<u64>> = RefCell::new(Vec::new());
+        // Seeded with the restored value so the save below fires on change, not on startup.
+        let fsall_saved: Cell<bool> = Cell::new(FULLSCREEN_ALL_DISPLAYS.with(|f| f.get()));
+        let panel_names: RefCell<Vec<(u64, String)>> = RefCell::new(Vec::new());
         let window = window.clone();
-        let layer = layer.clone();
         let ack_tx = ack_tx.clone();
         let surface_map = surface_map.clone();
-        let fit_cell = fit_cell.clone();
         let desired_size = desired_size.clone();
-        let apply_overlay = overlay.clone();
-        let apply_reveal = reveal_chrome.clone();
-        let cache = cache.clone();
-        // How much taller than its content view the guest's drawing area is right now. **One
-        // definition**, because there are two callers — this tick, and the present path's
-        // modeset refit — and they used to disagree: the present path fitted the guest into the
-        // raw content view, which under `extend` is exactly the housing inset too short. Its
-        // write lands on the carrier's layer and on `fit_cell`, so the picture the strip is
-        // continuing and the picture the carrier is showing came from different panel heights,
-        // and the guest's top bar was drawn twice, 33 pt apart (2026-08-08, caught in a
-        // screenshot after every individual number checked out).
-        let strip_inset_now = {
-            let window = window.clone();
-            let overlay = overlay.clone();
-            move || {
-                if overlay.claims_band() {
-                    window
-                        .screen()
-                        .map(|s| hostdisplay::fullscreen_inset(&s))
-                        .unwrap_or(0.0)
-                } else {
-                    0.0
-                }
-            }
-        };
+        let apply_input = input_state.clone();
         move || {
-            // Track the scanout layer to the window every tick — INCLUDING mid live-resize
-            // (the timer fires in common modes, so this runs during the drag). Dynamic mode
-            // fills the window (a layer-HOSTING view doesn't auto-size its layer; CA scales
-            // the current surface to the new frame, so the desktop stretches smoothly during
-            // a drag and snaps crisp once the guest re-modesets). Host/fixed aspect-fit the
-            // guest resolution into the view — the letterbox — on the black window
-            // background; the guest never re-modesets for a window resize in those modes.
-            // Bring the `extend` overlay up or down before measuring anything: it decides
-            // which view the guest lives in, and therefore what the fit is computed against.
+            // Each window's own walk — strip reconcile, refit, gen gate, modeset follow,
+            // present — runs in `guest_windows.apply` at the end of this tick, after the control
+            // plane below has assigned slots and pushed identities.
             if !window.styleMask().contains(NSWindowStyleMask::FullScreen) {
-                // Out of fullscreen the chrome is there for the taking, so the ask is moot —
-                // and clearing it here means entering fullscreen always starts from the
-                // overlay, whatever happened in the last session of it.
-                apply_reveal.store(false, std::sync::atomic::Ordering::Relaxed);
+                // Out of fullscreen the chrome is there for the taking on every panel (the
+                // covers drop with the primary's Space), so the ask is moot — and clearing it
+                // here means entering fullscreen always starts from the overlay, whatever
+                // happened in the last session of it. Through the InputState so the
+                // `reveal_chrome` mirror and the per-slot ask can never disagree.
+                apply_input.reveal_moot();
             }
-            apply_overlay.reconcile(
-                &window,
-                cfg_notch,
-                apply_reveal.load(std::sync::atomic::Ordering::Relaxed),
-            );
-            if let Some(v) = window.contentView() {
-                let sz = v.frame().size;
-                // Native fullscreen is the only state that reveals what AppKit's own housing
-                // inset actually costs; record it so `avoid` can size the guest to the point.
-                // The carrier's view is the inset one in BOTH policies now — the strip is a
-                // separate window and never changes what this measures — so unlike the
-                // re-parenting design there is no state to skip.
-                if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
-                    if let Some(s) = window.screen() {
-                        let frame = s.frame().size;
-                        let observed = fit::fullscreen_inset_measurement(
-                            (frame.width, frame.height),
-                            (sz.width, sz.height),
-                        );
-                        if display_trace() {
-                            eprintln!(
-                                "[DISPTRACE] learn id={} name={:?} frame={}x{} view={}x{} \
-                                 observed={observed:?} was={}",
-                                hostdisplay::display_id_of(&s),
-                                s.localizedName().to_string(),
-                                frame.width,
-                                frame.height,
-                                sz.width,
-                                sz.height,
-                                hostdisplay::fullscreen_inset(&s),
-                            );
-                        }
-                        if let Some(observed) = observed {
-                            hostdisplay::learn_fullscreen_inset(&s, observed);
-                        }
-                    }
-                }
-                // The area the guest is drawn into. AppKit insets the fullscreen carrier below
-                // the housing in both policies; under `extend` the strip window covers that band
-                // and shows the top of the same image, so the guest's usable height is the view
-                // plus the inset. One number for the fit, the pointer mapping and both layers.
-                // Keyed on the POLICY, not on whether the strip is on screen — the strip hides
-                // while our Space is away, and rescaling the guest for that would put a reflow
-                // back into every Space switch, which is the whole thing this design removes.
-                let strip_inset = strip_inset_now();
-                let (sz_w, sz_h) = fit::panel_size((sz.width, sz.height), strip_inset);
-                // Every input to the guest's height, on one line, whenever any of them moves. The
-                // symptom "guest renders below the housing while the band still shows content"
-                // has three candidate causes — the policy said no band, the learned inset came
-                // back 0, or the view was already the whole panel — and they are indistinguishable
-                // from the outside. Traced rather than reasoned about, after a wrong guess.
-                if display_trace() {
-                    let (id, notch, learned) = window
-                        .screen()
-                        .map(|s| {
-                            (
-                                hostdisplay::panel_key(&s),
-                                hostdisplay::notch_inset(&s),
-                                hostdisplay::fullscreen_inset(&s),
-                            )
-                        })
-                        .unwrap_or((0, -1.0, -1.0));
-                    let now = (
-                        sz.height as u32,
-                        strip_inset as u32,
-                        sz_h as u32,
-                        apply_overlay.claims_band(),
-                    );
-                    if geom_traced.get() != Some(now) {
-                        geom_traced.set(Some(now));
-                        eprintln!(
-                            "[GEOM] {} panel={:x} view={:.0}x{:.0} claims_band={} notch={:.0} \
-                             learned={:.0} strip_inset={:.0} -> guest_area={:.0}x{:.0} \
-                             screen={:?}",
-                            epoch_ms(),
-                            id,
-                            sz.width,
-                            sz.height,
-                            apply_overlay.claims_band(),
-                            notch,
-                            learned,
-                            strip_inset,
-                            sz_w,
-                            sz_h,
-                            window.screen().map(|s| {
-                                let f = s.frame();
-                                (f.origin.x, f.origin.y, f.size.width, f.size.height)
-                            }),
-                        );
-                    }
-                }
-                if sz_w > 0.0 && sz_h > 0.0 {
-                    let g = geom.get();
-                    let target = if mode == DisplayResolution::Dynamic {
-                        fit::FitRect::full(sz_w, sz_h)
-                    } else {
-                        fit::aspect_fit(g.0, g.1, sz_w, sz_h)
-                    };
-                    if target != fit_cell.get() {
-                        // Letterboxing in FULLSCREEN means the guest's mode and the panel
-                        // disagree, and the black bars alone don't say which side is wrong.
-                        // Log both numbers: bars on the SIDES mean the guest is on a mode of the
-                        // wrong *aspect* (it settled on a DMT entry rather than the preferred
-                        // timing), bars top and bottom mean the right aspect at a stale *size*,
-                        // and a short view with a matching guest means the housing strip never
-                        // reached us. Diagnosing this on dogfood otherwise costs a round of ssh
-                        // archaeology.
-                        if (window.styleMask().contains(NSWindowStyleMask::FullScreen)
-                            || apply_overlay.is_active())
-                            && (target.w < sz_w - 1.0 || target.h < sz_h - 1.0)
-                        {
-                            log::debug!(
-                                "fullscreen letterbox: guest {}x{} into {:.0}x{:.0} pt usable \
-                                 (view {:.0}x{:.0}, overlay {}) -> {:.0}x{:.0} \
-                                 at +{:.0}+{:.0}",
-                                g.0,
-                                g.1,
-                                sz_w,
-                                sz_h,
-                                sz.width,
-                                sz.height,
-                                apply_overlay.is_active(),
-                                target.w,
-                                target.h,
-                                target.x,
-                                target.y,
-                            );
-                        }
-                        fit_cell.set(target);
-                    }
-                    // Re-assert the scanout layer's frame whenever CA's copy has drifted from it
-                    // — checked against the LAYER, not against `fit_cell`. See
-                    // [`layer_frame_differs`]: AppKit resets it to the view's bounds on a layout
-                    // pass, and a guard on our own unchanged intent makes that permanent. The
-                    // strip has always been re-asserted this way; the carrier was not, and that
-                    // asymmetry is the whole bug.
-                    if layer_frame_differs(&layer, target) {
-                        set_layer_frame(&layer, target);
-                    }
-                    // Keep the strip over the housing band and its copy of the layer on the same
-                    // image, every tick: it has no AppKit machinery holding it in place across a
-                    // display reconfiguration, and the fit it mirrors can change under it.
-                    if let Some(s) = window.screen() {
-                        apply_overlay.place(&s, sz.height, strip_inset, target);
-                    }
-                    // What the two layers ACTUALLY hold, as opposed to what we last asked for.
-                    // The guest's top bar was once drawn twice, 33 pt apart, while every input
-                    // number read correct — because a second writer had put a differently-fitted
-                    // rect on the carrier's layer. Only the layers themselves can report that.
-                    if display_trace() {
-                        let c = layer.frame();
-                        let s = apply_overlay.strip_layer().frame();
-                        let now = (
-                            c.origin.y as i32,
-                            c.size.height as i32,
-                            s.origin.y as i32,
-                            s.size.height as i32,
-                        );
-                        if layer_traced.get() != Some(now) {
-                            layer_traced.set(Some(now));
-                            eprintln!(
-                                "[LAYER] {} carrier=({:.0},{:.0} {:.0}x{:.0}) \
-                                 strip=({:.0},{:.0} {:.0}x{:.0}) target={:?} view={:.0}x{:.0}",
-                                epoch_ms(),
-                                c.origin.x,
-                                c.origin.y,
-                                c.size.width,
-                                c.size.height,
-                                s.origin.x,
-                                s.origin.y,
-                                s.size.width,
-                                s.size.height,
-                                target,
-                                sz.width,
-                                sz.height,
-                            );
-                        }
-                    }
-                    // The strip has just come up: hand it the frame the carrier is already
-                    // showing. An idle guest presents nothing, so without this the band would
-                    // stay black until something in the guest happened to redraw. No ack — this
-                    // is not a new frame, and one frame must produce exactly one "shown".
-                    let up = apply_overlay.is_active();
-                    if up && !strip_was_up.replace(up) {
-                        if let Some(surface) = last_ca.borrow().as_ref() {
-                            set_layer_surface(&apply_overlay.strip_layer(), surface, None);
-                        }
-                    } else {
-                        strip_was_up.set(up);
-                    }
-                }
-            }
-
             // Resolution pushes to the guest, by display mode.
             if let Some(sock) = &resize_socket {
                 // Which physical display the window sits on, and therefore the identity,
@@ -2189,12 +2248,336 @@ pub fn run(
                 // touched. Both still have to reach the guest: the refresh and range live in the
                 // EDID, so a swallowed adjustment is a guest that can never drive variable
                 // refresh.
-                let migrated = host
-                    .as_ref()
-                    .is_some_and(|h| h.identity_key() != identity_sent.get());
+                // The pool arrangement. Which slot the window's panel owns, and — once the
+                // guest's own driver is up — the connects and disconnects that make the guest
+                // agree. Before that the guest is still firmware, which paints head 0 and no
+                // other, so the table plans nothing and every push below goes to slot 0 exactly
+                // as it always did.
+                let panel = window.screen().map(|s| hostdisplay::panel_key(&s));
+                let (slot, handover) = {
+                    let panels: Vec<(u64, String)> = NSScreen::screens(mtm)
+                        .iter()
+                        .map(|s| (hostdisplay::panel_key(&s), s.localizedName().to_string()))
+                        .collect();
+                    let attached: Vec<u64> = panels.iter().map(|(k, _)| *k).collect();
+                    *panel_names.borrow_mut() = panels;
+                    let mut table = display_table.borrow_mut();
+                    // The Displays menu's clicks, drained here because a switch is a connector
+                    // cycle and every one of those is planned in the same place, one tick later.
+                    for (panel, on) in
+                        DISPLAY_TOGGLES.with(|t| t.borrow_mut().drain(..).collect::<Vec<_>>())
+                    {
+                        table.set_enabled(panel, on);
+                    }
+                    // A fresh worker was swapped in (a resume, or a reboot relaunch): the
+                    // device is back to how it boots — slot 0 up, nothing else — and was never
+                    // told any of the identities, modes or positions the host remembers as
+                    // sent. Forget all of it, so the plan below says the whole arrangement
+                    // again. The reboot case also reaches this through the phase branches; a
+                    // resume keeps its phase and would otherwise never re-assert, which is the
+                    // 2026-08-22 stuck resume (docs/hardening-backlog.md §M9 snapshot
+                    // hardening): the table went on believing a slot the restored guest was no
+                    // longer driving, so the window watched a dead slot for good.
+                    //
+                    // Held until the new worker PRESENTS, not done when the swap is announced:
+                    // its display-control socket does not exist until its snapshot is loaded,
+                    // and a batch sent before that is dropped while the table records it as
+                    // said — the same staleness one restore later.
+                    if present::take_device_fresh(&shared) {
+                        reassert_pending.set(true);
+                    }
+                    let (os, presented) = {
+                        let s = shared.lock().unwrap();
+                        (
+                            s.guest_driver_ready,
+                            s.slots.iter().any(|slot| slot.show_id.is_some()),
+                        )
+                    };
+                    if reassert_pending.get() && presented {
+                        reassert_pending.set(false);
+                        log::info!(
+                            "display: a fresh worker has the device; re-asserting the arrangement"
+                        );
+                        table.reset_connectors_to_boot();
+                        screen_sent.set((initial_size, 0));
+                        identity_sent.set(0);
+                        mode_sent.set(0);
+                        positions_sent.borrow_mut().clear();
+                    }
+                    if os && table.enter_os_phase() {
+                        log::info!(
+                            "display: the guest's own driver has the GPU; the scanout pool is \
+                             ours to arrange"
+                        );
+                        // Say the identity again, now that there is a driver to hear it.
+                        //
+                        // Everything pushed during the firmware phase was said to a device the
+                        // guest had not attached yet, and a virtio driver RESETS its device
+                        // while probing — so an EDID set before that may simply not survive it.
+                        // When it does not, the connector keeps virtio-gpu's own default, which
+                        // claims a 10" panel: mutter reads it as "Red Hat, Inc. 10\"" and, at
+                        // 2560x1440 on a 10" screen, picks a 250% scale. Which side of the
+                        // reset we land on is timing, which is why it only bit some boots.
+                        //
+                        // Forgetting what we think the guest was told is enough — the next
+                        // tick sees the identity as changed and re-announces it as a migration
+                        // cycle, this time with the full host display info (range, alt mode)
+                        // that was not known that early either. Only slot 0 is connected here
+                        // (firmware paints head 0 and no other); every later slot carries its
+                        // identity on the connect that brings it up.
+                        //
+                        // All THREE, and `screen_sent` is the load-bearing one: in host mode —
+                        // the default — it alone gates the push that carries the identity, so
+                        // clearing only the other two re-announces nothing at all.
+                        screen_sent.set((initial_size, 0));
+                        identity_sent.set(0);
+                        mode_sent.set(0);
+                        positions_sent.borrow_mut().clear();
+                    } else if !os && table.phase() == displays::Phase::Os {
+                        // The worker was relaunched for a guest reboot: the guest is back in
+                        // firmware, which paints head 0 and no other.
+                        log::info!("display: the guest rebooted; back to the firmware arrangement");
+                        table.reset_to_firmware();
+                        positions_sent.borrow_mut().clear();
+                    }
+                    // Fullscreen is what lights up the other panels — when the user opted in
+                    // via the Displays menu; a window occupies exactly the display it is on.
+                    let presentation = displays::presentation_for(
+                        panel,
+                        window.styleMask().contains(NSWindowStyleMask::FullScreen),
+                        FULLSCREEN_ALL_DISPLAYS.with(|f| f.get()),
+                    );
+                    // Gated on the guest having presented, like every other push here: a plan
+                    // acted on before the first frame would cycle connectors under a guest that
+                    // has not finished probing them.
+                    match panel.filter(|_| geom.get() != (0, 0)) {
+                        Some(panel) => {
+                            let pushes = table.plan(presentation, &attached);
+                            (table.present_slot(panel, &attached), pushes)
+                        }
+                        None => (0, Vec::new()),
+                    }
+                };
+                primary_slot.set(slot);
+                publish_display_menu(&display_table.borrow(), &panel_names.borrow(), panel);
+                {
+                    // Persist on change only: this runs at frame rate, and the assignment moves
+                    // about as often as a monitor is plugged in.
+                    let now = display_table.borrow().assignment();
+                    if *slots_saved.borrow() != now {
+                        save_display_slots(slots_state_path.as_deref(), now.clone());
+                        *slots_saved.borrow_mut() = now;
+                    }
+                    let off = display_table.borrow().disabled_panels();
+                    if *disabled_saved.borrow() != off {
+                        save_display_disabled(slots_state_path.as_deref(), off.clone());
+                        *disabled_saved.borrow_mut() = off;
+                    }
+                    let fsall = FULLSCREEN_ALL_DISPLAYS.with(|f| f.get());
+                    if fsall_saved.get() != fsall {
+                        save_fullscreen_all(slots_state_path.as_deref(), fsall);
+                        fsall_saved.set(fsall);
+                    }
+                }
+
+                // The arrangement relay (M15 part 4): the guest-desktop position every
+                // connected connector should suggest, rebuilt from the host's own panel
+                // arrangement (`arrangement::guest_positions` — all slots or none). A position
+                // rides the connect that brings its slot up, so the hotplug the guest probes is
+                // already placed; a change on an already-connected slot (the user rearranged
+                // displays in System Settings) travels as its own in-place push below.
+                let desired_positions: std::collections::HashMap<u32, (u32, u32)> = {
+                    let table = display_table.borrow();
+                    if table.phase() == displays::Phase::Os {
+                        let screens = NSScreen::screens(mtm);
+                        let top = screens
+                            .iter()
+                            .map(|s| {
+                                let f = s.frame();
+                                f.origin.y + f.size.height
+                            })
+                            .fold(f64::MIN, f64::max);
+                        let mut slots: Vec<(u32, arrangement::Placement)> = table
+                            .connected_slots()
+                            .into_iter()
+                            .filter_map(|slot| {
+                                let panel = table.panel_of(slot)?;
+                                let s = screens
+                                    .iter()
+                                    .find(|s| hostdisplay::panel_key(s) == panel)?;
+                                let f = s.frame();
+                                let inset = notch_inset_for(&s, cfg_notch);
+                                let (uw, uh) =
+                                    fit::usable_content(f.size.width, f.size.height, inset);
+                                Some((
+                                    slot,
+                                    arrangement::Placement {
+                                        panel,
+                                        // AppKit's global space is y-up; the guest's desktop
+                                        // is y-down. Flip against the arrangement's top edge.
+                                        frame: arrangement::PointRect {
+                                            x: f.origin.x,
+                                            y: top - (f.origin.y + f.size.height),
+                                            w: f.size.width,
+                                            h: f.size.height,
+                                        },
+                                        logical: (uw.round() as u32, uh.round() as u32),
+                                    },
+                                ))
+                            })
+                            .collect();
+                        // The metric correction: where the guest's compositor reported its
+                        // own logical rects, those sizes replace the prediction — they are
+                        // exactly what mutter validates the suggested set against, and the
+                        // only way to be right about a fractional scale.
+                        arrangement::correct_metric(
+                            &mut slots,
+                            &arrangement::reported_logical_sizes(),
+                        );
+                        let placements: Vec<_> = slots.iter().map(|(_, p)| *p).collect();
+                        match arrangement::guest_positions(&placements) {
+                            Some(positions) => slots
+                                .iter()
+                                .zip(positions)
+                                .map(|((slot, _), (_, xy))| (*slot, xy))
+                                .collect(),
+                            None => Default::default(),
+                        }
+                    } else {
+                        Default::default()
+                    }
+                };
+
+                // A handover carries the arriving panel's whole identity on its connect, so it
+                // *is* the migration for the slot it brings up — the in-place path below must
+                // not also fire for the same event.
+                let handed_over = handover.iter().any(|p| {
+                    p.slot == slot && matches!(p.action, displays::SlotAction::Connect(_))
+                });
+                {
+                    // In-place position pushes go out BEFORE any connect: a new panel moves
+                    // where the already-up connectors belong, and the guest compositor
+                    // evaluates the suggested set the moment the connect's hotplug lands —
+                    // a position that arrives after it is stale at the only instant it is
+                    // read, the set looks overlapping, and the guest falls back to its
+                    // linear default for good (rig, 2026-08-19). A slot whose own connect is
+                    // in this handover is skipped: its position rides the connect itself.
+                    // The device applies queued updates in order, so sending first is
+                    // arriving first.
+                    let mut sent = positions_sent.borrow_mut();
+                    let mut moves = Vec::new();
+                    for (&mslot, &xy) in &desired_positions {
+                        if handover.iter().any(|p| {
+                            p.slot == mslot && matches!(p.action, displays::SlotAction::Connect(_))
+                        }) {
+                            continue;
+                        }
+                        // A scanout starts at the device-default (0, 0), so pushing (0, 0)
+                        // to a slot never told otherwise changes nothing in the guest — but
+                        // it would still cost a config-change cycle at desktop arrival in
+                        // every single-display session, perturbing whatever is mid-flight.
+                        let told = sent.get(&mslot).copied();
+                        if told != Some(xy) && (xy != (0, 0) || told.is_some()) {
+                            sent.insert(mslot, xy);
+                            moves.push(limina_displayctl::DisplayCommand::Display(
+                                limina_displayctl::DisplayControl {
+                                    display_id: mslot,
+                                    position: Some(xy),
+                                    ..Default::default()
+                                },
+                            ));
+                        }
+                    }
+                    if !moves.is_empty() {
+                        send_display_commands(sock, moves);
+                    }
+                }
+                if !handover.is_empty() {
+                    let commands: Vec<_> = handover
+                        .iter()
+                        .filter_map(|push| match push.action {
+                            displays::SlotAction::Disconnect => {
+                                Some(displays::disconnect_command(push.slot))
+                            }
+                            displays::SlotAction::Connect(_) if push.slot == slot => {
+                                host.as_ref().map(|host| {
+                                    hostdisplay::connect_command(
+                                        host,
+                                        hostdisplay::drives_size(mode, true),
+                                        push.slot,
+                                        desired_positions.get(&push.slot).copied(),
+                                    )
+                                })
+                            }
+                            // A panel that is not the window's, and so always driven to its
+                            // own size — see `hostdisplay::drives_size` for why the display
+                            // mode does not reach these. If AppKit no longer has that screen —
+                            // unplugged between the two reads — drop the push rather than
+                            // substituting some other panel's identity, which would have the
+                            // guest save a configuration for a monitor that does not exist,
+                            // under a connector duplicating the primary's. The panel is gone
+                            // from `attached` next tick, so the plan re-diffs it away.
+                            displays::SlotAction::Connect(other) => {
+                                hostdisplay::describe_panel(other, cfg_notch, mtm).map(|panel| {
+                                    hostdisplay::connect_command(
+                                        &panel,
+                                        hostdisplay::drives_size(mode, false),
+                                        push.slot,
+                                        desired_positions.get(&push.slot).copied(),
+                                    )
+                                })
+                            }
+                        })
+                        .collect();
+                    send_display_commands(sock, commands);
+                }
+                {
+                    // Positions that rode a connect are recorded as sent; a slot that went
+                    // down forgets its position so a later reconnect is told again.
+                    let mut sent = positions_sent.borrow_mut();
+                    for push in &handover {
+                        match push.action {
+                            displays::SlotAction::Connect(_) => {
+                                match desired_positions.get(&push.slot) {
+                                    Some(&xy) => {
+                                        sent.insert(push.slot, xy);
+                                    }
+                                    None => {
+                                        sent.remove(&push.slot);
+                                    }
+                                }
+                            }
+                            displays::SlotAction::Disconnect => {
+                                sent.remove(&push.slot);
+                            }
+                        }
+                    }
+                }
+
+                // Two distinct events, deliberately not merged. A *migration* is a different
+                // physical panel and earns the connector cycle; an *adjustment* is the same panel
+                // changing what it is doing (its refresh rate, and with it the VRR range) and
+                // must travel in place — cycling there would black the guest out for the settle
+                // every time a ProMotion display changed rate on a monitor the user never
+                // touched.
+                let migrated = !handed_over
+                    && host
+                        .as_ref()
+                        .is_some_and(|h| h.identity_key() != identity_sent.get());
                 let adjusted = host
                     .as_ref()
-                    .is_some_and(|h| !migrated && h.mode_key() != mode_sent.get());
+                    .is_some_and(|h| !migrated && !handed_over && h.mode_key() != mode_sent.get());
+                if handed_over {
+                    if let Some(host) = host.as_ref() {
+                        identity_sent.set(host.identity_key());
+                        mode_sent.set(host.mode_key());
+                        // `screen_sent` deliberately NOT pre-set: in host mode the block it
+                        // gates also re-locks the window's aspect, reshapes it to the arriving
+                        // panel and refreshes the relaunch size, and those are owed whatever
+                        // carried the identity. Only the *push* is redundant, and it is skipped
+                        // at the send below.
+                    }
+                }
 
                 match mode {
                     // Dynamic: push the window's content size ONCE the resize gesture ENDS —
@@ -2225,7 +2608,7 @@ pub fn run(
                                 crate::session::pack_size(want.0, want.1),
                                 std::sync::atomic::Ordering::Relaxed,
                             );
-                            send_resize(sock, want.0, want.1);
+                            send_resize(sock, slot, want.0, want.1);
                         }
                     }
                     // Host: drive the guest to the point size of the screen the window is
@@ -2311,20 +2694,30 @@ pub fn run(
                                             host,
                                             true,
                                             hostdisplay::HotplugPolicy::from_env(),
+                                            slot,
                                         ),
                                     );
                                 } else if adjusted {
                                     send_display_command(
                                         sock,
-                                        hostdisplay::adjustment_command(host, true),
+                                        hostdisplay::adjustment_command(host, true, slot),
                                     );
-                                } else {
+                                } else if !handed_over {
+                                    // The connect this tick already carried the size and the
+                                    // identity together, so a size push here would be a second
+                                    // modeset for one migration.
+                                    //
+                                    // `Resize` is the short form for display 0 only, so a window
+                                    // on a panel that owns another slot sends the general form.
                                     send_display_command(
                                         sock,
-                                        DisplayCommand::Resize {
-                                            width: want.0,
-                                            height: want.1,
-                                        },
+                                        DisplayCommand::Display(
+                                            limina_displayctl::DisplayControl {
+                                                display_id: slot,
+                                                size: Some(want),
+                                                ..Default::default()
+                                            },
+                                        ),
                                     );
                                 }
                             }
@@ -2354,204 +2747,42 @@ pub fn run(
                                     host,
                                     false,
                                     hostdisplay::HotplugPolicy::from_env(),
+                                    slot,
                                 ),
                             );
                         } else if adjusted {
                             mode_sent.set(host.mode_key());
                             send_display_command(
                                 sock,
-                                hostdisplay::adjustment_command(host, false),
+                                hostdisplay::adjustment_command(host, false, slot),
                             );
                         }
                     }
                 }
             }
 
-            let (gen, show_id, width, height) = {
-                let s = shared.lock().unwrap();
-                (s.gen, s.show_id, s.width, s.height)
+            // Every guest window's walk — strip reconcile, refit, gen gate, modeset
+            // follow, present — primary first, one collection (`windows::GuestWindows`).
+            let slot_panels: std::collections::HashMap<usize, u64> = {
+                let table = display_table.borrow();
+                table
+                    .connected_slots()
+                    .into_iter()
+                    .filter_map(|s| table.panel_of(s).map(|p| (s as usize, p)))
+                    .collect()
             };
-            if gen == last_gen.get() {
-                return;
-            }
-            last_gen.set(gen);
-
-            let Some(id) = show_id else { return };
-            if geom.get() != (width, height) {
-                geom.set((width, height));
-                if mode == DisplayResolution::Dynamic {
-                    // Guest-follow (dynamic only): the window tracks guest modesets, as
-                    // originally shipped.
-                    let (pw, ph) = scale_for(&window, hidpi).to_points((width, height));
-                    window.setContentSize(NSSize::new(pw, ph));
-                    let full = fit::FitRect::full(width as f64, height as f64);
-                    fit_cell.set(full);
-                    set_layer_frame(&layer, full);
-                    // Keep the relaunch size current: a reboot then boots at whatever
-                    // resolution the guest last ran (e.g. an in-guest xrandr choice).
-                    desired_size.store(
-                        crate::session::pack_size(width, height),
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
-                } else if let Some(v) = window.contentView() {
-                    // Host/fixed: the window is host-owned — a guest modeset re-fits the
-                    // letterbox NOW (not next tick) so this frame presents at the right rect.
-                    // Through `strip_inset_now`, so this agrees with the render tick about how
-                    // tall the guest's area is — see that closure.
-                    let sz = v.frame().size;
-                    let (pw, ph) = fit::panel_size((sz.width, sz.height), strip_inset_now());
-                    let target = fit::aspect_fit(width, height, pw, ph);
-                    if target != fit_cell.get() {
-                        fit_cell.set(target);
-                        set_layer_frame(&layer, target);
-                    }
-                }
-                // A mode change means the worker allocated fresh surfaces; ids from the old mode
-                // are gone (and could be reused for unrelated surfaces), so drop the cache.
-                cache.borrow_mut().clear();
-            }
-
-            drain_releases(&surface_map, &cache);
-
-            let mut cache = cache.borrow_mut();
-            // Resolve the id to a surface once and keep our own retained reference. Prefer the
-            // Mach-delivered store (the capability-scoped, non-global scanouts); fall back to a
-            // global `IOSurfaceLookup` for the venus zero-copy path (still global) and the legacy
-            // no-receiver mode. A failed resolve (the worker freed it during a rapid remodeset
-            // before we caught up) is not fatal — skip this frame rather than panic the UI.
-            // Protect the id the guest is presenting from the store's cap. Unconditional, not
-            // just on a cache miss: the frame cache in front means a hot id would otherwise never
-            // touch the store and would look idle to any eviction policy — which is exactly how
-            // the compositor's ring got evicted while in continuous use.
-            surface_map.lock().unwrap().pin_presented(id);
-            let Some(surface) = cache.get_or_insert_with(id, || {
-                surface_map
-                    .lock()
-                    .unwrap()
-                    .get(id)
-                    .or_else(|| IOSurfaceLookup(id))
-            }) else {
-                // Say WHY, not just that. "Unresolved" alone cost days: it reads as a rare race
-                // with a remodeset, while the observed fault is the guest presenting an id the
-                // worker told us it released — a permanent skip, not a transient one. Naming the
-                // cause at the point of failure is what separates the two.
-                // See `spikes/scanout-blob-freeze/RESULTS.md`.
-                // Ask for it back. These scanouts are non-global, so no lookup can recover one
-                // — only the worker can publish it again, and until it does every frame naming
-                // this id is skipped. Throttled per id inside the store; the request goes to the
-                // dedicated ack thread (never a socket write on the AppKit main thread).
-                let (why, ask) = {
-                    let mut map = surface_map.lock().unwrap();
-                    (map.why_gone(id), map.request_resurface(id))
-                };
-                if ask {
-                    let _ = ack_tx.try_send(present::AckMsg::Resurface(id));
-                }
-                match why {
-                    Some(present::GoneReason::Released) => log::warn!(
-                        "window: surface {id} unresolved; skipping frame — the worker RELEASED \
-                         this surface and the guest is still presenting it. Recoverable only if \
-                         the worker still has it registered."
-                    ),
-                    Some(present::GoneReason::Evicted) => log::warn!(
-                        "window: surface {id} unresolved; skipping frame — the store EVICTED this \
-                         surface at its cap and the guest is still presenting it. Asking for it \
-                         back."
-                    ),
-                    None => log::warn!(
-                        "window: surface {id} unresolved; skipping frame — we never held it, and \
-                         no release or eviction was recorded for it."
-                    ),
-                }
-                return;
-            };
-            let surface = &surface;
-            // Shown-ack channel (#8 leg 2): after Core Animation processes this frame's
-            // transaction, hand the id to the dedicated ack-sender thread (a bounded, non-blocking
-            // try_send) so it can tell the worker "shown <id>" at the real latch boundary — the
-            // blocking socket write never touches the AppKit main thread. The ack identifies the
-            // frame by the GUEST's surface id even in copy mode (the worker tracks holds by the id
-            // it presented); the sender thread targets whichever worker is current after a relaunch.
-            // The message also carries the surface this frame replaces as layer contents (the one
-            // WindowServer may still be sampling) so the sender can hold the ack until it's truly
-            // off glass (#24). A same-surface re-flush carries None — there's nothing replaced to
-            // wait on (and the guest is single-buffering, which pacing can't protect).
-            let ack_for = |shown: &CFRetained<IOSurfaceRef>| {
-                let prev = last_ca
-                    .borrow_mut()
-                    .replace(shown.clone())
-                    .filter(|p| !std::ptr::eq::<IOSurfaceRef>(&**p, &**shown));
-                Some((
-                    ack_tx.clone(),
-                    present::AckMsg::Shown(id, prev.map(present::SendSurface::new)),
-                ))
-            };
-            // Hand a frame to the carrier's layer and, when the `extend` strip is up, to its copy
-            // of it. The strip's transaction carries NO ack: one presented frame must produce
-            // exactly one "shown" or the worker's flush fence would be completed twice.
-            let show = |src: &CFRetained<IOSurfaceRef>, ack| {
-                set_layer_surface(&layer, src, ack);
-                if apply_overlay.is_active() {
-                    set_layer_surface(&apply_overlay.strip_layer(), src, None);
-                }
-            };
-            // Distinct object each frame (the worker alternates ids) → CA re-reads.
-            if marker_poll_at.get().elapsed() >= std::time::Duration::from_millis(500) {
-                marker_poll_at.set(std::time::Instant::now());
-                copy_marker.set(std::fs::metadata("/tmp/limina-present-copy").is_ok());
-                lock_marker.set(std::fs::metadata("/tmp/limina-present-lock").is_ok());
-            }
-            let present_copy = present_copy_env || copy_marker.get();
-            if present_copy {
-                if copy_geom.get() != (width, height) {
-                    copy_geom.set((width, height));
-                    let mut ring = copy_ring.borrow_mut();
-                    ring.clear();
-                    for _ in 0..3 {
-                        if let Some(s) = create_local_iosurface(width, height) {
-                            ring.push(s);
-                        }
-                    }
-                }
-                let ring = copy_ring.borrow();
-                if ring.len() == 3 {
-                    let dst = &ring[copy_idx.get() % 3];
-                    copy_idx.set(copy_idx.get().wrapping_add(1));
-                    copy_surface(surface, dst);
-                    show(dst, ack_for(dst));
-                } else {
-                    show(surface, ack_for(surface));
-                }
-            } else {
-                let present_lock = present_lock_env || lock_marker.get();
-                if present_lock {
-                    sync_surface(surface);
-                }
-                show(surface, ack_for(surface));
-            }
-
-            // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
-            // long-running headless check ends with a recent frame, not just early boot.
-            applies.set(applies.get() + 1);
-            if applies.get() % 120 == 0 {
-                if let Some(path) = &capture_path {
-                    capture_iosurface(surface, id, path);
-                }
-            }
-            // Targeted per-id sweep — look each requested global id up fresh (no cache) and
-            // dump it, so we can read the venus blob surface directly even when it isn't the
-            // presented one.
-            if !capture_ids.is_empty() && applies.get() % 30 == 0 {
-                if let Some(base) = &capture_path {
-                    for &cid in &capture_ids {
-                        if let Some(s) = IOSurfaceLookup(cid) {
-                            capture_iosurface(&s, cid, &format!("{base}.id{cid}.png"));
-                        } else {
-                            log::info!("capture: IOSurfaceLookup({cid}) -> none (not alive)");
-                        }
-                    }
-                }
-            }
+            guest_windows.borrow_mut().apply(
+                &shared,
+                &surface_map,
+                &ack_tx,
+                &windows::Layout {
+                    panels: &slot_panels,
+                    notch: cfg_notch,
+                    reveal_ask: apply_input.reveal_ask_slot(),
+                    mode,
+                },
+                mtm,
+            );
         }
     });
     register_apply_hook(apply.clone());
@@ -2591,32 +2822,35 @@ pub fn run(
     // below moves `window` in.
     let shortcut_window = window.clone();
 
+    let timer_primary_slot = primary_slot.clone();
     let timer_cursor = host_cursor.clone();
-    let timer_fit = fit_cell.clone();
+    let timer_primary = primary_core.clone();
     let timer_conn = conn.clone();
     let timer_captured = captured.clone();
-    let timer_cursor_layer = cursor_layer.clone();
-    let timer_overlay_cursor = overlay.clone();
     let timer_surface_map = surface_map.clone();
-    let timer_cache = cache.clone();
     // For the quit-check below: distinguish a real window CLOSE from a mere miniaturize/app-hide
     // (all three make the window not-visible, but only a close should power the guest off).
     let timer_app = app.clone();
     let timer_state_path = state_path.clone();
     // (`input_state` itself was created further up, before the capture tap, which shares it.)
     let timer_input = input_state.clone();
+    // The same reading the tap takes (`[display] edge-resistance`, `Off` = never grab): the
+    // screen-gain trigger is the policy grab, so it obeys the policy's own switch.
+    let timer_grab_enabled =
+        crate::vmlib::schema::EdgeHold::from_toml(edge_resistance).seconds() > 0.0;
     // Window key-focus state carried across ticks, so the timer can detect the key→not-key edge.
     // Seeded with the current state (the window was just made key), so the first tick is a no-op.
     let was_key = Cell::new(window.isKeyWindow());
     let was_on_space = Cell::new(window.isOnActiveSpace());
     // Last `[GRABSTATE]` tuple, so the trace reports transitions rather than 60 lines a second.
     let grab_traced: Cell<Option<GrabStateTrace>> = Cell::new(None);
-    // Parked-window resume bookkeeping (task #18): when play was clicked (the felt-resume
-    // log) and the frame counter at the click — `frames` never resets across the worker
-    // swap, so "first fresh frame" means exceeding this baseline, not `> 0`.
+    // Parked-window resume bookkeeping (task #18): when play was clicked (the felt-resume log)
+    // and the worker epoch at the click, which is what tells the fresh worker's frames from the
+    // suspended one's ([`resume_first_frame`]).
     let timer_view = view.clone();
+    let timer_windows = guest_windows.clone();
+    let timer_pointer_slot = pointer_slot.clone();
     let resume_clicked_at: Cell<std::time::Instant> = Cell::new(std::time::Instant::now());
-    let resume_frames_baseline: Cell<u64> = Cell::new(0);
     let resume_epoch_baseline: Cell<u64> = Cell::new(0);
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         // One-shot: the remembered fullscreen, taken on the first tick the window is actually on
@@ -2631,15 +2865,15 @@ pub fn run(
         // Let go of what the guest has let go of, every tick — not only when a frame arrives.
         // A compositor that quits stops presenting, and its framebuffers are exactly the ones
         // worth reclaiming (testcomp/supervisor-retention.sh).
-        drain_releases(&timer_surface_map, &timer_cache);
+        timer_windows.borrow().drain_releases(&timer_surface_map);
 
         let (exited, worker_suspended, show_id, frames, worker_epoch, resume_dead) = {
             let s = shared.lock().unwrap();
             (
                 s.worker_exited,
                 s.worker_suspended,
-                s.show_id,
-                s.frames,
+                s.slots[timer_primary_slot.get() as usize].show_id,
+                s.slots[timer_primary_slot.get() as usize].frames,
                 s.worker_epoch,
                 s.resume_dead,
             )
@@ -2692,6 +2926,12 @@ pub fn run(
                             ov.replace(overlay::Overlay::parked(&host_layer, &content));
                         }
                     }
+                    // The other displays' windows go with it. This path returns before the
+                    // frame-apply closure runs, so nothing else would ever take them down —
+                    // and while covering they are borderless and above the menu bar, which
+                    // means a panel frozen on its last frame with no way to dismiss it. They
+                    // come back on resume, when the restored worker presents again.
+                    timer_windows.borrow_mut().close_secondaries();
                     window.setTitle(&NSString::from_str(&format!("{title} — Suspended")));
                     log::info!("VM suspended; window parked (click to resume)");
                     return;
@@ -2714,7 +2954,6 @@ pub fn run(
                     if sent {
                         PARK_STATE.with(|p| p.set(ParkPhase::Resuming));
                         resume_clicked_at.set(std::time::Instant::now());
-                        resume_frames_baseline.set(frames);
                         resume_epoch_baseline.set(worker_epoch);
                         let mut ov = timer_overlay.borrow_mut();
                         if let Some(o) = ov.take() {
@@ -2767,7 +3006,7 @@ pub fn run(
                     crate::exit_cleanup();
                     std::process::exit(1);
                 }
-                if frames > resume_frames_baseline.get() {
+                if resume_first_frame(worker_epoch, resume_epoch_baseline.get(), frames) {
                     PARK_STATE.with(|p| p.set(ParkPhase::Live));
                     if let Some(o) = timer_overlay.borrow_mut().take() {
                         o.remove();
@@ -2828,6 +3067,10 @@ pub fn run(
                     }
                 }
             }
+            // The other panels freeze with this one, so they say so with it. Only the suspend
+            // flavor reaches them: by the time the window is parked or resuming, the park has
+            // closed every secondary.
+            timer_windows.borrow_mut().veil(live && suspending);
         }
 
         // Release keys held when the window loses key focus (e.g. the user hit Cmd-Tab): the local
@@ -2836,7 +3079,15 @@ pub fn run(
         // here on the key→not-key edge rather than via an NSWindowDelegate (the window's deliberate
         // no-delegate pattern); the timer keeps firing while the app is backgrounded, so it catches
         // the app-switch case too.
-        let is_key = window.isKeyWindow();
+        // ONE ownership snapshot for this tick — the same assembler as the tap's per-event one
+        // (`InputState::window_facts`), so the tick and the tap can never answer an ownership
+        // question differently.
+        let facts = timer_input.window_facts(&timer_view);
+        let pf = grab_policy::primary_facts(&facts);
+        // App-level, like every other key question here: focus moving from the primary to a
+        // covering secondary is movement INSIDE the VM, and dumping the held modifiers for it
+        // would drop a chord mid-press whenever the user clicked the other display.
+        let is_key = facts.iter().any(|f| f.key);
         if was_key.get() && !is_key {
             timer_input.release_all_held("key-loss");
         } else if !was_key.get() && is_key && input::input_trace() {
@@ -2857,7 +3108,7 @@ pub fn run(
         // takes the Space away is itself made of keys: Ctrl-Up is delivered to the guest as
         // Ctrl-down while the soft keyboard grab is still engaged, and the matching key-up then
         // goes to macOS instead — leaving Ctrl stuck down in the guest for good.
-        let on_active_space = window.isOnActiveSpace();
+        let on_active_space = pf.on_active_space;
         if was_on_space.get() && !on_active_space {
             timer_input.release_all_held("space-leave");
         } else if !was_on_space.get() && on_active_space && input::input_trace() {
@@ -2869,10 +3120,18 @@ pub fn run(
         was_on_space.set(on_active_space);
         if grab_policy::must_drop_grab(
             timer_input.captured_flag(),
-            on_active_space,
-            window.screen().is_some(),
+            grab_policy::capture_owner(&facts, timer_input.capture_slot()),
         ) {
-            log::debug!("pointer grab released: window is not on screen");
+            log::debug!("pointer grab released: the cursor's window is not on screen");
+            timer_input.release_capture(&timer_view);
+        }
+        // Backstop for the tap's per-event key-loss release: without the tap (no Accessibility
+        // grant) the local monitor stops seeing events the instant focus leaves, so nothing
+        // event-driven can hand a captured pointer back. The tap remains the low-latency
+        // consumer of the same predicate; this only changes when the release lands in
+        // event-free windows.
+        if grab_policy::key_loss_releases(timer_input.captured_flag(), &facts) {
+            log::info!("pointer capture: released — the window lost focus (tick backstop)");
             timer_input.release_capture(&timer_view);
         }
 
@@ -2891,7 +3150,7 @@ pub fn run(
                 timer_input.captured_flag(),
                 is_key,
                 on_active_space,
-                window.screen().is_some(),
+                pf.has_screen,
                 NSApplication::sharedApplication(mtm).isActive(),
             );
             if grab_traced.get() != Some(now) {
@@ -3046,46 +3305,117 @@ pub fn run(
         // applies even when the scanout hasn't produced a new frame. The shape is built at
         // the window's content scale (the fit rect over the guest resolution), so a resize
         // that rescales the desktop rescales the pointer with it.
-        let (cur, guest_w) = {
+        // The shape belongs to the display the POINTER is over, not to the primary: the guest
+        // enables its cursor plane on one CRTC and hides it on the others, so reading slot 0
+        // meant the `cursorhide` for the display the pointer left blanked the host cursor while
+        // the display it arrived on was publishing a perfectly good one.
+        // Both halves of the scale come from the window the pointer is over. Mixing the
+        // primary's width with another display's guest mode drew the sprite at the wrong size
+        // and offset its hotspot by the same factor, so clicks landed away from the drawn tip.
+        let (cursor_slot, pointer_content_w) = timer_pointer_slot.get();
+        let cursor_fit_w = if pointer_content_w > 0.0 {
+            pointer_content_w
+        } else {
+            timer_primary.fit().w
+        };
+        // The SHAPE comes from whichever slot the guest has its plane on ([`cursor::shape_slot`]) —
+        // routinely not the slot the pointer is over — while the SCALE stays the pointer's own
+        // window's, because that is where the sprite is drawn.
+        let (cur, guest_w, shape_slot) = {
             let s = shared.lock().unwrap();
+            let visible: Vec<bool> = s.slots.iter().map(|sl| sl.cursor.visible).collect();
+            let shape_slot = cursor::shape_slot(cursor_slot, &visible);
+            let c = s.slots[shape_slot].cursor;
             (
-                (
-                    s.cursor_gen,
-                    s.cursor_visible,
-                    s.cursor_id,
-                    s.cursor_w,
-                    s.cursor_h,
-                    s.hot_x,
-                    s.hot_y,
-                ),
-                s.width,
+                (c.gen, c.visible, c.id, c.w, c.h, c.hot_x, c.hot_y),
+                s.slots[cursor_slot].width,
+                shape_slot,
             )
         };
-        let scale_key = cursor::cursor_scale_key(timer_fit.get().w, guest_w);
+        let scale_key = cursor::cursor_scale_key(cursor_fit_w, guest_w);
         let scale_moved = built_cursor.get().is_some_and(|(_, k)| k != scale_key);
-        if cur.0 != last_cursor_gen.get() || scale_moved {
-            last_cursor_gen.set(cur.0);
-            apply_cursor(&timer_cursor, &built_cursor, &cur, &surface_map, scale_key);
+        if (shape_slot, cur.0) != last_cursor_gen.get() || scale_moved {
+            // Only on success: a build that failed leaves the pointer blank, and marking the
+            // generation done would keep it that way until the guest next changed shape.
+            if apply_cursor(&timer_cursor, &built_cursor, &cur, &surface_map, scale_key) {
+                last_cursor_gen.set((shape_slot, cur.0));
+            }
         }
         // Pointer-capture cursor: while captured, composite the guest cursor at its reported
-        // position (the host NSCursor is hidden then). Position moves every frame, so unlike the
-        // shape this runs every tick, not gated on `cursor_gen`.
-        update_capture_cursor(
-            &timer_cursor_layer,
-            &timer_captured,
-            &shared,
-            &timer_surface_map,
-        );
-        // And the strip's copy of it, on the same terms as the strip's copy of the picture: the
-        // band is a different window, so a cursor composited only into the carrier's layer is
-        // clipped out of existence there. Only while the strip exists — this creates the layer.
-        if timer_overlay_cursor.has_strip() {
-            update_capture_cursor(
-                &timer_overlay_cursor.strip_cursor_layer(),
-                &timer_captured,
-                &shared,
-                &timer_surface_map,
-            );
+        // position (the host NSCursor is hidden then). Position moves every frame, so unlike
+        // the shape this runs every tick, not gated on `cursor_gen`. Every window draws its
+        // OWN slot, never the pointer's — see `GuestWindows::update_capture_cursors`.
+        timer_windows
+            .borrow()
+            .update_capture_cursors(&timer_captured, &shared, &timer_surface_map);
+
+        // PROBE (edge-trace only): can the macOS fullscreen menu-bar reveal be OBSERVED?
+        // The band's stand-down currently fires on our own push gesture, macOS's reveal fires
+        // on its own — two thresholds estimating one intent, and the user stops pushing at
+        // whichever fires first (macOS's). If either signal below tracks the actual reveal,
+        // the band can be slaved to it instead of estimated. Logged on transition only.
+        if capture_tap::edge_trace() {
+            use std::cell::Cell;
+            thread_local! {
+                static MENUBAR_LAST: Cell<(bool, i32, i32)> = const { Cell::new((false, -1, -1)) };
+            }
+            let vis = objc2_app_kit::NSMenu::menuBarVisible(mtm);
+            let gaps: Vec<i32> = objc2_app_kit::NSScreen::screens(mtm)
+                .iter()
+                .map(|s| {
+                    let f = s.frame();
+                    let v = s.visibleFrame();
+                    ((f.origin.y + f.size.height) - (v.origin.y + v.size.height)) as i32
+                })
+                .collect();
+            let g0 = gaps.first().copied().unwrap_or(-1);
+            let g1 = gaps.get(1).copied().unwrap_or(-1);
+            let now = (vis, g0, g1);
+            MENUBAR_LAST.with(|c| {
+                if c.get() != now {
+                    c.set(now);
+                    eprintln!(
+                        "[MENUBAR] t={:.1} visible={vis} top_gaps={gaps:?}",
+                        capture_tap::trace_ms()
+                    );
+                }
+            });
+        }
+
+        // Chrome ask, slaved to the OBSERVED macOS menu bar: macOS's fullscreen reveal and
+        // our band stand-down judge the same push, and two independent thresholds meant the
+        // user stopped pushing at whichever fired first (macOS's) with the strip still up —
+        // covering the very band the revealed menu bar lives in on a notched panel. See
+        // `InputState::menubar_observed`.
+        timer_input.menubar_observed(objc2_app_kit::NSMenu::menuBarVisible(mtm), &timer_view);
+
+        // Everything from here to the frame apply serves a guest, so none of it runs without
+        // one ([`speaks_for_a_guest`]): a parked or resuming window has a dead worker behind it,
+        // and acting for it means seizing the pointer nothing can use, hiding the cursor over a
+        // still frame, and probing a device that is gone.
+        if speaks_for_a_guest(PARK_STATE.with(|p| p.get())) {
+            // The captured cursor follows the guest (`window/echo.rs`): re-base the estimate onto
+            // the slot and pixel the guest's cursor echo names, then — once the last position we
+            // sent has had time to echo back — compare and warn on a readable disagreement.
+            timer_input.follow_guest_echo(&timer_view);
+            // …and once the hand pauses, the park follows the cursor onto that panel
+            // (`InputState::repark_if_quiescent`), so swipes act where the user is looking.
+            timer_input.repark_if_quiescent(&timer_view);
+            timer_input.verify_guest_echo();
+            // The blank the captured host pointer wears is advisory — AppKit resets the cursor from
+            // its own rects, and while the tap consumes motion no event comes back for us to answer
+            // with. This is where a stripped wear (a second, static pointer on top of the guest's)
+            // is noticed and put back.
+            timer_input.verify_captured_wear();
+            // Going fullscreen, or a panel joining a session that is already fullscreen ("Use Other
+            // Screens When Fullscreen"), hands the guest the pointer. Neither arrives as an event
+            // the tap sees, and the second happens while the user is still in a macOS menu — so it
+            // is polled here, where the window facts are already being read.
+            timer_input.grab_on_screen_gain(&timer_view, timer_grab_enabled);
+            // Sweep the absolute device to learn each display's share of it, rather than waiting
+            // for the user to cross the seam by accident. Grabbed or not: the mapping is the
+            // uncaptured pointer's, so it should be known before the pointer first needs it.
+            timer_input.probe_mapping(&timer_view);
         }
 
         // Frame apply: normally event-driven (dispatch from the reader thread); this is
@@ -3200,6 +3530,68 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
+
+    /// Cross-BATCH order is as load-bearing as in-batch order: a migration cycle's settle
+    /// (CONNECTOR_DOWN_SETTLE) parks its batch mid-flight, and a batch spawned for a later
+    /// event (a second migration, a dynamic-mode resize) must not overtake it — the guest
+    /// would apply the earlier replug LAST and keep a stale identity nothing repairs. One
+    /// sender queue serializes them.
+    #[test]
+    fn display_batches_reach_the_wire_in_submission_order() {
+        use std::io::Read;
+        let path =
+            std::env::temp_dir().join(format!("limina-dispsend-order-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let cyc = |id: u32, up: bool| {
+            limina_displayctl::DisplayCommand::Display(limina_displayctl::DisplayControl {
+                display_id: id,
+                connected: Some(up),
+                ..Default::default()
+            })
+        };
+        let (a1, a2, b1) = (cyc(0, false), cyc(0, true), cyc(1, true));
+        let expected = [a1.to_wire(), a2.to_wire(), b1.to_wire()];
+        // Batch A parks in the unplug settle; batch B is submitted while A sleeps.
+        super::send_display_commands(&path, vec![a1, a2]);
+        super::send_display_commands(&path, vec![b1]);
+        let mut lines = Vec::new();
+        for _ in 0..3 {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut s = String::new();
+            conn.read_to_string(&mut s).unwrap();
+            lines.push(s.trim().to_string());
+        }
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(lines, expected, "a later batch overtook an in-flight cycle");
+    }
+
+    /// The Displays menu's tag must survive the row list shifting under an open menu: the
+    /// render timer republishes DISPLAY_MENU on hotplug, and a click routed by INDEX would
+    /// land on whichever row slid into that position — switching the wrong display. Identity
+    /// tags find the same display, or nothing once it is gone.
+    #[test]
+    fn a_menu_click_survives_the_rows_shifting_under_it() {
+        let row = |panel: u64, name: &str| super::DisplayMenuRow {
+            panel,
+            name: name.into(),
+            enabled: true,
+            primary: false,
+        };
+        let before = [row(10, "a"), row(20, "b"), row(0x8000_0000_0000_0003, "c")];
+        // The user opens the menu over "c" (its tag bakes in the panel key)...
+        let tag = before[2].panel as isize;
+        // ...panel "b" unplugs before the click, shifting the list.
+        let after = [row(10, "a"), row(0x8000_0000_0000_0003, "c")];
+        let hit = super::menu_row_for_tag(&after, tag).expect("the display is still attached");
+        assert_eq!(
+            hit.name, "c",
+            "the click must land on the display the user aimed at"
+        );
+        // The display itself unplugging means the click lands on nothing, never a neighbour.
+        let gone = [row(10, "a"), row(20, "b")];
+        assert!(super::menu_row_for_tag(&gone, tag).is_none());
+    }
     use super::*;
 
     /// A migration cycle is an unplug followed by a replug, and inverting them leaves the guest
@@ -3219,6 +3611,7 @@ mod tests {
 
         let host = hostdisplay::HostDisplay {
             size: (2560, 1440),
+            logical: (2560, 1440),
             edid: limina_displayctl::EdidSpec {
                 serial: 0xFEED_FACE,
                 name: "Test Panel".into(),
@@ -3227,7 +3620,7 @@ mod tests {
         };
         send_display_commands(
             &path,
-            hostdisplay::migration_commands(&host, true, hostdisplay::HotplugPolicy::Cycle),
+            hostdisplay::migration_commands(&host, true, hostdisplay::HotplugPolicy::Cycle, 0),
         );
 
         // One connection per command; the order they arrive in is the whole assertion.
@@ -3286,6 +3679,42 @@ mod tests {
         // No resume channel = parking would strand the window (the play click could never
         // respawn a worker) — always quit.
         assert!(!should_park_on_suspend(false, false, false));
+    }
+
+    #[test]
+    fn a_window_with_no_worker_behind_it_speaks_for_no_guest() {
+        // Rig 2026-08-22: a suspended VM's window took the pointer and hid it on every visit to
+        // its Space — `grab_on_screen_gain` fires because a parked fullscreen window really does
+        // gain the screen, and its refusal chain never asked whether there is a guest to serve.
+        // The tap and the NSEvent monitor both stand down while parked; the tick did not.
+        assert!(speaks_for_a_guest(ParkPhase::Live));
+        assert!(!speaks_for_a_guest(ParkPhase::Parked));
+        // Resuming is the half the obvious test would miss: `parked()` is already false there,
+        // and the trace shows the grabs continuing right through it — the fresh worker has not
+        // presented, so there is still nothing behind the window.
+        assert!(!speaks_for_a_guest(ParkPhase::Resuming));
+    }
+
+    #[test]
+    fn the_resuming_overlay_comes_down_on_the_fresh_workers_first_frame() {
+        // Rig 2026-08-22: the arrangement came back but "Resuming…" stayed up. The dismissal
+        // was `frames > <the count at the play click>` on the premise that the counter survives
+        // the worker swap — which stopped being true when the swap started clearing the slots,
+        // so the fresh worker had to out-present the whole previous session before its own
+        // first frame counted. The epoch is what actually separates the two workers.
+        //
+        // args: (worker_epoch, epoch_at_click, frames)
+        assert!(
+            resume_first_frame(4, 3, 1),
+            "a frame from a worker swapped in after the click IS the first fresh frame"
+        );
+        assert!(
+            !resume_first_frame(4, 3, 0),
+            "the fresh worker has not presented yet"
+        );
+        // Pre-swap: the counter still belongs to the worker that was suspended, however
+        // large it is — nothing about it says the resume has produced a pixel.
+        assert!(!resume_first_frame(3, 3, 9_000));
     }
 
     #[test]

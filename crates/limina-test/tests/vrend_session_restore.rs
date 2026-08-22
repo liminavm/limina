@@ -129,6 +129,14 @@ fn classic_vrend_world_survives_snapshot_restore() {
     // bracket must not double-trigger the in-guest suspend.
     std::env::set_var("LIMINA_GPU_TRACE", "1");
     std::env::set_var("LIMINA_BRACKET_NO_BUTTON", "1");
+    // The firmware→OS handover ("guest OS driver took the GPU over", first GET_EDID) logs at
+    // debug in the device; the phase assertion below waits for it in the restore leg's log.
+    // This is a capture-mode boot — the supervisor never parses the display control channel
+    // here, so the worker-side line is the only observable for the handover.
+    std::env::set_var(
+        "RUST_LOG",
+        "info,krun_devices::virtio::gpu::virtio_gpu=debug",
+    );
 
     // --- Guest 1: seated desktop (compositor on classic vrend), snapshot-armed ---
     let cfg1 = devices(base_cfg.clone())
@@ -300,6 +308,41 @@ fn classic_vrend_world_survives_snapshot_restore() {
         boot_id_after, boot_id,
         "boot_id changed across restore — the guest rebooted instead of resuming"
     );
+
+    // Phase handover: a fresh worker starts with `guest_driver_seen` false and only the
+    // guest's first GET_EDID reports the firmware→OS handover — the signal the supervisor's
+    // display table waits for before arranging displays (the displays.rs "known gap": stuck
+    // at Firmware, a restored guest is held to slot 0 until it reboots). A restored guest's
+    // driver probed its connectors long ago and re-probes only if nudged, so the restore path
+    // must re-elicit the handover.
+    if let Err(e) =
+        g2.wait_for_supervisor_log("took the GPU over from firmware", Duration::from_secs(60))
+    {
+        // Forensics: keep the whole restore-leg supervisor log (the scratch dir dies with the
+        // guest) and count the handover chain's tracer lines so the failure names the broken
+        // link — nudge queued (limina-vmm info), config-change serviced, GET_EDID reached the
+        // device (krun_devices debug), handover line sent.
+        let log = g2.supervisor_log();
+        let keep =
+            std::env::temp_dir().join(format!("limina-vrend-phase-{}.log", std::process::id()));
+        let _ = std::fs::write(&keep, &log);
+        eprintln!("restore-leg supervisor log kept at {}", keep.display());
+        for needle in [
+            "restore: injecting",
+            "display update",
+            "config change",
+            "GetEdid",
+            "took the GPU over",
+            "guestdriver",
+        ] {
+            eprintln!("needle {needle:?}: {} hits", log.matches(needle).count());
+        }
+        cleanup();
+        panic!(
+            "restored supervisor never saw the guestdriver handover — display phase stuck at Firmware: {e}"
+        );
+    }
+    eprintln!("restore leg: guestdriver handover re-arrived");
 
     // A healthy idle desktop is GPU-SILENT (submits=+0 proves nothing either way), so
     // stimulate real compositing through the restored world: launch a fresh app in the

@@ -82,6 +82,8 @@ pub mod msg_type {
     pub const MEM_PRESSURE: u8 = 7;
     /// Host → guest authoritative wallclock (guest-clock sync across host sleep/restore).
     pub const TIME_SYNC: u8 = 8;
+    /// Guest → host monitor arrangement (M15 multi-display pointer mapping).
+    pub const DISPLAY_LAYOUT: u8 = 9;
     pub const CLIP_OFFER: u8 = 16;
     pub const CLIP_REQUEST: u8 = 17;
     pub const CLIP_DATA: u8 = 18;
@@ -117,6 +119,42 @@ pub struct Heartbeat {
     /// Monotonic per-connection sequence number.
     #[n(0)]
     pub seq: u64,
+}
+
+/// One guest monitor, as the guest's own compositor has it arranged.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
+pub struct GuestMonitor {
+    /// The DRM connector name, e.g. `Virtual-1`. This is what ties the monitor back to a
+    /// scanout: the guest's virtio-gpu driver names connector N+1 for scanout N.
+    #[n(0)]
+    pub connector: String,
+    /// Position in the guest's desktop, in its own logical coordinates.
+    #[n(1)]
+    pub x: i32,
+    #[n(2)]
+    pub y: i32,
+    /// Size in the same logical coordinates.
+    #[n(3)]
+    pub width: u32,
+    #[n(4)]
+    pub height: u32,
+}
+
+/// Guest → host monitor arrangement.
+///
+/// The host cannot infer this. A guest's compositor lays its monitors out however it likes —
+/// its own default, or whatever the user arranged and it saved — and an absolute pointing
+/// device is spread across that whole arrangement. Without knowing it, the host can only
+/// assume, and an assumption that disagrees puts the pointer on the wrong monitor: measured
+/// 2026-08-18, a guest rearranged to match the host became exactly transposed from the
+/// slot-order default.
+///
+/// Sent whenever the arrangement changes. Enhanced-tier only; a guest without an agent leaves
+/// the host on its assumed layout, which is the documented degraded floor.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
+pub struct DisplayLayout {
+    #[n(0)]
+    pub monitors: Vec<GuestMonitor>,
 }
 
 /// Guest → host memory-pressure report for the M6 PSI autoballoon policy. Sent on an interval over
@@ -303,6 +341,7 @@ pub enum Message {
     Welcome(Welcome),
     Heartbeat(Heartbeat),
     MemPressure(MemPressure),
+    DisplayLayout(DisplayLayout),
     TimeSync(TimeSync),
     Shutdown(Shutdown),
     /// Empty payload: acknowledges a [`Shutdown`]; the guest powers off right after.
@@ -326,6 +365,7 @@ impl Message {
             Message::Welcome(_) => msg_type::WELCOME,
             Message::Heartbeat(_) => msg_type::HEARTBEAT,
             Message::MemPressure(_) => msg_type::MEM_PRESSURE,
+            Message::DisplayLayout(_) => msg_type::DISPLAY_LAYOUT,
             Message::TimeSync(_) => msg_type::TIME_SYNC,
             Message::Shutdown(_) => msg_type::SHUTDOWN,
             Message::ShutdownAck => msg_type::SHUTDOWN_ACK,
@@ -356,6 +396,7 @@ impl Message {
             Message::Welcome(m) => cbor(m),
             Message::Heartbeat(m) => cbor(m),
             Message::MemPressure(m) => cbor(m),
+            Message::DisplayLayout(m) => cbor(m),
             Message::TimeSync(m) => cbor(m),
             Message::Shutdown(m) => cbor(m),
             Message::ShutdownAck => Ok(Vec::new()),
@@ -380,6 +421,7 @@ impl Message {
             msg_type::TIME_SYNC => Message::TimeSync(cbor(&payload)?),
             msg_type::SHUTDOWN => Message::Shutdown(cbor(&payload)?),
             msg_type::SHUTDOWN_ACK => Message::ShutdownAck,
+            msg_type::DISPLAY_LAYOUT => Message::DisplayLayout(cbor(&payload)?),
             msg_type::CLIP_OFFER => Message::ClipOffer(cbor(&payload)?),
             msg_type::CLIP_REQUEST => Message::ClipRequest(cbor(&payload)?),
             msg_type::CLIP_DATA => Message::ClipData(cbor(&payload)?),

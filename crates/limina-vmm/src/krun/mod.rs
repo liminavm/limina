@@ -288,8 +288,24 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
     );
     vmr.set_gpu_virgl_flags(flags);
     vmr.set_gpu_software_2d(software_2d);
+    // Slot 0 is the display the guest boots on. The rest of the pool exists only so a display
+    // can be *added* later without rebuilding the device — `num_scanouts` is config-space state
+    // read once by the driver — so they boot disconnected: the guest sees the connectors, reports
+    // them unplugged, and hands us a slot to fill whenever limina pushes an identity and connects
+    // it. A pool of 1 produces exactly the device we shipped before this existed.
     vmr.displays
         .push(DisplayInfo::new(display.width, display.height));
+    for _ in 1..display.pool {
+        let mut spare = DisplayInfo::new(display.width, display.height);
+        spare.connected = false;
+        vmr.displays.push(spare);
+    }
+    log::info!(
+        "virtio-gpu displays: {} scanout(s), slot 0 connected at {}x{}",
+        display.pool,
+        display.width,
+        display.height
+    );
 
     vmr.display_backend = Some(match &display.sink {
         DisplaySink::CapturePng(png_path) => limina_display::capture_backend(CaptureConfig {
@@ -733,6 +749,27 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     if spec.restore_file.is_some() {
         log::info!("restore: injecting guest wake (KEY_WAKEUP) to resume from s2idle");
         crate::wake::pulse();
+        // Display re-probe nudge. A restored guest's driver is long past its boot-time
+        // connector probe, so nothing would ever make it re-issue GET_EDID into this fresh
+        // device — and the first GET_EDID is what reports the firmware→OS handover the
+        // supervisor's display table waits for (its "known gap": a fresh supervisor held the
+        // restored guest to slot 0 until reboot). An empty update rides the runtime-resize
+        // path: the GPU worker raises a display-event config-change, the woken guest re-reads
+        // display info and re-reads every EDID, and the handover re-fires. Queued HERE, after
+        // the GIC restore — an interrupt raised during device-state restore is wiped by the
+        // GIC state restored after it (measured: the nudge from the GPU worker's staged-replay
+        // branch never reached the guest).
+        match vmm.lock().unwrap().gpu_resize_handle() {
+            Some(handle) => {
+                handle.update(devices::virtio::DisplayUpdate {
+                    display_id: 0,
+                    ..Default::default()
+                });
+            }
+            None => log::warn!(
+                "restore: no GPU resize handle; the display phase handover cannot be re-elicited"
+            ),
+        }
     }
 
     // Keep the Vmm alive for the lifetime of the event loop.

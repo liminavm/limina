@@ -198,6 +198,17 @@ fn allocation_burst_survives_inflated_balloon() {
             );
             let _ = conn.send(&Message::MemPressure(report));
         }
+        // Liveness FIRST, output SECOND — the order is the correctness. A dead process's
+        // final output is already on disk (exit flushes before pgrep can miss it), so a
+        // liveness read followed by an output read yields a consistent verdict; the reverse
+        // order reads the output early, lets the allocator finish in the gap, then finds the
+        // process gone and calls a completed burst "died" (it did, once, on a suite run
+        // whose burst.out plainly ended in BURST-OK). The bracketed pgrep pattern keeps it
+        // from matching the ssh-spawned shell whose own command line carries the pattern
+        // (the self-match once made a dead allocator look alive forever).
+        let alive = guest
+            .ssh_exec("pgrep -f '[b]urst.py' | head -1")
+            .unwrap_or_default();
         let out = guest
             .ssh_exec("cat /tmp/burst.out 2>/dev/null")
             .unwrap_or_default();
@@ -205,13 +216,8 @@ fn allocation_burst_survives_inflated_balloon() {
             verdict = "ok".into();
             break;
         }
-        // The allocator process vanished without its verdict = it was killed. The bracketed
-        // pattern keeps pgrep from matching the ssh-spawned shell whose own command line
-        // carries the pattern (the self-match once made a dead allocator look alive forever).
-        let alive = guest
-            .ssh_exec("pgrep -f '[b]urst.py' | head -1")
-            .unwrap_or_default();
-        if alive.trim().is_empty() && !out.contains("BURST-OK") {
+        // The allocator process vanished without its verdict = it was killed.
+        if alive.trim().is_empty() {
             verdict = "died".into();
             break;
         }

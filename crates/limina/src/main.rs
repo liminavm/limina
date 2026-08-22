@@ -193,6 +193,14 @@ struct Cli {
     #[arg(long, default_value = "1280x800")]
     display_size: String,
 
+    /// How many virtio-gpu scanouts to configure (1..=16). `num_scanouts` is device-config
+    /// state the guest driver reads once at probe, so every display a VM may *ever* be given
+    /// has to exist from boot: slot 0 boots connected, the rest boot disconnected and wait to
+    /// be given an identity. 1 is the single-display device limina has always built.
+    /// Falls back to `LIMINA_DISPLAY_POOL` so the spike scripts can drive it.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=16))]
+    display_pool: Option<u32>,
+
     /// What resolution the guest display is driven to (windowed boots only): `host` (default)
     /// follows the screen the window is on, letterboxing the window as needed — fullscreen
     /// needs no modeset; `dynamic` makes the guest follow the window (drag-end resize, and
@@ -1011,6 +1019,9 @@ fn cli_from_definition(
         // Dynamic-mode first-boot fallback only; the real initial size is derived per
         // display mode (and remembered state) in run_vm's windowed branch.
         display_size: "1280x800".into(),
+        // Managed VMs do not size the pool yet; that becomes a `vm.toml` setting with the slot
+        // model. `LIMINA_DISPLAY_POOL` still reaches it, which is what the spikes drive.
+        display_pool: None,
         display_resolution: ov.display_resolution.unwrap_or(cfg.display.resolution),
         window_state_file: window.then(|| bundle.state_toml()),
         display_control_socket: None,
@@ -1256,6 +1267,12 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     } else {
         None
     };
+    // Which FIDO transport this run serves — never both, or the guest ends up with two
+    // authenticators sharing one store (two Touch ID sheets per ceremony, two credentials per
+    // registration). The USB gadget wins wherever the controller is on, because every guest has
+    // it; the control plane withholds the `fido` capability accordingly, which is what keeps the
+    // agent from raising its uhid device (see `control::welcome_caps`).
+    let usb_fido_gadget = usb && fido_store.is_some();
 
     // Fingerprint reader template store (M14 wave 3): the single enrolled `user_id`, persisted next
     // to state.toml so it survives boots. `Some` only where a Touch ID sensor is present (or the
@@ -1286,7 +1303,12 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             tmpsock::own(&path);
             path
         });
-        match control::ControlPlane::start(&socket, balloon_policy, fido_store.clone()) {
+        match control::ControlPlane::start(
+            &socket,
+            balloon_policy,
+            fido_store.clone(),
+            usb_fido_gadget,
+        ) {
             Ok(cp) => {
                 args.push("--vsock-port".into());
                 args.push(limina_proto::CONTROL_PORT.to_string());
@@ -1449,6 +1471,23 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         None
     };
 
+    // The scanout pool belongs to the DEVICE, so it is pushed here — above the windowed branch,
+    // which returns, and above the capture branch. It has been placed inside each of those in
+    // turn, and each time the other path silently booted at a pool of 1.
+    // A windowed VM defaults to a pool of four, because the slots have to exist before a panel
+    // can be given one: `num_scanouts` is read once at probe, so a display cannot be added to a
+    // running device. An idle slot costs nothing measurable (`spikes/scanout-pool/RESULTS.md`
+    // measured 1/4/8 against the same guest), and a guest sees the spares as inert disconnected
+    // connectors. Capture runs stay at one — they have no host panels to mirror.
+    let pool = cli
+        .display_pool
+        .or_else(display_pool_from_env)
+        .unwrap_or(if cli.window { 4 } else { 1 });
+    if pool > 1 {
+        args.push("--display-pool".into());
+        args.push(pool.to_string());
+    }
+
     // Windowed mode: open a native window in the supervisor and stream the guest scanout
     // from the worker over a control socketpair (the worker publishes shared IOSurfaces).
     if cli.window {
@@ -1531,6 +1570,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                 (w.round() as u32, h.round() as u32)
             });
         return session::run_windowed(session::SessionConfig {
+            display_pool: pool,
             hidpi,
             notch,
             edge_resistance,
@@ -1656,6 +1696,21 @@ fn initial_display_size(
         Host => screen_points.unwrap_or(fallback),
         Dynamic => remembered.unwrap_or(fallback),
         Fixed(w, h) => (w, h),
+    }
+}
+
+/// `LIMINA_DISPLAY_POOL`, the env fallback for `--display-pool`. It exists so the spike and boot
+/// scripts, which drive the whole stack through environment variables, can size the pool without
+/// each of them growing a pass-through flag. Out-of-range values warn and fall back rather than
+/// fail: this is a debugging knob, and a typo in it must not stop a VM from booting.
+fn display_pool_from_env() -> Option<u32> {
+    let raw = std::env::var("LIMINA_DISPLAY_POOL").ok()?;
+    match raw.trim().parse::<u32>() {
+        Ok(n) if (1..=16).contains(&n) => Some(n),
+        _ => {
+            log::warn!("LIMINA_DISPLAY_POOL={raw:?} is not 1..=16; using the default pool");
+            None
+        }
     }
 }
 

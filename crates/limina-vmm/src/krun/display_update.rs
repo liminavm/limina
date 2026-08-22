@@ -26,6 +26,7 @@ pub fn display_update_from(control: DisplayControl) -> DisplayUpdate {
     DisplayUpdate {
         display_id: control.display_id,
         size: control.size,
+        position: control.position,
         edid: control.edid.map(edid_params_from),
         connected: control.connected,
     }
@@ -156,12 +157,14 @@ mod tests {
         let update = display_update_from(DisplayControl {
             display_id: 1,
             size: Some((1512, 982)),
+            position: Some((2048, 0)),
             connected: Some(true),
             edid: Some(spec()),
         });
 
         assert_eq!(update.display_id, 1);
         assert_eq!(update.size, Some((1512, 982)));
+        assert_eq!(update.position, Some((2048, 0)));
         assert_eq!(update.connected, Some(true));
         let params = update.edid.expect("edid");
         assert_eq!(params.refresh_rate, 120);
