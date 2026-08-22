@@ -231,6 +231,102 @@ buffers on a transition to keep its scanout alive; a compositor that does so is 
 bug that no longer exists. The cap is a memory bound on client transients, not a budget guests
 share. History: `spikes/scanout-blob-freeze/RESULTS.md`.
 
+### More than one display
+
+The guest may have several connectors, so every line of the worker→supervisor present protocol
+names the **pool slot** it belongs to: `surface <id0> <id1> <w> <h> [<scanout>]`,
+`frame <id> [<scanout>]`, and `scanoutgone <scanout>` when a connector goes away. The field is
+optional on read and absent means slot 0, so an *old* trace still parses; the worker always
+writes it, so a new single-display trace carries a trailing `0` on every line.
+
+Two structural facts follow from virtio-gpu itself and shape everything above:
+
+- **`num_scanouts` is device-config state read once at probe**, so a display cannot be added to a
+  running device. Every display a VM may ever show exists from boot as a **disconnected** scanout
+  (`--display-pool`, `LIMINA_DISPLAY_POOL`), and "adding a display" is connecting one of those.
+- **Connector status is one bool** (`DisplayControl { connected }`), and the EDID *is* the mode
+  list. So identity, mode and presence are all pushes on a slot that already exists.
+
+The device and both compositors were never the constraint here: an idle pool is inert, and a spare
+slot connects at runtime into a real second monitor — **on the stock tier too**, with Fedora's own
+kernel and no limina components. Multi-display needs no agent, no custom kernel and no venus.
+Measurements: `spikes/scanout-pool/RESULTS.md`.
+
+#### A panel owns a slot, and the pool is arranged in two phases
+
+**The slot index IS the connector name.** The guest driver creates its outputs in index order at
+probe (`third_party/linux/drivers/gpu/drm/virtio/virtgpu_display.c:284`), so scanout *i* is
+`Virtual-(i+1)` for the life of the boot. mutter identifies a monitor by connector **and**
+vendor/product/serial together (`meta_monitor_spec_equals`,
+`third_party/mutter/src/backends/meta-monitor.c:141`), so the same panel arriving on a different
+slot is a *different* monitor with its own saved arrangement — exactly as moving a real display
+from DP-1 to DP-2 would be. Slots are therefore assigned per host panel, first-come lowest-free,
+and persisted per VM (`display_slots` in the VM state), so the guest sees the same monitors on the
+same connectors every run. The primary window follows its panel's slot; every other connected slot
+gets its own window, slot 0 included — no index is permanently special.
+
+That collides with the firmware, which can only paint head 0: edk2's `VirtioGpuDxe` hardcodes it
+(`OvmfPkg/VirtioGpuDxe/Gop.c:66,447,480`). So the pool is arranged in two phases, and the
+boundary is **observed, not declared**: firmware never issues `VIRTIO_GPU_CMD_GET_EDID`, and every
+Linux connector probe does, so the first one is an unambiguous "the OS driver has the GPU". The
+device reports it to the display backend (`krun_display_guest_driver_ready_fn`) and the supervisor
+sees a `guestdriver` line. Before it, slot 0 is the only connector touched; after it, the whole
+pool is arrangeable. This needs nothing from the guest — no agent, no custom kernel — so it holds
+on the stock tier by construction. A guest reboot returns to the firmware phase (libkrun is
+single-shot: the worker is torn down and the fresh one starts in firmware); an in-process resume
+does not, because the restored guest's driver is already up.
+
+**Who picks a connector's resolution.** The display mode (`host` / `dynamic` / a fixed size) is
+the *window's* policy and reaches only the connector the window is on: `host` drives the guest to
+that panel, `dynamic` and fixed push the window's own content size instead. Every other connector
+is driven to its panel's full size regardless of mode — its window fills that panel and cannot be
+resized, so nothing else would ever set it, and a sizeless connect leaves the guest advertising a
+stale preferred mode with a physical size derived from it. The rule lives in
+`hostdisplay::drives_size`.
+
+**Per-monitor configuration survives the cycle**, which is what the per-panel slot assignment
+exists to buy. Measured on the two-panel rig, dynamic mode: an arrangement set while fullscreen
+across both panels comes back on the next fullscreen *and* across a full VM restart, mutter
+matching its saved `monitors.xml` entry on connector plus the panel's real vendor/product/serial.
+
+**Switching a display off.** A slot carries the user's standing intent (`enabled`) as well as the
+guest's current state (`connected`), and the planner ANDs them — so the Displays menu's rows are
+the same connector cycle as an unplug, planned in the same place. Intent is keyed on the **panel**
+and persisted as `display_disabled`, because it has to outlive the assignment: an unplugged panel
+has no slot to carry the decision. The menu lists every attached panel rather than every assigned
+slot (a panel earns a connector only when something wants to show it), and the row for the panel
+the window is on is checked and dead.
+
+Not done yet:
+
+- **The cursor.** The guest's cursor commands name a scanout
+  (`virtio_gpu_cursor_pos.scanout_id`) but libkrun's display C ABI drops it, so the sprite rides
+  the primary window; plumbing it is a fork ABI change.
+- **Keyboard reaches the guest through the primary window only.** A secondary is never made key
+  — one that took key focus would swallow every keystroke while still showing pixels — so the
+  keyboard has one owner. The *pointer* is per-display: each window resolves to the slot it shows
+  and maps into that display's share of the absolute range through the guest's own layout
+  report (`window/arrangement.rs`).
+- **A covered panel outranks everything on it.** The cover window is borderless above
+  `NSMainMenuWindowLevel`, so while the VM is fullscreen that panel's menu bar and Dock are
+  unreachable and there is no reveal gesture for them — the primary's chrome ask serves the
+  primary's panel only. macOS's own fullscreen at least reveals the menu bar on a top-edge push;
+  this does not.
+- **The guest's arrangement is known only when the guest reports it.** `limina-agent-session`
+  reports the compositor's own logical rects (enhanced tier) and the pointer maps through them:
+  measured 2026-08-18 with a BenQ at guest scale 1.25 beside a built-in at 2.0, a full sweep of
+  each window covered its own display edge to edge (0..2047 of 2048, and 4..1512 of 1512) with
+  no overshoot. A stock guest reports nothing and the host does not guess: each window maps onto
+  the whole range, exact for one display and the documented stock floor for two
+  (`docs/input-and-windows.md` §3).
+- **User-defined virtual displays.** `SlotSource::Virtual` is a placeholder: the slot model
+  accepts one, but nothing constructs it and it carries no `EdidSpec` yet, so there is no
+  "Add virtual display…" row.
+- ~~A VM resumed into a fresh supervisor process is held to one connector~~ — fixed: the
+  restore path queues an empty display update after the GIC restore, whose config-change makes
+  the restored guest re-read every EDID and re-fire the firmware→OS handover
+  (`limina-vmm/src/krun/mod.rs`; regression-covered in `vrend_session_restore`).
+
 ### Format modifiers
 
 KK implements `VK_EXT_image_drm_format_modifier` for real, LINEAR-only, over the
