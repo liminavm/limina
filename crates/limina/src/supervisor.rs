@@ -24,7 +24,7 @@
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -320,6 +320,7 @@ pub struct Spawned {
 /// announce-once-per-open rule fall out for free on reboot and resume.
 pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     install_signal_handlers()?;
+    install_panic_kill_hook();
     let mut cmd = Command::new(&spec.vmm_bin);
     cmd.args(&spec.args).process_group(0);
 
@@ -376,7 +377,38 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     // The worker holds its own copy now; dropping ours means the broker's reader sees EOF
     // when the worker exits, which is how a reboot relaunch unblocks the old reader thread.
     drop(spice_worker);
+    WORKER_PID.store(child.id() as i32, Ordering::Release);
     Ok(Spawned { child, spice_host })
+}
+
+/// The live worker's pid — the leader of its own process group — for the panic hook. Zero
+/// when no worker is running; cleared by [`monitor`] the moment the child is reaped, so a
+/// recycled pid can never be mistaken for ours.
+static WORKER_PID: AtomicI32 = AtomicI32::new(0);
+static PANIC_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// Make a supervisor panic take the VM down with it. The worker runs in its own process group
+/// (so it survives a supervisor *relaunch*), which means a supervisor that merely panics
+/// leaves a headless, orphaned guest running. The pointer stack asserts its invariants with
+/// `assert!` on purpose — a crash is the loud, early signal wanted there — so a crash has to
+/// mean the whole VM, not a ghost. Runs the default hook first (message + backtrace), then
+/// SIGKILLs the worker's process group, then aborts: a panicking non-main thread must not
+/// leave the window limping on without the invariant that just failed.
+fn install_panic_kill_hook() {
+    if PANIC_HOOK_INSTALLED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default(info);
+        let pid = WORKER_PID.swap(0, Ordering::AcqRel);
+        if pid > 0 {
+            eprintln!("limina: supervisor panic — killing the VM worker (process group {pid})");
+            // SAFETY: plain signal send to the process group we spawned and still own.
+            unsafe { libc::kill(-pid, libc::SIGKILL) };
+        }
+        std::process::abort();
+    }));
 }
 
 /// Monitor an already-spawned worker until it exits, honoring the stop signal and grace
@@ -524,6 +556,8 @@ pub fn run(
 }
 
 fn report_exit(status: ExitStatus) -> i32 {
+    // The child is reaped: its pid may be recycled, so the panic hook must forget it.
+    WORKER_PID.store(0, Ordering::Release);
     if let Some(code) = status.code() {
         if code == 0 {
             log::info!("VM powered off cleanly (worker exit 0)");

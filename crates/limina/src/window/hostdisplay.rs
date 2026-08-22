@@ -17,9 +17,27 @@
 //! screen; the AppKit/CoreGraphics reads are the thin part.
 
 use super::fit;
+use crate::vmlib::schema::DisplayResolution;
 use limina_displayctl::{DisplayCommand, DisplayControl, EdidSpec, RangeSpec};
-use objc2_app_kit::NSScreen;
-use objc2_foundation::{NSNumber, NSString};
+use objc2_app_kit::{NSScreen, NSWindow};
+use objc2_foundation::{NSNumber, NSPoint, NSRect, NSString};
+
+// CoreGraphics (already linked): the arrangement queries the pointer assertions are judged
+// against. Points are CG global (top-left origin of the main display).
+extern "C" {
+    fn CGMainDisplayID() -> u32;
+    fn CGDisplayBounds(display: u32) -> NSRect;
+    fn CGGetActiveDisplayList(max_displays: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGGetDisplaysWithPoint(
+        point: NSPoint,
+        max_displays: u32,
+        displays: *mut u32,
+        matching: *mut u32,
+    ) -> i32;
+}
+
+/// The most displays any arrangement query asks about.
+const MAX_DISPLAYS: usize = 8;
 
 /// Vendor id limina stamps on the displays it synthesizes.
 const LIMINA_VENDOR: [u8; 3] = *b"LMN";
@@ -40,6 +58,10 @@ const BLANKING_VERTICAL: u32 = 50;
 pub struct HostDisplay {
     /// The guest resolution this display implies (screen frame, in points).
     pub size: (u32, u32),
+    /// The predicted guest-*logical* size of the monitor: the usable frame in points (`size`
+    /// before the backing scale). What the arrangement relay lays the desktop out in — see
+    /// `super::arrangement` for why logical, and why prediction.
+    pub logical: (u32, u32),
     /// The EDID to advertise for it.
     pub edid: EdidSpec,
 }
@@ -143,11 +165,61 @@ impl HotplugPolicy {
 ///
 /// It still has to be *sent*: the EDID is where the refresh and the VRR range descriptor live, so
 /// a guest that never receives this can never drive variable refresh.
-pub fn adjustment_command(host: &HostDisplay, drives_size: bool) -> DisplayCommand {
+pub fn adjustment_command(
+    host: &HostDisplay,
+    drives_size: bool,
+    display_id: u32,
+) -> DisplayCommand {
     DisplayCommand::Display(DisplayControl {
-        display_id: 0,
+        display_id,
         size: drives_size.then_some(host.size),
+        position: None,
         connected: None,
+        edid: Some(host.edid.clone()),
+    })
+}
+
+/// Plug a connector in, carrying this display's whole identity.
+///
+/// The arriving half of a connector cycle, and the whole of a slot handover: when a panel's own
+/// slot comes up it comes up already knowing what it is, so the guest's compositor recognizes the
+/// monitor and applies that monitor's remembered configuration on the first probe. The EDID rides
+/// the *connect* and never the disconnect — a connector that comes back still advertising the old
+/// identity is exactly the staleness the cycle exists to avoid.
+/// Whether a push to this slot should carry a size — i.e. whether limina picks the guest's
+/// resolution for that connector, or leaves the guest to keep whatever it has.
+///
+/// For the **window's own panel** this is the display mode: `host` drives the guest to the
+/// panel; `dynamic` and a fixed size are the *window's* to decide, and the resize path pushes
+/// them from the window's content size instead.
+///
+/// For **every other panel** it is unconditionally true. Those connectors are shown by a
+/// borderless window that fills its panel and that the user cannot resize, so nothing else will
+/// ever set their size — and a connect that carries none leaves the guest advertising a stale
+/// preferred mode. Measured on the two-panel rig 2026-08-18, dynamic mode: the built-in's
+/// connector kept the 1800×1176 the *window* had been before fullscreen, so its EDID described a
+/// 1800 px panel at the built-in's real 254 DPI and GNOME named the monitor `LMN 8"`. mutter
+/// still picked the native 3024×1960 from the mode list, so the picture was right — but a guest
+/// with no saved configuration takes the preferred mode, and that one was wrong.
+pub fn drives_size(mode: DisplayResolution, is_window_panel: bool) -> bool {
+    !is_window_panel || mode == DisplayResolution::Host
+}
+
+/// `position` is the arrangement relay's guest-desktop suggestion for this connector
+/// (`super::arrangement`): riding the connect keeps the hotplug the guest sees atomic — the
+/// probe that discovers the monitor already finds its suggested offset in place, instead of
+/// racing a second config-change against mutter building the new layout.
+pub fn connect_command(
+    host: &HostDisplay,
+    drives_size: bool,
+    display_id: u32,
+    position: Option<(u32, u32)>,
+) -> DisplayCommand {
+    DisplayCommand::Display(DisplayControl {
+        display_id,
+        size: drives_size.then_some(host.size),
+        position,
+        connected: Some(true),
         edid: Some(host.edid.clone()),
     })
 }
@@ -156,10 +228,12 @@ pub fn migration_commands(
     host: &HostDisplay,
     drives_size: bool,
     policy: HotplugPolicy,
+    display_id: u32,
 ) -> Vec<DisplayCommand> {
     let arrive = DisplayControl {
-        display_id: 0,
+        display_id,
         size: drives_size.then_some(host.size),
+        position: None,
         connected: matches!(policy, HotplugPolicy::Cycle).then_some(true),
         edid: Some(host.edid.clone()),
     };
@@ -169,7 +243,7 @@ pub fn migration_commands(
         // still advertising the old EDID is the stale case we are trying to avoid.
         HotplugPolicy::Cycle => vec![
             DisplayCommand::Display(DisplayControl {
-                display_id: 0,
+                display_id,
                 connected: Some(false),
                 ..DisplayControl::default()
             }),
@@ -298,6 +372,39 @@ pub fn identity_key_of(screen: &NSScreen) -> u64 {
     describe(screen, fit::Scale::new(1.0, false), 0.0).identity_key()
 }
 
+/// Describe an attached panel by its [`panel_key`], for the displays the *window* is not on.
+///
+/// Those have no window to read a backing scale from, so they take their own, and they are
+/// described in their own device pixels — a display the guest owns outright gets all of it.
+///
+/// The notch policy still reaches them, because a secondary panel can be the notched built-in.
+/// Its window is borderless and above menu-bar level, which is the one thing macOS lets draw
+/// beside the camera housing, so `extend` needs no carrier here and the guest is simply given
+/// the whole panel. Under `avoid` the housing band is withheld from the *mode*, so the guest is
+/// already the height its window will be and entering fullscreen never modesets — the same
+/// reason [`describe`] takes the inset at all. `None` if the panel is no longer attached.
+pub fn describe_panel(
+    panel: u64,
+    notch: crate::vmlib::schema::NotchPolicy,
+    mtm: objc2::MainThreadMarker,
+) -> Option<HostDisplay> {
+    NSScreen::screens(mtm)
+        .iter()
+        .find(|s| panel_key(s) == panel)
+        .map(|s| {
+            let scale = fit::Scale::new(s.backingScaleFactor(), true);
+            // The same figure the primary's own fullscreen uses, deliberately: a panel's guest
+            // mode must not change when it switches between being the window's and being a
+            // secondary, or the guest would save a second configuration for it and re-arrange
+            // the desktop every time the window moved.
+            let inset = match notch {
+                crate::vmlib::schema::NotchPolicy::Avoid => fullscreen_inset(&s),
+                crate::vmlib::schema::NotchPolicy::Extend => 0.0,
+            };
+            describe(&s, scale, inset)
+        })
+}
+
 pub fn describe(screen: &NSScreen, scale: fit::Scale, notch_inset: f64) -> HostDisplay {
     let frame = screen.frame().size;
     let (usable_w, usable_h) = fit::usable_content(frame.width, frame.height, notch_inset);
@@ -317,6 +424,7 @@ pub fn describe(screen: &NSScreen, scale: fit::Scale, notch_inset: f64) -> HostD
     let (product_id, serial) = identity_from(vendor_number, model_number, serial_number, &name);
 
     HostDisplay {
+        logical: points,
         edid: EdidSpec {
             refresh_hz,
             dpi: dpi_from(points.0, millimeters_wide, backing),
@@ -476,6 +584,76 @@ pub(crate) fn display_id_of(screen: &NSScreen) -> u32 {
         .unwrap_or(0)
 }
 
+/// Every display containing this CG global point. Mirrored displays answer together, so a
+/// membership test is always "contains", never "equals". Empty means the point is nowhere the
+/// cursor can actually be — `CGWarpMouseCursorPosition` does not fail there, it silently clamps
+/// into the display union, which is how a "just past this edge" target lands on a neighbour.
+pub(crate) fn displays_at(p: NSPoint) -> Vec<u32> {
+    let mut ids = [0u32; MAX_DISPLAYS];
+    let mut matching: u32 = 0;
+    // SAFETY: plain CoreGraphics query writing at most MAX_DISPLAYS ids into our buffer.
+    unsafe {
+        CGGetDisplaysWithPoint(p, MAX_DISPLAYS as u32, ids.as_mut_ptr(), &mut matching);
+    }
+    ids[..(matching as usize).min(MAX_DISPLAYS)].to_vec()
+}
+
+/// The active displays with their CG global bounds — the arrangement, for assertion dumps.
+pub(crate) fn active_displays() -> Vec<(u32, NSRect)> {
+    let mut ids = [0u32; MAX_DISPLAYS];
+    let mut count: u32 = 0;
+    // SAFETY: plain CoreGraphics queries, bounded by our buffer.
+    unsafe {
+        CGGetActiveDisplayList(MAX_DISPLAYS as u32, ids.as_mut_ptr(), &mut count);
+        ids[..(count as usize).min(MAX_DISPLAYS)]
+            .iter()
+            .map(|&id| (id, CGDisplayBounds(id)))
+            .collect()
+    }
+}
+
+/// The displays a window's frame intersects — the set a point "inside this window" may
+/// legitimately land on. A window straddling a seam covers two; `NSWindow::screen` names only
+/// the majority one, which is why the assertions take the set and not the screen.
+pub(crate) fn displays_under_window(window: &NSWindow) -> Vec<u32> {
+    let f = window.frame();
+    // NS screen coordinates share the main display's origin with CG but grow upward.
+    // SAFETY: plain CoreGraphics query.
+    let main_h = unsafe { CGDisplayBounds(CGMainDisplayID()) }.size.height;
+    let (fx0, fx1) = (f.origin.x, f.origin.x + f.size.width);
+    let (fy0, fy1) = (main_h - (f.origin.y + f.size.height), main_h - f.origin.y);
+    active_displays()
+        .into_iter()
+        .filter(|(_, b)| {
+            let (bx0, bx1) = (b.origin.x, b.origin.x + b.size.width);
+            let (by0, by1) = (b.origin.y, b.origin.y + b.size.height);
+            fx0 < bx1 && bx0 < fx1 && fy0 < by1 && by0 < fy1
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// The arrangement as one line, for assertion messages: `id@x,y WxH` per active display, the
+/// main display first.
+pub(crate) fn describe_arrangement() -> String {
+    // SAFETY: plain CoreGraphics query.
+    let main = unsafe { CGMainDisplayID() };
+    active_displays()
+        .iter()
+        .map(|(id, b)| {
+            format!(
+                "{id}{}@{:.0},{:.0} {:.0}x{:.0}",
+                if *id == main { "(main)" } else { "" },
+                b.origin.x,
+                b.origin.y,
+                b.size.width,
+                b.size.height
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
 /// A cache key for a physical panel that **survives a hotplug**.
 ///
 /// `CGDirectDisplayID` does not: macOS reassigns ids when the arrangement changes, so a cache
@@ -555,8 +733,35 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 mod tests {
     use super::*;
 
+    /// The window's own panel follows the display mode: match-host drives the guest, dynamic and
+    /// fixed leave the resolution to the window.
+    #[test]
+    fn the_window_s_panel_is_driven_only_in_match_host_mode() {
+        assert!(drives_size(DisplayResolution::Host, true));
+        assert!(!drives_size(DisplayResolution::Dynamic, true));
+        assert!(!drives_size(DisplayResolution::Fixed(1600, 1000), true));
+    }
+
+    /// Any other panel is driven whatever the mode, because its window fills that panel and
+    /// nothing else ever sets its size. Without this the connector kept a stale preferred mode —
+    /// the size the *window* happened to have — and described the wrong physical panel with it.
+    #[test]
+    fn a_panel_the_window_is_not_on_is_always_driven_to_its_own_size() {
+        for mode in [
+            DisplayResolution::Host,
+            DisplayResolution::Dynamic,
+            DisplayResolution::Fixed(1600, 1000),
+        ] {
+            assert!(
+                drives_size(mode, false),
+                "{mode:?} left a secondary sizeless"
+            );
+        }
+    }
+
     fn host() -> HostDisplay {
         HostDisplay {
+            logical: (1512, 982),
             size: (2560, 1440),
             edid: EdidSpec {
                 refresh_hz: 60,
@@ -583,8 +788,13 @@ mod tests {
     /// Measured in `spikes/display-identity-hotplug/`.
     #[test]
     fn a_cycle_takes_the_connector_down_then_back_up_with_the_new_edid() {
-        let commands = migration_commands(&host(), true, HotplugPolicy::Cycle);
+        let commands = migration_commands(&host(), true, HotplugPolicy::Cycle, 2);
         assert_eq!(commands.len(), 2, "a cycle is exactly two commands");
+        assert!(
+            commands.iter().all(|c| control(c).display_id == 2),
+            "both halves address the same connector — a cycle that unplugged one slot and \
+             plugged another would be two events, not one migration"
+        );
 
         let down = control(&commands[0]);
         assert_eq!(down.connected, Some(false), "the first command unplugs");
@@ -610,7 +820,7 @@ mod tests {
     /// verified end-to-end by dragging a dynamic-mode VM between two physical displays.
     #[test]
     fn a_cycle_that_does_not_drive_the_size_still_replugs_with_the_identity() {
-        let commands = migration_commands(&host(), false, HotplugPolicy::Cycle);
+        let commands = migration_commands(&host(), false, HotplugPolicy::Cycle, 0);
         assert_eq!(commands.len(), 2);
         let up = control(&commands[1]);
         assert_eq!(up.connected, Some(true));
@@ -625,7 +835,7 @@ mod tests {
     /// still the cheaper event for a guest that re-reads an in-place change.
     #[test]
     fn in_place_stays_a_single_command_that_never_touches_connectivity() {
-        let commands = migration_commands(&host(), true, HotplugPolicy::InPlace);
+        let commands = migration_commands(&host(), true, HotplugPolicy::InPlace, 0);
         assert_eq!(commands.len(), 1);
         let only = control(&commands[0]);
         assert_eq!(only.connected, None);
@@ -773,6 +983,7 @@ mod tests {
     fn the_identity_key_distinguishes_same_sized_displays() {
         let make = |serial: u32| HostDisplay {
             size: (1920, 1080),
+            logical: (1920, 1080),
             edid: EdidSpec {
                 serial,
                 ..EdidSpec::default()
@@ -815,6 +1026,7 @@ mod tests {
     fn identity_travels_in_every_mode_but_size_only_in_host_mode() {
         let host = HostDisplay {
             size: (1512, 982),
+            logical: (1512, 982),
             edid: EdidSpec {
                 serial: 42,
                 name: "Built-in".into(),
@@ -824,7 +1036,7 @@ mod tests {
 
         // Under either policy the arriving display is described by the LAST command.
         for policy in [HotplugPolicy::Cycle, HotplugPolicy::InPlace] {
-            let commands = migration_commands(&host, true, policy);
+            let commands = migration_commands(&host, true, policy, 0);
             let host_mode = control(commands.last().expect("a command"));
             assert_eq!(host_mode.size, Some((1512, 982)), "{policy:?}");
             assert_eq!(
@@ -835,7 +1047,7 @@ mod tests {
 
             // Dynamic/fixed: the guest's resolution is theirs to decide, but it still must
             // learn which display it is on.
-            let commands = migration_commands(&host, false, policy);
+            let commands = migration_commands(&host, false, policy, 0);
             let other_mode = control(commands.last().expect("a command"));
             assert_eq!(
                 other_mode.size, None,
@@ -854,6 +1066,7 @@ mod tests {
     fn a_refresh_change_is_an_adjustment_not_a_different_panel() {
         let make = |refresh_hz: u32| HostDisplay {
             size: (1512, 982),
+            logical: (1512, 982),
             edid: EdidSpec {
                 serial: 9,
                 refresh_hz,
@@ -882,6 +1095,7 @@ mod tests {
     fn a_different_panel_changes_the_identity() {
         let make = |serial: u32| HostDisplay {
             size: (1512, 982),
+            logical: (1512, 982),
             edid: EdidSpec {
                 serial,
                 refresh_hz: 60,
@@ -894,7 +1108,7 @@ mod tests {
     /// An adjustment is the cheap event: same panel, so the connector never goes down.
     #[test]
     fn an_adjustment_carries_the_edid_without_touching_connectivity() {
-        let command = adjustment_command(&host(), true);
+        let command = adjustment_command(&host(), true, 0);
         let adjusted = control(&command);
         assert_eq!(
             adjusted.connected, None,
@@ -907,7 +1121,7 @@ mod tests {
         );
 
         // The modes that don't drive the guest's resolution still push the EDID alone.
-        let sizeless = adjustment_command(&host(), false);
+        let sizeless = adjustment_command(&host(), false, 0);
         assert!(control(&sizeless).size.is_none());
         assert!(control(&sizeless).edid.is_some());
     }

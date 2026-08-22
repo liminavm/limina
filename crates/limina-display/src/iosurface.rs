@@ -10,10 +10,23 @@
 //! plain fd carrying a tiny line protocol:
 //!
 //! ```text
-//! surface <id> <id1> <width> <height>   # a new scanout ring is available (id resolved via Mach)
-//! frame <id>                            # the surface id to show now
-//! cursor <id> <w> <h> <hot_x> <hot_y>   # a new cursor image
+//! surface <id> <id1> <width> <height> [<scanout>]  # a new scanout ring (id resolved via Mach)
+//! frame <id> [<scanout>]                           # the surface id to show now
+//! cursor <id> <w> <h> <hot_x> <hot_y> [<scanout>] # a new cursor image
+//! cursormove <x> <y> [<scanout>]                   # where to draw it
+//! cursorhide [<scanout>]                           # that scanout has no cursor
 //! ```
+//!
+//! The trailing `<scanout>` names the pool slot the line belongs to — a guest with several
+//! connectors presents into each independently, and the supervisor routes each slot to its own
+//! window. It is optional on the wire and absent means slot 0, so a single-display log reads
+//! exactly as it always did.
+//!
+//! The cursor lines carry it too, and there it is not a nicety: a guest enables its hardware
+//! cursor plane on only the CRTC the pointer is on and disables the others, so the scanout id
+//! is the *entire* signal for which display should show the sprite. Without it every cursor
+//! landed on slot 0's window — the pointer would be on the second display, hit-testing
+//! correctly, while its sprite was drawn on the first.
 //!
 //! Each scanout/cursor IOSurface is created NON-global and handed to the supervisor over a
 //! Mach port (`limina-surfaceport`), keyed by its `IOSurfaceGetID` — so the supervisor resolves
@@ -66,15 +79,33 @@ pub struct WindowConfig {
 /// a guest ever presents well above the display refresh.
 const SURFACE_RING: usize = 3;
 
+/// How many scanouts the backend will track. `VIRTIO_GPU_MAX_SCANOUTS` is the device's own
+/// ceiling and `krun_add_display` enforces it, so a slot at or above this is a malformed guest
+/// command rather than a configuration we could honour. Slots cost nothing until configured:
+/// an unused one is a `None`.
+pub const MAX_SCANOUTS: usize = 16;
+
 /// A display backend that publishes guest scanouts as shared IOSurfaces.
+///
+/// One entry per pool slot: the guest's connectors are independent displays, each with its own
+/// mode, framebuffer and surface ring, and each present names the slot it belongs to so the
+/// supervisor can route it to the right window.
 pub struct WindowBackend {
     control: Option<File>,
-    scanout: Option<Scanout>,
+    scanouts: [Option<Scanout>; MAX_SCANOUTS],
     next_frame_id: u32,
     presents: u64,
-    /// The current hardware-cursor IOSurface (kept retained so the supervisor can look it up
-    /// before we replace it on the next shape change). `None` when the cursor is hidden.
-    cursor: Option<CFRetained<IOSurfaceRef>>,
+    /// The current hardware-cursor IOSurface **per slot** (kept retained so the supervisor can
+    /// look it up before we replace it on the next shape change). `None` where that slot's
+    /// cursor is hidden.
+    ///
+    /// Per slot because the guest's cursor plane moves between connectors: it enables the plane
+    /// on the display the pointer is on and hides it on the others, so a pointer crossing
+    /// displays is a `cursor` on one slot and a `cursorhide` on another, back and forth. A
+    /// single retain made each of those drop the *other* slot's just-published surface, leaving
+    /// its lifetime to the supervisor's bounded store — the same class as the scanout-ring
+    /// eviction that froze a display, and a non-global surface cannot be recovered once gone.
+    cursor: [Option<CFRetained<IOSurfaceRef>>; MAX_SCANOUTS],
     /// Mach-port channel to the supervisor: each scanout/cursor surface is handed over by its
     /// (opaque, non-resolvable) `IOSurfaceGetID` so the supervisor resolves ids without
     /// `IOSurfaceLookup`. `None` ⇒ legacy global surfaces (no receiver name configured).
@@ -147,15 +178,25 @@ impl DisplayBackendNew<WindowConfig> for WindowBackend {
         }
         WindowBackend {
             control,
-            scanout: None,
+            scanouts: [const { None }; MAX_SCANOUTS],
             next_frame_id: 0,
             presents: 0,
-            cursor: None,
+            cursor: [const { None }; MAX_SCANOUTS],
             // No receiver ⇒ surfaces must stay global or the supervisor can't resolve them.
             also_global: also_global || sender.is_none(),
             sender,
         }
     }
+}
+
+/// Validate a guest-supplied scanout id as a pool slot. The bound is the device's own
+/// `VIRTIO_GPU_MAX_SCANOUTS`; anything past it is a malformed command, not a display we could
+/// grow into.
+fn slot_of(scanout_id: u32) -> Result<usize, DisplayBackendError> {
+    let slot = scanout_id as usize;
+    (slot < MAX_SCANOUTS)
+        .then_some(slot)
+        .ok_or(DisplayBackendError::InvalidScanoutId)
 }
 
 impl WindowBackend {
@@ -188,15 +229,13 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         height: u32,
         format: ResourceFormat,
     ) -> Result<(), DisplayBackendError> {
-        if scanout_id != 0 {
-            return Err(DisplayBackendError::InvalidScanoutId);
-        }
+        let slot = slot_of(scanout_id)?;
         // Reuse the existing surfaces on a same-geometry remodeset. A real guest (Fedora:
         // simpledrm → plymouth → GDM) reconfigures the scanout many times at the same mode;
         // reallocating fresh global IOSurfaces each time would churn their ids and free
         // surfaces out from under the supervisor's pending lookups. Keeping them stable
         // makes the steady state a no-op and avoids that race.
-        if let Some(s) = self.scanout.as_mut() {
+        if let Some(s) = self.scanouts[slot].as_mut() {
             if s.width == width && s.height == height && s.format == format {
                 // Same mode: keep the surfaces, but force the next present to repaint the
                 // whole frame (the guest just re-declared the scanout; play it safe).
@@ -217,7 +256,9 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
             );
         }
         let ids: Vec<u32> = surfaces.iter().map(|s| IOSurfaceGetID(s)).collect();
-        log::info!("window: scanout 0 -> IOSurfaces {ids:?} ({width}x{height} {format:?})");
+        log::info!(
+            "window: scanout {scanout_id} -> IOSurfaces {ids:?} ({width}x{height} {format:?})"
+        );
         // Hand each ring surface to the supervisor over the Mach channel, keyed by its id, BEFORE
         // the `surface` line announces them — so the supervisor can resolve the ids without a
         // global IOSurfaceLookup.
@@ -228,8 +269,9 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         // The supervisor looks surfaces up lazily by id (one IOSurfaceLookup per `frame <id>`),
         // so the protocol still only needs to name the initial buffer; the rest are discovered
         // as they're shown. Keep the two-id shape for wire compatibility (id1 is ignored).
-        let id1 = ids.get(1).copied().unwrap_or(ids[0]);
-        self.scanout = Some(Scanout {
+        let id0 = ids[0];
+        let id1 = ids.get(1).copied().unwrap_or(id0);
+        self.scanouts[slot] = Some(Scanout {
             width,
             height,
             format,
@@ -240,16 +282,22 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
             idx: 0,
             needs_full: true,
         });
-        let id0 = self.scanout.as_ref().unwrap().ids[0];
-        self.send(&format!("surface {id0} {id1} {width} {height}"));
+        self.send(&format!(
+            "surface {id0} {id1} {width} {height} {scanout_id}"
+        ));
         Ok(())
     }
 
     fn disable_scanout(&mut self, scanout_id: u32) -> Result<(), DisplayBackendError> {
-        if scanout_id != 0 {
-            return Err(DisplayBackendError::InvalidScanoutId);
-        }
-        self.scanout = None;
+        let slot = slot_of(scanout_id)?;
+        self.scanouts[slot] = None;
+        // Tell the supervisor the slot has no scanout, so the window presenting it can go away.
+        // Without this a disconnected display would keep its window up showing the last frame
+        // forever — the guest never presents to it again, so nothing else would ever say so.
+        // Slot 0 sees this during ordinary modeset churn (simpledrm → plymouth → GDM each
+        // disable then reconfigure), which is why it clears the frame rather than closing a
+        // window: the announcement that follows brings it straight back.
+        self.send(&format!("scanoutgone {scanout_id}"));
         Ok(())
     }
 
@@ -264,12 +312,10 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         iosurface_id: u32,
         _rect: Option<&Rect>,
     ) -> Result<(), DisplayBackendError> {
-        if scanout_id != 0 {
-            return Err(DisplayBackendError::InvalidScanoutId);
-        }
+        slot_of(scanout_id)?;
         self.presents += 1;
         red_probe(iosurface_id, self.presents);
-        self.send(&format!("frame {iosurface_id}"));
+        self.send(&format!("frame {iosurface_id} {scanout_id}"));
         Ok(())
     }
 
@@ -296,11 +342,21 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         Ok(())
     }
 
+    /// The guest's OS driver has taken the device over from boot firmware.
+    ///
+    /// It matters because the two drivers do not agree about scanouts. EDK2's virtio-gpu GOP
+    /// driver programs head 0 and nothing else (`OvmfPkg/VirtioGpuDxe/Gop.c`), so slot 0 must be
+    /// the connected one for as long as firmware is drawing — GRUB included. Linux enumerates
+    /// every scanout and follows connector hotplug, so from here the supervisor is free to give
+    /// each host panel its own slot. Anything that arranges displays has to wait for this line.
+    fn guest_driver_ready(&mut self) -> Result<(), DisplayBackendError> {
+        self.send("guestdriver");
+        Ok(())
+    }
+
     fn alloc_frame(&mut self, scanout_id: u32) -> Result<(u32, &mut [u8]), DisplayBackendError> {
-        let scanout = self
-            .scanout
+        let scanout = self.scanouts[slot_of(scanout_id)?]
             .as_mut()
-            .filter(|_| scanout_id == 0)
             .ok_or(DisplayBackendError::InvalidScanoutId)?;
         let frame_id = self.next_frame_id;
         self.next_frame_id = self.next_frame_id.wrapping_add(1);
@@ -313,12 +369,9 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         _frame_id: u32,
         rect: Option<&Rect>,
     ) -> Result<(), DisplayBackendError> {
-        if scanout_id != 0 {
-            return Err(DisplayBackendError::InvalidScanoutId);
-        }
+        let slot = slot_of(scanout_id)?;
         // Take the scanout out so we can write the surface and call &mut self.send().
-        let mut scanout = self
-            .scanout
+        let mut scanout = self.scanouts[slot]
             .take()
             .ok_or(DisplayBackendError::InvalidScanoutId)?;
 
@@ -359,13 +412,14 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         copy_canvas_into_surface(&scanout.surfaces[i], &scanout.canvas, width, height);
         let show_id = scanout.ids[i];
         self.presents += 1;
-        self.scanout = Some(scanout);
-        self.send(&format!("frame {show_id}"));
+        self.scanouts[slot] = Some(scanout);
+        self.send(&format!("frame {show_id} {scanout_id}"));
         Ok(())
     }
 
     fn set_cursor(
         &mut self,
+        scanout_id: u32,
         width: u32,
         height: u32,
         hot_x: u32,
@@ -378,8 +432,10 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
             .checked_mul(height as usize)
             .and_then(|px| px.checked_mul(4));
         let Some(need) = need.filter(|&n| n > 0 && buffer.len() >= n) else {
-            self.cursor = None;
-            self.send("cursorhide");
+            if let Some(slot) = self.cursor.get_mut(scanout_id as usize) {
+                *slot = None;
+            }
+            self.send(&format!("cursorhide {scanout_id}"));
             return Ok(());
         };
 
@@ -398,17 +454,24 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         }
         copy_canvas_into_surface(&surface, &canvas, width, height);
 
-        self.cursor = Some(surface);
-        self.send(&format!("cursor {id} {width} {height} {hot_x} {hot_y}"));
+        if let Some(slot) = self.cursor.get_mut(scanout_id as usize) {
+            *slot = Some(surface);
+        }
+        self.send(&format!(
+            "cursor {id} {width} {height} {hot_x} {hot_y} {scanout_id}"
+        ));
         Ok(())
     }
 
-    fn move_cursor(&mut self, x: u32, y: u32) -> Result<(), DisplayBackendError> {
+    fn move_cursor(&mut self, scanout_id: u32, x: u32, y: u32) -> Result<(), DisplayBackendError> {
         // The virtio wire field is u32, but a cursor whose hotspot hangs past the scanout's
         // left/top edge is legitimately negative — the guest kernel casts (e.g. -2 arrives as
         // 4294967294). Recover the signed value before forwarding, so the supervisor draws the
         // sprite partially off-edge instead of dropping the position.
-        self.send(&format!("cursormove {} {}", x as i32, y as i32));
+        self.send(&format!(
+            "cursormove {} {} {scanout_id}",
+            x as i32, y as i32
+        ));
         Ok(())
     }
 }
@@ -634,6 +697,120 @@ unsafe fn cfnum(v: i32) -> Option<CFRetained<CFNumber>> {
 mod tests {
     use super::*;
 
+    /// A backend whose control channel is a temp file, so a test can read the exact wire lines
+    /// it emitted. The file *is* the protocol as the supervisor sees it — asserting on the
+    /// backend's internal state instead would prove nothing about what got routed.
+    fn backend_with_wire() -> (WindowBackend, std::path::PathBuf) {
+        use std::os::fd::AsRawFd;
+        let path = std::env::temp_dir().join(format!(
+            "limina-wire-{}-{:?}.txt",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let file = File::create(&path).expect("wire file");
+        let backend = WindowBackend::new(Some(&WindowConfig {
+            control_fd: file.as_raw_fd(),
+            surface_port_name: None,
+        }));
+        (backend, path)
+    }
+
+    fn wire(path: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(path)
+            .expect("wire file")
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn every_pool_slot_can_be_configured_and_presented() {
+        // The scanout pool's whole point: a slot above 0 is a real display. Until the pool
+        // landed the backend answered InvalidScanoutId for every slot but 0, so a guest driving
+        // a second monitor got ErrInvalidScanoutId once per frame and nothing was ever shown
+        // (measured on a live guest — spikes/scanout-pool/RESULTS.md).
+        let (mut b, path) = backend_with_wire();
+        for slot in [0u32, 1, MAX_SCANOUTS as u32 - 1] {
+            b.configure_scanout(slot, 64, 32, 64, 32, ResourceFormat::BGRX)
+                .unwrap_or_else(|e| panic!("configure_scanout({slot}) rejected: {e:?}"));
+            let (_id, staging) = b
+                .alloc_frame(slot)
+                .unwrap_or_else(|e| panic!("alloc_frame({slot}) rejected: {e:?}"));
+            staging[0] = slot as u8;
+            b.present_frame(slot, 0, None)
+                .unwrap_or_else(|e| panic!("present_frame({slot}) rejected: {e:?}"));
+        }
+
+        // Every line names its slot, so the supervisor can route it to the right window.
+        let lines = wire(&path);
+        for slot in [0u32, 1, MAX_SCANOUTS as u32 - 1] {
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l.starts_with("surface ") && l.ends_with(&format!(" {slot}"))),
+                "no `surface … {slot}` line in {lines:?}"
+            );
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l.starts_with("frame ") && l.ends_with(&format!(" {slot}"))),
+                "no `frame … {slot}` line in {lines:?}"
+            );
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn slots_keep_their_own_framebuffers() {
+        // One shared `Scanout` would make the second slot's configure resize the first, and
+        // both slots would then present the same pixels — the failure that looks like "the
+        // second monitor mirrors the first".
+        let (mut b, path) = backend_with_wire();
+        b.configure_scanout(0, 64, 32, 64, 32, ResourceFormat::BGRX)
+            .expect("configure slot 0");
+        b.configure_scanout(1, 128, 64, 128, 64, ResourceFormat::BGRX)
+            .expect("configure slot 1");
+
+        let (_, s0) = b.alloc_frame(0).expect("alloc slot 0");
+        assert_eq!(s0.len(), 64 * 32 * 4, "slot 0's staging buffer was resized");
+        let (_, s1) = b.alloc_frame(1).expect("alloc slot 1");
+        assert_eq!(s1.len(), 128 * 64 * 4, "slot 1 has the wrong staging size");
+
+        // Disabling one slot leaves the other presentable.
+        b.disable_scanout(1).expect("disable slot 1");
+        assert!(
+            b.alloc_frame(1).is_err(),
+            "a disabled slot must not hand out a framebuffer"
+        );
+        b.alloc_frame(0).expect("slot 0 survives slot 1's disable");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_slot_past_the_pool_is_still_rejected() {
+        // The bound moved from 1 to MAX_SCANOUTS; it did not disappear. An out-of-range id is
+        // a malformed guest command and must stay an error rather than index off the array.
+        let (mut b, path) = backend_with_wire();
+        let over = MAX_SCANOUTS as u32;
+        assert!(matches!(
+            b.configure_scanout(over, 64, 32, 64, 32, ResourceFormat::BGRX),
+            Err(DisplayBackendError::InvalidScanoutId)
+        ));
+        assert!(matches!(
+            b.present_frame(over, 0, None),
+            Err(DisplayBackendError::InvalidScanoutId)
+        ));
+        assert!(matches!(
+            b.present_surface(over, 7, None),
+            Err(DisplayBackendError::InvalidScanoutId)
+        ));
+        assert!(matches!(
+            b.disable_scanout(over),
+            Err(DisplayBackendError::InvalidScanoutId)
+        ));
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn to_bgra_forces_opaque_and_orders_bgra() {
         // BGRX source [B,G,R,X] -> BGRA [B,G,R,255].
@@ -833,9 +1010,9 @@ mod tests {
             255, 255, 255, 255, /* (1,0) */ 0, 0, 0, 0, //
             /* (0,1) */ 0, 0, 0, 0, /* (1,1) */ 0, 0, 0, 0,
         ];
-        b.set_cursor(2, 2, 0, 0, ResourceFormat::BGRA, &data)
+        b.set_cursor(0, 2, 2, 0, 0, ResourceFormat::BGRA, &data)
             .unwrap();
-        let surf = b.cursor.as_ref().expect("cursor surface published");
+        let surf = b.cursor[0].as_ref().expect("cursor surface published");
         unsafe {
             IOSurfaceLock(surf, IOSurfaceLockOptions(0), ptr::null_mut());
             assert_eq!(px(surf, 0, 0), [255, 255, 255, 255]);
@@ -847,13 +1024,13 @@ mod tests {
     #[test]
     fn set_cursor_publishes_surface_then_hides() {
         let mut b = WindowBackend::new(None); // control_fd -1 → no channel, surface still made
-        assert!(b.cursor.is_none());
+        assert!(b.cursor[0].is_none());
 
         // A 2×2 BGRX cursor: pixel (x,y) = [x, y, 9, 0].
         let data = staging(2, 2, 9);
-        b.set_cursor(2, 2, 1, 1, ResourceFormat::BGRX, &data)
+        b.set_cursor(0, 2, 2, 1, 1, ResourceFormat::BGRX, &data)
             .unwrap();
-        let surf = b.cursor.as_ref().expect("cursor surface published");
+        let surf = b.cursor[0].as_ref().expect("cursor surface published");
         unsafe {
             IOSurfaceLock(surf, IOSurfaceLockOptions(0), ptr::null_mut());
             assert_eq!(px(surf, 0, 0), [0, 0, 9, 255]);
@@ -862,12 +1039,35 @@ mod tests {
         }
 
         // Zero size hides the cursor (and an empty buffer must not panic).
-        b.set_cursor(0, 0, 0, 0, ResourceFormat::BGRX, &[]).unwrap();
-        assert!(b.cursor.is_none());
-        // A too-small buffer is also treated as hide, not a panic.
-        b.set_cursor(4, 4, 0, 0, ResourceFormat::BGRX, &[0, 0, 0, 0])
+        b.set_cursor(0, 0, 0, 0, 0, ResourceFormat::BGRX, &[])
             .unwrap();
-        assert!(b.cursor.is_none());
+        assert!(b.cursor[0].is_none());
+        // A too-small buffer is also treated as hide, not a panic.
+        b.set_cursor(0, 4, 4, 0, 0, ResourceFormat::BGRX, &[0, 0, 0, 0])
+            .unwrap();
+        assert!(b.cursor[0].is_none());
+    }
+
+    /// A cursor crossing displays is a show on one slot and a hide on another, over and over.
+    /// One retain for the whole backend made each of those drop the other slot's surface, whose
+    /// only other reference is the supervisor's bounded store — and a non-global IOSurface that
+    /// falls out of it cannot be looked up again.
+    #[test]
+    fn each_slot_keeps_its_own_cursor_surface() {
+        let mut b = WindowBackend::new(None);
+        let data = staging(2, 2, 9);
+        b.set_cursor(0, 2, 2, 0, 0, ResourceFormat::BGRX, &data)
+            .unwrap();
+        b.set_cursor(1, 2, 2, 0, 0, ResourceFormat::BGRX, &data)
+            .unwrap();
+        assert!(b.cursor[0].is_some(), "slot 0 lost its surface to slot 1");
+        assert!(b.cursor[1].is_some());
+
+        // The pointer leaves slot 0: only slot 0's surface goes.
+        b.set_cursor(0, 0, 0, 0, 0, ResourceFormat::BGRX, &[])
+            .unwrap();
+        assert!(b.cursor[0].is_none());
+        assert!(b.cursor[1].is_some(), "hiding slot 0 dropped slot 1");
     }
 
     #[test]

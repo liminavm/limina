@@ -51,6 +51,9 @@ pub struct SessionConfig {
     /// Points of push needed to take the pointer out of a fullscreen guest
     /// (`[display] edge-resistance`; 0 disables).
     pub edge_resistance: f64,
+    /// Scanouts the worker was given (`--display-pool`): the ceiling on how many host panels
+    /// this VM can show. Fixed at boot — see [`window::WindowOptions::display_pool`].
+    pub display_pool: u32,
     /// Where to persist window state (the bundle's state.toml); None = no persistence.
     pub state_path: Option<PathBuf>,
     /// Remembered NSWindow frame to restore (screen points, Cocoa bottom-left origin).
@@ -234,6 +237,7 @@ pub struct WindowedSession {
     hidpi: bool,
     notch: crate::vmlib::schema::NotchPolicy,
     edge_resistance: f64,
+    display_pool: u32,
     state_path: Option<PathBuf>,
     restore_frame: Option<[f64; 4]>,
     fullscreen_display: Option<u64>,
@@ -278,6 +282,7 @@ impl WindowedSession {
             hidpi,
             notch,
             edge_resistance,
+            display_pool,
         } = config;
 
         // Close-to-suspend needs somewhere to persist the suspend and a snapshot path for the
@@ -485,6 +490,8 @@ impl WindowedSession {
                 // The fresh worker owns a fresh SPICE port; the old broker's reader is
                 // already unblocking on the dead worker's closed end.
                 attach_vdagent(monitor_control.as_ref(), next.spice_host);
+                // Before the reader starts, so the fresh worker's first lines survive it.
+                window::mark_worker_swapped(&monitor_shared, resuming);
                 window::spawn_reader(next.sup, monitor_shared.clone());
                 if resuming {
                     // The exit flags described the suspended (dead) worker; clear them AFTER
@@ -502,6 +509,7 @@ impl WindowedSession {
             hidpi,
             notch,
             edge_resistance,
+            display_pool,
             conn,
             shared,
             surface_map,
@@ -542,6 +550,7 @@ impl WindowedSession {
                 hidpi: self.hidpi,
                 notch: self.notch,
                 edge_resistance: self.edge_resistance,
+                display_pool: self.display_pool,
                 resize_socket: self.resize_socket,
                 remap: self.remap,
                 soft_kbd_grab: self.soft_kbd_grab,

@@ -37,10 +37,17 @@ pub(crate) fn update_capture_cursor(
     captured: &std::sync::atomic::AtomicBool,
     shared: &Arc<Mutex<Shared>>,
     surface_map: &SurfaceMap,
+    slot: usize,
 ) {
     use std::sync::atomic::Ordering;
     let hide = || {
         if !cursor_layer.isHidden() {
+            if super::capture_tap::edge_trace() {
+                eprintln!(
+                    "[CURSORLAYER] t={:.1} slot={slot} layer hides",
+                    super::capture_tap::trace_ms(),
+                );
+            }
             CATransaction::begin();
             CATransaction::setDisableActions(true);
             cursor_layer.setHidden(true);
@@ -51,19 +58,18 @@ pub(crate) fn update_capture_cursor(
         hide();
         return;
     }
-    let (visible, cid, cw, ch, hx, hy, px, py, sw, sh) = {
+    let (visible, cid, cw, ch, px, py, sw, sh) = {
         let s = shared.lock().unwrap();
+        let c = s.slots[slot].cursor;
         (
-            s.cursor_visible,
-            s.cursor_id,
-            s.cursor_w,
-            s.cursor_h,
-            s.hot_x,
-            s.hot_y,
-            s.cursor_pos_x,
-            s.cursor_pos_y,
-            s.width,
-            s.height,
+            c.visible,
+            c.id,
+            c.w,
+            c.h,
+            c.pos_x,
+            c.pos_y,
+            s.slots[slot].width,
+            s.slots[slot].height,
         )
     };
     let geom_ok = visible && sw > 0 && sh > 0 && cw > 0 && ch > 0;
@@ -90,11 +96,20 @@ pub(crate) fn update_capture_cursor(
     let scale_y = bounds.height / sh as f64;
     let w = cw as f64 * scale_x;
     let h = ch as f64 * scale_y;
-    // Image top-left in guest pixels = reported position minus the hotspot.
-    let left = (px - hx as i32) as f64 * scale_x;
-    let top = (py - hy as i32) as f64 * scale_y;
+    // The reported position IS the image's top-left: the guest kernel sends the cursor plane's
+    // `crtc_x/crtc_y` (pointer minus hotspot, virtgpu_plane.c) and the hotspot separately.
+    // Subtracting the hotspot here again drew the sprite hot_x/hot_y pixels up-left of where
+    // the guest has it, so every click landed "slightly right of the visual tip".
+    let left = f64::from(px) * scale_x;
+    let top = f64::from(py) * scale_y;
     // CALayer sublayers use a bottom-left origin; the guest reports a top-down y, so flip.
     let y = bounds.height - top - h;
+    if cursor_layer.isHidden() && super::capture_tap::edge_trace() {
+        eprintln!(
+            "[CURSORLAYER] t={:.1} slot={slot} layer shows at guest=({px},{py}) frame=({left:.0},{y:.0} {w:.0}x{h:.0})",
+            super::capture_tap::trace_ms(),
+        );
+    }
     let obj: &AnyObject = unsafe { &*(&*surface as *const IOSurfaceRef as *const AnyObject) };
     unsafe {
         CATransaction::begin();
@@ -130,25 +145,34 @@ pub(crate) fn cursor_scale_key(fit_w: f64, guest_w: u32) -> u32 {
 /// scale (`cursor_scale_key`) of the shape the host pointer already wears, so we only
 /// rebuild on an actual shape or scale change (the worker publishes each shape as a fresh
 /// IOSurface and keeps it alive until the next; the scale moves on a window resize).
+///
+/// Returns whether the state was applied. A shape we could not build is **not** applied: the
+/// caller keys its "already applied this generation" cache on the answer, so a transient
+/// failure is retried on the next tick instead of leaving the pointer blank until the guest
+/// happens to change shape again.
 pub(crate) fn apply_cursor(
     host: &input::HostCursor,
     built: &Cell<Option<(u32, u32)>>,
     cur: &(u64, bool, Option<u32>, u32, u32, u32, u32),
     surface_map: &SurfaceMap,
     scale_key: u32,
-) {
+) -> bool {
     let (_gen, visible, id, w, h, hot_x, hot_y) = *cur;
     match id {
         Some(id) if visible && w > 0 && h > 0 => {
             if built.get() == Some((id, scale_key)) {
-                return;
+                return true;
             }
             match build_guest_cursor(id, w, h, hot_x, hot_y, surface_map, scale_key) {
                 Some(c) => {
                     host.update(c, false);
                     built.set(Some((id, scale_key)));
+                    true
                 }
-                None => log::warn!("window: building guest cursor from IOSurface {id} failed"),
+                None => {
+                    log::warn!("window: building guest cursor from IOSurface {id} failed");
+                    false
+                }
             }
         }
         _ => {
@@ -159,8 +183,30 @@ pub(crate) fn apply_cursor(
                 built.set(None);
                 host.update(blank_cursor().unwrap_or_else(NSCursor::arrowCursor), true);
             }
+            true
         }
     }
+}
+
+/// Which slot's cursor shape the host pointer should wear.
+///
+/// The guest has ONE cursor and enables its plane on ONE CRTC, and **that need not be the slot
+/// the pointer is over**: while the absolute device's per-display shares are still being learned
+/// (`window/absfit.rs`), or whenever the two disagree at all, the guest's cursor is on a
+/// different display from the host pointer. Reading only the pointer's slot meant the
+/// `cursorhide` for the display the guest's cursor *left* dressed the host pointer in the blank
+/// while another slot was publishing a perfectly good shape — an invisible pointer, and no way
+/// to find it again except by toggling the grab (dogfood 2026-08-22, right after enabling "Use
+/// Other Screens When Fullscreen"). The blank is for the guest hiding its cursor *everywhere*,
+/// which is the only thing that means "no pointer".
+///
+/// The pointer's own slot still wins when it has one: a sprite straddling a seam lights two
+/// planes, and the one under the pointer is the one meant.
+pub(crate) fn shape_slot(pointer_slot: usize, visible: &[bool]) -> usize {
+    if visible.get(pointer_slot).copied().unwrap_or(false) {
+        return pointer_slot;
+    }
+    visible.iter().position(|v| *v).unwrap_or(pointer_slot)
 }
 
 /// Build an `NSCursor` wearing the guest's cursor image: look up the worker-published
@@ -226,8 +272,22 @@ fn build_guest_cursor(
 }
 
 /// A fully transparent 1×1 cursor — what the host pointer wears while the guest hides its
-/// own (so "no pointer" is honored instead of showing a stale arrow over the view).
+/// own (so "no pointer" is honored instead of showing a stale arrow over the view), and what
+/// it wears throughout capture.
+///
+/// **One instance, memoised.** It is worn on every re-assert, so building the bitmap each time
+/// would be waste; more importantly the wear is only *advisory* — AppKit resets the cursor from
+/// its own cursor rects behind us — so the way to tell whether ours is still on is to compare
+/// `NSCursor::currentCursor()` against it by identity ([`input::HostCursor::verify_captured`]),
+/// and that needs the same object every time.
 pub(crate) fn blank_cursor() -> Option<Retained<NSCursor>> {
+    thread_local! {
+        static BLANK: Option<Retained<NSCursor>> = build_blank_cursor();
+    }
+    BLANK.with(|b| b.clone())
+}
+
+fn build_blank_cursor() -> Option<Retained<NSCursor>> {
     let ctx = bgra_bitmap_context(1, 1)?;
     unsafe {
         let dst = CGBitmapContextGetData(Some(&ctx)) as *mut u32;
@@ -277,6 +337,32 @@ fn nscursor_from_context(
         &nsimage,
         NSPoint::new(hot_x, hot_y),
     ))
+}
+
+#[cfg(test)]
+mod shape_slot_tests {
+    use super::shape_slot;
+
+    #[test]
+    fn the_pointers_own_slot_wins_when_it_shows_a_cursor() {
+        assert_eq!(shape_slot(0, &[true, true]), 0);
+        assert_eq!(shape_slot(1, &[true, true]), 1);
+    }
+
+    #[test]
+    fn a_cursor_on_another_slot_is_still_the_guests_cursor() {
+        // The pointer is over the BenQ, the guest's cursor is on the internal: wear the shape
+        // it is actually showing, do not blank.
+        assert_eq!(shape_slot(0, &[false, true]), 1);
+    }
+
+    #[test]
+    fn no_cursor_anywhere_falls_back_to_the_pointers_slot() {
+        // Which then carries `visible = false`, and the blank is worn — the guest really has
+        // hidden its pointer.
+        assert_eq!(shape_slot(1, &[false, false]), 1);
+        assert_eq!(shape_slot(7, &[]), 7);
+    }
 }
 
 #[cfg(test)]

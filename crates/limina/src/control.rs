@@ -123,6 +123,9 @@ struct Inner {
     /// `None` when this host has no Secure Enclave — then the `fido` capability is never
     /// advertised and a guest presents no authenticator (stock-degrade rule).
     fido_store: Option<Arc<crate::fido::store::FidoStore>>,
+    /// Is the USB FIDO gadget serving this VM? Then the agent must NOT stand up a second
+    /// authenticator — see [`welcome_caps`].
+    usb_fido_gadget: bool,
 }
 
 impl ControlPlane {
@@ -132,11 +135,14 @@ impl ControlPlane {
     /// `fido_store` is the shared per-VM passkey store (built by [`crate::fido::store_if_capable`]
     /// — `Some` only where a Secure Enclave, or the test-approve knob, can back the authenticator).
     /// It is shared with the USB gadget transport so both speak to one store; `None` advertises
-    /// no `fido` capability at all.
+    /// no `fido` capability at all. `usb_fido_gadget` says whether that gadget is the transport
+    /// this run serves — if it is, the agent must not raise a second authenticator, so the `fido`
+    /// capability is withheld ([`welcome_caps`]).
     pub fn start(
         socket_path: &Path,
         balloon_policy: Option<crate::balloon_policy::BalloonPolicy>,
         fido_store: Option<Arc<crate::fido::store::FidoStore>>,
+        usb_fido_gadget: bool,
     ) -> Result<ControlPlane> {
         let _ = std::fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path)
@@ -150,6 +156,7 @@ impl ControlPlane {
             vdagent: Mutex::new(None),
             balloon_policy,
             fido_store,
+            usb_fido_gadget,
         });
         let serve_inner = inner.clone();
         std::thread::Builder::new()
@@ -397,16 +404,12 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
         hello.caps,
         hello.pagesize
     );
-    // Advertise `fido` only when we can actually back it with a Secure Enclave, so a
-    // guest never creates an authenticator device with nothing behind it.
-    let mut caps = vec!["shutdown".to_string(), "clipboard".to_string()];
-    if inner.fido_store.is_some() {
-        caps.push("fido".to_string());
-    }
     write_message(
         &mut stream,
         CHANNEL_CONTROL,
-        &Message::Welcome(Welcome { caps }),
+        &Message::Welcome(Welcome {
+            caps: welcome_caps(inner.fido_store.is_some(), inner.usb_fido_gadget),
+        }),
     )?;
 
     let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
@@ -510,6 +513,19 @@ fn serve_loop(
                     policy.on_pressure(&p);
                 }
             }
+            // M15: the guest's own monitor arrangement, which the host cannot infer — an
+            // absolute pointer is spread across the guest's whole desktop, so mapping into it
+            // needs to know what order the compositor put the monitors in.
+            //
+            // Deliberately last-writer-wins with no host-side ownership rule: arbitration is
+            // the GUEST's (limina-agent-session's `layout_gate` — only the helper whose uid
+            // owns the seat's ACTIVE logind session reports, and it re-sends on activation).
+            // The host cannot rank channels itself (it has no view of guest session
+            // activity), and a pre-gate or stock helper writing unconditionally is the
+            // documented degraded floor, not a state to defend against here.
+            Ok((_, Message::DisplayLayout(l))) => {
+                crate::window::arrangement::publish_guest_layout(&l.monitors);
+            }
             Ok((_, Message::Error(e))) => {
                 log::warn!("control: agent reported error: {e:?}");
             }
@@ -525,6 +541,29 @@ fn serve_loop(
             Err(e) => return Err(e),
         }
     }
+}
+
+/// What WELCOME advertises to a freshly connected agent.
+///
+/// `fido` is the interesting one, and it carries a **policy**, not just a capability: it is what
+/// makes the agent create its uhid authenticator (`guest/limina-agent`), so advertising it
+/// alongside the USB gadget gives the guest **two** FIDO devices with the same VID:PID and one
+/// shared passkey store. Browsers dispatch a ceremony to every attached HID authenticator in
+/// parallel, so both signed — a Touch ID sheet each — and on registration both *minted* a
+/// credential, leaving orphans the site never saw and one RP's sign counter split across two
+/// credentials (which reads as a cloned authenticator to any RP that enforces monotonicity).
+///
+/// So: exactly one transport per guest. USB wins where it exists, because it is the tier every
+/// guest has (no agent required); uhid stays for `--no-usb` runs, where there is no controller to
+/// hang a gadget on and it is the only way to keep passkeys — which is precisely why `--no-fido`
+/// is a separate flag from `--no-usb` (see `Cli::fido_enabled`). Withholding the cap is also the
+/// whole fix: agents already gate the device on it, so no guest-side change is needed.
+fn welcome_caps(has_fido_store: bool, usb_fido_gadget: bool) -> Vec<String> {
+    let mut caps = vec!["shutdown".to_string(), "clipboard".to_string()];
+    if has_fido_store && !usb_fido_gadget {
+        caps.push("fido".to_string());
+    }
+    caps
 }
 
 /// The host's authoritative wallclock as a [`Message::TimeSync`] frame.
@@ -575,6 +614,26 @@ mod tests {
         s
     }
 
+    /// One guest, one FIDO authenticator. The agent creates its uhid device iff WELCOME says
+    /// `fido`, so serving the USB gadget must withhold the cap — otherwise the guest carries two
+    /// authenticators (measured: `/dev/hidraw0` USB + `/dev/hidraw1` uhid, both `ID_FIDO_TOKEN=1`,
+    /// same 1D6B:0F1D), browsers dispatch to both, and one registration mints two credentials.
+    #[test]
+    fn the_usb_gadget_and_the_agent_never_both_serve_fido() {
+        assert!(
+            !welcome_caps(true, true).iter().any(|c| c == "fido"),
+            "the gadget is serving; the agent must not raise a second authenticator"
+        );
+        // No gadget (--no-usb): uhid is the only way to keep passkeys, so it is offered.
+        assert!(welcome_caps(true, false).iter().any(|c| c == "fido"));
+        // No store (no Secure Enclave, or --no-fido): no authenticator either way.
+        assert!(!welcome_caps(false, false).iter().any(|c| c == "fido"));
+        assert!(!welcome_caps(false, true).iter().any(|c| c == "fido"));
+        // The rest of the handshake is unaffected.
+        assert!(welcome_caps(true, true).iter().any(|c| c == "clipboard"));
+        assert!(welcome_caps(true, true).iter().any(|c| c == "shutdown"));
+    }
+
     /// A shutdown-capable agent that never drains its socket must not stall
     /// `request_shutdown`: `Peer::send` used to be a blocking write with no timeout,
     /// made while holding the peers lock — one wedged agent froze the Ctrl-C shutdown
@@ -585,7 +644,7 @@ mod tests {
         std::env::set_var("LIMINA_CONTROL_WRITE_TIMEOUT_MS", "200");
         let path =
             std::env::temp_dir().join(format!("limina-ctl-test-{}.sock", std::process::id()));
-        let plane = ControlPlane::start(&path, None, None).unwrap();
+        let plane = ControlPlane::start(&path, None, None, false).unwrap();
         // HELLO, then never read again: the socket buffers fill and stay full.
         let wedged = connect_agent(&path, &["shutdown"]);
 

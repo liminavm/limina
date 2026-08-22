@@ -20,7 +20,7 @@
 //! refuses writes (GREEN).
 //!
 //! SKIPs cleanly if the ≥7.1 kernel or the disk is missing — build the kernel with
-//! `KVER=v7.1 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 PATCHES_OPTIONAL=1 scripts/build-test-kernel.sh`.
+//! `KVER=v7.1.8 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 scripts/build-test-kernel.sh`.
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
 use std::time::Duration;

@@ -46,6 +46,10 @@ pub struct DisplayControl {
     pub display_id: u32,
     /// New preferred mode, in guest pixels.
     pub size: Option<(u32, u32)>,
+    /// New position in the guest's desktop, in the coordinates its compositor lays monitors
+    /// out in (logical, not pixels — see `docs/design/arrangement-relay.md`). The arrangement
+    /// relay's suggested-offset source; only meaningful as part of a full-set emission.
+    pub position: Option<(u32, u32)>,
     /// New connection state; `false` is a genuine unplug as far as the guest is concerned.
     pub connected: Option<bool>,
     /// New EDID — identity, physical size, mode list and refresh range.
@@ -139,6 +143,9 @@ impl DisplayControl {
         if let Some((width, height)) = self.size {
             out.push_str(&format!(" size={width}x{height}"));
         }
+        if let Some((x, y)) = self.position {
+            out.push_str(&format!(" pos={x},{y}"));
+        }
         if let Some(connected) = self.connected {
             out.push_str(&format!(" connected={}", u8::from(connected)));
         }
@@ -190,6 +197,7 @@ impl DisplayControl {
             match key {
                 "id" => control.display_id = value.parse().ok()?,
                 "size" => control.size = Some(parse_dimensions(value)?),
+                "pos" => control.position = Some(parse_position(value)?),
                 "connected" => control.connected = Some(parse_bool(value)?),
                 "refresh" => {
                     edid.refresh_hz = value.parse().ok()?;
@@ -251,6 +259,11 @@ impl DisplayControl {
         }
         Some(control)
     }
+}
+
+fn parse_position(value: &str) -> Option<(u32, u32)> {
+    let (x, y) = value.split_once(',')?;
+    Some((x.parse().ok()?, y.parse().ok()?))
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -330,6 +343,7 @@ mod tests {
         DisplayControl {
             display_id: 0,
             size: Some((1512, 982)),
+            position: Some((2048, 0)),
             connected: Some(true),
             edid: Some(EdidSpec {
                 refresh_hz: 120,
@@ -396,6 +410,20 @@ mod tests {
         assert_eq!(control.display_id, 1);
         assert_eq!(control.connected, Some(false));
         assert_eq!(control.size, None);
+        assert_eq!(control.edid, None);
+    }
+
+    /// The arrangement relay's field stands alone and parses back to only itself.
+    #[test]
+    fn a_position_only_command_carries_nothing_else() {
+        let parsed = DisplayCommand::parse("display id=2 pos=2048,0").expect("should parse");
+        let DisplayCommand::Display(control) = parsed else {
+            panic!("expected a display command");
+        };
+        assert_eq!(control.display_id, 2);
+        assert_eq!(control.position, Some((2048, 0)));
+        assert_eq!(control.size, None);
+        assert_eq!(control.connected, None);
         assert_eq!(control.edid, None);
     }
 

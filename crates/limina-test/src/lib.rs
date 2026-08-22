@@ -364,6 +364,9 @@ pub struct DisplayCfg {
     /// runs `window::run`, so a capture boot would exercise none of it and pass against a
     /// broken window. Mutually exclusive with capture in the CLI, so there is no PNG.
     pub windowed: bool,
+    /// How many virtio-gpu scanouts to configure (`--display-pool`). 1 is the single-display
+    /// device every test but the multi-display ones wants. Slots above 0 boot disconnected.
+    pub pool: u32,
 }
 
 /// Which guest console device an interactive (`console_input`) session is wired through.
@@ -920,7 +923,7 @@ impl GuestConfig {
     /// **distinct** kernel file so the venus suite still runs on its validated 6.12 kernel.
     ///
     /// Build the kernel first:
-    /// `KVER=v7.1 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 PATCHES_OPTIONAL=1 scripts/build-test-kernel.sh`.
+    /// `KVER=v7.1.8 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 scripts/build-test-kernel.sh`.
     /// Overrides: `LIMINA_TEST_KERNEL_71` (default `target/test-guest/kernel/Image-16k-71`),
     /// `LIMINA_TEST_DISK` (default this release's `stock.test`), plus the usual
     /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the ≥7.1 kernel or
@@ -934,7 +937,7 @@ impl GuestConfig {
         anyhow::ensure!(
             kernel.exists(),
             "≥7.1 test kernel not found at {kernel:?}; build it with \
-             `KVER=v7.1 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 PATCHES_OPTIONAL=1 \
+             `KVER=v7.1.8 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 \
              scripts/build-test-kernel.sh` (or set LIMINA_TEST_KERNEL_71)"
         );
         let disk = match std::env::var("LIMINA_TEST_DISK") {
@@ -1022,7 +1025,22 @@ impl GuestConfig {
             height,
             software_2d: true,
             windowed: false,
+            pool: 1,
         });
+        self
+    }
+
+    /// Configure a scanout **pool** of `pool` displays instead of one. Slot 0 boots connected
+    /// at the size the display builder set; every other slot boots disconnected, waiting for a
+    /// [`Guest::update_display`] to give it an identity and connect it. `num_scanouts` is
+    /// virtio-gpu config-space state, so this is the only place the count can be chosen — a
+    /// display cannot be added to a running device. Call after a display builder.
+    pub fn with_display_pool(mut self, pool: u32) -> GuestConfig {
+        let display = self
+            .display
+            .as_mut()
+            .expect("with_display_pool needs a display builder first");
+        display.pool = pool;
         self
     }
 
@@ -1036,6 +1054,7 @@ impl GuestConfig {
             height,
             software_2d: false,
             windowed: false,
+            pool: 1,
         });
         // A coexist display runs virglrenderer's `vrend` half (host GL via zink-on-KK), whose
         // `virgl_renderer_init` dlopens libEGL at startup — so a coexist boot ALWAYS needs the
@@ -1066,6 +1085,7 @@ impl GuestConfig {
             height,
             software_2d: false,
             windowed: true,
+            pool: 1,
         });
         self.with_virgl_host_gl()
     }
@@ -1745,6 +1765,11 @@ impl Guest {
                                 .as_ref()
                                 .expect("resize_socket set with a display"),
                         );
+                }
+                // The scanout pool. Omitted at 1 so every existing test still spawns the exact
+                // argv it always did, and a pool test is visibly the only one asking for more.
+                if d.pool > 1 {
+                    cmd.arg("--display-pool").arg(d.pool.to_string());
                 }
                 // The 2D capture oracle forces the software-2D GPU so it's deterministic and
                 // independent of venus/Metal (the worker default is the coexist device). A

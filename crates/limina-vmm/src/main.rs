@@ -156,6 +156,14 @@ struct Cli {
     #[arg(long, default_value = "1280x800")]
     display_size: String,
 
+    /// How many virtio-gpu scanouts to configure (the *pool*). `num_scanouts` is device
+    /// config-space state and cannot grow at runtime, so a display the user enables later
+    /// has to already exist as a disconnected scanout. Slot 0 is the one that starts
+    /// connected; every other slot boots disconnected and is a `display id=N connected=1`
+    /// away from being a monitor. See docs/design/stable-edid-hotplug.md.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=16))]
+    display_pool: u32,
+
     /// UNIX-socket path for runtime display-resize requests. The worker binds a listener
     /// here and applies newline-delimited `resize <w> <h>` commands to the live virtio-gpu
     /// (the guest re-modesets). The supervisor window and the test harness connect to it.
@@ -597,6 +605,7 @@ fn main() -> Result<()> {
                 Some(DisplaySpec {
                     width,
                     height,
+                    pool: cli.display_pool,
                     sink,
                     software_2d: cli.gpu_software_2d,
                     control_socket: cli.display_control_socket,

@@ -20,6 +20,11 @@ use objc2_quartz_core::{CALayer, CATransaction};
 
 use limina_surfaceport::{SurfaceMsg, SurfacePortReceiver};
 
+/// How many pool slots the supervisor tracks. `VIRTIO_GPU_MAX_SCANOUTS`, the same ceiling the
+/// worker's backend enforces — the supervisor does not link the worker, so the constant is
+/// restated rather than shared. A slot costs a few words until a connector uses it.
+pub(crate) const MAX_SCANOUTS: usize = 16;
+
 /// A retained IOSurface that can cross threads. IOSurface is thread-safe — the kernel object is
 /// atomically refcounted and designed for cross-process/-thread scanout sharing — but objc2
 /// conservatively leaves `CFRetained<IOSurfaceRef>` `!Send`/`!Sync`. The recv thread stores
@@ -401,10 +406,11 @@ pub(crate) fn register_apply_hook(hook: std::rc::Rc<dyn Fn()>) {
     APPLY_HOOK.with(|h| *h.borrow_mut() = Some(hook));
 }
 
-/// State shared between the control-channel reader thread, the worker monitor, and the
-/// main-thread render timer. Only `Send` data — never AppKit objects.
+/// What one guest scanout is showing. There is one of these per pool slot: the guest's
+/// connectors are independent displays, and a frame arriving for slot 1 must not disturb the
+/// window presenting slot 0.
 #[derive(Default)]
-pub struct Shared {
+pub struct SlotPresent {
     /// The surface id the worker wants shown right now (alternates between its double
     /// buffer so the layer's contents object changes and Core Animation re-reads).
     pub(crate) show_id: Option<u32>,
@@ -412,6 +418,48 @@ pub struct Shared {
     pub(crate) height: u32,
     /// Bumped on any update (new surface geometry or a new frame) — the timer re-applies.
     pub(crate) gen: u64,
+    /// Count of *presented frames* (`frame` messages), as opposed to `gen`, which also bumps
+    /// on surface geometry. The restore overlay comes down on the first real frame, not on
+    /// the fresh worker's surface announcement (which would flash black under the spinner).
+    pub(crate) frames: u64,
+    /// This scanout's hardware cursor.
+    ///
+    /// Per slot because the guest enables its cursor plane on one CRTC at a time and disables
+    /// the others: a single VM-wide block meant the `cursorhide` for the display the pointer
+    /// *left* blanked the shape while the display it arrived on was showing one, so the pointer
+    /// vanished while still hit-testing correctly.
+    pub(crate) cursor: CursorState,
+}
+
+/// One scanout's hardware-cursor state.
+///
+/// In the normal (absolute) path the host pointer *adopts* this shape over the guest view (see
+/// `HostCursor`) and guest-reported positions are ignored — the pointer the user sees is the
+/// host one, which the guest tracks via absolute input. In **pointer-capture** mode that no
+/// longer holds (the host cursor is grabbed away from the guest position), so the image is
+/// composited at `pos_x`/`pos_y`.
+#[derive(Clone, Copy, Default)]
+pub struct CursorState {
+    pub(crate) id: Option<u32>,
+    pub(crate) w: u32,
+    pub(crate) h: u32,
+    pub(crate) hot_x: u32,
+    pub(crate) hot_y: u32,
+    pub(crate) visible: bool,
+    /// Guest-reported position (virtio-gpu `MoveCursor`), in that scanout's pixels.
+    pub(crate) pos_x: i32,
+    pub(crate) pos_y: i32,
+    /// Bumped on any shape/visibility change — the timer re-applies.
+    pub(crate) gen: u64,
+}
+
+/// State shared between the control-channel reader thread, the worker monitor, and the
+/// main-thread render timer. Only `Send` data — never AppKit objects.
+#[derive(Default)]
+pub struct Shared {
+    /// Per-scanout present state, indexed by pool slot. Slot 0 is the display every VM has;
+    /// the rest are live only while their connector is.
+    pub(crate) slots: [SlotPresent; MAX_SCANOUTS],
     /// Set when the worker/control channel is gone — the window should close.
     pub(crate) worker_exited: bool,
     /// Set (before `worker_exited`) when the worker exited BY SUSPENDING (exit 126): the
@@ -426,29 +474,11 @@ pub struct Shared {
     /// (spawn or gateway-restart failure): the window must not wait for a worker that
     /// will never come.
     pub(crate) resume_dead: bool,
-    /// Count of *presented frames* (`frame` messages), as opposed to `gen`, which also bumps
-    /// on surface geometry. The restore overlay comes down on the first real frame, not on
-    /// the fresh worker's surface announcement (which would flash black under the spinner).
-    pub(crate) frames: u64,
-
-    /// Guest hardware-cursor state (decoupled from the scanout above; the worker publishes
-    /// the cursor image as its own IOSurface). In the normal (absolute) path the host pointer
-    /// *adopts* this shape over the guest view (see `HostCursor`) and guest-reported positions
-    /// are ignored — the pointer the user sees is the host one, which the guest tracks via
-    /// absolute input. In **pointer-capture** mode that no longer holds (the host cursor is
-    /// grabbed away from the guest position), so we composite this image at `cursor_pos_*`.
-    pub(crate) cursor_id: Option<u32>,
-    pub(crate) cursor_w: u32,
-    pub(crate) cursor_h: u32,
-    pub(crate) hot_x: u32,
-    pub(crate) hot_y: u32,
-    pub(crate) cursor_visible: bool,
-    /// Guest-reported cursor position (virtio-gpu `MoveCursor`), in guest scanout pixels. Used
-    /// only while captured — see `cursormove` handling and `update_capture_cursor`.
-    pub(crate) cursor_pos_x: i32,
-    pub(crate) cursor_pos_y: i32,
-    /// Bumped on any cursor shape/visibility change — the timer re-applies.
-    pub(crate) cursor_gen: u64,
+    /// Whether a guest OS driver has taken the GPU over from boot firmware (the worker's
+    /// `guestdriver` line). Firmware paints head 0 and only head 0, so before this the pool is
+    /// not ours to arrange; after it, each host panel can own a slot. Cleared on a reboot
+    /// relaunch by [`mark_worker_running`], because the fresh worker starts in firmware again.
+    pub(crate) guest_driver_ready: bool,
 }
 
 impl Shared {
@@ -479,6 +509,32 @@ pub fn mark_worker_running(shared: &Arc<Mutex<Shared>>) {
     s.resume_dead = false;
 }
 
+/// A fresh worker's endpoints have been swapped in — a guest reboot (`resuming == false`) or a
+/// resume from a snapshot. Called **before** the new worker's reader starts, so nothing it says
+/// can be wiped by this.
+///
+/// The slots describe the OLD worker's connectors, and nothing will ever retract them: the new
+/// worker only announces what the guest brings up, and a `scanoutgone` for a connector it never
+/// knew about cannot arrive. Left stale, a slot above 0 that was live before the relaunch reopens
+/// a window whose `show_id` resolves to a dead surface — a black window nothing can close.
+///
+/// The firmware/OS phase is the other half, and it splits by *why* the worker is fresh. A reboot
+/// starts at firmware again, which paints head 0 and only head 0, so the phase must go back. A
+/// resume restores a guest whose driver is already up: no second `GET_EDID` is coming, so
+/// clearing the phase there would strand the arrangement at "firmware" for the rest of the run.
+pub fn mark_worker_swapped(shared: &Arc<Mutex<Shared>>, resuming: bool) {
+    let mut s = shared.lock().unwrap();
+    s.slots = Default::default();
+    if !resuming {
+        s.guest_driver_ready = false;
+        // A reboot is a different guest session: its compositor will report an arrangement of
+        // its own, and until it does, keeping the old one would map the pointer through a
+        // layout nothing is displaying.
+        super::arrangement::forget_guest_layout();
+    }
+    super::echo::forget();
+}
+
 /// A resume respawn was abandoned before any swap (spawn/gateway failure): tell the window
 /// so it can surface the failure instead of showing "Resuming…" over a worker that will
 /// never arrive. Called by the monitor thread on its resume-relaunch error paths.
@@ -497,48 +553,91 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
             match parts.next() {
                 Some("surface") => {
                     log::info!("window: <- {line}");
-                    // surface <id0> <id1> <w> <h> — geometry + the initial buffer to show.
+                    // surface <id0> <id1> <w> <h> [<scanout>] — geometry + the initial buffer.
                     let id0 = parts.next().and_then(|s| s.parse::<u32>().ok());
                     let _id1 = parts.next();
                     let w = parts.next().and_then(|s| s.parse::<u32>().ok());
                     let h = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    if let (Some(id0), Some(w), Some(h)) = (id0, w, h) {
+                    let slot = parse_slot(parts.next());
+                    if let (Some(id0), Some(w), Some(h), Some(slot)) = (id0, w, h, slot) {
+                        super::echo::publish_scanout(slot, w, h);
                         let mut s = shared.lock().unwrap();
-                        s.show_id = Some(id0);
-                        s.width = w;
-                        s.height = h;
-                        s.gen += 1;
+                        let slot = &mut s.slots[slot];
+                        slot.show_id = Some(id0);
+                        slot.width = w;
+                        slot.height = h;
+                        slot.gen += 1;
                         drop(s);
                         wake_main_apply();
                     }
                 }
                 Some("frame") => {
-                    // frame <id> — the buffer to show now.
-                    if let Some(id) = parts.next().and_then(|s| s.parse::<u32>().ok()) {
+                    // frame <id> [<scanout>] — the buffer to show now, on that slot.
+                    let id = parts.next().and_then(|s| s.parse::<u32>().ok());
+                    let slot = parse_slot(parts.next());
+                    if let (Some(id), Some(slot)) = (id, slot) {
                         let mut s = shared.lock().unwrap();
-                        s.show_id = Some(id);
-                        s.gen += 1;
-                        s.frames += 1;
+                        let slot = &mut s.slots[slot];
+                        slot.show_id = Some(id);
+                        slot.gen += 1;
+                        slot.frames += 1;
                         drop(s);
                         wake_main_apply();
                     }
                 }
+                Some("scanoutgone") => {
+                    // scanoutgone <scanout> — the slot has no scanout any more.
+                    if let Some(slot) = parse_slot(parts.next()) {
+                        super::echo::publish_scanout(slot, 0, 0);
+                        let mut s = shared.lock().unwrap();
+                        let slot = &mut s.slots[slot];
+                        slot.show_id = None;
+                        slot.width = 0;
+                        slot.height = 0;
+                        slot.gen += 1;
+                        drop(s);
+                        wake_main_apply();
+                    }
+                }
+                Some("guestdriver") => {
+                    // The guest's OS driver took the device over from boot firmware. Until this
+                    // arrives, slot 0 is the only scanout anything paints (EDK2's GOP driver
+                    // programs head 0 and no other), so display arrangement waits for it.
+                    log::info!("window: <- {line}");
+                    let mut s = shared.lock().unwrap();
+                    s.guest_driver_ready = true;
+                    drop(s);
+                    wake_main_apply();
+                }
                 Some("cursor") => {
-                    // cursor <id> <w> <h> <hot_x> <hot_y> — new cursor image + hotspot.
+                    // cursor <id> <w> <h> <hot_x> <hot_y> [<scanout>] — image + hotspot.
                     let id = parts.next().and_then(|s| s.parse::<u32>().ok());
                     let w = parts.next().and_then(|s| s.parse::<u32>().ok());
                     let h = parts.next().and_then(|s| s.parse::<u32>().ok());
                     let hx = parts.next().and_then(|s| s.parse::<u32>().ok());
                     let hy = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    if let (Some(id), Some(w), Some(h), Some(hx), Some(hy)) = (id, w, h, hx, hy) {
+                    let slot = parse_slot(parts.next());
+                    if let (Some(id), Some(w), Some(h), Some(hx), Some(hy), Some(slot)) =
+                        (id, w, h, hx, hy, slot)
+                    {
                         let mut s = shared.lock().unwrap();
-                        s.cursor_id = Some(id);
-                        s.cursor_w = w;
-                        s.cursor_h = h;
-                        s.hot_x = hx;
-                        s.hot_y = hy;
-                        s.cursor_visible = true;
-                        s.cursor_gen += 1;
+                        let c = &mut s.slots[slot].cursor;
+                        c.id = Some(id);
+                        c.w = w;
+                        c.h = h;
+                        c.hot_x = hx;
+                        c.hot_y = hy;
+                        c.visible = true;
+                        c.gen += 1;
+                        if super::capture_tap::edge_trace() {
+                            eprintln!(
+                                "[CURSOR] t={:.1} slot={slot} shape id={id} {w}x{h} hot=({hx},{hy}) pos=({},{})",
+                                super::capture_tap::trace_ms(),
+                                c.pos_x,
+                                c.pos_y,
+                            );
+                        }
+                        publish_echo(&s, slot);
                     }
                 }
                 Some("cursormove") => {
@@ -550,16 +649,38 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
                     // guest cursor — store it for `update_capture_cursor`.
                     let x = parts.next().and_then(parse_cursor_coord);
                     let y = parts.next().and_then(parse_cursor_coord);
-                    if let (Some(x), Some(y)) = (x, y) {
+                    let slot = parse_slot(parts.next());
+                    if let (Some(x), Some(y), Some(slot)) = (x, y, slot) {
                         let mut s = shared.lock().unwrap();
-                        s.cursor_pos_x = x;
-                        s.cursor_pos_y = y;
+                        let c = &mut s.slots[slot].cursor;
+                        c.pos_x = x;
+                        c.pos_y = y;
+                        let visible = c.visible;
+                        publish_echo(&s, slot);
+                        drop(s);
+                        if super::capture_tap::edge_trace() {
+                            eprintln!(
+                                "[CURSOR] t={:.1} slot={slot} move ({x},{y}) visible={visible}",
+                                super::capture_tap::trace_ms(),
+                            );
+                        }
                     }
                 }
                 Some("cursorhide") => {
-                    let mut s = shared.lock().unwrap();
-                    s.cursor_visible = false;
-                    s.cursor_gen += 1;
+                    if let Some(slot) = parse_slot(parts.next()) {
+                        let mut s = shared.lock().unwrap();
+                        let c = &mut s.slots[slot].cursor;
+                        c.visible = false;
+                        c.gen += 1;
+                        publish_echo(&s, slot);
+                        drop(s);
+                        if super::capture_tap::edge_trace() {
+                            eprintln!(
+                                "[CURSOR] t={:.1} slot={slot} hide",
+                                super::capture_tap::trace_ms(),
+                            );
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -570,6 +691,30 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
         // a relaunch a fresh reader is spawned on the new channel; this thread just ends.
         log::info!("window: control channel closed (worker gone)");
     });
+}
+
+/// Hand one slot's cursor state to the pointer stack's oracle (`window/echo.rs`).
+fn publish_echo(s: &Shared, slot: usize) {
+    let sp = &s.slots[slot];
+    let c = sp.cursor;
+    super::echo::publish(
+        slot,
+        c.visible,
+        (c.pos_x, c.pos_y),
+        (c.hot_x, c.hot_y),
+        (sp.width, sp.height),
+    );
+}
+
+/// Parse the optional trailing scanout id on a `surface`/`frame` line. Absent means slot 0, so
+/// a worker that predates the pool — or a log from one — reads correctly. A slot past the pool
+/// is dropped rather than clamped: routing a stray frame onto slot 0's window would show one
+/// display's pixels on another, which is worse than showing nothing.
+fn parse_slot(field: Option<&str>) -> Option<usize> {
+    match field {
+        None => Some(0),
+        Some(s) => s.parse::<usize>().ok().filter(|n| *n < MAX_SCANOUTS),
+    }
 }
 
 /// Parse a guest cursor coordinate. The virtio-gpu wire carries the position as **u32**, but a

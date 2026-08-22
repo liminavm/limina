@@ -23,6 +23,28 @@ pub struct VmState {
     /// running VM.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suspended: Option<Suspended>,
+    /// Which guest connector each host panel owns, as `[panel_key, slot]` pairs.
+    ///
+    /// A compositor identifies a monitor by connector name *and* vendor/product/serial, and the
+    /// connector name is the scanout index — so a panel that lands on a different slot next run
+    /// is a different monitor to the guest, with its own remembered arrangement. Keeping the
+    /// assignment is what makes a panel the same monitor tomorrow as it was today.
+    ///
+    /// Keys go through i64 for TOML's signed integers, like `fullscreen_display`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub display_slots: Vec<(i64, u32)>,
+    /// Host panels the user has switched off in the Displays menu, as panel keys.
+    ///
+    /// Keyed on the panel and not the connector because that is what was switched off — a
+    /// display, not a slot. It also has to outlive the assignment: a panel that is unplugged has
+    /// no slot to carry the decision, and would otherwise come back switched on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub display_disabled: Vec<i64>,
+    /// The Displays menu's "Use Other Screens When Fullscreen": fullscreen lights up every
+    /// attached panel instead of taking only the window's own. Off by default — one screen is
+    /// what fullscreen means until the user asks for more.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fullscreen_all_displays: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -108,6 +130,37 @@ pub fn set_window(path: &Path, window: Option<WindowState>) -> std::io::Result<(
     save(path, &state)
 }
 
+/// Merge-save the panel→connector assignment, leaving the window placement and any
+/// `[suspended]` record alone. Same merge discipline as [`set_window`], for the same reason.
+pub fn set_display_slots(path: &Path, slots: Vec<(i64, u32)>) -> std::io::Result<()> {
+    let mut state = load(path).unwrap_or_default();
+    if state.display_slots == slots {
+        return Ok(());
+    }
+    state.display_slots = slots;
+    save(path, &state)
+}
+
+/// Merge-save the set of switched-off displays, leaving everything else alone.
+pub fn set_display_disabled(path: &Path, disabled: Vec<i64>) -> std::io::Result<()> {
+    let mut state = load(path).unwrap_or_default();
+    if state.display_disabled == disabled {
+        return Ok(());
+    }
+    state.display_disabled = disabled;
+    save(path, &state)
+}
+
+/// Merge-save the fullscreen-uses-other-screens switch, leaving everything else alone.
+pub fn set_fullscreen_all_displays(path: &Path, on: bool) -> std::io::Result<()> {
+    let mut state = load(path).unwrap_or_default();
+    if state.fullscreen_all_displays == on {
+        return Ok(());
+    }
+    state.fullscreen_all_displays = on;
+    save(path, &state)
+}
+
 /// Atomic save (tmp + rename, the `VmBundle::save` pattern). Best-effort at the
 /// call sites — losing a window-placement save is not worth failing anything.
 pub fn save(path: &Path, state: &VmState) -> std::io::Result<()> {
@@ -147,6 +200,9 @@ mod tests {
                 fullscreen_display: Some(0x1234_5678_9abc_def0),
             }),
             suspended: None,
+            display_slots: vec![(0x1111, 0), (0x2222, 1)],
+            display_disabled: Vec::new(),
+            fullscreen_all_displays: true,
         };
         save(&path, &state).unwrap();
         assert_eq!(load(&path), Some(state));
@@ -169,6 +225,9 @@ mod tests {
                 fullscreen_display: Some(0x9abc_def0_1234_5678),
             }),
             suspended: None,
+            display_slots: Vec::new(),
+            display_disabled: Vec::new(),
+            fullscreen_all_displays: false,
         };
         save(&path, &state).expect("a top-bit identity key must be persistable");
         assert_eq!(load(&path), Some(state));
@@ -232,6 +291,9 @@ mod tests {
             &VmState {
                 window: Some(win),
                 suspended: None,
+                display_slots: Vec::new(),
+                display_disabled: Vec::new(),
+                fullscreen_all_displays: false,
             },
         )
         .unwrap();
@@ -253,6 +315,70 @@ mod tests {
         assert_eq!(cleared.window, Some(win));
         assert_eq!(cleared.suspended, None);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_top_bit_panel_key_survives_the_slot_assignment_round_trip() {
+        // Same hazard as `fullscreen_display`: panel keys are full-width hashes and TOML has no
+        // unsigned integers, so a key with bit 63 set must be bit-preserved through i64 or the
+        // whole state save fails and the assignment silently never persists.
+        let dir = scratch("slotkeys");
+        let path = dir.join("state.toml");
+        let slots = vec![(0x9abc_def0_1234_5678_u64 as i64, 1), (7, 0)];
+        set_display_slots(&path, slots.clone()).expect("a top-bit panel key must be persistable");
+        assert_eq!(load(&path).unwrap().display_slots, slots);
+    }
+
+    #[test]
+    fn the_switched_off_displays_survive_the_round_trip_beside_the_assignment() {
+        // Same top-bit hazard as the assignment, and the two must not overwrite each other:
+        // they are saved from the same tick by two separate merge-saves.
+        let dir = scratch("displayoff");
+        let path = dir.join("state.toml");
+        let disabled = vec![0x9abc_def0_1234_5678_u64 as i64, 7];
+        set_display_slots(&path, vec![(7, 1)]).unwrap();
+        set_display_disabled(&path, disabled.clone()).unwrap();
+        let back = load(&path).unwrap();
+        assert_eq!(back.display_disabled, disabled);
+        assert_eq!(back.display_slots, vec![(7, 1)]);
+    }
+
+    #[test]
+    fn the_fullscreen_all_displays_switch_merges_beside_the_display_state() {
+        // Saved from the same render-timer tick as the assignment and the switched-off set —
+        // three separate merge-saves that must not clobber each other. Absent means off.
+        let dir = scratch("fsall");
+        let path = dir.join("state.toml");
+        set_display_slots(&path, vec![(7, 1)]).unwrap();
+        set_fullscreen_all_displays(&path, true).unwrap();
+        let back = load(&path).unwrap();
+        assert!(back.fullscreen_all_displays);
+        assert_eq!(back.display_slots, vec![(7, 1)]);
+        set_fullscreen_all_displays(&path, false).unwrap();
+        let back = load(&path).unwrap();
+        assert!(!back.fullscreen_all_displays, "off must persist as off");
+        assert_eq!(back.display_slots, vec![(7, 1)]);
+    }
+
+    #[test]
+    fn set_display_slots_preserves_the_window_placement() {
+        let dir = scratch("slotmerge");
+        let path = dir.join("state.toml");
+        let win = WindowState {
+            frame: [10.0, 20.0, 800.0, 600.0],
+            content: (800, 600),
+            fullscreen: false,
+            fullscreen_display: None,
+        };
+        set_window(&path, Some(win)).unwrap();
+        set_display_slots(&path, vec![(0x1111, 0)]).unwrap();
+        let back = load(&path).unwrap();
+        assert_eq!(
+            back.window,
+            Some(win),
+            "a slot save must not clobber the frame"
+        );
+        assert_eq!(back.display_slots, vec![(0x1111, 0)]);
     }
 
     #[test]

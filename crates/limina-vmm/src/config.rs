@@ -104,6 +104,12 @@ pub struct DisplaySpec {
     pub width: u32,
     /// Advertised display height in pixels.
     pub height: u32,
+    /// How many scanouts to configure. `num_scanouts` is virtio-gpu config-space state and
+    /// cannot grow once the device is built, so every display the guest may *ever* be given
+    /// has to exist from boot. Slot 0 boots connected at `width`x`height`; the rest boot
+    /// disconnected, waiting for a `DisplayControl` to give them an identity and connect them.
+    /// 1 is today's single-display device, byte for byte.
+    pub pool: u32,
     /// The host sink for presented frames.
     pub sink: DisplaySink,
     /// Force the software-2D-only GPU (no virglrenderer/venus init). Default is the

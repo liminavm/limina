@@ -86,6 +86,7 @@ fn l1_edid_identity_is_stable_and_pushable() {
     // ---- 3. A pushed identity lands, and the guest re-reads it.
     let control = DisplayControl {
         display_id: 0,
+        position: None,
         size: Some((1280, 800)),
         connected: None,
         edid: Some(EdidSpec {
@@ -162,6 +163,7 @@ fn l1_edid_identity_is_stable_and_pushable() {
     guest
         .update_display(DisplayControl {
             display_id: 0,
+            position: None,
             size: Some((3024, 1964)),
             connected: None,
             edid: Some(EdidSpec {
@@ -229,6 +231,7 @@ fn l1_edid_identity_is_stable_and_pushable() {
     guest
         .update_display(DisplayControl {
             display_id: 0,
+            position: None,
             connected: Some(false),
             ..Default::default()
         })
@@ -241,6 +244,7 @@ fn l1_edid_identity_is_stable_and_pushable() {
     guest
         .update_display(DisplayControl {
             display_id: 0,
+            position: None,
             connected: Some(true),
             ..Default::default()
         })
