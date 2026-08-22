@@ -9,15 +9,24 @@ appetite.
 Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, see below.
 
 ## Display / window
-- **NEEDS-REPRO: the pointer is withheld for a long time when leaving the VM's Space, and jumps on
-  re-capture coming back.** Observed on dogfood 2026-08-22, **single display**, so nothing in the
-  multi-display mapping is implicated. Booked together because both hang off the same trigger —
-  switching macOS Spaces away from the VM and back — not because they are known to be one fault: switching away to another macOS Space leaves the pointer unavailable
-  for a noticeable stretch, and returning re-takes the grab with the cursor somewhere other than
-  where it was left. Reproduce first on a booted VM with `LIMINA_EDGE_TRACE=1` +
-  `LIMINA_POINTER_WIRE_TRACE=1` — the release target logged by `release_grab` against the first
-  `[CAP]`/`[EDGE]` lines after the return is exactly the comparison that names a jump's origin, and
-  `[GRABSTATE]` transitions bracket the withheld window. No theory here on purpose.
+- **The pointer cannot be drawn for the first ~350 ms of a Space-switch animation, and every
+  public signal that would let it says so too late.** Measured 2026-08-22 on six flicks: a
+  three-finger Space switch animates for ~530 ms, and `isOnActiveSpace`, key status and
+  app-active all move at the switch's **commit** — so a captured pointer stays hidden,
+  disassociated and parked for the whole animation, and appears only once it settles. macOS
+  itself draws a moving cursor throughout an ordinary Space switch, so the behaviour is
+  achievable; we simply cannot see the transition start. The one public signal that leads is
+  `NSWindow.occlusionState`, which loses `.Visible` **175–200 ms before** the flip (174, 175,
+  184, 188, 170, 201) — because it means "any pixel of our window still shows", so sliding OUT
+  we stay visible until about two-thirds through, while sliding IN it turns visible ~535 ms
+  ahead of the flip. Hanging the release on it would return the pointer for the last third of
+  the animation; judged not worth the extra release trigger on its own, and parked deliberately
+  rather than half-fixed. Trackpad gesture events ARE visible to the tap (`NSEventType` 29, the
+  burst starting ~530 ms before occlusion drops, which would cover the whole animation) but fire
+  for every gesture including two-finger scrolls, so using them means classifying by touch count
+  — a heuristic the grab should not hang on, and one that would still miss Ctrl-arrow and
+  Mission Control. Remaining lever if this is ever picked up: a private CGS space-change
+  callback, unpriced, and likely to fire at the commit like everything else.
 - **NEEDS-REPRO: the pointer does not appear immediately after a logout/login cycle — seen under
   SYNOIK, not mutter.** Observed on dogfood 2026-08-22, intermittently. Which side owes the fix is
   open: a Vulkan compositor drives the cursor plane differently from mutter (see §Stock virtio-gpu
@@ -31,6 +40,20 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   the ask, so the chrome retracts out from under an open menu. The ask is slaved to the observed
   `NSMenu::menuBarVisible` (`InputState::menubar_observed`) and released by `reveal_step`; which of
   the two lets go first is unmeasured. Same vehicle and traces as the entry above.
+- **A guest desktop that is not a rectangle has no edge class for the dead space, in two
+  places.** Measured 2026-08-22 on the dogfood, guest arranged as Dell (0,184) 3072x1728 @1.25
+  beside built-in (3072,0) 2048x1328: any vertical offset or height mismatch leaves corners of
+  the bounding box that belong to no monitor, and both the captured clamp and the pressure
+  filter assume the box IS the desktop. (1) `fit::range_step` clamps captured motion to
+  `0..=ABS_MAX` — the ends of the whole box, not of the display the cursor is on — so a display
+  whose top is not the box's top can be pushed past its own edge into dead space, where the
+  cursor is over no output and simply vanishes; ~200 host px of push before overflow even starts
+  to charge, and the relative motion then forwarded fights the absolute device that keeps
+  snapping it back. (2) `arrangement::outer_edges` calls an edge outer only when it sits at the
+  bbox coordinate, so with a guest report in place that same top becomes a *seam* and
+  `Edges::keep` drops the push entirely — a leaky wall for a dead one. An edge is a seam only
+  where a neighbour actually abuts it over that span; an edge facing dead space is outer. Both
+  vanish if the tops are aligned in the guest, which is the workaround, not the fix.
 - **`notch = extend`: the band is not hidden when the reveal triggers ungrabbed.** The strip
   overlay keeps covering its band while macOS has the menu bar out, so the revealed bar sits
   behind the very thing the reveal exists to get past. The grant path is there and works
