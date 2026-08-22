@@ -3443,6 +3443,37 @@ pub fn run(
     }
     let _timer = timer;
 
+    // Whether a macOS menu is open, for the grab (see `capture_tap::set_menu_open`). Observed
+    // rather than asked: AppKit has no "is a menu up" property, and the tap cannot tell a click
+    // that closes a menu from a click asking for the guest — the window server answers "guest
+    // content" for any point the menu's panel does not happen to cover.
+    //
+    // `object: None` so it catches every menu in the app, not one we remember to wire up; the
+    // observer is deliberately never removed (app lifetime, like the tap's context).
+    {
+        let center = objc2_foundation::NSNotificationCenter::defaultCenter();
+        let opened = RcBlock::new(move |_n: NonNull<objc2_foundation::NSNotification>| {
+            capture_tap::set_menu_open(true);
+        });
+        let closed = RcBlock::new(move |_n: NonNull<objc2_foundation::NSNotification>| {
+            capture_tap::set_menu_open(false);
+        });
+        unsafe {
+            let _ = center.addObserverForName_object_queue_usingBlock(
+                Some(objc2_app_kit::NSMenuDidBeginTrackingNotification),
+                None,
+                None,
+                &opened,
+            );
+            let _ = center.addObserverForName_object_queue_usingBlock(
+                Some(objc2_app_kit::NSMenuDidEndTrackingNotification),
+                None,
+                None,
+                &closed,
+            );
+        }
+    }
+
     // Capture keyboard + mouse via a local event monitor and forward them to the worker as evdev
     // events. Swallowed key events return null; pass-through events return themselves. The
     // translator (`input_state`, an Rc) was created above so the render timer shares it (to flush

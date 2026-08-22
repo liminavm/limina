@@ -741,6 +741,24 @@ fn route_aux_event(ctx: &TapCtx, event: CGEventRef, mode: GrabMode) -> CGEventRe
     std::ptr::null_mut()
 }
 
+/// Whether a macOS menu is open and tracking right now.
+///
+/// Set from `NSMenuDidBeginTracking`/`NSMenuDidEndTracking` (window/mod.rs). The grab needs it
+/// because a click that dismisses an open menu is indistinguishable, at the tap, from a click
+/// asking for the guest: the window server's hit test answers honestly that the point is guest
+/// content — the menu's panel does not extend over it — and the grab took the pointer on a click
+/// the user spent closing a menu (dogfood 2026-08-22).
+static MENU_OPEN: AtomicBool = AtomicBool::new(false);
+
+/// Note that a menu opened or closed — see [`MENU_OPEN`].
+pub(crate) fn set_menu_open(open: bool) {
+    MENU_OPEN.store(open, Ordering::Release);
+}
+
+pub(crate) fn menu_open() -> bool {
+    MENU_OPEN.load(Ordering::Acquire)
+}
+
 thread_local! {
     /// A failed install's context, kept so [`retry_install`] can re-attempt the tap when
     /// Accessibility is granted mid-run. Main-thread only (like everything else here).
@@ -825,6 +843,7 @@ fn uncaptured_edges(
         space_visible: arming.1,
         grab_enabled: ctx.hold > 0.0,
         buttons_down: ctx.buttons.get() != 0,
+        menu_open: menu_open(),
         click,
     };
     // The window server's own hit test, deferred until the policy has a reason to spend it (a

@@ -214,6 +214,8 @@ fn the_hidden_seam_trace_replays_to_a_release_through_the_seam() {
                     grab_enabled: true,
                     buttons_down: false,
                     click: false,
+                    // The recording has no menu open; the trace would carry no click anyway.
+                    menu_open: false,
                 };
                 // The recording is a pointer over guest content throughout — the episode is
                 // about the grab, not about macOS chrome.

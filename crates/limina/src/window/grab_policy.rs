@@ -590,6 +590,9 @@ pub(crate) struct Free {
     pub buttons_down: bool,
     /// This event is a button press: the user's explicit ask for the grab.
     pub click: bool,
+    /// A macOS menu is open and tracking. The first click anywhere else belongs to macOS —
+    /// it dismisses the menu — and says nothing about the guest either way.
+    pub menu_open: bool,
 }
 
 /// What the free path owes this event.
@@ -655,6 +658,15 @@ pub(crate) fn free_step(st: &mut GrabState, s: &Free, on_guest: impl Fn() -> boo
     // Without that, using the menus was a fight — the walk back down toward the guest re-took
     // the pointer, and the click on the menu item took it too.
     if s.click {
+        // A click while a menu is open is spent closing it. macOS eats it for the dismissal, so
+        // it never reaches the guest — and it is not the user leaving for macOS either, since
+        // they said nothing about the guest. The hit test cannot tell us this: an open menu's
+        // panel does not cover the whole screen, so a click beside it answers "guest content"
+        // perfectly honestly (dogfood 2026-08-22 — the chrome revealed, a menu open, and the
+        // grab taken by the click that closed it).
+        if s.menu_open {
+            return out;
+        }
         if !on_guest() {
             st.user_released = true;
             st.reset_gesture();
@@ -693,7 +705,15 @@ pub(crate) fn free_step(st: &mut GrabState, s: &Free, on_guest: impl Fn() -> boo
     // `on_guest` last: it is a window-server round trip, and only worth spending once the dwell
     // and the margin have already said yes. A pointer resting deep inside the guest's rect but
     // under an open menu is not in the guest, and must not be taken back mid-menu.
+    //
+    // `menu_open` is the rest of that same rule. The hit test only knows whether the pointer is
+    // UNDER the menu's panel, so walking down off the menu bar — away from the open menu, into
+    // the guest's picture — passed it, and the dwell took the pointer back mid-menu after all.
+    // Taking the grab makes the chrome ask moot, so the reveal retracts — while the menu stays
+    // open, stranded above a guest that now owns the pointer, leaving the user to ungrab before
+    // they can dismiss it: "the reveal drops when I move down a bit" (dogfood 2026-08-22).
     if !st.user_released
+        && !s.menu_open
         && fit::may_regrab(s.pos, s.fit, out.inside_for, s.buttons_down)
         && on_guest()
     {
@@ -1052,6 +1072,7 @@ mod tests {
             grab_enabled: true,
             buttons_down: false,
             click: false,
+            menu_open: false,
         }
     }
 
@@ -1061,6 +1082,65 @@ mod tests {
             buttons_down: true,
             ..free(pos, now)
         }
+    }
+
+    /// A menu open on the other side of the screen still means the user is in macOS.
+    ///
+    /// Dogfood 2026-08-22, and the real form of "the reveal drops when I move the cursor down a
+    /// bit": nothing dropped the reveal. Coming down off the menu bar left the pointer deep in
+    /// guest content with no button, the dwell re-grab fired ~465 ms later, and taking the grab
+    /// makes the chrome ask moot by design — so the reveal retracted. The menu does NOT go with
+    /// it: it stays open, stranded above a guest that now owns the pointer, and the user has to
+    /// Cmd-Ctrl-G out of the grab just to dismiss the UI they were already using. The `on_guest`
+    /// hit test cannot catch this: it only knows the pointer is not *under* the menu's panel,
+    /// which is true and beside the point.
+    #[test]
+    fn the_dwell_does_not_retake_the_pointer_while_a_menu_is_open() {
+        let mut st = GrabState::default();
+        let t0 = Instant::now();
+        let deep = (700.0, 400.0);
+        let dwelt = t0 + fit::REGRAB_DWELL + Duration::from_millis(50);
+        free_step(&mut st, &free(deep, t0), || true);
+        let out = free_step(
+            &mut st,
+            &Free {
+                menu_open: true,
+                ..free(deep, dwelt)
+            },
+            || true,
+        );
+        assert!(!out.grab, "the user is in the menu, not the guest");
+        assert!(!st.holding());
+        // The dwell is not thrown away by the wait — the menu closing is enough.
+        let out = free_step(&mut st, &free(deep, dwelt), || true);
+        assert!(out.grab, "with the menu gone the dwell stands");
+    }
+
+    /// The click that closes a menu is macOS's, not an ask for the guest.
+    ///
+    /// Dogfood 2026-08-22, with the chrome revealed and a menu bar menu open: a click below the
+    /// open menu's panel landed on guest content by the window server's own honest answer, and
+    /// the grab took the pointer. But macOS eats that click to dismiss the menu — the user never
+    /// reached the guest with it, and got captured for their trouble.
+    #[test]
+    fn a_click_that_dismisses_an_open_menu_is_not_an_ask_for_the_grab() {
+        let mut st = GrabState::default();
+        let t0 = Instant::now();
+        let out = free_step(
+            &mut st,
+            &Free {
+                menu_open: true,
+                ..click((700.0, 400.0), t0)
+            },
+            || true,
+        );
+        assert!(!out.grab, "the menu's dismissal is not a grab request");
+        assert!(!st.holding());
+        // …and it is not the user leaving for macOS either: nothing about the guest was said.
+        assert!(!st.user_released());
+        assert!(!out.left_guest);
+        // The very next click, with the menu gone, is the real ask.
+        assert!(free_step(&mut st, &click((700.0, 400.0), t0), || true).grab);
     }
 
     #[test]
