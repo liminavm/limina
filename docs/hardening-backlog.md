@@ -35,7 +35,9 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   Space; only the slot table takes a window down (`windows::slot_fate`). The re-entry that was
   supposed to give fullscreen back — and sometimes did not — is gone from this path entirely,
   along with the duplicate `toggleFullScreen` that `SecondaryWindow::open` used to make before
-  `apply`'s own restyle. Rule recorded in docs/graphics.md §"A panel owns a slot".
+  `apply`'s own restyle. Rule recorded in docs/graphics.md §"A panel owns a slot". Confirmed on
+  the two-panel rig over two logout/login cycles: 5 modesets on slot 1, 1 window opened (the
+  deliberate one, when the panel was switched on), 0 closes, no unasked-for grab.
   - Still open, and a different mechanism: a **reboot** does drop a fullscreen secondary, because
     the firmware phase collapses the pool to slot 0 (`DisplayTable::wanted`) and the table really
     does dismiss the other slot. Nothing mirrors the console onto the other panels, so there is
