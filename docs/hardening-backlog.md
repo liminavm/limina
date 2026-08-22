@@ -9,6 +9,28 @@ appetite.
 Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, see below.
 
 ## Display / window
+- **NEEDS-REPRO: the pointer is withheld for a long time when leaving the VM's Space, and jumps on
+  re-capture coming back.** Observed on dogfood 2026-08-22, **single display**, so nothing in the
+  multi-display mapping is implicated. Booked together because both hang off the same trigger —
+  switching macOS Spaces away from the VM and back — not because they are known to be one fault: switching away to another macOS Space leaves the pointer unavailable
+  for a noticeable stretch, and returning re-takes the grab with the cursor somewhere other than
+  where it was left. Reproduce first on a booted VM with `LIMINA_EDGE_TRACE=1` +
+  `LIMINA_POINTER_WIRE_TRACE=1` — the release target logged by `release_grab` against the first
+  `[CAP]`/`[EDGE]` lines after the return is exactly the comparison that names a jump's origin, and
+  `[GRABSTATE]` transitions bracket the withheld window. No theory here on purpose.
+- **NEEDS-REPRO: the pointer does not appear immediately after a logout/login cycle — seen under
+  SYNOIK, not mutter.** Observed on dogfood 2026-08-22, intermittently. Which side owes the fix is
+  open: a Vulkan compositor drives the cursor plane differently from mutter (see §Stock virtio-gpu
+  formats in `docs/images.md`), and a session restart is exactly where a plane left armed or a
+  shape never re-uploaded would show. Note the standing rule — **a mutter "cannot reproduce" is a
+  FALSE NEGATIVE here**, so this must be chased on the synoik image
+  (`Fedora-Workstation-44.enhanced.synoik.raw`, cloned), not the mutter one. The guest synoik
+  session is a peer and can be asked what its side saw.
+- **NEEDS-REPRO: the reveal drops while the menu is still open, on a small downward move.**
+  Observed on dogfood 2026-08-22. Moving the pointer down slightly with a macOS menu open releases
+  the ask, so the chrome retracts out from under an open menu. The ask is slaved to the observed
+  `NSMenu::menuBarVisible` (`InputState::menubar_observed`) and released by `reveal_step`; which of
+  the two lets go first is unmeasured. Same vehicle and traces as the entry above.
 - **`notch = extend`: the band is not hidden when the reveal triggers ungrabbed.** The strip
   overlay keeps covering its band while macOS has the menu bar out, so the revealed bar sits
   behind the very thing the reveal exists to get past. The grant path is there and works
