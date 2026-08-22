@@ -27,6 +27,18 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   — a heuristic the grab should not hang on, and one that would still miss Ctrl-arrow and
   Mission Control. Remaining lever if this is ever picked up: a private CGS space-change
   callback, unpriced, and likely to fire at the commit like everything else.
+- **NEEDS-REPRO: a secondary window leaves fullscreen when the session hands over to gdm, and
+  does not always come back.** Observed on the rig 2026-08-22: logging out drops the compositor,
+  gdm takes over, and the secondary window leaves fullscreen; gdm picking the session back up
+  restored it once and did not the second time. Already visible in a `LIMINA_EDGE_TRACE` run of
+  that cycle, twice over: the second slot is re-modeset at the handover — `scanout 1 ->
+  IOSurfaces […] (3024x1960)` to `(1920x1440)` and back — while the panel count runs 2 -> 1 -> 2
+  (`pointer capture: … panels 1 -> 2`). So the leaving is the slot being dismissed under a
+  changing scanout; the not-coming-back is the *re-entry* to fullscreen, which is a separate step
+  and evidently not guaranteed. Read against the standing rule that a dismissed slot's window
+  must close on OUR decision rather than on `scanoutgone` (docs/graphics.md §"A panel owns a
+  slot"): a mode change is not a dismissal, and may be what is being read as one. Reproduce with
+  two panels, the guest fullscreen on both, and repeated logout/login cycles.
 - **NEEDS-REPRO: the pointer does not appear immediately after a logout/login cycle — seen under
   SYNOIK, not mutter.** Observed on dogfood 2026-08-22, intermittently. Which side owes the fix is
   open: a Vulkan compositor drives the cursor plane differently from mutter (see §Stock virtio-gpu
