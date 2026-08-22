@@ -1606,8 +1606,9 @@ control plane (`limina-proto` `SHUTDOWN`/`TIME_SYNC`) + `limina-agent` (M5); dis
 completed: the emulated xHCI controller plus the FIDO gadget *and* the impersonated MOC
 (elanmoc) fingerprint reader are default-on since `f9646d0`, so a stock guest gets both with no
 guest components installed (`docs/design/usb-moc-fingerprint.md`, `docs/fingerprint-reader.md`).
-What remains is an L2 FIDO guard with a test-only Touch-ID bypass, and payload/app-bundle
-delivery polish. Original CTAP2-core detail, still accurate:
+What remains is an L2 FIDO guard with a test-only Touch-ID bypass, payload/app-bundle
+delivery polish, and the host/guest shared-identity follow-up booked at the end of this section.
+Original CTAP2-core detail, still accurate:
 
 **CTAP2 core GREEN end-to-end (2026-07-24, `spikes/touchid-fido/RESULTS.md`). Spikes A
 (SEP/Touch ID primitive) + B (uhid↔vsock transport) done, then the real authenticator: hand-rolled
@@ -1632,8 +1633,9 @@ device forwarding.
    `SecKeyCreateSignature`. Key material never exists in the guest; a compromised guest cannot
    sign without a finger on the physical sensor. Credentials are **device-bound** (like a hardware
    key), **namespaced per VM**; attestation = self/none (no cert chain); the restricted
-   `com.apple.developer.web-browser.public-key-credential` entitlement is NOT needed (only gates
-   iCloud/Apple-Passwords passkeys, which we don't touch).
+   `com.apple.developer.web-browser.public-key-credential` entitlement is NOT needed — it gates
+   asking *macOS's own* authenticator for credentials on arbitrary relying parties, which is a
+   different design (and the one the host/guest-shared-identity follow-up below would need).
 2. **Spike A facts (all empirical):** LAContext prompt + userPresence-gated SEP ES256 signing work
    from a terminal-launched, Apple-Development-signed CLI with **zero entitlements**. The
    data-protection keychain needs profile-backed entitlements — plain `codesign --entitlements`
@@ -1700,6 +1702,37 @@ by protocol simplicity); fwupd's actual probe behavior vs the version bluff; enr
 (each "touch" = a host prompt); LAContext prompt from all launch modes (terminal proven; Dock
 launch to verify — cf. the fd-limit and TCC launch-env traps); multi-VM prompt attribution.
 
+### Follow-up: one passkey identity across host and guest (📋 booked 2026-08-17)
+
+**Wanted:** guest Firefox signs in with the *same* passkey as host Firefox, so a VM is not a
+separate identity — and **per-VM configurable**, because plenty of users want the guest's
+credentials deliberately untied from the host's. Design the switch in from the start
+(`vm.toml`, alongside the other hardware toggles); today's behavior is the isolated end of it.
+
+**The obvious route is closed, and the reason generalizes.** Sharing the host's passkeys means
+asking macOS's own platform authenticator for them (AuthenticationServices), which also happens to
+be the only way to get Apple-rooted attestation. Its RP identifier must be a domain the app is
+associated with, and the escape hatch for arbitrary RP identifiers is
+`com.apple.developer.web-browser.public-key-credential` (macOS 13.3+) — a **managed capability
+Apple grants only to web browsers**: the Account Holder applies, and the app must declare the
+HTTP/HTTPS schemes, offer a URL field / search / bookmarks on launch, and render the destination's
+own web content. A VM meets none of that. (This also settles the neighbouring question: **we cannot
+relay Apple attestation.** `SecKeyCreateAttestation` is absent from the public macOS SDK entirely,
+and App Attest (`DCAppAttestService`, macOS 11+) attests only a key *it* generates and binds our own
+App ID, not the guest site's RP identifier — verified against the SDK headers, not recalled.)
+
+**The route we control inverts the direction:** rather than the guest borrowing the host's
+credentials, present *limina's* enclave-backed authenticator to the **host** as well, so both sides
+share one store and one identity. Host browsers only speak to real HID devices, so this needs a
+virtual USB/HID device on macOS — DriverKit (`com.apple.developer.driverkit.transport.hid`), itself
+an entitlement, but one granted to ordinary device developers rather than to browsers only.
+**Unverified**: whether a DriverKit HID device is reachable by browsers as a security key, and what
+that entitlement actually requires. Spike that before promising the feature.
+
+Sharing then makes the per-VM switch load-bearing rather than cosmetic: one store means a guest
+compromise can *ask* for signatures on host credentials (each still gated by a Touch ID sheet whose
+reason string must name the asking VM — see the multi-VM prompt-attribution risk above).
+
 ---
 
 ## Milestone 15 — Virtual display pipeline v2: native refresh, hardware planes, scanout modifiers
@@ -1750,6 +1783,40 @@ cannot be acceptance-tested without one — this wave unblocks it. VRR/ProMotion
 design half: CA latch cadence is variable, and the guest should see that (EDID VRR range /
 `vrr_capable`) rather than a fixed grid. Rides on the per-hw-display work already planned for
 multi-display (M8 remainder).
+
+**Part 3 (more than one virtual display) ✅ SHIPPED 2026-08-18** — a boot-time pool of scanouts
+(`--display-pool`, default 4 windowed), a slot table where **a host panel owns a connector**
+stably by `panel_key` (so GNOME's saved per-monitor configuration still matches after a
+migration), fullscreen across every attached panel, and a Displays menu that switches a panel
+out of the guest's arrangement. `crates/limina/src/window/displays.rs` holds the policy;
+`docs/graphics.md` has the model and the traps.
+
+**Part 4 (arrangement relay) ✅ SHIPPED 2026-08-19** — the guest is told *where* each connector
+sits, so a guest with no saved configuration comes up laid out like the host instead of
+left-to-right by accident. The rect that `virtio_gpu_resp_display_info` always carried now
+flows end to end: limina computes guest-desktop positions from the host arrangement
+(`crates/limina/src/window/arrangement.rs` — structure detected in point space, metric rebuilt
+in predicted logical units, and the whole set re-validated against mutter's own
+adjacency/overlap rules: emit a clean full set or nothing), libkrun carries them
+(`DisplayInfo::position` → `GET_DISPLAY_INFO` r.x/r.y), and the enhanced kernel exposes them as
+the DRM `suggested X`/`suggested Y` connector properties **plus `hotplug_mode_update`**, which
+compositors gate the offsets on (mutter returns early without it — the offsets alone are
+silently ignored). Enhanced tier; stock guests unaffected. Three ordering/timing rules were
+load-bearing on the rig: the whole suggested set must be in place *before* the connect's
+hotplug (in-place moves are sent first, positions ride the connect); one config-change event
+carries every update that can share it, and the device holds further events until the guest
+acks (the ack race otherwise loses the second event — regression:
+`l1_multidisplay::l1_b_back_to_back_updates_survive_the_ack_race`, which needs the 7.1.8+
+guest driver where the window exists); and a position is never pushed to a slot already at
+the device default. Rig-verified 2026-08-19: fractional-scale BenQ at (1512, 0), hidpi
+built-in at (0, 747), matching the host, user-confirmed at the seam. The metric is
+self-correcting: where the guest picks a scale the host prediction can't see (fractional on
+a fixed-mode connector), the agent's reported logical rects replace the predicted sizes
+before the walk (`arrangement::correct_metric`, design in
+`docs/design/arrangement-relay.md`). When corrections take effect is mutter's call — mutter
+≥ 50 re-applies an existing config over any in-place suggested change, so corrected offsets
+land at a set's first appearance or the next seat, never mid-session (verified end to end;
+`l2_arrangement.rs` pins the precedence and the seat-time apply).
 
 ### Wave 2 — overlay planes on virtio-gpu (protocol extension, both sides)
 
@@ -2037,7 +2104,19 @@ occupy `gnome-build-meta`'s position, junction fdsdk and override elements rathe
   - **A host-side lever worth building:** limina can verify a slot's whole `/usr` against its root
     hash **offline, from outside, with the guest powered off** — the complete check the guest
     never performs, on an image it cannot tamper with while stopped. That belongs in the same
-    powered-off slot-health path that reads `.osrel`/`.cmdline` from the ESP.
+    powered-off slot-health path that reads `.osrel`/`.cmdline` from the ESP. Built and proven in
+    `spikes/liminaos-slot-health/`; the moment to run it is **immediately after a rollback**.
+  - **⚠️ "dm-verity activated" is evidence about the hash TREE, not about the image.** A payload
+    with a corrupt data block can ship a byte-identical, intact tree whose root still matches the
+    GPT — activation has nothing to object to, and the failure surfaces at the first read of the
+    damaged block. Anything reporting `verified` as reassurance is reporting the tree.
+  - **Open, and it decides what the product protects against: how much of `/usr` the boot path
+    actually reads.** Corruption at data block 0 rolls back; corruption 50 MiB in boots clean and
+    gets blessed — same image class, opposite outcomes, separated only by *where* it sat. If that
+    read-on-boot set is small, verity + A/B is a **tampering** defence being quoted as a
+    **corruption** defence. Measurable: we own the virtio-blk backend, so a read-trace across a
+    boot gives it. The answer is a fraction plus which regions — it moves when an early unit is
+    enabled, so it is not a constant to quote later.
 - **The cmdline must be embedded in the UKI**, since without a SecureBoot chain an externally
   supplied cmdline is unauthenticated and could simply drop `usrhash=`, making verity decorative.
   This is safe on our stack: **limina passes no cmdline at all on the EFI path** (it sets only the
@@ -2051,9 +2130,21 @@ occupy `gnome-build-meta`'s position, junction fdsdk and override elements rathe
   retry loop, not a rollback**. Protection comes from having a good slot to *prefer*, which means
   **both the bless side (`systemd-bless-boot` / `boot-complete.target`) and a populated B slot must
   exist** before boot counting protects anything at all.
+  - **Proven on real KRUN_EFI**, not only under TCG: `+3-0 → +2-1 → +1-2 → +0-3`, every rename
+    surviving the power cycle, then the exhausted entry sorts last and the good slot takes over.
+    That the two bootloaders agreed is a *result* — they are not the same code executing.
   - Corollary for a headless guest: with `timeout 0` + `editor no`, boot counting is the *only*
     path back from a bad update, so confirm the menu is still reachable on a held key over serial
-    before depending on it.
+    before depending on it. **And a verity failure parks the guest in an emergency shell that a
+    locked root makes unusable**, so there is nothing behind boot counting — which means `timeout 0`
+    needs a positive justification, not merely a passing reachability test.
+  - **A successful rollback leaves the guest with no working fallback, and says nothing.** After
+    recovering, the machine runs fine with zero failed units while its only fallback is a slot that
+    is both exhausted and corrupt — one bad block from having nothing to boot. No guest-side lever
+    can see this *by construction*: verity validates blocks on read and a dormant slot is read by
+    nothing; sysupdate reasons about versions, to which two slots present is the healthy shape;
+    there is no failed unit because the degradation is not in the running system. The obligation is
+    host-side, and reporting a recovery as an unqualified success is the actual defect.
 - **`systemd-sysupdate` A/B** on partitions + UKIs in the ESP, with **the limina twist: the host
   serves updates over virtiofs** — sysupdate takes local paths, so a LiminaOS guest needs no
   network and no update server. Host contract: `--share updates=<dir>` → tag `limina-updates`,

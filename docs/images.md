@@ -53,7 +53,7 @@ guest with `rpm -q`. Last verified in a booted F44 enhanced guest 2026-08-16.
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F44 stock** (`*.raw`, `*.boot.raw`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-1` | 16 KiB | `26.1.6-1.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-3` | 16 KiB | `26.1.6-1.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
 | **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.8-1` | 16 KiB | `26.1.6-1.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` | 16 KiB | `26.1.5-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` (stock) |
@@ -79,8 +79,24 @@ release's stock GNOME Shell (same `libmutter-NN` ABI).
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r10.tar.zst`.** Applied with the real
-`install-enhanced.sh` to all three F44 enhanced images. What it contains:
+**Current payload: `payload/limina-guest-tools-f44-r15.tar.zst`** (r15, 2026-08-21: a host-side
+repack of r14 carrying `limina-agent-session` 0.1.1 — the claim-phase reconnect now writes its
+HELLO before the `DisplayLayout` seed; the old order had the host drop the peer and the helper
+reconnect without backoff until the worker died of `EMFILE`, see `docs/hardening-backlog.md`
+§Guest-reachable aborts). Applied with the real `install-enhanced.sh` to all three F44 enhanced
+images (`.bak-pre-r15.raw` CoW backups), the installed binary's sha256 verified against the build
+(`e2d6c874…`) — the sequence `scripts/provision/deliver-payload.sh <payload> <image>...` now
+scripts (backup → boot → install → verify both agent hashes → poweroff, per image); kernel and mesa short-circuited as already installed and the permanent default
+stayed `7.1.8-limina16k.3`, so no trial boot was owed. Previous: r14 (2026-08-19: kernel
+`limina-kernel-16k-7.1.8-3`, KREL `7.1.8-limina16k.3` — drm/virtio exposes each scanout's
+`GET_DISPLAY_INFO` rect as the DRM `suggested X`/`suggested Y` connector properties AND
+declares `hotplug_mode_update`, which compositors gate the offsets on: the guest half of the
+host→guest arrangement relay, rig-verified end-to-end; each image trial-booted and
+auto-promoted), r13 (2026-08-19, the
+offsets without the gate — relayed values mutter never read), r12 (2026-08-19,
+`limina-agent-session` multi-session arbitration — only the active seat session's helper
+reports the arrangement), r11 (2026-08-18, zxdg_output_v1 logical rects for the
+fractional-scale pointer mismap). What it contains:
 
 - the `limina-kernel-16k` and mesa RPM sets, their srpms, and a **local dnf repo**
   (`payload/repo/`, built by `package-payload.sh` with `createrepo_c`; devel/tests in, debuginfo
@@ -218,7 +234,7 @@ needs no ad-hoc installs (which perturb the very thing being measured, and on 20
 | `apitrace` (`eglretrace`) | Fedora `apitrace-13.0-6.fc44` | `gl-replay-venus`, `gl-replay-llvmpipe` |
 | `vkmark` | Fedora `vkmark-2025.01-3.20250123git2bf2ca7.fc44` | `vkmark-default-venus` — note this is the **distro** binary, so compare only against `vkmark-default-venus` rows, never the `vkmark-3scene-venus` ones |
 | `fio` | Fedora | virtio-blk path numbers |
-| `gfxrecon-replay` | **built in-guest** at `~claude/gfxreconstruct/build/tools/replay/`, upstream `765c3d6`; on the F44 `enhanced.test` golden it is `/opt/gfxreconstruct`, cross-built on the host by `scripts/build-gfxreconstruct.sh` at the **same** `765c3d6` (2026-08-16) | `vk-replay-venus-headless`, and the L2 `venus_vk_replay_matches_lavapipe_reference` |
+| `gfxrecon-replay` | **built in-guest** at `~claude/gfxreconstruct/build/tools/replay/`, upstream `765c3d6`; on the F44 `enhanced.raw` **and** `enhanced.test` images it is `/opt/gfxreconstruct`, cross-built on the host by `scripts/build-gfxreconstruct.sh` at the **same** `765c3d6` — on BOTH images so the documented reclone (`cp -c enhanced.raw enhanced.test.raw`) preserves it: a reclone from an enhanced.raw without it silently strips the fixture and `venus_vk_replay` fails with `gfxrecon-replay: No such file or directory` (bit the suite 2026-08-19; install = extract `target/test-guest/gfxreconstruct.tar.zst` into `/opt`) | `vk-replay-venus-headless`, and the L2 `venus_vk_replay_matches_lavapipe_reference` |
 
 `gfxrecon-replay` is not packaged for Fedora; the build recipe (and its F44-specific dependency
 set, without which OpenXR aborts cmake) lives in the header of `scripts/perf-ledger.sh`. Build

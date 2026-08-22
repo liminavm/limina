@@ -306,8 +306,9 @@ windows too, and it hid the Accessibility grant dialog behind the very app that 
   view while the strip went on showing the top of the real 980 pt fit. The GNOME top bar rendered
   twice, 33 pt apart, healing only on the things that happen to change the intent (a fullscreen
   toggle, the chrome ask). `layer_frame_differs` compares against the layer. **Never guard a write
-  to state someone else can change on a cache of your own intent** — `NSWindow::frame`, `fit_cell`
-  and the layer frames are all last-writes, not observations.
+  to state someone else can change on a cache of your own intent** — `NSWindow::frame` and the
+  layer frames are last-writes, not observations. (`fit_cell` itself is gone: the input gate
+  reads the layer too, `GuestWindow::fit`.)
 - **The user is not asking for the chrome.** Nothing can reveal over the overlay, which is the
   point of it; but the menu bar and the window's own controls still have to be reachable for the
   VM's menu actions. A deliberate shove at the top edge — **uncaptured only**, so a grabbed pointer

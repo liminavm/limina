@@ -9,14 +9,134 @@ appetite.
 Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, see below.
 
 ## Display / window
-- **Runtime window resize / EDID hotplug** — ✅ SHIPPED 2026-06-23 (all 4 layers; L1 sysfs test GREEN
-  + windowed-VM log-verified, guest re-modesets with no oscillation). Resizing the limina window
-  reflows the guest resolution, no reboot. Design + as-built notes:
-  `docs/design/runtime-display-resize.md`; memory `limina-display-resize`. libkrun patches 0025/0026.
-  **Extended 2026-07-31** with stable EDID identity + real connector events (libkrun 0119-0121):
-  the guest sees the identity/density/refresh of the host display the window is on, and a pushed
-  disconnect genuinely disconnects the connector. `docs/design/stable-edid-hotplug.md`.
-- **OPEN (found 2026-08-03): the host-derived EDID identity does NOT survive a GUEST reboot.**
+- **`notch = extend`: the band is not hidden when the reveal triggers ungrabbed.** The strip
+  overlay keeps covering its band while macOS has the menu bar out, so the revealed bar sits
+  behind the very thing the reveal exists to get past. The grant path is there and works
+  (`InputState::menubar_observed` slaves the ask to the observed `NSMenu::menuBarVisible`); what
+  is missing is the band standing down for it in the uncaptured case. Small, and known.
+- **The mapping probe could not run until the pointer had already been misplaced — FIXED
+  2026-08-22.** The sweep gated on `capture_range`, which a taken grab clears and only captured
+  motion writes, so it waited for the very stroke it existed to place correctly: on a first
+  two-display session that stroke went through the identity mapping (slot 0 runs 1.738x ahead of
+  it on the rig), which is the flick that lands on the wrong display. The gate was there because
+  the sweep restored to a saved device number — one computed under the mapping the sweep then
+  replaced, so restoring by it was a teleport. Both are gone: the restore re-places `capture_pos`
+  through the mapping as it now stands, and the sweep runs grabbed or not, since the mapping it
+  learns is the *uncaptured* pointer's. Two faults the ungrabbed sweep then exposed are fixed with
+  it — `follow_guest_echo` chasing the sweep's own cursor (which warped the park across displays,
+  dropped the grab mid-sweep, and corrupted the restore position), and `send_device` handing the
+  verifier a device unit where a display unit belongs. Rig-verified end to end 2026-08-22: sweep
+  starts on the panel joining with no mouse movement, both slots learned, restore lands at
+  miss=0.0px, cursor confirmed on screen by eye.
+- **The probe's corner avoidance is in the wrong space.** `absfit::PROBE_SWEEP` keeps `v` inside
+  `0.30..0.70` *of the union*, and a display occupying only part of the union's height can have its
+  top edge inside that band (the rig's slot 1 starts 172 logical px down). A step meant to be
+  mid-screen can therefore land clamped on a display's top edge, and at `u = 0.05` that is a
+  top-left corner: GNOME Activities. The sweep's guard test checks device space, which proves
+  nothing about where a step lands on a display. Derive the safe band per slot from the lines, or
+  keep the sweep inside a band no display can have a corner in. NOT the cause of "enabling Use
+  Other Screens When Fullscreen always triggers the overview": that was the identity-mapped first
+  flick the sweep could not pre-empt, and it is gone. Ten rig sweeps land no step near a corner,
+  so this is a latent hazard of an arrangement we have not met, not an observed failure.
+- **Clicks that do not grab, with the tap installed — open.** Reported 2026-08-22: some presses
+  neither take the grab nor stand it down, and printed nothing at all. Every press the tap sees now
+  logs one info line with the facts behind the answer (`pointer capture: click at (x,y) — grabbed=…;
+  fullscreen=… key=… space=… on-screen=… grab-enabled=… latched=…`), and the no-tap path says so in
+  its own words. Read those before theorising — the cause is not yet known, and the previous
+  `[CLICK]` line only printed under `LIMINA_EDGE_TRACE` *and* only after the policy had run, so a
+  press refused earlier was invisible. One concrete candidate now instruments itself: the system
+  disables our event tap on timeout or user input, and the re-enable used to be silent — events in
+  that gap reach the app untapped, so a click there takes no grab and logs nothing, which is
+  exactly the reported signature. `pointer capture: the system disabled our event tap` now says so.
+- **The probe's first pass is blind.** With no lines yet the ten steps are a fixed set whatever the
+  union's division, so how many samples each slot gets is luck. Once one line exists each slot's
+  span is known and the remaining steps could be placed *inside* each slot deliberately — which
+  also fixes the corner problem above. On the rig it currently divides 6/4, which fits both slots
+  well, but nothing arranges that.
+- **The free pointer never re-grabs over a secondary window — CLOSED 2026-08-21.** It was the
+  explicit-release latch (`user_released`), not the sampler: one Cmd-Ctrl-G latched the policy
+  out, and on a fullscreen-everything Mac neither clearing edge (the pointer leaving guest
+  content, the window regaining key) can ever arrive. The `[EDGE]` trace's `latched=true`
+  said so. A click on guest content now takes the grab at once and clears the latch
+  (`grab_policy::free_step`); the key-regain clear is gone.
+- **Pointer hotspot: clicks registered slightly right of the visual tip — FIXED 2026-08-21.**
+  The guest kernel sends the cursor plane's `crtc_x/crtc_y` (pointer minus hotspot,
+  `virtgpu_plane.c:503`) with the hotspot separately; the captured-mode overlay subtracted the
+  hotspot a second time, so the sprite sat hot_x/hot_y px up-left of the guest's cursor. Only
+  the captured path drew it (fullscreen auto-captures, which is why dogfood saw it); NSCursor
+  applies the hotspot once. Rig-verified: tip and click coincide in fullscreen.
+- **Secondary cover: present at final size from the first frame.** Entering fullscreen covers a
+  panel by `toggleFullScreen(None)` on a small centered titled window; AppKit's zoom animates
+  the window frame while CA stretches whatever surface is current to each intermediate layer
+  frame, so the guest content visibly scales into place until the guest re-modesets. All our
+  own layer writes are action-disabled — the stretch is purely content tracking AppKit's
+  transition. Polish (deliberately after multi-display is feature-complete): pre-size the
+  window/layer to the panel before the toggle, or curtain/hold the layer until the transition
+  settles and the guest's mode matches, so the content lays out and draws once, at the correct
+  size. Levers are all host-side (`windows.rs` restyle + refit).
+- **Relay units FIXED (513fe03, verified on the rig 2026-08-18): the arrangement relay reports
+  the compositor's own logical rects via `zxdg_output_v1`.** The guest spreads the absolute
+  range over its monitors' **logical** extents (measured, `spikes/pointer-units-oracle/RESULTS.md`);
+  `wl_output` carries only integer scale, so the old mode/scale division was wrong by 1.6x under
+  fractional 1.25 — the ~20% unreachable band and the offset hit testing. Verified: guest journal
+  reports 2048-logical rects, wire seam pileup moved 0.458 → 0.575, full range reachable, clicks
+  land true, and the post-rearrangement seam (0.425) tracked the relay's report. Delivered as
+  payload r11 to all three F44 enhanced images. Without a report the host does not guess a
+  layout: each window maps onto the whole range (`arrangement::abs_through_report`), exact for
+  one display and the documented stock-tier floor for two — loud, not silent (the guest-echo
+  check in `input.rs`).
+
+  **The desktop model is RETIRED; the captured cursor follows the guest (2026-08-21).** The
+  captured position is a running value in the device range, scaled from host deltas by a
+  mode-width gain and clamped only at the range ends; the guest crosses its own seams, its
+  cursor echo names the slot, and the fit used for drawing/press/release re-bases to it
+  (`docs/input-and-windows.md` §4). The retired model — a desktop-space cursor confined to the
+  union of monitor rects the host laid out itself when no agent reported — made every trigger
+  follow a guessed layout while the sprite followed the guest. No host-side layout guess may
+  return. Remaining gaps: the per-slot gain is the pixel-row approximation (a guest at 2× on one
+  display moves its cursor at a different speed there — tune from the echo if it shows);
+  uncaptured multi-display on a STOCK guest has no share model (each window maps onto the whole
+  range; the `guest pointer:` warnings say where the guest put it) — fit the shares from the
+  echo, or offer one panel without a report; a fullscreen-all held-button drag still follows
+  AppKit's mouseDown-window routing.
+
+  Two guest cursor defects surfaced on the rig (2026-08-19), both mutter's, **no limina time
+  on either** (the compositor replacement retires mutter; very-low-priority upstream-report
+  candidates): the "ghost cursor" guest half — after a REARRANGEMENT (scale changes do not
+  trigger it) mutter software-paints the cursor while leaving the hardware cursor plane armed
+  and stale; recovers on a CRTC crossing (`spikes/pointer-units-oracle/RESULTS.md` §5, with a
+  `SUBMIT_3D → ERR_UNSPEC` kernel-error flood minutes earlier as an open lead; the host half,
+  AppKit unhiding the parked NSCursor behind the hide refcount, is FIXED `64aee92` — the
+  captured pointer wears the transparent blank, so a stray unhide shows nothing); and over the
+  Settings arrangement diagram a pre-upscaled ~2× blurry arrow uploaded into the 64×64 cursor
+  buffer (23×39 vs the arrow's 13×22, §6; every output at 100%, host path invariant).
+
+  Related routes assessed: per-display virtio tablets are measured viable for pointing but
+  blocked on the wheel (`spikes/per-display-input/RESULTS.md`); libei/EIS is the wrong layer
+  for a VMM's pointer though its per-region model independently vindicates per-screen absolute
+  devices (`docs/research/12-libei-emulated-input.md`).
+
+  Read `docs/input-and-windows.md` before touching any of this.
+
+- **NEEDS-REPRO: the composited cursor sprite drawn at the wrong position within the right
+  display.** Photographed under the pre-fix wrong-rects relay (guest hardware cursor at
+  internal pixel (503, 878) by hit-test truth; sprite at roughly (0.35, 0.40) of the panel vs
+  the truth at (0.17, 0.46) — data in `spikes/pointer-units-oracle/RESULTS.md` §3), but **did
+  not reproduce on the post-fix verification run** (user eyeballed the same rig). Plausibly
+  downstream of the mismapped rects; do not chase without a fresh observation. If it
+  reappears, the path is the per-window compositing (`window/cursor.rs`
+  `update_capture_cursor` + `secondary.rs`) and the first suspects are a units/space mix
+  (guest pixel position into a point-sized layer, or slot-local vs desktop coordinates).
+
+- **PROBABLY CLOSED 2026-08-22, NEEDS ONE GUEST REBOOT TO CONFIRM (found 2026-08-03): the
+  host-derived EDID identity does NOT survive a GUEST reboot.** The cause was found on the
+  cold-boot version of the same fault: an identity pushed while the FIRMWARE owns the GPU may not
+  survive the guest driver's device reset during probe, leaving virtio-gpu's default. A guest
+  reboot re-enters the firmware phase (`reset_to_firmware`), so it is the same race, which is why
+  it reports the same fallback identity. limina now re-announces the identity on every entry into
+  the OS phase, reboots included. Verify by rebooting a guest and re-reading the monitor spec
+  before believing this — the fix is reasoned onto the reboot path, not yet measured there.
+  Original report follows.
   Observed on a windowed venus VM whose host display never changed (BenQ LCD attached throughout,
   confirmed via `system_profiler SPDisplaysDataType`): at first boot mutter reported the connector
   as `('Virtual-1', 'LMN', 'BenQ LCD', '0x6c42fae5')` — correctly mirroring the host display — and
@@ -115,6 +235,18 @@ rects). Remaining:
   errors); vkr = THE trust boundary (validate → poison context); libkrun Rust decoders =
   error returns, not unwrap. Surface: 59 asserts in hand-written vkr, 178 in KK vulkan/,
   71 in vk_meta* (compiled into KK), 89 unwrap/panic/assert! in libkrun virtio-gpu.
+- **A guest vsock connect storm kills the worker** (measured 2026-08-21: `limina-agent-session`
+  wrote its `DisplayLayout` seed ahead of the HELLO, the host dropped the peer, the helper
+  reconnected with no backoff — 396,747 connects in 150 s — and the worker died of `EMFILE` at
+  `third_party/libkrun/src/devices/src/virtio/vsock/muxer.rs:633`, an `unwrap()` on the proxy
+  socket creation; the reaper thread then died of the poisoned lock). The guest bug is fixed
+  (HELLO first), but two host-side holes remain: (a) that `unwrap` — a failed proxy socket must
+  refuse the one connection (RST it), never abort the VMM; (b) the control plane accepts and
+  drops first-message violators at whatever rate the guest offers — consider a per-peer accept
+  backoff or a cap on concurrent unauthenticated peers. Guest side, (c) the helper's
+  `HostGone → try_connect` path sleeps only when `vsock_connect` itself fails, so any future
+  drop-after-accept storms again; a backoff on a channel that died before its first reply
+  closes that class.
 
 ## Guest app crashes (venus/KK correctness)
 

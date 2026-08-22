@@ -4,6 +4,15 @@ Status: **shipped 2026-08-02**, after five rounds of dogfood that changed four o
 `display-modes.md` §"Retired: edge resistance", which stays documented as history. Companion:
 `spikes/edge-pressure/RESULTS.md` (rounds 1–3, the measurements this rests on).
 
+**Multi-display:** the captured cursor follows the guest — the window it is judged in is the
+one showing the slot the guest's cursor echo names (the grab's window at first, re-based on
+every crossing), and everything in this document is evaluated in **that window**: the charge
+model, the release barrier and its constants, the park/regrab coupling, the policy purity. Where
+it says "the content" or "the fit", read "the current capture window's content". A seam to a
+neighbouring guest window is not an edge: the guest's cursor crosses it on its own and the
+capture window switches with it; only the guest desktop's outer edges pin, press and release
+(`docs/input-and-windows.md` §4-5).
+
 ## Why the design this replaces could not be tuned into shape
 
 `EdgeResist` let the cursor escape and then warps it back. That is not an implementation detail
@@ -199,10 +208,13 @@ instead of reading it, I got it wrong.
   policy had retaken it. The hard grab was simply unreachable. Now: soft or policy-held → hard
   grab (a promotion in place, no capture transition); hard → release; Ctrl-Opt always releases.
   User's design.
-- **The `user_released` latch clears when the pointer leaves the guest**, not only on a focus
-  regain. On a fullscreen VM there is nothing else on that display to click, so the regain edge
-  never came and one Cmd-Ctrl-G disabled the grab for good. It must still survive while the
-  pointer stays inside, or the re-grab undoes the release a quarter second later.
+- **The `user_released` latch clears on a click on guest content** (which also takes the grab
+  at once — the click is the explicit ask) or when the pointer leaves the guest; never on a
+  focus regain. On a fullscreen VM there is nothing else on that display to click, so the
+  regain edge never came and one Cmd-Ctrl-G disabled the grab for good; on a
+  fullscreen-everything Mac the pointer cannot leave guest content either, which is how the
+  leave-based clear stuck the same way (rig, 2026-08-21). The latch must still survive while
+  the pointer merely rests inside, or the re-grab undoes the release a quarter second later.
 - **The bottom edge is ordinary.** It briefly had a release-in-place special case, to reach what
   looked like a dash at the bottom. It was the macOS Dock, and it only appeared *while the cursor
   was teleporting* — a special case built to serve a symptom, which passed my own review by

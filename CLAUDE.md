@@ -171,9 +171,11 @@ Two refinements that are easy to forget:
   time sync, and lifecycle.
 
 See `docs/research/00-overview.md` for the full picture, `docs/graphics.md` for the whole
-render/present stack (tier ladder, scanout, pitfalls, open items), and `docs/roadmap.md` for
-the milestone plan (M1 boot → M15 display pipeline). `docs/research/GAPS-and-verification.md`
-tracks claims still needing verification.
+render/present stack (tier ladder, scanout, pitfalls, open items), **`docs/input-and-windows.md`
+for the whole windows/pointer/keyboard stack** (windows vs slots, the five coordinate spaces,
+captured vs uncaptured pointer, the fullscreen grab, the notch — read it before touching
+`crates/limina/src/window/`), and `docs/roadmap.md` for the milestone plan (M1 boot → M15 display
+pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing verification.
 
 ## Working conventions (learned the hard way)
 
@@ -193,14 +195,15 @@ tracks claims still needing verification.
   deliberately **skips** the HVF tests (no codesign / sandbox) — green there means
   almost nothing for boot behavior, so always run the full suite before
   declaring something works. It needs `dangerouslyDisableSandbox` (hits `hv_vm_*`).
-  - **It takes ~28 min, so run it detached and monitor it — and know that detaching hands you a
-    fake exit code.** `nohup cargo xtask test > <log> 2>&1 &` returns **immediately with exit 0**:
-    that status is the *backgrounding shell*, not the suite. A tool-completion notification for
-    that command says "completed, exit code 0" seconds after launch, and reads exactly like a green
-    suite. **Never report a suite result from the launch command's status.** Wait on the real
-    process (`until ! kill -0 <pid>; do sleep 10; done`) and then read the log:
-    `grep -E "^ *Summary|test result:|FAILED" <log>`. Nearly shipped a "green suite" this way on
-    2026-08-14 — same disease as a check that reports success by construction, in our own tooling.
+  - **It takes ~28 min. THE one way to run or wait on it is `scripts/run-suite.sh`** — run
+    `scripts/run-suite.sh <log>` as a *backgrounded task* (its completion IS the suite's, with
+    the suite's real exit code, and it ends by printing the verdict lines), or attach to a run
+    already live with `scripts/run-suite.sh --wait <log> [pid]`. Never `nohup cargo xtask test &`
+    and never hand-roll a kill-0/grep wait: the nohup launch returns **exit 0 seconds after
+    launch** (the backgrounding shell's status, not the suite's) and reads exactly like a green
+    suite — a false green nearly shipped that way on 2026-08-14. The verdict is the log's
+    `Summary`/`FAILED` lines, which the script prints; a log with no Summary line is a failure,
+    not a pass. The script also refuses to start while another run is live.
   - **Never `cargo build` (or `git commit` — the pre-commit hook runs clippy) while the suite is
     running**; a concurrent build relinks the binaries under the running tests. Hold commits until
     it finishes, or use `--no-verify` deliberately for a docs-only change.
@@ -259,7 +262,9 @@ tracks claims still needing verification.
   retired 2026-08-15) must flow into
   (a) the guest-tools tarball (`scripts/provision/f44/package-payload.sh`) and (b) an
   `install-enhanced.sh` pass over the enhanced-tier images (`enhanced.raw` /
-  `enhanced.test.raw`), then update `docs/images.md` §Component versions. Stale images cost
+  `enhanced.test.raw` / `enhanced.synoik.raw`) — `scripts/provision/deliver-payload.sh
+  <payload> <image>...` does that pass (backup, boot, install, verify, poweroff) — then update
+  `docs/images.md` §Component versions. Stale images cost
   a day on 2026-07-02: every "identical" local repro of a dogfood crash silently ran a
   guest two deliveries behind (6.19.10 / mesa -1 vs the deployed 7.1.2 / mesa -3).
 - **Never modify the user's dogfood Mac (dogfood-mac) or its dogfood-guest guest without an
@@ -385,5 +390,13 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   root) and the supervisor logs the exact SSH command — `guest SSH forward ready: ssh -p N <user>@127.0.0.1`.
   The host port **auto-allocates from 2222 up** (so 2+ VMs run concurrently without colliding); pin it
   with `--ssh-port <1024-65535>`, and capture gvproxy's packet log (the host-side net oracle) with
-  `--net-log <file>`. Read N from the log — don't assume 2222. Full recipe + creds in the
+  `--net-log <file>`. Read N from the log — don't assume 2222; the line lands in the WORKER log the boot
+  vehicle names (`/tmp/limina-worker-<disk>.log`), not the boot script's stdout.
+  **THE one way to wait for a networked boot — for ANY purpose — is
+  `port=$(scripts/wait-guest-ssh.sh <worker-log> [timeout])`.** This applies whether you framed
+  the wait as "waiting for ssh", "waiting for the window", or "is it booted yet": sshd answering
+  its banner is the readiness oracle for all of them, the script blocks until that actually
+  happens and prints the port (nonzero + log tail on timeout). Never hand-roll a
+  grep/sleep-until loop over the logs — that re-invents this script badly (it has been done and
+  called out; don't repeat it). Full recipe + creds in the
   `limina-fedora-access` memory; design in `limina-m3-networking` / `crates/limina/src/gateway.rs`.
