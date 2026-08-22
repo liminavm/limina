@@ -27,18 +27,20 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   — a heuristic the grab should not hang on, and one that would still miss Ctrl-arrow and
   Mission Control. Remaining lever if this is ever picked up: a private CGS space-change
   callback, unpriced, and likely to fire at the commit like everything else.
-- **NEEDS-REPRO: a secondary window leaves fullscreen when the session hands over to gdm, and
-  does not always come back.** Observed on the rig 2026-08-22: logging out drops the compositor,
-  gdm takes over, and the secondary window leaves fullscreen; gdm picking the session back up
-  restored it once and did not the second time. Already visible in a `LIMINA_EDGE_TRACE` run of
-  that cycle, twice over: the second slot is re-modeset at the handover — `scanout 1 ->
-  IOSurfaces […] (3024x1960)` to `(1920x1440)` and back — while the panel count runs 2 -> 1 -> 2
-  (`pointer capture: … panels 1 -> 2`). So the leaving is the slot being dismissed under a
-  changing scanout; the not-coming-back is the *re-entry* to fullscreen, which is a separate step
-  and evidently not guaranteed. Read against the standing rule that a dismissed slot's window
-  must close on OUR decision rather than on `scanoutgone` (docs/graphics.md §"A panel owns a
-  slot"): a mode change is not a dismissal, and may be what is being read as one. Reproduce with
-  two panels, the guest fullscreen on both, and repeated logout/login cycles.
+- **A secondary window left fullscreen when the session handed over to gdm — FIXED 2026-08-22.**
+  `scanoutgone` was closing the window, and the guest sends one for every ordinary modeset: the
+  logout trace showed the second slot re-modeset twice over (3024x1960 → 1920x1440 → back) with
+  the window torn down and rebuilt each time, which also fired a `pointer capture: taken — the
+  guest gained the screen` the user never asked for. A dark slot now keeps its window and its
+  Space; only the slot table takes a window down (`windows::slot_fate`). The re-entry that was
+  supposed to give fullscreen back — and sometimes did not — is gone from this path entirely,
+  along with the duplicate `toggleFullScreen` that `SecondaryWindow::open` used to make before
+  `apply`'s own restyle. Rule recorded in docs/graphics.md §"A panel owns a slot".
+  - Still open, and a different mechanism: a **reboot** does drop a fullscreen secondary, because
+    the firmware phase collapses the pool to slot 0 (`DisplayTable::wanted`) and the table really
+    does dismiss the other slot. Nothing mirrors the console onto the other panels, so there is
+    nothing to keep the window up *for*. If a fullscreen VM should stay fullscreen on every panel
+    across a reboot, that is a mirroring feature, not a lifetime fix.
 - **NEEDS-REPRO: the pointer does not appear immediately after a logout/login cycle — seen under
   SYNOIK, not mutter.** Observed on dogfood 2026-08-22, intermittently. Which side owes the fix is
   open: a Vulkan compositor drives the cursor plane differently from mutter (see §Stock virtio-gpu

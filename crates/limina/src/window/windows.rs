@@ -133,6 +133,44 @@ struct SlotSnapshot {
     gen: u64,
 }
 
+/// What this tick does with one slot's secondary window, after the dismissal pass has closed
+/// the windows of slots the table no longer gives a panel.
+///
+/// Pure, because the rule it carries is the one that is otherwise observable only by booting
+/// onto two panels and logging out: **a slot with no geometry is between modes, not gone.**
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fate {
+    /// No window, and nothing to open one for.
+    Idle,
+    /// Open a window for this slot, on the panel the table gave it.
+    Open,
+    /// The window stays, and shows the slot's frame.
+    Show,
+    /// The window stays — holding its panel, its style and its fullscreen — but the slot has
+    /// nothing to present.
+    Dark,
+}
+
+/// The lifetime decision for one slot, given whether it already has a window, whether the
+/// table gives it a panel, and whether the guest currently has a mode on it.
+fn slot_fate(open: bool, paneled: bool, live: bool) -> Fate {
+    match (open, live) {
+        (true, true) => Fate::Show,
+        // A window that exists is NOT closed for a dark slot. The guest disables a scanout and
+        // reconfigures it for every ordinary modeset — simpledrm → plymouth → gdm on the way
+        // up, and again at every session handover — and `scanoutgone` is all we get either
+        // way, so it says nothing about whether the connector is still there. Whether a slot
+        // has one at all is the table's answer, and the dismissal pass is where it is acted
+        // on (docs/graphics.md §"A panel owns a slot").
+        (true, false) => Fate::Dark,
+        // A slot whose connector is on its way down still has geometry until `scanoutgone`
+        // lands, and a window opened in that gap would flash up for the settle and immediately
+        // close. So: a panel AND a mode, or nothing.
+        (false, true) if paneled => Fate::Open,
+        (false, _) => Fate::Idle,
+    }
+}
+
 /// The PRIMARY window's per-tick presentation state: the same walk every [`SecondaryWindow`]
 /// runs — strip reconcile, refit, gen gate, modeset follow, present — plus the role state
 /// that exists exactly once. "Primary" is this value attached to `run()`'s window, not a
@@ -809,35 +847,24 @@ impl GuestWindows {
             if slot == primary {
                 continue;
             }
-            // A slot with no geometry has no connector: `scanoutgone` cleared it, or it never
-            // had one. Take its window down.
-            if width == 0 || height == 0 {
-                if let Some(w) = self.secondaries.remove(&slot) {
-                    log::info!("window: guest display {slot} went away; closing its window");
-                    drop(w);
-                }
+            // Whether the guest has a mode on this slot right now — presentation, not
+            // lifetime. See [`fate`] for what each combination means.
+            let live = width != 0 && height != 0;
+            let fate = slot_fate(
+                self.secondaries.contains_key(&slot),
+                panels.contains_key(&slot),
+                live,
+            );
+            if fate == Fate::Idle {
                 continue;
             }
-
-            // Open only for a slot the table has actually given a panel. A slot whose
-            // connector is on its way down still has geometry until `scanoutgone` lands, and a
-            // window opened in that gap would flash up for the settle and immediately close.
-            let entry = match self.secondaries.entry(slot) {
-                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-                std::collections::hash_map::Entry::Vacant(e) => {
-                    let Some(panel) = panels.get(&slot).copied() else {
-                        continue;
-                    };
-                    e.insert(SecondaryWindow::open(
-                        slot,
-                        Some(panel),
-                        width,
-                        height,
-                        cover,
-                        notch,
-                        mtm,
-                    ))
-                }
+            if fate == Fate::Open {
+                let window =
+                    SecondaryWindow::open(slot, panels.get(&slot).copied(), width, height, mtm);
+                self.secondaries.insert(slot, window);
+            }
+            let Some(entry) = self.secondaries.get_mut(&slot) else {
+                continue;
             };
             // The slot changed hands: its panel was unplugged and another monitor recycled the
             // connector. The window is still sitting on the old panel's coordinates and would
@@ -868,6 +895,15 @@ impl GuestWindows {
                 continue;
             }
             entry.last_gen = gen;
+            if fate == Fate::Dark {
+                // The ring the guest just disabled is gone, and its ids are free to be reused
+                // for something unrelated — so nothing cached may outlive it. The layer keeps
+                // the last frame until the new mode's first present replaces it, which is what
+                // a monitor does across a mode change and what the primary has always done
+                // across the same churn.
+                entry.core.clear_frame_cache();
+                continue;
+            }
 
             if entry.geom != (width, height) {
                 entry.geom = (width, height);
@@ -998,13 +1034,17 @@ fn native_space_ok(mtm: MainThreadMarker) -> bool {
 }
 
 impl SecondaryWindow {
+    /// Open a plain windowed window on the slot's panel. Covering is NOT decided here: the
+    /// window comes up `covering: false` and [`GuestWindows::apply`]'s own `covering != cover`
+    /// check restyles it on the very next statement. Doing it in both places meant two
+    /// `toggleFullScreen` calls in one tick, and the second one only checked the style mask —
+    /// which AppKit has not necessarily flipped yet mid-transition, so it could ask to leave
+    /// the Space it had just asked to enter.
     fn open(
         slot: usize,
         panel: Option<u64>,
         width: u32,
         height: u32,
-        cover: bool,
-        notch: crate::vmlib::schema::NotchPolicy,
         mtm: MainThreadMarker,
     ) -> Self {
         let style = NSWindowStyleMask::Titled
@@ -1098,7 +1138,7 @@ impl SecondaryWindow {
         SLOT_WINDOWS.with(|m| m.borrow_mut().insert(slot, window.clone()));
         log::info!("window: guest display {slot} appeared ({width}x{height}); opened a window");
 
-        let this = SecondaryWindow {
+        SecondaryWindow {
             core,
             suspend_overlay: None,
             last_gen: 0,
@@ -1108,12 +1148,7 @@ impl SecondaryWindow {
             native_space: false,
             cover_inset: 0.0,
             strip_registered: false,
-        };
-        let mut this = this;
-        if cover {
-            this.restyle(true, notch, mtm);
         }
-        this
     }
 
     /// Take the whole panel, or give it back.
@@ -1339,5 +1374,49 @@ impl SecondaryWindow {
             f64::from(width) / scale,
             f64::from(height) / scale,
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{slot_fate, Fate};
+
+    /// The gdm handover, and every modeset before it: the guest disables the scanout and
+    /// reconfigures it a moment later. Closing the window there cost the secondary its
+    /// fullscreen Space on every logout — and the re-entry that was supposed to give it back
+    /// did not always happen (observed on the two-panel rig, 2026-08-22).
+    #[test]
+    fn a_slot_between_modes_keeps_its_window() {
+        assert_eq!(slot_fate(true, true, false), Fate::Dark);
+    }
+
+    /// The table is the authority on lifetime, and it has not spoken here — so a dark slot
+    /// keeps its window whatever the panel map says this tick.
+    #[test]
+    fn a_dark_slot_keeps_its_window_even_mid_dismissal() {
+        assert_eq!(slot_fate(true, false, false), Fate::Dark);
+    }
+
+    #[test]
+    fn a_slot_with_a_mode_and_a_panel_gets_a_window() {
+        assert_eq!(slot_fate(false, true, true), Fate::Open);
+    }
+
+    /// A connector on its way down still has geometry until `scanoutgone` lands; a window
+    /// opened in that gap would flash up for the settle and close again.
+    #[test]
+    fn a_slot_the_table_has_not_given_a_panel_opens_nothing() {
+        assert_eq!(slot_fate(false, false, true), Fate::Idle);
+    }
+
+    /// Nothing to show and nothing to show it in: a slot that has never come up.
+    #[test]
+    fn a_dark_slot_with_no_window_opens_nothing() {
+        assert_eq!(slot_fate(false, true, false), Fate::Idle);
+    }
+
+    #[test]
+    fn a_live_slot_with_a_window_presents_into_it() {
+        assert_eq!(slot_fate(true, true, true), Fate::Show);
     }
 }

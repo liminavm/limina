@@ -297,6 +297,16 @@ has no slot to carry the decision. The menu lists every attached panel rather th
 slot (a panel earns a connector only when something wants to show it), and the row for the panel
 the window is on is checked and dead.
 
+**A window's lifetime is the TABLE's decision, never `scanoutgone`'s.** A guest disables a scanout
+and reconfigures it for every ordinary modeset — simpledrm → plymouth → gdm on the way up, and
+again at every session handover — and the host sees the identical `scanoutgone` either way, so the
+message cannot tell "between modes" from "gone". A slot with no geometry therefore keeps its
+window: it holds its panel, its style and its fullscreen, and shows its last frame until the new
+mode's first present replaces it, exactly as a monitor does across a mode change. Only the slot
+table takes a window down (`windows::slot_fate`, unit-tested). Closing on the dark slot instead
+cost a fullscreen secondary its Space at every logout, and the re-entry meant to give it back is
+a `toggleFullScreen` that does not always land.
+
 Not done yet:
 
 - **The cursor.** The guest's cursor commands name a scanout
