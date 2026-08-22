@@ -34,7 +34,12 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   shape never re-uploaded would show. Note the standing rule — **a mutter "cannot reproduce" is a
   FALSE NEGATIVE here**, so this must be chased on the synoik image
   (`Fedora-Workstation-44.enhanced.synoik.raw`, cloned), not the mutter one. The guest synoik
-  session is a peer and can be asked what its side saw.
+  session is a peer and can be asked what its side saw. **One clean cycle on a synoik poke VM
+  2026-08-22 did NOT reproduce it** — the trace across the logout/login showed cursor-plane
+  updates flowing, no stuck hide, and no grab-state anomaly. Weak evidence at best against
+  something seen twice in a day of dogfooding; if it is chased again, do it in a LOOP (the plane's
+  visibility is readable from the `[CURSOR] … visible=` trace, so the check can be automated over
+  many cycles rather than eyeballed once).
 - **NEEDS-REPRO: the reveal drops while the menu is still open, on a small downward move.**
   Observed on dogfood 2026-08-22. Moving the pointer down slightly with a macOS menu open releases
   the ask, so the chrome retracts out from under an open menu. The ask is slaved to the observed
