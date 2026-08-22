@@ -317,6 +317,9 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
             }
             Ok((_, Message::Heartbeat(_)))
             | Ok((_, Message::MemPressure(_)))
+            // The arrangement is the SESSION helper's to report — it needs a compositor
+            // connection, which this system daemon has none of.
+            | Ok((_, Message::DisplayLayout(_)))
             | Ok((_, Message::Error(_))) => {}
             // Clipboard frames belong to the session helper (this daemon never
             // advertises the cap); HELLO from a host / stray acks: ignore, don't die.
