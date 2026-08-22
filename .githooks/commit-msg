@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Strip `Claude-Session:` trailers from every commit message. The trailer is injected by
+# Claude Code's harness and is not disableable in its settings (anthropics/claude-code
+# #41873, closed not-planned); this repo's policy is to carry Co-Authored-By but never
+# per-session URLs. The hook is the deterministic net behind the instruction layer — a
+# session that forgets still cannot land one.
+set -euo pipefail
+sed -i '' '/^Claude-Session: /d' "$1"

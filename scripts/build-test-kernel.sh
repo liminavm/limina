@@ -28,6 +28,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 KVER="${KVER:-v6.12}"
+# Stable point tags (v7.1.8) only exist in the stable tree, not torvalds/linux.
+case "$KVER" in
+    *.*.*) DEFAULT_SRC=https://github.com/gregkh/linux ;;
+    *)     DEFAULT_SRC=https://github.com/torvalds/linux ;;
+esac
+SRC_REPO="${SRC_REPO:-$DEFAULT_SRC}"
 JOBS="${JOBS:-8}"
 MEM="${MEM:-8g}"
 PAGESIZE="${PAGESIZE:-4k}"               # 4k (default) or 16k (matches the 16 KiB host)
@@ -167,7 +173,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         if [ ! -d \"\$CACHE\" ]; then
             echo '--- shallow-cloning $KVER into cache (first run)'
             mkdir -p /out/cache
-            git clone --bare --depth 1 --branch '$KVER' https://github.com/torvalds/linux \"\$CACHE\"
+            git clone --bare --depth 1 --branch '$KVER' '$SRC_REPO' \"\$CACHE\"
         fi
         # Worktree lives in the PERSISTENT volume (/build, ext4) for incremental builds.
         if [ ! -d /build/linux/.git ]; then

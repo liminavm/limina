@@ -28,17 +28,25 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 OUT="${OUT:-$HOME/limina-build/kernel}"
 BUILD="${BUILD:-$HOME/limina-build/linux}"
-LOCALVERSION="${LOCALVERSION:--limina16k}"
+# RPM Release. Bump it (RELEASE=2) whenever the CONTENT changes but the kernel Version does not —
+# e.g. a fork-branch change at the same base. Same NEVRA + different content is the classic trap:
+# dnf/rpm see the installed package as identical and skip the upgrade.
+RELEASE="${RELEASE:-1}"
+# The release must ALSO land in KERNELRELEASE: the kernel package is install-only, so a -2 RPM
+# with the same /lib/modules/<KREL> as the installed -1 hits file conflicts instead of upgrading
+# (bit us 2026-08-19 delivering 7.1.8-2). Distinct KRELs is the designed behavior anyway — the
+# new kernel coexists as its own GRUB entry and the previous one stays a bootable fallback.
+if [ "$RELEASE" = 1 ]; then
+    LOCALVERSION="${LOCALVERSION:--limina16k}"
+else
+    LOCALVERSION="${LOCALVERSION:--limina16k.$RELEASE}"
+fi
 # The kernel Makefile appends BOTH the make-visible $LOCALVERSION and CONFIG_LOCALVERSION to
 # KERNELRELEASE. We write CONFIG_LOCALVERSION from this variable below, so if the caller EXPORTED
 # it (`LOCALVERSION=-foo build-kernel-rpm.sh`) it lands twice — 7.1.6-foo-foo — and rpmbuild then
 # rejects the double separator at the very end of a ~40-minute build. Un-export it so only the
 # config fragment carries it. (Bit us 2026-08-03 building the no-fence probe kernel.)
 export -n LOCALVERSION 2>/dev/null || true
-# RPM Release. Bump it (RELEASE=2) whenever the CONTENT changes but the kernel Version does not —
-# e.g. a fork-branch change at the same base. Same NEVRA + different content is the classic trap:
-# dnf/rpm see the installed package as identical and skip the upgrade.
-RELEASE="${RELEASE:-1}"
 # Base config: the running guest's real Fedora config.
 CONFIG_BASE="${CONFIG_BASE:-/boot/config-$(uname -r)}"
 # Source: the liminavm/linux fork's `limina` branch at the rev pinned in

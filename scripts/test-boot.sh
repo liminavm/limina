@@ -55,7 +55,7 @@ echo "==> running boot tests (LIMINA_HVF_TESTS=1)"
 #   the trace fixture (fixtures/traces/ — regenerate via spikes/trace-replay/).
 # - `l2_share_71` is the ≥7.1-kernel virtiofs --share guard (libkrun 0090); it SKIPs unless a
 #   ≥7.1 16 KiB test kernel exists (build with
-#   `KVER=v7.1 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 PATCHES_OPTIONAL=1 scripts/build-test-kernel.sh`).
+#   `KVER=v7.1.8 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 scripts/build-test-kernel.sh`).
 #
 # --no-fail-fast is load-bearing: cargo test fail-fasts ACROSS test binaries, so without it the
 # first failing binary (e.g. boot) silently stops the run and every later binary (net, venus,
