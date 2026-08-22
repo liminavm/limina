@@ -677,8 +677,9 @@ pub struct InputState {
     /// continuous for the whole session (`captured_step_and_emit`). `None` until the first
     /// captured step seeds it from the fit.
     capture_range: Cell<Option<(f64, f64)>>,
-    /// The last cursor echo the captured estimate was re-based from (`follow_guest_echo`).
-    echo_seen: Cell<Option<(usize, i32, i32)>>,
+    /// Which guest cursor echoes the captured estimate may still be re-based from
+    /// (`follow_guest_echo`). See [`EchoGate`].
+    echo_seen: Cell<EchoGate>,
     /// The slot whose window the park currently sits in: the grab's window at the engage, then
     /// the panel the guest's cursor crossed to after each re-park (`repark_if_quiescent`). The
     /// re-pin's warp expectation is this slot's displays; `capture_slot` may already be a
@@ -914,7 +915,7 @@ impl InputState {
             last_push: Cell::new(None),
             echo_checked: Cell::new(None),
             capture_range: Cell::new(None),
-            echo_seen: Cell::new(None),
+            echo_seen: Cell::new(EchoGate::default()),
             park_slot: Cell::new(0),
             last_captured_motion: Cell::new(None),
             primary,
@@ -1116,6 +1117,10 @@ impl InputState {
         }
         // The host displays the park's window covers — the engage warp must land on one.
         let mut engage_displays = Vec::new();
+        // Where the hand is, and the fit it is in — what the guest is told once the grab is
+        // live (see the send below). `None` for a grab taken with the pointer off guest
+        // content, which has no honest position to hand over.
+        let mut engage_send: Option<((f64, f64), super::fit::FitRect)> = None;
         if now {
             // Seed the virtual cursor from where the pointer REALLY is before deriving the park,
             // so both the guest cursor and the (zero-length) grab warp start from the truth. Our
@@ -1132,14 +1137,15 @@ impl InputState {
             // elsewhere) the remembered position is the better answer: clamping the live one
             // would drag the guest cursor to whichever edge happens to be nearest, and the
             // warp is unavoidably long either way.
-            if let Some(hit) = self.live_over_guest(view) {
+            let live = self.live_over_guest(view);
+            if let Some(hit) = live.as_ref() {
                 self.capture_pos.set(Some(hit.point));
                 self.capture_slot.set(hit.slot);
             }
             // A fresh session: the range seeds from the first step's fit position, and the
             // estimate follows the guest's echo from the first fresh one.
             self.capture_range.set(None);
-            self.echo_seen.set(None);
+            self.echo_seen.set(EchoGate::engaged(self.echo_key_now()));
             // The park is judged in the capture window's space: the (possibly just-seeded)
             // cursor clamped into that window's fit. With nothing placed — or a remembered
             // position whose window has no surface this tick — fall back to the primary, and
@@ -1178,6 +1184,11 @@ impl InputState {
                 }
             }
             self.park.set(view_point_to_cg_global(&park_view, park));
+            engage_send = live
+                .is_some()
+                .then_some(seed)
+                .flatten()
+                .map(|s| (s, park_fit));
             engage_displays = park_view
                 .window()
                 .map(|w| super::hostdisplay::displays_under_window(&w))
@@ -1193,6 +1204,20 @@ impl InputState {
                 displays: engage_displays,
             };
             self.warp.engage(self.park_point(), &aim, &self.host_cursor);
+            // Tell the guest where the hand is, so its cursor comes to meet the pointer.
+            //
+            // Nothing on the wire says "a grab began", and the guest's cursor is wherever it
+            // was when the pointer last left — which, after a macOS Space switch, is not where
+            // the hand is any more. Without this the estimate agrees with the hand for exactly
+            // one tick and the guest's cursor never moves, so the first stroke back continues
+            // from the pre-switch position: the pointer appears to warp backwards (measured
+            // 2026-08-22, 420 pt on the rig). Only for a grab taken with the pointer over guest
+            // content (`live`) — a keyboard grab from elsewhere has no honest position to send,
+            // and the centre fallback would teleport the guest's cursor for no reason.
+            if let Some((s, fit)) = engage_send {
+                let u = super::fit::unit_through_fit(s.0, s.1, fit);
+                self.send_abs_unit(self.capture_slot.get(), u, true);
+            }
         } else {
             self.warp.disengage(release_to, &self.host_cursor);
         }
@@ -1951,26 +1976,7 @@ impl InputState {
         if t.content_w > 0.0 {
             self.pointer_slot.set((t.slot, t.content_w));
         }
-        // Through the guest's reported layout, not straight to the range: the guest spreads
-        // one absolute device over every connector it has, so a full sweep of THIS window must
-        // cover only this display's share of it. With one display, or no report, the two are
-        // identical ([`super::arrangement::abs_through_report`]).
-        if let Some((x, y)) =
-            super::absfit::abs_position(t.slot, t.unit.0, t.unit.1, ABS_MAX as i32)
-        {
-            self.send_ptr(InputEvent::new(EV_ABS, ABS_X, x));
-            self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, y));
-            self.send_ptr(InputEvent::syn());
-            self.record_sent(
-                t.slot,
-                t.unit,
-                (
-                    f64::from(x) / f64::from(ABS_MAX),
-                    f64::from(y) / f64::from(ABS_MAX),
-                ),
-                false,
-            );
-        }
+        self.send_abs_unit(t.slot, t.unit, false);
 
         // Remember the position as the capture seed — the event's point in ITS window's view
         // space, with the slot naming that window — so a grab starts exactly where the cursor
@@ -2024,6 +2030,31 @@ impl InputState {
             send_edge_overflow(&self.conn, over);
             self.last_push.set(Some(std::time::Instant::now()));
         }
+    }
+
+    /// Put the guest's pointer at a unit position on one slot's content.
+    ///
+    /// Through the guest's reported layout, never straight onto the range: the guest spreads
+    /// one absolute device over every connector it has, so a full sweep of ONE window must
+    /// cover only that display's share of it. With one display, or no report, the two are
+    /// identical ([`super::arrangement::abs_through_report`]). Silent when the slot has no
+    /// mapping yet — a pointer that briefly does not move, rather than one that jumps.
+    fn send_abs_unit(&self, slot: usize, unit: (f64, f64), captured: bool) {
+        let Some((x, y)) = super::absfit::abs_position(slot, unit.0, unit.1, ABS_MAX as i32) else {
+            return;
+        };
+        self.send_ptr(InputEvent::new(EV_ABS, ABS_X, x));
+        self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, y));
+        self.send_ptr(InputEvent::syn());
+        self.record_sent(
+            slot,
+            unit,
+            (
+                f64::from(x) / f64::from(ABS_MAX),
+                f64::from(y) / f64::from(ABS_MAX),
+            ),
+            captured,
+        );
     }
 
     /// Note what we just told the guest, for [`Self::verify_guest_echo`].
@@ -2700,6 +2731,15 @@ impl InputState {
     /// truth the fit-space estimate (drawing, edge press, release target) is kept in step
     /// with; a seam the guest crossed moves the capture window with it, and the estimate
     /// leaves the old fit's edge before any release charge could accumulate there.
+    /// Where the guest's cursor is right now, as an [`EchoGate`] key — the position an
+    /// engaging grab must not mistake for an answer to what it is about to send.
+    fn echo_key_now(&self) -> Option<(usize, i32, i32)> {
+        let echo = super::echo::snapshot();
+        let on = super::echo::shown_slot(self.capture_slot.get(), &echo)?;
+        let c = echo[on];
+        (c.w != 0 && c.h != 0).then_some((on, c.x, c.y))
+    }
+
     pub(crate) fn follow_guest_echo(&self, primary_view: &NSView) {
         if !self.is_captured() {
             return;
@@ -2721,11 +2761,11 @@ impl InputState {
         if c.w == 0 || c.h == 0 {
             return;
         }
-        let key = (on, c.x, c.y);
-        if self.echo_seen.get() == Some(key) {
+        let mut gate = self.echo_seen.get();
+        if !gate.adopt((on, c.x, c.y)) {
             return;
         }
-        self.echo_seen.set(Some(key));
+        self.echo_seen.set(gate);
         let Some((_, fit)) = self.slot_surface(on, primary_view) else {
             return;
         };
@@ -3178,6 +3218,41 @@ struct ButtonLedger {
     tap: u8,
 }
 
+/// Which guest cursor echoes the captured estimate may re-base itself from.
+///
+/// While captured the guest is the authority on where its own cursor is — it clamps, it
+/// constrains, it may refuse to go where we put it — so the estimate follows the echo
+/// (`InputState::follow_guest_echo`). Each position is adopted once: the echo repeats at the
+/// scanout's rate whether or not anything moved, and re-adopting a position the estimate has
+/// already taken would pin it there against the hand.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+struct EchoGate {
+    seen: Option<(usize, i32, i32)>,
+}
+
+impl EchoGate {
+    /// The grab engages while the guest's cursor is at `now` — take that as already adopted.
+    ///
+    /// The engage seeds the captured cursor from where the host pointer really is and tells
+    /// the guest to put its cursor there ([`InputState::toggle_capture_to`]). Until the guest
+    /// answers, what it echoes is the position it held *before* the grab, and adopting that
+    /// is how the pointer got dragged back across a macOS Space switch: the hand had moved
+    /// while away, the guest had not, and one tick was enough to throw the hand's position
+    /// away. Holding it as seen means the next CHANGE is the guest arriving where we sent it.
+    fn engaged(now: Option<(usize, i32, i32)>) -> Self {
+        Self { seen: now }
+    }
+
+    /// May the captured estimate be re-based onto this echo? Once per position.
+    fn adopt(&mut self, key: (usize, i32, i32)) -> bool {
+        if self.seen == Some(key) {
+            return false;
+        }
+        self.seen = Some(key);
+        true
+    }
+}
+
 impl ButtonLedger {
     /// The guest is being told about a press.
     fn pressed(self, bit: u8) -> Self {
@@ -3307,6 +3382,48 @@ mod tests {
             "but it is not a press the guest was told about"
         );
         assert!(!l.noted_by_tap(1, false).any_down());
+    }
+
+    /// Where the guest's cursor was before the grab is not an answer to the grab.
+    ///
+    /// The fault (measured 2026-08-22, dogfood + rig): coming back from another macOS Space,
+    /// the grab is retaken and seeds the captured cursor from where the pointer REALLY is —
+    /// and then the very next tick threw that away for the position the guest had been
+    /// echoing all along, from before the switch. The hand had moved 420 pt while away; the
+    /// pointer resumed where it had been before, which is the jarring part: the guest's
+    /// cursor is the thing the user is looking at, and it did not come to meet them.
+    #[test]
+    fn a_grab_does_not_adopt_where_the_guests_cursor_was_before_it() {
+        let before = (0usize, 1346, 680);
+        let mut gate = EchoGate::engaged(Some(before));
+        assert!(
+            !gate.adopt(before),
+            "the position the guest held through the whole switch is stale by construction — \
+             it cannot be an answer to a seed we have only just sent"
+        );
+    }
+
+    #[test]
+    fn the_guests_answer_to_the_seed_is_adopted() {
+        // …and the moment the guest actually moves, the estimate follows it again: that is
+        // what makes the captured cursor track a guest that clamps or constrains.
+        let mut gate = EchoGate::engaged(Some((0, 1346, 680)));
+        assert!(
+            gate.adopt((0, 766, 1182)),
+            "the guest arrived where we sent it"
+        );
+        assert!(
+            !gate.adopt((0, 766, 1182)),
+            "and each position is still taken only once — the echo repeats every frame"
+        );
+    }
+
+    #[test]
+    fn a_grab_with_no_cursor_to_go_stale_adopts_the_first_echo() {
+        // A guest showing no cursor at all (hidden, or a slot that has not painted one) gives
+        // the engage nothing to hold against, so the first echo that arrives is fresh news.
+        let mut gate = EchoGate::engaged(None);
+        assert!(gate.adopt((0, 100, 100)));
     }
 
     const CONTROL: u64 = 1 << 18;
