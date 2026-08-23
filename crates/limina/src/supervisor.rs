@@ -391,9 +391,11 @@ static PANIC_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 /// (so it survives a supervisor *relaunch*), which means a supervisor that merely panics
 /// leaves a headless, orphaned guest running. The pointer stack asserts its invariants with
 /// `assert!` on purpose — a crash is the loud, early signal wanted there — so a crash has to
-/// mean the whole VM, not a ghost. Runs the default hook first (message + backtrace), then
-/// SIGKILLs the worker's process group, then aborts: a panicking non-main thread must not
-/// leave the window limping on without the invariant that just failed.
+/// mean the whole VM, not a ghost. Runs the default hook first (message + backtrace, and — since
+/// `main` installs [`crate::panic_log`] before this one — the append to the panic log, which is
+/// the only copy a Dock-launched app keeps), then SIGKILLs the worker's process group, then
+/// aborts: a panicking non-main thread must not leave the window limping on without the
+/// invariant that just failed.
 fn install_panic_kill_hook() {
     if PANIC_HOOK_INSTALLED.swap(true, Ordering::AcqRel) {
         return;

@@ -15,6 +15,7 @@ mod control;
 mod fido;
 mod gateway;
 mod moc;
+mod panic_log;
 mod sep;
 mod session;
 mod supervisor;
@@ -629,6 +630,11 @@ fn raise_fd_limit() {
 
 fn main() -> Result<()> {
     raise_fd_limit();
+
+    // Panics go to a file BEFORE anything else installs a hook: a Dock-launched app has no
+    // stderr, so without this the message our loud assertions exist to print is simply lost
+    // (see `panic_log`). `supervisor::install_panic_kill_hook` chains on top of this later.
+    panic_log::install();
 
     // Death-pact reaper mode (hidden, spawned by the gateway alongside gvproxy). Handled BEFORE
     // clap/logging/AppKit so it stays a tiny process that only watches a pipe and reaps gvproxy
