@@ -29,8 +29,9 @@ emulated xHCI controller it shares with M7, which is default-on.
 with a partial win; per-host-display + VRR and waves 2–3 remain. This is the main line of
 work.
 
-**Planned, not started.** M12 (SPICE vdagent, spike green), M13 (visibility/power render
-adaptation).
+**Planned, not started.** M13 (visibility/power render adaptation). M12's clipboard half
+shipped alongside M5's (#37, 2026-08-15); its file-transfer half, and an arbitration probe that
+tests the right thing, are what remain.
 
 **Deferred by decision, not by neglect.** M3 bridged networking and M7 real-device USB
 capture both wait on the single shared privileged helper (`docs/design/privileged-helper.md`);
@@ -1238,12 +1239,14 @@ onboarding doc shipped: `docs/dev-onboarding.md`.
 
 ## Milestone 12 — SPICE guest-agent support (baseline-tier clipboard first)
 
-**Status: 📋 spike #1 DONE + GREEN 2026-07-31 (`spikes/m12-spice-port/RESULTS.md`); broker not started.**
-Research done (2026-07-17). **Both named risks are retired.** libkrun already has named multiport
-ports, so no new device is needed (task 1 corrected below); the stock agent wakes on the port and
-answers our capability announce; and a guest clipboard copy reaches the host as a real
-`CLIPBOARD_GRAB`. The one blocker the spike uncovered — a pre-existing, guest-triggerable VMM panic
-on port *reopen* — is **fixed** (libkrun 0125). What remains is task 2, the host-side broker.
+**Status: 🟢 clipboard shipped 2026-08-15 (#37); the arbitration probe tests the wrong thing.**
+libkrun already had named multiport ports, so no new device was needed (task 1 corrected below); the
+stock agent wakes on the port, answers our capability announce, and a guest copy arrives as a real
+`CLIPBOARD_GRAB`. The host broker is live (`crates/limina/src/vdagent/`) behind M5's single
+pasteboard owner, and `limina-agent-session` yields to a live vdagent per session. The
+guest-triggerable VMM panic on port *reopen* that spike #1 uncovered is fixed (libkrun 0125). What
+remains: the per-session probe below (a vdagent that is *alive* is not a vdagent that *works*), and
+client→guest file transfer (task 3), not started.
 
 **Goal:** light up SPICE's `spice-vdagent` in an **unmodified** guest so a stock Fedora VM gets
 integration features **with zero limina guest components installed** — starting with **clipboard
@@ -1369,11 +1372,12 @@ limina speaks the vdagent protocol.
      **claims** the clipboard (advertises the cap, takes a quiet tier) or **stands by** because vdagent
      covers it; the host keeps its single `crates/limina/src/clipboard.rs` pasteboard owner and routes
      to the SPICE transport plus whichever peers claimed. No host-side policy.
-   - **Probe positively, don't infer.** The test is "is `spice-vdagent` alive in *this* session and
-     holding the selection", NOT "is XWayland installed" — GNOME starts XWayland **on demand** (none
-     was running on dogfood-guest at all), so the inference is wrong in both directions. Note the cost
-     while we are at it: vdagent autostart is itself an X client, so adopting SPICE keeps an XWayland
-     resident in every GNOME session that would otherwise never start one.
+   - **Probe positively, don't infer.** "Is XWayland installed" is wrong in both directions — GNOME
+     starts XWayland **on demand** (none was running on dogfood-guest at all), and an XWayland that
+     exists may still not bridge selections (task 5). *Which* positive test to run is settled in task
+     5: bind our own backend, because vdagent liveness turned out not to imply vdagent function. Note
+     the cost while we are at it: vdagent autostart is itself an X client, so adopting SPICE keeps an
+     XWayland resident in every GNOME session that would otherwise never start one.
    - **The wrinkle that does not decompose: `vdagentd` serves only the logind-ACTIVE session.** SPICE
      coverage is therefore per-session *and* time-varying — gsrs is covered while active and uncovered
      the moment you switch to kov. Two options, and the choice is deliberate: (a) the helper watches
@@ -1397,6 +1401,77 @@ limina speaks the vdagent protocol.
      to mean *not enabling the SPICE clipboard for that session*, never merging afterwards.
    - Build this **with** task 2, not after it: the announce path is where the decision lives, and
      bolting it on later means writing the clipboard message set twice.
+
+5. **Invert the probe: test our own backend, not vdagent's liveness.** The shipped probe asks "is
+   `spice-vdagent` alive in this session" (`guest/limina-agent-session/src/vdagent.rs`) and yields
+   when the answer is yes. That is a *liveness* fact standing in for a *function* claim, and the two
+   come apart: a vdagent can be running, connected, and completely unable to move a selection, with
+   every component reporting healthy. Replace it with a positive test of the thing we can actually
+   establish from inside the session — **bind `ext_data_control_manager_v1`** (which
+   `guest/limina-agent-session/src/wayland_clip.rs` already does when acquiring a backend) and claim
+   when the bind succeeds. Liveness stays as the tiebreak for sessions where our backend is absent.
+   - **What broke, measured 2026-08-23 on the jabuticaba deploy** (synoik session, `DISPLAY=:0` via
+     `xwayland-satellite` 0.8.2): host→guest-X11 worked in ≤3 s; guest-X11→Wayland, Wayland→X11 and
+     guest→host all failed. Everything limina owns was healthy — port present, zero `vdagent:`
+     warnings across a 10 MB supervisor log, `vdagentd`/`vdagent` alive, the helper correctly
+     yielded. **The break is the X11↔Wayland selection bridge.** satellite binds only
+     `wl_data_device` and primary-selection (`src/server/selection.rs:27-37`), never data-control;
+     its X11→Wayland push is gated on `last_kb_serial` (`selection.rs:113`), which is written only
+     from `wl_keyboard::Enter`/`Key` on a surface resolving to an X window (`src/server/event.rs:864`,
+     `:903`). In a session whose apps are all Wayland-native, no X window is ever focused, so the
+     serial stays `None`, the push is skipped, and `wl_data_device.selection` is never delivered to
+     satellite either. vdagent creates no focusable window, so it is structurally blind there.
+   - **The compositor is not the faulty half.** synoik advertises `zwlr_data_control_manager_v1` v2
+     *and* `ext_data_control_manager_v1` v1, and notifies data-control clients on every selection
+     change (verified with `wl-paste --watch` across three successive copies). Our own backend works
+     in exactly the session where vdagent does not.
+   - **This does not retire vdagent — it is still the only transport on GNOME.** mutter will not
+     ship data-control (mutter#3941, wontfix), and vd_agent MR !57 (a Wayland-native vdagent over
+     ext-data-control, open since 2026-04-06) explicitly does not fix GNOME either. The corrected
+     coverage model, with the two properties kept separate as the 2026-08-15 correction above
+     demands:
+
+     | session | X11↔Wayland bridging | ext-data-control | carried by |
+     |---|---|---|---|
+     | GNOME / mutter | yes | never | vdagent |
+     | KDE, sway, Hyprland, wlroots | yes | yes | **either — they overlap** |
+     | niri, synoik (`xwayland-satellite`) | no (focus-gated) | yes | our helper |
+
+   - **UTM has strictly less, so there is nothing to copy.** Both its backends are vdagent-only —
+     `VZSpiceAgentPortAttachment` on Virtualization.framework
+     (`Configuration/UTMAppleConfigurationVirtualization.swift:192`), spice-gtk's `shareClipboard`
+     on QEMU (`Services/UTMSpiceIO.m:103`) — with no data-control path and no fallback agent
+     anywhere in the tree. vd_agent issue #26 is a UTM user reporting this exact failure.
+
+6. **The mute we don't have: nothing can tell vdagent to stand down.** The arbitration is one-way by
+   construction — the helper yields to vdagent and nothing runs in the other direction.
+   `crates/limina/src/vdagent/codec.rs:110` `our_caps()` is a constant announced once per port open
+   (`session.rs:124`), and the poller (`crates/limina/src/control.rs:184`) fans every host copy to
+   the vdagent transport *and* the claiming peers unconditionally. Today that is safe only because
+   the helper always yields first. **Inverting the probe removes that safety**: in the overlap row
+   above both transports would serve one session, which is precisely the two-owners fight the
+   yield-first design exists to prevent (the host pasteboard is protected by the `changeCount`
+   ratchet; the guest side is not).
+   - **The primitive already exists upstream, unused by us.** Announcing capabilities with
+     `request=1` and **without** `VD_AGENT_CAP_CLIPBOARD_BY_DEMAND` makes `vdagentd` call
+     `do_client_disconnect()` (`src/vdagentd/vdagentd.c:257`), broadcast
+     `VDAGENTD_CLIENT_DISCONNECTED` (`:169`), and the session agent then calls
+     `vdagent_clipboards_release_all()` (`src/vdagent/vdagent.c:256`) — it **drops X selection
+     ownership**, it does not merely go quiet. Thereafter `do_agent_clipboard()` short-circuits on
+     the missing cap (`vdagentd.c:741`), so no guest grab or request reaches the port at all.
+     Re-announcing with the bits restored walks vdagent through the same reconnect and hands the
+     clipboard back. Host→guest needs no protocol at all: skip `broker.host_copy()` while muted.
+   - So the work is a *muted* state on `Session`, flipped by whether any control peer currently
+     announces the `clipboard` cap, plus the poller skipping the vdagent leg while muted. Two
+     constraints carry over unchanged: the flip must be **edge-triggered** (a repeating announce is
+     a clipboard suppressor, per the announce-once rule above), and the mute is **per-VM while the
+     claim is per-session** — the host still cannot map a peer to a guest session, so the guest must
+     only claim when it can genuinely serve, which is what task 5's bind-test buys.
+
+**Sequencing (decided 2026-08-23): fix the bridge first, revisit arbitration after.** synoik gains
+X11↔Wayland selection bridging on its own side, which restores vdagent in the one session where it
+is currently blind and unblocks dogfood without touching limina. Tasks 5 and 6 stay booked and
+unstarted; the overlap they create is only worth paying for once a session needs both transports.
 
 **libkrun patches:** the virtio-serial named-multiport device (task 1) — the one real patch. Broker +
 clipboard bridge are pure limina code.
@@ -2344,7 +2419,7 @@ running GTK client alive.
 | M9 suspend/resume + snapshots ✅ | host-side VMM snapshot (file format/CRC, `--restore` wiring, device schema + mapped-blob set, named-snapshot manager + clone + APFS `clonefile` disk, agent freeze bracket, proto `Snapshot`/`Restore`/`TimeSet`, capability probe, UX); Mesa-venus object-graph replay + **device-local content readback** + blob copy-back (venus tier) | multi-vCPU HVF pause/quiesce (incl. WFE-parked wakeup) + vCPU save/restore (wrappers, FFI exists) + GIC state (spike #2 green) + `CNTVOFF` set + `--restore` mode + device (de)serialize + virtio freeze/thaw hardening + snapshot-time GPU quiesce (restore = fresh worker, no in-process renderer reset; `reset_session` rutabaga-context fix already shipped, 0035); carry `patches/linux` Dongwon-Kim drm/virtio freeze-restore (virgl) |
 | M10 multiple disks + ISO ✅ | repeatable `--disk`, stable virtio serial identity, `--cdrom`, qcow2 sniff, EFI-ISO boot | imago discard→punch-hole fix (fork, pinned by `third_party/manifest.toml` + `[patch.crates-io]`) |
 | M11 productization ✅ | `cargo xtask` command surface (`setup`/`vendor`/`build`/`sign`/`test`/`run`/`app`/`bundle`) wrapping the tested scripts; `docs/dev-onboarding.md` | none |
-| M12 SPICE agent 📋 planned | host vdagent broker (framing + clipboard, then client→guest file transfer), NSPasteboard bridge reuse (M5), **per-session** native-vs-SPICE arbitration (SPICE default; the helper claims only sessions vdagent can't cover — no XWayland — and the decision is made in-guest); display-resize deliberately excluded (native EDID already covers it) | virtio-serial named multiport port `com.redhat.spice.0` (wakes stock `spice-vdagentd`); no crate reuse |
+| M12 SPICE agent 🟢 clipboard | host vdagent broker (framing + clipboard) shipped behind M5's NSPasteboard bridge; remaining: client→guest file transfer, and a **per-session** arbitration probe that binds `ext_data_control_manager_v1` instead of testing vdagent liveness — plus the host-side mute (a clipboard-less announce) the resulting overlap needs; display-resize deliberately excluded (native EDID already covers it) | virtio-serial named multiport port `com.redhat.spice.0` (wakes stock `spice-vdagentd`); no crate reuse |
 | M13 visibility/power render adaptation 📋 planned | front-end occlusion/Space/power signal + hysteresis policy, `vm.toml [power]/[render]` config, host present cap/pause (reuse s2idle), agent frame-rate throttle message | present pause/cap knob (extends s2idle 0089) + fence-feedback pacing knob; relax deep-idle bias on occlusion |
 | M14 biometric auth ✅ both halves shipped | host CTAP2 authenticator (SEP ES256 + LAContext, CryptoKit blob store per VM), agent uhid FIDO bridge + vsock channel, later xHCI + FIDO/MOC-fingerprint gadgets, pam_u2f/authselect recipe | none for uhid transport (vsock exists); stock wave = xHCI controller + gadget device models in libkrun (shared with M7) |
 | M15 display pipeline v2 📋 planned | per-hw-display window/present policy (native refresh + VRR pacing), CALayer-per-plane compositing, WindowServer GPU-share profiling | krun-display EDID/modes per host display (incl. VRR range), virtio-gpu overlay-plane + YUV(NV12/P010)+color-props protocol extension (device + guest kernel, capset-gated), primary-plane format/modifier advertisement (XBGR/ABGR now; non-LINEAR per `spikes/scanout-modifiers/`), cursor-size lift (low-prio) |
