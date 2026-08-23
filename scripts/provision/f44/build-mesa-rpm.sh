@@ -148,6 +148,14 @@ ls -la "$OUT"/*.rpm 2>/dev/null || { echo "(no RPMs produced — check the build
 
 # Venus sanity: the enhanced tier is pointless without the virtio (venus) Vulkan ICD. F44 mesa
 # builds it by default; if this warns, add 'virtio' to the spec's `%global vulkan_drivers` line.
-if ! rpm -qlp "$OUT"/mesa-vulkan-drivers-*.rpm 2>/dev/null | grep -q 'virtio_icd'; then
+# Name the one package exactly: a glob also picks up -debuginfo, and rpm failing on ANY of the
+# files it is given prints nothing for all of them — which reads as "venus is missing" when it is
+# not (false alarm on the 26.1.7-2 build, 2026-08-23).
+# The version is enough to exclude -debuginfo (its name has a component before
+# the version); the %{?dist} tag and the arch are not ours to predict.
+VULKAN_RPM="$(ls "$OUT"/mesa-vulkan-drivers-"$NEVR".*.rpm 2>/dev/null | head -1)"
+if [ -z "$VULKAN_RPM" ]; then
+  echo "WARN: no mesa-vulkan-drivers-$NEVR RPM — cannot check for the venus ICD" >&2
+elif ! rpm -qlp "$VULKAN_RPM" | grep -q 'virtio_icd'; then
   echo "WARN: no virtio_icd (venus) in mesa-vulkan-drivers — add 'virtio' to %global vulkan_drivers and rebuild" >&2
 fi

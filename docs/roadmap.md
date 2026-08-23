@@ -1872,32 +1872,38 @@ useful answer — it makes the guest's blit permanent and turns it into their op
 
 ### Wave 6 — zero-copy udmabuf (guest-RAM dmabuf) import into venus
 
-**Status: 📋 planned 2026-08-13** (raised by the user while fixing the totem crash: *"is it really
-impossible to import udmabuf, or is it a matter of giving venus a new primitive?"* — the answer is
-the second, and it needs GUEST-side work first).
+**Status: phase 1 ✅ shipped, phases 2–3 📋 planned** (raised by the user while fixing the totem
+crash: *"is it really impossible to import udmabuf, or is it a matter of giving venus a new
+primitive?"* — the answer is the second, and it needed GUEST-side work first).
 
 **What a udmabuf is and why it matters.** `/dev/udmabuf` wraps plain guest anonymous pages (a
 sealed memfd) as a dmabuf. It is how every *software*-decoded media frame reaches the GPU stack:
-GStreamer allocates into a memfd, wraps it, and hands the dmabuf to zink/GL. Today the import is
-refused and the stack falls back to a raw upload — one CPU copy per frame, per player. (Before
-2026-08-13 the refusal *killed the GPU context*; that is fixed on both sides, see
-`vkr_ghost_containment.rs`, and this wave is about the performance, not correctness.)
+GStreamer allocates into a memfd, wraps it, and hands the dmabuf to zink/GL. The GL path now works
+(phase 1) at the cost of one host-side copy per frame; venus still refuses the import, and
+removing that last copy is what phases 2–3 are for.
 
-**Measured 2026-08-13, the load-bearing fact:** a foreign dmabuf PRIME-imported into virtio-gpu is
-**purely guest-side**. `DRM_IOCTL_PRIME_FD_TO_HANDLE` succeeds and `RESOURCE_INFO` reports a real
-res_id with `blob_mem=0`, but the host receives **no `RESOURCE_CREATE_*` and no
-`RESOURCE_ATTACH_BACKING`** for it (probed with `LIMINA_TRACE_ATTACH_BACKING=1`: the ids around it
-trace, it never does). So the host holds nothing at all — not the resource, not the page list —
-which is exactly why vkr answers "invalid res_id". **The bridge cannot be built host-side alone.**
+**The import does reach the host.** A PRIME-imported udmabuf arrives as a guest-memory blob whose
+pages libkrun translates into host-VA iovecs — measured `[BLOB-CREATE] ctx 0 res 293 blob_mem=1
+blob_flags=0x2 size=3686400 -> 225 iovec(s), 3686400 bytes`. (Until 2026-08-23 it did not, and the
+resulting *untyped* host resource made `CREATE_SAMPLER_VIEW` fail and poisoned the player's GL
+context permanently — the fix chain is phase 1 below.)
 
 Three phases, each independently useful:
 
-1. **Guest kernel (`liminavm/linux`, branch `limina`) — make the import reach the host.** Teach
-   drm/virtio's PRIME-import path to register a foreign dmabuf's `sg_table` as a virtio-gpu
-   resource: create it host-side and `RESOURCE_ATTACH_BACKING` its pages. This is a real upstream
-   gap, so keep it upstreamable — and keep it a *capability*, not a requirement: a stock guest
-   simply keeps today's raw-upload fallback (two-tier guarantee). Watch out for dmabuf lifetime:
-   the resource must hold the dmabuf attachment for as long as the host has the pages.
+1. **✅ Make the import reach the host, and make GL sample it.** Four fixes, one chain:
+   - guest kernel (`liminavm/linux`) — record `blob_mem` on a PRIME-imported object so
+     `RESOURCE_INFO` reports it, and give the dma-buf GEM funcs `.open`/`.close` so the resource
+     is attached to the render context;
+   - guest mesa (`limina-guest`) — report `blob_mem` for a resource found in the winsys cache
+     (every plane after the first of a multi-planar dma-buf, and, because planes import in reverse
+     order, plane 0 — the only one allowed to emit `SET_TYPE`);
+   - guest mesa — let planar YUV reach the sampler bitmask, so the composite format is used
+     instead of one host resource per plane;
+   - virglrenderer (`limina`) — type the blob into a real GL texture, fill it from the guest's own
+     pages (macOS has no dmabuf to alias, so we copy) and re-read before every command batch that
+     samples it; planar YUV is converted to RGBA on the way in.
+
+   Frames therefore reach the GPU with **one host-side copy** and no guest-side one.
 2. **Host (virglrenderer `limina`) — consume an iov-backed classic resource in venus.** libkrun
    already translates the backing into **host-VA iovecs** (`virtio_gpu.rs` `attach_backing` →
    `virgl_renderer_resource_attach_iov`), so the pages are visible in the worker; what is missing

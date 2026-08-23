@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Thu, 13 Aug 2026 16:19:33 -0300
-Subject: [PATCH 7/8] zink: don't recurse forever populating a shadow
+Subject: [PATCH 07/10] zink: don't recurse forever populating a shadow
  attachment
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

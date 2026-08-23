@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Sun, 23 Aug 2026 12:47:21 -0300
+Subject: [PATCH 09/10] virgl: report blob_mem for a resource that was already
+ imported
+
+A multi-planar dma-buf carries every plane in one fd, so only the first
+plane through virgl_drm_winsys_resource_create_from_handle allocates the
+virgl_hw_res and runs RESOURCE_INFO; the rest find it in bo_handles and
+return early, leaving the caller's *blob_mem at 0.
+
+dri_create_image_from_winsys imports planes in reverse order, and
+virgl_resource_from_handle only emits SET_TYPE for plane 0 -- so plane 0
+is always the cache hit, always reports blob_mem 0, and SET_TYPE is
+never sent for a multi-planar import. The host resource stays untyped
+and the image samples as garbage; measured on limina with
+`videotestsrc ! video/x-raw,format=NV12 ! glupload ! glcolorconvert !
+glcolorscale ! gldownload`, which produced a blank frame while the same
+pipeline in RGBA produced the right one.
+
+Report the cached resource's blob_mem at the shared exit instead.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/gallium/winsys/virgl/drm/virgl_drm_winsys.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/src/gallium/winsys/virgl/drm/virgl_drm_winsys.c b/src/gallium/winsys/virgl/drm/virgl_drm_winsys.c
+index 9258a4da0ac..89fce3bebcf 100644
+--- a/src/gallium/winsys/virgl/drm/virgl_drm_winsys.c
++++ b/src/gallium/winsys/virgl/drm/virgl_drm_winsys.c
+@@ -592,6 +592,17 @@ virgl_drm_winsys_resource_create_handle(struct virgl_winsys *qws,
+    _mesa_hash_table_insert(qdws->bo_handles, (void *)(uintptr_t)res->bo_handle, res);
+ 
+ done:
++   /* Report the blob kind on the cache-hit paths too, not just where
++    * RESOURCE_INFO ran. A multi-planar dma-buf imports every plane from the
++    * same fd, so only the first plane allocates the virgl_hw_res; the rest hit
++    * the hash tables above. dri_create_image_from_winsys imports planes in
++    * reverse order, so plane 0 -- the only one virgl_resource_from_handle lets
++    * emit SET_TYPE -- is always a cache hit. Leaving *blob_mem at 0 there makes
++    * it look like a classic (non-blob) resource, SET_TYPE is skipped, and the
++    * host resource stays untyped: the image samples as garbage. */
++   if (res)
++      *blob_mem = res->blob_mem;
++
+    mtx_unlock(&qdws->bo_handles_mutex);
+    return res;
+ }
