@@ -9,12 +9,14 @@ appetite.
 Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, see below.
 
 ## Display / window
-- **The suspend/resume overlays exist only on the primary window; a secondary just freezes.**
-  Noticed on the rig 2026-08-22 while testing park/resume on two panels: the "Suspending…" scrim
-  and the "Resuming…" spinner are installed on the main window's content layer, so a guest
-  display on another panel simply stops updating with no indication of why. The overlay module
-  already takes the layer and view it decorates, so this is a matter of giving each secondary its
-  own instance and taking them all down together, not new machinery.
+- **The suspend overlay reached only the primary window; a secondary just froze — FIXED
+  2026-08-22.** Noticed on the rig while testing park/resume on two panels: the snapshot save
+  takes ~13 s, and for all of it a second panel simply stopped updating with nothing to say why.
+  Each secondary wears its own instance now (`GuestWindows::veil`), driven from the same tick
+  block as the primary's so they rise and fall together — including when the bracket is abandoned
+  and the VM keeps running. **Only the suspend flavor can reach a secondary**: parked and
+  resuming both happen after the park has closed every secondary window, and the restore splash
+  predates their existence. Rig-confirmed on both windows.
 - **A parked (or resuming) window grabbed and blanked the pointer on every visit to its Space —
   FIXED 2026-08-22.**
   Measured 2026-08-22: three grab/release cycles in two minutes on each of two suspended VMs,
