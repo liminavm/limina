@@ -36,6 +36,34 @@ in the guest — the guest-side command stream proved unreliable to decode.
   (mesa `limina-guest`) — the multi-planar cache-hit path left `*blob_mem` at 0,
   and planes import in reverse order, so plane 0 — the only one allowed to emit
   SET_TYPE — was always the cache hit.
-- `vrend: sample guest-memory blobs from the guest's own pages`
+- `virgl: let planar YUV formats be looked up in the sampler bitmask`
+  (mesa `limina-guest`) — `util_format` gives a planar format no channels, so the
+  generic checks rejected NV12/I420 outright and the frontend fell back to
+  importing each plane as its own resource. That layout is not expressible: a
+  sampler view carries only a format, and I420's two chroma planes are identical
+  in format and size, so the host cannot tell U from V.
+- `vrend: sample guest-memory blobs from the guest's own pages` +
+  `vrend: sample a planar-YUV guest blob by converting it to RGBA`
   (virglrenderer) — macOS has no dmabuf to alias, so fill the texture from the
-  guest iovecs and re-read before each command batch that samples it.
+  guest iovecs and re-read before each command batch that samples it; planar
+  formats are advertised sampler-only and converted to RGBA on the way in.
+
+## Measured green (2026-08-23)
+
+Kernel `7.1.8-limina16k.4`, mesa `26.1.7-3.limina.fc44`, virglrenderer `f04641d7`,
+via `gl-upload-oracle.sh 1280x720`:
+
+| format | SET_TYPE seen at the host | PNG | verdict |
+|---|---|---|---|
+| reference (no GL in the pipeline) | — | 34820 B | the baseline SMPTE frame |
+| RGBA | `fmt 67 planes 1` | 32675 B | correct |
+| NV12 | `fmt 166 planes 2 stride0 1280 off0 0 stride1 1280 off1 921600` | 30681 B | correct |
+| I420 | `fmt 165 planes 3 stride0 1536 off0 0 stride1 768 off1 1105920` | 30681 B | correct |
+
+A 20-frame NV12 run gives 20 distinct md5s with the ball visibly advancing, so the
+per-batch re-read is picking up new content and not caching the first frame.
+
+**Still unexplained, parked:** `glupload ! gldownload` at *identical* caps issues no
+transfer and no draw, so it is not an oracle — the scaling step in
+`gl-upload-oracle.sh` is what forces the frame through the GPU. First suspect if a
+readback-shaped path ever misbehaves.

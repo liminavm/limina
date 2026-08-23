@@ -80,9 +80,9 @@ The table covers the 58 audited commits; the 6 added since are listed under
 
 ### Post-audit commits (unaudited — added after the 2026-08-03 pass)
 
-The table's 58 rows are the audited series. Six commits have landed on the branch since,
-and none has been researched against upstream yet. Listed so the drift is visible rather
-than implied by a stale count:
+The table's 58 rows are the audited series. Twenty-three commits have landed on the branch
+since, and none has been researched against upstream yet. Listed so the drift is visible
+rather than implied by a stale count:
 
 | commit | subject | first guess at disposition |
 |---|---|---|
@@ -92,6 +92,24 @@ than implied by a stale count:
 | `17bb8bf2` | vrend: VREND_CONTENT=0 kill switch for the content export | carry (chained) |
 | `034f7086` | vrend: back VIRGL_BIND_SHARED resources with IOSurfaces too | carry — chains onto the IOSurface backing (0053) and the fd-less classic attach; upstreamable only if that stack goes up |
 | `24a3c2d9` | venus: bound the host GPU memory a guest can hold | **send-later, standalone** — the accounting half is host-agnostic and generally useful (any VMM can be killed by a guest that over-allocates); the ledger + histogram would need no limina context to explain. The `LIMINA_GPU_MEM_BUDGET_MIB` name and the default-off policy are ours and would need renaming; splitting accounting from enforcement is the natural shape upstream |
+| `16bd6836` | venus: periodic GPU-memory census, and read the modifiers before the cap | chains onto `24a3c2d9`; goes up or stays with it |
+| `53e660e6` | budget: charge classic resources to their own bucket, not a venus context | chained (accounting half of `24a3c2d9`) |
+| `f665d25e` | budget: report lifetime charges, not just what is live | chained |
+| `fc27af6e` | vkr: tag scanout traces by context, log lifetime totals at every teardown | diag — strip or drop before any send |
+| `fbde8534` | vkr: census the +1/-1 balance of every host reference taken on an IOSurface | diag — same |
+| `b3a40d2f` | venus: count DEALLOCs, not releases, for scanout surfaces and textures | chained to the IOSurface stack |
+| `af8043c8` | venus: reject a zero-size vkCreateBuffer at the trust boundary | **send-later, standalone** — a guest-triggerable host-side fault at a trust boundary, no limina context needed; classify for disclosure before filing |
+| `b1913b6f` | venus: answer VK_EXT_memory_budget from the GPU-memory ledger | chained to `24a3c2d9`; the natural second half of that MR |
+| `283aeea4` | venus: poison a cmd_buf's replay after a failed RECORDING entry | unassessed |
+| `81de70e8` | venus: contain ghost objects instead of killing the context | unassessed — related in spirit to mesa 0016 (ring loss is not an abort) and to the open !42501 |
+| `5c762457` | vrend: force the Metal linear row pitch on classic IOSurfaces | carry (macOS/IOSurface-specific) |
+| `7caf247b` | vkr: default the KK MTLTEXTURE scanout path ON, one parse for all sites | carry (chained to the KK scanout stack) |
+| `a6a36c93` | vrend: complete a CPU transfer into a shared IOSurface before returning | carry |
+| `b3bc52e0` | vkr: log the pre-clamp memory budget, so a moving number can be attributed | diag |
+| `5e04055b` | vkr: let the supervisor ask for a scanout IOSurface back | carry (limina supervisor protocol) |
+| `4c2a38f5` | vrend: sample guest-memory blobs from the guest's own pages | **carry** — it exists because macOS has no dmabuf, so a `blob_mem=GUEST` resource can only be sampled by copying the guest pages into the texture. On a dmabuf host the import aliases the pages and no copy is wanted, so the mechanism is not upstream-shaped as written; the generalizable part is "a guest blob with no importable fd is not automatically untypeable" |
+| `f04641d7` | vrend: sample a planar-YUV guest blob by converting it to RGBA | **carry** — chained to `4c2a38f5`, and the CPU YUV to RGBA conversion stands in for sampler-side conversion the host GL cannot do here. What *is* upstream-shaped is the narrow half: advertising NV12/NV21/IYUV/YV12 as sampler-only formats so the guest stops taking the per-plane "lowered" path (the guest half is mesa 0019 — send the pair or neither) |
+| `86741d53` | vrend: drop the iovecs when the VMM's resource is destroyed | **carry, chained to `4c2a38f5`** — the dangling `res->iov` exists upstream too (`virgl_resource_destroy_func` never calls `detach_iov`), but nothing upstream reads it after the unref, so there is no bug to report and nothing to disclose. It became reachable only through our own guest-pixels refresh. Sending it alone would be a fix for a latent pointer with no failing case |
 
 `034f7086` is the allocation-side half of the fd-less classic-resource attach: without it
 only `VIRGL_BIND_SCANOUT` resources got an IOSurface, so a Vulkan compositor could import

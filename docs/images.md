@@ -60,11 +60,14 @@ guest with `rpm -q`. Last verified in a booted F44 enhanced guest 2026-08-16.
 
 Two facts the table cannot show:
 
-- **The limina kernel branch currently carries zero delta.** At the v7.1.8 rebase our one remaining
-  commit (`mm/page_reporting` freezable-workqueue) was absorbed upstream. We still build the kernel
-  ourselves, for the **16 KiB page size and the config** — which is the whole reason it exists
-  (venus, `docs/graphics.md` §3.3). The two DRM format/modifier commits were deliberately dropped
-  (see §"Stock virtio-gpu formats" below).
+- **The limina kernel branch carries two drm/virtio commits**, both upstream-now candidates:
+  per-scanout rects exposed as suggested connector offsets (the guest half of the arrangement
+  relay), and typing + context-attaching PRIME-imported dmabufs (without it every
+  software-decoded video frame is untyped host-side — `docs/graphics.md` §3.2). The
+  `mm/page_reporting` freezable-workqueue commit was absorbed upstream at the v7.1.8 rebase, and
+  the two DRM format/modifier commits were deliberately dropped (see §"Stock virtio-gpu formats"
+  below). We would still build the kernel ourselves with no delta at all, for the **16 KiB page
+  size and the config** — which is the whole reason it exists (venus, `docs/graphics.md` §3.3).
 - **Mutter is stock from the guest's next distro update onward.** We stopped shipping a patched
   mutter on 2026-07-11: an `.limina` release loses to any stock bump, and the event that displaced
   it also proved stock mutter needs none of our rendering patches. Images that still contain

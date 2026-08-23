@@ -1,17 +1,18 @@
 # linux — patch-audit ledger
 
 **Fork model since 2026-08-03.** There is no `patches/linux/` series any more: our kernel changes
-are commits on **`github.com/liminavm/linux`** branch **`limina`**, base **`v7.1.6`**, pinned in
+are commits on **`github.com/liminavm/linux`** branch **`limina`**, base **`v7.1.8`**, pinned in
 `third_party/manifest.toml`. The fork's parent is **`gregkh/linux`** (the stable-tree mirror) —
 `torvalds/linux` has no stable point-release tags. Regenerate the series as a build artifact with
 `scripts/export-linux-patches.sh` (`git format-patch base..rev`).
 
-1 commit. Schema + protocol: `README.md`. Rows are keyed by SUBJECT; ordinals are informational
+2 commits. Schema + protocol: `README.md`. Rows are keyed by SUBJECT; ordinals are informational
 and drift on re-export.
 
 | ord | subject | files | diag | need | checked | issue | mr | sec | fold | tier | disp | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 0001 | mm/page_reporting: use system_freezable_wq to fix UAF during suspend | `mm/page_reporting.c` |  | **backport** — cherry-pick of upstream `0b45f69` (Link Lin, 2026-07-29, 3 Acks + akpm, Cc: stable, Fixes: 36e66c5); replaced our own driver-side patch | NOT in `v7.1.6` (checked `mm/page_reporting.c` at v7.1.5 + v7.1.6, 2026-08-03: still `schedule_delayed_work`) | n/a — upstream root-caused it independently | n/a — thread lore.kernel.org/virtualization/20260721005603.1710551-1-linkl@google.com | no (guest self-oops only) | standalone | guest-enhanced (bug also afflicts stock guests until the stable backport reaches them) | **drop-on-rebase** once the base carries the stable backport; nothing to send | judge a base by `mm/page_reporting.c`, NOT `virtio_balloon.c` — the fix is invisible in the file we used to patch; watch: restore-error-path UAF follow-up, and the `F_REPORTING_PM_SAFE` Bit 6 RFC (host-relevant: our libkrun balloon could offer Bit 6) |
+| 0001 | drm/virtio: expose per-scanout rects as suggested connector offsets | `drivers/gpu/drm/virtio/virtgpu_display.c`, `virtgpu_vq.c`, `virtgpu_drv.h` |  | **needed** — no driver reads the rect position; qxl is the only precedent | `v7.1.8` `virtgpu_display.c` (read 2026-08-23: still size-only, no suggested_x/y, no `hotplug_mode_update`) | none-yet | none-yet | no | standalone | guest-enhanced | **upstream-now** | the guest half of the host→guest arrangement relay; mutter gates the offsets on `hotplug_mode_update`, so the two halves must go together |
+| 0002 | drm/virtio: type and attach PRIME-imported dmabufs | `drivers/gpu/drm/virtio/virtgpu_prime.c` |  | **needed** — `bo->blob_mem` is still unset on the import path and `virtgpu_dma_buf_funcs` still carries only `.free` | `v7.1.8` `virtgpu_prime.c` (read 2026-08-23) | none-yet | none-yet | no | standalone | guest-enhanced (the bug hits any guest whose glupload picks the DirectDmabuf uploader; 16 KiB pages are what make that the default here) | **upstream-now** | a plain driver bug with a self-contained fix and a measured symptom — the cleanest upstream candidate we carry; see the finding below |
 
 ## Left the series
 
@@ -21,6 +22,7 @@ and drift on re-export.
 | virtio_balloon: stop free-page reporting across suspend/resume | replaced by the `0b45f69` backport (row 0001) | Upstream root-caused the same UAF independently and chose the core fix over our driver-side approach. |
 | drm/virtio: widen the primary plane format list | **dropped 2026-08-04** (preserved under tag `limina/2026-08-04-modifiers`) | Punted with 0003 to the future hardware-planes work — see "Why these two left" below. Never priced: the rig drives the compositor's own present path, not fullscreen *client* direct scanout, which is what this patch is actually for. |
 | drm/virtio: advertise DRM_FORMAT_MOD_LINEAR on planes | **dropped 2026-08-04** (preserved under tag `limina/2026-08-04-modifiers`) | The one failure it appeared to prevent turned out to be a bug in our own Vulkan compositor, fixable in one line; stock mutter never needed it. See "Why these two left" below. |
+| mm/page_reporting: use system_freezable_wq to fix UAF during suspend | **dropped on rebase 2026-08-23** (base moved `v7.1.6` → `v7.1.8`) | It was a cherry-pick of upstream `0b45f69`, carried only until the stable base caught up; `v7.1.8`'s `mm/page_reporting.c` queues on `system_freezable_wq`. The watch items it left behind are in Findings. |
 | drm/virtio: fence RESOURCE_FLUSH for host3d blob scanout | **dropped 2026-08-04** (was on the branch for one day, as `bde37a06ba4d`; preserved under tag `limina/2026-08-04`) | Rewritten, shipped, then **measured**: it costs 86% of frames on the async-scanout rig. `virtio_gpu_resource_flush` *blocks* on the fence in `commit_tail`, and our host does not signal until the CA latch — so fencing blob scanout serialises every commit behind a host vblank. Not a bad idea badly implemented: a bad *place*. See Findings. |
 
 ## Findings
@@ -289,6 +291,32 @@ the guest kernel to be ≥ 7.2 (stock Fedora's), and guest Mesa to query
 `VIRTGPU_PARAM_BLOB_ALIGNMENT` and round (stock Fedora's, on this tier). Two of three are not ours
 to ship, and advertising before the third turns working odd-size allocations into clean
 `-EINVAL`s. Details and the internal action items: `guest/virtio-gpu-dkms/README.md`.
+
+### The PRIME-import fix, and why the guest tier needs it (2026-08-23)
+
+**(a) Capability.** A dmabuf imported into virtio-gpu — every frame GStreamer's `glupload`
+sends through its DirectDmabuf uploader, i.e. all software-decoded video — is reported to the
+host as a guest blob *and* attached to the importing render context, so the host learns the
+frame's format and strides and can sample it.
+
+**(b) Stock guest without it.** Boots and runs; video players draw stale framebuffer garbage on
+this tier. A 4 KiB guest hides the bug because `glupload` picks a different uploader there — the
+page size is the trigger, not the fault.
+
+**(c) Host-side alternative.** There is none that is honest. Without `SET_TYPE` the host has the
+pages and nothing else — no format, no stride, no plane offsets — so any host-side guess is a
+heuristic over raw bytes. The renderer additionally *rejects* the resource as unknown to the
+context, which `vrend_report_context_error` makes permanent: the player's GL context is dead at
+its first frame. Both halves are guest-kernel facts; neither is inferable host-side.
+
+**(d) Exit.** It is a plain driver bug with a self-contained fix, so the exit is upstream
+acceptance: once a released kernel carries it, the enhanced-tier requirement dissolves into "a
+new enough kernel" and the stock tier absorbs it. Nothing in the fix is limina-specific.
+
+**The lesson the fix carries** is that it was one of *four* faults on a single path, each hiding
+the next — two here, two in guest Mesa (`docs/upstreaming/ledger/mesa.md`), plus the host half in
+vrend. Fixing any one alone changes the symptom and not the outcome, which is exactly how a
+partial fix reads as a wrong theory. Measure the *next* hop after every fix, not the pixels.
 
 ### Load-bearing references
 

@@ -140,6 +140,34 @@ ICD at all.
 vrend also owns the scanout (§4), so zero-copy present is a host-side property available to *both*
 tiers, not an enhanced-tier feature.
 
+#### An imported dmabuf: how a software-decoded video frame reaches the GPU
+
+A frame that a CPU decoder produced lives in guest memory, and GStreamer's `glupload` hands it to
+GL by wrapping the memfd with `/dev/udmabuf` and PRIME-importing it into virtio-gpu. On a 16 KiB
+guest that is the *default* uploader, so it is the path every software-decoded video takes;
+a 4 KiB guest picks a different uploader, which is why the page size looks like the trigger.
+
+Two things have to happen for the host to be able to sample it:
+
+1. **The guest must say what the bytes are.** The import registers the pages as a
+   `VIRTGPU_BLOB_MEM_GUEST` blob, but pages alone are not an image — format, size, stride and
+   plane offsets travel separately, in `VIRGL_CCMD_PIPE_RESOURCE_SET_TYPE`. Mesa emits that only
+   when `RESOURCE_INFO` reports a nonzero `blob_mem`, and only for plane 0.
+2. **The host must be able to read them.** On Linux vrend imports the dmabuf and the texture
+   aliases the guest pages. **macOS has no dmabuf**: `fd_type` can never be `DMABUF` here, so vrend
+   copies instead — it keeps the iovecs and the plane layout and re-reads them before every command
+   batch that samples the texture. Planar YUV is converted to RGBA on the way in (BT.601 limited
+   range, the EGL default), and NV12/NV21/IYUV/YV12 are advertised **sampler-only** so the guest
+   stops taking gallium's per-plane "lowered" path — which virgl cannot express, because a sampler
+   view carries only a format and I420's two chroma planes are identical in format and size.
+
+An untyped resource is not in the render context's resource hash, so `CREATE_SAMPLER_VIEW` on it is
+rejected as an illegal resource — and `vrend_report_context_error` poisons the context
+*permanently*. That is why the symptom is not a wrong-looking video but a player whose window never
+paints at all: its GL context dies at the first frame. If you see `Illegal resource` followed by
+`failed to dispatch CREATE_OBJECT`, look for a missing SET_TYPE, not for a rendering bug.
+
+
 ### 3.3 venus — Vulkan, and the one thing that needs the enhanced guest
 
 venus is the Vulkan side only. In an enhanced guest:
