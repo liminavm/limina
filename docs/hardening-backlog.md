@@ -89,20 +89,30 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   the ask, so the chrome retracts out from under an open menu. The ask is slaved to the observed
   `NSMenu::menuBarVisible` (`InputState::menubar_observed`) and released by `reveal_step`; which of
   the two lets go first is unmeasured. Same vehicle and traces as the entry above.
-- **A guest desktop that is not a rectangle has no edge class for the dead space, in two
-  places.** Measured 2026-08-22 on the dogfood, guest arranged as Dell (0,184) 3072x1728 @1.25
-  beside built-in (3072,0) 2048x1328: any vertical offset or height mismatch leaves corners of
-  the bounding box that belong to no monitor, and both the captured clamp and the pressure
-  filter assume the box IS the desktop. (1) `fit::range_step` clamps captured motion to
-  `0..=ABS_MAX` — the ends of the whole box, not of the display the cursor is on — so a display
-  whose top is not the box's top can be pushed past its own edge into dead space, where the
-  cursor is over no output and simply vanishes; ~200 host px of push before overflow even starts
-  to charge, and the relative motion then forwarded fights the absolute device that keeps
-  snapping it back. (2) `arrangement::outer_edges` calls an edge outer only when it sits at the
-  bbox coordinate, so with a guest report in place that same top becomes a *seam* and
-  `Edges::keep` drops the push entirely — a leaky wall for a dead one. An edge is a seam only
-  where a neighbour actually abuts it over that span; an edge facing dead space is outer. Both
-  vanish if the tops are aligned in the guest, which is the workaround, not the fix.
+- **A guest desktop that is not a rectangle had no edge class for the dead space, in two
+  places — FIXED 2026-08-23.** A desktop is a union of rectangles, so any vertical offset or
+  height mismatch leaves corners of the bounding box belonging to no monitor, and both the
+  captured clamp and the pressure filter assumed the box IS the desktop. (1) `fit::range_step`
+  clamped captured motion to `0..=ABS_MAX`, the ends of the whole box, so a display whose top is
+  not the box's top could be pushed past its own edge into dead space, where the pointer is over
+  no output and — the cursor plane being per-scanout — nothing draws it. It now clamps against
+  the guest's reported desktop (`arrangement::Desktop::confine`): a candidate that lands on a
+  monitor is taken as it is, so seam crossing survives; one that lands nowhere is clamped
+  against the rect the *previous position* occupied, never the capture slot's, which the echo
+  leaves a step behind after a crossing. Every clamp then happens at a wall by construction, so
+  the pressure charges where the hand is pushing and needs no filter. The gain moved to the same
+  geometry — the slot's share of the range over its share of the window — retiring an estimate
+  that assumed a top-aligned row of scanout-sized monitors. (2) `arrangement::outer_edges`
+  called an edge outer only when it sat at a bbox coordinate, so an offset monitor's leading
+  edges read as seams and `Edges::keep` dropped the push: a wall the guest holds the pointer
+  against that charges nothing. `outer_edges_at` takes the position and asks what is on the
+  other side of the edge *there* — no per-side answer can be right for an edge that is a seam
+  over the span its neighbour covers and a wall over the rest.
+  Measured on the two-panel rig 2026-08-23, guest at BenQ `(1512,0) 2048x1152` and built-in
+  `(0,747) 1512x948`: **0 of 2374** absolute positions landed on no monitor, the deepest reach
+  on the BenQ was y=1152.0 and the shallowest on the built-in y=747.0 — both walls to the unit —
+  and **53** upward pressure events charged at the built-in's top, an edge the old `r.y == 0`
+  test zeroed. Oracle and repro: `spikes/m15-ragged-desktop/`.
 - **`notch = extend`: the band is not hidden when the reveal triggers ungrabbed.** The strip
   overlay keeps covering its band while macOS has the menu bar out, so the revealed bar sits
   behind the very thing the reveal exists to get past. The grant path is there and works
