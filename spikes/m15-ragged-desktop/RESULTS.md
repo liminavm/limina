@@ -58,8 +58,10 @@ there was no clamped-off motion to charge with. Before the fix, on the same rig,
 disappeared when pushed past the built-in's bottom edge into the dead band.
 
 `outer_edges_at` governs the **uncaptured** path (and the captured seed, before a running range
-exists). Its end-to-end differential is an uncaptured drag past an edge facing dead space; its
-geometry is pinned by unit tests in `window/arrangement.rs`. **Any test run fullscreen is a test
+exists). Its end-to-end differential is uncaptured **hover** past an edge facing dead space — plain
+motion, no button. There is no uncaptured drag to use instead: where the tap is installed it
+owns clicks and takes the grab, so a press captures. Its geometry is pinned by unit tests in
+`window/arrangement.rs`. **Any test run fullscreen is a test
 of the captured path, whatever it was meant to test** — `docs/input-and-windows.md` §4.
 
 **A cursor that vanishes at a monitor's *true* edge is not this bug.** The plane's hotspot

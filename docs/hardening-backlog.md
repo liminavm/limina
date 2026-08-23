@@ -114,7 +114,8 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   and **53** upward pressure events charged at the built-in's top, where the old box clamp had
   nothing to charge with until range y=0. That run was fullscreen, so it verifies (1) only: the
   captured path takes its pressure from the confinement and never consults `outer_edges_at`,
-  whose end-to-end differential is an *uncaptured* drag and whose geometry rests on unit tests.
+  whose end-to-end differential is *uncaptured hover* (plain motion, no button — a press
+  captures) and whose geometry rests on unit tests.
   Oracle and repro: `spikes/m15-ragged-desktop/`.
 - **`notch = extend`: the band is not hidden when the reveal triggers ungrabbed.** The strip
   overlay keeps covering its band while macOS has the menu bar out, so the revealed bar sits

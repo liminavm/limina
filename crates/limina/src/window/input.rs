@@ -2067,10 +2067,14 @@ impl InputState {
         // Harmless when the tap *is* installed: while resistance holds it consumes the event, so
         // this never runs for the same motion.
         //
-        // Filtered to this slot's OUTER edges (`arrangement::outer_edges`): the fit clamp is
-        // the window's edge, pressure belongs at the desktop's. During an uncaptured drag
-        // toward a seam the pointer keeps reporting past the fit edge, and unfiltered overflow
-        // there is seam pressure — the two devices fighting over one pointer.
+        // Filtered to this slot's OUTER edges (`arrangement::outer_edges_at`): the fit clamp is
+        // the window's edge, pressure belongs at the desktop's. An uncaptured pointer moving
+        // toward a seam keeps reporting past the fit edge, and unfiltered overflow there is
+        // seam pressure — the two devices fighting over one pointer.
+        //
+        // This is the ONE path that consults `outer_edges_at`, and it is reached from plain
+        // uncaptured motion — no button. There is no uncaptured *drag* to test it with: where
+        // the tap is installed it owns clicks and takes the grab, so a press captures.
         let over = super::fit::edge_overflow((p.x, p.y), event.deltaX(), event.deltaY(), fit);
         let over = super::arrangement::outer_edges_at(t.slot, t.unit.0, t.unit.1).keep(over);
         if over != (0.0, 0.0) {
