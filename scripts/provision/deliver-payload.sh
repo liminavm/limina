@@ -75,7 +75,16 @@ deliver() {
   LIMINA_DISK="$img" LIMINA_BOOT_LOG="$log" spikes/venus-draw-probe/boot-enhanced-efi-kk.sh \
     >"$LOGDIR/limina-deliver-$name-$REV.boot.log" 2>&1 &
   boot=$!
-  port="$(scripts/wait-guest-ssh.sh "$log" "$SSH_TIMEOUT")"
+  port="$(scripts/wait-guest-ssh.sh "$log" "$SSH_TIMEOUT")" || true
+  if [ -z "$port" ]; then
+    # Carrying on with an empty port does not merely fail the install: every ssh
+    # below dies with `Bad port ''`, INCLUDING the poweroff, so `wait "$boot"`
+    # never returns and the whole run hangs with the guest still up.
+    echo "!!! no SSH port for $img (see $log) — abandoning this image" >&2
+    kill "$boot" 2>/dev/null || true
+    wait "$boot" 2>/dev/null || true
+    return 1
+  fi
   echo "guest up: ssh -p $port $USER_@127.0.0.1 (worker log $log)"
 
   scp -P "$port" "${SSH_OPTS[@]}" "$PAYLOAD" "$USER_@127.0.0.1:"

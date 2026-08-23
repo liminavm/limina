@@ -30,7 +30,12 @@ while [ -z "$port" ]; do
         tail -5 "$log" >&2 2>/dev/null || echo "  (log unreadable)" >&2
         exit 1
     fi
-    port=$(sed -n 's/.*guest SSH forward ready: ssh -p \([0-9][0-9]*\).*/\1/p' "$log" 2>/dev/null | tail -1)
+    # The log may not exist yet: a caller that launches the boot and waits in the
+    # same breath (deliver-payload.sh) gets here before the vehicle creates it. Left
+    # bare, sed's failure rides pipefail into set -e and kills this script SILENTLY --
+    # the caller then reads an empty port, and every ssh after it fails with
+    # `Bad port ''`. Absorb the failure and keep waiting for the file to appear.
+    port=$({ sed -n 's/.*guest SSH forward ready: ssh -p \([0-9][0-9]*\).*/\1/p' "$log" 2>/dev/null || true; } | tail -1)
     [ -n "$port" ] || sleep 2
 done
 
