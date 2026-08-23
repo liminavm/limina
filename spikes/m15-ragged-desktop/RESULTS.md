@@ -60,8 +60,43 @@ disappeared when pushed past the built-in's bottom edge into the dead band.
 `outer_edges_at` governs the **uncaptured** path (and the captured seed, before a running range
 exists). Its end-to-end differential is uncaptured **hover** past an edge facing dead space — plain
 motion, no button. There is no uncaptured drag to use instead: where the tap is installed it
-owns clicks and takes the grab, so a press captures. Its geometry is pinned by unit tests in
-`window/arrangement.rs`. **Any test run fullscreen is a test
+owns clicks and takes the grab, so a press captures.
+
+### The per-point edge, measured
+
+Same physical action, same corner, same session, pointer free throughout — only the guest's
+arrangement differs. `Virtual-1` (primary, 2048x1152) is held at `(0,948)` in both, so under
+the old per-side test its top edge was never outer (`r.y == 0` is false at 948) and every
+upward push was dropped whatever the neighbour did.
+
+| the corner under the push | upward pressure | absolute samples | overview |
+| --- | --- | --- | --- |
+| **wall** — `Virtual-2` at `(1024,0)`, above the RIGHT half | **96** | 1689 | opens |
+| **seam** — `Virtual-2` at `(0,0)`, above the LEFT half | **0** | 3033 | opens |
+
+Neither window contains a capture transition, so both are the uncaptured path throughout.
+The wall column is the differential against the old code; the seam column is the same edge
+refusing to charge where a neighbour actually abuts it, which is the property no per-side
+answer can express.
+
+**The hot corner alone does not prove pressure arrived.** The overview opens in *both*
+arrangements — and in the seam case it opened with **zero** pressure events on the wire, so
+opening it is not evidence that any was delivered. What does differ is the effort: with the
+pressure the corner triggers readily, and without it the operator reports having to work at it,
+which reads as a second, harder route still being available to an absolute pointer that lands
+in the corner itself. Which route that is was not confirmed — `gresource` is absent from the
+guest, so the shell's own implementation was not read. Treat the overview as a visible sanity
+check on the wall case and nothing more; the wire trace is what tells the two halves apart.
+(Captured is the case a barrier genuinely cannot serve on its own — there the absolute stream is
+pre-clamped, which is why the pressure device exists at all.)
+
+Multi-display exists only in `FullscreenAll`: windowed mode hands the guest exactly one
+connector (`displays.rs`, `wanted`). So the test is fullscreen with the grab released, never
+windowed. Releasing takes **two** `Cmd-Ctrl-G` — the first promotes to a hard grab.
+
+Two edges are unusable on this rig, both eaten by macOS before the app sees them: the **right**
+edge, where Universal Control hands the cursor to another Mac (measured: the pointer stalls
+~9 units short and nothing charges), and the **bottom**, where the Dock reveals. **Any test run fullscreen is a test
 of the captured path, whatever it was meant to test** — `docs/input-and-windows.md` §4.
 
 **A cursor that vanishes at a monitor's *true* edge is not this bug.** The plane's hotspot

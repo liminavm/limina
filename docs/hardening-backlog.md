@@ -116,7 +116,24 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   captured path takes its pressure from the confinement and never consults `outer_edges_at`,
   whose end-to-end differential is *uncaptured hover* (plain motion, no button — a press
   captures) and whose geometry rests on unit tests.
+  (2) was then measured the same day, on the same rig: with `Virtual-1` held at `(0,948)` — so
+  its top edge is never outer under the old `r.y == 0` test — the neighbour above its RIGHT half
+  gave **96** upward pressure events at the top-left corner, and above its LEFT half **0**, from
+  3033 absolute samples. Same corner, same free pointer, no capture transition in either window.
   Oracle and repro: `spikes/m15-ragged-desktop/`.
+- **NEEDS REPRO — the released pointer can come back invisible.** Releasing a hard grab with
+  Ctrl-Opt left no cursor drawn at all: the pointer was live and moving (pushing it up revealed
+  the chrome, which restored the image) but nothing rendered until then. Seen once, on the
+  two-panel rig 2026-08-23, fullscreen on both panels after a click had promoted the grab. The
+  blank-wear check runs every tick and the unhide fix is in (`64aee92`), so this is either a path
+  that skips both or a macOS-side unhide that did not take; the wear log line did fire earlier in
+  the same session, which is why it is worth a look rather than a guess.
+- **NEEDS REPRO — pushing an edge uncaptured tends to re-take the grab.** Reported from the same
+  rig: "the pressure thing causes the capture". `user_released` is meant to hold the grab off
+  while the pointer stays in the fit, and the regrab arms on `!point_in_fit` — so an edge push
+  that momentarily reads as outside the fit would rearm and let the dwell take it back, which
+  would make the latch useless exactly where a user leans on it. Worth confirming against the fit
+  arithmetic before changing anything.
 - **`notch = extend`: the band is not hidden when the reveal triggers ungrabbed.** The strip
   overlay keeps covering its band while macOS has the menu bar out, so the revealed bar sits
   behind the very thing the reveal exists to get past. The grant path is there and works
