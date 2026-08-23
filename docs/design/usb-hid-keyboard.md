@@ -1,7 +1,6 @@
 # USB HID keyboard gadget: a keyboard for the pre-driver window
 
-Status: **implemented** (2026-08-23), pending validation against a real encrypted-root guest.
-Companion docs: `docs/design/usb-xhci.md` (the emulated
+Status: **shipped**. Companion docs: `docs/design/usb-xhci.md` (the emulated
 controller and the gadget seam), `docs/research/04-input-and-keyboard.md` (the virtio-input
 keyboard), `docs/input-and-windows.md` (the input stack as a whole).
 
@@ -166,19 +165,31 @@ Unit level (`cargo test`): the routing policy, the handoff, the reboot, the roll
 report shape are pinned in `router.rs` and `hidkbd.rs`; the endpoint/subclass shape and the
 perishable-FIFO rules in `report_pipe.rs` and `usb_kbd.rs`.
 
-What only a running guest can answer:
+Measured 2026-08-23 on a stock **Debian 13** guest with LVM-on-LUKS, the case that was unusable:
+the passphrase typed at the LUKS prompt and the root unlocked. The router's own trace is the
+timeline, and it needs no interpretation — `RUST_LOG=limina_input=info`:
 
-- **The gap and its close, on one image:** `module_blacklist=virtio_input` on the existing Fedora
-  test image reproduces the pre-driver window for the whole boot, so typing must work with the
-  gadget and not without it — no Debian image needed.
-- **An encrypted root**, which is the case that is *fatal* rather than annoying: type the
-  passphrase at a real LUKS prompt.
-- **The flip:** once the guest binds `virtio_input`, keys arrive exactly once.
-- **Snapshot/restore:** the gadget takes a new port, so an old capture must come back through the
-  `model_id` reconcile as an honest unplug (`usb/xhci/device.rs:534`).
-- **The premise itself**, rather than the generator source:
-  `lsinitramfs /boot/initrd.img-$(uname -r) | grep -E 'xhci|usbhid|hid-generic'`, and
-  `modinfo virtio_input` for the post-pivot half.
+```
+21:54:02  keyboard: the guest bound virtio-input; typing over virtio          firmware / GRUB
+21:54:05  keyboard: the guest has no virtio-input driver; typing over USB HID ExitBootServices
+21:54:25  keyboard: the guest bound virtio-input; typing over virtio          after the pivot
+```
+
+That last flip is itself an oracle for the unlock: Debian's initramfs has no `virtio_input`, so
+the driver can only load once the root is decrypted and pivoted.
+
+Measured the same day on the F44 enhanced image, where both keyboards exist at once: the gadget
+enumerates as `1d6b:0f1e limina Keyboard` and binds `hid-generic`; typed keys reach *only* the
+virtio device while it is bound, *only* the USB device while it is unbound
+(`/sys/bus/virtio/drivers/virtio_input/unbind` is the lever — `virtio_input` is builtin in the
+16k kernel, so `rmmod` is not), and only virtio again after a rebind. Never both: the report-only
+descriptor keeps EFI ConIn off the gadget.
+
+Still owed:
+
+- **Snapshot/restore across the change:** the gadget takes a new port, so a capture from before it
+  existed must come back through the `model_id` reconcile as an honest unplug
+  (`usb/xhci/device.rs:534`).
 
 ## 9. Deferred
 

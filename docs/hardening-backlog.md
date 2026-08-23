@@ -807,7 +807,8 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   2026-06-30** (commit `3210a36`): VirtioKeyboardDxe vendored into the GOP firmware + ConIn wiring
   (`patches/edk2/`), plus the libkrun virtio-input Inactive-on-reset fix (patch 0037) so desktop
   input survives the firmware→kernel handoff. The keyboard works at the GRUB menu; the RELEASE GOP
-  firmware is rebuilt. **(b) FIXED 2026-08-23, pending guest validation:** between
+  firmware is rebuilt. **(b) FIXED & user-validated 2026-08-23** (a stock Debian 13 LVM-on-LUKS
+  guest typed its passphrase and unlocked): between
   `ExitBootServices` and the moment the guest binds `virtio_input`, the guest had no keyboard at
   all. `install-enhanced.sh:247` forces `virtio_input` into the *enhanced* (dracut) initramfs;
   **neither stock generator ships it** — source-verified 2026-08-23: `initramfs-tools` never
