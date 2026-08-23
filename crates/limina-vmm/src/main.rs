@@ -21,6 +21,7 @@ mod restart;
 mod shutdown;
 mod snapshot;
 mod suspend;
+mod usb_kbd;
 mod wake;
 
 use std::path::PathBuf;

@@ -158,8 +158,18 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
         add_display(&mut vmr, display)?;
     }
 
+    // The USB HID keyboard gadget is built here, before the input devices, because the key
+    // router that decides where a keystroke goes is interposed as those are registered — but
+    // it is cold-plugged *after* the other gadgets below, so adding it does not renumber the
+    // ports an existing snapshot was captured with.
+    let mut usb_keyboard = None;
     if let Some(input) = &spec.input {
-        add_input(&mut vmr, input);
+        let hid_sink = spec.usb.then(|| {
+            let (gadget, sink) = crate::usb_kbd::build();
+            usb_keyboard = Some(gadget);
+            sink
+        });
+        add_input(&mut vmr, input, hid_sink);
     }
 
     if let Some(net) = &spec.net {
@@ -252,6 +262,15 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
                 Err(e) => log::warn!("USB: fingerprint gadget disabled: {e:#}"),
             }
         }
+        // The HID keyboard gadget (built above with the input devices, so the key router
+        // could be interposed there). Last, so it takes a port after the gadgets that
+        // predate it rather than renumbering them.
+        if let Some(gadget) = usb_keyboard {
+            vmr.usb_devices.push(gadget);
+            log::info!(
+                "USB: cold-plugging the HID keyboard gadget (the pre-virtio-input keyboard)"
+            );
+        }
     }
 
     Ok(vmr)
@@ -327,7 +346,16 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
 /// supervisor writes (as 8-byte datagrams) to an inherited socket fd; we register the
 /// native Rust backends (D2.1) on those fds. libkrun attaches the devices iff
 /// `input_backends` is non-empty.
-fn add_input(vmr: &mut VmResources, input: &InputSpec) {
+///
+/// With the USB controller present, a HID keyboard gadget is cold-plugged alongside and the
+/// key router is interposed on the keyboard socket, so keys still reach the guest in the
+/// window where it has no `virtio_input` driver — a stock encrypted-root guest cannot answer
+/// its own LUKS prompt otherwise (`docs/design/usb-hid-keyboard.md`).
+fn add_input(
+    vmr: &mut VmResources,
+    input: &InputSpec,
+    hid_sink: Option<limina_input::router::HidReportSink>,
+) {
     log::info!(
         "virtio-input: keyboard fd={}, pointer fd={}, rel-pointer fd={}",
         input.kbd_fd,
@@ -335,7 +363,10 @@ fn add_input(vmr: &mut VmResources, input: &InputSpec) {
         input.rel_ptr_fd
     );
     vmr.input_backends
-        .push(limina_input::backends::keyboard_backends(input.kbd_fd));
+        .push(limina_input::backends::keyboard_backends(
+            input.kbd_fd,
+            hid_sink,
+        ));
     vmr.input_backends
         .push(limina_input::backends::pointer_backends(input.ptr_fd));
     // The relative-pointer (mouse) device for capture mode is optional (M8).

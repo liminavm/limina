@@ -9,8 +9,16 @@
 //! ([`FdEvents`]) hands the guest the [`InputEvent`](crate::InputEvent)s the supervisor
 //! writes — as 8-byte datagrams — to an inherited socket fd. The notify fd the worker
 //! epolls *is* that socket: it's readable exactly while events are queued.
+//!
+//! [`FdEvents`] is also the **activation oracle** for the keyboard. libkrun creates the events
+//! instance when the device is activated (the guest driver reached DRIVER_OK) and drops it
+//! when the device is reset, so that object's lifetime *is* the window in which the guest has
+//! a working virtio keyboard — which is exactly what [`crate::router`] needs in order to send
+//! keys somewhere else outside it. No libkrun-side query is involved.
 
 use std::os::fd::{BorrowedFd, RawFd};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use krun_input::{
     write_bitmap, InputAbsInfo, InputBackendError, InputConfigBackend, InputDeviceIds,
@@ -19,31 +27,52 @@ use krun_input::{
 };
 
 use crate::constants::*;
+use crate::router::{self, HidReportSink};
 use crate::WIRE_LEN;
 
-/// Userdata carrying the inherited read socket for a device's event stream. `RawFd` is
-/// `Copy + Sync`; leaked to `'static` by the public constructors below.
+/// Userdata carrying the read socket for a device's event stream, plus (for the keyboard) the
+/// flag published while the guest holds the device. `RawFd` is `Copy + Sync` and `Arc<Atomic*>`
+/// is `Sync`; leaked to `'static` by the public constructors below.
 pub struct FdConfig {
     fd: RawFd,
+    activated: Option<Arc<AtomicBool>>,
 }
 
-/// Events backend: drains evdev triples from the supervisor's socket. Created per-device in
-/// the worker thread by libkrun (via `ObjectNew`).
+/// Events backend: drains evdev triples from its socket. Created per-device in the worker
+/// thread by libkrun on activation, and dropped when the device is reset — see the module
+/// docs: that bracket is what publishes `activated`.
 pub struct FdEvents {
     fd: RawFd,
+    activated: Option<Arc<AtomicBool>>,
 }
 
 impl ObjectNew<FdConfig> for FdEvents {
     fn new(userdata: Option<&FdConfig>) -> Self {
-        let fd = userdata.expect("FdEvents requires a socket fd").fd;
+        let cfg = userdata.expect("FdEvents requires a socket fd");
         // The worker epolls the fd and drains until empty, so reads must not block.
         unsafe {
-            let flags = libc::fcntl(fd, libc::F_GETFL);
+            let flags = libc::fcntl(cfg.fd, libc::F_GETFL);
             if flags >= 0 {
-                libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                libc::fcntl(cfg.fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
             }
         }
-        Self { fd }
+        if let Some(flag) = &cfg.activated {
+            flag.store(true, Ordering::Release);
+        }
+        Self {
+            fd: cfg.fd,
+            activated: cfg.activated.clone(),
+        }
+    }
+}
+
+impl Drop for FdEvents {
+    fn drop(&mut self) {
+        // The device was reset — by the firmware on its way out of ExitBootServices, or by a
+        // guest reboot. Whatever was reading this device is gone until it activates again.
+        if let Some(flag) = &self.activated {
+            flag.store(false, Ordering::Release);
+        }
     }
 }
 
@@ -273,13 +302,31 @@ fn copy_name(name: &[u8], buf: &mut [u8]) -> u8 {
 
 /// Build the keyboard backend pair. `fd` is the worker's read end of the keyboard event
 /// socket (inherited from the supervisor).
+///
+/// With `hid_sink`, the [`router`](crate::router) is interposed on that socket: keys go to the
+/// USB HID keyboard gadget (the sink) whenever the guest is not holding the virtio device, and
+/// the virtio backend reads a socket the router forwards into rather than the supervisor's
+/// directly. Without it — no USB controller — the backend reads the supervisor's socket as
+/// before and the pre-driver window stays keyboard-less.
 pub fn keyboard_backends(
     fd: RawFd,
+    hid_sink: Option<HidReportSink>,
 ) -> (
     InputConfigBackend<'static>,
     InputEventProviderBackend<'static>,
 ) {
-    let cfg: &'static FdConfig = Box::leak(Box::new(FdConfig { fd }));
+    let (fd, activated) = match hid_sink {
+        Some(sink) => match router::interpose(fd, sink) {
+            Ok((backend_fd, flag)) => (backend_fd, Some(flag)),
+            Err(e) => {
+                // The virtio keyboard still works; only the pre-driver window is lost.
+                log::warn!("keyboard: no USB fallback (the key router did not start: {e})");
+                (fd, None)
+            }
+        },
+        None => (fd, None),
+    };
+    let cfg: &'static FdConfig = Box::leak(Box::new(FdConfig { fd, activated }));
     (
         KeyboardConfig::into_input_config(None),
         FdEvents::into_input_events(Some(cfg)),
@@ -294,7 +341,10 @@ pub fn pointer_backends(
     InputConfigBackend<'static>,
     InputEventProviderBackend<'static>,
 ) {
-    let cfg: &'static FdConfig = Box::leak(Box::new(FdConfig { fd }));
+    let cfg: &'static FdConfig = Box::leak(Box::new(FdConfig {
+        fd,
+        activated: None,
+    }));
     (
         PointerConfig::into_input_config(None),
         FdEvents::into_input_events(Some(cfg)),
@@ -309,7 +359,10 @@ pub fn rel_pointer_backends(
     InputConfigBackend<'static>,
     InputEventProviderBackend<'static>,
 ) {
-    let cfg: &'static FdConfig = Box::leak(Box::new(FdConfig { fd }));
+    let cfg: &'static FdConfig = Box::leak(Box::new(FdConfig {
+        fd,
+        activated: None,
+    }));
     (
         RelPointerConfig::into_input_config(None),
         FdEvents::into_input_events(Some(cfg)),

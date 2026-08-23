@@ -11,7 +11,9 @@
 
 pub mod auxkey;
 pub mod constants;
+pub mod hidkbd;
 pub mod keymap;
+pub mod router;
 
 #[cfg(feature = "backends")]
 pub mod backends;

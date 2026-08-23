@@ -807,10 +807,19 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   2026-06-30** (commit `3210a36`): VirtioKeyboardDxe vendored into the GOP firmware + ConIn wiring
   (`patches/edk2/`), plus the libkrun virtio-input Inactive-on-reset fix (patch 0037) so desktop
   input survives the firmware→kernel handoff. The keyboard works at the GRUB menu; the RELEASE GOP
-  firmware is rebuilt. **(b) partially open:** `virtio_input` is forced into the *enhanced*
-  initramfs by `install-enhanced.sh`; a *stock* initramfs may still lack it → the dracut emergency
-  shell on a never-enhanced guest can still be keyboard-less. Small residual, revisit with the
-  import tooling.
+  firmware is rebuilt. **(b) FIXED 2026-08-23, pending guest validation:** between
+  `ExitBootServices` and the moment the guest binds `virtio_input`, the guest had no keyboard at
+  all. `install-enhanced.sh:247` forces `virtio_input` into the *enhanced* (dracut) initramfs;
+  **neither stock generator ships it** — source-verified 2026-08-23: `initramfs-tools` never
+  copies `kernel/drivers/virtio/`, and `dracut-ng`'s generic branch installs
+  `virtio/virtio_ring/virtio_pci/virtio_blk/virtio_scsi` and no more. So an encrypted-root Debian
+  guest could not answer its own LUKS prompt and was **unusable, not degraded** (a
+  compatibility-floor break, confirmed on a real install 2026-08-23), and the emergency shell on
+  any never-enhanced guest — Fedora included — was the same gap. The fix is not per-distro
+  initramfs surgery but a **USB HID keyboard gadget** on the already-default-on xHCI: USB HID is
+  in every stock initramfs because a bare-metal LUKS prompt requires it. Keys route to the gadget
+  while the virtio device is not activated and to virtio otherwise —
+  `docs/design/usb-hid-keyboard.md`.
 - **No Parallels-import tooling** (open) — converting an existing Parallels disk (merge snapshots →
   `qemu-img -f parallels` → raw, the `virtio_mmio` initramfs regen, `console=` GRUB args, Tools
   removal) is documented in the runbook but not scripted. A guided `import` helper would de-risk the
