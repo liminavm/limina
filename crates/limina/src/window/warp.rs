@@ -92,23 +92,51 @@ pub(crate) enum Repin {
     Rederive,
 }
 
-/// The re-pin's decision, pure — a mirror of [`warp_checked`]'s two preconditions, taken one
-/// step earlier where they can still be repaired instead of asserted. `on` is the displays
-/// containing the park ([`hostdisplay::displays_at`]); `allowed` is [`Aim::displays`], empty
-/// when the slot has no window to judge by.
-pub(crate) fn repin_verdict(on: &[u32], allowed: &[u32]) -> Repin {
+/// Is this still a point the window server will put the cursor at for this aim — pure, and a
+/// mirror of [`warp_checked`]'s two preconditions taken one step earlier, where a caller can
+/// still do something other than crash. `on` is the displays containing the target
+/// ([`hostdisplay::displays_at`]); `allowed` is [`Aim::displays`], empty when the caller has no
+/// window to judge by.
+///
+/// Every warp target we hold across time needs this, because none of them own the arrangement
+/// they were derived in: the captured park (re-pinned on every motion event) and the release
+/// point (computed a moment before the handback) both name coordinates an unplug can delete.
+pub(crate) fn target_is_live(on: &[u32], allowed: &[u32]) -> bool {
     if on.is_empty() {
-        // The unplug case: the park is nowhere the cursor can be, and a warp there does not
+        // The unplug case: the target is nowhere the cursor can be, and a warp there does not
         // fail — the window server silently clamps it onto a neighbour.
-        return Repin::Rederive;
+        return false;
     }
-    if !allowed.is_empty() && !on.iter().any(|d| allowed.contains(d)) {
-        // The park is on a real display, but not one this slot's window covers: the arrangement
-        // shifted under it, or the window moved. Holding the cursor there is the "menu bar
-        // revealed on the other screen" fault.
-        return Repin::Rederive;
+    // On a real display, but not one this slot's window covers: the arrangement shifted under
+    // it, or the window moved. Putting the cursor there is the "menu bar revealed on the other
+    // screen" fault.
+    allowed.is_empty() || on.iter().any(|d| allowed.contains(d))
+}
+
+/// Whether a release performs its seamless warp — pure, so both reasons not to are in one
+/// place.
+///
+/// `Handback::Gone` never warps: the guest's picture is not on screen to line up against, and
+/// the teleport plus its suppression interval land at the worst possible moment.
+///
+/// Neither does a `Seamless` release whose point the arrangement no longer contains. That point
+/// was derived from the capture window a moment earlier, and a release that lands inside a
+/// display reconfigure — the user pulling the cable while reaching for Cmd-Ctrl-G — asks for a
+/// warp to coordinates that have just been deleted. Unlike the re-pin there is nothing to
+/// re-derive, because the whole point is that capture is ending: the warp is simply dropped and
+/// the pointer stays where the hardware has it, which is what `Gone` does anyway. The seam is
+/// worth less than the crash.
+pub(crate) fn release_warps(handback: Handback, on: &[u32], allowed: &[u32]) -> bool {
+    handback == Handback::Seamless && target_is_live(on, allowed)
+}
+
+/// The re-pin's decision: hold the park, or repair it first.
+pub(crate) fn repin_verdict(on: &[u32], allowed: &[u32]) -> Repin {
+    if target_is_live(on, allowed) {
+        Repin::Hold
+    } else {
+        Repin::Rederive
     }
-    Repin::Hold
 }
 
 /// The most a warp's readback may differ from its target, in CG points, before the warp is
@@ -336,10 +364,20 @@ impl WarpBroker {
         // hand on a Space the user is already looking at, and its suppression interval freezes
         // real motion for a quarter second at the exact moment the switch animates (measured
         // 2026-08-22: deltas flowing, `CGEventGetLocation` pinned for 252 ms).
-        let release_to = match handback {
-            Handback::Seamless => release_to,
-            Handback::Gone => None,
-        };
+        let release_to = release_to.filter(|(p, aim)| {
+            let on = hostdisplay::displays_at(*p);
+            let warps = release_warps(handback, &on, &aim.displays);
+            if !warps && handback == Handback::Seamless {
+                log::warn!(
+                    "pointer capture: the release point ({:.0},{:.0}) is no longer on the \
+                     arrangement — handing the pointer back where it is; arrangement: {}",
+                    p.x,
+                    p.y,
+                    hostdisplay::describe_arrangement(),
+                );
+            }
+            warps
+        });
         // Warp BEFORE re-associating, and while still hidden: the cursor *appears* at the
         // release point rather than visibly jumping there from the park, and — the part that
         // was a real bug — the hardware cannot move it in between. Associating first made the
@@ -484,6 +522,30 @@ mod tests {
     fn a_park_off_its_own_windows_displays_is_re_derived() {
         assert_eq!(repin_verdict(&[2], &[1]), Repin::Rederive);
         assert_eq!(repin_verdict(&[2, 3], &[1, 4]), Repin::Rederive);
+    }
+
+    /// The release's own half of the same fault: the point was derived from the capture window
+    /// a moment ago, and a reconfigure between then and the handback deletes it. Today the
+    /// seamless release warps to it regardless and dies on `warp_checked`'s first assert.
+    #[test]
+    fn a_release_does_not_warp_to_a_point_the_unplug_deleted() {
+        assert!(
+            !release_warps(Handback::Seamless, &[], &[1]),
+            "a release point on NO display is the unplug — hand back where the pointer is",
+        );
+        assert!(
+            !release_warps(Handback::Seamless, &[2], &[1]),
+            "a release point off the window's own displays is the same fault",
+        );
+    }
+
+    /// The ordinary release still lines the two cursors up, and `Gone` still never warps.
+    #[test]
+    fn a_release_onto_a_live_point_still_warps_and_gone_never_does() {
+        assert!(release_warps(Handback::Seamless, &[1], &[1]));
+        assert!(release_warps(Handback::Seamless, &[1], &[]));
+        assert!(!release_warps(Handback::Gone, &[1], &[1]));
+        assert!(!release_warps(Handback::Gone, &[], &[]));
     }
 
     /// The steady state, which is almost every event: nothing moved, hold the park.
