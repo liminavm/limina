@@ -596,14 +596,20 @@ grub2-editenv - unset boot_indeterminate menu_auto_hide 2>/dev/null || true
 # → unrecoverable (no keyboard at GRUB). In the unquoted heredoc $KREL is baked at write time while
 # `uname -r` (a runtime pipe, not $(...)) is evaluated at boot, so this promotes only after the
 # trialed kernel itself reaches multi-user.
+#
+# The disable belongs INSIDE the success path, exactly as limina-arm-16k.sh does it. As an
+# ExecStartPost it fired on every boot, so any boot that was not the trial -- a stock boot before
+# the trial, the fallback after a failed one, or a trial boot cut short before multi-user -- burned
+# the arming for good: the guard correctly refused to promote and the unit disabled itself anyway,
+# leaving the image permanently on the old kernel with nothing left to promote it. Measured
+# 2026-08-23 on all three F44 enhanced images.
 cat > /etc/systemd/system/limina-kernel-promote.service <<PROMOTE
 [Unit]
 Description=Promote the limina 16k kernel to GRUB default after a verified boot
 After=multi-user.target
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'uname -r | grep -qxF "$KREL" && grubby --set-default=/boot/vmlinuz-$KREL && echo "promoted 16k ($KREL) to default" || true'
-ExecStartPost=/bin/sh -c 'systemctl disable limina-kernel-promote.service'
+ExecStart=/bin/sh -c 'uname -r | grep -qxF "$KREL" || { echo "not on $KREL; staying armed"; exit 0; }; grubby --set-default=/boot/vmlinuz-$KREL && systemctl disable limina-kernel-promote.service && echo "promoted 16k ($KREL) to default"'
 [Install]
 WantedBy=multi-user.target
 PROMOTE

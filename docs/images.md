@@ -48,7 +48,7 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 *link to this table* rather than restate numbers — a stale "mesa 25.3.6" once propagated into three
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
-guest with `rpm -q`. Last verified in a booted F44 enhanced guest 2026-08-23. The three F44 enhanced images carry `7.1.8-4` as a one-shot trial boot and still name `7.1.8-limina16k.3` as the permanent default; each promotes on its own next EFI boot to the desktop.
+guest with `rpm -q`. Last verified in a booted F44 enhanced guest 2026-08-23. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
 
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
@@ -89,8 +89,8 @@ drm/virtio now records `blob_mem` on a PRIME-imported dmabuf and gives the dma-b
 answered from the host caps instead of being hard-rejected. Without the matching host
 virglrenderer (`86741d53`) the payload alone changes nothing — see `docs/graphics.md` §3.2.
 Applied with the real `install-enhanced.sh` to all three F44 enhanced images
-(`.bak-pre-r16.raw` CoW backups), both agent hashes verified; each image owes the trial boot that
-promotes `7.1.8-limina16k.4` to permanent default. Previous: r15 (2026-08-21: a host-side
+(`.bak-pre-r16.raw` CoW backups), both agent hashes verified; all three trial-booted and
+promoted to `7.1.8-limina16k.4`. Previous: r15 (2026-08-21: a host-side
 repack of r14 carrying `limina-agent-session` 0.1.1 — the claim-phase reconnect now writes its
 HELLO before the `DisplayLayout` seed; the old order had the host drop the peer and the helper
 reconnect without backoff until the worker died of `EMFILE`, see `docs/hardening-backlog.md`
