@@ -401,8 +401,9 @@ impl Edges {
     }
 }
 
-/// Which of this slot's edges are edges of the guest's **desktop**, rather than seams with a
-/// neighbouring monitor — what edge *pressure* is judged against.
+/// Which of this slot's edges face the outside of the guest's **desktop** at the point
+/// `(u, v)` of its content, rather than a seam with a neighbouring monitor — what edge
+/// *pressure* is judged against.
 ///
 /// A drag that leaves a window's content keeps reporting past the fit edge, and the fit-clamped
 /// overflow forwarded as relative motion charges the guest's own barriers (GNOME's hot corner).
@@ -411,23 +412,45 @@ impl Edges {
 /// the neighbour while the absolute device keeps snapping it back: two devices fighting over
 /// one pointer (the cursor ping-pongs, a band next to the seam cannot be reached, a click
 /// first teleports the pointer back to the seam; observed on the two-panel rig 2026-08-18).
+///
+/// **The question belongs to the point, not to the side.** A guest desktop is a union of
+/// rectangles and not itself a rectangle: any vertical offset or height mismatch leaves corners
+/// of the bounding box that belong to no monitor, and a single edge is then a seam over the
+/// span a neighbour actually abuts and a wall over the rest — the dogfood's Dell, dropped 184
+/// units, meets the built-in down two thirds of its right edge and faces dead space below that.
+/// So an edge is a seam exactly where something is on the other side of it *here*, which is a
+/// containment test against the neighbours. Asking instead whether the edge sits at a
+/// bounding-box coordinate calls every offset monitor's leading edges seams and silently drops
+/// the pressure they are owed: a wall the guest holds the pointer against that charges nothing.
+///
 /// Without a report every edge is an outer edge — the same single-display reading
 /// [`abs_through_report`] takes, so the two stay consistent. A slot the report does not place
 /// has no known edges and charges nothing.
-pub(crate) fn outer_edges(slot: usize) -> Edges {
+pub(crate) fn outer_edges_at(slot: usize, u: f64, v: f64) -> Edges {
     let Some(rects) = reported_layout() else {
         return Edges::ALL;
     };
     let Some(r) = rects.iter().find(|(s, _)| *s == slot).map(|(_, r)| *r) else {
         return Edges::NONE;
     };
-    let dw = rects.iter().map(|(_, r)| r.x + r.w).max().unwrap_or(0);
-    let dh = rects.iter().map(|(_, r)| r.y + r.h).max().unwrap_or(0);
+    let (x0, y0) = (f64::from(r.x), f64::from(r.y));
+    let (w, h) = (f64::from(r.w), f64::from(r.h));
+    // The point on this monitor, held just inside it: the probes step half a unit off each
+    // edge, and one taken from a position on the far edge would ask about the next row over.
+    let x = x0 + (u.clamp(0.0, 1.0) * w).clamp(0.0, (w - 0.5).max(0.0));
+    let y = y0 + (v.clamp(0.0, 1.0) * h).clamp(0.0, (h - 0.5).max(0.0));
+    let occupied = |px: f64, py: f64| {
+        rects.iter().any(|(s, n)| {
+            *s != slot
+                && (f64::from(n.x)..f64::from(n.x) + f64::from(n.w)).contains(&px)
+                && (f64::from(n.y)..f64::from(n.y) + f64::from(n.h)).contains(&py)
+        })
+    };
     Edges {
-        left: r.x == 0,
-        right: r.x + r.w >= dw,
-        top: r.y == 0,
-        bottom: r.y + r.h >= dh,
+        left: !occupied(x0 - 0.5, y),
+        right: !occupied(x0 + w + 0.5, y),
+        top: !occupied(x, y0 - 0.5),
+        bottom: !occupied(x, y0 + h + 0.5),
     }
 }
 
@@ -661,6 +684,30 @@ mod tests {
         publish_guest_layout(&monitors);
     }
 
+    /// As [`report`], for an arrangement that is not one flush row: `(connector, x, y, w, h)`.
+    fn report_rects(monitors: &[(&str, i32, i32, u32, u32)]) {
+        let monitors: Vec<limina_proto::GuestMonitor> = monitors
+            .iter()
+            .map(|(c, x, y, w, h)| limina_proto::GuestMonitor {
+                connector: (*c).to_string(),
+                x: *x,
+                y: *y,
+                width: *w,
+                height: *h,
+            })
+            .collect();
+        publish_guest_layout(&monitors);
+    }
+
+    /// The dogfood's own arrangement 2026-08-22: the Dell dropped 184 logical units below the
+    /// built-in. `Virtual-1` is slot 0.
+    fn report_the_ragged_desktop() {
+        report_rects(&[
+            ("Virtual-1", 0, 184, 3072, 1728),
+            ("Virtual-2", 3072, 0, 2048, 1328),
+        ]);
+    }
+
     /// The case that must not change: with no report the mapping is what it always was for one
     /// display — the unit position straight over the range.
     #[test]
@@ -675,9 +722,9 @@ mod tests {
             Some((ABS, 0)),
             "clamped"
         );
-        assert_eq!(outer_edges(0), Edges::ALL);
+        assert_eq!(outer_edges_at(0, 0.5, 0.5), Edges::ALL);
         assert_eq!(
-            outer_edges(7),
+            outer_edges_at(7, 0.5, 0.5),
             Edges::ALL,
             "no report: every window is alone"
         );
@@ -699,9 +746,9 @@ mod tests {
         // Out of range clamps within the slot, never onto the neighbour.
         assert_eq!(abs_through_report(1, 5.0, 0.0, ABS).unwrap().0, seam);
         // The seam is not an edge of the desktop; everything else is.
-        let left = outer_edges(1);
+        let left = outer_edges_at(1, 0.5, 0.5);
         assert!(left.left && !left.right && left.top && left.bottom);
-        let right = outer_edges(0);
+        let right = outer_edges_at(0, 0.5, 0.5);
         assert!(!right.left && right.right && right.top && right.bottom);
         forget_guest_layout();
     }
@@ -727,7 +774,7 @@ mod tests {
         report(&[("Virtual-1", 0, 1000)]);
         assert_eq!(abs_through_report(0, 1.0, 1.0, ABS), Some((ABS, ABS)));
         assert_eq!(abs_through_report(1, 0.5, 0.5, ABS), None);
-        assert_eq!(outer_edges(1), Edges::NONE);
+        assert_eq!(outer_edges_at(1, 0.5, 0.5), Edges::NONE);
         forget_guest_layout();
     }
 
@@ -738,7 +785,46 @@ mod tests {
         let _g = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         report(&[("Virtual-99", 0, 100), ("HDMI-1", 100, 100)]);
         assert_eq!(abs_through_report(0, 0.5, 0.5, ABS), Some((MID, MID)));
-        assert_eq!(outer_edges(0), Edges::ALL);
+        assert_eq!(outer_edges_at(0, 0.5, 0.5), Edges::ALL);
+        forget_guest_layout();
+    }
+
+    /// The fault, in one assertion: a guest desktop that is not a rectangle leaves corners of
+    /// the bounding box belonging to no monitor, and an edge facing that dead space is a wall —
+    /// there is nothing on the other side to cross to. Read off the box, the Dell's top is not
+    /// at `y == 0`, so it read as a seam and every upward push was dropped: a wall the guest
+    /// holds the pointer against while nothing charges its barrier.
+    #[test]
+    fn an_edge_facing_dead_space_is_outer_although_the_box_reaches_past_it() {
+        let _g = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        report_the_ragged_desktop();
+        assert!(
+            outer_edges_at(0, 0.5, 0.0).top,
+            "nothing sits above the Dell, wherever the box's top is"
+        );
+        assert!(
+            outer_edges_at(1, 0.5, 1.0).bottom,
+            "nor below the built-in, which stops 584 short of the box"
+        );
+        forget_guest_layout();
+    }
+
+    /// One side is not one class. The Dell's right edge meets the built-in over the built-in's
+    /// height and faces dead space below it, so which it is belongs to the *point*, not the
+    /// side — and a per-side answer gets one half of this edge wrong whichever way it votes.
+    #[test]
+    fn an_edge_is_a_seam_only_where_the_neighbour_actually_abuts_it() {
+        let _g = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        report_the_ragged_desktop();
+        // Down the Dell's 1728: the built-in ends at guest y 1328, 66% of the way down.
+        assert!(!outer_edges_at(0, 1.0, 0.5).right, "the built-in is there");
+        assert!(outer_edges_at(0, 1.0, 0.9).right, "and stops before here");
+        // The same edge from the other side: the built-in's left is a wall above the Dell.
+        assert!(
+            outer_edges_at(1, 0.0, 0.05).left,
+            "the Dell starts 184 lower"
+        );
+        assert!(!outer_edges_at(1, 0.0, 0.5).left);
         forget_guest_layout();
     }
 

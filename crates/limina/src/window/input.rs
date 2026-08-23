@@ -2072,7 +2072,7 @@ impl InputState {
         // toward a seam the pointer keeps reporting past the fit edge, and unfiltered overflow
         // there is seam pressure — the two devices fighting over one pointer.
         let over = super::fit::edge_overflow((p.x, p.y), event.deltaX(), event.deltaY(), fit);
-        let over = super::arrangement::outer_edges(t.slot).keep(over);
+        let over = super::arrangement::outer_edges_at(t.slot, t.unit.0, t.unit.1).keep(over);
         if over != (0.0, 0.0) {
             send_edge_overflow(&self.conn, over);
             self.last_push.set(Some(std::time::Instant::now()));
@@ -2429,7 +2429,7 @@ impl InputState {
                 let (x, y) = super::absfit::abs_position(slot, u, v, ABS_MAX as i32)?;
                 (
                     (f64::from(x), f64::from(y)),
-                    super::arrangement::outer_edges(slot).keep(step.overflow),
+                    super::arrangement::outer_edges_at(slot, u, v).keep(step.overflow),
                 )
             }
         };
