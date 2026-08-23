@@ -70,6 +70,47 @@ pub(crate) struct Aim {
     pub(crate) displays: Vec<u32>,
 }
 
+/// What the steady-state re-pin should do with the park point it is holding.
+///
+/// The park is a **cached** CG-global point, derived once from the capture window
+/// ([`super::input::InputState::repin_park`]) and re-derived only when the guest's cursor
+/// crosses to another panel. The display arrangement underneath it is not cached and can change
+/// at any moment: unplugging a display deletes the coordinates the park names. The tap re-pins on
+/// every motion event and runs ahead of every notification handler, so the first mouse move after
+/// an unplug asks for a warp to a point that is no longer on any display — which
+/// [`warp_checked`] correctly refuses, by crashing (dogfood, 2026-08-23).
+///
+/// The tripwire is not the bug. Re-pinning to a point the arrangement no longer contains is, and
+/// this is where it is caught: one displays-at query per re-pin, ahead of the assert.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Repin {
+    /// The park still names a point on a display the slot's window covers. Warp to it — the
+    /// zero-length re-pin the steady state is made of.
+    Hold,
+    /// The park no longer names a point this slot may hold the cursor at. Re-derive it from the
+    /// window's *current* position before touching the cursor.
+    Rederive,
+}
+
+/// The re-pin's decision, pure — a mirror of [`warp_checked`]'s two preconditions, taken one
+/// step earlier where they can still be repaired instead of asserted. `on` is the displays
+/// containing the park ([`hostdisplay::displays_at`]); `allowed` is [`Aim::displays`], empty
+/// when the slot has no window to judge by.
+pub(crate) fn repin_verdict(on: &[u32], allowed: &[u32]) -> Repin {
+    if on.is_empty() {
+        // The unplug case: the park is nowhere the cursor can be, and a warp there does not
+        // fail — the window server silently clamps it onto a neighbour.
+        return Repin::Rederive;
+    }
+    if !allowed.is_empty() && !on.iter().any(|d| allowed.contains(d)) {
+        // The park is on a real display, but not one this slot's window covers: the arrangement
+        // shifted under it, or the window moved. Holding the cursor there is the "menu bar
+        // revealed on the other screen" fault.
+        return Repin::Rederive;
+    }
+    Repin::Hold
+}
+
 /// The most a warp's readback may differ from its target, in CG points, before the warp is
 /// judged to have landed elsewhere. `CGWarpMouseCursorPosition` is synchronous and lands on
 /// the target **floored to whole points** (measured 2026-08-21: a warp to (1746.9, 259.8)
@@ -417,6 +458,48 @@ mod tests {
             events_left: WARP_SWALLOW_EVENTS,
             seen: (0.0, 0.0),
         }
+    }
+
+    /// The dogfood crash of 2026-08-23, as data: captured on the external display, the user
+    /// unplugs it, and the very next motion event asks the tap to re-pin to a park whose
+    /// coordinates no longer belong to any display. Today that reaches `warp_checked` and the
+    /// first assert kills the app.
+    #[test]
+    fn an_unplug_leaves_the_park_on_no_display_and_must_not_be_warped_to() {
+        assert_eq!(
+            repin_verdict(&[], &[1]),
+            Repin::Rederive,
+            "a park on NO display is the unplug — re-derive it, never warp to it",
+        );
+        assert_eq!(
+            repin_verdict(&[], &[]),
+            Repin::Rederive,
+            "with no window to judge by, `on no display` is still the whole fault",
+        );
+    }
+
+    /// The second precondition's class: the park survives on a real display, but not one the
+    /// slot's window covers — the arrangement shifted under it, or the window moved without it.
+    #[test]
+    fn a_park_off_its_own_windows_displays_is_re_derived() {
+        assert_eq!(repin_verdict(&[2], &[1]), Repin::Rederive);
+        assert_eq!(repin_verdict(&[2, 3], &[1, 4]), Repin::Rederive);
+    }
+
+    /// The steady state, which is almost every event: nothing moved, hold the park.
+    #[test]
+    fn a_park_on_its_own_windows_display_is_held() {
+        assert_eq!(repin_verdict(&[1], &[1]), Repin::Hold);
+        assert_eq!(
+            repin_verdict(&[1, 2], &[2]),
+            Repin::Hold,
+            "mirrored displays answer together — membership is `contains`, not `equals`",
+        );
+        assert_eq!(
+            repin_verdict(&[1], &[]),
+            Repin::Hold,
+            "no window to judge by asks only that the park be on SOME display",
+        );
     }
 
     #[test]

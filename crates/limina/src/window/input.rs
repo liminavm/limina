@@ -712,6 +712,11 @@ pub struct InputState {
     /// re-pin's warp expectation is this slot's displays; `capture_slot` may already be a
     /// panel ahead of it while the hand is still moving.
     park_slot: Cell<usize>,
+    /// Whether the "the park is off the arrangement and cannot be re-derived" warning has
+    /// already been printed for the current stretch. The re-pin runs on every motion event, so
+    /// an unhealed park would otherwise emit one line per mouse move; cleared the moment a park
+    /// is held or re-derived successfully.
+    stale_park_reported: Cell<bool>,
     /// When captured motion last moved the cursor — the re-park waits for a pause.
     last_captured_motion: Cell<Option<std::time::Instant>>,
     /// Hi-res scroll accumulators (vertical, horizontal) — see [`ScrollAxis`].
@@ -944,6 +949,7 @@ impl InputState {
             capture_range: Cell::new(None),
             echo_seen: Cell::new(EchoGate::default()),
             park_slot: Cell::new(0),
+            stale_park_reported: Cell::new(false),
             last_captured_motion: Cell::new(None),
             primary,
             park: Cell::new(None),
@@ -989,9 +995,99 @@ impl InputState {
     /// The tap's per-event re-pin, through the broker: hold the hidden cursor at the park —
     /// zero-length, injects nothing ([`super::warp::WarpBroker::repin`]). Judged against the
     /// capture window, where the park was derived.
+    ///
+    /// The park is cached and the arrangement under it is not, so this first asks whether the
+    /// point it holds still exists ([`super::warp::repin_verdict`]). Unplugging a display
+    /// deletes the coordinates a park on it names, and this path — the tap — runs ahead of
+    /// every screen-parameter notification and of the render tick's own hand-back, so on the
+    /// first motion event after an unplug it is the only code in a position to notice. It used
+    /// to warp anyway and die on `warp_checked`'s first assert (dogfood, 2026-08-23).
     pub(crate) fn repin_park(&self, primary_view: &NSView) {
         let aim = self.slot_aim("repin", self.park_slot.get(), primary_view);
-        self.warp.repin(self.park_point(), &aim);
+        let park = self.park_point();
+        match super::warp::repin_verdict(&super::hostdisplay::displays_at(park), &aim.displays) {
+            super::warp::Repin::Hold => {
+                self.stale_park_reported.set(false);
+                self.warp.repin(park, &aim);
+            }
+            super::warp::Repin::Rederive => {
+                if let Err(why) = self.rederive_park(primary_view, "repin") {
+                    // Nowhere to hold the cursor this event. Leaving it where the hardware has
+                    // it is the safe move: the pointer is already decoupled and hidden, and the
+                    // render tick's `must_drop_grab` hands the grab back on the same
+                    // reconfigure — one tick later, without a warp to a dead point.
+                    self.report_stale_park_once(why);
+                }
+            }
+        }
+    }
+
+    /// Move the park to where the capture window is **now**, and warp the hidden cursor with it.
+    /// Shared by the re-pin's repair path and the quiescent cross-panel re-park, which differ
+    /// only in what makes them run.
+    ///
+    /// The re-derived point gets the *same* test the old one just failed. A reconfigure is not
+    /// atomic: the window may not have been re-placed yet, so the conversion can hand back a
+    /// point that is also on no display — warping there would crash inside the fix for the
+    /// crash. `Err` means there is nothing to hold the cursor at this event; the caller decides
+    /// how loud that is.
+    ///
+    /// The repair path breaks the quiescence rule [`Self::repark_if_quiescent`] keeps — this
+    /// warp can land mid-stroke, and its vector arrives as guest motion unless the injection
+    /// detector recognizes it. That is the accepted cost: the park has to move, because the
+    /// place it names no longer exists, and the alternative on this path is the crash.
+    fn rederive_park(
+        &self,
+        primary_view: &NSView,
+        stage: &'static str,
+    ) -> Result<(), &'static str> {
+        let pr = self
+            .capture_projection(primary_view)
+            .ok_or("the capture slot has no window this tick")?;
+        let park = super::fit::park_point(Some(pr.point), pr.fit);
+        let new =
+            view_point_to_cg_global(&pr.view, park).ok_or("the capture view is not in a window")?;
+        let displays = pr
+            .view
+            .window()
+            .map(|w| super::hostdisplay::displays_under_window(&w))
+            .unwrap_or_default();
+        if super::warp::repin_verdict(&super::hostdisplay::displays_at(new), &displays)
+            == super::warp::Repin::Rederive
+        {
+            return Err("the capture window has not been re-placed on a live display yet");
+        }
+        let aim = super::warp::Aim {
+            stage,
+            slot: pr.slot,
+            displays,
+        };
+        self.park_slot.set(pr.slot);
+        let old = self.park.get();
+        self.park.set(Some(new));
+        self.stale_park_reported.set(false);
+        if let Some(w) = self.warp.repark(new, old, &aim, &self.host_cursor) {
+            log::info!(
+                "pointer capture: re-parked into slot {} (warp {:.0},{:.0})",
+                pr.slot,
+                w.0,
+                w.1,
+            );
+        }
+        Ok(())
+    }
+
+    /// The park is off the arrangement and could not be re-derived — once per stretch, not once
+    /// per motion event.
+    fn report_stale_park_once(&self, why: &str) {
+        if !self.stale_park_reported.replace(true) {
+            log::warn!(
+                "pointer capture: the park is off the arrangement and cannot be re-derived \
+                 ({why}) — holding the cursor still until the grab is handed back; \
+                 arrangement: {}",
+                super::hostdisplay::describe_arrangement(),
+            );
+        }
     }
 
     /// The warp expectation for a target meant to sit in `slot`'s window
@@ -2484,6 +2580,9 @@ impl InputState {
     /// event arrive pure enough to recognize. The swipe this serves needs no faster park —
     /// fingers leave the trackpad before a three-finger swipe. One warp per crossing; steady
     /// motion and a cursor resting on its own panel never warp at all.
+    ///
+    /// The crossing gate is all this adds: the move itself is [`Self::rederive_park`], shared
+    /// with the re-pin's repair path so both validate the new point the same way.
     pub(crate) fn repark_if_quiescent(&self, primary_view: &NSView) {
         if !self.is_captured() || self.capture_slot.get() == self.park_slot.get() {
             return;
@@ -2493,33 +2592,9 @@ impl InputState {
                 return;
             }
         }
-        let Some(pr) = self.capture_projection(primary_view) else {
-            return;
-        };
-        let park = super::fit::park_point(Some(pr.point), pr.fit);
-        let Some(new) = view_point_to_cg_global(&pr.view, park) else {
-            return;
-        };
-        let aim = super::warp::Aim {
-            stage: "repark",
-            slot: pr.slot,
-            displays: pr
-                .view
-                .window()
-                .map(|w| super::hostdisplay::displays_under_window(&w))
-                .unwrap_or_default(),
-        };
-        self.park_slot.set(pr.slot);
-        let old = self.park.get();
-        self.park.set(Some(new));
-        if let Some(w) = self.warp.repark(new, old, &aim, &self.host_cursor) {
-            log::info!(
-                "pointer capture: re-parked into slot {} (warp {:.0},{:.0})",
-                pr.slot,
-                w.0,
-                w.1,
-            );
-        }
+        // Nothing to say when this one declines: a crossing whose window is not placeable this
+        // tick simply re-parks on a later tick. Only the re-pin's repair path is a symptom.
+        let _ = self.rederive_park(primary_view, "repark");
     }
 
     /// Run one real motion event's delta through the armed injection detector, if any —
