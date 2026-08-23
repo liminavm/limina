@@ -422,23 +422,55 @@ pub(crate) struct RangeStep {
 }
 
 /// Integrate a host delta into the range position (y grows down on both sides, so no flip),
-/// clamped to `0..=abs_max`. Overflow is bounded by this event's own delta, as in
+/// held on the guest's desktop. Overflow is bounded by this event's own delta, as in
 /// [`capture_step`].
+///
+/// `desktop` is what the range's ends are **not**: the range covers the desktop's bounding box,
+/// and a desktop whose monitors are not all flush and the same height leaves box over that
+/// belongs to no monitor. Clamping to `0..=abs_max` walks the pointer into that dead space,
+/// where the guest paints no cursor plane and the cursor is simply gone; it also charges the
+/// eaten motion nowhere near the wall the hand is actually pushing against — measured at ~200
+/// points of silent travel on the dogfood's arrangement. With a desktop, every clamp happens at
+/// a monitor's own boundary, which is a wall by construction ([`super::arrangement::Desktop`]),
+/// so the overflow needs no edge filter. `None` — the guest has not reported — keeps the box.
 pub(crate) fn range_step(
     pos: (f64, f64),
     dx: f64,
     dy: f64,
     gain: RangeGain,
     abs_max: f64,
+    desktop: Option<&super::arrangement::Desktop>,
 ) -> RangeStep {
     let (ux, uy) = (pos.0 + dx * gain.x, pos.1 + dy * gain.y);
-    let cx = ux.clamp(0.0, abs_max);
-    let cy = uy.clamp(0.0, abs_max);
+    let (cx, cy) = match desktop {
+        Some(d) => d.confine(pos, (ux, uy)),
+        None => (ux.clamp(0.0, abs_max), uy.clamp(0.0, abs_max)),
+    };
     let bound = |v: f64, d: f64| v.clamp(d.min(0.0), d.max(0.0));
     RangeStep {
         pos: (cx, cy),
         overflow: (bound((ux - cx) / gain.x, dx), bound((uy - cy) / gain.y, dy)),
     }
+}
+
+/// The gain from the slot's own share of the range: range units per view point is that share's
+/// extent over the content's, and nothing else enters.
+///
+/// This is [`range_gain`]'s answer where the guest has reported its layout, and a better one —
+/// the fallback estimates the desktop as a top-aligned row of scanouts, which is the very shape
+/// a ragged or fractionally-scaled arrangement is not. Reported, the share is measured, so the
+/// captured cursor's speed is right on every display instead of only on a flush row.
+pub(crate) fn range_gain_of_share(
+    fit: FitRect,
+    share: super::arrangement::RangeRect,
+) -> Option<RangeGain> {
+    if fit.w <= 0.0 || fit.h <= 0.0 || share.width() <= 0.0 || share.height() <= 0.0 {
+        return None;
+    }
+    Some(RangeGain {
+        x: share.width() / fit.w,
+        y: share.height() / fit.h,
+    })
 }
 
 /// A guest pixel on a slot's scanout as a point in that slot's fit (view space, y up),
@@ -894,14 +926,76 @@ mod tests {
     #[test]
     fn a_step_moves_in_range_units_and_only_the_range_ends_pin() {
         let g = RangeGain { x: 2.0, y: 2.0 };
-        let s = range_step((100.0, 100.0), 10.0, -5.0, g, 32767.0);
+        let s = range_step((100.0, 100.0), 10.0, -5.0, g, 32767.0, None);
         assert_eq!(s.pos, (120.0, 90.0));
         assert_eq!(s.overflow, (0.0, 0.0));
         // Past the right end: the position pins and the eaten motion comes back in points.
-        let s = range_step((32760.0, 0.0), 10.0, -3.0, g, 32767.0);
+        let s = range_step((32760.0, 0.0), 10.0, -3.0, g, 32767.0, None);
         assert_eq!(s.pos, (32767.0, 0.0));
         assert!((s.overflow.0 - 6.5).abs() < 1e-9);
         assert!((s.overflow.1 - (-3.0)).abs() < 1e-9);
+    }
+
+    /// The dogfood's arrangement, in range units: the Dell dropped below the built-in, so the
+    /// bounding box the device covers has a band at the top that is on no monitor at all.
+    fn ragged_desktop() -> super::super::arrangement::Desktop {
+        super::super::arrangement::Desktop::new(vec![
+            (
+                0,
+                super::super::arrangement::RangeRect {
+                    x0: 0.0,
+                    y0: 3153.0,
+                    x1: 19660.0,
+                    y1: 32767.0,
+                },
+            ),
+            (
+                1,
+                super::super::arrangement::RangeRect {
+                    x0: 19660.0,
+                    y0: 0.0,
+                    x1: 32767.0,
+                    y1: 22759.0,
+                },
+            ),
+        ])
+    }
+
+    /// The range's ends are the *box's* corners, and pinning there pushes an offset monitor's
+    /// pointer clean off itself into dead space — no output under it, no cursor drawn, and no
+    /// pressure charged until it gets to the box, which is a long way past the wall the hand
+    /// is leaning on.
+    #[test]
+    fn a_step_pins_at_the_desktops_edge_not_at_the_boxs() {
+        let d = ragged_desktop();
+        let top = d.rect_of(0).expect("the Dell").y0;
+        let g = RangeGain { x: 2.0, y: 2.0 };
+        let s = range_step((10000.0, top + 4.0), 0.0, -10.0, g, 32767.0, Some(&d));
+        assert_eq!(s.pos, (10000.0, top));
+        assert!(
+            (s.overflow.1 - (-8.0)).abs() < 1e-9,
+            "the wall charges on the event that reaches it: {:?}",
+            s.overflow
+        );
+        // The reading this replaces: sixteen more units of travel into nowhere, charging nothing.
+        let s = range_step((10000.0, top + 4.0), 0.0, -10.0, g, 32767.0, None);
+        assert_eq!(s.pos, (10000.0, top - 16.0));
+        assert_eq!(s.overflow, (0.0, 0.0));
+    }
+
+    /// The gain a reported share gives is the share over the content, and it agrees with the
+    /// scanout-row estimate exactly where that estimate is right: a flush row at scale 1.
+    #[test]
+    fn the_gain_from_a_reported_share_matches_the_row_where_the_row_is_true() {
+        let share = super::super::arrangement::RangeRect {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2560.0 / 5584.0 * 32767.0,
+            y1: 1440.0 / 1960.0 * 32767.0,
+        };
+        let a = range_gain_of_share(rig_fit(), share).unwrap();
+        let b = range_gain(rig_fit(), (2560, 1440), 5584, 1960, 32767.0).unwrap();
+        assert!((a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9);
     }
 
     #[test]

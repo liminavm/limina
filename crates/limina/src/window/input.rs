@@ -2412,15 +2412,26 @@ impl InputState {
         }
         let (u, v) = super::fit::unit_through_fit(step.pos.0, step.pos.1, fit);
         // The position the guest receives lives in the device range and stays continuous
-        // across seams: host deltas scale by this slot's mode-size gain and pin only at the
-        // range's ends, the guest desktop's outer edges. The guest crosses its own seams.
-        let sizes = super::echo::scanout_sizes();
-        let row_w: u32 = sizes.iter().map(|s| s.0).sum();
-        let row_h: u32 = sizes.iter().map(|s| s.1).max().unwrap_or(0);
-        let gain = super::fit::range_gain(fit, sizes[slot], row_w, row_h, f64::from(ABS_MAX));
+        // across seams: host deltas scale by this slot's gain and pin only where the guest's
+        // desktop ends. The guest crosses its own seams.
+        // The desktop the range is spread over, and this slot's share of it. Both come from
+        // the guest's own report where there is one: the share gives the gain exactly, and the
+        // desktop is what the step is held on — the range's ends are the bounding box's
+        // corners, and a desktop that is not a rectangle has box to spare that is on no
+        // monitor. Without a report, the row-of-scanouts estimate and the box, as before.
+        let desktop = super::arrangement::desktop_in_range(f64::from(ABS_MAX));
+        let gain = match desktop.as_ref().and_then(|d| d.rect_of(slot)) {
+            Some(share) => super::fit::range_gain_of_share(fit, share),
+            None => {
+                let sizes = super::echo::scanout_sizes();
+                let row_w: u32 = sizes.iter().map(|s| s.0).sum();
+                let row_h: u32 = sizes.iter().map(|s| s.1).max().unwrap_or(0);
+                super::fit::range_gain(fit, sizes[slot], row_w, row_h, f64::from(ABS_MAX))
+            }
+        };
         let (range, pressure) = match (self.capture_range.get(), gain) {
             (Some(r), Some(g)) => {
-                let rs = super::fit::range_step(r, dx, dy, g, f64::from(ABS_MAX));
+                let rs = super::fit::range_step(r, dx, dy, g, f64::from(ABS_MAX), desktop.as_ref());
                 (rs.pos, rs.overflow)
             }
             // No running position yet (the session's first step), or no mode sizes to scale

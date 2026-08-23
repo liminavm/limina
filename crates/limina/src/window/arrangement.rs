@@ -401,6 +401,133 @@ impl Edges {
     }
 }
 
+/// One monitor's rectangle in the absolute device's range units — the guest's desktop as the
+/// one device that has to cover all of it sees it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RangeRect {
+    pub(crate) x0: f64,
+    pub(crate) y0: f64,
+    pub(crate) x1: f64,
+    pub(crate) y1: f64,
+}
+
+impl RangeRect {
+    /// Inclusive on all four sides: monitors abut at an exact coordinate, and a point on a
+    /// seam belongs to both of them.
+    fn holds(&self, p: (f64, f64)) -> bool {
+        (self.x0..=self.x1).contains(&p.0) && (self.y0..=self.y1).contains(&p.1)
+    }
+
+    fn clamp(&self, p: (f64, f64)) -> (f64, f64) {
+        (p.0.clamp(self.x0, self.x1), p.1.clamp(self.y0, self.y1))
+    }
+
+    /// How far outside this rect a point lies, squared.
+    fn distance2(&self, p: (f64, f64)) -> f64 {
+        let c = self.clamp(p);
+        (c.0 - p.0).powi(2) + (c.1 - p.1).powi(2)
+    }
+
+    pub(crate) fn width(&self) -> f64 {
+        self.x1 - self.x0
+    }
+
+    pub(crate) fn height(&self) -> f64 {
+        self.y1 - self.y0
+    }
+}
+
+/// The guest's desktop in device-range units: one rect per placed slot, in the report's order.
+///
+/// The device's range is spread over the desktop's **bounding box**, and a desktop is a union
+/// of rectangles — so unless every monitor is the same height and flush, part of that box is
+/// dead space belonging to no monitor. This is the shape that says which part.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Desktop {
+    rects: Vec<(usize, RangeRect)>,
+}
+
+impl Desktop {
+    pub(crate) fn new(rects: Vec<(usize, RangeRect)>) -> Self {
+        Self { rects }
+    }
+
+    /// One slot's share of the range, if the report places it.
+    pub(crate) fn rect_of(&self, slot: usize) -> Option<RangeRect> {
+        self.rects.iter().find(|(s, _)| *s == slot).map(|(_, r)| *r)
+    }
+
+    /// Hold a candidate device position on the desktop, sliding it along the wall of the
+    /// monitor it is leaving.
+    ///
+    /// **A position is not motion, and only motion is confined.** The guest transforms an
+    /// absolute value against its viewport's *extents* — the bounding box — and puts the
+    /// pointer wherever that lands, dead space included, where it is over no output at all and
+    /// the cursor simply vanishes (the plane is per-scanout: no scanout, no cursor). Relative
+    /// motion it does confine, to the union. So the confinement of the absolute device is ours
+    /// to do, and pinning at the range's ends does not do it: those are the box's corners, not
+    /// the desktop's.
+    ///
+    /// A candidate that lands on a monitor is taken as it is — that is how the captured pointer
+    /// crosses a seam, which it must, since the guest owns which display a value lands on and
+    /// the echo re-homes the capture window after it (`input::follow_guest_echo`). Only a
+    /// candidate that lands nowhere is clamped, and against the rect the *previous position*
+    /// occupied rather than the capture slot's: between a crossing and the echo that reports it
+    /// the slot is a step behind, and clamping into it would drag the pointer back over the
+    /// seam it just crossed.
+    ///
+    /// A previous position that is itself nowhere — the guest rearranged its monitors under a
+    /// live grab, which reaches us as a new report and nothing else — snaps to the nearest
+    /// monitor. One jump the hand can see beats a pointer left invisible in a hole that is no
+    /// longer where it was.
+    pub(crate) fn confine(&self, from: (f64, f64), cand: (f64, f64)) -> (f64, f64) {
+        if self.rects.iter().any(|(_, r)| r.holds(cand)) {
+            return cand;
+        }
+        let home = self
+            .rects
+            .iter()
+            .find(|(_, r)| r.holds(from))
+            .or_else(|| {
+                self.rects.iter().min_by(|a, b| {
+                    a.1.distance2(from)
+                        .total_cmp(&b.1.distance2(from))
+                        .then(a.0.cmp(&b.0))
+                })
+            })
+            .map(|(_, r)| *r);
+        home.map_or(cand, |r| r.clamp(cand))
+    }
+}
+
+/// The guest's reported desktop in device-range units, or `None` when it has not reported —
+/// the range is then the single-display mapping ([`abs_through_report`]) and all of it is
+/// desktop, which is exactly true for one display and the stock tier's known floor for more.
+pub(crate) fn desktop_in_range(abs_max: f64) -> Option<Desktop> {
+    let rects = reported_layout()?;
+    let dw = f64::from(rects.iter().map(|(_, r)| r.x + r.w).max()?);
+    let dh = f64::from(rects.iter().map(|(_, r)| r.y + r.h).max()?);
+    if dw <= 0.0 || dh <= 0.0 {
+        return None;
+    }
+    Some(Desktop::new(
+        rects
+            .iter()
+            .map(|(s, r)| {
+                (
+                    *s,
+                    RangeRect {
+                        x0: f64::from(r.x) / dw * abs_max,
+                        y0: f64::from(r.y) / dh * abs_max,
+                        x1: f64::from(r.x + r.w) / dw * abs_max,
+                        y1: f64::from(r.y + r.h) / dh * abs_max,
+                    },
+                )
+            })
+            .collect(),
+    ))
+}
+
 /// Which of this slot's edges face the outside of the guest's **desktop** at the point
 /// `(u, v)` of its content, rather than a seam with a neighbouring monitor — what edge
 /// *pressure* is judged against.
@@ -826,6 +953,103 @@ mod tests {
         );
         assert!(!outer_edges_at(1, 0.0, 0.5).left);
         forget_guest_layout();
+    }
+
+    /// The ragged desktop in device-range units. Slot 0 is the Dell, slot 1 the built-in.
+    fn ragged_in_range() -> Desktop {
+        let _g = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        report_the_ragged_desktop();
+        let d = desktop_in_range(f64::from(ABS)).expect("a reported desktop");
+        forget_guest_layout();
+        d
+    }
+
+    fn near(got: (f64, f64), want: (f64, f64)) {
+        assert!(
+            (got.0 - want.0).abs() < 0.5 && (got.1 - want.1).abs() < 0.5,
+            "{got:?} is not {want:?}"
+        );
+    }
+
+    /// The fault: the device's range covers the bounding box, so pinning at its ends lets a
+    /// monitor that does not reach the box's edge be pushed clean off itself — into dead space,
+    /// where the pointer is over no output and the cursor vanishes.
+    #[test]
+    fn a_step_off_a_monitor_into_dead_space_is_held_at_its_own_edge() {
+        let d = ragged_in_range();
+        let dell = d.rect_of(0).expect("the Dell is placed");
+        assert!(dell.y0 > 0.0, "the Dell does not reach the box's top");
+        // Straight up from inside the Dell, past its top: nothing is above it.
+        near(
+            d.confine((10000.0, dell.y0 + 50.0), (10000.0, dell.y0 - 900.0)),
+            (10000.0, dell.y0),
+        );
+        // And down past the built-in's bottom, which stops well short of the box's.
+        let built_in = d.rect_of(1).expect("the built-in is placed");
+        near(
+            d.confine(
+                (25000.0, built_in.y1 - 50.0),
+                (25000.0, built_in.y1 + 900.0),
+            ),
+            (25000.0, built_in.y1),
+        );
+    }
+
+    /// What the confinement must not cost: the captured pointer crosses seams by walking the
+    /// range, and the guest owns which display a value lands on. A step that lands on a
+    /// monitor is that step, wherever it started.
+    #[test]
+    fn a_step_that_lands_on_the_neighbour_crosses_untouched() {
+        let d = ragged_in_range();
+        let seam = d.rect_of(0).expect("the Dell").x1;
+        let cand = (seam + 60.0, 10000.0);
+        assert_eq!(d.confine((seam - 60.0, 10000.0), cand), cand);
+    }
+
+    /// The same edge, below where the neighbour reaches: a wall, and the clamp finds it
+    /// without being told which edges are which.
+    #[test]
+    fn the_part_of_a_seam_the_neighbour_does_not_reach_is_a_wall() {
+        let d = ragged_in_range();
+        let seam = d.rect_of(0).expect("the Dell").x1;
+        let below = d.rect_of(1).expect("the built-in").y1 + 2000.0;
+        near(
+            d.confine((seam - 60.0, below), (seam + 60.0, below)),
+            (seam, below),
+        );
+        // Diagonally into the dead corner: it slides along the wall rather than stopping.
+        let d2 = d.rect_of(1).expect("the built-in").y1;
+        near(
+            d.confine((seam - 60.0, d2 - 100.0), (seam + 60.0, d2 + 400.0)),
+            (seam, d2 + 400.0),
+        );
+    }
+
+    /// A position that is itself nowhere — the guest rearranged its monitors under a live
+    /// grab, which reaches us as a new report and nothing else — snaps back onto the desktop
+    /// instead of being clamped deeper into the hole.
+    #[test]
+    fn a_previous_position_in_dead_space_snaps_to_the_nearest_monitor() {
+        let d = ragged_in_range();
+        let dell = d.rect_of(0).expect("the Dell");
+        let built_in = d.rect_of(1).expect("the built-in");
+        // The bottom-right corner of the box belongs to neither; the Dell is the closer.
+        let lost = (dell.x1 + 500.0, built_in.y1 + 4000.0);
+        near(d.confine(lost, (lost.0 + 10.0, lost.1)), (dell.x1, lost.1));
+    }
+
+    /// One display: the whole range is the desktop, and nothing is ever held back.
+    #[test]
+    fn with_one_monitor_every_position_is_on_the_desktop() {
+        let _g = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        report(&[("Virtual-1", 0, 1512)]);
+        let d = desktop_in_range(f64::from(ABS)).expect("a reported desktop");
+        forget_guest_layout();
+        assert_eq!(d.confine((100.0, 100.0), (200.0, 200.0)), (200.0, 200.0));
+        near(
+            d.confine((100.0, 100.0), (-50.0, 99999.0)),
+            (0.0, f64::from(ABS)),
+        );
     }
 
     /// Pressure aimed at a seam is dropped; pressure aimed outward on the same event is kept.
