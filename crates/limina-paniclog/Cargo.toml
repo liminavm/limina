@@ -1,0 +1,10 @@
+[package]
+name = "limina-paniclog"
+description = "limina panic sink — appends every panic to a file, for processes with no stderr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Only for the local-time stamp (strftime); the crate deliberately carries no date dependency.
+libc = { workspace = true }

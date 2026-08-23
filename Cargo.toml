@@ -41,6 +41,9 @@ limina-display     = { path = "crates/limina-display" }
 # (which applies). Dependency-free on purpose — see the crate docs.
 limina-displayctl  = { path = "crates/limina-displayctl" }
 limina-input       = { path = "crates/limina-input" }
+# The panic sink both host binaries install: a Dock-launched app has no stderr, so without
+# this the message our loud assertions exist to print is simply lost.
+limina-paniclog    = { path = "crates/limina-paniclog" }
 limina-proto       = { path = "crates/limina-proto" }
 limina-surfaceport = { path = "crates/limina-surfaceport" }
 

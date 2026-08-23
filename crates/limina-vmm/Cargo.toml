@@ -24,6 +24,8 @@ limina-display = { workspace = true }
 limina-displayctl = { workspace = true }
 # Our virtio-input backends (keyboard + absolute pointer), worker side.
 limina-input   = { workspace = true, features = ["backends"] }
+# The worker inherits the supervisor's stderr, so a Dock-launched app silences its panics too.
+limina-paniclog = { workspace = true }
 
 anyhow            = { workspace = true }
 clap              = { workspace = true }

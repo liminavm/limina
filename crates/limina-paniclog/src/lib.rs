@@ -12,9 +12,14 @@
 //! external display was unplugged) therefore cost a disassembly of the shipped binary to recover
 //! one `file:line` that the process had already formatted and dropped.
 //!
-//! So every panic is also appended to a file, before the abort hook takes the process down. The
-//! hook chain is ordered in `main`: this sink is installed first, so
-//! [`crate::supervisor::install_panic_kill_hook`] takes it as the `default` it calls before
+//! So every panic is also appended to a file, before any abort hook takes the process down.
+//! Both halves of a running VM write to it — the `limina` supervisor and its entitled
+//! `limina-vmm` worker, which inherits the supervisor's stderr and so inherits the same silence.
+//! Each record names its own `component` and pid, and `O_APPEND` plus a single `write_all` is
+//! what keeps two processes from interleaving mid-record.
+//!
+//! Install it first in `main`, before anything else takes a hook: `limina`'s own
+//! `install_panic_kill_hook` chains on top and takes this sink as the `default` it calls before
 //! `abort()`.
 //!
 //! Nothing here may panic. A hook that panics aborts with no message at all, which is exactly the
@@ -31,7 +36,7 @@ use std::path::{Path, PathBuf};
 /// dogfood run that wants the record somewhere specific); otherwise the macOS convention,
 /// `~/Library/Logs/Limina/panic.log` — the same folder the user already opens in Console.app
 /// next to `DiagnosticReports`.
-pub(crate) fn log_path() -> Option<PathBuf> {
+pub fn log_path() -> Option<PathBuf> {
     path_from(
         std::env::var_os("LIMINA_PANIC_LOG"),
         std::env::var_os("HOME"),
@@ -51,21 +56,36 @@ fn path_from(override_var: Option<OsString>, home: Option<OsString>) -> Option<P
     Some(PathBuf::from(home).join("Library/Logs/Limina/panic.log"))
 }
 
-/// One panic as it lands in the file. Several limina processes (the control center, one per
-/// running VM) share the log, so every record names its own pid and thread; the `====` banner is
-/// the record separator a reader greps for.
-fn format_record(
-    stamp: &str,
+/// One panic as it lands in the file. Several limina processes share it — the control center,
+/// one supervisor per running VM, and each supervisor's worker — so every record names the
+/// binary it came from as well as its pid and thread; the `====` banner is the record separator
+/// a reader greps for.
+struct Record<'a> {
+    stamp: &'a str,
+    /// The binary that panicked — the caller's `CARGO_PKG_NAME`, not this crate's.
+    component: &'a str,
     pid: u32,
-    version: &str,
-    thread: &str,
-    location: Option<&str>,
-    payload: &str,
-    backtrace: &str,
-) -> String {
+    version: &'a str,
+    thread: &'a str,
+    location: Option<&'a str>,
+    payload: &'a str,
+    backtrace: &'a str,
+}
+
+fn format_record(r: &Record<'_>) -> String {
+    let Record {
+        stamp,
+        component,
+        pid,
+        version,
+        thread,
+        location,
+        payload,
+        backtrace,
+    } = r;
     let mut s = String::with_capacity(payload.len() + backtrace.len() + 256);
     s.push_str(&format!(
-        "==== limina panic {stamp} pid={pid} v{version} thread={thread} ====\n"
+        "==== {component} panic {stamp} pid={pid} v{version} thread={thread} ====\n"
     ));
     s.push_str(&format!(
         "at {}\n",
@@ -133,9 +153,11 @@ fn payload_of(info: &PanicHookInfo<'_>) -> String {
 }
 
 /// Install the file sink. Chains the hook already in place (so the default stderr print still
-/// happens) and must be called before [`crate::supervisor::install_panic_kill_hook`], which
-/// wraps this one and aborts after it.
-pub(crate) fn install() {
+/// happens) and must be called before any hook that aborts, which then wraps this one.
+///
+/// `component` and `version` are the caller's own `CARGO_PKG_NAME` / `CARGO_PKG_VERSION` — this
+/// crate's would name the sink, not the binary that crashed.
+pub fn install(component: &'static str, version: &'static str) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         previous(info);
@@ -143,15 +165,16 @@ pub(crate) fn install() {
             return;
         };
         let thread = std::thread::current();
-        let record = format_record(
-            &now_stamp(),
-            std::process::id(),
-            env!("CARGO_PKG_VERSION"),
-            thread.name().unwrap_or("<unnamed>"),
-            info.location().map(|l| l.to_string()).as_deref(),
-            &payload_of(info),
-            &Backtrace::force_capture().to_string(),
-        );
+        let record = format_record(&Record {
+            stamp: &now_stamp(),
+            component,
+            pid: std::process::id(),
+            version,
+            thread: thread.name().unwrap_or("<unnamed>"),
+            location: info.location().map(|l| l.to_string()).as_deref(),
+            payload: &payload_of(info),
+            backtrace: &Backtrace::force_capture().to_string(),
+        });
         if let Err(e) = append_record(&path, &record) {
             // The sink failing must never be the thing that hides the panic.
             eprintln!(
@@ -187,15 +210,16 @@ mod tests {
 
     #[test]
     fn a_record_carries_the_location_and_the_message() {
-        let r = format_record(
-            "2026-08-23 17:03:22 -0300",
-            49683,
-            "0.1.0",
-            "main",
-            Some("crates/limina/src/window/warp.rs:106:5"),
-            "pointer capture [repin]: warp target (1746.0,259.0) is on NO display",
-            "0: limina::window::warp::warp_checked",
-        );
+        let r = format_record(&Record {
+            stamp: "2026-08-23 17:03:22 -0300",
+            component: "limina",
+            pid: 49683,
+            version: "0.1.0",
+            thread: "main",
+            location: Some("crates/limina/src/window/warp.rs:106:5"),
+            payload: "pointer capture [repin]: warp target (1746.0,259.0) is on NO display",
+            backtrace: "0: limina::window::warp::warp_checked",
+        });
         assert!(r.starts_with(
             "==== limina panic 2026-08-23 17:03:22 -0300 pid=49683 v0.1.0 thread=main ====\n"
         ));
@@ -209,8 +233,21 @@ mod tests {
 
     #[test]
     fn a_record_with_no_location_still_says_so() {
-        let r = format_record("t", 1, "0.1.0", "worker", None, "boom", "bt");
+        let r = format_record(&Record {
+            stamp: "t",
+            component: "limina-vmm",
+            pid: 1,
+            version: "0.1.0",
+            thread: "worker",
+            location: None,
+            payload: "boom",
+            backtrace: "bt",
+        });
         assert!(r.contains("at <unknown location>\n"));
+        assert!(
+            r.starts_with("==== limina-vmm panic "),
+            "a shared log is only readable if each record names its binary; got:\n{r}"
+        );
     }
 
     /// The hook itself, end to end. A panic hook is process-global and this test suite shares
@@ -221,7 +258,7 @@ mod tests {
         if std::env::var_os("LIMINA_PANIC_LOG_CHILD").is_some() {
             // The child writes to whatever `LIMINA_PANIC_LOG` the parent handed it — it must
             // not re-derive the path, whose name carries the *parent's* pid.
-            install();
+            install("limina-test-child", "0.0.0");
             panic!("a deliberate panic, from {}", "the child");
         }
         let path =
@@ -229,7 +266,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let status = std::process::Command::new(std::env::current_exe().expect("test binary path"))
             .args([
-                "panic_log::tests::the_installed_hook_writes_the_panic_to_the_log",
+                "tests::the_installed_hook_writes_the_panic_to_the_log",
                 "--exact",
                 "--nocapture",
             ])
@@ -249,8 +286,12 @@ mod tests {
             "the formatted message is what a reader needs; got:\n{got}"
         );
         assert!(
-            got.contains("panic_log.rs:"),
+            got.contains("lib.rs:"),
             "the record names the panicking location; got:\n{got}"
+        );
+        assert!(
+            got.contains("==== limina-test-child panic "),
+            "the record names the component the caller passed; got:\n{got}"
         );
         assert!(
             got.contains("--- backtrace ---"),

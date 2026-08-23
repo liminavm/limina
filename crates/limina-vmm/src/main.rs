@@ -493,6 +493,11 @@ fn default_gpu_mem_budget_mib(ram_mib: usize) -> usize {
 fn main() -> Result<()> {
     raise_fd_limit();
 
+    // Before anything else: the worker inherits the supervisor's stderr, so a Dock-launched
+    // Limina.app silences the worker's panics exactly as it silences the supervisor's. Both
+    // append to the same log; each record names its own binary and pid.
+    limina_paniclog::install(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+
     init_worker_logging();
 
     // Upstream KosmicKrisp gates its VK_EXT_custom_border_color (+ border_color_swizzle)

@@ -928,6 +928,7 @@ dependencies = [
  "libc",
  "limina-displayctl",
  "limina-input",
+ "limina-paniclog",
  "limina-proto",
  "limina-surfaceport",
  "log",
@@ -970,6 +971,13 @@ dependencies = [
  "krun-input",
  "libc",
  "log",
+]
+
+[[package]]
+name = "limina-paniclog"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -1027,6 +1035,7 @@ dependencies = [
  "limina-display",
  "limina-displayctl",
  "limina-input",
+ "limina-paniclog",
  "log",
  "pkg-config",
  "tracing-appender",

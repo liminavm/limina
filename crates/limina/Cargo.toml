@@ -29,6 +29,10 @@ sha2       = { workspace = true }
 ciborium   = { workspace = true }
 serde_json = { workspace = true }
 
+# Every panic also goes to ~/Library/Logs/Limina/panic.log — a Dock-launched app has no
+# stderr, and the .ips crash report carries only a backtrace.
+limina-paniclog = { workspace = true }
+
 # Shared evdev constants + macOS->Linux keymap + wire format (NO `backends` feature here,
 # so this pulls in no libkrun/bindgen; only the worker enables the krun_input backends).
 limina-input = { workspace = true }
