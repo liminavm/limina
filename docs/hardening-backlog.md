@@ -111,8 +111,11 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   Measured on the two-panel rig 2026-08-23, guest at BenQ `(1512,0) 2048x1152` and built-in
   `(0,747) 1512x948`: **0 of 2374** absolute positions landed on no monitor, the deepest reach
   on the BenQ was y=1152.0 and the shallowest on the built-in y=747.0 — both walls to the unit —
-  and **53** upward pressure events charged at the built-in's top, an edge the old `r.y == 0`
-  test zeroed. Oracle and repro: `spikes/m15-ragged-desktop/`.
+  and **53** upward pressure events charged at the built-in's top, where the old box clamp had
+  nothing to charge with until range y=0. That run was fullscreen, so it verifies (1) only: the
+  captured path takes its pressure from the confinement and never consults `outer_edges_at`,
+  whose end-to-end differential is an *uncaptured* drag and whose geometry rests on unit tests.
+  Oracle and repro: `spikes/m15-ragged-desktop/`.
 - **`notch = extend`: the band is not hidden when the reveal triggers ungrabbed.** The strip
   overlay keeps covering its band while macOS has the menu bar out, so the revealed bar sits
   behind the very thing the reveal exists to get past. The grant path is there and works

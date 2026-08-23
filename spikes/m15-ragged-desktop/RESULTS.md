@@ -50,9 +50,17 @@ dead space above the built-in and below the BenQ.
 | shallowest reach on the built-in | y = 747.0, its top edge exactly |
 | upward pressure events charged at the built-in's top | 53 |
 
-The 53 matter because that edge is at `y = 747`: the old filter's test was `top: r.y == 0`,
-so it zeroed every upward push there. Before the fix, on the same rig, the cursor disappeared
-when pushed past the built-in's bottom edge into the dead band.
+**These numbers verify the confinement, not the edge filter.** The run was fullscreen, so it
+was captured throughout, and the captured path takes its pressure from the confinement's own
+clamp — it never consults `outer_edges_at`. The old code was silent at that same wall because
+its clamp was the box's end at range `y = 0`, nowhere near the monitor's top at `y = 747`, so
+there was no clamped-off motion to charge with. Before the fix, on the same rig, the cursor
+disappeared when pushed past the built-in's bottom edge into the dead band.
+
+`outer_edges_at` governs the **uncaptured** path (and the captured seed, before a running range
+exists). Its end-to-end differential is an uncaptured drag past an edge facing dead space; its
+geometry is pinned by unit tests in `window/arrangement.rs`. **Any test run fullscreen is a test
+of the captured path, whatever it was meant to test** — `docs/input-and-windows.md` §4.
 
 **A cursor that vanishes at a monitor's *true* edge is not this bug.** The plane's hotspot
 sits on the last scanline and the bitmap is clipped, so how much of it survives depends on

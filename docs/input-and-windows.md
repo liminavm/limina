@@ -185,10 +185,18 @@ every tick, report once per episode and re-wear.
 
 **The captured cursor follows the guest.** Its position is a running value **in the device
 range** (`capture_range`, `0..=ABS_MAX`), continuous for the whole session: each host delta is
-scaled by a per-slot gain derived from the guest's **mode sizes in pixels** (this slot's scanout
-pixels per fit point × `ABS_MAX` / the sum of the connected scanouts' widths; heights over the
-tallest — `fit::range_gain`) and clamped only at the range ends, which are the guest desktop's
-outer edges (`fit::range_step`; the clamped-off motion is the edge pressure). The guest crosses
+scaled by a per-slot gain and clamped to the guest's **desktop** — which is a union of
+rectangles and **never its bounding box**, the thing the range actually covers. Any vertical
+offset or height mismatch leaves corners of that box on no monitor at all, and a position there
+is over no output: the cursor plane is per-scanout, so nothing draws it and the cursor is simply
+gone. `arrangement::Desktop::confine` holds the step on the desktop — a candidate that lands on
+a monitor is taken as it is (that is how a seam is crossed), and one that lands nowhere is
+clamped against the rect the *previous position* occupied, never the capture slot's, which the
+echo leaves a step behind after a crossing. Every clamp is then at a wall by construction, so the
+clamped-off motion is honest edge pressure and needs no filter (`fit::range_step`). The gain
+comes from the same geometry — the slot's share of the range over its share of the window
+(`fit::range_gain_of_share`) — falling back to a row-of-scanouts estimate (`fit::range_gain`)
+only where the guest has reported no layout. The guest crosses
 its own seams by itself, and its cursor echo (`window/echo.rs` — the scanout id every
 `MOVE_CURSOR` carries, plus the plane origin and hotspot) names the slot and pixel it is on;
 the render tick re-bases `capture_slot`/`capture_pos` to that slot's fit from the echo pixel
@@ -347,11 +355,21 @@ load-bearing parts:
   first, rig time second.
 - **Motion clamped off at a desktop edge is forwarded to the *relative* device as pressure**, so
   mutter's own barriers (the GNOME hot corner) still fire — a pointer is driven by **two**
-  devices at once, captured or not. Captured, the clamp is the range's ends (the guest
-  desktop's outer edges by construction); uncaptured, the fit clamp filtered to the slot's
-  outer edges (`arrangement::outer_edges` — from the guest's report; every edge when there is
-  none). A window's edge at a seam is not a desktop edge, and pressure there makes the two
+  devices at once, captured or not. Captured, the clamp is the desktop's own boundary, so what
+  it eats is a wall by construction; uncaptured, it is the fit clamp filtered to the slot's
+  outer edges (`arrangement::outer_edges_at` — from the guest's report; every edge when there
+  is none). A window's edge at a seam is not a desktop edge, and pressure there makes the two
   devices fight — teleporting, an unreachable band, a pointer that feels "pushed back".
+- **A seam is a property of the point, not of the side.** An edge is a seam exactly where a
+  neighbour is on the other side of it *there*; on a ragged desktop one edge is a seam over the
+  span its neighbour covers and a wall over the rest, and any per-side answer gets one half
+  wrong. Asking instead whether the edge sits at a bounding-box coordinate calls every offset
+  monitor's leading edges seams and silently drops the pressure they are owed — a wall the guest
+  holds the pointer against that charges nothing.
+- **A cursor that vanishes at a monitor's true edge is not a mis-placed pointer.** The plane's
+  hotspot sits on the last scanline and the bitmap is clipped, so how much of it survives depends
+  on the cursor's size on that display. The echo is what tells the two apart; the cursor is drawn
+  in full at a monitor's *top* edge, where the arrow points away from the boundary.
 
 ## 6. Fullscreen, the notch, and why there is more than one window shape
 
