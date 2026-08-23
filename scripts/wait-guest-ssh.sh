@@ -4,7 +4,7 @@
 
 # Wait for a limina guest's SSH to become reachable, and print the forwarded port.
 #
-#   scripts/wait-guest-ssh.sh WORKER_LOG [TIMEOUT_SECS]
+#   scripts/wait-guest-ssh.sh WORKER_LOG [TIMEOUT_SECS] [BOOT_PID]
 #
 # WORKER_LOG is the log the boot vehicle points the supervisor at (the
 # `limina pid=… (worker log /tmp/limina-worker-….log, …)` line names it) — that is
@@ -14,13 +14,19 @@
 # on the forward immediately, long before it can dial the guest), and only then
 # prints the port on stdout. Nonzero exit + diagnostics on stderr on timeout.
 #
+# BOOT_PID is optional and is the boot vehicle's pid. Pass it whenever you have it:
+# a vehicle that dies before it ever prints the line (a missing worker binary, a bad
+# disk path) is otherwise indistinguishable from a slow boot, and the wait burns the
+# full timeout for a port that can never arrive. With the pid we notice in seconds.
+#
 # Typical use:
 #   port=$(scripts/wait-guest-ssh.sh /tmp/limina-worker-<disk>.log 240)
 #   ssh -p "$port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null claude@127.0.0.1 …
 set -euo pipefail
 
-log="${1:?usage: wait-guest-ssh.sh WORKER_LOG [TIMEOUT_SECS]}"
+log="${1:?usage: wait-guest-ssh.sh WORKER_LOG [TIMEOUT_SECS] [BOOT_PID]}"
 timeout="${2:-240}"
+boot_pid="${3:-}"
 deadline=$(( $(date +%s) + timeout ))
 
 port=""
@@ -36,6 +42,11 @@ while [ -z "$port" ]; do
     # the caller then reads an empty port, and every ssh after it fails with
     # `Bad port ''`. Absorb the failure and keep waiting for the file to appear.
     port=$({ sed -n 's/.*guest SSH forward ready: ssh -p \([0-9][0-9]*\).*/\1/p' "$log" 2>/dev/null || true; } | tail -1)
+    if [ -z "$port" ] && [ -n "$boot_pid" ] && ! kill -0 "$boot_pid" 2>/dev/null; then
+        echo "wait-guest-ssh: boot vehicle (pid $boot_pid) exited before announcing SSH; log tail:" >&2
+        tail -5 "$log" >&2 2>/dev/null || echo "  (log unreadable)" >&2
+        exit 1
+    fi
     [ -n "$port" ] || sleep 2
 done
 

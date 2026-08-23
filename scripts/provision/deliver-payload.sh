@@ -75,7 +75,7 @@ deliver() {
   LIMINA_DISK="$img" LIMINA_BOOT_LOG="$log" spikes/venus-draw-probe/boot-enhanced-efi-kk.sh \
     >"$LOGDIR/limina-deliver-$name-$REV.boot.log" 2>&1 &
   boot=$!
-  port="$(scripts/wait-guest-ssh.sh "$log" "$SSH_TIMEOUT")" || true
+  port="$(scripts/wait-guest-ssh.sh "$log" "$SSH_TIMEOUT" "$boot")" || true
   if [ -z "$port" ]; then
     # Carrying on with an empty port does not merely fail the install: every ssh
     # below dies with `Bad port ''`, INCLUDING the poweroff, so `wait "$boot"`

@@ -401,7 +401,7 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   `--net-log <file>`. Read N from the log — don't assume 2222; the line lands in the WORKER log the boot
   vehicle names (`/tmp/limina-worker-<disk>.log`), not the boot script's stdout.
   **THE one way to wait for a networked boot — for ANY purpose — is
-  `port=$(scripts/wait-guest-ssh.sh <worker-log> [timeout])`.** This applies whether you framed
+  `port=$(scripts/wait-guest-ssh.sh <worker-log> [timeout] [boot-pid])`.** This applies whether you framed
   the wait as "waiting for ssh", "waiting for the window", or "is it booted yet": sshd answering
   its banner is the readiness oracle for all of them, the script blocks until that actually
   happens and prints the port (nonzero + log tail on timeout). Never hand-roll a
