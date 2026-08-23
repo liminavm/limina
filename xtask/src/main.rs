@@ -25,7 +25,8 @@
 //!   `run`    — boot an enhanced-tier image to the seated venus desktop in a window (EFI+venus, the
 //!              documented default boot; wraps `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh`).
 //!   `app`    — assemble the full self-contained `target/Limina.app` (the shipping bundle with the
-//!              whole host venus/GL closure; wraps `scripts/build-app.sh`).
+//!              whole host venus/GL closure) plus the `target/Limina.dmg` that carries it to
+//!              another Mac intact; wraps `scripts/build-app.sh`.
 //!   `bundle` — assemble a *minimal* codesigned `target/Limina.app` and (optionally) launch it
 //!              through LaunchServices. This validates the *normal* launch path early: an app
 //!              started via `open`/double-click runs under launchd with a real GUI/GPU session,
@@ -105,7 +106,8 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
     },
-    /// Assemble the full self-contained `target/Limina.app` (wraps scripts/build-app.sh).
+    /// Assemble the full self-contained `target/Limina.app` + `target/Limina.dmg`
+    /// (wraps scripts/build-app.sh).
     /// Builds RELEASE by default — the .app is the deployable artifact, and an explicit
     /// debug profile passed here once overrode build-app.sh's release default and shipped
     /// a debug bundle to the dogfood Mac (it happened twice).
@@ -452,7 +454,8 @@ fn run_vm(
 }
 
 /// Assemble the full self-contained `Limina.app` — the shipping deliverable, with the whole host
-/// venus/GL dylib closure vendored into `Contents/Frameworks`. All of it lives in build-app.sh.
+/// venus/GL dylib closure vendored into `Contents/Frameworks` — and the `Limina.dmg` that carries
+/// it to another Mac intact. All of it lives in build-app.sh.
 fn app(release: bool) -> Result<()> {
     bash_script(
         &repo_root(),

@@ -8,12 +8,16 @@
 # to @rpath so it resolves relative to the app (no /Volumes/mesa-cs, no third_party
 # prefixes, no Homebrew). Generates a relative-path KosmicKrisp ICD, copies the GOP
 # firmware and the gvproxy NAT helper (so `--net` works on a Mac without Homebrew),
-# writes Info.plist, and codesigns inside-out with an Apple Development identity from
+# writes Info.plist, codesigns inside-out (hardened runtime + secure timestamp) with an
+# Apple Development identity from
 # the keychain (keeps TCC grants stable across redeploys; ad-hoc only by explicit
 # opt-in — LIMINA_SIGN_IDENTITY="-" or LIMINA_ALLOW_ADHOC=1 — otherwise abort). The
 # supervisor sets the
 # remaining bundle-relative venus env (VK_ICD_FILENAMES + the zink-on-KK Mesa selectors)
 # when it detects it's running from the bundle — see crates/limina/src/venus_env.rs.
+#
+# Always produces target/Limina.dmg alongside the bundle — the shareable container, and
+# the thing notarization would staple a ticket to.
 #
 # Usage: scripts/build-app.sh [release|debug]
 #
@@ -170,6 +174,24 @@ if [ -z "$SIGN_ID" ]; then
   echo "    (key-combo capture) will break on every redeploy (TCC pins the CDHash)." >&2
   echo "    DO NOT deploy this bundle to the dogfood Mac." >&2
 fi
+
+# Hardened runtime + a secure timestamp on every signature. Both are prerequisites for
+# notarization (Apple rejects an un-hardened or un-timestamped upload), and the hardened
+# runtime is what the worker's entitlements are written against: it already carries
+# `allow-dyld-environment-variables` and `disable-library-validation`, the two the bundled
+# venus/zink stack needs (the supervisor sets VK_ICD_FILENAMES + the Mesa selectors, and
+# the dylibs under Frameworks are signed by us, not by the loading binary's team).
+#
+# --timestamp contacts Apple's timestamp server, so signing now needs NETWORK. Offline
+# (or when the service is down) it fails the whole build; LIMINA_NO_TIMESTAMP=1 drops it
+# for a local iteration, at the cost of a bundle that cannot be notarized.
+# Ad-hoc signatures take neither: they cannot be timestamped, and an ad-hoc bundle is a
+# dev-only opt-in that is never notarized anyway.
+TS=(--timestamp)
+[ "${LIMINA_NO_TIMESTAMP:-0}" = "1" ] && TS=(--timestamp=none)
+[ "$SIGN_ID" = "-" ] && TS=()
+HARDEN=("${TS[@]}" --options runtime)
+[ "$SIGN_ID" = "-" ] && HARDEN=()
 
 echo "==> building limina + limina-vmm ($PROFILE)"
 cargo build ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} -p limina -p limina-vmm
@@ -354,31 +376,47 @@ PLIST
 # $SIGN_ID and $DR were resolved (and the identity probed) at the top of the script,
 # before the build — see "signing identity" up there for the TCC rationale.
 echo "==> codesigning as '$SIGN_ID' (dylibs → worker → supervisor → app)"
-find "$FW" -type f -name '*.dylib' -exec codesign -s "$SIGN_ID" --force {} \;
+find "$FW" -type f -name '*.dylib' -exec codesign -s "$SIGN_ID" ${TS[@]+"${TS[@]}"} --force {} \;
 # The worker (limina-vmm), not the app main, is the process that opens CoreAudio for `--mic`.
 # TCC records the mic grant under the responsible app (eti.noronha.limina) but validates the
 # ACCESSING binary against the grant's csreq (identifier "eti.noronha.limina" + team OU), so
 # the worker must sign with the app's identifier and the same team-pinned DR — otherwise its
 # `.vmm` identity fails the csreq and CoreAudio delivers silence despite an allowed grant.
 if [ -n "$DR" ]; then
-  codesign -s "$SIGN_ID" --force -i "eti.noronha.limina" -r="$DR" \
+  codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force -i "eti.noronha.limina" -r="$DR" \
     --entitlements "$ROOT/crates/limina-vmm/hvf-entitlements.plist" "$MACOS/limina-vmm"
 else
-  codesign -s "$SIGN_ID" --force \
+  codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force \
     --entitlements "$ROOT/crates/limina-vmm/hvf-entitlements.plist" "$MACOS/limina-vmm"
 fi
-codesign -s "$SIGN_ID" --force "$MACOS/gvproxy"
-codesign -s "$SIGN_ID" --force "$MACOS/limina"
+codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/gvproxy"
+codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/limina"
 # Seal the app (outer) LAST, after the nested worker is in its final form, with the same
 # team-pinned DR so the app grant (Accessibility, etc.) also survives rebuilds/cert reissue.
 if [ -n "$DR" ]; then
-  codesign -s "$SIGN_ID" --force -r="$DR" "$APP"
+  codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force -r="$DR" "$APP"
   echo "    designated requirement pinned to team $TEAM (app + worker; TCC grants incl. mic reach the worker and survive rebuilds)"
 else
-  codesign -s "$SIGN_ID" --force "$APP"
+  codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$APP"
+fi
+
+# ---- disk image ------------------------------------------------------------------
+# The .dmg is the shareable form: a plain tarball/zip of a .app round-trips through
+# whatever the recipient's unarchiver does to symlinks and xattrs, and a broken symlink
+# inside Frameworks breaks the seal — an image is a byte-exact copy of the bundle. It is
+# built unconditionally so the deployable artifact and its container never drift apart,
+# and signed too (Gatekeeper evaluates the container the user actually double-clicks, and
+# notarization staples its ticket to the image).
+DMG="$ROOT/target/Limina.dmg"
+echo "==> packaging $DMG"
+rm -f "$DMG"
+hdiutil create -volname Limina -srcfolder "$APP" -format UDZO -fs HFS+ -ov -quiet "$DMG"
+if [ "$SIGN_ID" != "-" ]; then
+  codesign -s "$SIGN_ID" ${TS[@]+"${TS[@]}"} --force "$DMG"
 fi
 
 echo "==> done: $APP"
 du -sh "$APP" | awk '{print "    bundle size: " $1}'
+echo "    dmg:         $(du -sh "$DMG" | awk '{print $1}')  $DMG"
 echo "    verify venus link:"
 otool -L "$MACOS/limina-vmm" | grep -iE 'virgl|epoxy|vulkan' | sed 's/^/      /'
