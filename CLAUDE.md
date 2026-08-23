@@ -357,7 +357,15 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   image exactly as it really runs. venus and EFI boot have worked for a long time — **reach for this
   first.** `--no-net`/`--cpus`/`--ram-mib` and trailing `-- <extra limina flags>` map to the script's
   `LIMINA_NET`/`LIMINA_CPUS`/`LIMINA_RAM_MIB`/`LIMINA_EXTRA_ARGS`; the disk boots **in place**, so
-  clone it first to keep it pristine. The script sets all the host KK/zink env (VK_ICD_FILENAMES →
+  clone it first to keep it pristine — `cp -c` makes that free (APFS CoW, instant, no space).
+  **Always boot a poke VM with the debug channels already open**: `RUST_LOG=limina=info` and
+  `LIMINA_POINTER_WIRE_TRACE=1` (add the subsystem's own trace, e.g. `LIMINA_DISPLAY_TRACE`) so an
+  incident caught in passing is already recorded. Most of what we chase is intermittent and shows
+  up while doing something else; a boot without the channels turns a sighting into a re-run, and
+  some sightings do not come back. The supervisor and worker both default to `warn`, so the lines
+  that explain a symptom are simply absent unless asked for — `display: the guest reports its
+  monitors as …` is `info`. Both streams land in the worker log the boot vehicle names.
+  The script sets all the host KK/zink env (VK_ICD_FILENAMES →
   KosmicKrisp + the zink-on-KK DYLD/Mesa selectors); a *bare* `target/debug/limina --window` with
   NONE of that env **aborts on GPU init** (`Couldn't open libEGL.dylib` → SIGABRT) — that's the
   missing env, **not** a coexist problem, and **not** a reason to fall back to software-2D.

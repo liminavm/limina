@@ -127,13 +127,8 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   two-panel rig 2026-08-23, fullscreen on both panels after a click had promoted the grab. The
   blank-wear check runs every tick and the unhide fix is in (`64aee92`), so this is either a path
   that skips both or a macOS-side unhide that did not take; the wear log line did fire earlier in
-  the same session, which is why it is worth a look rather than a guess.
-- **NEEDS REPRO — pushing an edge uncaptured tends to re-take the grab.** Reported from the same
-  rig: "the pressure thing causes the capture". `user_released` is meant to hold the grab off
-  while the pointer stays in the fit, and the regrab arms on `!point_in_fit` — so an edge push
-  that momentarily reads as outside the fit would rearm and let the dwell take it back, which
-  would make the latch useless exactly where a user leans on it. Worth confirming against the fit
-  arithmetic before changing anything.
+  the same session, which is why it is worth a look rather than a guess. Deliberately deferred —
+  catching it again is the next step, which is why every poke boot carries the trace env.
 - **`notch = extend`: the band is not hidden when the reveal triggers ungrabbed.** The strip
   overlay keeps covering its band while macOS has the menu bar out, so the revealed bar sits
   behind the very thing the reveal exists to get past. The grant path is there and works
