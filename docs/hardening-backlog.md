@@ -15,7 +15,8 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   display on another panel simply stops updating with no indication of why. The overlay module
   already takes the layer and view it decorates, so this is a matter of giving each secondary its
   own instance and taking them all down together, not new machinery.
-- **A parked (or resuming) window grabs and blanks the pointer on every visit to its Space.**
+- **A parked (or resuming) window grabbed and blanked the pointer on every visit to its Space —
+  FIXED 2026-08-22.**
   Measured 2026-08-22: three grab/release cycles in two minutes on each of two suspended VMs,
   one per Space visit — `pointer capture: taken — the guest gained the screen (fullscreen=true,
   panels 0 -> 1)` while no guest process exists, each followed by the blank being re-worn on a
@@ -29,8 +30,11 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   asks whether there is a guest at all. Fix: give the refusal chain the park fact (a pure verdict
   in `grab_policy`, unit-testable), and gate the tick's remaining guest-pointer work — echo
   follow, repark, wear verify, mapping probe — on the same `parked()` the tap uses, since none of
-  it has a guest to serve. Seen in the Resuming phase too, so the gate is "no live worker", not
-  "Parked" alone.
+  it has a guest to serve — and the gate is "no live worker", not "Parked" alone, because the
+  grabs continued through the Resuming phase where `parked()` is already false
+  (`window::speaks_for_a_guest`). Rig-confirmed: **0** grabs across two parked windows, one of
+  them held ~90 s while panels were switched, against three grab/release cycles in two minutes
+  before.
 - **The pointer cannot be drawn for the first ~350 ms of a Space-switch animation, and every
   public signal that would let it says so too late.** Measured 2026-08-22 on six flicks: a
   three-finger Space switch animates for ~530 ms, and `isOnActiveSpace`, key status and
@@ -809,6 +813,15 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
 
 ## M9 snapshot hardening (from the 2026-07-18 transport-restore removal)
 
+- **Host sleep across a panel change is clean, in both directions (measured 2026-08-22).** Two
+  VMs (F44 enhanced and F44 stock), 4-scanout pool: sleep with two panels and wake with two;
+  sleep with two and wake with one (the external switched off mid-sleep); sleep with one and wake
+  with two (switched on mid-sleep). Guests logged `PM: suspend entry (s2idle)` → `PM: suspend
+  exit` every time, scanouts were re-published within 0.35 s of the wake, and no window was
+  closed, reopened or lost its Space. The panel that vanished had its connector disconnected and
+  its display swallowed into the main window; the panel that arrived got a slot and a window. No
+  worker swap is involved in any of it, which is why none of the restore faults below apply.
+
 - **An in-place resume came back on slot 0 while the host kept the panel→slot assignment it
   suspended with — the window froze on its last frame and "Resuming…" never came down. FIXED
   2026-08-22.**
@@ -850,6 +863,18 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   built-in swallowed slot 1 — → the same re-assert, slot 1's ring back, first frame **6.9 s**.
   Before the fix the same click took 416 s, and only because a panel was plugged in to force a
   re-plan.
+  - **A third fault, found only by testing the panel change ACROSS the park.** The re-assert
+    re-emits the slots the table believes are down, and a fresh device boots slot 0 *up* —
+    carrying virtio's own default EDID, sized to whatever the worker was spawned with. Nothing
+    else describes that slot when it belongs to a panel which is not the window's, because the
+    primary's size-and-identity push follows the window. The guest read its built-in as virtio's
+    10" default, chose a 250% scale for it (1024x576 logical from a 2560x1440 mode) and rendered
+    a mode the panel cannot fill — a large letterbox. `connected` could not express it: it
+    answers "does the guest see a plug", not "was it told what is on the other end", so the slot
+    carries an `announced` bit now and an unannounced slot is owed its connect. The debt is owed
+    to a *driver*, not to firmware — EDK2 paints head 0 and reads nothing else — so in the
+    firmware phase the diff is unchanged. Rig-confirmed: slot 0 now arrives with the panel's
+    refresh, DPI, VRR range and alt mode, and the guest reports 1512x948.
   - The stale absolute-pointer fit did NOT recur across either run (one 8.1 px echo-lag warning,
     no edge sticking), so it reads as a consequence of the assignment fault rather than its own.
     Not proven — two runs, and the fit is re-learned from the guest's echo either way.
