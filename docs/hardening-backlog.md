@@ -851,6 +851,27 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
 
 ## M9 snapshot hardening (from the 2026-07-18 transport-restore removal)
 
+- **A stock Debian 13 guest does not reset its `virtio_input` devices on s2idle, so suspend still
+  fails there** (open, 2026-08-23). The guest genuinely suspends — virtio-blk, -net, -console,
+  -snd and -balloon all reach `INIT`, and gvproxy loses the route — but all three virtio-input
+  devices stay `DRIVER_OK` (`0xf`) past the 20 s quiesce deadline, so the bracket aborts and the
+  VM keeps running. Fedora (16k enhanced) quiesces its input devices in ~250 ms on the same host
+  build, so this is guest-side, not ours. Upstream `virtinput_freeze` does reset the device, and
+  suspend order should reach the input devices *first* (they are registered last, and dpm walks
+  the list from the tail), which makes the observed state harder to explain rather than easier —
+  a partial resume would have restored virtio-blk too, and nothing touched the VM during the
+  bracket.
+
+  This is the second of the two causes behind "Debian can't suspend"; the first — the quiesce
+  oracle counting a never-driven device as a holdout — is fixed. They are independent, so this one
+  still has to go before an encrypted-root Debian guest can suspend.
+
+  What it needs: a throwaway Debian install with guest access, then read the guest's own record
+  rather than reasoning from ours — `journalctl -b` across the attempt, `/sys/power/pm_test`,
+  whether `virtio_input` is a module or builtin there, and whether its `.freeze` is even compiled
+  in (`CONFIG_PM_SLEEP`). Host side, `RUST_LOG=vmm=info` adds the per-device
+  `snapshot: virtio device type=… device_status=…` lines, which the default `warn` hides.
+
 - **Host sleep across a panel change is clean, in both directions (measured 2026-08-22).** Two
   VMs (F44 enhanced and F44 stock), 4-scanout pool: sleep with two panels and wake with two;
   sleep with two and wake with one (the external switched off mid-sleep); sleep with one and wake
