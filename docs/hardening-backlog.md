@@ -9,6 +9,22 @@ appetite.
 Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, see below.
 
 ## Display / window
+- **A parked (or resuming) window grabs and blanks the pointer on every visit to its Space.**
+  Measured 2026-08-22: three grab/release cycles in two minutes on each of two suspended VMs,
+  one per Space visit — `pointer capture: taken — the guest gained the screen (fullscreen=true,
+  panels 0 -> 1)` while no guest process exists, each followed by the blank being re-worn on a
+  window with nothing behind it. The user sees the cursor vanish over a suspended VM; Cmd-Ctrl-G
+  is the only way back. Both *event* paths already stand down while parked — the CGEventTap
+  returns early (`capture_tap.rs:261`, "the tap must claim NOTHING") and the NSEvent monitor
+  forwards nothing but the resume click (`mod.rs:3414`) — but the **tick** has no such gate, and
+  `grab_on_screen_gain` (`input.rs:1055`) fires because a parked fullscreen window does gain the
+  screen every time its Space comes forward. Its refusal chain asks whether the grab is off,
+  whether the pointer is already ours, and whether the pointer is over guest content; it never
+  asks whether there is a guest at all. Fix: give the refusal chain the park fact (a pure verdict
+  in `grab_policy`, unit-testable), and gate the tick's remaining guest-pointer work — echo
+  follow, repark, wear verify, mapping probe — on the same `parked()` the tap uses, since none of
+  it has a guest to serve. Seen in the Resuming phase too, so the gate is "no live worker", not
+  "Parked" alone.
 - **The pointer cannot be drawn for the first ~350 ms of a Space-switch animation, and every
   public signal that would let it says so too late.** Measured 2026-08-22 on six flicks: a
   three-finger Space switch animates for ~530 ms, and `isOnActiveSpace`, key status and
@@ -786,6 +802,41 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   controller. See `docs/fido-authenticator.md` §"Turning it off".
 
 ## M9 snapshot hardening (from the 2026-07-18 transport-restore removal)
+
+- **An in-place resume comes back on slot 0, but the host keeps the panel→slot assignment it
+  suspended with — the window freezes on its last frame and "Resuming…" never comes down.**
+  Measured 2026-08-22 on two flat `--disk` VMs (F44 enhanced and F44 stock, 4-scanout pool,
+  both reproducing identically). The trigger is the primary window showing a **non-zero** slot at
+  suspend time, which is what any panel change before the suspend produces: here the external
+  panel was switched off during a host sleep, so the built-in swallowed guest display 1
+  (`window: guest display 1 is the main window's now`) and the panel owned slot 1. On the play
+  click the fresh worker re-enumerated from zero — `virtio-gpu displays: 4 scanout(s), slot 0
+  connected at 3024x1896`, and the guest agreed (`Virtual-1 connected, Virtual-2 disconnected`,
+  the inverse of the pre-suspend state) — while the host went on showing and watching slot 1.
+  Three consequences, one fault: the window sits on its pre-suspend frame; the "Resuming…"
+  overlay never comes down, because it is gated on `frames > resume_frames_baseline` for the
+  **primary slot** (`window/mod.rs:2944`) and frames are landing on slot 0; and the capture aims
+  at a slot the guest does not have (`we sent the pointer to slot 1 … the guest shows its cursor
+  on [(0, …)] and none on slot 1`). Not frame starvation — a terminal launched in the guest over
+  ssh drew, and the overlay still stood. **Recoverable, not terminal**: plugging the external back
+  in forced a re-plan and both VMs came good (`resume: first frame presented 416.1s after the play
+  click`). `windows.rs:796` already carries the right instinct for the worker-gone case — "the
+  fresh worker re-announces whatever connectors the guest brings back" — and the restore path
+  needs the same: reconcile the table against what the restored guest actually lights, rather than
+  assuming continuity across the snapshot. The suite misses it because its suspend tests are
+  single-display with the primary on slot 0 throughout, so a RED test has to suspend with the
+  primary on a non-zero slot.
+  - **The host's display plan is not re-asserted onto the restored guest either.** After the
+    recovery each guest had exactly ONE connector (`Virtual-1` at 2560x1440) and the second
+    output's window was gone, while the host's display menu still showed that output enabled.
+    The second panel is never re-lit — the host's idea of which displays are on survived the
+    restore, but nothing pushes it to the fresh guest.
+  - **The absolute-pointer fit is stale across the slot change.** On the enhanced VM the guest's
+    cursor pinned to `x = 0` while the host sent x up to 1451 (782 px off), then wobbled as the
+    fit re-learned (offsets 29 → 64 → 214 → 782 px within five seconds). The guest reported its
+    monitor as 2048x1152 for a 2560x1440 mode (a 1.25 scale), so the fit and the mode changed
+    together. Likely a consequence of the assignment fault rather than a separate one; re-check
+    after fixing the reconciliation.
 
 - **NOTE 2026-08-15: a VM suspended before `1e6895b` cannot be resumed after it.** Every worker
   spawn now carries an extra virtio-serial port (`com.redhat.spice.0`, the clipboard's stock-tier
