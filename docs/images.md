@@ -48,12 +48,12 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 *link to this table* rather than restate numbers — a stale "mesa 25.3.6" once propagated into three
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
-guest with `rpm -q`. Last verified in a booted F44 enhanced guest 2026-08-16.
+guest with `rpm -q`. Last verified in a booted F44 enhanced guest 2026-08-23. The three F44 enhanced images carry `7.1.8-4` as a one-shot trial boot and still name `7.1.8-limina16k.3` as the permanent default; each promotes on its own next EFI boot to the desktop.
 
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F44 stock** (`*.raw`, `*.boot.raw`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-3` | 16 KiB | `26.1.6-1.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.7-3.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
 | **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.8-1` | 16 KiB | `26.1.6-1.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` | 16 KiB | `26.1.5-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` (stock) |
@@ -82,7 +82,15 @@ release's stock GNOME Shell (same `libmutter-NN` ABI).
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r15.tar.zst`** (r15, 2026-08-21: a host-side
+**Current payload: `payload/limina-guest-tools-f44-r16.tar.zst`** (r16, 2026-08-23: kernel
+`limina-kernel-16k-7.1.8-4` and mesa `26.1.7-3.limina` — the guest half of the video-import fix.
+drm/virtio now records `blob_mem` on a PRIME-imported dmabuf and gives the dma-buf GEM funcs
+`.open`/`.close`; the virgl winsys reports the blob kind on its cache-hit path and planar YUV is
+answered from the host caps instead of being hard-rejected. Without the matching host
+virglrenderer (`86741d53`) the payload alone changes nothing — see `docs/graphics.md` §3.2.
+Applied with the real `install-enhanced.sh` to all three F44 enhanced images
+(`.bak-pre-r16.raw` CoW backups), both agent hashes verified; each image owes the trial boot that
+promotes `7.1.8-limina16k.4` to permanent default. Previous: r15 (2026-08-21: a host-side
 repack of r14 carrying `limina-agent-session` 0.1.1 — the claim-phase reconnect now writes its
 HELLO before the `DisplayLayout` seed; the old order had the host drop the peer and the helper
 reconnect without backoff until the worker died of `EMFILE`, see `docs/hardening-backlog.md`
