@@ -9,6 +9,12 @@ appetite.
 Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, see below.
 
 ## Display / window
+- **The suspend/resume overlays exist only on the primary window; a secondary just freezes.**
+  Noticed on the rig 2026-08-22 while testing park/resume on two panels: the "Suspending…" scrim
+  and the "Resuming…" spinner are installed on the main window's content layer, so a guest
+  display on another panel simply stops updating with no indication of why. The overlay module
+  already takes the layer and view it decorates, so this is a matter of giving each secondary its
+  own instance and taking them all down together, not new machinery.
 - **A parked (or resuming) window grabs and blanks the pointer on every visit to its Space.**
   Measured 2026-08-22: three grab/release cycles in two minutes on each of two suspended VMs,
   one per Space visit — `pointer capture: taken — the guest gained the screen (fullscreen=true,
@@ -803,8 +809,9 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
 
 ## M9 snapshot hardening (from the 2026-07-18 transport-restore removal)
 
-- **An in-place resume comes back on slot 0, but the host keeps the panel→slot assignment it
-  suspended with — the window freezes on its last frame and "Resuming…" never comes down.**
+- **An in-place resume came back on slot 0 while the host kept the panel→slot assignment it
+  suspended with — the window froze on its last frame and "Resuming…" never came down. FIXED
+  2026-08-22.**
   Measured 2026-08-22 on two flat `--disk` VMs (F44 enhanced and F44 stock, 4-scanout pool,
   both reproducing identically). The trigger is the primary window showing a **non-zero** slot at
   suspend time, which is what any panel change before the suspend produces: here the external
@@ -824,8 +831,28 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   fresh worker re-announces whatever connectors the guest brings back" — and the restore path
   needs the same: reconcile the table against what the restored guest actually lights, rather than
   assuming continuity across the snapshot. The suite misses it because its suspend tests are
-  single-display with the primary on slot 0 throughout, so a RED test has to suspend with the
-  primary on a non-zero slot.
+  single-display with the primary on slot 0 throughout, so the RED test is at the table.
+
+  Two independent faults, fixed separately. **The arrangement is re-asserted onto a fresh
+  worker**: the table's connector beliefs describe a device, and a swap replaces the device
+  (`DisplayTable::reset_connectors_to_boot`), along with every identity, mode and position the
+  host remembers having sent — a worker just spawned has been told none of them. Held until the
+  new worker presents, because its display-control socket does not exist until the snapshot is
+  loaded and a batch sent before that is dropped while the table records it as said. **And the
+  overlay comes down on the epoch, not the frame count** (`resume_first_frame`): the dismissal
+  compared against the counter at the play click on the stated premise that it survives the swap,
+  which stopped being true when the swap began clearing the slots — so the fresh worker had to
+  out-present the whole suspended session first, which on an idle desktop is never.
+
+  Rig-confirmed 2026-08-22 on both shapes, reading the trace rather than only the window: two
+  panels lit, suspend and resume → `re-asserting the arrangement`, `guest display 1 appeared`,
+  first frame **5.5 s** after the click; and the original trigger — external switched off so the
+  built-in swallowed slot 1 — → the same re-assert, slot 1's ring back, first frame **6.9 s**.
+  Before the fix the same click took 416 s, and only because a panel was plugged in to force a
+  re-plan.
+  - The stale absolute-pointer fit did NOT recur across either run (one 8.1 px echo-lag warning,
+    no edge sticking), so it reads as a consequence of the assignment fault rather than its own.
+    Not proven — two runs, and the fit is re-learned from the guest's echo either way.
   - **The host's display plan is not re-asserted onto the restored guest either.** After the
     recovery each guest had exactly ONE connector (`Virtual-1` at 2560x1440) and the second
     output's window was gone, while the host's display menu still showed that output enabled.
