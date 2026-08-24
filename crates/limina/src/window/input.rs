@@ -649,8 +649,10 @@ pub struct InputState {
     /// When the hand last did so — a sweep waits for a gap in the user's own movement
     /// ([`super::absfit::PROBE_QUIET`]) rather than interrupting a stroke.
     hand_send_at: Cell<Option<std::time::Instant>>,
-    /// Keyboard remap policy (e.g. the Command/Option swap), applied to every key/modifier.
-    remap: KeyRemap,
+    /// Keyboard remap policy (modifier normalization + macOS's own modifier map), applied to
+    /// every key and modifier. A `Cell` because the Input menu can flip normalization while the
+    /// VM runs — see [`InputState::set_normalize`], which is the only thing allowed to write it.
+    remap: Cell<KeyRemap>,
     /// Pointer-capture mode: when set, the host cursor is grabbed (frozen and hidden) and the
     /// macOS-accelerated motion deltas integrate into a *virtual* cursor position
     /// ([`InputState::capture_pos`]) that drives the same absolute tablet as uncaptured mode —
@@ -936,7 +938,7 @@ impl InputState {
             primary_slot,
             pointer_slot,
             host_cursor,
-            remap,
+            remap: Cell::new(remap),
             captured,
             ungrab_armed: Cell::new(false),
             ungrab_withheld: RefCell::new(Vec::new()),
@@ -1408,7 +1410,7 @@ impl InputState {
             );
         }
         for &kc in &MODIFIER_KEYCODES {
-            if let Some(code) = macos_keycode_to_linux_remapped(kc, &self.remap) {
+            if let Some(code) = macos_keycode_to_linux_remapped(kc, &self.remap.get()) {
                 self.send_kbd(InputEvent::new(EV_KEY, code, 0));
                 self.send_kbd(InputEvent::syn());
             }
@@ -1437,7 +1439,7 @@ impl InputState {
     /// between consuming a key and handing it back to macOS: a key we cannot express in the
     /// guest is not ours to swallow.
     pub(crate) fn maps_to_guest(&self, macos_keycode: u16) -> bool {
-        macos_keycode_to_linux_remapped(macos_keycode, &self.remap).is_some()
+        macos_keycode_to_linux_remapped(macos_keycode, &self.remap.get()).is_some()
     }
 
     /// Whether *any* aux key is held. Lets the tap skip the NSEvent bridge entirely for the
@@ -1822,7 +1824,7 @@ impl InputState {
     }
 
     fn emit_key(&self, macos_keycode: u16, down: bool) {
-        if let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap) {
+        if let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap.get()) {
             self.send_kbd(InputEvent::new(EV_KEY, code, down as i32));
             self.send_kbd(InputEvent::syn());
             // Track the held key so a focus loss mid-press can release it (see `release_all_held`).
@@ -1832,6 +1834,35 @@ impl InputState {
                 self.pressed_keys.borrow_mut().remove(&macos_keycode);
             }
         }
+    }
+
+    /// Turn modifier normalization on or off while the VM is running (the Input menu).
+    ///
+    /// **Releases everything held first, through the map that pressed it.** A modifier's press
+    /// and its release are two separate emissions of `remap(keycode)`, so flipping the map
+    /// between them sends the guest a press of one evdev code and a release of another — and
+    /// the first one stays down forever. Draining before the flip is what makes the toggle safe
+    /// mid-chord; the pressed sets are re-learned from the next event either way, which is
+    /// exactly what `release_all_held` is already documented to rely on.
+    pub fn set_normalize(&self, on: bool) {
+        let current = self.remap.get();
+        if current.normalize == on {
+            return;
+        }
+        self.release_all_held("modifier normalization toggled");
+        self.remap.set(KeyRemap {
+            normalize: on,
+            ..current
+        });
+        log::info!(
+            "keyboard: modifier normalization {} — the Option position is {}",
+            if on { "on" } else { "off" },
+            if on {
+                "Super, Command is Alt"
+            } else {
+                "Alt, Command is Super (macOS's own mapping)"
+            },
+        );
     }
 
     /// Release every key we've forwarded as held — the modifiers (`pressed_mods`) and the
@@ -1865,13 +1896,13 @@ impl InputState {
             );
         }
         for &macos_keycode in mods.iter().chain(keys.iter()) {
-            if let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap) {
+            if let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap.get()) {
                 self.send_kbd(InputEvent::new(EV_KEY, code, 0));
                 self.send_kbd(InputEvent::syn());
             }
         }
-        // Aux keys are already evdev codes (no keycode map, no remap — the Cmd/Option swap
-        // has nothing to say about a media key).
+        // Aux keys are already evdev codes (no keycode map, no remap — normalization has
+        // nothing to say about a media key).
         for &code in aux.iter() {
             self.send_kbd(InputEvent::new(EV_KEY, code, 0));
             self.send_kbd(InputEvent::syn());
@@ -1894,10 +1925,10 @@ impl InputState {
     /// press+release tap per toggle — the guest toggles its own lock on press, so an edge would
     /// stick it (see [`ModEmit::Tap`]); they're not tracked in the pressed-set.
     fn emit_modifier(&self, macos_keycode: u16, raw_flags: u64) {
-        // The remap changes which evdev code we emit; `modifier_emit` stays keyed on the
-        // *physical* keycode (the macOS modifier-flag state is the physical key's). Caps Lock
+        // The remap changes which evdev code we emit; `modifier_emit` stays keyed on the keycode
+        // macOS DELIVERED, whose flag bits agree with it. Caps Lock
         // returns `None` here — it's a lock key handled by `sync_capslock`, not a held modifier.
-        let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap) else {
+        let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap.get()) else {
             return;
         };
         let was = self.pressed_mods.borrow().contains(&macos_keycode);
@@ -2014,7 +2045,9 @@ impl InputState {
     /// macOS sends no reconciling flagsChanged on refocus, so the next event here re-syncs.
     fn sync_capslock(&self, raw_flags: u64) {
         if self.caps.borrow_mut().observe(capslock_on(raw_flags)) {
-            if let Some(code) = macos_keycode_to_linux_remapped(MACOS_KC_CAPSLOCK, &self.remap) {
+            if let Some(code) =
+                macos_keycode_to_linux_remapped(MACOS_KC_CAPSLOCK, &self.remap.get())
+            {
                 self.send_kbd(InputEvent::new(EV_KEY, code, 1));
                 self.send_kbd(InputEvent::syn());
                 self.send_kbd(InputEvent::new(EV_KEY, code, 0));

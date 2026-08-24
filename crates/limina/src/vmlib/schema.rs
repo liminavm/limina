@@ -525,6 +525,10 @@ pub enum GpuMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InputCfg {
+    /// Modifier normalization: Control stays Control, the Option position becomes Meta/Super and
+    /// the Command position becomes Alt. The TOML key keeps its original name so existing
+    /// `vm.toml` files still parse; the *rule* is positional, which is why it looks like a swap.
+    /// Seeds the Input menu's switch, which can then move it for the session.
     pub swap_cmd_opt: bool,
 }
 

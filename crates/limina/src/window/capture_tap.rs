@@ -389,8 +389,10 @@ extern "C" fn tap_callback(
     // only in the state the chord itself created: a user who runs with `--no-soft-kbd-grab` and
     // no pointer grab keeps Ctrl+Option as an ordinary guest combo.
     //
-    // Why it is needed: with the Cmd/Option swap on (the default) the guest's Super IS macOS's
-    // Option, so "Ctrl held + Super" and the ungrab chord are the same physical gesture. Once the
+    // Why it is needed: with modifier normalization on (the default) and no host remapping, the
+    // guest's Super is macOS's Option, so "Ctrl held + Super" and the ungrab chord are the same
+    // physical gesture. (The chord is read in macOS's own space, so a host modifier remap moves
+    // both halves of it together and the reasoning survives.) Once the
     // first fire muted the soft grab, every later press with Control still held fell through to
     // the local monitor and reached the guest as a bare Super — GNOME's overview, twice over.
     // Reported 2026-08-09; evidence in `spikes/modifier-drift/`.

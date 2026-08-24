@@ -127,7 +127,17 @@ objc2-quartz-core = { version = "0.3", features = [
     "CATextLayer",
 ] }
 objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef", "IOSurfaceTypes", "libc"] }
-objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
+objc2-core-foundation = { version = "0.3", features = [
+    "CFBase",
+    # macOS's own Modifier Keys configuration (src/hostmods.rs). It lives in the ByHost
+    # global domain, which NSUserDefaults does not reach — only CFPreferences does, and the
+    # key list has to be enumerated because the keys are named per keyboard.
+    "CFPreferences",
+    "CFArray",
+    "CFDictionary",
+    "CFNumber",
+    "CFString",
+] }
 objc2-core-graphics = { version = "0.3", features = [
     # Aux/media key decode in the capture tap: the NX_SYSDEFINED event's key lives in
     # NSEvent.data1, reachable only by bridging the CGEvent through +[NSEvent eventWithCGEvent:].

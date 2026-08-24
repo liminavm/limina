@@ -629,6 +629,12 @@ thread_local! {
     /// each tick when deciding the presentation (no drain queue needed: a mode bool is not a
     /// connector cycle, the next tick's plan is where it takes effect).
     static FULLSCREEN_ALL_DISPLAYS: Cell<bool> = const { Cell::new(false) };
+
+    /// The Input menu's "Modifier normalization" switch. Seeded from the VM's configuration
+    /// (`[input] swap_cmd_opt`, default on) when the window comes up, then owned by the menu;
+    /// the render timer hands each change to the input translator, which drains the keyboard
+    /// through the old mapping before adopting the new one.
+    static MODIFIER_NORMALIZE: Cell<bool> = const { Cell::new(true) };
 }
 
 /// Find the menu row a clicked item names. The item's tag is the row's PANEL KEY (bit-cast),
@@ -686,12 +692,18 @@ define_class!(
         }
     }
 
-    // The Displays submenu is rebuilt every time it opens: its rows are the host's attached
-    // panels, which change while the app runs.
+    // Both dynamic submenus are rebuilt every time they open — Displays because its rows are
+    // the host's attached panels, Input because its checkmark can be moved from elsewhere. One
+    // delegate serves both, so it must ask WHICH menu opened; repopulating by title is the only
+    // identity an NSMenu hands its delegate here.
     unsafe impl NSMenuDelegate for VmMenuActions {
         #[unsafe(method(menuNeedsUpdate:))]
         fn menu_needs_update(&self, menu: &NSMenu) {
-            populate_displays_menu(menu, self.mtm(), self);
+            if menu.title().to_string() == "Input" {
+                populate_input_menu(menu, self.mtm(), self);
+            } else {
+                populate_displays_menu(menu, self.mtm(), self);
+            }
         }
     }
 
@@ -799,6 +811,14 @@ define_class!(
                 if on { "takes" } else { "leaves" }
             );
             FULLSCREEN_ALL_DISPLAYS.with(|f| f.set(on));
+        }
+
+        // Input ▸ Modifier normalization: whether the Mac's modifier row is normalized onto
+        // the PC row the guest expects. The render timer hands the flip to the translator.
+        #[unsafe(method(toggleModifierNormalization:))]
+        fn toggle_modifier_normalization(&self, _sender: &NSMenuItem) {
+            let on = !MODIFIER_NORMALIZE.with(|f| f.get());
+            MODIFIER_NORMALIZE.with(|f| f.set(on));
         }
 
         // Show in Finder: reveal the .liminavm bundle.
@@ -930,6 +950,40 @@ fn populate_displays_menu(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenu
         unsafe { item.setTarget(Some(actions)) };
         menu.addItem(&item);
     }
+}
+
+/// Build the "Input" menu.
+///
+/// One row for now. It is a menu rather than a checkbox somewhere in Settings because what it
+/// controls is felt continuously while typing, and the answer differs per guest — the row is
+/// where a hand already reaching for the menu bar can find it.
+fn build_input_menu(mtm: MainThreadMarker, actions: &VmMenuActions) -> Retained<NSMenu> {
+    let menu = NSMenu::new(mtm);
+    menu.setTitle(&NSString::from_str("Input"));
+    // Built on open so the checkmark tracks a flip made from anywhere else (the CLI's
+    // `--no-swap-cmd-opt` seeds it, and a future keybinding could move it too).
+    menu.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(actions)));
+    populate_input_menu(&menu, mtm, actions);
+    menu
+}
+
+fn populate_input_menu(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenuActions) {
+    menu.removeAllItems();
+    let item = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Modifier Normalization"),
+            Some(objc2::sel!(toggleModifierNormalization:)),
+            &NSString::from_str(""),
+        )
+    };
+    item.setState(if MODIFIER_NORMALIZE.with(|f| f.get()) {
+        objc2_app_kit::NSControlStateValueOn
+    } else {
+        objc2_app_kit::NSControlStateValueOff
+    });
+    unsafe { item.setTarget(Some(actions)) };
+    menu.addItem(&item);
 }
 
 /// Build the "Virtual Machine" verbs menu (shared between the menu bar and the Dock menu).
@@ -1784,6 +1838,9 @@ fn install_main_menu(mtm: MainThreadMarker, app: &NSApplication) {
     let displays_item = NSMenuItem::new(mtm);
     menubar.addItem(&displays_item);
     displays_item.setSubmenu(Some(&build_displays_menu(mtm, &actions)));
+    let input_item = NSMenuItem::new(mtm);
+    menubar.addItem(&input_item);
+    input_item.setSubmenu(Some(&build_input_menu(mtm, &actions)));
     app.setMainMenu(Some(&menubar));
     // NSMenuItem targets are weak; the actions object must live as long as the menu.
     std::mem::forget(actions);
@@ -1998,6 +2055,9 @@ pub fn run(
     // maintains it.
     let primary_slot: std::rc::Rc<Cell<u32>> = std::rc::Rc::new(Cell::new(0));
     let pointer_slot: std::rc::Rc<Cell<(usize, f64)>> = std::rc::Rc::new(Cell::new((0, 0.0)));
+    // The Input menu's switch starts wherever the configuration put it (`[input] swap_cmd_opt`
+    // / `--no-swap-cmd-opt`), so the menu shows the state the VM actually booted with.
+    MODIFIER_NORMALIZE.with(|f| f.set(remap.normalize));
     let input_state = std::rc::Rc::new(input::InputState::new(
         conn.clone(),
         host_cursor.clone(),
@@ -3095,6 +3155,10 @@ pub fn run(
         // ONE ownership snapshot for this tick — the same assembler as the tap's per-event one
         // (`InputState::window_facts`), so the tick and the tap can never answer an ownership
         // question differently.
+        // The Input menu writes only the switch; adopting it is the tick's job, because the
+        // translator has to drain the keyboard through the old mapping first and that must not
+        // happen inside a menu click. Idempotent, so an unchanged switch costs a comparison.
+        timer_input.set_normalize(MODIFIER_NORMALIZE.with(|f| f.get()));
         let facts = timer_input.window_facts(&timer_view);
         let pf = grab_policy::primary_facts(&facts);
         // App-level, like every other key question here: focus moving from the primary to a

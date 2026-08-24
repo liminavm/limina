@@ -94,3 +94,6 @@ spikes/balloon-retention-testbed/out-*/
 spikes/zink-shadow-recursion/shadow-recursion
 spikes/zink-shadow-recursion/*.log
 spikes/sme-mask/idreg-write-probe
+
+# Built by spikes/modifier-mapping/RESULTS.md — source is the probe, not the binary.
+spikes/modifier-mapping/probe

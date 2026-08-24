@@ -14,6 +14,8 @@ mod clipboard;
 mod control;
 mod fido;
 mod gateway;
+// macOS's own Modifier Keys configuration, which positional normalization must read past.
+mod hostmods;
 mod moc;
 mod sep;
 mod session;
@@ -369,17 +371,19 @@ struct Cli {
     #[arg(long)]
     vmm_bin: Option<PathBuf>,
 
-    /// Swap the Command and Option keys for the guest: Command acts as Alt, Option acts as
-    /// Meta/Super (the common ask for PC-style muscle memory). This is the **default**; the flag
-    /// is kept for back-compat / explicitness and to override an earlier --no-swap-cmd-opt.
-    /// Host-side keymap policy; the guest still owns the keyboard layout. Only meaningful with
-    /// --window.
+    /// Modifier normalization (menu: Input ▸ Modifier Normalization): map the Mac's modifier row
+    /// onto the PC row the guest expects — Control stays Control, the Option position becomes
+    /// Meta/Super and the Command position becomes Alt, which puts Alt under the thumb. Applied
+    /// to the PHYSICAL key, so macOS's own Modifier Keys remapping is read and undone first.
+    /// This is the **default**; the flag is kept for back-compat / explicitness and to override
+    /// an earlier --no-swap-cmd-opt. The guest still owns the keyboard layout. Only meaningful
+    /// with --window.
     #[arg(long, overrides_with = "no_swap_cmd_opt")]
     swap_cmd_opt: bool,
 
-    /// Keep the Mac-native Command/Option mapping instead of the default swap (Command stays
-    /// Meta/Super, Option stays Alt). The opt-out for --swap-cmd-opt; if both appear the last one
-    /// on the command line wins.
+    /// Leave the modifiers alone: the guest gets whatever macOS reports, host remapping included
+    /// (Command stays Meta/Super, Option stays Alt). The opt-out for --swap-cmd-opt; if both
+    /// appear the last one on the command line wins.
     #[arg(long, overrides_with = "swap_cmd_opt")]
     no_swap_cmd_opt: bool,
 
@@ -1089,9 +1093,14 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // anything below reads cli.snapshot_file.
     default_arm_flat_suspend(&mut cli)?;
     let cli = cli;
-    // Resolve the Command/Option swap policy up front (default ON; --no-swap-cmd-opt opts out)
-    // before any field of `cli` is moved out below, so the windowed path can use it freely.
-    let swap_cmd_opt = cli.swap_cmd_opt_enabled();
+    // Resolve modifier normalization up front (default ON; --no-swap-cmd-opt opts out) before any
+    // field of `cli` is moved out below, so the windowed path can use it freely. It is applied to
+    // the PHYSICAL key, so it needs macOS's own Modifier Keys configuration to read past — that is
+    // read once here, deliberately, so no held key can outlive the map that pressed it.
+    let remap = limina_input::keymap::KeyRemap {
+        normalize: cli.swap_cmd_opt_enabled(),
+        host: hostmods::read(),
+    };
     // HiDPI: whether a guest pixel is a device pixel or a point (default ON). Resolved here for
     // the same reason — the windowed path below moves fields out of `cli`.
     let hidpi = cli.hidpi_enabled();
@@ -1587,7 +1596,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             gateway,
             control,
             resize_socket,
-            remap: limina_input::keymap::KeyRemap { swap_cmd_opt },
+            remap,
             soft_kbd_grab: !cli.no_soft_kbd_grab,
             title: cli.window_title.clone().unwrap_or_else(|| "Limina".into()),
             mode: cli.display_resolution,

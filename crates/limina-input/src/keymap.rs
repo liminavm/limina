@@ -12,42 +12,161 @@
 
 use crate::constants::*;
 
+/// A modifier's HID usage (usage page 0x07 — the `Src`/`Dst` values macOS stores, minus the
+/// `0x7_0000_0000` page prefix). These six are the ones limina normalizes positionally.
+pub const HID_LEFT_CONTROL: u32 = 0xE0;
+/// See [`HID_LEFT_CONTROL`].
+pub const HID_LEFT_OPTION: u32 = 0xE2;
+/// See [`HID_LEFT_CONTROL`].
+pub const HID_LEFT_COMMAND: u32 = 0xE3;
+/// See [`HID_LEFT_CONTROL`].
+pub const HID_RIGHT_CONTROL: u32 = 0xE4;
+/// See [`HID_LEFT_CONTROL`].
+pub const HID_RIGHT_OPTION: u32 = 0xE6;
+/// See [`HID_LEFT_CONTROL`].
+pub const HID_RIGHT_COMMAND: u32 = 0xE7;
+
+/// The usages [`HostModifierMap`] will invert, in a fixed order it indexes by.
+///
+/// **Deliberately just these six.** macOS can also retarget Caps Lock, Shift and Globe, and
+/// inverting *those* would undo the user's own choice: Caps Lock → Control is the commonest
+/// macOS remap there is, and treating the resulting Control event as "physically Caps Lock"
+/// would send the guest a Caps Lock — silently defeating the remap its owner cares most about.
+/// A pair with either end outside this set is skipped and the event's identity stands as its
+/// physical identity.
+pub const REMAPPABLE_USAGES: [u32; 6] = [
+    HID_LEFT_CONTROL,
+    HID_LEFT_OPTION,
+    HID_LEFT_COMMAND,
+    HID_RIGHT_CONTROL,
+    HID_RIGHT_OPTION,
+    HID_RIGHT_COMMAND,
+];
+
+/// What **macOS itself** does to the modifier row (System Settings ▸ Keyboard ▸ Modifier Keys),
+/// inverted: for each usage an event can *arrive* as, the physical key that produces it.
+///
+/// This exists because macOS applies that remapping in the HID layer, **before any application
+/// sees the event** — measured 2026-08-24 with `spikes/modifier-mapping/probe.swift` against a
+/// live Control↔Command swap: pressing physical Control delivered `keyCode=0x37 kVK_Command`
+/// with the Command flag set. So an app cannot observe the physical key directly; it can only
+/// undo the mapping it reads back from the configuration.
+///
+/// `Default` is identity — the overwhelmingly common case of no remapping at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostModifierMap {
+    /// Parallel to [`REMAPPABLE_USAGES`]: `physical[i]` is the usage of the key the user
+    /// actually presses to produce `REMAPPABLE_USAGES[i]`.
+    physical: [u32; 6],
+}
+
+impl Default for HostModifierMap {
+    fn default() -> Self {
+        Self {
+            physical: REMAPPABLE_USAGES,
+        }
+    }
+}
+
+impl HostModifierMap {
+    /// Build from macOS's `(Src, Dst)` pairs — "pressing `Src` acts as `Dst`" — page prefix
+    /// already stripped. Pairs touching anything outside [`REMAPPABLE_USAGES`] are skipped
+    /// (see its docs), as are ones that would make two physical keys claim the same arrival.
+    pub fn from_pairs(pairs: impl IntoIterator<Item = (u32, u32)>) -> Self {
+        let mut map = Self::default();
+        for (src, dst) in pairs {
+            let (Some(_), Some(to)) = (Self::index_of(src), Self::index_of(dst)) else {
+                continue;
+            };
+            // Identity entries are written explicitly by the Settings pane; harmless either way.
+            map.physical[to] = src;
+        }
+        map
+    }
+
+    /// Is this the do-nothing map?
+    pub fn is_identity(&self) -> bool {
+        self.physical == REMAPPABLE_USAGES
+    }
+
+    fn index_of(usage: u32) -> Option<usize> {
+        REMAPPABLE_USAGES.iter().position(|&u| u == usage)
+    }
+
+    /// The physical key behind an arriving usage.
+    fn physical_for(&self, arriving: u32) -> u32 {
+        Self::index_of(arriving).map_or(arriving, |i| self.physical[i])
+    }
+}
+
 /// Keyboard remap **policy**, applied on top of the raw positional map. Host-side and
-/// per-config (a libkrun-free limina feature). Extensible; for now it carries the headline
-/// macOS-ergonomics knob, the Command/Option swap. `Default` = identity (no remap).
+/// per-config (a libkrun-free limina feature). `Default` = identity (no remap).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct KeyRemap {
-    /// Swap the Command and Option keys: Command then acts as Alt and Option acts as
-    /// Meta/Super (both left and right). The common ask from users coming off a PC layout —
-    /// it puts Alt under the thumb where Command sits. The guest still owns the keyboard
-    /// *layout* (dead keys/IME), so this only swaps the two modifiers' evdev identities.
-    pub swap_cmd_opt: bool,
+    /// Normalize the Mac's modifier row onto the PC row the guest expects: Control stays
+    /// Control, the **Option** position becomes Meta/Super and the **Command** position
+    /// becomes Alt (both sides).
+    ///
+    /// It is a *positional* rule, which is why it looks like a swap. A PC keyboard's bottom
+    /// row is Ctrl / Super / Alt and a Mac's is Ctrl / Option / Command, so Option sits where
+    /// Super does and Command sits where Alt does — and Alt lands under the thumb, which is
+    /// the whole point. The guest still owns the keyboard *layout* (dead keys/IME); this only
+    /// decides the two modifiers' evdev identities.
+    ///
+    /// Because it is positional, it is applied to the **physical** key ([`Self::host`]), not to
+    /// whatever macOS has decided that key currently means.
+    pub normalize: bool,
+    /// What macOS does to the modifier row, so [`Self::normalize`] can be undone back to the
+    /// physical key first. Ignored entirely when `normalize` is off — off means *leave the
+    /// modifiers alone*, and macOS's own answer is then the one that stands.
+    pub host: HostModifierMap,
 }
 
 impl KeyRemap {
-    /// Apply the remap policy to a raw Linux `KEY_*` code.
-    fn apply(&self, code: u16) -> u16 {
-        if self.swap_cmd_opt {
-            // Swap on the *output* modifier identity, so Command↔Alt and Option↔Meta hold
-            // regardless of which physical key produced META/ALT.
-            return match code {
-                KEY_LEFTMETA => KEY_LEFTALT,
-                KEY_LEFTALT => KEY_LEFTMETA,
-                KEY_RIGHTMETA => KEY_RIGHTALT,
-                KEY_RIGHTALT => KEY_RIGHTMETA,
-                other => other,
-            };
-        }
-        code
+    /// The evdev code for a modifier keycode under positional normalization, or `None` if this
+    /// keycode is not one of the six (Shift and Caps Lock normalize to themselves — the raw map
+    /// already has them right).
+    fn normalized_modifier(&self, macos_keycode: u16) -> Option<u16> {
+        let physical = self.host.physical_for(macos_modifier_usage(macos_keycode)?);
+        Some(match physical {
+            HID_LEFT_CONTROL => KEY_LEFTCTRL,
+            HID_RIGHT_CONTROL => KEY_RIGHTCTRL,
+            HID_LEFT_OPTION => KEY_LEFTMETA,
+            HID_RIGHT_OPTION => KEY_RIGHTMETA,
+            HID_LEFT_COMMAND => KEY_LEFTALT,
+            HID_RIGHT_COMMAND => KEY_RIGHTALT,
+            _ => return None,
+        })
     }
+}
+
+/// The HID usage a macOS modifier keycode carries, for the six keys normalization moves.
+fn macos_modifier_usage(macos_keycode: u16) -> Option<u32> {
+    Some(match macos_keycode {
+        0x3B => HID_LEFT_CONTROL,
+        0x3E => HID_RIGHT_CONTROL,
+        0x3A => HID_LEFT_OPTION,
+        0x3D => HID_RIGHT_OPTION,
+        0x37 => HID_LEFT_COMMAND,
+        0x36 => HID_RIGHT_COMMAND,
+        _ => return None,
+    })
 }
 
 /// Map a macOS keycode to a Linux `KEY_*`, applying the [`KeyRemap`] policy. **This is the
 /// function the input path calls**; [`macos_keycode_to_linux`] is the raw layer underneath.
-/// `modifier_is_down` stays keyed on the *physical* keycode (the swap changes only which
-/// evdev code we emit, not how we read the macOS modifier state).
+///
+/// `modifier_is_down` and [`reconcile_modifiers`] stay keyed on the keycode macOS *delivered*:
+/// the keycode and the flags arrive already agreeing with each other, so all the held-modifier
+/// bookkeeping is correct in macOS's own space. This function is the single seam where that
+/// space is translated into the guest's.
 pub fn macos_keycode_to_linux_remapped(keycode: u16, remap: &KeyRemap) -> Option<u16> {
-    macos_keycode_to_linux(keycode).map(|code| remap.apply(code))
+    if remap.normalize {
+        if let Some(code) = remap.normalized_modifier(keycode) {
+            return Some(code);
+        }
+    }
+    macos_keycode_to_linux(keycode)
 }
 
 /// Map a macOS virtual keycode to a Linux `KEY_*`, or `None` if limina doesn't handle it.
@@ -462,10 +581,23 @@ mod tests {
         assert!(reconcile_modifiers(caps_on, &believed(&[]), None).is_empty());
     }
 
+    /// The user's live macOS config on 2026-08-24, captured from
+    /// `defaults -currentHost read -g` (`com.apple.keyboard.modifiermapping.1452-834-0`) with
+    /// the `0x7_0000_0000` page prefix stripped: Control and Command swapped, both sides.
+    fn ctrl_cmd_swapped_host() -> HostModifierMap {
+        HostModifierMap::from_pairs([
+            (HID_RIGHT_COMMAND, HID_RIGHT_CONTROL),
+            (HID_LEFT_COMMAND, HID_LEFT_CONTROL),
+            (HID_LEFT_CONTROL, HID_LEFT_COMMAND),
+            (HID_RIGHT_CONTROL, HID_RIGHT_COMMAND),
+        ])
+    }
+
     #[test]
     fn identity_remap_matches_the_raw_map() {
         let id = KeyRemap::default();
-        assert!(!id.swap_cmd_opt);
+        assert!(!id.normalize);
+        assert!(id.host.is_identity());
         for kc in 0u16..=0x7f {
             assert_eq!(
                 macos_keycode_to_linux_remapped(kc, &id),
@@ -476,52 +608,149 @@ mod tests {
     }
 
     #[test]
-    fn swap_cmd_opt_exchanges_meta_and_alt_both_sides() {
-        let swap = KeyRemap { swap_cmd_opt: true };
-        // Command keys now act as Alt.
+    fn normalization_puts_super_on_option_and_alt_on_command() {
+        // The headline rule, with no host remapping in play.
+        let norm = KeyRemap {
+            normalize: true,
+            host: HostModifierMap::default(),
+        };
         assert_eq!(
-            macos_keycode_to_linux_remapped(L_CMD, &swap),
+            macos_keycode_to_linux_remapped(L_CMD, &norm),
             Some(KEY_LEFTALT)
         );
         assert_eq!(
-            macos_keycode_to_linux_remapped(R_CMD, &swap),
+            macos_keycode_to_linux_remapped(R_CMD, &norm),
             Some(KEY_RIGHTALT)
         );
-        // Option keys now act as Meta/Super.
         assert_eq!(
-            macos_keycode_to_linux_remapped(L_OPT, &swap),
+            macos_keycode_to_linux_remapped(L_OPT, &norm),
             Some(KEY_LEFTMETA)
         );
         assert_eq!(
-            macos_keycode_to_linux_remapped(R_OPT, &swap),
+            macos_keycode_to_linux_remapped(R_OPT, &norm),
             Some(KEY_RIGHTMETA)
+        );
+        // And Control is Control, which is the half people forget to check.
+        assert_eq!(
+            macos_keycode_to_linux_remapped(L_CTRL, &norm),
+            Some(KEY_LEFTCTRL)
         );
     }
 
     #[test]
-    fn swap_leaves_non_cmd_opt_keys_untouched() {
-        let swap = KeyRemap { swap_cmd_opt: true };
-        // A letter, a digit, Shift, and Control are unaffected by the Command/Option swap.
+    fn normalization_leaves_everything_but_the_six_alone() {
+        let norm = KeyRemap {
+            normalize: true,
+            host: ctrl_cmd_swapped_host(),
+        };
+        // A letter, a digit, Shift and Caps Lock are not part of the positional rule — and a
+        // host map that swaps Control must not reach them either.
         for kc in [
             0x00u16, /*A*/
             0x12,    /*1*/
             0x38,    /*L Shift*/
-            0x3B,    /*L Ctrl*/
+            0x39,    /*Caps*/
         ] {
             assert_eq!(
-                macos_keycode_to_linux_remapped(kc, &swap),
+                macos_keycode_to_linux_remapped(kc, &norm),
                 macos_keycode_to_linux(kc),
-                "swap must not touch keycode {kc:#x}"
+                "normalization must not touch keycode {kc:#x}"
             );
         }
     }
 
     #[test]
-    fn swap_is_an_involution() {
-        // Swapping the swapped output returns the original — sanity on the mapping pairs.
-        let swap = KeyRemap { swap_cmd_opt: true };
-        for code in [KEY_LEFTMETA, KEY_RIGHTMETA, KEY_LEFTALT, KEY_RIGHTALT] {
-            assert_eq!(swap.apply(swap.apply(code)), code);
+    fn a_host_swap_is_undone_so_the_physical_key_decides() {
+        // The 2026-08-24 case. macOS delivers physical Control AS Command (measured), so the
+        // old unconditional swap turned the user's Control key into Alt. Normalization has to
+        // reach past macOS's answer to the key the finger is on.
+        let norm = KeyRemap {
+            normalize: true,
+            host: ctrl_cmd_swapped_host(),
+        };
+        // Physical Control arrives as kVK_Command -> must still be Control in the guest.
+        assert_eq!(
+            macos_keycode_to_linux_remapped(L_CMD, &norm),
+            Some(KEY_LEFTCTRL),
+            "the key labelled Control must be Control however macOS reports it"
+        );
+        assert_eq!(
+            macos_keycode_to_linux_remapped(R_CMD, &norm),
+            Some(KEY_RIGHTCTRL)
+        );
+        // Physical Command arrives as kVK_Control -> Alt, per the positional rule.
+        assert_eq!(
+            macos_keycode_to_linux_remapped(L_CTRL, &norm),
+            Some(KEY_LEFTALT)
+        );
+        assert_eq!(
+            macos_keycode_to_linux_remapped(R_CTRL, &norm),
+            Some(KEY_RIGHTALT)
+        );
+        // Option was never remapped by the host, so it is untouched by the inversion.
+        assert_eq!(
+            macos_keycode_to_linux_remapped(L_OPT, &norm),
+            Some(KEY_LEFTMETA)
+        );
+    }
+
+    #[test]
+    fn normalization_off_passes_the_host_answer_straight_through() {
+        // "Leave the modifiers alone" means exactly that: macOS's answer stands, host remapping
+        // included. Physical Control acts as Command on the host, so the guest sees Meta.
+        let off = KeyRemap {
+            normalize: false,
+            host: ctrl_cmd_swapped_host(),
+        };
+        assert_eq!(
+            macos_keycode_to_linux_remapped(L_CMD, &off),
+            Some(KEY_LEFTMETA)
+        );
+        assert_eq!(
+            macos_keycode_to_linux_remapped(L_CTRL, &off),
+            Some(KEY_LEFTCTRL)
+        );
+        assert_eq!(
+            macos_keycode_to_linux_remapped(L_OPT, &off),
+            Some(KEY_LEFTALT)
+        );
+    }
+
+    #[test]
+    fn a_caps_lock_remap_is_left_for_macos_to_keep() {
+        // Caps Lock -> Control is the commonest macOS remap there is, and its owner wants the
+        // Control. Inverting it would hand the guest a Caps Lock instead.
+        const HID_CAPSLOCK: u32 = 0x39;
+        let host = HostModifierMap::from_pairs([(HID_CAPSLOCK, HID_LEFT_CONTROL)]);
+        assert!(
+            host.is_identity(),
+            "a pair reaching outside the six must be skipped entirely"
+        );
+        let norm = KeyRemap {
+            normalize: true,
+            host,
+        };
+        assert_eq!(
+            macos_keycode_to_linux_remapped(L_CTRL, &norm),
+            Some(KEY_LEFTCTRL),
+            "the Control the user asked for stays Control"
+        );
+    }
+
+    #[test]
+    fn normalization_is_a_bijection_over_the_six() {
+        // Every one of the six must land on a distinct evdev code, or two physical keys would
+        // collapse onto one guest modifier and a release could free the wrong one.
+        for host in [HostModifierMap::default(), ctrl_cmd_swapped_host()] {
+            let norm = KeyRemap {
+                normalize: true,
+                host,
+            };
+            let mut seen = std::collections::HashSet::new();
+            for kc in [L_CTRL, R_CTRL, L_OPT, R_OPT, L_CMD, R_CMD] {
+                let code = macos_keycode_to_linux_remapped(kc, &norm).expect("a modifier maps");
+                assert!(seen.insert(code), "keycode {kc:#x} collided on {code}");
+            }
         }
     }
 

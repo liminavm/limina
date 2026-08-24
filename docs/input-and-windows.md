@@ -442,6 +442,41 @@ load-bearing parts:
   makes a **tracking area mandatory** for it to see motion at all — `setAcceptsMouseMovedEvents` is
   necessary and not sufficient, because AppKit delivers `mouseMoved` to the key window.
 
+## 6b. The modifier row
+
+The Mac's bottom row is Ctrl / Option / Command and a PC's is Ctrl / Super / Alt, so **Option sits
+where Super does and Command sits where Alt does**. limina's *modifier normalization* is exactly
+that positional identification — Control stays Control, the Option position becomes Meta/Super, the
+Command position becomes Alt — which is what puts Alt under the thumb where a Linux desktop wants
+it. It is on by default (`[input] swap_cmd_opt` in `vm.toml`, `--no-swap-cmd-opt` to opt out) and
+lives on the menu bar under **Input ▸ Modifier Normalization**. Turned off, the guest gets whatever
+macOS reports and nothing is touched.
+
+Because the rule is positional it has to be applied to the **physical** key, and that is the whole
+difficulty: **macOS applies its own Modifier Keys remapping in the HID layer, before any
+application sees the event** — keycode *and* flags (measured, `spikes/modifier-mapping/`). So on a
+Mac with Control↔Command swapped in System Settings, an unconditional swap composed with the user's
+and delivered their Control key to the guest as Alt. Normalization therefore reads that
+configuration back (`crates/limina/src/hostmods.rs`, the ByHost global domain via `CFPreferences` —
+`NSUserDefaults` cannot see it) and inverts it to recover the physical key before mapping.
+
+- **Only six usages are ever inverted** (both Controls, Options and Commands). Caps Lock → Control
+  is the commonest macOS remap in existence and its owner wants the Control; inverting it would
+  hand the guest a Caps Lock instead. A pair reaching outside the six is skipped entirely.
+- **The inversion is the only thing that lives in physical space.** `modifier_is_down`,
+  `reconcile_modifiers` and the pressed-set all stay keyed on the keycode macOS delivered, whose
+  flag bits agree with it; `macos_keycode_to_linux_remapped` is the single seam where that space
+  becomes the guest's. Host-side chords (Cmd-Ctrl-G, the ungrab chord) also stay in macOS space —
+  the host's own remapping should govern host-side chrome.
+- **The mapping is per keyboard and an `NSEvent` does not say which keyboard typed.** Disagreeing
+  keyboards warn once and invert nothing, which is exactly the old behaviour. One case stays
+  undecidable: a PC keyboard whose owner swapped Cmd/Opt in macOS to restore the positional feel
+  gets that undone again in the guest.
+- **Flipping the switch mid-hold would wedge a modifier.** A press and its release are two separate
+  mappings of the same keycode, so a flip between them presses one evdev code and releases another.
+  `set_normalize` drains everything held through the *old* map first; the config is read once at
+  startup for the same reason.
+
 ## 7. Traps, each of which has cost a day
 
 - **A gate and its emitter must share one geometry.** Wherever they were computed separately, the

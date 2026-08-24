@@ -493,8 +493,8 @@ pub(crate) fn soft_keyboard_engaged(
 /// Whether the ungrab chord should still be recognized **after it has muted the soft keyboard
 /// grab** — that is, whether a Control still held from the last fire re-arms it.
 ///
-/// It used to go deaf the instant it fired, and with the Command/Option swap on (the default) that
-/// was a bug with teeth: the guest's Super *is* macOS's Option, so "Control held + Super" and the
+/// It used to go deaf the instant it fired, and with modifier normalization on (the default) that
+/// was a bug with teeth: the guest's Super is macOS's Option, so "Control held + Super" and the
 /// chord are one physical gesture. After the first fire, later presses fell through to the local
 /// monitor and reached the guest as a bare Super — GNOME's overview. Reported 2026-08-09; the
 /// trace is in `spikes/modifier-drift/`.
@@ -1345,7 +1345,7 @@ mod tests {
 
     #[test]
     fn the_chord_stays_armed_after_it_has_muted_the_soft_grab() {
-        // The reported bug: with the Cmd/Option swap on, "Ctrl held + Super" IS the chord, so the
+        // The reported bug: with normalization on, "Ctrl held + Super" IS the chord, so the
         // second press must be recognized rather than falling through to the guest as a bare
         // Super. Muted + key + on-screen is exactly the state the first fire leaves behind.
         assert!(chord_survives_mute(false, false, true, true, true));
