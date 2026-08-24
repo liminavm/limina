@@ -9,6 +9,17 @@ appetite.
 Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, see below.
 
 ## Display / window
+- **The guest-cursor echo check judges against the IDENTITY mapping, so with two displays it is
+  unreadable.** `echo::verdict` compares the guest's cursor plane to
+  `echo::expected_pixel(unit, scanout)` = `unit × scanout`, which is only the right expectation
+  when the absolute device's whole range covers one display. It does not: the range spans the
+  guest's entire desktop bounding box, so every slot's share is a *fraction* of it and the true
+  expectation is the fitted line `absfit` already holds (`pixel = a·u + b`). The failure is not
+  loud — the check either warns about an agreement it mis-computed, or (2026-08-24, chasing the
+  seam hold) falls into `Ok(None)` and goes silent in a way that reads exactly like "the guest
+  agrees". A diagnostic that lies in both directions is worse than none. Fix: expect the fitted
+  pixel where a fit exists, keep the identity fallback only for the unfitted case, and say which
+  one was used in the message. Diagnostic-only — nothing in the pointer path reads the verdict.
 - **The suspend overlay reached only the primary window; a secondary just froze — FIXED
   2026-08-22.** Noticed on the rig while testing park/resume on two panels: the snapshot save
   takes ~13 s, and for all of it a second panel simply stopped updating with nothing to say why.
