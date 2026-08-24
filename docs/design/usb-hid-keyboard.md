@@ -185,11 +185,23 @@ virtio device while it is bound, *only* the USB device while it is unbound
 16k kernel, so `rmmod` is not), and only virtio again after a rebind. Never both: the report-only
 descriptor keeps EFI ConIn off the gadget.
 
+Measured across a suspend/resume of that Debian guest: a restore starts a fresh worker, whose
+virtio keyboard is inactive, so keys ride the gadget through the restore window and the router
+flips back on its own once the guest re-negotiates `virtio_input` on the s2idle thaw — 1.4 s after
+the first frame. The handoff is not boot-specific.
+
+**A newer guest does not remove the need for this gadget.** The same VM upgraded to **Debian 14 /
+forky** (7.1.8+deb14.1-arm64) gains *suspend* — its kernel is past the v6.17 `virtinput_freeze`
+reset, see `docs/design/m9.2-quiesced-snapshot.md` — and changes nothing here: measured on its
+initramfs, ten xhci/usbhid/hid-generic entries and **zero** `virtio_input`. Which modules an
+initramfs carries is generator policy, not kernel version, so this is not a gap guests grow out of.
+
 Still owed:
 
-- **Snapshot/restore across the change:** the gadget takes a new port, so a capture from before it
-  existed must come back through the `model_id` reconcile as an honest unplug
-  (`usb/xhci/device.rs:534`).
+- **Snapshot/restore across the change:** the gadget takes a new port, so a capture from *before
+  it existed* must come back through the `model_id` reconcile as an honest unplug
+  (`usb/xhci/device.rs:534`). A resume of a snapshot taken *with* the gadget is clean (above);
+  this is the other direction.
 
 ## 9. Deferred
 

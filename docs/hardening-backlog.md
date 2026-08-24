@@ -851,26 +851,26 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
 
 ## M9 snapshot hardening (from the 2026-07-18 transport-restore removal)
 
-- **A stock Debian 13 guest does not reset its `virtio_input` devices on s2idle, so suspend still
-  fails there** (open, 2026-08-23). The guest genuinely suspends — virtio-blk, -net, -console,
-  -snd and -balloon all reach `INIT`, and gvproxy loses the route — but all three virtio-input
-  devices stay `DRIVER_OK` (`0xf`) past the 20 s quiesce deadline, so the bracket aborts and the
-  VM keeps running. Fedora (16k enhanced) quiesces its input devices in ~250 ms on the same host
-  build, so this is guest-side, not ours. Upstream `virtinput_freeze` does reset the device, and
-  suspend order should reach the input devices *first* (they are registered last, and dpm walks
-  the list from the tail), which makes the observed state harder to explain rather than easier —
-  a partial resume would have restored virtio-blk too, and nothing touched the VM during the
-  bracket.
+- ~~**A stock Debian 13 guest cannot suspend**~~ — **CLOSED 2026-08-23, both causes.** Two
+  independent faults, and neither was ours. **(a)** The quiesce oracle counted a device no driver
+  had ever taken as a holdout, so a guest without a driver for one of our devices could never be
+  observed to quiesce — fixed, it keys on `DRIVER_OK` now. **(b)** Before
+  `528d92bfc093 "virtio_input: Improve freeze handling"` (first released in **v6.17**),
+  `virtinput_freeze()` never reset the device, so the three virtio-input devices stayed
+  `DRIVER_OK` through an s2idle the rest of the guest completed. It was never backported to
+  6.12.y — that file is untouched on `linux-6.12.y` since 2024-07-08, branch tip 6.12.105 — so an
+  LTS guest does not grow into it.
 
-  This is the second of the two causes behind "Debian can't suspend"; the first — the quiesce
-  oracle counting a never-driven device as a holdout — is fixed. They are independent, so this one
-  still has to go before an encrypted-root Debian guest can suspend.
+  Measured 2026-08-23 on one VM before and after: Debian 13 (6.12.101) held out on
+  `virtio_i2c` at `1` plus all three inputs at `0xf` and aborted at the 20 s deadline; upgraded to
+  Debian 14 / forky (7.1.8) the same VM **quiesced in 252 ms** and snapshotted — under the *older*
+  `status != 0` oracle, so the guest drove every device to `INIT` with no help from (a). Resume
+  from that snapshot presented its first frame 1.6 s after the play click, and the key router
+  followed the guest back to virtio-input on its own after the s2idle thaw.
 
-  What it needs: a throwaway Debian install with guest access, then read the guest's own record
-  rather than reasoning from ours — `journalctl -b` across the attempt, `/sys/power/pm_test`,
-  whether `virtio_input` is a module or builtin there, and whether its `.freeze` is even compiled
-  in (`CONFIG_PM_SLEEP`). Host side, `RUST_LOG=vmm=info` adds the per-device
-  `snapshot: virtio device type=… device_status=…` lines, which the default `warn` hides.
+  The standing consequence is a support floor, recorded in
+  `docs/design/m9.2-quiesced-snapshot.md`: **suspend requires a guest kernel ≥ 6.17.** A guest
+  below it keeps running — the bracket wakes it and aborts — it just cannot be suspended.
 
 - **Host sleep across a panel change is clean, in both directions (measured 2026-08-22).** Two
   VMs (F44 enhanced and F44 stock), 4-scanout pool: sleep with two panels and wake with two;
