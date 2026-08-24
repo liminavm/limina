@@ -380,9 +380,12 @@ load-bearing parts:
   it as pressure sets the two pointer devices fighting. Two silences are deliberately different:
   a side with **nothing beyond it in the range** is the desktop's own outer edge and is left to
   the step's existing pin, while a **live display with no share fitted yet** holds every side at
-  once — it is somewhere, and we cannot say where. The far bound sits one guest pixel inside the
-  share, since a share's last value is the neighbour's column 0. Where every panel shows a
-  covered, agreeing window nothing is held at all, and tests pin that.
+  once — it is somewhere, and we cannot say where. Every held bound sits a small margin inside
+  the share on both ends, since a share's facing value is already the neighbour's column 0 —
+  and the margin is several scanout pixels, not one, because the guest places its cursor in
+  *logical* pixels: one scanout pixel was 0.8 of one on the 1.25-scaled BenQ and left the
+  hotspot on the neighbour's first column. Where every panel shows a covered, agreeing window
+  nothing is held at all, and tests pin that.
 - **A cursor that vanishes at a monitor's true edge is not a mis-placed pointer.** The plane's
   hotspot sits on the last scanline and the bitmap is clipped, so how much of it survives depends
   on the cursor's size on that display. The echo is what tells the two apart; the cursor is drawn

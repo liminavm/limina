@@ -55,6 +55,17 @@ use super::arrangement::{Edges, RangeRect};
 /// display's width and well over the fit's own noise.
 const RANGE_TOL: f64 = 64.0;
 
+/// How far short of a held seam the range stops, in the capture slot's own scanout pixels.
+///
+/// **Not one pixel.** The guest positions its cursor in *logical* pixels, which are larger
+/// than scanout pixels on a scaled display: one scanout pixel of inset was 0.8 logical pixels
+/// on the 1.25-scaled BenQ and left the hotspot on the neighbour's first column, exactly the
+/// symptom the hold exists to stop (measured 2026-08-24). Several pixels clear that, and clear
+/// the guest's own rounding with it, at no cost — a held seam is one the guest believes its
+/// desktop continues past, so there are no edge affordances there to lose, and the reserved
+/// strip buys a cursor the user can actually see.
+const SEAM_MARGIN_PX: f64 = 8.0;
+
 /// Host panel frames within this many points still abut — float drift, and the small height
 /// differences our own mode adjustments introduce.
 const POINT_TOL: f64 = 2.0;
@@ -157,28 +168,33 @@ impl Hold {
     /// release, and it reads the *fit*, which is clamped at the window's own content edge
     /// whatever the range does.
     ///
-    /// **A seam is held one guest pixel short of itself.** A share runs from the value that
-    /// lands on pixel 0 to the value that lands on pixel `w` — and on a neighbour that abuts
-    /// us, pixel `w` is *its* column 0. Stopping at the share's own far coordinate therefore
-    /// puts the hotspot on the display the user cannot see, one column past the picture they
-    /// are looking at (reported at the seam, 2026-08-24). Hold at the last pixel that is ours.
+    /// **A seam is held [`SEAM_MARGIN_PX`] short of itself, on every held side.** A share runs
+    /// from the value that lands on pixel 0 to the value that lands on pixel `w`, and on a
+    /// neighbour that abuts us, pixel `w` is *its* column 0 — so stopping at the share's own
+    /// facing coordinate puts the hotspot on the display the user cannot see.
     pub(crate) fn apply(&self, cand: (f64, f64)) -> (f64, f64) {
         let Some(r) = self.share else {
             return cand;
         };
-        let last = |extent: f64, px: f64| if px > 0.0 { extent / px } else { 0.0 };
-        let x = cand.0.clamp(
-            if self.held.left { r.x0 } else { f64::MIN },
-            if self.held.right {
-                r.x1 - last(r.width(), self.pixels.0)
+        let margin = |extent: f64, px: f64| {
+            if px > 0.0 {
+                SEAM_MARGIN_PX * extent / px
             } else {
-                f64::MAX
-            },
+                0.0
+            }
+        };
+        let (mx, my) = (
+            margin(r.width(), self.pixels.0),
+            margin(r.height(), self.pixels.1),
+        );
+        let x = cand.0.clamp(
+            if self.held.left { r.x0 + mx } else { f64::MIN },
+            if self.held.right { r.x1 - mx } else { f64::MAX },
         );
         let y = cand.1.clamp(
-            if self.held.top { r.y0 } else { f64::MIN },
+            if self.held.top { r.y0 + my } else { f64::MIN },
             if self.held.bottom {
-                r.y1 - last(r.height(), self.pixels.1)
+                r.y1 - my
             } else {
                 f64::MAX
             },
@@ -419,18 +435,18 @@ mod tests {
         }
     }
 
-    /// The reproduced bug: the neighbour's Space is swiped away, so the seam is held — and one
-    /// guest pixel short of itself, so the hotspot stays on the picture the user can see.
+    /// The reproduced bug: the neighbour's Space is swiped away, so the seam is held — and
+    /// short of itself, so the hotspot stays on the picture the user can see.
     #[test]
-    fn a_neighbour_the_hand_cannot_see_is_held_at_our_last_pixel() {
+    fn a_neighbour_the_hand_cannot_see_is_held_inside_our_own_share() {
         let mut slots = agreeing_pair();
         slots[1].covered = false;
         let h = Hold::of(&slots, 0, mid());
         assert!(h.held.right);
-        let one_px = 16000.0 / 2560.0;
+        let margin = 8.0 * 16000.0 / 2560.0;
         assert_eq!(
             h.apply((20000.0, RANGE / 2.0)),
-            (16000.0 - one_px, RANGE / 2.0)
+            (16000.0 - margin, RANGE / 2.0)
         );
     }
 
@@ -462,10 +478,10 @@ mod tests {
         );
         let h = Hold::of(&slots, 0, at);
         assert!(h.held.right, "the two disagree, so the seam is held");
-        let one_px = 10000.0 / 2560.0;
+        let margin = 8.0 * 10000.0 / 2560.0;
         assert_eq!(
             h.apply((12000.0, RANGE / 2.0)),
-            (10000.0 - one_px, RANGE / 2.0)
+            (10000.0 - margin, RANGE / 2.0)
         );
     }
 
@@ -480,11 +496,14 @@ mod tests {
         slots[1].share = None;
         let h = Hold::of(&slots, 0, mid());
         assert_eq!(h.held, Edges::ALL, "we cannot say which side it is on");
-        let one_px = 16000.0 / 2560.0;
+        let margin = 8.0 * 16000.0 / 2560.0;
         assert_eq!(
             h.apply((20000.0, RANGE / 2.0)),
-            (16000.0 - one_px, RANGE / 2.0)
+            (16000.0 - margin, RANGE / 2.0)
         );
+        // The margin is the same on the near side: `x0` is OUR pixel 0, so stopping exactly
+        // there rounds onto whatever is beyond it just as readily.
+        assert_eq!(h.apply((-500.0, RANGE / 2.0)).0, margin);
     }
 
     /// Our OWN share unknown is the one case with no answer: there is nothing to hold the
@@ -578,7 +597,7 @@ mod tests {
         assert!(h.held.bottom);
         assert_eq!(
             h.apply((RANGE / 2.0, 20000.0)).1,
-            16000.0 - 16000.0 / 1440.0
+            16000.0 - 8.0 * 16000.0 / 1440.0
         );
     }
 
@@ -657,14 +676,17 @@ mod tests {
         assert!(!h.held.left, "and nothing is left of the BenQ in the range");
 
         // The exact step that crossed in the trace: wire x walked 19124 -> 19488, past the
-        // built-in's share edge at 18848. It must stop one BenQ pixel short of the seam, so
-        // the hotspot is still on the picture the user is looking at.
+        // built-in's share edge at 18848. It must stop short of the seam by a margin the
+        // GUEST can resolve — it places its cursor in logical pixels, and the BenQ is scaled
+        // 1.25, so a scanout pixel of inset is 0.8 of one and rounds straight back onto the
+        // display the user cannot see. Judge it where the guest does.
         let held = h.apply((19488.0, 17411.0));
+        assert_eq!(held.0, seam - 8.0 * seam / 2560.0);
+        let logical = held.0 / RANGE * box_w;
         assert!(
-            held.0 < seam,
-            "the range must stop short of the hidden slot's share: {held:?}"
+            logical <= 2046.0,
+            "the hotspot must be a guest pixel or more inside the BenQ, not at {logical}"
         );
-        assert_eq!(held.0, seam - seam / 2560.0);
 
         // With the built-in's Space back the answer does not change — the two arrangements
         // still disagree, so the crossing is still refused rather than teleporting the hand
