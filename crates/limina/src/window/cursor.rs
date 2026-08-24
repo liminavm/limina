@@ -38,7 +38,7 @@ pub(crate) fn update_capture_cursor(
     shared: &Arc<Mutex<Shared>>,
     surface_map: &SurfaceMap,
     slot: usize,
-) {
+) -> LayerVerdict {
     use std::sync::atomic::Ordering;
     let hide = || {
         if !cursor_layer.isHidden() {
@@ -56,7 +56,7 @@ pub(crate) fn update_capture_cursor(
     };
     if !captured.load(Ordering::Acquire) {
         hide();
-        return;
+        return LayerVerdict::NotCaptured;
     }
     let (visible, cid, cw, ch, px, py, sw, sh) = {
         let s = shared.lock().unwrap();
@@ -72,11 +72,16 @@ pub(crate) fn update_capture_cursor(
             s.slots[slot].height,
         )
     };
-    let geom_ok = visible && sw > 0 && sh > 0 && cw > 0 && ch > 0;
-    let Some(cid) = cid.filter(|_| geom_ok) else {
+    let geom_ok = sw > 0 && sh > 0 && cw > 0 && ch > 0;
+    if !visible || !geom_ok || cid.is_none() {
         hide();
-        return;
-    };
+        return match (visible, geom_ok) {
+            (false, _) => LayerVerdict::GuestHidThisSlot,
+            (_, false) => LayerVerdict::NoGeometry,
+            _ => LayerVerdict::NoImage,
+        };
+    }
+    let cid = cid.expect("checked just above");
     let Some(surface) = surface_map
         .lock()
         .unwrap()
@@ -84,7 +89,7 @@ pub(crate) fn update_capture_cursor(
         .or_else(|| IOSurfaceLookup(cid))
     else {
         hide();
-        return;
+        return LayerVerdict::NoSurface;
     };
     // Parent (scanout) layer size in points; guest pixels scale into it — 1:1 in the steady state
     // (the window is sized to the guest resolution), stretched during a live resize.
@@ -119,6 +124,60 @@ pub(crate) fn update_capture_cursor(
         cursor_layer.setHidden(false);
         CATransaction::commit();
     }
+    LayerVerdict::Drawing
+}
+
+/// What one window's capture-cursor layer did this tick, and why — the input to
+/// [`undrawn_fault`]. Every variant but `Drawing` means the layer is hidden.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LayerVerdict {
+    Drawing,
+    /// Not captured: the host pointer wears the shape instead, so a hidden layer is correct.
+    NotCaptured,
+    /// The guest disabled its cursor plane on THIS slot — it is showing the cursor elsewhere,
+    /// or nowhere.
+    GuestHidThisSlot,
+    /// No scanout or no cursor size yet.
+    NoGeometry,
+    /// The guest never uploaded a cursor image for this slot.
+    NoImage,
+    /// An image id we cannot resolve to an IOSurface.
+    NoSurface,
+}
+
+/// The state that should be impossible: the pointer is captured, the guest plainly has a
+/// cursor, and the display the user is driving draws nothing.
+///
+/// Silent in every ordinary case — including the one that looks alarming and is not, a guest
+/// that has hidden its cursor everywhere (mouselook, a pointer-locked game). It fires on the
+/// shape of the 2026-08-24 dogfood report: the pointer moved and hot corners fired, but nothing
+/// was drawn, while the *uncaptured* path kept wearing a shape borrowed from another slot
+/// ([`shape_slot`]) and so looked perfectly healthy. Returns the reason, for a caller that logs
+/// it once per episode with the full per-slot state; `None` means nothing to say.
+pub(crate) fn undrawn_fault(
+    capture_slot: usize,
+    verdict: LayerVerdict,
+    visible: &[bool],
+) -> Option<String> {
+    if matches!(verdict, LayerVerdict::Drawing | LayerVerdict::NotCaptured) {
+        return None;
+    }
+    // The guest showing no cursor at all is the guest's business, not a fault.
+    let elsewhere: Vec<usize> = visible
+        .iter()
+        .enumerate()
+        .filter(|&(s, v)| *v && s != capture_slot)
+        .map(|(s, _)| s)
+        .collect();
+    if !visible.iter().any(|v| *v) {
+        return None;
+    }
+    Some(match verdict {
+        LayerVerdict::GuestHidThisSlot => format!(
+            "the guest has its cursor plane on {elsewhere:?}, not on the captured slot {capture_slot}"
+        ),
+        v => format!("slot {capture_slot} says it has a cursor and we drew none ({v:?})"),
+    })
 }
 
 /// The window-to-guest content scale the host pointer shape is built at: guest cursor
@@ -341,7 +400,62 @@ fn nscursor_from_context(
 
 #[cfg(test)]
 mod shape_slot_tests {
-    use super::shape_slot;
+    use super::{shape_slot, undrawn_fault, LayerVerdict};
+
+    /// The steady state says nothing at all: the layer is drawing.
+    #[test]
+    fn a_drawing_layer_is_not_a_fault() {
+        assert_eq!(
+            undrawn_fault(0, LayerVerdict::Drawing, &[true, false]),
+            None
+        );
+    }
+
+    /// Nor does an uncaptured pointer: the host cursor wears the shape, and the layer is
+    /// hidden on purpose.
+    #[test]
+    fn an_uncaptured_pointer_is_not_a_fault() {
+        assert_eq!(
+            undrawn_fault(0, LayerVerdict::NotCaptured, &[true, false]),
+            None
+        );
+    }
+
+    /// A guest that has hidden its cursor EVERYWHERE has hidden its cursor: mouselook, a
+    /// pointer-locked game. Drawing nothing is the correct answer, and this is the case that
+    /// would otherwise make the check noisy enough to be ignored.
+    #[test]
+    fn a_guest_that_hid_its_cursor_everywhere_is_not_a_fault() {
+        assert_eq!(
+            undrawn_fault(0, LayerVerdict::GuestHidThisSlot, &[false, false]),
+            None
+        );
+    }
+
+    /// The 2026-08-24 shape: the plane is on another slot, so the captured display draws
+    /// nothing while the worn shape borrows the good slot and looks healthy. The message must
+    /// name where the cursor actually went.
+    #[test]
+    fn the_plane_being_on_another_slot_is_the_fault_we_are_hunting() {
+        let why = undrawn_fault(0, LayerVerdict::GuestHidThisSlot, &[false, true])
+            .expect("the guest has a cursor, just not where we are captured");
+        assert!(why.contains('1'), "must name the slot that has it: {why}");
+        assert!(why.contains('0'), "and the slot we are captured on: {why}");
+    }
+
+    /// The other half: this slot claims a cursor and we still drew nothing. A different bug
+    /// with a different fix, so it must not be reported as the one above.
+    #[test]
+    fn a_slot_that_claims_a_cursor_and_draws_none_reports_its_own_gate() {
+        for v in [
+            LayerVerdict::NoImage,
+            LayerVerdict::NoGeometry,
+            LayerVerdict::NoSurface,
+        ] {
+            let why = undrawn_fault(0, v, &[true, false]).expect("this slot says it has one");
+            assert!(why.contains(&format!("{v:?}")), "must name the gate: {why}");
+        }
+    }
 
     #[test]
     fn the_pointers_own_slot_wins_when_it_shows_a_cursor() {

@@ -490,6 +490,12 @@ fn send_display_command(path: &Path, command: DisplayCommand) {
 /// process spawn silently supplies milliseconds. See `spikes/display-identity-hotplug/`.
 const CONNECTOR_DOWN_SETTLE: std::time::Duration = std::time::Duration::from_millis(60);
 
+/// How long the captured display must draw no cursor before it is worth saying so
+/// ([`cursor::undrawn_fault`]). Long enough that taking the grab, a fresh window and a slot
+/// waiting for its first cursor image all pass in silence; far short of the real fault, which
+/// stands until the guest re-uploads.
+const CURSOR_FAULT_SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Push a sequence of display commands **in order**, one connection each, serialized with every
 /// other sequence.
 ///
@@ -1957,6 +1963,11 @@ pub fn run(
     // leave the previous display's shape on.
     let last_cursor_gen = Cell::new((usize::MAX, 0u64));
     let built_cursor: Cell<Option<(u32, u32)>> = Cell::new(None);
+    // Since when the captured-cursor fault has stood, and whether this episode has been
+    // reported — so it is said once, and only after it has proved it is not a transient
+    // (`cursor::undrawn_fault`).
+    let cursor_fault_since: Cell<Option<std::time::Instant>> = Cell::new(None);
+    let cursor_fault_said = Cell::new(false);
     // The host pointer's guest-shape adoption, shared with the input monitor (which
     // tracks the pointer crossing the view boundary and asserts/clears the shape).
     let host_cursor = input::HostCursor::new();
@@ -3354,9 +3365,76 @@ pub fn run(
         // position (the host NSCursor is hidden then). Position moves every frame, so unlike
         // the shape this runs every tick, not gated on `cursor_gen`. Every window draws its
         // OWN slot, never the pointer's — see `GuestWindows::update_capture_cursors`.
-        timer_windows
-            .borrow()
-            .update_capture_cursors(&timer_captured, &shared, &timer_surface_map);
+        let layer = timer_windows.borrow().update_capture_cursors(
+            &timer_captured,
+            &shared,
+            &timer_surface_map,
+            cursor_slot,
+        );
+        // Quiet until the impossible happens: captured, the guest plainly has a cursor, and the
+        // display the user is driving draws none. Then say everything at once — which gate
+        // fired, and what last wrote each slot's flags — because this is rare, it self-heals
+        // the moment the guest re-uploads, and the report otherwise arrives with a log that
+        // cannot answer why (dogfood 2026-08-24). Logged on the transition only; the recovery
+        // closes the episode at `info` so its length is readable.
+        let fault = layer.and_then(|v| {
+            let s = shared.lock().unwrap();
+            let visible: Vec<bool> = s.slots.iter().map(|sl| sl.cursor.visible).collect();
+            cursor::undrawn_fault(cursor_slot, v, &visible).map(|why| {
+                let state: Vec<String> = s
+                    .slots
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, sl)| sl.width > 0 || sl.cursor.visible || sl.cursor.id.is_some())
+                    .map(|(i, sl)| {
+                        let c = sl.cursor;
+                        format!(
+                            "slot {i}: scanout {}x{} cursor visible={} id={:?} {}x{} at ({},{}) [{}]",
+                            sl.width,
+                            sl.height,
+                            c.visible,
+                            c.id,
+                            c.w,
+                            c.h,
+                            c.pos_x,
+                            c.pos_y,
+                            c.log.recent().join(" ")
+                        )
+                    })
+                    .collect();
+                format!("{why}; {}", state.join("; "))
+            })
+        });
+        match fault {
+            Some(why) => {
+                // A tick or two of nothing is ordinary — taking the grab, a slot whose first
+                // image has not landed — and a check that shouts at those gets ignored. Only a
+                // state that STANDS is the one worth reading; the real one stood until a
+                // modeset.
+                let since = match cursor_fault_since.get() {
+                    Some(t) => t,
+                    None => {
+                        let t = std::time::Instant::now();
+                        cursor_fault_since.set(Some(t));
+                        t
+                    }
+                };
+                if !cursor_fault_said.get() && since.elapsed() >= CURSOR_FAULT_SETTLE {
+                    log::warn!(
+                        "guest cursor: nothing has been drawn where the captured pointer is for {:.1}s — {why}",
+                        since.elapsed().as_secs_f64(),
+                    );
+                    cursor_fault_said.set(true);
+                }
+            }
+            None => {
+                if cursor_fault_said.get() {
+                    log::info!("guest cursor: drawing again on the captured slot {cursor_slot}");
+                }
+                cursor_fault_since.set(None);
+                cursor_fault_said.set(false);
+            }
+        }
 
         // PROBE (edge-trace only): can the macOS fullscreen menu-bar reveal be OBSERVED?
         // The band's stand-down currently fires on our own push gesture, macOS's reveal fires

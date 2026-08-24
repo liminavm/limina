@@ -270,8 +270,8 @@ impl GuestWindow {
         captured: &AtomicBool,
         shared: &Arc<Mutex<Shared>>,
         surface_map: &SurfaceMap,
-    ) {
-        super::cursor::update_capture_cursor(
+    ) -> super::cursor::LayerVerdict {
+        let verdict = super::cursor::update_capture_cursor(
             &self.cursor_layer,
             captured,
             shared,
@@ -287,6 +287,7 @@ impl GuestWindow {
                 slot,
             );
         }
+        verdict
     }
 
     /// Drop the listed guest-released surface ids from this window's frame cache. The

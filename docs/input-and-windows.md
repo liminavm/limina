@@ -218,6 +218,15 @@ the guess, on the wrong display.) Consequences that keep catching people:
   *host* pointer is answers a different question, and in capture mode it is frozen anyway.
 - The notch strip is a second window over the same layer bounds, so it needs its own copy of the
   cursor too, or the pointer vanishes on entering the housing band.
+- **The two presentations can disagree about which slot has the plane, and a captured pointer then
+  has nothing drawn under it.** The composited layer hides on its own slot's `visible == false`
+  while the worn shape takes whichever slot has a plane, so a stale per-slot flag is invisible
+  until someone is captured on that display. `cursor::undrawn_fault` is the standing check: the
+  tick asks the window showing the capture slot for a `LayerVerdict`, and a non-drawing verdict
+  that persists past `CURSOR_FAULT_SETTLE` while some slot *does* claim a cursor is one `warn`
+  with the whole per-slot state — scanout, visibility, image id, size, position, and each slot's
+  `CursorLog`, the last four writes that could have hidden it, with the timestamps. Everything
+  shorter than the settle is a transient and passes in silence; it never panics.
 - Capture runs through a session-level `CGEventTap` (needs Accessibility) *and* the local
   `NSEvent` monitor. **The two must map identically** — both call the one
   `InputState::captured_step_and_emit`; any new mapping must be shared rather than duplicated.

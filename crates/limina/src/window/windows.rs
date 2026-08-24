@@ -934,22 +934,34 @@ impl GuestWindows {
     /// was the previous shape, and in capture mode the host pointer is frozen and says nothing:
     /// it stayed pinned at slot 0 all session, so the primary window kept drawing a cursor the
     /// guest had moved elsewhere while the panel that really had it drew none.
+    ///
+    /// Returns what the window showing `watch` did, for the drawn-nothing check
+    /// ([`super::cursor::undrawn_fault`]); `None` when no window shows that slot.
     pub(crate) fn update_capture_cursors(
         &self,
         captured: &std::sync::atomic::AtomicBool,
         shared: &std::sync::Arc<std::sync::Mutex<Shared>>,
         surface_map: &SurfaceMap,
-    ) {
-        self.primary.core.composite_cursor(
-            self.primary.slot.get() as usize,
-            captured,
-            shared,
-            surface_map,
-        );
-        for (slot, w) in &self.secondaries {
-            w.core
-                .composite_cursor(*slot, captured, shared, surface_map);
+        watch: usize,
+    ) -> Option<super::cursor::LayerVerdict> {
+        let primary_slot = self.primary.slot.get() as usize;
+        let mut watched = None;
+        let v = self
+            .primary
+            .core
+            .composite_cursor(primary_slot, captured, shared, surface_map);
+        if primary_slot == watch {
+            watched = Some(v);
         }
+        for (slot, w) in &self.secondaries {
+            let v = w
+                .core
+                .composite_cursor(*slot, captured, shared, surface_map);
+            if *slot == watch {
+                watched = Some(v);
+            }
+        }
+        watched
     }
 
     /// Close every secondary window. The primary is never this collection's to close: on

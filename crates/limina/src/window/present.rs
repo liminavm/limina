@@ -438,6 +438,37 @@ pub struct SlotPresent {
 /// host one, which the guest tracks via absolute input. In **pointer-capture** mode that no
 /// longer holds (the host cursor is grabbed away from the guest position), so the image is
 /// composited at `pos_x`/`pos_y`.
+/// The last few things that changed one slot's cursor visibility, newest last.
+///
+/// Nothing reads this in the steady state. It exists because the flags that decide whether the
+/// captured cursor is drawn (`visible`, `id`, the slot's geometry) are written from four
+/// different guest messages, and when the layer goes silently blank the question is always
+/// *which of them last spoke* — a question a `warn`-level log cannot answer after the fact.
+/// `Copy` and fixed-size, because [`CursorState`] is copied out of the lock every tick.
+#[derive(Clone, Copy, Default)]
+pub struct CursorLog {
+    /// `(what, value, ms since start)`, oldest first once it has wrapped.
+    entries: [Option<(&'static str, u32, f64)>; CURSOR_LOG],
+    next: usize,
+}
+
+pub(crate) const CURSOR_LOG: usize = 4;
+
+impl CursorLog {
+    fn record(&mut self, what: &'static str, value: u32) {
+        self.entries[self.next] = Some((what, value, super::capture_tap::trace_ms()));
+        self.next = (self.next + 1) % CURSOR_LOG;
+    }
+
+    /// Oldest first, for a one-line rendering at the fault.
+    pub(crate) fn recent(&self) -> Vec<String> {
+        (0..CURSOR_LOG)
+            .filter_map(|i| self.entries[(self.next + i) % CURSOR_LOG])
+            .map(|(what, value, at)| format!("{what}={value}@{at:.0}ms"))
+            .collect()
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct CursorState {
     pub(crate) id: Option<u32>,
@@ -451,6 +482,8 @@ pub struct CursorState {
     pub(crate) pos_y: i32,
     /// Bumped on any shape/visibility change — the timer re-applies.
     pub(crate) gen: u64,
+    /// Who last changed the flags above ([`CursorLog`]).
+    pub(crate) log: CursorLog,
 }
 
 /// State shared between the control-channel reader thread, the worker monitor, and the
@@ -586,6 +619,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
                         slot.show_id = Some(id0);
                         slot.width = w;
                         slot.height = h;
+                        slot.cursor.log.record("scanout", w);
                         slot.gen += 1;
                         drop(s);
                         wake_main_apply();
@@ -615,6 +649,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
                         slot.width = 0;
                         slot.height = 0;
                         slot.gen += 1;
+                        slot.cursor.log.record("scanoutgone", 0);
                         drop(s);
                         wake_main_apply();
                     }
@@ -649,6 +684,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
                         c.hot_y = hy;
                         c.visible = true;
                         c.gen += 1;
+                        c.log.record("shape", id);
                         if super::capture_tap::edge_trace() {
                             eprintln!(
                                 "[CURSOR] t={:.1} slot={slot} shape id={id} {w}x{h} hot=({hx},{hy}) pos=({},{})",
@@ -692,6 +728,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
                         let c = &mut s.slots[slot].cursor;
                         c.visible = false;
                         c.gen += 1;
+                        c.log.record("hide", 0);
                         publish_echo(&s, slot);
                         drop(s);
                         if super::capture_tap::edge_trace() {
