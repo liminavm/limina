@@ -9,6 +9,22 @@ appetite.
 Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, see below.
 
 ## Display / window
+- **Nothing is drawn for the captured cursor until the guest re-uploads a cursor image.**
+  Reported on dogfood 2026-08-24, on a COLD-booted two-display session: the pointer moved, hot
+  corners fired, GNOME overview opened — and while captured nothing was drawn. `Ctrl-Alt-F1`/`F2`
+  fixed it permanently. The *uncaptured* path was wearing the guest's shape throughout, which is
+  what makes the report read as "captured mode is broken" and rules out "no cursor image exists".
+  The two paths ask different questions, deliberately (`window/cursor.rs`): the worn shape takes
+  **whichever slot has a plane** (`shape_slot`, itself the fix for an invisible *host* pointer on
+  2026-08-22), while the captured layer draws **each window's own slot** and hides on any of
+  three gates — `cursor.visible` false for that slot, zero geometry (`width`/`height`/`w`/`h`),
+  or no IOSurface for `cursor.id`. Which gate fired is not knowable from a `warn`-level log, and
+  guessing has already produced one wrong theory. Repro: park nothing, boot a two-display
+  enhanced guest with `LIMINA_EDGE_TRACE=1`, capture, and read the `[CURSOR]`/`[CURSORLAYER]`
+  lines — they name the slot, the shape id and every hide/show transition. Only then pick the
+  fix; the plausible ones (a per-slot `cursor.id` that a plane migration never refreshes, versus
+  a `visible` flag cleared by the `cursorhide` for the slot the cursor left) live behind
+  different gates and have different fixes.
 - **The guest-cursor echo check judges against the IDENTITY mapping, so with two displays it is
   unreadable.** `echo::verdict` compares the guest's cursor plane to
   `echo::expected_pixel(unit, scanout)` = `unit × scanout`, which is only the right expectation
