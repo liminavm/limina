@@ -9,22 +9,26 @@ appetite.
 Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, see below.
 
 ## Display / window
-- **Nothing is drawn for the captured cursor until the guest re-uploads a cursor image.**
-  Reported on dogfood 2026-08-24, on a COLD-booted two-display session: the pointer moved, hot
-  corners fired, GNOME overview opened — and while captured nothing was drawn. `Ctrl-Alt-F1`/`F2`
-  fixed it permanently. The *uncaptured* path was wearing the guest's shape throughout, which is
-  what makes the report read as "captured mode is broken" and rules out "no cursor image exists".
-  The two paths ask different questions, deliberately (`window/cursor.rs`): the worn shape takes
-  **whichever slot has a plane** (`shape_slot`, itself the fix for an invisible *host* pointer on
-  2026-08-22), while the captured layer draws **each window's own slot** and hides on any of
-  three gates — `cursor.visible` false for that slot, zero geometry (`width`/`height`/`w`/`h`),
-  or no IOSurface for `cursor.id`. Which gate fired is not knowable from a `warn`-level log, and
-  guessing has already produced one wrong theory. Repro: park nothing, boot a two-display
-  enhanced guest with `LIMINA_EDGE_TRACE=1`, capture, and read the `[CURSOR]`/`[CURSORLAYER]`
-  lines — they name the slot, the shape id and every hide/show transition. Only then pick the
-  fix; the plausible ones (a per-slot `cursor.id` that a plane migration never refreshes, versus
-  a `visible` flag cleared by the `cursorhide` for the slot the cursor left) live behind
-  different gates and have different fixes.
+- **The captured cursor can go undrawn on the display the user is looking at.** Dogfood
+  2026-08-24, cold-booted two-display session, **rare**: the pointer moved and GNOME overview
+  fired, but nothing was drawn while captured; `Ctrl-Alt-F1`/`F2` fixed it permanently, and the
+  *uncaptured* pointer wore the guest's shape throughout.
+  What the evidence already excludes. The IOSurface path: `building guest cursor from IOSurface
+  … failed` appears **0** times in that log, and the worn shape uses the same map and lookup.
+  A stale per-slot `cursor.id` across a plane migration: traced on a working two-display capture
+  (2026-08-24, stock guest), the guest sends `hide` for the old slot AND a fresh `shape id=` for
+  the new one on every crossing. And any momentary lookup miss: `update_capture_cursor` re-reads
+  the state every tick, so only *stored* state can persist a hide until a modeset.
+  What is left is the slot disagreement. The captured layer draws each window's OWN slot and
+  hides when that slot's `cursor.visible` is false — while the worn shape takes **whichever**
+  slot has a plane (`shape_slot`). So a guest whose cursor plane sits on the other CRTC leaves
+  the user's own window hidden and the worn pointer looking perfectly healthy, which is exactly
+  the report. That is not a hypothetical state: `shape_slot` exists because the guest's cursor
+  is on a different display from the host pointer while the absolute device's per-display shares
+  are still being learned — a fresh two-display boot, which is when this was seen. Confirm by
+  reading `[CURSOR] slot=N hide` against the capture slot at the moment of the report, then
+  decide whether the captured path owes the same tolerance `shape_slot` gives the worn one, or
+  whether the honest fix is upstream in the position.
 - **The guest-cursor echo check judges against the IDENTITY mapping, so with two displays it is
   unreadable.** `echo::verdict` compares the guest's cursor plane to
   `echo::expected_pixel(unit, scanout)` = `unit × scanout`, which is only the right expectation
