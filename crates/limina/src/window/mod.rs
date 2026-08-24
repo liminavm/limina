@@ -57,6 +57,7 @@ mod input;
 mod lifecycle;
 mod overlay;
 mod present;
+mod seams;
 mod warp;
 mod windows;
 

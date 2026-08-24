@@ -324,6 +324,35 @@ pub(crate) fn abs_position(slot: usize, u: f64, v: f64, abs_max: i32) -> Option<
     super::arrangement::abs_through_report(slot, u, v, abs_max)
 }
 
+/// Every live slot's share of the range, as far as the fitted lines know it — the seam rule's
+/// half of "which display is on the other side of this edge"
+/// ([`super::seams`]). A slot whose line is not fitted on both axes is absent: the honest
+/// answer there is "unknown", which the rule reads as an edge.
+pub(crate) fn shares(abs_max: f64) -> Vec<(usize, super::arrangement::RangeRect)> {
+    let sizes = super::echo::scanout_sizes();
+    let fits = FITS.lock().unwrap();
+    sizes
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, &(w, h))| {
+            if w == 0 || h == 0 {
+                return None;
+            }
+            let f = fits.get(slot)?;
+            let (lx, ly) = (f.x.line()?, f.y.line()?);
+            Some((
+                slot,
+                super::arrangement::RangeRect {
+                    x0: lx.unit(0.0)? * abs_max,
+                    y0: ly.unit(0.0)? * abs_max,
+                    x1: lx.unit(f64::from(w))? * abs_max,
+                    y1: ly.unit(f64::from(h))? * abs_max,
+                },
+            ))
+        })
+        .collect()
+}
+
 /// Which live slots still have no mapping — what a deliberate probe is for.
 ///
 /// Fewer than two live scanouts is never incomplete: one display's share IS the range, and

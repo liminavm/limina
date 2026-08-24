@@ -2544,6 +2544,17 @@ impl InputState {
                 )
             }
         };
+        // A seam the hand cannot follow is an edge: hold the range inside this slot's own
+        // share where the display on the other side is not one the user is looking at, or is
+        // not the same display the host panel beside us shows (`super::seams`). What the hold
+        // eats is charged to nobody — the guest's desktop really does continue there, so
+        // forwarding it as pressure would walk the guest's pointer onto the neighbour while
+        // the absolute device snapped it back. The push is answered in fit space instead, by
+        // the grab's own edge release, whose charge this clamp is what lets accumulate: before
+        // it, the guest crossed first and `follow_guest_echo` re-homed the fit out from under
+        // the press (2026-08-24).
+        let range =
+            super::seams::Hold::of(&self.seam_facts(primary_view), slot, range).apply(range);
         self.capture_range.set(Some(range));
         self.send_ptr(InputEvent::new(EV_ABS, ABS_X, range.0.round() as i32));
         self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, range.1.round() as i32));
@@ -2967,6 +2978,45 @@ impl InputState {
             });
         }
         out
+    }
+
+    /// The per-slot facts the seam rule reads ([`super::seams`]): each slot's share of the
+    /// device range, the host panel its window covers, and whether that window is a fullscreen
+    /// guest on the Space the user is actually looking at.
+    ///
+    /// The panel comes from the window's own screen rather than from the display table,
+    /// because the question is "what is the hand looking at on that panel" and the answer has
+    /// to agree with the window facts it is paired with.
+    fn seam_facts(&self, primary_view: &NSView) -> Vec<super::seams::SlotFacts> {
+        let shares = super::arrangement::range_shares(f64::from(ABS_MAX));
+        let panels = super::hostdisplay::active_displays();
+        let panel_of = |window: Option<&NSWindow>| {
+            let screen = window?.screen()?;
+            let id = super::hostdisplay::display_id_of(&screen);
+            let b = panels.iter().find(|(pid, _)| *pid == id)?.1;
+            Some(super::seams::PanelRect {
+                x0: b.origin.x,
+                y0: b.origin.y,
+                x1: b.origin.x + b.size.width,
+                y1: b.origin.y + b.size.height,
+            })
+        };
+        self.window_facts(primary_view)
+            .into_iter()
+            .map(|f| {
+                let window = if f.primary {
+                    primary_view.window()
+                } else {
+                    super::windows::window_of_slot(f.slot).map(|(w, _)| w)
+                };
+                super::seams::SlotFacts {
+                    slot: f.slot,
+                    share: shares.iter().find(|(s, _)| *s == f.slot).map(|(_, r)| *r),
+                    panel: panel_of(window.as_deref()),
+                    covered: f.fullscreen && f.on_active_space && f.has_screen,
+                }
+            })
+            .collect()
     }
 
     /// Whether `slot`'s window is on its panel's active Space — the captured stepper's

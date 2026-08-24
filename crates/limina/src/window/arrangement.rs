@@ -368,7 +368,7 @@ pub(crate) struct Edges {
 }
 
 impl Edges {
-    const ALL: Edges = Edges {
+    pub(crate) const ALL: Edges = Edges {
         left: true,
         right: true,
         top: true,
@@ -526,6 +526,17 @@ pub(crate) fn desktop_in_range(abs_max: f64) -> Option<Desktop> {
             })
             .collect(),
     ))
+}
+
+/// Every slot's share of the device range: the guest's own report where there is one, else
+/// the lines fitted from its cursor echo. The seam rule
+/// ([`super::seams::Hold`]) needs the shares whether or not an agent is running, and the stock
+/// tier only ever has the fitted half.
+pub(crate) fn range_shares(abs_max: f64) -> Vec<(usize, RangeRect)> {
+    match desktop_in_range(abs_max) {
+        Some(d) => d.rects,
+        None => super::absfit::shares(abs_max),
+    }
 }
 
 /// Which of this slot's edges face the outside of the guest's **desktop** at the point
