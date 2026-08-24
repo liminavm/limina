@@ -1,6 +1,7 @@
 # Guest images
 
-The source of truth for the Fedora guest disk images limina develops and tests against:
+The source of truth for the guest disk images limina develops and tests against (Fedora unless a
+section says otherwise):
 what each one is, which **tier** it exercises, whether it's pristine or modified, and how it's
 produced/refreshed. All images live in the repo root and are **gitignored** (`*.raw`, `*.raw.xz`)
 — they're large (10–22 GB real on disk) and reproducible, so they're never committed.
@@ -400,6 +401,29 @@ cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw
 software-2D floor pixel-verified 2026-06-20); running `make-accessible.sh` on it produces
 `accessible.raw`. `f44-edk2-build.raw` — **RETIRED 2026-06-25** (`images-staging-delete/`, expires
 2026-07-02): the EDK2 firmware build moved to the unified `limina-build` container image (below).
+
+### Debian — the stock encrypted-root guest
+
+| Image | Role |
+|---|---|
+| `Debian-testing.luks.raw` | **Stock-tier Debian, encrypted root.** The only guest we have with LVM-on-LUKS, which makes it the vehicle for the pre-driver keyboard window: its passphrase prompt runs in the initramfs, where no stock generator ships `virtio_input`, so it is a *hard* test of the USB HID keyboard gadget rather than a nuisance (`docs/design/usb-hid-keyboard.md`). Carries **no limina guest components** — it is the non-Fedora stock-baseline vehicle. |
+
+Installed 2026-08-23 from `debian-13.6.0-arm64-netinst`, then dist-upgraded trixie → **forky**
+(`testing`) the same day; running `7.1.8+deb14.1-arm64`. Access is `claude` / `claudiusrobotus`
+with passwordless sudo.
+
+- **It tracks `testing`, deliberately, and must not be moved back to stable.** Suspend needs a
+  guest kernel **≥ 6.17** for virtio-input's freeze to reset the device, and that fix was never
+  backported to 6.12.y — so Debian stable can never suspend
+  (`docs/design/m9.2-quiesced-snapshot.md`). `sources.list` points at `testing`/`testing-security`.
+- **Every cold boot stops at the LUKS prompt and a human has to type the passphrase** — we do not
+  hold it. Batch whatever you need per boot, and ask before rebooting.
+- A trixie→forky dist-upgrade needs `-o Dpkg::Options::=--force-overwrite` (files legitimately move
+  between packages across releases) and does **not** restart sshd; run it under `systemd-run` so it
+  survives losing the ssh session.
+- It ran as a managed VM at 6 vCPU / 8 GiB (`1024..8192` balloon, moderate reclaim), USB + battery
+  + FIDO + fingerprint, NAT, windowed — the settings to recreate if it is wrapped in a `.liminavm`
+  again. Boot it flat with `cargo xtask run --disk Debian-testing.luks.raw`.
 
 ## The unified build image (`limina-build:fc43`)
 
