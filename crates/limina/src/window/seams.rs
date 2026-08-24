@@ -78,6 +78,8 @@ pub(crate) struct SlotFacts {
     /// The window covering that panel is a fullscreen guest on the Space the user is looking
     /// at — the whole of "the hand can see this display".
     pub(crate) covered: bool,
+    /// This slot's scanout size in guest pixels, for the one-pixel inset a held seam needs.
+    pub(crate) pixels: (f64, f64),
 }
 
 /// Which side of a slot a question is about.
@@ -90,21 +92,25 @@ pub(crate) enum Side {
 }
 
 /// Where the captured range may go this step: the capture slot's own share, and which of its
-/// sides the pointer may leave.
+/// seams the pointer may not pass.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Hold {
     /// The capture slot's share, when it is known. `None` holds nothing.
     pub(crate) share: Option<RangeRect>,
-    /// `true` where the pointer may cross into the neighbour.
-    pub(crate) cross: Edges,
+    /// This slot's size in guest pixels — what one pixel of the share is worth, and so where
+    /// the last pixel the user can actually see begins.
+    pub(crate) pixels: (f64, f64),
+    /// `true` where a seam is held: there IS a display on the other side in the range, and it
+    /// is not one the hand can follow.
+    pub(crate) held: Edges,
 }
 
 impl Hold {
-    /// Nothing held — every side crossable, no share to hold at. What a slot with no known
-    /// share gets, and what a single-display session is.
+    /// Nothing held. What a slot with no known share gets.
     pub(crate) const OPEN: Hold = Hold {
         share: None,
-        cross: Edges::ALL,
+        pixels: (0.0, 0.0),
+        held: Edges::NONE,
     };
 
     /// The hold for `slot` with the range position at `at`.
@@ -117,47 +123,78 @@ impl Hold {
         };
         Hold {
             share: Some(share),
-            cross: Edges {
-                left: crossable(slots, own, at, Side::Left),
-                right: crossable(slots, own, at, Side::Right),
-                top: crossable(slots, own, at, Side::Top),
-                bottom: crossable(slots, own, at, Side::Bottom),
+            pixels: own.pixels,
+            held: Edges {
+                left: held(slots, own, at, Side::Left),
+                right: held(slots, own, at, Side::Right),
+                top: held(slots, own, at, Side::Top),
+                bottom: held(slots, own, at, Side::Bottom),
             },
         }
     }
 
-    /// Pull a candidate range position back inside the sides it may not leave.
+    /// Pull a candidate range position back inside the seams it may not pass.
     ///
     /// Silently: a seam is not a wall, and what it eats is charged to nobody (see the module
     /// note). The fullscreen grab's edge press is what turns a sustained push here into a
     /// release, and it reads the *fit*, which is clamped at the window's own content edge
     /// whatever the range does.
+    ///
+    /// **A seam is held one guest pixel short of itself.** A share runs from the value that
+    /// lands on pixel 0 to the value that lands on pixel `w` — and on a neighbour that abuts
+    /// us, pixel `w` is *its* column 0. Stopping at the share's own far coordinate therefore
+    /// puts the hotspot on the display the user cannot see, one column past the picture they
+    /// are looking at (reported at the seam, 2026-08-24). Hold at the last pixel that is ours.
     pub(crate) fn apply(&self, cand: (f64, f64)) -> (f64, f64) {
         let Some(r) = self.share else {
             return cand;
         };
+        let last = |extent: f64, px: f64| if px > 0.0 { extent / px } else { 0.0 };
         let x = cand.0.clamp(
-            if self.cross.left { f64::MIN } else { r.x0 },
-            if self.cross.right { f64::MAX } else { r.x1 },
+            if self.held.left { r.x0 } else { f64::MIN },
+            if self.held.right {
+                r.x1 - last(r.width(), self.pixels.0)
+            } else {
+                f64::MAX
+            },
         );
         let y = cand.1.clamp(
-            if self.cross.top { f64::MIN } else { r.y0 },
-            if self.cross.bottom { f64::MAX } else { r.y1 },
+            if self.held.top { r.y0 } else { f64::MIN },
+            if self.held.bottom {
+                r.y1 - last(r.height(), self.pixels.1)
+            } else {
+                f64::MAX
+            },
         );
         (x, y)
     }
 }
 
-/// May the pointer cross `own`'s `side`? Both neighbours must name the same slot, and it must
-/// be covered.
-fn crossable(slots: &[SlotFacts], own: &SlotFacts, at: (f64, f64), side: Side) -> bool {
-    let (Some(range), Some(host)) = (
-        range_neighbour(slots, own, at, side),
-        host_neighbour(slots, own, at, side),
-    ) else {
+/// Is `own`'s `side` a seam the pointer must be held at?
+///
+/// Only where the range really does continue past it. **A side with nothing beyond it in the
+/// range is the guest desktop's own outer edge and is not this module's business**: the
+/// step already pins there ([`super::fit::range_step`] against the desktop, or the range's
+/// ends), that pin is at a wall by construction, and tightening it by a fitted share's error
+/// would take the desktop's last column away from the user.
+fn held(slots: &[SlotFacts], own: &SlotFacts, at: (f64, f64), side: Side) -> bool {
+    let Some(beyond) = range_neighbour(slots, own, at, side) else {
         return false;
     };
-    range == host && slots.iter().any(|s| s.slot == range && s.covered)
+    !crossable(slots, own, at, side, beyond)
+}
+
+/// May the pointer cross into `beyond`? It must be the same slot the adjacent host panel is
+/// showing, and it must be covered.
+fn crossable(
+    slots: &[SlotFacts],
+    own: &SlotFacts,
+    at: (f64, f64),
+    side: Side,
+    beyond: usize,
+) -> bool {
+    host_neighbour(slots, own, at, side) == Some(beyond)
+        && slots.iter().any(|s| s.slot == beyond && s.covered)
 }
 
 /// The slot the *range* leads to past `side`, at the cross-axis position `at` names.
@@ -253,6 +290,9 @@ mod tests {
     use super::*;
 
     const RANGE: f64 = 32767.0;
+    /// The BenQ's width in guest pixels, so a one-pixel inset has a real size: 2560 px over a
+    /// share, i.e. the share's extent divided by 2560.
+    const PX: (f64, f64) = (2560.0, 1440.0);
 
     fn share(x0: f64, x1: f64) -> Option<RangeRect> {
         Some(RangeRect {
@@ -280,12 +320,14 @@ mod tests {
                 share: share(0.0, 16000.0),
                 panel: panel(0.0, 2560.0),
                 covered: true,
+                pixels: PX,
             },
             SlotFacts {
                 slot: 1,
                 share: share(16000.0, RANGE),
                 panel: panel(2560.0, 5584.0),
                 covered: true,
+                pixels: PX,
             },
         ]
     }
@@ -298,6 +340,7 @@ mod tests {
                 share: share(0.0, 10000.0),
                 panel: panel(0.0, 2560.0),
                 covered: true,
+                pixels: PX,
             },
             // Guest put slot 2 in the middle of the range; the host shows it on the RIGHT.
             SlotFacts {
@@ -305,12 +348,14 @@ mod tests {
                 share: share(10000.0, 21000.0),
                 panel: panel(5120.0, 7680.0),
                 covered: true,
+                pixels: PX,
             },
             SlotFacts {
                 slot: 1,
                 share: share(21000.0, RANGE),
                 panel: panel(2560.0, 5120.0),
                 covered: true,
+                pixels: PX,
             },
         ]
     }
@@ -319,76 +364,109 @@ mod tests {
         (8000.0, RANGE / 2.0)
     }
 
-    /// THE regression guard the user asked for: with every panel covered and the two
-    /// arrangements agreeing, this module must be invisible. Nothing new may be held, and no
-    /// side may become an edge — that is the shipped behaviour, and it is not what changed.
+    /// THE regression guard: with every panel covered and the two arrangements agreeing, this
+    /// module must be invisible. Nothing may be held, and no candidate may be moved — that is
+    /// the shipped behaviour, and it is not what changed.
     #[test]
     fn all_covered_and_agreeing_holds_nothing() {
         let slots = agreeing_pair();
         let h = Hold::of(&slots, 0, mid());
-        assert!(
-            h.cross.right,
-            "the seam to a covered neighbour is crossable"
-        );
+        assert_eq!(h.held, Edges::NONE, "no seam is held when all panels agree");
         let past = (20000.0, RANGE / 2.0);
         assert_eq!(h.apply(past), past, "a crossable seam must not clamp");
 
         // And from the other side, so this is not an artefact of being the first slot.
         let h = Hold::of(&slots, 1, (20000.0, RANGE / 2.0));
-        assert!(h.cross.left);
+        assert_eq!(h.held, Edges::NONE);
         assert_eq!(h.apply(mid()), mid());
     }
 
-    /// The reproduced bug: the neighbour's Space is swiped away, so the seam is an edge and
-    /// the range stops at this slot's own share.
+    /// The same, with a third covered panel: adding displays must not start holding seams.
     #[test]
-    fn a_neighbour_the_hand_cannot_see_is_an_edge() {
+    fn a_third_covered_panel_in_agreement_holds_nothing_either() {
+        let mut slots = disagreeing_trio();
+        // Put the host panels back in the range's own order, so the two agree.
+        slots[1].panel = panel(2560.0, 5120.0);
+        slots[2].panel = panel(5120.0, 7680.0);
+        for slot in [0usize, 1, 2] {
+            let at = match slot {
+                0 => (5000.0, RANGE / 2.0),
+                1 => (15000.0, RANGE / 2.0),
+                _ => (27000.0, RANGE / 2.0),
+            };
+            assert_eq!(
+                Hold::of(&slots, slot, at).held,
+                Edges::NONE,
+                "slot {slot} held a seam with every panel covered and in agreement"
+            );
+        }
+    }
+
+    /// The reproduced bug: the neighbour's Space is swiped away, so the seam is held — and one
+    /// guest pixel short of itself, so the hotspot stays on the picture the user can see.
+    #[test]
+    fn a_neighbour_the_hand_cannot_see_is_held_at_our_last_pixel() {
         let mut slots = agreeing_pair();
         slots[1].covered = false;
         let h = Hold::of(&slots, 0, mid());
-        assert!(!h.cross.right);
-        assert_eq!(h.apply((20000.0, RANGE / 2.0)), (16000.0, RANGE / 2.0));
+        assert!(h.held.right);
+        let one_px = 16000.0 / 2560.0;
+        assert_eq!(
+            h.apply((20000.0, RANGE / 2.0)),
+            (16000.0 - one_px, RANGE / 2.0)
+        );
     }
 
     /// A panel with no limina window at all is the same answer as a hidden one.
     #[test]
-    fn a_panel_with_no_window_is_an_edge() {
+    fn a_panel_with_no_window_is_held() {
         let mut slots = agreeing_pair();
         slots[1].panel = None;
         slots[1].covered = false;
-        let h = Hold::of(&slots, 0, mid());
-        assert!(!h.cross.right);
+        assert!(Hold::of(&slots, 0, mid()).held.right);
     }
 
     /// Host `A B C`, guest `A C B`, EVERY panel covered: coverage alone would cross A's right
     /// seam, and the pointer would land on the panel the host shows on the far right — a jump
     /// over B. The agreement test refuses it.
     #[test]
-    fn a_crossing_that_would_jump_a_panel_is_an_edge() {
+    fn a_crossing_that_would_jump_a_panel_is_held() {
         let slots = disagreeing_trio();
-        let h = Hold::of(&slots, 0, (5000.0, RANGE / 2.0));
+        let at = (5000.0, RANGE / 2.0);
         assert_eq!(
-            super::range_neighbour(&slots, &slots[0], (5000.0, RANGE / 2.0), Side::Right),
+            super::range_neighbour(&slots, &slots[0], at, Side::Right),
             Some(2),
             "the range leads to the slot the host shows on the far right"
         );
         assert_eq!(
-            super::host_neighbour(&slots, &slots[0], (5000.0, RANGE / 2.0), Side::Right),
+            super::host_neighbour(&slots, &slots[0], at, Side::Right),
             Some(1),
             "the host's own neighbour is the middle panel"
         );
-        assert!(!h.cross.right, "the two disagree, so it is an edge");
-        assert_eq!(h.apply((12000.0, RANGE / 2.0)), (10000.0, RANGE / 2.0));
+        let h = Hold::of(&slots, 0, at);
+        assert!(h.held.right, "the two disagree, so the seam is held");
+        let one_px = 10000.0 / 2560.0;
+        assert_eq!(
+            h.apply((12000.0, RANGE / 2.0)),
+            (10000.0 - one_px, RANGE / 2.0)
+        );
     }
 
-    /// The unknown answer is an edge: a neighbour whose share has not been fitted yet cannot
-    /// be named, so the crossing is refused rather than guessed.
+    /// The unknown answer is a held seam: a neighbour whose share has not been fitted yet
+    /// cannot be named, so the crossing is refused rather than guessed. It is still a seam —
+    /// the neighbour's own share names it — so this is not the outer-edge case below.
     #[test]
-    fn an_unfitted_neighbour_is_an_edge() {
+    fn an_unfitted_neighbour_is_held_by_the_neighbour_that_is_fitted() {
         let mut slots = agreeing_pair();
+        slots.push(SlotFacts {
+            slot: 2,
+            share: share(16000.0, RANGE),
+            panel: None,
+            covered: false,
+            pixels: PX,
+        });
         slots[1].share = None;
-        let h = Hold::of(&slots, 0, mid());
-        assert!(!h.cross.right);
+        assert!(Hold::of(&slots, 0, mid()).held.right);
     }
 
     /// Our OWN share unknown is the one case with no answer: there is nothing to hold the
@@ -402,14 +480,15 @@ mod tests {
         assert_eq!(h.apply((99999.0, 0.0)), (99999.0, 0.0));
     }
 
-    /// A real outer edge — nothing on the other side at all — is an edge here too, and the
-    /// clamp is what keeps the pointer on the desktop.
+    /// The guest desktop's own outer edge is NOT this module's business: nothing is beyond it
+    /// in the range, the step already pins there against a real wall, and tightening that pin
+    /// by a fitted share's error would cost the user the desktop's last column.
     #[test]
-    fn the_desktops_own_outer_edge_is_an_edge() {
+    fn the_desktops_own_outer_edge_is_left_to_the_step() {
         let slots = agreeing_pair();
         let h = Hold::of(&slots, 0, mid());
-        assert!(!h.cross.left, "nothing is left of the first display");
-        assert_eq!(h.apply((-500.0, RANGE / 2.0)), (0.0, RANGE / 2.0));
+        assert!(!h.held.left, "nothing is left of the first display");
+        assert_eq!(h.apply((-500.0, RANGE / 2.0)), (-500.0, RANGE / 2.0));
     }
 
     /// A neighbour dropped clear of this row is not on the other side of the seam *here*: the
@@ -417,16 +496,21 @@ mod tests {
     #[test]
     fn a_neighbour_that_does_not_span_this_row_is_not_a_neighbour() {
         let mut slots = agreeing_pair();
+        slots[1].covered = false;
         slots[1].share = Some(RangeRect {
             x0: 16000.0,
             y0: 25000.0,
             x1: RANGE,
             y1: RANGE,
         });
-        let h = Hold::of(&slots, 0, (8000.0, 5000.0));
-        assert!(!h.cross.right, "the neighbour is below this row");
-        let h = Hold::of(&slots, 0, (8000.0, 28000.0));
-        assert!(h.cross.right, "and beside it further down");
+        assert!(
+            !Hold::of(&slots, 0, (8000.0, 5000.0)).held.right,
+            "the neighbour is below this row, so this is the desktop's own edge"
+        );
+        assert!(
+            Hold::of(&slots, 0, (8000.0, 28000.0)).held.right,
+            "and beside it further down, where it must be held"
+        );
     }
 
     /// Vertical arrangements are the same question on the other axis.
@@ -449,6 +533,7 @@ mod tests {
                         y1: 1440.0,
                     }),
                     covered: true,
+                    pixels: PX,
                 },
                 SlotFacts {
                     slot: 1,
@@ -465,19 +550,34 @@ mod tests {
                         y1: 2880.0,
                     }),
                     covered,
+                    pixels: PX,
                 },
             ]
         };
-        assert!(
-            Hold::of(&stacked(true), 0, (RANGE / 2.0, 8000.0))
-                .cross
-                .bottom
+        let at = (RANGE / 2.0, 8000.0);
+        assert!(!Hold::of(&stacked(true), 0, at).held.bottom);
+        let h = Hold::of(&stacked(false), 0, at);
+        assert!(h.held.bottom);
+        assert_eq!(
+            h.apply((RANGE / 2.0, 20000.0)).1,
+            16000.0 - 16000.0 / 1440.0
         );
-        assert!(
-            !Hold::of(&stacked(false), 0, (RANGE / 2.0, 8000.0))
-                .cross
-                .bottom
-        );
+    }
+
+    /// Single display: nothing neighbours it on any side, so nothing is held and the range
+    /// keeps its own ends. Holding must never cost a one-display session anything.
+    #[test]
+    fn one_display_holds_nothing_at_all() {
+        let slots = vec![SlotFacts {
+            slot: 0,
+            share: share(0.0, RANGE),
+            panel: panel(0.0, 2560.0),
+            covered: true,
+            pixels: PX,
+        }];
+        let h = Hold::of(&slots, 0, mid());
+        assert_eq!(h.held, Edges::NONE);
+        assert_eq!(h.apply((RANGE, 0.0)), (RANGE, 0.0));
     }
 
     /// The incident this module was written for, in its own measured numbers (stock F44 guest,
@@ -487,21 +587,21 @@ mod tests {
     /// the guest crossed, the grab died against a window on no visible Space and the cursor
     /// snapped back to the park.
     ///
-    /// Both seams are edges here, and for different reasons: nothing is to the RIGHT on the
-    /// host at all, and the host's LEFT neighbour is a slot the range does not lead to. So the
-    /// captured pointer cannot leave the BenQ, which is correct — the way to the built-in is
-    /// the grab's release and a fresh grab over there.
+    /// The right seam is held whether or not that Space comes back, because the host has
+    /// nothing to the right at all: the way to the built-in is the grab's release and a fresh
+    /// grab over there.
     #[test]
     fn the_2026_08_24_teleport_cannot_happen_again() {
         let box_w = 3560.0;
         let range_x = |logical: f64| logical / box_w * RANGE;
+        let seam = range_x(2048.0);
         let slots = vec![
             SlotFacts {
                 slot: 0,
                 share: Some(RangeRect {
                     x0: 0.0,
                     y0: 0.0,
-                    x1: range_x(2048.0),
+                    x1: seam,
                     y1: RANGE,
                 }),
                 panel: Some(PanelRect {
@@ -511,11 +611,12 @@ mod tests {
                     y1: 1440.0,
                 }),
                 covered: true,
+                pixels: (2560.0, 1440.0),
             },
             SlotFacts {
                 slot: 1,
                 share: Some(RangeRect {
-                    x0: range_x(2048.0),
+                    x0: seam,
                     y0: 0.0,
                     x1: RANGE,
                     y1: 948.0 / 1152.0 * RANGE,
@@ -526,48 +627,34 @@ mod tests {
                     x1: 0.0,
                     y1: 1729.0,
                 }),
-                // The built-in's Space was swiped away. The assertions below hold either way,
-                // which is the point: the arrangements disagree, so neither seam is crossable.
+                // The built-in's Space was swiped away. The assertions hold either way, which
+                // is the point: the arrangements disagree, so the seam is held regardless.
                 covered: false,
+                pixels: (3024.0, 1896.0),
             },
         ];
         let at = (18000.0, 17411.0);
         let h = Hold::of(&slots, 0, at);
-        assert!(!h.cross.right, "no host panel is to the right of the BenQ");
-        assert!(
-            !h.cross.left,
-            "the host's left neighbour is not where the range leads"
-        );
+        assert!(h.held.right, "the built-in is not where the host shows it");
+        assert!(!h.held.left, "and nothing is left of the BenQ in the range");
+
         // The exact step that crossed in the trace: wire x walked 19124 -> 19488, past the
-        // built-in's share edge at 18848. It must stop at the BenQ's own.
+        // built-in's share edge at 18848. It must stop one BenQ pixel short of the seam, so
+        // the hotspot is still on the picture the user is looking at.
         let held = h.apply((19488.0, 17411.0));
         assert!(
-            held.0 <= range_x(2048.0) + 0.5,
-            "the range must not reach the hidden slot's share: {held:?}"
+            held.0 < seam,
+            "the range must stop short of the hidden slot's share: {held:?}"
         );
+        assert_eq!(held.0, seam - seam / 2560.0);
 
-        // And with the built-in's Space back, the answer does not change — the two
-        // arrangements still disagree, so the crossing is still refused rather than teleporting
-        // the hand from the BenQ's right edge onto a panel that is off to the left.
+        // With the built-in's Space back the answer does not change — the two arrangements
+        // still disagree, so the crossing is still refused rather than teleporting the hand
+        // from the BenQ's right edge onto a panel that is off to the left.
         let mut covered = slots.clone();
         covered[1].covered = true;
         let h = Hold::of(&covered, 0, at);
-        assert!(!h.cross.right);
-        assert!(!h.cross.left);
-    }
-
-    /// Single display: the share is the whole range, nothing neighbours it, and the clamp is a
-    /// no-op inside it. Holding must never cost a one-display session anything.
-    #[test]
-    fn one_display_is_held_by_its_own_extent_and_nothing_else() {
-        let slots = vec![SlotFacts {
-            slot: 0,
-            share: share(0.0, RANGE),
-            panel: panel(0.0, 2560.0),
-            covered: true,
-        }];
-        let h = Hold::of(&slots, 0, mid());
-        assert_eq!(h.apply(mid()), mid());
-        assert_eq!(h.apply((RANGE + 10.0, 0.0)), (RANGE, 0.0));
+        assert!(h.held.right);
+        assert!(!h.held.left);
     }
 }

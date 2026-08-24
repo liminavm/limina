@@ -374,7 +374,7 @@ impl Edges {
         top: true,
         bottom: true,
     };
-    const NONE: Edges = Edges {
+    pub(crate) const NONE: Edges = Edges {
         left: false,
         right: false,
         top: false,

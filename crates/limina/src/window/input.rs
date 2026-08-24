@@ -3001,6 +3001,7 @@ impl InputState {
                 y1: b.origin.y + b.size.height,
             })
         };
+        let sizes = super::echo::scanout_sizes();
         self.window_facts(primary_view)
             .into_iter()
             .map(|f| {
@@ -3009,11 +3010,13 @@ impl InputState {
                 } else {
                     super::windows::window_of_slot(f.slot).map(|(w, _)| w)
                 };
+                let px = sizes.get(f.slot).copied().unwrap_or((0, 0));
                 super::seams::SlotFacts {
                     slot: f.slot,
                     share: shares.iter().find(|(s, _)| *s == f.slot).map(|(_, r)| *r),
                     panel: panel_of(window.as_deref()),
                     covered: f.fullscreen && f.on_active_space && f.has_screen,
+                    pixels: (f64::from(px.0), f64::from(px.1)),
                 }
             })
             .collect()
