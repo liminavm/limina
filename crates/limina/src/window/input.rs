@@ -3001,22 +3001,28 @@ impl InputState {
                 y1: b.origin.y + b.size.height,
             })
         };
-        let sizes = super::echo::scanout_sizes();
-        self.window_facts(primary_view)
+        // Keyed on the LIVE scanouts, not on the windows: a display the guest is driving is one
+        // the range can lead to whether or not we have a window for it yet, and the seam rule's
+        // refusal of the unplaceable ([`super::seams::Hold::of`]) can only refuse what it is
+        // told about. A window whose scanout is dead is left out — nothing can cross into it.
+        let facts = self.window_facts(primary_view);
+        super::echo::scanout_sizes()
             .into_iter()
-            .map(|f| {
-                let window = if f.primary {
-                    primary_view.window()
-                } else {
-                    super::windows::window_of_slot(f.slot).map(|(w, _)| w)
+            .enumerate()
+            .filter(|&(_, (w, h))| w != 0 && h != 0)
+            .map(|(slot, (w, h))| {
+                let f = facts.iter().find(|f| f.slot == slot);
+                let window = match f {
+                    Some(f) if f.primary => primary_view.window(),
+                    Some(_) => super::windows::window_of_slot(slot).map(|(w, _)| w),
+                    None => None,
                 };
-                let px = sizes.get(f.slot).copied().unwrap_or((0, 0));
                 super::seams::SlotFacts {
-                    slot: f.slot,
-                    share: shares.iter().find(|(s, _)| *s == f.slot).map(|(_, r)| *r),
+                    slot,
+                    share: shares.iter().find(|(s, _)| *s == slot).map(|(_, r)| *r),
                     panel: panel_of(window.as_deref()),
-                    covered: f.fullscreen && f.on_active_space && f.has_screen,
-                    pixels: (f64::from(px.0), f64::from(px.1)),
+                    covered: f.is_some_and(|f| f.fullscreen && f.on_active_space && f.has_screen),
+                    pixels: (f64::from(w), f64::from(h)),
                 }
             })
             .collect()

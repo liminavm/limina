@@ -366,6 +366,23 @@ load-bearing parts:
   wrong. Asking instead whether the edge sits at a bounding-box coordinate calls every offset
   monitor's leading edges seams and silently drops the pressure they are owed — a wall the guest
   holds the pointer against that charges nothing.
+- **A seam the hand cannot follow is an edge** (`window/seams.rs`, pure `Hold`). Crossing a seam
+  is only right when the display on the other side is one the user is looking at, so a captured
+  step is held at the capture slot's own share unless **both** questions agree: the slot the
+  *range* leads to past that side is the same slot the adjacent *host panel* is showing, and that
+  slot is covered — fullscreen, on its panel's active Space, on a screen. Coverage alone is not
+  enough, because host and guest arrangements disagree routinely (nothing in the pointer path
+  relies on the relay — the shares are fitted from the echo, `absfit.rs`): with host panels
+  `A B C` and a guest ordering them `A C B`, asking about A's right side asks about B while the
+  range leads to C. Held, the seam becomes an ordinary release barrier and the edge press hands
+  the pointer out onto the panel beyond, which is what the user asked for; the eaten motion is
+  charged to nobody, because the guest's desktop really does continue past a seam and forwarding
+  it as pressure sets the two pointer devices fighting. Two silences are deliberately different:
+  a side with **nothing beyond it in the range** is the desktop's own outer edge and is left to
+  the step's existing pin, while a **live display with no share fitted yet** holds every side at
+  once — it is somewhere, and we cannot say where. The far bound sits one guest pixel inside the
+  share, since a share's last value is the neighbour's column 0. Where every panel shows a
+  covered, agreeing window nothing is held at all, and tests pin that.
 - **A cursor that vanishes at a monitor's true edge is not a mis-placed pointer.** The plane's
   hotspot sits on the last scanline and the bitmap is clipped, so how much of it survives depends
   on the cursor's size on that display. The echo is what tells the two apart; the cursor is drawn

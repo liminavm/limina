@@ -35,9 +35,12 @@
 //! **The unknown answer is an edge.** A neighbour we cannot name — no fit for it yet, no
 //! window, no panel — is refused. Resistance at a seam that should have been crossable is a
 //! recoverable surprise the user can fix by arranging the guest to match; a crossing onto a
-//! display that is not there is the bug this module exists to stop. (Our *own* share unknown
-//! is the one case with no answer at all: there is nothing to hold the range at, so the step
-//! keeps its old behaviour until the fit converges.)
+//! display that is not there is the bug this module exists to stop. A display we cannot place
+//! *at all* — live, but with no share fitted — is refused on every side at once, because
+//! "nothing beyond this side" and "something beyond it we cannot see yet" are the same
+//! silence, and only the first is safe to walk into. (Our *own* share unknown is the one case
+//! with no answer at all: there is nothing to hold the range at, so the step keeps its old
+//! behaviour until the fit converges.)
 //!
 //! **A held seam charges the guest nothing.** The eaten motion is dropped, not forwarded as
 //! edge pressure: the guest's desktop really does continue past a seam, so relative motion
@@ -121,6 +124,20 @@ impl Hold {
         let Some(share) = own.share else {
             return Hold::OPEN;
         };
+        // A live display whose share is not known yet is unknown territory in an unknown
+        // direction: it cannot be a neighbour of any side, so no side would be held, and the
+        // range would walk into whichever one it is really on. Hold everything until it can
+        // be placed.
+        if slots
+            .iter()
+            .any(|s| s.slot != own.slot && s.share.is_none())
+        {
+            return Hold {
+                share: Some(share),
+                pixels: own.pixels,
+                held: Edges::ALL,
+            };
+        }
         Hold {
             share: Some(share),
             pixels: own.pixels,
@@ -452,21 +469,22 @@ mod tests {
         );
     }
 
-    /// The unknown answer is a held seam: a neighbour whose share has not been fitted yet
-    /// cannot be named, so the crossing is refused rather than guessed. It is still a seam —
-    /// the neighbour's own share names it — so this is not the outer-edge case below.
+    /// A live display we cannot place at all holds EVERY seam. `None` beyond a side is two
+    /// different answers — "the desktop ends here" and "there is a display there whose line
+    /// has not converged" — and only the first is safe to walk into. A second panel connecting
+    /// drops every fit, and the deliberate sweep that recovers them waits for a quiet hand, so
+    /// a user pushing at the seam is exactly the user who waits longest for the answer.
     #[test]
-    fn an_unfitted_neighbour_is_held_by_the_neighbour_that_is_fitted() {
+    fn a_live_display_we_cannot_place_holds_every_seam() {
         let mut slots = agreeing_pair();
-        slots.push(SlotFacts {
-            slot: 2,
-            share: share(16000.0, RANGE),
-            panel: None,
-            covered: false,
-            pixels: PX,
-        });
         slots[1].share = None;
-        assert!(Hold::of(&slots, 0, mid()).held.right);
+        let h = Hold::of(&slots, 0, mid());
+        assert_eq!(h.held, Edges::ALL, "we cannot say which side it is on");
+        let one_px = 16000.0 / 2560.0;
+        assert_eq!(
+            h.apply((20000.0, RANGE / 2.0)),
+            (16000.0 - one_px, RANGE / 2.0)
+        );
     }
 
     /// Our OWN share unknown is the one case with no answer: there is nothing to hold the
