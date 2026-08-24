@@ -448,9 +448,11 @@ The Mac's bottom row is Ctrl / Option / Command and a PC's is Ctrl / Super / Alt
 where Super does and Command sits where Alt does**. limina's *modifier normalization* is exactly
 that positional identification — Control stays Control, the Option position becomes Meta/Super, the
 Command position becomes Alt — which is what puts Alt under the thumb where a Linux desktop wants
-it. It is on by default (`[input] swap_cmd_opt` in `vm.toml`, `--no-swap-cmd-opt` to opt out) and
-lives on the menu bar under **Input ▸ Modifier Normalization**. Turned off, the guest gets whatever
-macOS reports and nothing is touched.
+it. It is on by default (`[input] normalize_modifiers` in `vm.toml`, `--no-normalize-modifiers` to
+opt out) and lives on the menu bar under **Input ▸ Modifier Normalization**, which **persists per
+VM** in the machine-state file beside the display switches — the config is only the fallback for a
+VM whose menu has never been touched. Turned off, the guest gets whatever macOS reports and nothing
+is touched.
 
 Because the rule is positional it has to be applied to the **physical** key, and that is the whole
 difficulty: **macOS applies its own Modifier Keys remapping in the HID layer, before any

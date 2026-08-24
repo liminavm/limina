@@ -56,7 +56,7 @@ cargo xtask sign           # just re-codesign the worker (after a plain `cargo b
 ```sh
 cargo xtask run --disk <enhanced.raw>              # seated venus desktop in a window
 cargo xtask run --disk <enhanced.raw> --no-net --cpus 4 --ram-mib 4096
-cargo xtask run --disk <enhanced.raw> -- --swap-cmd-opt   # trailing flags go to `limina`
+cargo xtask run --disk <enhanced.raw> -- --no-normalize-modifiers  # trailing flags go to `limina`
 ```
 
 This is the **default boot: EFI + venus** — the guest's own installed kernel via our GOP

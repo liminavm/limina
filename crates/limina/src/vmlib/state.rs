@@ -45,6 +45,14 @@ pub struct VmState {
     /// what fullscreen means until the user asks for more.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fullscreen_all_displays: bool,
+    /// The Input menu's "Modifier Normalization" switch.
+    ///
+    /// `Option` rather than `bool` because its default is **on**, so absent has to mean "never
+    /// touched" and not "off" — a VM that has never seen the menu must keep taking its answer
+    /// from `[input] normalize_modifiers`. Once the menu moves it, this wins: the menu is the
+    /// later and more specific instruction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modifier_normalize: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -161,6 +169,16 @@ pub fn set_fullscreen_all_displays(path: &Path, on: bool) -> std::io::Result<()>
     save(path, &state)
 }
 
+/// Merge-save the modifier-normalization switch, leaving everything else alone.
+pub fn set_modifier_normalize(path: &Path, on: bool) -> std::io::Result<()> {
+    let mut state = load(path).unwrap_or_default();
+    if state.modifier_normalize == Some(on) {
+        return Ok(());
+    }
+    state.modifier_normalize = Some(on);
+    save(path, &state)
+}
+
 /// Atomic save (tmp + rename, the `VmBundle::save` pattern). Best-effort at the
 /// call sites — losing a window-placement save is not worth failing anything.
 pub fn save(path: &Path, state: &VmState) -> std::io::Result<()> {
@@ -203,6 +221,7 @@ mod tests {
             display_slots: vec![(0x1111, 0), (0x2222, 1)],
             display_disabled: Vec::new(),
             fullscreen_all_displays: true,
+            modifier_normalize: None,
         };
         save(&path, &state).unwrap();
         assert_eq!(load(&path), Some(state));
@@ -228,6 +247,7 @@ mod tests {
             display_slots: Vec::new(),
             display_disabled: Vec::new(),
             fullscreen_all_displays: false,
+            modifier_normalize: None,
         };
         save(&path, &state).expect("a top-bit identity key must be persistable");
         assert_eq!(load(&path), Some(state));
@@ -294,6 +314,7 @@ mod tests {
                 display_slots: Vec::new(),
                 display_disabled: Vec::new(),
                 fullscreen_all_displays: false,
+                modifier_normalize: None,
             },
         )
         .unwrap();
@@ -358,6 +379,26 @@ mod tests {
         let back = load(&path).unwrap();
         assert!(!back.fullscreen_all_displays, "off must persist as off");
         assert_eq!(back.display_slots, vec![(7, 1)]);
+    }
+
+    #[test]
+    fn the_modifier_normalization_switch_remembers_off_and_absence() {
+        // The switch defaults ON, so "absent" cannot mean "off" — absent has to stay absent, or
+        // a VM nobody has touched would come back with normalization disabled.
+        let dir = scratch("modnorm");
+        let path = dir.join("state.toml");
+        set_display_slots(&path, vec![(7, 1)]).unwrap();
+        assert_eq!(
+            load(&path).unwrap().modifier_normalize,
+            None,
+            "untouched must stay untouched, not become false"
+        );
+        set_modifier_normalize(&path, false).unwrap();
+        let back = load(&path).unwrap();
+        assert_eq!(back.modifier_normalize, Some(false), "off must persist");
+        assert_eq!(back.display_slots, vec![(7, 1)], "merged, not clobbered");
+        set_modifier_normalize(&path, true).unwrap();
+        assert_eq!(load(&path).unwrap().modifier_normalize, Some(true));
     }
 
     #[test]

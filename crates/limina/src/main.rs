@@ -375,17 +375,17 @@ struct Cli {
     /// onto the PC row the guest expects — Control stays Control, the Option position becomes
     /// Meta/Super and the Command position becomes Alt, which puts Alt under the thumb. Applied
     /// to the PHYSICAL key, so macOS's own Modifier Keys remapping is read and undone first.
-    /// This is the **default**; the flag is kept for back-compat / explicitness and to override
-    /// an earlier --no-swap-cmd-opt. The guest still owns the keyboard layout. Only meaningful
-    /// with --window.
-    #[arg(long, overrides_with = "no_swap_cmd_opt")]
-    swap_cmd_opt: bool,
+    /// This is the **default**; the flag is kept for explicitness and to override an earlier
+    /// --no-normalize-modifiers. The guest still owns the keyboard layout. Only
+    /// meaningful with --window.
+    #[arg(long, overrides_with = "no_normalize_modifiers")]
+    normalize_modifiers: bool,
 
     /// Leave the modifiers alone: the guest gets whatever macOS reports, host remapping included
-    /// (Command stays Meta/Super, Option stays Alt). The opt-out for --swap-cmd-opt; if both
-    /// appear the last one on the command line wins.
-    #[arg(long, overrides_with = "swap_cmd_opt")]
-    no_swap_cmd_opt: bool,
+    /// (Command stays Meta/Super, Option stays Alt). The opt-out for --normalize-modifiers; if
+    /// both appear the last one on the command line wins.
+    #[arg(long, overrides_with = "normalize_modifiers")]
+    no_normalize_modifiers: bool,
 
     /// Drive the guest at the host display's device pixels rather than its points, so a Retina
     /// panel renders at its native resolution and the guest picks a 2x scale. This is the
@@ -562,16 +562,16 @@ struct RmArgs {
 }
 
 impl Cli {
-    /// Effective Command/Option swap policy. Swap is **on by default** (PC-style muscle memory);
-    /// `--no-swap-cmd-opt` opts out. `--swap-cmd-opt` and `--no-swap-cmd-opt` override each other
-    /// (last-wins, via clap `overrides_with`), so this OR is exact for every combination and
-    /// reads both fields (no dead-code on the back-compat flag).
-    fn swap_cmd_opt_enabled(&self) -> bool {
-        self.swap_cmd_opt || !self.no_swap_cmd_opt
+    /// Effective modifier-normalization policy. **On by default**;
+    /// `--no-normalize-modifiers` opts out. The two flags override each other (last-wins, via
+    /// clap `overrides_with`), so this OR is exact for every combination and reads both fields
+    /// (no dead-code on the opt-out flag).
+    fn normalize_modifiers_enabled(&self) -> bool {
+        self.normalize_modifiers || !self.no_normalize_modifiers
     }
 
     /// Effective HiDPI policy. On by default; `--no-hidpi` opts out. Same last-wins
-    /// `overrides_with` pairing as the swap flags, so this OR is exact for every combination.
+    /// `overrides_with` pairing as the normalization flags, so this OR is exact everywhere.
     fn hidpi_enabled(&self) -> bool {
         self.hidpi || !self.no_hidpi
     }
@@ -1061,9 +1061,9 @@ fn cli_from_definition(
         shutdown_grace_secs: ov.shutdown_grace_secs.unwrap_or(20),
         vmm_bin: ov.vmm_bin.clone(),
         // Encode the definition's swap policy as the equivalent flag pair, so
-        // swap_cmd_opt_enabled() resolves to exactly cfg.input.swap_cmd_opt.
-        swap_cmd_opt: cfg.input.swap_cmd_opt,
-        no_swap_cmd_opt: !cfg.input.swap_cmd_opt,
+        // normalize_modifiers_enabled() resolves to exactly cfg.input.normalize_modifiers.
+        normalize_modifiers: cfg.input.normalize_modifiers,
+        no_normalize_modifiers: !cfg.input.normalize_modifiers,
         hidpi: cfg.display.hidpi,
         no_hidpi: !cfg.display.hidpi,
         notch: cfg.display.notch,
@@ -1093,12 +1093,12 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // anything below reads cli.snapshot_file.
     default_arm_flat_suspend(&mut cli)?;
     let cli = cli;
-    // Resolve modifier normalization up front (default ON; --no-swap-cmd-opt opts out) before any
+    // Resolve modifier normalization up front (default ON; --no-normalize-modifiers opts out) before any
     // field of `cli` is moved out below, so the windowed path can use it freely. It is applied to
     // the PHYSICAL key, so it needs macOS's own Modifier Keys configuration to read past — that is
     // read once here, deliberately, so no held key can outlive the map that pressed it.
     let remap = limina_input::keymap::KeyRemap {
-        normalize: cli.swap_cmd_opt_enabled(),
+        normalize: cli.normalize_modifiers_enabled(),
         host: hostmods::read(),
     };
     // HiDPI: whether a guest pixel is a device pixel or a point (default ON). Resolved here for
@@ -2526,16 +2526,16 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// Command/Option swap is ON by default; `--no-swap-cmd-opt` opts out; the two flags
-    /// override each other last-wins. Parses real argv through clap so the `overrides_with`
-    /// wiring is exercised (not just the boolean expression). `--window` is required for the
-    /// windowed path but the swap policy is parsed regardless, so we keep argv minimal.
+    /// Modifier normalization is ON by default; `--no-normalize-modifiers` opts out; the two
+    /// flags override each other last-wins. Parses real argv through clap so the
+    /// `overrides_with` wiring is exercised (not just the boolean expression). `--window` is
+    /// required for the windowed path but the policy parses regardless, so argv stays minimal.
     fn swap_for(extra: &[&str]) -> bool {
         let mut argv = vec!["limina"];
         argv.extend_from_slice(extra);
         Cli::try_parse_from(argv)
-            .expect("parsing swap flags")
-            .swap_cmd_opt_enabled()
+            .expect("parsing normalization flags")
+            .normalize_modifiers_enabled()
     }
 
     /// A definition + empty overrides must map onto the exact `Cli` the equivalent
@@ -2594,7 +2594,7 @@ mod tests {
                 edge_resistance: 0.0,
             },
             input: InputCfg {
-                swap_cmd_opt: false,
+                normalize_modifiers: false,
             },
             power: PowerCfg::default(),
         };
@@ -2638,7 +2638,10 @@ mod tests {
             cli.firmware,
             Some(PathBuf::from("/lib/Fedora.liminavm/fw/KRUN_EFI.fd"))
         );
-        assert!(!cli.swap_cmd_opt_enabled(), "definition's swap=false wins");
+        assert!(
+            !cli.normalize_modifiers_enabled(),
+            "the definition's normalize_modifiers=false wins"
+        );
         assert!(
             cli.usb_enabled(),
             "USB is on by default (like snd/battery) — the definition's default reaches the flag"
@@ -2883,24 +2886,23 @@ mod tests {
     }
 
     #[test]
-    fn cmd_opt_swap_is_default_on_with_opt_out() {
-        // Default: ON (the new behavior — PC-style muscle memory out of the box).
-        assert!(swap_for(&[]), "swap should default ON");
-        // Explicit on stays on (back-compat: the original --swap-cmd-opt still parses).
-        assert!(swap_for(&["--swap-cmd-opt"]));
+    fn modifier_normalization_is_default_on_with_opt_out() {
+        // Default: ON (PC-style muscle memory out of the box).
+        assert!(swap_for(&[]), "normalization should default ON");
+        assert!(swap_for(&["--normalize-modifiers"]));
         // Opt-out turns it off.
         assert!(
-            !swap_for(&["--no-swap-cmd-opt"]),
-            "--no-swap-cmd-opt should disable"
+            !swap_for(&["--no-normalize-modifiers"]),
+            "--no-normalize-modifiers should disable"
         );
         // Both given → last one on the line wins (clap overrides_with).
         assert!(
-            !swap_for(&["--swap-cmd-opt", "--no-swap-cmd-opt"]),
+            !swap_for(&["--normalize-modifiers", "--no-normalize-modifiers"]),
             "last flag (--no) wins"
         );
         assert!(
-            swap_for(&["--no-swap-cmd-opt", "--swap-cmd-opt"]),
-            "last flag (--swap) wins"
+            swap_for(&["--no-normalize-modifiers", "--normalize-modifiers"]),
+            "last flag (--normalize) wins"
         );
     }
 

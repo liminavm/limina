@@ -99,7 +99,7 @@ NET_FLAG=--net
 SHARE_FLAGS=()
 [ -n "${LIMINA_SHARE:-}" ] && SHARE_FLAGS=(--share "$LIMINA_SHARE")
 # LIMINA_EXTRA_ARGS=<flags> passes arbitrary extra limina flags through (e.g.
-# --swap-cmd-opt for the M8 keymap test). Word-split intentionally.
+# --no-normalize-modifiers for the M8 keymap test). Word-split intentionally.
 EXTRA_ARGS=()
 [ -n "${LIMINA_EXTRA_ARGS:-}" ] && read -ra EXTRA_ARGS <<<"$LIMINA_EXTRA_ARGS"
 target/debug/limina --vmm-bin target/debug/limina-vmm \

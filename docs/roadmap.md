@@ -909,8 +909,10 @@ Parallels replacement: fullscreen, keymap remap, multi-display, system-combo cap
      `CGDisplayCapture` exclusive mode still optional/deferred.
    - ~~**Keymap remap (Command/Option swap):**~~ **DONE** — host-side `KeyRemap` policy over the
      positional kVK_* → KEY_* table; guest owns the layout so dead keys/IME work natively. **Now ON
-     by default** (PC-style muscle memory out of the box); `--no-swap-cmd-opt` opts out, the original
-     `--swap-cmd-opt` is kept (back-compat, last-wins). Fully customizable keybindings beyond the
+     by default** (PC-style muscle memory out of the box); `--no-normalize-modifiers` opts out,
+     last-wins with `--normalize-modifiers`.
+     Renamed and made positional 2026-08-24 — it reads macOS's own modifier remapping and inverts
+     it, so the rule lands on the physical key. Fully customizable keybindings beyond the
      swap still ahead.
    - ~~**System-combo capture (Cmd-Tab/Cmd-Space/Ctrl-arrows):**~~ **DONE (keyboard)** — the capture
      CGEventTap consumes keyDown/keyUp/flagsChanged while captured and forwards them to the guest,

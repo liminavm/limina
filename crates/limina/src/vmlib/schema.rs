@@ -526,15 +526,18 @@ pub enum GpuMode {
 #[serde(default)]
 pub struct InputCfg {
     /// Modifier normalization: Control stays Control, the Option position becomes Meta/Super and
-    /// the Command position becomes Alt. The TOML key keeps its original name so existing
-    /// `vm.toml` files still parse; the *rule* is positional, which is why it looks like a swap.
-    /// Seeds the Input menu's switch, which can then move it for the session.
-    pub swap_cmd_opt: bool,
+    /// the Command position becomes Alt. Positional, which is why it looks like a swap.
+    ///
+    /// Seeds the Input menu's switch; once the menu moves it, the per-VM machine state carries
+    /// the answer and this becomes the fallback for a VM that has never been touched.
+    pub normalize_modifiers: bool,
 }
 
 impl Default for InputCfg {
     fn default() -> Self {
-        Self { swap_cmd_opt: true }
+        Self {
+            normalize_modifiers: true,
+        }
     }
 }
 
@@ -748,7 +751,7 @@ mod tests {
         assert_eq!(back.networks[0].ssh_port, 0);
         assert!(back.display.window);
         assert_eq!(back.display.resolution, DisplayResolution::Host);
-        assert!(back.input.swap_cmd_opt);
+        assert!(back.input.normalize_modifiers);
     }
 
     #[test]

@@ -102,7 +102,7 @@ enum Cmd {
         /// Guest RAM in MiB (default: the boot script's 8192).
         #[arg(long)]
         ram_mib: Option<u32>,
-        /// Extra flags forwarded to `limina` (e.g. `--swap-cmd-opt`).
+        /// Extra flags forwarded to `limina` (e.g. `--no-normalize-modifiers`).
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
     },

@@ -110,7 +110,7 @@ resolution = "host"             # host (match the window's screen; the DEFAULT) 
                                 # — see docs/design/display-modes.md
 
 [input]
-swap_cmd_opt = true             # the shipped default; false = --no-swap-cmd-opt
+normalize_modifiers = true      # the shipped default; false = --no-normalize-modifiers
 
 [guest]                         # written by install-guest-tools / read for the manifest check
 tools_version = "7.1.2"

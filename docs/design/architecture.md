@@ -414,7 +414,7 @@ dpi         = 220
 refresh_hz  = 60
 
 [input]
-swap_cmd_option = true              # Command<->Option remap [04]
+normalize_modifiers = true          # Mac modifier row -> PC row [04]
 capture_system_combos = false      # CGEventTap toggle (needs Accessibility) [04]
 [input.keybindings]                 # custom kVK_* -> KEY_* overrides
 

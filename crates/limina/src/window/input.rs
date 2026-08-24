@@ -152,7 +152,7 @@ pub enum HostShortcut {
 
 /// Recognize a host shortcut from a key-down's macOS keycode + raw `modifierFlags` bitmask,
 /// or `None` if the key should go to the guest. Uses the **device-independent class** flag
-/// bits, so it's independent of left/right *and* of `--swap-cmd-opt` (the swap changes only
+/// bits, so it's independent of left/right *and* of modifier normalization (which changes only
 /// which evdev code we emit to the guest, never the macOS modifier state read here). All
 /// shortcuts require EXACTLY Command+Control (no Option/Shift) so richer combos still reach
 /// the guest.

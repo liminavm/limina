@@ -55,8 +55,9 @@ modifiers never got the equivalent.
 
 ## Fault B — the user's "Ctrl + Super" *is* the ungrab chord, physically
 
-The Command/Option swap is **on by default** (`swap_cmd_opt_enabled()` = `swap || !no_swap`, both
-false → true), so the guest's Super is macOS's **left Option**. The ungrab chord is **Ctrl+Option**.
+Modifier normalization is **on by default** (`normalize_modifiers_enabled()` = `on || !off`, both
+false → true), so on a Mac whose modifier
+row macOS itself has not remapped, the guest's Super is macOS's **left Option**. The ungrab chord is **Ctrl+Option**.
 Holding Ctrl and pressing Super is therefore the literal ungrab gesture as far as the tap is
 concerned, and the trace shows it firing on the *first* press of every cycle:
 

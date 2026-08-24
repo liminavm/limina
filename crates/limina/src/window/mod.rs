@@ -400,6 +400,14 @@ fn save_fullscreen_all(path: Option<&Path>, on: bool) {
     }
 }
 
+/// The Input menu's modifier-normalization switch, saved beside the display state.
+fn save_modifier_normalize(path: Option<&Path>, on: bool) {
+    let Some(path) = path else { return };
+    if let Err(e) = crate::vmlib::state::set_modifier_normalize(path, on) {
+        log::warn!("modifier-normalization save failed: {e}");
+    }
+}
+
 /// The set of displays the user has switched off, saved beside the assignment.
 fn save_display_disabled(path: Option<&Path>, disabled: Vec<u64>) {
     let Some(path) = path else { return };
@@ -631,9 +639,10 @@ thread_local! {
     static FULLSCREEN_ALL_DISPLAYS: Cell<bool> = const { Cell::new(false) };
 
     /// The Input menu's "Modifier normalization" switch. Seeded from the VM's configuration
-    /// (`[input] swap_cmd_opt`, default on) when the window comes up, then owned by the menu;
-    /// the render timer hands each change to the input translator, which drains the keyboard
-    /// through the old mapping before adopting the new one.
+    /// (`[input] normalize_modifiers`, default on) when the window comes up, then overridden by
+    /// a remembered menu choice from the per-VM state. The render timer hands each change to the
+    /// input translator — which drains the keyboard through the old mapping before adopting the
+    /// new one — and persists it beside the display switches.
     static MODIFIER_NORMALIZE: Cell<bool> = const { Cell::new(true) };
 }
 
@@ -960,8 +969,8 @@ fn populate_displays_menu(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenu
 fn build_input_menu(mtm: MainThreadMarker, actions: &VmMenuActions) -> Retained<NSMenu> {
     let menu = NSMenu::new(mtm);
     menu.setTitle(&NSString::from_str("Input"));
-    // Built on open so the checkmark tracks a flip made from anywhere else (the CLI's
-    // `--no-swap-cmd-opt` seeds it, and a future keybinding could move it too).
+    // Built on open so the checkmark tracks a flip made from anywhere else (the config seeds it,
+    // the saved state can override it, and a future keybinding could move it too).
     menu.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(actions)));
     populate_input_menu(&menu, mtm, actions);
     menu
@@ -2055,8 +2064,9 @@ pub fn run(
     // maintains it.
     let primary_slot: std::rc::Rc<Cell<u32>> = std::rc::Rc::new(Cell::new(0));
     let pointer_slot: std::rc::Rc<Cell<(usize, f64)>> = std::rc::Rc::new(Cell::new((0, 0.0)));
-    // The Input menu's switch starts wherever the configuration put it (`[input] swap_cmd_opt`
-    // / `--no-swap-cmd-opt`), so the menu shows the state the VM actually booted with.
+    // The Input menu's switch starts wherever the configuration put it (`[input]
+    // normalize_modifiers` / `--no-normalize-modifiers`). A remembered menu choice overrides it
+    // further down, once the per-VM state is loaded.
     MODIFIER_NORMALIZE.with(|f| f.set(remap.normalize));
     let input_state = std::rc::Rc::new(input::InputState::new(
         conn.clone(),
@@ -2269,6 +2279,11 @@ pub fn run(
             // Before the timer's first tick: a start_fullscreen restore reaches the
             // presentation decision on tick one, and it must see the remembered switch.
             FULLSCREEN_ALL_DISPLAYS.with(|f| f.set(saved.fullscreen_all_displays));
+            // Absent means the menu has never been touched for this VM, so the configured
+            // value stands; present means the user said otherwise and outranks it.
+            if let Some(on) = saved.modifier_normalize {
+                MODIFIER_NORMALIZE.with(|f| f.set(on));
+            }
         }
         std::rc::Rc::new(RefCell::new(table))
     };
@@ -2282,6 +2297,9 @@ pub fn run(
         let disabled_saved: RefCell<Vec<u64>> = RefCell::new(Vec::new());
         // Seeded with the restored value so the save below fires on change, not on startup.
         let fsall_saved: Cell<bool> = Cell::new(FULLSCREEN_ALL_DISPLAYS.with(|f| f.get()));
+        // Same seeding rule: start from whatever the restore left in place, so the first save is a
+        // real change and not the startup value written back over the file.
+        let normalize_saved: Cell<bool> = Cell::new(MODIFIER_NORMALIZE.with(|f| f.get()));
         let panel_names: RefCell<Vec<(u64, String)>> = RefCell::new(Vec::new());
         let window = window.clone();
         let ack_tx = ack_tx.clone();
@@ -2450,6 +2468,11 @@ pub fn run(
                     if fsall_saved.get() != fsall {
                         save_fullscreen_all(slots_state_path.as_deref(), fsall);
                         fsall_saved.set(fsall);
+                    }
+                    let normalize = MODIFIER_NORMALIZE.with(|f| f.get());
+                    if normalize_saved.get() != normalize {
+                        save_modifier_normalize(slots_state_path.as_deref(), normalize);
+                        normalize_saved.set(normalize);
                     }
                 }
 
