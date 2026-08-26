@@ -773,8 +773,9 @@ define_class!(
             objc2::runtime::Bool::YES
         }
 
-        // Shut Down: the graceful power-off ladder (agent shutdown → power button →
-        // SIGKILL after grace) — identical to Ctrl-C / `limina stop`.
+        // Shut Down: the graceful power-off ladder (agent shutdown → power button → stock
+        // guest agent, then wait) — identical to Ctrl-C / `limina stop`. It never kills; a
+        // guest that ignores every rung keeps running until Force Stop.
         #[unsafe(method(shutDownVm:))]
         fn shut_down_vm(&self, _sender: &NSMenuItem) {
             log::info!("menu: Shut Down");
@@ -2883,9 +2884,14 @@ pub fn run(
     });
     register_apply_hook(apply.clone());
 
-    // Quit escalation state: set when the user closed the window / hit Ctrl-C and we asked
-    // the guest agent to power off; reaching the deadline falls back to SIGKILL.
+    // Quit escalation state: set when the user closed the window / hit Ctrl-C and we asked the
+    // guest to power off. `quit_rung` is how far up the ladder we have climbed (0 = nothing
+    // asked, 1 = our agent, 2 = the power button, 3 = the stock guest agent, 4 = waiting), and
+    // `quit_deadline` is when the current rung has had its turn. Reaching the last deadline
+    // does NOT kill anything — it only says so once; ending a guest that ignored every request
+    // stays an explicit human act.
     let quit_deadline: Cell<Option<std::time::Instant>> = Cell::new(None);
+    let quit_rung: Cell<u8> = Cell::new(0);
 
     // M9.4 close-policy state: the action chosen for THIS close episode (Ask answers once; a
     // close-suspend that times out demotes itself to Shutdown here), and when the
@@ -3378,49 +3384,79 @@ pub fn run(
                     if CLOSE_REQUESTED.with(|c| c.get()) && window.isVisible() {
                         window.close();
                     }
-                    // A SECOND stop signal (limina stop --force, impatient double Ctrl-C)
-                    // skips whatever grace remains — mirror of the headless monitor ladder.
-                    let force_now = crate::supervisor::force_stop_requested()
-                        || match quit_deadline.get() {
-                            None => {
-                                let orderly = control
+                    // The shutdown ladder, one rung per deadline, in the same order as the
+                    // headless monitor's: our own agent, the guest's power button, the stock
+                    // guest agent. Every rung is a *request* — nothing here kills the guest,
+                    // because an ordinary stop must never cost a running guest its unsaved work.
+                    let now = std::time::Instant::now();
+                    let due = quit_deadline.get().is_none_or(|d| now >= d);
+                    if due && quit_rung.get() < 4 {
+                        let next = match quit_rung.get() {
+                            // Nothing asked yet: our own agent runs the guest's shutdown path,
+                            // and is the fastest rung when it is there at all.
+                            0 => {
+                                if control
                                     .as_ref()
                                     .map(|c| c.request_shutdown(crate::control::AGENT_GRACE))
-                                    .unwrap_or(false);
-                                if orderly {
+                                    .unwrap_or(false)
+                                {
                                     log::info!(
                                         "window closed → asked the guest agent to power off"
                                     );
-                                    quit_deadline.set(Some(
-                                        std::time::Instant::now() + crate::control::AGENT_GRACE,
-                                    ));
-                                    false
-                                } else if control
+                                    (1, crate::control::AGENT_GRACE)
+                                } else {
+                                    log::info!("window closed → pressing the guest's power button");
+                                    unsafe { libc::kill(timer_conn.pid(), libc::SIGTERM) };
+                                    (2, crate::supervisor::BUTTON_GRACE)
+                                }
+                            }
+                            // Our agent took the request but the guest is still here.
+                            1 => {
+                                log::warn!(
+                                    "the guest agent did not power the guest off within {:?}; \
+                                     pressing the guest's power button",
+                                    crate::control::AGENT_GRACE
+                                );
+                                unsafe { libc::kill(timer_conn.pid(), libc::SIGTERM) };
+                                (2, crate::supervisor::BUTTON_GRACE)
+                            }
+                            // The button was ignored — a seated desktop's logind inhibitors do
+                            // that. The stock agent's `shutdown -P` runs as root and is not
+                            // subject to them, but the full systemd teardown it triggers takes
+                            // far longer (a seated F44 desktop measured ~28 s).
+                            2 => {
+                                if control
                                     .as_ref()
                                     .map(|c| c.request_qga_shutdown())
                                     .unwrap_or(false)
                                 {
-                                    // No limina-agent, but the guest's own stock agent answered
-                                    // earlier: ask it rather than going straight to the SIGKILL
-                                    // below, which is what a stock guest used to get here.
-                                    log::info!(
-                                        "window closed → asked the stock guest agent to power off"
+                                    log::warn!(
+                                        "the power button did not take within {:?}; asked the \
+                                         stock guest agent to power off instead",
+                                        crate::supervisor::BUTTON_GRACE
                                     );
-                                    // A stock guest's own shutdown takes far longer than the
-                                    // control-plane agent's (a seated desktop measured ~28 s):
-                                    // it is running the real systemd teardown, not just calling
-                                    // poweroff.
-                                    quit_deadline.set(Some(
-                                        std::time::Instant::now() + crate::supervisor::QGA_GRACE,
-                                    ));
-                                    false
+                                    (3, crate::supervisor::QGA_GRACE)
                                 } else {
-                                    true
+                                    (3, Duration::ZERO)
                                 }
                             }
-                            Some(d) => std::time::Instant::now() >= d,
+                            // Out of rungs: say it once and keep the VM running.
+                            _ => {
+                                log::warn!(
+                                    "the guest has not powered off and is still running. A stop \
+                                     never kills a VM on its own — use Force Stop in the menu \
+                                     (or `limina stop --force`) to end it."
+                                );
+                                (4, Duration::ZERO)
+                            }
                         };
-                    if force_now {
+                        quit_rung.set(next.0);
+                        quit_deadline.set(Some(now + next.1));
+                    }
+
+                    if crate::supervisor::force_stop_requested() {
+                        // The only path that kills: Force Stop in the menu, `limina stop
+                        // --force`, or an impatient double Ctrl-C.
                         save_state_final(timer_state_path.as_deref(), &window);
                         kill_worker_group(timer_conn.pid());
                         crate::exit_cleanup();

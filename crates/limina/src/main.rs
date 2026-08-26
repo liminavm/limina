@@ -540,8 +540,9 @@ struct StartOverrides {
 struct StopArgs {
     /// VM name or .liminavm bundle path.
     vm: String,
-    /// Skip the guest-side grace: kill the VM immediately (a second SIGTERM to the
-    /// supervisor, which escalates straight to SIGKILL).
+    /// Kill the VM immediately instead of asking it to power off (a second SIGTERM to the
+    /// supervisor, which SIGKILLs the worker). An ordinary `limina stop` never kills: it asks,
+    /// and a guest that refuses keeps running.
     #[arg(long)]
     force: bool,
 }
@@ -760,14 +761,22 @@ fn cmd_stop(args: StopArgs) -> Result<()> {
         vmlib::runtime::VmStatus::Running { pid } => pid,
     };
     vmlib::runtime::signal_stop(pid, args.force)?;
-    // The graceful ladder is bounded (agent grace + shutdown grace + SIGKILL), so a
-    // healthy supervisor always releases the lock; 60s covers a slow guest shutdown.
+    // 60s covers a slow guest shutdown (a seated desktop's own teardown is ~30s). A stop
+    // never kills the guest on its own, so overrunning this means the guest is still running,
+    // not that anything is broken — say what ends it.
     if vmlib::runtime::wait_stopped(&bundle, Duration::from_secs(60)) {
         println!("{} stopped", bundle.dir_name());
         Ok(())
-    } else {
+    } else if args.force {
         anyhow::bail!(
             "{} did not stop within 60s (supervisor pid {pid})",
+            bundle.dir_name()
+        )
+    } else {
+        anyhow::bail!(
+            "{} is still running after 60s: the guest has not powered off (supervisor pid \
+             {pid}). A stop never kills a VM on its own — `limina stop --force {}` ends it.",
+            bundle.dir_name(),
             bundle.dir_name()
         )
     }

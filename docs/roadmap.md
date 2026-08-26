@@ -230,12 +230,13 @@ child-process supervision + codesign shipped (`crates/limina`, `crates/limina-vm
   To see *kernel* dmesg the guest cmdline needs explicit `console=`; libkrun's PL011 is at
   `0x0a001000` → `earlycon=pl011,mmio32,0x0a001000 console=ttyAMA0,115200`.
 - **Networking is TSI default** at this stage (no virtio-net device — that's M3).
-- **Supervision:** `crates/limina` spawns the signed worker in its own process group, forwards
-  graceful shutdown on SIGINT/SIGTERM, escalates to SIGKILL after a grace period.
+- **Supervision:** `crates/limina` spawns the signed worker in its own process group and forwards
+  graceful shutdown on SIGINT/SIGTERM, climbing the rungs of the stop ladder. It never kills on a
+  timer — see M12.5.
 
 **Known caveat:** a *stock* EFI Fedora guest does not honor the GPIO power button (KRUN_EFI's ACPI
-doesn't advertise it), so graceful power-off is an **enhanced-tier** feature (our DT / `limina-agent`,
-shipped in M5); the baseline relies on the SIGKILL fallback.
+doesn't advertise it), so graceful power-off needs either our `limina-agent` (M5) or the stock
+`qemu-guest-agent` rung (M12.5).
 
 **libkrun patches:** none for the happy path. Stretch: convert the `panic!` exit paths a real boot
 may hit (`hvf/lib.rs:549` unknown PSCI, `:595-602` unknown exit reason, `:728` unknown ESR_EL2 EC)
@@ -275,7 +276,8 @@ crisp hardware cursor.
   guest-initiated pointer warps (guest `cursormove` positions) are ignored host-side — reconcile
   with pointer capture in M8.
 - **Window-close → orderly guest shutdown** is closed via the M5 control plane (window-close sends
-  the agent SHUTDOWN, falls back to SIGKILL for stock guests; `l1_shutdown` asserts the ladder).
+  the agent SHUTDOWN, and falls back through the power button and the stock guest agent for stock
+  guests; `l1_shutdown` asserts the ladder).
 
 Pre-boot display config (retained API reference): `krun_add_display(ctx, w, h)` (0..15, max 16),
 `krun_display_set_dpi/_physical_size/_refresh_rate` for the generated EDID; HiDPI via
@@ -595,7 +597,7 @@ channel between limina and a guest agent.
   (`device.rs:38-47` keeps `unix_ipc_port_map` separate from `tsi_flags`). The **supervisor owns the
   host side by default** (binds a private socket at `CONTROL_PORT`, serves the handshake, turns
   window-close/SIGTERM into an orderly power-off: SHUTDOWN → 5s agent grace → power-button SIGTERM →
-  SIGKILL). Explicit `--vsock-*` still passes raw plumbing for the harness.
+  the stock guest agent → wait; see M12.5 — it never kills on a timer). Explicit `--vsock-*` still passes raw plumbing for the harness.
 - **Multi-peer registry:** the host `ControlPlane` keeps a peer registry (the clipboard needs a
   separate per-session user connection alongside the root agent); SHUTDOWN routes to every
   shutdown-capable peer. Heartbeat liveness: every inbound message is stamped per peer; a monitor
@@ -1581,22 +1583,29 @@ detector (the host napped) and the periodic tick (drift) — and fires **only wh
 
 ### Step 2 — lifecycle + inventory (shipped)
 
-- **The stop ladder gained a rung, after the power button and before the SIGKILL**: agent (5 s) →
-  GPIO power button (5 s) → `guest-shutdown` → SIGKILL at the grace. It only comes up when a probe
+- **The stop ladder gained a rung, after the power button**: agent (5 s) → GPIO power button
+  (5 s) → `guest-shutdown` → wait. It only comes up when a probe
   has already succeeded (probing inside a stop ladder would eat the grace on a guest that has no
   agent) and when the grace can still hold it, so a tight `--shutdown-grace-secs` — the test
   harness uses 3 s — behaves exactly as before. Worth having despite the button: the agent runs
   `shutdown -P` as **root**, which goes through even where the button does not. The windowed close
-  path gets the same rung, where a stock guest previously went straight to SIGKILL.
+  path climbs the same ladder, where a stock guest previously went straight to SIGKILL.
 - **A guest that accepts the request gets more time** (`QGA_GRACE`, 45 s). Measured on a seated F44
   desktop, 2026-08-26: `shutdown -P +0` needs ~28 s from request to the VM being gone — it is
   running the real systemd teardown, not just calling poweroff. The operator's grace is about a
-  guest that will not *answer*; one that just took a shutdown request is answering, and SIGKILLing
-  it mid-teardown is how filesystems get hurt. A second stop signal still forces immediately.
+  guest that will not *answer*; one that just took a shutdown request is answering, and killing it
+  mid-teardown is how filesystems get hurt. A second stop signal still forces immediately.
 - **Inventory is logged once**, when the agent first answers: OS pretty-name + kernel + machine +
   hostname, non-loopback IPv4 addresses, logged-in users, and a second line of mounted filesystems
   with used/total. Log-only by choice — the surface is an incident report that can say what the
   guest *was*. Every command is optional; a blocked or missing one contributes nothing.
+- **An ordinary stop never kills the guest.** Every rung is a *request*; a guest that ignores all of
+  them keeps running, and the supervisor says so once (`the guest has not powered off … and is still
+  running`). The grace is a **reporting** deadline, not a kill deadline. Ending a guest that will not
+  stop is an explicit human act: a second stop signal (double Ctrl-C, `limina stop --force`) or Force
+  Stop in the window's menu. A timer-driven SIGKILL costs unsaved work the user never agreed to risk
+  — and it fired most readily on exactly the guest most likely to have work open, the seated desktop
+  holding logind inhibitors. `l1_stop_never_kills` pins it.
 
 ### Next steps
 

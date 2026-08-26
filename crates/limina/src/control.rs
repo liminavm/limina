@@ -8,7 +8,7 @@
 //! HELLO with WELCOME, tracks the connected peers, and — the first real payoff — turns
 //! window-close / SIGTERM into an **orderly guest power-off** by sending SHUTDOWN and
 //! letting the agent run the guest's own shutdown path, instead of going straight to the
-//! GPIO power button (which stock EFI guests ignore) and SIGKILL.
+//! GPIO power button, which stock EFI guests ignore.
 //!
 //! The plane serves **multiple concurrent connections** (the clipboard spike settled the
 //! guest topology: a root `limina-agent` plus per-session user helpers, each with its own
@@ -31,7 +31,8 @@ use limina_proto::{
     read_message, write_message, Message, Shutdown, Welcome, CHANNEL_CLIPBOARD, CHANNEL_CONTROL,
 };
 
-/// How long the orderly path gets before the caller escalates (power button / SIGKILL).
+/// How long the orderly path gets before the caller escalates to the next rung (the power
+/// button, then the stock guest agent).
 pub const AGENT_GRACE: Duration = Duration::from_secs(5);
 
 /// Socket path to remove on exit (the windowed path leaves via `process::exit`, which
@@ -306,13 +307,13 @@ impl ControlPlane {
         sent
     }
 
-    /// Ask a **stock** guest's `qemu-guest-agent` to power the guest off — the last polite rung
-    /// of the stop ladder, tried after the GPIO power button has had its chance and before the
-    /// SIGKILL.
+    /// Ask a **stock** guest's `qemu-guest-agent` to power the guest off — the last rung of the
+    /// stop ladder, tried after the GPIO power button has had its chance. There is no rung after
+    /// it: a guest that ignores this one keeps running until the user forces it down.
     ///
     /// `false` means nothing was sent (no agent has ever answered on this port, or it does not
-    /// offer `guest-shutdown`), so the caller should escalate immediately rather than spend the
-    /// remaining grace waiting on a guest nobody asked.
+    /// offer `guest-shutdown`), so the caller should stop waiting rather than spend the
+    /// remaining grace on a guest nobody asked.
     pub fn request_qga_shutdown(&self) -> bool {
         let Some(qga) = self.inner.qga.lock().unwrap().clone() else {
             return false;

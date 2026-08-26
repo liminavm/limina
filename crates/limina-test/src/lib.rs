@@ -2715,8 +2715,10 @@ impl Guest {
     }
 
     /// Request a clean shutdown (SIGTERM to the supervisor, which asks the guest to
-    /// power off and force-kills the worker after its own grace), then wait up to
-    /// `timeout` for the supervisor to exit. Escalates to SIGKILL if it overruns.
+    /// power off, climbing the rungs of its stop ladder), then wait up to `timeout` for the
+    /// supervisor to exit. A guest that ignores every rung is *not* killed by that first
+    /// signal — nothing in limina kills on a timer — so on overrun this escalates the way a
+    /// user would, with a second SIGTERM (the force path), and only SIGKILLs if that fails too.
     pub fn shutdown(mut self, timeout: Duration) -> Result<Outcome> {
         let outcome = self.terminate(timeout)?;
         Ok(outcome)
@@ -2799,8 +2801,23 @@ impl Guest {
             std::thread::sleep(Duration::from_millis(100));
         }
 
-        // Overran: force the supervisor down and net any orphaned worker, so a wedged
-        // supervisor can never leave a live VM holding HVF.
+        // Overran. An ordinary stop never kills the guest — the supervisor asks and then waits
+        // — so a guest that ignores every rung is still running here, by design. Escalate the
+        // way a user would: a SECOND SIGTERM is the force path, and the supervisor then tears
+        // its own worker and gateway down cleanly instead of being killed out from under them.
+        unsafe {
+            libc::kill(self.pid, libc::SIGTERM);
+        }
+        let forced_deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < forced_deadline {
+            if let Some(status) = self.child.try_wait().context("polling supervisor")? {
+                return Ok(self.outcome_from(status, true));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        // Even force didn't take: the supervisor itself is wedged. Kill it and net any
+        // orphaned worker, so a test run can never leave a live VM holding HVF.
         unsafe {
             libc::kill(self.pid, libc::SIGKILL);
         }

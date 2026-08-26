@@ -10,9 +10,10 @@
 //! the GPIO power button the guest would ignore.
 //!
 //! The guest stays alive precisely because the agent is serving the channel; the
-//! supervisor's SHUTDOWN is what ends it. Without the control plane this exact flow ends
-//! in a forced SIGKILL after the 20s grace (the old behavior), so the asserts below
-//! (exit 0, not forced, within seconds) prove the orderly path end-to-end.
+//! supervisor's SHUTDOWN is what ends it. Without the control plane this exact flow falls
+//! through to the power button and then the stock guest agent — and a guest that answers
+//! neither simply keeps running (see `l1_stop_never_kills`) — so the asserts below (exit 0,
+//! not forced, within seconds) prove the orderly path end-to-end.
 //!
 //! Build the guest first: `scripts/build-test-guest.sh`. Gated behind LIMINA_HVF_TESTS.
 
