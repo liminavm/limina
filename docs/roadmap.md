@@ -961,9 +961,30 @@ Parallels replacement: fullscreen, keymap remap, multi-display, system-combo cap
      `IOSurfaceLookup` screen-read hole; `iosdump` now needs `LIMINA_GLOBAL_SCANOUT=1`.
    - **CapsLock/NumLock LED parity (libkrun patch):** surface the statusq LED feedback
      (`worker.rs:238-248` no-op).
+   - **`virtio-rtc` — sub-second guest time (booked, low priority).** PL031's `RTCDR` is a 32-bit
+     *seconds* counter, so both tiers land within ~1 s of the host after a resume: stock via the
+     kernel's sleeptime injection, enhanced via agent TimeSync (which steps only at ≥1 s error).
+     `virtio-rtc` (mainline since 6.16 — `drivers/virtio/virtio_rtc_*`, including
+     `virtio_rtc_arm.c` and `virtio_rtc_ptp.c`) hands the guest a `(host CLOCK_REALTIME, guest
+     counter)` pair captured atomically and exposes it as `/dev/ptpN`; chrony consumes that as a
+     PHC refclock. There is no *drift* to correct — the guest's CNTVCT is the host counter
+     (`mach_absolute_time() - vtimer_offset`, `src/hvf/src/lib.rs:1287`), same crystal — so the
+     win is purely the **offset** at the moments the counter↔wallclock relationship breaks: host
+     sleep and snapshot restore. Concrete motivation is **virtiofs**: host files carry host mtimes,
+     and a guest clock up to a second off makes `make`/`ninja`/`cargo` see future-dated or stale
+     inputs across the share. Guest-side cost is one chrony `refclock PHC` line, so this is not
+     zero-touch on the stock tier — lighter than the agent, but still a config drop.
+     **Deliberately not `ptp_kvm`:** its discovery chain is gated on `PSCI_VERSION_MAJOR(ver) >= 1`
+     (`drivers/firmware/psci/psci.c` → `psci_init_smccc` → `kvm_init_hyp_services`), and we
+     advertise PSCI **v0.2** (`src/hvf/src/lib.rs:1017` returns `2` = major 0, minor 2), so the
+     guest never issues the vendor-hypervisor UID probe at all. Enabling it would cost a PSCI-level
+     bump on a working boot path (obliging `PSCI_FEATURES`, `ARM_SMCCC_VERSION` ≥ 1.1) plus
+     impersonating KVM's vendor-hypercall UID — for the same result a virtio device gets natively.
+     **Gates before starting:** confirm Fedora's aarch64 kernel enables `CONFIG_VIRTIO_RTC`, and
+     that a measured post-resume error justifies it (the recorded figure is ~0.14 s).
 
-**libkrun patches:** native virtio-snd (largest); optional LED parity. (The runtime
-display-reconfigure call shipped as 0025/0026.)
+**libkrun patches:** native virtio-snd (largest); optional LED parity; a `virtio-rtc` device
+(booked). (The runtime display-reconfigure call shipped as 0025/0026.)
 
 **Done test:** audio plays from a guest app through the Mac speakers (and mic capture works); an x86
 Linux binary runs in the arm64 guest via FEX; the window goes fullscreen on a Retina display,
@@ -2417,7 +2438,7 @@ running GTK client alive.
 | M5 clipboard/fs/agent 🟢 core | guest agent (from L1 vsock seed), NSPasteboard bridge, ext-data-control + RemoteDesktop clipboard clients, virtiofs share + auto-mount, enhanced-tier installer (remaining) | mutter 0003 (ext-data-control); none for transport (vsock+virtiofs exist) |
 | M6 dynamic memory ✅ | PSI autoballoon policy + `BalloonControlHandle` / `--memory` / control socket (internal Rust API, not a C ABI) | reclaim fix (MADV_FREE_REUSABLE) + 16 KiB align/coalesce + inflate/deflate handlers + DEFLATE_ON_OOM (0033/0034) |
 | M7 USB 🟢 emulated / 🟡 passthrough | host claim/attach, usbip plumbing; real-device capture waits on the privileged helper | emulated xHCI controller (0095–0098, shared with M14, default-on); our-kernel config edit (USB+uinput) |
-| M8 audio/x86/polish 🟢 polish + audio shipped; x86 + multi-display open | fullscreen, keymap, multi-display, pointer capture, IOSurface mach-port scoping, FEX wiring | native virtio-snd; runtime resize/EDID; LED parity |
+| M8 audio/x86/polish 🟢 polish + audio shipped; x86 + multi-display open | fullscreen, keymap, multi-display, pointer capture, IOSurface mach-port scoping, FEX wiring | native virtio-snd; runtime resize/EDID; LED parity; `virtio-rtc` device (booked) |
 | M9 suspend/resume + snapshots ✅ | host-side VMM snapshot (file format/CRC, `--restore` wiring, device schema + mapped-blob set, named-snapshot manager + clone + APFS `clonefile` disk, agent freeze bracket, proto `Snapshot`/`Restore`/`TimeSet`, capability probe, UX); Mesa-venus object-graph replay + **device-local content readback** + blob copy-back (venus tier) | multi-vCPU HVF pause/quiesce (incl. WFE-parked wakeup) + vCPU save/restore (wrappers, FFI exists) + GIC state (spike #2 green) + `CNTVOFF` set + `--restore` mode + device (de)serialize + virtio freeze/thaw hardening + snapshot-time GPU quiesce (restore = fresh worker, no in-process renderer reset; `reset_session` rutabaga-context fix already shipped, 0035); carry `patches/linux` Dongwon-Kim drm/virtio freeze-restore (virgl) |
 | M10 multiple disks + ISO ✅ | repeatable `--disk`, stable virtio serial identity, `--cdrom`, qcow2 sniff, EFI-ISO boot | imago discard→punch-hole fix (fork, pinned by `third_party/manifest.toml` + `[patch.crates-io]`) |
 | M11 productization ✅ | `cargo xtask` command surface (`setup`/`vendor`/`build`/`sign`/`test`/`run`/`app`/`bundle`) wrapping the tested scripts; `docs/dev-onboarding.md` | none |
