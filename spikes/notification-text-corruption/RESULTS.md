@@ -1674,7 +1674,7 @@ Pixel-verified, not counted: `evidence/replay-title-fixed-res353.png` is the car
 blank, now reading "Critical Updates 002" -- the same string llvmpipe produced from this trace.
 Card 1's body is clean text again.
 
-Upstream fork commit `b836c280506` on `limina-kk`. It is upstreamable as-is: the defect is
+Upstream fork commit `9e0538a3a0e` on `limina-kk`. It is upstreamable as-is: the defect is
 generic zink, not a KosmicKrisp workaround, and it hits every driver without
 `EXT_vertex_input_dynamic_state` given an application that alternates two vertex layouts.
 
@@ -1686,38 +1686,38 @@ considering separately as a pipeline-permutation reduction; worth checking again
 
 ## Next
 
-The fault reproduces in a single-process host program with no VM, no compositor and no guest,
-deterministically, and the host-implementation split runs inside it. Every question below is now
-answerable by editing and re-running one binary.
+The bug is root-caused and fixed (§ROOT CAUSE, §THE FIX). What is left is delivery and one
+review question.
 
-1. **A git bisect is still NOT available, and llvmpipe is not a substitute for one.** It needs a
-   known-good KK *revision*, and there is still no evidence this path ever rendered these cards
-   correctly. llvmpipe is a different driver, not an earlier KK — it makes an excellent
-   differential and a useless bisect endpoint. Do not start one without first establishing a good
-   end.
+**Reproducing this, in one command.** The recorded stream is
+`traces/notification-12card-repro.bin` (gitignored, like everything under `traces/`; it is a
+capture, not source). It reproduces and now verifies the fix with no VM, compositor or guest:
 
-   What the replay does change is the **cost of looking for one**: testing a candidate revision
-   used to mean a boot and a live damaging session, and now it is one replay run. The cheapest
-   probe worth taking is whether the fault survives with our own `limina-kk` commits reverted to
-   their upstream base — one build, and it answers whether we introduced it. If any revision comes
-   back clean, a real bisect opens up; until one does, the work is code-path narrowing, not history
-   search.
-2. **Find why a needed attachment is begun with CLEAR/DONTCARE.** The sweep has narrowed this from
-   "somewhere in zink/KK" to one mechanism with a counter attached: `reload_hazard` in
-   `kk_cmd_buffer.c`, 128 of them per replay. The question is now why the load action encoded for
-   these passes discards content the next draw still needs — whose loadOp that is (zink's, or KK's
-   own pass merging), and what makes card 1 differ.
-3. **Narrow to the draw if that is not enough.** Two differentials are in hand, both
-   about code paths rather than history: across drivers (llvmpipe renders, KK does not, same
-   stream) and within one KK run (card 1 renders, cards 2-12 do not). Card 12's command stream is card 1's modulo handles -- same CLEAR, same
-   sampler views, bit-identical viewport and constant-buffer values, same `BIND_OBJECT 18`, same
-   108-index draw at offsets 0/12/16, and title vertex buffers that are both 2304-byte resources
-   taking a single 2304-byte upload. One renders and one does not, so instrument KK on that draw
-   and compare the two arms directly.
-3. **The damage is not accumulated rasterisation.** `--draws-from 50000` drops every draw before
-   card 12 while keeping every resource, transfer and state command; card 12 still loses its title
-   and still renders its body. Whatever carries it is not the earlier cards' drawing -- which makes
-   per-draw state inside KK, not wear, the thing to look at.
+```
+./replay-host.sh traces/notification-12card-repro.bin --sweep --sweep-w 968   # titles
+./replay-host.sh traces/notification-12card-repro.bin --sweep --sweep-w 568   # bodies
+```
+
+Broken: 1 of 12 titles ink, one body sheared. Fixed: 12 of 12, all bodies at the same ink count.
+`LIMINA_HOST_GALLIUM=llvmpipe` is the reference arm. Always score **both** widths -- scoring only
+titles hid the symmetric body damage for most of this investigation.
+
+1. **The fix is not in the dogfooded app yet.** It lives in `/Volumes/mesa-cs/zink-kk-prefix` and
+   on the fork; the dogfood bundle still carries the old zink until a bundle rebuild and delivery.
+   That is the outstanding step for the person who reported it.
+2. **Upstream it.** The defect is generic zink, not a KosmicKrisp workaround: it hits any driver
+   without `EXT_vertex_input_dynamic_state` under an application that alternates two vertex
+   layouts. Fork commit `9e0538a3a0e` applies as-is.
+   - **Expect review to poke at this, so have the answer ready:** `ctx->vertex_state_changed` is
+     cleared only inside `if (!DRAW_STATE)`, while the new gate term sits in the shared template
+     body. On the static-vertex-input path a pending flag therefore makes each
+     `draw_vertex_state` call re-run `update_gfx_pipeline` until an ordinary draw clears it. That
+     is harmless -- the lookup is idempotent and returns the same pipeline -- but it is a real
+     asymmetry and should be raised rather than left to be found.
+3. **Whether KosmicKrisp should advertise `EXT_vertex_input_dynamic_state`** is booked in
+   `docs/hardening-backlog.md` as a perf item, **not** a fix. It would have masked this bug rather
+   than fixed it, and Metal compiles the vertex descriptor into the pipeline state object, so
+   unless MTL4 relaxes that it only moves zink's variant caching one layer down.
 
 ## Traps this rig exists to avoid
 

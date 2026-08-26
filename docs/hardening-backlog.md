@@ -1208,6 +1208,20 @@ before flushing.
 drain — read the count as a high-water mark, not a live value.
 
 ## GPU / rendering perf
+- **Should KosmicKrisp advertise `VK_EXT_vertex_input_dynamic_state`?** — 📋 open, raised 2026-08-26
+  after the notification-text root cause. **Not a correctness item** — the bug it would have masked is
+  fixed in zink (`spikes/notification-text-corruption/RESULTS.md`, §THE FIX), and adding the extension
+  is not an alternative to that fix.
+  - **The pitch is pipeline-permutation reduction.** Without it zink compiles vertex input into the
+    pipeline, so every shader × vertex-layout combination is a separate PSO. Advertising it lets zink
+    set the layout with `CmdSetVertexInputEXT` and collapse those permutations.
+  - **Check this first, before any work:** Metal compiles the vertex descriptor into the pipeline state
+    object (`MTLRenderPipelineDescriptor.vertexDescriptor`). If that still holds under **MTL4** — which
+    is what this tree encodes with — KK can only implement the extension by caching PSO variants keyed
+    on vertex input, i.e. doing zink's current job one layer down for no net gain. Verify against MTL4
+    rather than assuming the classic Metal model; that answer decides whether the item is worth
+    anything at all.
+
 - **Should the enhanced tier stop forcing zink? (i.e. delete `/etc/environment.d/90-limina-zink.conf`)**
   — 📋 open, raised by the user 2026-08-01 now that vrend is well supported. Attractive for the right
   reasons: they are blunt globals hitting every process in the guest, and the baseline tier already
