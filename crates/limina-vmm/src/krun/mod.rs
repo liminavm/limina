@@ -204,6 +204,14 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
         console::attach_spice_port(&mut vmr, fd).context("attaching the spice agent port")?;
     }
 
+    // The named `org.qemu.guest_agent.0` port that starts a stock guest's qemu-guest-agent
+    // (udev-triggered on the port name, exactly like the spice one above). Attached after
+    // the spice port so the port order — and therefore the guest's device topology — is the
+    // same on every launch.
+    if let Some(fd) = spec.qga_fd {
+        console::attach_qga_port(&mut vmr, fd).context("attaching the qemu guest-agent port")?;
+    }
+
     // Native virtio-snd audio device (device ID 25). On by default; the guest's stock
     // virtio_snd driver binds it and exposes an ALSA card with no guest components.
     vmr.balloon_free_page_reporting = spec.free_page_reporting;
@@ -1054,6 +1062,7 @@ mod tests {
             console: None,
             virtio_console: None,
             spice_fd: None,
+            qga_fd: None,
             display: None,
             input: None,
             net: None,

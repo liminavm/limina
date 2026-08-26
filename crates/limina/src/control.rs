@@ -116,6 +116,9 @@ struct Inner {
     /// The vdagent conversation, once a worker spawn has handed us the port's host end.
     /// `None` before that, and on a guest with no spice port at all.
     vdagent: Mutex<Option<Arc<crate::vdagent::broker::VdAgent>>>,
+    /// The stock `qemu-guest-agent` port, once a worker spawn has handed us its host end.
+    /// `None` before that; present-but-silent on a guest with no agent installed.
+    qga: Mutex<Option<Arc<crate::qga::client::Qga>>>,
     /// M6 PSI autoballoon policy, driven by guest `MemPressure` reports. `None` unless `--memory`
     /// configured a dynamic range.
     balloon_policy: Option<crate::balloon_policy::BalloonPolicy>,
@@ -154,6 +157,7 @@ impl ControlPlane {
             next_id: AtomicU64::new(1),
             clipboard: Arc::new(crate::clipboard::Clipboard::new()),
             vdagent: Mutex::new(None),
+            qga: Mutex::new(None),
             balloon_policy,
             fido_store,
             usb_fido_gadget,
@@ -231,7 +235,19 @@ impl ControlPlane {
                                 asleep.as_secs_f64()
                             );
                         }
-                        tsync_inner.send_to_capable("timesync", &time_sync_now(), CHANNEL_CONTROL);
+                        let took = tsync_inner.send_to_capable(
+                            "timesync",
+                            &time_sync_now(),
+                            CHANNEL_CONTROL,
+                        );
+                        // Nobody capable is connected — a stock guest, or one whose agent
+                        // is not running. Its clock has no other corrector: the RTC only
+                        // helps if the guest kernel re-reads it (s2idle thaw), which a guest
+                        // that stayed "running" through the host's nap never does. Ask the
+                        // stock qemu-guest-agent instead, if one is there.
+                        if took.is_empty() {
+                            tsync_inner.qga_sync_clock();
+                        }
                         last_sent = now;
                     }
                     last_awake = std::time::SystemTime::now();
@@ -290,6 +306,18 @@ impl ControlPlane {
         sent
     }
 
+    /// Adopt the host end of a worker's `org.qemu.guest_agent.0` port.
+    ///
+    /// Called once per worker *spawn*, like [`Self::attach_vdagent`]: the fresh port replaces
+    /// the previous client, whose guest is gone. Nothing is asked of the agent here — at
+    /// spawn time the guest has not booted — so this cannot tell whether an agent exists;
+    /// the first use finds out.
+    pub fn attach_qga(&self, host_fd: std::os::fd::OwnedFd) -> Result<()> {
+        let qga = crate::qga::client::Qga::start(host_fd)?;
+        *self.inner.qga.lock().unwrap() = Some(Arc::new(qga));
+        Ok(())
+    }
+
     /// Adopt the host end of a worker's `com.redhat.spice.0` port and start brokering the
     /// clipboard over it (M12 #37).
     ///
@@ -322,6 +350,51 @@ impl Inner {
     /// forever, but even a bounded stall must not serialize registration, the liveness
     /// sweep, and the shutdown ladder behind one slow peer. (Snapshotting is what makes
     /// this safe: a peer that deregisters concurrently just gets a failed send here.)
+    /// Correct a **stock** guest's clock through `qemu-guest-agent`.
+    ///
+    /// The last rung of the clock ladder, reached only when no `timesync`-capable peer took
+    /// the host's `TimeSync` — the enhanced tier always wins, and both mechanisms stepping
+    /// the same clock would just fight. Runs on the `limina-timesync` thread, so it inherits
+    /// both of that thread's triggers for free: the oversleep detector (the host napped and
+    /// the guest's counter did not) and the periodic tick (drift insurance).
+    ///
+    /// Every failure here is silent-by-design at `debug`: a guest with no `qemu-guest-agent`
+    /// installed is the normal case on Debian, and it already said so once when the port
+    /// went quiet.
+    fn qga_sync_clock(&self) {
+        let Some(qga) = self.qga.lock().unwrap().clone() else {
+            return;
+        };
+        let sample = match qga.time_sample() {
+            Ok(s) => s,
+            Err(e) => {
+                log::debug!("qga: no guest clock reading ({e:#})");
+                return;
+            }
+        };
+        match crate::qga::policy::decide(&sample) {
+            crate::qga::policy::Action::Nothing => {}
+            crate::qga::policy::Action::Resample => {
+                log::debug!(
+                    "qga: clock sample too noisy to act on (rtt {:?}); waiting for the next tick",
+                    sample.rtt
+                );
+            }
+            crate::qga::policy::Action::Step { delta_ns } => {
+                let secs = delta_ns as f64 / 1e9;
+                let now = crate::qga::client::unix_ns(std::time::SystemTime::now());
+                match qga.set_time(now) {
+                    Ok(()) => log::info!(
+                        "qga: the guest clock was {:.1}s {}; stepped it to the host's",
+                        secs.abs(),
+                        if secs > 0.0 { "behind" } else { "ahead" }
+                    ),
+                    Err(e) => log::warn!("qga: stepping the guest clock failed: {e:#}"),
+                }
+            }
+        }
+    }
+
     fn send_to_capable(&self, cap: &str, msg: &Message, channel: u32) -> Vec<String> {
         let targets: Vec<Arc<Peer>> = self
             .peers

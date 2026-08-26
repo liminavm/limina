@@ -261,7 +261,12 @@ multiple independent connections; less idiomatic. Reasonable fallback.
 ### E — Reuse an existing agent/protocol
 - **SPICE vdagent:** clipboard + display-resize solved, but assumes SPICE/`virtio-serial`; libkrun
   has **no SPICE server**; needs a vsock⇄spice shim. Heavyweight.
-- **qemu-guest-agent:** JSON-RPC over virtio-serial; exec/info/shutdown only; wrong transport.
+- **qemu-guest-agent:** JSON-RPC over virtio-serial; wrong transport *for this* — it cannot carry
+  clipboard, display or input, so it is no substitute for `limina-agent`. It is, however,
+  **already installed** in every Fedora/Ubuntu desktop guest and additive per feature, so limina
+  exposes its port and uses it as a stock-tier fallback (the guest clock today; see
+  `crates/limina/src/qga/`). Rejected as *the* agent, adopted as an on-ramp — the same shape M12
+  took for SPICE.
 - Net: all assume virtio-serial and miss our GUI feature set; adapting > purpose-built vsock agent.
 
 ### F — Raw vsock: `krun_disable_implicit_vsock` + `krun_add_vsock(ctx, 0)` + own muxer

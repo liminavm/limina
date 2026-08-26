@@ -17,6 +17,7 @@ mod gateway;
 // macOS's own Modifier Keys configuration, which positional normalization must read past.
 mod hostmods;
 mod moc;
+mod qga;
 mod sep;
 mod session;
 mod supervisor;

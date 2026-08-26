@@ -51,7 +51,7 @@ below. Do not reorder that string without re-reading this file.
 | `vmware` | Starts `vmtoolsd`, `vgauthd`, `run-vmblock\x2dfuse.mount`. open-vm-tools is **installed and enabled** on our F44 images, gated purely on `ConditionVirtualization=vmware`. **Avoid.** |
 | `microsoft` | Starts `hypervkvpd`, `hypervvssd` the same way. **Avoid.** |
 | `oracle`, `vmware` | WirePlumber has extra ALSA rules for these (`~^(vmware)\|(oracle)$`) — but they only match `alsa_*.pci.*` nodes, so they would not reach our virtio-mmio node anyway. |
-| `kvm`, `qemu`, `parallels`, `bochs` | Activate nothing. `qemu-guest-agent` is **not** name-gated — it is udev-triggered on a `virtio-ports` device named `org.qemu.guest_agent.0`, which we do not expose. |
+| `kvm`, `qemu`, `parallels`, `bochs` | Activate nothing. `qemu-guest-agent` is **not** name-gated — it is udev-triggered on a `virtio-ports` device named `org.qemu.guest_agent.0`, which **we expose on every spawn** (`crates/limina-vmm/src/krun/console.rs`), so the stock agent runs and the host talks to it (`crates/limina/src/qga/`). |
 
 Nothing in a Fedora guest keys on `parallels` to infer a macOS host. That signal does not
 exist; do not choose a name hoping for it.

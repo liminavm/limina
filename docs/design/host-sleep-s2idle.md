@@ -31,9 +31,10 @@ coverage is the validation story.)
 - **Close the last stock clock gap.** The suspend/resume clock is verified correct (2026-07-20:
   libkrun 0088 PL031 → `rtc-efi` → kernel sleeptime injection, +0.058 s after a 122 s gap, guarded
   in `managed_vm_suspends_and_resumes`) — but only if the guest actually suspends. A guest that
-  keeps "running" through host sleep gets a frozen CNTVCT and a wrong wall clock; on the stock
-  tier nothing corrects it (enhanced has agent TimeSync). s2idle'ing the guest around host sleep
-  makes the *same verified path* fix the clock with zero guest components.
+  keeps "running" through host sleep gets a frozen CNTVCT and a wrong wall clock; s2idle'ing the
+  guest around host sleep makes the *same verified path* fix the clock with zero guest components.
+  (Where the guest does not suspend at all, the stock `qemu-guest-agent` fallback below is what
+  corrects it; enhanced guests have agent TimeSync either way.)
 - **Honest suspend semantics.** Guest apps see a real suspend/resume instead of a mystery time
   jump; network daemons, timers, and leases re-sync through their normal resume paths.
 - **Possible glitch dodge.** If the CNTVCT backward-glitch (the 2119 wrap, source unfound) is
@@ -120,9 +121,15 @@ Nothing is stale on either side. Keep the world and the session survives **with 
 - **On host `didWake`:** pulse the wake key (`wake.rs`) **only if `slept_by_host`** — never wake a
   guest the user suspended themselves, and never pulse the *sleep* button at an asleep guest (the
   latch trap: a latched pulse re-suspends the guest unwakeable).
-- **Clock:** stock = kernel sleeptime injection via the 0088-anchored RTC (the verified path);
-  enhanced = agent TimeSync also fires on supervisor-detected oversleep — both are idempotent
-  (the agent steps only ≥1 s of error; the injection already fixed it → no-op).
+- **Clock:** three correctors, in precedence order, all idempotent (each steps only ≥1 s of error,
+  so whichever ran first turns the others into no-ops):
+  1. **enhanced** — `limina-agent` TimeSync, which also fires on supervisor-detected oversleep;
+  2. **stock, suspended** — kernel sleeptime injection via the 0088-anchored RTC (the verified path),
+     which only reaches a guest that actually suspended and re-read the RTC;
+  3. **stock, still running** — `guest-set-time` over the stock `qemu-guest-agent`
+     (`crates/limina/src/qga/`), driven from the same `limina-timesync` thread and used **only**
+     when no `timesync`-capable peer took the message. This is the one that covers a guest which
+     rode host sleep awake, or ignores its RTC.
 - **Config:** `vm.toml [power] on_host_sleep = "s2idle" (default) | "ignore"`. Per-VM; every
   supervisor handles its own VM, windowed and headless alike, so multi-VM works for free.
 - **Testing:** host sleep is not automatable in CI. Unit/seam-test the bracket pieces (a faked

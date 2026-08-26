@@ -34,14 +34,13 @@ fn l1_reopening_a_virtio_console_port_does_not_kill_the_vm() {
         return;
     }
 
-    // The probe needs *a* virtio-console **data** port (`/dev/vportNpM`) to reopen, and a
-    // default L1 boot has none (its console is the only port, and console ports have no
-    // `port_fops` chardev to open). `LIMINA_SPICE_PORT=1` is the one named data port we
-    // have — the M12 spike's `com.redhat.spice.0`. The bug is not SPICE-specific; that port
-    // is just the cheapest way to get a reopenable port into the boot.
+    // The probe needs *a* virtio-console **data** port (`/dev/vportNpM`) to reopen; console
+    // ports have no `port_fops` chardev to open, so `hvc0` alone would not do. Every spawn
+    // now carries two named data ports — `com.redhat.spice.0` and `org.qemu.guest_agent.0` —
+    // and the probe takes the first. The bug is not specific to either: anything that
+    // reopens a port hits it, `systemctl restart qemu-guest-agent` included.
     let cfg = GuestConfig::l1_from_env()
         .expect("resolving L1 guest config")
-        .with_env("LIMINA_SPICE_PORT", "1")
         .append_cmdline("limina.port_reopen");
     eprintln!(
         "booting L1 guest with the port-reopen probe: {:?}",

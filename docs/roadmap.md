@@ -1530,6 +1530,69 @@ ping-pong. dogfood-guest is already shaped like this, so it is a real configurat
 
 ---
 
+## Milestone 12.5 — QEMU guest-agent support (stock tier; clock first)
+
+**Status: 🟢 step 1 shipped — the port, the client, and the guest clock.** Steps 2–5 below are not
+started.
+
+**Goal:** expose `org.qemu.guest_agent.0` and speak to the `qemu-guest-agent` that a stock guest
+*already has*, the same additive on-ramp M12 built for SPICE. `limina-agent` stays the enhanced-tier
+path; this is what a guest that never installs our components gets.
+
+### Load-bearing facts (measured 2026-08-26, in a booted F44 enhanced guest)
+
+- **The package ships by default.** Fedora's comps put `qemu-guest-agent` (with `spice-vdagent` and
+  `spice-webdavd`) in `guest-desktop-agents`, all **mandatory**, and that group is in the *mandatory*
+  grouplist of `workstation-product-environment` and of every other desktop environment. Server and
+  Cloud get `guest-agents` as an **optional** group. Ubuntu desktop ships `spice-vdagent` as a hard
+  dependency of `ubuntu-desktop`. **Debian ships neither by default** — not in `task-desktop`, not in
+  `gnome`, not in the official cloud images — so the fallback is simply absent there.
+- **The trigger is the port name**, not a DMI name table: `99-qemu-guest-agent.rules` matches
+  `SUBSYSTEM=="virtio-ports", ATTR{name}=="org.qemu.guest_agent.0"`, and the unit is
+  `BindsTo=dev-virtio\x2dports-org.qemu.guest_agent.0.device`. Confirmed: exposing the port on an
+  otherwise untouched guest brought `qemu-guest-agent-10.2.2-1.fc44` up on its own.
+- **Fedora blocks nothing.** `/etc/sysconfig/qemu-ga` ships with its `--block-rpcs` line commented
+  out; the guest answered `guest-info` with **43 commands, every one `enabled`** — `guest-exec`,
+  `guest-file-*`, `guest-set-user-password` and the ssh-key commands included, all as root. The
+  trust boundary is therefore ours: only the supervisor process holds the host end of the port.
+- **`guest-set-time` works against our PL031.** The agent sets `CLOCK_REALTIME` and then writes the
+  RTC; libkrun's `RTCLR` write arm stores it as an offset from host wallclock, so nothing rejects it.
+  Measured: a guest shoved 7200.3 s back was stepped to the host's clock within one tick, and again
+  after `systemctl restart qemu-guest-agent` (the port-reopen path, `l1_port_reopen.rs`).
+
+### Why the clock came first
+
+A stock guest that **stays running** across a host nap, or that ignores its RTC, had no corrector at
+all: the RTC path needs the guest kernel to consult it (s2idle thaw), our `TimeSync` needs
+`limina-agent`, and libkrun's vsock port-123 timesync has no consumer in our guests. The fallback
+rides the existing `limina-timesync` thread, which already carries both triggers — the oversleep
+detector (the host napped) and the periodic tick (drift) — and fires **only when no
+`timesync`-capable peer took the message**, so the enhanced tier always wins.
+
+### Shape
+
+- Worker: `console::attach_named_port` puts both agent ports on the bus; the supervisor makes the
+  socketpair per spawn (`--qga-fd`), exactly like `--spice-fd`, so the guest's device topology never
+  depends on how the VM was launched.
+- Supervisor: `crates/limina/src/qga/` — `codec` (pure line/sentinel framing), `client` (one
+  outstanding call under a mutex; `guest-sync-delimited` is the only resync; timeout classes and a
+  `fire` variant for the commands that answer nothing), `policy` (pure: when to step a clock).
+  `guest-info`'s per-command `enabled` flag is the capability gate for everything below.
+
+### Next steps
+
+2. **Lifecycle + inventory** — `guest-shutdown` as a rung in the shutdown ladder for a guest with no
+   `limina-agent`; `guest-get-osinfo` / `-host-name` / `-users` / `-fsinfo` / `-disks` /
+   `-network-get-interfaces` behind the VM menu and control center.
+3. **Storage integrity** — `guest-fsfreeze-freeze`/`-thaw` inside the snapshot bracket (app-consistent
+   snapshots, including the guest's own `/etc/qemu-ga/fsfreeze-hook.d` scripts), `guest-fstrim`
+   alongside reclaim.
+4. **Provisioning** — `guest-exec`, `guest-file-*`, `guest-ssh-add-authorized-keys`: deliver the
+   enhanced tier into a stock guest without needing SSH first, which is the bootstrap floor the
+   two-tier guarantee asks for.
+5. **Telemetry / hotplug ack** — `guest-get-diskstats`/`-cpustats`/`-load`; `guest-get/set-vcpus` and
+   the memory-block commands only if CPU/memory hotplug ever lands (ballooning covers memory today).
+
 ## Milestone 13 — Visibility- & power-aware runtime rendering adaptation
 
 **Status: 📋 planned — high-level design only (2026-07-21).** Builds directly on the wakeup-reduction

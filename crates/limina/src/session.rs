@@ -112,6 +112,9 @@ struct WindowedWorker {
     /// Host end of this worker's SPICE agent port (created by `spawn_worker`), handed to
     /// the control plane so a stock guest gets a clipboard.
     spice_host: OwnedFd,
+    /// Host end of this worker's QEMU guest-agent port, handed to the control plane so a
+    /// stock guest's clock can be corrected without any limina component installed.
+    qga_host: OwnedFd,
 }
 
 /// Spawn a worker in `--display-window` mode and wire fresh scanout/input/ack socketpairs to
@@ -216,6 +219,7 @@ fn spawn_windowed_worker(
         sup,
         io: window::WorkerIo::new(pid, kbd_sup, ptr_sup, rel_ptr_sup, ack),
         spice_host: spawned.spice_host,
+        qga_host: spawned.qga_host,
     })
 }
 
@@ -332,6 +336,7 @@ impl WindowedSession {
             sup,
             io,
             spice_host,
+            qga_host,
         } = spawn_windowed_worker(
             &vmm_bin,
             &base_args,
@@ -345,6 +350,7 @@ impl WindowedSession {
             },
         )?;
         attach_vdagent(control.as_ref(), spice_host);
+        attach_qga(control.as_ref(), qga_host);
         let conn = window::WorkerConn::new(io);
         let shared = window::Shared::new();
         window::spawn_reader(sup, shared.clone(), surface_map.clone());
@@ -490,6 +496,7 @@ impl WindowedSession {
                 // The fresh worker owns a fresh SPICE port; the old broker's reader is
                 // already unblocking on the dead worker's closed end.
                 attach_vdagent(monitor_control.as_ref(), next.spice_host);
+                attach_qga(monitor_control.as_ref(), next.qga_host);
                 // Before the reader starts, so the fresh worker's first lines survive it.
                 window::mark_worker_swapped(&monitor_shared, resuming);
                 window::spawn_reader(
@@ -597,6 +604,18 @@ fn attach_vdagent(control: Option<&control::ControlPlane>, spice_host: OwnedFd) 
     let Some(cp) = control else { return };
     if let Err(e) = cp.attach_vdagent(spice_host) {
         log::warn!("clipboard: no SPICE agent transport: {e:#}");
+    }
+}
+
+/// Hand a freshly-spawned worker's QEMU guest-agent port to the control plane.
+///
+/// Best-effort for the same reason as the SPICE one above: a guest with no
+/// `qemu-guest-agent` installed simply never answers, and losing the port costs only the
+/// stock-tier features that ride it.
+fn attach_qga(control: Option<&control::ControlPlane>, qga_host: OwnedFd) {
+    let Some(cp) = control else { return };
+    if let Err(e) = cp.attach_qga(qga_host) {
+        log::warn!("qga: no guest-agent transport: {e:#}");
     }
 }
 

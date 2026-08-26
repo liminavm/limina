@@ -143,6 +143,11 @@ struct Cli {
     #[arg(long)]
     spice_fd: Option<i32>,
 
+    /// fd of the guest's QEMU guest-agent port (`org.qemu.guest_agent.0`), created and
+    /// driven by the supervisor. Same shape as --spice-fd: no flag, no port, no agent.
+    #[arg(long)]
+    qga_fd: Option<i32>,
+
     /// fd of the worker→supervisor control channel (used with --display-window).
     #[arg(long, requires = "display_window")]
     control_fd: Option<i32>,
@@ -663,6 +668,7 @@ fn main() -> Result<()> {
             input: cli.virtio_console_input,
         }),
         spice_fd: cli.spice_fd,
+        qga_fd: cli.qga_fd,
         display,
         input,
         net,

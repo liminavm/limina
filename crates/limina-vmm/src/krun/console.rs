@@ -131,16 +131,42 @@ pub fn attach_virtio(vmr: &mut VmResources, spec: &VirtioConsoleSpec) -> Result<
 /// (The `LIMINA_SPICE_PORT=1` probe this replaced lived in `spikes/m12-spice-port/`, which
 /// keeps the transcript of the protocol experiments that settled the broker's behavior.)
 pub fn attach_spice_port(vmr: &mut VmResources, guest_fd: RawFd) -> Result<()> {
+    attach_named_port(vmr, "com.redhat.spice.0", guest_fd)?;
+    log::info!("spice: exposed the guest agent port com.redhat.spice.0");
+    Ok(())
+}
+
+/// Expose the **named** virtio-serial data port `org.qemu.guest_agent.0` on `guest_fd`.
+///
+/// The stock `qemu-guest-agent` is gated the same way `spice-vdagent` is, one layer down:
+/// `/usr/lib/udev/rules.d/99-qemu-guest-agent.rules` matches
+/// `SUBSYSTEM=="virtio-ports", ATTR{name}=="org.qemu.guest_agent.0"`, and the unit itself is
+/// `BindsTo=dev-virtio\x2dports-org.qemu.guest_agent.0.device`. Fedora's comps make the
+/// package mandatory in every desktop variant, so on a stock guest this port is the entire
+/// installation cost of the guest agent. The supervisor speaks the protocol
+/// (`crates/limina/src/qga/`); nothing here parses a byte.
+pub fn attach_qga_port(vmr: &mut VmResources, guest_fd: RawFd) -> Result<()> {
+    attach_named_port(vmr, "org.qemu.guest_agent.0", guest_fd)?;
+    log::info!("qga: exposed the guest agent port org.qemu.guest_agent.0");
+    Ok(())
+}
+
+/// Put one named bidirectional data port on the guest's virtio-console device.
+///
+/// Appends to the existing explicit console device when there is one, so the ports land
+/// after `hvc0` in attach order (`/dev/vport0p1`, `/dev/vport0p2`, …); otherwise stands up a
+/// device just for this port. Guests find these by *name* under `/dev/virtio-ports/`, so the
+/// index is not load-bearing for any udev rule — but the order is deterministic anyway,
+/// which keeps a guest's device topology identical across launches.
+fn attach_named_port(vmr: &mut VmResources, name: &str, guest_fd: RawFd) -> Result<()> {
     // One fd for both directions: libkrun dups it separately for input and output
     // (`create_explicit_ports` -> `input_to_raw_fd_dup`), so there is no double close.
     let port = PortConfig::InOut {
-        name: "com.redhat.spice.0".to_string(),
+        name: name.to_string(),
         input_fd: guest_fd,
         output_fd: guest_fd,
     };
 
-    // Append to the existing explicit console device if there is one (so our port lands as
-    // port 1 = /dev/vport0p1 alongside hvc0); otherwise stand up a device just for it.
     match vmr.virtio_consoles.iter_mut().find_map(|c| match c {
         VirtioConsoleConfigMode::Explicit(ports) => Some(ports),
         _ => None,
@@ -150,8 +176,6 @@ pub fn attach_spice_port(vmr: &mut VmResources, guest_fd: RawFd) -> Result<()> {
             .virtio_consoles
             .push(VirtioConsoleConfigMode::Explicit(vec![port])),
     }
-
-    log::info!("spice: exposed the guest agent port com.redhat.spice.0");
     Ok(())
 }
 

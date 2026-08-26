@@ -307,13 +307,18 @@ pub struct Spawned {
     /// Host end of the guest's `com.redhat.spice.0` port — hand it to
     /// [`crate::control::ControlPlane::attach_vdagent`] to get a clipboard.
     pub spice_host: OwnedFd,
+    /// Host end of the guest's `org.qemu.guest_agent.0` port — hand it to
+    /// [`crate::control::ControlPlane::attach_qga`] to reach a stock guest's
+    /// `qemu-guest-agent`.
+    pub qga_host: OwnedFd,
 }
 
 /// Spawn the worker in its own process group. `inherit_fds` are extra file descriptors
 /// the child should keep open across exec (the windowed control channel) — Rust sets
 /// `O_CLOEXEC` on fds it doesn't know about, so we clear it via `pre_exec`.
 ///
-/// The SPICE agent port is created **here**, for every spawn, rather than at each call
+/// The two stock-agent ports (SPICE's `com.redhat.spice.0`, QEMU's
+/// `org.qemu.guest_agent.0`) are created **here**, for every spawn, rather than at each call
 /// site. Two reasons: the guest's device topology must not depend on how the VM was
 /// started (a headless run and a windowed run that differ in device count would restore
 /// each other's snapshots wrong), and "one port per spawn" is what makes the broker's
@@ -327,6 +332,8 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     let (spice_host, spice_worker) = socketpair(libc::SOCK_STREAM)?;
     cmd.arg("--spice-fd")
         .arg(spice_worker.as_raw_fd().to_string());
+    let (qga_host, qga_worker) = socketpair(libc::SOCK_STREAM)?;
+    cmd.arg("--qga-fd").arg(qga_worker.as_raw_fd().to_string());
     // Auto-resume (M9.4): decided HERE, per spawn, never via spec.args — see
     // `take_pending_resume` for why (a reboot relaunch must cold-boot, not re-restore).
     if let Some(snap) = &spec.snapshot_file {
@@ -354,6 +361,7 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     {
         let mut fds = inherit_fds.to_vec();
         fds.push(spice_worker.as_raw_fd());
+        fds.push(qga_worker.as_raw_fd());
         // SAFETY: only async-signal-safe fcntl calls between fork and exec.
         unsafe {
             cmd.pre_exec(move || {
@@ -377,8 +385,13 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     // The worker holds its own copy now; dropping ours means the broker's reader sees EOF
     // when the worker exits, which is how a reboot relaunch unblocks the old reader thread.
     drop(spice_worker);
+    drop(qga_worker);
     WORKER_PID.store(child.id() as i32, Ordering::Release);
-    Ok(Spawned { child, spice_host })
+    Ok(Spawned {
+        child,
+        spice_host,
+        qga_host,
+    })
 }
 
 /// The live worker's pid — the leader of its own process group — for the panic hook. Zero
@@ -536,6 +549,9 @@ pub fn run(
         if let Some(cp) = control {
             if let Err(e) = cp.attach_vdagent(spawned.spice_host) {
                 log::warn!("clipboard: no SPICE agent transport: {e:#}");
+            }
+            if let Err(e) = cp.attach_qga(spawned.qga_host) {
+                log::warn!("qga: no guest-agent transport: {e:#}");
             }
         }
         let code = monitor(spawned.child, spec.shutdown_grace, control)?;
