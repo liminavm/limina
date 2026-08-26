@@ -17,6 +17,8 @@
 #   vrend-trace-decode.py <dump> --ctx              draw targets per virgl context
 #   vrend-trace-decode.py <dump> --uploads          how each glyph draw's vertex data arrived
 #   vrend-trace-decode.py <dump> --fingerprint [ctx] full draw state of every glyph draw
+#   vrend-trace-decode.py <dump> --resources       the resource create/destroy log
+#   vrend-trace-decode.py <dump> --replayable      can this trace be replayed at all?
 #
 # --uploads is the comparison that characterised this bug. For every draw whose vertex bindings
 # include a zero stride (the constant-colour attribute unique to the glyph pipeline) it reports
@@ -95,7 +97,11 @@ CCMD = {
     63: "GET_PIPE_RESOURCE_LAYOUT",
 }
 
-TYPES = {1: "SUBMIT", 2: "CMD", 3: "DRAW_FB", 4: "TRANSFER", 5: "FENCE", 6: "RETIRE", 7: "PAD"}
+TYPES = {1: "SUBMIT", 2: "CMD", 3: "DRAW_FB", 4: "TRANSFER", 5: "FENCE", 6: "RETIRE", 7: "PAD",
+         9: "XFERDATA"}
+RES_KIND = {0: "create", 1: "blob", 2: "unref"}
+# struct vrend_trace_res: u64 seq, then kind + 11 u32 fields.
+RES = struct.Struct("<Q12I")
 HDR = struct.Struct("<IBBHQQII")   # total_len, type, cmd, ctx, seq, mono_ns, payload_len, aux_count
 
 
@@ -111,7 +117,20 @@ def load(path):
         "base_mono_ns": head[8] | (head[9] << 32),
         "base_real_ns": head[10] | (head[11] << 32),
     }
-    recs, off = [], 64
+    # v2 puts the resource log between the header and the ring: resources are created on the
+    # CONTROL path, never in the command stream, so a trace without this cannot be replayed.
+    meta["res_full"] = bool(head[13]) if meta["version"] >= 2 else False
+    resources, off = [], 64
+    if meta["version"] >= 2:
+        for _ in range(head[12]):
+            f = RES.unpack_from(blob, off)
+            resources.append({"seq": f[0], "kind": f[1], "handle": f[2], "target": f[3],
+                              "format": f[4], "bind": f[5], "width": f[6], "height": f[7],
+                              "depth": f[8], "array_size": f[9], "last_level": f[10],
+                              "nr_samples": f[11], "flags": f[12]})
+            off += RES.size
+    meta["resources"] = resources
+    recs = []
     while off + HDR.size <= len(blob):
         total, typ, cmd, ctx, seq, mono, plen, aux_n = HDR.unpack_from(blob, off)
         if total < HDR.size or off + total > len(blob):
@@ -135,6 +154,9 @@ def describe(r):
     if typ == 4:
         return ("%-8s res=%d mode=%d level=%d box=%d,%d %dx%d stride=%d"
                 % (t, aux[0], aux[1], aux[2], aux[3], aux[4], aux[5], aux[6], aux[7]))
+    if typ == 9:
+        off = aux[1] | (aux[2] << 32) if len(aux) > 2 else 0
+        return "%-8s res=%d offset=%d bytes=%d" % (t, aux[0], off, len(payload))
     if typ == 5:
         fid = struct.unpack("<Q", payload)[0] if len(payload) == 8 else 0
         return "%-8s ctx=%d flags=%d id=%d" % (t, ctx, aux[0] if aux else 0, fid)
@@ -153,6 +175,10 @@ def main():
     meta, recs = load(path)
     args = sys.argv[2:]
 
+    if meta.get("resources"):
+        print("resource log: %d events%s"
+              % (len(meta["resources"]),
+                 "  <-- FULL, trace is NOT replayable" if meta["res_full"] else ""))
     print("ring %d MB, %d bytes live, %d records total, %d EVICTED%s"
           % (meta["ring_mb"], meta["used"], meta["records"], meta["evicted"],
              "  <-- window does not reach the start" if meta["evicted"] else ""))
@@ -295,6 +321,92 @@ def main():
                     print("  draw: start=%d count=%d mode=%d indexed=%d instances=%d"
                           % (dw[1], dw[2], dw[3], dw[4], dw[5] if len(dw) > 5 else 1))
                 created.clear()
+        return
+
+    if "--replayable" in args:
+        # Completeness gate for stream replay, the same class of check as the duplicate-seq gate
+        # above: a trace that LOOKS complete but is not must announce itself, or the replayer's
+        # failures get chased as replayer bugs.
+        #
+        # Every handle the command stream touches must have a create event that precedes its first
+        # use. The way this fails is structural, not random: resources are created on the CONTROL
+        # path, and the guest KMS driver makes its scanout and cursor resources at boot -- long
+        # before any 3D client submits. Anything created while the tracer was still disarmed is
+        # referenced forever and logged never.
+        births, deaths = {}, {}
+        for e in meta.get("resources", []):
+            if e["kind"] == 2:
+                deaths.setdefault(e["handle"], []).append(e["seq"])
+            else:
+                births.setdefault(e["handle"], []).append(e["seq"])
+        refs = collections.defaultdict(list)   # handle -> [(seq, what)]
+
+        def ref(h, seq, what):
+            if h:
+                refs[h].append((seq, what))
+
+        for r in recs:
+            if r[1] != 2 or len(r[6]) < 4:
+                continue
+            dw = struct.unpack("<%dI" % (len(r[6]) // 4), r[6])
+            name = CCMD.get(r[2])
+            if name == "TRANSFER3D" and len(dw) > 1:
+                ref(dw[1], r[0], "TRANSFER3D")
+            elif name == "COPY_TRANSFER3D":
+                if len(dw) > 1:
+                    ref(dw[1], r[0], "COPY_TRANSFER3D dst")
+                if len(dw) > 12:
+                    ref(dw[12], r[0], "COPY_TRANSFER3D src")
+            elif name == "SET_VERTEX_BUFFERS":
+                for k in range((len(dw) - 1) // 3):
+                    ref(dw[3 + 3 * k], r[0], "SET_VERTEX_BUFFERS[%d]" % k)
+            elif name == "SET_INDEX_BUFFER" and len(dw) > 1:
+                ref(dw[1], r[0], "SET_INDEX_BUFFER")
+            elif name == "RESOURCE_INLINE_WRITE" and len(dw) > 1:
+                ref(dw[1], r[0], "RESOURCE_INLINE_WRITE")
+            elif name in ("BLIT", "RESOURCE_COPY_REGION") and len(dw) > 2:
+                ref(dw[1], r[0], name + " dst")
+                ref(dw[2], r[0], name + " src")
+            elif name == "CREATE_OBJECT" and len(dw) > 2:
+                kind = (dw[0] >> 8) & 0xFF
+                if kind in (3, 8):   # sampler view, surface -- both name a resource
+                    ref(dw[2], r[0], "CREATE_OBJECT %s" % ("sampler_view" if kind == 3 else "surface"))
+
+        missing, late = [], []
+        for h, uses in refs.items():
+            first = min(u[0] for u in uses)
+            b = births.get(h)
+            if not b:
+                missing.append((h, first, len(uses), uses[0][1]))
+            elif min(b) > first:
+                late.append((h, first, min(b), len(uses)))
+
+        print("\nreplayability: %d distinct handles referenced by the stream, %d created in the log"
+              % (len(refs), len(births)))
+        if late:
+            print("  !! %d handles first used BEFORE their create event (seq skew or reuse)" % len(late))
+            for h, f, b, n in sorted(late)[:10]:
+                print("     res %-6d first use seq %-9d create seq %-9d (%d uses)" % (h, f, b, n))
+        if missing:
+            tot = sum(m[2] for m in missing)
+            print("  !! %d handles NEVER created in the log (%d references) -- trace is NOT replayable"
+                  % (len(missing), tot))
+            for h, f, n, what in sorted(missing, key=lambda m: -m[2])[:15]:
+                print("     res %-6d %5d refs, first at seq %-9d as %s" % (h, n, f, what))
+        else:
+            print("  every referenced handle has a create event: replayable")
+        return
+
+    if "--resources" in args:
+        for r in meta.get("resources", []):
+            if r["kind"] == 2:
+                print("seq %-9d unref  res=%d" % (r["seq"], r["handle"]))
+            else:
+                print("seq %-9d %-6s res=%-6d target=%d format=%d bind=0x%x %dx%dx%d "
+                      "array=%d levels=%d samples=%d flags=0x%x"
+                      % (r["seq"], RES_KIND.get(r["kind"], "?"), r["handle"], r["target"],
+                         r["format"], r["bind"], r["width"], r["height"], r["depth"],
+                         r["array_size"], r["last_level"], r["nr_samples"], r["flags"]))
         return
 
     if "--list" in args:

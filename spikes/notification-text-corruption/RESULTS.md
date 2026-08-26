@@ -1298,46 +1298,87 @@ and depth-texture churn makes KosmicKrisp's allocator pool grow without bound
 (`[LIMINA-ALLOC-POOL] class 0 grew to 301 allocators (budget 4 MiB) -- in-flight depth is
 outrunning completion`). It does not affect the verdict here.
 
+## The stream replay: the fault reproduces on the host, with no VM
+
+The captured vrend command stream, replayed through libvirglrenderer on the host with no guest and
+no compositor, loses the notification header exactly as the real session does. `vrend-replay.c`
+takes a trace, recreates every resource on the control path, feeds the recorded bytes into their
+backing stores, submits the batches, and reads the offscreens back.
+
+What one sweep reports, deterministic across runs:
+
+| offscreen | contents (read from the pixels) | card 1 | cards 2-12 |
+|---|---|---|---|
+| 968x44 | title, "Critical Updates 001" | inked | **blank** |
+| 110x38 | timestamp, "Just now" | inked | **blank** |
+| 134x44 | header element | inked | **blank** |
+| 38x38 | icon | inked | **blank** |
+| 568x44 | body, "install critical updates as soon as possible" | 23 px | **4668 px, every card** |
+
+That is the reported fault: the card keeps its background and body and loses the header row, the
+icon and the title. Eleven damaged cards, against a live session `bannerprobe` scored 11/11
+damaging immediately before the dump.
+
+**Name the offscreens from pixels, not from geometry.** A note in this tree had 968x44 and 568x44
+swapped, which inverts the verdict — the same run reads as "the title renders and the body is lost".
+`REPLAY_DUMP_W=568 REPLAY_DUMP_DIR=<dir>` plus `rgba2png.py` puts the actual text on screen.
+
+**Why this is not a replay artefact.** Card 1 and cards 2-12 are structurally identical — same
+sizes, same two draws per offscreen, same D24S8 depth sibling — and only the later ones lose their
+text. Any missing replay input takes card 1 with it, and a gap in what the trace captured before it
+armed would hit the *earliest* cards hardest; the differential runs the other way. The depth
+attachment does not discriminate either: every offscreen in both classes has one, which finally puts
+a measurement under the long-standing D24S8-emulation suspicion instead of another exoneration that
+never had it under test.
+
+Controls, run before reading any of it: `--nodraw` leaves all 58 card offscreens blank (the five
+that keep ink are upload-fed icons, which draw nothing), two further sweeps reproduce the ink
+signature bit for bit, and all 675 copy-payload correlations are verified rather than assumed —
+0 unmatched.
+
+### What made the replay lie before it worked
+
+Four defects, each of which produced a confident blank verdict:
+
+- **The iov must reach vrend, and passing it to create prevents that.**
+  `virgl_renderer_resource_create` stores the iov on the *virgl* resource and stops — its signature
+  marks the parameter `UNUSED` — while vrend's resource, the one every transfer reads, is fed only
+  by `virgl_renderer_resource_attach_iov`. The two are mutually exclusive: `attach_iov` returns
+  `EINVAL` when an iov is already set. Create with NULL, then attach.
+- **`COPY_TRANSFER3D` payloads belong to the SOURCE.** vrend captures the bytes inside
+  `transfer_write_iov`, which the copy path reaches as `transfer_write_iov(dst_res, src_res->iov, …)`,
+  so the record is keyed by dst while the offset and the bytes belong to src. Seeding dst put 675 of
+  1617 uploads where nothing reads them and left the real source at zeros. No recapture is needed to
+  correlate them: command records are written *after* their dispatch, so the next CMD in the context
+  is the copy that produced the payload.
+- **Score at the resource's UNREF, never by suppressing it.** virgl handles are REUSED, so a
+  survivor makes a later create collide and everything downstream of it stops rendering.
+- **"0 submit errors" is not a clean replay.** It counts only `submit_cmd`'s return; per-command
+  dispatch failures inside a batch never reach it. The first run that passed that gate had 168
+  dropped draws.
+
+And one in vrend itself: `vrend_renderer_transfer_iov` reports `ILLEGAL_RESOURCE` both for "the
+context does not know this handle" and for "it does, but there is no backing iov". Reading one for
+the other costs a session chasing resource attachment for what is a backing bug. `LIMINA_ATTACH_TRACE`
+now separates them, and also prints which branch `vrend_renderer_attach_res_ctx` takes.
+
 ## Next
 
-Nothing above the host driver survives, and both remaining ways of watching the driver from inside
-it are now closed: every GL-side readback cures the fault, and so does a Metal capture.
+The fault now reproduces in a single-process host program with no VM, no compositor and no guest,
+deterministically. That changes what is worth doing next: every question below is answerable by
+editing and re-running one binary in seconds.
 
-1. **What is the second draw meant to be?** It is a distinct cogl pipeline targeting the label's
-   offscreen right after the text lands. Identify it on the *guest* side -- a vec2-position,
-   float4-colour, stride-16 layout with one constant (stride-0) attribute is a small enough
-   fingerprint to name in cogl. Whether it is a legitimate draw that should be empty, or the text
-   draw arriving through the wrong pipeline, decides everything downstream.
-2. **Why does it rasterise nothing here, when the same guest GL renders correctly under llvmpipe?**
-   Compare what that pipeline is fed on both paths. The stride-0 binding is the first thing to
-   check: a constant vertex attribute is exactly the kind of thing a virgl/vrend round trip can
-   mistranslate. These are guest- and vrend-side questions; nothing further is owed by
-   KosmicKrisp, which faithfully compiles what it is given.
-2. **A bisect is NOT available.** It needs a known-good revision and there is no evidence this path
-   ever rendered these cards correctly -- so there is nothing to search toward. Do not start one
-   without first establishing a good end.
-2. **Instrument `kk_draw` further only with reads that cost nothing.** The Metal buffers are
-   CPU-visible, so the geometry, the atlas and the attachment were all read with no synchronisation
-   -- and all came back identical. Anything needing a fence belongs to the cured-it class.
+1. **Bisect the trace.** This is the search that was unavailable while the only vehicle was a live
+   session: card 1 renders its header and cards 2-12 do not, in one deterministic stream, so there
+   IS a known-good end now. Find the first submitted batch after which the header stops arriving.
+2. **Bisect KosmicKrisp against it.** With a fixed input and a pixel oracle, the host driver can be
+   changed and re-scored directly.
+3. **Instrument the host Vulkan driver on the failing draw.** The same technique that turned "venus
+   renders black" into one fact -- the vertex buffer the GPU fetches is all-zero -- now costs a
+   rebuild and a rerun rather than a boot cycle.
 
-Old items, still open:
-
-1. **Find what the second render does differently.** It is the same 18 draws into the same target,
-   yet one lands and one does not. The next probe is inside that second pass: does the host see the
-   draws at all (count them in vrend), or does it see them and produce nothing? Those separate a
-   dropped submission from a pass that runs and writes nowhere.
-2. **Find which composite reaches the screen.** The stage samples the label repeatedly per card;
-   only one of those results is presented. A frame counter on the probe, correlated with the
-   presented scanout, says whether the presented frame is always an empty-sample one -- which is
-   what the damage rate implies but nothing yet proves.
-2. **Then ask why it is empty, given the guest issued the draws first.** The cheap discriminator is
-   identity: log the GL texture id attached to the 968x44 *render target* when the guest draws the
-   title, and compare it against the id the stage samples. Different ids means the content is being
-   written to one object and read from another -- an aliasing or reallocation fault, and a very
-   different fix from an ordering one.
-
-The instrumented mutter stays installed in the poke guest and every arm is one `glyph-arm.sh` call,
-so re-measuring any of this is cheap.
+The trace this rests on predates neither fix in `vrend_trace.c`, so a recapture will be cleaner
+still; it is not needed for the above.
 
 ## Traps this rig exists to avoid
 
