@@ -72,8 +72,8 @@ Ranked roughly by blast radius / reviewer-readiness. None are blocked on disclos
 - mesa: **0014** (zink lost-wakeup deadlock — byte-for-byte on main, + the trywait timespec has
   silently never waited), **0013** (venus ICD TLS-destructor pin), **0002** (fbobject NULL guard),
   **0003+0004** as one MR, **0020** (zink missed pipeline rebind when vertex
-  input is static — generic to any driver without `EXT_vertex_input_dynamic_state`; **main not yet
-  checked**).
+  input is static — generic to any driver without `EXT_vertex_input_dynamic_state`; **verified live on main
+  `1a4286e1abb`** 2026-08-17, tracker not yet searched).
 - KK: **0009** (vk_meta empty rects — broad audience), the monolith's **dm nil-check** and
   **2DArray→2D demotion**.
 - virgl: **0020 / 0021 / 0023 / 0057** (vrend correctness + macOS enablement), **0002** (kqueue
