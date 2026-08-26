@@ -1332,9 +1332,54 @@ a measurement under the long-standing D24S8-emulation suspicion instead of anoth
 never had it under test.
 
 Controls, run before reading any of it: `--nodraw` leaves all 58 card offscreens blank (the five
-that keep ink are upload-fed icons, which draw nothing), two further sweeps reproduce the ink
-signature bit for bit, and all 675 copy-payload correlations are verified rather than assumed —
-0 unmatched.
+that keep ink are upload-fed icons, which draw nothing), and all 675 copy-payload correlations are
+verified rather than assumed — 0 unmatched.
+
+**The vehicle is deterministic.** Six sweeps in a row: 214 verdicts, 0 submit errors, identical
+values throughout.
+
+It was not, and the cause is worth keeping because it produced convincing wrong answers rather than
+crashes. `backing_add` held the replayer's backing stores in a `realloc`'d array of structs and
+handed vrend `&b->iov`. vrend stores that `struct iovec *` and dereferences it for the resource's
+whole life, so **every previously attached resource dangled the moment the array outgrew its
+capacity**. Whether that mattered depended on whether realloc happened to move the block, which is
+why the same trace would sometimes sail through and sometimes report `src iov_len=0` on one copy
+transfer. Hold backings by POINTER; a backing's iovec must never move.
+
+The failure downstream of that is the part to recognise again: **one rejected command poisons the
+context permanently, and everything after it fails in silence.** `vrend_report_context_error` sets
+`ctx->in_error`, `vrend_hw_switch_context` refuses a context in error, and
+`vrend_decode_ctx_submit_cmd` then returns EINVAL with no message of its own. So a single bad
+COPY_TRANSFER3D turned into 391 silently failed submits and 115 failed readbacks — and the process
+still **exited 0**, having printed 105 verdicts instead of 214. A short verdict list is the only
+symptom. Check the count and the submit-error total on every run; a missing verdict means the run
+never got there, not that the offscreen was blank.
+
+### The host-implementation split, reproduced inside the replay
+
+The same trace, the same binary and the same commands, with only the host GL implementation
+swapped underneath vrend. Both arms run `LIMINA_VREND_IOSURFACE=0`, so the scanout path is held
+constant too and the driver is the single variable. Twelve title offscreens, card 1 first:
+
+| host GL | 968x44 title offscreens |
+|---|---|
+| zink → KosmicKrisp → Metal | `I...........` |
+| llvmpipe | `IIIIIIIIIIII` |
+
+Three runs of each, identical every time. Under llvmpipe every title renders (3145-3399 inked
+pixels, varying as the banner numbers do); under zink-on-KK eleven of twelve are exactly zero.
+
+  MESA_PREFIX=/Volumes/mesa-cs/zink-llvmpipe-prefix LIMINA_HOST_GALLIUM=llvmpipe \
+    LIMINA_VREND_IOSURFACE=0 ./replay-host.sh <trace> --sweep --sweep-w 968
+
+llvmpipe needs `LIMINA_VREND_IOSURFACE=0` or it asserts in `init_scene_texture` on a map failure —
+the same assert the live split hit, for the same reason.
+
+This retires the live split's stated caveat, that llvmpipe's cleanliness might be timing
+suppression because it is slower. There is no live session here and no compositor to race: the
+replay submits a fixed recorded stream at its own pace in both arms. The zink-on-KK result is also
+perfectly deterministic — eleven blank, one inked, to the pixel, on every run — which is not how a
+timing race behaves.
 
 ### What made the replay lie before it worked
 
@@ -1364,21 +1409,33 @@ now separates them, and also prints which branch `vrend_renderer_attach_res_ctx`
 
 ## Next
 
-The fault now reproduces in a single-process host program with no VM, no compositor and no guest,
-deterministically. That changes what is worth doing next: every question below is answerable by
-editing and re-running one binary in seconds.
+The fault reproduces in a single-process host program with no VM, no compositor and no guest,
+deterministically, and the host-implementation split runs inside it. Every question below is now
+answerable by editing and re-running one binary.
 
-1. **Bisect the trace.** This is the search that was unavailable while the only vehicle was a live
-   session: card 1 renders its header and cards 2-12 do not, in one deterministic stream, so there
-   IS a known-good end now. Find the first submitted batch after which the header stops arriving.
-2. **Bisect KosmicKrisp against it.** With a fixed input and a pixel oracle, the host driver can be
-   changed and re-scored directly.
-3. **Instrument the host Vulkan driver on the failing draw.** The same technique that turned "venus
-   renders black" into one fact -- the vertex buffer the GPU fetches is all-zero -- now costs a
-   rebuild and a rerun rather than a boot cycle.
+1. **A git bisect is still NOT available, and llvmpipe is not a substitute for one.** It needs a
+   known-good KK *revision*, and there is still no evidence this path ever rendered these cards
+   correctly. llvmpipe is a different driver, not an earlier KK — it makes an excellent
+   differential and a useless bisect endpoint. Do not start one without first establishing a good
+   end.
 
-The trace this rests on predates neither fix in `vrend_trace.c`, so a recapture will be cleaner
-still; it is not needed for the above.
+   What the replay does change is the **cost of looking for one**: testing a candidate revision
+   used to mean a boot and a live damaging session, and now it is one replay run. The cheapest
+   probe worth taking is whether the fault survives with our own `limina-kk` commits reverted to
+   their upstream base — one build, and it answers whether we introduced it. If any revision comes
+   back clean, a real bisect opens up; until one does, the work is code-path narrowing, not history
+   search.
+2. **Narrow to the draw — this is the actual next step.** Two differentials are in hand, both
+   about code paths rather than history: across drivers (llvmpipe renders, KK does not, same
+   stream) and within one KK run (card 1 renders, cards 2-12 do not). Card 12's command stream is card 1's modulo handles -- same CLEAR, same
+   sampler views, bit-identical viewport and constant-buffer values, same `BIND_OBJECT 18`, same
+   108-index draw at offsets 0/12/16, and title vertex buffers that are both 2304-byte resources
+   taking a single 2304-byte upload. One renders and one does not, so instrument KK on that draw
+   and compare the two arms directly.
+3. **The damage is not accumulated rasterisation.** `--draws-from 50000` drops every draw before
+   card 12 while keeping every resource, transfer and state command; card 12 still loses its title
+   and still renders its body. Whatever carries it is not the earlier cards' drawing -- which makes
+   per-draw state inside KK, not wear, the thing to look at.
 
 ## Traps this rig exists to avoid
 

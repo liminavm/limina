@@ -84,14 +84,20 @@ struct backing {
    bool     live;
 };
 
-static struct backing *backings;
+/* An array of POINTERS, never of structs. vrend stores the `struct iovec *` it is handed and
+ * dereferences it for the resource's whole life, so a backing's iovec must never move. Holding
+ * the backings by value in a realloc'd array left every previously attached resource pointing
+ * into freed memory the moment the array grew past its capacity -- which is why a run would
+ * sometimes sail through and sometimes report `src iov_len=0`, poison the context on one failed
+ * copy, and then fail every submit and readback after it in silence. */
+static struct backing **backings;
 static uint32_t backing_n, backing_cap;
 
 static struct backing *backing_find(uint32_t handle)
 {
    for (uint32_t i = 0; i < backing_n; i++)
-      if (backings[i].live && backings[i].handle == handle)
-         return &backings[i];
+      if (backings[i]->live && backings[i]->handle == handle)
+         return backings[i];
    return NULL;
 }
 
@@ -102,8 +108,9 @@ static struct backing *backing_add(uint32_t handle, size_t size)
       backings = realloc(backings, backing_cap * sizeof *backings);
       if (!backings) { fprintf(stderr, "OOM\n"); exit(2); }
    }
-   struct backing *b = &backings[backing_n++];
-   memset(b, 0, sizeof *b);
+   struct backing *b = calloc(1, sizeof *b);
+   if (!b) { fprintf(stderr, "OOM\n"); exit(2); }
+   backings[backing_n++] = b;
    b->handle = handle;
    b->size = size ? size : 4096;
    b->mem = calloc(1, b->size);
@@ -244,6 +251,12 @@ static void score_resource(const struct res_ev *ev)
    struct iovec riov = { .iov_base = px, .iov_len = need };
    struct virgl_box box = { .x = 0, .y = 0, .z = 0, .w = w, .h = h, .d = 1 };
 
+   /* force_ctx_0 is load-bearing: without it the readback segfaults. It is also why scoring is
+    * only trustworthy in a FULL --sweep. It switches the renderer away from the replayed context
+    * and the stream never switches back, so batches after the first score are damaged; a full
+    * sweep scores from the very start and reads each resource before that matters, while a sparse
+    * one (--sweep-w, or a single --readback) submits hundreds of batches after the switch and
+    * reports 373 submit errors. Narrowing the readbacks needs this fixed first. */
    virgl_renderer_force_ctx_0();
    int rr = virgl_renderer_transfer_read_iov(ev->handle, (uint32_t)want_ctx, 0, w * 4, 0,
                                              &box, 0, &riov, 1);
@@ -281,6 +294,8 @@ int main(int argc, char **argv)
    int loops = 1;
    bool nodraw = false;
    bool sweep = false;
+   uint64_t draws_from = 0;
+   uint32_t sweep_w = 0;
 
    bool no_unref = getenv("REPLAY_NO_UNREF") != NULL;
    uint32_t watch = getenv("REPLAY_WATCH") ? (uint32_t)atoi(getenv("REPLAY_WATCH")) : 0;
@@ -288,6 +303,10 @@ int main(int argc, char **argv)
    for (int i = 1; i < argc; i++) {
       if (!strcmp(argv[i], "--ctx") && i + 1 < argc) want_ctx = atoi(argv[++i]);
       else if (!strcmp(argv[i], "--sweep")) sweep = true;
+      else if (!strcmp(argv[i], "--sweep-w") && i + 1 < argc)
+         sweep_w = (uint32_t)atoi(argv[++i]);
+      else if (!strcmp(argv[i], "--draws-from") && i + 1 < argc)
+         draws_from = strtoull(argv[++i], NULL, 10);
       else if (!strcmp(argv[i], "--loops") && i + 1 < argc) loops = atoi(argv[++i]);
       else if (!strcmp(argv[i], "--nodraw")) nodraw = true;
       else if (!strcmp(argv[i], "--readback") && i + 1 < argc) readback_res = (uint32_t)atoi(argv[++i]);
@@ -393,6 +412,12 @@ int main(int argc, char **argv)
          case T_CMD: {
             size_t dw = h.payload_len / 4;
             if (nodraw && h.cmd == VIRGL_CCMD_DRAW_VBO) break;   /* the positive control */
+            /* --draws-from is the bounded form of --nodraw, and it asks the one question the
+             * replay was built for: is the fault ACCUMULATED? Every resource, transfer and state
+             * command still runs, so a later card is set up exactly as captured -- only the
+             * earlier cards' rasterisation is removed. If that card then renders its header, the
+             * damage is carried by work done before it rather than by its own stream. */
+            if (draws_from && h.cmd == VIRGL_CCMD_DRAW_VBO && h.seq < draws_from) break;
             if (batch_dw + dw > batch_cap) {
                batch_cap = (batch_dw + dw) * 2;
                batch = realloc(batch, batch_cap * 4);
@@ -449,7 +474,12 @@ int main(int argc, char **argv)
                          && res[k].seq < r->seq)
                         born = &res[k];
                   /* target 2 is a 2D texture; format 20 is D24S8, which carries no ink. */
-                  if (born && born->target == 2 && born->format != 20 && born->width > 8)
+                  /* --sweep-w narrows the readbacks to one width. Needed for the llvmpipe arm:
+                   * reading every offscreen back trips an assert inside llvmpipe on resources
+                   * that have nothing to do with the cards, and aborts the run before it reaches
+                   * them. Scoring only the width under study keeps the A/B possible. */
+                  if (born && born->target == 2 && born->format != 20 && born->width > 8
+                      && (!sweep_w || born->width == sweep_w))
                      score_resource(born);
                }
                if (r->handle == readback_res) {
