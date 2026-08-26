@@ -1170,6 +1170,43 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   never reaches the host at all (no `RESOURCE_CREATE_*`, no `RESOURCE_ATTACH_BACKING` —
   probe with `LIMINA_TRACE_ATTACH_BACKING=1`), so it needs guest-kernel work first.
 
+## GPU — KosmicKrisp's command-allocator pool has no ceiling when the client never flushes
+
+Measured 2026-08-26 on the host (zink-on-KK), with `spikes/notification-text-corruption/glyphmimic`.
+Found in passing while chasing the notification-text bug; **it is not that bug** and does not move
+its damage rate.
+
+Our command-allocator pool in `kk_device.c` (`/Volumes/mesa-cs/mesa`, branch `limina-kk`) retires
+surplus allocators **only in a call that was already served from the pool** — deliberately, so a
+call that has to mint never also destroys. The consequence is that a client which submits render
+passes without ever letting one complete keeps every allocator `in_use`, pass 1 never succeeds, and
+the pool mints one allocator per render pass with nothing ever retired:
+
+| workload (cards x 2 frames x 5 offscreens) | live class-0 allocators |
+| --- | --- |
+| 10 cards (100 passes) | 101 |
+| 30 cards (300 passes) | 301 |
+| 60 cards (600 passes) | 435 |
+| 93 cards (930 passes) | 510 |
+
+Tracking is 1:1 up to ~300, then sublinear as retirement finally engages — so it is **not a leak**,
+it is an unbounded *in-flight* pool. Two things make it worth booking anyway: the **4 MiB budget
+named in the warning does not cap anything** (it is reported, not enforced), and the count is driven
+purely by submitted-but-uncompleted passes, which a guest client controls.
+
+**What it is not.** Independent of the D24S8 depth attachment (`GM_NODEPTH` reaches the same 510)
+and of the fresh-FBO-per-frame churn. It scales with render-pass count alone.
+
+**What drains it.** Any per-frame completion or flush: `GM_FINISH=1` and `GM_PRESENT=1` both stay
+**under the watermark entirely — no warning at all**. gnome-shell flushes every frame, which is why
+this is invisible in normal desktop use; the exposure is a guest client that batches many frames
+before flushing.
+
+**Reproduce.** `spikes/notification-text-corruption/mimic-host.sh 93` and watch stderr for
+`[LIMINA-ALLOC-POOL] class 0 grew to N`. Note the watermark warning is one-way
+(`pool->watermark_warned` only ever increases), so the log shows growth but never the subsequent
+drain — read the count as a high-water mark, not a live value.
+
 ## GPU / rendering perf
 - **Should the enhanced tier stop forcing zink? (i.e. delete `/etc/environment.d/90-limina-zink.conf`)**
   — 📋 open, raised by the user 2026-08-01 now that vrend is well supported. Attractive for the right
