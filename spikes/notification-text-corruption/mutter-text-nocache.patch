@@ -1,0 +1,43 @@
+LIMINA A/B lever: rebuild the glyph primitive on every draw.
+
+Against mutter 50.0's clutter/clutter/pango/clutter-pango-display-list.c. Built and installed into
+the guest with install-mutter-50.sh; see RESULTS.md for what the arm measured.
+
+The cached glyph VBO is the one structural difference between this path and the cogl journal, which
+rebuilds its buffer every frame and never loses content on the virgl/vrend path. Dropping the re-use
+tests whether the cached buffer's contents reach the host. It is NOT a fix -- it discards the
+optimisation this code exists for, and it churns a GL buffer object per glyph run.
+
+--- a/clutter/clutter/pango/clutter-pango-display-list.c
++++ b/clutter/clutter/pango/clutter-pango-display-list.c
+@@ -267,6 +267,29 @@
+    * that if the text doesn't change from frame to frame the VBO can
+    * be re-used avoiding the repeated cost of validating the data and
+    * mapping it into the GPU... */
+ 
++  /* LIMINA A/B lever, LIMINA_TEXT_NOCACHE=1: rebuild the glyph primitive (and its VBO) on every
++   * draw instead of re-using the cached one.
++   *
++   * The cache is the one structural difference between this path and the cogl journal, which
++   * rebuilds its buffer every frame and never loses content on the virgl/vrend path. If dropping
++   * the re-use restores the text, the fault is the cached buffer's contents not reaching the host,
++   * not anything about the draw itself. Not a fix: it discards the optimisation this code exists
++   * for. */
++  {
++    static int nocache = -1;
++    if (nocache < 0)
++      {
++        nocache = g_getenv ("LIMINA_TEXT_NOCACHE") != NULL;
++        g_printerr ("[LIMINA] clutter glyph primitive cache %s\n",
++                    nocache ? "DISABLED (LIMINA_TEXT_NOCACHE)" : "on (default)");
++      }
++    if (nocache && node->d.texture.primitive != NULL)
++      {
++        g_object_unref (node->d.texture.primitive);
++        node->d.texture.primitive = NULL;
++      }
++  }
++
+   if (node->d.texture.primitive == NULL)
+     {
+       CoglAttributeBuffer *buffer;

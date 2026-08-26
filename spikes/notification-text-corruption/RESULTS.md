@@ -57,6 +57,24 @@ The human cannot reproduce on demand either: *"I just send notifications, wait a
 close stuff until one of them misrenders."* The blocker is incidence everywhere, not a missing
 trigger.
 
+**Which card is posted matters more than which session.** Measured back to back in ONE session, on
+one host build, both classes pixel-confirmed:
+
+| vehicle | card | damaged |
+|---|---|---|
+| `calib.sh` | source icon + "Critical Updates" / "Install critical updates as soon as possible" | 8/10 |
+| `run-trials.sh` | `notify-send -p 'notifyprobe N' 'MMMM WWWW MMMM N'`, no source icon | **0/32** |
+
+So a run that scores zero is not evidence of a cure until the *same vehicle* is shown to reproduce
+in the same session -- 0/32 here was a stock build with the bug plainly live minutes earlier. This
+also revises the reading that unique per-trial text is what makes the fault appear: the vehicle that
+reproduces uses a *constant* string, and the one that varies text per card does not reproduce at
+all. What the reproducing card has that the other lacks is the symbolic source icon, which is
+consistent with the icon dying together with the header and title.
+
+**Score an arm with a vehicle whose baseline you measured in the session you are scoring**, and
+prefer `calib.sh` for cure/no-cure questions.
+
 ## Detection
 
 `calib.sh` posts a notification with a symbolic source icon and measures ink in a strip holding only
@@ -106,9 +124,10 @@ than inflating the rate to 100%, so the failure is loud -- but three separate ru
 | host upload ordering, vs prior work | `LIMINA_VREND_TRANSFER_FORCE_SYNC=1` | 17/19 — no effect |
 | host upload ordering, vs consuming draw | `LIMINA_VREND_TRANSFER_SYNC_AFTER=1` | 12/13 — no effect |
 | damage region / clip / buffer age / culling | `CLUTTER_PAINT=disable-clipped-redraws` | 13/13 — no effect |
-| zink completion-bookkeeping races made atomic | mesa `a02579c3974` | 18/19 — no effect |
+| zink completion-bookkeeping races made atomic | mesa `a0d96c18f02` | 18/19 — no effect |
 | vrend's threaded sync removed entirely | `VIRGL_DISABLE_MT=1` | 16/19 — no effect |
 | zink command-stream reordering | `ZINK_DEBUG=noreorder` | 19/19 — no effect |
+| cached glyph VBO rebuilt every draw | `LIMINA_TEXT_NOCACHE=1` | 11/11 — no effect |
 | software-2D | `--gpu-software-2d` | **0/40 — cures** |
 
 - **Not a data race between virglrenderer and zink.** ThreadSanitizer over the host zink +
@@ -810,22 +829,27 @@ That asymmetry lines up with every earlier observation:
   make a missed or late buffer upload land in time.
 - **Software-2D is clean** -- it bypasses virgl entirely, so no buffer transfer is involved.
 
-**Hypothesis, still UNTESTED:** the cached glyph VBO's contents do not reliably reach the host
-across the virgl/vrend buffer-map path, so the re-used draw fetches stale or uninitialised vertices.
+**The cached glyph VBO is NOT the fault.** `LIMINA_TEXT_NOCACHE=1` (lever in the guest's
+`clutter-pango-display-list.c`, kept as `mutter-text-nocache.patch`; unrefs the primitive so it and
+its VBO are rebuilt on every draw) leaves the damage untouched: **11 of 11 valid samples damaged**,
+against **8 of 10** for stock in the immediately preceding session, both pixel-confirmed. The arm
+self-evidences in the journal (`clutter glyph primitive cache DISABLED`).
 
-The obvious arm does not work. `LIMINA_TEXT_NOCACHE=1` (built into the guest's
-`clutter-pango-display-list.c`, unrefs the primitive so it is rebuilt every draw) **SIGSEGVs the
-host worker** within a few notification posts, with zink logging `> 100 copy boxes detected`
-throughout. Rebuilding the primitive per draw churns a GL buffer object per glyph run, and vrend
-does not survive that rate. So the arm measures nothing about the text, and it is not simply "one
-line in the guest" -- a usable version must re-upload the *contents* of the existing buffer without
-recreating the object, which needs the vertex data retained on the node.
+That kills the hypothesis it was built for -- that a *re-used* VBO's contents fail to reach the host
+across the virgl/vrend buffer-map path. With the cache off there is no re-use: every draw gets a
+freshly created buffer, the same shape as the cogl journal, which never loses content on this path.
+Fresh buffers lose the text just as reliably, so cached-versus-fresh is not the discriminator and
+the asymmetry against the journal lies somewhere else.
 
-### A concurrency fault on the same path, from the crash the failed arm produced
+The arm also used to **SIGSEGV the host worker** within a few posts, which is why it was long
+recorded as unusable. That crash was ours and unrelated -- see below -- and with it fixed the arm
+runs clean to completion. Its cost is real but survivable: it churns a GL buffer object per glyph
+run and zink logs `> 100 copy boxes detected` throughout.
 
-The arm that crashed the worker left the most useful artifact of the day.
-`evidence/vrend-sync-vs-gpu-worker-segv.ips` shows **two threads inside the same zink/KosmicKrisp
-context at once**:
+### The worker SIGSEGV on this path was our own instrumentation, not a concurrency fault
+
+`evidence/vrend-sync-vs-gpu-worker-segv.ips` was read as evidence of **two threads inside the same
+zink/KosmicKrisp context at once**:
 
     thread 19 "gpu worker" (faulting, SIGSEGV at 0x11e01d000 -- a page boundary)
       Worker::process_queue -> create_fence -> vrend_renderer_create_fence
@@ -835,25 +859,39 @@ context at once**:
     thread 27 "vrend-sync"
       zink_fence_finish -> zink_screen_timeline_wait -> kk_timeline_wait
 
-Creating a fence on the gpu-worker thread forces a threaded-context sync, which **executes deferred
-draw calls on that thread**, while vrend's sync thread is independently inside zink waiting on a
-timeline semaphore. Mesa's threaded context and a zink context are not safe for that. The fault
-address is a page boundary, which is what reading past a buffer another thread has reallocated looks
-like.
+Both halves of that observation are real: creating a fence on the gpu-worker thread does force a
+threaded-context sync that executes deferred draws on that thread, and vrend's sync thread is
+independently inside zink. Neither is what faulted.
 
-This is a real fault on exactly the path under investigation, and it fits the text bug's whole
-signature -- intermittency, every synchronisation curing it, and content that is stale rather than
-wrong. **It is not yet shown to be the same fault**: the crash needs the abnormal buffer churn of
-the no-cache arm to appear, and nothing yet ties it to a normal run.
+The fault was a dangling read in **our own poly-heap instrumentation**. It kept the CPU view of the
+bump pointer in a global, set from whichever `kk_device` initialised its heap last, and dereferenced
+it on every draw. One process hosts two KK devices -- host zink-on-KK serving vrend's GL, and guest
+venus/vkr -- so when either is torn down its heap mapping goes away and the next draw by the
+survivor reads freed memory. That is why the fault address is always page-aligned. Fixed by hanging
+the pointer off the owning `kk_device`.
 
-**Both ways of testing it by removing the concurrency are unusable**, and neither should be retried
-as stated:
+`limina-test::venus_replay` reproduces it deterministically, because it tears the venus device down
+mid-test while host GL keeps drawing: clean at the manifest-pinned mesa rev, SIGSEGV at the
+instrumentation tip, clean again with the fix. The older `.ips` above symbolises the frame as
+`kk_draw.cold.1` rather than `kk_heap` (`kk_heap` is `static`, so it inlines), so it is the same
+fault in all but proof.
+
+**The rule worth keeping:** always-on instrumentation is live code on every draw and earns the same
+lifetime discipline as the driver around it. A pointer into device-owned memory belongs on the
+device, never in a global -- this process has two of every Vulkan object that looks like a
+singleton.
+
+One way of testing this by removing the concurrency remains unusable, and should not be retried as
+stated:
 
 - `VIRGL_DISABLE_MT=1` clears `VIRGL_RENDERER_THREAD_SYNC` (we do set it, so the lever is live).
   The guest boots and `org.gnome.Shell` reports `active` with load ~2, but **nothing is ever
   presented** -- the window stays on the last boot-console frame. Removing the sync thread while
   `ASYNC_FENCE_CB` is still enabled wedges the present path. A usable version has to drop both.
-- `LIMINA_TEXT_NOCACHE=1` crashes the host, as above.
+
+(`LIMINA_TEXT_NOCACHE=1` was the other, and it is usable now: the SIGSEGV that made it look
+unmeasurable was our own instrumentation, and with that fixed the arm runs to completion. Measured
+above -- it does not cure.)
 
 Note the trap in both: each *looks* like a clean result if you only score cards. A wedged compositor
 scores every post as NO BANNER, and a crashed worker scores a frozen surface as clean.
@@ -981,6 +1019,13 @@ so re-measuring any of this is cheap.
 ## Traps this rig exists to avoid
 
 Each produced a confident, wrong reading.
+
+- **The worker log's `scanout 0 -> IOSurfaces` line goes stale, and nothing says so.** A gdm restart
+  mints a fresh scanout pool without emitting a new line, so the newest line in the log still names
+  the *previous* session's surfaces. Scoring against them read 20/20 `NO_CARD` -- printed as "0
+  damaged", which is the same string a cure produces. `iosscan` is the oracle: the live desktop
+  surfaces carry `nz` in the tens of thousands, a stale boot-console frame carries ~1000, and
+  `dumpone.sh <id>` settles it by eye in one command. Take the ids from a census, never from the log.
 
 - **Verify an env change inside the target process, and verify the *renderer*, not just the env.**
   `/etc/environment.d/` reaches an ssh session but **not** gnome-shell (the systemd *user* manager

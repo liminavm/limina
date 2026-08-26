@@ -1495,7 +1495,7 @@ property, so nothing is broken, but anything reading EDID from sysfs sees nothin
 
 ## GPU — data races in vrend and zink, found by ThreadSanitizer
 
-**Fixed**, virglrenderer `75f9358b` and mesa `49ab36589ae` / `879a6929bb2`. A boot plus a
+**Fixed**, virglrenderer `7f67e9a0` and mesa `a0d96c18f02` / `c398247db94`. A boot plus a
 notification workload went from **23 ThreadSanitizer reports to 1**. Kept here for the reproduce
 recipe, the one that remains, and the negative result attached to all of it.
 
@@ -1543,8 +1543,12 @@ oracle on this stack.
 
 Raw reports: `spikes/notification-text-corruption/evidence/tsan-vrend-two-races.log` and
 `tsan-zink-kk-boot-19races-plus-kkdraw-segv.log` (the latter also holds a hard SEGV in `kk_draw`,
-reached through `vk_meta_blit` from vrend's `do_readpixels`, which stopped reproducing once the
-races above were fixed).
+reached through `vk_meta_blit` from vrend's `do_readpixels`). That SEGV is unrelated to the races:
+it was a dangling read in our own poly-heap instrumentation, which held the CPU view of a
+device-owned bump pointer in a global and dereferenced it on every draw. One process hosts two KK
+devices (host zink-on-KK for vrend's GL, guest venus/vkr), so tearing either down left the survivor
+reading freed memory. Fixed per-device; `limina-test::venus_replay` is the regression test, since it
+destroys the venus device mid-test.
 
 ---
 
