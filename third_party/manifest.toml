@@ -22,7 +22,7 @@
 repo = "https://github.com/liminavm/libkrun.git"
 upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
-rev = "bf2ed27cd3c6538741e2d367172fc70e1ec30aea"
+rev = "d916b6dffe9a6bb1c084fb8250f791e642c0907d"
 base = "07fd40dcf6da8e14dd47e16a535531f0383fe52c"
 
 # The EFI firmware (task #22, migrated 2026-08-06). The `limina` branch carries our whole
@@ -53,7 +53,7 @@ rev = "16e9602270e5890ab8fee83bf6f9a438049dabea"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-kk"
-rev = "808f04971e4205e8be7bbb911cd04be18cc01c52"
+rev = "c398247db9405fba96322ea89d220d2951146c3c"
 base = "418f2963a15"
 
 # The GUEST venus Mesa (task #11 — same liminavm/mesa repo, its own branch). NOT vendored by
@@ -73,7 +73,7 @@ base = "mesa-26.1.7"
 repo = "https://github.com/liminavm/virglrenderer.git"
 upstream = "https://gitlab.freedesktop.org/virgl/virglrenderer.git"
 branch = "limina"
-rev = "86741d53fbf7de3e11486c561a47513b668e8ceb"
+rev = "7f67e9a0665c4ca7864c4f0b1a2b8c24a6174403"
 base = "f2945d3974256fefc731f0411c28b865680eebdc"
 
 [linux]
