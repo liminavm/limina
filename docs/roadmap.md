@@ -1532,8 +1532,8 @@ ping-pong. dogfood-guest is already shaped like this, so it is a real configurat
 
 ## Milestone 12.5 — QEMU guest-agent support (stock tier; clock first)
 
-**Status: 🟢 step 1 shipped — the port, the client, and the guest clock.** Steps 2–5 below are not
-started.
+**Status: 🟢 steps 1–2 shipped — the port, the client, the guest clock, the shutdown rung and the
+guest inventory.** Steps 3–5 below are not started.
 
 **Goal:** expose `org.qemu.guest_agent.0` and speak to the `qemu-guest-agent` that a stock guest
 *already has*, the same additive on-ramp M12 built for SPICE. `limina-agent` stays the enhanced-tier
@@ -1579,11 +1579,27 @@ detector (the host napped) and the periodic tick (drift) — and fires **only wh
   `fire` variant for the commands that answer nothing), `policy` (pure: when to step a clock).
   `guest-info`'s per-command `enabled` flag is the capability gate for everything below.
 
+### Step 2 — lifecycle + inventory (shipped)
+
+- **The stop ladder gained a rung, after the power button and before the SIGKILL**: agent (5 s) →
+  GPIO power button (5 s) → `guest-shutdown` → SIGKILL at the grace. It only comes up when a probe
+  has already succeeded (probing inside a stop ladder would eat the grace on a guest that has no
+  agent) and when the grace can still hold it, so a tight `--shutdown-grace-secs` — the test
+  harness uses 3 s — behaves exactly as before. Worth having despite the button: the agent runs
+  `shutdown -P` as **root**, which goes through even where the button does not. The windowed close
+  path gets the same rung, where a stock guest previously went straight to SIGKILL.
+- **A guest that accepts the request gets more time** (`QGA_GRACE`, 45 s). Measured on a seated F44
+  desktop, 2026-08-26: `shutdown -P +0` needs ~28 s from request to the VM being gone — it is
+  running the real systemd teardown, not just calling poweroff. The operator's grace is about a
+  guest that will not *answer*; one that just took a shutdown request is answering, and SIGKILLing
+  it mid-teardown is how filesystems get hurt. A second stop signal still forces immediately.
+- **Inventory is logged once**, when the agent first answers: OS pretty-name + kernel + machine +
+  hostname, non-loopback IPv4 addresses, logged-in users, and a second line of mounted filesystems
+  with used/total. Log-only by choice — the surface is an incident report that can say what the
+  guest *was*. Every command is optional; a blocked or missing one contributes nothing.
+
 ### Next steps
 
-2. **Lifecycle + inventory** — `guest-shutdown` as a rung in the shutdown ladder for a guest with no
-   `limina-agent`; `guest-get-osinfo` / `-host-name` / `-users` / `-fsinfo` / `-disks` /
-   `-network-get-interfaces` behind the VM menu and control center.
 3. **Storage integrity** — `guest-fsfreeze-freeze`/`-thaw` inside the snapshot bracket (app-consistent
    snapshots, including the guest's own `/etc/qemu-ga/fsfreeze-hook.d` scripts), `guest-fstrim`
    alongside reclaim.

@@ -433,6 +433,30 @@ fn install_panic_kill_hook() {
 /// (orderly, the guest runs its own shutdown path) → after [`crate::control::AGENT_GRACE`]
 /// fall back to SIGTERM → worker → shutdown eventfd → GPIO power button (stock guests with
 /// no agent — most ignore it too) → after `grace`, SIGKILL.
+/// How long the guest gets to answer the GPIO power button before the stock guest agent is
+/// asked instead. Sized against the default 20 s grace: agent 0–5 s, button 5–10 s, guest
+/// agent from 10 s, SIGKILL at 20 s — so `shutdown -P` still has half the grace to run.
+pub const BUTTON_GRACE: Duration = Duration::from_secs(5);
+
+/// How much longer the guest gets once its stock agent has **accepted** a `guest-shutdown`.
+///
+/// The operator's grace is about a guest that will not answer; a guest that just took a real
+/// shutdown request is answering, and SIGKILLing it mid-`systemd-shutdown` is how filesystems
+/// get hurt. Measured on a seated F44 desktop, 2026-08-26: `shutdown -P +0` needs ~28 s from
+/// request to the VM being gone (session teardown, unmounts, btrfs commit).
+pub const QGA_GRACE: Duration = Duration::from_secs(45);
+
+/// Is it time for the guest-agent rung? `elapsed` is measured from the shutdown request, and
+/// `grace` is the deadline after which the worker is SIGKILLed.
+///
+/// Pure so the ordering is testable: the rung comes **after** the power button has had
+/// [`BUTTON_GRACE`], and only when at least [`crate::control::AGENT_GRACE`] of the overall
+/// grace is left — asking a guest to power off a moment before SIGKILLing it is theatre.
+fn qga_rung_due(elapsed: Duration, grace: Duration) -> bool {
+    let due = crate::control::AGENT_GRACE + BUTTON_GRACE;
+    elapsed >= due && due + crate::control::AGENT_GRACE <= grace
+}
+
 pub fn monitor(
     mut child: std::process::Child,
     grace: Duration,
@@ -441,6 +465,9 @@ pub fn monitor(
     let pid = child.id() as libc::pid_t;
     let mut shutdown_at: Option<Instant> = None;
     let mut sigterm_sent = false;
+    let mut qga_asked = false;
+    // Extra time granted because the stock guest agent accepted a power-off.
+    let mut agent_extra = Duration::ZERO;
     let mut suspend_at: Option<Instant> = None;
     loop {
         if let Some(status) = child.try_wait().context("polling worker")? {
@@ -498,13 +525,36 @@ pub fn monitor(
                 }
                 sigterm_sent = true;
             }
-            if t.elapsed() >= grace || force_stop_requested() {
+            // Last polite rung before the SIGKILL: a guest that ignored the power button may
+            // still take `guest-shutdown` from its own stock agent, which runs `shutdown -P` as
+            // root and so is not subject to the logind inhibitors a seated desktop holds. Only
+            // when an agent has already answered — probing here would eat the remaining grace
+            // on a guest that has none.
+            if !qga_asked && sigterm_sent && qga_rung_due(t.elapsed(), grace) {
+                qga_asked = true;
+                if control.map(|c| c.request_qga_shutdown()).unwrap_or(false) {
+                    // It accepted, so it is shutting down — give it room to finish rather than
+                    // SIGKILL it mid-teardown at the original deadline.
+                    agent_extra = QGA_GRACE;
+                    log::warn!(
+                        "the power button did not take within {:?}; asked the stock guest agent \
+                         to power off instead (giving it {:?} more)",
+                        BUTTON_GRACE,
+                        QGA_GRACE
+                    );
+                }
+            }
+
+            if t.elapsed() >= grace + agent_extra || force_stop_requested() {
                 if force_stop_requested() {
                     log::warn!(
                         "force stop requested (second signal); skipping the grace (SIGKILL)"
                     );
                 } else {
-                    log::warn!("guest did not power off within {grace:?}; forcing (SIGKILL)");
+                    log::warn!(
+                        "guest did not power off within {:?}; forcing (SIGKILL)",
+                        grace + agent_extra
+                    );
                 }
                 let _ = child.kill();
                 let status = child.wait().context("waiting on worker after SIGKILL")?;
@@ -596,7 +646,50 @@ fn report_exit(status: ExitStatus) -> i32 {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
+
+    /// The stop ladder's rungs must stay in order: agent, power button, stock guest agent,
+    /// SIGKILL. Each of the first three needs room to work, so the guest-agent rung only comes
+    /// up when the overall grace can still hold it *and* leave the button its own chance.
+    #[test]
+    fn the_guest_agent_rung_sits_between_the_power_button_and_the_kill() {
+        let grace = Duration::from_secs(20);
+        // Before the button has had its own grace: too early — the button is still the
+        // guest's to answer.
+        assert!(!qga_rung_due(Duration::from_secs(0), grace));
+        assert!(!qga_rung_due(crate::control::AGENT_GRACE, grace));
+        assert!(!qga_rung_due(
+            crate::control::AGENT_GRACE + BUTTON_GRACE - Duration::from_millis(1),
+            grace
+        ));
+        // Then it is due, with time left before the SIGKILL for `shutdown -P` to run.
+        assert!(qga_rung_due(
+            crate::control::AGENT_GRACE + BUTTON_GRACE,
+            grace
+        ));
+    }
+
+    #[test]
+    fn the_default_grace_leaves_the_rung_half_the_ladder() {
+        // The default `--shutdown-grace-secs 20`: the rung must actually come up there, with
+        // room for `shutdown -P` to finish before the SIGKILL. A constant sized past that
+        // would make this whole rung dead code in production.
+        let default_grace = Duration::from_secs(20);
+        let due = crate::control::AGENT_GRACE + BUTTON_GRACE;
+        assert!(qga_rung_due(due, default_grace));
+        assert!(default_grace - due >= Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_grace_too_short_to_hold_the_rung_skips_it_entirely() {
+        // `limina stop` with a tight grace, or a test harness that wants a fast teardown:
+        // asking an agent a moment before SIGKILLing the worker is theatre, so the ladder
+        // behaves exactly as it did before this rung existed.
+        let tight = crate::control::AGENT_GRACE + BUTTON_GRACE;
+        assert!(!qga_rung_due(tight, tight));
+        assert!(!qga_rung_due(tight * 4, tight));
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir =

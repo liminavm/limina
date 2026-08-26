@@ -2446,6 +2446,15 @@ impl Guest {
         }
     }
 
+    /// The pid of the `limina` supervisor this guest is running under. Signal it to drive the
+    /// real stop ladder (SIGTERM = the graceful path, a second one = force) while keeping the
+    /// `Guest` alive to read its supervisor log — [`Guest::shutdown`] consumes the guest and
+    /// takes its scratch dir, and with it the log, so a test that asserts on *how* the VM
+    /// stopped needs this plus [`Guest::wait_for_exit`].
+    pub fn supervisor_pid(&self) -> libc::pid_t {
+        self.pid
+    }
+
     /// The pid of the `limina-vmm` worker — the supervisor's child whose executable is
     /// [`vmm_bin`](GuestConfig::vmm_bin). With `--net` the supervisor also has gvproxy + a reaper
     /// child, so we match on the executable path rather than taking the first child.

@@ -170,6 +170,31 @@ impl Qga {
         })
     }
 
+    /// Ask the guest to power itself off, the stock-tier last rung of the shutdown ladder.
+    ///
+    /// **Only if an earlier probe already succeeded** — this never probes. The caller is a stop
+    /// ladder with its own deadline, and paying a probe timeout there would delay the SIGKILL
+    /// that follows for a guest which has no agent at all.
+    ///
+    /// Worth having even though the GPIO power button comes first: the agent runs
+    /// `shutdown -P` as root, which is not subject to the logind inhibitors that make a seated
+    /// GNOME guest refuse a polite power-off.
+    pub fn shutdown(&self) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        if conn.state != State::Ready {
+            bail!("no guest agent has answered on this port");
+        }
+        if !conn.caps.has("guest-shutdown") {
+            bail!("the guest agent does not offer guest-shutdown");
+        }
+        // `guest-shutdown` carries 'success-response': false — there is no reply to wait for,
+        // and the guest going away IS the answer.
+        write_all(
+            &mut conn,
+            &codec::request("guest-shutdown", Some(json!({ "mode": "powerdown" }))),
+        )
+    }
+
     /// Set the guest's clock to `unix_ns`. The agent sets `CLOCK_REALTIME` and then pushes
     /// the value at the RTC, so a guest that only consults its RTC on resume lands there too.
     pub fn set_time(&self, unix_ns: i64) -> Result<()> {
@@ -208,8 +233,12 @@ fn ensure_ready(conn: &mut Conn) -> Result<()> {
                     caps.commands.len()
                 );
             }
+            let first_answer = conn.state != State::Ready;
             conn.caps = caps;
             conn.state = State::Ready;
+            if first_answer {
+                log_inventory(conn);
+            }
             Ok(())
         }
         Err(e) => {
@@ -254,6 +283,105 @@ fn probe(conn: &mut Conn) -> Result<Caps> {
         })
         .unwrap_or_default();
     Ok(Caps { version, commands })
+}
+
+/// Say what this guest *is*, once, when its agent first answers.
+///
+/// Log-only on purpose: it costs a handful of instant round trips and it is the difference
+/// between an incident report that names the guest's OS, kernel, addresses and mounts, and one
+/// that says a VM misbehaved. Every command is optional — an agent that blocked one, or a
+/// version that lacks it, simply contributes nothing.
+fn log_inventory(conn: &mut Conn) {
+    let ask = |conn: &mut Conn, cmd: &str| -> Option<Value> {
+        if !conn.caps.has(cmd) {
+            return None;
+        }
+        match exec(conn, cmd, None, FAST) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                log::debug!("qga: {cmd} failed ({e:#})");
+                None
+            }
+        }
+    };
+    let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("?").to_string();
+
+    let os = ask(conn, "guest-get-osinfo");
+    let host = ask(conn, "guest-get-host-name");
+    let identity = match (&os, &host) {
+        (Some(os), host) => format!(
+            "{} (kernel {}, {}) as {}",
+            s(os, "pretty-name"),
+            s(os, "kernel-release"),
+            s(os, "machine"),
+            host.as_ref().map(|h| s(h, "host-name")).unwrap_or_default(),
+        ),
+        (None, Some(host)) => s(host, "host-name"),
+        (None, None) => return,
+    };
+
+    let addrs: Vec<String> = ask(conn, "guest-network-get-interfaces")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter(|iface| s(iface, "name") != "lo")
+        .flat_map(|iface| {
+            iface
+                .get("ip-addresses")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .filter(|a| s(a, "ip-address-type") == "ipv4")
+        .map(|a| s(&a, "ip-address"))
+        .collect();
+
+    let users: Vec<String> = ask(conn, "guest-get-users")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .map(|u| s(u, "user"))
+        .collect();
+
+    log::info!(
+        "qga: guest is {identity}{}{}",
+        if addrs.is_empty() {
+            String::new()
+        } else {
+            format!("; addresses {}", addrs.join(", "))
+        },
+        if users.is_empty() {
+            String::new()
+        } else {
+            format!("; logged in: {}", users.join(", "))
+        }
+    );
+
+    // Storage on its own line: it is the long one, and it is what a "the guest ran out of
+    // disk" report needs.
+    let mounts: Vec<String> = ask(conn, "guest-get-fsinfo")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .map(|fs| {
+            let gib = |k: &str| {
+                fs.get(k)
+                    .and_then(Value::as_f64)
+                    .map(|b| b / (1024.0 * 1024.0 * 1024.0))
+            };
+            match (gib("used-bytes"), gib("total-bytes")) {
+                (Some(used), Some(total)) => format!(
+                    "{} ({}) {used:.1}/{total:.1} GiB",
+                    s(fs, "mountpoint"),
+                    s(fs, "type")
+                ),
+                _ => format!("{} ({})", s(fs, "mountpoint"), s(fs, "type")),
+            }
+        })
+        .collect();
+    if !mounts.is_empty() {
+        log::info!("qga: guest filesystems: {}", mounts.join(", "));
+    }
 }
 
 /// `guest-sync-delimited`: the only way to know the stream is ours again. Everything the
@@ -490,6 +618,112 @@ mod tests {
         assert_eq!(s.guest_ns, guest_ns);
         assert!(s.host_ns > guest_ns, "the host is not in 2023");
         assert!(s.rtt < FAST);
+    }
+
+    #[test]
+    fn the_shutdown_rung_never_probes_and_reaches_the_agent() {
+        let seen = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
+        let recorder = seen.clone();
+        let (qga, _agent) = client_with(move |cmd, _| {
+            recorder.lock().unwrap().push(cmd.to_string());
+            match cmd {
+                "guest-info" => Some(info_reply(&["guest-shutdown", "guest-get-time"])),
+                "guest-get-time" => Some(json!({ "return": 1_700_000_000_000_000_000i64 })),
+                _ => None,
+            }
+        });
+
+        // Nothing has probed yet: the stop ladder must fall straight through to its next rung
+        // rather than pay a probe timeout while a SIGKILL waits behind it.
+        let t0 = Instant::now();
+        assert!(qga.shutdown().is_err());
+        assert!(
+            t0.elapsed() < Duration::from_millis(200),
+            "the shutdown rung probed: {:?}",
+            t0.elapsed()
+        );
+        assert!(seen.lock().unwrap().is_empty());
+
+        // Once an earlier call has probed, the request goes out — and nothing waits for a
+        // reply, because `guest-shutdown` answers none on success.
+        qga.time_sample().unwrap();
+        qga.shutdown().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if seen.lock().unwrap().iter().any(|c| c == "guest-shutdown") {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "guest-shutdown never reached the agent: {:?}",
+            seen.lock().unwrap()
+        );
+    }
+
+    #[test]
+    fn an_agent_without_shutdown_is_refused_rather_than_asked() {
+        let (qga, _agent) = client_with(|cmd, _| match cmd {
+            // A hardened guest that blocked it; asking anyway would waste the rest of the
+            // stop grace waiting for a power-off nobody requested.
+            "guest-info" => Some(info_reply(&["guest-get-time"])),
+            "guest-get-time" => Some(json!({ "return": 1_700_000_000_000_000_000i64 })),
+            _ => None,
+        });
+        qga.time_sample().unwrap();
+        let err = qga.shutdown().unwrap_err();
+        assert!(err.to_string().contains("guest-shutdown"), "{err}");
+    }
+
+    #[test]
+    fn the_inventory_is_gathered_once_when_the_agent_first_answers() {
+        let seen = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
+        let recorder = seen.clone();
+        let (qga, _agent) = client_with(move |cmd, _| {
+            recorder.lock().unwrap().push(cmd.to_string());
+            match cmd {
+                "guest-info" => Some(info_reply(&[
+                    "guest-get-osinfo",
+                    "guest-get-host-name",
+                    "guest-network-get-interfaces",
+                    "guest-get-users",
+                    "guest-get-fsinfo",
+                    "guest-get-time",
+                ])),
+                "guest-get-osinfo" => Some(json!({ "return": {
+                    "pretty-name": "Fedora Linux 44", "kernel-release": "7.1.8", "machine": "aarch64"
+                }})),
+                "guest-get-host-name" => Some(json!({ "return": { "host-name": "fedora" } })),
+                "guest-network-get-interfaces" => Some(json!({ "return": [
+                    { "name": "lo", "ip-addresses": [
+                        { "ip-address": "127.0.0.1", "ip-address-type": "ipv4", "prefix": 8 }] },
+                    { "name": "enp0s1", "ip-addresses": [
+                        { "ip-address": "10.0.2.15", "ip-address-type": "ipv4", "prefix": 24 }] },
+                ]})),
+                "guest-get-users" => Some(json!({ "return": [{ "user": "claude" }] })),
+                "guest-get-fsinfo" => Some(json!({ "return": [
+                    { "mountpoint": "/", "type": "btrfs", "used-bytes": 1u64 << 30,
+                      "total-bytes": 40u64 << 30, "name": "vda3", "disk": [] },
+                ]})),
+                "guest-get-time" => Some(json!({ "return": 1_700_000_000_000_000_000i64 })),
+                _ => None,
+            }
+        });
+
+        qga.time_sample().unwrap();
+        let first = seen.lock().unwrap().clone();
+        assert!(first.contains(&"guest-get-osinfo".to_string()));
+        assert!(first.contains(&"guest-get-fsinfo".to_string()));
+
+        // …and only once: a per-tick inventory would be a per-tick pile of round trips and a
+        // log nobody reads.
+        qga.time_sample().unwrap();
+        let again = seen.lock().unwrap().clone();
+        assert_eq!(
+            again.iter().filter(|c| *c == "guest-get-osinfo").count(),
+            1,
+            "the inventory was gathered again: {again:?}"
+        );
     }
 
     #[test]

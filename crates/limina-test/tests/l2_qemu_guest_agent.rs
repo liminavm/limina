@@ -90,12 +90,15 @@ fn host_epoch() -> i64 {
         .as_secs() as i64
 }
 
-/// Wait until the guest's clock agrees with the host's, or give up.
+/// Wait until the guest's clock agrees with the host's, or give up. Each sample is printed:
+/// when this test fails, *when* the clock moved is the whole diagnosis.
 fn wait_for_agreement(guest: &Guest, within: Duration) -> i64 {
     let deadline = std::time::Instant::now() + within;
     let mut last = i64::MAX;
     while std::time::Instant::now() < deadline {
-        last = (guest_epoch(guest) - host_epoch()).abs();
+        let (g, h) = (guest_epoch(guest), host_epoch());
+        last = (g - h).abs();
+        eprintln!("clock sample: guest {g} host {h} off {last}s");
         if last <= 2 {
             return last;
         }
@@ -119,11 +122,22 @@ fn a_stock_guest_agent_corrects_a_skewed_clock() {
             .with_supervisor_log()
             // The clock ladder's tick. Production is 60 s; the drift watchdog and the
             // oversleep detector both ride it.
-            .with_env("LIMINA_TIMESYNC_SECS", "5"),
+            .with_env("LIMINA_TIMESYNC_SECS", "5")
+            // Every request and reply into the supervisor log: when a clock assertion fails,
+            // "did we even ask?" is the first question, and it should not need a re-run.
+            .with_env("LIMINA_QGA_TRACE", "1"),
         Err(e) => {
             eprintln!("SKIPPED a_stock_guest_agent_corrects_a_skewed_clock: {e:#}");
             return;
         }
+    };
+
+    // The harness stops VMs on a 3 s grace, which is deliberately too short to hold the
+    // guest-agent rung (`supervisor::qga_rung_due` skips it rather than ask a guest to power
+    // off a moment before SIGKILLing it). Oracle 6 needs the production-shaped ladder.
+    let cfg = GuestConfig {
+        shutdown_grace: Duration::from_secs(30),
+        ..cfg
     };
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
@@ -185,6 +199,28 @@ fn a_stock_guest_agent_corrects_a_skewed_clock() {
             )
         });
 
+    // --- Oracle 3b: the inventory the first probe gathers ---
+    //
+    // Log-only by design, so the log IS the surface: an incident report that cannot say what
+    // the guest was is the thing this exists to prevent.
+    let log = guest.supervisor_log();
+    assert!(
+        log.contains("qga: guest is "),
+        "the supervisor never logged what the guest is. qga log lines: {}",
+        supervisor_qga_lines(&guest)
+    );
+    assert!(
+        log.lines()
+            .any(|l| l.contains("qga: guest is ") && l.contains("kernel ")),
+        "the identity line carries no kernel — guest-get-osinfo did not land: {}",
+        supervisor_qga_lines(&guest)
+    );
+    assert!(
+        log.contains("qga: guest filesystems: "),
+        "no filesystem inventory — guest-get-fsinfo did not land: {}",
+        supervisor_qga_lines(&guest)
+    );
+
     // --- Oracle 4: the discriminator — a skewed clock, with every other corrector stopped ---
     ssh_soft(&guest, "sudo systemctl stop chronyd");
     // limina-agent is already stopped above; prove it, because a live one would correct the
@@ -208,18 +244,33 @@ fn a_stock_guest_agent_corrects_a_skewed_clock() {
          rest of this test would assert nothing"
     );
 
-    let off = wait_for_agreement(&guest, CORRECT_WITHIN);
+    // Wait on the SUPERVISOR's own account of what it did, not on the clock: the guest's
+    // clock is already right the instant `guest-set-time` returns, so a test that polls the
+    // clock first can see agreement a beat before the line explaining it lands in the log —
+    // which reads exactly like "something else corrected it" (it did, twice, on 2026-08-26).
+    guest
+        .wait_for_supervisor_log("stepped it to the host's", CORRECT_WITHIN)
+        .unwrap_or_else(|e| {
+            eprintln!(
+                "guest-side time state: {}",
+                ssh_soft(
+                    &guest,
+                    "systemctl is-active limina-agent chronyd systemd-timesyncd; timedatectl",
+                )
+            );
+            panic!(
+                "the supervisor never stepped the guest clock ({e}); with limina-agent and \
+                 chronyd both stopped, the guest agent is the only corrector left. \
+                 qga log lines: {}",
+                supervisor_qga_lines(&guest)
+            )
+        });
+
+    let off = wait_for_agreement(&guest, Duration::from_secs(20));
     assert!(
         off <= 2,
-        "the guest clock is still {off}s off after {CORRECT_WITHIN:?} — nothing corrected it. \
-         qga log lines: {}",
-        supervisor_qga_lines(&guest)
-    );
-    let log = guest.supervisor_log();
-    assert!(
-        log.contains("stepped it to the host's"),
-        "the clock agrees, but the supervisor never said it stepped it — something else \
-         corrected the guest and this test proved nothing. qga log lines: {}",
+        "the supervisor says it stepped the clock, but the guest is still {off}s off — the \
+         `guest-set-time` did not take. qga log lines: {}",
         supervisor_qga_lines(&guest)
     );
 
@@ -236,17 +287,74 @@ fn a_stock_guest_agent_corrects_a_skewed_clock() {
         &guest,
         &format!("sudo date -s '@{}'", before - SKEW.as_secs() as i64),
     );
-    let off = wait_for_agreement(&guest, CORRECT_WITHIN);
+    let steps_before = step_lines(&guest);
+    let deadline = std::time::Instant::now() + CORRECT_WITHIN;
+    while step_lines(&guest) == steps_before && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_secs(2));
+    }
     assert!(
-        off <= 2,
-        "after `systemctl restart qemu-guest-agent` the clock stayed {off}s off — the client \
-         did not resynchronize across the port reopen. qga log lines: {}",
+        step_lines(&guest) > steps_before,
+        "after `systemctl restart qemu-guest-agent` the supervisor never stepped the clock \
+         again — the client did not resynchronize across the port reopen. qga log lines: {}",
         supervisor_qga_lines(&guest)
     );
+    let off = wait_for_agreement(&guest, Duration::from_secs(20));
+    assert!(
+        off <= 2,
+        "the clock was stepped after the agent restart but the guest is still {off}s off"
+    );
 
+    // --- Oracle 6: the stop ladder's guest-agent rung ---
+    //
+    // With `limina-agent` stopped there is no orderly control-plane power-off, and telling
+    // logind to ignore the power key takes the *next* rung away too — which is exactly the
+    // seated-desktop case this rung exists for (a guest that will not answer the button).
+    // What is left is `guest-shutdown` from the stock agent, and the VM must end by powering
+    // itself off rather than by the SIGKILL at the end of the grace.
+    ssh_soft(
+        &guest,
+        "sudo mkdir -p /etc/systemd/logind.conf.d && \
+         printf '[Login]\\nHandlePowerKey=ignore\\nHandlePowerKeyLongPress=ignore\\n' | \
+         sudo tee /etc/systemd/logind.conf.d/99-limina-test.conf >/dev/null && \
+         sudo systemctl restart systemd-logind",
+    );
+
+    // SIGTERM by hand rather than `Guest::shutdown`: that consumes the guest — and its scratch
+    // dir, and with it the supervisor log, which is where the evidence for *which* rung carried
+    // the shutdown lives.
+    unsafe { libc::kill(guest.supervisor_pid(), libc::SIGTERM) };
     guest
-        .shutdown(Duration::from_secs(60))
-        .expect("the VM did not shut down");
+        .wait_for_supervisor_log(
+            "asked the stock guest agent to power off",
+            Duration::from_secs(60),
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "the ladder never reached the guest-agent rung ({e}); with limina-agent stopped \
+                 and the power key ignored, nothing else should have been able to stop this \
+                 guest. qga log lines: {}",
+                supervisor_qga_lines(&guest)
+            )
+        });
+
+    let outcome = guest
+        .wait_for_exit(Duration::from_secs(90))
+        .expect("waiting for the VM to power itself off");
+    assert!(
+        !outcome.forced && outcome.signal.is_none() && outcome.code == Some(0),
+        "the VM did not power itself off through the guest agent ({outcome:?}); it was forced \
+         down at the end of the grace instead"
+    );
+}
+
+/// How many clock steps the supervisor has reported so far — the second skew needs a *new*
+/// one, and the first one's line is still in the log.
+fn step_lines(guest: &Guest) -> usize {
+    guest
+        .supervisor_log()
+        .lines()
+        .filter(|l| l.contains("stepped it to the host's"))
+        .count()
 }
 
 /// Everything the supervisor said about this transport, for a failure message.

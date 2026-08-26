@@ -3395,6 +3395,25 @@ pub fn run(
                                         std::time::Instant::now() + crate::control::AGENT_GRACE,
                                     ));
                                     false
+                                } else if control
+                                    .as_ref()
+                                    .map(|c| c.request_qga_shutdown())
+                                    .unwrap_or(false)
+                                {
+                                    // No limina-agent, but the guest's own stock agent answered
+                                    // earlier: ask it rather than going straight to the SIGKILL
+                                    // below, which is what a stock guest used to get here.
+                                    log::info!(
+                                        "window closed → asked the stock guest agent to power off"
+                                    );
+                                    // A stock guest's own shutdown takes far longer than the
+                                    // control-plane agent's (a seated desktop measured ~28 s):
+                                    // it is running the real systemd teardown, not just calling
+                                    // poweroff.
+                                    quit_deadline.set(Some(
+                                        std::time::Instant::now() + crate::supervisor::QGA_GRACE,
+                                    ));
+                                    false
                                 } else {
                                     true
                                 }

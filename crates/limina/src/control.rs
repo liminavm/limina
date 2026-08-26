@@ -306,6 +306,29 @@ impl ControlPlane {
         sent
     }
 
+    /// Ask a **stock** guest's `qemu-guest-agent` to power the guest off — the last polite rung
+    /// of the stop ladder, tried after the GPIO power button has had its chance and before the
+    /// SIGKILL.
+    ///
+    /// `false` means nothing was sent (no agent has ever answered on this port, or it does not
+    /// offer `guest-shutdown`), so the caller should escalate immediately rather than spend the
+    /// remaining grace waiting on a guest nobody asked.
+    pub fn request_qga_shutdown(&self) -> bool {
+        let Some(qga) = self.inner.qga.lock().unwrap().clone() else {
+            return false;
+        };
+        match qga.shutdown() {
+            Ok(()) => {
+                log::info!("qga: asked the stock guest agent to power off");
+                true
+            }
+            Err(e) => {
+                log::debug!("qga: no guest-agent power-off ({e:#})");
+                false
+            }
+        }
+    }
+
     /// Adopt the host end of a worker's `org.qemu.guest_agent.0` port.
     ///
     /// Called once per worker *spawn*, like [`Self::attach_vdagent`]: the fresh port replaces
