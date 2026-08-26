@@ -792,8 +792,22 @@ const SCREENSHOT_UI_BUNDLE: &str = "com.apple.screencaptureui";
 ///      the policy has a reason to (a click, or a dwell that already earned the re-grab),
 ///      exactly like the hit test beside it.
 fn screen_capture_session_live() -> bool {
+    bundle_has_onscreen_window(SCREENSHOT_UI_BUNDLE)
+}
+
+/// Does any running instance of `bundle_id` have a window on screen right now.
+///
+/// Split out from [`screen_capture_session_live`] so the *mechanism* — a Launch Services
+/// lookup, then a window list keyed on owner pid — can be exercised against a bundle that is
+/// reliably up (see this module's tests). Without that, the whole gate is unfalsifiable except
+/// by holding a crosshair over a running VM: it would return false forever if the pid key or
+/// the number cast were wrong, and a dead gate looks exactly like an unfixed bug.
+///
+/// Reads only the pid, never the window name — titles are the Screen-Recording-gated part of
+/// the list, and this must work with no TCC grant of any kind.
+fn bundle_has_onscreen_window(bundle_id: &str) -> bool {
     let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(
-        SCREENSHOT_UI_BUNDLE,
+        bundle_id,
     ));
     if apps.is_empty() {
         return false;
@@ -1404,6 +1418,36 @@ pub(crate) fn prompt_accessibility_once() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The capture gate's mechanism, run for real: the extern-static key, the CFArray→NSArray
+    /// bridge and the number downcast all have to be right together, and every one of them
+    /// fails *quietly* — a wrong key or a refused downcast makes the query answer "no window,
+    /// ever", which reads as a working build in which the fix simply does nothing.
+    ///
+    /// The Dock stands in for the screenshot UI because it is the same question with a known
+    /// answer: a bundle id that is running and owns on-screen windows (measured, e.g. `win=2503
+    /// owner=Dock`). Skipped rather than failed where no Dock is running, so a headless run
+    /// reports nothing instead of a false alarm.
+    #[test]
+    fn the_window_owner_query_answers_for_a_bundle_that_really_has_windows() {
+        const DOCK: &str = "com.apple.dock";
+        let dock_running = !NSRunningApplication::runningApplicationsWithBundleIdentifier(
+            &NSString::from_str(DOCK),
+        )
+        .is_empty();
+        if !dock_running {
+            return; // no window server session here; the query has nothing to be right about
+        }
+        assert!(
+            bundle_has_onscreen_window(DOCK),
+            "the Dock is running and owns on-screen windows — a `false` here means the query is \
+             broken, not that the Dock is hiding"
+        );
+        assert!(
+            !bundle_has_onscreen_window("dev.limina.no.such.bundle"),
+            "a bundle that is not running must not match any window"
+        );
+    }
 
     #[test]
     fn chord_fire_from_a_pointer_grab_also_mutes_the_soft_keyboard() {
