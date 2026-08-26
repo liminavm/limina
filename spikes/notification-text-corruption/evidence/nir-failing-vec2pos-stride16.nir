@@ -1,0 +1,357 @@
+// vi attributes_valid=0x7 bindings_valid=0x7
+// vi attr[0] binding=0 format=103 offset=0
+// vi attr[1] binding=1 format=109 offset=0
+// vi attr[2] binding=2 format=103 offset=0
+// vi binding[0] stride=16 input_rate=0
+// vi binding[1] stride=0 input_rate=0
+// vi binding[2] stride=16 input_rate=0
+shader: MESA_SHADER_VERTEX
+source_blake3: {0x0208c87f, 0xa56978ef, 0x536779ab, 0x7013c929, 0x82124aa7, 0x455dfe12, 0x50cf50c9, 0x7fe5f850}
+name: 
+next_stage: MESA_SHADER_FRAGMENT
+num_ubos: 2
+outputs_written: 0,17-18,32-33
+perspective_varyings: 32-33
+system_values_read: 0x00000000'00000000'00000000'00000200
+max_subgroup_size: 32
+min_subgroup_size: 32
+clip_distance_array_size: 8
+bit_sizes_float: 0x20
+bit_sizes_int: 0x61
+known_interpolation_qualifiers: true
+io_lowered: true
+inputs: 3
+outputs: 5
+uniforms: 52
+decl_var ubo INTERP_MODE_NONE none block[1] #0 (~0, 0, 0)
+decl_var ubo INTERP_MODE_NONE none block[1]#1 #2 (~0, 0, 1)
+decl_var push_const INTERP_MODE_NONE none block #3
+decl_function main () (entrypoint)
+
+impl main {
+    block b0:    // preds:
+    32      %0 = @decl_reg (num_components=1, num_array_elems=0, bit_size=32, divergent=0)
+    32      %1 = @decl_reg (num_components=1, num_array_elems=0, bit_size=32, divergent=0)
+    32      %2 = @decl_reg (num_components=1, num_array_elems=0, bit_size=32, divergent=0)
+    32      %3 = @decl_reg (num_components=1, num_array_elems=0, bit_size=32, divergent=0)
+    32      %4 = @decl_reg (num_components=1, num_array_elems=0, bit_size=32, divergent=0)
+    32      %5 = @decl_reg (num_components=1, num_array_elems=0, bit_size=32, divergent=0)
+    32      %6 = @decl_reg (num_components=1, num_array_elems=0, bit_size=32, divergent=0)
+    32      %7 = @decl_reg (num_components=1, num_array_elems=0, bit_size=32, divergent=0)
+    32      %8 = load_const (0x00000000)
+    64      %9 = @load_buffer_ptr_kk (binding=0)
+    64     %10 = load_const (0x0000000000000350 = 848)
+    64     %11 = iadd %9, %10 (0x350)
+    64     %12 = @load_global_constant (%11) (access=speculatable, align_mul=8, align_offset=0)
+    32x4   %13 = @load_global_constant_offset (%12, %8 (0x0)) (access=speculatable, align_mul=16, align_offset=0)
+    32     %14 = load_const (0x00000040 = 64)
+    64     %15 = u2u64 %13.x
+    64     %16 = u2u64 %13.y
+    32     %17 = load_const (0x00000020 = 32)
+    64     %18 = ishl %16, %17 (0x20)
+    64     %19 = ior %15, %18
+    32     %20 = mov %13.z
+    32     %21 = @load_global_constant_bounded (%19, %14 (0x40), %20) (access=none, align_mul=64, align_offset=0)
+    32     %22 = load_const (0x00000044 = 68)
+    32     %23 = @load_global_constant_bounded (%19, %22 (0x44), %20) (access=none, align_mul=64, align_offset=4)
+    32     %24 = @load_vertex_id
+    64     %25 = load_const (0x0000000000000098 = 152)
+    64     %26 = iadd %9, %25 (0x98)
+    64     %27 = @load_global_constant (%26) (access=none, align_mul=8, align_offset=0)
+    64     %28 = load_const (0x0000000000000010 = 16)
+    64     %29 = iadd %9, %28 (0x10)
+    32     %30 = @load_global_constant (%29) (access=none, align_mul=4, align_offset=0)
+    32     %31 = load_const (0x00000002)
+    32     %32 = ushr %30, %31 (0x2)
+    32     %33 = imul %24, %32
+    32x2   %34 = @load_constant_agx (%27, %33) (access=none, base=0, format=r32_uint, sign_extend=0)
+    64     %35 = load_const (0x0000000000000190 = 400)
+    64     %36 = iadd %9, %35 (0x190)
+    32     %37 = @load_global_constant (%36) (access=none, align_mul=4, align_offset=0)
+    1      %38 = ult %37, %24
+    32     %39 = load_const (0x00000000 = 0.000000)
+    32     %40 = load_const (0x00000000 = 0.000000)
+    32     %41 = bcsel %38, %39 (0x0), %34.x
+    32     %42 = bcsel %38, %40 (0x0), %34.y
+    32     %43 = fmul %21, %41
+    32     %44 = fmul %23, %41
+    32     %45 = load_const (0x00000050 = 80)
+    32     %46 = @load_global_constant_bounded (%19, %45 (0x50), %20) (access=none, align_mul=64, align_offset=16)
+    32     %47 = load_const (0x00000054 = 84)
+    32     %48 = @load_global_constant_bounded (%19, %47 (0x54), %20) (access=none, align_mul=64, align_offset=20)
+    32     %49 = fmul %46, %42
+    32     %50 = fmul %48, %42
+    32     %51 = load_const (0x00000060 = 96)
+    32     %52 = load_const (0x00000064 = 100)
+    32     %53 = load_const (0x00000070 = 112)
+    32     %54 = @load_global_constant_bounded (%19, %53 (0x70), %20) (access=none, align_mul=64, align_offset=48)
+    32     %55 = load_const (0x00000074 = 116)
+    32     %56 = @load_global_constant_bounded (%19, %55 (0x74), %20) (access=none, align_mul=64, align_offset=52)
+    32     %57 = fadd %43, %54
+    32     %58 = fadd %57, %49
+    32     %59 = fadd %44, %56
+    32     %60 = fadd %59, %50
+    32     %61 = @load_global_constant_bounded (%19, %8 (0x0), %20) (access=none, align_mul=64, align_offset=0)
+    32     %62 = load_const (0x00000004)
+    32     %63 = @load_global_constant_bounded (%19, %62 (0x4), %20) (access=none, align_mul=64, align_offset=4)
+    32     %64 = load_const (0x00000008)
+    32     %65 = @load_global_constant_bounded (%19, %64 (0x8), %20) (access=none, align_mul=64, align_offset=8)
+    32     %66 = load_const (0x0000000c = 12)
+    32     %67 = @load_global_constant_bounded (%19, %66 (0xc), %20) (access=none, align_mul=64, align_offset=12)
+    64     %68 = load_const (0x0000000000000088 = 136)
+    64     %69 = iadd %9, %68 (0x88)
+    64     %70 = @load_global_constant (%69) (access=none, align_mul=8, align_offset=0)
+    64     %71 = load_const (0x0000000000000008)
+    64     %72 = iadd %9, %71 (0x8)
+    32     %73 = @load_global_constant (%72) (access=none, align_mul=4, align_offset=0)
+    32     %74 = ushr %73, %31 (0x2)
+    32     %75 = imul %24, %74
+    32x2   %76 = @load_constant_agx (%70, %75) (access=none, base=0, format=r32_uint, sign_extend=0)
+    64     %77 = load_const (0x0000000000000188 = 392)
+    64     %78 = iadd %9, %77 (0x188)
+    32     %79 = @load_global_constant (%78) (access=none, align_mul=4, align_offset=0)
+    1      %80 = ult %79, %24
+    32     %81 = bcsel %80, %39 (0x0), %76.x
+    32     %82 = bcsel %80, %40 (0x0), %76.y
+    32     %83 = fmul %61, %81
+    32     %84 = fmul %63, %81
+    32     %85 = fmul %65, %81
+    32     %86 = fmul %67, %81
+    32     %87 = load_const (0x00000010 = 16)
+    32     %88 = @load_global_constant_bounded (%19, %87 (0x10), %20) (access=none, align_mul=64, align_offset=16)
+    32     %89 = load_const (0x00000014 = 20)
+    32     %90 = @load_global_constant_bounded (%19, %89 (0x14), %20) (access=none, align_mul=64, align_offset=20)
+    32     %91 = load_const (0x00000018 = 24)
+    32     %92 = @load_global_constant_bounded (%19, %91 (0x18), %20) (access=none, align_mul=64, align_offset=24)
+    32     %93 = load_const (0x0000001c = 28)
+    32     %94 = @load_global_constant_bounded (%19, %93 (0x1c), %20) (access=none, align_mul=64, align_offset=28)
+    32     %95 = fmul %88, %82
+    32     %96 = fmul %90, %82
+    32     %97 = fmul %92, %82
+    32     %98 = fmul %94, %82
+    32     %99 = load_const (0x00000024 = 36)
+    32    %100 = load_const (0x00000028 = 40)
+    32    %101 = load_const (0x0000002c = 44)
+    32    %102 = load_const (0x00000030 = 48)
+    32    %103 = @load_global_constant_bounded (%19, %102 (0x30), %20) (access=none, align_mul=64, align_offset=48)
+    32    %104 = load_const (0x00000034 = 52)
+    32    %105 = @load_global_constant_bounded (%19, %104 (0x34), %20) (access=none, align_mul=64, align_offset=52)
+    32    %106 = load_const (0x00000038 = 56)
+    32    %107 = @load_global_constant_bounded (%19, %106 (0x38), %20) (access=none, align_mul=64, align_offset=56)
+    32    %108 = load_const (0x0000003c = 60)
+    32    %109 = @load_global_constant_bounded (%19, %108 (0x3c), %20) (access=none, align_mul=64, align_offset=60)
+    32    %110 = fadd %83, %103
+    32    %111 = fadd %110, %95
+    32    %112 = fadd %84, %105
+    32    %113 = fadd %112, %96
+    32    %114 = fadd %85, %107
+    32    %115 = fadd %114, %97
+    32    %116 = fadd %86, %109
+    32    %117 = fadd %116, %98
+    64    %118 = load_const (0x0000000000000090 = 144)
+    64    %119 = iadd %9, %118 (0x90)
+    64    %120 = @load_global_constant (%119) (access=none, align_mul=8, align_offset=0)
+    64    %121 = load_const (0x000000000000000c = 12)
+    64    %122 = iadd %9, %121 (0xc)
+    32    %123 = @load_global_constant (%122) (access=none, align_mul=4, align_offset=0)
+    32    %124 = ushr %123, %31 (0x2)
+    32    %125 = imul %24, %124
+    32x4  %126 = @load_constant_agx (%120, %125) (access=none, base=0, format=r32_uint, sign_extend=0)
+    64    %127 = load_const (0x000000000000018c = 396)
+    64    %128 = iadd %9, %127 (0x18c)
+    32    %129 = @load_global_constant (%128) (access=none, align_mul=4, align_offset=0)
+    1     %130 = ult %129, %24
+    32    %131 = load_const (0x00000000 = 0.000000)
+    32    %132 = load_const (0x00000000 = 0.000000)
+    32    %133 = load_const (0x00000000 = 0.000000)
+    32    %134 = load_const (0x00000000 = 0.000000)
+    32    %135 = bcsel %130, %131 (0x0), %126.x
+    32    %136 = bcsel %130, %132 (0x0), %126.y
+    32    %137 = bcsel %130, %133 (0x0), %126.z
+    32    %138 = bcsel %130, %134 (0x0), %126.w
+    32x4  %139 = vec4 %135, %136, %137, %138
+    64    %140 = load_const (0x0000000000000358 = 856)
+    64    %141 = iadd %9, %140 (0x358)
+    64    %142 = @load_global_constant (%141) (access=speculatable, align_mul=8, align_offset=0)
+    32x4  %143 = @load_global_constant_offset (%142, %8 (0x0)) (access=speculatable, align_mul=16, align_offset=0)
+    32    %144 = load_const (0x00000288 = 648)
+    64    %145 = u2u64 %143.x
+    64    %146 = u2u64 %143.y
+    64    %147 = ishl %146, %17 (0x20)
+    64    %148 = ior %145, %147
+    32    %149 = mov %143.z
+    32    %150 = @load_global_constant_bounded (%148, %144 (0x288), %149) (access=none, align_mul=64, align_offset=8)
+    1     %151 = ine %150, %8 (0x0)
+                 // succs: b1 b2
+    if %151 {
+        block b1:    // preds: b0
+        32    %152 = @load_global_constant_bounded (%148, %8 (0x0), %149) (access=none, align_mul=64, align_offset=0)
+        32    %153 = @load_global_constant_bounded (%148, %62 (0x4), %149) (access=none, align_mul=64, align_offset=4)
+        32    %154 = @load_global_constant_bounded (%148, %64 (0x8), %149) (access=none, align_mul=64, align_offset=8)
+        32    %155 = @load_global_constant_bounded (%148, %66 (0xc), %149) (access=none, align_mul=64, align_offset=12)
+        32    %156 = fmul %117, %155
+        32    %157 = fmul %115, %154
+        32    %158 = fadd %157, %156
+        32    %159 = fmul %113, %153
+        32    %160 = fadd %159, %158
+        32    %161 = fmul %111, %152
+        32    %162 = fadd %161, %160
+                     @store_reg (%162, %0) (base=0, wrmask=x, legacy_fsat=0)
+        32    %163 = @load_global_constant_bounded (%148, %87 (0x10), %149) (access=none, align_mul=64, align_offset=16)
+        32    %164 = @load_global_constant_bounded (%148, %89 (0x14), %149) (access=none, align_mul=64, align_offset=20)
+        32    %165 = @load_global_constant_bounded (%148, %91 (0x18), %149) (access=none, align_mul=64, align_offset=24)
+        32    %166 = @load_global_constant_bounded (%148, %93 (0x1c), %149) (access=none, align_mul=64, align_offset=28)
+        32    %167 = fmul %117, %166
+        32    %168 = fmul %115, %165
+        32    %169 = fadd %168, %167
+        32    %170 = fmul %113, %164
+        32    %171 = fadd %170, %169
+        32    %172 = fmul %111, %163
+        32    %173 = fadd %172, %171
+                     @store_reg (%173, %1) (base=0, wrmask=x, legacy_fsat=0)
+        32    %174 = @load_global_constant_bounded (%148, %17 (0x20), %149) (access=none, align_mul=64, align_offset=32)
+        32    %175 = @load_global_constant_bounded (%148, %99 (0x24), %149) (access=none, align_mul=64, align_offset=36)
+        32    %176 = @load_global_constant_bounded (%148, %100 (0x28), %149) (access=none, align_mul=64, align_offset=40)
+        32    %177 = @load_global_constant_bounded (%148, %101 (0x2c), %149) (access=none, align_mul=64, align_offset=44)
+        32    %178 = fmul %117, %177
+        32    %179 = fmul %115, %176
+        32    %180 = fadd %179, %178
+        32    %181 = fmul %113, %175
+        32    %182 = fadd %181, %180
+        32    %183 = fmul %111, %174
+        32    %184 = fadd %183, %182
+                     @store_reg (%184, %2) (base=0, wrmask=x, legacy_fsat=0)
+        32    %185 = @load_global_constant_bounded (%148, %102 (0x30), %149) (access=none, align_mul=64, align_offset=48)
+        32    %186 = @load_global_constant_bounded (%148, %104 (0x34), %149) (access=none, align_mul=64, align_offset=52)
+        32    %187 = @load_global_constant_bounded (%148, %106 (0x38), %149) (access=none, align_mul=64, align_offset=56)
+        32    %188 = @load_global_constant_bounded (%148, %108 (0x3c), %149) (access=none, align_mul=64, align_offset=60)
+        32    %189 = fmul %117, %188
+        32    %190 = fmul %115, %187
+        32    %191 = fadd %190, %189
+        32    %192 = fmul %113, %186
+        32    %193 = fadd %192, %191
+        32    %194 = fmul %111, %185
+        32    %195 = fadd %194, %193
+                     @store_reg (%195, %3) (base=0, wrmask=x, legacy_fsat=0)
+        32    %196 = @load_global_constant_bounded (%148, %14 (0x40), %149) (access=none, align_mul=64, align_offset=0)
+        32    %197 = @load_global_constant_bounded (%148, %22 (0x44), %149) (access=none, align_mul=64, align_offset=4)
+        32    %198 = load_const (0x00000048 = 72)
+        32    %199 = @load_global_constant_bounded (%148, %198 (0x48), %149) (access=none, align_mul=64, align_offset=8)
+        32    %200 = load_const (0x0000004c = 76)
+        32    %201 = @load_global_constant_bounded (%148, %200 (0x4c), %149) (access=none, align_mul=64, align_offset=12)
+        32    %202 = fmul %117, %201
+        32    %203 = fmul %115, %199
+        32    %204 = fadd %203, %202
+        32    %205 = fmul %113, %197
+        32    %206 = fadd %205, %204
+        32    %207 = fmul %111, %196
+        32    %208 = fadd %207, %206
+                     @store_reg (%208, %4) (base=0, wrmask=x, legacy_fsat=0)
+        32    %209 = @load_global_constant_bounded (%148, %45 (0x50), %149) (access=none, align_mul=64, align_offset=16)
+        32    %210 = @load_global_constant_bounded (%148, %47 (0x54), %149) (access=none, align_mul=64, align_offset=20)
+        32    %211 = load_const (0x00000058 = 88)
+        32    %212 = @load_global_constant_bounded (%148, %211 (0x58), %149) (access=none, align_mul=64, align_offset=24)
+        32    %213 = load_const (0x0000005c = 92)
+        32    %214 = @load_global_constant_bounded (%148, %213 (0x5c), %149) (access=none, align_mul=64, align_offset=28)
+        32    %215 = fmul %117, %214
+        32    %216 = fmul %115, %212
+        32    %217 = fadd %216, %215
+        32    %218 = fmul %113, %210
+        32    %219 = fadd %218, %217
+        32    %220 = fmul %111, %209
+        32    %221 = fadd %220, %219
+                     @store_reg (%221, %5) (base=0, wrmask=x, legacy_fsat=0)
+        32    %222 = @load_global_constant_bounded (%148, %51 (0x60), %149) (access=none, align_mul=64, align_offset=32)
+        32    %223 = @load_global_constant_bounded (%148, %52 (0x64), %149) (access=none, align_mul=64, align_offset=36)
+        32    %224 = load_const (0x00000068 = 104)
+        32    %225 = @load_global_constant_bounded (%148, %224 (0x68), %149) (access=none, align_mul=64, align_offset=40)
+        32    %226 = load_const (0x0000006c = 108)
+        32    %227 = @load_global_constant_bounded (%148, %226 (0x6c), %149) (access=none, align_mul=64, align_offset=44)
+        32    %228 = fmul %117, %227
+        32    %229 = fmul %115, %225
+        32    %230 = fadd %229, %228
+        32    %231 = fmul %113, %223
+        32    %232 = fadd %231, %230
+        32    %233 = fmul %111, %222
+        32    %234 = fadd %233, %232
+                     @store_reg (%234, %6) (base=0, wrmask=x, legacy_fsat=0)
+        32    %235 = @load_global_constant_bounded (%148, %53 (0x70), %149) (access=none, align_mul=64, align_offset=48)
+        32    %236 = @load_global_constant_bounded (%148, %55 (0x74), %149) (access=none, align_mul=64, align_offset=52)
+        32    %237 = load_const (0x00000078 = 120)
+        32    %238 = @load_global_constant_bounded (%148, %237 (0x78), %149) (access=none, align_mul=64, align_offset=56)
+        32    %239 = load_const (0x0000007c = 124)
+        32    %240 = @load_global_constant_bounded (%148, %239 (0x7c), %149) (access=none, align_mul=64, align_offset=60)
+        32    %241 = fmul %117, %240
+        32    %242 = fmul %115, %238
+        32    %243 = fadd %242, %241
+        32    %244 = fmul %113, %236
+        32    %245 = fadd %244, %243
+        32    %246 = fmul %111, %235
+        32    %247 = fadd %246, %245
+                     @store_reg (%247, %7) (base=0, wrmask=x, legacy_fsat=0)
+                     // succs: b3
+    } else {
+        block b2:// preds: b0
+        @store_reg (%8 (0x0), %0) (base=0, wrmask=x, legacy_fsat=0)
+        @store_reg (%8 (0x0), %1) (base=0, wrmask=x, legacy_fsat=0)
+        @store_reg (%8 (0x0), %2) (base=0, wrmask=x, legacy_fsat=0)
+        @store_reg (%8 (0x0), %3) (base=0, wrmask=x, legacy_fsat=0)
+        @store_reg (%8 (0x0), %4) (base=0, wrmask=x, legacy_fsat=0)
+        @store_reg (%8 (0x0), %5) (base=0, wrmask=x, legacy_fsat=0)
+        @store_reg (%8 (0x0), %6) (base=0, wrmask=x, legacy_fsat=0)
+        @store_reg (%8 (0x0), %7) (base=0, wrmask=x, legacy_fsat=0)
+        // succs: b3
+    }
+    block b3:    // preds: b1 b2
+    32    %248 = load_const (0x00000280 = 640)
+    32    %249 = @load_global_constant_bounded (%148, %248 (0x280), %149) (access=none, align_mul=64, align_offset=0)
+    32    %250 = fmul %113, %249
+    64    %251 = load_const (0x0000000000000218 = 536)
+    64    %252 = iadd %9, %251 (0x218)
+    32    %253 = @load_global_constant (%252) (access=speculatable, align_mul=4, align_offset=0)
+    32    %254 = fmul %117, %253
+    32    %255 = fadd %254, %115
+    32    %256 = fmul %115, %253
+    32    %257 = fneg %256
+    32    %258 = fadd %257, %255
+    32x4  %259 = vec4 %111, %250, %258, %117
+                 @store_output (%259, %8 (0x0)) (base=0, range=0, wrmask=xyzw, component=0, src_type=float32, io location=VARYING_SLOT_POS slots=1 no_signed_zero, xfb())
+    32    %260 = @load_reg (%0) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_output (%260, %8 (0x0)) (base=1, range=0, wrmask=x, component=0, src_type=float32, io location=VARYING_SLOT_CLIP_DIST0 slots=1 no_varying no_signed_zero, xfb())
+    32    %261 = @load_reg (%0) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_clip_distance_kk (%261) (base=0)
+    32    %262 = @load_reg (%1) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_output (%262, %8 (0x0)) (base=1, range=0, wrmask=x, component=1, src_type=float32, io location=VARYING_SLOT_CLIP_DIST0 slots=1 no_varying no_signed_zero, xfb())
+    32    %263 = @load_reg (%1) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_clip_distance_kk (%263) (base=1)
+    32    %264 = @load_reg (%2) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_output (%264, %8 (0x0)) (base=1, range=0, wrmask=x, component=2, src_type=float32, io location=VARYING_SLOT_CLIP_DIST0 slots=1 no_varying no_signed_zero, xfb())
+    32    %265 = @load_reg (%2) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_clip_distance_kk (%265) (base=2)
+    32    %266 = @load_reg (%3) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_output (%266, %8 (0x0)) (base=1, range=0, wrmask=x, component=3, src_type=float32, io location=VARYING_SLOT_CLIP_DIST0 slots=1 no_varying no_signed_zero, xfb())
+    32    %267 = @load_reg (%3) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_clip_distance_kk (%267) (base=3)
+    32    %268 = @load_reg (%4) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_output (%268, %8 (0x0)) (base=2, range=0, wrmask=x, component=0, src_type=float32, io location=VARYING_SLOT_CLIP_DIST1 slots=1 no_varying no_signed_zero, xfb())
+    32    %269 = @load_reg (%4) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_clip_distance_kk (%269) (base=4)
+    32    %270 = @load_reg (%5) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_output (%270, %8 (0x0)) (base=2, range=0, wrmask=x, component=1, src_type=float32, io location=VARYING_SLOT_CLIP_DIST1 slots=1 no_varying no_signed_zero, xfb())
+    32    %271 = @load_reg (%5) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_clip_distance_kk (%271) (base=5)
+    32    %272 = @load_reg (%6) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_output (%272, %8 (0x0)) (base=2, range=0, wrmask=x, component=2, src_type=float32, io location=VARYING_SLOT_CLIP_DIST1 slots=1 no_varying no_signed_zero, xfb())
+    32    %273 = @load_reg (%6) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_clip_distance_kk (%273) (base=6)
+    32    %274 = @load_reg (%7) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_output (%274, %8 (0x0)) (base=2, range=0, wrmask=x, component=3, src_type=float32, io location=VARYING_SLOT_CLIP_DIST1 slots=1 no_varying no_signed_zero, xfb())
+    32    %275 = @load_reg (%7) (base=0, legacy_fabs=0, legacy_fneg=0)
+                 @store_clip_distance_kk (%275) (base=7)
+                 @store_output (%139, %8 (0x0)) (base=3, range=0, wrmask=xyzw, component=0, src_type=float32, io location=VARYING_SLOT_VAR0 slots=1 no_signed_zero, xfb())
+    32x2  %276 = vec2 %58, %60
+                 @store_output (%276, %8 (0x0)) (base=4, range=0, wrmask=xy, component=0, src_type=float32, io location=VARYING_SLOT_VAR1 slots=1 no_signed_zero, xfb())
+                 // succs: b4
+    block b4:
+}
+

@@ -1,0 +1,843 @@
+Aug 24 22:08:55 fedora gnome-shell[3118]: [LIMINA-TEXT] draw log live, matching "Critical" readback=0
+Aug 24 22:08:55 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Aug 24 10:08 PM" at (0.0,0.0) fb=0xaaaaf1e071f0 OFFSCREEN 322x70
+Aug 24 22:08:55 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Type to search" at (0.0,0.0) fb=0xaaaaf24aedd0 OFFSCREEN 204x44
+Aug 24 22:08:55 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Aug 24 10:08 PM" at (0.0,0.0) fb=0xaaaaf1e071f0 OFFSCREEN 322x70
+Aug 24 22:08:56 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Aug 24 10:08 PM" at (0.0,0.0) fb=0xaaaaf1e071f0 OFFSCREEN 322x70
+Aug 24 22:08:57 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Aug 24 10:08 PM" at (0.0,0.0) fb=0xaaaaf1e071f0 OFFSCREEN 322x70
+Aug 24 22:08:57 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Type to search" at (0.0,0.0) fb=0xaaaaf24aedd0 OFFSCREEN 204x44
+Aug 24 22:09:00 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Aug 24 10:09 PM" at (0.0,0.0) fb=0xaaaaf1e071f0 OFFSCREEN 322x70
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaf09f8690 OFFSCREEN 134x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaef441630 OFFSCREEN 110x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 001" at (0.0,0.0) fb=0xaaaaf0c512b0 OFFSCREEN 968x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0c512b0 968x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaf254b9b0 OFFSCREEN 568x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf254b9b0 568x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=1 fb=0xaaaaf0c512b0 OFFSCREEN 968x44 entries=18
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=2 fb=0xaaaaef441630 OFFSCREEN 110x38 entries=7
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=3 fb=0xaaaaf09f8690 OFFSCREEN 134x44 entries=8
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=4 fb=0xaaaaf1045880 OFFSCREEN 38x38 entries=1
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=5 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1045880 38x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09f8690 134x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef441630 110x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0c512b0 968x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf254b9b0 568x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=6 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1045880 38x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09f8690 134x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef441630 110x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0c512b0 968x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf254b9b0 568x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=7 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1045880 38x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09f8690 134x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef441630 110x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0c512b0 968x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf254b9b0 568x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=8 fb=0xaaaaef033b50 onscreen 2560x1440 entries=39
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1045880 38x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09f8690 134x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef441630 110x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0c512b0 968x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf254b9b0 568x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=9 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1045880 38x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09f8690 134x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef441630 110x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0c512b0 968x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf254b9b0 568x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=10 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1045880 38x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09f8690 134x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef441630 110x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0c512b0 968x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf254b9b0 568x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=11 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1045880 38x38
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09f8690 134x44
+Aug 24 22:09:25 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=12 fb=0xaaaaef033b50 onscreen 2560x1440 entries=36
+Aug 24 22:09:29 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=13 fb=0xaaaaef033b50 onscreen 2560x1440 entries=36
+Aug 24 22:09:29 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=14 fb=0xaaaaef033b50 onscreen 2560x1440 entries=36
+Aug 24 22:09:29 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=15 fb=0xaaaaef033b50 onscreen 2560x1440 entries=25
+Aug 24 22:09:29 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=16 fb=0xaaaaef033b50 onscreen 2560x1440 entries=23
+Aug 24 22:09:29 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=17 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:29 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=18 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:29 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=19 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:29 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=20 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:29 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=21 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:29 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=22 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=23 fb=0xaaaaf1dfd6b0 OFFSCREEN 4102x70 entries=21
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=24 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=25 fb=0xaaaaf105ac90 OFFSCREEN 82x82 entries=11
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=26 fb=0xaaaaf0a4ff90 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=27 fb=0xaaaaf165e800 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=28 fb=0xaaaaf0a4e100 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaf0f52530 OFFSCREEN 134x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaf0a6b280 OFFSCREEN 110x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 002" at (0.0,0.0) fb=0xaaaaf09ee930 OFFSCREEN 968x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09ee930 968x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaf0a75aa0 OFFSCREEN 568x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a75aa0 568x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=29 fb=0xaaaaf09ee930 OFFSCREEN 968x44 entries=18
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=30 fb=0xaaaaf0a6b280 OFFSCREEN 110x38 entries=7
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=31 fb=0xaaaaf0f52530 OFFSCREEN 134x44 entries=8
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=32 fb=0xaaaaf0a59610 OFFSCREEN 38x38 entries=1
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=33 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a59610 38x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaf0f52530 OFFSCREEN 134x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0f52530 134x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaf0a6b280 OFFSCREEN 110x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a6b280 110x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 002" at (0.0,0.0) fb=0xaaaaf09ee930 OFFSCREEN 968x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09ee930 968x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaf0a75aa0 OFFSCREEN 568x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a75aa0 568x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=34 fb=0xaaaaf09ee930 OFFSCREEN 968x44 entries=18
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=35 fb=0xaaaaf0a6b280 OFFSCREEN 110x38 entries=7
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=36 fb=0xaaaaf0f52530 OFFSCREEN 134x44 entries=8
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=37 fb=0xaaaaf0a59610 OFFSCREEN 38x38 entries=1
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=38 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a59610 38x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0f52530 134x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a6b280 110x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09ee930 968x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a75aa0 568x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=39 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a59610 38x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0f52530 134x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a6b280 110x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09ee930 968x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a75aa0 568x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=40 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a59610 38x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0f52530 134x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a6b280 110x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09ee930 968x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a75aa0 568x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=41 fb=0xaaaaef033b50 onscreen 2560x1440 entries=39
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a59610 38x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0f52530 134x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a6b280 110x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09ee930 968x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a75aa0 568x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=42 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a59610 38x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0f52530 134x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a6b280 110x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09ee930 968x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a75aa0 568x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=43 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a59610 38x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0f52530 134x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a6b280 110x38
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09ee930 968x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a75aa0 568x44
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=44 fb=0xaaaaef033b50 onscreen 2560x1440 entries=36
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:32 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=45 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:36 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=46 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:09:36 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=47 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:36 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=48 fb=0xaaaaef033b50 onscreen 2560x1440 entries=24
+Aug 24 22:09:36 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=49 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:36 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=50 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:36 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=51 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:36 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=52 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:36 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=53 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=54 fb=0xaaaaf1dfd6b0 OFFSCREEN 4102x70 entries=21
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=55 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=56 fb=0xaaaaf09f28d0 OFFSCREEN 82x82 entries=11
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=57 fb=0xaaaaefe9c930 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=58 fb=0xaaaaf09edab0 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=59 fb=0xaaaaf0a86a40 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaef3e3080 OFFSCREEN 134x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaf08571d0 OFFSCREEN 110x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 003" at (0.0,0.0) fb=0xaaaaf0fb6bc0 OFFSCREEN 968x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0fb6bc0 968x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaf10e6ee0 OFFSCREEN 568x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf10e6ee0 568x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=60 fb=0xaaaaf0fb6bc0 OFFSCREEN 968x44 entries=18
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=61 fb=0xaaaaf08571d0 OFFSCREEN 110x38 entries=7
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=62 fb=0xaaaaef3e3080 OFFSCREEN 134x44 entries=8
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=63 fb=0xaaaaf16ac010 OFFSCREEN 38x38 entries=1
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=64 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 38x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaef3e3080 OFFSCREEN 134x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef3e3080 134x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaf08571d0 OFFSCREEN 110x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 110x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 003" at (0.0,0.0) fb=0xaaaaf0fb6bc0 OFFSCREEN 968x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0fb6bc0 968x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaf10e6ee0 OFFSCREEN 568x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf10e6ee0 568x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=65 fb=0xaaaaf0fb6bc0 OFFSCREEN 968x44 entries=18
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=66 fb=0xaaaaf08571d0 OFFSCREEN 110x38 entries=7
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=67 fb=0xaaaaef3e3080 OFFSCREEN 134x44 entries=8
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=68 fb=0xaaaaf16ac010 OFFSCREEN 38x38 entries=1
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=69 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 38x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef3e3080 134x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 110x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0fb6bc0 968x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf10e6ee0 568x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=70 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 38x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef3e3080 134x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 110x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0fb6bc0 968x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf10e6ee0 568x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=71 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 38x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef3e3080 134x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 110x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0fb6bc0 968x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf10e6ee0 568x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=72 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 38x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef3e3080 134x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 110x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0fb6bc0 968x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf10e6ee0 568x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=73 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 38x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef3e3080 134x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 110x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0fb6bc0 968x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf10e6ee0 568x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=74 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 38x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef3e3080 134x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 110x38
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0fb6bc0 968x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf10e6ee0 568x44
+Aug 24 22:09:38 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=75 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:42 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:42 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:42 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:42 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:42 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 38x38
+Aug 24 22:09:42 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef3e3080 134x44
+Aug 24 22:09:42 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 110x38
+Aug 24 22:09:42 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0fb6bc0 968x44
+Aug 24 22:09:42 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=76 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:42 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=77 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:43 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=78 fb=0xaaaaef033b50 onscreen 2560x1440 entries=3
+Aug 24 22:09:43 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=79 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:43 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=80 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:43 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=81 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:43 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=82 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:43 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=83 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=84 fb=0xaaaaf1dfd6b0 OFFSCREEN 4102x70 entries=21
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=85 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=86 fb=0xaaaaf15fdd20 OFFSCREEN 82x82 entries=11
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=87 fb=0xaaaaf0c5b970 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=88 fb=0xaaaaf13195a0 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=89 fb=0xaaaaf0fb6bc0 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaf0a64b10 OFFSCREEN 134x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaf16ac010 OFFSCREEN 110x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 004" at (0.0,0.0) fb=0xaaaaf15ec3e0 OFFSCREEN 968x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf15ec3e0 968x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaefded070 OFFSCREEN 568x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 568x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=90 fb=0xaaaaf15ec3e0 OFFSCREEN 968x44 entries=18
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=91 fb=0xaaaaf16ac010 OFFSCREEN 110x38 entries=7
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=92 fb=0xaaaaf0a64b10 OFFSCREEN 134x44 entries=8
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=93 fb=0xaaaaf08571d0 OFFSCREEN 38x38 entries=1
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=94 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaf0a64b10 OFFSCREEN 134x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a64b10 134x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaf16ac010 OFFSCREEN 110x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 110x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 004" at (0.0,0.0) fb=0xaaaaf15ec3e0 OFFSCREEN 968x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf15ec3e0 968x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaefded070 OFFSCREEN 568x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 568x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=95 fb=0xaaaaf15ec3e0 OFFSCREEN 968x44 entries=18
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=96 fb=0xaaaaf16ac010 OFFSCREEN 110x38 entries=7
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=97 fb=0xaaaaf0a64b10 OFFSCREEN 134x44 entries=8
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=98 fb=0xaaaaf08571d0 OFFSCREEN 38x38 entries=1
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=99 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a64b10 134x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 110x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf15ec3e0 968x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 568x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=100 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a64b10 134x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 110x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf15ec3e0 968x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 568x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=101 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a64b10 134x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 110x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf15ec3e0 968x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 568x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=102 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a64b10 134x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 110x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf15ec3e0 968x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 568x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=103 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a64b10 134x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 110x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf15ec3e0 968x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 568x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=104 fb=0xaaaaef033b50 onscreen 2560x1440 entries=36
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a64b10 134x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 110x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf15ec3e0 968x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 568x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=105 fb=0xaaaaef033b50 onscreen 2560x1440 entries=36
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a64b10 134x44
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf16ac010 110x38
+Aug 24 22:09:45 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=106 fb=0xaaaaef033b50 onscreen 2560x1440 entries=36
+Aug 24 22:09:49 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=107 fb=0xaaaaef033b50 onscreen 2560x1440 entries=36
+Aug 24 22:09:49 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=108 fb=0xaaaaef033b50 onscreen 2560x1440 entries=36
+Aug 24 22:09:49 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=109 fb=0xaaaaef033b50 onscreen 2560x1440 entries=3
+Aug 24 22:09:49 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=110 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:49 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=111 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:49 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=112 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:49 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=113 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:49 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=114 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=115 fb=0xaaaaf1dfd6b0 OFFSCREEN 4102x70 entries=21
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=116 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=117 fb=0xaaaaefd46380 OFFSCREEN 82x82 entries=11
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=118 fb=0xaaaaf1608f10 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=119 fb=0xaaaaf1621aa0 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=120 fb=0xaaaaf24ca6f0 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaf0a3d170 OFFSCREEN 134x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaf0a4ff90 OFFSCREEN 110x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 005" at (0.0,0.0) fb=0xaaaaf251c520 OFFSCREEN 968x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf251c520 968x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaf1066de0 OFFSCREEN 568x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 568x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=121 fb=0xaaaaf251c520 OFFSCREEN 968x44 entries=18
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=122 fb=0xaaaaf0a4ff90 OFFSCREEN 110x38 entries=7
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=123 fb=0xaaaaf0a3d170 OFFSCREEN 134x44 entries=8
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=124 fb=0xaaaaf0a04f10 OFFSCREEN 38x38 entries=1
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=125 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a04f10 38x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaf0a3d170 OFFSCREEN 134x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 134x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaf0a4ff90 OFFSCREEN 110x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a4ff90 110x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 005" at (0.0,0.0) fb=0xaaaaf251c520 OFFSCREEN 968x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf251c520 968x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaf1066de0 OFFSCREEN 568x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 568x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=126 fb=0xaaaaf251c520 OFFSCREEN 968x44 entries=18
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=127 fb=0xaaaaf0a4ff90 OFFSCREEN 110x38 entries=7
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=128 fb=0xaaaaf0a3d170 OFFSCREEN 134x44 entries=8
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=129 fb=0xaaaaf0a04f10 OFFSCREEN 38x38 entries=1
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=130 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a04f10 38x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 134x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a4ff90 110x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf251c520 968x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 568x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=131 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a04f10 38x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 134x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a4ff90 110x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf251c520 968x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 568x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=132 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a04f10 38x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 134x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a4ff90 110x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf251c520 968x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 568x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=133 fb=0xaaaaef033b50 onscreen 2560x1440 entries=39
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a04f10 38x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 134x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a4ff90 110x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf251c520 968x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 568x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=134 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a04f10 38x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 134x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a4ff90 110x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf251c520 968x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 568x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=135 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a04f10 38x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 134x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a4ff90 110x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf251c520 968x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 568x44
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=136 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a04f10 38x38
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=137 fb=0xaaaaef033b50 onscreen 2560x1440 entries=36
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=138 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:52 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=139 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:56 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=140 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:09:56 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=141 fb=0xaaaaef033b50 onscreen 2560x1440 entries=36
+Aug 24 22:09:56 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=142 fb=0xaaaaef033b50 onscreen 2560x1440 entries=24
+Aug 24 22:09:56 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=143 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:56 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=144 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:56 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=145 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:56 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=146 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:56 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=147 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:56 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=148 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:56 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=149 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=150 fb=0xaaaaf1dfd6b0 OFFSCREEN 4102x70 entries=21
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=151 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=152 fb=0xaaaaf103b3b0 OFFSCREEN 82x82 entries=11
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=153 fb=0xaaaaf0c6a6c0 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=154 fb=0xaaaaefe3bd80 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=155 fb=0xaaaaf0a7b1b0 OFFSCREEN 98x98 entries=1
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaef441630 OFFSCREEN 134x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaf0a3d170 OFFSCREEN 110x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 006" at (0.0,0.0) fb=0xaaaaefec7b00 OFFSCREEN 968x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefec7b00 968x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaf0a10750 OFFSCREEN 568x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a10750 568x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=156 fb=0xaaaaefec7b00 OFFSCREEN 968x44 entries=18
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=157 fb=0xaaaaf0a3d170 OFFSCREEN 110x38 entries=7
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=158 fb=0xaaaaef441630 OFFSCREEN 134x44 entries=8
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=159 fb=0xaaaaf0de53b0 OFFSCREEN 38x38 entries=1
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=160 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de53b0 38x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaef441630 OFFSCREEN 134x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef441630 134x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaf0a3d170 OFFSCREEN 110x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 110x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 006" at (0.0,0.0) fb=0xaaaaefec7b00 OFFSCREEN 968x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefec7b00 968x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaf0a10750 OFFSCREEN 568x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a10750 568x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=161 fb=0xaaaaefec7b00 OFFSCREEN 968x44 entries=18
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=162 fb=0xaaaaf0a3d170 OFFSCREEN 110x38 entries=7
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=163 fb=0xaaaaef441630 OFFSCREEN 134x44 entries=8
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=164 fb=0xaaaaf0de53b0 OFFSCREEN 38x38 entries=1
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=165 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de53b0 38x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef441630 134x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 110x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefec7b00 968x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a10750 568x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=166 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de53b0 38x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef441630 134x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 110x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefec7b00 968x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a10750 568x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=167 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de53b0 38x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef441630 134x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 110x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefec7b00 968x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a10750 568x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=168 fb=0xaaaaef033b50 onscreen 2560x1440 entries=39
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de53b0 38x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef441630 134x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 110x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefec7b00 968x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a10750 568x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=169 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de53b0 38x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef441630 134x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 110x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefec7b00 968x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a10750 568x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=170 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de53b0 38x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaef441630 134x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a3d170 110x38
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefec7b00 968x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0a10750 568x44
+Aug 24 22:09:58 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=171 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:10:00 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:00 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Aug 24 10:10 PM" at (0.0,0.0) fb=0xaaaaf1e071f0 OFFSCREEN 322x70
+Aug 24 22:10:00 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=172 fb=0xaaaaf1e071f0 OFFSCREEN 322x70 entries=12
+Aug 24 22:10:00 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=173 fb=0xaaaaf1dfd6b0 OFFSCREEN 4102x70 entries=21
+Aug 24 22:10:00 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=174 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:10:02 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=175 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:10:02 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=176 fb=0xaaaaef033b50 onscreen 2560x1440 entries=36
+Aug 24 22:10:02 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=177 fb=0xaaaaef033b50 onscreen 2560x1440 entries=23
+Aug 24 22:10:02 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=178 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:02 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=179 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:02 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=180 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:03 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=181 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:03 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=182 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:03 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=183 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=184 fb=0xaaaaf1dfd6b0 OFFSCREEN 4102x70 entries=21
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=185 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=186 fb=0xaaaaf0c6a6c0 OFFSCREEN 82x82 entries=11
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=187 fb=0xaaaaf05c5d40 OFFSCREEN 98x98 entries=1
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=188 fb=0xaaaaf0db0560 OFFSCREEN 98x98 entries=1
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=189 fb=0xaaaaf0457900 OFFSCREEN 98x98 entries=1
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaf1066de0 OFFSCREEN 134x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaefded070 OFFSCREEN 110x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 007" at (0.0,0.0) fb=0xaaaaf103b3b0 OFFSCREEN 968x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 968x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaf09d5680 OFFSCREEN 568x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09d5680 568x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=190 fb=0xaaaaf103b3b0 OFFSCREEN 968x44 entries=18
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=191 fb=0xaaaaefded070 OFFSCREEN 110x38 entries=7
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=192 fb=0xaaaaf1066de0 OFFSCREEN 134x44 entries=8
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=193 fb=0xaaaaf08571d0 OFFSCREEN 38x38 entries=1
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=194 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaf1066de0 OFFSCREEN 134x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 134x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaefded070 OFFSCREEN 110x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 110x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 007" at (0.0,0.0) fb=0xaaaaf103b3b0 OFFSCREEN 968x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 968x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaf09d5680 OFFSCREEN 568x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09d5680 568x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=195 fb=0xaaaaf103b3b0 OFFSCREEN 968x44 entries=18
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=196 fb=0xaaaaefded070 OFFSCREEN 110x38 entries=7
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=197 fb=0xaaaaf1066de0 OFFSCREEN 134x44 entries=8
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=198 fb=0xaaaaf08571d0 OFFSCREEN 38x38 entries=1
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=199 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 134x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 110x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 968x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09d5680 568x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=200 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 134x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 110x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 968x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09d5680 568x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=201 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 134x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 110x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 968x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09d5680 568x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=202 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 134x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 110x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 968x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09d5680 568x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=203 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 134x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 110x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 968x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09d5680 568x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=204 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1066de0 134x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefded070 110x38
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 968x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf09d5680 568x44
+Aug 24 22:10:05 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=205 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf08571d0 38x38
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=206 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=207 fb=0xaaaaef033b50 onscreen 2560x1440 entries=33
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=208 fb=0xaaaaef033b50 onscreen 2560x1440 entries=24
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=209 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=210 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=211 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=212 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=213 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:09 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=214 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=215 fb=0xaaaaf1dfd6b0 OFFSCREEN 4102x70 entries=21
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=216 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=217 fb=0xaaaaf08571d0 OFFSCREEN 82x82 entries=11
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=218 fb=0xaaaaefeb33e0 OFFSCREEN 98x98 entries=1
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=219 fb=0xaaaaf0a6b280 OFFSCREEN 98x98 entries=1
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=220 fb=0xaaaaf0a59610 OFFSCREEN 98x98 entries=1
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaf0dd1320 OFFSCREEN 134x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaf103b3b0 OFFSCREEN 110x38
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 008" at (0.0,0.0) fb=0xaaaaefeb33e0 OFFSCREEN 968x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefeb33e0 968x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaefdecd00 OFFSCREEN 568x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefdecd00 568x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=221 fb=0xaaaaefeb33e0 OFFSCREEN 968x44 entries=18
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=222 fb=0xaaaaf103b3b0 OFFSCREEN 110x38 entries=7
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=223 fb=0xaaaaf0dd1320 OFFSCREEN 134x44 entries=8
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=224 fb=0xaaaaf0de0bf0 OFFSCREEN 38x38 entries=1
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=225 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de0bf0 38x38
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Software" at (0.0,0.0) fb=0xaaaaf0dd1320 OFFSCREEN 134x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0dd1320 134x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Just now" at (0.0,0.0) fb=0xaaaaf103b3b0 OFFSCREEN 110x38
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 110x38
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Critical Updates 008" at (0.0,0.0) fb=0xaaaaefeb33e0 OFFSCREEN 968x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefeb33e0 968x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-TEXT] draw "Install critical updates as soon as poss" at (0.0,0.0) fb=0xaaaaefdecd00 OFFSCREEN 568x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefdecd00 568x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=226 fb=0xaaaaefeb33e0 OFFSCREEN 968x44 entries=18
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=227 fb=0xaaaaf103b3b0 OFFSCREEN 110x38 entries=7
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=228 fb=0xaaaaf0dd1320 OFFSCREEN 134x44 entries=8
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=229 fb=0xaaaaf0de0bf0 OFFSCREEN 38x38 entries=1
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=230 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de0bf0 38x38
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0dd1320 134x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 110x38
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefeb33e0 968x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefdecd00 568x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=231 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de0bf0 38x38
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0dd1320 134x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 110x38
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefeb33e0 968x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefdecd00 568x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=232 fb=0xaaaaef033b50 onscreen 2560x1440 entries=39
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de0bf0 38x38
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0dd1320 134x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 110x38
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefeb33e0 968x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefdecd00 568x44
+Aug 24 22:10:11 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=233 fb=0xaaaaef033b50 onscreen 2560x1440 entries=38
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de0bf0 38x38
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0dd1320 134x44
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 110x38
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefeb33e0 968x44
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefdecd00 568x44
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=234 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de0bf0 38x38
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0dd1320 134x44
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 110x38
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefeb33e0 968x44
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefdecd00 568x44
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=235 fb=0xaaaaef033b50 onscreen 2560x1440 entries=36
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0de0bf0 38x38
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf0dd1320 134x44
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf103b3b0 110x38
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefeb33e0 968x44
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaefdecd00 568x44
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=236 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf24c6670 2560x1440
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JDEP] fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf1dfd6b0 4102x70
+Aug 24 22:10:12 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=237 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:10:16 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=238 fb=0xaaaaef033b50 onscreen 2560x1440 entries=37
+Aug 24 22:10:16 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=239 fb=0xaaaaef033b50 onscreen 2560x1440 entries=25
+Aug 24 22:10:16 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=240 fb=0xaaaaef033b50 onscreen 2560x1440 entries=3
+Aug 24 22:10:16 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=241 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:16 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=242 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:16 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=243 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:16 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=244 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2
+Aug 24 22:10:16 fedora gnome-shell[3118]: [LIMINA-JFLUSH] seq=245 fb=0xaaaaef033b50 onscreen 2560x1440 entries=2

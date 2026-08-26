@@ -1,0 +1,23 @@
+# Built probe binaries (build.sh rebuilds them from the committed sources).
+bannerprobe
+iosscan
+iosdump
+nudge
+winbounds
+# Per-run capture output.
+run-*/
+sanity/
+warmup/
+idletest/
+idlefix*/
+sincetest/
+flushtest/
+frames/
+*-cycles/
+*-into/
+# Loose scratch captures; evidence/ holds the ones that matter.
+*.png
+!evidence/*.png
+soak-*/
+panel-view.png
+traces/

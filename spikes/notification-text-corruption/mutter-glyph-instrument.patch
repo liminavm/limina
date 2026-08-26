@@ -1,0 +1,433 @@
+--- a/clutter/clutter/pango/clutter-pango-render.c
++++ b/clutter/clutter/pango/clutter-pango-render.c
+@@ -287,6 +287,30 @@
+ 
+   if (qdata->display_list == NULL)
+     {
++      /* [LIMINA-GLYPH] The upload and the draw that samples it are both in this branch, in one
++       * frame: clutter_ensure_glyph_cache_for_layout() rasterizes every newly seen glyph with
++       * cairo and cogl_texture_set_region()s it into the atlas, and the display list built just
++       * below is then rendered from that same atlas. That is the exact shape the notification
++       * text damage has: absent, shredded, or speckled glyphs on freshly built cards.
++       *
++       * LIMINA_GLYPH_LOG reports how many fresh glyphs a layout uploaded before being drawn, so a
++       * damaged card can be checked for whether its frame uploaded any. LIMINA_GLYPH_SYNC blocks
++       * until the upload has completed before the draw is allowed to sample it -- if that cures
++       * the damage, the fault is upload-versus-sample ordering and nothing above it. */
++      static int limina_log = -1;
++      static int limina_sync = -1;
++      unsigned int limina_before;
++
++      if (G_UNLIKELY (limina_log < 0))
++        {
++          limina_log = g_getenv ("LIMINA_GLYPH_LOG") ? 1 : 0;
++          limina_sync = g_getenv ("LIMINA_GLYPH_SYNC") ? 1 : 0;
++          g_printerr ("[LIMINA-GLYPH] instrumented mutter live: log=%d sync=%d\n",
++                      limina_log, limina_sync);
++        }
++
++      limina_before = clutter_pango_limina_uploads;
++
+       clutter_ensure_glyph_cache_for_layout (context, layout);
+ 
+       qdata->display_list =
+@@ -302,8 +326,69 @@
+       renderer->display_list = qdata->display_list;
+       pango_renderer_draw_layout (PANGO_RENDERER (renderer), layout, 0, 0);
+       renderer->display_list = NULL;
++
++      if (clutter_pango_limina_uploads != limina_before)
++        {
++          unsigned int n = clutter_pango_limina_uploads - limina_before;
++
++          if (limina_log)
++            {
++              const char *text = pango_layout_get_text (layout);
++
++              g_printerr ("[LIMINA-GLYPH] %u fresh glyph(s) uploaded, then drawn: \"%.60s\"\n",
++                          n, text ? text : "");
++            }
++
++          /* Ordering lever, not a fix: wait for the texels to land before the draw samples them. */
++          if (limina_sync)
++            cogl_framebuffer_finish (fb);
++        }
+     }
+ 
++  /* [LIMINA-TEXT] Log the draw ITSELF, every frame, for layouts whose text contains
++   * LIMINA_TEXT_MATCH. This splits the fault in two and nothing else does: if a damaged card
++   * shows no line here, its text was never submitted and the fault is above -- clutter/St did not
++   * paint it. If the line IS here and the pixels are still blank, the draw was submitted and lost
++   * underneath us, which is where the host split already points. */
++  static const char *limina_match = NULL;
++  static int limina_checked = 0;
++  static int limina_readback = 0;
++  static const char *limina_mode = NULL;
++  static int limina_mode_logged = 0;
++
++  {
++    if (G_UNLIKELY (!limina_checked))
++      {
++        limina_match = g_getenv ("LIMINA_TEXT_MATCH");
++        limina_readback = g_getenv ("LIMINA_TEXT_READBACK") ? 1 : 0;
++        limina_mode = g_getenv ("LIMINA_TEXT_SYNC");
++        limina_checked = 1;
++        if (limina_match)
++          g_printerr ("[LIMINA-TEXT] draw log live, matching \"%s\" readback=%d\n",
++                      limina_match, limina_readback);
++      }
++
++    if (G_UNLIKELY (limina_match != NULL))
++      {
++        const char *text = pango_layout_get_text (layout);
++
++        if (text && strstr (text, limina_match))
++          {
++            /* Arm the issue-order log on the draw we care about, so the window covers this card
++             * and not an arbitrary frame. */
++            const char *arm = g_getenv ("LIMINA_JFLUSH");
++
++            if (arm)
++              cogl_framebuffer_limina_arm_jflush ((unsigned int) atoi (arm));
++          }
++          g_printerr ("[LIMINA-TEXT] draw \"%.40s\" at (%.1f,%.1f) fb=%p %s %dx%d\n",
++                      text, x, y, fb,
++                      COGL_IS_OFFSCREEN (fb) ? "OFFSCREEN" : "onscreen",
++                      cogl_framebuffer_get_width (fb),
++                      cogl_framebuffer_get_height (fb));
++      }
++  }
++
+   cogl_framebuffer_push_matrix (fb);
+   cogl_framebuffer_translate (fb, x, y, 0);
+ 
+@@ -314,6 +399,84 @@
+ 
+   cogl_framebuffer_pop_matrix (fb);
+ 
++  /* [LIMINA-TEXT] Read the offscreen back immediately after the text was drawn into it, and
++   * report how much ink landed. This asks whether the pixels ever reached the label FBO at all,
++   * which no host-side lever can see.
++   *
++   * The readback is NOT trusted on its own -- a black readback has lied here before. It is read
++   * against a control: the body label draws into its own offscreen the same way and always
++   * renders correctly on screen, so if the body reports ink and the title reports none, the
++   * oracle is tracking reality rather than reporting black for its own reasons. */
++  /* [LIMINA-TEXT] The discriminating ladder. A full readback after the label offscreen is drawn
++   * cures the damage, but a readback is three things at once, and which one matters decides who
++   * owns the bug:
++   *
++   *   flush    - submits what cogl has journalled, without waiting. A cure here means the label
++   *              draw was still sitting UNSUBMITTED when the composite sampled the texture, which
++   *              is a bug above us, in cogl.
++   *   finish   - submits and waits for the GPU. A cure only here means the work was submitted but
++   *              not COMPLETE when sampled: render-to-texture versus sample ordering, below vrend.
++   *   readback - the original heavy arm, kept as the known-cure control.
++   *
++   * Ordered weakest-first on purpose: the weakest lever that still cures names the layer. */
++  if (G_UNLIKELY (limina_mode != NULL && limina_match != NULL))
++    {
++      const char *mtext = pango_layout_get_text (layout);
++
++      if (mtext && strstr (mtext, limina_match))
++        {
++          unsigned int depth = cogl_framebuffer_limina_journal_len (fb);
++
++          if (strcmp (limina_mode, "sleep") == 0)
++            {
++              /* Control rung: delay of the same order as a flush round-trip, submitting nothing.
++               * If this cures, the ladder was measuring latency and not flush semantics. */
++              const char *us = g_getenv ("LIMINA_TEXT_SLEEP_US");
++
++              g_usleep (us ? (gulong) atoi (us) : 500);
++            }
++          else if (strcmp (limina_mode, "journal") == 0)
++            cogl_framebuffer_limina_flush_journal (fb);
++          else if (strcmp (limina_mode, "flush") == 0)
++            cogl_framebuffer_flush (fb);
++          else if (strcmp (limina_mode, "finish") == 0)
++            cogl_framebuffer_finish (fb);
++
++          /* The journal depth AT THE CALL is the load-bearing number: if it is already 0 then the
++           * journal-flush half is a no-op and any cure must come from the driver flush. */
++          if (limina_mode_logged < 4)
++            {
++              limina_mode_logged++;
++              g_printerr ("[LIMINA-TEXT] sync ladder: mode=%s journal_depth=%u\n",
++                          limina_mode, depth);
++            }
++        }
++    }
++
++  if (G_UNLIKELY (limina_readback && limina_match != NULL))
++    {
++      const char *rtext = pango_layout_get_text (layout);
++
++      if (rtext && strstr (rtext, limina_match))
++        {
++          int rw = cogl_framebuffer_get_width (fb);
++          int rh = cogl_framebuffer_get_height (fb);
++          uint8_t *px = g_malloc0 ((gsize) rw * rh * 4);
++          unsigned int lit = 0;
++          gboolean ok;
++
++          ok = cogl_framebuffer_read_pixels (fb, 0, 0, rw, rh,
++                                             COGL_PIXEL_FORMAT_RGBA_8888_PRE, px);
++          for (gsize i = 3; i < (gsize) rw * rh * 4; i += 4)
++            if (px[i] > 32)
++              lit++;
++
++          g_printerr ("[LIMINA-TEXT] readback \"%.40s\" %dx%d ok=%d lit=%u\n",
++                      rtext, rw, rh, ok, lit);
++          g_free (px);
++        }
++    }
++
+   /* Keep a reference to the first line of the layout so we can detect
+      changes */
+   if (qdata->first_line)
+--- a/clutter/clutter/pango/clutter-pango-glyph-cache.c
++++ b/clutter/clutter/pango/clutter-pango-glyph-cache.c
+@@ -366,6 +366,12 @@
+   return has_color;
+ }
+ 
++/* [LIMINA-GLYPH] Counts glyphs whose texels were rasterized and uploaded into the atlas.
++ * Read either side of clutter_ensure_glyph_cache_for_layout() to tell whether a layout
++ * was drawn from an atlas it had just written to. */
++unsigned int clutter_pango_limina_uploads = 0;
++static CoglTexture *clutter_pango_limina_last_texture = NULL;
++
+ static void
+ clutter_pango_glyph_cache_set_dirty_glyphs_cb (void *key_ptr,
+                                                void *value_ptr,
+@@ -447,6 +453,8 @@
+ 
+       value->has_color = font_has_color_glyphs (key->font);
+       value->dirty = FALSE;
++      clutter_pango_limina_uploads++;
++      clutter_pango_limina_last_texture = value->texture;
+     }
+ }
+ 
+@@ -458,9 +466,59 @@
+   if (!cache->has_dirty_glyphs)
+     return;
+ 
+-  g_hash_table_foreach (cache->hash_table,
+-                        clutter_pango_glyph_cache_set_dirty_glyphs_cb,
+-                        NULL);
++  {
++    /* [LIMINA-GLYPH] Report every upload batch AT THE UPLOAD SITE, not at the paint site. The
++     * paint-site probe saw zero, which only shows that this is reached from somewhere else --
++     * clutter_ensure_glyph_cache_for_layout() is public and is also called while measuring, so
++     * the batch can land in a different frame from the draw that samples it. Which of the two it
++     * is decides whether upload-versus-sample ordering can explain the damage at all. */
++    static int limina_log = -1;
++    static int limina_sync = -1;
++    unsigned int before = clutter_pango_limina_uploads;
++
++    if (G_UNLIKELY (limina_log < 0))
++      {
++        limina_log = g_getenv ("LIMINA_GLYPH_LOG") ? 1 : 0;
++        limina_sync = g_getenv ("LIMINA_GLYPH_SYNC") ? 1 : 0;
++        g_printerr ("[LIMINA-GLYPH] upload-site arm: log=%d sync=%d\n", limina_log, limina_sync);
++      }
++
++    g_hash_table_foreach (cache->hash_table,
++                          clutter_pango_glyph_cache_set_dirty_glyphs_cb,
++                          NULL);
++
++    if (limina_log && clutter_pango_limina_uploads != before)
++      g_printerr ("[LIMINA-GLYPH] upload batch: %u glyph(s) from %p\n",
++                  clutter_pango_limina_uploads - before,
++                  __builtin_return_address (0));
++
++    /* [LIMINA-GLYPH] Ordering lever. Read the just-written texels back, which cannot complete
++     * until the upload has actually landed, so no later draw can sample the glyph early. The
++     * CONTENT of the readback is not used and must not be trusted (see the black-readback
++     * finding); only its blocking is wanted. If this cures the damage, the fault is
++     * upload-versus-sample ordering underneath us and nothing in the compositor. */
++    if (limina_sync &&
++        clutter_pango_limina_uploads != before &&
++        clutter_pango_limina_last_texture != NULL)
++      {
++        CoglTexture *t = clutter_pango_limina_last_texture;
++        CoglPixelFormat fmt = cogl_texture_get_format (t);
++        int size = cogl_texture_get_data (t, fmt, 0, NULL);
++
++        if (size > 0)
++          {
++            uint8_t *buf = g_malloc (size);
++
++            cogl_texture_get_data (t, fmt, 0, buf);
++            g_free (buf);
++          }
++
++        /* Evidence the lever, every time. A get_data that returns 0 does nothing at all, and a
++         * silent no-op is indistinguishable from a cure. */
++        if (limina_log)
++          g_printerr ("[LIMINA-GLYPH] sync readback: %d byte(s)\n", size);
++      }
++  }
+ 
+   cache->has_dirty_glyphs = FALSE;
+ }
+--- a/clutter/clutter/pango/clutter-pango-private.h
++++ b/clutter/clutter/pango/clutter-pango-private.h
+@@ -96,4 +96,6 @@
+     }
+ }
+ 
++extern unsigned int clutter_pango_limina_uploads;
++
+ G_END_DECLS
+--- a/cogl/cogl/cogl-framebuffer.c
++++ b/cogl/cogl/cogl-framebuffer.c
+@@ -860,13 +860,50 @@
+     g_list_prepend (priv->deps, g_object_ref (dependency));
+ }
+ 
++/* [LIMINA] Which framebuffer's draws reach GL first.
++ *
++ * The whole remaining question is whether the guest issues the label's draws BEFORE or AFTER the
++ * composite that samples them. A journal flush is where a framebuffer's batched draws actually
++ * become GL calls, so the order these complete in IS the issue order.
++ *
++ * The log is placed AFTER _cogl_journal_flush returns, not before, and that is load-bearing: a
++ * flush first flushes its dependencies (cogl-journal.c calls
++ * _cogl_framebuffer_flush_dependency_journals), so the dependency's flush is NESTED INSIDE the
++ * parent's. Logging on entry would print the parent first and read as the exact inversion of what
++ * GL sees.
++ *
++ * Armed by the draw probe and self-limiting, because every framebuffer flushes every frame and an
++ * unbounded log buries the one card being measured. */
++unsigned int cogl_framebuffer_limina_jflush_budget = 0;
++unsigned int cogl_framebuffer_limina_jdep_budget = 0;
++static unsigned int limina_flush_seq = 0;
++
++void
++cogl_framebuffer_limina_arm_jflush (unsigned int n)
++{
++  cogl_framebuffer_limina_jflush_budget = n;
++  cogl_framebuffer_limina_jdep_budget = n;
++}
++
+ void
+ _cogl_framebuffer_flush_journal (CoglFramebuffer *framebuffer)
+ {
+   CoglFramebufferPrivate *priv =
+     cogl_framebuffer_get_instance_private (framebuffer);
++  unsigned int n = (priv->journal && priv->journal->entries)
++                     ? priv->journal->entries->len : 0;
+ 
+   _cogl_journal_flush (priv->journal);
++
++  if (n > 0 && cogl_framebuffer_limina_jflush_budget > 0)
++    {
++      cogl_framebuffer_limina_jflush_budget--;
++      g_printerr ("[LIMINA-JFLUSH] seq=%u fb=%p %s %dx%d entries=%u\n",
++                  ++limina_flush_seq, (void *) framebuffer,
++                  COGL_IS_OFFSCREEN (framebuffer) ? "OFFSCREEN" : "onscreen",
++                  cogl_framebuffer_get_width (framebuffer),
++                  cogl_framebuffer_get_height (framebuffer), n);
++    }
+ }
+ 
+ void
+@@ -1567,6 +1604,25 @@
+   cogl_framebuffer_driver_finish (priv->driver);
+ }
+ 
++/* [LIMINA] cogl_framebuffer_flush() is TWO things: it flushes the journal (submitting draws cogl
++ * has batched but not issued) and then calls the driver flush (glFlush). A cure from the pair does
++ * not say which half mattered, and the two answers point at different layers -- an unflushed
++ * journal is a cogl bug above us, while needing a glFlush for correctness is a driver bug, since
++ * GL already orders commands within a context. These expose each half on its own. */
++unsigned int
++cogl_framebuffer_limina_journal_len (CoglFramebuffer *framebuffer)
++{
++  CoglJournal *journal = cogl_framebuffer_get_journal (framebuffer);
++
++  return (journal && journal->entries) ? journal->entries->len : 0;
++}
++
++void
++cogl_framebuffer_limina_flush_journal (CoglFramebuffer *framebuffer)
++{
++  _cogl_framebuffer_flush_journal (framebuffer);
++}
++
+ void
+ cogl_framebuffer_flush (CoglFramebuffer *framebuffer)
+ {
+--- a/cogl/cogl/cogl-framebuffer.h
++++ b/cogl/cogl/cogl-framebuffer.h
+@@ -1122,6 +1122,18 @@
+ COGL_EXPORT void
+ cogl_framebuffer_flush (CoglFramebuffer *framebuffer);
+ 
++COGL_EXPORT unsigned int
++cogl_framebuffer_limina_journal_len (CoglFramebuffer *framebuffer);
++
++COGL_EXPORT void
++cogl_framebuffer_limina_flush_journal (CoglFramebuffer *framebuffer);
++
++COGL_EXPORT void
++cogl_framebuffer_limina_arm_jflush (unsigned int n);
++
++COGL_EXPORT unsigned int cogl_framebuffer_limina_jflush_budget;
++COGL_EXPORT unsigned int cogl_framebuffer_limina_jdep_budget;
++
+ /**
+  * cogl_framebuffer_get_internal_format: (skip)
+  *
+--- a/cogl/cogl/cogl-journal.c
++++ b/cogl/cogl/cogl-journal.c
+@@ -1490,7 +1490,20 @@
+     return TRUE;
+ 
+   for (l = _cogl_texture_get_associated_framebuffers (texture); l; l = l->next)
+-    _cogl_framebuffer_add_dependency (framebuffer, l->data);
++    {
++      _cogl_framebuffer_add_dependency (framebuffer, l->data);
++      if (cogl_framebuffer_limina_jdep_budget > 0)
++        {
++          cogl_framebuffer_limina_jdep_budget--;
++          g_printerr ("[LIMINA-JDEP] fb=%p %dx%d depends on %p %dx%d\n",
++                      (void *) framebuffer,
++                      cogl_framebuffer_get_width (framebuffer),
++                      cogl_framebuffer_get_height (framebuffer),
++                      (void *) l->data,
++                      cogl_framebuffer_get_width (l->data),
++                      cogl_framebuffer_get_height (l->data));
++        }
++    }
+ 
+   return TRUE;
+ }
+--- a/cogl/cogl/driver/gl/cogl-framebuffer-gl.c
++++ b/cogl/cogl/driver/gl/cogl-framebuffer-gl.c
+@@ -311,9 +311,21 @@
+ {
+   CoglContext *ctx = context_from_driver (fb_driver);
+   CoglDriver *driver = cogl_context_get_driver (ctx);
++  /* [LIMINA] The driver flush is two mechanisms: a sync fd covering prior work, and glFlush.
++   * They have different fixes, so allow the sync-fd half to be dropped and the cheaper half
++   * measured on its own. */
++  static int limina_no_syncfd = -1;
++
++  if (G_UNLIKELY (limina_no_syncfd < 0))
++    {
++      limina_no_syncfd = g_getenv ("LIMINA_COGL_NO_SYNCFD") ? 1 : 0;
++      if (limina_no_syncfd)
++        g_printerr ("[LIMINA-TEXT] cogl driver flush: sync fd SKIPPED, bare glFlush only\n");
++    }
+ 
+   /* Update our "latest" sync fd to contain all previous work */
+-  _cogl_context_update_sync (ctx);
++  if (!limina_no_syncfd)
++    _cogl_context_update_sync (ctx);
+ 
+   GE (driver, glFlush ());
+ }

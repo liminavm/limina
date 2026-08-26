@@ -1,0 +1,14 @@
+[LIMINA-KK] dispatch attachment=0xcbbdcaf80 count=1 pipeline=0xcbbf48000 bound_on=0xcbb1e1b20 enc=0xcbb1e1b20
+[LIMINA-KK] dispatch vs=0xcbbdb9340 fs=0xcbbdb9500 samples=1 fmt0=37
+[LIMINA-KK] dispatch attachment=0xcbbdcaf80 count=1 pipeline=0xcbbf48000 bound_on=0xcbbfde3e0 enc=0xcbbfde3e0
+[LIMINA-KK] dispatch vs=0xcbbdb9340 fs=0xcbbdb9500 samples=1 fmt0=37
+[LIMINA-KK] dispatch attachment=0xcbe640f00 count=1 pipeline=0xcbbf48000 bound_on=0xcbbfdeca0 enc=0xcbbfdeca0
+[LIMINA-KK] dispatch vs=0xcbbdb9340 fs=0xcbbdb9500 samples=1 fmt0=37
+[LIMINA-KK] dispatch attachment=0xcbe640a00 count=1 pipeline=0xcbbf48000 bound_on=0xcbbfde3e0 enc=0xcbbfde3e0
+[LIMINA-KK] dispatch vs=0xcbbdb9340 fs=0xcbbdb9500 samples=1 fmt0=37
+[LIMINA-KK] dispatch attachment=0xcbe640a00 count=1 pipeline=0xcbed11c00 bound_on=0xcbbfdc000 enc=0xcbbfdc000
+[LIMINA-KK] dispatch vs=0xcbed00e00 fs=0xcbed00fc0 samples=1 fmt0=37
+[LIMINA-KK] dispatch attachment=0xcbe640280 count=1 pipeline=0xcbbf48000 bound_on=0xcbb1e2f40 enc=0xcbb1e2f40
+[LIMINA-KK] dispatch vs=0xcbbdb9340 fs=0xcbbdb9500 samples=1 fmt0=37
+[LIMINA-KK] dispatch attachment=0xcbe640280 count=1 pipeline=0xcbed11c00 bound_on=0xcbbfdddc0 enc=0xcbbfdddc0
+[LIMINA-KK] dispatch vs=0xcbed00e00 fs=0xcbed00fc0 samples=1 fmt0=37

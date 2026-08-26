@@ -61,8 +61,12 @@ export DYLD_FALLBACK_LIBRARY_PATH="$MESA_PREFIX/lib:$ROOT/third_party/epoxy-egl-
 mkdir -p "$MESA_PREFIX/vulkan-rpath"
 ln -sf /opt/homebrew/lib/libvulkan.1.dylib "$MESA_PREFIX/vulkan-rpath/libvulkan.1.dylib"
 export DYLD_LIBRARY_PATH="$MESA_PREFIX/vulkan-rpath${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-export MESA_LOADER_DRIVER_OVERRIDE=zink
-export GALLIUM_DRIVER=zink
+# LIMINA_HOST_GALLIUM swaps the host GL implementation under an otherwise identical stack --
+# same guest, same virgl protocol, same vrend GL stream, only the driver underneath changes.
+# It is the locus split for "is this fault above or below vrend?"; llvmpipe needs a host mesa
+# built with -Dgallium-drivers=zink,llvmpipe and MESA_PREFIX pointed at it. Default stays zink.
+export MESA_LOADER_DRIVER_OVERRIDE="${LIMINA_HOST_GALLIUM:-zink}"
+export GALLIUM_DRIVER="${LIMINA_HOST_GALLIUM:-zink}"
 export LIBGL_DRIVERS_PATH="$MESA_PREFIX/lib"
 export EGL_PLATFORM=surfaceless
 export VIRGL_LOG_LEVEL=info
@@ -89,7 +93,17 @@ done
 # Keep this list honest: a name here that nothing reads any more is forwarded silently and looks
 # like it works. LIMINA_KK_{EARLYZ,SLIMPUSH,FASTBIND} were retired 2026-08-14 (now unconditional
 # in KK) and LIMINA_KK_SLIMROOT had already stopped existing while still being forwarded here.
-for v in LIMINA_KK_STATS LIMINA_KK_RTLOG LIMINA_GLOBAL_SCANOUT MESA_KK_DEBUG MESA_KK_GPU_CAPTURE LIMINA_KK_CAPTURE \
+# MTL_CAPTURE_ENABLED=1 is what lets Metal start a capture programmatically at all; without it
+# KK_LIMINA_CAPTURE's startCaptureWithDescriptor is refused and the only symptom is a trace that
+# never appears. KK_LIMINA_CAPTURE=WxH arms a *triggered* capture (see kk_limina_capture.c) --
+# unlike MESA_KK_GPU_CAPTURE, which runs device-create to device-destroy and is unusably large.
+# LIMINA_KK_CAPTURE was forwarded here for a long time while nothing read it; it is gone.
+for v in LIMINA_KK_STATS LIMINA_KK_RTLOG LIMINA_GLOBAL_SCANOUT MESA_KK_DEBUG MESA_KK_GPU_CAPTURE \
+         MTL_CAPTURE_ENABLED KK_LIMINA_CAPTURE KK_LIMINA_CAPTURE_DIR KK_LIMINA_CAPTURE_TRIGGER \
+         KK_LIMINA_CAPTURE_PASSES KK_LIMINA_CAPTURE_MAX_CBS KK_LIMINA_CAPTURE_ARM \
+         KK_LIMINA_CAPTURE_RUNS KK_LIMINA_CAPTURE_SKIP KK_LIMINA_CAPTURE_REPEAT KK_LIMINA_VP_LOG \
+         KK_LIMINA_FORCE_TOPO_UNSPEC KK_LIMINA_SHADER_DUMP LIMINA_ZINK_NO_FANS KK_LIMINA_NO_PROMOTE \
+         VIRGL_DISABLE_MT \
          LIMINA_KK_NOLISTRESTART LIMINA_KK_BOCACHE LIMINA_KK_NOROBUST LIMINA_KK_MTLTEXTURE_SCANOUT \
          LIMINA_GPU_MEM_BUDGET_MIB LIMINA_GPU_MEM_BUDGET_CENSUS LIMINA_GPU_MEM_BUDGET_SOFT \
          LIMINA_INPUT_TRACE LIMINA_EDGE_TRACE LIMINA_DISPLAY_TRACE LIMINA_OVERLAY_TRACE; do

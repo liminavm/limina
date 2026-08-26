@@ -326,8 +326,71 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
     (dev-enh + KosmicKrisp): the exact venus-allocated scanout ids (from `SET_SCANOUT_BLOB`) return
     "not alive" to a stranger while a `LIMINA_GLOBAL_SCANOUT=1` contrast dumps the screen; pure
     zero-copy (`LIMINA_PRESENT_COPY=0`) presents them via the Mach map with 0 "unresolved" skips.
+- **A held seam leaves no trace at all.** `window/seams.rs` is pure policy with no logging, so
+  after the fact there is no way to tell a seam that was held (adjacent panel not fullscreen, not
+  on its active Space, or off-screen) from one that was never reached. Asked directly by the
+  2026-08-24 multi-session incident below: the user's own reading was "the sweep ran while the
+  secondary display was not the current macOS Space on its host display", and that is exactly the
+  configuration that turns a seam into an edge — by design — but nothing in the log can confirm or
+  refute it. Wants the `cursor::undrawn_fault` treatment: one episode-style line on hold engage and
+  another on release, naming the side, the slot the range leads to, and which of the three coverage
+  answers refused it. Cheap, and it converts "the pointer would not cross" from a re-run into a grep.
+- **A cursor plane left enabled just outside a display's edge.** Long-standing and NOT the
+  multi-session fault below — 31 occurrences in the 2026-08-24 dogfood log starting 02:01, in a
+  single-session guest: `other slots also showing a cursor: [(1, (-10, 582))]` while the pointer is
+  legitimately at the far edge of slot 0. The neighbouring slot keeps a visible cursor plane at a
+  negative coordinate a few pixels outside its own scanout. Harmless for placement (the echo names
+  the slot the pointer is really on) but it is a second cursor as far as `shape_slot` is concerned,
+  which is the input to the undrawn-cursor fault above. Worth deciding whether the guest ought to
+  hide it, or whether our echo should ignore a plane whose origin lies outside its scanout.
 - **CapsLock/NumLock LED parity** — surface the statusq LED feedback (libkrun `worker.rs` no-op).
   Roadmap M8.
+
+## Guest multi-session (two seat sessions on one VM, VT switching)
+
+Diagnosed 2026-08-24 from the dogfood pair (the host's `supervisor.log` + the guest's journal), all
+read-only. The user started a second seat session — their own compositor as another uid on tty3,
+`systemd-run --uid=1002 … synoik --session` — and switched between it and their tty2 session. The
+pointer teleported and its movement was clamped, in bursts that fall **exactly** inside the windows
+where the tty2 compositor was paused, i.e. whenever the *other* session owned the screen.
+
+- **A guest VT switch is invisible to us, and the arrangement report we keep is then the wrong
+  session's — and it cannot be corrected.** This is the load-bearing one. Nothing changes on the
+  virtio-gpu wire across a seat switch: same scanouts, same modes, same resources, no event — the
+  same blind spot as a monitor repositioned. Two mechanisms then keep running against the previous
+  session's geometry:
+  - The report goes **stale rather than absent**. `layout_gate` holds while inactive, which is
+    correct *when the incoming session also runs a helper* — it claims the report on becoming
+    active. The tty3 session ran none: `limina-agent-session.service` is
+    `WantedBy=graphical-session.target`, and a compositor launched straight from `systemd-run`
+    never reaches that target. Measured: the `report:` / `arrangement:` values in every warning are
+    byte-identical through the whole incident.
+  - **A present report outranks everything and is never demoted.** `absfit::abs_position` consults
+    the fitted lines only `if !has_report()`, so absfit's contradiction/refit machinery — the one
+    mechanism that could have noticed — was locked out for the entire episode. Hence the
+    *teleporting*: sends of 2452 px off, and `we sent the pointer to slot 0 … the guest shows its
+    cursor on [(1, …)] and none on slot 0`. Hence also the *clamping*: `desktop_in_range` and
+    `range_shares` build the captured range's confinement and the seam rule's shares from that same
+    stale report, so a captured pointer was held inside the other session's desktop rectangle.
+  - It did not converge and then settle; it was simply *correct again on every return to tty2*
+    (`layout_gate.poll` re-sends on the inactive→active edge) and ended for good when the second
+    session was stopped.
+  Fix directions, cheapest first: **demote a report the echo keeps refuting** (absfit already has
+  the `CONTRADICTIONS` pattern; the report tier has no equivalent) — host-side, so it also covers
+  the stock tier and any helper-less active session, which the two-tier refinement says is a normal
+  partial state; **name the tier that produced the send** (report / fit / identity) in the
+  echo-mismatch warning — `unit sent` is just the target re-expressed and discriminates nothing, and
+  one word would have made this diagnosis a single grep; on the enhanced tier, have root
+  `limina-agent` watch logind and tell the host the seat's active session changed, which is the one
+  event the wire cannot carry; and reconsider the helper's `WantedBy`, or treat "no helper in the
+  active session" as a reason to distrust the held report.
+- **A `SUBMIT3D` storm across the DRM master handoff — unchased lead.** At 20:21:42, twenty-odd
+  seconds after the first `chvt`, `ctx 25 submit_command -> Err("ErrRutabaga(ComponentError(22))")`
+  repeats at ~4 KiB per command for as long as the handoff lasts. Consistent with a compositor
+  continuing to submit while it no longer holds DRM master. Not investigated: it may be entirely the
+  guest compositor's bug class, but the worker should be checked for what it does with a context
+  whose submits fail in a run like that, and `ComponentError(22)` (EINVAL) should be traced to its
+  emission site before anyone reasons from the message text.
 
 ## Lifecycle robustness
 - **Windowed guest reboot** — ✅ **DONE (shipped `efa285f` 2026-06-13, verified live 2026-06-23).**
@@ -474,15 +537,47 @@ rects). Remaining:
     `VK_LOADER_DRIVERS_DISABLE='*virtio*'`. Meanwhile `tests/venus_fallback.rs` (in test-boot.sh since
     2026-07-03) pins the truthful contract — explicit-lavapipe floor works, default path fails
     structuredly, session survives — and auto-tightens the day the default path starts succeeding.
-- **GNOME notification shows a green corruption artifact** (open, low priority — reported 2026-06-29
-  while dogfooding the F44 enhanced tier) — a notification ("Disk Usage Analyzer / Low Disk Space on
-  'boot'") renders a small **green glitch** (a few stray bright-green pixels) just below the bold
-  summary line, where the body text / whitespace should be. Native-Wayland venus path; a localized
-  region of garbage/uninitialized pixels — smells like a damage-tracking, glyph-cache, or subsurface
-  compositing artifact on zink→venus→KK→Metal. Evidence:
-  `spikes/venus-draw-probe/notification-green-artifact-2026-06-29.png`. Not chased yet; needs the
-  venus pixel-verify discipline (reproduce a notification, capture the IOSurface, isolate the damaged
-  rect). Cosmetic, single-widget — low priority.
+- **Card widgets in the shell lose their contents on the accelerated GL path** (open, localised to
+  zink/KosmicKrisp 2026-08-24) — a rounded-rect St card in gnome-shell keeps its background and
+  loses text and icons inside it. Canonically: the card is pixel-identical to a healthy one except
+  that the header row (app icon + name + timestamp) and the title are not painted, with background,
+  large icon and body at identical positions and unchanged card height. Other shapes: shredded glyph
+  outlines, and coloured specks at a text row's left origin.
+  - **The fault is below vrend, in zink/KosmicKrisp.** Host-implementation locus split: host mesa
+    built with `-Dgallium-drivers=zink,llvmpipe`, worker switched with `LIMINA_HOST_GALLIUM`.
+    Identical guest, virgl protocol, vrend GL stream, driver script and scoring; only the host GL
+    implementation differs. zink→KK→Metal **4 damaged / 4 clean**; llvmpipe **0 damaged / 16 clean**.
+    Caveat: llvmpipe is much slower, so its clean half is strong evidence rather than proof
+    (timing suppression); the damaged half is unambiguous.
+  - **Not notification-specific, and no placement is safe.** In one frame of the open clock menu,
+    plain labels on the popup background render perfectly while *every* rounded-rect card in the same
+    popup loses its contents. A notification can render complete in the popover list while its banner
+    form is damaged — but the popover is also a place the damage appears, so there is no calm copy.
+  - **Excluded, each against a measured same-session baseline**: the cogl glyph atlas
+    (`COGL_DEBUG=disable-atlas[,disable-shared-atlas]`); the per-StLabel offscreen FBOs as locus
+    (`CLUTTER_PAINT=disable-offscreen-redirect` — text drawn direct-to-framebuffer still corrupts);
+    the guest driver's opportunistic transfer optimizations (`VIRGL_DEBUG=xfer`); vrend-level upload
+    ordering in **both** directions (`LIMINA_VREND_TRANSFER_FORCE_SYNC`, `..._SYNC_AFTER`); and the
+    damage region / clip stack / buffer age / actor culling family
+    (`CLUTTER_PAINT=disable-clipped-redraws`, 13/13 damaged). `--gpu-software-2d` cures it (0/40).
+  - **It rides a repaint, not the first render** — *"it appears with text, then animates to grow into
+    the full bubble completely empty."* Disabling GNOME animations helps without curing. The reading
+    that fits: content is sampled too early, before its upload or its FBO render is visible.
+  - **The label FBOs are painted and their contents are wrong** — not skipped. gnome-shell's
+    screenshot renders via `clutter_stage_paint_to_buffer` with no view, so culling bails and no clip
+    or buffer age applies; a merely-skipped label would have repainted correctly there. It comes out
+    damaged.
+  - **venus is not involved.** gnome-shell is a GL compositor and GL rides vrend on both tiers; this
+    reproduces on a **stock** guest (kernel `6.19.10-300.fc44`, mesa `26.0.3-4.fc44`, no limina guest
+    components). Matches dogfood experience — gnome-shell shows it, the synoik Vulkan compositor does
+    not. The original 2026-06-29 attribution to venus was wrong.
+  - Next: instrument zink/KK the way the venus vertex-buffer oracle was built — zink's barrier
+    tracking between a staging `vkCmdCopyBufferToImage` and the sampling draw, and the
+    render-to-texture → sample path for a label's FBO.
+  - Rig, reproducer, evidence and the measurement traps (several produced confident wrong readings):
+    `spikes/notification-text-corruption/RESULTS.md`. Earlier evidence of the same signature on the
+    enhanced tier: `spikes/venus-draw-probe/notification-green-artifact-2026-06-29.png`.
+  - Cosmetic but pervasive — every card widget in the shell is affected, not one notification.
 - **venus TSD-destructor SIGSEGV on libtest worker-thread teardown** (open, isolated + reproduced
   2026-06-30 — fix belongs in venus/mesa) — a wgpu **Vulkan device on venus** (`libvulkan_virtio.so`),
   created and dropped inside a libtest `#[test]`, SIGSEGVs as the test's worker thread exits. The

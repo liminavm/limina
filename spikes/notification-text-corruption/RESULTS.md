@@ -1,0 +1,1008 @@
+# Card widgets in the GNOME shell lose their contents on the accelerated GL path
+
+A rounded-rect "card" in gnome-shell keeps its background but loses some or all of its text and
+icons. Booked in `docs/hardening-backlog.md`.
+
+Canonical symptom, on the notification banner posted by `calib.sh`:
+
+- A **healthy** card shows a header row (small symbolic icon + app name + `Just now`), then a bold
+  title, then a large round icon with the body text beside it.
+- A **damaged** card is pixel-identical to the healthy one except that **the header row and the
+  title are simply not painted**. Background, large icon and body text are all present *at exactly
+  the same pixel positions*, and the card's height is unchanged. Nothing is shifted or reflowed.
+
+So the allocation is correct and a contiguous top band of card *content* goes unpainted. Other
+observed shapes: glyph outlines rendered shredded/partial, and coloured specks piled at a text row's
+left origin.
+
+## What is established
+
+- **Not venus.** Reproduced on a **stock guest** — stock kernel `6.19.10-300.fc44`, stock mesa
+  `26.0.3-4.fc44`, no limina guest components. gnome-shell is a GL compositor and GL rides **vrend**
+  on both tiers, so venus is not on this path. (The backlog's original "zink→venus→KK→Metal"
+  attribution was wrong.)
+- **Scoped to the accelerated GL path.** virgl → vrend → zink-on-KK → Metal: **39 damaged / 0
+  clean**. `--gpu-software-2d` (guest `-virgl`, llvmpipe, dumb blit): **0 damaged / 40 clean**.
+- **Not our host scanout/present path.** The guest's **own** screenshot, taken by gnome-shell inside
+  the guest and read off the guest filesystem, shows the identical damage. Whatever goes wrong is
+  already wrong in the guest's framebuffer.
+- **Not notification-specific.** In one frame of the open clock menu, plain labels drawn straight
+  onto the popup background (`Monday`, `August 24 2026`, the weekday letters, every date digit)
+  render perfectly, while **every** rounded-rect card in the same popup loses its contents and keeps
+  its background: the notification cards, `Today / No Events`, `Add World Clocks…`,
+  `Select Weather Location…`.
+- **A card can render correctly in one place and damaged in another, but neither placement is
+  safe.** The clock popover's notification list has been seen complete while the banner form of the
+  same notification was damaged — but the popover is *also* a place the damage appears, in the
+  notification cards and in unrelated bubbles alike. Do not build on "the list is the calm copy".
+- **It rides a repaint, not first render.** User, watching it live: *"it appears with text, then
+  animates to grow into the full bubble completely empty."*
+- **gnome-shell breaks, synoik does not.** synoik is a Vulkan/venus compositor, gnome-shell a
+  GL/cogl one.
+
+## Incidence is session-unstable — only large gaps mean anything
+
+The virgl damage rate has been measured at 52.5% in one session and ~100% in others, both verified
+against pixels. **A small difference between arms is noise.** Every arm below was run in a session
+whose baseline was independently measured, and only unmistakable gaps are reported as results.
+
+Seven consecutive 13-20 sample runs of the *same* default arm scored 29, 29, 32, 47, 55, 58, 69 and
+77% damaged. That band swallows any partial effect, so at these sample sizes **the only readings
+worth taking are cured and not-cured**. A real cure drives the rate to ~0: at even the lowest
+observed baseline, 0/19 has probability 0.71^19 ~ 0.002, so one clean run of 19 is strong and a
+second makes it conclusive. Never run an arm expecting to interpret a partial shift -- that is how
+noise gets written down as a lead.
+
+The human cannot reproduce on demand either: *"I just send notifications, wait around, open and
+close stuff until one of them misrenders."* The blocker is incidence everywhere, not a missing
+trigger.
+
+## Detection
+
+`calib.sh` posts a notification with a symbolic source icon and measures ink in a strip holding only
+the header text — above the large icon, left of the close button. It separates cleanly: **0 when the
+header is absent, ~420–450 when present**, both classes confirmed against pixels
+(`evidence/banner-header-present-ink452.png`, `evidence/banner-header-missing-ink0.png`). The title
+dies with the header every time observed.
+
+`NTITLE` / `NBODY` override the posted strings, because *which* card is posted turned out to be a
+variable of the experiment rather than decoration.
+
+**The header strip alone is not enough to score an arm.** It rests on "the title dies with the
+header", and any arm that preserves stale pixels breaks it: the header text is *constant* across
+cards ("Software", "Just now"), so a header held over from the previous frame is pixel-identical to
+a freshly drawn one, while the title — which carries the per-card counter — is not. Under
+`KK_LIMINA_FORCE_LOAD` the header detector duly called a clean sweep on cards whose titles were
+plainly gone. That says nothing about whether the header was rescued; it says the header strip is
+**unreadable by construction** on any content-preserving arm, and only the title score carries
+weight there. `score-title.py` measures the title independently from the PNGs every run already
+saves -- crop rows 83-96 carry 41-113 lit pixels when the title renders and exactly 0 when it does
+not. **Score every arm both ways**; they agree on all the ordering and unroll arms, which is what
+makes the one disagreement worth having caught.
+
+A **validity gate** is mandatory: a sample counts only if the BODY strip is inked, proving a banner
+was really on screen. Without it every no-banner state — an idle session, the Activities overview a
+fresh boot lands in — reads as zero header ink and inflates the damage rate straight to 100%. The
+gate has a matching failure mode: **a body string too short to cover the body rect reads as
+NOBANNER and voids the arm**, so short-text variants need their own gate.
+
+## Where the fault is NOT
+
+Every arm below ran against an independently measured baseline in the same session.
+
+| arm | knob | result |
+|---|---|---|
+| baseline | — | 39/0, and separately 19/19 |
+| cogl texture atlas | `COGL_DEBUG=disable-atlas` | 39/0 — no effect |
+| cogl atlas, both kinds | `COGL_DEBUG=disable-atlas,disable-shared-atlas` | 19/0 — no effect |
+| per-StLabel offscreen FBOs | `CLUTTER_PAINT=disable-offscreen-redirect` | persists, changed shape |
+| guest driver transfer optimizations | `VIRGL_DEBUG=xfer` | 19/19 — no effect |
+| host upload ordering, vs prior work | `LIMINA_VREND_TRANSFER_FORCE_SYNC=1` | 17/19 — no effect |
+| host upload ordering, vs consuming draw | `LIMINA_VREND_TRANSFER_SYNC_AFTER=1` | 12/13 — no effect |
+| damage region / clip / buffer age / culling | `CLUTTER_PAINT=disable-clipped-redraws` | 13/13 — no effect |
+| software-2D | `--gpu-software-2d` | **0/40 — cures** |
+
+- **Not the cogl glyph atlas**, shared or otherwise.
+- **Not the offscreen-redirect FBO path.** With the redirect disabled the text is drawn
+  direct-to-framebuffer and *still* corrupts, as shredded dark glyph fragments shaped like the words
+  (`evidence/no-redirect-body-glyphs-shredded.png`). Text that never goes through an FBO still
+  corrupts, so the FBO is not where content is lost. (This knob also suppresses banners, so it gives
+  a qualitative result only, never a rate.)
+- **Not the guest virgl driver's opportunistic transfer optimizations.** `VIRGL_DEBUG=xfer` disables
+  the uninitialized-range fast path, the discard→staging path, and `buffer_subdata` queue-extend
+  (`virgl_resource.c:201,213,979` in mesa). It changes nothing. Note this is a **partial**
+  exoneration: `wait = !(usage & PIPE_MAP_UNSYNCHRONIZED)` is not gated by that flag, so an
+  *explicit* unsynchronized map from cogl still reaches vrend's mid-buffer unsynchronized branch.
+- **Not vrend-level upload ordering, in either direction.** Two levers on the virglrenderer fork,
+  each verified engaged via its stderr marker in the worker log. `LIMINA_VREND_TRANSFER_FORCE_SYNC=1`
+  `glFinish()`es **before** every `vrend_renderer_transfer_write_iov` and forces a plain synchronized
+  `GL_MAP_INVALIDATE_RANGE_BIT` map, bypassing the orphan/unsynchronized heuristic — that orders a
+  transfer against *prior* GL work. `LIMINA_VREND_TRANSFER_SYNC_AFTER=1` `glFinish()`es **after** it —
+  that orders it against the *subsequent consuming draw*. Damage survives both. Note the second lever
+  exists because the first alone proves much less than it appears to: GL guarantees upload→draw
+  ordering within the API, but here that guarantee is implemented by zink's barrier tracking and
+  KosmicKrisp's Metal encoding, so it is a real suspect that no pre-transfer sync can touch.
+- **Not the damage region, clip stack, buffer age, partial swap, or actor culling.**
+  `CLUTTER_PAINT=disable-clipped-redraws` (`clutter-context.c:72`, honored at `meta-stage-impl.c:456`
+  in mutter 50) forces a full-view repaint every frame, removing damage regions, buffer-age unions,
+  the stencil region clip, and effectively all on-screen frustum culling. 13/13 damaged.
+
+### Host-side: zink and KosmicKrisp
+
+Once the host split convicted zink/KK (below), the same discipline was applied inside them. Every
+arm is self-evidencing -- it prints its own engagement to stderr in the worker log -- because an
+arm that silently fails to engage is indistinguishable from a clean exoneration.
+
+| arm | knob | result |
+|---|---|---|
+| zink copy barriers | `ZINK_DEBUG=sync` | 13/13 — no effect |
+| zink scheduling, wholesale | `ZINK_DEBUG=sync,noreorder,norp,nogeneral` | 13/13 — no effect |
+| KK barrier pass-restart | `KK_LIMINA_BARRIER=norestart` | path never runs (see counters) |
+| all cross-command-buffer ordering | `KK_LIMINA_SERIALIZE=1` | 9/13 — no effect |
+| poly-heap reset aliasing | `KK_LIMINA_HEAP_NORESET=1` | 9/19 — no effect |
+| geometry unrolling, wholesale | `LIMINA_ZINK_NO_FANS=1 KK_LIMINA_NO_PROMOTE=1` | 11/20 — no effect |
+
+- **Not zink's scheduling.** `sync` puts a full `VkMemoryBarrier` around every copy; the combined
+  arm additionally disables command reordering, renderpass tracking and GENERAL-layout use. No
+  effect, so zink's request side is out.
+- **Not a race between command buffers.** Metal 4 removed automatic hazard tracking, and KK submits
+  an upload (`pre_gfx`) separately from the draws that consume it (`gfx`), so this was a live
+  suspect. `KK_LIMINA_SERIALIZE` chains every command buffer on a queue event, making concurrent or
+  out-of-order execution impossible. Damage survives. Note precisely what this does and does not
+  settle: it rules out a *race*, not a deterministic mis-ordering, since it enforces the existing
+  submit order rather than questioning it.
+- **Not the pass-restart paths.** KK tears down and restarts a live render pass in two places --
+  `kk_CmdPipelineBarrier2` when a gfx encoder is open, and `kk_flush_render_pass` on a
+  colour-attachment-map or sample-location change. A restart that failed to reload would lose
+  exactly what this bug loses. Counters say **neither ever fires** in a gnome-shell session:
+  `restarts=0/0`. Nothing to exonerate.
+- **Not the geometry-unroll path, in whole.** Every compute dispatch KK hoists ahead of an open
+  render pass is geometry unrolling (2164 fans + 1505 index promotions; `dladdr` attributes all of
+  them to `kk_unroll_geometry` and nothing else). It also converts direct draws to indirect and
+  stages indices through one device-wide heap, and llvmpipe -- the clean control -- has no
+  equivalent. Rather than test its hazards one by one, the path was **drained**: with fans lowered
+  by zink, uint8 index buffers refused, and restart-disabled promotion skipped, the counters read
+  `fan=0 promote=0 robust=0 restart=0` and the damage is unchanged. Unrolling, the indirect
+  conversion, the shared index heap and the hoisting are all out together.
+- **Not the poly heap.** With its reset suppressed for a whole session the bump allocator reaches
+  276080 bytes of 134217712 (0.21%) and never trips its overflow abort, so allocations cannot be
+  wrapping onto each other; and making every allocation unique does not move the damage.
+
+- **Not content discarded at pass start.** With ordering exhausted, the remaining host-side
+  suspect was what a pass *encodes*: a render pass beginning on a texture that already holds
+  drawing, with a load action of CLEAR or DONT_CARE, throws that drawing away. A detector in
+  `cs_start_render` (a never-emptied set of texture pointers, checked against the load action
+  actually written into the descriptor) finds 155 such starts per session, 59 of them on
+  attachments small enough to be a label or icon offscreen. Firing is not guilt -- clearing a
+  reused offscreen before redrawing it is ordinary -- so it was turned into an arm:
+  `KK_LIMINA_FORCE_LOAD=small` makes every small drawn target load instead. **32% damaged, no
+  effect** -- and confirmed engaged after the fact from the same run's log (`FORCED to LOAD on small
+  drawn targets`, `reload_hazard=160 (small=64)`), so 64 discards really were converted to loads.
+  One hole it cannot close: a *fresh* texture is not in the seen-set, so a first-pass offscreen is
+  never forced -- and it cannot be, since loading an undrawn target reads uninitialized memory. (The unrestricted `=1` form is void, not a cure: with card backgrounds no longer
+  cleared, previous frames pile up inside them and the leftover ink scores as healthy. It reads
+  0/20 on both detectors while the pixels show the same title drawn twice over.)
+
+One real bug was found on the way and is **not** this one: the force-LOAD loop in
+`kk_CmdBeginRendering` indexes the Metal descriptor by the raw Vulkan attachment index while every
+other site uses `dyn->cal.color_map[i]`, so a non-identity map would write LOAD to the wrong slot
+and a restart would discard earlier drawing. Measured `color_map_nonidentity=0/5448` -- the map is
+always the identity here, and restarts never fire, so this workload cannot reach it. Latent, worth
+fixing, unrelated.
+
+**Partial effect, not a cure:** disabling GNOME animations
+(`gsettings set org.gnome.desktop.interface enable-animations false`) raised the clean rate from
+2/19 to 5/12. Consistent with the fault riding the insertion/expand repaint, but it does not
+eliminate it.
+
+## Synthetic vehicles that failed to reproduce
+
+Two hand-written surfaceless GLES3 programs, run in the guest on the virgl path. Both are committed
+because a negative result on a faithful-looking imitation is itself a conclusion: **the essential
+ingredient of the real workload is not yet imitated.**
+
+- `texupload.c` — small R8 texture, banded `glTexSubImage2D` sub-rect uploads, texture churn through
+  a slot pool, verification deferred by several iterations so a race has room to land.
+  **0 mismatches in 3976 checks.**
+- `bufstream.c` — one reused streaming VBO written with
+  `GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT` plus `GL_MAP_INVALIDATE_BUFFER_BIT` at offset 0 /
+  `GL_MAP_UNSYNCHRONIZED_BIT` elsewhere (mimicking cogl's journal), rendering colour-coded cells with
+  no per-iteration sync. **0 wrong in 20 passes × 1024 cells.**
+
+## Vehicles for isolating the real code, and how they fail
+
+- **`LIBGL_ALWAYS_SOFTWARE=1` on gnome-shell is unavailable.** The shell **SEGVs in
+  `dri2_drm_swap_buffers()`** — mutter's gbm/KMS renderer cannot take swrast here — and gdm loops
+  until it gives up. The guest-llvmpipe-with-our-scanout split cannot be run this way.
+- **apitrace on the session gnome-shell does not work.** `LD_PRELOAD` is inherited by **Xwayland**,
+  which the shell spawns; both processes then write the same `TRACE_FILE`, Xwayland aborts, and the
+  trace freezes. Scoping the drop-in per systemd instance does not help — the collision is
+  parent→child. A `--no-x11` vehicle avoids it.
+- **`gnome-shell --nested` no longer exists in 50.** Nested is the *default*; `--display-server`
+  opts into being the real one. But launching a second shell without `--headless` still contended for
+  the display (a `MUTTER_DEBUG_DUMMY_MODE_SPECS` mode change lands on the real scanout) and took the
+  outer session down with it. Use **`--headless --virtual-monitor WxH --no-x11`**, which contends
+  with nothing, can screenshot itself, and is the one process to `LD_PRELOAD`.
+- **The headless shell runs, but as an oracle it is inert until something drives its frame clock.**
+  `nested-start.sh` / `nested-run.sh` bring it up on a private bus and it accepts notifications, but
+  **a headless virtual monitor with no consumer paints once at startup and then never again**:
+  measured, 6 screenshots over 4.2 s after a `Notify` were pixel-identical and the banner never
+  appeared, and 4 sampled posts all returned the same startup frame. Every sample scores clean, so
+  the freeze reads exactly like a cure -- treat any clean result from this vehicle as void until a
+  frame driver is proven live. Attaching a screencast does unfreeze it (the banner appears), which
+  is how headless GNOME really runs, but the recorder then fails PipeWire format negotiation
+  (`no more input formats`) and the paints stop again. **Unfinished; not needed for instrumenting
+  our own code**, since a `printf` compiled into libmutter works in the session shell and only
+  `LD_PRELOAD` tools require this vehicle.
+- Two traps worth keeping from building it: the shell's `Screenshot`/`Screencast` D-Bus methods are
+  **sender-gated**, and a caller that owns an allowlisted name (`org.gnome.Screenshot`) is still
+  refused if it calls immediately -- the shell resolves those names asynchronously, so **sleep after
+  `RequestName`** or a race reads as a hard permission wall. And `pkill -f 'gnome-shell --headless'`
+  matches the ssh command line that contains that string, killing its own wrapper; anchor with `^`.
+
+## Where this leaves the fault
+
+**The label FBOs are painted, and their content is wrong.** That is forced by the guest screenshot.
+gnome-shell's screenshot goes through `clutter_stage_paint_to_buffer` (`src/shell-screenshot.c:339`),
+which builds a paint context with no view, so `clutter_paint_context_is_drawing_off_stage()` is TRUE
+(`clutter-paint-context.c:218-224`) and `cull_actor()` bails without culling
+(`clutter-actor.c:3227-3235`) — no damage region, no clip, no buffer age. A label that had merely
+been *skipped* on screen would have a NULL offscreen and would repaint fresh and correct there. It
+came out damaged, so it had been painted, into an FBO whose content is wrong
+(`clutter-offscreen-effect.c:569-575` composites the cached texture for a non-dirty actor, which is
+also why a bad frame leaves the widget blank until something re-dirties that label).
+
+A tempting reading — "a contiguous top band is unpainted, so something clipped the repaint" — is
+therefore **wrong**, and the `disable-clipped-redraws` arm confirms it empirically. A pixel-level
+clip would mask the card background exactly as it masks the text, and the background is present.
+
+The best available reading is **late, not corrupt**: the texels are fine once they have landed, and
+what fails is sampling them too early, in the same churn frame that rasterizes and uploads them. It
+unifies all three damage shapes — nothing uploaded yet → zero coverage → absent row; partially
+landed → shredded fragments; stale allocation bytes → coloured specks at origin — and it explains why
+disabling animations helps without curing (fewer frames between rasterize and sample), and why every
+damaged card is one that was freshly built or animated in the frame that damaged it.
+
+**It is weaker than a "calm copy renders fine" argument would make it look.** The same notification's
+text has been seen complete in the clock popover's list while its banner form was damaged, which
+invites the inference that quiet repaints are safe and glyph texels are therefore fine at rest. That
+inference is **not supported**: the popover is also a place the damage appears, in notification cards
+and unrelated bubbles alike. So "damaged only during churn" is a description of what has been
+observed, not an established property, and glyph-texel corruption at rest has not actually been
+excluded.
+
+Since vrend-level ordering is covered in both directions, the remaining suspects are **below vrend**:
+zink's staging-copy → sampling-draw barrier tracking and the render-to-texture → sample path for the
+label FBO, over KosmicKrisp's Metal encoding. This host has prior form for exactly this fault class —
+the WebRender tile-displacement tear (`vrend_renderer.c:9685-9705`, "Reproduced through
+guest→virgl→zink→KK; clean host-direct") and the IOSurface transfer fence gap
+(`vrend_renderer.c:9979-10000`).
+
+## The host-implementation split: zink/KosmicKrisp is convicted
+
+The locus split has been **run**. Host mesa rebuilt with `-Dgallium-drivers=zink,llvmpipe` into
+`/Volumes/mesa-cs/zink-llvmpipe-prefix`; the worker selects between them with
+`LIMINA_HOST_GALLIUM` (`boot-enhanced-efi-kk.sh`). Identical guest, identical virgl protocol,
+identical vrend GL stream, identical driver script and oracle — the *only* difference is the host GL
+implementation underneath vrend.
+
+| host GL | damaged | clean |
+|---|---|---|
+| zink → KosmicKrisp → Metal | **4** | 4 |
+| llvmpipe | **0** | 16 |
+
+Same card in both arms (GNOME's own "Screen Capture / Screenshot captured" notification, which the
+screenshot oracle raises), scored identically by `score-guest-shots.py`, driven by
+`guest-shot-run.sh`. Evidence: `evidence/hostsplit-zinkkk-header-title-lost.png` versus
+`evidence/hostsplit-llvmpipe-same-card-clean.png`.
+
+**The fault is below vrend, in zink/KosmicKrisp.** Everything above it — the guest virgl driver, the
+virgl command stream, vrend's own transfer handling — is held constant across those two arms and
+produces a correct image on one of them.
+
+Two things make this an apples-to-apples comparison rather than the asymmetric one it could easily
+have been. Both arms use the **guest's own screenshot** as the oracle, not the host scanout probe:
+llvmpipe cannot run with our IOSurface-backed scanout at all (it asserts in `init_scene_texture`
+when the map fails), so that arm needs `LIMINA_VREND_IOSURFACE=0` and has no host window to probe.
+And both arms score the **same card**, because the screenshot oracle's own notification tends to own
+the banner slot in both.
+
+**Caveat, stated plainly:** llvmpipe is much slower, so some of its cleanliness may be timing
+suppression rather than correctness. The result is strong evidence, not proof. It is not
+symmetrical, though — the *damaged* half is unambiguous.
+
+## The compositor build: the damaged draw is submitted, and a GL flush cures it
+
+mutter 50.0 built from the exact Fedora source the guest runs (`mutter-50.0-1.fc44`, which carries
+**zero** distro patches, so source and running binary match), instrumented, installed over the stock
+libraries and verified loaded out of `/proc/PID/maps`. Scripts: `install-mutter-50.sh` (install +
+prove-loaded), `glyph-arm.sh` (select an arm), patch: `mutter-glyph-instrument.patch`.
+
+**State the confounder first: this build damages at 92-100%, against 29-77% for stock Fedora
+mutter.** Same fault by pixels and same shapes, and a near-certain reproduction is what makes a
+single run decisive at last -- but it is a changed system under test, and every rate below belongs
+to this build, not to the shipped one.
+
+| arm | what it forces | title | body |
+|---|---|---|---|
+| baseline (29 samples over 3 arms) | nothing | **damaged 29/29** | intact |
+| `LIMINA_GLYPH_SYNC` | glyph texels read back at the UPLOAD site | damaged 15/15 | intact |
+| `LIMINA_TEXT_SYNC=journal` | cogl journal flushed after the label draw | **clean 10/10** | **shredded 10/10** |
+| `LIMINA_TEXT_SYNC=flush` | journal flush + driver flush (sync fd + `glFlush`) | **clean 10/10** | **clean 10/10** |
+| `LIMINA_TEXT_SYNC=flush` + `LIMINA_COGL_NO_SYNCFD` | journal flush + bare `glFlush`, no sync fd | **clean 10/10** | **clean 10/10** |
+| `LIMINA_TEXT_SYNC=sleep` (5 ms) | nothing; waits only | damaged 9/9 | intact |
+| `LIMINA_TEXT_READBACK` | full readback of the label offscreen | clean 6/6 | clean 6/6 |
+
+- **The damaged text IS drawn.** Every damaged title logged its own draw, twice each, 10 of 10.
+  This is the split the whole investigation needed: the fault is not a missed paint, a cull, or an
+  actor left unset. It is submitted work that does not survive.
+- **Not the glyph texels.** Glyphs are rasterized and uploaded from `clutter_text_create_layout`
+  (not from the paint path -- a paint-site probe read zero and would have exonerated the wrong
+  thing). Forcing a blocking readback so the texels have provably landed before any draw -- evidenced
+  per batch, `sync readback: 1664 byte(s)` -- leaves the damage at 15/15. The atlas is also not the
+  variable: the body label draws from the same atlas and renders correctly in the same frame.
+- **Not offscreen redirection as such.** Title and body BOTH draw into fresh per-card offscreens
+  (968x44 and 568x44). Redirection cannot be the discriminator when the intact half is redirected too.
+- **A GL flush after the label offscreen is drawn cures it.** `cogl_framebuffer_flush()` is not a
+  CPU wait and not a readback: it flushes the journal and calls the driver flush
+  (`_cogl_context_update_sync` + `glFlush`). Splitting the two halves is what localizes the fault --
+  the journal half alone cures the title and leaves the body shredded, and only adding the driver
+  half cures both. **Rendered content is not visible to the draw that samples it unless a GL-level
+  flush is forced.** GL orders commands within a context on its own, so needing one is a driver
+  fault, which is exactly where the llvmpipe-versus-zink/KK host split already pointed.
+- **It is not lateness.** Every curing lever also delays, so "heavier lever, more cure" reads equally
+  well as "any pause lets the host catch up" -- and this bug has looked late from the first sample.
+  The rung that separates them waits without submitting anything: a 5 ms `g_usleep` at the same
+  call site, ten times the cost of the flush it replaces and self-evidenced as engaged (`mode=sleep
+  journal_depth=18`, the same depth the curing arm reports), cures **nothing**, 9 of 9. Delay is not
+  the active ingredient; the flush boundary is.
+- **The sync fd is not the active ingredient either.** Dropping `_cogl_context_update_sync` and
+  leaving a bare `glFlush` still cures both halves, 10 of 10. So no host round-trip and no fence is
+  required -- **ending the command batch is sufficient**, which is a far more specific accusation:
+  zink tracks render-target-to-sample hazards per batch, and a forced flush ends the batch and emits
+  the transition that a mid-batch path is missing. It also explains why `ZINK_DEBUG=sync` never
+  moved this: that barriers copies, not render-target-to-sample transitions.
+- Ordering the ladder weakest-first is what made it readable: the heavy readback arm cures too, but
+  on its own it proves nothing about which layer owns the bug.
+
+**Do not read the `journal` arm as void.** It reports NOBANNER on every sample, because the validity
+gate proves a banner exists by measuring BODY ink -- and that arm is precisely the one that damages
+the body. The gate cannot see a card whose gating element is the damaged one; the samples were
+scored from the saved PNGs instead (title 432-1144 present, body 92-279 against 960-1493 intact).
+
+## Next
+
+The fault now has a shape and a layer: **content rendered into a freshly created offscreen is not
+visible to the draw that samples it, in the same frame, unless the command batch is ended.** Not a
+fence, not a wait, not a delay -- a submission boundary, and nothing weaker. The
+compositor is exonerated of everything except being the thing that hits it -- the draw is submitted,
+the glyphs are uploaded and complete, the actor state is right.
+
+### The synthetic reproducer does not reproduce (`rtsample.c`)
+
+Built to the shape the ladder ended on: a fresh texture+FBO per iteration, rendered into (a blue
+clear plus a red quad over the middle half, so a failure says *which* of the two was lost), sampled
+1:1 into a persistent grid in the same batch, and verified by a **single** readback after all 256
+iterations -- deferred because a per-iteration readback would supply the very batch boundary being
+tested for. It runs on the real stack (`virgl (zink ... MESA_KOSMICKRISP)`), and it self-tests: the
+`RTS_FINISH` arm reports 256/256 correct, so the oracle can say "clean" for the right reason.
+
+**Every arm is clean, 256/256**: baseline, `TEXDRAW` (the offscreen pass also *reads* a texture,
+blended, as a glyph draw does), `REBIND` (the offscreen written by two render passes with real work
+on a third target in between), `BLEND` (blended composite), and all three together.
+
+So the fault is **not** reachable from render-to-fresh-offscreen-then-sample alone. Something in the
+real case is still missing from the mock, and guessing further ingredients one at a time is the
+wrong move -- the mock cannot be trusted to have failed for the right reason. Keep the vehicle: it
+is a fast negative control, and it will be the regression test once the fault is understood.
+
+### It is not only the text: the icon dies with it
+
+The damaged card loses the header line, the **app icon** and the title together, and keeps the body
+(`evidence/card-damaged-header-icon-title-all-gone.png` against
+`evidence/card-intact-header-icon-title.png`). An icon is not a glyph, is not laid out by pango and
+never touches the glyph cache, so whatever this is, it is not about text. It is about which *small,
+freshly created* offscreens survive to be sampled. Every remaining theory has to explain the icon.
+
+### Host arms: zink's reordering and renderpass tracking are NOT it
+
+`ZINK_DEBUG` exposes the two host optimizations that could plausibly need a flush to come out right
+-- `noreorder` ("do not reorder command streams") and `norp` ("disable renderpass
+tracking/optimizations", which is where load/store ops are chosen). Set on the worker and proved
+present in its environment with `ps -E`, against the instrumented build's ~93% base rate:
+
+| host arm | damaged |
+|---|---|
+| control, `ZINK_DEBUG` unset | 13/14 (93%) |
+| `norp` | 13/13 (100%) |
+| `noreorder` | 15/15 (100%) |
+| `noreorder,norp` | 14/15 (93%) |
+
+Neither switch moves it. An earlier `noreorder,norp` run measured 7/11 (64%) and is **void, not a
+lead**: `ydotoold` was dead for it, so that vehicle had no synthetic input at all while every other
+run did. It was re-run with input restored and came back at 93%, matching control. A partial-looking
+effect that survives only in the run with a broken vehicle is a vehicle artifact.
+
+The invalidate/discard theory died before it cost a boot, in two greps: cogl calls
+`cogl_framebuffer_discard_buffers` from exactly one place, `cogl-onscreen.c`, so a label offscreen is
+never discarded; and vrend does not relay `glInvalidateFramebuffer` at all, so no guest invalidate
+could reach host GL even if one were made.
+
+### The guest's issue order is correct: the fork resolves to the host
+
+The probe: a global counter and a `printerr` in `_cogl_framebuffer_flush_journal`, logged **after**
+`_cogl_journal_flush` returns rather than before -- load-bearing, because a flush first flushes its
+dependencies, so a dependency's flush is *nested inside* its parent's and logging on entry prints
+the exact inversion of what GL sees. Plus a line at the dependency-registration site in
+`cogl-journal.c`, since a dependency that is never recorded cannot be flushed first. Armed by the
+title draw itself and self-limiting, so the window sits on the card being measured.
+Log: `evidence/journal-issue-order.log`.
+
+Both halves come back correct, on every card:
+
+```
+[LIMINA-TEXT]  draw "Critical Updates 005" fb=0xaaaaf251c520 OFFSCREEN 968x44
+[LIMINA-JDEP]  fb=0xaaaaef033b50 2560x1440 depends on 0xaaaaf251c520 968x44
+[LIMINA-JFLUSH] seq=121 fb=0xaaaaf251c520 OFFSCREEN 968x44   entries=18
+[LIMINA-JFLUSH] seq=125 fb=0xaaaaef033b50 onscreen 2560x1440 entries=35
+```
+
+The stage **does** record the title offscreen as a dependency, and the title's 18 journalled entries
+**are** issued to GL before the stage's 35 that sample them. The clean card and the damaged card
+produce byte-identical orderings (`seq=1..5` on the intact post 001, `seq=121..125` on the damaged
+post 005), so issue order is not the discriminator and cogl is exonerated of mis-ordering.
+
+That was the last guest-side explanation the ladder left open, and with it goes the reading that the
+journal-flush cure worked by fixing an order. **The same work is submitted, in the same order, in
+both cases; the damaged card loses its content below the guest's GL stream.** The host split is now
+earned by this measurement rather than inherited from the old llvmpipe run.
+
+### What dies is what was journalled this frame -- the survivor never flushes
+
+Sitting in the same log, unlooked-for. Across all 8 posts, the four elements that die each flush a
+journal 15 times -- title `968x44` (18 entries), `Software` `134x44` (8), `Just now` `110x38` (7),
+the `38x38` icon (1). The body's `568x44` offscreen **never flushes with entries anywhere in the
+log**, 0 occurrences, and the body is the one element that survives. A perfect anticorrelation
+between "had draws issued in this window" and "lost".
+
+**One thread in it is not yet explained and the correlation should not be leaned on until it is:**
+the body's draw *is* logged every frame, so its journal ought to hold entries at flush time and does
+not. Where they go -- flushed between the draw and the window, or never journalled -- has to be
+answered before this is more than an observation.
+
+It does sharpen two things regardless. The host question is not "does the texture hold ink at frame
+end" but *content rendered this frame versus content retained from earlier frames*. And it hands
+`rtsample.c` the ingredient it lacks: the mock composites 256 sources that were all freshly rendered
+in the same batch, and never mixes same-frame-rendered sources with retained ones the way a real
+card does.
+
+### The KK instrumentation we own tracks loads, and skips exactly this case
+
+`kk_cmd_buffer.c` already classifies every render-pass start (`fresh` / `seen+LOAD` /
+`seen+CLEAR` / `seen+DONTCARE`) and carries the `KK_LIMINA_FORCE_LOAD` arm, which was measured and
+did not cure. Two gaps matter now:
+
+- **`fresh` attachments are counted and then skipped** (`continue`), and a freshly created label
+  offscreen is precisely a `fresh` attachment. The one bucket the title lives in is the one the
+  detector stops looking at.
+- **Nothing tracked store actions.** `kk_apply_attachment_store_ops` took `force_store` as a
+  parameter, so there was no env arm for it -- and content lost at pass *end* was the shape still
+  unaccounted for, since a guest-side flush moves where passes end.
+
+Both gaps are closed (mesa `limina-kk`, `kk: arm the store side, and stop dropping fresh
+attachments`), and the store arm answers:
+
+| KK arm | what it forces | damaged |
+|---|---|---|
+| `KK_LIMINA_FORCE_LOAD=small` | pass START loads instead of clearing/discarding | no cure |
+| `KK_LIMINA_FORCE_STORE=1` | pass END stores instead of discarding | **11/11, no cure** |
+
+**Both ends of the render pass are now exonerated.** Nothing is being discarded that should have
+been kept, at either end. Whatever loses the content is not a load or store action, which also means
+it is not the `DONTCARE` counter that has been sitting nonzero in the worker log all along.
+
+### The host texture holds the text -- and the stage composites it while it is empty
+
+`LIMINA_VREND_INK=968x44` (virglrenderer `limina`, `vrend: read a host texture's ink at the moment a
+draw samples it`) reads the texture back at the instant a draw binds it to sample, from inside
+`vrend_draw_bind_samplers_shader`. Log: `evidence/host-ink-at-sample.log`.
+
+Three details are what make it readable, and two were corrections:
+
+- **Read twice, with a `glFinish` between.** An empty first read means either "the draws have not
+  executed yet" or "the readback raced", and those are opposite conclusions.
+- **Report a checksum, not just a count.** Ink alone cannot distinguish fresh content from a
+  previous card's text sitting in a recycled texture.
+- **Rate-limit on the wall clock, not on texture id.** Deduplicating per id looked obviously right --
+  every card gets a fresh offscreen -- but the guest recycles GL texture ids hard, so the id-keyed
+  version fired for the first few cards and went silent for the rest. It read like a general result
+  from three samples.
+
+The probe is a perturbation and is only readable next to the damage rate from the same run. **All 9
+cards came out damaged, so it did not cure and the reading stands.**
+
+```
+sample tex=83 968x44 ink=3152 after_finish=3152 sum=ee68cd6e -> drawing into 2560x1440
+sample tex=83 968x44 ink=0    after_finish=0    sum=811c9dc5 -> drawing into 2560x1440
+sample tex=84 968x44 ink=3158 after_finish=3158 sum=d00580b0 -> drawing into 2560x1440
+sample tex=84 968x44 ink=0    after_finish=0    sum=811c9dc5 -> drawing into 2560x1440
+```
+
+- **The content exists on the host, and it is this card's.** ~3000 inked texels of 42592 is a line
+  of text, and the checksum is different for every card -- so it is freshly rendered content, not a
+  recycled texture still holding the previous title.
+- **The empty reads are real.** `after_finish` equals `ink` on every single line, so a texture that
+  reads empty is genuinely empty and fully synchronized, not a racing readback.
+- **Both kinds of sample are the stage.** Every line says `drawing into 2560x1440`. This is not some
+  other consumer's texture: the visible composite is the thing sampling an empty label.
+
+So within one card the stage composites that label texture more than once, and at some of those
+composites it holds the title while at others it holds nothing -- and what reaches the screen has no
+title. The render is not the failure; **the failure is that the composite that matters samples the
+texture while it is empty.**
+
+### It is the SECOND render into the same offscreen that produces nothing
+
+Logging the render target at the draw entry point -- and reporting every *switch* to a 968x44
+target, not just every change of id -- completes the sequence.
+Log: `evidence/host-second-render-empty.log`.
+
+```
+RENDER TARGET tex=84 968x44                       <- the guest renders the title into 84
+sample tex=84 ink=3152 after_finish=3152 ...      <- a composite sees the title
+RENDER TARGET tex=84 968x44                       <- the guest renders into 84 AGAIN
+sample tex=84 ink=0    after_finish=0    ...      <- the next composite sees NOTHING
+```
+
+- **Identity is clean.** The target rendered into and the texture sampled are the same GL object.
+  Aliasing is out; nothing is written to one object and read from another.
+- **The first render lands and the second does not.** Same target, same 18 draws -- the guest's
+  draw probe logged the title twice per card all along, and the journal flushed 18 entries both
+  times. On the host the first pass fills the texture and the second leaves it empty, verified
+  after `glFinish`.
+
+Two placement bugs had to be fixed to see this, and each produced a confident wrong reading first.
+The render-target check began inside the sampler probe, which only runs for sampler views that are
+**dirty** -- so it never fired once, which reads exactly like "the label is never rendered into a
+968x44 target" and is instead a dead probe. It then deduplicated on "the id changed", which hid the
+repaint of the same target: precisely the event that turned out to be the answer.
+
+**`rtsample` still does not reproduce it.** An `RTS_TWICE` arm that renders each offscreen, samples
+it, then renders the same target again and samples again comes back 256/256 clean -- so
+"render the same target twice" is necessary to the real case but not sufficient on its own. The mock
+is still missing something, and this is recorded as a negative rather than tuned until it breaks.
+
+### Both render episodes carry the same draws -- and a false cure, caught by the pixels
+
+Counting the draws vrend processes per render episode on the label target closes the "did the work
+arrive" question: **both episodes report `draws=1`.** The guest's 18 journal entries batch into one
+GL draw, and the second pass carries it just as the first does. The work reaches the host in both
+passes; the second one writes nothing.
+
+That reframes `ink=0` as well. The label offscreen is cleared to transparent, so an empty texture is
+not "nothing happened" -- it is **cleared, and then not drawn**.
+
+Which made `KK_LIMINA_FORCE_LOAD=small` worth re-running against the current oracle, since
+suppressing the clear should leave the first pass's content in place. It measured **7/7 clean on the
+header strip -- and every one of those cards had no title.** The pixels say what happened: the
+header line and the icon came back, the title did not.
+
+**This is the trap this document already warned about, walked into anyway.** The header text is
+identical on every card, so any arm that preserves a reused texture's contents makes the header
+reappear and scores as a cure while the element that actually varies is still missing. The mechanism
+is now clear too: `FORCE_LOAD` only acts on the `seen` path, and the header and icon offscreens are
+reused across cards (so their preserved content is indistinguishable from fresh) while a per-card
+title offscreen is `fresh` and skipped entirely. The arm preserves stale pixels; it does not cure.
+
+**The rig is fixed rather than the reading just corrected.** `calib.sh` now scores a TITLE strip
+(`1120,100,480,28`), validated two-point against the known cure: 202 ink with
+`LIMINA_TEXT_SYNC=flush`, blank on a damaged card. The title is the only element whose text changes
+per post, so it is the only one that can tell a card that rendered from one showing preserved
+pixels. Every arm from here is scored on it; the header stays as a secondary signal.
+
+### The failing draw rasterises nothing
+
+An occlusion query around the label draw, read at episode end where a readback is already known not
+to cure, settles what the second pass does. `GL_SAMPLES_PASSED` is rejected by this context; the
+GLES3 boolean form works.
+
+```
+episode END tex=84 draws=1 ink=3145 ... | source tex=4 512x512 ink=22680 | samples=1
+episode END tex=84 draws=1 ink=0    ... | source tex=4 512x512 ink=22680 | samples=0
+```
+
+**`samples=0`.** No fragments are produced at all, so this is not blending, not a write mask and
+not a store -- the geometry never covers a pixel. And everything observable about the two draws is
+identical: same target, same draw count, same program, same viewport, same blend and mask state,
+and the same glyph atlas with byte-identical ink. The program has **no matrix uniform**, so cogl
+bakes the transform into the vertex data -- which means the geometry lives entirely in the buffer
+the draw fetches.
+
+### What is exhausted
+
+| arm | engagement proof | result |
+|---|---|---|
+| `KK_LIMINA_FORCE_LOAD=small` | announces itself | header/icon return, **title does not** -- preserves stale pixels, not a cure |
+| `KK_LIMINA_FORCE_STORE=1` | announces itself | no cure, 11/11 |
+| `LIMINA_VREND_SCISSOR_FIX=1` | announces itself | no cure; failing draws run with a correct box |
+| `LIMINA_VREND_TRANSFER_FORCE_SYNC=1` | announces itself | **no cure** -- by its own documented semantics, host transfer ordering is not what produces this |
+| `ZINK_DEBUG=noreorder` / `norp` / both | `ps -E` | no cure |
+| `rtsample` incl. `RTS_VBO`, `RTS_TWICE` | self-tests | 256/256 clean on every arm |
+
+**Reading the geometry from the host is a closed avenue.** `glGetBufferSubData` on the bound
+attribute buffer killed the worker with SIGABRT; copying into a scratch buffer we own with
+`glCopyBufferSubData` first killed it too. Two methods, same signal 6.
+
+**Everything that synchronises cures.** A guest-side `glFlush` at the label draw, a full readback of
+the label offscreen, and -- discovered by accident -- a 512x512 `glReadPixels` of the glyph atlas
+*before* the draw, which cured 4/4 and had to be moved to episode end to keep the bug alive. This is
+consistent and it is also why no sync-based probe can localise further.
+
+**One control is NOT established.** `LIMINA_HOST_GALLIUM=llvmpipe` renders 6/6 cards correctly, twice
+over, but the vrend probe emitted **zero** lines in those runs -- the instrumented path never ran, so
+that arm cannot be read as "the same stack minus zink". It is recorded as unresolved, not as the
+layer control it was meant to be.
+
+### Inside KosmicKrisp: encoded, bound and scissored correctly, and still covering no pixels
+
+`KK_LIMINA_VP_LOG` reports, for render areas 64 rows or shorter, what actually reaches Metal. It
+exists because reading the geometry from the GL side is impossible -- two methods, two SIGABRTs --
+while this is all plain state, readable with no synchronisation, which is what made every GL probe
+either fatal or curative.
+
+- **The scissor is correct at the layer that matters.** `area 968x44 | scissor in 0,0 968x44 -> out
+  0,0 968x44`. The stale GL-side box never reaches Metal, so the one state difference that looked
+  compelling was a red herring in both directions: zink synthesises its own rect when the GL test is
+  disabled.
+- **The bindings are well formed and identical on every draw**: `vb0 range=2304 vb1 range=2292`, an
+  index buffer of 384 single-byte indices, `indexed=1 draws=1`.
+- **The failing draw reaches `kk_dispatch_draw`**, past the predicate path and the geometry unroll,
+  both of which bail out silently and would look exactly like a draw that rasterises nothing.
+
+So the draw is encoded, correctly bound, correctly scissored, correctly clipped -- and covers no
+pixels.
+
+### Every observable is identical between the pass that works and the pass that fails
+
+`KK_LIMINA_VP_LOG` was extended until there was nothing left to compare. Correlated against the
+vrend episode log in the shared worker log (`evidence/kk-both-passes-identical.log`):
+
+| dimension | working pass | failing pass |
+|---|---|---|
+| scissor reaching Metal | `968x44 -> 0,0 968x44` | same |
+| viewport reaching Metal | `0,44 968x-44` | same |
+| vertex / index bindings | `vb0 2304, vb1 2292, ib 384 x 1B, indexed` | same |
+| **vertex data itself** | `-51.2,14.5 -50.4,… idx 0 1 2` | **byte-identical** |
+| glyph atlas contents | `512x512 ink=23592` | **byte-identical** |
+| colour attachment | `0xa1ac85900` | **same Metal texture** |
+| reaches `kk_dispatch_draw` | yes | **yes** |
+| result | `ink=3152 samples=1` | `ink=0 samples=0` |
+
+The geometry is read through a debug-only GPU-address-to-CPU-pointer registry recorded at bo
+creation. Metal buffers are CPU-visible, so that read needs **no synchronisation** -- which is the
+whole point: both GL-side attempts to read the same bytes aborted the worker, and every GL read that
+did work cured the bug instead of measuring it.
+
+### Where this stands
+
+**The root cause is not established.** What is established is a precise, reproducible signature and a
+long list of things it is not.
+
+The "recycled vertex buffer" hypothesis is **refuted**: the vertex data is byte-identical at encode
+in both passes.
+
+## The two passes are not the same draw: the failing one runs a different shader
+
+The table above is **not** the whole state, and the conclusion once drawn from it -- "two identical
+Metal draws, different results" -- was wrong. It listed every dimension that had been *read*, and
+read no shader. The pipeline object was named as one of three candidates "past where fprintf can
+go"; it was in fact one `fprintf` away.
+
+Logging the bound pipeline and its provenance at the dispatch, over a run with two damaged cards:
+
+| | working render | failing render |
+|---|---|---|
+| vertex shader | `0xcbbdb9340` | `0xcbed00e00` |
+| fragment shader | `0xcbbdb9500` | `0xcbed00fc0` |
+| Metal render pipeline | `0xcbbf48000` | `0xcbed11c00` |
+| sample count | 1 | 1 |
+| colour format | 37 | 37 |
+| pipeline bound on the drawing encoder | yes | yes |
+
+**The repeat render binds a different shader pair, and the correlation with damage is exact**: in
+that run the one label attachment whose second render kept `0xcbbf48000` came out clean, and the two
+that switched to `0xcbed11c00` are the two fully damaged cards. Evidence:
+`evidence/failing-pass-uses-a-different-shader.log`.
+
+### The second pass is a different cogl pipeline, not a second attempt at the same one
+
+Dumping the NIR that goes *into* `nir_to_msl`, keyed by the same `kk_shader` pointer as the MSL,
+together with the `vk_vertex_input_state` each was compiled against
+(`KK_LIMINA_SHADER_DUMP=<dir>` writes both):
+
+| | working pass | failing pass |
+|---|---|---|
+| attr 0 | `106` R32G32B32_SFLOAT — **vec3 position** | `103` R32G32_SFLOAT — **vec2 position** |
+| attr 1 | `37` R8G8B8A8_UNORM — packed colour | `109` R32G32B32A32_SFLOAT — float4 colour |
+| attr 2 | `103` R32G32_SFLOAT | `103` R32G32_SFLOAT |
+| binding strides | 32 / 32 / 32 | **16 / 0 / 16** |
+| vertex fetch in NIR | `32x3 %76 = load_constant_agx` | `32x2 %76 = load_constant_agx` |
+
+The input NIR differs by 491 lines, so **the divergence is not KK's code generation** -- KK is handed
+different shaders compiled against different vertex layouts. These are two different cogl pipelines,
+and the baked topology class is a *consequence* of that, not the cause.
+
+**This reframes the fault.** It was never one draw behaving two ways. A label offscreen is rendered
+by one pipeline (vec3 position, packed colour, stride 32) and then rendered *again* by a different
+one (vec2 position, float4 colour, stride 16, plus a stride-0 binding, i.e. a constant attribute) --
+and that second pass produces no ink. Since a pass start clears, the second pass **wipes the good
+content** rather than merely failing to add to it.
+
+That retroactively explains `KK_LIMINA_FORCE_LOAD`, recorded above as "preserves stale pixels, not a
+cure". It is not a stale-pixel artefact: forcing LOAD stops the second pass clearing, so the
+*correct* content from the first pass survives. The arm was measuring the real mechanism and was
+mis-read at the time.
+
+### Both pipelines named from cogl's source, and what the failing one is
+
+The two vertex layouts identify their call sites exactly, with no guest instrumentation needed:
+
+- **The working pipeline is the cogl journal** (`cogl/cogl/cogl-journal.c`): `cogl_position_in` as
+  2-or-3 floats ("3 when doing software transforms") plus `cogl_color_in` as **4 unsigned bytes**,
+  interleaved at a layer-dependent stride. That is the batched-rectangle path -- the card
+  background.
+- **The failing pipeline is the text itself** (`clutter/clutter/pango/clutter-pango-display-list.c`):
+  `CoglVertexP2T2 { float x, y, s, t }`, i.e. vec2 position at offset 0 and vec2 texcoord at
+  offset 8, stride **16**, with colour supplied by the pipeline rather than per-vertex -- which is
+  the stride-0 binding. Drawn as `COGL_VERTICES_MODE_TRIANGLES` with cached rectangle indices.
+
+So the symptom is not "a second pass wipes the text". **The failing draw *is* the glyph draw**, and
+it rasterises nothing -- which is precisely the reported symptom, background intact and text gone.
+The paragraph above claiming the second pass overwrites good content is superseded by this.
+
+### The load-bearing detail: the glyph VBO is cached and re-used
+
+```c
+if (node->d.texture.primitive == NULL)
+  { ...allocate the buffer, cogl_buffer_map(..., MAP_HINT_DISCARD), fill the quads... }
+cogl_primitive_draw (node->d.texture.primitive, fb, pipeline);
+```
+
+The source comment states the intent: *"if the text doesn't change from frame to frame the VBO can
+be re-used avoiding the repeated cost of validating the data and mapping it into the GPU."* The
+journal rebuilds its buffer every frame; the glyph path does not.
+
+That asymmetry lines up with every earlier observation:
+
+- **It rides a repaint, not first render** -- the first draw builds the buffer, later draws re-use it.
+- **Every synchronisation cures it** -- a flush or readback around the draw is exactly what would
+  make a missed or late buffer upload land in time.
+- **Software-2D is clean** -- it bypasses virgl entirely, so no buffer transfer is involved.
+
+**Hypothesis, still UNTESTED:** the cached glyph VBO's contents do not reliably reach the host
+across the virgl/vrend buffer-map path, so the re-used draw fetches stale or uninitialised vertices.
+
+The obvious arm does not work. `LIMINA_TEXT_NOCACHE=1` (built into the guest's
+`clutter-pango-display-list.c`, unrefs the primitive so it is rebuilt every draw) **SIGSEGVs the
+host worker** within a few notification posts, with zink logging `> 100 copy boxes detected`
+throughout. Rebuilding the primitive per draw churns a GL buffer object per glyph run, and vrend
+does not survive that rate. So the arm measures nothing about the text, and it is not simply "one
+line in the guest" -- a usable version must re-upload the *contents* of the existing buffer without
+recreating the object, which needs the vertex data retained on the node.
+
+### A concurrency fault on the same path, from the crash the failed arm produced
+
+The arm that crashed the worker left the most useful artifact of the day.
+`evidence/vrend-sync-vs-gpu-worker-segv.ips` shows **two threads inside the same zink/KosmicKrisp
+context at once**:
+
+    thread 19 "gpu worker" (faulting, SIGSEGV at 0x11e01d000 -- a page boundary)
+      Worker::process_queue -> create_fence -> vrend_renderer_create_fence
+        -> _mesa_fence_sync -> tc_flush -> _tc_sync -> tc_batch_execute
+          -> tc_call_draw_single -> zink_draw -> kk_draw
+
+    thread 27 "vrend-sync"
+      zink_fence_finish -> zink_screen_timeline_wait -> kk_timeline_wait
+
+Creating a fence on the gpu-worker thread forces a threaded-context sync, which **executes deferred
+draw calls on that thread**, while vrend's sync thread is independently inside zink waiting on a
+timeline semaphore. Mesa's threaded context and a zink context are not safe for that. The fault
+address is a page boundary, which is what reading past a buffer another thread has reallocated looks
+like.
+
+This is a real fault on exactly the path under investigation, and it fits the text bug's whole
+signature -- intermittency, every synchronisation curing it, and content that is stale rather than
+wrong. **It is not yet shown to be the same fault**: the crash needs the abnormal buffer churn of
+the no-cache arm to appear, and nothing yet ties it to a normal run.
+
+**Both ways of testing it by removing the concurrency are unusable**, and neither should be retried
+as stated:
+
+- `VIRGL_DISABLE_MT=1` clears `VIRGL_RENDERER_THREAD_SYNC` (we do set it, so the lever is live).
+  The guest boots and `org.gnome.Shell` reports `active` with load ~2, but **nothing is ever
+  presented** -- the window stays on the last boot-console frame. Removing the sync thread while
+  `ASYNC_FENCE_CB` is still enabled wedges the present path. A usable version has to drop both.
+- `LIMINA_TEXT_NOCACHE=1` crashes the host, as above.
+
+Note the trap in both: each *looks* like a clean result if you only score cards. A wedged compositor
+scores every post as NO BANNER, and a crashed worker scores a frozen surface as clean.
+
+Two supports for this hypothesis have since been withdrawn, and it now rests only on the
+cached-vs-rebuilt asymmetry between the two paths:
+
+- **The `nan` in the read-back vertex data is a probe artifact, not corruption.** The `geom` probe
+  prints four consecutive floats; under the journal layout those are `vec3 position` followed by a
+  **packed RGBA8 colour**, and a colour reinterpreted as a float is meaningless by construction. A
+  NaN there is expected and says nothing.
+- **"The Metal bytes were byte-identical between the two passes"** is equally void in the other
+  direction: the two passes use different buffers with different layouts, and the probe read both
+  under one assumed layout, so neither the match nor the NaN carries information. The probe needs a
+  per-pipeline layout before any geometry claim can be made from it.
+
+So the question is no longer "why does the same draw behave differently" -- it never was the same
+draw, nor even the same pipeline. It is now:
+
+1. **Why does a second render of the same label use a different program at all?** That decision is
+   made above KosmicKrisp, in zink or in the guest, and it is reachable by ordinary logging on both
+   sides.
+2. **Why does that program rasterise nothing?** `samples=0` with a sample count and colour format
+   identical to the working pipeline points at what the vertex stage computes, not at pass state.
+
+Note what made this findable: the shader identity costs nothing to read and needed no fence, while
+the whole preceding effort went into dimensions that were merely *easy to think of*. The lesson
+generalises -- **"identical in every dimension" is only ever a claim about the dimensions read**,
+and it should be written as a list of what was checked, never as a universal.
+
+## The Metal GPU capture: the fault will not be observed this way
+
+A triggered device-scope Metal capture was built to see what the GPU *did* rather than what was
+encoded (`KK_LIMINA_CAPTURE`, `spikes/notification-text-corruption/metal-capture.sh`). It works,
+and it closes the approach -- not by showing the fault, but by proving it cannot be reached here.
+
+**Apple's capture layer segfaults on this command stream whenever the window spans the failing
+pass: 2 of 2.** It dies inside `GPUToolsCapture`, called straight from our commit:
+
+    GTMTLSMCommandEncoder_processTraceFunc
+    GTResourceTrackerProcessFunction
+    -[CaptureMTL4CommandQueue _addRequestsToDownloadQueueForCommandBuffers:count:atIndex:]
+    -[CaptureMTL4CommandQueue _commitCommandBuffers:count:atIndex:]
+    -[CaptureMTL4CommandQueue commit:count:options:]
+    mtl_command_queue_commit            <- ours; a plain [q commit:cmds count:count options:opt]
+    kk_queue_submit
+
+`EXC_BAD_ACCESS ... at 0x8`, full report in `evidence/gputoolscapture-segv-on-commit.ips`. A window
+closed at the commit that carries the *first* render survives and writes a complete trace; one held
+open across the repeat render does not.
+
+**The Xcode-attached destination is closed too, for an unrelated reason: attaching a debugger to a
+running worker SIGKILLs it.** Twice, and the second time with `com.apple.security.get-task-allow`
+in the signature -- which a debugger does require, but which turns out not to be enough. A SIGKILL
+writes no crash report and the supervisor logs no panic, so the VM just disappears mid-session with
+nothing to read; recognising that signature is worth more than the attempt was. The untried variant
+is attaching *before* the VM is created, on the theory that it is live `hv_vm_*` state that cannot
+have its threads suspended. `LIMINA_SIGN_DEBUGGABLE=1` (`crates/limina-vmm/sign.sh`) exists for
+whoever tries it -- and note `xtask run` re-signs on every boot, so signing the worker debuggable by
+hand is silently undone seconds later.
+
+**Whether capture also *cures* the fault is undecided, and deliberately left so.** The one capture
+that completed -- a first-render window, worker alive at scoring -- gave a clean card, which at a
+~7% clean base rate is p≈0.07: suggestive, not a finding. The failing-pass shape cannot answer it
+at all, because the crash preempts the verdict: the worker dies inside that pass's commit, so the
+composite never presents and the probe reads a frozen surface still showing an earlier, good
+composite. **A run whose worker is dead at scoring time yields no clean/damaged verdict** -- two
+such runs were briefly recorded here as "clean" before that was caught, which is this rig's own
+"treat invariance as a broken oracle" trap in its purest form: three trials, ink identical to the
+byte, explained away as text determinism. `metal-capture.sh` now refuses to score a dead worker.
+
+Re-measuring the cure question buys nothing: if capture cures, the trace holds a working pass; if
+it does not, the tooling crashes before writing one. Either way the next tool is the same.
+
+One complete trace exists, of a **working** label pass, at
+`traces/WORKING-PASS-cap-85549-1/limina-vmm.gputrace` (357 MB, gitignored; its encoder is labelled
+`LIMINA 968x44 pass #1`, so it is searchable in Xcode's navigator). It shows nothing the encode-side
+table above does not already state, and there is no failing-pass trace to diff it against.
+
+**The remaining tool is a `limina-kk` bisect.** The signature is sharp enough that a good/bad
+boundary would name the change, and unlike every probe tried so far a bisect does not touch the
+timing of the run it measures.
+
+## Next
+
+Nothing above the host driver survives, and both remaining ways of watching the driver from inside
+it are now closed: every GL-side readback cures the fault, and so does a Metal capture.
+
+1. **What is the second draw meant to be?** It is a distinct cogl pipeline targeting the label's
+   offscreen right after the text lands. Identify it on the *guest* side -- a vec2-position,
+   float4-colour, stride-16 layout with one constant (stride-0) attribute is a small enough
+   fingerprint to name in cogl. Whether it is a legitimate draw that should be empty, or the text
+   draw arriving through the wrong pipeline, decides everything downstream.
+2. **Why does it rasterise nothing here, when the same guest GL renders correctly under llvmpipe?**
+   Compare what that pipeline is fed on both paths. The stride-0 binding is the first thing to
+   check: a constant vertex attribute is exactly the kind of thing a virgl/vrend round trip can
+   mistranslate. These are guest- and vrend-side questions; nothing further is owed by
+   KosmicKrisp, which faithfully compiles what it is given.
+2. **A bisect is NOT available.** It needs a known-good revision and there is no evidence this path
+   ever rendered these cards correctly -- so there is nothing to search toward. Do not start one
+   without first establishing a good end.
+2. **Instrument `kk_draw` further only with reads that cost nothing.** The Metal buffers are
+   CPU-visible, so the geometry, the atlas and the attachment were all read with no synchronisation
+   -- and all came back identical. Anything needing a fence belongs to the cured-it class.
+
+Old items, still open:
+
+1. **Find what the second render does differently.** It is the same 18 draws into the same target,
+   yet one lands and one does not. The next probe is inside that second pass: does the host see the
+   draws at all (count them in vrend), or does it see them and produce nothing? Those separate a
+   dropped submission from a pass that runs and writes nowhere.
+2. **Find which composite reaches the screen.** The stage samples the label repeatedly per card;
+   only one of those results is presented. A frame counter on the probe, correlated with the
+   presented scanout, says whether the presented frame is always an empty-sample one -- which is
+   what the damage rate implies but nothing yet proves.
+2. **Then ask why it is empty, given the guest issued the draws first.** The cheap discriminator is
+   identity: log the GL texture id attached to the 968x44 *render target* when the guest draws the
+   title, and compare it against the id the stage samples. Different ids means the content is being
+   written to one object and read from another -- an aliasing or reallocation fault, and a very
+   different fix from an ordering one.
+
+The instrumented mutter stays installed in the poke guest and every arm is one `glyph-arm.sh` call,
+so re-measuring any of this is cheap.
+
+## Traps this rig exists to avoid
+
+Each produced a confident, wrong reading.
+
+- **Verify an env change inside the target process, and verify the *renderer*, not just the env.**
+  `/etc/environment.d/` reaches an ssh session but **not** gnome-shell (the systemd *user* manager
+  persists across logins, so restarting gdm leaves the old environment). `glxinfo` over ssh then
+  reports `llvmpipe` for **its own process** while gnome-shell stays on virgl — both "arms" are the
+  same arm, which is exactly why the control matched. Read
+  `tr '\0' '\n' < /proc/<shell-pid>/environ`, reboot rather than restart gdm, and confirm the
+  renderer actually changed.
+- **A lever whose engagement cannot be observed is worse than no lever.** virglrenderer's own log
+  defaults to WARNING *and* its output does not reach the limina worker log at all, so the absence
+  of a `virgl_info` line proves nothing. `LIMINA_VREND_TRANSFER_FORCE_SYNC` announces itself on
+  stderr for this reason.
+- **A single leftover CRITICAL notification pins the banner slot forever.** GNOME never
+  auto-dismisses `-u critical`, so every later notification queues behind it and the probe measures
+  one stale card indefinitely — with entirely plausible, entirely constant ink. Flush the queue
+  first, never send critical. **Flush a wide id range**: ids climb through a long session, and a
+  too-low range silently leaves a resident card (e.g. GNOME's own "Support GNOME") owning the slot,
+  so the probe measures *that* card instead of the posted one.
+- **Liveness must be measured against a pre-send baseline, not sampled in the moment.** By probe
+  time the banner is already static, so nothing differs over a short window and the probe falls back
+  to whichever stale surface still holds an old card.
+- **The scanout is a rotating pool AND the pool is re-created over a VM's life** (183 → 255 → 260 in
+  one session). An id from a log line goes stale silently and every trial then reports *identical*
+  ink. Treat invariance as a broken oracle until proven otherwise.
+- **`IOSurfaceGetSeed` is not a liveness oracle here.** It advances for CPU lock-based writes, not
+  for the GPU writing the scanout blob. Diff actual content.
+- **`LIMINA_WINDOW_CAPTURE` is the wrong oracle for this guest path.** It fires once per 120
+  *presents*, and mutter here flushes the **same** framebuffer rather than swapping, so the counter
+  barely advances while the screen updates fine.
+- **GNOME withholds notification *banners* while its idle monitor says the user is away** — they go
+  straight to the tray, nothing repaints, and an unattended loop measures a frozen screen while
+  reporting healthy numbers. Defeat idle and *verify* it (`org.gnome.Mutter.IdleMonitor.GetIdletime`).
+  A host cursor warp does not reset it; a forwarded keystroke does.
+- **The overview silently turns damaged samples into clean ones.** The header strip is calibrated
+  against a banner on the plain desktop; in the Activities overview the banner sits lower and that
+  strip lands on the shell's search entry, whose ink scores as a present header. One Escape at
+  startup is not enough -- a run that re-enters the overview partway through becomes a stream of
+  false negatives, and one such run came back at 30% against a 29-77% baseline and briefly read as a
+  lead. `calib.sh` now leaves the overview before every post. **Confirm a suspicious arm against the
+  saved PNGs before believing it**: it was a full-frame capture, showing wallpaper and top bar, that
+  distinguished "the overview is up" from "the card lost its header".
+- **A constant notification string measures nothing after the first card.** cogl renders the glyphs
+  once and later cards reuse the cached texture. Vary the text every trial.
+- **Parse tool output by label, never by field position.** Adding two fields to the probe's output
+  silently shifted every column and reported healthy cards as damaged.
+- **`pkill -f <pattern>` over ssh matches its own shell's command line** and kills the rest of the
+  remote command. Bracket the pattern (`notify-loo[p]`).
+- **An arm that breaks rendering entirely exits 0 and looks like a completed run.** The
+  `VIRGL_DISABLE_MT` measurement scored 10/10 `NO BANNER` and returned exit code 0: the compositor
+  was alive (`org.gnome.Shell` `active`, load ~2) but never presented, so every post was correctly
+  discarded and nothing anywhere said "this arm is broken". The validity gate is what saved it --
+  without a gate this reads as 100% damage, and with only a title-strip score it reads as clean.
+  **Read the gate's discard count, not just the pass/fail line**: an all-discarded run is a broken
+  rig, never a measurement.
+- **The guest DRM plane's `fb=` id staying constant does not mean the compositor is idle** — on this
+  path mutter updates the same framebuffer in place.

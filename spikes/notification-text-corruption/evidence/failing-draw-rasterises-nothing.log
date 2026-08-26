@@ -1,0 +1,40 @@
+[LIMINA-INK] RENDER episode START tex=82 968x44
+[LIMINA-INK] DRAW mode=4 count=108 idx=1 inst=1 prog=3 fbo=10 vp=0,0,968x44 scissor=0[951,0,657x43] blend=1[1,303] cmask=1111 depth=0 stencil=0 cull=0 act=855f tex0=4
+[LIMINA-INK] RENDER episode END tex=82 draws=1 ink=3140 after_finish=3140 sum=e69b3de8 | source tex=4 512x512 ink=22442 | samples=1
+[LIMINA-INK] sample tex=82 968x44 ink=3140 after_finish=3140 sum=e69b3de8 -> drawing into 2560x1440
+[LIMINA-INK] RENDER episode START tex=82 968x44
+[LIMINA-INK] DRAW mode=4 count=108 idx=1 inst=1 prog=3 fbo=10 vp=0,0,968x44 scissor=0[0,40,2560x1400] blend=1[1,303] cmask=1111 depth=0 stencil=0 cull=0 act=855f tex0=4
+[LIMINA-INK] RENDER episode END tex=82 draws=1 ink=0 after_finish=0 sum=811c9dc5 | source tex=4 512x512 ink=22442 | samples=0
+[LIMINA-INK] sample tex=82 968x44 ink=0 after_finish=0 sum=811c9dc5 -> drawing into 2560x1440
+[LIMINA-INK] RENDER episode START tex=84 968x44
+[LIMINA-INK] DRAW mode=4 count=108 idx=1 inst=1 prog=3 fbo=10 vp=0,0,968x44 scissor=0[951,0,657x43] blend=1[1,303] cmask=1111 depth=0 stencil=0 cull=0 act=855f tex0=4
+[LIMINA-INK] RENDER episode END tex=84 draws=1 ink=3145 after_finish=3145 sum=074c5d84 | source tex=4 512x512 ink=22680 | samples=1
+[LIMINA-INK] sample tex=84 968x44 ink=3145 after_finish=3145 sum=074c5d84 -> drawing into 2560x1440
+[LIMINA-INK] RENDER episode START tex=84 968x44
+[LIMINA-INK] DRAW mode=4 count=108 idx=1 inst=1 prog=3 fbo=10 vp=0,0,968x44 scissor=0[0,40,2560x1400] blend=1[1,303] cmask=1111 depth=0 stencil=0 cull=0 act=855f tex0=4
+[LIMINA-INK] RENDER episode END tex=84 draws=1 ink=0 after_finish=0 sum=811c9dc5 | source tex=4 512x512 ink=22680 | samples=0
+[LIMINA-INK] sample tex=84 968x44 ink=0 after_finish=0 sum=811c9dc5 -> drawing into 2560x1440
+[LIMINA-INK] RENDER episode START tex=84 968x44
+[LIMINA-INK] DRAW mode=4 count=108 idx=1 inst=1 prog=3 fbo=10 vp=0,0,968x44 scissor=0[951,0,657x40] blend=1[1,303] cmask=1111 depth=0 stencil=0 cull=0 act=855f tex0=4
+[LIMINA-INK] RENDER episode END tex=84 draws=1 ink=3152 after_finish=3152 sum=ee68cd6e | source tex=4 512x512 ink=22921 | samples=1
+[LIMINA-INK] sample tex=84 968x44 ink=3152 after_finish=3152 sum=ee68cd6e -> drawing into 2560x1440
+[LIMINA-INK] RENDER episode START tex=84 968x44
+[LIMINA-INK] DRAW mode=4 count=108 idx=1 inst=1 prog=3 fbo=10 vp=0,0,968x44 scissor=0[0,40,2560x1400] blend=1[1,303] cmask=1111 depth=0 stencil=0 cull=0 act=855f tex0=4
+[LIMINA-INK] RENDER episode END tex=84 draws=1 ink=0 after_finish=0 sum=811c9dc5 | source tex=4 512x512 ink=22921 | samples=0
+[LIMINA-INK] sample tex=84 968x44 ink=0 after_finish=0 sum=811c9dc5 -> drawing into 2560x1440
+[LIMINA-INK] RENDER episode START tex=85 968x44
+[LIMINA-INK] DRAW mode=4 count=108 idx=1 inst=1 prog=3 fbo=10 vp=0,0,968x44 scissor=0[951,0,657x43] blend=1[1,303] cmask=1111 depth=0 stencil=0 cull=0 act=855f tex0=4
+[LIMINA-INK] RENDER episode END tex=85 draws=1 ink=3158 after_finish=3158 sum=d00580b0 | source tex=4 512x512 ink=23185 | samples=1
+[LIMINA-INK] sample tex=85 968x44 ink=3158 after_finish=3158 sum=d00580b0 -> drawing into 2560x1440
+[LIMINA-INK] RENDER episode START tex=85 968x44
+[LIMINA-INK] DRAW mode=4 count=108 idx=1 inst=1 prog=3 fbo=10 vp=0,0,968x44 scissor=0[0,40,2560x1400] blend=1[1,303] cmask=1111 depth=0 stencil=0 cull=0 act=855f tex0=4
+[LIMINA-INK] RENDER episode END tex=85 draws=1 ink=0 after_finish=0 sum=811c9dc5 | source tex=4 512x512 ink=23185 | samples=0
+[LIMINA-INK] sample tex=85 968x44 ink=0 after_finish=0 sum=811c9dc5 -> drawing into 2560x1440
+[LIMINA-INK] RENDER episode START tex=84 968x44
+[LIMINA-INK] DRAW mode=4 count=108 idx=1 inst=1 prog=3 fbo=10 vp=0,0,968x44 scissor=0[951,0,657x43] blend=1[1,303] cmask=1111 depth=0 stencil=0 cull=0 act=855f tex0=4
+[LIMINA-INK] RENDER episode END tex=84 draws=1 ink=3185 after_finish=3185 sum=ecdcf03f | source tex=4 512x512 ink=23470 | samples=1
+[LIMINA-INK] sample tex=84 968x44 ink=3185 after_finish=3185 sum=ecdcf03f -> drawing into 2560x1440
+[LIMINA-INK] RENDER episode START tex=84 968x44
+[LIMINA-INK] DRAW mode=4 count=108 idx=1 inst=1 prog=3 fbo=10 vp=0,0,968x44 scissor=0[0,40,2560x1400] blend=1[1,303] cmask=1111 depth=0 stencil=0 cull=0 act=855f tex0=4
+[LIMINA-INK] RENDER episode END tex=84 draws=1 ink=0 after_finish=0 sum=811c9dc5 | source tex=4 512x512 ink=23470 | samples=0
+[LIMINA-INK] sample tex=84 968x44 ink=0 after_finish=0 sum=811c9dc5 -> drawing into 2560x1440
