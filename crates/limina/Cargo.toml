@@ -71,6 +71,8 @@ objc2-foundation = { version = "0.3", features = [
     "NSUserDefaults",
     "NSDictionary",
     "NSValue",
+    # The grab's screen-capture gate: the CG window list, read through its NSArray bridge.
+    "NSArray",
 ] }
 objc2-app-kit = { version = "0.3", features = [
     "NSApplication",
@@ -109,6 +111,8 @@ objc2-app-kit = { version = "0.3", features = [
     "NSPasteboard",
     # VM window menu (M9.4): Show in Finder.
     "NSWorkspace",
+    # The grab's screen-capture gate: find the screenshot UI by bundle id (`capture_tap.rs`).
+    "NSRunningApplication",
     # Configure sheet "?" help: clicking the button shows the explanation in a
     # transient popover (hover shows the same text as a fast tooltip).
     "NSPopover",
@@ -148,6 +152,9 @@ objc2-core-graphics = { version = "0.3", features = [
     "CGBitmapContext",
     # M9.4 felt-resume overlay: the dim-scrim layer color.
     "CGColor",
+    # The grab's screen-capture gate: the on-screen window list, to tell a live screenshot
+    # session from its process merely still being alive (`capture_tap.rs`).
+    "CGWindow",
 ] }
 # Diagnostic: dump the rendered layer to a PNG (LIMINA_WINDOW_CAPTURE) without screen-record.
 png = { workspace = true }

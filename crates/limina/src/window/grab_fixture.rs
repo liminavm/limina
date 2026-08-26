@@ -219,7 +219,8 @@ fn the_hidden_seam_trace_replays_to_a_release_through_the_seam() {
                 };
                 // The recording is a pointer over guest content throughout — the episode is
                 // about the grab, not about macOS chrome.
-                let out = free_step(&mut st, &s, || true);
+                // No screenshot UI in the recording, as in every recorded episode so far.
+                let out = free_step(&mut st, &s, || true, || false);
                 // The latch's whole lifecycle — holding inside, ending by leaving — replays
                 // exactly ([EDGE] prints it after the step).
                 assert_eq!(st.user_released(), *latched, "latched at t={t}");

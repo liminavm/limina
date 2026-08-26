@@ -618,13 +618,25 @@ pub(crate) struct FreeOutcome {
 /// actually clicking. It is about the WINDOW, not the picture — the two differ by the letterbox,
 /// and that difference is a third case the click path keeps separate.
 ///
+/// `capture_live` answers "is macOS running an interactive screen-capture session" — the
+/// crosshair of Cmd-Shift-4 and its relatives. It is the same shape of question as `menu_open`
+/// and needs its own answer for the same reason: the screenshot overlay takes the click at the
+/// event layer without covering anything, so `on_guest` reports the guest's own window and every
+/// arm below would read a click meant for the crosshair as an ask for the guest. Injected and
+/// deferred like the hit test, because it costs a window-list round trip.
+///
 /// The re-grab hysteresis is the load-bearing part: the pointer must come a real margin back
 /// *inside* the content and stay there, with no button down, before the grab retakes it. On a single
 /// display a released cursor cannot leave the window at all — fullscreen *is* the screen, and the
 /// window server pins it to the top row, which is still window territory — so re-grabbing on mere
 /// containment would take the pointer back on the first inward jitter. That is the likeliest way
 /// this design ships worse than what it replaces.
-pub(crate) fn free_step(st: &mut GrabState, s: &Free, on_guest: impl Fn() -> bool) -> FreeOutcome {
+pub(crate) fn free_step(
+    st: &mut GrabState,
+    s: &Free,
+    on_guest: impl Fn() -> bool,
+    capture_live: impl Fn() -> bool,
+) -> FreeOutcome {
     // `space_visible` joins the ownership test rather than sitting beside it: a pointer moving over
     // a Space we are not on is not ours by any reading, so it owes us neither a grab nor an ask —
     // and the reset below is what stops the dwell it spent there from being banked for our return.
@@ -665,6 +677,13 @@ pub(crate) fn free_step(st: &mut GrabState, s: &Free, on_guest: impl Fn() -> boo
         // perfectly honestly (dogfood 2026-08-22 — the chrome revealed, a menu open, and the
         // grab taken by the click that closed it).
         if s.menu_open {
+            return out;
+        }
+        // A click during a screen-capture session is the screenshot tool's, by the same logic
+        // and with a sharper penalty: taking it consumes the drag and the mouse-up the selection
+        // needs, and takes the keyboard with them, so Esc cannot cancel what the click started.
+        // Like the menu case this says nothing about the guest — no grab, and no latch either.
+        if capture_live() {
             return out;
         }
         if !on_guest() {
@@ -712,10 +731,16 @@ pub(crate) fn free_step(st: &mut GrabState, s: &Free, on_guest: impl Fn() -> boo
     // Taking the grab makes the chrome ask moot, so the reveal retracts — while the menu stays
     // open, stranded above a guest that now owns the pointer, leaving the user to ungrab before
     // they can dismiss it: "the reveal drops when I move down a bit" (dogfood 2026-08-22).
+    //
+    // `capture_live` is the same rule again, and last of all because it is the dearest question
+    // asked here: a crosshair resting over the guest is a stationary pointer deep inside the
+    // content like any other, and the dwell would take it — cursor hidden, screenshot session
+    // stranded — without the user having clicked anything at all.
     if !st.user_released
         && !s.menu_open
         && fit::may_regrab(s.pos, s.fit, out.inside_for, s.buttons_down)
         && on_guest()
+        && !capture_live()
     {
         st.hold();
         out.grab = true;
@@ -889,6 +914,13 @@ pub(crate) fn press_step(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The three-argument `free_step` the cases below were written against: no screen-capture
+    /// session, which is the state every one of them is about. The session cases call
+    /// [`super::free_step`] directly with the fourth argument.
+    fn free_step(st: &mut GrabState, s: &Free, on_guest: impl Fn() -> bool) -> FreeOutcome {
+        super::free_step(st, s, on_guest, || false)
+    }
 
     fn screen() -> fit::FitRect {
         // The dogfood Mac's built-in panel, fullscreen: the content IS the screen.
@@ -1141,6 +1173,56 @@ mod tests {
         assert!(!out.left_guest);
         // The very next click, with the menu gone, is the real ask.
         assert!(free_step(&mut st, &click((700.0, 400.0), t0), || true).grab);
+    }
+
+    /// A screen-capture session (Cmd-Shift-4 and friends) owns the click, and the grab stays out.
+    ///
+    /// Dogfood 2026-08-26: with the crosshair up, clicking to drag a region out of the guest's
+    /// picture took the pointer instead — and from that moment the tap consumed the drag and the
+    /// mouse-up, so the selection could never finish and letting go to cancel was the only exit.
+    /// Esc could not cancel it either, because the grab had already taken the keyboard.
+    ///
+    /// `on_guest` cannot catch this, and the trace says so in as many words: with the overlay
+    /// live the window server answered `hit=2486 guestwindows=[2486] guest=true` — the guest's
+    /// own window, honestly, because the overlay intercepts at the event layer rather than by
+    /// covering anything. Only a session flag can.
+    #[test]
+    fn a_click_during_a_screen_capture_session_is_not_an_ask_for_the_grab() {
+        let mut st = GrabState::default();
+        let t0 = Instant::now();
+        let out = super::free_step(&mut st, &click((700.0, 400.0), t0), || true, || true);
+        assert!(!out.grab, "the screenshot tool's click is not ours to take");
+        assert!(!st.holding());
+        // …and it is not the user leaving for macOS either — exactly as for an open menu.
+        assert!(!st.user_released());
+        assert!(!out.left_guest);
+        // The next click, with the session over, is the ordinary ask.
+        assert!(free_step(&mut st, &click((700.0, 400.0), t0), || true).grab);
+    }
+
+    /// The dwell stands down for the same reason.
+    ///
+    /// Not what dogfood reported — there the Ctrl-Opt release that freed the pointer to reach
+    /// Cmd-Shift-4 had latched, so the dwell was already out of the running and the click arm
+    /// alone fired. It is gated anyway: the crosshair resting over the guest satisfies the
+    /// margin and the dwell like any other stationary pointer, and any path that reaches a
+    /// capture session with the latch clear would have the pointer taken from under the
+    /// crosshair without a click at all.
+    #[test]
+    fn the_dwell_does_not_take_the_pointer_during_a_screen_capture_session() {
+        let mut st = GrabState::default();
+        let t0 = Instant::now();
+        let deep = (700.0, 400.0);
+        let dwelt = t0 + fit::REGRAB_DWELL + Duration::from_millis(50);
+        super::free_step(&mut st, &free(deep, t0), || true, || true);
+        let out = super::free_step(&mut st, &free(deep, dwelt), || true, || true);
+        assert!(
+            !out.grab,
+            "the crosshair is the user's, not a dwell over the guest"
+        );
+        assert!(!st.holding());
+        // The dwell survives the session: the moment it ends, the pointer is the guest's again.
+        assert!(free_step(&mut st, &free(deep, dwelt), || true).grab);
     }
 
     #[test]

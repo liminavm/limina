@@ -32,9 +32,13 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Arc;
 
 use objc2::rc::Retained;
-use objc2_app_kit::{NSEvent, NSView};
-use objc2_core_graphics::CGEvent;
-use objc2_foundation::NSPoint;
+use objc2::runtime::AnyObject;
+use objc2_app_kit::{NSEvent, NSRunningApplication, NSView};
+use objc2_core_foundation::CFArray;
+use objc2_core_graphics::{
+    kCGWindowOwnerPID, CGEvent, CGWindowListCopyWindowInfo, CGWindowListOption,
+};
+use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSPoint, NSString};
 
 use limina_input::auxkey::{
     decode_aux_data1, nx_key_bucket, nx_key_to_linux, route_aux_event_key, AuxBucket, GrabMode,
@@ -761,6 +765,55 @@ pub(crate) fn menu_open() -> bool {
     MENU_OPEN.load(Ordering::Acquire)
 }
 
+/// The bundle that puts up the interactive screenshot UI — the Cmd-Shift-4 crosshair, the
+/// Cmd-Shift-5 panel, Screenshot.app. Its windows are owned by "Screenshot" and its executable
+/// is `screencaptureui`, so neither name finds it reliably; the bundle id is the identity.
+const SCREENSHOT_UI_BUNDLE: &str = "com.apple.screencaptureui";
+
+/// Whether macOS is running an interactive screen-capture session right now.
+///
+/// The grab needs this for the same reason it needs [`MENU_OPEN`]: the click belongs to macOS,
+/// and no hit test can say so. The screenshot overlay intercepts at the *event* layer rather
+/// than by covering anything, so with the crosshair live the window server still answers our own
+/// window for a point over the guest's picture (measured 2026-08-26: `[HITTEST] hit=2486
+/// guestwindows=[2486] guest=true`). Taking the grab there consumes the drag and the mouse-up,
+/// so the selection can never finish — and the keyboard goes with it, so Esc cannot cancel
+/// either. That is how one stolen click left a capture session live for three unbroken minutes.
+///
+/// Two stages, cheap first:
+///
+///   1. **Is the screenshot UI running at all.** A Launch Services lookup, and the answer is no
+///      almost always: each session starts a fresh process (measured pids 76248 then 77373 over
+///      two sessions) and it exits when the session is done with it.
+///   2. **Does it have a window on screen.** The process outlives the session's end by a moment,
+///      so being alive is not the session; the overlay window appearing and disappearing with
+///      the crosshair is (`added=[2634] … owner=Screenshot layer=24`, gone again on Esc). This
+///      is the verdict, and it costs a window-list query — which is why nothing spends it until
+///      the policy has a reason to (a click, or a dwell that already earned the re-grab),
+///      exactly like the hit test beside it.
+fn screen_capture_session_live() -> bool {
+    let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(
+        SCREENSHOT_UI_BUNDLE,
+    ));
+    if apps.is_empty() {
+        return false;
+    }
+    let pids: Vec<i32> = apps.iter().map(|a| a.processIdentifier()).collect();
+    let Some(list) = CGWindowListCopyWindowInfo(CGWindowListOption::OptionOnScreenOnly, 0) else {
+        return false;
+    };
+    // The window list is a CFArray of CFDictionary, toll-free bridged to their NS counterparts.
+    let windows: &NSArray<NSDictionary<NSString, AnyObject>> = unsafe {
+        &*(&*list as *const CFArray as *const NSArray<NSDictionary<NSString, AnyObject>>)
+    };
+    let key: &NSString = unsafe { &*(kCGWindowOwnerPID as *const _ as *const NSString) };
+    windows.iter().any(|w| {
+        w.objectForKey(key)
+            .and_then(|v| v.downcast::<NSNumber>().ok())
+            .is_some_and(|n| pids.contains(&n.as_i32()))
+    })
+}
+
 thread_local! {
     /// A failed install's context, kept so [`retry_install`] can re-attempt the tap when
     /// Accessibility is granted mid-run. Main-thread only (like everything else here).
@@ -858,12 +911,33 @@ fn uncaptured_edges(
         hit_window.set(Some(t.hit));
         t.ours
     };
-    let out = ctx.with_grab(|st| grab_policy::free_step(st, &sample, on_guest));
-    // A click on the guest's own picture that did not take the grab was intercepted by whatever
-    // macOS has in front — a menu, a dialog, the revealed chrome. Naming the window is the
-    // difference between "clicking stopped working" and a diagnosis, so say it at info rather
-    // than only under the trace.
-    if click && !out.grab && hit_slot.is_some() && super::fit::point_in_fit(cur.0, cur.1, fit) {
+    // The capture-session query, on the same deferral and memoized the same way — the policy
+    // may ask it from either arm, and one event must not spend two window-list round trips.
+    let capture_seen = std::cell::Cell::new(None::<bool>);
+    let capture_live = || {
+        let live = capture_seen
+            .get()
+            .unwrap_or_else(screen_capture_session_live);
+        capture_seen.set(Some(live));
+        live
+    };
+    let out = ctx.with_grab(|st| grab_policy::free_step(st, &sample, on_guest, capture_live));
+    // A click the screenshot UI owns is not a window in front of the guest — the hit test
+    // answers our own window for it — so it needs its own line, or the message below would
+    // name the guest as the thing that intercepted the click.
+    if click && !out.grab && capture_seen.get() == Some(true) {
+        log::info!(
+            "pointer capture: a screen-capture session is live — the click is macOS's and the grab stands down"
+        );
+    } else if click
+        && !out.grab
+        && hit_slot.is_some()
+        && super::fit::point_in_fit(cur.0, cur.1, fit)
+    {
+        // A click on the guest's own picture that did not take the grab was intercepted by
+        // whatever macOS has in front — a menu, a dialog, the revealed chrome. Naming the window
+        // is the difference between "clicking stopped working" and a diagnosis, so say it at
+        // info rather than only under the trace.
         log::info!(
             "pointer capture: the click on slot {} was taken by window {} in front of the guest — the grab stands down",
             hit_slot.map(|s| s as i64).unwrap_or(-1),
@@ -878,7 +952,8 @@ fn uncaptured_edges(
         // preceding [EDGE] line's own fields spell out.
         eprintln!(
             "[CLICK] t={:.1} loc=({:.1},{:.1}) cur=({:.1},{:.1}) slot={hit_slot:?} \
-             in_fit={} fs_key={} space={} enabled={} grab={} stood_down={} latched={}",
+             in_fit={} fs_key={} space={} enabled={} grab={} stood_down={} latched={} \
+             capture={:?}",
             trace_ms(),
             loc.x,
             loc.y,
@@ -891,6 +966,8 @@ fn uncaptured_edges(
             out.grab,
             out.left_guest,
             ctx.input.grab_state().user_released(),
+            // `None` when nothing asked — the click was decided before the question arose.
+            capture_seen.get(),
         );
     }
 
