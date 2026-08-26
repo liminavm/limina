@@ -975,6 +975,329 @@ table above does not already state, and there is no failing-pass trace to diff i
 boundary would name the change, and unlike every probe tried so far a bisect does not touch the
 timing of the run it measures.
 
+## The host-side mimic: the failing pipeline reproduced, the fault not
+
+`glyphmimic.c` builds the failing episode out of every property measured above, at once, and runs
+it with no compositor and no toolkit -- in the guest on virgl, and natively on the host on
+zink-on-KosmicKrisp. The point of the host leg is Metal tracing: Apple's capture layer segfaults
+on the VM's command stream (below), so a host process that reproduces is the only route to a
+capture.
+
+Built maximal rather than incremental, because `rtsample.c` established that walking one
+ingredient at a time returns clean on every arm. One 968x44 offscreen per episode, rendered by two
+passes with the two different measured pipelines, composited by a stage in between and after:
+
+| | pass 1 -- cogl journal | pass 2 -- clutter display list |
+| --- | --- | --- |
+| attribute formats | `106` / `37` / `103` | `103` / `109` / `103` |
+| binding strides | 32 / 32 / 32 | **16 / 0 / 16** |
+| geometry | 18 quads | 64 quads, 256 verts, 384 uint8 indices |
+
+The stride-0 binding is produced the way cogl produces it: a vertex attribute whose **array is
+disabled**, its value supplied by `glVertexAttrib4f`. Mesa lowers a disabled array's current value
+to a zero-stride vertex buffer. A stride-0 `glVertexAttribPointer` is a different thing (GL stride
+0 means tightly packed) and a uniform is a different pipeline; either substitution builds a
+vehicle that cannot reproduce.
+
+**Both gates pass, so the numbers below are worth something.** The pipeline gate:
+`KK_LIMINA_SHADER_DUMP` shows the mimic compiling to exactly the two tables above -- the fingerprint
+is reproduced at the level KK sees, not merely in the source. The oracle gate: `GM_NODRAW`, which
+omits the glyph draw, scores `text-lost=90` with `samples=0` on all 90 -- the real case's exact
+signature -- so a clean verdict is a real observation and not a detector that never fires.
+
+**Every host arm is clean: 3600 episodes, zero losses.**
+
+The arm names in the two tables below (`GM_PAD`, `GM_ATLASUP`, `GM_ONCE`, `GM_NOCACHE`,
+`GM_REUPLOAD`, `GM_POOL`) are **retired** and no longer exist in `glyphmimic.c`. They were
+additive guesses at what to put around the draw; the faithful rebuild subsumes all of them, and
+its arms are subtractive instead. The results stand as evidence -- none of these provoked the
+fault -- but do not try to run them.
+
+| arm | host (zink-on-KK), 90 episodes |
+| --- | --- |
+| baseline (x3) | 90/90 clean |
+| `GM_PAD` 1 / 4 / 16 / 64 / 256 -- filler draws between the passes | 90/90 clean |
+| `GM_ATLASUP` -- atlas written between composite and glyph pass | 90/90 clean |
+| `GM_ATLASUP` + `GM_PAD` | 90/90 clean |
+| `GM_PRESENT`, `GM_U16`, `GM_NOCACHE`, `GM_ONCE`, `GM_NOSTRIDE0` | 90/90 clean |
+| `GM_FINISH`, `GM_FLUSH` | 90/90 clean |
+| 40 repeats of `GM_ATLASUP GM_PAD=8` | 0 non-clean of 40 (3600 episodes) |
+
+**The guest leg is clean too.** Same source, built in the guest against its own EGL/GLES so the
+stream reaching vrend is guest mesa's, renderer reported as `virgl (zink Vulkan 1.4(Apple M1 Max
+(MESA_KOSMICKRISP)))` -- i.e. the full guest-virgl -> vrend -> zink -> KK path the real case uses.
+The positive control was re-proven on this platform first (`text-lost=90`, `samples=0` on all 90),
+because the host proof does not transfer to a different readback path.
+
+| arm | guest (virgl), 90 episodes |
+| --- | --- |
+| baseline | 90/90 clean |
+| `GM_PAD` 8 / 64 | 90/90 clean |
+| `GM_ATLASUP`, `GM_ATLASUP`+`GM_PAD` | 90/90 clean |
+| `GM_PRESENT`, `GM_U16`, `GM_NOCACHE`, `GM_ONCE`, `GM_NOSTRIDE0` | 90/90 clean |
+| `GM_FINISH`, `GM_FLUSH` | 90/90 clean |
+| 40 repeats of `GM_ATLASUP GM_PAD=8` | 0 non-clean of 40 |
+
+**Both legs clean, so the reading is the third one: the fingerprint is incomplete.** Not "vrend's
+emission is the trigger" -- that branch required the guest to fail while the host stayed clean, and
+it did not. Every property we knew how to name about the failing draw is now reproduced, verified at
+the pipeline level, on both routes into the convicted component, and none of it provokes the fault.
+What provokes it is therefore something we have not yet named, and no further guessed arm on this
+vehicle can find it.
+
+That is the point to stop guessing and measure. The next step is not a new ingredient: it is to
+instrument **vrend**, which we own, to record the actual GL call stream it emits at a failing
+episode, and replay that stream on the host. The existing `LIMINA_VREND_*` levers are all
+behavioural toggles; none of them records what vrend emits, so the dump has to be added. Until then
+the vehicle's value is as a fast, gated negative control and as the eventual regression test.
+
+**This does not exonerate zink or KK, and must not be read that way.** The locus is not in
+question -- the host-implementation split above convicted zink/KosmicKrisp with everything from the
+guest driver down through vrend held constant. What this vehicle probes is the **trigger**: which
+input provokes the fault. A clean host run says the GL *this file writes by hand* does not provoke
+it, which is a statement about the input, not about the implementation.
+
+That distinction is what makes the guest leg informative rather than redundant. The same source
+reaches zink/KK by two different routes, and in the real case the GL is not hand-written at all --
+vrend emits it from the guest's virgl commands, with its own state setting, buffer orphaning and
+bind pattern. So `guest reproduces + host clean` localises the trigger to vrend's emission, and
+`both clean` says the fingerprint is incomplete on either route. Until one leg fails this is an
+unproven mimic.
+
+Two gaps are already known and are the first things to close if the guest leg is also clean:
+
+- **Incidence was session-unstable in the real case** -- 8/10 in one session and 0/32 in another on
+  the same build, with the card's identity controlling it. That is consistent with dependence on
+  accumulated process state a fresh 90-episode process may never reach.
+- **The real host side runs two KosmicKrisp devices in one process** -- venus/vkr for the guest and
+  zink-on-KK serving vrend's GL. A single-device mimic structurally cannot reproduce a fault that
+  lives in the interaction between them. That is the next hypothesis if both legs come back clean,
+  and it is not reachable by adding more single-process arms. The poly-heap SIGSEGV above is a
+  standing reminder that the two-device shape is real and has already bitten once.
+
+Run the legs with `mimic-host.sh` (which carries the host KK/zink env; a bare run aborts in GPU
+init) and `mimic-build.sh` in the guest. Both gates are documented at the top of `mimic-host.sh`
+and must be re-run per platform -- the oracle was proven on zink-on-KK, and virgl is a different
+readback path.
+
+## The vrend command tracer: what vrend is actually asked to do
+
+Both mimic legs came back clean, so the fingerprint is incomplete and the way forward is to stop
+naming ingredients and record the real thing. `LIMINA_VREND_TRACE=<MB>` (virglrenderer `limina`,
+`src/vrend/vrend_trace.[ch]`) arms a preallocated ring that captures the whole stream; a dump is
+requested with `echo x > /tmp/limina-vrend-trace.fifo` and decoded by
+`vrend-trace-decode.py`.
+
+**It buffers in memory and writes only on request, and that is the load-bearing design choice.**
+A bare `glFlush` cures this fault, so it sits at a submission boundary; a tracer emitting a line
+per command would move the boundary it is trying to observe. The hot path does an
+allocation-free, syscall-free append.
+
+Hooked in three places, because the command stream alone does not contain the interesting work:
+
+| hook | why it is not enough to hook the decode loop |
+| --- | --- |
+| decode loop, full payload per command | the baseline; payloads kept whole so the stream stays replayable |
+| `vrend_renderer_transfer_iov` | transfers never enter the command stream -- and this is the glyph-atlas upload path, i.e. the write-then-sample shape under suspicion |
+| `vrend_renderer_create_fence` + per-fence retire | libkrun fences through the **ctx0** path; hooking the decode layer's fence entry recorded **zero** fences and read as "this session takes no fences" |
+
+Draws carry the bound target's size unconditionally, so the 968x44 label stays findable after its
+create has aged out of the window.
+
+A first capture of the live desktop, as a smoke test of the instrument:
+
+```
+records: CMD 13197, DRAW_FB 1453, FENCE 398, RETIRE 398, TRANSFER 160, SUBMIT 119
+draw targets: 4102x70 (panel), 4102x230, 2560x1440 (stage), 204x44, 250x250, ...
+```
+
+**Two bugs the instrument had, and how they were caught -- both are the reason to distrust a
+tracer until it is gated.** Records do not all arrive on one thread: fences retire on vrend's
+poll thread, and the unlocked first version produced a trace with **one sequence number claimed
+by two records**. Nothing about the trace looked wrong; only counting distinct seqs against the
+record count exposed it. The decoder now runs that check on every load and says so, because a
+trace that silently invents or tears records would corrupt every conclusion drawn from it. The
+second: a dump requested while the guest was idle never happened, because only the render thread
+serviced the request at a submit -- indistinguishable from a broken tracer. The FIFO thread now
+dumps directly.
+
+`evicted` in the dump header is the count of records that aged out. It is not a curiosity: the
+ring is a window, and a nonzero value means the capture no longer reaches back to the episode of
+interest. Size the ring for the session and fire the dump promptly after damage is seen.
+
+## The first trace of a damaged session: the glyph draw's vertex buffer is uploaded 0.08 ms before it
+
+Captured with the tracer above during a session damaged **9/9** (`calib.sh`, title ink 0 and header
+ink 0 on every valid post, body ink ~845 proving a banner was really on screen). The window spans
+875 s with **0 evicted**, so the whole session is in it, and the integrity gate passes.
+
+**The card is not one offscreen, it is many.** Per posted notification the guest renders a fixed
+set of small targets and then composites them into the stage:
+
+```
+568x44   <- the GLYPH-shaped draw: 3 bindings, strides (16, 16, 0)
+968x44   journal shape, strides (32, 32, 32) at offsets 0 / 12 / 16
+110x38   134x44   38x38   82x82   98x98      then 2560x1440 (the stage), many draws
+```
+
+Each of these is rendered **twice** per post, and the whole set repeats.
+
+**Which draw is the text is now measured, not inferred.** Searching the trace for the constant
+(zero-stride) colour attribute finds `(16, 16, 0)` exactly **20 times in 10 posts** -- twice per
+post, and nowhere else in the session. Every one of them targets **568x44**. The 968x44 draws use
+the journal layout. Earlier work here treated 968x44 as the failing title draw; at least on this
+vehicle and card, the glyph-shaped draw is the 568x44 one, and it is worth re-reading the older
+sections with that in mind.
+
+**The finding: the glyph draw's vertex buffer arrives by transfer, immediately before the draw.**
+Every glyph draw is preceded by a `TRANSFER` of exactly **2432 dwords** into the very resource it
+then binds as its vertex buffer, and in 9 of 10 posts both passes reuse the *same* resource, which
+is re-uploaded each time.
+
+| | upload -> draw (median) | range | fences between |
+| --- | --- | --- | --- |
+| 1st pass | 0.22 ms | 0.18 - 2.70 | 0 |
+| 2nd pass | **0.08 ms** | 0.07 - 0.31 | 0 |
+
+The second pass -- the one already established to produce nothing -- draws from a vertex buffer
+uploaded roughly **three times closer** to the draw, with no fence in between on either.
+
+**What this does and does not establish.** It is the first *observable difference* between the pass
+that lands and the pass that fails: the section above concluded "every observable is identical",
+and that conclusion was reached without any visibility into transfers, which do not appear in the
+command stream at all. It also matches the host probe's finding that the vertex buffer the GPU
+fetches is all-zero -- a buffer whose upload has not landed looks exactly like that. But it is a
+**correlation over ten episodes**, not a demonstrated race, and both intervals are small.
+
+**The obvious next arm is a weak test, and that is worth saying before someone runs it.**
+`LIMINA_VREND_TRANSFER_FORCE_SYNC=1` would very likely turn the damage off -- but *every*
+synchronisation tried on this bug has, so a cure there discriminates nothing. What would
+discriminate is comparing the bytes the transfer delivered against the geometry the draw actually
+fetched, which needs the transfer payload recorded (the tracer currently keeps the box, not the
+data) and a matching read at the draw. That is the next instrument, not the next arm.
+
+## Tracing the mimic against the real thing: the measured gap list
+
+Both streams captured with the same instrument, gnome-shell's during a 9/9-damaged session and
+the mimic's from the same host, then separated by **virgl context id** (different processes get
+different contexts -- separating them by sequence window instead gives wrong answers, and did
+once here).
+
+| property | gnome-shell, damaged | matched by the mimic? |
+| --- | --- | --- |
+| glyph draw target | 568x44 | yes |
+| card composition | 568x44, 968x44, 110x38, 134x44, 38x38 siblings, one draw each per frame, composited into 2560x1440 | yes |
+| frames per card | exactly 2, 13-36 ms apart, then abandoned | yes |
+| depth attachment | D24S8 (`S8_UINT_Z24_UNORM`), fresh surface per frame | yes |
+| colour attachment | fresh surface per frame over a persistent texture | yes |
+| constant colour attribute | stride 0, separate long-lived buffer, offset +16 per frame | yes, unbuilt -- mesa lowers it there |
+| index buffer | long-lived, uint8, offset 0, never re-uploaded | yes |
+| draw | 228 indices, TRIANGLES, indexed, 1 instance | yes |
+| upload size | 2432 bytes = exactly the draw's 152 vertices | yes |
+| upload -> draw | median 0.18 ms | 0.66 ms |
+| submit batches between upload and draw | 0 on 36 of 36 | 0 on 59% |
+
+**The last two rows are the only ones still open, and neither is load-bearing.** In the real case
+the vertex upload and the draw that consumes it are *always* in the same virgl command batch, and
+a submission boundary is the one thing already known to cure this fault -- so a vehicle that
+inserts the cure between the two operations under test cannot reproduce, whatever else it gets
+right. That was worth chasing, and it was chased to the end: an arm was built in which **every
+one of 200 draws had zero submit batches between its upload and itself**, the shell's exact
+invariant. It is clean. The sharpest structural candidate this trace can name is matched and
+exonerated.
+
+Reaching that invariant at all requires a **per-frame flush**. Without one, virgl accumulates many
+frames into a single batch and emits all of their transfers at its head, hundreds of milliseconds
+from the draws that read them. Two other things must stay out of the window between upload and
+draw or they split it themselves: `glCheckFramebufferStatus` (a round trip -- check the FBO once,
+not per frame) and any readback.
+
+A trap worth naming from these measurements: the ring outlives a process and **virgl context ids
+are reused**, so a later run's records sit in the same ctx as an earlier one's. Analysing "ctx 8"
+as though it were one run silently mixes arms; window by time or by sequence range within the
+context, and never confuse `glBufferSubData` (writes in place, as the shell does) with
+`glBufferData` (orphans and mints a fresh resource -- a third behaviour that is nobody's).
+
+Two claims from earlier sections need reading in this light. "Every observable is identical
+between the pass that works and the pass that fails" was reached with no visibility into
+transfers, which never enter the command stream; the passes differ in upload-to-draw distance
+(0.08 ms failing vs 0.22 ms landing). That difference is probably **not** causal -- a 5 ms sleep
+in the same place was already measured to cure nothing -- so latency is not the active ingredient.
+
+**What this branch establishes, and where it stops.** The trigger is not any single property of
+the glyph draw. Every property the trace could name was reproduced, one at a time and then all at
+once, and none of them provoked it.
+
+## The faithful mimic: the stream matched field-for-field, and still nothing breaks
+
+The gap list above was closed by extracting the failing draw's exact state from the trace rather
+than inferring it, and rebuilding the mimic's episode around it. Four ingredients had been wrong
+or missing, and two of them were invisible until the decoder printed them:
+
+- **A D24S8 depth-stencil attachment on every offscreen** (`SET_FRAMEBUFFER_STATE` carries a
+  nonzero zsurf whose surface is `VIRGL_FORMAT_S8_UINT_Z24_UNORM`). Metal has no 24-bit depth, so
+  KosmicKrisp emulates this format. "D24S8 emulation" is one of the five exonerations from the run
+  of pixel-identical A/B results -- i.e. it had never actually been under test. The mimic had no
+  depth buffer at all.
+- **A fresh surface object per paint over persistent textures.** Both attachment surfaces are
+  newly created for each frame and wrap the same two resources. In GL terms: a new FBO every
+  frame, the textures kept.
+- **A card is a set of sibling offscreens** -- 568x44 title, 968x44, 110x38, 134x44, 38x38 -- each
+  drawn *once* per frame and composited into the 2560x1440 stage, not one label drawn twice.
+- **A card lives exactly two frames.** Ten cards, twenty glyph draws, two per colour resource,
+  13-36 ms apart, then the resources are abandoned.
+
+Two earlier readings were wrong and are corrected here. The failing draw is **228 indices = 38
+quads = 152 vertices**, so uint8 indices never approach their 255 ceiling: that ceiling is not a
+property of this bug, it was an artifact of a 64-quad choice made before the trace existed. And a
+virgl buffer transfer's extent is in **bytes**, not dwords -- confirmed by the mimic reporting back
+exactly the byte count it uploaded -- so the shell's 2432 is 152 vertices at stride 16, *exactly*
+the draw's data with no slack, not a buffer four times the size of its draw.
+
+With all of it assembled the two streams are indistinguishable at the draw-state level: same
+target, fresh colour and depth surfaces over persistent resources, the stride-0 constant attribute
+fed from a separate long-lived buffer at an offset advancing 16 bytes per frame, a long-lived
+uint8 index buffer at offset 0, 228 indices, the same GL framebuffer across both frames, and a
+2432-byte upload. The one ingredient that never needed building was that separate-resource
+constant attribute: mesa's current-value lowering already produced it.
+
+**Verdict: no arm ever loses the text** -- twelve arms and forty repetitions, on the host and in
+the guest. (`GM_COMPOSITES=0` scores BLANK rather than clean: with nothing composited there is
+nothing to read back. That is the oracle being removed, not a cure.) while the same session lost the title on **16 of 16 real cards** posted immediately
+before and immediately after the run. That pairing is what makes this negative worth something --
+incidence is session-unstable, so a clean mimic in a quiet session proves nothing, while a clean
+mimic beside a 16/16-damaging real card is the strongest result this vehicle can produce.
+
+The subtractive arms (`GM_NODEPTH`, `GM_FRAMES`, `GM_WIDE`, `GM_COMPOSITES`, `GM_GAP_MS`,
+`GM_NOSTRIDE0`, `GM_U16`, `GM_FINISH`, `GM_FLUSH`, `GM_PRESENT`) exist for the case where the
+faithful arm *does* reproduce: each removes one measured ingredient, so the reproduction can be
+minimised by finding which removal cures it. Building the other direction -- adding one property
+at a time to a stripped mimic -- never provoked anything and is not worth repeating.
+
+One residual difference is measured and is *not* the blocker: the shell holds zero submit
+boundaries between an upload and the draw consuming it on 36 of 36 draws, while the mimic reaches
+that on 59% (median distance 0.66 ms against the shell's 0.18). The exoneration is *internal to
+the faithful arm* and that is what makes it count: **881 of its 1485 draws held the shell's exact
+zero-boundary invariant, and every one of them was clean**. So the invariant is cleared in
+combination with every other measured ingredient, not in isolation -- an earlier arm that matched
+it on a mimic with no depth buffer, no siblings and no fresh FBOs would have proved nothing, by
+this spike's own rule. Reaching it at all needs a
+per-frame flush: without one, virgl accumulates many frames into a single batch and emits all
+their transfers at its head, hundreds of milliseconds from the draws.
+
+**This mimicking branch is closed.** Two exits remain, both named before this round and neither
+reachable by building a guest program that draws like the shell:
+
+1. **Replay the captured stream through vrend on the host.** The tracer already records full
+   command payloads for this purpose; what it does not yet record is transfer *contents*.
+2. **The two-device hypothesis.** The worker hosts two KosmicKrisp devices -- venus/vkr and
+   zink-on-KK -- and a single-process mimic cannot reach a fault in their interaction.
+
+A side observation from the faithful arm, unrelated to the text but worth having: the fresh-FBO
+and depth-texture churn makes KosmicKrisp's allocator pool grow without bound
+(`[LIMINA-ALLOC-POOL] class 0 grew to 301 allocators (budget 4 MiB) -- in-flight depth is
+outrunning completion`). It does not affect the verdict here.
+
 ## Next
 
 Nothing above the host driver survives, and both remaining ways of watching the driver from inside
@@ -1019,6 +1342,19 @@ so re-measuring any of this is cheap.
 ## Traps this rig exists to avoid
 
 Each produced a confident, wrong reading.
+
+- **A shader dump taken twice is a PARTIAL dump the second time.** `KK_LIMINA_SHADER_DUMP` fires on
+  compile, so a re-run serves the pipelines from zink's on-disk shader cache and writes only the
+  tables it happened to recompile -- silently. The first `glyphmimic` gate run emitted three vertex
+  shaders; the next emitted one, and the glyph pipeline's table, the one the gate exists to check,
+  was simply absent. Read that way it says "the failing pass is gone". Always pass
+  `MESA_SHADER_CACHE_DISABLE=true` with the dump lever, and count the tables you expect.
+
+- **A vehicle that never fails may be a vehicle that cannot fail.** Every `glyphmimic` arm returning
+  90/90 clean is only evidence because `GM_NODRAW` -- the same code with the glyph draw omitted --
+  returns `text-lost=90` with `samples=0` on all 90. Without that positive control, an ink detector
+  that always fires and a genuine cure print the identical verdict. Prove the oracle can say the bad
+  thing, per platform, before believing the good thing.
 
 - **The worker log's `scanout 0 -> IOSurfaces` line goes stale, and nothing says so.** A gdm restart
   mints a fresh scanout pool without emitting a new line, so the newest line in the log still names
