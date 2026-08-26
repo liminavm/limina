@@ -153,7 +153,7 @@ pub fn request_force_stop() {
 fn install_signal_handlers() -> Result<()> {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = on_signal as usize;
+        sa.sa_sigaction = on_signal as *const () as usize;
         libc::sigemptyset(&mut sa.sa_mask);
         sa.sa_flags = libc::SA_RESTART;
         if libc::sigaction(libc::SIGINT, &sa, std::ptr::null_mut()) != 0
@@ -169,7 +169,7 @@ fn install_signal_handlers() -> Result<()> {
         // control); a handler overrides that. The supervisor runs in its own process group with no
         // controlling terminal, so SIGTSTP only ever arrives from `limina suspend` relaying it.
         let mut sus: libc::sigaction = std::mem::zeroed();
-        sus.sa_sigaction = on_suspend as usize;
+        sus.sa_sigaction = on_suspend as *const () as usize;
         libc::sigemptyset(&mut sus.sa_mask);
         sus.sa_flags = libc::SA_RESTART;
         if libc::sigaction(libc::SIGTSTP, &sus, std::ptr::null_mut()) != 0 {

@@ -2198,7 +2198,7 @@ pub fn run(
                                     t0.elapsed(),
                                     shown_cap
                                 );
-                            } else if n % 512 == 0 {
+                            } else if n.is_multiple_of(512) {
                                 log::trace!(
                                     "window: off-glass ack gate n={n}, last wait {:?}",
                                     t0.elapsed()

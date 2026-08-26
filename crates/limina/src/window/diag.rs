@@ -85,7 +85,9 @@ pub(crate) fn capture_iosurface(surface: &IOSurfaceRef, id: u32, path: &str) {
                     Ok(()) => {
                         // Report a coarse luminance sum so the log alone tells black vs content.
                         let nonzero = rgba
-                            .chunks_exact(4)
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
                             .filter(|p| p[0] | p[1] | p[2] != 0)
                             .count();
                         log::info!(

@@ -1462,7 +1462,7 @@ impl CapturedFrame {
     /// (uniform) frame yields 1; rendered text/graphics yields many.
     pub fn distinct_colors(&self) -> usize {
         let mut set = std::collections::HashSet::new();
-        for px in self.rgba.chunks_exact(4) {
+        for px in self.rgba.as_chunks::<4>().0 {
             set.insert([px[0], px[1], px[2], px[3]]);
         }
         set.len()
@@ -1472,7 +1472,7 @@ impl CapturedFrame {
     pub fn dominant_color(&self) -> ([u8; 4], f64) {
         let mut counts = std::collections::HashMap::new();
         let total = (self.rgba.len() / 4).max(1);
-        for px in self.rgba.chunks_exact(4) {
+        for px in self.rgba.as_chunks::<4>().0 {
             *counts.entry([px[0], px[1], px[2], px[3]]).or_insert(0u64) += 1;
         }
         counts

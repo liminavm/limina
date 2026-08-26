@@ -316,7 +316,12 @@ fn swizzle_to_rgba(format: ResourceFormat, src: &[u8], dst: &mut [u8]) {
         ResourceFormat::ABGR => (3, 2, 1, Some(0)),
         ResourceFormat::XBGR => (3, 2, 1, None),
     };
-    for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+    for (s, d) in src
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(dst.as_chunks_mut::<4>().0.iter_mut())
+    {
         d[0] = s[r];
         d[1] = s[g];
         d[2] = s[b];

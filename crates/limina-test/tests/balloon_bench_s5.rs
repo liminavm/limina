@@ -126,7 +126,7 @@ fn run_point(run: &BenchRun, chatty: bool) -> String {
             host_samples.push(s);
         }
         tick += 1;
-        if tick % 5 == 0 {
+        if tick.is_multiple_of(5) {
             if let Some(r) = real_report(&guest) {
                 let _ = conn.send(&Message::MemPressure(r));
             }

@@ -449,7 +449,12 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         // Swizzle the cursor pixels into BGRA, PRESERVING alpha (unlike the scanout path,
         // which forces opaque): the cursor image is mostly transparent surround.
         let mut canvas = vec![0u8; need];
-        for (dst, src) in canvas.chunks_exact_mut(4).zip(buffer.chunks_exact(4)) {
+        for (dst, src) in canvas
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(buffer.as_chunks::<4>().0)
+        {
             dst.copy_from_slice(&to_bgra_keep_alpha(format, src));
         }
         copy_canvas_into_surface(&surface, &canvas, width, height);

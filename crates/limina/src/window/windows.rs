@@ -635,7 +635,7 @@ impl PrimaryDisplay {
         // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
         // long-running headless check ends with a recent frame, not just early boot.
         self.applies.set(self.applies.get() + 1);
-        if self.applies.get() % 120 == 0 {
+        if self.applies.get().is_multiple_of(120) {
             if let Some(path) = &self.capture_path {
                 super::diag::capture_iosurface(surface, id, path);
             }
@@ -643,7 +643,7 @@ impl PrimaryDisplay {
         // Targeted per-id sweep — look each requested global id up fresh (no cache) and
         // dump it, so we can read the venus blob surface directly even when it isn't the
         // presented one.
-        if !self.capture_ids.is_empty() && self.applies.get() % 30 == 0 {
+        if !self.capture_ids.is_empty() && self.applies.get().is_multiple_of(30) {
             if let Some(base) = &self.capture_path {
                 for &cid in &self.capture_ids {
                     if let Some(s) = IOSurfaceLookup(cid) {

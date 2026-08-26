@@ -51,7 +51,7 @@ pub fn install() -> Result<EventFd> {
 
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = handle_sigtstp as usize;
+        sa.sa_sigaction = handle_sigtstp as *const () as usize;
         libc::sigemptyset(&mut sa.sa_mask);
         sa.sa_flags = libc::SA_RESTART;
         if libc::sigaction(libc::SIGTSTP, &sa, std::ptr::null_mut()) != 0 {

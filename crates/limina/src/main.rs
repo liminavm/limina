@@ -2025,8 +2025,7 @@ fn parse_disk(spec: &str) -> Result<DiskOpt> {
     let mut rest = spec;
     let mut read_only = false;
     let mut create = None;
-    loop {
-        let Some(colon) = rest.rfind(':') else { break };
+    while let Some(colon) = rest.rfind(':') {
         let token = &rest[colon + 1..];
         if token == "ro" {
             anyhow::ensure!(!read_only, "--disk {spec:?}: ':ro' given twice");

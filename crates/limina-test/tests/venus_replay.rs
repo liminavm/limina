@@ -126,13 +126,20 @@ fn compare_snapshot_dirs(venus_dir: &Path, ref_dir: &Path, min_frames: usize) {
             load_png_rgb(&ref_dir.join(name)).expect("decoding reference frame (set mismatch?)");
         assert_eq!((vw, vh), (rw, rh), "frame {name}: size mismatch");
 
-        if reference.chunks_exact(3).any(|p| p.iter().any(|&c| c > 32)) {
+        if reference
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .any(|p| p.iter().any(|&c| c > 32))
+        {
             reference_has_content = true;
         }
 
         let bad = venus
-            .chunks_exact(3)
-            .zip(reference.chunks_exact(3))
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(reference.as_chunks::<3>().0)
             .filter(|(a, b)| {
                 a.iter()
                     .zip(b.iter())
@@ -174,7 +181,9 @@ fn load_png_rgb(path: &Path) -> anyhow::Result<(u32, u32, Vec<u8>)> {
     let rgb = match info.color_type {
         png::ColorType::Rgb => buf,
         png::ColorType::Rgba => buf
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[1], p[2]])
             .collect(),
         other => anyhow::bail!("unexpected PNG color type {other:?} in {path:?}"),

@@ -735,8 +735,7 @@ pub fn counter_delta(
     let at = |t: u64| {
         samples
             .iter()
-            .filter(|s| s.ts_ms <= t)
-            .next_back()
+            .rfind(|s| s.ts_ms <= t)
             .or(samples.first())
             .map(&field)
             .unwrap_or(0)

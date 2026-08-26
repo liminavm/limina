@@ -217,7 +217,9 @@ pub fn decode(msg_type: u32, data: &[u8], selection: bool) -> Result<AgentMessag
             }
             let request = u32at(data, 0) != 0;
             let caps = data[4..]
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
                 .collect();
             Ok(AgentMessage::AnnounceCapabilities { request, caps })
@@ -225,7 +227,9 @@ pub fn decode(msg_type: u32, data: &[u8], selection: bool) -> Result<AgentMessag
         msg_type::CLIPBOARD_GRAB => {
             let (sel, rest) = split_selection(data, selection)?;
             let types = rest
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
                 .collect();
             Ok(AgentMessage::ClipboardGrab {

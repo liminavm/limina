@@ -70,7 +70,7 @@ fn tick_total(window: &str, name: &str) -> (i64, usize) {
 /// the content.
 fn color_diversity(frame: &limina_test::CapturedFrame) -> usize {
     let mut seen = std::collections::HashSet::new();
-    for px in frame.rgba.chunks_exact(4).step_by(4) {
+    for px in frame.rgba.as_chunks::<4>().0.iter().step_by(4) {
         let key = ((px[0] as u16 >> 4) << 8) | ((px[1] as u16 >> 4) << 4) | (px[2] as u16 >> 4);
         seen.insert(key);
     }

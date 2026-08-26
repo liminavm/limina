@@ -165,7 +165,7 @@ const SCALE_CANDIDATES: [(u32, u32); 13] = [
 pub(crate) fn offerable_scales(w: u32, h: u32) -> u32 {
     SCALE_CANDIDATES
         .iter()
-        .filter(|(a, b)| (w * b) % a == 0 && (h * b) % a == 0)
+        .filter(|(a, b)| (w * b).is_multiple_of(*a) && (h * b).is_multiple_of(*a))
         .count() as u32
 }
 

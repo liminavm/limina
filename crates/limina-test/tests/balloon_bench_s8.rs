@@ -183,7 +183,7 @@ fn s8_desktop_steady_state() {
             None => holds.push((e.decision.clone(), 1)),
         }
     }
-    holds.sort_by(|a, b| b.1.cmp(&a.1));
+    holds.sort_by_key(|h| std::cmp::Reverse(h.1));
     let holds_json: Vec<String> = holds
         .iter()
         .map(|(d, n)| format!("{{\"{d}\":{n}}}"))
