@@ -1630,6 +1630,60 @@ journal draws at stride 32; what executes for them is the body's pipeline, which
 The shader-dump aliasing that would have explained all of this away was tested and does not exist:
 the dump path carries a compile counter, and no shader is compiled twice.
 
+### THE FIX: force the pipeline lookup when vertex elements change and vertex input is static
+
+`zink_draw.cpp` decides whether to look the pipeline up at all -- and so whether
+`CmdBindPipeline` is reached -- from a fixed set of flags: `gfx_pipeline_state.dirty`, the
+renderpass state, `gfx_dirty`, `dirty_gfx_stages`, the primitive mode, and batch changes.
+A vertex-element rebind sets **none** of them. It sets `ctx->vertex_state_changed`, which on
+this path is consumed by nothing: it exists for `CmdSetVertexInputEXT`, which only the
+`ZINK_DYNAMIC_VERTEX_INPUT*` paths reach. KosmicKrisp lands on `ZINK_DYNAMIC_STATE3`.
+
+Logging the whole gate rather than its verdict shows it directly -- 24 title draws, split
+exactly in half, with the vertex state changed at every single one:
+
+```
+gate=1  dirty=1 rp=1 gfx_dirty=0 stages=0x0 prim=0 batch=0 vtx_changed=1   x12   first paint
+gate=0  dirty=0 rp=0 gfx_dirty=0 stages=0x0 prim=0 batch=0 vtx_changed=1   x12   repaint
+```
+
+The first paint of each card is rescued by unrelated dirt (`dirty`/`rp`), not by anything
+noticing the layout change. On the repaint nothing is dirty, the lookup is skipped, and the
+draw inherits its predecessor's compiled vertex layout.
+
+The fix adds the missing term, compile-time gated so the dynamic paths pay nothing:
+
+```c
+const bool vi_is_static = DYNAMIC_STATE != ZINK_DYNAMIC_VERTEX_INPUT &&
+                          DYNAMIC_STATE != ZINK_DYNAMIC_VERTEX_INPUT2;
+... || (vi_is_static && ctx->vertex_state_changed) ? update_gfx_pipeline<...>(...) : false;
+```
+
+Placed at the gate rather than in `zink_bind_vertex_elements_state`, because three separate
+sites set `vertex_state_changed` (elements bind, enabled-mask change, and `zink_context.c:1447`)
+and the gate covers all of them without one being missed later.
+
+Measured on the recorded stream, replayed with no VM and no compositor:
+
+| | titles inking | card 1 body ink | other bodies |
+|---|---|---|---|
+| before | **1** of 12 | 2313 | 4668 each |
+| after | **12** of 12 | 4668 | 4668 each |
+
+Pixel-verified, not counted: `evidence/replay-title-fixed-res353.png` is the card that was
+blank, now reading "Critical Updates 002" -- the same string llvmpipe produced from this trace.
+Card 1's body is clean text again.
+
+Upstream fork commit `b836c280506` on `limina-kk`. It is upstreamable as-is: the defect is
+generic zink, not a KosmicKrisp workaround, and it hits every driver without
+`EXT_vertex_input_dynamic_state` given an application that alternates two vertex layouts.
+
+**Adding `EXT_vertex_input_dynamic_state` to KosmicKrisp is not an alternative to this fix.**
+Metal compiles the vertex descriptor into the pipeline state object, so KK could only implement
+the extension by caching pipeline variants keyed on vertex input -- what zink already does, moved
+one layer down, buying no capability. It would also mask the bug rather than fix it. Worth
+considering separately as a pipeline-permutation reduction; worth checking against MTL4 first.
+
 ## Next
 
 The fault reproduces in a single-process host program with no VM, no compositor and no guest,
