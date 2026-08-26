@@ -2724,6 +2724,27 @@ impl Guest {
         Ok(outcome)
     }
 
+    /// Tear down a guest that **cannot power itself off** — one still in firmware/GRUB, or a
+    /// stock image with neither `limina-agent` nor a reachable `qemu-guest-agent`. limina
+    /// deliberately never kills such a guest on a timer (an ordinary stop is a request and
+    /// nothing more), so asking politely would just burn `timeout` and come back `forced`.
+    ///
+    /// This asks the way a user would: the **force** path (two stop signals, as
+    /// `limina stop --force` sends). The supervisor still does its own clean teardown, so a
+    /// `forced: true` outcome from here means the *supervisor* is wedged — which keeps that
+    /// flag meaningful as an oracle instead of merely restating what the guest cannot do.
+    pub fn force_shutdown(mut self, timeout: Duration) -> Result<Outcome> {
+        // `terminate` sends the second one, which is what makes the pair a force. The gap is
+        // load-bearing: standard signals do not queue, so two SIGTERMs sent back to back
+        // collapse into one delivery and the supervisor's counter never reaches 2 — the same
+        // trap `vmlib::runtime::signal_stop` re-delivers around.
+        unsafe {
+            libc::kill(self.pid, libc::SIGTERM);
+        }
+        std::thread::sleep(Duration::from_millis(250));
+        self.terminate(timeout)
+    }
+
     /// Wait for the supervisor (and thus the VM) to exit **on its own** — for guests that
     /// self-terminate, e.g. one that powers itself off. Sends no signal while waiting, so the
     /// returned [`Outcome`] reflects how the guest ended (clean power-off → `code: Some(0)`; a

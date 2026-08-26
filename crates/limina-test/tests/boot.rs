@@ -56,11 +56,12 @@ fn fedora_stock_image_boots_to_bootloader() {
     assert_console_has(&guest.console(), &["UEFI firmware", "GRUB"])
         .expect("expected boot markers");
 
-    // Clean teardown. Stock Fedora ignores the GPIO power button, so the supervisor will
-    // force-kill the worker after its (short, test-configured) grace — that's expected
-    // and still a clean stop. We just require the supervisor itself exits.
+    // Clean teardown. This guest is still in GRUB: there is no kernel, no agent, and nothing
+    // that could act on the GPIO power button, and limina never kills a guest on a timer — so
+    // stopping it is the user's `--force`, not a polite request. What we still require is that
+    // the supervisor's own teardown works, which is what `forced` reports below.
     let outcome = guest
-        .shutdown(Duration::from_secs(20))
+        .force_shutdown(Duration::from_secs(20))
         .expect("supervisor did not stop");
     eprintln!("teardown outcome: {outcome:?}");
     assert!(

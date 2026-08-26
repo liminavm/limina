@@ -98,10 +98,16 @@ impl VmStatus {
     }
 }
 
-/// Ask a running supervisor to stop. One SIGTERM runs the graceful ladder
-/// (control-plane SHUTDOWN → GPIO power button → SIGKILL after the grace);
-/// `force` sends a second SIGTERM, which the supervisor treats as "skip the
-/// remaining grace, kill now".
+/// Ask a running supervisor to stop. One SIGTERM runs the graceful ladder (control-plane
+/// SHUTDOWN → GPIO power button → the stock guest agent → wait); `force` sends a **second**
+/// SIGTERM, which the supervisor treats as "kill now" — the only thing that ends a guest which
+/// ignores every rung.
+///
+/// The second signal must be *counted*, and standard signals do not queue: two SIGTERMs sent
+/// back to back while one is still pending collapse into a single delivery, leaving the
+/// supervisor's counter at 1 and silently turning a `--force` into an ordinary stop. So force
+/// re-delivers on a short cadence until the supervisor is gone (or we run out of patience),
+/// which also covers a supervisor busy enough to still be in the first handler.
 pub fn signal_stop(pid: i32, force: bool) -> Result<()> {
     anyhow::ensure!(pid > 0, "refusing to signal pid {pid}");
     let deliver = || -> Result<()> {
@@ -114,7 +120,14 @@ pub fn signal_stop(pid: i32, force: bool) -> Result<()> {
     };
     deliver()?;
     if force {
-        deliver()?;
+        for _ in 0..5 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            // Gone already (or reaped by its parent): nothing left to force.
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                return Ok(());
+            }
+            deliver()?;
+        }
     }
     Ok(())
 }

@@ -178,12 +178,14 @@ fn managed_vm_lifecycle_create_start_stop_rm() {
         "flock fail-fast took {elapsed:?}"
     );
 
-    // --- stop: SIGTERM ladder via the pidfile. The guest sits in GRUB/early boot and
-    // ignores the power button, so this exercises the bounded escalation (agent grace
-    // + the 3s shutdown grace + SIGKILL) and must still exit promptly.
+    // --- stop: the stop path via the pidfile, releasing the run lock and updating the
+    // recorded state. `--force` because the guest sits in GRUB — no kernel, no agent,
+    // nothing that could act on the power button — and an ordinary `limina stop` is a
+    // *request*: it waits on a guest that ignores it rather than killing it (the ladder
+    // itself is the subject of `l1_stop_never_kills`, not of this lifecycle test).
     run_ok(
-        limina_cmd(&cfg.limina_bin, &scratch).args(["stop", "vmdef-test"]),
-        "limina stop",
+        limina_cmd(&cfg.limina_bin, &scratch).args(["stop", "--force", "vmdef-test"]),
+        "limina stop --force",
     );
     let mut child = child;
     let deadline = Instant::now() + Duration::from_secs(15);
