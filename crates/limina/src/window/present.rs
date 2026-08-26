@@ -101,6 +101,19 @@ pub struct SurfaceStore {
     /// asked. The guest presents a missing id at 60 Hz, so without this every frame would put a
     /// request on the wire while the first one is still in flight.
     pending_resurface: std::collections::HashMap<u32, std::time::Instant>,
+    /// The surface each slot's CURRENT cursor image lives in, as named by the worker's `cursor`
+    /// control line. **Never evicted, and never dropped on a release.**
+    ///
+    /// A cursor surface is republished only when the guest changes shape, which it may not do
+    /// for minutes — so unlike a scanout, losing one is not a frame skipped but a pointer that
+    /// is simply gone until the user happens to hover something that changes it (dogfood
+    /// 2026-08-26: no pointer from boot+12 s, unhealable by grab, workspace or click).
+    ///
+    /// The release guard is not belt-and-braces: the worker never releases a cursor surface, it
+    /// only replaces one. A release naming the current cursor id therefore describes a surface
+    /// that is not ours — an IOSurface id is reusable the moment its surface dies, and the
+    /// release path carries the id the guest's resource was created with.
+    cursors: [Option<u32>; MAX_SCANOUTS],
 }
 
 /// Why an id left the store. See [`SurfaceStore::gone`].
@@ -149,6 +162,7 @@ impl SurfaceStore {
             gone: VecDeque::new(),
             pinned: VecDeque::new(),
             pending_resurface: std::collections::HashMap::new(),
+            cursors: [None; MAX_SCANOUTS],
         }
     }
 
@@ -166,17 +180,19 @@ impl SurfaceStore {
         }
     }
 
-    /// Evict oldest-first until the cap is met, **skipping ids the guest is presenting**. Those
-    /// are moved to the back rather than dropped: they are the hot set, and evicting one freezes
-    /// the display for it. If everything left is pinned we stop and go over the cap — a bounded
-    /// overshoot (`PINNED_CAP` entries) is strictly better than a frozen screen.
+    /// Evict oldest-first until the cap is met, **skipping ids the guest is presenting** and the
+    /// slots' current cursor images ([`Self::cursors`] — a cursor is republished only on a shape
+    /// change, so evicting one leaves the pointer gone, not one frame skipped). Those are moved
+    /// to the back rather than dropped: they are the hot set, and evicting one freezes the
+    /// display for it. If everything left is protected we stop and go over the cap — a bounded
+    /// overshoot (`PINNED_CAP` + one cursor per slot) is strictly better than a frozen screen.
     fn evict_to_cap(&mut self) {
         let mut skipped = 0usize;
         while self.order.len() > self.cap && skipped < self.order.len() {
             let Some(old) = self.order.pop_front() else {
                 break;
             };
-            if self.pinned.contains(&old) {
+            if self.pinned.contains(&old) || self.is_cursor(old) {
                 self.order.push_back(old);
                 skipped += 1;
                 continue;
@@ -233,6 +249,19 @@ impl SurfaceStore {
         }
     }
 
+    /// `slot`'s cursor image now lives in `id` — the worker just published it. Protects the
+    /// surface from eviction and from a release naming a recycled id; see [`Self::cursors`].
+    pub(crate) fn pin_cursor(&mut self, slot: usize, id: u32) {
+        if let Some(c) = self.cursors.get_mut(slot) {
+            *c = Some(id);
+        }
+    }
+
+    /// Is `id` some slot's current cursor image?
+    fn is_cursor(&self, id: u32) -> bool {
+        self.cursors.contains(&Some(id))
+    }
+
     /// Record why an id left, for the failed-resolve diagnostic.
     fn note_gone(&mut self, id: u32, reason: GoneReason) {
         if self.gone.len() == GONE_HISTORY_CAP {
@@ -257,6 +286,18 @@ impl SurfaceStore {
     /// from under the window. And the guest will not present it again, so no later resolve can
     /// miss because of this.
     pub(crate) fn note_released(&mut self, id: u32) {
+        // A release naming a slot's CURRENT cursor cannot be about that surface: the worker
+        // replaces cursor surfaces, it never releases one. What it does release is the IOSurface
+        // a guest resource was created with — an id that is reusable the moment that surface
+        // dies, and may by then belong to our cursor. Acting on it drops the pointer for as long
+        // as the guest keeps the same shape. See [`Self::cursors`].
+        if self.is_cursor(id) {
+            log::warn!(
+                "surface store: ignoring a release for {id} — it is a slot's current cursor \
+                 image, which the worker never releases, so this release names a recycled id"
+            );
+            return;
+        }
         let was_held = self.map.contains_key(&id);
         self.remove(id);
         self.released.push(id);
@@ -309,6 +350,7 @@ impl SurfaceStore {
     pub(crate) fn clear(&mut self) {
         self.map.clear();
         self.order.clear();
+        self.cursors = [None; MAX_SCANOUTS];
     }
 
     /// Drop everything the previous worker published, queueing the ids so the main thread drops
@@ -318,6 +360,9 @@ impl SurfaceStore {
         self.released.extend(self.map.keys().copied());
         self.map.clear();
         self.order.clear();
+        // The cursor ids belonged to the dead worker; the fresh one publishes its own, and
+        // holding these would guard ids that can never come back.
+        self.cursors = [None; MAX_SCANOUTS];
     }
 
     /// Retained surfaces currently held — the quantity the cap exists to bound.
@@ -597,7 +642,7 @@ pub fn mark_resume_dead(shared: &Arc<Mutex<Shared>>) {
 
 /// Read the control channel on a background thread, updating `shared`. Consumes (owns) `fd` —
 /// the supervisor's end of the control socketpair — and closes it when the reader hits EOF.
-pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
+pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: SurfaceMap) {
     std::thread::spawn(move || {
         let reader = BufReader::new(File::from(fd));
         for line in reader.lines() {
@@ -685,6 +730,10 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>) {
                         c.visible = true;
                         c.gen += 1;
                         c.log.record("shape", id);
+                        // Protect the surface for as long as it is the shape being worn: the
+                        // guest may not change cursor again for minutes, and this is the only
+                        // moment we learn which id that is. See `SurfaceStore::cursors`.
+                        surface_map.lock().unwrap().pin_cursor(slot, id);
                         if super::capture_tap::edge_trace() {
                             eprintln!(
                                 "[CURSOR] t={:.1} slot={slot} shape id={id} {w}x{h} hot=({hx},{hy}) pos=({},{})",
@@ -984,6 +1033,62 @@ mod tests {
         assert!(
             store.get(12).is_some(),
             "surface 12 is being presented and was evicted anyway — this is the freeze"
+        );
+    }
+
+    /// **The no-pointer fault, at unit scale** (dogfood 2026-08-26). A slot's current cursor
+    /// image must survive the cap. It is not a frame that gets skipped: the worker republishes a
+    /// cursor only when the guest changes shape, so a guest holding one arrow has no pointer at
+    /// all until it happens to change it — minutes, and unreachable by anything the user does
+    /// with the grab or the window.
+    #[test]
+    fn a_cursor_surface_survives_eviction_pressure() {
+        let mut store = SurfaceStore::with_cap(2);
+        store.insert(50, make_surface());
+        store.pin_cursor(0, 50);
+
+        for id in 100..110 {
+            store.insert(id, make_surface());
+        }
+
+        assert!(
+            store.get(50).is_some(),
+            "surface 50 is slot 0's cursor and was evicted anyway — this is the missing pointer"
+        );
+    }
+
+    /// A release naming the current cursor describes a surface that is not ours. The worker
+    /// replaces cursor surfaces and never releases one; what it releases is the IOSurface a
+    /// guest resource was created with, and an IOSurface id is reusable the moment its surface
+    /// dies. Acting on such a release takes the pointer away until the next shape change.
+    #[test]
+    fn a_release_naming_the_current_cursor_is_ignored() {
+        let mut store = SurfaceStore::with_cap(4);
+        store.insert(50, make_surface());
+        store.pin_cursor(0, 50);
+
+        store.note_released(50);
+
+        assert!(
+            store.get(50).is_some(),
+            "a recycled-id release dropped the live cursor surface"
+        );
+        assert!(
+            store.take_released().is_empty(),
+            "the ignored release must not reach the main thread's frame cache either"
+        );
+        assert_eq!(
+            store.why_gone(50),
+            None,
+            "the surface never left, so nothing may be recorded against it"
+        );
+
+        // Once the guest changes shape the old id is ordinary again, and a release for it lands.
+        store.pin_cursor(0, 51);
+        store.note_released(50);
+        assert!(
+            store.get(50).is_none(),
+            "a superseded cursor id is releasable"
         );
     }
 

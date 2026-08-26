@@ -468,6 +468,35 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         Ok(())
     }
 
+    /// Hand `iosurface_id` to the supervisor again, if it is one of ours.
+    ///
+    /// Our surfaces are non-global — capability-scoped, passed by Mach port — so once the
+    /// supervisor's bounded store drops one, no `IOSurfaceLookup` can bring it back and only we
+    /// can mint another port for it. For a scanout that costs a skipped frame until the guest
+    /// presents again; for a **cursor** it costs the pointer entirely, because we publish a
+    /// cursor only when the guest changes shape and a guest may hold one shape for minutes
+    /// (dogfood 2026-08-26).
+    ///
+    /// `InvalidParam` means we do not hold that id at all: the surface is gone, not merely
+    /// dropped, and the caller should stop asking.
+    fn republish_surface(&mut self, iosurface_id: u32) -> Result<(), DisplayBackendError> {
+        let found = self
+            .cursor
+            .iter()
+            .flatten()
+            .chain(
+                self.scanouts
+                    .iter()
+                    .flatten()
+                    .flat_map(|s| s.surfaces.iter()),
+            )
+            .find(|s| IOSurfaceGetID(s) == iosurface_id)
+            .cloned()
+            .ok_or(DisplayBackendError::InvalidParam)?;
+        self.publish(iosurface_id, &found);
+        Ok(())
+    }
+
     fn move_cursor(&mut self, scanout_id: u32, x: u32, y: u32) -> Result<(), DisplayBackendError> {
         // The virtio wire field is u32, but a cursor whose hotspot hangs past the scanout's
         // left/top edge is legitimately negative — the guest kernel casts (e.g. -2 arrives as
@@ -1057,6 +1086,30 @@ mod tests {
     /// One retain for the whole backend made each of those drop the other slot's surface, whose
     /// only other reference is the supervisor's bounded store — and a non-global IOSurface that
     /// falls out of it cannot be looked up again.
+    /// The supervisor lost a cursor surface (its store dropped it) while the guest is still
+    /// showing that shape. Only we can hand it back — the surfaces are non-global — and the
+    /// pointer is missing until we do. An id we never held must say so rather than pretend.
+    #[test]
+    fn a_held_cursor_surface_can_be_handed_over_again() {
+        let mut b = WindowBackend::new(None);
+        let data = staging(2, 2, 9);
+        b.set_cursor(0, 2, 2, 0, 0, ResourceFormat::BGRX, &data)
+            .unwrap();
+        let id = IOSurfaceGetID(b.cursor[0].as_ref().expect("cursor surface published"));
+
+        assert!(
+            b.republish_surface(id).is_ok(),
+            "the surface is still ours to hand over"
+        );
+        assert!(
+            matches!(
+                b.republish_surface(id.wrapping_add(9_999)),
+                Err(DisplayBackendError::InvalidParam)
+            ),
+            "an id we do not hold is gone, not merely dropped — say so instead of asking forever"
+        );
+    }
+
     #[test]
     fn each_slot_keeps_its_own_cursor_surface() {
         let mut b = WindowBackend::new(None);

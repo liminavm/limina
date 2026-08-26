@@ -24,8 +24,63 @@ use objc2_io_surface::{
 };
 use objc2_quartz_core::{CALayer, CATransaction};
 
+use std::sync::mpsc::SyncSender;
+
 use super::input;
-use super::present::{Shared, SurfaceMap};
+use super::present::{self, AckMsg, Shared, SurfaceMap};
+
+/// Resolve a cursor image id to its surface, or arrange for its recovery and return `None`.
+///
+/// **The cursor's counterpart to [`super::guestwindow::resolve_presented`]**, and it exists for
+/// the same reason that one does — with a longer fuse. A scanout that cannot be resolved skips
+/// one frame and the guest presents again immediately; a cursor that cannot be resolved leaves
+/// **no pointer at all**, and the worker republishes a cursor only when the guest changes shape.
+/// A guest sitting on one arrow therefore stays pointerless for as long as it keeps that arrow —
+/// minutes of a dogfood session on 2026-08-26, through grab releases, workspace switches and
+/// clicks, healed only by hovering something that happened to change the shape.
+///
+/// So: say WHY (a release, an eviction, or an id we never held — three different faults with
+/// three different fixes), and ask the worker for the surface back. The ask is throttled per id
+/// inside the store, and rides the ack thread, never a socket write on the main thread.
+pub(crate) fn resolve_cursor(
+    surface_map: &SurfaceMap,
+    ack_tx: &SyncSender<AckMsg>,
+    id: u32,
+) -> Option<CFRetained<IOSurfaceRef>> {
+    // Mach-delivered (non-global) cursor surface first; legacy/global fallback.
+    let resolved = surface_map
+        .lock()
+        .unwrap()
+        .get(id)
+        .or_else(|| IOSurfaceLookup(id));
+    if resolved.is_some() {
+        return resolved;
+    }
+    let (why, ask) = {
+        let mut map = surface_map.lock().unwrap();
+        (map.why_gone(id), map.request_resurface(id))
+    };
+    if !ask {
+        // A request for this id is already in flight — one line per tick would be noise.
+        return None;
+    }
+    let _ = ack_tx.try_send(AckMsg::Resurface(id));
+    match why {
+        Some(present::GoneReason::Released) => log::warn!(
+            "guest cursor: surface {id} unresolved — the worker RELEASED it while it is the \
+             shape the guest is showing. Asking for it back."
+        ),
+        Some(present::GoneReason::Evicted) => log::warn!(
+            "guest cursor: surface {id} unresolved — the store EVICTED it at its cap while it \
+             is the shape the guest is showing. Asking for it back."
+        ),
+        None => log::warn!(
+            "guest cursor: surface {id} unresolved — we never held it, and no release or \
+             eviction was recorded for it. Asking for it."
+        ),
+    }
+    None
+}
 
 /// While the pointer is captured, composite the guest cursor at its guest-reported position into
 /// `cursor_layer` (the host NSCursor is hidden in capture mode, so the guest cursor must be drawn
@@ -37,6 +92,7 @@ pub(crate) fn update_capture_cursor(
     captured: &std::sync::atomic::AtomicBool,
     shared: &Arc<Mutex<Shared>>,
     surface_map: &SurfaceMap,
+    ack_tx: &SyncSender<AckMsg>,
     slot: usize,
 ) -> LayerVerdict {
     use std::sync::atomic::Ordering;
@@ -82,12 +138,7 @@ pub(crate) fn update_capture_cursor(
         };
     }
     let cid = cid.expect("checked just above");
-    let Some(surface) = surface_map
-        .lock()
-        .unwrap()
-        .get(cid)
-        .or_else(|| IOSurfaceLookup(cid))
-    else {
+    let Some(surface) = resolve_cursor(surface_map, ack_tx, cid) else {
         hide();
         return LayerVerdict::NoSurface;
     };
@@ -214,6 +265,7 @@ pub(crate) fn apply_cursor(
     built: &Cell<Option<(u32, u32)>>,
     cur: &(u64, bool, Option<u32>, u32, u32, u32, u32),
     surface_map: &SurfaceMap,
+    ack_tx: &SyncSender<AckMsg>,
     scale_key: u32,
 ) -> bool {
     let (_gen, visible, id, w, h, hot_x, hot_y) = *cur;
@@ -222,7 +274,8 @@ pub(crate) fn apply_cursor(
             if built.get() == Some((id, scale_key)) {
                 return true;
             }
-            match build_guest_cursor(id, w, h, hot_x, hot_y, surface_map, scale_key) {
+            let geom = CursorGeom { w, h, hot_x, hot_y };
+            match build_guest_cursor(id, geom, surface_map, ack_tx, scale_key) {
                 Some(c) => {
                     host.update(c, false);
                     built.set(Some((id, scale_key)));
@@ -268,6 +321,15 @@ pub(crate) fn shape_slot(pointer_slot: usize, visible: &[bool]) -> usize {
     visible.iter().position(|v| *v).unwrap_or(pointer_slot)
 }
 
+/// One guest cursor image's pixel geometry: size and hotspot, in guest pixels.
+#[derive(Clone, Copy)]
+struct CursorGeom {
+    w: u32,
+    h: u32,
+    hot_x: u32,
+    hot_y: u32,
+}
+
 /// Build an `NSCursor` wearing the guest's cursor image: look up the worker-published
 /// IOSurface (BGRA, premultiplied alpha), copy it through a `CGBitmapContext` into a
 /// `CGImage`, and wrap it with the guest's hotspot (top-left origin, as NSCursor expects).
@@ -276,19 +338,13 @@ pub(crate) fn shape_slot(pointer_slot: usize, visible: &[bool]) -> usize {
 /// window's content scale, so downscaled cursors stay crisp on Retina backings.
 fn build_guest_cursor(
     id: u32,
-    w: u32,
-    h: u32,
-    hot_x: u32,
-    hot_y: u32,
+    geom: CursorGeom,
     surface_map: &SurfaceMap,
+    ack_tx: &SyncSender<AckMsg>,
     scale_key: u32,
 ) -> Option<Retained<NSCursor>> {
-    // Mach-delivered (non-global) cursor surface first; legacy/global fallback.
-    let surface = surface_map
-        .lock()
-        .unwrap()
-        .get(id)
-        .or_else(|| IOSurfaceLookup(id))?;
+    let CursorGeom { w, h, hot_x, hot_y } = geom;
+    let surface = resolve_cursor(surface_map, ack_tx, id)?;
     let ctx = bgra_bitmap_context(w, h)?;
     unsafe {
         let dst = CGBitmapContextGetData(Some(&ctx)) as *mut u8;
@@ -396,6 +452,46 @@ fn nscursor_from_context(
         &nsimage,
         NSPoint::new(hot_x, hot_y),
     ))
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use std::sync::mpsc::sync_channel;
+    use std::sync::{Arc, Mutex};
+
+    use super::super::present::{SurfaceMap, SurfaceStore};
+    use super::{resolve_cursor, AckMsg};
+
+    /// The missing-pointer fault (dogfood 2026-08-26): the guest is showing a shape whose
+    /// surface we cannot resolve. Giving up silently is not one skipped frame — the worker
+    /// republishes a cursor only on a shape change, so the pointer stays gone. Ask for it back,
+    /// exactly once per throttle window.
+    #[test]
+    fn an_unresolved_cursor_asks_the_worker_to_republish() {
+        // No real IOSurface plausibly wears a near-MAX global id, so the lookup fallback
+        // stays deterministic in a test.
+        let id = u32::MAX - 23;
+        let map: SurfaceMap = Arc::new(Mutex::new(SurfaceStore::default()));
+        let (tx, rx) = sync_channel::<AckMsg>(4);
+
+        assert!(
+            resolve_cursor(&map, &tx, id).is_none(),
+            "an id nobody holds must not resolve"
+        );
+        match rx.try_recv() {
+            Ok(AckMsg::Resurface(asked)) => assert_eq!(asked, id),
+            Ok(AckMsg::Shown(..)) => panic!("a cursor resolve must never ack a frame as shown"),
+            Err(_) => panic!("an unresolved cursor must ask the worker to publish it again"),
+        }
+
+        // Both cursor paths run every tick while the shape stands — a 60 Hz stream of asks and
+        // warnings would bury the one line that matters.
+        assert!(resolve_cursor(&map, &tx, id).is_none());
+        assert!(
+            rx.try_recv().is_err(),
+            "a second miss inside the throttle window must not re-ask"
+        );
+    }
 }
 
 #[cfg(test)]

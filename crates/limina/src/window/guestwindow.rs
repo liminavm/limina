@@ -270,12 +270,14 @@ impl GuestWindow {
         captured: &AtomicBool,
         shared: &Arc<Mutex<Shared>>,
         surface_map: &SurfaceMap,
+        ack_tx: &SyncSender<AckMsg>,
     ) -> super::cursor::LayerVerdict {
         let verdict = super::cursor::update_capture_cursor(
             &self.cursor_layer,
             captured,
             shared,
             surface_map,
+            ack_tx,
             slot,
         );
         if self.overlay.has_strip() {
@@ -284,6 +286,7 @@ impl GuestWindow {
                 captured,
                 shared,
                 surface_map,
+                ack_tx,
                 slot,
             );
         }

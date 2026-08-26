@@ -2924,6 +2924,9 @@ pub fn run(
     let timer_conn = conn.clone();
     let timer_captured = captured.clone();
     let timer_surface_map = surface_map.clone();
+    // The cursor paths ask for a lost cursor surface back the same way the present path asks for
+    // a scanout (`cursor::resolve_cursor`), and the ask rides the ack thread.
+    let timer_ack_tx = ack_tx.clone();
     // For the quit-check below: distinguish a real window CLOSE from a mere miniaturize/app-hide
     // (all three make the window not-visible, but only a close should power the guest off).
     let timer_app = app.clone();
@@ -3444,7 +3447,14 @@ pub fn run(
         if (shape_slot, cur.0) != last_cursor_gen.get() || scale_moved {
             // Only on success: a build that failed leaves the pointer blank, and marking the
             // generation done would keep it that way until the guest next changed shape.
-            if apply_cursor(&timer_cursor, &built_cursor, &cur, &surface_map, scale_key) {
+            if apply_cursor(
+                &timer_cursor,
+                &built_cursor,
+                &cur,
+                &surface_map,
+                &timer_ack_tx,
+                scale_key,
+            ) {
                 last_cursor_gen.set((shape_slot, cur.0));
             }
         }
@@ -3456,6 +3466,7 @@ pub fn run(
             &timer_captured,
             &shared,
             &timer_surface_map,
+            &timer_ack_tx,
             cursor_slot,
         );
         // Quiet until the impossible happens: captured, the guest plainly has a cursor, and the
@@ -3468,6 +3479,21 @@ pub fn run(
             let s = shared.lock().unwrap();
             let visible: Vec<bool> = s.slots.iter().map(|sl| sl.cursor.visible).collect();
             cursor::undrawn_fault(cursor_slot, v, &visible).map(|why| {
+                // What happened to the image the slot names, in the store's own words. The
+                // three departures are three different faults — a release acted on, a cap too
+                // small, a surface never handed over — and the first field report of this
+                // (2026-08-26) could not tell them apart.
+                let gone = s.slots[cursor_slot]
+                    .cursor
+                    .id
+                    .map(|id| match timer_surface_map.lock().unwrap().why_gone(id) {
+                        Some(present::GoneReason::Released) => {
+                            format!("surface {id} was RELEASED")
+                        }
+                        Some(present::GoneReason::Evicted) => format!("surface {id} was EVICTED"),
+                        None => format!("no departure recorded for surface {id}"),
+                    })
+                    .unwrap_or_else(|| "no cursor image id".to_string());
                 let state: Vec<String> = s
                     .slots
                     .iter()
@@ -3489,7 +3515,7 @@ pub fn run(
                         )
                     })
                     .collect();
-                format!("{why}; {}", state.join("; "))
+                format!("{why}; {gone}; {}", state.join("; "))
             })
         });
         match fault {

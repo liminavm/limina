@@ -347,7 +347,7 @@ impl WindowedSession {
         attach_vdagent(control.as_ref(), spice_host);
         let conn = window::WorkerConn::new(io);
         let shared = window::Shared::new();
-        window::spawn_reader(sup, shared.clone());
+        window::spawn_reader(sup, shared.clone(), surface_map.clone());
 
         // The parked-window resume channel (task #18): the play click (window main thread)
         // sends; the monitor thread below, parked in recv() after a suspend exit, respawns.
@@ -492,7 +492,11 @@ impl WindowedSession {
                 attach_vdagent(monitor_control.as_ref(), next.spice_host);
                 // Before the reader starts, so the fresh worker's first lines survive it.
                 window::mark_worker_swapped(&monitor_shared, resuming);
-                window::spawn_reader(next.sup, monitor_shared.clone());
+                window::spawn_reader(
+                    next.sup,
+                    monitor_shared.clone(),
+                    monitor_surface_map.clone(),
+                );
                 if resuming {
                     // The exit flags described the suspended (dead) worker; clear them AFTER
                     // the swap so the window never sees "running" with a stale conn.

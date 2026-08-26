@@ -942,21 +942,22 @@ impl GuestWindows {
         captured: &std::sync::atomic::AtomicBool,
         shared: &std::sync::Arc<std::sync::Mutex<Shared>>,
         surface_map: &SurfaceMap,
+        ack_tx: &SyncSender<AckMsg>,
         watch: usize,
     ) -> Option<super::cursor::LayerVerdict> {
         let primary_slot = self.primary.slot.get() as usize;
         let mut watched = None;
-        let v = self
-            .primary
-            .core
-            .composite_cursor(primary_slot, captured, shared, surface_map);
+        let v =
+            self.primary
+                .core
+                .composite_cursor(primary_slot, captured, shared, surface_map, ack_tx);
         if primary_slot == watch {
             watched = Some(v);
         }
         for (slot, w) in &self.secondaries {
             let v = w
                 .core
-                .composite_cursor(*slot, captured, shared, surface_map);
+                .composite_cursor(*slot, captured, shared, surface_map, ack_tx);
             if *slot == watch {
                 watched = Some(v);
             }
