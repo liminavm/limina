@@ -726,6 +726,65 @@ Both would have turned from recoverable into a use-after-free under a destroy po
   drive it. Those allocators are now pinned out of the destroy policy. The underlying early
   discharge is still open and fixed separately.
 
+## ⚠ Pool growth past the watermark: NOT reproducible on the dev Mac (measured 2026-08-26)
+
+A dogfood session on the M4 dogfood Mac logged the render pool's high-water mark climbing 65 → 68. Nothing
+on the dev Mac (M1 Max) reproduces it: across four arms the pool peaked at **30** against the
+watermark of 64, retired 161 times, and left IOAccelerator (graphics) BELOW its baseline.
+
+| arm | render_pass_starts | pool peak | growth warns | IOAccel (graphics) |
+|---|---|---|---|---|
+| baseline (seated, idle) | 0 | — | 0 | 626.2M / 1805 |
+| GNOME notification loop ×2 | ~0 | 28 | 0 | 410.3M / 1276 |
+| glmark2, fullscreen | 618 071 | ~28 | 0 | — |
+| 4× glmark2 + notifications, two displays | 1 280 825 | 30 | 0 | 556.7M / 1367 |
+
+**The notification workload is not the driver, and cannot be.** It is a venus (Vulkan) compositor
+path; the pool is fed by GL arriving through vrend → zink-on-KK. The notify-only arms sit at
+`render_pass_starts=0` — the workload never reaches the pool at all. A session where both happen
+at once will implicate the visible one.
+
+**Volume is not the axis.** 33× the dogfood session's render passes produced no growth whatsoever.
+What the warn measures is in-flight depth — acquires that find nothing reusable — so the axis is
+how far submission outruns completion, which serial GL benchmarks do not stress however hard they
+run. Reproducing it needs whatever that host has and this one does not (M4 completion latency, a
+3840×2160 primary, a long-lived session), not a bigger workload.
+
+**Reclaim is healthy under everything we can throw at it**, including four concurrent GL clients
+across two displays, where the pool pins at the floor of 8 and retires on nearly every acquire.
+That steady state is its own mild pathology — a mint and a kernel unmap per cycle — but it is the
+opposite of the growth being chased, and it bounds memory rather than leaking it.
+
+### The knobs are one-sided by default
+
+The growth warn is unconditional; the retire line and the teardown `live/peak/retired` summary are
+behind `LIMINA_KK_ALLOC_POOL_LOG`. **A log without that knob shows growth and never shrink**, so
+absence of retirement in a dogfood log is not evidence of anything. Set it when the question is
+whether a pool drains.
+
+### `LIMINA_KK_FAIL_DISCHARGE_ALLOC` takes the worker down with it
+
+The injection returns `VK_ERROR_OUT_OF_HOST_MEMORY` from `vkQueueSubmit`, and host zink answers
+that with `Assertion failed: (batch_id), function zink_wait_on_batch` → SIGABRT. Use it on a
+throwaway clone, never on a session anyone cares about.
+
+It also cannot strand a charge: the payload is allocated BEFORE the commit and the failure returns
+early, so the GPU never receives the work and the later discharge-at-reset is correct. An
+allocator stuck at `pending != 0` — which would be permanently unusable AND unretirable, since
+both predicates skip it — is therefore not reachable this way.
+
+### The recipe
+
+```
+cp -c Fedora-Workstation-44.enhanced.raw kkpool.raw          # APFS CoW, instant
+LIMINA_DISK=$PWD/kkpool.raw LIMINA_KK_ALLOC_POOL_LOG=1 RUST_LOG=limina=info \
+  LIMINA_NET=1 spikes/venus-draw-probe/boot-enhanced-efi-kk.sh &
+port=$(scripts/wait-guest-ssh.sh /tmp/limina-worker-kkpool.log 300)
+# in-guest, for depth rather than volume: several GL clients at once, both displays enabled
+for n in 1 2 3 4; do (timeout 180 glmark2-wayland --run-forever &); done
+grep -E "class 0 grew|retired one class-0" /tmp/limina-worker-kkpool.log
+```
+
 ## ✅ CLOSED: the discharge-at-reset use-after-free (2026-08-09, kk `38b801cbdd6`)
 
 The charge for a command buffer must be released when the **GPU** finishes with it. The submit
