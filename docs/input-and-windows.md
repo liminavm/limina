@@ -263,6 +263,18 @@ load-bearing parts:
   Neither reaches the tap, and the second happens while the user is still inside a macOS menu whose
   clicks have just stood the grab down. The silent re-take after an edge release
   keeps its hysteresis (deep inside for the dwell, no button down).
+- **Some macOS UI takes the click without covering anything, and the hit test cannot see it.**
+  Two known: an **open menu** (the click that dismisses it is spent on the dismissal) and a live
+  **screen-capture session** — the Cmd-Shift-4 crosshair and its relatives, which intercept at
+  the event layer, so the window server still answers our own window for a point over the
+  guest's picture. Both are their own inputs to the policy (`menu_open`, `capture_live`), and
+  both mean the same thing: no grab, and no departure either, so the *next* click is still the
+  ordinary ask. The screenshot case is the sharper one — the grab would consume the drag and the
+  mouse-up the selection needs, and take the keyboard with them, so Esc could not cancel what the
+  click started. The session is found by bundle id (`com.apple.screencaptureui`) as a cheap
+  filter and confirmed by an on-screen window it owns; the process alone is not the session, it
+  outlives it. Both questions are deferred like the hit test — they are round trips, spent only
+  once the policy has a reason.
 - **Taking the pointer settles the chrome ask** (`toggle_capture_to` → `reveal_moot`, so every
   route in obeys it). A held grab and a granted reveal are mutually exclusive: the reveal exists
   so the pointer can reach the menu bar and the window's controls, and a captured pointer is
