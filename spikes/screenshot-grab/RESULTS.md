@@ -24,13 +24,20 @@ what is observable.
   the grab bug did, and what makes "the process has been up for minutes" not mean "it is
   lingering idle".
 
-## Unmeasured
+- **The session outlives the shot by a few seconds.** After a region capture completes, a click
+  2.7 s later still reads as a live session; one 8.6 s later does not. The gate refuses the
+  grab for that window, and the click still reaches the guest as an ordinary button press — it
+  is the *capture* that is withheld, not the click.
 
-Whether the post-capture floating thumbnail is an on-screen window owned by the same process.
-If it is, it reads as a live session for its few seconds of life — mild, and separable by
-bounds (display-sized overlay vs. small corner window) if it ever matters. Triggering it
-needs a real keystroke: a synthetic Cmd-Shift-3 aimed at a focused VM window is consumed by
-the soft keyboard grab and reaches the guest instead.
+## Why presence, not size
+
+Discriminating the post-capture tail by bounds — count only display-sized windows, so a small
+corner thumbnail does not — would also let Cmd-Shift-5's small control bar through, and that
+one is a live session whose clicks must not be stolen. A few seconds of "the click acts but
+does not capture" is the cheaper side of that trade.
+
+Triggering the tail synthetically is not possible from inside limina: a scripted Cmd-Shift-3
+aimed at a focused VM window is consumed by the soft keyboard grab and reaches the guest.
 
 ## The probe
 
