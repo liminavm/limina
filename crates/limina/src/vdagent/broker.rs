@@ -97,24 +97,31 @@ impl VdAgent {
             let n = match reader.read(&mut buf) {
                 Ok(0) => {
                     log::debug!("vdagent: port closed");
-                    return;
+                    return self.port_lost();
                 }
                 Ok(n) => n,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(e) => {
                     log::warn!("vdagent: read failed: {e}");
-                    return;
+                    return self.port_lost();
                 }
             };
 
             // A framing error means the byte stream desynchronized, and there is no way to
             // resync a stream protocol from the middle. Stop reading rather than feed the
             // session garbage — the clipboard degrades, the VM is untouched.
+            //
+            // At ERROR, not WARN: this is unrecoverable for the life of the worker, and
+            // the 2026-08-26 outage sat unnoticed in a log nobody was reading at WARN.
+            // Say what it costs, so the next reader does not have to infer it.
             let messages = match frames.push(&buf[..n]) {
                 Ok(m) => m,
                 Err(e) => {
-                    log::warn!("vdagent: {e:#}; abandoning the port");
-                    return;
+                    log::error!(
+                        "vdagent: {e:#}; the clipboard is off for the life of this VM \
+                         (it comes back on the next guest reboot or resume)"
+                    );
+                    return self.port_lost();
                 }
             };
 
@@ -136,6 +143,15 @@ impl VdAgent {
         }
     }
 
+    /// Tell the session we have gone deaf, so it stops offering the guest a clipboard it
+    /// can no longer serve. The write half often still works, which is the trap: without
+    /// this, host copies keep announcing grabs that strip the guest's own clipboard and
+    /// give nothing back.
+    fn port_lost(&self) {
+        let effects = self.session.lock().unwrap().on_event(Event::PortLost);
+        self.apply(effects);
+    }
+
     fn apply(&self, effects: Vec<Effect>) {
         for effect in effects {
             match effect {
@@ -149,6 +165,9 @@ impl VdAgent {
                         // read. The clipboard degrades; the VM is untouched.
                         log::warn!("vdagent: write failed ({e}); abandoning the port");
                         let _ = out.shutdown(std::net::Shutdown::Both);
+                        // The shutdown unblocks the reader's `read` with 0, and it marks
+                        // the session lost from there. Saying it here as well would
+                        // re-enter `apply` from inside itself for no gain.
                         return;
                     }
                 }
@@ -312,6 +331,101 @@ mod tests {
                 format: codec::CLIPBOARD_UTF8_TEXT,
                 data: b"copied on the host".to_vec()
             }
+        );
+    }
+
+    /// Frame a message the way the guest really does — one unsplit chunk, no 2048 split
+    /// (`vdagent_virtio_port_write_start`). The mock must not use our own `encode`, or it
+    /// would politely chunk its writes and never reproduce what a real agent sends.
+    fn encode_unsplit_clipboard(text: &str) -> Vec<u8> {
+        let mut body = vec![codec::SELECTION_CLIPBOARD, 0, 0, 0];
+        body.extend_from_slice(&codec::CLIPBOARD_UTF8_TEXT.to_le_bytes());
+        body.extend_from_slice(text.as_bytes());
+
+        // sizeof(VDAgentMessage): protocol + type + opaque + size.
+        const MESSAGE_HEADER_LEN: usize = 4 + 4 + 8 + 4;
+
+        let mut wire = Vec::new();
+        wire.extend_from_slice(&codec::VDP_CLIENT_PORT.to_le_bytes());
+        wire.extend_from_slice(&((MESSAGE_HEADER_LEN + body.len()) as u32).to_le_bytes());
+        wire.extend_from_slice(&codec::PROTOCOL.to_le_bytes());
+        wire.extend_from_slice(&codec::msg_type::CLIPBOARD.to_le_bytes());
+        wire.extend_from_slice(&0u64.to_le_bytes());
+        wire.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        wire.extend_from_slice(&body);
+        wire
+    }
+
+    #[test]
+    fn a_big_guest_copy_arrives_unsplit_and_does_not_kill_the_clipboard() {
+        // The 2026-08-26 outage end to end: a guest copy over ~2 KB comes in as a single
+        // oversized chunk. It must land on the pasteboard, and — the part that made the
+        // bug so expensive — the port must still be alive afterwards.
+        let (agent, clipboard, mut mock, _env) = setup("limina-vdagent-test-unsplit");
+        greet(&mut mock);
+
+        let big = "x".repeat(3574);
+        mock.send(&codec::encode_grab(
+            codec::SELECTION_CLIPBOARD,
+            &[codec::CLIPBOARD_UTF8_TEXT],
+        ));
+        assert!(matches!(mock.recv(), AgentMessage::ClipboardRequest { .. }));
+        mock.send(&encode_unsplit_clipboard(&big));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if clipboard.current_text().as_deref() == Some(big.as_str()) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the oversized guest chunk never reached the pasteboard"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        // Still talking: a host copy after the big paste must still be offered. Before the
+        // fix the reader thread was gone by now and this grab never arrived.
+        agent.host_copy("still alive".into());
+        assert_eq!(
+            mock.recv(),
+            AgentMessage::ClipboardGrab {
+                selection: codec::SELECTION_CLIPBOARD,
+                types: vec![codec::CLIPBOARD_UTF8_TEXT]
+            }
+        );
+    }
+
+    #[test]
+    fn a_host_copy_after_the_port_dies_does_not_announce_a_grab_it_cannot_serve() {
+        // A grab we cannot answer makes the agent take X11 ownership in the guest and
+        // then strand it: the guest's own clipboard becomes owned-but-unreadable. Silence
+        // is the correct degrade.
+        let (agent, _clipboard, mut mock, _env) = setup("limina-vdagent-test-deaf");
+        greet(&mut mock);
+
+        // Kill the guest end and wait for the reader to notice.
+        mock.stream.shutdown(std::net::Shutdown::Both).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !agent.session.lock().unwrap().port_is_lost() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the reader never noticed the port died"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        // The write half may well still accept bytes; the point is that we produce none.
+        // Asserted on the effects rather than the socket because "nothing was sent" is
+        // not observable on a far end we just closed.
+        let effects = agent
+            .session
+            .lock()
+            .unwrap()
+            .on_event(Event::HostCopy("copied while deaf".into()));
+        assert!(
+            effects.is_empty(),
+            "a deaf broker still offered the guest a clipboard: {effects:?}"
         );
     }
 

@@ -10,15 +10,29 @@
 //!   `VDAgentMessage{protocol,type,opaque,size}` (20 B), `VD_AGENT_MAX_DATA_SIZE 2048`,
 //!   the message/capability enumerations, and the `#if 0`-documented layout shifts the
 //!   `CLIPBOARD_SELECTION` / `CLIPBOARD_GRAB_SERIAL` capabilities impose.
-//! - `vd_agent/src/vdagentd/virtio-port.c` — the receiving state machine, which pins down
-//!   three rules the header alone does not:
-//!   1. `chunk_header.size > VD_AGENT_MAX_DATA_SIZE` is a hard error, and **the chunk
-//!      header itself is not counted** in that size (`conn_handle_header`).
+//! - `vd_agent/src/vdagentd/virtio-port.c` — the state machine on both sides, which pins
+//!   down three rules the header alone does not:
+//!   1. `chunk_header.size > VD_AGENT_MAX_DATA_SIZE` is a hard error **on the receiving
+//!      side only**, and the chunk header itself is not counted in that size
+//!      (`conn_handle_header`). The limit binds *us* when we write, because the agent
+//!      applies it to what we send. It emphatically does not describe what the agent
+//!      sends: `vdagent_virtio_port_write_start` sets
+//!      `chunk_header->size = sizeof(message_header) + data_size` and emits the whole
+//!      message as ONE chunk, however large. So the two directions are not symmetric —
+//!      we split our writes at [`MAX_CHUNK_DATA`] and must accept inbound chunks far
+//!      past it. Enforcing 2048 on the receive side reads as principled and is a bug:
+//!      it turns every guest copy over ~2 KB into a fatal framing error.
 //!   2. The 20-byte message header is part of the chunked byte stream, so a chunk may
 //!      split it (`vdagent_virtio_port_do_chunk` reassembles the header across chunks).
 //!   3. A chunk may not extend past the end of the message it is carrying — the agent
 //!      calls that "chunk larger than message, lost sync?" and drops the connection. So
 //!      **never pack two messages into one chunk**; each message starts a fresh one.
+//! - `vd_agent/src/vdagentd/vdagentd.c` — `release_clipboards` writes a bare
+//!   `&sel, 1`, bypassing `virtio_write_clipboard` and therefore the 4-byte selection
+//!   prefix every other clipboard message carries. Upstream has two `CLIPBOARD_RELEASE`
+//!   writers and only one of them frames correctly, so a 1-byte release body is normal
+//!   traffic, not corruption. It rides any logind active-session change — a VT switch is
+//!   enough — so it is routine, not a disconnect-only path.
 //!
 //! ## Capabilities we announce, and why not more
 //!
@@ -44,6 +58,9 @@ pub const PROTOCOL: u32 = 1;
 
 /// `VD_AGENT_MAX_DATA_SIZE` — the maximum bytes of *chunk payload*; the 8-byte chunk
 /// header is on top of this, not inside it.
+///
+/// This bounds what **we write**, because the agent rejects anything larger. It is not a
+/// bound on what we read — see rule 1 in the module docs and [`MAX_INBOUND_CHUNK`].
 pub const MAX_CHUNK_DATA: usize = 2048;
 
 /// `VDP_CLIENT_PORT` — the chunk port a SPICE client uses. (`VDP_END_PORT` is 3, so ports
@@ -64,6 +81,13 @@ const CHUNK_HEADER_LEN: usize = 4 + 4;
 /// confused agent from making us allocate without limit. Far above any real clipboard
 /// payload; a message past it is a lost-sync error, not a truncation.
 const MAX_MESSAGE_DATA: usize = 16 * 1024 * 1024;
+
+/// The ceiling on an *inbound* chunk. The agent never splits its writes, so a legitimate
+/// chunk is as large as the whole message it carries — which [`MAX_MESSAGE_DATA`] already
+/// bounds. This exists only so a corrupt header cannot make us buffer toward 4 GiB
+/// waiting for a body that will never arrive; it is a sanity bound, not a protocol one,
+/// and it must never be confused with [`MAX_CHUNK_DATA`].
+const MAX_INBOUND_CHUNK: usize = MESSAGE_HEADER_LEN + MAX_MESSAGE_DATA;
 
 /// `VD_AGENT_*` message types (`vd_agent.h`; the enum starts at 1).
 pub mod msg_type {
@@ -259,7 +283,15 @@ pub fn decode(msg_type: u32, data: &[u8], selection: bool) -> Result<AgentMessag
             })
         }
         msg_type::CLIPBOARD_RELEASE => {
-            let (sel, _) = split_selection(data, selection)?;
+            // Upstream's `release_clipboards` writes a bare 1-byte selection with no
+            // prefix (see the module docs), so a release is the one message whose body
+            // may be a single byte no matter what capabilities are in force. Tolerated
+            // here rather than in `split_selection` so a short body stays an error for
+            // every message that has no such writer.
+            let sel = match data {
+                [sel] => *sel,
+                _ => split_selection(data, selection)?.0,
+            };
             Ok(AgentMessage::ClipboardRelease { selection: sel })
         }
         other => Ok(AgentMessage::Other { msg_type: other }),
@@ -319,8 +351,10 @@ impl Reassembler {
             let h = &self.wire[consumed..consumed + CHUNK_HEADER_LEN];
             let port = u32::from_le_bytes([h[0], h[1], h[2], h[3]]);
             let size = u32::from_le_bytes([h[4], h[5], h[6], h[7]]) as usize;
-            if size > MAX_CHUNK_DATA {
-                bail!("chunk size {size} exceeds VD_AGENT_MAX_DATA_SIZE ({MAX_CHUNK_DATA})");
+            // Deliberately NOT MAX_CHUNK_DATA: the agent writes each message as a single
+            // unsplit chunk, so anything up to a whole message is legal here.
+            if size > MAX_INBOUND_CHUNK {
+                bail!("chunk size {size} exceeds the inbound ceiling ({MAX_INBOUND_CHUNK})");
             }
             if port >= VDP_END_PORT {
                 bail!("chunk port {port} out of range");
@@ -524,15 +558,88 @@ mod tests {
         assert!(!has_cap(&[0, 0], 99));
     }
 
-    #[test]
-    fn an_oversized_chunk_is_a_lost_sync_error() {
+    /// Frame a message the way `vdagent_virtio_port_write_start` does: one chunk carrying
+    /// the whole thing, never split, however large. This is what the guest actually puts
+    /// on the wire, so it is the only honest way to test our receive side.
+    fn encode_unsplit(msg_type: u32, data: &[u8]) -> Vec<u8> {
         let mut wire = Vec::new();
         wire.extend_from_slice(&VDP_CLIENT_PORT.to_le_bytes());
-        wire.extend_from_slice(&((MAX_CHUNK_DATA + 1) as u32).to_le_bytes());
-        wire.extend_from_slice(&vec![0u8; MAX_CHUNK_DATA + 1]);
+        wire.extend_from_slice(&((MESSAGE_HEADER_LEN + data.len()) as u32).to_le_bytes());
+        wire.extend_from_slice(&PROTOCOL.to_le_bytes());
+        wire.extend_from_slice(&msg_type.to_le_bytes());
+        wire.extend_from_slice(&0u64.to_le_bytes());
+        wire.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        wire.extend_from_slice(data);
+        wire
+    }
+
+    #[test]
+    fn a_guest_chunk_past_the_send_side_split_is_accepted() {
+        // The agent does not chunk. This is the real 2026-08-26 outage: a 3574-byte guest
+        // copy arrives as one 3602-byte chunk (20 message header + 4 selection + 4 format
+        // + payload), and reading VD_AGENT_MAX_DATA_SIZE as a receive-side rule made that
+        // a fatal framing error that deafened the host for the life of the VM.
+        let text = "x".repeat(3574);
+        let mut body = vec![SELECTION_CLIPBOARD, 0, 0, 0];
+        body.extend_from_slice(&CLIPBOARD_UTF8_TEXT.to_le_bytes());
+        body.extend_from_slice(text.as_bytes());
+        let wire = encode_unsplit(msg_type::CLIPBOARD, &body);
+
+        let size = u32::from_le_bytes([wire[4], wire[5], wire[6], wire[7]]) as usize;
+        assert_eq!(size, 3602, "the chunk from the incident, byte for byte");
+        assert!(size > MAX_CHUNK_DATA, "the point of the test");
+
+        assert_eq!(
+            roundtrip(&wire),
+            vec![AgentMessage::Clipboard {
+                selection: SELECTION_CLIPBOARD,
+                format: CLIPBOARD_UTF8_TEXT,
+                data: text.into_bytes(),
+            }]
+        );
+    }
+
+    #[test]
+    fn an_inbound_chunk_past_the_message_ceiling_is_still_a_lost_sync_error() {
+        // Dropping the 2048 rule must not drop the sanity bound: a corrupt header that
+        // declares a body we would wait forever for is still a desync.
+        let mut wire = Vec::new();
+        wire.extend_from_slice(&VDP_CLIENT_PORT.to_le_bytes());
+        wire.extend_from_slice(&((MAX_INBOUND_CHUNK + 1) as u32).to_le_bytes());
 
         let err = Reassembler::new().push(&wire).unwrap_err().to_string();
-        assert!(err.contains("exceeds VD_AGENT_MAX_DATA_SIZE"), "{err}");
+        assert!(err.contains("inbound ceiling"), "{err}");
+    }
+
+    #[test]
+    fn an_unprefixed_one_byte_release_decodes_rather_than_erroring() {
+        // Upstream's `release_clipboards` bypasses the selection prefix, and it fires on
+        // every VT switch — so this is routine traffic, not corruption.
+        let wire = encode_unsplit(msg_type::CLIPBOARD_RELEASE, &[SELECTION_CLIPBOARD]);
+        assert_eq!(
+            roundtrip(&wire),
+            vec![AgentMessage::ClipboardRelease {
+                selection: SELECTION_CLIPBOARD
+            }]
+        );
+    }
+
+    #[test]
+    fn a_short_body_is_still_an_error_for_messages_upstream_frames_correctly() {
+        // The 1-byte tolerance is scoped to releases; a truncated grab or request has no
+        // benign explanation and must stay loud.
+        for t in [msg_type::CLIPBOARD_GRAB, msg_type::CLIPBOARD_REQUEST] {
+            let wire = encode_unsplit(t, &[SELECTION_CLIPBOARD]);
+            let mut r = Reassembler::new();
+            let msgs = r
+                .push(&wire)
+                .expect("framing is fine; only the body is short");
+            let (ty, body) = &msgs[0];
+            assert!(
+                decode(*ty, body, true).is_err(),
+                "a 1-byte body for type {t} must not decode"
+            );
+        }
     }
 
     #[test]

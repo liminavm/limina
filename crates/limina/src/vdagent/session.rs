@@ -45,6 +45,10 @@ pub enum Event {
     HostCopy(String),
     /// The agent said something.
     Agent(AgentMessage),
+    /// We can no longer hear the agent: the port closed, a read failed, or the byte
+    /// stream desynchronized past any hope of resync. The write half may still work,
+    /// which is exactly why this has to be said out loud — see [`Session::port_lost`].
+    PortLost,
 }
 
 /// What the session wants done. Frames are already chunked and ready for the wire.
@@ -70,6 +74,13 @@ pub struct Session {
     /// supersedes that request (a newer guest grab, a host copy) clears it, so a late
     /// answer to a superseded request cannot resurrect an older clipboard.
     awaiting_guest_data: bool,
+    /// Set once the read side is gone. A `GRAB` is a promise to answer the `REQUEST` it
+    /// provokes, and answering needs the read side — so once we are deaf, every further
+    /// grab is a promise we cannot keep. Worse than useless: the agent takes X11
+    /// clipboard ownership on our behalf and then cannot produce the content, so the
+    /// guest's own clipboard is left owned-but-unreadable and a host copy *destroys*
+    /// what the guest had. Staying quiet degrades; announcing anyway damages.
+    port_lost: bool,
 }
 
 impl Session {
@@ -79,7 +90,15 @@ impl Session {
             announced: false,
             host_text: None,
             awaiting_guest_data: false,
+            port_lost: false,
         }
+    }
+
+    /// Whether the read side is gone. Exposed so the I/O half can wait for the reader
+    /// thread to have noticed, which is otherwise unobservable from outside.
+    #[cfg(test)]
+    pub fn port_is_lost(&self) -> bool {
+        self.port_lost
     }
 
     /// Whether the agent negotiated `CLIPBOARD_SELECTION` (which shifts every clipboard
@@ -121,7 +140,14 @@ impl Session {
                 self.agent_caps = None;
                 self.awaiting_guest_data = false;
                 self.announced = true;
+                self.port_lost = false;
                 vec![Effect::Send(codec::encode_announce(true))]
+            }
+
+            Event::PortLost => {
+                self.port_lost = true;
+                self.awaiting_guest_data = false;
+                Vec::new()
             }
 
             Event::HostCopy(text) => {
@@ -129,7 +155,7 @@ impl Session {
                 // for content the user has already superseded.
                 self.awaiting_guest_data = false;
                 self.host_text = Some(text);
-                if !self.by_demand() {
+                if !self.by_demand() || self.port_lost {
                     return Vec::new();
                 }
                 vec![Effect::Send(codec::encode_grab(
@@ -301,6 +327,44 @@ mod tests {
             ],
         }));
         s
+    }
+
+    #[test]
+    fn a_lost_port_stops_offering_the_guest_a_clipboard() {
+        let mut s = negotiated();
+        assert!(
+            !sent(&s.on_event(Event::HostCopy("before".into()))).is_empty(),
+            "a healthy session must offer the copy"
+        );
+
+        s.on_event(Event::PortLost);
+        assert!(
+            s.on_event(Event::HostCopy("after".into())).is_empty(),
+            "a grab we cannot answer strands the guest's own clipboard"
+        );
+    }
+
+    #[test]
+    fn reopening_the_port_offers_again() {
+        // The lost flag must not outlive the port it describes, or a guest reboot would
+        // come back to a permanently silent clipboard.
+        let mut s = Session::new();
+        s.on_event(Event::PortOpened);
+        s.on_event(Event::PortLost);
+        s.on_event(Event::PortOpened);
+        s.on_event(Event::Agent(AgentMessage::AnnounceCapabilities {
+            request: false,
+            caps: vec![
+                (1 << codec::cap::CLIPBOARD_BY_DEMAND) | (1 << codec::cap::CLIPBOARD_SELECTION),
+            ],
+        }));
+        assert_eq!(
+            sent(&s.on_event(Event::HostCopy("after the reboot".into()))),
+            vec![AgentMessage::ClipboardGrab {
+                selection: codec::SELECTION_CLIPBOARD,
+                types: vec![codec::CLIPBOARD_UTF8_TEXT]
+            }]
+        );
     }
 
     #[test]
