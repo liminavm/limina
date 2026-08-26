@@ -1,0 +1,71 @@
+==================
+WARNING: ThreadSanitizer: data race (pid=35351)
+  Read of size 2 at 0x000104d255e0 by thread T30 (mutexes: write M0):
+    #0 thread_sync vrend_renderer.c:7882 (libvirglrenderer.1.dylib:arm64+0x60760)
+    #1 impl_thrd_routine threads_posix.h:90 (libvirglrenderer.1.dylib:arm64+0x60cc4)
+
+  Previous write of size 2 at 0x000104d255e0 by thread T19:
+    #0 vrend_renderer_init vrend_renderer.c:8268 (libvirglrenderer.1.dylib:arm64+0x4363c)
+    #1 virgl_renderer_init virglrenderer.c:960 (libvirglrenderer.1.dylib:arm64+0x52ec)
+    #2 krun_rutabaga_gfx::virgl_renderer::VirglRenderer::init::h301df0f3154d03c2 <null> (limina-vmm:arm64+0x1007d2520)
+
+  Location is global 'vrend_state' at 0x000104d25440 (libvirglrenderer.1.dylib+0x5795e0)
+
+  Mutex M0 (0x000104d25498) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64+0x337dc)
+    #1 mtx_init threads_posix.h:211 (libvirglrenderer.1.dylib:arm64+0x44bd4)
+    #2 vrend_renderer_use_threaded_sync vrend_renderer.c:7932 (libvirglrenderer.1.dylib:arm64+0x44bd4)
+    #3 vrend_renderer_init vrend_renderer.c:8252 (libvirglrenderer.1.dylib:arm64+0x43620)
+    #4 virgl_renderer_init virglrenderer.c:960 (libvirglrenderer.1.dylib:arm64+0x52ec)
+    #5 krun_rutabaga_gfx::virgl_renderer::VirglRenderer::init::h301df0f3154d03c2 <null> (limina-vmm:arm64+0x1007d2520)
+
+  Thread T30 (tid=164865, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64+0x31d84)
+    #1 thrd_create threads_posix.h:293 (libvirglrenderer.1.dylib:arm64+0x44c6c)
+    #2 u_thread_create u_thread.h:117 (libvirglrenderer.1.dylib:arm64+0x44c6c)
+    #3 vrend_renderer_use_threaded_sync vrend_renderer.c:7939 (libvirglrenderer.1.dylib:arm64+0x44c6c)
+    #4 vrend_renderer_init vrend_renderer.c:8252 (libvirglrenderer.1.dylib:arm64+0x43620)
+    #5 virgl_renderer_init virglrenderer.c:960 (libvirglrenderer.1.dylib:arm64+0x52ec)
+    #6 krun_rutabaga_gfx::virgl_renderer::VirglRenderer::init::h301df0f3154d03c2 <null> (limina-vmm:arm64+0x1007d2520)
+
+  Thread T19 (tid=164774, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64+0x31d84)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x1009911d4)
+
+SUMMARY: ThreadSanitizer: data race vrend_renderer.c:7882 in thread_sync
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=35351)
+  Write of size 1 at 0x00010fa38d61 by thread T19:
+    #0 proxy_context_destroy proxy_context.c:589 (libvirglrenderer.1.dylib:arm64+0x4eb464)
+    #1 virgl_context_destroy_func virgl_context.c:47 (libvirglrenderer.1.dylib:arm64+0x1feb0)
+    #2 util_hash_table_remove u_hash_table.c:152 (libvirglrenderer.1.dylib:arm64+0x9b90)
+    #3 virgl_context_remove virgl_context.c:83 (libvirglrenderer.1.dylib:arm64+0x1ffdc)
+    #4 virgl_renderer_context_destroy virglrenderer.c:320 (libvirglrenderer.1.dylib:arm64+0x41d0)
+    #5 _$LT$krun_rutabaga_gfx..virgl_renderer..VirglRendererContext$u20$as$u20$core..ops..drop..Drop$GT$::drop::h148f948615d86ea3 <null> (limina-vmm:arm64+0x1008426c0)
+
+  Previous read of size 1 at 0x00010fa38d61 by thread T66:
+    #0 proxy_context_sync_thread proxy_context.c:181 (libvirglrenderer.1.dylib:arm64+0x4ec7ac)
+    #1 impl_thrd_routine threads_posix.h:90 (libvirglrenderer.1.dylib:arm64+0x4ec8ac)
+
+  Location is heap block of size 2408 at 0x00010fa38400 allocated by thread T19:
+    #0 calloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64+0x64ea0)
+    #1 proxy_context_create proxy_context.c:777 (libvirglrenderer.1.dylib:arm64+0x4eafec)
+    #2 virgl_renderer_context_create_with_flags virglrenderer.c:276 (libvirglrenderer.1.dylib:arm64+0x3f80)
+    #3 _$LT$krun_rutabaga_gfx..virgl_renderer..VirglRenderer$u20$as$u20$krun_rutabaga_gfx..rutabaga_core..RutabagaComponent$GT$::create_context::h36baa1563bcb133c <null> (limina-vmm:arm64+0x1007d4200)
+
+  Thread T19 (tid=164774, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64+0x31d84)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x1009911d4)
+
+  Thread T66 (tid=165283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64+0x31d84)
+    #1 thrd_create threads_posix.h:293 (libvirglrenderer.1.dylib:arm64+0x4eb3a4)
+    #2 proxy_context_init_fencing proxy_context.c:658 (libvirglrenderer.1.dylib:arm64+0x4eb3a4)
+    #3 proxy_context_init proxy_context.c:730 (libvirglrenderer.1.dylib:arm64+0x4eb3a4)
+    #4 proxy_context_create proxy_context.c:792 (libvirglrenderer.1.dylib:arm64+0x4eb3a4)
+    #5 virgl_renderer_context_create_with_flags virglrenderer.c:276 (libvirglrenderer.1.dylib:arm64+0x3f80)
+    #6 _$LT$krun_rutabaga_gfx..virgl_renderer..VirglRenderer$u20$as$u20$krun_rutabaga_gfx..rutabaga_core..RutabagaComponent$GT$::create_context::h36baa1563bcb133c <null> (limina-vmm:arm64+0x1007d4200)
+
+SUMMARY: ThreadSanitizer: data race proxy_context.c:589 in proxy_context_destroy
+==================

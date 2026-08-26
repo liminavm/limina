@@ -32,7 +32,15 @@ fn main() {
     // cflags for epoxy/egl". MESA_PREFIX overrides the zink-on-KK Mesa location (see
     // docs/drivers/kosmickrisp.rst); default matches build-mesa-zink-kk.sh.
     let tp = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../third_party");
-    let prefix_pc = tp.join("virgl-prefix/lib/pkgconfig");
+    // LIMINA_VIRGL_PREFIX picks a different virglrenderer install than the default, the way
+    // MESA_PREFIX does for the zink-on-KK Mesa. Its reason to exist is sanitizer builds: a
+    // TSan-instrumented virglrenderer has to live in its own prefix so the working one stays
+    // usable, and the worker bakes the dylib's absolute path in at link time, so choosing it has
+    // to happen here rather than at run time.
+    let virgl_prefix = std::env::var("LIMINA_VIRGL_PREFIX")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| tp.join("virgl-prefix"));
+    let prefix_pc = virgl_prefix.join("lib/pkgconfig");
     let mesa_prefix = std::env::var("MESA_PREFIX")
         .unwrap_or_else(|_| "/Volumes/mesa-cs/zink-kk-prefix".to_string());
     let extra_pc = [

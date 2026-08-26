@@ -90,6 +90,12 @@ NOBANNER and voids the arm**, so short-text variants need their own gate.
 
 Every arm below ran against an independently measured baseline in the same session.
 
+**Booting the vehicle for this harness requires `LIMINA_GLOBAL_SCANOUT=1`.** Scanout IOSurfaces are
+created non-global and passed to the supervisor over a Mach port, so a cross-process probe cannot
+`IOSurfaceLookup` them; without the variable `bannerprobe` binds to a stale 1280x800 surface from
+early boot and every post scores `NO BANNER`. The validity gate catches this and discards rather
+than inflating the rate to 100%, so the failure is loud -- but three separate runs were spent on it.
+
 | arm | knob | result |
 |---|---|---|
 | baseline | — | 39/0, and separately 19/19 |
@@ -100,7 +106,32 @@ Every arm below ran against an independently measured baseline in the same sessi
 | host upload ordering, vs prior work | `LIMINA_VREND_TRANSFER_FORCE_SYNC=1` | 17/19 — no effect |
 | host upload ordering, vs consuming draw | `LIMINA_VREND_TRANSFER_SYNC_AFTER=1` | 12/13 — no effect |
 | damage region / clip / buffer age / culling | `CLUTTER_PAINT=disable-clipped-redraws` | 13/13 — no effect |
+| zink completion-bookkeeping races made atomic | mesa `a02579c3974` | 18/19 — no effect |
+| vrend's threaded sync removed entirely | `VIRGL_DISABLE_MT=1` | 16/19 — no effect |
+| zink command-stream reordering | `ZINK_DEBUG=noreorder` | 19/19 — no effect |
 | software-2D | `--gpu-software-2d` | **0/40 — cures** |
+
+- **Not a data race between virglrenderer and zink.** ThreadSanitizer over the host zink +
+  KosmicKrisp stack reports 19 races on a plain boot, and the suspicious ones sit on exactly the
+  seam this bug's symptoms suggested: virglrenderer's fence thread makes a *second, shared* GL
+  context current and calls `glClientWaitSync`, so it walks into zink's screen-level completion
+  bookkeeping while zink's own submit thread is in it. Two independent arms kill the theory:
+  making that bookkeeping atomic changes nothing (18/19), and *deleting the sync thread outright*
+  changes nothing (16/19). The second arm is the decisive one -- it removes the whole seam, not one
+  field of it.
+  The arm is self-evidencing: with threaded sync off there is no poll eventfd, so nothing pumped
+  `virgl_renderer_poll()` and no fence ever retired -- the window froze on the last pre-desktop
+  frame. It only produced a desktop once the worker pumped the poll itself, which it only needs to
+  do when the sync thread is genuinely absent. A run that presents a desktop under this flag has
+  therefore proved the thread is gone.
+  The races are real undefined behaviour and have been fixed on their own merits -- 23 reports down
+  to 1, see `docs/hardening-backlog.md` -- but they are not this bug. The fixed stack was re-measured
+  here and the damage rate did not move.
+- **Not zink's command-stream reordering either.** Zink hoists unsynchronised uploads into a
+  reordered command buffer that runs ahead of the batch's draws, which would explain a cached VBO
+  being read before its upload lands -- and any explicit sync curing it, by forcing a batch
+  boundary. `ZINK_DEBUG=noreorder` disables that wholesale: 19/19 damaged, the top of the band.
+  Verified present in the worker's own environment before scoring, not just exported.
 
 - **Not the cogl glyph atlas**, shared or otherwise.
 - **Not the offscreen-redirect FBO path.** With the redirect disabled the text is drawn

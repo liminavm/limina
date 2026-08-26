@@ -1493,6 +1493,59 @@ Also open, and unrelated to the above: `/sys/class/drm/card0-Virtual-1/edid` rea
 under both compositors while both have the full identity and mode list. They read the DRM connector
 property, so nothing is broken, but anything reading EDID from sysfs sees nothing.
 
+## GPU — data races in vrend and zink, found by ThreadSanitizer
+
+**Fixed**, virglrenderer `75f9358b` and mesa `49ab36589ae` / `879a6929bb2`. A boot plus a
+notification workload went from **23 ThreadSanitizer reports to 1**. Kept here for the reproduce
+recipe, the one that remains, and the negative result attached to all of it.
+
+**Why this seam is ours to find.** virglrenderer's fence thread makes a *second, shared* GL context
+current and calls `glClientWaitSync`, so it walks into zink's screen- and batch-level state from a
+thread zink does not know exists. virgl-over-zink is an upstream-undertested combination — on Linux
+virgl normally runs on radeonsi or iris — so nobody else is exercising this.
+
+**What was wrong, and what it took.** Three kinds of fault needed three kinds of fix, and the third
+is the interesting one:
+- *Unsynchronised scalars*, several already half-atomic (`bs->fence.submitted` was set with
+  `p_atomic_set()` but cleared with a plain store). Routed through `p_atomic_*`, writers **and**
+  readers — fixing only the writers leaves the race, which is exactly what the first re-measure showed.
+- *An unguarded list*: `bs->fence.mfences` is appended to by `zink_flush()` while `destroy_fence()`
+  removes entries from the fence thread. No atomic fixes a dynarray; it took a lock, held only
+  across the dynarray call and never across `FREE()`.
+- *Two bitfields sharing a storage unit*: `ctx->blitting` and `ctx->unordered_blitting` are read on
+  one thread while the threaded context writes neighbouring flags in the same unit. **Distinct
+  bitfields in one storage unit are a single memory location** to the memory model, so no per-flag
+  atomic can help — the fields have to be separated. Worth remembering the next time a race sits on
+  a field nothing obviously shares.
+
+**Still open — the one race left.** `zink_batch_reference_resource_move()` and its `_unsync()` twin
+mutate the same batch object lists from different threads *by intent*. Locking that is a hot-path
+perf decision, not a bug fix, so it is deliberately left alone.
+
+**None of it explains the notification-text corruption.** The fixes do not move the damage rate, and
+neither does `VIRGL_DISABLE_MT=1`, which deletes the fence thread and the whole cross-context seam.
+Recorded so the theory is not re-opened for free; see `spikes/notification-text-corruption/RESULTS.md`.
+
+**Reproduce.** Build mesa or virglrenderer with `-Db_sanitize=thread` into its own prefix, point the
+worker at it (`MESA_PREFIX` / `LIMINA_VIRGL_PREFIX`, the latter added to `crates/limina-vmm/build.rs`
+for exactly this), and boot with `TSAN_OPTIONS="halt_on_error=0 log_path=/tmp/tsan"`. Three traps:
+- The TSan runtime must be **linked into the worker** (`RUSTFLAGS="-C link-arg=<tsan dylib> -C
+  link-arg=-Wl,-rpath,<dir>"`). A `DYLD_INSERT_LIBRARIES` preload is stripped across the worker
+  spawn and TSan then aborts with "interceptors are not working ... loaded too late".
+- Instrumented mesa and instrumented virgl **cannot run together**: they link different TSan
+  runtimes (Apple's vs Homebrew LLVM's) and only one may be loaded.
+- **Boot alone is not enough.** Four of the races only appear once something renders, so run a
+  workload before declaring a round clean.
+
+TSan costs a lot of speed but does **not** perturb the graphics behaviour away — the
+notification-text bug still reproduces at full rate under it, which makes it a rare non-destructive
+oracle on this stack.
+
+Raw reports: `spikes/notification-text-corruption/evidence/tsan-vrend-two-races.log` and
+`tsan-zink-kk-boot-19races-plus-kkdraw-segv.log` (the latter also holds a hard SEGV in `kk_draw`,
+reached through `vk_meta_blit` from vrend's `do_readpixels`, which stopped reproducing once the
+races above were fixed).
+
 ---
 
 When a milestone's loose ends are all closed, fold the remainder back into the roadmap milestone

@@ -103,7 +103,7 @@ for v in LIMINA_KK_STATS LIMINA_KK_RTLOG LIMINA_GLOBAL_SCANOUT MESA_KK_DEBUG MES
          KK_LIMINA_CAPTURE_PASSES KK_LIMINA_CAPTURE_MAX_CBS KK_LIMINA_CAPTURE_ARM \
          KK_LIMINA_CAPTURE_RUNS KK_LIMINA_CAPTURE_SKIP KK_LIMINA_CAPTURE_REPEAT KK_LIMINA_VP_LOG \
          KK_LIMINA_FORCE_TOPO_UNSPEC KK_LIMINA_SHADER_DUMP LIMINA_ZINK_NO_FANS KK_LIMINA_NO_PROMOTE \
-         VIRGL_DISABLE_MT \
+         VIRGL_DISABLE_MT ZINK_DEBUG \
          LIMINA_KK_NOLISTRESTART LIMINA_KK_BOCACHE LIMINA_KK_NOROBUST LIMINA_KK_MTLTEXTURE_SCANOUT \
          LIMINA_GPU_MEM_BUDGET_MIB LIMINA_GPU_MEM_BUDGET_CENSUS LIMINA_GPU_MEM_BUDGET_SOFT \
          LIMINA_INPUT_TRACE LIMINA_EDGE_TRACE LIMINA_DISPLAY_TRACE LIMINA_OVERLAY_TRACE; do
@@ -116,6 +116,13 @@ done
 # which reads exactly like "no allocations happened". Setting it here, in the process that execs
 # the worker, is the same trick DYLD_FALLBACK_LIBRARY_PATH above relies on.
 [ -n "${LIMINA_IOTRACE_DYLIB:-}" ] && export DYLD_INSERT_LIBRARIES="$LIMINA_IOTRACE_DYLIB"
+# Same trick, same reason, for a sanitizer runtime. A ThreadSanitizer build of Mesa is loaded via
+# dlopen (the ICD and libEGL both are), and TSan aborts the process outright if its interceptors
+# were not installed at startup: "Interceptors are not working ... loaded too late (e.g. via
+# dlopen)". Preloading the runtime is the fix TSan itself prescribes. Use the SAME runtime the
+# instrumented libraries link against -- mixing Apple clang's and Homebrew LLVM's is worse than
+# having none.
+[ -n "${LIMINA_DYLD_INSERT:-}" ] && export DYLD_INSERT_LIBRARIES="$LIMINA_DYLD_INSERT"
 for v in LIMINA_IOTRACE_DUMP LIMINA_IOTRACE_DEPTH LIMINA_IOTRACE_ALL; do
   [ -n "$(eval echo "\${$v:-}")" ] && export "$v"
 done

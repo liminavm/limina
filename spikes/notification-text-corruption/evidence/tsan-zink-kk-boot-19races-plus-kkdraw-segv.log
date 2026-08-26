@@ -1,0 +1,1362 @@
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Write of size 4 at 0x00011ce00064 by thread T22:
+    #0 submit_queue zink_batch.c:851 (libgallium-26.3.0-devel.dylib:arm64+0xb067e0)
+    #1 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #2 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #3 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Previous read of size 4 at 0x00011ce00064 by thread T19 (mutexes: read M0, write M1):
+    #0 zink_flush zink_context.c:4558 (libgallium-26.3.0-devel.dylib:arm64+0xb575e0)
+    #1 tc_flush u_threaded_context.c:3730 (libgallium-26.3.0-devel.dylib:arm64+0x948df4)
+    #2 st_flush st_cb_flush.c:63 (libgallium-26.3.0-devel.dylib:arm64+0x37b134)
+    #3 st_context_flush <null> (libgallium-26.3.0-devel.dylib:arm64+0x39d0e8)
+    #4 dri_create_fence_fd dri_helpers.c:131 (libgallium-26.3.0-devel.dylib:arm64+0x5d88)
+    #5 dri2_create_sync egl_dri2.c:2952 (libEGL.1.dylib:arm64+0x1742c)
+    #6 _eglCreateSync eglapi.c:1967 (libEGL.1.dylib:arm64+0x81f0)
+    #7 eglCreateSyncKHR eglapi.c:1993 (libEGL.1.dylib:arm64+0x946c)
+    #8 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50564)
+
+  Location is heap block of size 68368 at 0x00011ce00000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 create_batch_state zink_batch.c:305 (libgallium-26.3.0-devel.dylib:arm64+0xb08244)
+    #3 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb04400)
+    #4 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #5 zink_context_create zink_context.c:6091 (libgallium-26.3.0-devel.dylib:arm64+0xb45c0c)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50518)
+
+  Mutex M0 (0x00010e60a860) created at:
+    #0 pthread_rwlock_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x35d54)
+    #1 u_rwlock_init rwlock.c:22 (libEGL.1.dylib:arm64+0x94564)
+    #2 _eglFindDisplay egldisplay.c:278 (libEGL.1.dylib:arm64+0x10ecc)
+    #3 _eglGetSurfacelessDisplay egldisplay.c:678 (libEGL.1.dylib:arm64+0x11704)
+    #4 eglGetPlatformDisplayEXT eglapi.c:484 (libEGL.1.dylib:arm64+0xaa5c)
+    #5 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50404)
+
+  Mutex M1 (0x00010c804ba8) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x352ec)
+    #1 mtx_init threads_posix.c:163 (libEGL.1.dylib:arm64+0xd7880)
+    #2 dri2_initialize egl_dri2.c:956 (libEGL.1.dylib:arm64+0x15d64)
+    #3 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #4 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_batch.c:851 in submit_queue
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Write of size 4 at 0x000127a00064 by thread T22:
+    #0 submit_queue zink_batch.c:851 (libgallium-26.3.0-devel.dylib:arm64+0xb067e0)
+    #1 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #2 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #3 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Previous read of size 4 at 0x000127a00064 by thread T19:
+    #0 zink_flush zink_context.c:4558 (libgallium-26.3.0-devel.dylib:arm64+0xb575e0)
+    #1 tc_flush u_threaded_context.c:3730 (libgallium-26.3.0-devel.dylib:arm64+0x948df4)
+    #2 _mesa_fence_sync syncobj.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x2c4e48)
+    #3 _mesa_FenceSync syncobj.c:335 (libgallium-26.3.0-devel.dylib:arm64+0x2c506c)
+    #4 glFenceSync es2_glapi_mapi_tmp.h:1051 (libGLESv2.2.dylib:arm64+0x42ec)
+    #5 vrend_renderer_create_fence <null> (libvirglrenderer.1.dylib:arm64+0x33f34)
+
+  Location is heap block of size 68368 at 0x000127a00000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 create_batch_state zink_batch.c:305 (libgallium-26.3.0-devel.dylib:arm64+0xb08244)
+    #3 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb043b0)
+    #4 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #5 zink_context_create zink_context.c:6091 (libgallium-26.3.0-devel.dylib:arm64+0xb45c0c)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_batch.c:851 in submit_queue
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Atomic write of size 1 at 0x000127a00038 by thread T22:
+    #0 submit_queue zink_batch.c:862 (libgallium-26.3.0-devel.dylib:arm64+0xb068f0)
+    #1 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #2 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #3 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Previous read of size 1 at 0x000127a00038 by thread T19:
+    #0 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb04008)
+    #1 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #2 flush_batch zink_context.c:4065 (libgallium-26.3.0-devel.dylib:arm64+0xb3b938)
+    #3 zink_flush zink_context.c:4538 (libgallium-26.3.0-devel.dylib:arm64+0xb57474)
+    #4 tc_flush u_threaded_context.c:3730 (libgallium-26.3.0-devel.dylib:arm64+0x948df4)
+    #5 _mesa_fence_sync syncobj.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x2c4e48)
+    #6 _mesa_FenceSync syncobj.c:335 (libgallium-26.3.0-devel.dylib:arm64+0x2c506c)
+    #7 glFenceSync es2_glapi_mapi_tmp.h:1051 (libGLESv2.2.dylib:arm64+0x42ec)
+    #8 vrend_renderer_create_fence <null> (libvirglrenderer.1.dylib:arm64+0x33f34)
+
+  Location is heap block of size 68368 at 0x000127a00000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 create_batch_state zink_batch.c:305 (libgallium-26.3.0-devel.dylib:arm64+0xb08244)
+    #3 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb043b0)
+    #4 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #5 zink_context_create zink_context.c:6091 (libgallium-26.3.0-devel.dylib:arm64+0xb45c0c)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_batch.c:862 in submit_queue
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Write of size 4 at 0x00011908c6d8 by thread T19 (mutexes: write M0):
+    #0 zink_end_batch zink_batch.c:892 (libgallium-26.3.0-devel.dylib:arm64+0xb05000)
+    #1 flush_batch zink_context.c:4055 (libgallium-26.3.0-devel.dylib:arm64+0xb3b84c)
+    #2 zink_flush zink_context.c:4538 (libgallium-26.3.0-devel.dylib:arm64+0xb57474)
+    #3 tc_batch_execute u_threaded_context.c:5436 (libgallium-26.3.0-devel.dylib:arm64+0x9590f0)
+    #4 tc_batch_execute u_threaded_context.c:5390 (libgallium-26.3.0-devel.dylib:arm64+0x9549ac)
+    #5 tc_texture_subdata u_threaded_context.c:3342 (libgallium-26.3.0-devel.dylib:arm64+0x951ec8)
+    #6 st_TexSubImage st_cb_texture.c:2215 (libgallium-26.3.0-devel.dylib:arm64+0x3805d4)
+    #7 texture_sub_image teximage.c:3786 (libgallium-26.3.0-devel.dylib:arm64+0x2e6ac4)
+    #8 texsubimage_err teximage.c:3836 (libgallium-26.3.0-devel.dylib:arm64+0x2e5ea8)
+    #9 _mesa_TexSubImage2D teximage.c:4050 (libgallium-26.3.0-devel.dylib:arm64+0x2e6080)
+    #10 glTexSubImage2D es2_glapi_mapi_tmp.h:2437 (libGLESv2.2.dylib:arm64+0xa184)
+    #11 vrend_renderer_transfer_write_iov <null> (libvirglrenderer.1.dylib:arm64+0x301e0)
+
+  Previous read of size 4 at 0x00011908c6d8 by thread T22:
+    #0 submit_queue zink_batch.c:860 (libgallium-26.3.0-devel.dylib:arm64+0xb0684c)
+    #1 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #2 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #3 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Location is heap block of size 112736 at 0x00011908c000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 zink_context_create zink_context.c:5840 (libgallium-26.3.0-devel.dylib:arm64+0xb44308)
+    #3 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #4 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #5 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #6 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #7 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #8 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Mutex M0 (0x0001287e4400) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x352ec)
+    #1 mtx_init threads_posix.c:163 (libgallium-26.3.0-devel.dylib:arm64+0x6cde50)
+    #2 _simple_mtx_plain_init_once simple_mtx.c:13 (libgallium-26.3.0-devel.dylib:arm64+0x68084c)
+    #3 util_call_once_data_slow_once u_call_once.c:20 (libgallium-26.3.0-devel.dylib:arm64+0x689eb8)
+    #4 pthread_once <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x36b04)
+    #5 call_once threads_posix.c:53 (libgallium-26.3.0-devel.dylib:arm64+0x6cdc10)
+    #6 util_call_once_data_slow u_call_once.c:29 (libgallium-26.3.0-devel.dylib:arm64+0x689e60)
+    #7 simple_mtx_init simple_mtx.c:22 (libgallium-26.3.0-devel.dylib:arm64+0x6808bc)
+    #8 _mesa_alloc_shared_state shared.c:139 (libgallium-26.3.0-devel.dylib:arm64+0x2bf9a8)
+    #9 _mesa_initialize_context context.c:1019 (libgallium-26.3.0-devel.dylib:arm64+0xfa5d0)
+    #10 st_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x387264)
+    #11 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dc0c)
+    #12 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #13 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #14 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #15 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #16 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+SUMMARY: ThreadSanitizer: data race zink_batch.c:892 in zink_end_batch
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Read of size 4 at 0x000133f50050 by thread T30:
+    #0 zink_fence_reference zink_fence.c:80 (libgallium-26.3.0-devel.dylib:arm64+0xc3ef1c)
+    #1 fence_reference zink_fence.c:90 (libgallium-26.3.0-devel.dylib:arm64+0xc3fd5c)
+    #2 __client_wait_sync syncobj.c:160 (libgallium-26.3.0-devel.dylib:arm64+0x2c5888)
+    #3 _mesa_ClientWaitSync syncobj.c:401 (libgallium-26.3.0-devel.dylib:arm64+0x2c51fc)
+    #4 glClientWaitSync es2_glapi_mapi_tmp.h:652 (libGLESv2.2.dylib:arm64+0x27bc)
+    #5 thread_sync <null> (libvirglrenderer.1.dylib:arm64+0x3ad14)
+
+  Previous write of size 4 at 0x000133f50050 by thread T19:
+    #0 zink_flush zink_context.c:4559 (libgallium-26.3.0-devel.dylib:arm64+0xb576f8)
+    #1 tc_flush u_threaded_context.c:3730 (libgallium-26.3.0-devel.dylib:arm64+0x948df4)
+    #2 _mesa_fence_sync syncobj.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x2c4e48)
+    #3 _mesa_FenceSync syncobj.c:335 (libgallium-26.3.0-devel.dylib:arm64+0x2c506c)
+    #4 glFenceSync es2_glapi_mapi_tmp.h:1051 (libGLESv2.2.dylib:arm64+0x42ec)
+    #5 vrend_renderer_create_fence <null> (libvirglrenderer.1.dylib:arm64+0x33f34)
+
+  Location is heap block of size 68368 at 0x000133f50000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 create_batch_state zink_batch.c:305 (libgallium-26.3.0-devel.dylib:arm64+0xb08244)
+    #3 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb043b0)
+    #4 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #5 zink_context_create zink_context.c:6091 (libgallium-26.3.0-devel.dylib:arm64+0xb45c0c)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T30 (tid=258417, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 vrend_renderer_use_threaded_sync <null> (libvirglrenderer.1.dylib:arm64+0x2aa74)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_fence.c:80 in zink_fence_reference
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Read of size 8 at 0x00010bb41e08 by thread T30:
+    #0 zink_fence_reference zink_fence.c:80 (libgallium-26.3.0-devel.dylib:arm64+0xc3ef78)
+    #1 fence_reference zink_fence.c:90 (libgallium-26.3.0-devel.dylib:arm64+0xc3fd5c)
+    #2 __client_wait_sync syncobj.c:160 (libgallium-26.3.0-devel.dylib:arm64+0x2c5888)
+    #3 _mesa_ClientWaitSync syncobj.c:401 (libgallium-26.3.0-devel.dylib:arm64+0x2c51fc)
+    #4 glClientWaitSync es2_glapi_mapi_tmp.h:652 (libGLESv2.2.dylib:arm64+0x27bc)
+    #5 thread_sync <null> (libvirglrenderer.1.dylib:arm64+0x3ad14)
+
+  Previous write of size 8 at 0x00010bb41e08 by thread T19:
+    #0 zink_flush zink_context.c:4559 (libgallium-26.3.0-devel.dylib:arm64+0xb57704)
+    #1 tc_flush u_threaded_context.c:3730 (libgallium-26.3.0-devel.dylib:arm64+0x948df4)
+    #2 _mesa_fence_sync syncobj.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x2c4e48)
+    #3 _mesa_FenceSync syncobj.c:335 (libgallium-26.3.0-devel.dylib:arm64+0x2c506c)
+    #4 glFenceSync es2_glapi_mapi_tmp.h:1051 (libGLESv2.2.dylib:arm64+0x42ec)
+    #5 vrend_renderer_create_fence <null> (libvirglrenderer.1.dylib:arm64+0x33f34)
+
+  Location is heap block of size 64 at 0x00010bb41e00 allocated by thread T19:
+    #0 realloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x67b64)
+    #1 zink_flush zink_context.c:4559 (libgallium-26.3.0-devel.dylib:arm64+0xb576c4)
+    #2 tc_flush u_threaded_context.c:3730 (libgallium-26.3.0-devel.dylib:arm64+0x948df4)
+    #3 _mesa_fence_sync syncobj.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x2c4e48)
+    #4 _mesa_FenceSync syncobj.c:335 (libgallium-26.3.0-devel.dylib:arm64+0x2c506c)
+    #5 glFenceSync es2_glapi_mapi_tmp.h:1051 (libGLESv2.2.dylib:arm64+0x42ec)
+    #6 vrend_renderer_create_fence <null> (libvirglrenderer.1.dylib:arm64+0x33f34)
+
+  Thread T30 (tid=258417, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 vrend_renderer_use_threaded_sync <null> (libvirglrenderer.1.dylib:arm64+0x2aa74)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_fence.c:80 in zink_fence_reference
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Atomic write of size 1 at 0x000133fa0038 by thread T22:
+    #0 submit_queue zink_batch.c:862 (libgallium-26.3.0-devel.dylib:arm64+0xb068f0)
+    #1 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #2 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #3 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Previous read of size 1 at 0x000133fa0038 by thread T19:
+    #0 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb04008)
+    #1 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #2 flush_batch zink_context.c:4065 (libgallium-26.3.0-devel.dylib:arm64+0xb3b938)
+    #3 zink_flush zink_context.c:4538 (libgallium-26.3.0-devel.dylib:arm64+0xb57474)
+    #4 zink_batch_usage_wait zink_batch.c:1269 (libgallium-26.3.0-devel.dylib:arm64+0xb07eec)
+    #5 zink_image_map zink_resource.c:2965 (libgallium-26.3.0-devel.dylib:arm64+0xc66f04)
+    #6 u_transfer_helper_transfer_map u_transfer_helper.c:376 (libgallium-26.3.0-devel.dylib:arm64+0x942ed8)
+    #7 tc_texture_map u_threaded_context.c:2891 (libgallium-26.3.0-devel.dylib:arm64+0x950c90)
+    #8 _mesa_map_renderbuffer renderbuffer.c:486 (libgallium-26.3.0-devel.dylib:arm64+0x2a5850)
+    #9 _mesa_readpixels readpix.c:901 (libgallium-26.3.0-devel.dylib:arm64+0x2a2b58)
+    #10 st_ReadPixels st_cb_readpixels.c:584 (libgallium-26.3.0-devel.dylib:arm64+0x37c190)
+    #11 _mesa_ReadnPixelsARB readpix.c:1228 (libgallium-26.3.0-devel.dylib:arm64+0x2a48c4)
+    #12 _dispatch_stub_ReadnPixelsARB shared_glapi_mapi_tmp.h:23565 (libgallium-26.3.0-devel.dylib:arm64+0xac12f8)
+    #13 do_readpixels <null> (libvirglrenderer.1.dylib:arm64+0x368e4)
+
+  Location is heap block of size 68368 at 0x000133fa0000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 create_batch_state zink_batch.c:305 (libgallium-26.3.0-devel.dylib:arm64+0xb08244)
+    #3 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb04400)
+    #4 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #5 zink_context_create zink_context.c:6091 (libgallium-26.3.0-devel.dylib:arm64+0xb45c0c)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_batch.c:862 in submit_queue
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Atomic write of size 1 at 0x000134500038 by thread T22:
+    #0 submit_queue zink_batch.c:862 (libgallium-26.3.0-devel.dylib:arm64+0xb068f0)
+    #1 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #2 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #3 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Previous read of size 1 at 0x000134500038 by thread T19:
+    #0 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb04008)
+    #1 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #2 flush_batch zink_context.c:4065 (libgallium-26.3.0-devel.dylib:arm64+0xb3b938)
+    #3 zink_flush zink_context.c:4538 (libgallium-26.3.0-devel.dylib:arm64+0xb57474)
+    #4 zink_fence_wait zink_context.c:4590 (libgallium-26.3.0-devel.dylib:arm64+0xb3c998)
+    #5 zink_image_map zink_resource.c:2968 (libgallium-26.3.0-devel.dylib:arm64+0xc66f78)
+    #6 u_transfer_helper_transfer_map u_transfer_helper.c:376 (libgallium-26.3.0-devel.dylib:arm64+0x942ed8)
+    #7 tc_texture_map u_threaded_context.c:2891 (libgallium-26.3.0-devel.dylib:arm64+0x950c90)
+    #8 _mesa_map_renderbuffer renderbuffer.c:486 (libgallium-26.3.0-devel.dylib:arm64+0x2a5850)
+    #9 _mesa_readpixels readpix.c:901 (libgallium-26.3.0-devel.dylib:arm64+0x2a2b58)
+    #10 st_ReadPixels st_cb_readpixels.c:584 (libgallium-26.3.0-devel.dylib:arm64+0x37c190)
+    #11 _mesa_ReadnPixelsARB readpix.c:1228 (libgallium-26.3.0-devel.dylib:arm64+0x2a48c4)
+    #12 _dispatch_stub_ReadnPixelsARB shared_glapi_mapi_tmp.h:23565 (libgallium-26.3.0-devel.dylib:arm64+0xac12f8)
+    #13 do_readpixels <null> (libvirglrenderer.1.dylib:arm64+0x368e4)
+
+  Location is heap block of size 68368 at 0x000134500000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 create_batch_state zink_batch.c:305 (libgallium-26.3.0-devel.dylib:arm64+0xb08244)
+    #3 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb0426c)
+    #4 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #5 zink_context_create zink_context.c:6091 (libgallium-26.3.0-devel.dylib:arm64+0xb45c0c)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_batch.c:862 in submit_queue
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Write of size 8 at 0x000116a47c38 by thread T19 (mutexes: write M0):
+    #0 kk_limina_counts_tick <null> (libvulkan_kosmickrisp.dylib:arm64+0x18414c)
+    #1 kk_CmdPipelineBarrier2 <null> (libvulkan_kosmickrisp.dylib:arm64+0x185434)
+    #2 kk_cmd_tramp_CmdPipelineBarrier2 <null> (libvulkan_kosmickrisp.dylib:arm64+0x17db08)
+    #3 emit_memory_barrier<(barrier_type)1>::for_image(zink_context*, zink_resource*, VkImageLayout, unsigned int, unsigned int, bool, VkCommandBuffer_T*, bool*) zink_synchronization.cpp:302 (libgallium-26.3.0-devel.dylib:arm64+0xc7f3ac)
+    #4 void zink_resource_image_barrier<(barrier_type)1, true, true>(zink_context*, zink_resource*, VkImageLayout, unsigned int, unsigned int) zink_synchronization.cpp:445 (libgallium-26.3.0-devel.dylib:arm64+0xc7f8ac)
+    #5 void zink_resource_image_barrier_general<true>(zink_context*, zink_resource*, VkImageLayout, unsigned int, unsigned int) zink_synchronization.cpp:710 (libgallium-26.3.0-devel.dylib:arm64+0xc7abd4)
+    #6 zink_resource_image_transfer_dst_barrier zink_synchronization.cpp (libgallium-26.3.0-devel.dylib:arm64+0xc78fac)
+    #7 zink_copy_image_buffer zink_context.c:5181 (libgallium-26.3.0-devel.dylib:arm64+0xb3de10)
+    #8 zink_transfer_flush_region zink_resource.c:3167 (libgallium-26.3.0-devel.dylib:arm64+0xc61524)
+    #9 transfer_unmap zink_resource.c:3419 (libgallium-26.3.0-devel.dylib:arm64+0xc5dd98)
+    #10 zink_image_unmap zink_resource.c:3465 (libgallium-26.3.0-devel.dylib:arm64+0xc6743c)
+    #11 u_transfer_helper_transfer_unmap u_transfer_helper.c:705 (libgallium-26.3.0-devel.dylib:arm64+0x944c94)
+    #12 u_default_texture_subdata u_transfer.c:116 (libgallium-26.3.0-devel.dylib:arm64+0x94251c)
+    #13 zink_image_subdata zink_resource.c:3123 (libgallium-26.3.0-devel.dylib:arm64+0xc60804)
+    #14 tc_texture_subdata u_threaded_context.c:3345 (libgallium-26.3.0-devel.dylib:arm64+0x951ef4)
+    #15 st_TexSubImage st_cb_texture.c:2215 (libgallium-26.3.0-devel.dylib:arm64+0x3805d4)
+    #16 texture_sub_image teximage.c:3786 (libgallium-26.3.0-devel.dylib:arm64+0x2e6ac4)
+    #17 texsubimage_err teximage.c:3836 (libgallium-26.3.0-devel.dylib:arm64+0x2e5ea8)
+    #18 _mesa_TexSubImage2D teximage.c:4050 (libgallium-26.3.0-devel.dylib:arm64+0x2e6080)
+    #19 glTexSubImage2D es2_glapi_mapi_tmp.h:2437 (libGLESv2.2.dylib:arm64+0xa184)
+    #20 vrend_renderer_transfer_write_iov <null> (libvirglrenderer.1.dylib:arm64+0x301e0)
+
+  Previous write of size 8 at 0x000116a47c38 by thread T56:
+    #0 kk_limina_counts_tick <null> (libvulkan_kosmickrisp.dylib:arm64+0x18414c)
+    #1 cs_start_render <null> (libvulkan_kosmickrisp.dylib:arm64+0x183ae0)
+    #2 kk_CmdBeginRendering <null> (libvulkan_kosmickrisp.dylib:arm64+0x189a98)
+    #3 kk_cmd_tramp_CmdBeginRendering <null> (libvulkan_kosmickrisp.dylib:arm64+0x17e8c0)
+    #4 begin_rendering zink_context.c:3544 (libgallium-26.3.0-devel.dylib:arm64+0xb39a30)
+    #5 zink_batch_rp zink_context.c:3634 (libgallium-26.3.0-devel.dylib:arm64+0xb376d8)
+    #6 zink_flush_clears zink_context.c:3785 (libgallium-26.3.0-devel.dylib:arm64+0xb5e994)
+    #7 zink_set_framebuffer_state zink_context.c:4263 (libgallium-26.3.0-devel.dylib:arm64+0xb55ab4)
+    #8 tc_batch_execute u_threaded_context.c:5415 (libgallium-26.3.0-devel.dylib:arm64+0x957680)
+    #9 tc_batch_execute u_threaded_context.c:5390 (libgallium-26.3.0-devel.dylib:arm64+0x9549ac)
+    #10 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #11 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Location is global 'kk_limina_counts' at 0x000116a47c38 (libvulkan_kosmickrisp.dylib+0x124fc38)
+
+  Mutex M0 (0x0001287e4400) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x352ec)
+    #1 mtx_init threads_posix.c:163 (libgallium-26.3.0-devel.dylib:arm64+0x6cde50)
+    #2 _simple_mtx_plain_init_once simple_mtx.c:13 (libgallium-26.3.0-devel.dylib:arm64+0x68084c)
+    #3 util_call_once_data_slow_once u_call_once.c:20 (libgallium-26.3.0-devel.dylib:arm64+0x689eb8)
+    #4 pthread_once <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x36b04)
+    #5 call_once threads_posix.c:53 (libgallium-26.3.0-devel.dylib:arm64+0x6cdc10)
+    #6 util_call_once_data_slow u_call_once.c:29 (libgallium-26.3.0-devel.dylib:arm64+0x689e60)
+    #7 simple_mtx_init simple_mtx.c:22 (libgallium-26.3.0-devel.dylib:arm64+0x6808bc)
+    #8 _mesa_alloc_shared_state shared.c:139 (libgallium-26.3.0-devel.dylib:arm64+0x2bf9a8)
+    #9 _mesa_initialize_context context.c:1019 (libgallium-26.3.0-devel.dylib:arm64+0xfa5d0)
+    #10 st_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x387264)
+    #11 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dc0c)
+    #12 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #13 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #14 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #15 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #16 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+  Thread T56 (tid=258854, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 threaded_context_create u_threaded_context.c:5594 (libgallium-26.3.0-devel.dylib:arm64+0x9467ec)
+    #5 zink_context_create zink_context.c:6198 (libgallium-26.3.0-devel.dylib:arm64+0xb469dc)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+SUMMARY: ThreadSanitizer: data race (libvulkan_kosmickrisp.dylib:arm64+0x18414c) in kk_limina_counts_tick+0x40
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Write of size 8 at 0x000116a47c40 by thread T56:
+    #0 kk_CmdPipelineBarrier2 <null> (libvulkan_kosmickrisp.dylib:arm64+0x185424)
+    #1 kk_cmd_tramp_CmdPipelineBarrier2 <null> (libvulkan_kosmickrisp.dylib:arm64+0x17db08)
+    #2 emit_memory_barrier<(barrier_type)1>::for_image(zink_context*, zink_resource*, VkImageLayout, unsigned int, unsigned int, bool, VkCommandBuffer_T*, bool*) zink_synchronization.cpp:302 (libgallium-26.3.0-devel.dylib:arm64+0xc7f3ac)
+    #3 void zink_resource_image_barrier<(barrier_type)1, false, true>(zink_context*, zink_resource*, VkImageLayout, unsigned int, unsigned int) zink_synchronization.cpp:445 (libgallium-26.3.0-devel.dylib:arm64+0xc7dea8)
+    #4 void zink_resource_image_barrier_general<false>(zink_context*, zink_resource*, VkImageLayout, unsigned int, unsigned int) zink_synchronization.cpp:710 (libgallium-26.3.0-devel.dylib:arm64+0xc7aadc)
+    #5 zink_flush_clears zink_context.c:3756 (libgallium-26.3.0-devel.dylib:arm64+0xb5e824)
+    #6 zink_set_framebuffer_state zink_context.c:4263 (libgallium-26.3.0-devel.dylib:arm64+0xb55ab4)
+    #7 tc_batch_execute u_threaded_context.c:5415 (libgallium-26.3.0-devel.dylib:arm64+0x957680)
+    #8 tc_batch_execute u_threaded_context.c:5390 (libgallium-26.3.0-devel.dylib:arm64+0x9549ac)
+    #9 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #10 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Previous write of size 8 at 0x000116a47c40 by thread T19 (mutexes: write M0):
+    #0 kk_CmdPipelineBarrier2 <null> (libvulkan_kosmickrisp.dylib:arm64+0x185424)
+    #1 kk_cmd_tramp_CmdPipelineBarrier2 <null> (libvulkan_kosmickrisp.dylib:arm64+0x17db08)
+    #2 emit_memory_barrier<(barrier_type)1>::for_image(zink_context*, zink_resource*, VkImageLayout, unsigned int, unsigned int, bool, VkCommandBuffer_T*, bool*) zink_synchronization.cpp:302 (libgallium-26.3.0-devel.dylib:arm64+0xc7f3ac)
+    #3 void zink_resource_image_barrier<(barrier_type)1, true, true>(zink_context*, zink_resource*, VkImageLayout, unsigned int, unsigned int) zink_synchronization.cpp:445 (libgallium-26.3.0-devel.dylib:arm64+0xc7f8ac)
+    #4 void zink_resource_image_barrier_general<true>(zink_context*, zink_resource*, VkImageLayout, unsigned int, unsigned int) zink_synchronization.cpp:710 (libgallium-26.3.0-devel.dylib:arm64+0xc7abd4)
+    #5 zink_resource_image_transfer_dst_barrier zink_synchronization.cpp (libgallium-26.3.0-devel.dylib:arm64+0xc78fac)
+    #6 zink_copy_image_buffer zink_context.c:5181 (libgallium-26.3.0-devel.dylib:arm64+0xb3de10)
+    #7 zink_transfer_flush_region zink_resource.c:3167 (libgallium-26.3.0-devel.dylib:arm64+0xc61524)
+    #8 transfer_unmap zink_resource.c:3419 (libgallium-26.3.0-devel.dylib:arm64+0xc5dd98)
+    #9 zink_image_unmap zink_resource.c:3465 (libgallium-26.3.0-devel.dylib:arm64+0xc6743c)
+    #10 u_transfer_helper_transfer_unmap u_transfer_helper.c:705 (libgallium-26.3.0-devel.dylib:arm64+0x944c94)
+    #11 u_default_texture_subdata u_transfer.c:116 (libgallium-26.3.0-devel.dylib:arm64+0x94251c)
+    #12 zink_image_subdata zink_resource.c:3123 (libgallium-26.3.0-devel.dylib:arm64+0xc60804)
+    #13 tc_texture_subdata u_threaded_context.c:3345 (libgallium-26.3.0-devel.dylib:arm64+0x951ef4)
+    #14 st_TexSubImage st_cb_texture.c:2215 (libgallium-26.3.0-devel.dylib:arm64+0x3805d4)
+    #15 texture_sub_image teximage.c:3786 (libgallium-26.3.0-devel.dylib:arm64+0x2e6ac4)
+    #16 texsubimage_err teximage.c:3836 (libgallium-26.3.0-devel.dylib:arm64+0x2e5ea8)
+    #17 _mesa_TexSubImage2D teximage.c:4050 (libgallium-26.3.0-devel.dylib:arm64+0x2e6080)
+    #18 glTexSubImage2D es2_glapi_mapi_tmp.h:2437 (libGLESv2.2.dylib:arm64+0xa184)
+    #19 vrend_renderer_transfer_write_iov <null> (libvirglrenderer.1.dylib:arm64+0x301e0)
+
+  Location is global 'kk_limina_counts' at 0x000116a47c38 (libvulkan_kosmickrisp.dylib+0x124fc40)
+
+  Mutex M0 (0x0001287e4400) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x352ec)
+    #1 mtx_init threads_posix.c:163 (libgallium-26.3.0-devel.dylib:arm64+0x6cde50)
+    #2 _simple_mtx_plain_init_once simple_mtx.c:13 (libgallium-26.3.0-devel.dylib:arm64+0x68084c)
+    #3 util_call_once_data_slow_once u_call_once.c:20 (libgallium-26.3.0-devel.dylib:arm64+0x689eb8)
+    #4 pthread_once <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x36b04)
+    #5 call_once threads_posix.c:53 (libgallium-26.3.0-devel.dylib:arm64+0x6cdc10)
+    #6 util_call_once_data_slow u_call_once.c:29 (libgallium-26.3.0-devel.dylib:arm64+0x689e60)
+    #7 simple_mtx_init simple_mtx.c:22 (libgallium-26.3.0-devel.dylib:arm64+0x6808bc)
+    #8 _mesa_alloc_shared_state shared.c:139 (libgallium-26.3.0-devel.dylib:arm64+0x2bf9a8)
+    #9 _mesa_initialize_context context.c:1019 (libgallium-26.3.0-devel.dylib:arm64+0xfa5d0)
+    #10 st_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x387264)
+    #11 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dc0c)
+    #12 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #13 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #14 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #15 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #16 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T56 (tid=258854, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 threaded_context_create u_threaded_context.c:5594 (libgallium-26.3.0-devel.dylib:arm64+0x9467ec)
+    #5 zink_context_create zink_context.c:6198 (libgallium-26.3.0-devel.dylib:arm64+0xb469dc)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race (libvulkan_kosmickrisp.dylib:arm64+0x185424) in kk_CmdPipelineBarrier2+0x38
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Read of size 2 at 0x0001190a784e by thread T19 (mutexes: write M0):
+    #0 void zink_resource_image_barrier<(barrier_type)1, true, true>(zink_context*, zink_resource*, VkImageLayout, unsigned int, unsigned int) zink_synchronization.cpp:456 (libgallium-26.3.0-devel.dylib:arm64+0xc7f8f8)
+    #1 void zink_resource_image_barrier_general<true>(zink_context*, zink_resource*, VkImageLayout, unsigned int, unsigned int) zink_synchronization.cpp:710 (libgallium-26.3.0-devel.dylib:arm64+0xc7abd4)
+    #2 zink_resource_image_transfer_dst_barrier zink_synchronization.cpp (libgallium-26.3.0-devel.dylib:arm64+0xc78fac)
+    #3 zink_copy_image_buffer zink_context.c:5181 (libgallium-26.3.0-devel.dylib:arm64+0xb3de10)
+    #4 zink_transfer_flush_region zink_resource.c:3167 (libgallium-26.3.0-devel.dylib:arm64+0xc61524)
+    #5 transfer_unmap zink_resource.c:3419 (libgallium-26.3.0-devel.dylib:arm64+0xc5dd98)
+    #6 zink_image_unmap zink_resource.c:3465 (libgallium-26.3.0-devel.dylib:arm64+0xc6743c)
+    #7 u_transfer_helper_transfer_unmap u_transfer_helper.c:705 (libgallium-26.3.0-devel.dylib:arm64+0x944c94)
+    #8 u_default_texture_subdata u_transfer.c:116 (libgallium-26.3.0-devel.dylib:arm64+0x94251c)
+    #9 zink_image_subdata zink_resource.c:3123 (libgallium-26.3.0-devel.dylib:arm64+0xc60804)
+    #10 tc_texture_subdata u_threaded_context.c:3345 (libgallium-26.3.0-devel.dylib:arm64+0x951ef4)
+    #11 st_TexSubImage st_cb_texture.c:2215 (libgallium-26.3.0-devel.dylib:arm64+0x3805d4)
+    #12 texture_sub_image teximage.c:3786 (libgallium-26.3.0-devel.dylib:arm64+0x2e6ac4)
+    #13 texsubimage_err teximage.c:3836 (libgallium-26.3.0-devel.dylib:arm64+0x2e5ea8)
+    #14 _mesa_TexSubImage2D teximage.c:4050 (libgallium-26.3.0-devel.dylib:arm64+0x2e6080)
+    #15 glTexSubImage2D es2_glapi_mapi_tmp.h:2437 (libGLESv2.2.dylib:arm64+0xa184)
+    #16 vrend_renderer_transfer_write_iov <null> (libvirglrenderer.1.dylib:arm64+0x301e0)
+
+  Previous write of size 2 at 0x0001190a784e by thread T56:
+    #0 zink_set_framebuffer_state zink_context.c:4399 (libgallium-26.3.0-devel.dylib:arm64+0xb56a00)
+    #1 tc_batch_execute u_threaded_context.c:5415 (libgallium-26.3.0-devel.dylib:arm64+0x957680)
+    #2 tc_batch_execute u_threaded_context.c:5390 (libgallium-26.3.0-devel.dylib:arm64+0x9549ac)
+    #3 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #4 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Location is heap block of size 112736 at 0x00011908c000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 zink_context_create zink_context.c:5840 (libgallium-26.3.0-devel.dylib:arm64+0xb44308)
+    #3 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #4 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #5 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #6 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #7 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #8 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Mutex M0 (0x0001287e4400) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x352ec)
+    #1 mtx_init threads_posix.c:163 (libgallium-26.3.0-devel.dylib:arm64+0x6cde50)
+    #2 _simple_mtx_plain_init_once simple_mtx.c:13 (libgallium-26.3.0-devel.dylib:arm64+0x68084c)
+    #3 util_call_once_data_slow_once u_call_once.c:20 (libgallium-26.3.0-devel.dylib:arm64+0x689eb8)
+    #4 pthread_once <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x36b04)
+    #5 call_once threads_posix.c:53 (libgallium-26.3.0-devel.dylib:arm64+0x6cdc10)
+    #6 util_call_once_data_slow u_call_once.c:29 (libgallium-26.3.0-devel.dylib:arm64+0x689e60)
+    #7 simple_mtx_init simple_mtx.c:22 (libgallium-26.3.0-devel.dylib:arm64+0x6808bc)
+    #8 _mesa_alloc_shared_state shared.c:139 (libgallium-26.3.0-devel.dylib:arm64+0x2bf9a8)
+    #9 _mesa_initialize_context context.c:1019 (libgallium-26.3.0-devel.dylib:arm64+0xfa5d0)
+    #10 st_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x387264)
+    #11 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dc0c)
+    #12 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #13 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #14 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #15 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #16 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+  Thread T56 (tid=258854, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 threaded_context_create u_threaded_context.c:5594 (libgallium-26.3.0-devel.dylib:arm64+0x9467ec)
+    #5 zink_context_create zink_context.c:6198 (libgallium-26.3.0-devel.dylib:arm64+0xb469dc)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+SUMMARY: ThreadSanitizer: data race zink_synchronization.cpp:456 in void zink_resource_image_barrier<(barrier_type)1, true, true>(zink_context*, zink_resource*, VkImageLayout, unsigned int, unsigned int)
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Write of size 4 at 0x000110c00928 by thread T30:
+    #0 zink_screen_timeline_wait zink_screen.c:2602 (libgallium-26.3.0-devel.dylib:arm64+0xc68f04)
+    #1 fence_finish zink_fence.c:210 (libgallium-26.3.0-devel.dylib:arm64+0xc40014)
+    #2 __client_wait_sync syncobj.c:154 (libgallium-26.3.0-devel.dylib:arm64+0x2c5808)
+    #3 _mesa_ClientWaitSync syncobj.c:401 (libgallium-26.3.0-devel.dylib:arm64+0x2c51fc)
+    #4 glClientWaitSync es2_glapi_mapi_tmp.h:652 (libGLESv2.2.dylib:arm64+0x27bc)
+    #5 thread_sync <null> (libvirglrenderer.1.dylib:arm64+0x3ad14)
+
+  Previous read of size 4 at 0x000110c00928 by thread T22:
+    #0 submit_queue zink_batch.c:860 (libgallium-26.3.0-devel.dylib:arm64+0xb06888)
+    #1 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #2 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #3 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Location is heap block of size 50864 at 0x000110c00000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 zink_internal_create_screen zink_screen.c:3425 (libgallium-26.3.0-devel.dylib:arm64+0xc69310)
+    #3 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #4 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #5 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #6 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #7 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #8 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #9 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #10 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #11 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #12 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #13 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #14 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T30 (tid=258417, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 vrend_renderer_use_threaded_sync <null> (libvirglrenderer.1.dylib:arm64+0x2aa74)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_screen.c:2602 in zink_screen_timeline_wait
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Read of size 4 at 0x0001190c46d8 by thread T22:
+    #0 submit_queue zink_batch.c:860 (libgallium-26.3.0-devel.dylib:arm64+0xb0684c)
+    #1 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #2 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #3 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Previous write of size 4 at 0x0001190c46d8 by thread T19:
+    #0 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb0409c)
+    #1 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #2 flush_batch zink_context.c:4065 (libgallium-26.3.0-devel.dylib:arm64+0xb3b938)
+    #3 zink_flush zink_context.c:4538 (libgallium-26.3.0-devel.dylib:arm64+0xb57474)
+    #4 tc_flush u_threaded_context.c:3730 (libgallium-26.3.0-devel.dylib:arm64+0x948df4)
+    #5 _mesa_fence_sync syncobj.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x2c4e48)
+    #6 _mesa_FenceSync syncobj.c:335 (libgallium-26.3.0-devel.dylib:arm64+0x2c506c)
+    #7 glFenceSync es2_glapi_mapi_tmp.h:1051 (libGLESv2.2.dylib:arm64+0x42ec)
+    #8 vrend_renderer_create_fence <null> (libvirglrenderer.1.dylib:arm64+0x33f34)
+
+  Location is heap block of size 112736 at 0x0001190c4000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 zink_context_create zink_context.c:5840 (libgallium-26.3.0-devel.dylib:arm64+0xb44308)
+    #3 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #4 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #5 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #6 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #7 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #8 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_batch.c:860 in submit_queue
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Write of size 4 at 0x000134600064 by thread T22:
+    #0 submit_queue zink_batch.c:851 (libgallium-26.3.0-devel.dylib:arm64+0xb067e0)
+    #1 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #2 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #3 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Previous read of size 4 at 0x000134600064 by thread T19:
+    #0 fence_finish zink_fence.c:210 (libgallium-26.3.0-devel.dylib:arm64+0xc3fef8)
+    #1 st_glFinish st_cb_flush.c:109 (libgallium-26.3.0-devel.dylib:arm64+0x37b368)
+    #2 _mesa_Finish context.c:1641 (libgallium-26.3.0-devel.dylib:arm64+0xfc7f0)
+    #3 glFinish es2_glapi_mapi_tmp.h:1058 (libGLESv2.2.dylib:arm64+0x4348)
+    #4 vrend_renderer_transfer_write_iov <null> (libvirglrenderer.1.dylib:arm64+0x302f8)
+
+  Location is heap block of size 68368 at 0x000134600000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 create_batch_state zink_batch.c:305 (libgallium-26.3.0-devel.dylib:arm64+0xb08244)
+    #3 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb04400)
+    #4 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #5 zink_context_create zink_context.c:6091 (libgallium-26.3.0-devel.dylib:arm64+0xb45c0c)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_batch.c:851 in submit_queue
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Atomic write of size 1 at 0x000134600038 by thread T22:
+    #0 submit_queue zink_batch.c:862 (libgallium-26.3.0-devel.dylib:arm64+0xb068f0)
+    #1 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #2 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #3 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Previous read of size 1 at 0x000134600038 by thread T19:
+    #0 fence_finish zink_fence.c:210 (libgallium-26.3.0-devel.dylib:arm64+0xc3ff24)
+    #1 st_glFinish st_cb_flush.c:109 (libgallium-26.3.0-devel.dylib:arm64+0x37b368)
+    #2 _mesa_Finish context.c:1641 (libgallium-26.3.0-devel.dylib:arm64+0xfc7f0)
+    #3 glFinish es2_glapi_mapi_tmp.h:1058 (libGLESv2.2.dylib:arm64+0x4348)
+    #4 vrend_renderer_transfer_write_iov <null> (libvirglrenderer.1.dylib:arm64+0x302f8)
+
+  Location is heap block of size 68368 at 0x000134600000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 create_batch_state zink_batch.c:305 (libgallium-26.3.0-devel.dylib:arm64+0xb08244)
+    #3 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb04400)
+    #4 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #5 zink_context_create zink_context.c:6091 (libgallium-26.3.0-devel.dylib:arm64+0xb45c0c)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_batch.c:862 in submit_queue
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Atomic write of size 1 at 0x000133f00038 by thread T22:
+    #0 submit_queue zink_batch.c:862 (libgallium-26.3.0-devel.dylib:arm64+0xb068f0)
+    #1 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #2 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #3 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Previous read of size 1 at 0x000133f00038 by thread T19:
+    #0 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb04008)
+    #1 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #2 flush_batch zink_context.c:4065 (libgallium-26.3.0-devel.dylib:arm64+0xb3b938)
+    #3 zink_flush zink_context.c:4538 (libgallium-26.3.0-devel.dylib:arm64+0xb57474)
+    #4 tc_batch_execute u_threaded_context.c:5436 (libgallium-26.3.0-devel.dylib:arm64+0x9590f0)
+    #5 tc_batch_execute u_threaded_context.c:5390 (libgallium-26.3.0-devel.dylib:arm64+0x9549ac)
+    #6 tc_flush u_threaded_context.c:3721 (libgallium-26.3.0-devel.dylib:arm64+0x948d48)
+    #7 _mesa_fence_sync syncobj.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x2c4e48)
+    #8 _mesa_FenceSync syncobj.c:335 (libgallium-26.3.0-devel.dylib:arm64+0x2c506c)
+    #9 glFenceSync es2_glapi_mapi_tmp.h:1051 (libGLESv2.2.dylib:arm64+0x42ec)
+    #10 vrend_renderer_create_fence <null> (libvirglrenderer.1.dylib:arm64+0x33f34)
+
+  Location is heap block of size 68368 at 0x000133f00000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 create_batch_state zink_batch.c:305 (libgallium-26.3.0-devel.dylib:arm64+0xb08244)
+    #3 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb04360)
+    #4 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #5 zink_context_create zink_context.c:6091 (libgallium-26.3.0-devel.dylib:arm64+0xb45c0c)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_batch.c:862 in submit_queue
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Write of size 1 at 0x000127a00038 by thread T22 (mutexes: write M0, write M1):
+    #0 reset_batch_state_internal zink_batch.c:149 (libgallium-26.3.0-devel.dylib:arm64+0xb030a0)
+    #1 submit_queue zink_batch.c:867 (libgallium-26.3.0-devel.dylib:arm64+0xb06980)
+    #2 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #3 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #4 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Previous read of size 1 at 0x000127a00038 by thread T30:
+    #0 fence_finish zink_fence.c:210 (libgallium-26.3.0-devel.dylib:arm64+0xc3ff24)
+    #1 __client_wait_sync syncobj.c:154 (libgallium-26.3.0-devel.dylib:arm64+0x2c5808)
+    #2 _mesa_ClientWaitSync syncobj.c:401 (libgallium-26.3.0-devel.dylib:arm64+0x2c51d4)
+    #3 glClientWaitSync es2_glapi_mapi_tmp.h:652 (libGLESv2.2.dylib:arm64+0x27bc)
+    #4 thread_sync <null> (libvirglrenderer.1.dylib:arm64+0x3ad14)
+
+  Location is heap block of size 68368 at 0x000127a00000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 create_batch_state zink_batch.c:305 (libgallium-26.3.0-devel.dylib:arm64+0xb08244)
+    #3 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb043b0)
+    #4 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #5 zink_context_create zink_context.c:6091 (libgallium-26.3.0-devel.dylib:arm64+0xb45c0c)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Mutex M0 (0x000110c00b38) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x352ec)
+    #1 mtx_init threads_posix.c:163 (libgallium-26.3.0-devel.dylib:arm64+0x6cde50)
+    #2 _simple_mtx_plain_init_once simple_mtx.c:13 (libgallium-26.3.0-devel.dylib:arm64+0x68084c)
+    #3 util_call_once_data_slow_once u_call_once.c:20 (libgallium-26.3.0-devel.dylib:arm64+0x689eb8)
+    #4 pthread_once <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x36b04)
+    #5 call_once threads_posix.c:53 (libgallium-26.3.0-devel.dylib:arm64+0x6cdc10)
+    #6 util_call_once_data_slow u_call_once.c:29 (libgallium-26.3.0-devel.dylib:arm64+0x689e60)
+    #7 simple_mtx_init simple_mtx.c:22 (libgallium-26.3.0-devel.dylib:arm64+0x6808bc)
+    #8 zink_internal_create_screen zink_screen.c:3860 (libgallium-26.3.0-devel.dylib:arm64+0xc6bc54)
+    #9 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #10 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #11 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #12 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #13 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #14 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #15 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #16 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #17 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #18 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #19 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #20 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Mutex M1 (0x000110c00ad0) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x352ec)
+    #1 mtx_init threads_posix.c:163 (libgallium-26.3.0-devel.dylib:arm64+0x6cde50)
+    #2 _simple_mtx_plain_init_once simple_mtx.c:13 (libgallium-26.3.0-devel.dylib:arm64+0x68084c)
+    #3 util_call_once_data_slow_once u_call_once.c:20 (libgallium-26.3.0-devel.dylib:arm64+0x689eb8)
+    #4 pthread_once <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x36b04)
+    #5 call_once threads_posix.c:53 (libgallium-26.3.0-devel.dylib:arm64+0x6cdc10)
+    #6 util_call_once_data_slow u_call_once.c:29 (libgallium-26.3.0-devel.dylib:arm64+0x689e60)
+    #7 simple_mtx_init simple_mtx.c:22 (libgallium-26.3.0-devel.dylib:arm64+0x6808bc)
+    #8 zink_internal_create_screen zink_screen.c:3859 (libgallium-26.3.0-devel.dylib:arm64+0xc6bc48)
+    #9 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #10 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #11 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #12 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #13 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #14 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #15 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #16 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #17 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #18 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #19 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #20 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T30 (tid=258417, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 vrend_renderer_use_threaded_sync <null> (libvirglrenderer.1.dylib:arm64+0x2aa74)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_batch.c:149 in reset_batch_state_internal
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Write of size 4 at 0x000110c00928 by thread T22 (mutexes: write M0, write M1):
+    #0 reset_batch_state_internal zink_batch.c:151 (libgallium-26.3.0-devel.dylib:arm64+0xb030f4)
+    #1 submit_queue zink_batch.c:867 (libgallium-26.3.0-devel.dylib:arm64+0xb06980)
+    #2 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #3 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #4 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Previous write of size 4 at 0x000110c00928 by thread T30:
+    #0 zink_screen_timeline_wait zink_screen.c:2602 (libgallium-26.3.0-devel.dylib:arm64+0xc68f04)
+    #1 fence_finish zink_fence.c:210 (libgallium-26.3.0-devel.dylib:arm64+0xc40014)
+    #2 __client_wait_sync syncobj.c:154 (libgallium-26.3.0-devel.dylib:arm64+0x2c5808)
+    #3 _mesa_ClientWaitSync syncobj.c:401 (libgallium-26.3.0-devel.dylib:arm64+0x2c51fc)
+    #4 glClientWaitSync es2_glapi_mapi_tmp.h:652 (libGLESv2.2.dylib:arm64+0x27bc)
+    #5 thread_sync <null> (libvirglrenderer.1.dylib:arm64+0x3ad14)
+
+  Location is heap block of size 50864 at 0x000110c00000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 zink_internal_create_screen zink_screen.c:3425 (libgallium-26.3.0-devel.dylib:arm64+0xc69310)
+    #3 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #4 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #5 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #6 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #7 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #8 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #9 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #10 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #11 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #12 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #13 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #14 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Mutex M0 (0x000110c00b38) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x352ec)
+    #1 mtx_init threads_posix.c:163 (libgallium-26.3.0-devel.dylib:arm64+0x6cde50)
+    #2 _simple_mtx_plain_init_once simple_mtx.c:13 (libgallium-26.3.0-devel.dylib:arm64+0x68084c)
+    #3 util_call_once_data_slow_once u_call_once.c:20 (libgallium-26.3.0-devel.dylib:arm64+0x689eb8)
+    #4 pthread_once <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x36b04)
+    #5 call_once threads_posix.c:53 (libgallium-26.3.0-devel.dylib:arm64+0x6cdc10)
+    #6 util_call_once_data_slow u_call_once.c:29 (libgallium-26.3.0-devel.dylib:arm64+0x689e60)
+    #7 simple_mtx_init simple_mtx.c:22 (libgallium-26.3.0-devel.dylib:arm64+0x6808bc)
+    #8 zink_internal_create_screen zink_screen.c:3860 (libgallium-26.3.0-devel.dylib:arm64+0xc6bc54)
+    #9 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #10 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #11 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #12 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #13 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #14 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #15 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #16 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #17 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #18 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #19 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #20 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Mutex M1 (0x000110c00ad0) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x352ec)
+    #1 mtx_init threads_posix.c:163 (libgallium-26.3.0-devel.dylib:arm64+0x6cde50)
+    #2 _simple_mtx_plain_init_once simple_mtx.c:13 (libgallium-26.3.0-devel.dylib:arm64+0x68084c)
+    #3 util_call_once_data_slow_once u_call_once.c:20 (libgallium-26.3.0-devel.dylib:arm64+0x689eb8)
+    #4 pthread_once <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x36b04)
+    #5 call_once threads_posix.c:53 (libgallium-26.3.0-devel.dylib:arm64+0x6cdc10)
+    #6 util_call_once_data_slow u_call_once.c:29 (libgallium-26.3.0-devel.dylib:arm64+0x689e60)
+    #7 simple_mtx_init simple_mtx.c:22 (libgallium-26.3.0-devel.dylib:arm64+0x6808bc)
+    #8 zink_internal_create_screen zink_screen.c:3859 (libgallium-26.3.0-devel.dylib:arm64+0xc6bc48)
+    #9 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #10 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #11 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #12 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #13 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #14 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #15 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #16 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #17 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #18 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #19 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #20 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T30 (tid=258417, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 vrend_renderer_use_threaded_sync <null> (libvirglrenderer.1.dylib:arm64+0x2aa74)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_batch.c:151 in reset_batch_state_internal
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=57620)
+  Write of size 4 at 0x000127a00060 by thread T22 (mutexes: write M0, write M1):
+    #0 reset_batch_state_internal zink_batch.c:153 (libgallium-26.3.0-devel.dylib:arm64+0xb0310c)
+    #1 submit_queue zink_batch.c:867 (libgallium-26.3.0-devel.dylib:arm64+0xb06980)
+    #2 util_queue_thread_func u_queue.c:297 (libgallium-26.3.0-devel.dylib:arm64+0x68b530)
+    #3 thread_routine <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c91c)
+    #4 impl_thrd_routine threads_posix.c:43 (libgallium-26.3.0-devel.dylib:arm64+0x6ce144)
+
+  Previous write of size 4 at 0x000127a00060 by thread T30:
+    #0 fence_finish zink_fence.c:210 (libgallium-26.3.0-devel.dylib:arm64+0xc40030)
+    #1 __client_wait_sync syncobj.c:154 (libgallium-26.3.0-devel.dylib:arm64+0x2c5808)
+    #2 _mesa_ClientWaitSync syncobj.c:401 (libgallium-26.3.0-devel.dylib:arm64+0x2c51fc)
+    #3 glClientWaitSync es2_glapi_mapi_tmp.h:652 (libGLESv2.2.dylib:arm64+0x27bc)
+    #4 thread_sync <null> (libvirglrenderer.1.dylib:arm64+0x3ad14)
+
+  Location is heap block of size 68368 at 0x000127a00000 allocated by thread T19:
+    #0 malloc <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x679b4)
+    #1 rzalloc_size ralloc.c:152 (libgallium-26.3.0-devel.dylib:arm64+0x677084)
+    #2 create_batch_state zink_batch.c:305 (libgallium-26.3.0-devel.dylib:arm64+0xb08244)
+    #3 zink_reset_batch zink_batch.c:510 (libgallium-26.3.0-devel.dylib:arm64+0xb043b0)
+    #4 zink_start_batch zink_batch.c:544 (libgallium-26.3.0-devel.dylib:arm64+0xb046cc)
+    #5 zink_context_create zink_context.c:6091 (libgallium-26.3.0-devel.dylib:arm64+0xb45c0c)
+    #6 st_api_create_context <null> (libgallium-26.3.0-devel.dylib:arm64+0x39dba0)
+    #7 dri_create_context dri_context.c:180 (libgallium-26.3.0-devel.dylib:arm64+0x3bfc)
+    #8 driCreateContextAttribs <null> (libgallium-26.3.0-devel.dylib:arm64+0x964c)
+    #9 dri2_create_context egl_dri2.c:1313 (libEGL.1.dylib:arm64+0x16238)
+    #10 eglCreateContext eglapi.c:903 (libEGL.1.dylib:arm64+0x3c7c)
+    #11 virgl_egl_create_context <null> (libvirglrenderer.1.dylib:arm64+0x50b08)
+
+  Mutex M0 (0x000110c00b38) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x352ec)
+    #1 mtx_init threads_posix.c:163 (libgallium-26.3.0-devel.dylib:arm64+0x6cde50)
+    #2 _simple_mtx_plain_init_once simple_mtx.c:13 (libgallium-26.3.0-devel.dylib:arm64+0x68084c)
+    #3 util_call_once_data_slow_once u_call_once.c:20 (libgallium-26.3.0-devel.dylib:arm64+0x689eb8)
+    #4 pthread_once <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x36b04)
+    #5 call_once threads_posix.c:53 (libgallium-26.3.0-devel.dylib:arm64+0x6cdc10)
+    #6 util_call_once_data_slow u_call_once.c:29 (libgallium-26.3.0-devel.dylib:arm64+0x689e60)
+    #7 simple_mtx_init simple_mtx.c:22 (libgallium-26.3.0-devel.dylib:arm64+0x6808bc)
+    #8 zink_internal_create_screen zink_screen.c:3860 (libgallium-26.3.0-devel.dylib:arm64+0xc6bc54)
+    #9 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #10 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #11 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #12 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #13 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #14 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #15 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #16 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #17 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #18 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #19 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #20 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Mutex M1 (0x000110c00ad0) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x352ec)
+    #1 mtx_init threads_posix.c:163 (libgallium-26.3.0-devel.dylib:arm64+0x6cde50)
+    #2 _simple_mtx_plain_init_once simple_mtx.c:13 (libgallium-26.3.0-devel.dylib:arm64+0x68084c)
+    #3 util_call_once_data_slow_once u_call_once.c:20 (libgallium-26.3.0-devel.dylib:arm64+0x689eb8)
+    #4 pthread_once <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x36b04)
+    #5 call_once threads_posix.c:53 (libgallium-26.3.0-devel.dylib:arm64+0x6cdc10)
+    #6 util_call_once_data_slow u_call_once.c:29 (libgallium-26.3.0-devel.dylib:arm64+0x689e60)
+    #7 simple_mtx_init simple_mtx.c:22 (libgallium-26.3.0-devel.dylib:arm64+0x6808bc)
+    #8 zink_internal_create_screen zink_screen.c:3859 (libgallium-26.3.0-devel.dylib:arm64+0xc6bc48)
+    #9 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #10 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #11 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #12 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #13 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #14 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #15 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #16 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #17 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #18 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #19 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #20 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T22 (tid=258283, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 thrd_create threads_posix.c:255 (libgallium-26.3.0-devel.dylib:arm64+0x6ce0c8)
+    #2 u_thread_create <null> (libgallium-26.3.0-devel.dylib:arm64+0x68c8a8)
+    #3 util_queue_init u_queue.c:457 (libgallium-26.3.0-devel.dylib:arm64+0x68a8f0)
+    #4 zink_internal_create_screen zink_screen.c:3608 (libgallium-26.3.0-devel.dylib:arm64+0xc6ab50)
+    #5 zink_create_screen zink_screen.c:3916 (libgallium-26.3.0-devel.dylib:arm64+0xc69254)
+    #6 sw_screen_create_vk sw_helper.h:90 (libgallium-26.3.0-devel.dylib:arm64+0x36d0)
+    #7 pipe_loader_sw_create_screen pipe_loader_sw.c:363 (libgallium-26.3.0-devel.dylib:arm64+0xadbd0c)
+    #8 pipe_loader_create_screen_vk pipe_loader.c:182 (libgallium-26.3.0-devel.dylib:arm64+0xadb810)
+    #9 pipe_loader_create_screen pipe_loader.c:188 (libgallium-26.3.0-devel.dylib:arm64+0xadb864)
+    #10 drisw_init_screen drisw.c:620 (libgallium-26.3.0-devel.dylib:arm64+0xb250)
+    #11 driCreateNewScreen3 <null> (libgallium-26.3.0-devel.dylib:arm64+0x8b28)
+    #12 dri2_create_screen egl_dri2.c:832 (libEGL.1.dylib:arm64+0x151a8)
+    #13 dri2_initialize_surfaceless platform_surfaceless.c:394 (libEGL.1.dylib:arm64+0x188b8)
+    #14 dri2_initialize egl_dri2.c:919 (libEGL.1.dylib:arm64+0x15d00)
+    #15 eglInitialize eglapi.c:709 (libEGL.1.dylib:arm64+0x2ee4)
+    #16 virgl_egl_init <null> (libvirglrenderer.1.dylib:arm64+0x50468)
+
+  Thread T30 (tid=258417, running) created by thread T19 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 vrend_renderer_use_threaded_sync <null> (libvirglrenderer.1.dylib:arm64+0x2aa74)
+
+  Thread T19 (tid=258259, running) created by thread T9 at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x33834)
+    #1 std::sys::pal::unix::thread::Thread::new::hb97e44308caec9c9 <null> (limina-vmm:arm64+0x10099128c)
+
+SUMMARY: ThreadSanitizer: data race zink_batch.c:153 in reset_batch_state_internal
+==================
+==57620==ERROR: ThreadSanitizer: SEGV on unknown address 0x00013fdb4000 (pc 0x000115988548 bp 0x000171840ae0 sp 0x000171840360 T258259)
+==57620==The signal is caused by a READ memory access.
+    #0 kk_draw <null> (libvulkan_kosmickrisp.dylib:arm64+0x190548)
+    #1 kk_CmdDraw <null> (libvulkan_kosmickrisp.dylib:arm64+0x18c324)
+    #2 vk_meta_draw_volume <null> (libvulkan_kosmickrisp.dylib:arm64+0x134508)
+    #3 do_blit <null> (libvulkan_kosmickrisp.dylib:arm64+0x122840)
+    #4 vk_meta_blit_image <null> (libvulkan_kosmickrisp.dylib:arm64+0x120988)
+    #5 vk_meta_blit_image2 <null> (libvulkan_kosmickrisp.dylib:arm64+0x122a74)
+    #6 kk_CmdBlitImage2 <null> (libvulkan_kosmickrisp.dylib:arm64+0x1939f8)
+    #7 vk_common_CmdBlitImage <null> (libvulkan_kosmickrisp.dylib:arm64+0x7158)
+    #8 kk_cmd_tramp_CmdBlitImage <null> (libvulkan_kosmickrisp.dylib:arm64+0x17625c)
+    #9 zink_blit zink_blit.c:429 (libgallium-26.3.0-devel.dylib:arm64+0xb0b3b4)
+    #10 tc_batch_execute u_threaded_context.c:5415 (libgallium-26.3.0-devel.dylib:arm64+0x957194)
+    #11 _tc_sync u_threaded_context.c:760 (libgallium-26.3.0-devel.dylib:arm64+0x9454d0)
+    #12 tc_texture_map u_threaded_context.c:2883 (libgallium-26.3.0-devel.dylib:arm64+0x950c24)
+    #13 st_ReadPixels st_cb_readpixels.c:545 (libgallium-26.3.0-devel.dylib:arm64+0x37c5b0)
+    #14 _mesa_ReadnPixelsARB readpix.c:1228 (libgallium-26.3.0-devel.dylib:arm64+0x2a48c4)
+    #15 _dispatch_stub_ReadnPixelsARB shared_glapi_mapi_tmp.h:23565 (libgallium-26.3.0-devel.dylib:arm64+0xac12f8)
+    #16 do_readpixels <null> (libvirglrenderer.1.dylib:arm64+0x368e4)
+    #17 vrend_renderer_transfer_send_iov <null> (libvirglrenderer.1.dylib:arm64+0x30d08)
+    #18 vrend_decode_ctx_transfer_3d <null> (libvirglrenderer.1.dylib:arm64+0x185d0)
+    #19 virgl_renderer_transfer_read_iov <null> (libvirglrenderer.1.dylib:arm64+0x3ad8)
+    #20 _$LT$krun_rutabaga_gfx..virgl_renderer..VirglRenderer$u20$as$u20$krun_rutabaga_gfx..rutabaga_core..RutabagaComponent$GT$::transfer_read::hb882b939b4c7bec7 <null> (limina-vmm:arm64+0x1007d3ae8)
+    #21 krun_rutabaga_gfx::rutabaga_core::Rutabaga::transfer_read::hd1731778986e4429 <null> (limina-vmm:arm64+0x1007e5b38)
+    #22 krun_devices::virtio::gpu::virtio_gpu::VirtioGpu::transfer_read::h3067c44cf4e04f9c <null> (limina-vmm:arm64+0x10056a2f8)
+    #23 krun_devices::virtio::gpu::worker::Worker::process_gpu_command::h9ef01de60cf4f50a <null> (limina-vmm:arm64+0x1004baf84)
+    #24 krun_devices::virtio::gpu::worker::Worker::process_queue::hacf2aab5347271b7 <null> (limina-vmm:arm64+0x1004bd7c8)
+    #25 krun_devices::virtio::gpu::worker::Worker::service::hf9c5938ab31bd980 <null> (limina-vmm:arm64+0x1004b8ab4)
+    #26 krun_devices::virtio::gpu::worker::Worker::work::h5dcc032623cd34c2 <null> (limina-vmm:arm64+0x1004b5e94)
+    #27 krun_devices::virtio::gpu::worker::Worker::run::_$u7b$$u7b$closure$u7d$$u7d$::h1296654bc999c9b3 <null> (limina-vmm:arm64+0x100772290)
+    #28 std::sys::backtrace::__rust_begin_short_backtrace::h41a2231b60440960 <null> (limina-vmm:arm64+0x100535e70)
+    #29 std::thread::Builder::spawn_unchecked_::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h8964c17615a4f520 <null> (limina-vmm:arm64+0x10067a930)
+    #30 _$LT$core..panic..unwind_safe..AssertUnwindSafe$LT$F$GT$$u20$as$u20$core..ops..function..FnOnce$LT$$LP$$RP$$GT$$GT$::call_once::ha016d8e9b622fed1 <null> (limina-vmm:arm64+0x1005ec198)
+    #31 std::panicking::try::do_call::h891b3a3ca50b2370 <null> (limina-vmm:arm64+0x10075234c)
+    #32 __rust_try <null> (limina-vmm:arm64+0x10067ba44)
+    #33 std::thread::Builder::spawn_unchecked_::_$u7b$$u7b$closure$u7d$$u7d$::hfc22e36f7c285a94 <null> (limina-vmm:arm64+0x100678c0c)
+    #34 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h77bb6e15cb9d6305 <null> (limina-vmm:arm64+0x10069fc50)
+    #35 std::sys::pal::unix::thread::Thread::new::thread_start::hf0cf67e969add794 <null> (limina-vmm:arm64+0x100991428)
+    #36 __tsan_thread_start_func <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x337a0)
+    #37 _pthread_start <null> (libsystem_pthread.dylib:arm64e+0x6c54)
+    #38 thread_start <null> (libsystem_pthread.dylib:arm64e+0x1c18)
+
+==57620==Register values:
+ x[0] = 0x00000001029f4000   x[1] = 0x000010027fb68000   x[2] = 0x00000000529b120f   x[3] = 0x0000000000005003  
+ x[4] = 0x0000000000000001   x[5] = 0x0000000000000000   x[6] = 0x0000000000000000   x[7] = 0x0000000000000000  
+ x[8] = 0x0013fdb400080213   x[9] = 0x00000000129b120f  x[10] = 0x00000000129b1200  x[11] = 0x0000000128d7bf08  
+x[12] = 0x000010027fb68000  x[13] = 0x0000000000000000  x[14] = 0x0000000000000000  x[15] = 0x0000000000000004  
+x[16] = 0x000000018bfacc8c  x[17] = 0x0000000103358a40  x[18] = 0x0000000000000000  x[19] = 0x0000000000000000  
+x[20] = 0x00000001f56fb2b0  x[21] = 0x00000001f81c1508  x[22] = 0x000000013fdb4000  x[23] = 0x0000000000000005  
+x[24] = 0x0000000000001888  x[25] = 0x00000000000026e0  x[26] = 0x0000000000001884  x[27] = 0x0000000133e04000  
+x[28] = 0x0000000133e04590     fp = 0x0000000171840ae0     lr = 0x0000000115988548     sp = 0x0000000171840360  
+ThreadSanitizer can not provide additional info.
+SUMMARY: ThreadSanitizer: SEGV (libvulkan_kosmickrisp.dylib:arm64+0x190548) in kk_draw+0x41e0
+==57620==ABORTING
