@@ -1550,47 +1550,85 @@ on all eight being identical in the dimensions read while exactly one inks -- bu
 owed before any per-card claim, and vrend's `set_framebuffer_state` shares the replay's stderr,
 which is the cheap way to get it.
 
-### Reading the recorded stream: nothing is missing, but the layouts do not match across the seam
+### ROOT CAUSE: zink does not rebind the pipeline between the body draw and the title draw
 
-The replay feeds the driver only what the trace recorded, so a missing upload would be visible as an
-absent transfer. It is not missing. Every glyph-pipeline draw has its own upload a median 0.162 ms
-earlier with **zero** submit batches in between, and every title draw samples the **same** sampler
-view -- the working card and the failing ones alike. That is what llvmpipe already implied: inking
-all twelve from this trace is only possible if the content is in it.
+Nothing is missing from the recorded stream. Every glyph-pipeline draw has its own upload a median
+0.162 ms earlier with **zero** submit batches in between, and every title draw samples the **same**
+sampler view -- the working card and the failing ones alike. That is what llvmpipe already implied:
+inking all twelve from this trace is only possible if the content is in it.
 
-The inspection paid off in two other ways.
+Resource-to-card mapping, read from the framebuffer colour surface at each draw and confirmed
+against the verdict lines: `res 293` is card 1's title, `res 295` its body; `res 353`/`res 355` are
+card 2's; and so on up by ~38 per card.
 
-**The resource-to-card mapping is now established**, which several earlier claims were owed:
-`res 293` is card 1, the title that inks; `res 353` is card 2, blank. Read from the framebuffer's
-colour surface at each draw, and confirmed against the verdict lines.
+**Each card is painted twice**, and each paint is a body draw (cogl/pango glyph pipeline, strides
+16/0/16 in KK's binding order) immediately followed by a title draw (cogl journal pipeline, strides
+32/32/32). Keying every draw on the pipeline object actually in effect, and on whether zink issued a
+bind between the two draws of a pair:
 
-**And the vertex layouts do not agree across the vrend/zink seam.** Totals match, the split does not:
+| body draw runs under | bind issued between the two draws | title draw runs under | count |
+|---|---|---|---|
+| 16/0/16 (`0xbb8974000`) | **yes, to 32/32/32** | 32/32/32 | x12 |
+| 16/0/16 (`0xbb89e8e00`) | **none** | 16/0/16 | x11 |
+| 32/32/32 | none | 32/32/32 | x1 |
 
-| | into 968x44 (title) | into 568x44 (body) |
+Row 1 is every card's **first** paint: zink binds the title pipeline and the title renders. Row 2 is
+the **repaint** of cards 2-12: zink issues no bind at all, so the title draw executes under the
+body's still-bound pipeline. Row 3 is card 1's repaint, where the inherited pipeline happens already
+to be the right one.
+
+A vertex stage compiled for the body fetches vec2 positions at stride 16 out of the title's stride-32
+buffer. It rasterises nothing -- no error, no warning. The pass legitimately began with a CLEAR, so
+the correct content from the first paint is already gone, and the offscreen reads back empty.
+`FORCE_LOAD` cures by suppressing that clear, restoring the first paint's output, which is why it
+matches llvmpipe pixel-for-pixel.
+
+**The fault is symmetric, and card 1 carries both of its signs.** Row 3 is the same missed rebind
+with the roles reversed: card 1's *body* repaint runs under the title's 32/32/32 pipeline. Scoring
+every body confirms it -- eleven bodies ink a dead-uniform 4668 pixels, and card 1's inks 2313:
+
+| resource | card | ink pixels |
 |---|---|---|
-| virgl issues | 24 draws, all stride 32/32/32 | 24 draws, all stride 16/16/0 |
-| KK executes | 13 at stride 32, **11 at stride 16** | 23 at stride 16, 1 at stride 32 |
+| 295 | 1 | **2313** |
+| 355, 394, 431, 469, 508, 545, 581, 616, 653, 688, 725 | 2-12 | 4668 each |
 
-(KK orders the bindings 16/0/16 where virgl reports 16/16/0; same layout, different binding order.)
+The pixels settle what the count alone could not. Card 2's body is clean text; card 1's is sheared,
+colour-smeared garbage -- the same string and the same glyph count, so "card 1's body just says
+something different" is dead:
 
-Eleven title draws reach KK compiled for the *body's* layout. A vertex stage fetching vec2 positions
-at stride 16 out of a stride-32 buffer produces garbage geometry and rasterises nothing, which is
-the symptom exactly -- and 11 is the number of blank cards.
+- `evidence/replay-body-card2-clean-res355.png` -- "Install critical updates as soon as possible"
+- `evidence/replay-body-card1-sheared-res295.png` -- the same draw through the wrong vertex layout
 
-**Do not spend that coincidence yet.** The per-texture view says *every* title, including the one
-that inks, has a stride-16 draw in its last pass. If that holds under a real card mapping, then the
-wrong layout is not sufficient to blank a card and the 11/11 match is a coincidence. The two
-readings cannot both be right, and the way to separate them is the mapping KK still lacks: log the
-virgl resource id at framebuffer bind so a Metal pass can be named by the card it belongs to.
+So card 1 is the only card whose title survives **and** the only card whose body is destroyed. One
+fault, both signs, on the one card where the stale binding runs the other way.
 
-This also retires an identification that has stood since the live session and that today's KK-level
-work appeared to confirm: **the failing title draw is not the clutter/pango glyph pipeline.** In the
-recorded stream the zero-stride pango pipeline draws only the 568x44 body, which renders correctly
-on every card; the titles are drawn by the cogl journal pipeline at stride 32. What KK executes for
-some of them is a different matter, and is the discrepancy above.
+**The defect is above KosmicKrisp.** KK receives no bind and faithfully keeps the pipeline it holds;
+the check that decides this is a grep for a `stage=0` bind between the two draws of a failing pair,
+and there is none. Both pipeline variants exist and are individually correct, so the pipeline cache
+is not implicated either -- the skipped step is the *bind decision*. Because KK does not advertise
+`VK_EXT_vertex_input_dynamic_state`, zink bakes attribute formats and offsets into the pipeline and
+leaves only the stride dynamic, so a missed rebind silently swaps the entire vertex layout instead of
+tripping validation.
+
+The guest supplies the pattern that defeats the dirty tracking: cogl alternates these two vertex
+layouts per card, A-B-A-B across submits. That is also the most likely reason the field-for-field
+mimic never reproduced the fault -- it matched the state, not the alternation cadence.
+
+Two rules this section earns:
+
+- **Ordering is a sound join across a seam; texture identity is not.** Both sides execute the same
+  stream in order, so the Nth KK draw into a title target is the Nth title draw in the trace, and
+  the two sequences interleave identically (48 draws, `BTBTBT...`). An earlier grouping by Metal
+  texture pointer was scrambled by texture reuse and produced a confident wrong answer.
+- **Log the object in effect, not the events.** Counting binds between draws splits 12/12 and says
+  nothing; keying on the pipeline actually in effect splits 12/11/1 and says everything.
+
+This also retires an identification that stood since the live session: **the failing title draw is
+not the clutter/pango glyph pipeline.** That pipeline draws only the 568x44 body. The titles are cogl
+journal draws at stride 32; what executes for them is the body's pipeline, which is the fault above.
 
 The shader-dump aliasing that would have explained all of this away was tested and does not exist:
-the dump path now carries a compile counter, and no shader is compiled twice.
+the dump path carries a compile counter, and no shader is compiled twice.
 
 ## Next
 
