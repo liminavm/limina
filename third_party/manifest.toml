@@ -22,7 +22,7 @@
 repo = "https://github.com/liminavm/libkrun.git"
 upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
-rev = "f98bd2ce6a8da671792843b099c1af81fb845e60"
+rev = "560a2cedb91ba9924f03f5e313e85b8a3d374707"
 base = "07fd40dcf6da8e14dd47e16a535531f0383fe52c"
 
 # The EFI firmware (task #22, migrated 2026-08-06). The `limina` branch carries our whole
@@ -73,7 +73,7 @@ base = "mesa-26.1.7"
 repo = "https://github.com/liminavm/virglrenderer.git"
 upstream = "https://gitlab.freedesktop.org/virgl/virglrenderer.git"
 branch = "limina"
-rev = "511efc8e197c442bd12e612ba0aae3a48f85b929"
+rev = "81e20fac035cefffaa978b4b17ec43e065ee47e1"
 base = "f2945d3974256fefc731f0411c28b865680eebdc"
 
 [linux]
