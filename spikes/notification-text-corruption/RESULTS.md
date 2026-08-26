@@ -1355,6 +1355,50 @@ still **exited 0**, having printed 105 verdicts instead of 214. A short verdict 
 symptom. Check the count and the submit-error total on every run; a missing verdict means the run
 never got there, not that the offscreen was blank.
 
+### The lever sweep: exactly one lever moves it, and it is a mask
+
+With the replay as the vehicle, the spike's own KK/zink A/B levers become testable one run each.
+Twelve 968x44 title offscreens, card 1 first; BASELINE is run as an arm, because a sweep whose
+baseline does not reproduce the known signature is measuring nothing:
+
+| arm | titles |
+|---|---|
+| BASELINE (gate) | `I...........` |
+| `KK_LIMINA_FORCE_LOAD=1` | **`IIIIIIIIIIII`** |
+| `KK_LIMINA_FORCE_LOAD=small` | `I...........` |
+| `KK_LIMINA_FORCE_TOPO_UNSPEC=1` | (hangs, >150 s) |
+| FORCE_STORE, HEAP_NORESET, NO_PROMOTE, SERIALIZE, BARRIER, ZINK_NO_FANS, NOLISTRESTART, NOROBUST | `I...........` each |
+
+Exactly one lever moves it, and it moves it all the way. The reading first drawn from that -- that
+the clear is the defect -- is **wrong**, and the section below establishes why with the draws
+counted: the clear is a legitimate per-repaint clear, and `FORCE_LOAD` is a mask that resurrects the
+*previous* repaint's copy. Read this table as "one lever reaches the fault", never as "the fault is
+the load action".
+
+KK counts this itself — `LIMINA_KK_STATS=1` over the replay:
+
+    pass starts: fresh=78 seen+LOAD=383 seen+CLEAR=118 seen+DONTCARE=10 (fresh small=62)
+                 | reload_hazard=128 (small=30)
+
+128 pass starts discard a target that had already been drawn -- a count of *opportunities* for the
+mask to bite, not of defects. Only 30 are "small", which is why
+`=small` cannot cure a 968-wide title: it forces LOAD only on attachments <= 512 px, so it never
+touches this one. That arm is not a control for this fault — do not read its null as evidence.
+
+**The cure is verified against a reference, not against an ink count.** `FORCE_LOAD=1` is a
+diagnostic and not a fix, and its own comment says why: with nothing cleared, previous frames pile
+up and stale ink reads as a healthy header. That is real and visible here — cards 9-11 come back at
+roughly double (6734/6588/6763 against llvmpipe's 3399/3264/3145). But cards 1-8 and 12 match the
+llvmpipe reference EXACTLY, pixel count for pixel count (3264 3350 3362 3348 3364 3396 3293 3397 …
+3231), and card 12's dump reads "Critical Updates 012" — its own number, not an earlier card's. So
+the cure is genuine on 9 of 12 and the doubling is a separate, expected artefact of the lever.
+
+**Trap, again, and it nearly produced a clean table of nothing.** macOS has no `timeout` binary.
+The first sweep wrapped every arm in it, so every arm silently no-opped and returned an identical
+result — including the baseline that was already known to work. Uniformity across arms is the
+signature of a differential not reaching the system under test; run the baseline as an arm and read
+nothing until it passes.
+
 ### The host-implementation split, reproduced inside the replay
 
 The same trace, the same binary and the same commands, with only the host GL implementation
@@ -1407,6 +1451,147 @@ context does not know this handle" and for "it does, but there is no backing iov
 the other costs a session chasing resource attachment for what is a backing bug. `LIMINA_ATTACH_TRACE`
 now separates them, and also prints which branch `vrend_renderer_attach_res_ctx` takes.
 
+### The mechanism, with the draws counted: the repeat draw is a different pipeline and inks nothing
+
+Counting draws per render pass -- with every draw path logged and every encoder identified at
+creation -- resolves the whole sequence. Each 968x44 title offscreen, in encode order, with `C` a
+pass that begins CLEAR and `L` one that begins LOAD, and the letters inside naming the bound
+VS/FS pair:
+
+    C[-] L[AB] C[-] L[CD]          (8 of the title textures; 12 titles share 8, textures are reused)
+    C[-] L[AB] C[-] L[CD] C[-] L[EFABEF]
+
+Three facts fall straight out, and together they are the fault:
+
+- **Every CLEAR pass draws nothing.** 24 of 24, exactly.
+- **The repeat pass binds a different shader pair.** `A/B` draws the title in pass 2; pass 4 redraws
+  with `C/D`. This is the live session's "the failing render binds a different shader pair", now
+  deterministic and in a program with no compositor.
+- **KosmicKrisp drops nothing.** `kk_draw` entries == `mtl_draw_*` encodes == 4465, zero bails on
+  the predicate or unroll paths. Every draw that enters KK reaches Metal.
+
+So the sequence per title is: pass 2 draws the correct title with `A/B`; pass 3 clears it away;
+pass 4 redraws with `C/D` and **produces no ink**; the readback is blank. `FORCE_LOAD` cures by
+stopping pass 3 clearing, so `A/B`'s correct output survives -- which is why it matches the llvmpipe
+reference pixel-for-pixel rather than looking like stale ink. **The clear is legitimate per-repaint
+behaviour. The defect is that the pass-4 draw rasterises nothing.**
+
+`C/D` is *not* the culprit, and the section below shows why: one title's pass-4 draw inks, using the
+same `C/D` pipeline as the eleven that fail. The two-pipeline structure is real and explains which
+draw is at risk; it does not explain which instance of it fails.
+
+llvmpipe closes the argument from the other side: it inks all twelve from the *same trace*, so the
+stream genuinely contains ink-producing draws after that final clear. vrend is common to both arms.
+The draw exists, KK encodes it, and only under zink-on-KK does it land empty.
+
+This supersedes both earlier framings in this file. "The failing draw rasterises nothing" was right
+about the draw and wrong to call the clear incidental; "content loss at pass start is IN" was right
+that the clear participates and wrong to call it the defect. Neither is the whole statement; the
+layered one above is.
+
+**Two probe-coverage traps, both of which produced confident invariance.**
+
+- The draw probe covered `mtl_draw_primitives` only. On this stack that is 208 of 4465 draws -- zink
+  issues **indexed-indirect** draws, so the glyph path was entirely invisible and every title pass
+  read as "no draws". The render-pass log then looked identical across working and failing cards,
+  which reads exactly like a differential not reaching the system under test. It was a hole in the
+  instrument. *"Identical in every dimension" is only ever a claim about the dimensions read* --
+  and that includes the dimension you believe you are already reading.
+- Encoder pointers **recycle** across command buffers. Binding `enc -> pass` on first sight and never
+  rebinding silently attributes later draws to a dead pass; it invented a 21-draw pass that does not
+  exist and made the per-pass counts look card-dependent when they are uniform. A zero-unmapped-draw
+  control does not catch this -- it catches drops, not misattribution. `[LIMINA-KK-RPENC]` now prints
+  the encoder at creation, immediately after its descriptor: parse the pairing, never infer it.
+
+### The vertex layouts, reproduced -- and why the pipeline is NOT the discriminator
+
+`KK_LIMINA_SHADER_DUMP` over the replay reproduces the live session's table exactly, from the
+deterministic vehicle:
+
+| | working (pass 2) | failing (pass 4) |
+|---|---|---|
+| attr 0 | `106` R32G32B32_SFLOAT vec3 position | `103` R32G32_SFLOAT vec2 position |
+| attr 1 | `37` R8G8B8A8_UNORM packed colour | `109` R32G32B32A32_SFLOAT float4 colour |
+| attr 2 | `103` R32G32_SFLOAT | `103` R32G32_SFLOAT |
+| binding strides | 32 / 32 / 32 | **16 / 0 / 16** |
+
+Working is the cogl journal; failing is `CoglVertexP2T2` from the clutter/pango display list, its
+colour supplied by the pipeline rather than per-vertex -- which is the stride-0 binding.
+
+**A lead was drawn from this and is RETRACTED; the retraction is the useful part.**
+`KK_LIMINA_VP_LOG` shows all 24 title draws binding `vb1 == vb0 + 12`, ranges 2304/2292 -- offset 12
+being where the packed colour sits in the journal's 32-byte vertex. Read as "the pass-4 draw is
+compiled for stride 16 but bound with the journal's stride-32 shape", that is a mechanism which
+rasterises nothing while reporting no error. It does not survive contact with the rest of the data:
+**every** title pass-4 draw shares those bindings, and one title inks. A binding shape common to the
+working draw and the failing ones cannot be what separates them.
+
+That failure is worth more than the lead was, because it names the real constraint:
+
+- All title pass-4 draws bind the **same** VS/FS pointers (`C/D`, one pair across every title).
+- All bind the **same** vertex buffers (`+12`, identical ranges).
+- All carry the **same** scissor `(0,0 968x44)` and the **same** viewport
+  `(0.0,44.0 968.0x-44.0)` -- full target, correctly flipped.
+- Exactly one of them inks.
+
+So the draw that works is indistinguishable from the eleven that do not **in every dimension read so
+far**, and those dimensions cover the pipeline object and the geometry-coverage state entirely.
+The defect is therefore **per-draw data, not per-draw pipeline state**: the vertex *contents*, or
+the glyph atlas the fragment stage samples. A draw that rasterises correctly while sampling an
+unwritten atlas region inks nothing and reports nothing.
+
+Two dimensions are now closed rather than open, which is the point of recording them: viewport and
+scissor are uniform, and robustness is out on its own arm (`LIMINA_KK_NOROBUST` leaves the sweep at
+`I...........`), so a stride-0 colour binding collapsing to a zero fetch range is not it either.
+
+One caveat on identity: the replay cannot yet map a virgl resource to a Metal texture, so which of
+these eight textures is card 1 is not established. The argument above does not need it -- it rests
+on all eight being identical in the dimensions read while exactly one inks -- but the mapping is
+owed before any per-card claim, and vrend's `set_framebuffer_state` shares the replay's stderr,
+which is the cheap way to get it.
+
+### Reading the recorded stream: nothing is missing, but the layouts do not match across the seam
+
+The replay feeds the driver only what the trace recorded, so a missing upload would be visible as an
+absent transfer. It is not missing. Every glyph-pipeline draw has its own upload a median 0.162 ms
+earlier with **zero** submit batches in between, and every title draw samples the **same** sampler
+view -- the working card and the failing ones alike. That is what llvmpipe already implied: inking
+all twelve from this trace is only possible if the content is in it.
+
+The inspection paid off in two other ways.
+
+**The resource-to-card mapping is now established**, which several earlier claims were owed:
+`res 293` is card 1, the title that inks; `res 353` is card 2, blank. Read from the framebuffer's
+colour surface at each draw, and confirmed against the verdict lines.
+
+**And the vertex layouts do not agree across the vrend/zink seam.** Totals match, the split does not:
+
+| | into 968x44 (title) | into 568x44 (body) |
+|---|---|---|
+| virgl issues | 24 draws, all stride 32/32/32 | 24 draws, all stride 16/16/0 |
+| KK executes | 13 at stride 32, **11 at stride 16** | 23 at stride 16, 1 at stride 32 |
+
+(KK orders the bindings 16/0/16 where virgl reports 16/16/0; same layout, different binding order.)
+
+Eleven title draws reach KK compiled for the *body's* layout. A vertex stage fetching vec2 positions
+at stride 16 out of a stride-32 buffer produces garbage geometry and rasterises nothing, which is
+the symptom exactly -- and 11 is the number of blank cards.
+
+**Do not spend that coincidence yet.** The per-texture view says *every* title, including the one
+that inks, has a stride-16 draw in its last pass. If that holds under a real card mapping, then the
+wrong layout is not sufficient to blank a card and the 11/11 match is a coincidence. The two
+readings cannot both be right, and the way to separate them is the mapping KK still lacks: log the
+virgl resource id at framebuffer bind so a Metal pass can be named by the card it belongs to.
+
+This also retires an identification that has stood since the live session and that today's KK-level
+work appeared to confirm: **the failing title draw is not the clutter/pango glyph pipeline.** In the
+recorded stream the zero-stride pango pipeline draws only the 568x44 body, which renders correctly
+on every card; the titles are drawn by the cogl journal pipeline at stride 32. What KK executes for
+some of them is a different matter, and is the discrepancy above.
+
+The shader-dump aliasing that would have explained all of this away was tested and does not exist:
+the dump path now carries a compile counter, and no shader is compiled twice.
+
 ## Next
 
 The fault reproduces in a single-process host program with no VM, no compositor and no guest,
@@ -1425,7 +1610,12 @@ answerable by editing and re-running one binary.
    their upstream base — one build, and it answers whether we introduced it. If any revision comes
    back clean, a real bisect opens up; until one does, the work is code-path narrowing, not history
    search.
-2. **Narrow to the draw — this is the actual next step.** Two differentials are in hand, both
+2. **Find why a needed attachment is begun with CLEAR/DONTCARE.** The sweep has narrowed this from
+   "somewhere in zink/KK" to one mechanism with a counter attached: `reload_hazard` in
+   `kk_cmd_buffer.c`, 128 of them per replay. The question is now why the load action encoded for
+   these passes discards content the next draw still needs — whose loadOp that is (zink's, or KK's
+   own pass merging), and what makes card 1 differ.
+3. **Narrow to the draw if that is not enough.** Two differentials are in hand, both
    about code paths rather than history: across drivers (llvmpipe renders, KK does not, same
    stream) and within one KK run (card 1 renders, cards 2-12 do not). Card 12's command stream is card 1's modulo handles -- same CLEAR, same
    sampler views, bit-identical viewport and constant-buffer values, same `BIND_OBJECT 18`, same

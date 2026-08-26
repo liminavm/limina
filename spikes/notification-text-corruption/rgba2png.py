@@ -7,6 +7,8 @@
 # straight alpha-composite onto white is what makes the glyphs legible to a human eye.
 import glob, os, re, struct, sys, zlib
 
+BG = int(os.environ.get("RGBA2PNG_BG", "255"))
+
 def png(path, w, h, rgb):
     raw = b"".join(b"\x00" + rgb[y * w * 3:(y + 1) * w * 3] for y in range(h))
     def chunk(tag, data):
@@ -27,9 +29,12 @@ for src in sorted(sys.argv[1:]):
     out = bytearray()
     for i in range(0, w * h * 4, 4):
         b, g, r, a = data[i], data[i + 1], data[i + 2], data[i + 3]
-        # composite over white so glyphs on a transparent offscreen are actually visible
-        inv = 255 - a
+        # Composite over BG. The offscreens are premultiplied text on transparency, so the
+        # background choice decides legibility and there is no universally right one: these
+        # cards draw NEAR-WHITE glyphs, which vanish on the white default. Pass RGBA2PNG_BG
+        # (0-255) and pick a value the ink contrasts with before reading anything into a dump.
+        inv = (255 - a) * BG // 255
         out += bytes((min(255, r + inv), min(255, g + inv), min(255, b + inv)))
-    dst = os.path.splitext(src)[0] + ".png"
+    dst = os.path.splitext(src)[0] + (".png" if BG == 255 else "-bg%d.png" % BG)
     png(dst, w, h, bytes(out))
     print(dst)
