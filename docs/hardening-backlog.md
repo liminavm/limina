@@ -1532,7 +1532,7 @@ skips implicit sync. That the guest-side bo wait fixes this proves the guest ker
 fence on the bo, so `VIRTGPU_WAIT`/sync-file consumers are safe and a bare Vulkan importer is
 not — unprobed. Formats/modifiers beyond `Argb8888` + LINEAR are also unmeasured.
 
-## An idle guest misses frame deadlines: the WFI timeout wakes late
+## An idle guest misses frame deadlines
 
 A Vulkan or GL client on an otherwise idle guest does not hold its refresh rate. `vkcube` alone
 on a 59.885 Hz output runs at ~49 FPS, and the frame-time distribution is not scattered — it is
@@ -1553,37 +1553,49 @@ which rules out the renderer, the compositor, and the stock tier's per-frame CPU
 ~4.3 MB/frame on a machine with an M1 Max's bandwidth, and it is present in every row above).
 What the two fixes share is that the guest stops relying on a *long, one-shot* timer to wake up:
 a busy CPU wakes on real work, and `nohz=off` replaces the deadline with a 1 kHz periodic tick.
+So the guest's timer wakeups are late. **Where** they are late is the open question.
 
-The cause is ours. An idle vCPU traps on WFI, and
-`vmm/src/macos/vstate.rs::wait_for_event` parks the thread in a `crossbeam` `select!` on
-`recv(after(timeout))` — an ordinary host thread sleeping on an ordinary timer, which macOS serves
-about 1.5 ms late at the median and up to tens of milliseconds late in the tail.
+**Not in our WFI park.** On macOS 26.5 / Apple silicon a guest's `WFI` does not trap out to
+libkrun at all: HVF parks the vCPU inside `hv_vcpu_run`
+(`HvCore::Hypervisor::VcpuStateManager::wait_for_interrupt`, seen in a `sample` of the worker) and
+serves the virtual timer from its own `VirtualClock` thread. Over 30 s of an idle desktop the only
+vCPU exits are MMIO reads — `WaitForEvent`, `WaitForEventTimeout` and `VtimerActivated` are all
+zero. `vstate.rs::wait_for_event` and its `crossbeam` `after()` timeout are dead code on this host.
+The `LIMINA_WFI_LATENCY` instrument stays in place to watch for that changing.
 
-`spikes/macos-timer-wakeup/` measures every host lever against a 16.667 ms deadline and settles
-which one matters. The wait primitive does not: `nanosleep`, `pthread_cond_timedwait`,
-`mach_wait_until` and a plain kqueue timer are within noise of each other. Nor is timer coalescing
-the term — an explicit `LATENCY_QOS_TIER_0` moves the tier and not the lateness, and a wait that
-wakes 0.5 ms *early* to spin still lands 1.2 ms late, so the thread is runnable and not running.
-`THREAD_TIME_CONSTRAINT_POLICY` moves the median 1580 µs → 18 µs and the worst case 13 ms → 52 µs.
-`hv_vcpu_run_until` is not an option: `hv.h` puts it inside `#ifdef __x86_64__`, and nothing in
-the arm64 config headers stops WFI trapping, so the deadline is ours to serve.
+`spikes/macos-timer-wakeup/` still describes the host accurately, and is why the thread-scheduling
+band remains the lever worth trying: an ordinary macOS thread asking for a 16.667 ms deadline is
+served ~1.5 ms late at the median and tens of ms late in the tail, `THREAD_TIME_CONSTRAINT_POLICY`
+takes that to 18 µs median / 52 µs worst, and neither the wait primitive nor the latency-QoS tier
+moves it at all. HVF's wait runs **on our vCPU thread**, so that policy is still ours to set — what
+is no longer known is whether it reaches the wakeup that is actually late, since HVF's clock thread
+is not ours. `hv_vcpu_run_until` is not an escape: `hv.h` puts it inside `#ifdef __x86_64__`.
 
-Order of work: instrument requested-vs-observed lateness at the real call site; then replace the
-wait's *shape* — one kqueue per vCPU carrying `EVFILT_TIMER` (`NOTE_MACHTIME | NOTE_ABSOLUTE`,
-`NOTE_CRITICAL`) plus `EVFILT_USER`, which serves the deadline, the device IRQ and the pause event
-in one wait and drops the per-WFI channel `after()` allocates; then the real-time band, with the
-question of what xnu does to a time-constraint thread that overruns its computation slice answered
-first — a vCPU thread is not a 2 ms audio callback, so the band may belong on a timer thread that
-wakes the vCPU rather than on the vCPU thread itself. Verify against the guest's frame-time
-distribution, not the host probe.
+Next: set the real-time band on the vCPU threads and re-measure the *guest's* frame-time
+distribution — that is now the cheapest way to find out whether the lateness is on a thread we
+control. If it does not move, the wakeup being missed is inside HVF and the next question is
+whether anything short of a Radar changes it.
 
-**The constraint this work must respect: idle wakeups are a budget we already spent effort
+**The constraint any fix must respect: idle wakeups are a budget we already spent effort
 winning.** `docs/design/venus-ring-idle-wakeups.md` took `limina-vmm` from ~75/s to ~0/s at idle,
 and the ring poll plateau in `docs/roadmap.md` was tuned against a measured wakeup cost. A
 real-time band, and especially any spin, can hand that back. Both are nonetheless justified,
 because holding 60 fps on a *quiet* guest is a requirement and not a luxury — so the target is
 punctuality that is armed only when the guest is presenting and released when it is not, and any
 proposal here reports its idle wakeup rate and battery cost alongside its frame times.
+
+## An idle guest exits ~1,600 times a second reading virtio-net's interrupt status
+
+Measured 2026-08-27 while chasing the frame-deadline misses above, on a stock Fedora 44 guest at a
+settled idle desktop with `--net`: 48,489 vCPU exits in 30 s, **all of them MMIO reads**, and
+72,374 of the 30 s window's reads target `0xa01f060` — offset `0x060`, `InterruptStatus`, on the
+device the guest maps as `a01f000.virtio_mmio` → `virtio_net`. virtio-blk at `0xa01d060` is a
+distant second at 2,896; every other device is in the tens.
+
+Nothing else exits at all, so this is the entire vCPU-exit cost of an idle VM. Whether it is a
+normal consequence of gvproxy's traffic, an interrupt that is acked in a way that costs an extra
+read per event, or a genuine storm has not been established — start by rerunning the same count
+with `--no-net`, and against a guest with no NAT traffic to serve.
 
 ## The supervisor⇄worker control sockets should probably be Mach ports
 
