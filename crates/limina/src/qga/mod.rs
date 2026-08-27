@@ -37,9 +37,12 @@
 //! `limina-agent`. The enhanced tier keeps winning: the fallback only runs when no
 //! `timesync`-capable peer took the message (`crate::control`).
 
-//! Beyond the clock, the port carries the one housekeeping job only the guest can do:
-//! handing free disk blocks back so the host image can shrink ([`trim`]).
+//! Beyond the clock, the port carries the one housekeeping job only the guest can do —
+//! handing free disk blocks back so the host image can shrink ([`trim`]) — and the one job
+//! that has to happen before anything of ours exists in the guest at all: delivering the
+//! enhanced tier into it ([`bootstrap`]).
 
+pub mod bootstrap;
 pub mod client;
 pub mod codec;
 pub mod policy;

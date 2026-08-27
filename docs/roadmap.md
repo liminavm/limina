@@ -1648,11 +1648,46 @@ bracket around a **disk-level** operation (live clone/backup), so it waits for t
 ever lands, `qemu-ga` never auto-thaws on Linux and its `isfrozen` state file survives on disk into a
 cold boot, so an unconditional thaw-on-attach is mandatory.
 
+### Step 4 — bootstrapping the enhanced tier through the port (shipped)
+
+The two-tier guarantee makes the stock tier the **bootstrap substrate**: a fresh install starts
+stock and everything of ours arrives afterwards, so the delivery mechanism must not depend on the
+things it delivers. SSH does — a network, a listening `sshd`, an account, a key already in it. The
+stock agent needs none of them: `guest-file-write` + `guest-exec` are the whole mechanism, and it is
+already root.
+
+`crates/limina/src/qga/bootstrap.rs` delivers a **kit** (named by `LIMINA_QGA_DEPLOY` — env-only
+while the product surface is unsettled), not a payload: a directory of files staged
+under `/var/tmp/limina-bootstrap` and an `install.sh` run as root over `/bin/sh`. What travels is
+hundreds of KiB — the agent, its unit, the script — deliberately not the half-gigabyte RPM payload,
+which would be absurd as base64 inside JSON lines. The kit installs enough for the guest to fetch
+the rest the ordinary way; a kit that starts to look large is the signal to bootstrap a *fetcher*,
+not to widen this channel. `authorized_keys.<user>` entries go in through
+`guest-ssh-add-authorized-keys`, which is the only way to get the ownership, mode and label `sshd`
+insists on — last and best-effort, because the agent binary is what the kit exists to deliver.
+
+It fires only when the guest does **not** already run `limina-agent`, after a grace window
+(`LIMINA_QGA_DEPLOY_AFTER`, 120 s) that lets a guest's own agent boot and connect first. The peer
+match keeps the trailing slash — `limina-agent/` — because the enhanced tier also connects a
+`limina-agent-session` helper that shares the prefix and cannot stand in for the system agent.
+
+**Scope: an unconfined agent.** `guest-exec` runs its children in `qemu-ga`'s SELinux domain, and
+measured on F44 Enforcing (2026-08-27) `virt_qemu_ga_t` may not write `bin_t` (`install` into
+`/usr/local/bin` is denied), may not reach systemd's D-Bus (`systemd-run` is denied), may not write
+`/etc/qemu-ga/fsfreeze-hook.d/`, and may not call `getenforce`; `guest-ssh-add-authorized-keys` has
+its own `virt_qemu_ga_manage_ssh` boolean. Every lever that would widen the domain needs privileges
+the domain lacks, so the bootstrap cannot lift its own confinement. **Enforcing Fedora guests keep
+SSH as their delivery path**; AppArmor guests and permissive domains get the kit. A refused deploy
+logs the installer's output line by line and costs the enhanced tier, never the VM.
+
+`l2_qga_bootstrap` pins it by deleting the enhanced agent outright — unit disabled, binary and unit
+file removed, the peer polled until it disappears — then deploying `limina-agent` through the port
+and waiting for it to call home. A test that deployed over a live agent would go green with the
+delivery entirely broken, and the sha256 check on the delivered binary is what separates *delivered*
+from *delivered intact*.
+
 ### Next steps
 
-4. **Provisioning** — `guest-exec`, `guest-file-*`, `guest-ssh-add-authorized-keys`: deliver the
-   enhanced tier into a stock guest without needing SSH first, which is the bootstrap floor the
-   two-tier guarantee asks for.
 5. **Telemetry / hotplug ack** — `guest-get-diskstats`/`-cpustats`/`-load`; `guest-get/set-vcpus` and
    the memory-block commands only if CPU/memory hotplug ever lands (ballooning covers memory today).
 

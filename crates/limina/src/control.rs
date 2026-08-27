@@ -368,12 +368,15 @@ impl ControlPlane {
     /// spawn time the guest has not booted — so this cannot tell whether an agent exists;
     /// the first use finds out.
     pub fn attach_qga(&self, host_fd: std::os::fd::OwnedFd) -> Result<()> {
-        let qga = crate::qga::client::Qga::start(host_fd)?;
+        let qga = Arc::new(crate::qga::client::Qga::start(host_fd)?);
         *self.inner.qga.lock().unwrap() = Some(QgaSlot {
-            client: Arc::new(qga),
+            client: qga.clone(),
             attached_at: Instant::now(),
             last_trim: None,
         });
+        if let Some(dir) = crate::qga::bootstrap::dir_from_env() {
+            self.inner.clone().spawn_bootstrap(qga, dir);
+        }
         Ok(())
     }
 
@@ -436,6 +439,64 @@ impl Inner {
                 .retain(|p| !failed.contains(&p.id));
         }
         delivered
+    }
+
+    /// Deliver a bootstrap kit into a guest that has no `limina-agent` (`crate::qga::bootstrap`).
+    ///
+    /// A thread of its own, and a detached one: it sleeps out the grace window and then holds
+    /// the port for as long as the transfer and the kit's installer take, which is minutes.
+    /// Nothing waits for it, and nothing fails because of it — a bootstrap that does not
+    /// happen costs the enhanced tier, never the VM.
+    fn spawn_bootstrap(
+        self: Arc<Self>,
+        qga: Arc<crate::qga::client::Qga>,
+        dir: std::path::PathBuf,
+    ) {
+        let spawned = std::thread::Builder::new()
+            .name("limina-qga-bootstrap".into())
+            .spawn(move || {
+                let grace = crate::qga::bootstrap::grace_from_env();
+                std::thread::sleep(grace);
+                // The whole point of the wait: a guest that brought up its own agent needs no
+                // bootstrap, and reinstalling under a healthy one is a way to break it.
+                let enhanced = crate::qga::bootstrap::AGENT;
+                if self
+                    .peers
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|p| p.agent.starts_with(enhanced))
+                {
+                    log::info!(
+                        "qga: the guest already runs {}; not deploying the bootstrap kit",
+                        enhanced.trim_end_matches('/')
+                    );
+                    return;
+                }
+                let kit = match crate::qga::bootstrap::load(&dir) {
+                    Ok(kit) => kit,
+                    Err(e) => {
+                        // A named kit that cannot be read is a misconfiguration, not a guest
+                        // property — say it at warn, where someone will see it.
+                        log::warn!("qga: {e:#}");
+                        return;
+                    }
+                };
+                log::info!(
+                    "qga: no {} after {}s; deploying the bootstrap kit from {} ({} file(s), {:.0} KiB)",
+                    enhanced.trim_end_matches('/'),
+                    grace.as_secs(),
+                    dir.display(),
+                    kit.files.len(),
+                    kit.bytes() as f64 / 1024.0
+                );
+                if let Err(e) = crate::qga::bootstrap::deploy(&qga, &kit) {
+                    log::warn!("qga: the bootstrap kit did not install ({e:#})");
+                }
+            });
+        if let Err(e) = spawned {
+            log::warn!("qga: could not spawn the bootstrap thread: {e}");
+        }
     }
 
     /// One tick of the periodic guest trim (`crate::qga::trim`).

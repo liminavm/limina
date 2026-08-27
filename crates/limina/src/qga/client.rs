@@ -35,6 +35,19 @@ pub const FAST: Duration = Duration::from_secs(2);
 /// have made a healthy trim look like a dead agent.
 pub const SLOW: Duration = Duration::from_secs(900);
 
+/// Budget for the provisioning verbs (QGA-4). A `guest-file-write` line is ~342 KiB of
+/// base64 travelling a virtio-serial port that a loaded host shares with everything else;
+/// [`FAST`] is a promise about commands that answer out of memory, and holding a bulk
+/// transfer to it turns a slow port into a dead agent. Still bounded, because a wedged guest
+/// must not own a host thread forever.
+pub const MEDIUM: Duration = Duration::from_secs(30);
+
+/// Raw bytes per `guest-file-write`. Base64 inflates by 4/3, so this becomes a ~342 KiB JSON
+/// line — inside [`codec::MAX_LINE`] with room to spare. Chunk here rather than raise that
+/// bound: the cap is what stops a hostile guest growing our buffer without end, and it
+/// protects every other reply too.
+pub const WRITE_CHUNK: usize = 256 * 1024;
+
 /// How long a write may block before we treat the agent as wedged. Same bound, and the same
 /// reason, as the vdagent broker: this runs on the shared `limina-timesync` thread, and a
 /// guest that stopped draining its port must not take the host's clock sync down with it.
@@ -216,6 +229,121 @@ impl Qga {
             .map(|_| ())
     }
 
+    /// Write `bytes` to `path` in the guest, creating or truncating it.
+    ///
+    /// The whole transfer — open, every chunk, close — happens under **one** hold of the
+    /// port. Two reasons: a handle is only meaningful while the agent still has it, and a
+    /// [`Self::fstrim`] slipping in between chunks would hold the port for minutes with a
+    /// half-written file on the other side.
+    ///
+    /// The mode is `wb`, so a partial previous attempt is truncated rather than appended to.
+    pub fn write_file(&self, path: &str, bytes: &[u8]) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        ensure_ready(&mut conn)?;
+        let handle = exec(
+            &mut conn,
+            "guest-file-open",
+            Some(json!({ "path": path, "mode": "wb" })),
+            FAST,
+        )?
+        .as_i64()
+        .ok_or_else(|| anyhow!("guest-file-open did not return a handle for {path}"))?;
+
+        let wrote = write_chunks(&mut conn, handle, bytes);
+        // Close whatever happened: a leaked handle is a file descriptor the agent keeps for
+        // the rest of its life, and there is no way to enumerate them.
+        let closed = exec(
+            &mut conn,
+            "guest-file-close",
+            Some(json!({ "handle": handle })),
+            FAST,
+        );
+        wrote.with_context(|| format!("writing {path} in the guest"))?;
+        closed.map(|_| ()).context("closing the guest file")
+    }
+
+    /// Run `path` with `args` in the guest, as root, and wait for it to exit.
+    ///
+    /// Polls `guest-exec-status` and **releases the port between polls**, on purpose: the
+    /// clock tick shares this port and takes it only when free ([`Self::time_sample`]), so a
+    /// ten-second install script must not be ten seconds of held mutex.
+    pub fn run(&self, path: &str, args: &[&str], within: Duration) -> Result<ExecOutcome> {
+        let pid = self
+            .call(
+                "guest-exec",
+                Some(json!({ "path": path, "arg": args, "capture-output": true })),
+                FAST,
+            )?
+            .get("pid")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| anyhow!("guest-exec did not return a pid for {path}"))?;
+
+        let deadline = Instant::now() + within;
+        for attempt in 0.. {
+            let st = self.call("guest-exec-status", Some(json!({ "pid": pid })), FAST)?;
+            if st.get("exited").and_then(Value::as_bool).unwrap_or(false) {
+                let text = |k: &str| {
+                    st.get(k)
+                        .and_then(Value::as_str)
+                        .map(|b| codec::b64_decode(b).unwrap_or_default())
+                        .map(|b| String::from_utf8_lossy(&b).trim_end().to_string())
+                        .unwrap_or_default()
+                };
+                return Ok(ExecOutcome {
+                    exitcode: st.get("exitcode").and_then(Value::as_i64),
+                    signal: st.get("signal").and_then(Value::as_i64),
+                    stdout: text("out-data"),
+                    stderr: text("err-data"),
+                    // The agent's capture buffer is finite. Say so, so a caller reading the
+                    // output for a verdict knows it may be reading only the start of one.
+                    truncated: ["out-truncated", "err-truncated"]
+                        .iter()
+                        .any(|k| st.get(k).and_then(Value::as_bool).unwrap_or(false)),
+                });
+            }
+            if Instant::now() >= deadline {
+                // The process is still running and stays running: `guest-exec` has no kill.
+                bail!("{path} did not finish within {within:?} in the guest (pid {pid})");
+            }
+            std::thread::sleep(super::bootstrap::poll_delay(attempt));
+        }
+        unreachable!("the poll loop only leaves through a return or a bail")
+    }
+
+    /// Append `keys` to `user`'s `authorized_keys` (replacing the file when `reset`).
+    ///
+    /// The agent's own verb rather than a [`Self::write_file`] into `~/.ssh`: it creates the
+    /// directory and the file with the ownership, mode and SELinux label `sshd` insists on,
+    /// none of which a raw write would get right.
+    pub fn add_authorized_keys(&self, user: &str, keys: &[String], reset: bool) -> Result<()> {
+        self.call(
+            "guest-ssh-add-authorized-keys",
+            Some(json!({ "username": user, "keys": keys, "reset": reset })),
+            FAST,
+        )
+        .map(|_| ())
+    }
+
+    /// Set `user`'s password. `crypted` says whether `password` is already a crypt(3) hash;
+    /// a plaintext one is hashed by the guest.
+    ///
+    /// The schema takes the password **base64-encoded** either way — it is binary as far as
+    /// the wire is concerned, which is also what keeps it out of the trace's argument echo
+    /// as readable text.
+    #[allow(dead_code)]
+    pub fn set_user_password(&self, user: &str, password: &str, crypted: bool) -> Result<()> {
+        self.call(
+            "guest-set-user-password",
+            Some(json!({
+                "username": user,
+                "password": codec::b64_encode(password.as_bytes()),
+                "crypted": crypted,
+            })),
+            FAST,
+        )
+        .map(|_| ())
+    }
+
     /// Discard every free extent of at least `minimum` bytes on every mounted filesystem, so
     /// the host image can punch the holes out (see [`super::trim`]).
     ///
@@ -249,6 +377,64 @@ impl Qga {
         }
         Ok(report)
     }
+}
+
+/// What one [`Qga::run`] did. `exitcode` is `None` when the process was killed by a signal.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExecOutcome {
+    pub exitcode: Option<i64>,
+    pub signal: Option<i64>,
+    pub stdout: String,
+    pub stderr: String,
+    /// The agent's output capture filled up; what is here is a prefix.
+    pub truncated: bool,
+}
+
+impl ExecOutcome {
+    pub fn ok(&self) -> bool {
+        self.exitcode == Some(0)
+    }
+
+    /// Whatever the process said, for a log line — stderr first, because that is where a
+    /// failure explains itself.
+    pub fn said(&self) -> String {
+        let mut said = String::new();
+        for part in [self.stderr.trim(), self.stdout.trim()] {
+            if !part.is_empty() {
+                if !said.is_empty() {
+                    said.push_str("; ");
+                }
+                said.push_str(part);
+            }
+        }
+        if self.truncated && !said.is_empty() {
+            said.push_str(" […truncated]");
+        }
+        said
+    }
+}
+
+/// Push a file's bytes through an open handle, one [`WRITE_CHUNK`] at a time.
+///
+/// The agent echoes how many bytes it took; a short count means the guest's filesystem ran
+/// out or refused, and continuing would leave a file that looks whole and is not.
+fn write_chunks(conn: &mut Conn, handle: i64, bytes: &[u8]) -> Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    for chunk in bytes.chunks(WRITE_CHUNK) {
+        let ret = exec(
+            conn,
+            "guest-file-write",
+            Some(json!({ "handle": handle, "buf-b64": codec::b64_encode(chunk) })),
+            MEDIUM,
+        )?;
+        let took = ret.get("count").and_then(Value::as_u64).unwrap_or(0) as usize;
+        if took != chunk.len() {
+            bail!("the guest took {took} of {} bytes", chunk.len());
+        }
+    }
+    Ok(())
 }
 
 /// The outcome of one [`Qga::fstrim`], flattened out of its per-path array.
@@ -473,7 +659,12 @@ fn exec(conn: &mut Conn, cmd: &str, args: Option<Value>, timeout: Duration) -> R
         sync(conn)?;
     }
     if trace_on() {
-        eprintln!("[QGA] -> {cmd} {}", args.clone().unwrap_or(json!(null)));
+        // Elided, not printed whole: a `guest-file-write` argument is a ~342 KiB base64
+        // blob, and a trace that dumps it buries every line that explains anything.
+        eprintln!(
+            "[QGA] -> {cmd} {}",
+            elide(&args.clone().unwrap_or(json!(null)))
+        );
     }
     write_all(conn, &codec::request(cmd, args))?;
 
@@ -486,12 +677,27 @@ fn exec(conn: &mut Conn, cmd: &str, args: Option<Value>, timeout: Duration) -> R
         conn.pending.clear();
     })?;
     if trace_on() {
-        eprintln!("[QGA] <- {}", String::from_utf8_lossy(&line));
+        let text = String::from_utf8_lossy(&line);
+        eprintln!("[QGA] <- {}", short(&text));
     }
     match codec::parse_reply(&line)? {
         Ok(v) => Ok(v),
         Err(e) => Err(e.into()),
     }
+}
+
+/// How much of a traced value to print before saying how much was left out.
+const TRACE_MAX: usize = 200;
+
+fn short(text: &str) -> String {
+    match text.char_indices().nth(TRACE_MAX) {
+        None => text.to_string(),
+        Some((cut, _)) => format!("{}… [{} bytes]", &text[..cut], text.len()),
+    }
+}
+
+fn elide(args: &Value) -> String {
+    short(&args.to_string())
 }
 
 fn write_all(conn: &mut Conn, bytes: &[u8]) -> Result<()> {
@@ -866,5 +1072,165 @@ mod tests {
             .time_sample()
             .expect("the stale ping reply must not land here");
         assert_eq!(s.guest_ns, 1_700_000_000_000_000_000i64);
+    }
+
+    /// A file bigger than one chunk must arrive whole and in order, and the agent's byte
+    /// count is the only evidence of that we get — a short one means the guest took less
+    /// than we sent, and continuing would leave a file that looks complete and is not.
+    #[test]
+    fn a_large_file_is_chunked_and_a_short_write_is_refused() {
+        use std::sync::{Arc, Mutex};
+        let got: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen = got.clone();
+        let closed = Arc::new(Mutex::new(false));
+        let shut = closed.clone();
+        let (qga, _h) = client_with(move |cmd, args| match cmd {
+            "guest-info" => Some(info_reply(&[
+                "guest-file-open",
+                "guest-file-write",
+                "guest-file-close",
+            ])),
+            "guest-file-open" => {
+                assert_eq!(args["mode"], "wb");
+                Some(json!({ "return": 7 }))
+            }
+            "guest-file-write" => {
+                assert_eq!(args["handle"], 7);
+                let bytes = codec::b64_decode(args["buf-b64"].as_str().unwrap()).unwrap();
+                let n = bytes.len();
+                seen.lock().unwrap().extend_from_slice(&bytes);
+                Some(json!({ "return": { "count": n, "eof": false } }))
+            }
+            "guest-file-close" => {
+                *shut.lock().unwrap() = true;
+                Some(json!({ "return": {} }))
+            }
+            _ => None,
+        });
+
+        let payload: Vec<u8> = (0..=255u8).cycle().take(WRITE_CHUNK * 2 + 17).collect();
+        qga.write_file("/var/tmp/limina-bootstrap/agent", &payload)
+            .unwrap();
+        assert_eq!(*got.lock().unwrap(), payload);
+        assert!(*closed.lock().unwrap(), "the handle was left open");
+
+        // …and the same transfer against an agent that takes fewer bytes than it was given.
+        let (qga, _h) = client_with(|cmd, args| match cmd {
+            "guest-info" => Some(info_reply(&[
+                "guest-file-open",
+                "guest-file-write",
+                "guest-file-close",
+            ])),
+            "guest-file-open" => Some(json!({ "return": 7 })),
+            "guest-file-write" => {
+                let n = codec::b64_decode(args["buf-b64"].as_str().unwrap())
+                    .unwrap()
+                    .len();
+                Some(json!({ "return": { "count": n - 1, "eof": false } }))
+            }
+            "guest-file-close" => Some(json!({ "return": {} })),
+            _ => None,
+        });
+        let err = qga.write_file("/tmp/x", b"hello").unwrap_err().to_string();
+        assert!(err.contains("writing /tmp/x"), "unexpected error: {err}");
+    }
+
+    /// `guest-exec` answers with a pid and nothing else; the outcome only exists once
+    /// `guest-exec-status` says the process exited, and its output arrives base64-encoded.
+    #[test]
+    fn a_command_is_polled_until_it_exits_and_its_output_decoded() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        let polls = Arc::new(AtomicU32::new(0));
+        let n = polls.clone();
+        let (qga, _h) = client_with(move |cmd, args| match cmd {
+            "guest-info" => Some(info_reply(&["guest-exec", "guest-exec-status"])),
+            "guest-exec" => {
+                assert_eq!(args["path"], "/bin/sh");
+                assert_eq!(args["arg"][0], "/var/tmp/limina-bootstrap/install.sh");
+                assert_eq!(args["capture-output"], json!(true));
+                Some(json!({ "return": { "pid": 4242 } }))
+            }
+            "guest-exec-status" => {
+                assert_eq!(args["pid"], 4242);
+                if n.fetch_add(1, Ordering::SeqCst) < 2 {
+                    return Some(json!({ "return": { "exited": false } }));
+                }
+                Some(json!({ "return": {
+                    "exited": true,
+                    "exitcode": 0,
+                    "out-data": codec::b64_encode(b"installed\n"),
+                    "err-data": codec::b64_encode(b"warning: already enabled\n"),
+                    "err-truncated": true,
+                }}))
+            }
+            _ => None,
+        });
+
+        let out = qga
+            .run(
+                "/bin/sh",
+                &["/var/tmp/limina-bootstrap/install.sh"],
+                Duration::from_secs(10),
+            )
+            .unwrap();
+        assert!(out.ok());
+        assert_eq!(out.stdout, "installed");
+        assert!(out.truncated);
+        // stderr leads, because that is where a failure explains itself.
+        assert_eq!(
+            out.said(),
+            "warning: already enabled; installed […truncated]"
+        );
+        assert!(polls.load(Ordering::SeqCst) >= 3, "it did not poll");
+    }
+
+    /// A command that never exits must end at the caller's deadline rather than holding the
+    /// thread that started it.
+    #[test]
+    fn a_command_that_never_exits_ends_at_the_deadline() {
+        let (qga, _h) = client_with(|cmd, _| match cmd {
+            "guest-info" => Some(info_reply(&["guest-exec", "guest-exec-status"])),
+            "guest-exec" => Some(json!({ "return": { "pid": 1 } })),
+            "guest-exec-status" => Some(json!({ "return": { "exited": false } })),
+            _ => None,
+        });
+        let err = qga
+            .run("/bin/sleep", &["600"], Duration::from_millis(300))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("did not finish"), "unexpected error: {err}");
+    }
+
+    /// The password crosses the wire base64-encoded whether or not it is already hashed —
+    /// the schema treats it as binary, which is also what keeps a plaintext one out of the
+    /// trace as readable text.
+    #[test]
+    fn provisioning_verbs_carry_the_shapes_the_schema_asks_for() {
+        let (qga, _h) = client_with(|cmd, args| match cmd {
+            "guest-info" => Some(info_reply(&[
+                "guest-set-user-password",
+                "guest-ssh-add-authorized-keys",
+            ])),
+            "guest-set-user-password" => {
+                assert_eq!(args["username"], "claude");
+                assert_eq!(args["crypted"], json!(false));
+                assert_eq!(
+                    codec::b64_decode(args["password"].as_str().unwrap()).unwrap(),
+                    b"hunter2"
+                );
+                Some(json!({ "return": {} }))
+            }
+            "guest-ssh-add-authorized-keys" => {
+                assert_eq!(args["username"], "claude");
+                assert_eq!(args["keys"], json!(["ssh-ed25519 AAAA one"]));
+                assert_eq!(args["reset"], json!(false));
+                Some(json!({ "return": {} }))
+            }
+            _ => None,
+        });
+        qga.set_user_password("claude", "hunter2", false).unwrap();
+        qga.add_authorized_keys("claude", &["ssh-ed25519 AAAA one".to_string()], false)
+            .unwrap();
     }
 }

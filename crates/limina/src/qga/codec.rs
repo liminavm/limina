@@ -135,6 +135,58 @@ impl Lines {
     }
 }
 
+/// The base64 alphabet, padded — what every `*-b64` member of the guest agent's schema
+/// carries (`guest-file-write`'s `buf-b64`, `guest-exec-status`'s `out-data`, the password
+/// `guest-set-user-password` takes).
+///
+/// Hand-rolled rather than pulled in as a dependency: this is forty lines of a fixed
+/// transform, it is part of *this* wire format, and it is the only place in limina that
+/// needs it.
+const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Encode `bytes` as standard, padded base64.
+pub fn b64_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(n >> (18 - 6 * i)) as usize & 0x3f] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// Decode standard base64, tolerating the whitespace some agents wrap long values in.
+pub fn b64_decode(text: &str) -> Result<Vec<u8>> {
+    let mut acc: u32 = 0;
+    let mut bits = 0u32;
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    for c in text.bytes() {
+        if c == b'=' || c.is_ascii_whitespace() {
+            continue;
+        }
+        let Some(v) = ALPHABET.iter().position(|&a| a == c) else {
+            bail!("{:?} is not base64", c as char);
+        };
+        acc = acc << 6 | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +261,24 @@ mod tests {
         bytes.extend_from_slice(b"{\"return\": 3}\n");
         let got = lines.push(&bytes).unwrap();
         assert_eq!(parse_reply(&got[0]).unwrap().unwrap(), json!(3));
+    }
+
+    #[test]
+    fn base64_round_trips_and_pads_the_way_the_agent_expects() {
+        // RFC 4648 vectors: the padding cases are exactly where a hand-rolled encoder goes
+        // wrong, and `guest-file-write` counts bytes after decoding.
+        assert_eq!(b64_encode(b""), "");
+        assert_eq!(b64_encode(b"f"), "Zg==");
+        assert_eq!(b64_encode(b"fo"), "Zm8=");
+        assert_eq!(b64_encode(b"foo"), "Zm9v");
+        assert_eq!(b64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(b64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(b64_encode(b"foobar"), "Zm9vYmFy");
+
+        let bytes: Vec<u8> = (0..=255u8).cycle().take(1000).collect();
+        assert_eq!(b64_decode(&b64_encode(&bytes)).unwrap(), bytes);
+        // Agents wrap long values; whitespace is not corruption.
+        assert_eq!(b64_decode("Zm9v\n YmFy").unwrap(), b"foobar");
+        assert!(b64_decode("not base64!").is_err());
     }
 }
