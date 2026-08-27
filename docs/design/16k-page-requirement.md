@@ -37,12 +37,24 @@ premise, that the stage-2 granule is pinned to the host page size. None of them 
 premise, and none of them was needed. Before building machinery to work around a platform
 constraint, check that the constraint is one.
 
-### The one guard that survives
+### What survives the retirement, and why
 
-virglrenderer refuses to map a blob larger than the allocation it was created from
-(`vkr_device_memory.c`), rather than publishing whatever host memory follows into the guest. That
-was written as the safety half of the size-rounding scheme; it stands on its own as a bound on a
-broken or hostile guest, so it stayed when the rounding went.
+Two host-side pieces of the old scheme stayed, both in `vkr_device_memory.c`, and one of them is
+load-bearing for a completely different reason than it was written for:
+
+- **Host-visible allocations are padded to 64 KiB.** The guest kernel `PAGE_ALIGN`s every blob to
+  *its* page size, so a 1280-byte `VkDeviceMemory` comes back as a 4096-byte blob on a 4 KiB guest.
+  The VMM maps the blob's size from the pointer we publish, so an allocation smaller than its own
+  blob cannot be exported at all — and the guest loses the resource, which kills the client.
+  Measured on stock Fedora 44: removing the pad segfaults `vkcube`. 64 KiB because the guest's page
+  size is unknowable at allocation time, and it is the largest any guest uses.
+- **A blob larger than its allocation is refused**, rather than published. With the pad in place
+  this only fires on a broken or hostile guest; it is the backstop, not the mechanism.
+
+Worth naming the trap: the pad was *described* as the host half of the guest's 64 KiB rounding, so
+removing the guest half looked like it made the pad redundant. It didn't — the pad had a second,
+undocumented job. A comment that explains one reason for a line does not prove there is only one;
+the A/B on a real guest is what settled it.
 
 ### A landmine found while the negotiated design was still live
 

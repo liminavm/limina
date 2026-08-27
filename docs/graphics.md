@@ -202,8 +202,10 @@ sets `ipa_granule = "16k"` gets that back. It is a speed setting now, not an ent
 Everything that was built to manufacture an aligned lattice from the guest side — Mesa rounding
 blob sizes, the `guest/virtio-gpu-dkms` node-alignment module, the negotiated
 `VIRTGPU_PARAM_BLOB_ALIGNMENT` chain — is retired unbuilt or reverted; `docs/design/16k-page-requirement.md`
-keeps the analysis. One host-side guard survives them: virglrenderer refuses to map a blob larger
-than the allocation it was created from, rather than publishing whatever host memory follows.
+keeps the analysis. Two host-side pieces survive them, both in virglrenderer: host-visible
+allocations are padded to 64 KiB (a guest `PAGE_ALIGN`s its blobs, so an allocation must be at
+least one guest page — removing this segfaults `vkcube` on a stock guest), and a blob larger than
+its allocation is refused rather than published.
 
 #### Open: stock-tier Vulkan is dead, not degraded
 
