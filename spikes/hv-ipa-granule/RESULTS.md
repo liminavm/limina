@@ -40,10 +40,29 @@ guest's arena. That is the property the entire workaround family existed to manu
 All three were downstream of one assumption: that the stage-2 granule is pinned to the host page
 size. It is configurable, and none of them are needed to map a 4 KiB guest's blobs.
 
+## Confirmed on a booted guest: venus comes up on a stock 4 KiB Fedora
+
+`Fedora-Workstation-44.accessible` (stock kernel `6.19.10-300.fc44`, 4 KiB pages, stock
+`mesa-vulkan-drivers-26.0.3-4.fc44`) — **no guest components of any kind**. One clone, both arms in
+sequence, identical but for `--ipa-granule 4k`:
+
+| | host default (16 KiB) | `--ipa-granule 4k` |
+|---|---|---|
+| guest dmesg, `RESOURCE_MAP_BLOB` (`0x208`) → `ERR_UNSPEC` (`0x1200`) | repeated | **none** |
+| `vulkaninfo --summary` | `vkCreateInstance failed with ERROR_OUT_OF_HOST_MEMORY` | `Virtio-GPU Venus (Apple M1 Max)`, `driverName = venus` |
+| `vkcube --c 120` | exit 1, no Vulkan device | **exit 0** |
+| worker log | — | `stage-2 IPA granule set to FourK`, 0 map failures |
+
+The control's `ERROR_OUT_OF_HOST_MEMORY` is the usual venus disguise for "could not get a buffer",
+and the guest kernel names the buffer: the blob map is refused, so the ring never exists. Which is
+what makes this the mechanism and not merely a correlation — the failing command in the control is
+the exact one the granule governs.
+
+**So venus on the stock tier was never a venus problem.** It needed a host setting, not a guest
+kernel, not a DKMS module, not a Mesa patch.
+
 ## Still owed before relying on it
 
-- **The data path.** These cases prove the mapping is *accepted*. They do not run a vCPU, so they do
-  not prove the guest reads the right bytes through it. A booted guest is the real oracle.
 - **The cost.** A 4 KiB granule means roughly 4× the stage-2 entries and more TLB pressure for the
   **whole** VM, not just GPU memory. It is a global setting bought for one subsystem, so it needs an
   A/B on the perf battery before it becomes the default.

@@ -132,6 +132,11 @@ pub struct Hardware {
     /// See `--balloon-deflate-on-oom`.
     #[serde(default)]
     pub balloon_deflate_on_oom: bool,
+    /// Stage-2 translation granule (see [`IpaGranule`]). Defaults to the host's, which is what
+    /// every VM ran on before this existed. A guest with smaller pages than the host needs `4k`
+    /// for its virtio-gpu host-visible memory to be mappable.
+    #[serde(default)]
+    pub ipa_granule: IpaGranule,
 }
 
 fn default_true() -> bool {
@@ -180,6 +185,7 @@ impl Default for Hardware {
             fingerprint: true,
             fido: true,
             balloon_deflate_on_oom: false,
+            ipa_granule: IpaGranule::default(),
         }
     }
 }
@@ -535,6 +541,43 @@ pub enum GpuMode {
     Software2d,
 }
 
+/// Stage-2 (guest-physical -> host) translation granule, chosen when the VM is created.
+///
+/// macOS pins this to the host page size unless asked otherwise, and on Apple silicon that is
+/// 16 KiB. A 4 KiB-page guest then cannot express its own memory layout to us: its virtio-gpu
+/// host-visible blobs land on 4 KiB-granular guest addresses and `hv_vm_map` refuses them, which
+/// is what costs a stock guest venus (`spikes/hv-ipa-granule/RESULTS.md`).
+///
+/// Creation-time only, so a change applies from the next boot; a restored snapshot must use the
+/// granule its guest's layout was built under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum IpaGranule {
+    /// Keep whatever the host defaults to.
+    #[default]
+    #[value(name = "host")]
+    Host,
+    /// 4 KiB — what a 4 KiB-page guest needs.
+    #[serde(rename = "4k")]
+    #[value(name = "4k")]
+    FourK,
+    /// 16 KiB — the Apple silicon default.
+    #[serde(rename = "16k")]
+    #[value(name = "16k")]
+    SixteenK,
+}
+
+impl IpaGranule {
+    /// The worker's `--ipa-granule` value, or `None` to pass no flag at all.
+    pub fn flag(self) -> Option<&'static str> {
+        match self {
+            IpaGranule::Host => None,
+            IpaGranule::FourK => Some("4k"),
+            IpaGranule::SixteenK => Some("16k"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InputCfg {
@@ -789,6 +832,36 @@ mod tests {
         assert!(back.display.window);
         assert_eq!(back.display.resolution, DisplayResolution::Host);
         assert!(back.input.normalize_modifiers);
+    }
+
+    /// The granule is creation-time-only and a wrong one silently costs a 4 KiB guest its
+    /// host-visible GPU memory, so the default must stay "whatever the host does" — the
+    /// behaviour every VM had before the key existed — and the spelling must survive a
+    /// round-trip, since it is destined for the UI.
+    #[test]
+    fn ipa_granule_defaults_to_the_host_and_round_trips() {
+        let h: Hardware = toml::from_str("").unwrap();
+        assert_eq!(h.ipa_granule, IpaGranule::Host);
+        assert_eq!(
+            h.ipa_granule.flag(),
+            None,
+            "the host default forwards no flag"
+        );
+
+        for (spelling, want, flag) in [
+            ("4k", IpaGranule::FourK, Some("4k")),
+            ("16k", IpaGranule::SixteenK, Some("16k")),
+            ("host", IpaGranule::Host, None),
+        ] {
+            let h: Hardware = toml::from_str(&format!("ipa_granule = \"{spelling}\"")).unwrap();
+            assert_eq!(h.ipa_granule, want, "{spelling}");
+            assert_eq!(h.ipa_granule.flag(), flag, "{spelling}");
+            let back = toml::to_string(&h).unwrap();
+            assert!(
+                back.contains(&format!("ipa_granule = \"{spelling}\"")),
+                "{back}"
+            );
+        }
     }
 
     #[test]

@@ -126,6 +126,15 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     })
     .map_err(|e| anyhow!("set_vm_config: {e:?}"))?;
 
+    // Stage-2 granule. Left alone unless asked: the host default is the host page size, and a
+    // guest whose own pages are that size or larger never notices. A 4 KiB-page guest does --
+    // its virtio-gpu host-visible blobs land on 4 KiB-granular guest addresses that a 16 KiB
+    // granule cannot express, and hv_vm_map refuses them (spikes/hv-ipa-granule/).
+    vmr.ipa_granule = spec.ipa_granule.map(|g| match g {
+        crate::config::IpaGranule::FourK => vmm::resources::IpaGranule::FourK,
+        crate::config::IpaGranule::SixteenK => vmm::resources::IpaGranule::SixteenK,
+    });
+
     match &spec.boot {
         // EFI boot: load the EDK2 firmware blob; the guest boots its own kernel off the
         // disk's ESP (Payload::Firmware). No bundled kernel, no root_disk_remount.
@@ -1054,6 +1063,7 @@ mod tests {
         VmSpec {
             cpus: 1,
             ram_mib: 512,
+            ipa_granule: None,
             balloon_control_socket: None,
             boot: BootSource::Firmware(PathBuf::from("/nonexistent/KRUN_EFI.fd")),
             disks: Vec::new(),

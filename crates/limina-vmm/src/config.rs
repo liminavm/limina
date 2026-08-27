@@ -186,11 +186,25 @@ pub enum BootSource {
     Kernel(KernelSpec),
 }
 
+/// Which stage-2 granule to ask HVF for. Named for the guest page size it accommodates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum IpaGranule {
+    #[value(name = "4k")]
+    FourK,
+    #[value(name = "16k")]
+    SixteenK,
+}
+
 /// A fully-resolved VM specification.
 #[derive(Debug, Clone)]
 pub struct VmSpec {
     /// Number of vCPUs.
     pub cpus: u8,
+    /// Stage-2 translation granule to create the VM with. `None` keeps the host default
+    /// (16 KiB on Apple silicon). A 4 KiB-page guest needs `FourK` for its host-visible
+    /// virtio-gpu blobs to be mappable at all — see `spikes/hv-ipa-granule/RESULTS.md`.
+    /// Creation-time only, so this is fixed for the life of the worker process.
+    pub ipa_granule: Option<IpaGranule>,
     /// Guest RAM in MiB. With dynamic memory (M6) this is the **max** — what libkrun allocates and
     /// the guest sees; the supervisor's balloon policy shrinks effective RAM toward its min via the
     /// control socket (the worker is mechanism-only and doesn't know the min).

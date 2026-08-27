@@ -176,6 +176,12 @@ struct Cli {
     #[arg(long)]
     display_control_socket: Option<PathBuf>,
 
+    /// Stage-2 translation granule for the VM (macOS 26+). Omitted keeps the host default,
+    /// which is the host page size -- 16 KiB on Apple silicon. `4k` is what lets a 4 KiB-page
+    /// guest map its virtio-gpu host-visible blobs at all. Creation-time only.
+    #[arg(long, value_enum)]
+    ipa_granule: Option<crate::config::IpaGranule>,
+
     /// Force the software-2D-only GPU (no virglrenderer/venus). Default is the coexist
     /// device (software-2D 2D + Venus 3D). Use for the capture oracle or the local-Terminal
     /// GPU-init hang.
@@ -650,6 +656,7 @@ fn main() -> Result<()> {
     let spec = VmSpec {
         cpus: cli.cpus,
         ram_mib: cli.ram_mib,
+        ipa_granule: cli.ipa_granule,
         balloon_control_socket: cli.balloon_control_socket,
         boot,
         disks,
