@@ -1,4 +1,4 @@
-# A stock guest's Vulkan windows composite black: vrend cannot type an mtl_shm blob
+# A stock guest's Vulkan windows composited black: the blit buffer's bytes went nowhere
 
 Measured 2026-08-27 on `Fedora-Workstation-44.stock.test.raw` (kernel `6.19.10-300.fc44`, 4 KiB
 pages, stock `mesa-vulkan-drivers-26.0.3-4.fc44`, stock `mutter-50.0-1.fc44`, no limina guest
@@ -9,7 +9,11 @@ granule shipped, a 4 KiB guest could not map host-visible blobs at all and had n
 present. Nothing regressed; the present path simply ends one step short on the tier that could
 never reach it before.
 
-## What happens
+**Fixed** in our virglrenderer fork (`f68289d8`), guarded by
+`crates/limina-test/tests/l2_stock_vulkan_window.rs`. This page records the diagnosis and the
+measurements; the fix's own reasoning is in that commit.
+
+## What happened
 
 `vkcube` runs, reports `Virtio-GPU Venus (Apple M1 Max)`, and draws a window of the right size in
 the right place. The window is **solid black** (`stock-vkcube-black.png`); the rest of the desktop
@@ -37,6 +41,10 @@ takes the native single-memory LINEAR path because `patches/mesa-guest/0001` set
 `wsi_device::treat_invalid_modifier_as_linear`, which rewrites INVALID to LINEAR in the *client's*
 view of the compositor's list. A stock guest by definition does not carry that patch.
 
+The client's staging buffer is `R16G16B16X16_FLOAT` — 8 bytes per pixel, so 500 px is 4000 B and
+the 4096 B stride is the padding, not a 4-byte-per-pixel row. Our enhanced guest never allocates
+one because the same patch's `block_16f_swapchain_formats` also drops the 16F formats.
+
 **3. Host-side, the export is stripped and given an mtl_shm carrier.** For each of vkcube's three
 swapchain buffers the worker logs
 
@@ -61,16 +69,40 @@ Three warnings, one per wl_buffer. The enhanced arm logs the opposite for the sa
 it falls to the zeroed placeholder — deliberately, because returning `EINVAL` there poisons the
 compositor's context permanently. Black is the designed-for failure, not a crash.
 
-## Where a fix would go
+**5. And the buffer really is a buffer.** A probe build logging the allocation's memory type and
+its bind target settled the two premises the fix rests on, rather than inferring them from the
+2 MiB size:
 
-The stop point is in our own virglrenderer fork, so this is fixable host-side without any guest
+    [LIMINA-PROBE-ALLOC] size=2097152 typeIndex=0 props=0xf DEVICE_LOCAL HOST_VISIBLE
+                         HOST_COHERENT HOST_CACHED
+    [LIMINA-PROBE-BIND]  carrier memory -> BUFFER2 (offset=0 iosurf=0x0)
+
+Three of each, one per swapchain buffer. Host-visible is what makes the fix cheap; bound to a
+`VkBuffer` is what makes the IOSurface path inapplicable.
+
+## The fix
+
+The carrier's bytes are made real: the memory is host-pointer-imported over the carrier's own
+mapping, so the guest's blit lands in the bytes the exported fd carries, and vrend mmaps that fd
+and feeds the existing `guest_pixels` upload path (which already re-reads per command batch and
+already honours a padded stride). A CPU copy per frame — the enhanced tier keeps the zero-copy
+IOSurface scanout, which is what the guest components are for.
+
+`stock-vkcube-fixed.png` is the same stock guest after the fix: the cube renders with correct
+colours and no shear, and the frame contains **zero** pure-black pixels, against 490,694 before.
+
+## Where the fix went
+
+The stop point was in our own virglrenderer fork, so this was fixable host-side without any guest
 component — which is what the two-tier guarantee asks for, since a black window is not "degraded
-but usable". The placeholder branch already has a precedent directly below it: a guest-memory blob
-with no importable fd is filled from its iovecs rather than declared untypeable. An mtl_shm carrier
-is the same shape — host-visible bytes with no IOSurface — and could be sampled the same way.
+but usable". The placeholder branch already had a precedent directly below it: a guest-memory blob
+with no importable fd is filled from its iovecs rather than declared untypeable. The mtl_shm
+carrier is the same shape — host-visible bytes with no IOSurface — and is now sampled the same
+way.
 
 The guest-side alternatives (upstreaming the WSI knob, or teaching virgl to enumerate modifiers)
-are the durable fix for every VMM, but stock guests stay black until distros ship them.
+remain the durable fix for every VMM and would restore zero-copy for a stock guest too — but no
+stock guest gets them until distros ship them, which is why the host carries this.
 
 ## Scope note
 
