@@ -1,7 +1,8 @@
 # Design — pre-flight checks for VM start
 
-Status: PROPOSED 2026-08-27. Host-side only; nothing here touches the worker, libkrun, or a
-guest. Builds on the managed-VM machinery in `docs/design/vm-definitions.md`.
+Status: SHIPPED 2026-08-27 (`crates/limina/src/vmlib/preflight.rs`, `center/spawn.rs`,
+`center/model.rs`, `limina check`). Host-side only; nothing here touches the worker, libkrun,
+or a guest. Builds on the managed-VM machinery in `docs/design/vm-definitions.md`.
 
 ## 1. The problem
 
@@ -70,7 +71,7 @@ pub struct Finding {
 
 ### Tier A — static, `Depth::Cheap`
 
-Stat-only and cross-VM-lock probes; cheap enough for the center's refresh.
+Stat-only: cheap enough to run across the whole library on the center's 1 s refresh.
 
 | Check | Severity | Today |
 |---|---|---|
@@ -78,9 +79,9 @@ Stat-only and cross-VM-lock probes; cheap enough for the center's refresh.
 | each `[[disk]]`: exists · file-or-blockdev · readable · writable unless `ro` | Blocker | `main.rs:2157` |
 | each `[[cdrom]]`: same predicate | Blocker | `main.rs:2098` |
 | same image attached twice (canonicalized) across disks+cdroms | Blocker | `main.rs:2071-2078` |
-| a writable disk is already locked by another running VM | Blocker | probe-and-release, §3.3 |
+| `hardware.cpus` exceeds the host's logical CPUs | **Warning** | oversubscribing is legal |
 | `hardware.cpus` within a sane range | Blocker | **nothing, anywhere** |
-| `hardware.memory` parses and is ≥ the 1 GiB dynamic floor | Blocker | `schema.rs:203` (late) |
+| `hardware.memory` parses as a size | Blocker | `schema.rs:203` (late) |
 | `network[0].ssh_port` is 0 or ≥ `SSH_PORT_MIN` | Blocker | `main.rs:1472` (late) |
 | `ssh_port` set with no `[[network]]` | Blocker | `main.rs:980` |
 | each `[[share]]`: path is absolute | Blocker | **never checked**, §3.5 |
@@ -103,7 +104,12 @@ Never on the timer.
 | Check | Severity |
 |---|---|
 | bundle `run/lock` already held (`runtime::status`) | Blocker |
+| a writable disk is already locked by another running VM | Blocker — §3.3 |
 | explicit `ssh_port` already bound on the host | **Warning** — a bind probe is racy by nature |
+
+The disk-lock probe is Full-depth rather than Cheap: it has to open every writable image
+read-write, which is not something to do to the whole library once a second, and a running VM
+holds its own locks.
 
 ### 3.3 The disk-conflict check is reliable, not best-effort
 
@@ -116,6 +122,10 @@ The worker already takes a non-blocking `LOCK_EX` on every **writable** disk's b
 Pre-flight performs the same probe and releases it. Because the lock lives on the file rather
 than on a bundle, this catches flat `limina --disk X` runs started from a terminal as well as
 managed VMs. Read-only disks are not locked and correctly need no check.
+
+Conservatively: only a definitive `EWOULDBLOCK` reports "in use". An image that cannot be
+opened at all yields nothing here, because `validate_disk_path` has already spoken about that
+and a second guess would only add noise.
 
 ### 3.4 Ordering
 
@@ -195,11 +205,13 @@ One module, four callers:
 1. **`spawn::start_vm`** — `Depth::Full`; Blockers become `Err` *before* the spawn, and the
    existing alert at `controller.rs:134,147` fires unchanged.
 2. **`limina start <vm>`** — the same call, findings to stderr, non-zero exit. A terminal start
-   and a button click give the identical message.
-3. **`model.rs::snapshot`** — `Depth::Cheap`, adding `VmRow.blocked: Option<Finding>`. The row
-   shows the reason inline (extending the `(missing)` it already computes) and the play button
-   is **disabled with a tooltip naming the cause**, so the un-startable button is never
-   clickable. `limina ls` gains the same column.
+   and a button click give the identical message. It checks the definition **with this run's
+   overrides applied** (`cfg_with_overrides`): `--firmware` or `--cpus` can make an otherwise
+   blocked VM startable, and a check that cannot prove a failure must not produce one.
+3. **`model.rs::snapshot`** — `Depth::Cheap`, adding `VmRow.blocked: Option<String>`. The play
+   button is **disabled and its tooltip names the cause**, so the un-startable button is never
+   clickable. `limina ls` shows such a VM as `stopped (blocked)`, with `limina check` for the
+   detail.
 4. **`reset_vm`** — inherits it through `start_vm`; already off the main thread.
 
 `startClicked` runs on the AppKit main thread and a `stat()` against a dead network mount can

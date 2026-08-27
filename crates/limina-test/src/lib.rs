@@ -214,6 +214,13 @@ fn target_profile_dir() -> Result<PathBuf> {
 
 /// Resolve a built binary by name: `$<env_override>` if set, else next to the test
 /// binary in the cargo target dir.
+/// The shipped `limina` front-end binary (honors `LIMINA_BIN`). For tests that drive the CLI
+/// without booting anything — `limina check`, a start refused before the spawn — and so have
+/// no reason to resolve a guest image or firmware.
+pub fn limina_bin() -> Result<PathBuf> {
+    resolve_bin("limina", "LIMINA_BIN")
+}
+
 fn resolve_bin(name: &str, env_override: &str) -> Result<PathBuf> {
     if let Ok(p) = std::env::var(env_override) {
         let p = PathBuf::from(p);

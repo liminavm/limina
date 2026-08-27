@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use crate::vmlib::{bundle, runtime, schema};
+use crate::vmlib::{bundle, preflight, runtime, schema};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmRow {
@@ -28,6 +28,10 @@ pub struct VmRow {
     /// vm.toml failed to load/validate: show the row (with the error) but offer no
     /// lifecycle actions except Delete.
     pub broken: bool,
+    /// Why Start cannot work right now — pre-flight's first blocker, already phrased for a
+    /// person. `None` means nothing known is wrong. Only computed while stopped: a running
+    /// VM holds its own disk locks, and "why can't it start" is not a question about it.
+    pub blocked: Option<String>,
 }
 
 /// Snapshot the whole library. A missing library is an empty list; an unreadable
@@ -53,6 +57,7 @@ pub fn snapshot() -> Vec<VmRow> {
                     summary: summarize(&cfg),
                     disks: disks_line(&b, &cfg),
                     ssh: ssh_line(&b, &cfg, running),
+                    blocked: (!running).then(|| blocking_reason(&b, &cfg)).flatten(),
                     running,
                     pid,
                     broken: false,
@@ -63,6 +68,7 @@ pub fn snapshot() -> Vec<VmRow> {
                     summary: format!("broken: {e:#}"),
                     disks: String::new(),
                     ssh: None,
+                    blocked: Some(format!("{e:#}")),
                     running,
                     pid,
                     broken: true,
@@ -71,6 +77,14 @@ pub fn snapshot() -> Vec<VmRow> {
             }
         })
         .collect()
+}
+
+/// Pre-flight's verdict for the row, at the depth a 1 s refresh can afford: stat-only, no
+/// opening every disk read-write and no port probes (those wait for the click).
+fn blocking_reason(bundle: &bundle::VmBundle, cfg: &schema::VmConfig) -> Option<String> {
+    preflight::check(bundle, cfg, preflight::Depth::Cheap)
+        .first_blocker()
+        .map(|f| f.to_string())
 }
 
 fn summarize(cfg: &schema::VmConfig) -> String {
@@ -199,6 +213,39 @@ mod tests {
         let trash = rows.iter().find(|r| r.name == "Trash").unwrap();
         assert!(trash.broken);
         assert!(trash.summary.starts_with("broken:"), "{}", trash.summary);
+
+        std::env::remove_var("LIMINA_VM_LIBRARY");
+        std::fs::remove_dir_all(&lib).ok();
+    }
+
+    /// The row must carry *why* Start is unavailable, not merely render "(missing)" in the
+    /// disks line and leave the button live.
+    #[test]
+    fn a_vm_whose_disk_is_gone_reports_why_it_cannot_start() {
+        let _guard = crate::vmlib::bundle::tests::ENV_LOCK.lock().unwrap();
+        let lib = crate::vmlib::bundle::tests::scratch_library("blocked");
+        std::env::set_var("LIMINA_VM_LIBRARY", &lib);
+
+        let src = lib.join("img.raw");
+        std::fs::write(&src, vec![0u8; 2 * 1024 * 1024]).unwrap();
+        let mut opts = crate::vmlib::bundle::tests::basic_opts("Alpha");
+        opts.disk = Some(src);
+        let bundle = create(&opts, &lib).unwrap();
+
+        // Healthy: nothing to report about starting.
+        let row = snapshot().into_iter().find(|r| r.name == "Alpha").unwrap();
+        assert_eq!(row.blocked, None, "{:?}", row.disks);
+
+        let cfg = bundle.load().unwrap();
+        std::fs::remove_file(bundle.resolve_path(&cfg.disks[0].path)).unwrap();
+
+        let row = snapshot().into_iter().find(|r| r.name == "Alpha").unwrap();
+        assert!(!row.broken, "a missing disk is not a broken definition");
+        assert_eq!(row.disks, "root.raw (missing)");
+        let why = row
+            .blocked
+            .expect("the row must say why Start is unavailable");
+        assert!(why.contains("not found"), "{why}");
 
         std::env::remove_var("LIMINA_VM_LIBRARY");
         std::fs::remove_dir_all(&lib).ok();

@@ -121,7 +121,7 @@ impl Drop for Gateway {
 /// Resolve the gvproxy binary, in priority order: `$LIMINA_GVPROXY_BIN`, then a copy vendored
 /// next to the supervisor in the app bundle (`Contents/MacOS/gvproxy` — what makes `--net` work
 /// on a Mac with no Homebrew), then the Homebrew path if present, else bare `gvproxy` from `PATH`.
-fn gvproxy_bin() -> PathBuf {
+pub(crate) fn gvproxy_bin() -> PathBuf {
     let env_override = std::env::var_os("LIMINA_GVPROXY_BIN").map(PathBuf::from);
     let brew = {
         let p = PathBuf::from(DEFAULT_GVPROXY);
@@ -377,7 +377,7 @@ fn gvproxy_config_yaml(mac: &str, ssh_port: u16) -> String {
 /// we bind then immediately drop the listener so gvproxy can take the port. Inherently TOCTOU,
 /// but VMs start seconds apart and gvproxy binds its forward within ms, so in practice the next
 /// VM's scan already sees this one's port held.
-fn port_is_free(port: u16) -> bool {
+pub(crate) fn port_is_free(port: u16) -> bool {
     std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 

@@ -131,7 +131,8 @@ define_class!(
                     continue;
                 }
                 if !vmlib::runtime::status(&bundle).is_running() {
-                    if let Err(e) = spawn::start_vm(&bundle) {
+                    let errors = self.ivars().errors.clone();
+                    if let Err(e) = spawn::start_vm(&bundle, &errors) {
                         self.alert("Could not start the VM", &format!("{e:#}"));
                     }
                 }
@@ -144,7 +145,8 @@ define_class!(
         #[unsafe(method(startClicked:))]
         fn start_clicked(&self, sender: &NSButton) {
             if let Some(row) = self.row_for(sender) {
-                if let Err(e) = spawn::start_vm(&row.bundle) {
+                let errors = self.ivars().errors.clone();
+                if let Err(e) = spawn::start_vm(&row.bundle, &errors) {
                     self.alert("Could not start the VM", &format!("{e:#}"));
                 }
                 self.refresh(true);
@@ -187,7 +189,7 @@ define_class!(
             let bundle = row.bundle.clone();
             // Blocking (stop + wait for the flock + start) — never on the main thread.
             std::thread::spawn(move || {
-                if let Err(e) = spawn::reset_vm(&bundle) {
+                if let Err(e) = spawn::reset_vm(&bundle, &errors) {
                     errors
                         .lock()
                         .unwrap()
@@ -676,7 +678,20 @@ impl CenterController {
             );
             actions.addView_inGravity(&reset, NSStackViewGravity::Leading);
         } else {
-            let start = self.icon_button(mtm, "play.fill", "Start", sel!(startClicked:), index);
+            // A start that pre-flight already knows cannot work: leave the button visible so
+            // the row still reads as a VM, but disabled and carrying the reason. Clicking a
+            // control that silently does nothing is the bug this whole path exists to fix.
+            let start = match &row.blocked {
+                Some(why) => self.icon_button(
+                    mtm,
+                    "play.fill",
+                    &format!("Cannot start: {why}"),
+                    sel!(startClicked:),
+                    index,
+                ),
+                None => self.icon_button(mtm, "play.fill", "Start", sel!(startClicked:), index),
+            };
+            start.setEnabled(row.blocked.is_none());
             actions.addView_inGravity(&start, NSStackViewGravity::Leading);
             let configure = unsafe {
                 NSButton::buttonWithTitle_target_action(

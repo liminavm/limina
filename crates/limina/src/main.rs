@@ -439,6 +439,8 @@ enum Cmd {
     Start(StartArgs),
     /// List managed VMs and their status.
     Ls,
+    /// Report whether a managed VM can start, and why not (exit 1 if it cannot).
+    Check(CheckArgs),
     /// Ask a running managed VM to shut down (--force skips the guest-side grace).
     Stop(StopArgs),
     /// Suspend a running managed VM (M9.2): snapshot the guest and tear it down; the next `start`
@@ -447,6 +449,12 @@ enum Cmd {
     Suspend(SuspendArgs),
     /// Delete a stopped managed VM's bundle (disks outside the bundle are never touched).
     Rm(RmArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct CheckArgs {
+    /// VM name (library lookup) or path to a .liminavm bundle.
+    vm: String,
 }
 
 #[derive(clap::Args, Debug)]
@@ -659,6 +667,7 @@ fn main() -> Result<()> {
         Some(Cmd::Create(args)) => cmd_create(args),
         Some(Cmd::Start(args)) => cmd_start(args),
         Some(Cmd::Ls) => cmd_ls(),
+        Some(Cmd::Check(a)) => cmd_check(a),
         Some(Cmd::Stop(args)) => cmd_stop(args),
         Some(Cmd::Suspend(args)) => cmd_suspend(args),
         Some(Cmd::Rm(args)) => cmd_rm(args),
@@ -699,9 +708,48 @@ fn cmd_create(args: CreateArgs) -> Result<()> {
     Ok(())
 }
 
+/// The definition as this run will actually use it. Pre-flight has to see the overridden
+/// values or it would block a start that `--firmware` or `--cpus` was about to make valid —
+/// a check that cannot prove a failure must not produce one.
+fn cfg_with_overrides(
+    cfg: &vmlib::schema::VmConfig,
+    ov: &StartOverrides,
+) -> vmlib::schema::VmConfig {
+    let mut cfg = cfg.clone();
+    if let Some(c) = ov.cpus {
+        cfg.hardware.cpus = c;
+    }
+    if let Some(m) = &ov.memory {
+        cfg.hardware.memory = vmlib::schema::Memory(m.clone());
+    }
+    if let Some(fw) = &ov.firmware {
+        cfg.boot.firmware = Some(fw.clone());
+    }
+    if let (Some(port), Some(net)) = (ov.ssh_port, cfg.networks.first_mut()) {
+        net.ssh_port = port;
+    }
+    if ov.window {
+        cfg.display.window = true;
+    }
+    if ov.no_window {
+        cfg.display.window = false;
+    }
+    cfg
+}
+
 fn cmd_start(args: StartArgs) -> Result<()> {
     let bundle = vmlib::bundle::resolve(&args.vm)?;
     let cfg = bundle.load()?;
+    // Before the run lock (see `docs/design/vm-start-preflight.md` §3.4): everything the
+    // supervisor validates today happens inside run_vm, with the lock already held and the
+    // message going only to whatever captured our stdout.
+    vmlib::preflight::check(
+        &bundle,
+        &cfg_with_overrides(&cfg, &args.overrides),
+        vmlib::preflight::Depth::Full,
+    )
+    .ensure_startable()
+    .with_context(|| format!("{} cannot start", bundle.dir_name()))?;
     let cli = cli_from_definition(&cfg, &bundle, &args.overrides)?;
     // Exclusive run lock + pidfile: taken before the VM comes up so a double-start
     // fails fast, leaked deliberately because every supervisor exit path is
@@ -710,6 +758,29 @@ fn cmd_start(args: StartArgs) -> Result<()> {
     vmlib::runtime::write_pidfile(&bundle)?;
     std::mem::forget(lock);
     run_vm(cli)
+}
+
+/// The same report the play button and `limina start` consult, printed. Useful on its own for
+/// a VM copied between Macs, and it gives tests a surface that is not `start`'s stderr.
+fn cmd_check(args: CheckArgs) -> Result<()> {
+    let bundle = vmlib::bundle::resolve(&args.vm)?;
+    let cfg = bundle.load()?;
+    let report = vmlib::preflight::check(&bundle, &cfg, vmlib::preflight::Depth::Full);
+    for f in &report.findings {
+        let tag = match f.severity {
+            vmlib::preflight::Severity::Blocker => "BLOCKER",
+            vmlib::preflight::Severity::Warning => "warning",
+        };
+        // The code is the stable name for a finding (prose is free to improve) and the
+        // subject is the exact thing at fault — both worth quoting in a bug report.
+        println!("{tag} {:?}  {}", f.code, f.subject);
+        println!("    {f}");
+    }
+    if report.is_startable() {
+        println!("{} can start.", bundle.dir_name());
+        return Ok(());
+    }
+    anyhow::bail!("{} cannot start", bundle.dir_name());
 }
 
 fn cmd_ls() -> Result<()> {
@@ -726,9 +797,23 @@ fn cmd_ls() -> Result<()> {
         "NAME", "STATUS", "CPUS", "MEMORY", "SSH"
     );
     for bundle in all {
-        let status = match vmlib::runtime::status(&bundle) {
+        let running = vmlib::runtime::status(&bundle);
+        let status = match running {
             vmlib::runtime::VmStatus::Running { pid } => format!("running (pid {pid})"),
-            vmlib::runtime::VmStatus::Stopped => "stopped".to_string(),
+            // A stopped VM that cannot start says so here rather than looking merely idle;
+            // `limina check <vm>` prints the reason.
+            vmlib::runtime::VmStatus::Stopped => match bundle
+                .load()
+                .ok()
+                .filter(|cfg| {
+                    !vmlib::preflight::check(&bundle, cfg, vmlib::preflight::Depth::Cheap)
+                        .is_startable()
+                })
+                .is_some()
+            {
+                true => "stopped (blocked)".to_string(),
+                false => "stopped".to_string(),
+            },
         };
         match bundle.load() {
             Ok(cfg) => {
@@ -1811,6 +1896,16 @@ fn resolve_windowed_firmware(
     exists(&silent).then_some((silent, false))
 }
 
+/// The windowed-boot firmware limina would actually pick right now, for pre-flight. Same
+/// resolution the start path uses (`resolve_windowed_firmware`), with the real environment
+/// and executable location filled in.
+pub(crate) fn resolve_windowed_firmware_for_preflight() -> Option<(PathBuf, bool)> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?.to_path_buf();
+    let env_override = std::env::var_os("LIMINA_GOP_FIRMWARE").map(PathBuf::from);
+    resolve_windowed_firmware(&exe_dir, env_override, |p| p.exists())
+}
+
 fn path_arg(p: &std::path::Path) -> Result<String> {
     p.to_str()
         .map(str::to_string)
@@ -2104,7 +2199,7 @@ fn build_disk_args(disks: &[String], read_only: bool, cdroms: &[PathBuf]) -> Res
         if let Some(size) = disk.create {
             create_disk_image(&disk.path, size)?;
         }
-        validate_disk_path(&disk.path)?;
+        vmlib::preflight::validate_disk_path(&disk.path)?;
         check_unique(&disk.path)?;
         out.push("--disk".into());
         out.push(format!(
@@ -2116,7 +2211,7 @@ fn build_disk_args(disks: &[String], read_only: bool, cdroms: &[PathBuf]) -> Res
     // `--cdrom PATH` is sugar for a read-only `--disk`, appended after the data disks. No
     // `:create`/`:ro` suffix parsing — it's always an existing, read-only image.
     for iso in cdroms {
-        validate_disk_path(iso)?;
+        vmlib::preflight::validate_disk_path(iso)?;
         check_unique(iso)?;
         out.push("--disk".into());
         out.push(format!("{}:ro", path_arg(iso)?));
@@ -2172,28 +2267,6 @@ fn create_disk_image(path: &Path, size: u64) -> Result<()> {
     f.set_len(size) // sparse: allocates no blocks until written
         .with_context(|| format!("sizing new disk image {path:?} to {size} bytes"))?;
     Ok(())
-}
-
-/// Validate a `--disk` backing path: it must exist and be a regular file or a block device.
-/// Distinguishes "not found" (likely a typo, or wanted `:create`) from "permission denied".
-fn validate_disk_path(path: &Path) -> Result<()> {
-    use std::os::unix::fs::FileTypeExt;
-    match std::fs::metadata(path) {
-        Ok(m) => {
-            anyhow::ensure!(
-                m.is_file() || m.file_type().is_block_device(),
-                "--disk path is not a regular file or block device: {path:?}"
-            );
-            Ok(())
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(anyhow::anyhow!(
-            "--disk path not found: {path:?} (pass :create=SIZE to make a new disk)"
-        )),
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Err(anyhow::anyhow!(
-            "--disk path not accessible (permission denied): {path:?}"
-        )),
-        Err(e) => Err(e).with_context(|| format!("stat --disk path {path:?}")),
-    }
 }
 
 #[cfg(test)]
@@ -2527,7 +2600,7 @@ mod tests {
         create_disk_image(&p, 64 * 1024 * 1024).unwrap();
         assert_eq!(std::fs::metadata(&p).unwrap().len(), 64 * 1024 * 1024);
         // …and validates as a regular file.
-        validate_disk_path(&p).unwrap();
+        vmlib::preflight::validate_disk_path(&p).unwrap();
         // Idempotent at the same size.
         create_disk_image(&p, 64 * 1024 * 1024).unwrap();
         // Refuses a different size rather than clobbering.
@@ -2535,7 +2608,7 @@ mod tests {
 
         std::fs::remove_file(&p).ok();
         // A path that doesn't exist fails validation with the create hint.
-        assert!(validate_disk_path(&p).is_err());
+        assert!(vmlib::preflight::validate_disk_path(&p).is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 
