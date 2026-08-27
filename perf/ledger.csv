@@ -225,3 +225,27 @@ date,commit,workload,metric,value,notes
 2026-08-09,5f0f0a7,gl-replay-llvmpipe,fps,753.511,post-UAF-fix full battery run 3
 2026-08-09,5f0f0a7,vk-replay-venus-headless,fps,1959.113305,post-UAF-fix full battery run 3
 2026-08-09,5f0f0a7,glmark2-wayland-venus,score,2962,post-UAF-fix full battery run 3
+2026-08-27,53a1387,gl-replay-venus,fps,48.7739,ipa-granule A/B: arm A (host default 16k granule), run 1
+2026-08-27,53a1387,gl-replay-llvmpipe,fps,733.776,ipa-granule A/B: arm A (host default 16k granule), run 1
+2026-08-27,53a1387,vk-replay-venus-headless,fps,1968.160071,ipa-granule A/B: arm A (host default 16k granule), run 1
+2026-08-27,53a1387,glmark2-wayland-venus,score,2829,ipa-granule A/B: arm A (host default 16k granule), run 1
+2026-08-27,53a1387,gl-replay-venus,fps,49.2508,ipa-granule A/B: arm A (host default 16k granule), run 2
+2026-08-27,53a1387,gl-replay-llvmpipe,fps,743.144,ipa-granule A/B: arm A (host default 16k granule), run 2
+2026-08-27,53a1387,vk-replay-venus-headless,fps,1892.309445,ipa-granule A/B: arm A (host default 16k granule), run 2
+2026-08-27,53a1387,glmark2-wayland-venus,score,2861,ipa-granule A/B: arm A (host default 16k granule), run 2
+2026-08-27,53a1387,gl-replay-venus,fps,50.6342,ipa-granule A/B: arm A (host default 16k granule), run 3
+2026-08-27,53a1387,gl-replay-llvmpipe,fps,746.182,ipa-granule A/B: arm A (host default 16k granule), run 3
+2026-08-27,53a1387,vk-replay-venus-headless,fps,1898.915956,ipa-granule A/B: arm A (host default 16k granule), run 3
+2026-08-27,53a1387,glmark2-wayland-venus,score,2826,ipa-granule A/B: arm A (host default 16k granule), run 3
+2026-08-27,53a1387,gl-replay-venus,fps,45.5738,ipa-granule A/B: arm B (--ipa-granule 4k), run 1
+2026-08-27,53a1387,gl-replay-llvmpipe,fps,711.497,ipa-granule A/B: arm B (--ipa-granule 4k), run 1
+2026-08-27,53a1387,vk-replay-venus-headless,fps,1897.161208,ipa-granule A/B: arm B (--ipa-granule 4k), run 1
+2026-08-27,53a1387,glmark2-wayland-venus,score,2668,ipa-granule A/B: arm B (--ipa-granule 4k), run 1
+2026-08-27,53a1387,gl-replay-venus,fps,45.2805,ipa-granule A/B: arm B (--ipa-granule 4k), run 2
+2026-08-27,53a1387,gl-replay-llvmpipe,fps,713.881,ipa-granule A/B: arm B (--ipa-granule 4k), run 2
+2026-08-27,53a1387,vk-replay-venus-headless,fps,1963.336324,ipa-granule A/B: arm B (--ipa-granule 4k), run 2
+2026-08-27,53a1387,glmark2-wayland-venus,score,2649,ipa-granule A/B: arm B (--ipa-granule 4k), run 2
+2026-08-27,53a1387,gl-replay-venus,fps,45.0574,ipa-granule A/B: arm B (--ipa-granule 4k), run 3
+2026-08-27,53a1387,gl-replay-llvmpipe,fps,716.217,ipa-granule A/B: arm B (--ipa-granule 4k), run 3
+2026-08-27,53a1387,vk-replay-venus-headless,fps,1933.186653,ipa-granule A/B: arm B (--ipa-granule 4k), run 3
+2026-08-27,53a1387,glmark2-wayland-venus,score,2702,ipa-granule A/B: arm B (--ipa-granule 4k), run 3
