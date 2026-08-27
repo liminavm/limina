@@ -1019,7 +1019,7 @@ impl CenterController {
         });
     }
 
-    /// Configure…: vCPUs / memory / reclaim / SSH port / display in a modal alert.
+    /// Configure…: vCPUs / memory / reclaim / pages / SSH port / display in a modal alert.
     /// Only reachable for stopped VMs (the row offers no Configure while running).
     /// Every row carries a “?” hover with its explanation instead of a wall of
     /// informative text; Display is a popup, with a resolution popup (the sizes
@@ -1045,24 +1045,24 @@ impl CenterController {
         alert.addButtonWithTitle(&NSString::from_str("Save"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
 
-        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 242.0));
+        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 272.0));
         let cpus_field = labeled_field(
             mtm,
             &accessory,
-            212.0,
+            242.0,
             "vCPUs:",
             &cfg.hardware.cpus.to_string(),
         );
         self.row_help(
             &accessory,
-            212.0,
+            242.0,
             &cpus_field,
             "How many virtual CPUs the guest sees.",
         );
-        let mem_field = labeled_field(mtm, &accessory, 182.0, "Memory:", &mem_now);
+        let mem_field = labeled_field(mtm, &accessory, 212.0, "Memory:", &mem_now);
         self.row_help(
             &accessory,
-            182.0,
+            212.0,
             &mem_field,
             "The maximum guest RAM — \"4G\", \"8GiB\", or a bare MiB count. Idle guest \
              memory is returned to the Mac according to Reclaim.",
@@ -1070,18 +1070,35 @@ impl CenterController {
         let reclaim_popup = labeled_popup(
             mtm,
             &accessory,
-            152.0,
+            182.0,
             "Reclaim:",
             &RECLAIM_CHOICES,
             reclaim_index(cfg.hardware.reclaim),
         );
         self.row_help(
             &accessory,
-            152.0,
+            182.0,
             &reclaim_popup,
             "How hard idle guest memory is returned to the Mac. Moderate keeps some \
              guest disk cache unless the Mac is under memory pressure; Light engages \
              only when the Mac is; Aggressive always squeezes; Disabled never reclaims.",
+        );
+        let granule_popup = labeled_popup(
+            mtm,
+            &accessory,
+            152.0,
+            "Memory pages:",
+            &GRANULE_CHOICES,
+            granule_index(cfg.hardware.ipa_granule),
+        );
+        self.row_help(
+            &accessory,
+            152.0,
+            &granule_popup,
+            "How finely the Mac maps this VM's memory. 4 KB suits any guest, including a \
+             stock Linux distro whose own pages are 4 KB — such a guest gets no 3D \
+             acceleration at all without it. 16 KB matches this Mac's own page size and is \
+             a few percent faster, so choose it for a guest that uses 16 KB pages.",
         );
         let ssh_field = labeled_field(mtm, &accessory, 122.0, "SSH port:", &ssh_now.to_string());
         self.row_help(
@@ -1229,6 +1246,7 @@ impl CenterController {
             cfg.hardware.cpus = cpus;
             cfg.hardware.memory = memory;
             cfg.hardware.reclaim = reclaim_from_index(reclaim_popup.indexOfSelectedItem());
+            cfg.hardware.ipa_granule = granule_from_index(granule_popup.indexOfSelectedItem());
             cfg.display.resolution = resolution;
             cfg.display.notch = notch_from_index(notch_popup.indexOfSelectedItem());
             cfg.display.edge_resistance = hold_from_index(
@@ -1339,6 +1357,24 @@ fn reclaim_from_index(index: isize) -> ReclaimMode {
         1 => ReclaimMode::Light,
         3 => ReclaimMode::Aggressive,
         _ => ReclaimMode::Moderate,
+    }
+}
+
+/// Popup titles for the stage-2 granule, in [`vmlib::schema::IpaGranule`] order. Named for
+/// the guest page size each one accommodates, which is the only thing the choice depends on.
+const GRANULE_CHOICES: [&str; 2] = ["4 KB (any guest)", "16 KB (faster)"];
+
+fn granule_index(granule: vmlib::schema::IpaGranule) -> isize {
+    match granule {
+        vmlib::schema::IpaGranule::FourK => 0,
+        vmlib::schema::IpaGranule::SixteenK => 1,
+    }
+}
+
+fn granule_from_index(index: isize) -> vmlib::schema::IpaGranule {
+    match index {
+        1 => vmlib::schema::IpaGranule::SixteenK,
+        _ => vmlib::schema::IpaGranule::FourK,
     }
 }
 

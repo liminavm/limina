@@ -51,16 +51,18 @@ Worker state at the end of the identical sweep:
 The footprint difference runs the *wrong* way for a cost and is well inside what a browser workload
 varies by between runs; read this row as "no measurable penalty", not as a saving.
 
-## What this means for the default
+## The decision these numbers bought
 
-**Do not make 4 KiB the global default.** It is a real, repeatable regression for a 16 KiB guest,
-which is the enhanced tier and the tier we ship.
-
-**Do make it the default for a 4 KiB-page guest**, where the trade is not 5% against 0 — it is 5%
-against *having Vulkan at all*. That is not a close call in either direction, which is why the
-setting belongs per-VM (`[hardware] ipa_granule` in `vm.toml`) rather than globally.
+**4 KiB is the default** (`[hardware] ipa_granule` in `vm.toml`, `--ipa-granule`), and **16 KiB is
+the informed opt-in**, offered as *Memory pages* in the control center's Configure sheet.
 
 The granule is fixed at VM creation, so a guest's page size cannot be discovered in time to choose
-it on first boot. The path that follows from these numbers: default to the host granule, and let a
-guest observed to be 4 KiB (its own report, or a refused `RESOURCE_MAP_BLOB`) persist `4k` into its
-definition for subsequent boots.
+it on the first boot of an unknown image — the default has to be the one that is merely *slower*
+when wrong, never the one that is *broken* when wrong. 4-8% is what a guest pays for being
+understood without being configured; a 16 KiB guest whose owner says so gets it back. For scale:
+Asahi's 4 KiB kernels were measured around 15% against their 16 KiB ones, so this seam is cheap by
+comparison.
+
+Existing definitions carry no key and therefore move to 4 KiB with this change — a knowing
+regression for the enhanced tier, taken because the compatibility floor is what a default is for.
+Auto-selecting 16 KiB from an observed guest page size is a later refinement, not a prerequisite.

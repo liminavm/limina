@@ -132,9 +132,9 @@ pub struct Hardware {
     /// See `--balloon-deflate-on-oom`.
     #[serde(default)]
     pub balloon_deflate_on_oom: bool,
-    /// Stage-2 translation granule (see [`IpaGranule`]). Defaults to the host's, which is what
-    /// every VM ran on before this existed. A guest with smaller pages than the host needs `4k`
-    /// for its virtio-gpu host-visible memory to be mappable.
+    /// Stage-2 translation granule (see [`IpaGranule`]). Defaults to `4k`, which every guest
+    /// can use; `16k` is faster but costs a guest with smaller pages its virtio-gpu
+    /// host-visible memory entirely.
     #[serde(default)]
     pub ipa_granule: IpaGranule,
 }
@@ -551,29 +551,27 @@ pub enum GpuMode {
 /// Creation-time only, so a change applies from the next boot; a restored snapshot must use the
 /// granule its guest's layout was built under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
-#[serde(rename_all = "kebab-case")]
 pub enum IpaGranule {
-    /// Keep whatever the host defaults to.
+    /// 4 KiB. The default: it can express any guest's layout, including a stock 4 KiB-page
+    /// distro's, at a measured 4-8% cost on guest CPU-bound work
+    /// (`perf/2026-08-27-ipa-granule.md`).
     #[default]
-    #[value(name = "host")]
-    Host,
-    /// 4 KiB — what a 4 KiB-page guest needs.
     #[serde(rename = "4k")]
     #[value(name = "4k")]
     FourK,
-    /// 16 KiB — the Apple silicon default.
+    /// 16 KiB — the Apple silicon host page size, and what every VM ran on before this existed.
+    /// Faster, but a guest whose own pages are smaller loses its host-visible GPU memory.
     #[serde(rename = "16k")]
     #[value(name = "16k")]
     SixteenK,
 }
 
 impl IpaGranule {
-    /// The worker's `--ipa-granule` value, or `None` to pass no flag at all.
-    pub fn flag(self) -> Option<&'static str> {
+    /// The worker's `--ipa-granule` value.
+    pub fn flag(self) -> &'static str {
         match self {
-            IpaGranule::Host => None,
-            IpaGranule::FourK => Some("4k"),
-            IpaGranule::SixteenK => Some("16k"),
+            IpaGranule::FourK => "4k",
+            IpaGranule::SixteenK => "16k",
         }
     }
 }
@@ -835,27 +833,23 @@ mod tests {
     }
 
     /// The granule is creation-time-only and a wrong one silently costs a 4 KiB guest its
-    /// host-visible GPU memory, so the default must stay "whatever the host does" — the
-    /// behaviour every VM had before the key existed — and the spelling must survive a
-    /// round-trip, since it is destined for the UI.
+    /// host-visible GPU memory, so the default is the one that works for every guest —
+    /// an unmodified distro gets Vulkan without being configured for it, and the faster
+    /// 16 KiB granule is the informed opt-in. The spelling must survive a round-trip,
+    /// since it is what the Configure sheet writes.
     #[test]
-    fn ipa_granule_defaults_to_the_host_and_round_trips() {
+    fn ipa_granule_defaults_to_4k_and_round_trips() {
         let h: Hardware = toml::from_str("").unwrap();
-        assert_eq!(h.ipa_granule, IpaGranule::Host);
         assert_eq!(
-            h.ipa_granule.flag(),
-            None,
-            "the host default forwards no flag"
+            h.ipa_granule,
+            IpaGranule::FourK,
+            "a definition that says nothing gets the compatible granule"
         );
 
-        for (spelling, want, flag) in [
-            ("4k", IpaGranule::FourK, Some("4k")),
-            ("16k", IpaGranule::SixteenK, Some("16k")),
-            ("host", IpaGranule::Host, None),
-        ] {
+        for (spelling, want) in [("4k", IpaGranule::FourK), ("16k", IpaGranule::SixteenK)] {
             let h: Hardware = toml::from_str(&format!("ipa_granule = \"{spelling}\"")).unwrap();
             assert_eq!(h.ipa_granule, want, "{spelling}");
-            assert_eq!(h.ipa_granule.flag(), flag, "{spelling}");
+            assert_eq!(h.ipa_granule.flag(), spelling, "{spelling}");
             let back = toml::to_string(&h).unwrap();
             assert!(
                 back.contains(&format!("ipa_granule = \"{spelling}\"")),

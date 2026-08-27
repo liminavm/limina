@@ -270,12 +270,13 @@ struct Cli {
     #[arg(long)]
     gpu_software_2d: bool,
 
-    /// Stage-2 translation granule for the VM (macOS 26+). Omitted keeps the host default, which
-    /// is the host page size -- 16 KiB on Apple silicon. `4k` is what lets a 4 KiB-page guest map
-    /// its virtio-gpu host-visible blobs at all (spikes/hv-ipa-granule/). Chosen at VM creation,
-    /// so it applies from the next boot and cannot change while a VM runs.
-    #[arg(long, value_enum)]
-    ipa_granule: Option<vmlib::schema::IpaGranule>,
+    /// Stage-2 translation granule for the VM (macOS 26+). `4k` (the default) is what lets a
+    /// 4 KiB-page guest map its virtio-gpu host-visible blobs at all (spikes/hv-ipa-granule/);
+    /// `16k` matches the Apple silicon host page size and is a few percent faster for a guest
+    /// whose own pages are that size. Chosen at VM creation, so it applies from the next boot
+    /// and cannot change while a VM runs.
+    #[arg(long, value_enum, default_value_t = vmlib::schema::IpaGranule::FourK)]
+    ipa_granule: vmlib::schema::IpaGranule,
 
     /// Do NOT mirror the host battery into the guest. By default the worker attaches a
     /// virtio-i2c SBS battery mirroring the host's whenever the host has one (stock guests
@@ -1144,7 +1145,7 @@ fn cli_from_definition(
         balloon_deflate_on_oom: cfg.hardware.balloon_deflate_on_oom,
         reclaim: ov.reclaim.unwrap_or(cfg.hardware.reclaim),
         gpu_software_2d: cfg.display.gpu == GpuMode::Software2d,
-        ipa_granule: Some(cfg.hardware.ipa_granule),
+        ipa_granule: cfg.hardware.ipa_granule,
         no_battery: !cfg.hardware.battery,
         no_snd: !cfg.hardware.snd,
         mic: cfg.hardware.mic,
@@ -1472,10 +1473,8 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     if cli.gpu_software_2d {
         args.push("--gpu-software-2d".into());
     }
-    if let Some(flag) = cli.ipa_granule.and_then(|g| g.flag()) {
-        args.push("--ipa-granule".into());
-        args.push(flag.into());
-    }
+    args.push("--ipa-granule".into());
+    args.push(cli.ipa_granule.flag().into());
     if cli.no_battery {
         args.push("--no-battery".into());
     }
@@ -2786,9 +2785,8 @@ mod tests {
         assert!(cli.gpu_software_2d);
         assert_eq!(
             cli.ipa_granule,
-            Some(vmlib::schema::IpaGranule::Host),
-            "a definition that says nothing keeps the host granule, and the flag it forwards \
-             is None so the worker sees no --ipa-granule at all"
+            vmlib::schema::IpaGranule::FourK,
+            "a definition that says nothing gets the granule every guest can use"
         );
         assert_eq!(
             cli.firmware,
