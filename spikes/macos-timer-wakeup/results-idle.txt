@@ -1,0 +1,43 @@
+timebase 125/3 (41.6667 ns/tick), deadline 16667 us, 400 iterations per cell
+lateness = observed wake - requested deadline, in microseconds
+
+=== policy: default
+  [default] latency QoS tier = 0x0
+  wait                        p50      p90      p99      max     mean
+  nanosleep                  1532     5104     9854    12706   2045.1
+  cond_timedwait             1671     4289    20643    46629   2304.7
+  mach_wait_until            1580     4500    10723    13219   1896.6
+  kqueue timer               1694     3162    13295    23653   2005.1
+  kqueue NOTE_CRITICAL         59     2177     8901    14196    656.1
+  mach + 0.5ms spin          1277     4682    11444    13588   1770.0
+
+=== policy: QOS_USER_INTERACTIVE
+  [QOS_USER_INTERACTIVE] latency QoS tier = 0x0
+  wait                        p50      p90      p99      max     mean
+  nanosleep                  1415     4101    14330    20527   1965.1
+  cond_timedwait             1706     4607    10340    16259   2051.6
+  mach_wait_until            1687     4150    12803    16827   2021.4
+  kqueue timer               1926     4180    12914    28464   2192.0
+  kqueue NOTE_CRITICAL         52     1155     7344    11896    471.7
+  mach + 0.5ms spin          1100     4117    10798    15472   1551.2
+
+=== policy: LATENCY_QOS_TIER_0
+  [LATENCY_QOS_TIER_0] latency QoS tier = 0xff0001
+  wait                        p50      p90      p99      max     mean
+  nanosleep                  1552     3866    12433    16765   1925.3
+  cond_timedwait             1718     4756    21921    41309   2361.9
+  mach_wait_until            1562     4365    11254    23938   2024.6
+  kqueue timer               1593     3546     9642    15513   1871.1
+  kqueue NOTE_CRITICAL         58     1563    10395    21414    631.7
+  mach + 0.5ms spin          1219     4390    15580    26308   1811.3
+
+=== policy: TIME_CONSTRAINT
+  [TIME_CONSTRAINT] latency QoS tier = 0x0
+  wait                        p50      p90      p99      max     mean
+  nanosleep                    27       46       62      121     28.8
+  cond_timedwait               25       39       54       79     26.3
+  mach_wait_until              18       29       40       52     19.1
+  kqueue timer                 47       69       91      113     49.0
+  kqueue NOTE_CRITICAL         49       71      112      150     51.4
+  mach + 0.5ms spin             0        0        3        8      0.1
+
