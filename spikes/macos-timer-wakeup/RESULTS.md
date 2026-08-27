@@ -61,6 +61,19 @@ but leaves a multi-millisecond tail — still enough to drop frames, just fewer.
 is precisely the state a quiet guest puts the machine in, which is why the symptom appears when
 nothing is happening and vanishes when anything is.
 
+## What this does and does not describe
+
+The probe measures the host. It does **not** measure limina's WFI park, because on macOS 26.5 /
+Apple silicon that park never runs: a guest's `WFI` does not trap out to libkrun, HVF parks the
+vCPU inside `hv_vcpu_run` (`HvCore::Hypervisor::VcpuStateManager::wait_for_interrupt`) and serves
+the virtual timer from its own `VirtualClock` thread. Measured with the `LIMINA_WFI_LATENCY`
+counters plus a `sample` of the worker: 30 s of idle desktop, 48,489 vCPU exits, every one of them
+an MMIO read.
+
+The numbers still matter, for one reason: HVF's wait blocks on **our** vCPU thread, so the
+scheduling band is still ours to set. Whether setting it reaches the wakeup that is actually late
+is an open experiment, not a conclusion — HVF's clock thread is not ours.
+
 ## Reproducing
 
     clang -O2 -o wakeprobe wakeprobe.c
