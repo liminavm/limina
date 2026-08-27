@@ -137,8 +137,11 @@ leaving them at their defaults advertises capabilities no evdev key can service.
   guest is playing. Net behavior in the common case is unchanged, and the unfocused case starts
   working.
 - **`Media` stays at `GrabMode::Full`.** Under an explicit capture the VM owns the keyboard
-  outright, so the tap eats the `NX_SYSDEFINED` event and forwards the key directly. There is no
-  double-delivery risk: an event consumed at the tap never becomes a remote command.
+  outright, so the tap eats the `NX_SYSDEFINED` event and forwards the key directly. This is
+  expected to give no double delivery — an event consumed at a session tap should never reach the
+  system handler that mints the remote command — but that is reasoning, **not** a measurement
+  (see §9). If it turned out wrong the guest would receive every press twice and play/pause would
+  cancel itself out, so verify it at implementation.
 - **`Volume` is untouched.** Volume is not a remote command, our audio leaves through CoreAudio,
   and the existing full-grab-only rule is already right for the reasons in `auxkey.rs`'s header.
 - **`Brightness` and `Other` are untouched.**
@@ -166,7 +169,11 @@ and cannot be overridden per VM. Artwork (enhanced tier) is the only per-content
 
 ## 9. Open before implementation
 
-Whether re-registering while a rival player is **actively playing** takes the session from it.
+**Does a full-grab tap consumption suppress the remote command?** §7 assumes it does. Cheap to
+check once the registration exists: capture the window, press fn+F8, and confirm exactly one key
+reaches the guest.
+
+**Does claiming the session take it from an active rival?** Whether re-registering while a rival player is **actively playing** takes the session from it.
 The measurements show a rival wins while we are released; they do not show what happens when we
 claim during active rival playback. This decides whether "start music in the VM, press play/pause"
 works on the first press or only after the rival stops, and it is one probe run away

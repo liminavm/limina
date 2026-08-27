@@ -53,6 +53,14 @@ Two things the probe is built to avoid confounding:
 | 3 | same, but **no rival player open** | → **still us**, `togglePlayPause` | tile gone |
 | 4 | handlers `removeTarget` + `isEnabled = false` | → macOS default player | tile gone |
 
+The logical arms above do not map one-to-one onto the raw logs, because arm 3 was found by
+accident before it was isolated. `arm1-bundled-noaudio.log` is arm 1. `arm2-retire.log` is a first
+pass at arm 2 whose two late `togglePlayPause` lines were in fact the arm-3 phenomenon — no rival
+happened to be open at the time — which is what prompted isolating it. `arm3-release.log` carries
+arms 2, 3 and 4 in sequence, each under a stated rival condition: the arm-2 press (rival open)
+left no line in it, the arm-3 press (rival quit) is the `togglePlayPause` at 195.975 s, and the
+arm-4 press after `unwire` again left none.
+
 **1. Eligibility does not require audio from the registering process.** A process rendering
 nothing at all held the session and received media keys system-wide. The worker/UI split is a
 non-issue: the AppKit process can own MediaPlayer while libkrun owns CoreAudio, and the only
