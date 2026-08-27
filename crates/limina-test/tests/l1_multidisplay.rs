@@ -270,15 +270,27 @@ fn read_edid(guest: &mut Guest, connector: &str) -> Vec<u8> {
         .collect()
 }
 
+/// Poll until the connector serves a **complete** EDID.
+///
+/// "Long enough" is not the settle condition: the blob comes back through the serial console
+/// as `xxd` output, and a line arriving mid-read yields a plausible-length blob that is not an
+/// EDID (observed once in the suite as a checksum of 95 on a freshly pushed identity, and not
+/// reproducible in 3 isolated runs). A valid checksum is what says the read is whole. On
+/// timeout the last long-enough blob is returned anyway, so a genuinely malformed EDID fails
+/// the caller's checksum assert with its real value instead of the useless "never produced one".
 fn wait_for_edid(guest: &mut Guest, connector: &str) -> Option<Vec<u8>> {
     let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last: Option<Vec<u8>> = None;
     loop {
         let edid = read_edid(guest, connector);
         if edid.len() >= 128 {
-            return Some(edid);
+            if checksum(&edid[..128]) == 0 {
+                return Some(edid);
+            }
+            last = Some(edid);
         }
         if Instant::now() >= deadline {
-            return None;
+            return last;
         }
         std::thread::sleep(Duration::from_millis(250));
     }
@@ -288,7 +300,7 @@ fn wait_for_edid_change(guest: &mut Guest, connector: &str, previous: &[u8]) -> 
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let edid = read_edid(guest, connector);
-        if edid.len() >= 128 && edid != previous {
+        if edid.len() >= 128 && edid != previous && checksum(&edid[..128]) == 0 {
             return Some(edid);
         }
         if Instant::now() >= deadline {
