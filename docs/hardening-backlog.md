@@ -1532,25 +1532,39 @@ skips implicit sync. That the guest-side bo wait fixes this proves the guest ker
 fence on the bo, so `VIRTGPU_WAIT`/sync-file consumers are safe and a bare Vulkan importer is
 not — unprobed. Formats/modifiers beyond `Argb8888` + LINEAR are also unmeasured.
 
-## GPU — a stock guest's Vulkan window has jittery FPS, and the copy does not explain it
+## An idle guest misses frame deadlines: the WFI timeout wakes late
 
-A stock guest's Vulkan client is composited by copying its WSI blit staging buffer into the
-compositor's texture once per command batch (virglrenderer `f68289d8`). Observed on stock
-Fedora 44 with two `vkcube` windows: the frame rate visibly fluctuates.
+A Vulkan or GL client on an otherwise idle guest does not hold its refresh rate. `vkcube` alone
+on a 59.885 Hz output runs at ~49 FPS, and the frame-time distribution is not scattered — it is
+quantised to whole vblank periods, so ~10-15% of frames simply miss their flip and slip one
+refresh. Give the guest *any* other work and the misses stop.
 
-The copy is the obvious suspect and is probably the wrong one. The larger window is 900x600 at
-8 bytes/pixel (`R16G16B16X16_FLOAT`) — about 4.3 MB per frame, against an M1 Max's memory
-bandwidth. That is not a budget a copy of this size should perturb, so look past it before
-optimising it: the upload is a `glTexSubImage2D` on the compositor's GL context, so a stall
-there, a pipeline flush, or the once-per-batch refresh firing more often than once per
-presented frame are all better candidates than the memcpy.
+Measured 2026-08-27, stock Fedora 44, `vkcube` 900x600 under MangoHud, 20 s samples
+(frame times in ms):
 
-Nothing here is synchronised against the client's blit either — there is no shared fence on this
-transport — so tearing and pacing artefacts are possible independent of cost. Worth separating
-"is it slow" from "is it uneven" before attributing either.
+| guest state | avg FPS | p50 | p90 | p99 | max |
+|---|---|---|---|---|---|
+| idle (vkcube alone) | 48.7 | 17.2 | 33.3 | 39.8 | 78.3 |
+| + four pure-CPU spinners | 57.2 | 16.7 | 18.0 | 34.6 | 41.5 |
+| `nohz=off` on the guest cmdline | 59.4 | 16.7 | 18.1 | 28.0 | 38.3 |
 
-Measure the stock and enhanced tiers as a pair: the enhanced tier presents the same client
-zero-copy through an IOSurface and is the control.
+The load that fixes it carries no GPU work at all, and `nohz=off` fixes it while adding no load —
+which rules out the renderer, the compositor, and the stock tier's per-frame CPU copy (the copy is
+~4.3 MB/frame on a machine with an M1 Max's bandwidth, and it is present in every row above).
+What the two fixes share is that the guest stops relying on a *long, one-shot* timer to wake up:
+a busy CPU wakes on real work, and `nohz=off` replaces the deadline with a 1 kHz periodic tick.
+
+The suspect is therefore ours. An idle vCPU traps on WFI, and
+`vmm/src/macos/vstate.rs::wait_for_event` parks the thread in a `crossbeam` `select!` on
+`recv(after(timeout))` — an ordinary host thread sleeping on an ordinary timer. macOS coalesces
+those, and coalescing slack grows with the requested interval, so a ~16 ms deadline can be served
+late by enough to cost a whole refresh while a ~1 ms one is served on time. That fits every row.
+
+Next steps, cheapest first: instrument the actual wake lateness (requested vs observed) at that
+call site to confirm the slip directly; then evaluate raising the vCPU threads' QoS class and
+taking the wait off a coalescible timer — `mach_wait_until` on a mach-absolute deadline, or a
+time-constraint thread policy — rather than adding load or a tick the guest should not need.
+`after()` also allocates a fresh channel per WFI, which is worth removing regardless.
 
 ## The supervisor⇄worker control sockets should probably be Mach ports
 
