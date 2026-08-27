@@ -214,10 +214,14 @@ One module, four callers:
    detail.
 4. **`reset_vm`** — inherits it through `start_vm`; already off the main thread.
 
-`startClicked` runs on the AppKit main thread and a `stat()` against a dead network mount can
-block for seconds. `disks_line` already stats on the 1 s timer, so the exposure is pre-existing
-rather than new — but Tier A moves to the background refresh thread as part of this rather than
-inheriting the hazard silently.
+**Open: the refresh is on the main thread.** `refresh` runs from an `NSTimer` on the AppKit
+main thread (`center/mod.rs:220`), so Tier A does too — and a `stat()` against a dead network
+mount can block for seconds. `disks_line` already stats there, so the hazard is pre-existing
+rather than introduced, and Tier A is deliberately stat-only to keep the added cost to a few
+syscalls per VM. It is still the wrong thread for it. Moving snapshotting to a background
+thread that hands finished rows to the main thread is the fix; it changes the refresh
+architecture rather than this module, so it is booked in `docs/hardening-backlog.md`
+(§Lifecycle robustness), not done.
 
 ## 4. Layer 2 — the reaper
 

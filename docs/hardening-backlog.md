@@ -426,6 +426,15 @@ where the tty2 compositor was paused, i.e. whenever the *other* session owned th
   "bind the TLS at the vrend entry" paragraph batched with it (in both `vkr_budget.h` and
   `docs/design/gpu-memory-budget.md`) is corrected in the same commit.
 
+- **The control center snapshots VMs on the AppKit main thread** — `refresh` runs from an
+  `NSTimer` on the main thread (`crates/limina/src/center/mod.rs`), so every per-VM `stat()` it
+  does runs there too: `disks_line`'s existence check, and now the cheap-depth pre-flight behind
+  `VmRow::blocked` (`docs/design/vm-start-preflight.md` §3.6). A dead network mount can block a
+  `stat()` for seconds, which freezes the UI. Pre-existing rather than introduced — the cheap tier
+  is deliberately stat-only, a few syscalls per VM — but it is the wrong thread for it. Fix =
+  snapshot on a background thread and hand finished rows to the main thread; that changes the
+  refresh architecture, not the pre-flight module.
+
 ## Guest-reachable aborts (a guest must never kill the VMM)
 
 Two classes already landed as targeted fixes: the empty-clear-rect vk_meta assert
