@@ -57,6 +57,19 @@ impl VmConfig {
             !self.identity.name.is_empty(),
             "vm.toml identity.name is empty"
         );
+        // A share is the one definition path not resolved against the bundle: it resolves
+        // against the process working directory, so a relative one lets whoever can write a
+        // directory the user might launch from choose what gets mounted into the guest.
+        // Refused here — at load — so it can never reach the worker.
+        for s in &self.shares {
+            anyhow::ensure!(
+                s.path.is_absolute(),
+                "vm.toml [[share]] path must be absolute: {}; a relative share resolves \
+                 against the working directory rather than the bundle, which lets anyone \
+                 who can write that directory choose what is shared into the guest",
+                s.path.display()
+            );
+        }
         Ok(())
     }
 }
@@ -735,6 +748,30 @@ mod tests {
             input: InputCfg::default(),
             power: PowerCfg::default(),
         }
+    }
+
+    /// A `[[share]]` path resolves against the process CWD, not the bundle — so a relative
+    /// one lets whoever can write a directory the user might `cd` into choose what gets
+    /// mounted into the guest (`ln -s /Users/x/secret /tmp/harmless` + `path = "harmless/d"`).
+    /// Rejected at load so it can never reach the worker. See design §3.5.
+    #[test]
+    fn a_relative_share_path_is_refused() {
+        let mut cfg = minimal();
+        cfg.shares = vec![ShareEntry {
+            name: None,
+            path: "harmless/docs".into(),
+            ro: false,
+        }];
+        let err = cfg
+            .validate()
+            .expect_err("a relative share path must not load");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("must be absolute"), "{msg}");
+        assert!(msg.contains("harmless/docs"), "{msg}");
+
+        // The absolute spelling of the same intent loads.
+        cfg.shares[0].path = "/tmp/harmless/docs".into();
+        cfg.validate().unwrap();
     }
 
     #[test]

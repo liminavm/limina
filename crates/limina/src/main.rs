@@ -1888,6 +1888,7 @@ fn parse_size_mib(s: &str) -> Result<usize> {
 }
 
 /// A parsed `--share [NAME=]PATH[:ro]` spec, normalized to the worker's `tag=path` form.
+#[derive(Debug)]
 struct ShareSpec {
     tag: String,
     path: PathBuf,
@@ -1908,7 +1909,28 @@ fn parse_share(spec: &str) -> Result<ShareSpec> {
     };
     anyhow::ensure!(!path_str.is_empty(), "--share has an empty path: {spec:?}");
     let path = PathBuf::from(path_str);
-    anyhow::ensure!(path.is_dir(), "share path is not a directory: {path:?}");
+    // A share is host-filesystem exposure, and the only path limina resolves against the
+    // process working directory rather than a bundle. Relative is refused so that choosing
+    // where the user launches from cannot choose what is mounted; a symlinked root is refused
+    // so a plausible name cannot be retargeted after the fact. (libkrun opens the share root
+    // O_NOFOLLOW, which covers the final component only — this is the same rule, made ours
+    // and testable.) See `docs/design/vm-start-preflight.md` §3.5.
+    anyhow::ensure!(
+        path.is_absolute(),
+        "share path must be absolute: {path:?}; a relative share resolves against the working \
+         directory, which lets anyone who can write that directory choose what is shared"
+    );
+    let meta = std::fs::symlink_metadata(&path)
+        .with_context(|| format!("share path not accessible: {path:?}"))?;
+    anyhow::ensure!(
+        !meta.file_type().is_symlink(),
+        "share path is a symlink: {path:?}; point the share at the real directory"
+    );
+    anyhow::ensure!(meta.is_dir(), "share path is not a directory: {path:?}");
+    // Carry the canonical path, so what we validated is what the worker opens.
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("resolving share path {path:?}"))?;
 
     let name = match name {
         Some(n) => n,
@@ -2178,6 +2200,40 @@ fn validate_disk_path(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// A share is host-filesystem exposure and the only path we resolve against the process
+    /// working directory. Relative is refused so nobody can pick the base by choosing where
+    /// the user launches from; a symlinked root is refused so nobody can retarget the name
+    /// after the fact. See `docs/design/vm-start-preflight.md` §3.5.
+    #[test]
+    fn share_paths_are_absolute_non_symlink_and_canonical() {
+        let dir = std::env::temp_dir().join(format!("limina-sharetest-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let real = dir.join("real");
+        let secret = dir.join("very-secret");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(&secret).unwrap();
+
+        // Relative: refused outright, however innocuous it looks.
+        let err = parse_share("harmless/docs").expect_err("a relative share must be refused");
+        assert!(format!("{err:#}").contains("must be absolute"), "{err:#}");
+
+        // A symlinked root is refused rather than followed -- the attack is a plausible name
+        // pointing somewhere else, so following it silently is the whole problem.
+        let link = dir.join("harmless");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+        let err = parse_share(link.to_str().unwrap())
+            .expect_err("a symlinked share root must be refused");
+        assert!(format!("{err:#}").contains("symlink"), "{err:#}");
+
+        // A plain directory is accepted and carried canonicalized, so what we validate is
+        // what the worker opens (macOS /tmp is itself a symlink to /private/tmp).
+        let spec = parse_share(real.to_str().unwrap()).unwrap();
+        assert_eq!(spec.path, real.canonicalize().unwrap());
+        assert!(spec.path.is_absolute());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// Task #20: flat runs default-arm suspend beside the boot disk; read-only and
     /// explicitly-configured runs don't; --discard-suspend deletes a pending snapshot.
