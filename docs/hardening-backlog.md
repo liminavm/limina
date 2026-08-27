@@ -1532,6 +1532,26 @@ skips implicit sync. That the guest-side bo wait fixes this proves the guest ker
 fence on the bo, so `VIRTGPU_WAIT`/sync-file consumers are safe and a bare Vulkan importer is
 not — unprobed. Formats/modifiers beyond `Argb8888` + LINEAR are also unmeasured.
 
+## GPU — a stock guest's Vulkan window has jittery FPS, and the copy does not explain it
+
+A stock guest's Vulkan client is composited by copying its WSI blit staging buffer into the
+compositor's texture once per command batch (virglrenderer `f68289d8`). Observed on stock
+Fedora 44 with two `vkcube` windows: the frame rate visibly fluctuates.
+
+The copy is the obvious suspect and is probably the wrong one. The larger window is 900x600 at
+8 bytes/pixel (`R16G16B16X16_FLOAT`) — about 4.3 MB per frame, against an M1 Max's memory
+bandwidth. That is not a budget a copy of this size should perturb, so look past it before
+optimising it: the upload is a `glTexSubImage2D` on the compositor's GL context, so a stall
+there, a pipeline flush, or the once-per-batch refresh firing more often than once per
+presented frame are all better candidates than the memcpy.
+
+Nothing here is synchronised against the client's blit either — there is no shared fence on this
+transport — so tearing and pacing artefacts are possible independent of cost. Worth separating
+"is it slow" from "is it uneven" before attributing either.
+
+Measure the stock and enhanced tiers as a pair: the enhanced tier presents the same client
+zero-copy through an IOSurface and is the control.
+
 ## The supervisor⇄worker control sockets should probably be Mach ports
 
 Five UNIX sockets in the temp dir carry the whole supervisor⇄worker control plane: `limina-ctrl`
