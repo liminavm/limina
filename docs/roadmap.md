@@ -1690,10 +1690,18 @@ and waiting for it to call home. A test that deployed over a live agent would go
 delivery entirely broken, and the sha256 check on the delivered binary is what separates *delivered*
 from *delivered intact*.
 
-### Next steps
+### What is left, and what it waits for
 
-5. **Telemetry / hotplug ack** — `guest-get-diskstats`/`-cpustats`/`-load`; `guest-get/set-vcpus` and
-   the memory-block commands only if CPU/memory hotplug ever lands (ballooning covers memory today).
+**Telemetry** (`guest-get-diskstats`/`-cpustats`/`-load`) and **hotplug ack**
+(`guest-get/set-vcpus`, the memory-block commands) are the remaining verbs, and both are **deferred
+until they have a consumer**: a surface that shows guest-side load, and CPU/memory hotplug actually
+landing. Implemented before that they are log noise, and a telemetry cadence with nothing reading it
+is a cost the stock tier pays for nothing.
+
+Nineteen of the guest's forty-three commands are in use. The rest have no consumer by choice —
+`guest-file-read`/`-seek`/`-flush`, `guest-get-disks`, `guest-get-timezone`, the ssh-key read/remove
+pair, and `guest-suspend-*` (the bracket owns suspend). `guest-fsfreeze-*` is closed with a measured
+reason above, not skipped.
 
 ## Milestone 13 — Visibility- & power-aware runtime rendering adaptation
 
