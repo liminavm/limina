@@ -1558,9 +1558,10 @@ So the guest's timer wakeups are late. **Where** they are late is the open quest
 **Not in our WFI park.** On macOS 26.5 / Apple silicon a guest's `WFI` does not trap out to
 libkrun at all: HVF parks the vCPU inside `hv_vcpu_run`
 (`HvCore::Hypervisor::VcpuStateManager::wait_for_interrupt`, seen in a `sample` of the worker) and
-serves the virtual timer from its own `VirtualClock` thread. Over 30 s of an idle desktop the only
-vCPU exits are MMIO reads — `WaitForEvent`, `WaitForEventTimeout` and `VtimerActivated` are all
-zero. `vstate.rs::wait_for_event` and its `crossbeam` `after()` timeout are dead code on this host.
+serves the virtual timer from its own `VirtualClock` thread. `wait_for_event`'s own counters never
+increment — not even the one for the WFI that returns without parking — and over 30 s of idle
+desktop `WaitForEvent`, `WaitForEventTimeout` and `VtimerActivated` are all zero in the debug log.
+`vstate.rs::wait_for_event` and its `crossbeam` `after()` timeout are dead code on this host.
 The `LIMINA_WFI_LATENCY` instrument stays in place to watch for that changing.
 
 `spikes/macos-timer-wakeup/` still describes the host accurately, and is why the thread-scheduling
@@ -1587,12 +1588,12 @@ proposal here reports its idle wakeup rate and battery cost alongside its frame 
 ## An idle guest exits ~1,600 times a second reading virtio-net's interrupt status
 
 Measured 2026-08-27 while chasing the frame-deadline misses above, on a stock Fedora 44 guest at a
-settled idle desktop with `--net`: 48,489 vCPU exits in 30 s, **all of them MMIO reads**, and
-72,374 of the 30 s window's reads target `0xa01f060` — offset `0x060`, `InterruptStatus`, on the
-device the guest maps as `a01f000.virtio_mmio` → `virtio_net`. virtio-blk at `0xa01d060` is a
-distant second at 2,896; every other device is in the tens.
+settled idle desktop with `--net`: 48,489 MMIO *reads* in 30 s, 72,374 of them against `0xa01f060`
+— offset `0x060`, `InterruptStatus`, on the device the guest maps as `a01f000.virtio_mmio` →
+`virtio_net`. virtio-blk at `0xa01d060` is a distant second at 2,896; every other device is in the
+tens. (MMIO writes are not logged, so the true exit total is higher; the read mix is the finding.)
 
-Nothing else exits at all, so this is the entire vCPU-exit cost of an idle VM. Whether it is a
+No other logged exit kind appears at all. Whether it is a
 normal consequence of gvproxy's traffic, an interrupt that is acked in a way that costs an extra
 read per event, or a genuine storm has not been established — start by rerunning the same count
 with `--no-net`, and against a guest with no NAT traffic to serve.
