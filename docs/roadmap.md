@@ -1553,10 +1553,14 @@ path; this is what a guest that never installs our components gets.
   `SUBSYSTEM=="virtio-ports", ATTR{name}=="org.qemu.guest_agent.0"`, and the unit is
   `BindsTo=dev-virtio\x2dports-org.qemu.guest_agent.0.device`. Confirmed: exposing the port on an
   otherwise untouched guest brought `qemu-guest-agent-10.2.2-1.fc44` up on its own.
-- **Fedora blocks nothing.** `/etc/sysconfig/qemu-ga` ships with its `--block-rpcs` line commented
-  out; the guest answered `guest-info` with **43 commands, every one `enabled`** — `guest-exec`,
-  `guest-file-*`, `guest-set-user-password` and the ssh-key commands included, all as root. The
-  trust boundary is therefore ours: only the supervisor process holds the host end of the port.
+- **Fedora blocks nothing at the RPC layer — it confines the domain instead.**
+  `/etc/sysconfig/qemu-ga` ships with its `--block-rpcs` line commented out and the guest answered
+  `guest-info` with **43 commands, every one `enabled`** — `guest-exec`, `guest-file-*`,
+  `guest-set-user-password` and the ssh-key commands included, all as root. What the RPC list gives,
+  `virt_qemu_ga_t` takes back: the verbs are all reachable and what they may *touch* is the gate
+  (Step 4). So `enabled` in a capability probe means the agent will attempt the command, never that
+  it will be allowed to finish it. The trust boundary on our side is unchanged: only the supervisor
+  process holds the host end of the port.
 - **`guest-set-time` works against our PL031.** The agent sets `CLOCK_REALTIME` and then writes the
   RTC; libkrun's `RTCLR` write arm stores it as an offset from host wallclock, so nothing rejects it.
   Measured: a guest shoved 7200.3 s back was stepped to the host's clock within one tick, and again
