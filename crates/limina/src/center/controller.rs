@@ -1096,11 +1096,12 @@ impl CenterController {
             152.0,
             &granule_popup,
             "How finely the Mac maps this VM's memory. 4 KB suits any guest, including a \
-             stock Linux distro whose own pages are 4 KB — such a guest gets no 3D \
-             acceleration at all without it. Choose 16 KB only if this guest runs a kernel \
-             with 16 KB pages: it then matches the Mac's own page size and runs a few \
-             percent faster. Shut the VM down fully before changing this — a suspended \
-             guest resumes with the memory layout it was saved with.",
+             stock Linux distro whose own pages are 4 KB — such a guest gets no hardware \
+             Vulkan without it, though OpenGL stays accelerated either way. Choose 16 KB \
+             only if this guest runs a kernel with 16 KB pages: it then matches the Mac's \
+             own page size and runs a few percent faster. Shut the VM down fully before \
+             changing this — a suspended guest resumes with the memory layout it was \
+             saved with.",
         );
         let ssh_field = labeled_field(mtm, &accessory, 122.0, "SSH port:", &ssh_now.to_string());
         self.row_help(
