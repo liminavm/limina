@@ -1554,17 +1554,36 @@ which rules out the renderer, the compositor, and the stock tier's per-frame CPU
 What the two fixes share is that the guest stops relying on a *long, one-shot* timer to wake up:
 a busy CPU wakes on real work, and `nohz=off` replaces the deadline with a 1 kHz periodic tick.
 
-The suspect is therefore ours. An idle vCPU traps on WFI, and
+The cause is ours. An idle vCPU traps on WFI, and
 `vmm/src/macos/vstate.rs::wait_for_event` parks the thread in a `crossbeam` `select!` on
-`recv(after(timeout))` — an ordinary host thread sleeping on an ordinary timer. macOS coalesces
-those, and coalescing slack grows with the requested interval, so a ~16 ms deadline can be served
-late by enough to cost a whole refresh while a ~1 ms one is served on time. That fits every row.
+`recv(after(timeout))` — an ordinary host thread sleeping on an ordinary timer, which macOS serves
+about 1.5 ms late at the median and up to tens of milliseconds late in the tail.
 
-Next steps, cheapest first: instrument the actual wake lateness (requested vs observed) at that
-call site to confirm the slip directly; then evaluate raising the vCPU threads' QoS class and
-taking the wait off a coalescible timer — `mach_wait_until` on a mach-absolute deadline, or a
-time-constraint thread policy — rather than adding load or a tick the guest should not need.
-`after()` also allocates a fresh channel per WFI, which is worth removing regardless.
+`spikes/macos-timer-wakeup/` measures every host lever against a 16.667 ms deadline and settles
+which one matters. The wait primitive does not: `nanosleep`, `pthread_cond_timedwait`,
+`mach_wait_until` and a plain kqueue timer are within noise of each other. Nor is timer coalescing
+the term — an explicit `LATENCY_QOS_TIER_0` moves the tier and not the lateness, and a wait that
+wakes 0.5 ms *early* to spin still lands 1.2 ms late, so the thread is runnable and not running.
+`THREAD_TIME_CONSTRAINT_POLICY` moves the median 1580 µs → 18 µs and the worst case 13 ms → 52 µs.
+`hv_vcpu_run_until` is not an option: `hv.h` puts it inside `#ifdef __x86_64__`, and nothing in
+the arm64 config headers stops WFI trapping, so the deadline is ours to serve.
+
+Order of work: instrument requested-vs-observed lateness at the real call site; then replace the
+wait's *shape* — one kqueue per vCPU carrying `EVFILT_TIMER` (`NOTE_MACHTIME | NOTE_ABSOLUTE`,
+`NOTE_CRITICAL`) plus `EVFILT_USER`, which serves the deadline, the device IRQ and the pause event
+in one wait and drops the per-WFI channel `after()` allocates; then the real-time band, with the
+question of what xnu does to a time-constraint thread that overruns its computation slice answered
+first — a vCPU thread is not a 2 ms audio callback, so the band may belong on a timer thread that
+wakes the vCPU rather than on the vCPU thread itself. Verify against the guest's frame-time
+distribution, not the host probe.
+
+**The constraint this work must respect: idle wakeups are a budget we already spent effort
+winning.** `docs/design/venus-ring-idle-wakeups.md` took `limina-vmm` from ~75/s to ~0/s at idle,
+and the ring poll plateau in `docs/roadmap.md` was tuned against a measured wakeup cost. A
+real-time band, and especially any spin, can hand that back. Both are nonetheless justified,
+because holding 60 fps on a *quiet* guest is a requirement and not a luxury — so the target is
+punctuality that is armed only when the guest is presenting and released when it is not, and any
+proposal here reports its idle wakeup rate and battery cost alongside its frame times.
 
 ## The supervisor⇄worker control sockets should probably be Mach ports
 
