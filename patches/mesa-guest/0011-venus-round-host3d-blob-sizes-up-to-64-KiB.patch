@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Thu, 27 Aug 2026 11:18:37 -0300
+Subject: [PATCH 11/11] venus: round host3d blob sizes up to 64 KiB
+
+The kernel packs host-visible blobs back to back in one arena with no
+alignment (virtgpu_vram.c passes alignment 0 to drm_mm_insert_node), so a
+blob's offset is the running sum of the sizes before it. A host translates
+those offsets at its own page granularity, which can be larger than ours:
+on Apple silicon a 4 KiB-page guest under a 16 KiB-page host produces
+offsets the host cannot express, and the map is refused outright. Measured
+on a Debian guest: 14 refused maps in four hours, every one of them at
+guest offset 0x21000 (= 0x20000 + one 4 KiB blob), all with the host
+pointer and the size already 16 KiB-aligned and only the offset ragged.
+
+One ragged size skews every offset after it, so rounding the size is what
+keeps the offsets aligned -- there is nothing to fix up at map time, since
+the guest CPU reaches this memory through stage-2 translation with no
+software in the path.
+
+64 KiB rather than the host's page size: it is the largest page size any
+host uses, so the guest needs no knowledge of who is running it. The host
+side pads its own allocation to the same value.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ src/virtio/vulkan/vn_renderer_virtgpu.c | 24 +++++++++++++++++++++---
+ 1 file changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/src/virtio/vulkan/vn_renderer_virtgpu.c b/src/virtio/vulkan/vn_renderer_virtgpu.c
+index 978ab3c9d50..f1cc46f68be 100644
+--- a/src/virtio/vulkan/vn_renderer_virtgpu.c
++++ b/src/virtio/vulkan/vn_renderer_virtgpu.c
+@@ -644,9 +644,27 @@ virtgpu_ioctl_resource_create_blob(struct virtgpu *gpu,
+                                    uint64_t blob_id,
+                                    uint32_t *res_id)
+ {
+-#ifdef SIMULATE_BO_SIZE_FIX
+-   blob_size = align64(blob_size, 4096);
+-#endif
++   /* limina: round every blob up to a fixed granularity, so that host-visible blobs
++    * land on offsets a host with larger pages than ours can actually map.
++    *
++    * The kernel packs host-visible blobs back to back in one arena with no alignment
++    * (virtgpu_vram.c, `drm_mm_insert_node` = alignment 0), so a blob's offset is the
++    * running sum of the sizes before it. A host maps those offsets at ITS page
++    * granularity, which may be larger than ours -- 16 KiB host pages under 4 KiB guest
++    * pages on Apple silicon -- and a map it cannot express is refused outright, costing
++    * the guest host-visible memory with no way to ask differently. One ragged size skews
++    * every offset after it, so rounding the size is what keeps the offsets aligned.
++    *
++    * 64 KiB is the largest page size any host uses, so this needs no knowledge of who is
++    * running us. The host pads its own allocation to the same value (virglrenderer
++    * vkr_device_memory.c, LIMINA_BLOB_SIZE_ALIGN); rounding up past what it allocates
++    * would have it map memory past the end of the allocation to us.
++    *
++    * HOST3D blobs only: those are the ones the kernel turns into vram objects and so the
++    * only ones that ever take an arena slot (virtgpu_ioctl.c, virtio_gpu_vram_create).
++    * A guest-shmem blob is backed by our own pages and is never mapped by the host. */
++   if (blob_mem == VIRTGPU_BLOB_MEM_HOST3D)
++      blob_size = align64(blob_size, 64 * 1024);
+ 
+    struct drm_virtgpu_resource_create_blob args = {
+       .blob_mem = blob_mem,

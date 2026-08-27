@@ -26,7 +26,7 @@ that two independent ways:
 | half | who breaks it | status |
 |---|---|---|
 | **size** — a blob sized `0x21000` is not a 16 KiB multiple | host passed the size verbatim | **fixed host-side 2026-07-03**, libkrun `0043` rounds map/unmap identically (+ virglrenderer `0023` for the zink map-info gate) |
-| **offset** — two 4 KiB-packed blobs share one host page, so neither can be mapped alone | guest `virtgpu` vram allocator packs at 4 KiB | **not host-fixable**; needs the guest to keep the lattice |
+| **offset** — two 4 KiB-packed blobs share one host page, so neither can be mapped alone | guest `virtgpu` vram allocator packs at 4 KiB | **not host-fixable**; needs the guest to keep the lattice — guest Mesa now rounds every host3d blob to 64 KiB, see below |
 
 Only the second half ever implied a page size, and it does not imply it *specifically* — it implies
 an **aligned offset lattice**. A 16 KiB guest gets that for free (`PAGE_ALIGN` is 16 KiB, so blobs
@@ -38,13 +38,28 @@ guest-side answers that don't involve page size.
 
 ## The offset lattice without 16 KiB pages
 
-**Today: `guest/virtio-gpu-dkms/`.** One patch gives every vram node a 16 KiB *start* alignment
-(sizes stay exact — rounding them guest-side breaks `virtgpu_vram_mmap`, which requires mapping
-length == node size). Delivered out-of-tree so it shadows the in-tree module. Validated on stock
-4 KiB F44: `Virtio-GPU Venus (Apple M1 Max)` enumerated for the first time on the stock tier
-(`spikes/venus-4k-dkms/RESULTS.md`). **Still not wired into the guest-tools payload** — grep says
-neither `build-all.sh` nor `install-enhanced.sh` mentions it, so it remains a hand-installed spike
-artifact.
+**Shipped: guest Mesa rounds the size.** `virtgpu_ioctl_resource_create_blob` rounds every
+**host3d** blob up to 64 KiB before the ioctl (`vn_renderer_virtgpu.c`), and the host pads the
+VkDeviceMemory to the same granularity (`LIMINA_BLOB_SIZE_ALIGN`, virglrenderer
+`vkr_device_memory.c`) so the blob never exceeds the allocation it was created from. This is link 3
+of the negotiated chain below, minus the negotiation: no feature bit, no kernel floor, nothing to
+advertise, so none of the ordering hazards apply. 64 KiB rather than the host's page size because it
+is the largest page size any host uses and the guest then needs no knowledge of who is running it.
+`crates/limina-test/tests/blob_size_granularity.rs` pins the two constants together — a guest
+rounding past what the host allocates would be handed host memory past the end of it.
+
+Rounding the size guest-side is safe, contrary to what this document said while the DKMS module was
+the only answer: `virtio_gpu_vram_mmap` rejects only a mapping that runs **past** the node
+(`vm_end > vram->vram_node.size`, `virtgpu_vram.c:64`), so a shorter mapping over a rounded node is
+fine — and `virtio_gpu_vram_create` already `PAGE_ALIGN`s the size anyway (`:203`), which is exactly
+why a 16 KiB guest gets the lattice for free.
+
+**Lab alternative: `guest/virtio-gpu-dkms/`.** One patch gives every vram node a 16 KiB *start*
+alignment, keeping sizes exact. Delivered out-of-tree so it shadows the in-tree module. Validated on
+stock 4 KiB F44: `Virtio-GPU Venus (Apple M1 Max)` enumerated for the first time on the stock tier
+(`spikes/venus-4k-dkms/RESULTS.md`). Never wired into the guest-tools payload, and the Mesa rounding
+above covers the same ground for any guest running our Mesa, so this stays a hand-installed spike
+artifact. It remains the only answer for a guest running **stock** Mesa.
 
 **Upstream: `VIRTIO_GPU_F_BLOB_ALIGNMENT`.** This is exactly the "host-side padding" idea we
 discussed, formalized as a negotiated protocol, and it is **merged** — verified in v7.2-rc7, not
@@ -73,13 +88,14 @@ odd-size allocations into clean `-EINVAL` failures.**
 2. **Guest kernel ≥ 7.2** — 7.2 is at rc7, so weeks away. For the *enhanced* tier this is ours (we
    build the kernel). For the *stock* tier it is Fedora's, and F44 currently ships 6.19.10 — a long
    way back.
-3. **Guest Mesa queries the param and rounds** — **this does not exist anywhere yet.** Not in
+3. **Guest Mesa queries the param and rounds** — the *querying* half still exists nowhere. Not in
    26.1.7, and not on Mesa `main` (`git grep BLOB_ALIGNMENT origin/main -- src/virtio` is empty;
-   the only params venus queries are listed at `vn_renderer_virtgpu.c:1023-1061`). Somebody has to
-   write it, and it is squarely upstreamable.
+   the only params venus queries are listed at `vn_renderer_virtgpu.c:1023-1061`). Our fork does
+   the *rounding* half unconditionally, which is what makes it work today on any kernel; turning it
+   into the negotiated form is what an upstream submission would need.
 
-So the honest status is that link 3 is *unwritten*, not merely unshipped — the README's "not ours to
-ship" is true for the stock tier but understates it: nobody has shipped it for any tier.
+So links 1 and 2 buy only the ability to make the granule a *contract* — the guest already keeps the
+lattice without them. They matter for the stock tier, which runs Mesa we do not build.
 
 ### A landmine found while verifying link 3
 

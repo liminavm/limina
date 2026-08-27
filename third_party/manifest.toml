@@ -66,14 +66,14 @@ base = "418f2963a15"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-guest"
-rev = "e2032647964e770a25e40f7fe7d325121b927cf7"
+rev = "e27f2ae56c95db972eaf6599595f1c01817eb1ca"
 base = "mesa-26.1.7"
 
 [virglrenderer]
 repo = "https://github.com/liminavm/virglrenderer.git"
 upstream = "https://gitlab.freedesktop.org/virgl/virglrenderer.git"
 branch = "limina"
-rev = "81e20fac035cefffaa978b4b17ec43e065ee47e1"
+rev = "03885127685974cadf2658ed5bbaded3cb5462a1"
 base = "f2945d3974256fefc731f0411c28b865680eebdc"
 
 [linux]

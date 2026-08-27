@@ -177,9 +177,9 @@ $ vulkaninfo --summary
 GPU0: Virtio-GPU Venus (Apple M1 Max),  driverName = venus
 ```
 
-**venus requires a 16 KiB-page guest.** This is the single hard tier boundary in the graphics
-stack, and its mechanism is precise: `hv_vm_map` demands 16 KiB granularity for the host address,
-the guest address *and* the size. The size half was fixed host-side in 2026-07 (libkrun + virgl);
+**venus needs an aligned blob lattice — in practice, a 16 KiB-page guest.** This is the single
+hard tier boundary in the graphics stack, and its mechanism is precise: `hv_vm_map` demands 16 KiB
+granularity for the host address, the guest address *and* the size. The size half was fixed host-side in 2026-07 (libkrun + virgl);
 the **offset** half is guest-side — a 4 KiB guest packs several blobs into one host page, so a
 blob's guest address is 4 KiB-aligned but not 16 KiB-aligned:
 
@@ -189,11 +189,18 @@ hv_vm_map failed: ret=0xfae94003 … guest=0x280021000 size=0x100000
 ResourceMapBlob -> ErrUnspec
 ```
 
-Full analysis and the ways out (16 KiB kernel — what we ship; `guest/virtio-gpu-dkms`;
-or a `VIRTGPU_PARAM_BLOB_ALIGNMENT` Mesa chain, unwritten) are in
-`docs/design/16k-page-requirement.md`. Note the DKMS module is a *lab* answer: no shipped image or
-payload carries it, so "venus works on a stock 4 KiB guest" is only true of a guest somebody
-modified by hand.
+The offset half now has a shipped answer that does not involve page size: guest Mesa rounds every
+host3d blob up to 64 KiB (`vn_renderer_virtgpu.c`) and the host pads the allocation to match
+(`LIMINA_BLOB_SIZE_ALIGN`), so the offsets stay on an aligned lattice whatever the guest's page size
+is. That moves the requirement from "a 16 KiB kernel" to "our Mesa" — a much lighter delivery — but
+**it has not yet been measured on a 4 KiB guest**, because no image we ship pairs 4 KiB pages with
+our Mesa. Until it is, the enhanced tier's 16 KiB kernel is still what venus is known to run on.
+
+Full analysis and the alternatives (`guest/virtio-gpu-dkms`, the negotiated
+`VIRTGPU_PARAM_BLOB_ALIGNMENT` chain) are in `docs/design/16k-page-requirement.md`. A guest running
+*stock* Mesa is unaffected by the rounding above and still needs the DKMS module, which no shipped
+image or payload carries — so "venus works on a stock 4 KiB guest" remains true only of a guest
+somebody modified by hand.
 
 #### Open: stock-tier Vulkan is dead, not degraded
 

@@ -793,7 +793,7 @@ fn cmd_ls() -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<24} {:<16} {:>4}  {:<12} {:<6}",
+        "{:<24} {:<18} {:>4}  {:<12} {:<6}",
         "NAME", "STATUS", "CPUS", "MEMORY", "SSH"
     );
     for bundle in all {
@@ -824,7 +824,7 @@ fn cmd_ls() -> Result<()> {
                     None => "-".to_string(),
                 };
                 println!(
-                    "{:<24} {:<16} {:>4}  {:<12} {:<6}",
+                    "{:<24} {:<18} {:>4}  {:<12} {:<6}",
                     cfg.identity.name, status, cfg.hardware.cpus, mem, ssh
                 );
             }
