@@ -435,9 +435,10 @@ only in the second. And the whole file is named `90-limina-zink.conf` while zink
 not been a supported configuration since 2026-08-04. Neither is load-bearing to rename, but both
 invite exactly the mistake that was made.
 
-An enhanced image is safe to boot even if the 16 KiB kernel is not the selected one: venus init
-fails, GL keeps working on vrend, and the desktop comes up degraded rather than broken. Component
-versions and the host-first ordering prerequisite are in `docs/images.md`.
+An enhanced image is safe to boot even if the 16 KiB kernel is not the selected one: under the
+default 4 KiB granule venus comes up on the 4 KiB kernel too, and under `--ipa-granule 16k` it
+fails while GL keeps working on vrend — degraded, not broken, either way. Component versions and
+the host-first ordering prerequisite are in `docs/images.md`.
 
 ## 6. Performance
 

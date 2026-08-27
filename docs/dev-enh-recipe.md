@@ -26,8 +26,12 @@ divergences that remain candidate causes of the present failure.
   rootfstype=btrfs rw selinux=0 console=ttyAMA0"` (the canonical launcher is
   `spikes/venus-draw-probe/boot-seated-kk.sh`). The **kernel is never inside the disk image**;
   the disk supplies only the btrfs root.
-- **16 KiB pages are load-bearing**: a 4 KiB guest cannot map venus host-visible blobs on a
-  16 KiB host (`HV_BAD_ARGUMENT`). So venus accel **requires** the 16K kernel.
+- **16 KiB pages were load-bearing, and are not any more** (2026-08-27): a 4 KiB guest could not
+  map venus host-visible blobs (`HV_BAD_ARGUMENT`) because the VM's stage-2 granule was pinned to
+  the 16 KiB host page. `hv_vm_config_set_ipa_granule` sets it per VM and **4 KiB is now the
+  default**, so venus accel no longer requires the 16K kernel — the 16K kernel is a perf choice
+  (`--ipa-granule 16k` / *Memory pages* in Configure). Everything below that reasons from the old
+  rule is historical.
 - Source: `torvalds/linux` tag **`v6.12`** (shallow), `arm64 defconfig` +
   `limina.fragment` (`CONFIG_ARM64_16K_PAGES=y`, virtio stack, btrfs/virtio-net builtin,
   DRM_VIRTIO_GPU, overlayfs, SELinux, PL011) + **`patches/linux/0001-0003`** (`0001` fence
@@ -245,9 +249,9 @@ not a correctness gap.
   `0001–0006` (md5-verified live). Lesson: inspect the *deployed* artifact, not leftover source.
 - **"dev-enh presents on stock 4K EFI / overturns the 16K requirement."** FALSE. The live
   catalog booted the clone with **no `--kernel`** → the 4K **llvmpipe software** greeter, whose
-  "gbm lock: 0 failures" is the *software* present, not venus. venus accel needs 16K
-  (`HV_BAD_ARGUMENT` on a 16K host otherwise). Lesson: confirm the renderer (venus vs llvmpipe)
-  before reading a present result as "the venus tier works."
+  "gbm lock: 0 failures" is the *software* present, not venus. (venus needed 16K **at the time**;
+  a 4 KiB guest gets it today under the default 4 KiB granule.) Lesson: confirm the renderer
+  (venus vs llvmpipe) before reading a present result as "the venus tier works."
 - **Both transcript agents' "mutter 49.5 vs 50.0 is the differentiator."** Still rejected for
   *our* case: the clone is mutter-49.5 too. (mutter-50 has its own modifier-RT crash, separate.)
 - **"dev-enh works with no KK fixes."** Literally FALSE — it needs KK `0001` (XFB etc.). True

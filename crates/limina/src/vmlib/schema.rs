@@ -548,8 +548,9 @@ pub enum GpuMode {
 /// host-visible blobs land on 4 KiB-granular guest addresses and `hv_vm_map` refuses them, which
 /// is what costs a stock guest venus (`spikes/hv-ipa-granule/RESULTS.md`).
 ///
-/// Creation-time only, so a change applies from the next boot; a restored snapshot must use the
-/// granule its guest's layout was built under.
+/// Creation-time only, so a change applies from the next boot. A snapshot restores fine under a
+/// *finer* granule than it was taken with, but a coarser one cannot express the layout the guest
+/// already built, so resume it as it was saved — or shut the guest down before coarsening this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
 pub enum IpaGranule {
     /// 4 KiB. The default: it can express any guest's layout, including a stock 4 KiB-page

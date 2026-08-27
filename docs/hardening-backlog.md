@@ -1343,7 +1343,7 @@ advertisement to a mock-mutter clipboard bridge. **If it fires again, stop treat
 the first thing to check is whether the wait for `PASTED` is bounded generously enough under a
 parallel nextest lane, since the suite has run parallel since 2026-08-03.
 
-## Suspected test flake — `venus_shell_replay_matches_llvmpipe_reference`
+## Replay-under-load stall — `venus_replay` / `venus_shell_replay` never print `Rendered`
 
 Seen **once**, 2026-08-12, during the full HVF suite over the escalating give-back commits
 (102/103, everything else green). The guest-side `eglretrace --headless` shell-trace replay
@@ -1394,6 +1394,36 @@ Independent of the balloon work: `GuestConfig::l1_from_env` sets `memory: None`,
 does not rebuild it — so reverting the source file left all runs executing the identical binary.
 Any A/B of shipped behaviour through this harness must rebuild **and re-codesign** between arms,
 or compare something other than the binary.
+
+**Third occurrence, 2026-08-27** (full suite over the 4 KiB-granule default, 117/118) — and it
+hit the **other** trace this time: `venus_replay_matches_llvmpipe_reference` stalled 959.0 s with
+the signature to the second (the venus arm's `eglretrace` context created, ~90 s of KosmicKrisp
+shader work, then a wedge at the first frame boundary, the 1 Hz `capture: configure scanout` and
+the once-a-minute `vsock muxer: unexpected dgram pkt: 3` for fifteen minutes, then the ssh bound).
+Solo rerun passed in 163.9 s. Same load correlation a third time: 3343 s for the run, against the
+~2200 s of a green one. So **the condition is not trace-specific** — it is the seated venus replay
+under suite parallelism, and either trace can draw it. Not a granule effect: venus enumerated in
+that same guest, the two sibling venus tests passed inside the same suite, and the log holds zero
+`hv_vm_map failed` and zero `exceeds its` lines.
+
+## Flaky test — libkrun's `sweep_fault_handler_fields_concurrent_touches`
+
+`cargo test -p krun-hvf --lib` in `third_party/libkrun`. Measured 2026-08-27 on a clean tree
+(no limina change in the run): **2 passes in 5**, failing with `no toucher write collided with a
+sweep window in 50 sweeps`. The test needs a racing thread's write to land inside a sweep window
+it does not control, so on a quiet or a busy machine it simply never collides. Pre-existing and
+unrelated to anything we changed; it does not run in `cargo xtask test`, but it does fire for
+anyone running the fork's own unit tests. Fix by driving the collision deterministically (hold
+the sweep open, or count observed windows and skip when zero) rather than raising the 50.
+
+## Configure can coarsen the granule of a suspended VM
+
+A suspended VM has no supervisor process, so the control center reports it Stopped and offers
+Configure. Flipping *Memory pages* from 4 KB to 16 KB there and resuming replays a guest layout
+the coarser granule cannot express — blob maps refuse mid-replay. The `Suspended` record does not
+carry the granule it was taken under, so a preflight cannot compare. For now the help text says to
+shut down first; the real fix is to record the granule in the suspend metadata and refuse (or warn
+on) a coarsening resume. Finer-than-saved is safe and needs no gate.
 
 ## M6 — the io give-back's availability denominator is the balloon itself
 

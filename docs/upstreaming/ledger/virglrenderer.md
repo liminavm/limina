@@ -80,7 +80,7 @@ The table covers the 58 audited commits; the 6 added since are listed under
 
 ### Post-audit commits (unaudited — added after the 2026-08-03 pass)
 
-The table's 58 rows are the audited series. Twenty-three commits have landed on the branch
+The table's 58 rows are the audited series. Twenty-four commits have landed on the branch
 since, and none has been researched against upstream yet. Listed so the drift is visible
 rather than implied by a stale count:
 
@@ -110,6 +110,7 @@ rather than implied by a stale count:
 | `4c2a38f5` | vrend: sample guest-memory blobs from the guest's own pages | **carry** — it exists because macOS has no dmabuf, so a `blob_mem=GUEST` resource can only be sampled by copying the guest pages into the texture. On a dmabuf host the import aliases the pages and no copy is wanted, so the mechanism is not upstream-shaped as written; the generalizable part is "a guest blob with no importable fd is not automatically untypeable" |
 | `f04641d7` | vrend: sample a planar-YUV guest blob by converting it to RGBA | **carry** — chained to `4c2a38f5`, and the CPU YUV to RGBA conversion stands in for sampler-side conversion the host GL cannot do here. What *is* upstream-shaped is the narrow half: advertising NV12/NV21/IYUV/YV12 as sampler-only formats so the guest stops taking the per-plane "lowered" path (the guest half is mesa 0019 — send the pair or neither) |
 | `86741d53` | vrend: drop the iovecs when the VMM's resource is destroyed | **carry, chained to `4c2a38f5`** — the dangling `res->iov` exists upstream too (`virgl_resource_destroy_func` never calls `detach_iov`), but nothing upstream reads it after the unref, so there is no bug to report and nothing to disclose. It became reachable only through our own guest-pixels refresh. Sending it alone would be a fix for a latent pointer with no failing case |
+| `e534ac72` | venus: size host-visible allocations for the blob the guest will make of them | **carry, but the underlying gap is upstream-shaped** — a guest turns host-visible memory into a virtio-gpu blob and the guest *kernel* `PAGE_ALIGN`s it to the guest's page size, so a 1280-byte `VkDeviceMemory` arrives back as a 4096-byte blob and the export refuses it (the guest then holds a dead resource id and the client dies — measured on stock Fedora 44 with `vkcube`). We pad to 64 KiB because the host cannot ask the guest its page size; the *right* upstream fix is for venus to learn the guest page size (or for the export to tolerate a page-aligned overshoot), not a fixed pad. `LIMINA_BLOB_SIZE_ALIGN` would need renaming either way |
 
 `034f7086` is the allocation-side half of the fd-less classic-resource attach: without it
 only `VIRGL_BIND_SCANOUT` resources got an IOSurface, so a Vulkan compositor could import
