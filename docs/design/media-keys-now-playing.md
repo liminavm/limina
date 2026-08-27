@@ -55,27 +55,30 @@ It does not. A silent `.accessory` process holds the session and receives media 
 and a title-only info dict — no duration, elapsed time, rate or artwork — is enough to be routed
 to (measured 2026-08-27, macOS 26.5; `spikes/now-playing-media-keys/RESULTS.md`). The probe
 carries a near-silent in-process audio arm to isolate "must render audio" from "must merely
-register"; it was never needed.
+register"; eligibility did not need it. Whether *ranking* does is the open question in §9.
 
-### 2.2 What it does not buy: contention against a live host player
+### 2.2 The VM becomes a participant in macOS's rules
 
 macOS's arbitration is sticky to the app that most recently **rendered audio**, and it survives
 that app being paused. Registering handlers and publishing `.playing` while a host player is
 mid-playback does not displace it, and pausing that player does not hand the session over either
-(measured; arms 5–6 in `spikes/now-playing-media-keys/RESULTS.md`).
+(measured; arms 5-6 in `spikes/now-playing-media-keys/RESULTS.md`).
 
-So the feature's reach is bounded, and the bound should be stated rather than discovered: **the
-guest opening its audio stream makes the VM the media-key target only when no host player that
-has played is still running.** On a Mac with Spotify or Music open, the keys keep going there.
-That is defensible — it is exactly the arbitration a native player would be subject to, and the
-user's mental model of "the media keys drive whatever last played" stays intact — but it is
-strictly less than "music in the guest always gets the keys", and §9 records the one lever that
-might widen it.
+**That is the design working, not a limitation.** The goal is to make the VM a peer subject to the
+same rules as any native player, not a privileged one — and "the transport keys drive whatever
+last played" is the rule. A limina that seized the media session merely by having a VM open would
+be a worse citizen than iTunes: it would take the keys away from the app the user was actually
+listening to, on the strength of a guest that is playing nothing.
 
-This does not weaken the case for the design. The bucket rule loses the unfocused case
-*unconditionally*; this loses it only to a live host player, and in exchange the Control Center
-transport, the headphone gestures and Siri all start working. But it does mean the feature is a
-better-arbitration story, not an always-wins one.
+The reach of the feature follows from that, and is worth stating plainly: the guest opening its
+audio stream makes the VM the media-key target when the VM is what most recently played. A host
+player that is still running and played more recently keeps the keys. Both halves are correct.
+
+What this buys that key routing **cannot buy at any grab level**: the Control Center transport
+buttons, Siri, and headset gestures — a double-tap on the earbuds pausing whatever is playing in
+the guest. None of those ever enter the keyboard event stream, so no aux-key bucket policy can
+reach them however permissive it is made. They are only available to a registered media session,
+and they are the part of this that is genuinely new rather than better-arbitrated.
 
 ## 3. The signal: the guest's PCM stream lifetime
 

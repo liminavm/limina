@@ -106,19 +106,21 @@ nothing (arm 6). The arbitration is sticky to the app that most recently *render
 survives a pause; being a registered, `.playing`, tile-eligible player is not enough to displace
 it.
 
-The consequence is a real limitation on the feature, not a detail: **the guest opening its audio
-stream does not make the VM the media-key target while any host player that has played is still
-running.** The headline case — music in the guest, press play/pause from a host app — works on a
-Mac with no live host player, and loses to one that exists. Arms 1–4 all ran on an empty field,
-which is why they read so cleanly.
+This is the behavior the design wants: the VM is a participant in macOS's arbitration, not a
+privileged one. A player that seized the session merely by existing would take the keys from the
+app the user is actually listening to. The reach that follows — the guest gets the keys when the
+VM is what most recently played, a still-running host player that played more recently keeps them
+— is correct on both halves. Arms 1–4 read so cleanly because they ran on an empty field.
 
 ## Still open
 
-**Does rendering audio from the registering process win contention?** Arm 1 proved audio is not
-needed for *eligibility* on an empty field; arms 5–6 show something else decides *contention*, and
-"most recently rendered audio" is the obvious candidate. limina is structurally on the wrong side
-of that if so: its MediaPlayer process is silent while a *sibling* process (the worker) makes the
-sound, so it would never win a contest against a real host player. The probe's `--audio` arm
-exists precisely for this — run it against an actively-playing rival and see whether the session
-moves. Measure before implementing, because a "no" bounds what the feature can promise, and may
-argue for registering from the worker instead of the supervisor.
+**Can the VM take its turn when the turn is genuinely its own?** Participating in the arbitration
+means ranking by audio recency, so the VM must move to the front once the guest starts playing and
+the host player has gone quiet. Arm 1 proved audio is not needed for *eligibility* on an empty
+field; arms 5–6 show something else decides *ranking*, and "most recently rendered audio" is the
+obvious candidate. limina is structurally on the wrong side of that if so: its MediaPlayer process
+renders nothing while a *sibling* process (the worker) makes the sound. If macOS credits the
+worker, the VM is not a participant at all — just a last-place entry that only wins on an empty
+Mac. The `--audio` arm exists precisely for this: render a tone from the registering process,
+claim against an idle-but-recent rival, and see whether the session moves. A "yes" argues for
+registering from the worker rather than the supervisor.
