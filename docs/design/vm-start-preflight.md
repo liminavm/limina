@@ -83,6 +83,8 @@ Stat-only and cross-VM-lock probes; cheap enough for the center's refresh.
 | `hardware.memory` parses and is ≥ the 1 GiB dynamic floor | Blocker | `schema.rs:203` (late) |
 | `network[0].ssh_port` is 0 or ≥ `SSH_PORT_MIN` | Blocker | `main.rs:1472` (late) |
 | `ssh_port` set with no `[[network]]` | Blocker | `main.rs:980` |
+| each `[[share]]`: path is absolute | Blocker | **never checked**, §3.5 |
+| each `[[share]]`: exists, is a directory, root is not a symlink | Blocker | `main.rs:1911` (late, and follows symlinks) |
 | `boot.firmware`, when configured, exists | Blocker | **never checked** |
 | firmware resolvable when not configured | Blocker | `resolve_windowed_firmware` |
 | GOP firmware absent, krunkit `silent.fd` present | **Warning** | `main.rs:1227` |
@@ -127,6 +129,49 @@ Separately, `runtime::status` treats an unreadable `run/lock` as `Stopped`
 (`runtime.rs:167-169`), so a permission-broken bundle reads as stoppable in `ls` and the center
 and then fails at `acquire`. Tier A distinguishes the two.
 
+### 3.5 Share paths must be absolute
+
+A `[[share]]` is the only path in a definition that is not resolved against the bundle
+(`main.rs:965-971`, versus `:953-963` for disks and cdroms). It resolves against the process
+CWD instead — which is not the bundle, and varies with how limina was launched.
+
+That is a privilege-escalation shape, not an inconsistency. A relative share path lets an
+attacker who can write to any directory the user might `cd` into choose what gets mounted:
+
+```
+attacker:  ln -s /Users/kov/very-secret /tmp/harmless
+config:    path = "harmless/docs"
+user:      cd /tmp && limina start …
+```
+
+`harmless` is an intermediate path component, resolved normally, symlink followed; `docs` is a
+real directory beneath the target. The guest gets `/Users/kov/very-secret/docs`.
+
+The single-component form of this (`path = "harmless"`) happens to fail, because libkrun opens
+the share root with `O_NOFOLLOW` (`third_party/libkrun/src/devices/src/virtio/fs/macos/
+passthrough.rs:656-661` and `:1330-1335`). That defense is real but narrow — `O_NOFOLLOW`
+constrains only the final component — and it is incidental: our own `parse_share` checks
+`is_dir()`, which *follows* symlinks, so the host side validates a different path than the one
+libkrun opens.
+
+**The rule: `[[share]] path` must be absolute, enforced in `VmConfig::validate()`** — at load,
+so a relative share can never reach the worker, and so the bundle presents as broken with the
+reason shown rather than starting with a surprising mount. The same constraint applies to
+`--share` on the ad-hoc CLI: the CWD is exactly the attacker-chosen base the rule exists to
+remove, and a shell can supply an absolute path.
+
+Two supporting measures, since (1) alone leaves the defense implicit:
+
+- **Canonicalize at parse and carry the canonical path.** Our check and libkrun's open then
+  refer to the same path, and the intermediate-symlink variant is closed even for an absolute
+  path whose parent an attacker can write.
+- **Pin the `O_NOFOLLOW` root open with a test on our side.** It is load-bearing security living
+  in a vendored file we rebase, currently defended by nothing.
+
+Symlinks *inside* a share need no handling: the macOS passthrough backend uses `O_NOFOLLOW`
+throughout lookup and open, so the guest kernel resolves them rather than the host. The exposed
+surface is the share root alone, which is why constraining the root is sufficient.
+
 ### Tier C — deliberately not checked
 
 Written down so it is not "improved" later.
@@ -143,7 +188,7 @@ Written down so it is not "improved" later.
   overcommitment is the design, not an error.
 - **Anything guest-side.** Pre-flight ends at the VM boundary.
 
-### 3.5 Call sites
+### 3.6 Call sites
 
 One module, four callers:
 
@@ -209,10 +254,6 @@ assert against instead of parsing `start`'s stderr.
 
 ## 8. Out of scope, noted here because the audit surfaced them
 
-- **`[[share]]` paths are not bundle-resolved** (`main.rs:964-972`) while `[[disk]]` and
-  `boot.firmware` are (`:953-958`, `:1000-1003`). A relative `share.path` therefore resolves
-  against the process CWD — for a center-launched VM, wherever the app happened to be launched
-  from. A latent bug, fixed separately.
 - **`hardware.cpus` is unvalidated end to end**: `cpus = 0` loads, translates (`main.rs:1020`),
   and reaches the worker raw (`limina-vmm/src/main.rs:651`). Tier A stops it at the door; the
   worker should reject it too.
