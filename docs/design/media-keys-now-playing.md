@@ -1,0 +1,173 @@
+# Media keys as a media session, not a keyboard bucket
+
+Status: **designed, not implemented.** Companion material: the measurements in
+`spikes/now-playing-media-keys/RESULTS.md`, the current policy in
+`crates/limina-input/src/auxkey.rs`, and the input stack as a whole in
+`docs/input-and-windows.md`.
+
+## 1. What the bucket rule gets wrong
+
+Aux keys (the special/media top row) reach us as `NX_SYSDEFINED` events and are routed by a
+per-bucket ownership table (`crates/limina-input/src/auxkey.rs`, `AuxBucket::min_grab`). The
+`Media` bucket — play/pause, next, prev, ff, rw — goes to the guest at `GrabMode::Soft` or
+better, i.e. **whenever the VM window is focused**, and the host keeps it otherwise.
+
+That rule answers the wrong question. "Who is focused" is a *keyboard* question; "who should
+receive a transport command" is a *media session* question, and macOS already arbitrates it
+system-wide. Two consequences follow from asking the wrong one:
+
+- **The common case is backwards.** Music playing in the guest while the user works in a host
+  app is exactly when the transport keys are wanted, and it is exactly when the bucket rule
+  denies them: the VM is not focused, so the host keeps the key. Conversely, a focused VM
+  swallows play/pause even when the thing actually playing is Spotify on the host.
+- **The Control Center transport is unreachable.** The menu-bar Now Playing widget, the
+  headphone gestures and Siri all speak the media-session protocol, not the keyboard. A design
+  built on key routing can never reach them.
+
+## 2. The design
+
+The VM **announces itself to macOS as a player** for as long as the guest holds its audio device
+open, and translates the remote commands macOS routes back to it into the evdev media keys the
+guest already understands. macOS keeps ownership of the arbitration; limina supplies a player and
+a translation.
+
+```
+guest opens virtio-snd stream 0  ──▶  worker  ──▶  supervisor  ──▶  MPNowPlayingInfoCenter
+                                                                    MPRemoteCommandCenter
+   guest evdev KEY_PLAYPAUSE     ◀──  worker  ◀──  supervisor  ◀──  remote command callback
+```
+
+Deliberately **no guest state** is involved in this first version: no MPRIS, no title, no artist,
+no artwork, no position. The session is announced with a title-only info dict naming the VM, and
+commands are delivered as media keys the guest's own desktop already routes to its own player.
+Everything richer is an enhanced-tier addition on top of exactly this shape (§8) and needs a guest
+agent; this version works on a **stock guest with no limina components at all**, which is what
+makes it the right floor.
+
+### 2.1 It works despite the process split — measured, not assumed
+
+The registering process renders no audio. libkrun's CoreAudio sink lives in the **worker**
+(`third_party/libkrun/src/devices/src/virtio/snd/audio_macos.rs`), while `MPNowPlayingInfoCenter`
+must live in the **AppKit** process. If macOS tied media-session eligibility to the registering
+process actually producing audio, this design would need a fork.
+
+It does not. A silent `.accessory` process holds the session and receives media keys system-wide,
+and a title-only info dict — no duration, elapsed time, rate or artwork — is enough to be routed
+to (measured 2026-08-27, macOS 26.5; `spikes/now-playing-media-keys/RESULTS.md`). The probe
+carries a near-silent in-process audio arm to isolate "must render audio" from "must merely
+register"; it was never needed.
+
+## 3. The signal: the guest's PCM stream lifetime
+
+"Is the VM a player right now" is answered by the virtio-snd PCM lifecycle for playback stream 0,
+which libkrun already handles explicitly — `VIRTIO_SND_R_PCM_START` / `STOP` / `RELEASE` at
+`third_party/libkrun/src/devices/src/virtio/snd/device.rs:306-320`. No sampling, no RMS
+thresholding, no heuristics: a discrete event to hang a callback on.
+
+Be honest about what that event means: **the guest's audio device is active**, not *music is
+playing*. PipeWire keeps a sink node open across a pause and only suspends it after an idle
+timeout, and a system beep opens it for a moment. So the state limina publishes is "the VM has
+audio open", mapped to `playbackState = .playing`, and `STOP`/`RELEASE` mean *stop being a
+player* rather than "paused" — once the guest has let go of the audio device we genuinely have
+nothing to control.
+
+The retire side wants **hysteresis** (a few seconds' hold-off) so a track gap or a PipeWire idle
+suspend does not hand the session away and make the user's next press miss the guest.
+
+## 4. The seam
+
+Mechanism in the fork, policy in limina, as everywhere else:
+
+- **libkrun** gains a stream-state callback on the snd device — the smallest possible upstreamable
+  addition, no policy.
+- **The worker** forwards it to the supervisor as a line on the existing worker→supervisor control
+  socketpair, alongside `surface` / `frame` / `scanoutgone` (parsed in
+  `crates/limina/src/window/present.rs:645`, `spawn_reader`). One new verb, no new channel.
+- **The supervisor** owns registration, retire hysteresis, per-VM arbitration (§7) and the
+  translation back to `InputState::tap_aux_key` (`crates/limina/src/window/input.rs:1487`) — which
+  is already exactly "emit this evdev media key, down then up", and is what the aux tap calls
+  today. **Nothing new in the input stack**; only the source of the event changes.
+
+## 5. Registration must be symmetric with the stream
+
+This is the part the measurements changed, and getting it wrong is worse than not shipping the
+feature.
+
+Clearing `nowPlayingInfo` and setting `playbackState = .stopped` removes the Control Center tile
+and yields to any *rival* player — which reads like a clean handback, and is not one. With **no
+rival open, an app whose remote-command handlers are still registered stays the fallback target**
+and goes on receiving `togglePlayPause` indefinitely. Only `removeTarget(nil)` plus
+`isEnabled = false` actually steps aside, after which macOS falls back to its own default player.
+
+So a limina that registered its handlers once at launch and only managed the info dict would
+**silently swallow three keys on any Mac with no other player running**, forwarding them to a
+guest that is not playing anything — invisible, permanent, and very hard to attribute. The rule:
+
+> Wire the commands when the guest opens the stream; **unwire** them when it closes it. The
+> handler registration, not the info dict, is what holds the keys.
+
+`playbackState` must also be maintained rather than set once: the Control Center button renders
+from it, so a stale `.playing` leaves the widget offering "pause" forever and sending `pause`
+repeatedly.
+
+## 6. Command mapping
+
+fn+F8 arrives as `togglePlayPause`. Control Center's own buttons send the **discrete** `pause`
+and `nextTrack`. So wiring all of play / pause / toggle is load-bearing, not defensive — a
+toggle-only registration leaves the widget's buttons dead.
+
+| remote command | guest key |
+|---|---|
+| `togglePlayPause`, `play`, `pause` | `KEY_PLAYPAUSE` (164) |
+| `nextTrackCommand` | `KEY_NEXTSONG` (163) |
+| `previousTrackCommand` | `KEY_PREVIOUSSONG` (165) |
+
+The guest only understands a toggle, so `play` and `pause` collapse onto it. A desync between
+macOS's idea of our state and the guest's is possible but self-correcting, because our published
+state is derived from the actual stream rather than from the commands we received.
+
+Every other command (`changePlaybackPosition`, seek, skip, shuffle, repeat, like, rating, …) is
+explicitly `isEnabled = false`. That is the documented way to say "this player cannot do that";
+leaving them at their defaults advertises capabilities no evdev key can service.
+
+## 7. What stays, and what changes, in the bucket table
+
+- **`Media` leaves the soft grab.** With the window merely focused, media keys are no longer
+  intercepted; they go to macOS, which routes them to whoever owns the session — us, when the
+  guest is playing. Net behavior in the common case is unchanged, and the unfocused case starts
+  working.
+- **`Media` stays at `GrabMode::Full`.** Under an explicit capture the VM owns the keyboard
+  outright, so the tap eats the `NX_SYSDEFINED` event and forwards the key directly. There is no
+  double-delivery risk: an event consumed at the tap never becomes a remote command.
+- **`Volume` is untouched.** Volume is not a remote command, our audio leaves through CoreAudio,
+  and the existing full-grab-only rule is already right for the reasons in `auxkey.rs`'s header.
+- **`Brightness` and `Other` are untouched.**
+
+**Multiple VMs.** `MPNowPlayingInfoCenter.default()` is process-wide, so one limina.app can
+present exactly one session however many VMs it runs. Most-recent-stream-start wins, and the
+command goes to *that* VM — deliberately **not** the focused one, since the whole point is that
+focus is the wrong question.
+
+## 8. Two-tier behavior
+
+- **Stock guest (no limina components).** Fully works. The guest's own desktop already binds
+  `virtio_snd` and already handles `KEY_PLAYPAUSE`; nothing guest-side is required. This is the
+  version described above.
+- **Enhanced guest (later).** With `limina-agent` present, the same shape carries real metadata
+  and real commands: MPRIS title/artist/album/artwork/position published into the info dict, and
+  MPRemoteCommand callbacks delivered as MPRIS method calls to the exact player the agent picked,
+  instead of synthesized keys. That removes the toggle collapse of §6 and makes the scrubber and
+  artwork work. It is strictly additive: the key-synthesis path remains the floor for guests
+  without the agent, and the arbitration, the stream signal and the retire discipline are
+  unchanged.
+
+Note the app icon shown in the Now Playing widget is always limina's — that is the *app's* icon
+and cannot be overridden per VM. Artwork (enhanced tier) is the only per-content lever.
+
+## 9. Open before implementation
+
+Whether re-registering while a rival player is **actively playing** takes the session from it.
+The measurements show a rival wins while we are released; they do not show what happens when we
+claim during active rival playback. This decides whether "start music in the VM, press play/pause"
+works on the first press or only after the rival stops, and it is one probe run away
+(`spikes/now-playing-media-keys/`).
