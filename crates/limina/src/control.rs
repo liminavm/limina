@@ -22,7 +22,7 @@
 
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -129,10 +129,11 @@ struct Inner {
     /// The stock `qemu-guest-agent` port, once a worker spawn has handed us its host end.
     /// `None` before that; present-but-silent on a guest with no agent installed.
     qga: Mutex<Option<QgaSlot>>,
-    /// The guest's last-reported PSI `full` IO `avg10`, or `u32::MAX` for "never reported"
-    /// — which is the normal state on a stock guest, and the state
-    /// [`crate::qga::trim::Gate`] must not read as "busy".
-    guest_io_full_avg10: AtomicU32,
+    /// The guest's last-reported PSI `full` IO `avg10`, and when it said so. `None` on a
+    /// stock guest, which never reports — the state [`crate::qga::trim::Gate`] must not read
+    /// as "busy". A reading that stops being refreshed expires the same way; see
+    /// [`crate::qga::trim::fresh_psi`].
+    guest_io_full_avg10: Mutex<Option<(Instant, u32)>>,
     /// M6 PSI autoballoon policy, driven by guest `MemPressure` reports. `None` unless `--memory`
     /// configured a dynamic range.
     balloon_policy: Option<crate::balloon_policy::BalloonPolicy>,
@@ -172,7 +173,7 @@ impl ControlPlane {
             clipboard: Arc::new(crate::clipboard::Clipboard::new()),
             vdagent: Mutex::new(None),
             qga: Mutex::new(None),
-            guest_io_full_avg10: AtomicU32::new(u32::MAX),
+            guest_io_full_avg10: Mutex::new(None),
             balloon_policy,
             fido_store,
             usb_fido_gadget,
@@ -460,11 +461,11 @@ impl Inner {
             // the clock, so the qga port is never touched and `ready()` would be false
             // forever. The trim is allowed to be the first question asked on this port; the
             // client's own probe-and-backoff handles a guest with no agent at all.
-            let io = self.guest_io_full_avg10.load(Ordering::Relaxed);
+            let last_psi = *self.guest_io_full_avg10.lock().unwrap();
             let gate = crate::qga::trim::Gate {
                 host_calm: crate::balloon_policy::sample_host_pressure().blended
                     == crate::balloon_policy::HostPressure::Normal,
-                guest_io_full_avg10: (io != u32::MAX).then_some(io),
+                guest_io_full_avg10: crate::qga::trim::fresh_psi(now, last_psi),
             };
             if let Err(why) = crate::qga::trim::gate_ok(gate) {
                 log::debug!("qga: not trimming now — {why}");
@@ -708,9 +709,8 @@ fn serve_loop(
                 // Also the only view the host gets of how busy the guest's disk is, which is
                 // what gates the periodic trim (`crate::qga::trim`). Kept even when no balloon
                 // policy is configured — the two consumers are independent.
-                inner
-                    .guest_io_full_avg10
-                    .store(p.io_full_avg10, Ordering::Relaxed);
+                *inner.guest_io_full_avg10.lock().unwrap() =
+                    Some((Instant::now(), p.io_full_avg10));
                 if let Some(policy) = &inner.balloon_policy {
                     policy.on_pressure(&p);
                 }

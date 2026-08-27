@@ -19,11 +19,10 @@
 //! middle assertion (freed but *not* returned) a real part of the oracle rather than a
 //! formality: it pins that the shrink at the end came from our trim.
 //!
-//! An earlier draft used a blank ext4 data disk instead. It measured nothing, because
-//! `qemu-ga` is SELinux-confined and cannot open a filesystem at an unlabelled mount point:
-//! `/mnt/trimtest: failed to open: Permission denied`, while the guest's real filesystems
-//! trimmed fine beside it. The guest's own root is the honest vehicle — it is the filesystem
-//! production actually trims, with the labels production actually has.
+//! The root is also the only honest vehicle here. `qemu-ga` is SELinux-confined and cannot
+//! open a filesystem at an unlabelled mount point — a scratch `ext4` at `/mnt/…` answers
+//! `failed to open: Permission denied` while the guest's real filesystems trim fine beside
+//! it. Test on the filesystem production trims, with the labels production has.
 //!
 //! Oracles, in order:
 //! 1. Writing into the guest's filesystem grows the host image.

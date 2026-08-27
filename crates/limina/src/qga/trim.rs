@@ -40,6 +40,19 @@ pub const MIN_EXTENT: u64 = 1024 * 1024;
 /// counts as not doing I/O. Only enhanced guests report it; see [`Gate::guest_io_full_avg10`].
 pub const GUEST_IO_CALM: u32 = 500;
 
+/// How long a guest's PSI reading stays meaningful. An enhanced guest reports every few
+/// seconds; when the reports stop — its `limina-agent` died, or the guest is mid-upgrade —
+/// the last reading must not keep speaking for it. If that reading happened to be "busy" it
+/// would refuse every trim for the rest of the session, silently. Stale therefore reads the
+/// same way absent does ([`Gate::guest_io_full_avg10`]): silence is not evidence of load.
+pub const PSI_FRESH: Duration = Duration::from_secs(5 * 60);
+
+/// The gate's view of the guest's IO pressure: the last reading, if it still speaks for now.
+pub fn fresh_psi(now: Instant, last: Option<(Instant, u32)>) -> Option<u32> {
+    last.filter(|(at, _)| now.duration_since(*at) < PSI_FRESH)
+        .map(|(_, io)| io)
+}
+
 /// `LIMINA_QGA_TRIM_SECS` overrides the cadence; `0` disables trimming altogether.
 pub fn interval_from_env() -> Option<Duration> {
     parse_interval(std::env::var("LIMINA_QGA_TRIM_SECS").ok().as_deref())
@@ -170,6 +183,25 @@ mod tests {
         assert!(gate_ok(Gate {
             host_calm: true,
             guest_io_full_avg10: None,
+        })
+        .is_ok());
+    }
+
+    /// The mirror of the rule above: a guest that *stops* reporting must stop being believed.
+    /// A busy reading left frozen in place would refuse every trim for the rest of the session.
+    #[test]
+    fn a_psi_reading_stops_speaking_for_a_guest_that_went_quiet() {
+        let a = t0();
+        let busy = Some((a, GUEST_IO_CALM + 1));
+        assert_eq!(
+            fresh_psi(a + Duration::from_secs(30), busy),
+            Some(GUEST_IO_CALM + 1)
+        );
+        assert_eq!(fresh_psi(a + PSI_FRESH, busy), None);
+        assert_eq!(fresh_psi(a, None), None);
+        assert!(gate_ok(Gate {
+            host_calm: true,
+            guest_io_full_avg10: fresh_psi(a + PSI_FRESH, busy),
         })
         .is_ok());
     }

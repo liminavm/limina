@@ -1627,9 +1627,14 @@ Measured 2026-08-26 (`spikes/qga-fstrim/RESULTS.md`), which is also what set the
 
 The gate is the balloon's idle-scrub rule in miniature, for the same reason: a calm host *and* a
 guest not doing its own IO. A **stock** guest reports no PSI at all, and it is the tier this exists
-for — so a missing reading means "no reason to wait", never "assume the worst". The trim runs on a
-detached thread because it can hold the port for minutes; the clock tick that shares the thread
-takes the port only if it is free and skips a beat otherwise.
+for — so a missing reading means "no reason to wait", never "assume the worst", and a reading that
+stops being refreshed expires into the same absence rather than speaking for a guest that went
+quiet. The trim runs on a detached thread because it can hold the port for minutes; the clock tick
+that shares the thread takes the port only if it is free and skips a beat otherwise.
+
+A suspend that lands while the guest is inside its `FITRIM` can fail the quiesce and abort the
+bracket once. At a six-hour cadence that is rare, and it self-heals — the bracket wakes the guest,
+the VM lives, and the next request goes through — so it stays a known interaction, not mechanism.
 
 `l2_qga_fstrim` pins it host-side on `st_blocks` — never on `fstrim -v`'s own number, which reports
 ranges *walked* (25.7 GiB in a run that recovered 958 MiB).
