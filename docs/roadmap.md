@@ -481,22 +481,23 @@ flip straight to the primary plane). Converged truth + open-threads ledger live 
   virtio-gpu, routed by ring/command type (2D → software-2D CPU path; 3D ctx/submit/capset →
   rutabaga/venus), and **degrades gracefully to software-2D on renderer-init failure** (no panic).
   **Coexist is the DEFAULT** (`--gpu-software-2d` overrides for the capture oracle). Design: `docs/graphics.md` §2.
-- **The 16 KiB-host / 4 KiB-guest blob map — SOLVED, and no longer a reason for 16 KiB pages.**
-  venus RESOURCE_MAP_BLOB → `hv_vm_map` requires host addr, guest addr, AND size to be
-  16 KiB-multiples, and a 4 KiB guest breaks that two ways. The **size** half was fixed *host-only*
-  (libkrun `0043` rounds map/unmap identically; virglrenderer `0023` opens the zink map-info gate) —
-  so the old "no host-only fix exists" line here was wrong. The **offset** half (two 4 KiB-packed
-  blobs sharing one host page) needs the guest to keep an aligned lattice, which a 16 KiB kernel
-  gets for free but is *not* the only way to get: `guest/virtio-gpu-dkms/` does it on stock 4 KiB
-  guests (validated 2026-07-03 — venus enumerates on the stock tier), and upstream has since merged
-  the negotiated form, `VIRTIO_GPU_F_BLOB_ALIGNMENT` (in 7.2-rc). **16 KiB stays *the* enhanced
-  tier because it is better — but nothing hard-requires it any more.** The other things 16 KiB buys
-  (udmabuf `mach_vm_remap` stitching, virtiofs DAX, balloon reclaim granularity) all degrade
-  gracefully on 4 KiB, and the balloon's sub-page coalescing is already implemented
+- **The 16 KiB-host / 4 KiB-guest blob map — SOLVED host-side, and no longer a reason for 16 KiB
+  pages.** venus RESOURCE_MAP_BLOB → `hv_vm_map` requires host addr, guest addr AND size to be
+  multiples of the VM's **stage-2 granule**, which macOS pins to the host page size — 16 KiB on
+  Apple silicon — *unless asked otherwise*. `hv_vm_config_set_ipa_granule` (macOS 26+) asks
+  otherwise, and limina creates every VM at 4 KiB unless its definition says `ipa_granule = "16k"`;
+  a stock Fedora guest with no limina components then enumerates venus and runs `vkcube`
+  (`spikes/hv-ipa-granule/RESULTS.md`). The size half had already been fixed host-only (libkrun
+  rounds map/unmap identically, now to the granule in force). Everything built to give the guest an
+  aligned lattice — `guest/virtio-gpu-dkms/`, guest Mesa size rounding, the negotiated
+  `VIRTIO_GPU_F_BLOB_ALIGNMENT` chain — is retired: it all rested on the granule being fixed to the
+  host page size, which it is not. **16 KiB stays *the* enhanced tier because it is faster**
+  (4-8% on guest CPU-bound work, `perf/2026-08-27-ipa-granule.md`) — nothing requires it. The other
+  things 16 KiB buys (udmabuf `mach_vm_remap` stitching, virtiofs DAX, balloon reclaim granularity)
+  all degrade gracefully on 4 KiB, and the balloon's sub-page coalescing is already implemented
   (`virtio/balloon/device.rs:83-140`). venus was the sole hard failure — and the sole one because
-  its failure mode poisoned the whole Vulkan loader rather than degrading. Full analysis, the
-  three-link chain, the ordering hazard, and the short upstream list that would make a stock distro
-  work unaided: `docs/design/16k-page-requirement.md`.
+  its failure mode poisoned the whole Vulkan loader rather than degrading, which is still true of
+  any *future* venus failure. Full analysis: `docs/design/16k-page-requirement.md`.
   libkrun **0011** logs `hv_vm_map` failures with the alignment breakdown (diagnostic only).
 - **Zero-copy present + the B/D insight: IOSurface is the macOS dmabuf.** "Zero-copy end-to-end" has
   four crossings; the desktop needs **B** (rendered image → display) and **D** (mutter can create a

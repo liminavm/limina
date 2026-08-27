@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Sun, 23 Aug 2026 12:47:21 -0300
-Subject: [PATCH 09/11] virgl: report blob_mem for a resource that was already
+Subject: [PATCH 09/10] virgl: report blob_mem for a resource that was already
  imported
 
 A multi-planar dma-buf carries every plane in one fd, so only the first

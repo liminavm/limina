@@ -1,4 +1,11 @@
-# guest/virtio-gpu-dkms — the stock-4k venus enabler
+# guest/virtio-gpu-dkms — the stock-4k venus enabler (RETIRED 2026-08-27)
+
+**Nothing needs this any more.** It manufactured a 16 KiB blob-offset lattice inside a 4 KiB guest
+because `hv_vm_map` refused finer addresses — but that refusal came from the VM's stage-2 granule,
+which macOS lets us choose: limina creates every VM at 4 KiB by default, and a stock 4 KiB guest
+enumerates venus with nothing installed into it (`spikes/hv-ipa-granule/RESULTS.md`). Kept as a lab
+artifact and as the record of a validated approach; do not wire it into any payload.
+
 
 An out-of-tree build of the in-tree virtio-gpu DRM driver, carrying one patch, for
 **stock 4 KiB-page guests**. `scripts/build-virtio-gpu-dkms.sh` vendors the driver

@@ -177,36 +177,41 @@ $ vulkaninfo --summary
 GPU0: Virtio-GPU Venus (Apple M1 Max),  driverName = venus
 ```
 
-**venus needs an aligned blob lattice — in practice, a 16 KiB-page guest.** This is the single
-hard tier boundary in the graphics stack, and its mechanism is precise: `hv_vm_map` demands 16 KiB
-granularity for the host address, the guest address *and* the size. The size half was fixed host-side in 2026-07 (libkrun + virgl);
-the **offset** half is guest-side — a 4 KiB guest packs several blobs into one host page, so a
-blob's guest address is 4 KiB-aligned but not 16 KiB-aligned:
+**venus needs the VM's stage-2 granule to be no coarser than the guest's page size.** Every
+guest-physical address, size and offset handed to `hv_vm_map` must be a multiple of that granule,
+and a guest packs host-visible blobs back to back in one arena — so a 4 KiB guest's second blob
+starts 4 KiB in, and a 16 KiB granule cannot name that address:
 
 ```
 hv_vm_map failed: ret=0xfae94003 … guest=0x280021000 size=0x100000
-                  (host%16k=0 guest%16k=4096 size%16k=0)
+                  (granule=0x4000 host%g=0 guest%g=4096 size%g=0)
 ResourceMapBlob -> ErrUnspec
 ```
 
-The offset half now has a shipped answer that does not involve page size: guest Mesa rounds every
-host3d blob up to 64 KiB (`vn_renderer_virtgpu.c`) and the host pads the allocation to match
-(`LIMINA_BLOB_SIZE_ALIGN`), so the offsets stay on an aligned lattice whatever the guest's page size
-is. That moves the requirement from "a 16 KiB kernel" to "our Mesa" — a much lighter delivery — but
-**it has not yet been measured on a 4 KiB guest**, because no image we ship pairs 4 KiB pages with
-our Mesa. Until it is, the enhanced tier's 16 KiB kernel is still what venus is known to run on.
+macOS pins the granule to the host page size — 16 KiB on Apple silicon — **unless asked otherwise**.
+`hv_vm_config_set_ipa_granule` (macOS 26+) asks otherwise, and limina creates every VM at 4 KiB by
+default (`[hardware] ipa_granule`, *Memory pages* in the Configure sheet). That is the whole of the
+fix: measured on a stock Fedora 44 guest — stock kernel, stock Mesa, no limina components — venus
+enumerates and `vkcube` runs (`spikes/hv-ipa-granule/RESULTS.md`).
 
-Full analysis and the alternatives (`guest/virtio-gpu-dkms`, the negotiated
-`VIRTGPU_PARAM_BLOB_ALIGNMENT` chain) are in `docs/design/16k-page-requirement.md`. A guest running
-*stock* Mesa is unaffected by the rounding above and still needs the DKMS module, which no shipped
-image or payload carries — so "venus works on a stock 4 KiB guest" remains true only of a guest
-somebody modified by hand.
+So **there is no page-size tier boundary in the graphics stack any more.** 16 KiB pages remain the
+enhanced tier because they are faster — the finer granule costs 4-8% on guest CPU-bound work and
+nothing where the work is GPU-bound (`perf/2026-08-27-ipa-granule.md`) — and a guest whose owner
+sets `ipa_granule = "16k"` gets that back. It is a speed setting now, not an entry fee.
+
+Everything that was built to manufacture an aligned lattice from the guest side — Mesa rounding
+blob sizes, the `guest/virtio-gpu-dkms` node-alignment module, the negotiated
+`VIRTGPU_PARAM_BLOB_ALIGNMENT` chain — is retired unbuilt or reverted; `docs/design/16k-page-requirement.md`
+keeps the analysis. One host-side guard survives them: virglrenderer refuses to map a blob larger
+than the allocation it was created from, rather than publishing whatever host memory follows.
 
 #### Open: stock-tier Vulkan is dead, not degraded
 
-This is a live violation of the two-tier guarantee and the highest-value open item in this
-document. On a stock guest, venus's failure does not degrade — it takes the whole Vulkan loader
-down with it:
+A latent violation of the two-tier guarantee: whenever venus fails, its failure does not degrade —
+it takes the whole Vulkan loader down with it, so a guest that should have fallen back to llvmpipe
+is left with no Vulkan at all. The granule fix removed the failure that used to trigger this on
+every stock guest, which demotes it from a live defect to a trap waiting for the next venus
+failure — the amplifier itself is untouched:
 
 ```
 $ vulkaninfo
@@ -214,8 +219,7 @@ vkCreateInstance failed with ERROR_OUT_OF_HOST_MEMORY
 ```
 
 Isolating the ICDs proves the loader is the amplifier: `VK_DRIVER_FILES=…/lvp_icd…` alone
-enumerates llvmpipe perfectly; `…/virtio_icd…` alone produces the OOM. A stock guest is therefore
-left with *no* Vulkan, when it should have had a working software one.
+enumerates llvmpipe perfectly; `…/virtio_icd…` alone produces the OOM.
 
 The fix exists — `patches/mesa-guest/0003-venus-degrade-to-the-stub-instance-when-ring-setup-f.patch`
 does exactly this — but it is in **our guest series**, which by definition a stock guest does not
@@ -227,8 +231,8 @@ item 1 of the shopping list in `docs/design/16k-page-requirement.md` and it is t
 
 A guest may have some, all, or none of the enhanced pieces, and partial states are normal (a guest
 mid-upgrade, or one that installed only part). Light up each feature when *its own* prerequisite is
-present — 16 KiB pages for venus, the limina mesa for the venus WSI fixes, the agent for its own
-features — rather than gating everything on a monolithic "enhanced" flag.
+present — the limina mesa for the venus WSI fixes, the agent for its own features — rather than
+gating everything on a monolithic "enhanced" flag.
 
 ## 4. Scanout and present: IOSurface is the macOS dmabuf
 
@@ -596,8 +600,7 @@ or commit while it runs.
 
 | item | where |
 |---|---|
-| **Stock-tier Vulkan is dead, not degraded** — upstream the venus stub-instance patch so a stock guest keeps llvmpipe | §3.3, `docs/design/16k-page-requirement.md`, `docs/upstreaming/ledger/mesa.md` |
-| Retire the 16 KiB requirement for venus on stock guests (`VIRTGPU_PARAM_BLOB_ALIGNMENT` chain) | `docs/design/16k-page-requirement.md` |
+| **A venus failure kills the whole Vulkan loader** — upstream the stub-instance patch so a stock guest keeps llvmpipe when venus goes down | §3.3, `docs/design/16k-page-requirement.md`, `docs/upstreaming/ledger/mesa.md` |
 | **Fence-accurate present is not wired for vrend** — vrend's flush path never reaches `try_park_present`, so `FENCEPRESENT` never fires and the #24 tear/pacing work does not apply to the tier the desktop actually runs on. **No observable symptom, though:** the overview-toggle stress (historically the most tear-prone workload) was human-verified smooth on both present paths on 2026-08-16, so this is a missing mechanism rather than a live defect. Re-open it if tearing is ever reported. | `docs/hardening-backlog.md`, `spikes/graphics-doc-audit/RESULTS.md` row 20 |
 | zink reads `heap.size − heapUsage` instead of `heapBudget`, so GL clients do not see our cap | `docs/design/gpu-memory-budget.md` §Known limits |
 | Pure-GL guests are unbounded — the cap is only enforced at `vkAllocateMemory` | same |
