@@ -1097,10 +1097,10 @@ impl CenterController {
             &granule_popup,
             "How finely the Mac maps this VM's memory. 4 KB suits any guest, including a \
              stock Linux distro whose own pages are 4 KB — such a guest gets no 3D \
-             acceleration at all without it. 16 KB matches this Mac's own page size and is \
-             a few percent faster, so choose it for a guest that uses 16 KB pages. Shut the \
-             VM down fully before changing this — a suspended guest resumes with the memory \
-             layout it was saved with.",
+             acceleration at all without it. Choose 16 KB only if this guest runs a kernel \
+             with 16 KB pages: it then matches the Mac's own page size and runs a few \
+             percent faster. Shut the VM down fully before changing this — a suspended \
+             guest resumes with the memory layout it was saved with.",
         );
         let ssh_field = labeled_field(mtm, &accessory, 122.0, "SSH port:", &ssh_now.to_string());
         self.row_help(
@@ -1364,7 +1364,7 @@ fn reclaim_from_index(index: isize) -> ReclaimMode {
 
 /// Popup titles for the stage-2 granule, in [`vmlib::schema::IpaGranule`] order. Named for
 /// the guest page size each one accommodates, which is the only thing the choice depends on.
-const GRANULE_CHOICES: [&str; 2] = ["4 KB (any guest)", "16 KB (faster)"];
+const GRANULE_CHOICES: [&str; 2] = ["4 KB", "16 KB"];
 
 fn granule_index(granule: vmlib::schema::IpaGranule) -> isize {
     match granule {
