@@ -29,11 +29,11 @@ use super::policy::TimeSample;
 /// Budget for the commands that answer immediately (everything QGA-1 sends).
 pub const FAST: Duration = Duration::from_secs(2);
 
-/// Budget for commands that legitimately take their time — the freeze family, `guest-fstrim`.
-/// Nothing sends one yet, but the shape has to be here from the start: a single constant
-/// would have made the first slow command look like a dead agent.
-#[allow(dead_code)]
-pub const SLOW: Duration = Duration::from_secs(30);
+/// Budget for commands that legitimately take their time. `guest-fstrim` is the one that
+/// needs it: the agent walks every free extent of every mounted filesystem before it answers,
+/// and on a large first pass that is minutes, not seconds. A single timeout constant would
+/// have made a healthy trim look like a dead agent.
+pub const SLOW: Duration = Duration::from_secs(900);
 
 /// How long a write may block before we treat the agent as wedged. Same bound, and the same
 /// reason, as the vdagent broker: this runs on the shared `limina-timesync` thread, and a
@@ -117,12 +117,19 @@ impl Qga {
     }
 
     /// Is there an agent answering on this port right now (as of the last probe)?
+    ///
+    /// Only the tests read these two. Production paths deliberately do **not** gate on them:
+    /// nothing probes the port on its own, so on an enhanced guest — where `limina-agent`
+    /// takes the clock and nobody asks qga anything — `ready()` would be false forever and a
+    /// caller that waited for it would never run. Ask the question you actually have and let
+    /// [`Self::call`] probe.
     #[allow(dead_code)]
     pub fn ready(&self) -> bool {
         self.conn.lock().unwrap().state == State::Ready
     }
 
-    /// What the agent reported it supports, empty until a probe succeeds.
+    /// What the agent reported it supports, empty until a probe succeeds. See [`Self::ready`]
+    /// for why this is a test observer rather than a gate.
     #[allow(dead_code)]
     pub fn caps(&self) -> Caps {
         self.conn.lock().unwrap().caps.clone()
@@ -153,8 +160,15 @@ impl Qga {
 
     /// Measure the guest's clock against the host's, bracketing the round trip so the
     /// estimate carries its own error bar (see [`super::policy`]).
+    /// Takes the port only if it is free: a [`Self::fstrim`] can hold it for minutes, and this
+    /// runs on the shared `limina-timesync` thread. Skipping a clock tick costs nothing (the
+    /// next one is 60 s away and the step threshold is 1 s); blocking that thread would also
+    /// stall the liveness reporting that shares it.
     pub fn time_sample(&self) -> Result<TimeSample> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self
+            .conn
+            .try_lock()
+            .map_err(|_| anyhow!("the guest agent port is busy with a longer command"))?;
         ensure_ready(&mut conn)?;
         let t0 = SystemTime::now();
         let ret = exec(&mut conn, "guest-get-time", None, FAST)?;
@@ -201,6 +215,51 @@ impl Qga {
         self.call("guest-set-time", Some(json!({ "time": unix_ns })), FAST)
             .map(|_| ())
     }
+
+    /// Discard every free extent of at least `minimum` bytes on every mounted filesystem, so
+    /// the host image can punch the holes out (see [`super::trim`]).
+    ///
+    /// Returns the byte count the agent reports, which is the size of the ranges it **walked**
+    /// — *not* space recovered. Measured 2026-08-26: it said 25.7 GiB while the backing file
+    /// shrank by 958 MiB. It is a progress figure and nothing more; the real oracle is host-side
+    /// allocated blocks.
+    ///
+    /// Per-path failures are normal and not an error here: a read-only mount or a filesystem
+    /// with no discard support answers with an `error` field while its neighbours succeed.
+    pub fn fstrim(&self, minimum: u64) -> Result<TrimReport> {
+        let ret = self.call("guest-fstrim", Some(json!({ "minimum": minimum })), SLOW)?;
+        let paths = ret
+            .get("paths")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("guest-fstrim returned {ret}, with no paths array"))?;
+        let mut report = TrimReport::default();
+        for p in paths {
+            match p.get("error").and_then(Value::as_str) {
+                Some(e) => {
+                    report.failed.push(format!(
+                        "{}: {e}",
+                        p.get("path").and_then(Value::as_str).unwrap_or("?")
+                    ));
+                }
+                None => {
+                    report.walked_bytes += p.get("trimmed").and_then(Value::as_u64).unwrap_or(0);
+                    report.trimmed += 1;
+                }
+            }
+        }
+        Ok(report)
+    }
+}
+
+/// The outcome of one [`Qga::fstrim`], flattened out of its per-path array.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TrimReport {
+    /// How many mounted filesystems accepted the trim.
+    pub trimmed: usize,
+    /// Ranges the agent walked, in bytes. **Not** space recovered — see [`Qga::fstrim`].
+    pub walked_bytes: u64,
+    /// `path: reason` for each filesystem that refused, which is routine rather than fatal.
+    pub failed: Vec<String>,
 }
 
 /// Host wallclock as nanoseconds since the epoch.
@@ -555,6 +614,42 @@ mod tests {
         let (host, guest) = UnixStream::pair().unwrap();
         let handle = spawn_agent(guest, answer);
         (Qga::start(host.into()).unwrap(), handle)
+    }
+
+    /// The per-path array is the whole reply: some filesystems trim, some refuse, and a
+    /// refusal is routine (a read-only mount, a filesystem with no discard support) rather
+    /// than a failed call — a guest whose `/boot` says no still gets its root trimmed.
+    #[test]
+    fn a_trim_reports_per_filesystem_and_survives_one_refusing() {
+        let (qga, _h) = client_with(|cmd, args| match cmd {
+            "guest-info" => Some(info_reply(&["guest-fstrim"])),
+            "guest-fstrim" => {
+                assert_eq!(args["minimum"], json!(super::super::trim::MIN_EXTENT));
+                Some(json!({ "return": { "paths": [
+                    { "path": "/", "trimmed": 27637084160u64 },
+                    { "path": "/boot", "error": "Operation not supported" },
+                    { "path": "/home", "trimmed": 1048576u64 },
+                ]}}))
+            }
+            _ => None,
+        });
+        let r = qga.fstrim(super::super::trim::MIN_EXTENT).unwrap();
+        assert_eq!(r.trimmed, 2);
+        assert_eq!(r.walked_bytes, 27637084160 + 1048576);
+        assert_eq!(r.failed, vec!["/boot: Operation not supported".to_string()]);
+    }
+
+    /// A trim can hold the port for minutes. The clock tick shares the thread that starts it,
+    /// so it must find the port busy and give up, not queue behind it.
+    #[test]
+    fn a_clock_tick_skips_a_beat_rather_than_queueing_behind_a_trim() {
+        let (qga, _h) = client_with(|cmd, _| match cmd {
+            "guest-info" => Some(info_reply(&["guest-fstrim", "guest-get-time"])),
+            _ => None,
+        });
+        let _held = qga.conn.lock().unwrap();
+        let err = qga.time_sample().unwrap_err().to_string();
+        assert!(err.contains("busy"), "unexpected error: {err}");
     }
 
     #[test]

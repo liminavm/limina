@@ -22,7 +22,7 @@
 
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -108,6 +108,15 @@ fn write_timeout() -> Option<Duration> {
     (ms > 0).then(|| Duration::from_millis(ms))
 }
 
+/// One worker spawn's guest-agent port, plus the little state the periodic trim keeps about
+/// it. Bound together because both timers reset at exactly the same moment — a reboot or a
+/// resume makes a new port, and a fresh guest has neither settled nor been trimmed.
+struct QgaSlot {
+    client: Arc<crate::qga::client::Qga>,
+    attached_at: Instant,
+    last_trim: Option<Instant>,
+}
+
 struct Inner {
     peers: Mutex<Vec<Arc<Peer>>>,
     next_id: AtomicU64,
@@ -119,7 +128,11 @@ struct Inner {
     vdagent: Mutex<Option<Arc<crate::vdagent::broker::VdAgent>>>,
     /// The stock `qemu-guest-agent` port, once a worker spawn has handed us its host end.
     /// `None` before that; present-but-silent on a guest with no agent installed.
-    qga: Mutex<Option<Arc<crate::qga::client::Qga>>>,
+    qga: Mutex<Option<QgaSlot>>,
+    /// The guest's last-reported PSI `full` IO `avg10`, or `u32::MAX` for "never reported"
+    /// — which is the normal state on a stock guest, and the state
+    /// [`crate::qga::trim::Gate`] must not read as "busy".
+    guest_io_full_avg10: AtomicU32,
     /// M6 PSI autoballoon policy, driven by guest `MemPressure` reports. `None` unless `--memory`
     /// configured a dynamic range.
     balloon_policy: Option<crate::balloon_policy::BalloonPolicy>,
@@ -159,6 +172,7 @@ impl ControlPlane {
             clipboard: Arc::new(crate::clipboard::Clipboard::new()),
             vdagent: Mutex::new(None),
             qga: Mutex::new(None),
+            guest_io_full_avg10: AtomicU32::new(u32::MAX),
             balloon_policy,
             fido_store,
             usb_fido_gadget,
@@ -212,6 +226,12 @@ impl ControlPlane {
                     .and_then(|v| v.parse::<u64>().ok())
                     .map(Duration::from_secs)
                     .unwrap_or(Duration::from_secs(60));
+                // This thread also carries the periodic guest trim. It rides here rather than
+                // on a thread of its own because the two are the same shape — a rare, bounded
+                // errand against the same port — and because sharing the tick is what lets
+                // `time_sample` skip a beat while a trim holds the port instead of queueing
+                // behind it. `None` = trimming switched off.
+                let trim_interval = crate::qga::trim::interval_from_env();
                 // NB: measured on the WALLCLOCK, not Instant — macOS Instant (mach
                 // absolute time) freezes during host sleep, which would blind this
                 // detector to exactly the event it exists to catch.
@@ -250,6 +270,9 @@ impl ControlPlane {
                             tsync_inner.qga_sync_clock();
                         }
                         last_sent = now;
+                    }
+                    if let Some(every) = trim_interval {
+                        tsync_inner.qga_trim_tick(every);
                     }
                     last_awake = std::time::SystemTime::now();
                 }
@@ -315,7 +338,14 @@ impl ControlPlane {
     /// offer `guest-shutdown`), so the caller should stop waiting rather than spend the
     /// remaining grace on a guest nobody asked.
     pub fn request_qga_shutdown(&self) -> bool {
-        let Some(qga) = self.inner.qga.lock().unwrap().clone() else {
+        let Some(qga) = self
+            .inner
+            .qga
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|s| s.client.clone())
+        else {
             return false;
         };
         match qga.shutdown() {
@@ -338,7 +368,11 @@ impl ControlPlane {
     /// the first use finds out.
     pub fn attach_qga(&self, host_fd: std::os::fd::OwnedFd) -> Result<()> {
         let qga = crate::qga::client::Qga::start(host_fd)?;
-        *self.inner.qga.lock().unwrap() = Some(Arc::new(qga));
+        *self.inner.qga.lock().unwrap() = Some(QgaSlot {
+            client: Arc::new(qga),
+            attached_at: Instant::now(),
+            last_trim: None,
+        });
         Ok(())
     }
 
@@ -374,6 +408,100 @@ impl Inner {
     /// forever, but even a bounded stall must not serialize registration, the liveness
     /// sweep, and the shutdown ladder behind one slow peer. (Snapshotting is what makes
     /// this safe: a peer that deregisters concurrently just gets a failed send here.)
+    fn send_to_capable(&self, cap: &str, msg: &Message, channel: u32) -> Vec<String> {
+        let targets: Vec<Arc<Peer>> = self
+            .peers
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.has_cap(cap))
+            .cloned()
+            .collect();
+        let mut delivered = Vec::new();
+        let mut failed = Vec::new();
+        for peer in targets {
+            match peer.send(msg, channel) {
+                Ok(()) => delivered.push(peer.agent.clone()),
+                Err(e) => {
+                    log::warn!("control: send to {} failed ({e}); dropping it", peer.agent);
+                    failed.push(peer.id);
+                }
+            }
+        }
+        if !failed.is_empty() {
+            self.peers
+                .lock()
+                .unwrap()
+                .retain(|p| !failed.contains(&p.id));
+        }
+        delivered
+    }
+
+    /// One tick of the periodic guest trim (`crate::qga::trim`).
+    ///
+    /// Runs on the timesync thread, whose 2 s tick is far finer than the hours-long cadence —
+    /// so this is written to cost almost nothing on the overwhelming majority of ticks: a
+    /// mutex and two `Instant` comparisons before anything is measured or asked.
+    ///
+    /// The trim itself runs on a **detached thread**, because it can hold the port for
+    /// minutes. Nothing waits for it: the timesync tick that follows takes the port only if
+    /// it is free ([`crate::qga::client::Qga::time_sample`]), and a trim that fails is a
+    /// missed housekeeping pass, never a fault the VM should notice.
+    fn qga_trim_tick(&self, interval: Duration) {
+        let now = Instant::now();
+        let client = {
+            let mut slot = self.qga.lock().unwrap();
+            let Some(slot) = slot.as_mut() else { return };
+            if !crate::qga::trim::due(now, slot.attached_at, slot.last_trim, interval) {
+                return;
+            }
+            // Deliberately NOT gated on `client.ready()`. The client only probes when someone
+            // asks it something, and on an ENHANCED guest nobody does — `limina-agent` takes
+            // the clock, so the qga port is never touched and `ready()` would be false
+            // forever. The trim is allowed to be the first question asked on this port; the
+            // client's own probe-and-backoff handles a guest with no agent at all.
+            let io = self.guest_io_full_avg10.load(Ordering::Relaxed);
+            let gate = crate::qga::trim::Gate {
+                host_calm: crate::balloon_policy::sample_host_pressure().blended
+                    == crate::balloon_policy::HostPressure::Normal,
+                guest_io_full_avg10: (io != u32::MAX).then_some(io),
+            };
+            if let Err(why) = crate::qga::trim::gate_ok(gate) {
+                log::debug!("qga: not trimming now — {why}");
+                return;
+            }
+            // Charge the cadence up front: the trim is about to run for minutes, and a
+            // second one must not start behind it.
+            slot.last_trim = Some(now);
+            slot.client.clone()
+        };
+
+        let spawned = std::thread::Builder::new()
+            .name("limina-qga-trim".into())
+            .spawn(move || match client.fstrim(crate::qga::trim::MIN_EXTENT) {
+                Ok(r) => {
+                    log::info!(
+                        "qga: trimmed {} guest filesystem(s); the agent walked {:.1} GiB of free \
+                         ranges (host space returned is smaller){}",
+                        r.trimmed,
+                        r.walked_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+                        if r.failed.is_empty() {
+                            String::new()
+                        } else {
+                            format!("; skipped: {}", r.failed.join(", "))
+                        }
+                    );
+                }
+                // No agent installed, an agent that blocks `guest-fstrim`, a filesystem that
+                // refused — all the same thing here: a housekeeping pass that did not happen,
+                // and nothing the VM should notice. The next cadence tries again.
+                Err(e) => log::debug!("qga: the guest trim did not run ({e:#})"),
+            });
+        if let Err(e) = spawned {
+            log::warn!("qga: could not spawn the trim thread: {e}");
+        }
+    }
+
     /// Correct a **stock** guest's clock through `qemu-guest-agent`.
     ///
     /// The last rung of the clock ladder, reached only when no `timesync`-capable peer took
@@ -386,7 +514,7 @@ impl Inner {
     /// installed is the normal case on Debian, and it already said so once when the port
     /// went quiet.
     fn qga_sync_clock(&self) {
-        let Some(qga) = self.qga.lock().unwrap().clone() else {
+        let Some(qga) = self.qga.lock().unwrap().as_ref().map(|s| s.client.clone()) else {
             return;
         };
         let sample = match qga.time_sample() {
@@ -417,35 +545,6 @@ impl Inner {
                 }
             }
         }
-    }
-
-    fn send_to_capable(&self, cap: &str, msg: &Message, channel: u32) -> Vec<String> {
-        let targets: Vec<Arc<Peer>> = self
-            .peers
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|p| p.has_cap(cap))
-            .cloned()
-            .collect();
-        let mut delivered = Vec::new();
-        let mut failed = Vec::new();
-        for peer in targets {
-            match peer.send(msg, channel) {
-                Ok(()) => delivered.push(peer.agent.clone()),
-                Err(e) => {
-                    log::warn!("control: send to {} failed ({e}); dropping it", peer.agent);
-                    failed.push(peer.id);
-                }
-            }
-        }
-        if !failed.is_empty() {
-            self.peers
-                .lock()
-                .unwrap()
-                .retain(|p| !failed.contains(&p.id));
-        }
-        delivered
     }
 }
 
@@ -606,6 +705,12 @@ fn serve_loop(
             }
             // M6: feed guest memory-pressure reports to the autoballoon policy (if configured).
             Ok((_, Message::MemPressure(p))) => {
+                // Also the only view the host gets of how busy the guest's disk is, which is
+                // what gates the periodic trim (`crate::qga::trim`). Kept even when no balloon
+                // policy is configured — the two consumers are independent.
+                inner
+                    .guest_io_full_avg10
+                    .store(p.io_full_avg10, Ordering::Relaxed);
                 if let Some(policy) = &inner.balloon_policy {
                     policy.on_pressure(&p);
                 }

@@ -1534,8 +1534,8 @@ ping-pong. dogfood-guest is already shaped like this, so it is a real configurat
 
 ## Milestone 12.5 — QEMU guest-agent support (stock tier; clock first)
 
-**Status: 🟢 steps 1–2 shipped — the port, the client, the guest clock, the shutdown rung and the
-guest inventory.** Steps 3–5 below are not started.
+**Status: 🟢 steps 1–3 shipped — the port, the client, the guest clock, the shutdown rung, the
+guest inventory, and the periodic disk trim.** Steps 4–5 below are not started.
 
 **Goal:** expose `org.qemu.guest_agent.0` and speak to the `qemu-guest-agent` that a stock guest
 *already has*, the same additive on-ramp M12 built for SPICE. `limina-agent` stays the enhanced-tier
@@ -1607,11 +1607,44 @@ detector (the host napped) and the periodic tick (drift) — and fires **only wh
   — and it fired most readily on exactly the guest most likely to have work open, the seated desktop
   holding logind inhibitors. `l1_stop_never_kills` pins it.
 
+### Step 3 — giving disk back (shipped)
+
+A raw image only ever grows: a guest's `rm` frees blocks in its own filesystem, and the host file
+keeps them unless the guest also **discards** the range — virtio-blk `VIRTIO_BLK_T_DISCARD`, which
+our imago fork turns into a punch-hole. Only the guest knows which blocks are free, so only the
+guest can start this. The supervisor asks `guest-fstrim` on a long cadence
+(`crates/limina/src/qga/trim.rs`, 6 h, `LIMINA_QGA_TRIM_SECS`; `0` switches it off), riding the
+`limina-timesync` thread that already carries the clock errand.
+
+Measured 2026-08-26 (`spikes/qga-fstrim/RESULTS.md`), which is also what set the cadence:
+
+- The discard path works end to end — guest `rm` → `DISCARD` → punch-hole → the `.raw` shrinks.
+- **Fedora already mounts btrfs `discard=async` and enables `fstrim.timer`**, and the delete alone
+  returned 4 GiB within 30 s, unprompted. So this is not a hot path and must never behave like one.
+- What a trim adds is the **residue** async discard can never reach — extents freed before it was
+  in force. 958 MiB (~6%) on a weeks-old image. The value scales with how unlike Fedora the guest
+  is: an ext4 guest discards nothing by default.
+
+The gate is the balloon's idle-scrub rule in miniature, for the same reason: a calm host *and* a
+guest not doing its own IO. A **stock** guest reports no PSI at all, and it is the tier this exists
+for — so a missing reading means "no reason to wait", never "assume the worst". The trim runs on a
+detached thread because it can hold the port for minutes; the clock tick that shares the thread
+takes the port only if it is free and skips a beat otherwise.
+
+`l2_qga_fstrim` pins it host-side on `st_blocks` — never on `fstrim -v`'s own number, which reports
+ranges *walked* (25.7 GiB in a run that recovered 958 MiB).
+
+**`guest-fsfreeze-*` was measured and rejected** (`spikes/qga-fsfreeze/RESULTS.md`). Holding a freeze
+across the suspend bracket deadlocks it: a frozen root blocks the guest's own s2idle path, so every
+virtio device is a quiesce holdout. The freeze is also unrecoverable from inside the guest — `sudo`
+itself blocks — and on a suspend that *does* complete it buys nothing, because the snapshot captures
+RAM and disk and page cache are coherent by construction. It is the right tool for a host-held
+bracket around a **disk-level** operation (live clone/backup), so it waits for that consumer. If it
+ever lands, `qemu-ga` never auto-thaws on Linux and its `isfrozen` state file survives on disk into a
+cold boot, so an unconditional thaw-on-attach is mandatory.
+
 ### Next steps
 
-3. **Storage integrity** — `guest-fsfreeze-freeze`/`-thaw` inside the snapshot bracket (app-consistent
-   snapshots, including the guest's own `/etc/qemu-ga/fsfreeze-hook.d` scripts), `guest-fstrim`
-   alongside reclaim.
 4. **Provisioning** — `guest-exec`, `guest-file-*`, `guest-ssh-add-authorized-keys`: deliver the
    enhanced tier into a stock guest without needing SSH first, which is the bootstrap floor the
    two-tier guarantee asks for.
