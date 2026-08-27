@@ -101,3 +101,9 @@ spikes/modifier-mapping/probe
 # spikes/notification-text-corruption build artifacts (source + RESULTS.md are kept)
 spikes/notification-text-corruption/glyphmimic
 spikes/notification-text-corruption/glyphmimic.dSYM/
+
+# spikes/now-playing-media-keys build artifacts (source + RESULTS.md are kept)
+spikes/now-playing-media-keys/nowplaying
+spikes/now-playing-media-keys/nowplaying.dSYM/
+spikes/now-playing-media-keys/NowPlayingProbe.app/
+spikes/now-playing-media-keys/ctl.fifo
