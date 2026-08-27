@@ -57,6 +57,26 @@ to (measured 2026-08-27, macOS 26.5; `spikes/now-playing-media-keys/RESULTS.md`)
 carries a near-silent in-process audio arm to isolate "must render audio" from "must merely
 register"; it was never needed.
 
+### 2.2 What it does not buy: contention against a live host player
+
+macOS's arbitration is sticky to the app that most recently **rendered audio**, and it survives
+that app being paused. Registering handlers and publishing `.playing` while a host player is
+mid-playback does not displace it, and pausing that player does not hand the session over either
+(measured; arms 5–6 in `spikes/now-playing-media-keys/RESULTS.md`).
+
+So the feature's reach is bounded, and the bound should be stated rather than discovered: **the
+guest opening its audio stream makes the VM the media-key target only when no host player that
+has played is still running.** On a Mac with Spotify or Music open, the keys keep going there.
+That is defensible — it is exactly the arbitration a native player would be subject to, and the
+user's mental model of "the media keys drive whatever last played" stays intact — but it is
+strictly less than "music in the guest always gets the keys", and §9 records the one lever that
+might widen it.
+
+This does not weaken the case for the design. The bucket rule loses the unfocused case
+*unconditionally*; this loses it only to a live host player, and in exchange the Control Center
+transport, the headphone gestures and Siri all start working. But it does mean the feature is a
+better-arbitration story, not an always-wins one.
+
 ## 3. The signal: the guest's PCM stream lifetime
 
 "Is the VM a player right now" is answered by the virtio-snd PCM lifecycle for playback stream 0,

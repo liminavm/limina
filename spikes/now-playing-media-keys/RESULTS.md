@@ -52,6 +52,8 @@ Two things the probe is built to avoid confounding:
 | 2 | `.stopped` + `nowPlayingInfo = nil`, handlers **still registered**, a rival player open | → the rival app | tile gone |
 | 3 | same, but **no rival player open** | → **still us**, `togglePlayPause` | tile gone |
 | 4 | handlers `removeTarget` + `isEnabled = false` | → macOS default player | tile gone |
+| 5 | claim (wire + publish `.playing`) **while a rival is actively playing** | → the rival | tile stays the rival's |
+| 6 | same, after the rival has been **paused** | → the rival (it resumed) | tile stays the rival's |
 
 The logical arms above do not map one-to-one onto the raw logs, because arm 3 was found by
 accident before it was isolated. `arm1-bundled-noaudio.log` is arm 1. `arm2-retire.log` is a first
@@ -59,7 +61,9 @@ pass at arm 2 whose two late `togglePlayPause` lines were in fact the arm-3 phen
 happened to be open at the time — which is what prompted isolating it. `arm3-release.log` carries
 arms 2, 3 and 4 in sequence, each under a stated rival condition: the arm-2 press (rival open)
 left no line in it, the arm-3 press (rival quit) is the `togglePlayPause` at 195.975 s, and the
-arm-4 press after `unwire` again left none.
+arm-4 press after `unwire` again left none. `arm5-reclaim.log` carries arms 5 and 6, and its
+value is entirely in what it does *not* contain: the probe starts fully released, claims at
+1104 s while a rival plays, and records no command at all across both subsequent presses.
 
 **1. Eligibility does not require audio from the registering process.** A process rendering
 nothing at all held the session and received media keys system-wide. The worker/UI split is a
@@ -94,10 +98,27 @@ swallow the media keys of any Mac with no other player running, forwarding them 
 is not playing anything — an invisible, permanent theft of three keys. Registration must be
 symmetric with the guest's virtio-snd stream lifetime, not set up once at launch.
 
+**6. Claiming does not take the session from a rival — and a paused rival still holds it.**
+Registering handlers and publishing `.playing` while another app is mid-playback changes nothing:
+the tile keeps naming the rival, and the key goes to the rival (arm 5). Pausing that rival does
+*not* hand the session over either — the next press resumed it, and the probe again received
+nothing (arm 6). The arbitration is sticky to the app that most recently *rendered audio*, and it
+survives a pause; being a registered, `.playing`, tile-eligible player is not enough to displace
+it.
+
+The consequence is a real limitation on the feature, not a detail: **the guest opening its audio
+stream does not make the VM the media-key target while any host player that has played is still
+running.** The headline case — music in the guest, press play/pause from a host app — works on a
+Mac with no live host player, and loses to one that exists. Arms 1–4 all ran on an empty field,
+which is why they read so cleanly.
+
 ## Still open
 
-Whether re-registering while a rival is **actively playing** takes the session from it — i.e.
-whether the guest opening its audio stream makes the VM the media-key target immediately, or only
-once the rival stops. Arm 2 shows a rival wins while we are released; it does not show what
-happens when we claim during active rival playback. Measure before shipping, because it decides
-whether "start music in the VM, press play/pause" works on the first press.
+**Does rendering audio from the registering process win contention?** Arm 1 proved audio is not
+needed for *eligibility* on an empty field; arms 5–6 show something else decides *contention*, and
+"most recently rendered audio" is the obvious candidate. limina is structurally on the wrong side
+of that if so: its MediaPlayer process is silent while a *sibling* process (the worker) makes the
+sound, so it would never win a contest against a real host player. The probe's `--audio` arm
+exists precisely for this — run it against an actively-playing rival and see whether the session
+moves. Measure before implementing, because a "no" bounds what the feature can promise, and may
+argue for registering from the worker instead of the supervisor.

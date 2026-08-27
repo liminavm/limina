@@ -1,0 +1,12 @@
+[  0.057] bundle: id=dev.noronha.limina.nowplaying-probe path=<repo>/spikes/now-playing-media-keys/NowPlayingProbe.app
+[  0.059] commands: registered (toggle/play/pause/stop/next/prev enabled, rest disabled)
+[  0.059] info: published title-only dict (no duration/elapsed/rate/artwork)
+[  0.060] info: playbackState = playing
+[  0.060] ready — press fn+F8 (and the Control Center transport buttons). Ctrl-C to stop.
+[  0.060]        this process is .accessory, so it is never frontmost: a delivered
+[  0.060]        command proves system-wide media-session routing, not focus.
+[  1.952] stdin: clear -> playbackState=playing info=nil
+[  2.365] stdin: unwire -> all guest commands removeTarget(nil) + disabled
+[1104.562] commands: registered (toggle/play/pause/stop/next/prev enabled, rest disabled)
+[1104.992] info: published title-only dict (no duration/elapsed/rate/artwork)
+[1104.992] info: playbackState = playing
