@@ -259,11 +259,20 @@ interrupt, expose a target API.
   tuning); needs the macOS reclaim fix and `F_DEFLATE_ON_OOM`.
 
 ### E — virtio-mem hotplug
-- **Pros**: cleanest large-range grow/shrink; online blocks; no 4 KiB balloon
-  accounting; designed for `min..max`.
-- **Cons**: does **not exist** in libkrun — new device + region reservation +
-  guest config + aarch64 ACPI/DT under HVF; unplug needs movable-zone cooperation
-  and can fail/fragment. Highest cost/risk; overkill for milestone.
+- **Pros**: the only mechanism that can **raise** the ceiling — boot small and grow, so the
+  guest's `MemTotal` is the truth rather than the max it will never be allowed to keep.
+  That matters beyond tidiness: page-cache targets, dirty ratios, `min_free_kbytes` and every
+  runtime that sizes a heap from total RAM all scale off that number.
+- **Cons**: does **not exist** in libkrun — new device + region reservation + guest config +
+  aarch64 ACPI/DT under HVF. And in the **give-back** direction it is strictly weaker than
+  reporting: unplug runs `alloc_contig_range()` over `ZONE_MOVABLE` and returns `-EBUSY` when
+  the range is busy (`drivers/virtio/virtio_mem.c`), so it needs *contiguous, movable* ranges
+  where free-page reporting hands back scattered single pages. Granularity is coarse on our
+  guests — arm64 at 16 KiB pages takes the 4 KiB path, `SECTION_SIZE_BITS 27`
+  (`arch/arm64/include/asm/sparsemem.h`) ⇒ **128 MiB** Linux memory blocks, sub-block mode
+  finer but still contiguous — and reliable unplug wants hot-added memory onlined to
+  `ZONE_MOVABLE`, which holds no unmovable kernel allocations, so slab, page tables and DMA
+  must fit in the boot RAM.
 
 ### F — B + D together
 Reporting handles automatic baseline return; balloon+PSI enforces bounds.
@@ -308,9 +317,19 @@ dynamic memory.
 > effective RAM and inflation is transparent. Analysis + compensations: the 2026-07-20
 > addendum in `docs/design/m6-dynamic-memory.md`.
 
-**Defer Option E (virtio-mem)** until balloon proves insufficient (very large
-swings, fragmentation). It is the right long-term tool for big grow ranges but a
-large, risky from-scratch device.
+**Option E is a complement, not a successor.** Hotplug owns the ceiling (boot small, grow on
+demand, an honest `MemTotal`); balloon + free-page reporting keeps owning fine-grained
+give-back, where it is shipped, measured and tuned. Replacing the balloon with hotplug would
+trade page granularity for 128 MiB granularity and a `ZONE_MOVABLE` constraint, and would buy
+nothing host-side: however the guest releases a range, the host frees it by discarding — the
+same `madvise`/punch-hole path the FRQ sweep already drives — so neither the page-cache
+ratchet on `phys_footprint` nor the HVF ledger 2× gap changes. Those, not the guest's
+willingness to give pages back, are what the overhead work keeps meeting.
+
+So E waits for a consumer in the **grow** direction, and two unknowns gate it: whether
+Fedora's stock aarch64 kernel enables `CONFIG_VIRTIO_MEM` (it decides stock-tier vs
+enhanced-only), and what HVF permits for mapping/unmapping sub-regions of a running VM's
+memory. The second is the likelier wall and is worth a spike before any device work.
 
 ### 4.1 Proposed public API to add to libkrun
 
