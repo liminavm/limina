@@ -1,0 +1,19 @@
+thread_policy_set -> 0 (in the band)
+before the overrun:
+  [t+ 0.50s] banded                 mean      18 us   max      38 us
+  [t+ 1.00s] banded                 mean      23 us   max      51 us
+  [t+ 1.50s] banded                 mean      19 us   max      35 us
+burning 1500 ms of uninterrupted computation...
+after the overrun (each row is 30 deadlines, ~0.5 s):
+  [t+ 3.62s] post-overrun           mean    3910 us   max   18571 us
+  [t+ 4.29s] post-overrun           mean    5810 us   max   50840 us
+  [t+ 4.85s] post-overrun           mean    1907 us   max   14664 us
+  [t+ 5.35s] post-overrun           mean      23 us   max      44 us
+  [t+ 5.85s] post-overrun           mean      22 us   max      33 us
+  [t+ 6.35s] post-overrun           mean      27 us   max     106 us
+  [t+ 6.85s] post-overrun           mean      21 us   max      38 us
+  [t+ 7.36s] post-overrun           mean      20 us   max      46 us
+  [t+ 7.86s] post-overrun           mean      17 us   max      36 us
+  [t+ 8.36s] post-overrun           mean      11 us   max      22 us
+  [t+ 8.86s] post-overrun           mean      14 us   max      31 us
+  [t+ 9.36s] post-overrun           mean      20 us   max      47 us
