@@ -13,11 +13,19 @@
 # care about; its TIME_CONSTRAINT row says whether a banded host thread escapes.
 #
 # Repeat the arms. The guest-side collapse is stochastic and there is no reason this is steadier.
-set -euo pipefail
+set -uo pipefail
 cd "$(dirname "$0")/../.."
 
 disk=$1; sched=$2; reps=${3:-2}
 base=$(basename "$disk" .raw)
+
+# set -e is off, but a stray failure must still not leave a VM holding the disk — the next arm
+# would then fail to boot, which is how two runs of this were lost.
+cleanup() {
+  pkill -f "^target/debug/limina --vmm-bin.*$base" 2>/dev/null
+  true
+}
+trap cleanup EXIT
 worker=/tmp/limina-worker-$base.log
 probe=spikes/macos-timer-wakeup/wakeprobe
 [ -x "$probe" ] || clang -O2 -o "$probe" spikes/macos-timer-wakeup/wakeprobe.c
@@ -32,14 +40,38 @@ ssh_guest() {
   ssh -p "$port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -o ConnectTimeout=20 claude@127.0.0.1 "$@" 2>/dev/null
 }
+
+# Saturating the guest is a differential like any other, and it fails silently in two ways.
+# Spinners started as background children of an ssh session take SIGHUP when the session exits, so
+# the cell quietly measures an idle guest — hence setsid. And `pkill -f 'while :'` matches the very
+# ssh command line carrying it, so the kill takes down its own shell and ssh returns 255; the
+# spinners get a marker, and the pattern is bracketed so it cannot match itself.
+saturate_guest() {                 # saturate_guest <seconds>
+  ssh_guest "printf '%s\\n' '#!/bin/bash' 'while :; do :; done' > /tmp/limina-spin.sh; \
+             chmod +x /tmp/limina-spin.sh; \
+             for i in \$(seq \$(nproc)); do \
+               setsid nohup timeout $1 /tmp/limina-spin.sh >/dev/null 2>&1 & done; sleep 1" || true
+  sleep 3
+  local idle
+  idle=$(ssh_guest "top -bn1 | grep '%Cpu' | sed -E 's/.*, *([0-9.]+) id.*/\\1/'" || true)
+  if [ -z "$idle" ] || [ "${idle%%.*}" -gt 10 ]; then
+    echo "!! guest did not saturate (idle=${idle:-?}%) — this cell is NOT a loaded arm"
+    return 1
+  fi
+  echo "   guest saturated (idle=${idle}%)"
+}
+
+desaturate_guest() {
+  ssh_guest "pkill -f 'limina[-]spin' >/dev/null 2>&1; true" >/dev/null || true
+}
+
 echo "== policy='${sched:-none}'  armed vCPUs: $(grep -c 'VCPU-RT' "$worker" || echo 0)"
 sleep 60   # the desktop's first minute is login jobs, not idle
 
 for state in idle saturated; do
   for r in $(seq "$reps"); do
     if [ "$state" = saturated ]; then
-      ssh_guest "for i in \$(seq \$(nproc)); do (exec -a spin-load timeout 90 bash -c 'while :; do :; done') & done; sleep 1; echo load: \$(grep -c . /proc/loadavg)" >/dev/null
-      sleep 3
+      saturate_guest 120 || true
     fi
     out=$("$probe" 200 16667)
     # The ordinary thread is the victim; the banded one says whether a reservation is an escape.
@@ -47,7 +79,7 @@ for state in idle saturated; do
     tc=$(echo "$out" | awk '/^=== policy: TIME_CONSTRAINT/,0' | grep 'mach_wait_until')
     echo "${sched:-none} guest=$state rep=$r  host-default  $def"
     echo "${sched:-none} guest=$state rep=$r  host-banded   $tc"
-    ssh_guest "pkill -f 'while :' 2>/dev/null; pkill timeout 2>/dev/null" >/dev/null || true
+    desaturate_guest
     sleep 5
   done
 done

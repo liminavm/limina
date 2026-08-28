@@ -1815,24 +1815,39 @@ never difference `AppleRawCurrentCapacity`.
 
 ## What the vCPU band charges the host
 
-Measured 2026-08-28 with `wakeprobe` running on the host against each guest arm; full table in
-`spikes/macos-timer-wakeup/results-host-impact.md`. The quantity is an ordinary host thread's
-lateness on a 16.667 ms deadline — the same oracle, and the same units, as the host baseline this
-whole investigation started from.
+Measured 2026-08-28, two instruments; tables and method in
+`spikes/macos-timer-wakeup/results-host-impact.md`.
 
-**Banding every vCPU costs the host its tail; arming per vCPU does not.** Worst-case host lateness
-is 8.6-25.0 ms under the static band against 2.4-7.0 ms unbanded — a host app on a 60 Hz screen
-loses a frame — while `rt+dyn` stays at 2.6-7.6 ms, inside the unbanded range in every cell. The
-guest-side ordering, confirmed from the other side.
+**The host cost is throughput, and only throughput.** An 8-thread host job keeps 3452-3458 Miter/s
+against an **idle** guest under every policy — eight reservations held by threads that are not
+running take nothing, which is the design's premise. Against a **saturated** guest it keeps 2050
+unbanded (roughly proportional sharing: eight host threads and eight busy vCPUs on ten cores), and
+**538 with every vCPU banded** — 15% of solo throughput, a 3.8x slowdown, the job stretching from
+9 s to 61 s. `rt+dyn` returns the unbanded numbers rep for rep, which is also the evidence that the
+disarm is *complete* rather than partial: a sampler leaving one or two vCPUs banded would show
+here, since the static arm shows what a handful of reservations costs.
 
-**Do not read the median.** It is bimodal at 1 ms or 2 ms across reps of *every* arm including
-unbanded — the host's power state, not the policy — and the rep whose median halved is the one with
-the 24.9 ms tail: a busy machine wakes threads sooner on average while its tail gets worse. A mean
-hides both directions at once.
+**Host wake latency does not move at all.** Pooled over 5400 samples per cell, the share of
+deadlines missed by more than half a frame is 19.4-19.9% for every arm against an idle guest and an
+empty host's 22.0%, and 10.5-13.3% for every arm against a saturated one — the loaded cells are
+*better*, the same "a busy machine wakes threads sooner" effect the guest side shows. That is what
+the mechanism predicts: a real-time thread cannot be preempted, so ordinary host work is not woken
+late by one, it is not run at all.
 
-A *banded* host thread measures 18-22 µs at p50 under every arm, so eight vCPU reservations do not
-close the real-time class to anyone else. A host thread that needs punctuality can still ask for
-it — which is what would make the band safe for the app's own present path to use later.
+**Do not measure a tail with one sample of it.** An earlier pass here reported that banding cost
+the host 8.6-25 ms of worst-case lateness. It was wrong twice over: half its cells were measuring a
+guest that never loaded (see below), and the instrument — `wakeprobe`, ~80 s for one sample per
+cell of a six-by-four lever matrix — produces a precise-looking number that reproduces nothing.
+Reps of one arm disagreed by 2 ms to 25 ms and the ordering between policies flipped between
+passes. Use `hostlate.c`: one wait, one policy, many samples, counts rather than a max.
 
-Still owed here: throughput, which starves differently from latency. Nothing has measured what a
-fixed host compute job costs while a VM is banded.
+**A load that never arrives reads as a result, not an error.** Spinners started as background
+children of an ssh session take SIGHUP when the session exits, so a "saturated" cell measures an
+idle guest — and it announced itself as the host's throughput under a saturated guest coming back
+*identical to an empty host*. Start them `setsid nohup`, and have every loaded cell print the
+guest's own idle percentage before measuring. Related: `pkill -f 'while :'` over ssh matches the
+remote shell carrying the pattern and kills its own session, which under `set -e` leaves the script
+dead and the VM holding the disk, so the next arm cannot boot.
+
+Still owed: this measures one synthetic CPU-bound job. Host work that is I/O- or GPU-bound may
+share differently.

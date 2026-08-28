@@ -1,45 +1,78 @@
 # What a banded VM charges the host
 
-Measured 2026-08-28, `host-impact.sh` — the `wakeprobe` oracle running **on the host** while a
-guest runs under each policy, idle and saturated, two reps each. The quantity is what an ordinary
-host thread pays for a 16.667 ms deadline: the same instrument, and the same units, as the host
-baseline that started this investigation.
+Measured 2026-08-28, M1 Max on AC. Two instruments, because the band starves two things
+differently: `hostlate-matrix.sh` (an ordinary host thread's lateness on a 16.667 ms deadline,
+6 reps x 900 samples per cell) and `host-throughput.sh` (fixed work at ordinary priority, wall
+clock, 3 reps per cell). Every loaded cell proves the guest is saturated — the guest's own idle
+percentage — before it measures.
 
-This is the question every other measurement here dodges. The band is a *reservation*: it takes
-cores from everything not banded, which on a laptop is the user's editor, their browser, and any
-second VM. A policy that fixes a guest by making its host stutter is not a fix.
+## Throughput: banding every vCPU takes the machine
 
-## An ordinary host thread's lateness, in microseconds
+Aggregate rate of an 8-thread host job, `hostwork 8 4000`:
 
-| guest policy | guest | p50 | p99 | max |
-|---|---|---|---|---|
-| unbanded | idle | 2006, 2019 | 2261, 4623 | **2384, 6968** |
-| unbanded | saturated | 2018, 2019 | 5517, 3212 | **5988, 6142** |
-| static `rt` | idle | 2019, 2019 | 7775, 8423 | **14941, 8611** |
-| static `rt` | saturated | 2018, 1018 | 3757, 13491 | **10259, 24975** |
-| `rt+dyn` | idle | 1019, 2017 | 2520, 5992 | **2565, 5999** |
-| `rt+dyn` | saturated | 2018, 2018 | 5799, 2766 | **5992, 7575** |
+| arm | idle guest | saturated guest |
+|---|---|---|
+| no VM at all | 3458 Miter/s | — |
+| unbanded | 3454 | 2050 / 2058 / 2038 |
+| static `rt` | 3452 | **538 / 521 / 1602** |
+| `rt+dyn` | 3448 | 2043 / 2026 / 2038 |
 
-**Banding every vCPU costs the host its tail.** Worst-case lateness runs 8.6-25.0 ms under the
-static band against 2.4-7.0 ms unbanded — a host app on a 60 Hz screen loses a frame, sometimes
-more than one. **Dynamic arming does not**: 2.6-7.6 ms, inside the unbanded range in every cell.
-That is the same ordering the guest-side numbers gave, measured from the other side.
+An **idle** guest costs the host nothing under any policy — eight reservations held by threads that
+are not running take nothing, which is the design's whole premise. A **saturated** guest costs the
+host 41% of its throughput unbanded, which is roughly proportional sharing: eight host threads and
+eight busy vCPUs on ten cores, both sides wanting everything.
 
-The median is *not* the signal here, and reading it as one would invert the conclusion. It is
-bimodal at 1 ms or 2 ms across reps of every arm, including unbanded — the host's own power state,
-not the policy. The one rep where it halved to 1018 µs is also the rep with the worst tail
-(24975 µs): a busy machine keeps cores awake and wakes threads *sooner* on average, the same effect
-that makes a loaded guest render better, while the tail goes the other way. A mean hides both.
+Banding every vCPU turns that contest into a seizure: the host keeps **15%** of its solo
+throughput, a 3.8x slowdown against the same guest unbanded, and the job runs 9 s → 61 s.
+`rt+dyn` returns **exactly** the unbanded numbers, rep for rep — so the disarm is complete, not
+partial. A sampler leaving even one or two vCPUs banded would show here, because the static arm
+shows what a handful of reservations does to this job.
 
-## A reservation still buys an escape, under every arm
+Note the static arm's third rep (1602 Miter/s against 538 and 521). Even the catastrophic
+configuration is stochastic, the same way the guest-side collapse is.
 
-A *banded* host thread measured 18-22 µs at p50 in all twelve cells, tails 70-780 µs. Eight vCPU
-reservations do not close the real-time class to anyone else — a host thread that needs punctuality
-can still ask for it and get it, which is what makes the band a safe thing for the app itself to
-use later.
+## Latency: the policy does not move it
 
-## Method notes
+Share of deadlines missed by more than half a frame, pooled over 5400 samples per cell:
 
-Repeat every arm: the guest-side collapse is stochastic and so is this — the static band's worst
-cell (24.9 ms) and its best (8.6 ms) differ threefold. Two reps is the minimum that shows a range;
-it is not enough to compare two arms that land close together.
+| arm | idle guest | saturated guest |
+|---|---|---|
+| no VM at all | 22.0% | — |
+| unbanded | 19.9% | 13.3% |
+| static `rt` | 19.9% | 10.5% |
+| `rt+dyn` | 19.4% | 11.5% |
+
+Every arm is within noise of an empty host, and the *loaded* cells are consistently the best ones —
+a busy machine keeps cores awake and wakes threads sooner, the same effect that makes a loaded
+guest render better. Misses beyond a whole frame are 0-8 per 5400 everywhere, with no ordering.
+**A VM's vCPU scheduling policy does not move host wake latency.**
+
+That is what the mechanism predicts, in hindsight: a real-time thread cannot be preempted, so
+ordinary host work does not get woken *late* by one — it simply does not get *run*. Latency was
+never the quantity to watch.
+
+## Two ways this measured nothing while looking like it measured something
+
+**A saturated cell that was never loaded.** Spinners started as background children of an ssh
+session take SIGHUP when the session exits. Every "saturated" cell in the first pass was an idle
+guest, and it read as a *result*: the host's throughput under a "saturated" guest came back
+identical to an empty host, which is what exposed it. Start them with `setsid nohup`, and make each
+cell print the guest's measured idle percentage before it measures anything.
+
+**A `pkill` that matched its own command line.** `pkill -f 'while :'` over ssh matches the very
+remote shell carrying the pattern, so the kill takes down its own session, ssh returns 255, and
+under `set -e` the script dies holding the VM — after which the next arm cannot boot the disk. Give
+the spinners a marker and bracket the pattern (`limina[-]spin`), and give the script an EXIT trap
+so a VM never outlives it.
+
+**And an instrument aimed at the wrong question.** The first latency answer came from `wakeprobe`,
+which spends ~80 s sweeping six waits x four policies to produce a single sample per cell. Against
+a heavy tail that yields a number that looks precise and reproduces nothing: reps of one arm
+disagreed by 2 ms to 25 ms, and the ordering between policies flipped between passes. It is the
+right instrument for "which lever exists" and the wrong one for "does this move the host". Hence
+`hostlate.c`: one wait, one policy, many samples, and counts rather than a max that one unlucky
+wake decides.
+
+`hostlate`'s p50 (~5.6 ms) does not match `wakeprobe`'s default-policy cell (~2.0 ms); the two
+differ in process and thread shape and were never cross-calibrated. Compare within an instrument,
+not across them.
