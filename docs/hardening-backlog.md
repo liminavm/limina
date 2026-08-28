@@ -1611,9 +1611,15 @@ off the agent's critical path: the host's own power state (`NSProcessInfo.isLowP
 `IOPSGetProvidingPowerSourceType` — AC vs battery is already mirrored into the guest over
 virtio-i2c SBS), and whether anything is actually reaching scanout. The guest's GNOME power profile
 is user *intent* rather than machine state and is the one thing the host cannot observe, so it
-belongs to the enhanced tier and the agent, as a refinement — never as a prerequisite. Worth
-checking before designing against it: a VM has no cpufreq driver to bind, so
-`power-profiles-daemon` may have no backend and offer only *balanced*.
+belongs to the enhanced tier, as a refinement — never as a prerequisite. The guest has no
+`cpufreq` (measured) and no ACPI `platform_profile`, so `power-profiles-daemon` is running on its
+placeholder and the GNOME toggle may not drive anything at all.
+
+Which decides how the enhanced tier should carry it, when it does: **a `platform_profile` driver in
+our kernel backed by a virtio device**, not an agent reading D-Bus or dconf. That gives ppd a real
+backend so the GNOME control becomes meaningful, and the host sees the user's choice arrive as a
+device write on the same path in both directions — the host can set it as well as read it, which is
+what a VM on a laptop going to battery actually wants.
 
 ## An idle guest exits ~1,600 times a second reading virtio-net's interrupt status
 
