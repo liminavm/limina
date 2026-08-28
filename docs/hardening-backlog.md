@@ -1606,10 +1606,35 @@ mechanism, since the band changes how promptly a woken thread is scheduled, not 
 wakes. Untested: battery, where the band's preference for performance cores is the thing to watch,
 and any workload where a vCPU overruns its computation slice.
 
-Before it can ship on by default: establish what xnu does to a time-constraint thread that
-overruns — a vCPU runs guest code for as long as the guest wants, which is not the audio-callback
-shape the band is designed for. If that turns out to bite, the band may belong on a dedicated
-thread that wakes the vCPU rather than on the vCPU thread itself.
+**But it must not go on the vCPU threads, and must never be left armed.** xnu's fail-safe
+(`osfmk/kern/priority.c`, `thread_quantum_expire`) demotes a `TH_MODE_REALTIME` thread to plain
+timeshare once its computation *since it last blocked* passes `max_unsafe_rt_computation`, and
+holds it there until `safe_release`. The release-kernel constants make that 100 quanta × 10 ms =
+**1 s to trip**, and `SAFE_RT_MULTIPLIER` × that = **2 s demoted**. Preemption does not clear the
+accumulator — only blocking does (`sched_prim.c` accumulates `computation_metered` across
+preemptions and zeroes it on dispatch from a wait). A vCPU thread serving a busy guest does not
+block, so it trips continuously.
+
+`spikes/macos-timer-wakeup/rt_overrun.c` watches it happen on a bare thread: 18-23 µs banded, then
+after 1.5 s of uninterrupted computation 3910/5810/1907 µs over the next three windows with a
+50.8 ms worst case, recovering at 2.2 s. **The demoted state is worse than never banding at all.**
+
+And it reaches the guest. Same clone, same six spinners saturating six vCPUs, vkcube 900x600:
+
+| arm | p50 | p90 | p99 | max |
+|---|---|---|---|---|
+| band off | 16.66 | 16.97 | 19.67 | 34.59 |
+| band on | 16.67 | 28.12 | **365.58** | **4459.59** |
+
+A 4.5-second frame. Band-off under load is near-perfect (59.9 FPS) — load was always the thing that
+*fixed* the idle jitter — so leaving the band armed trades a fixable idle problem for a far worse
+loaded one.
+
+Two ways out, and they compose: arm the band only while the guest is idle enough not to trip the
+fail-safe (the same presentation-driven arming the constraint below asks for), or put the band on a
+thread that **blocks every frame** — a dedicated timer or present thread that wakes the vCPU —
+which never accumulates enough computation to trip it. The second is the more robust shape and is
+what the fail-safe's own trigger condition points at.
 
 **The constraint any fix must respect: idle wakeups are a budget we already spent effort
 winning.** `docs/design/venus-ring-idle-wakeups.md` took `limina-vmm` from ~75/s to ~0/s at idle,
