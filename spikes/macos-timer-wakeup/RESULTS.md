@@ -1,10 +1,13 @@
 # How late macOS wakes a thread that asked for a 16.7 ms deadline
 
-An idle guest vCPU traps on WFI. limina reads the guest's virtual-timer deadline and parks a
-host thread until it (`vmm/src/macos/vstate.rs::wait_for_event`). Whatever lateness that host
-wait carries becomes the guest's timer lateness, and at a 60 Hz frame cadence a few milliseconds
-of it is a missed flip. `wakeprobe.c` measures that lateness directly: request a deadline
+An idle guest's frame clock is a host thread's sleep, and at a 60 Hz cadence a few milliseconds of
+lateness is a missed flip. `wakeprobe.c` measures that lateness directly: request a deadline
 16.667 ms out, take `mach_absolute_time()` on wake, record the overshoot.
+
+The thread doing the waiting is **not** ours to choose on this host — HVF parks an idle vCPU inside
+`hv_vcpu_run` and never hands us the WFI trap, so `vstate.rs::wait_for_event` is dead code here.
+The *thread* is still ours, which is why the policy column below is the one that matters and the
+wait column is not. What that buys a real guest is in `results-guest-arms.md`.
 
 Measured 2026-08-27, macOS 26.5, M1 Max, 400 iterations per cell, microseconds of lateness.
 Each policy runs in its own child process — thread policies are additive on a thread.
