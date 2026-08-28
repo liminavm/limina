@@ -655,7 +655,7 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                         match guard.resume_parked_vcpus() {
                             Ok(()) => {
                                 drop(guard);
-                                crate::wake::pulse();
+                                crate::wake::guest(&vmm_for_snapshot);
                                 log::warn!(
                                     "snapshot: aborted and guest resumed; suspend request failed"
                                 );
@@ -739,7 +739,7 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                          (holdouts: {holdouts:?}); waking it and aborting the suspend \
                          (VM lives on)"
                     );
-                    crate::wake::pulse();
+                    crate::wake::guest(&vmm_for_bracket);
                     continue; // re-arm: the next SIGTSTP gets a fresh bracket
                 }
 
@@ -759,7 +759,7 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                         match guard.resume_parked_vcpus() {
                             Ok(()) => {
                                 drop(guard);
-                                crate::wake::pulse();
+                                crate::wake::guest(&vmm_for_bracket);
                                 log::warn!(
                                     "bracket: aborted and guest resumed; suspend request failed"
                                 );
@@ -804,6 +804,11 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     // the raised SPI is latched pending in the restored GIC, so it wakes the vCPU regardless of
     // exact timing. Harmless if the snapshot was of a running (non-suspended) guest.
     if spec.restore_file.is_some() {
+        // Deliberately the raw pulse, not `wake::guest`: this is a FRESH worker, so there is no
+        // live system-suspend state to consult — the snapshot does not carry it (the same gap
+        // task #41 records for CPU_OFF online state). A guest snapshotted in PSCI SYSTEM_SUSPEND
+        // therefore restores unwakeable; the bracket avoids creating one by waking the guest
+        // before it snapshots.
         log::info!("restore: injecting guest wake (KEY_WAKEUP) to resume from s2idle");
         crate::wake::pulse();
         // Display re-probe nudge. A restored guest's driver is long past its boot-time

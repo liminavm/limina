@@ -17,6 +17,9 @@
 
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
+
+use vmm::Vmm;
 
 use anyhow::{anyhow, Result};
 use utils::eventfd::{EventFd, EFD_NONBLOCK};
@@ -45,6 +48,33 @@ extern "C" fn handle_sigwinch(_sig: libc::c_int) {
 /// reloaded guest's vCPUs are live, to bring it out of s2idle. Async-signal-safe.
 pub fn pulse() {
     pulse_fd();
+}
+
+/// Wake the guest, by whichever mechanism its suspend flavour needs.
+///
+/// **Use this, not [`pulse`], anywhere a live guest has to come back.** There are two kinds of
+/// suspended guest and only one of them can hear a GPIO:
+///
+/// - **s2idle**: vCPUs sit in WFx with interrupts live, so raising `KEY_WAKEUP` wakes them.
+/// - **PSCI `SYSTEM_SUSPEND`** (what `systemctl suspend` means once we advertise PSCI 1.0 — see
+///   [`crate::quiesce::Quiesced::SystemSuspended`]): every vCPU is powered off. There is nobody
+///   left to take the interrupt, so the pulse lands nowhere and the guest never returns.
+///
+/// The discriminator is the VMM's live state rather than a suspend outcome the caller remembers,
+/// because a remembered outcome goes stale and every wake site would have to thread it through
+/// correctly. `wake_from_system_suspend` reports whether it applied, so asking is free and the
+/// fallback is exact.
+pub fn guest(vmm: &Arc<Mutex<Vmm>>) {
+    match vmm.lock().unwrap().wake_from_system_suspend() {
+        Ok(true) => {
+            log::info!("wake: resumed the guest from PSCI SYSTEM_SUSPEND");
+            return;
+        }
+        // Not system-suspended: an s2idle guest, or one that never suspended at all.
+        Ok(false) => {}
+        Err(e) => log::warn!("wake: resuming from system suspend failed: {e}; pulsing KEY_WAKEUP"),
+    }
+    pulse();
 }
 
 /// Create the guest wake eventfd and install the `SIGWINCH` test-seam handler. Returns the `EventFd`

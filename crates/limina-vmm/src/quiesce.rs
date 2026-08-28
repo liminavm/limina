@@ -36,7 +36,8 @@ pub enum Quiesced {
     /// cannot be lost to a stray wakeup.
     ///
     /// Costs a host-driven wake: no vCPU is left to take a wake interrupt, so the `KEY_WAKEUP`
-    /// pulse does nothing and only [`Vmm::wake_from_system_suspend`] brings the guest back.
+    /// pulse does nothing and only [`Vmm::wake_from_system_suspend`] brings the guest back —
+    /// which is why every wake goes through [`crate::wake::guest`].
     SystemSuspended,
     /// Devices at `INIT` *and* every vCPU parked: the guest is past `timekeeping_suspend`,
     /// so time spent stopped from here is classified as suspend.
@@ -56,14 +57,6 @@ impl Quiesced {
     /// whose vCPUs never register as parked.
     pub fn allows_snapshot(self) -> bool {
         self != Quiesced::No
-    }
-
-    /// Does bringing this guest back require [`Vmm::wake_from_system_suspend`]? A
-    /// system-suspended guest has no vCPU left to take the `KEY_WAKEUP` interrupt, so pulsing
-    /// the wake key at it — the only wake mechanism an s2idle guest needs — leaves it parked
-    /// forever.
-    pub fn needs_host_wake(self) -> bool {
-        self == Quiesced::SystemSuspended
     }
 
     /// May the HOST stop this guest's vCPUs and have the guest account for the time as
@@ -190,18 +183,12 @@ mod tests {
         );
     }
 
-    /// A system-suspended guest is the strongest outcome, and the ONLY one that changes how the
-    /// guest must be woken: it has no vCPU left to take the `KEY_WAKEUP` interrupt, so pulsing
-    /// at it strands it. Getting `needs_host_wake` wrong does not fail loudly — the guest simply
-    /// never comes back — so pin which outcomes claim it.
+    /// The strongest rung must clear both bars: the guest told us it stopped rather than us
+    /// inferring it, so a snapshot may proceed and the host may stop it without poisoning
+    /// CLOCK_MONOTONIC. (How to WAKE such a guest is not decided here — `wake::guest` reads the
+    /// VMM's live state, so no caller has to carry this value around to get it right.)
     #[test]
-    fn only_a_system_suspended_guest_needs_the_host_to_wake_it() {
-        assert!(Quiesced::SystemSuspended.needs_host_wake());
-        assert!(!Quiesced::Parked.needs_host_wake());
-        assert!(!Quiesced::DevicesOnly.needs_host_wake());
-        assert!(!Quiesced::No.needs_host_wake());
-
-        // It clears both bars: the guest told us it stopped, rather than us inferring it.
+    fn a_system_suspended_guest_clears_both_bars() {
         assert!(Quiesced::SystemSuspended.allows_snapshot());
         assert!(Quiesced::SystemSuspended.survives_a_host_stop());
     }
