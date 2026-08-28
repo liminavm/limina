@@ -39,6 +39,25 @@ pub enum Quiesced {
     No,
 }
 
+impl Quiesced {
+    /// May a snapshot proceed? Devices at `INIT` is the whole precondition: `save_snapshot`
+    /// -> `snapshot_vcpus` parks every vCPU itself at a clean boundary, so the bracket does
+    /// not need [`Quiesced::Parked`] and must not demand it — requiring it once made
+    /// `Virtual Machine -> Suspend` unreachable, because `Parked` does not hold on a guest
+    /// whose vCPUs never register as parked.
+    pub fn allows_snapshot(self) -> bool {
+        self != Quiesced::No
+    }
+
+    /// May the HOST stop this guest's vCPUs and have the guest account for the time as
+    /// suspend? Only [`Quiesced::Parked`]: the guest keeps running afterwards, so anything
+    /// less means the stop lands in `CLOCK_MONOTONIC`. The two bars differ because the two
+    /// callers differ — a snapshotted guest is frozen for good, a host-slept one wakes up.
+    pub fn survives_a_host_stop(self) -> bool {
+        self == Quiesced::Parked
+    }
+}
+
 /// Per-caller knobs. The sequence they drive is fixed.
 pub struct QuiesceRequest {
     /// Pulse `KEY_SLEEP`. The snapshot bracket suppresses this when the caller already
@@ -120,5 +139,33 @@ fn wait_until(budget: Duration, mut pred: impl FnMut() -> bool) -> bool {
             return false;
         }
         std::thread::sleep(POLL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Quiesced;
+
+    /// The two callers' bars are different, and conflating them is a shipped-regression
+    /// shape: the snapshot bracket was given the host-sleep bracket's bar and
+    /// `Virtual Machine -> Suspend` went unreachable. Pin both, and pin that they disagree
+    /// on exactly one outcome. Verified to fail on that exact swap.
+    #[test]
+    fn the_snapshot_bar_is_lower_than_the_host_stop_bar() {
+        assert!(Quiesced::Parked.allows_snapshot());
+        assert!(Quiesced::DevicesOnly.allows_snapshot());
+        assert!(!Quiesced::No.allows_snapshot());
+
+        assert!(Quiesced::Parked.survives_a_host_stop());
+        assert!(!Quiesced::DevicesOnly.survives_a_host_stop());
+        assert!(!Quiesced::No.survives_a_host_stop());
+
+        // DevicesOnly is the outcome that separates them: good enough to snapshot, not
+        // good enough to let the host stop a guest that will keep running.
+        assert!(
+            Quiesced::DevicesOnly.allows_snapshot()
+                && !Quiesced::DevicesOnly.survives_a_host_stop(),
+            "DevicesOnly must snapshot but must not be trusted across a host stop"
+        );
     }
 }

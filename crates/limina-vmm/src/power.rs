@@ -254,7 +254,7 @@ fn hold_ack_until_safe_to_stop(vmm: &Arc<Mutex<Vmm>>, pulse_button: bool) -> Qui
 #[cfg(target_os = "macos")]
 fn resume_after_host_sleep(vmm: &Arc<Mutex<Vmm>>, outcome: Quiesced) {
     let mut guard = vmm.lock().unwrap();
-    let r = if outcome == Quiesced::Parked {
+    let r = if outcome.survives_a_host_stop() {
         guard.resume_keeping_counter()
     } else {
         guard.resume()

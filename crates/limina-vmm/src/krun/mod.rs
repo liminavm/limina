@@ -729,10 +729,13 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                     },
                 );
 
-                if outcome == crate::quiesce::Quiesced::No {
+                if !outcome.allows_snapshot() {
                     let holdouts = vmm_for_bracket.lock().unwrap().quiesce_holdouts();
+                    // "bracket: ABORTED" is a stable marker the L1 abort guard counts (once
+                    // per SIGTSTP, to prove the bracket re-arms). Keep it verbatim and put
+                    // any rewording in the prose that follows it.
                     log::warn!(
-                        "bracket: guest did not quiesce within {QUIESCE_TIMEOUT:?} \
+                        "bracket: ABORTED — guest did not quiesce within {QUIESCE_TIMEOUT:?} \
                          (holdouts: {holdouts:?}); waking it and aborting the suspend \
                          (VM lives on)"
                     );

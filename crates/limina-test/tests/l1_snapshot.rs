@@ -295,8 +295,11 @@ fn l2_suspend_bracket_aborts_when_guest_cannot_quiesce() {
 
     // The worker log must show the bracket aborted (guest didn't quiesce), NOT a completed snapshot.
     let log = guest.supervisor_log();
+    // Key on the stable "bracket: ABORTED" marker, not on the prose around it: this
+    // assertion once went red for a reworded log line while missing a real behaviour change
+    // in the same function, which is the wrong way round.
     assert!(
-        log.contains("did not quiesce"),
+        log.contains("bracket: ABORTED"),
         "expected the bracket to log an aborted (non-quiesced) suspend; got:\n{log}"
     );
     assert!(
@@ -326,7 +329,7 @@ fn l2_suspend_bracket_aborts_when_guest_cannot_quiesce() {
     std::thread::sleep(Duration::from_secs(28));
     let log = guest.supervisor_log();
     assert_eq!(
-        log.matches("did not quiesce").count(),
+        log.matches("bracket: ABORTED").count(),
         2,
         "expected a second bracket abort (one 'did not quiesce' per SIGTSTP) — an aborted \
          bracket must re-arm, not die; got:\n{log}"
