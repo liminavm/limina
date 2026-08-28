@@ -1,0 +1,60 @@
+== block 1  no VM (host floor)
+  mean 5.27 W over 70 samples, capacity 3488 -> 3463 mAh (25 in 6 min)
+== block 2  policy=''  load=idle  worker 45007  ssh 2222
+  VCPU-RT lines: 0
+0
+  worker 45007  0.0  1330 
+  worker 45007  2.9  1345+
+  worker 45007  3.8  1365+
+  worker 45007  2.6  1373+
+  mean 5.12 W over 70 samples, capacity 3431 -> 3406 mAh (25 in 6 min)
+== block 3  policy='rt+dyn'  load=idle  worker 46171  ssh 2222
+  VCPU-RT lines: 8
+    [2026-08-28T11:22:36.167797Z INFO  krun_vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms)
+    [2026-08-28T11:22:36.167976Z INFO  krun_vmm::macos::vcpu_sched] [VCPU-RT] vCPU 1 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms)
+    [2026-08-28T11:22:36.168089Z INFO  krun_vmm::macos::vcpu_sched] [VCPU-RT] vCPU 2 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms)
+  worker 46171  0.0  934  
+  worker 46171  2.8  938+ 
+  worker 46171  2.9  941+ 
+  worker 46171  2.8  946+ 
+  mean 5.30 W over 70 samples, capacity 3363 -> 3338 mAh (25 in 6 min)
+== block 4  policy='rt+dyn'  load=idle  worker 47776  ssh 2222
+  VCPU-RT lines: 8
+    [2026-08-28T11:30:55.894244Z INFO  krun_vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms)
+    [2026-08-28T11:30:55.894446Z INFO  krun_vmm::macos::vcpu_sched] [VCPU-RT] vCPU 1 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms)
+    [2026-08-28T11:30:55.894568Z INFO  krun_vmm::macos::vcpu_sched] [VCPU-RT] vCPU 2 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms)
+  worker 47776  0.0  1577 
+  worker 47776  2.6  1594+
+  worker 47776  3.2  1616+
+  worker 47776  2.8  1619+
+  mean 5.15 W over 70 samples, capacity 3304 -> 3276 mAh (28 in 6 min)
+== block 5  policy=''  load=idle  worker 48872  ssh 2222
+  VCPU-RT lines: 0
+0
+  worker 48872  0.0  1490 
+  worker 48872  2.6  1498+
+  worker 48872  3.4  1509+
+  worker 48872  2.6  1522+
+  mean 4.87 W over 70 samples, capacity 3240 -> 3209 mAh (31 in 6 min)
+== block 6  policy=''  load=vkcube  worker 49940  ssh 2222
+  vkcube: 2582 vkcube --width 900 --height 600
+  VCPU-RT lines: 0
+0
+  vkcube alive at end: 1
+  worker 49940  0.0  2509 
+  worker 49940  40.0 2539+
+  worker 49940  40.9 2550+
+  worker 49940  42.9 2572+
+  mean 7.85 W over 70 samples, capacity 3170 -> 3043 mAh (127 in 6 min)
+== block 7  policy='rt+dyn'  load=vkcube  worker 51142  ssh 2222
+  vkcube: 2602 vkcube --width 900 --height 600
+  VCPU-RT lines: 8
+    [2026-08-28T11:56:09.080780Z INFO  krun_vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms)
+    [2026-08-28T11:56:09.080966Z INFO  krun_vmm::macos::vcpu_sched] [VCPU-RT] vCPU 1 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms)
+    [2026-08-28T11:56:09.081086Z INFO  krun_vmm::macos::vcpu_sched] [VCPU-RT] vCPU 2 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms)
+  vkcube alive at end: 1
+  worker 51142  0.0  2120 
+  worker 51142  38.5 2134+
+  worker 51142  46.3 2144+
+  worker 51142  47.8 2155+
+  mean 7.88 W over 70 samples, capacity 3085 -> 2954 mAh (131 in 6 min)

@@ -1613,11 +1613,17 @@ derived; a k-of-8 sweep and a burst test are what would derive them. And the arm
 visible cost of its own: a vCPU that has just gone idle waits a sample plus hysteresis before it is
 punctual, which is a hitch exactly when a build finishes.
 
-**Still open before this is on by default.** Battery: the band prefers performance cores, and the
-oracle is `powermetrics` package milliwatts plus a `pmset -g batt` drop over a fixed window, idle
-guest with and without, on battery — it needs the machine unplugged, so it is the user's to run.
-The idle far tail does not fully clean up (max 31-49 ms even armed), so something rarer is still
-late. And the outer gate is still owed: **idle wakeups are a budget we already spent effort
+**The band is not a battery cost.** Measured on battery, six-minute interleaved blocks, method
+and tables in `spikes/macos-timer-wakeup/results-battery.md`: idle, the band and its 200 ms sampler
+cost **under ~20 mW of package power** (banded 128/104 mW against unbanded 111 and an empty-host
+floor of 98), and the pack cannot resolve them at all — every VM block lands inside the spread of
+the no-VM blocks. Presenting, banded draws +154 mW (+18%) while delivering +21% frames (58.9/59.8
+FPS against 47.7/49.6), so energy per frame is flat to marginally better. The pack is the blunt
+instrument here — the display dominates it, and `AppleRawCurrentCapacity` is a self-refitting
+estimate that once *rose* 34 mAh during a discharge, so never difference the mAh column.
+
+**Still open before this is on by default.** The idle far tail does not fully clean up (max 31-49
+ms even armed), so something rarer is still late. And the outer gate is still owed: **idle wakeups are a budget we already spent effort
 winning** (`docs/design/venus-ring-idle-wakeups.md` took the worker from ~75/s to ~0/s), so the
 sampler should idle entirely when nothing is presenting. Both inputs for that are available on a
 **stock** guest, which keeps this off the agent's critical path: the host's own power state
@@ -1769,3 +1775,29 @@ destroys the venus device mid-test.
 When a milestone's loose ends are all closed, fold the remainder back into the roadmap milestone
 status. Greenfield milestones still ahead: **M7 USB**, **M8 audio + x86**. (**M6 dynamic memory** shipped
 2026-06-26 — see `docs/design/m6-dynamic-memory.md` + memory `limina-m6-dynamic-memory`.)
+
+## Efficiency is unmeasured except at idle
+
+We now know two points on the curve and nothing else: an idle guest costs ~13 mW of package power
+over an empty host, and a `vkcube` guest costs ~0.9 W (`spikes/macos-timer-wakeup/results-battery.md`).
+Everything else — disk, network, a build, a video call, a desktop being *used* — has never been
+measured in watts, so "limina is efficient" currently rests on the one workload that does least.
+
+What a suite needs, beyond the block-and-sample harness that exists (`battery-cost.sh` +
+`pm-align.py`):
+
+- **A work-unit counter per workload**, because perf/W is meaningless without the numerator and
+  every workload counts differently: frames for graphics, IOPS and MB/s for disk, packets for net,
+  wall-clock for a fixed build. Watts alone rank a slow VM first.
+- **Package power without a human in the loop.** `powermetrics` needs root, which is why today's
+  run depended on the user starting it by hand; the pack alternative is display-dominated and
+  cannot see effects under ~0.3 W. This is a use for the deferred privileged helper
+  (`docs/design/privileged-helper.md`) — one shared helper exposing package power serves both a
+  test suite and any runtime power policy we build later.
+- **The comparison that would mean something**: the same workloads under Parallels and under
+  Apple Virtualization.framework on the same host. "Replace Parallels" is a claim about perf/W as
+  much as about features, and it stays unevidenced until then.
+
+Traps already paid for, in the results file: interleave arms rather than running A then B (the
+pack's voltage sags as it drains), verify per block that the differential reached the guest, and
+never difference `AppleRawCurrentCapacity`.

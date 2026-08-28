@@ -4,6 +4,10 @@
 #
 # `loaded` leaves spare vCPUs; `saturated` runs one spinner per vCPU, so every vCPU thread has guest
 # work at all times and never parks. Only the second shape can trip xnu's real-time fail-safe.
+#
+# The guest needs mangohud, and the F44 enhanced image does not ship it — `dnf install mangohud`
+# into the (disposable) clone first. Without it the layer never loads, vkcube runs bare, and this
+# reports `NO LOG`, which reads like a parsing bug rather than a missing package.
 set -u
 label=$1; mode=${2:-idle}
 export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0
