@@ -1572,10 +1572,31 @@ moves it at all. HVF's wait runs **on our vCPU thread**, so that policy is still
 is no longer known is whether it reaches the wakeup that is actually late, since HVF's clock thread
 is not ours. `hv_vcpu_run_until` is not an escape: `hv.h` puts it inside `#ifdef __x86_64__`.
 
-Next: set the real-time band on the vCPU threads and re-measure the *guest's* frame-time
-distribution — that is now the cheapest way to find out whether the lateness is on a thread we
-control. If it does not move, the wakeup being missed is inside HVF and the next question is
-whether anything short of a Radar changes it.
+**The real-time band fixes it, host-side, with no guest change.** `THREAD_TIME_CONSTRAINT_POLICY`
+on each vCPU thread (`vcpu_sched.rs`, off unless `LIMINA_VCPU_RT` is set) — measured on the same
+stock guest and clone, vkcube 900x600, 20 s MangoHud samples, frame times in ms:
+
+| arm | avg FPS | p50 | p90 | p99 | max |
+|---|---|---|---|---|---|
+| band off | 46.0 | 17.47 | 34.07 | 45.45 | 56.47 |
+| band on | 59.2 | 16.66 | 17.61 | 27.62 | 67.31 |
+| band on, repeat | 59.3 | 16.67 | 17.40 | 26.36 | 61.48 |
+
+p90 was a whole missed refresh and is now one frame. That also answers the question the HVF finding
+raised: the band reaches the wakeup that was late, so it is not HVF's own `VirtualClock` thread
+that needs fixing. The far tail does not fully clean up (max 61-67 ms, 0.1% min ~15 FPS), so
+something rarer is still late.
+
+**And it appears to cost nothing at idle.** Worker CPU 2.3% with the band against 2.4% without,
+same idle-wakeup rate (`top -stats cpu,idlew`, seven settled 10 s samples each) — which fits the
+mechanism, since the band changes how promptly a woken thread is scheduled, not how often it
+wakes. Untested: battery, where the band's preference for performance cores is the thing to watch,
+and any workload where a vCPU overruns its computation slice.
+
+Before it can ship on by default: establish what xnu does to a time-constraint thread that
+overruns — a vCPU runs guest code for as long as the guest wants, which is not the audio-callback
+shape the band is designed for. If that turns out to bite, the band may belong on a dedicated
+thread that wakes the vCPU rather than on the vCPU thread itself.
 
 **The constraint any fix must respect: idle wakeups are a budget we already spent effort
 winning.** `docs/design/venus-ring-idle-wakeups.md` took `limina-vmm` from ~75/s to ~0/s at idle,
