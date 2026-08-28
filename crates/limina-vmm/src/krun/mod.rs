@@ -713,9 +713,11 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                 );
 
                 // Same sequence the host-sleep bracket runs — one implementation, this
-                // caller's budgets. A snapshot wants the vCPUs parked for its own reason:
-                // a guest captured mid-suspend resumes into a machine whose devices and
-                // timekeeping disagree about what stage it had reached.
+                // caller's budgets AND this caller's bar. A snapshot's precondition is
+                // devices at INIT; it does NOT need `Parked`, because `save_snapshot` ->
+                // `snapshot_vcpus` parks every vCPU itself at a clean boundary. Only the
+                // host-sleep bracket needs `Parked`, because there the guest keeps running
+                // afterwards and must have classified the stop as suspend.
                 const QUIESCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
                 let outcome = crate::quiesce::quiesce_guest(
                     &vmm_for_bracket,
@@ -727,10 +729,12 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                     },
                 );
 
-                if outcome != crate::quiesce::Quiesced::Parked {
+                if outcome == crate::quiesce::Quiesced::No {
+                    let holdouts = vmm_for_bracket.lock().unwrap().quiesce_holdouts();
                     log::warn!(
-                        "bracket: guest reached only {outcome:?} within {QUIESCE_TIMEOUT:?}; \
-                         waking it and aborting the suspend (VM lives on)"
+                        "bracket: guest did not quiesce within {QUIESCE_TIMEOUT:?} \
+                         (holdouts: {holdouts:?}); waking it and aborting the suspend \
+                         (VM lives on)"
                     );
                     crate::wake::pulse();
                     continue; // re-arm: the next SIGTSTP gets a fresh bracket
