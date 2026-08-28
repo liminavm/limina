@@ -1,0 +1,9 @@
+[Unit]
+Description=Three-clock logger for the s2idle monotonic spike
+
+[Service]
+ExecStart=/usr/local/bin/clocklog.py /var/log/clocklog.txt
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
