@@ -12,7 +12,11 @@
  * watch it happen: band the thread, measure its wake latency, burn CPU without blocking for
  * longer than the limit, and measure again while it recovers.
  *
- *   clang -O2 -o rt_overrun rt_overrun.c && ./rt_overrun [burn_ms]
+ * With a heartbeat interval, the burn loop blocks briefly every so often. thread_unblock()
+ * zeroes computation_metered, so a thread that really enters TH_WAIT often enough can never
+ * reach the limit — which is the cheapest way to keep a vCPU thread in the band safely.
+ *
+ *   clang -O2 -o rt_overrun rt_overrun.c && ./rt_overrun [burn_ms] [heartbeat_ms]
  */
 #include <mach/mach.h>
 #include <mach/mach_time.h>
@@ -61,6 +65,8 @@ static void window(const char *tag, int n, uint64_t t0) {
 
 int main(int argc, char **argv) {
 	uint64_t burn_ms = argc > 1 ? strtoull(argv[1], NULL, 10) : 1500;
+	/* 0 = never block during the burn (the failing shape). */
+	uint64_t hb_ms = argc > 2 ? strtoull(argv[2], NULL, 10) : 0;
 	mach_timebase_info(&tb);
 	band();
 
@@ -68,12 +74,28 @@ int main(int argc, char **argv) {
 	printf("before the overrun:\n");
 	for (int i = 0; i < 3; i++) window("banded", 30, t0);
 
-	/* Burn CPU without ever blocking, so the fail-safe accumulator is never cleared. */
-	printf("burning %llu ms of uninterrupted computation...\n", (unsigned long long)burn_ms);
+	if (hb_ms)
+		printf("burning %llu ms, blocking briefly every %llu ms...\n",
+		       (unsigned long long)burn_ms, (unsigned long long)hb_ms);
+	else
+		printf("burning %llu ms of uninterrupted computation...\n", (unsigned long long)burn_ms);
+
 	uint64_t until = mach_absolute_time() + ns_to_abs(burn_ms * 1000000ull);
+	uint64_t next_hb = hb_ms ? mach_absolute_time() + ns_to_abs(hb_ms * 1000000ull) : 0;
+	uint64_t beats = 0;
 	volatile uint64_t sink = 0;
-	while (mach_absolute_time() < until) sink += 1;
+	while (mach_absolute_time() < until) {
+		sink += 1;
+		if (next_hb && mach_absolute_time() >= next_hb) {
+			/* Far enough out that the thread genuinely parks: a deadline already in the
+			 * past returns without ever entering TH_WAIT, and then nothing is reset. */
+			mach_wait_until(mach_absolute_time() + ns_to_abs(100000ull)); /* 100 us */
+			next_hb = mach_absolute_time() + ns_to_abs(hb_ms * 1000000ull);
+			beats++;
+		}
+	}
 	(void)sink;
+	if (hb_ms) printf("  (%llu heartbeat blocks)\n", (unsigned long long)beats);
 
 	printf("after the overrun (each row is 30 deadlines, ~0.5 s):\n");
 	for (int i = 0; i < 12; i++) window("post-overrun", 30, t0);

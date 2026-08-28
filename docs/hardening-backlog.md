@@ -1534,134 +1534,114 @@ not — unprobed. Formats/modifiers beyond `Argb8888` + LINEAR are also unmeasur
 
 ## An idle guest misses frame deadlines
 
-A Vulkan or GL client on an otherwise idle guest does not hold its refresh rate. `vkcube` alone
-on a 59.885 Hz output runs at ~49 FPS, and the frame-time distribution is not scattered — it is
-quantised to whole vblank periods, so ~10-15% of frames simply miss their flip and slip one
-refresh. Give the guest *any* other work and the misses stop.
+A Vulkan or GL client on an otherwise idle guest does not hold its refresh rate. `vkcube` alone on
+a 59.885 Hz output runs at ~40 FPS, and the frame-time distribution is not scattered — it is
+quantised to whole vblank periods, so frames simply miss their flip and slip one refresh. Give the
+guest *any* other work and the misses stop.
 
-Measured 2026-08-27, stock Fedora 44, `vkcube` 900x600 under MangoHud, 20 s samples
-(frame times in ms):
+The guest's timer wakeups are late, and the lateness is a **host thread scheduling** property, not
+a renderer or compositor one: the load that fixes it carries no GPU work, and `nohz=off` fixes it
+while adding no load. What those two share is that the guest stops waiting on a long, one-shot
+timer — a busy CPU wakes on real work, a 1 kHz tick replaces the deadline. The stock tier's
+per-frame CPU copy is present in every arm and is not it.
 
-| guest state | avg FPS | p50 | p90 | p99 | max |
-|---|---|---|---|---|---|
-| idle (vkcube alone) | 48.7 | 17.2 | 33.3 | 39.8 | 78.3 |
-| + four pure-CPU spinners | 57.2 | 16.7 | 18.0 | 34.6 | 41.5 |
-| `nohz=off` on the guest cmdline | 59.4 | 16.7 | 18.1 | 28.0 | 38.3 |
+**It is not our WFI park.** On macOS 26.5 / Apple silicon a guest's `WFI` does not trap out to
+libkrun: HVF parks the vCPU inside `hv_vcpu_run`
+(`HvCore::Hypervisor::VcpuStateManager::wait_for_interrupt`) and serves the virtual timer from its
+own `VirtualClock` thread. `vstate.rs::wait_for_event` and its `crossbeam` `after()` timeout are
+dead code here — over 30 s of idle desktop, `WaitForEvent`, `WaitForEventTimeout` and
+`VtimerActivated` are all zero. The `LIMINA_WFI_LATENCY` instrument stays in place to notice that
+changing. `hv_vcpu_run_until` is not an escape either: `hv.h` puts it inside `#ifdef __x86_64__`.
 
-The load that fixes it carries no GPU work at all, and `nohz=off` fixes it while adding no load —
-which rules out the renderer, the compositor, and the stock tier's per-frame CPU copy (the copy is
-~4.3 MB/frame on a machine with an M1 Max's bandwidth, and it is present in every row above).
-What the two fixes share is that the guest stops relying on a *long, one-shot* timer to wake up:
-a busy CPU wakes on real work, and `nohz=off` replaces the deadline with a 1 kHz periodic tick.
-So the guest's timer wakeups are late. **Where** they are late is the open question.
+HVF's wait nonetheless runs **on our vCPU thread**, and a scheduling band belongs to the thread.
+`spikes/macos-timer-wakeup/` measures what that is worth: an ordinary macOS thread asking for a
+16.667 ms deadline is served ~1.5 ms late at the median and tens of ms late in the tail, while
+`THREAD_TIME_CONSTRAINT_POLICY` takes it to 18 µs median / 52 µs worst. Neither the wait primitive
+nor the latency-QoS tier moves it at all.
 
-**Not in our WFI park.** On macOS 26.5 / Apple silicon a guest's `WFI` does not trap out to
-libkrun at all: HVF parks the vCPU inside `hv_vcpu_run`
-(`HvCore::Hypervisor::VcpuStateManager::wait_for_interrupt`, seen in a `sample` of the worker) and
-serves the virtual timer from its own `VirtualClock` thread. `wait_for_event`'s own counters never
-increment — not even the one for the WFI that returns without parking — and over 30 s of idle
-desktop `WaitForEvent`, `WaitForEventTimeout` and `VtimerActivated` are all zero in the debug log.
-`vstate.rs::wait_for_event` and its `crossbeam` `after()` timeout are dead code on this host.
-The `LIMINA_WFI_LATENCY` instrument stays in place to watch for that changing.
+**The band fixes the guest, and must be armed per vCPU.** Full matrix and method in
+`spikes/macos-timer-wakeup/results-guest-arms.md`; the shape of it:
 
-`spikes/macos-timer-wakeup/` still describes the host accurately, and is why the thread-scheduling
-band remains the lever worth trying: an ordinary macOS thread asking for a 16.667 ms deadline is
-served ~1.5 ms late at the median and tens of ms late in the tail, `THREAD_TIME_CONSTRAINT_POLICY`
-takes that to 18 µs median / 52 µs worst, and neither the wait primitive nor the latency-QoS tier
-moves it at all. HVF's wait runs **on our vCPU thread**, so that policy is still ours to set — what
-is no longer known is whether it reaches the wakeup that is actually late, since HVF's clock thread
-is not ours. `hv_vcpu_run_until` is not an escape: `hv.h` puts it inside `#ifdef __x86_64__`.
+| policy | idle | six spinners | one spinner per vCPU |
+|---|---|---|---|
+| none | 43.6 / 39.2 FPS | 54.5 / 55.7 | 60.4 / 60.4 |
+| band on every vCPU | 59.5 / 59.7 | 59.6 / 59.7 | **3 and 32 frames in 20 s** |
+| band on vCPU 0 only | 52.1 / 53.0 | — | 59.9 / 57.8 |
+| `QOS_CLASS_USER_INTERACTIVE` | 47.2 / 46.6 | 55.0 / 58.6 | 59.2 / 59.4 |
+| **armed per vCPU from its CPU share** | **58.6 / 59.5** | **59.7 / 59.7** | **59.8 / 59.1** |
 
-**The real-time band fixes it, host-side, with no guest change.** `THREAD_TIME_CONSTRAINT_POLICY`
-on each vCPU thread (`vcpu_sched.rs`, off unless `LIMINA_VCPU_RT` is set) — measured on the same
-stock guest and clone, vkcube 900x600, 20 s MangoHud samples, frame times in ms:
+MangoHud counts the guest's presents, not the host's flips — 60.4 FPS on a 59.885 Hz output is more
+frames than there were refreshes — so it sizes these effects but does not prove what reached the
+screen. It is the right instrument for a 20 FPS difference and the wrong one for a 1 FPS difference.
 
-| arm | avg FPS | p50 | p90 | p99 | max |
-|---|---|---|---|---|---|
-| band off | 46.0 | 17.47 | 34.07 | 45.45 | 56.47 |
-| band on | 59.2 | 16.66 | 17.61 | 27.62 | 67.31 |
-| band on, repeat | 59.3 | 16.67 | 17.40 | 26.36 | 61.48 |
+The band on every vCPU thread is catastrophic once every vCPU has guest code to run: **the band is
+a reservation, not a priority**, and eight real-time threads own the machine. Observed directly
+during a collapse — all eight vCPU threads at 100% CPU, priority 97, every other thread in the
+worker at 0.0%, and the venus ring thread's `signal->resume` at 28.7 ms average / 434.9 ms worst
+against the 8-27 µs it measures unbanded. Banding one vCPU is clean under the same load; a QoS
+class, which carries priority and no reservation, never collapses.
 
-p90 was a whole missed refresh and is now one frame. That also answers the question the HVF finding
-raised: the band reaches the wakeup that was late, so it is not HVF's own `VirtualClock` thread
-that needs fixing. The far tail does not fully clean up (max 61-67 ms, 0.1% min ~15 FPS), so
-something rarer is still late.
+xnu's real-time fail-safe (`osfmk/kern/priority.c::thread_quantum_expire`, which demotes a
+`TH_MODE_REALTIME` thread to timeshare after 1 s of computation without blocking, for 2 s) is **not**
+the mechanism. What rules it out is the experiment, not the reasoning: a forced 100 µs park every
+250 ms, which exists precisely to prevent the demotion, fires 1200 times in a run and changes
+nothing, and declaring 15 ms of computation instead of 1 ms does not help either. The demoted state
+is also the wrong size — `rt_overrun.c` measures it as ~1.7 s of few-millisecond lateness that the
+OS then heals on its own, which cannot produce a 7-second frame.
 
-**The venus ring thread does not need the same treatment.** Its wake path — guest doorbell → VM
-exit → libkrun's gpu worker → `cnd_signal` → `vkr_ring_thread` resuming — was the obvious next
-candidate, and `LIMINA_RING_WAKE_PROFILE=1` says no. With the band off and vkcube running,
-`signal->resume` averages **8-27 µs** (max 0.13-1.54 ms), and it is flat across park-duration
-buckets rather than growing with the gap.
+The tempting shortcut — "a demoted thread is an ordinary thread, and unbanded is clean, so
+demotion cannot be it" — **does not hold, and is worth remembering as a trap**: demotion is
+per-thread and transient, so the steady state under that hypothesis is a mix in which several
+threads are banded and busy at any instant, never the all-ordinary configuration being compared
+against. A whole-system claim does not follow from a per-thread one.
 
-That is two orders of magnitude better than the ordinary-thread wake the probe measured, and it
-points at what actually distinguishes the two cases: the ring thread is woken by `cnd_signal` from
-a thread that is already running on a machine that is already busy, while a vCPU waiting on a
-guest timer needs a core brought out of deep idle. The fault is specific to **timer-driven wakeups
-on an idle host**, not to thread wakeups in general — which is the rule to carry to the next
-candidate rather than banding threads on suspicion.
+So: sample each vCPU thread's own share of a core (`THREAD_BASIC_INFO`) every 200 ms, arm below
+35%, disarm above 60%, one sampler thread per VM (`vcpu_sched.rs`, `LIMINA_VCPU_SCHED=rt+dyn`).
+The vCPU that needs a punctual timer wake is the idle one, which is also the one whose reservation
+costs the host nothing. The hysteresis gap matters: a policy change is the moment the present path
+can lose its core, so a thread hovering at the threshold must not switch every sample. A *static*
+choice will not do — banding vCPU 0 alone recovers only half the idle gap, because the deadline
+that matters lives on whichever vCPU the guest scheduler put the client on, and that migrates.
 
-**And it appears to cost nothing at idle.** Worker CPU 2.3% with the band against 2.4% without,
-same idle-wakeup rate (`top -stats cpu,idlew`, seven settled 10 s samples each) — which fits the
-mechanism, since the band changes how promptly a woken thread is scheduled, not how often it
-wakes. Untested: battery, where the band's preference for performance cores is the thing to watch,
-and any workload where a vCPU overruns its computation slice.
+**Booked against the arming policy itself.** Per-thread hysteresis bounds each thread and not the
+system: a guest `make -j8` flips all eight busy in one tick, which is the collapsing configuration
+for a whole sample interval. It wants a global cap — never more banded-and-busy threads than
+leaves the host a couple of performance cores — and asymmetric hysteresis, disarming fast and
+arming lazily. The collapse threshold is also unmeasured in both count and duration (does six
+banded-busy collapse? does 250 ms of full occupancy hurt?), so the constants above are chosen, not
+derived; a k-of-8 sweep and a burst test are what would derive them. And the arm direction has a
+visible cost of its own: a vCPU that has just gone idle waits a sample plus hysteresis before it is
+punctual, which is a hitch exactly when a build finishes.
 
-**But it must not go on the vCPU threads, and must never be left armed.** xnu's fail-safe
-(`osfmk/kern/priority.c`, `thread_quantum_expire`) demotes a `TH_MODE_REALTIME` thread to plain
-timeshare once its computation *since it last blocked* passes `max_unsafe_rt_computation`, and
-holds it there until `safe_release`. The release-kernel constants make that 100 quanta × 10 ms =
-**1 s to trip**, and `SAFE_RT_MULTIPLIER` × that = **2 s demoted**. Preemption does not clear the
-accumulator — only blocking does (`sched_prim.c` accumulates `computation_metered` across
-preemptions and zeroes it on dispatch from a wait). A vCPU thread serving a busy guest does not
-block, so it trips continuously.
+**Still open before this is on by default.** Battery: the band prefers performance cores, and the
+oracle is `powermetrics` package milliwatts plus a `pmset -g batt` drop over a fixed window, idle
+guest with and without, on battery — it needs the machine unplugged, so it is the user's to run.
+The idle far tail does not fully clean up (max 31-49 ms even armed), so something rarer is still
+late. And the outer gate is still owed: **idle wakeups are a budget we already spent effort
+winning** (`docs/design/venus-ring-idle-wakeups.md` took the worker from ~75/s to ~0/s), so the
+sampler should idle entirely when nothing is presenting. Both inputs for that are available on a
+**stock** guest, which keeps this off the agent's critical path: the host's own power state
+(`NSProcessInfo.isLowPowerModeEnabled`, `IOPSGetProvidingPowerSourceType`) and whether anything is
+reaching scanout. The guest's GNOME power profile is user *intent* rather than machine state and
+belongs to the enhanced tier as a refinement, never a prerequisite.
 
-`spikes/macos-timer-wakeup/rt_overrun.c` watches it happen on a bare thread: 18-23 µs banded, then
-after 1.5 s of uninterrupted computation 3910/5810/1907 µs over the next three windows with a
-50.8 ms worst case, recovering at 2.2 s. **The demoted state is worse than never banding at all.**
+The profile does exist on a stock F44 guest, which is worth knowing before designing around its
+absence: there is no `cpufreq` and no ACPI `platform_profile`, but Fedora 44 backs the
+`net.hadess.PowerProfiles` D-Bus API with **tuned** (not `power-profiles-daemon`, which is
+`inactive`), offering all three profiles. How the enhanced tier should carry it: **a
+`platform_profile` driver in our kernel backed by a virtio device** — not because the D-Bus route
+is dead, but because a device write reaches the host without an agent in the path and works in both
+directions, which is what a VM on a laptop going to battery actually wants.
 
-And it reaches the guest. Same clone, same six spinners saturating six vCPUs, vkcube 900x600:
+**The venus ring thread does not need any of this.** Its wake path — guest doorbell → VM exit →
+gpu worker → `cnd_signal` → `vkr_ring_thread` — measures 8-27 µs `signal->resume` (max 0.13-1.54 ms)
+with no policy at all, flat across park-duration buckets rather than growing with the gap. That is
+two orders of magnitude better than the ordinary-thread wake, and it points at what distinguishes
+the two cases: the ring thread is signalled by a thread already running on a machine already busy,
+while a vCPU waiting on a guest timer needs a core brought out of deep idle. The fault is specific
+to **timer-driven wakeups on an idle host** — which is the rule to carry to the next candidate,
+rather than banding threads on suspicion.
 
-| arm | p50 | p90 | p99 | max |
-|---|---|---|---|---|
-| band off | 16.66 | 16.97 | 19.67 | 34.59 |
-| band on | 16.67 | 28.12 | **365.58** | **4459.59** |
-
-A 4.5-second frame. Band-off under load is near-perfect (59.9 FPS) — load was always the thing that
-*fixed* the idle jitter — so leaving the band armed trades a fixable idle problem for a far worse
-loaded one.
-
-Two ways out, and they compose: arm the band only while the guest is idle enough not to trip the
-fail-safe (the same presentation-driven arming the constraint below asks for), or put the band on a
-thread that **blocks every frame** — a dedicated timer or present thread that wakes the vCPU —
-which never accumulates enough computation to trip it. The second is the more robust shape and is
-what the fail-safe's own trigger condition points at.
-
-**The constraint any fix must respect: idle wakeups are a budget we already spent effort
-winning.** `docs/design/venus-ring-idle-wakeups.md` took `limina-vmm` from ~75/s to ~0/s at idle,
-and the ring poll plateau in `docs/roadmap.md` was tuned against a measured wakeup cost. A
-real-time band, and especially any spin, can hand that back. Both are nonetheless justified,
-because holding 60 fps on a *quiet* guest is a requirement and not a luxury — so the target is
-punctuality that is armed only when the guest is presenting and released when it is not, and any
-proposal here reports its idle wakeup rate and battery cost alongside its frame times.
-
-The two inputs to that arming are both available on a **stock** guest, which is what keeps the band
-off the agent's critical path: the host's own power state (`NSProcessInfo.isLowPowerModeEnabled`,
-`IOPSGetProvidingPowerSourceType` — AC vs battery is already mirrored into the guest over
-virtio-i2c SBS), and whether anything is actually reaching scanout. The guest's GNOME power profile
-is user *intent* rather than machine state and is the one thing the host cannot observe, so it
-belongs to the enhanced tier, as a refinement — never as a prerequisite.
-
-The signal does exist on a stock F44 guest, which is worth knowing before designing around its
-absence. There is no `cpufreq` and no ACPI `platform_profile`, but Fedora 44 backs the
-`net.hadess.PowerProfiles` D-Bus API with **tuned**, not `power-profiles-daemon` (that service is
-`inactive`), and it offers all three profiles with `balanced` active. So the GNOME control is real
-and readable — guest-side, over D-Bus.
-
-How the enhanced tier should carry it: **a `platform_profile` driver in our kernel backed by a
-virtio device**. Not because the D-Bus route is dead — it is not — but because a device write
-reaches the host directly, without an agent in the path, and works in both directions: the host can
-set the profile as well as read it, which is what a VM on a laptop going to battery actually
-wants.
 
 ## An idle guest exits ~1,600 times a second reading virtio-net's interrupt status
 
