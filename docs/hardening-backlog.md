@@ -1813,24 +1813,26 @@ Traps already paid for, in the results file: interleave arms rather than running
 pack's voltage sags as it drains), verify per block that the differential reached the guest, and
 never difference `AppleRawCurrentCapacity`.
 
-## The band's effect on the HOST is unmeasured
+## What the vCPU band charges the host
 
-Every number behind the vCPU scheduling band describes the **guest**: frame times, FPS, the
-collapse. What a *host* thread pays while a VM holds eight real-time reservations has never been
-measured — the host spinners in `host-contention.sh` were a stimulus, not an instrument, and
-"the host seemed fine" is a proxy claim of exactly the kind this project distrusts.
+Measured 2026-08-28 with `wakeprobe` running on the host against each guest arm; full table in
+`spikes/macos-timer-wakeup/results-host-impact.md`. The quantity is an ordinary host thread's
+lateness on a 16.667 ms deadline — the same oracle, and the same units, as the host baseline this
+whole investigation started from.
 
-It matters because the band is a reservation. `THREAD_TIME_CONSTRAINT_POLICY` takes cores from
-everything that is not banded, and on a laptop that includes the user's editor, their browser, and
-any second VM. A policy that fixes a guest by making its host stutter is not a fix; the static band
-plausibly does that and dynamic arming plausibly does not, but neither is measured.
+**Banding every vCPU costs the host its tail; arming per vCPU does not.** Worst-case host lateness
+is 8.6-25.0 ms under the static band against 2.4-7.0 ms unbanded — a host app on a 60 Hz screen
+loses a frame — while `rt+dyn` stays at 2.6-7.6 ms, inside the unbanded range in every cell. The
+guest-side ordering, confirmed from the other side.
 
-The oracle exists: `spikes/macos-timer-wakeup/wakeprobe.c` already measures what an ordinary host
-thread is charged for a 16.667 ms deadline (~1.5 ms median, tens of ms in the tail, on an idle
-host). Run it *on the host* against each guest arm — unbanded, static `rt`, `rt+dyn` — with the
-guest saturated and idle, and the answer falls out in the same units the guest side uses. Worth
-pairing with a fixed host compute job for throughput, since latency and throughput starve
-differently.
+**Do not read the median.** It is bimodal at 1 ms or 2 ms across reps of *every* arm including
+unbanded — the host's power state, not the policy — and the rep whose median halved is the one with
+the 24.9 ms tail: a busy machine wakes threads sooner on average while its tail gets worse. A mean
+hides both directions at once.
 
-Repeat every arm: the guest-side collapse turned out to be stochastic (60.6 / 55.0 / 31.8 FPS for
-one configuration), and there is no reason the host side would be steadier.
+A *banded* host thread measures 18-22 µs at p50 under every arm, so eight vCPU reservations do not
+close the real-time class to anyone else. A host thread that needs punctuality can still ask for
+it — which is what would make the band safe for the app's own present path to use later.
+
+Still owed here: throughput, which starves differently from latency. Nothing has measured what a
+fixed host compute job costs while a VM is banded.
