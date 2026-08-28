@@ -777,6 +777,8 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     // with zero guest components; independent of the snapshot machinery above.
     if spec.host_sleep_s2idle {
         crate::power::start(vmm.clone());
+        // Stands in for macOS in the L2s; a no-op unless LIMINA_HOST_SLEEP_SEAM=1.
+        crate::power::install_test_seam(vmm.clone());
     }
 
     // Start the GPU worker-message servicer when a display is attached (mirrors

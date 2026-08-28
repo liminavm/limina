@@ -4,10 +4,17 @@
 //! Host-sleep integration: s2idle the guest around host sleep (M9 follow-on).
 //!
 //! Design: `docs/design/host-sleep-s2idle.md` §4. When the HOST goes to sleep, a guest
-//! left "running" gets a frozen CNTVCT and wakes with a wrong wall clock (on the stock
-//! tier nothing ever corrects it); s2idle'ing the guest first makes its own thaw re-read
-//! the (host-anchored, libkrun 0088) RTC — the verified clock path — and gives apps an
-//! honest suspend instead of a time jump.
+//! left "running" keeps a RUNNING CNTVCT (measured: `spikes/s2idle-monotonic/`), and the
+//! elapsed time lands in `CLOCK_MONOTONIC` — where nothing can ever reclaim it, because
+//! sleeptime injection moves only REALTIME and BOOTTIME by construction. On a guest with
+//! systemd service watchdogs (Debian arms 3 min on journald/udevd/logind; Fedora arms
+//! none) that kills logind, which orphans the DRM and input leases and takes the seated
+//! session with it. s2idle'ing the guest first puts the stop INSIDE the window the kernel
+//! classifies as suspend, so the counter delta is injected as sleep instead.
+//!
+//! The injection comes from the arch counter, NOT the PL031: `timekeeping_resume()`
+//! prefers a suspend-nonstop clocksource, and libkrun's timer node declares no
+//! `arm,no-tick-in-suspend`, so the RTC rung is shadowed.
 //!
 //! Mechanism, all existing seams:
 //! - `kIOMessageSystemWillSleep` (IOKit `IORegisterForSystemPower`, which HOLDS the sleep
@@ -156,30 +163,7 @@ impl PowerCtx {
                         log::info!("host sleep: guest is already suspended; leaving it be");
                     }
                     SleepAction::PulseAndWait => {
-                        log::info!(
-                            "host sleep: pulsing the guest sleep button and holding the \
-                             sleep ack for quiesce (≤{QUIESCE_WAIT:?})"
-                        );
-                        crate::suspend::pulse();
-                        let deadline = std::time::Instant::now() + QUIESCE_WAIT;
-                        let quiesced = loop {
-                            if self.guest_quiesced() {
-                                break true;
-                            }
-                            if std::time::Instant::now() >= deadline {
-                                break false;
-                            }
-                            std::thread::sleep(QUIESCE_POLL);
-                        };
-                        if quiesced {
-                            log::info!("host sleep: guest quiesced; releasing the sleep ack");
-                        } else {
-                            log::warn!(
-                                "host sleep: guest did not quiesce within {QUIESCE_WAIT:?}; \
-                                 releasing the sleep ack anyway (guest rides the host sleep \
-                                 with a frozen counter, as before)"
-                            );
-                        }
+                        hold_ack_until_safe_to_stop(&self.vmm);
                     }
                 }
                 unsafe { ffi::IOAllowPowerChange(self.root_port, message_argument as isize) };
@@ -201,6 +185,105 @@ impl PowerCtx {
         }
     }
 }
+
+/// The `willSleep` release decision: pulse the guest's sleep button and hold the host's
+/// sleep ack until it is safe for the host to stop our vCPUs. Returns whether the guest
+/// reached that state before [`QUIESCE_WAIT`].
+///
+/// "Safe" means the guest is past `timekeeping_suspend`, so that whatever time the host
+/// spends asleep is classified as suspend rather than absorbed by `CLOCK_MONOTONIC`.
+/// [`Vmm::is_quiesced`] does NOT establish that: it observes virtio device status, which
+/// the guest clears in its `.suspend` callbacks during `dpm_suspend()`, while timekeeping
+/// freezes later — after `dpm_suspend_late`/`_noirq` and after the `s2idle_enter`
+/// rendezvous in which every vCPU must be scheduled to reach `tick_freeze()`. Measured on
+/// an idle host that leg is 0.28 ms; it is unbounded when vCPU threads are not promptly
+/// scheduled, which is the condition at host sleep. See `spikes/s2idle-monotonic/`.
+#[cfg(target_os = "macos")]
+fn hold_ack_until_safe_to_stop(vmm: &Arc<Mutex<Vmm>>) -> bool {
+    log::info!(
+        "host sleep: pulsing the guest sleep button and holding the sleep ack for \
+         quiesce (<={QUIESCE_WAIT:?})"
+    );
+    crate::suspend::pulse();
+    let deadline = std::time::Instant::now() + QUIESCE_WAIT;
+    let quiesced = loop {
+        if vmm.lock().unwrap().is_quiesced() {
+            break true;
+        }
+        if std::time::Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(QUIESCE_POLL);
+    };
+    if quiesced {
+        log::info!("host sleep: guest quiesced; releasing the sleep ack");
+    } else {
+        log::warn!(
+            "host sleep: guest did not quiesce within {QUIESCE_WAIT:?}; releasing the \
+             sleep ack anyway — the host will stop the vCPUs mid-suspend and the guest \
+             will absorb the sleep into CLOCK_MONOTONIC"
+        );
+    }
+    quiesced
+}
+
+/// Test seam for the release-point decision (`LIMINA_HOST_SLEEP_SEAM=1`, `SIGURG`).
+///
+/// IOKit's half cannot run in CI — sleeping the host kills the session driving the test —
+/// so this stands in for macOS: run the real [`hold_ack_until_safe_to_stop`], then stop
+/// this process at exactly the moment we release the ack. Stopping *at* the release point
+/// rather than some microseconds later is deliberate: it is the worst case macOS is
+/// entitled to, and it makes the race deterministic, because the rendezvous the guest
+/// still owes cannot complete while its vCPUs are frozen. The driving test sends
+/// `SIGCONT` after the gap it wants to simulate, and this thread then pulses the wake key
+/// exactly as `didWake` would.
+///
+/// `SIGSTOP` (not [`Vmm::pause`]) is what models a host sleep: `Vmm::pause`/`resume` hide
+/// the elapsed time by advancing the vtimer offset, which is exactly what macOS does NOT
+/// do to us.
+#[cfg(target_os = "macos")]
+pub fn install_test_seam(vmm: Arc<Mutex<Vmm>>) {
+    if std::env::var("LIMINA_HOST_SLEEP_SEAM").as_deref() != Ok("1") {
+        return;
+    }
+    static FIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    extern "C" fn handle_sigurg(_sig: libc::c_int) {
+        FIRED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = handle_sigurg as *const () as usize;
+        libc::sigemptyset(&mut sa.sa_mask);
+        if libc::sigaction(libc::SIGURG, &sa, std::ptr::null_mut()) != 0 {
+            log::warn!("host sleep seam: installing the SIGURG handler failed");
+            return;
+        }
+    }
+    std::thread::Builder::new()
+        .name("host-sleep-seam".into())
+        .spawn(move || {
+            loop {
+                if FIRED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    log::warn!("host sleep seam: simulating willSleep");
+                    hold_ack_until_safe_to_stop(&vmm);
+                    log::warn!("host sleep seam: ack released — stopping the worker");
+                    unsafe { libc::raise(libc::SIGSTOP) };
+                    // Let the guest finish the suspend it was stopped partway through
+                    // before the wake key lands, or the pulse arrives at a guest that is
+                    // not yet in s2idle and is simply ignored.
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    log::warn!("host sleep seam: continued — pulsing the guest wake key");
+                    crate::wake::pulse();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        })
+        .expect("spawning the host-sleep seam thread");
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn install_test_seam(_vmm: Arc<Mutex<Vmm>>) {}
 
 #[cfg(target_os = "macos")]
 extern "C" fn power_callback(
