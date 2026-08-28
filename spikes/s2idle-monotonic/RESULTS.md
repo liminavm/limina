@@ -50,12 +50,30 @@ A counter-sourced injection under-measures by exactly the interval the vCPUs wer
 outside the suspend window; an RTC-sourced one (host-anchored) would have been exact.
 Guest-side confirmation: `current_clocksource` = `arch_sys_counter`.
 
-**The quiesce oracle fires one PM stage early.** `Vmm::is_quiesced` reads virtio device
-status (`vmm/src/lib.rs:521`), which the guest resets to `INIT` in its `.suspend`
-callbacks during `dpm_suspend()`. `timekeeping_suspend()` runs later, in
-`syscore_suspend()`. So `power.rs` releases the macOS sleep ack while the guest still has
-syscore ahead of it, and any time macOS takes to actually stop the vCPUs after that lands
-in monotonic. This is structural, not a lost race.
+**The quiesce oracle releases the ack before the vCPUs are parked.** `Vmm::is_quiesced`
+reads virtio device status (`vmm/src/lib.rs:521`), which the guest clears in its `.suspend`
+callbacks during `dpm_suspend()`. Timekeeping freezes later, inside `machine_suspend` —
+after `dpm_suspend_late`/`_noirq` and after the `s2idle_enter` rendezvous in which *every*
+vCPU must be scheduled to reach `tick_freeze()`. Measured on an idle host with all six
+vCPUs promptly schedulable, that leg is **0.28 ms**:
+
+```
+dpm_suspend       [2] end    1254.623297   <- what is_quiesced observes
+dpm_suspend_late  [2] end    1254.623475
+dpm_suspend_noirq [2] end    1254.623577
+machine_suspend   [1] begin  1254.623577   <- timekeeping freezes here
+```
+
+That number is a floor, not the exposure. The rendezvous is unbounded when vCPU threads
+are not promptly scheduled — which is the condition at host sleep, as macOS winds down.
+So the ack is released into a window that is sub-millisecond when the host is idle and
+arbitrarily long when it is not: a race biased heavily toward winning, lost occasionally.
+The tester's guest took **23 s** from suspend entry to device quiesce where this host took
+47 ms, which is what the unfavourable regime looks like.
+
+The consequence is that `is_quiesced` is the wrong release signal. The event that must
+have happened is the rendezvous completing — observable host-side as every vCPU halted
+with no vmexits, which works on a stock guest.
 
 ## Distro dependence
 
