@@ -1596,22 +1596,33 @@ threads are banded and busy at any instant, never the all-ordinary configuration
 against. A whole-system claim does not follow from a per-thread one.
 
 So: sample each vCPU thread's own share of a core (`THREAD_BASIC_INFO`) every 200 ms, arm below
-35%, disarm above 60%, one sampler thread per VM (`vcpu_sched.rs`, `LIMINA_VCPU_SCHED=rt+dyn`).
+35%, disarm above 60%, one sampler thread per VM (`vcpu_sched.rs`). This is **the default** — the
+supervisor sets `LIMINA_VCPU_SCHED=rt+dyn` for the worker unless the environment names a policy
+(`worker_vcpu_sched` in `crates/limina/src/supervisor.rs`; an empty value turns it off, which is
+how an A/B arm runs).
 The vCPU that needs a punctual timer wake is the idle one, which is also the one whose reservation
 costs the host nothing. The hysteresis gap matters: a policy change is the moment the present path
 can lose its core, so a thread hovering at the threshold must not switch every sample. A *static*
 choice will not do — banding vCPU 0 alone recovers only half the idle gap, because the deadline
 that matters lives on whichever vCPU the guest scheduler put the client on, and that migrates.
 
-**Booked against the arming policy itself.** Per-thread hysteresis bounds each thread and not the
-system: a guest `make -j8` flips all eight busy in one tick, which is the collapsing configuration
-for a whole sample interval. It wants a global cap — never more banded-and-busy threads than
-leaves the host a couple of performance cores — and asymmetric hysteresis, disarming fast and
-arming lazily. The collapse threshold is also unmeasured in both count and duration (does six
-banded-busy collapse? does 250 ms of full occupancy hurt?), so the constants above are chosen, not
-derived; a k-of-8 sweep and a burst test are what would derive them. And the arm direction has a
-visible cost of its own: a vCPU that has just gone idle waits a sample plus hysteresis before it is
-punctual, which is a hitch exactly when a build finishes.
+**The transition window is measured, and it is benign — so this ships on by default.** A burst of
+full guest occupancy costs no frame over 100 ms at any length from 250 ms to 8 s, under `rt+dyn`
+*or* under the static band, and the *unbanded* arm is the one that suffers (77 and 123 frames over
+33 ms at 250/500 ms bursts, against 2 and 29 banded) because it pays in the idle gaps between
+bursts. Tables in `spikes/macos-timer-wakeup/results-burst-and-contention.md`. A global cap — never
+more banded-and-busy threads than leaves the host a couple of performance cores, with asymmetric
+hysteresis, disarming fast and arming lazily — is therefore hardening rather than a prerequisite.
+The arm direction still has a cost of its own: a vCPU that has just gone idle waits a sample plus
+hysteresis before it is punctual, which is a hitch exactly when a build finishes.
+
+**Never judge the collapse from one run.** Sustained saturation under a full static band measured
+60.6, 55.0 and 31.8 FPS on the same boot minutes apart; the first measurement of it, "3 and 32
+frames in 20 s", is the same distribution's tail. The direction is reliable, the magnitude is not.
+Host contention was the obvious explanation for that spread and is **not** it: ordinary-priority
+host threads cannot preempt a banded vCPU, and sweeping 0/4/8 of them leaves the static band's
+saturated case at 31.8 / 29.6 / 29.8 FPS. Dynamic arming beats the static band in every saturated
+cell (58.9 / 52.2 / 35.0) and ties it in every idle one at 58-60 FPS.
 
 **The band is not a battery cost.** Measured on battery, six-minute interleaved blocks, method
 and tables in `spikes/macos-timer-wakeup/results-battery.md`: idle, the band and its 200 ms sampler
@@ -1801,3 +1812,25 @@ What a suite needs, beyond the block-and-sample harness that exists (`battery-co
 Traps already paid for, in the results file: interleave arms rather than running A then B (the
 pack's voltage sags as it drains), verify per block that the differential reached the guest, and
 never difference `AppleRawCurrentCapacity`.
+
+## The band's effect on the HOST is unmeasured
+
+Every number behind the vCPU scheduling band describes the **guest**: frame times, FPS, the
+collapse. What a *host* thread pays while a VM holds eight real-time reservations has never been
+measured — the host spinners in `host-contention.sh` were a stimulus, not an instrument, and
+"the host seemed fine" is a proxy claim of exactly the kind this project distrusts.
+
+It matters because the band is a reservation. `THREAD_TIME_CONSTRAINT_POLICY` takes cores from
+everything that is not banded, and on a laptop that includes the user's editor, their browser, and
+any second VM. A policy that fixes a guest by making its host stutter is not a fix; the static band
+plausibly does that and dynamic arming plausibly does not, but neither is measured.
+
+The oracle exists: `spikes/macos-timer-wakeup/wakeprobe.c` already measures what an ordinary host
+thread is charged for a 16.667 ms deadline (~1.5 ms median, tens of ms in the tail, on an idle
+host). Run it *on the host* against each guest arm — unbanded, static `rt`, `rt+dyn` — with the
+guest saturated and idle, and the answer falls out in the same units the guest side uses. Worth
+pairing with a fixed host compute job for throughput, since latency and throughput starve
+differently.
+
+Repeat every arm: the guest-side collapse turned out to be stochastic (60.6 / 55.0 / 31.8 FPS for
+one configuration), and there is no reason the host side would be steadier.

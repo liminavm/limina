@@ -23,6 +23,7 @@
 //! fresh boot) on reboot, while the supervisor — and the resources it owns (gvproxy, the
 //! control plane) — survive. A boot-loop guard stops endless relaunches.
 
+use std::ffi::OsStr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
@@ -304,6 +305,28 @@ pub fn socketpair(sock_type: libc::c_int) -> Result<(OwnedFd, OwnedFd)> {
     Ok((sup_fd, worker_fd))
 }
 
+/// The vCPU scheduling policy the worker runs under unless the environment says otherwise.
+///
+/// Mechanism is libkrun's (`macos/vcpu_sched.rs`); which policy to run is ours. `rt+dyn` puts a
+/// vCPU thread into a real-time band only while that thread is mostly idle — the state where a
+/// punctual timer wake is what a guest needs, and the state where the reservation costs the host
+/// nothing. Without it an idle guest's frame clock slips a whole refresh at a time
+/// (docs/hardening-backlog.md, "An idle guest misses frame deadlines").
+const DEFAULT_VCPU_SCHED: &str = "rt+dyn";
+
+/// What to set `LIMINA_VCPU_SCHED` to for the worker, given what the environment already carries.
+///
+/// Anything explicit wins, including an empty value — that is how a run turns the band off — and
+/// the older `LIMINA_VCPU_RT` spelling counts as explicit too, or setting it would silently gain a
+/// dynamic policy it never asked for.
+fn worker_vcpu_sched(sched: Option<&OsStr>, legacy_rt: Option<&OsStr>) -> Option<&'static str> {
+    if sched.is_some() || legacy_rt.is_some() {
+        None
+    } else {
+        Some(DEFAULT_VCPU_SCHED)
+    }
+}
+
 /// A spawned worker, plus the host ends of the channels this function created for it.
 pub struct Spawned {
     pub child: std::process::Child,
@@ -331,6 +354,13 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     install_panic_kill_hook();
     let mut cmd = Command::new(&spec.vmm_bin);
     cmd.args(&spec.args).process_group(0);
+
+    if let Some(sched) = worker_vcpu_sched(
+        std::env::var_os("LIMINA_VCPU_SCHED").as_deref(),
+        std::env::var_os("LIMINA_VCPU_RT").as_deref(),
+    ) {
+        cmd.env("LIMINA_VCPU_SCHED", sched);
+    }
 
     let (spice_host, spice_worker) = socketpair(libc::SOCK_STREAM)?;
     cmd.arg("--spice-fd")
@@ -768,5 +798,17 @@ mod tests {
             "a record with no snapshot behind it must be reconciled away"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_explicit_vcpu_policy_always_beats_the_default() {
+        // The default exists to make an idle guest punctual; a run that names a policy — including
+        // an empty one, which is how the band gets turned off for an A/B — must get exactly that.
+        assert_eq!(worker_vcpu_sched(None, None), Some("rt+dyn"));
+        assert_eq!(worker_vcpu_sched(Some(OsStr::new("rt")), None), None);
+        assert_eq!(worker_vcpu_sched(Some(OsStr::new("")), None), None);
+        // The older spelling is explicit too: it means the static band, and silently upgrading it
+        // to a dynamic one would change what a run measures without saying so.
+        assert_eq!(worker_vcpu_sched(None, Some(OsStr::new("1"))), None);
     }
 }
