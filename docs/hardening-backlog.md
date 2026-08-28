@@ -1587,6 +1587,19 @@ raised: the band reaches the wakeup that was late, so it is not HVF's own `Virtu
 that needs fixing. The far tail does not fully clean up (max 61-67 ms, 0.1% min ~15 FPS), so
 something rarer is still late.
 
+**The venus ring thread does not need the same treatment.** Its wake path — guest doorbell → VM
+exit → libkrun's gpu worker → `cnd_signal` → `vkr_ring_thread` resuming — was the obvious next
+candidate, and `LIMINA_RING_WAKE_PROFILE=1` says no. With the band off and vkcube running,
+`signal->resume` averages **8-27 µs** (max 0.13-1.54 ms), and it is flat across park-duration
+buckets rather than growing with the gap.
+
+That is two orders of magnitude better than the ordinary-thread wake the probe measured, and it
+points at what actually distinguishes the two cases: the ring thread is woken by `cnd_signal` from
+a thread that is already running on a machine that is already busy, while a vCPU waiting on a
+guest timer needs a core brought out of deep idle. The fault is specific to **timer-driven wakeups
+on an idle host**, not to thread wakeups in general — which is the rule to carry to the next
+candidate rather than banding threads on suspicion.
+
 **And it appears to cost nothing at idle.** Worker CPU 2.3% with the band against 2.4% without,
 same idle-wakeup rate (`top -stats cpu,idlew`, seven settled 10 s samples each) — which fits the
 mechanism, since the band changes how promptly a woken thread is scheduled, not how often it
@@ -1611,15 +1624,19 @@ off the agent's critical path: the host's own power state (`NSProcessInfo.isLowP
 `IOPSGetProvidingPowerSourceType` — AC vs battery is already mirrored into the guest over
 virtio-i2c SBS), and whether anything is actually reaching scanout. The guest's GNOME power profile
 is user *intent* rather than machine state and is the one thing the host cannot observe, so it
-belongs to the enhanced tier, as a refinement — never as a prerequisite. The guest has no
-`cpufreq` (measured) and no ACPI `platform_profile`, so `power-profiles-daemon` is running on its
-placeholder and the GNOME toggle may not drive anything at all.
+belongs to the enhanced tier, as a refinement — never as a prerequisite.
 
-Which decides how the enhanced tier should carry it, when it does: **a `platform_profile` driver in
-our kernel backed by a virtio device**, not an agent reading D-Bus or dconf. That gives ppd a real
-backend so the GNOME control becomes meaningful, and the host sees the user's choice arrive as a
-device write on the same path in both directions — the host can set it as well as read it, which is
-what a VM on a laptop going to battery actually wants.
+The signal does exist on a stock F44 guest, which is worth knowing before designing around its
+absence. There is no `cpufreq` and no ACPI `platform_profile`, but Fedora 44 backs the
+`net.hadess.PowerProfiles` D-Bus API with **tuned**, not `power-profiles-daemon` (that service is
+`inactive`), and it offers all three profiles with `balanced` active. So the GNOME control is real
+and readable — guest-side, over D-Bus.
+
+How the enhanced tier should carry it: **a `platform_profile` driver in our kernel backed by a
+virtio device**. Not because the D-Bus route is dead — it is not — but because a device write
+reaches the host directly, without an agent in the path, and works in both directions: the host can
+set the profile as well as read it, which is what a VM on a laptop going to battery actually
+wants.
 
 ## An idle guest exits ~1,600 times a second reading virtio-net's interrupt status
 
