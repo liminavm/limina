@@ -1851,3 +1851,27 @@ dead and the VM holding the disk, so the next arm cannot boot.
 
 Still owed: this measures one synthetic CPU-bound job. Host work that is I/O- or GPU-bound may
 share differently.
+
+## Supervisor features we decline to offer the guest (PSCI, and an inventory)
+
+libkrun answers `PSCI_VERSION` with `2` — PSCI **0.2** (`hvf/src/lib.rs:1112`) — and lets
+`PSCI_FEATURES` fall through to `NOT_SUPPORTED`. Linux only calls
+`psci_init_system_suspend()` when the major version is ≥ 1, so no `PM_SUSPEND_MEM` ops are
+registered and `/sys/power/mem_sleep` offers only `s2idle`. **Our guests use s2idle because
+we never offered anything else**, not because s2idle was chosen.
+
+The one that matters: PSCI 1.0 `SYSTEM_SUSPEND` (`0xC400_000E`) would give us an exact,
+race-free "the guest is safely stopped" event. `timekeeping_suspend` is a syscore op, and
+`syscore_suspend()` runs *before* `suspend_ops->enter()`, so the SMC arrives strictly after
+timekeeping is frozen — which is precisely the moment the host-sleep bracket needs and
+cannot currently observe (see `spikes/s2idle-monotonic/`). Host-side only, so it needs no
+guest components. Costs: `mem_sleep_default` flips guests to `deep`, so the M9 park /
+session-preservation work — which keys on the s2idle device-reset signature — needs
+revalidating; and libkrun must implement the resume half (`entry_point_address` +
+`context_id`, the shape `VcpuExit::CpuOn` already has).
+
+Owed: a **full inventory** of supervisor-level features we could be exposing and are not —
+the rest of PSCI 1.x (`SYSTEM_RESET2`, `CPU_FREEZE`, `PSCI_FEATURES`, `CPU_SUSPEND` idle
+states), SMCCC/`ARCH_FEATURES`, PPTT/topology, and whatever else a guest probes and gets
+`NOT_SUPPORTED` for. Each declined feature is a guest behaviour we inherit by default rather
+than choose.
