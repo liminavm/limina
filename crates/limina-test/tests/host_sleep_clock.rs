@@ -70,7 +70,10 @@ fn host_sleep_is_not_absorbed_into_guest_monotonic() {
         Ok(cfg) => cfg
             .with_net()
             .with_supervisor_log()
-            .with_env("LIMINA_HOST_SLEEP_SEAM", "1"),
+            .with_env("LIMINA_HOST_SLEEP_SEAM", "1")
+            // The bracket's own account of how far the guest got is the first thing to
+            // read when this test fails.
+            .with_env("RUST_LOG", "limina_vmm=info,limina=info"),
         Err(e) => {
             eprintln!("SKIPPED host_sleep_is_not_absorbed_into_guest_monotonic: {e}");
             return;
@@ -133,6 +136,12 @@ fn host_sleep_is_not_absorbed_into_guest_monotonic() {
         boot_id_after, boot_id,
         "boot_id changed across the simulated host sleep — the guest rebooted"
     );
+
+    for line in guest.supervisor_log().lines() {
+        if line.contains("quiesce:") || line.contains("host sleep") || line.contains("host wake") {
+            eprintln!("  bracket: {line}");
+        }
+    }
 
     let (real1, mono1, boot1) = clocks(&guest, "after");
     let (d_real, d_mono, d_boot) = (real1 - real0, mono1 - mono0, boot1 - boot0);

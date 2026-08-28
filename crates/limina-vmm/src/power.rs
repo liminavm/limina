@@ -19,9 +19,10 @@
 //! Mechanism, all existing seams:
 //! - `kIOMessageSystemWillSleep` (IOKit `IORegisterForSystemPower`, which HOLDS the sleep
 //!   until we ack): if the guest is awake, pulse the sleep button
-//!   ([`crate::suspend::pulse`]) and poll [`Vmm::is_quiesced`] up to [`QUIESCE_WAIT`],
-//!   then `IOAllowPowerChange`. A guest that won't quiesce just gets today's
-//!   frozen-counter behavior — fail-open, never worse.
+//!   ([`crate::suspend::pulse`]) and drive [`crate::quiesce`] until every vCPU is parked,
+//!   pause the vCPUs ourselves, then `IOAllowPowerChange`. A guest that will not get there
+//!   is paused anyway and resumed with the interval hidden: a wrong wall clock (which the
+//!   clock correctors fix) instead of a poisoned `CLOCK_MONOTONIC` (which nothing fixes).
 //! - `kIOMessageSystemHasPoweredOn`: pulse the wake key ([`crate::wake::pulse`]) — but
 //!   ONLY if we put the guest to sleep (or our pulse landed late and it slept while the
 //!   host slept). Never wake a guest the user suspended, and never touch the *sleep*
@@ -35,10 +36,16 @@ use std::sync::{Arc, Mutex};
 
 use vmm::Vmm;
 
-/// How long `willSleep` holds the host's sleep ack while the guest quiesces. The system
-/// allows ~30 s; a stock guest s2idles in 1–4 s. On expiry we release the ack anyway.
-const QUIESCE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
-const QUIESCE_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+use crate::quiesce::{QuiesceRequest, Quiesced};
+
+/// How long `willSleep` holds the host's sleep ack. macOS allows ~30 s; we spend it in two
+/// parts — waiting for the guest's devices to quiesce, then for its vCPUs to park — and
+/// keep a margin so we always ack before the system stops asking.
+const DEVICE_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+const PARK_WAIT: std::time::Duration = std::time::Duration::from_secs(8);
+/// "Every vCPU parked" must hold this long: one sample can catch the `s2idle_enter`
+/// rendezvous mid-flight, with the last vCPU briefly in a WFx wait on its way elsewhere.
+const PARK_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// What `willSleep` should do with the guest.
 #[derive(Debug, PartialEq, Eq)]
@@ -140,6 +147,9 @@ mod ffi {
 struct PowerCtx {
     vmm: Arc<Mutex<Vmm>>,
     state: HostSleepState,
+    /// How far the guest got quiescing on the last `willSleep` — it decides which resume
+    /// flavour `didWake` owes it.
+    quiesced: Quiesced,
     /// The root power domain port, filled in right after registration (before the run
     /// loop starts, so before any callback can fire).
     root_port: ffi::IoConnect,
@@ -158,17 +168,22 @@ impl PowerCtx {
                 unsafe { ffi::IOAllowPowerChange(self.root_port, message_argument as isize) };
             }
             ffi::K_IO_MESSAGE_SYSTEM_WILL_SLEEP => {
-                match self.state.on_will_sleep(self.guest_quiesced()) {
+                // An already-suspended guest still needs its vCPUs confirmed parked and
+                // paused — it is only the sleep-button pulse it must not get again (a
+                // latched pulse re-suspends it unwakeably on wake).
+                let pulse = match self.state.on_will_sleep(self.guest_quiesced()) {
                     SleepAction::LeaveAsleep => {
-                        log::info!("host sleep: guest is already suspended; leaving it be");
+                        log::info!("host sleep: guest is already suspended; not pulsing");
+                        false
                     }
-                    SleepAction::PulseAndWait => {
-                        hold_ack_until_safe_to_stop(&self.vmm);
-                    }
-                }
+                    SleepAction::PulseAndWait => true,
+                };
+                self.quiesced = hold_ack_until_safe_to_stop(&self.vmm, pulse);
                 unsafe { ffi::IOAllowPowerChange(self.root_port, message_argument as isize) };
             }
             ffi::K_IO_MESSAGE_SYSTEM_HAS_POWERED_ON => {
+                // Unpause first: a paused guest cannot answer a wake key.
+                resume_after_host_sleep(&self.vmm, self.quiesced);
                 match self.state.on_did_wake(self.guest_quiesced()) {
                     WakeAction::WakeGuest => {
                         log::info!("host wake: waking the guest (KEY_WAKEUP)");
@@ -187,44 +202,66 @@ impl PowerCtx {
 }
 
 /// The `willSleep` release decision: pulse the guest's sleep button and hold the host's
-/// sleep ack until it is safe for the host to stop our vCPUs. Returns whether the guest
-/// reached that state before [`QUIESCE_WAIT`].
+/// sleep ack until it is safe for the host to stop our vCPUs.
 ///
-/// "Safe" means the guest is past `timekeeping_suspend`, so that whatever time the host
-/// spends asleep is classified as suspend rather than absorbed by `CLOCK_MONOTONIC`.
-/// [`Vmm::is_quiesced`] does NOT establish that: it observes virtio device status, which
-/// the guest clears in its `.suspend` callbacks during `dpm_suspend()`, while timekeeping
-/// freezes later — after `dpm_suspend_late`/`_noirq` and after the `s2idle_enter`
-/// rendezvous in which every vCPU must be scheduled to reach `tick_freeze()`. Measured on
-/// an idle host that leg is 0.28 ms; it is unbounded when vCPU threads are not promptly
-/// scheduled, which is the condition at host sleep. See `spikes/s2idle-monotonic/`.
+/// "Safe" means the guest is past `timekeeping_suspend`, so the host's sleep is classified
+/// as suspend rather than absorbed by `CLOCK_MONOTONIC` — see [`crate::quiesce`] for why
+/// device quiesce alone does not establish that.
+///
+/// Ends by pausing the vCPUs ourselves. On the happy path that is a ribbon: the guest is
+/// already parked, and pausing only means the stop happens at a boundary we picked instead
+/// of wherever macOS would have cut us. When the guest did NOT get there it is the
+/// backstop, and it is what keeps a lost race survivable — see [`resume_after_host_sleep`].
 #[cfg(target_os = "macos")]
-fn hold_ack_until_safe_to_stop(vmm: &Arc<Mutex<Vmm>>) -> bool {
-    log::info!(
-        "host sleep: pulsing the guest sleep button and holding the sleep ack for \
-         quiesce (<={QUIESCE_WAIT:?})"
+fn hold_ack_until_safe_to_stop(vmm: &Arc<Mutex<Vmm>>, pulse_button: bool) -> Quiesced {
+    log::info!("host sleep: quiescing the guest and holding the sleep ack");
+    let outcome = crate::quiesce::quiesce_guest(
+        vmm,
+        &QuiesceRequest {
+            pulse_button,
+            device_budget: DEVICE_WAIT,
+            park_budget: PARK_WAIT,
+            park_settle: PARK_SETTLE,
+        },
     );
-    crate::suspend::pulse();
-    let deadline = std::time::Instant::now() + QUIESCE_WAIT;
-    let quiesced = loop {
-        if vmm.lock().unwrap().is_quiesced() {
-            break true;
+    match outcome {
+        Quiesced::Parked => {
+            log::info!("host sleep: guest parked; releasing the sleep ack")
         }
-        if std::time::Instant::now() >= deadline {
-            break false;
-        }
-        std::thread::sleep(QUIESCE_POLL);
-    };
-    if quiesced {
-        log::info!("host sleep: guest quiesced; releasing the sleep ack");
-    } else {
-        log::warn!(
-            "host sleep: guest did not quiesce within {QUIESCE_WAIT:?}; releasing the \
-             sleep ack anyway — the host will stop the vCPUs mid-suspend and the guest \
-             will absorb the sleep into CLOCK_MONOTONIC"
-        );
+        other => log::warn!(
+            "host sleep: guest reached only {other:?} within the budget; pausing it \
+             ourselves and releasing the sleep ack — the guest's wall clock will need \
+             correcting on wake, but its CLOCK_MONOTONIC is protected"
+        ),
     }
-    quiesced
+    // Stop the guest at a boundary we chose, rather than leaving it to macOS.
+    if let Err(e) = vmm.lock().unwrap().pause() {
+        log::warn!("host sleep: pausing the vCPUs failed ({e}); the host will stop them itself");
+    }
+    outcome
+}
+
+/// The `didWake` counterpart: unpause, choosing the flavour the sleep-side outcome earned.
+///
+/// [`Quiesced::Parked`] resumes **keeping the counter**: the guest is in s2idle past
+/// `timekeeping_suspend`, and `timekeeping_resume()` derives the sleep it injects into
+/// REALTIME/BOOTTIME from exactly that counter delta — hiding the interval would leave the
+/// wall clock behind by the length of the host's sleep. Anything else resumes with the
+/// interval hidden: that guest still had timekeeping live, so letting it see the elapsed
+/// time would put the whole host sleep into `CLOCK_MONOTONIC`. Its wall clock is then
+/// behind, which chrony, the agent's TimeSync, or the qga `guest-set-time` rung correct —
+/// a degraded clock instead of a killed session.
+#[cfg(target_os = "macos")]
+fn resume_after_host_sleep(vmm: &Arc<Mutex<Vmm>>, outcome: Quiesced) {
+    let mut guard = vmm.lock().unwrap();
+    let r = if outcome == Quiesced::Parked {
+        guard.resume_keeping_counter()
+    } else {
+        guard.resume()
+    };
+    if let Err(e) = r {
+        log::warn!("host wake: resuming the vCPUs failed: {e}");
+    }
 }
 
 /// Test seam for the release-point decision (`LIMINA_HOST_SLEEP_SEAM=1`, `SIGURG`).
@@ -266,14 +303,14 @@ pub fn install_test_seam(vmm: Arc<Mutex<Vmm>>) {
             loop {
                 if FIRED.swap(false, std::sync::atomic::Ordering::SeqCst) {
                     log::warn!("host sleep seam: simulating willSleep");
-                    hold_ack_until_safe_to_stop(&vmm);
-                    log::warn!("host sleep seam: ack released — stopping the worker");
+                    let outcome = hold_ack_until_safe_to_stop(&vmm, true);
+                    log::warn!("host sleep seam: ack released ({outcome:?}) — stopping the worker");
                     unsafe { libc::raise(libc::SIGSTOP) };
-                    // Let the guest finish the suspend it was stopped partway through
-                    // before the wake key lands, or the pulse arrives at a guest that is
-                    // not yet in s2idle and is simply ignored.
+                    log::warn!("host sleep seam: continued — resuming and waking the guest");
+                    resume_after_host_sleep(&vmm, outcome);
+                    // Let the guest settle before the wake key lands, or the pulse arrives
+                    // at a guest not yet in s2idle and is simply ignored.
                     std::thread::sleep(std::time::Duration::from_secs(3));
-                    log::warn!("host sleep seam: continued — pulsing the guest wake key");
                     crate::wake::pulse();
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
@@ -307,6 +344,7 @@ pub fn start(vmm: Arc<Mutex<Vmm>>) {
             let ctx = Box::leak(Box::new(PowerCtx {
                 vmm,
                 state: HostSleepState::default(),
+                quiesced: Quiesced::No,
                 root_port: 0,
             }));
             let mut port: ffi::IoNotificationPortRef = std::ptr::null_mut();

@@ -705,32 +705,32 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                 // suspend requests; the one that lands after userspace freezes replays on resume
                 // and re-suspends the restored guest into an unwakeable sleep (run-11 MMIO trace:
                 // thaw renegotiates every device, then everything freezes back to 0).
-                if std::env::var_os("LIMINA_BRACKET_NO_BUTTON").is_some() {
-                    log::info!("bracket: SIGTSTP received; button pulse suppressed (env), waiting for guest-initiated quiesce");
-                } else {
-                    log::info!("bracket: SIGTSTP received; pulsing the guest suspend button");
-                    crate::suspend::pulse();
-                }
+                // LIMINA_BRACKET_NO_BUTTON: the caller already arranged the guest-side
+                // suspend, so a second pulse would replay on resume (see QuiesceRequest).
+                let pulse_button = std::env::var_os("LIMINA_BRACKET_NO_BUTTON").is_none();
+                log::info!(
+                    "bracket: SIGTSTP received; quiescing the guest (button pulse: {pulse_button})"
+                );
 
-                // Poll the quiesce oracle until every virtio device has reset to INIT, or give up.
-                const POLL: std::time::Duration = std::time::Duration::from_millis(250);
+                // Same sequence the host-sleep bracket runs — one implementation, this
+                // caller's budgets. A snapshot wants the vCPUs parked for its own reason:
+                // a guest captured mid-suspend resumes into a machine whose devices and
+                // timekeeping disagree about what stage it had reached.
                 const QUIESCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-                let deadline = std::time::Instant::now() + QUIESCE_TIMEOUT;
-                let quiesced = loop {
-                    if vmm_for_bracket.lock().unwrap().is_quiesced() {
-                        break true;
-                    }
-                    if std::time::Instant::now() >= deadline {
-                        break false;
-                    }
-                    std::thread::sleep(POLL);
-                };
+                let outcome = crate::quiesce::quiesce_guest(
+                    &vmm_for_bracket,
+                    &crate::quiesce::QuiesceRequest {
+                        pulse_button,
+                        device_budget: QUIESCE_TIMEOUT,
+                        park_budget: std::time::Duration::from_secs(8),
+                        park_settle: std::time::Duration::from_millis(300),
+                    },
+                );
 
-                if !quiesced {
-                    let holdouts = vmm_for_bracket.lock().unwrap().quiesce_holdouts();
+                if outcome != crate::quiesce::Quiesced::Parked {
                     log::warn!(
-                        "bracket: guest did not quiesce within {QUIESCE_TIMEOUT:?} \
-                         (holdouts: {holdouts:?}); waking it and aborting the suspend (VM lives on)"
+                        "bracket: guest reached only {outcome:?} within {QUIESCE_TIMEOUT:?}; \
+                         waking it and aborting the suspend (VM lives on)"
                     );
                     crate::wake::pulse();
                     continue; // re-arm: the next SIGTSTP gets a fresh bracket

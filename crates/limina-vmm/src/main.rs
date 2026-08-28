@@ -17,6 +17,7 @@ mod fido_usb;
 mod krun;
 mod moc_usb;
 mod power;
+mod quiesce;
 mod restart;
 mod shutdown;
 mod snapshot;
