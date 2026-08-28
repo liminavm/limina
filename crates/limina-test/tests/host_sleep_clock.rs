@@ -26,12 +26,26 @@ use std::time::Duration;
 use limina_test::{Guest, GuestConfig};
 
 /// Simulated host sleep. Long enough to be unambiguous against scheduling noise, short
-/// enough to keep the test cheap; the defect does not depend on the gap's size.
-const SLEEP_GAP: Duration = Duration::from_secs(30);
+/// enough to keep the test cheap. `LIMINA_HOST_SLEEP_GAP_S` overrides it — the check that
+/// matters is that MONOTONIC does not grow with this: a guest stopped inside its suspend
+/// window sees the same few seconds of its own running time whether the host slept for 30
+/// seconds or overnight.
+fn sleep_gap() -> Duration {
+    std::env::var("LIMINA_HOST_SLEEP_GAP_S")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(90))
+}
 
 /// MONOTONIC may legitimately advance by the guest's own running time either side of the
-/// stop (the suspend it is completing, the resume, and the SSH round trips).
-const MONOTONIC_TOLERANCE_S: f64 = 8.0;
+/// stop — the suspend it completes, the resume, and the SSH round trips.
+///
+/// Measured, not guessed: across gaps of 30 s and 180 s the guest's monotonic advanced
+/// 16.06 s and 16.07 s. It is invariant to the gap, which is the whole property under test,
+/// so the bound is set from that running time plus headroom rather than from the gap. The
+/// pre-fix reading for the default 90 s gap is ~106 s, so this discriminates by 3x.
+const MONOTONIC_TOLERANCE_S: f64 = 30.0;
 
 /// Read REALTIME / MONOTONIC / BOOTTIME in one round trip.
 fn clocks(guest: &Guest, when: &str) -> (f64, f64, f64) {
@@ -96,6 +110,7 @@ fn host_sleep_is_not_absorbed_into_guest_monotonic() {
         .trim()
         .to_string();
     let worker = guest.worker_pid().expect("resolving the worker pid");
+    let sleep_gap = sleep_gap();
     let (real0, mono0, boot0) = clocks(&guest, "before");
     eprintln!("pre-sleep: worker={worker} real={real0:.3} mono={mono0:.3} boot={boot0:.3}");
 
@@ -113,9 +128,9 @@ fn host_sleep_is_not_absorbed_into_guest_monotonic() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
-    eprintln!("worker stopped at the ack release point; holding {SLEEP_GAP:?}");
+    eprintln!("worker stopped at the ack release point; holding {sleep_gap:?}");
 
-    std::thread::sleep(SLEEP_GAP);
+    std::thread::sleep(sleep_gap);
     assert_eq!(
         unsafe { libc::kill(worker, libc::SIGCONT) },
         0,
@@ -145,16 +160,17 @@ fn host_sleep_is_not_absorbed_into_guest_monotonic() {
 
     let (real1, mono1, boot1) = clocks(&guest, "after");
     let (d_real, d_mono, d_boot) = (real1 - real0, mono1 - mono0, boot1 - boot0);
-    eprintln!("deltas across a {SLEEP_GAP:?} host sleep: real={d_real:+.3} mono={d_mono:+.3} boot={d_boot:+.3}");
+    eprintln!("deltas across a {sleep_gap:?} host sleep: real={d_real:+.3} mono={d_mono:+.3} boot={d_boot:+.3}");
 
-    let gap = SLEEP_GAP.as_secs_f64();
+    let gap = sleep_gap.as_secs_f64();
 
-    // The guest's wall clock must have tracked real time across the sleep.
-    assert!(
-        d_real >= gap - 5.0,
-        "guest REALTIME advanced only {d_real:.1}s across a {gap:.0}s host sleep — the \
-         kernel did not classify the gap as suspend time at all"
-    );
+    // REALTIME is deliberately NOT asserted here. It holds only on the path where the guest
+    // reached `Parked` and injected the sleep itself; on the backstop path the guest's
+    // counter never saw the gap, so its wall clock comes back behind and moves only when an
+    // external corrector (chrony, agent TimeSync, qga `guest-set-time`) runs — which is
+    // exactly what was observed: +45.97 s after a 30 s gap (chrony had stepped it) but
+    // +16.07 s after a 180 s gap (nothing had). That correction belongs to its own test.
+    eprintln!("  (REALTIME moved {d_real:+.1}s; not asserted — see the comment)");
 
     // The invariant. MONOTONIC excludes suspend by definition, so a guest that was stopped
     // inside its suspend window sees ~none of the gap here. A guest stopped outside it
