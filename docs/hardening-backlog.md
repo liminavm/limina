@@ -1606,6 +1606,15 @@ because holding 60 fps on a *quiet* guest is a requirement and not a luxury — 
 punctuality that is armed only when the guest is presenting and released when it is not, and any
 proposal here reports its idle wakeup rate and battery cost alongside its frame times.
 
+The two inputs to that arming are both available on a **stock** guest, which is what keeps the band
+off the agent's critical path: the host's own power state (`NSProcessInfo.isLowPowerModeEnabled`,
+`IOPSGetProvidingPowerSourceType` — AC vs battery is already mirrored into the guest over
+virtio-i2c SBS), and whether anything is actually reaching scanout. The guest's GNOME power profile
+is user *intent* rather than machine state and is the one thing the host cannot observe, so it
+belongs to the enhanced tier and the agent, as a refinement — never as a prerequisite. Worth
+checking before designing against it: a VM has no cpufreq driver to bind, so
+`power-profiles-daemon` may have no backend and offer only *balanced*.
+
 ## An idle guest exits ~1,600 times a second reading virtio-net's interrupt status
 
 Measured 2026-08-27 while chasing the frame-deadline misses above, on a stock Fedora 44 guest at a
