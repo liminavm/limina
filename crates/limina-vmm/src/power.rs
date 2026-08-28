@@ -185,10 +185,7 @@ impl PowerCtx {
                 // Unpause first: a paused guest cannot answer a wake key.
                 resume_after_host_sleep(&self.vmm, self.quiesced);
                 match self.state.on_did_wake(self.guest_quiesced()) {
-                    WakeAction::WakeGuest => {
-                        log::info!("host wake: waking the guest (KEY_WAKEUP)");
-                        crate::wake::pulse();
-                    }
+                    WakeAction::WakeGuest => wake_guest(&self.vmm, self.quiesced),
                     WakeAction::LeaveAlone => {
                         log::info!(
                             "host wake: guest not ours to wake (user-suspended or never slept)"
@@ -252,6 +249,30 @@ fn hold_ack_until_safe_to_stop(vmm: &Arc<Mutex<Vmm>>, pulse_button: bool) -> Qui
 /// behind, which chrony, the agent's TimeSync, or the qga `guest-set-time` rung correct —
 /// a degraded clock instead of a killed session.
 #[cfg(target_os = "macos")]
+/// Bring the guest back, by whichever mechanism its suspend flavour requires.
+///
+/// A guest in s2idle wakes on the `KEY_WAKEUP` GPIO. A guest that took PSCI `SYSTEM_SUSPEND`
+/// cannot: it has no vCPU left to take the interrupt, so the pulse lands nowhere and the guest
+/// stays suspended forever. Only the VMM re-arming the suspended vCPU brings that one back.
+fn wake_guest(vmm: &Arc<Mutex<Vmm>>, outcome: Quiesced) {
+    if outcome.needs_host_wake() {
+        log::info!("host wake: resuming the guest from PSCI SYSTEM_SUSPEND");
+        match vmm.lock().unwrap().wake_from_system_suspend() {
+            Ok(true) => {}
+            // The guest left system-suspend on its own (nothing else can do that), so there is
+            // nothing to re-arm. Fall back to the pulse rather than leave it asleep.
+            Ok(false) => {
+                log::warn!("host wake: guest was no longer system-suspended; pulsing KEY_WAKEUP");
+                crate::wake::pulse();
+            }
+            Err(e) => log::warn!("host wake: resuming from system suspend failed: {e}"),
+        }
+        return;
+    }
+    log::info!("host wake: waking the guest (KEY_WAKEUP)");
+    crate::wake::pulse();
+}
+
 fn resume_after_host_sleep(vmm: &Arc<Mutex<Vmm>>, outcome: Quiesced) {
     let mut guard = vmm.lock().unwrap();
     let r = if outcome.survives_a_host_stop() {
@@ -308,10 +329,12 @@ pub fn install_test_seam(vmm: Arc<Mutex<Vmm>>) {
                     unsafe { libc::raise(libc::SIGSTOP) };
                     log::warn!("host sleep seam: continued — resuming and waking the guest");
                     resume_after_host_sleep(&vmm, outcome);
-                    // Let the guest settle before the wake key lands, or the pulse arrives
-                    // at a guest not yet in s2idle and is simply ignored.
+                    // Let the guest settle before the wake lands, or a KEY_WAKEUP pulse arrives
+                    // at a guest not yet in s2idle and is simply ignored. (A system-suspended
+                    // guest needs no such grace — it is provably parked — but the sleep is
+                    // harmless and keeps the seam one path.)
                     std::thread::sleep(std::time::Duration::from_secs(3));
-                    crate::wake::pulse();
+                    wake_guest(&vmm, outcome);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }

@@ -29,6 +29,15 @@ use vmm::Vmm;
 /// How far the guest got. The caller decides what each outcome is worth to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Quiesced {
+    /// The guest suspended itself to RAM through PSCI `SYSTEM_SUSPEND`. The strongest state
+    /// there is, and the only one the guest *told* us about rather than us inferring: Linux
+    /// issues the call from `syscore_suspend()`, after every secondary vCPU has gone through
+    /// `CPU_OFF` and after `timekeeping_suspend()`. Nothing is racing, and unlike a WFx park it
+    /// cannot be lost to a stray wakeup.
+    ///
+    /// Costs a host-driven wake: no vCPU is left to take a wake interrupt, so the `KEY_WAKEUP`
+    /// pulse does nothing and only [`Vmm::wake_from_system_suspend`] brings the guest back.
+    SystemSuspended,
     /// Devices at `INIT` *and* every vCPU parked: the guest is past `timekeeping_suspend`,
     /// so time spent stopped from here is classified as suspend.
     Parked,
@@ -49,12 +58,20 @@ impl Quiesced {
         self != Quiesced::No
     }
 
+    /// Does bringing this guest back require [`Vmm::wake_from_system_suspend`]? A
+    /// system-suspended guest has no vCPU left to take the `KEY_WAKEUP` interrupt, so pulsing
+    /// the wake key at it — the only wake mechanism an s2idle guest needs — leaves it parked
+    /// forever.
+    pub fn needs_host_wake(self) -> bool {
+        self == Quiesced::SystemSuspended
+    }
+
     /// May the HOST stop this guest's vCPUs and have the guest account for the time as
     /// suspend? Only [`Quiesced::Parked`]: the guest keeps running afterwards, so anything
     /// less means the stop lands in `CLOCK_MONOTONIC`. The two bars differ because the two
     /// callers differ — a snapshotted guest is frozen for good, a host-slept one wakes up.
     pub fn survives_a_host_stop(self) -> bool {
-        self == Quiesced::Parked
+        matches!(self, Quiesced::Parked | Quiesced::SystemSuspended)
     }
 }
 
@@ -98,6 +115,10 @@ pub fn quiesce_guest(vmm: &Arc<Mutex<Vmm>>, req: &QuiesceRequest) -> Quiesced {
     let deadline = Instant::now() + req.park_budget;
     let mut seen = 0u32;
     loop {
+        if vmm.lock().unwrap().system_suspended() {
+            log::info!("quiesce: the guest suspended itself to RAM (PSCI SYSTEM_SUSPEND)");
+            return Quiesced::SystemSuspended;
+        }
         if vmm.lock().unwrap().all_vcpus_parked() {
             let settled_at = Instant::now();
             let held = loop {
@@ -167,5 +188,21 @@ mod tests {
                 && !Quiesced::DevicesOnly.survives_a_host_stop(),
             "DevicesOnly must snapshot but must not be trusted across a host stop"
         );
+    }
+
+    /// A system-suspended guest is the strongest outcome, and the ONLY one that changes how the
+    /// guest must be woken: it has no vCPU left to take the `KEY_WAKEUP` interrupt, so pulsing
+    /// at it strands it. Getting `needs_host_wake` wrong does not fail loudly — the guest simply
+    /// never comes back — so pin which outcomes claim it.
+    #[test]
+    fn only_a_system_suspended_guest_needs_the_host_to_wake_it() {
+        assert!(Quiesced::SystemSuspended.needs_host_wake());
+        assert!(!Quiesced::Parked.needs_host_wake());
+        assert!(!Quiesced::DevicesOnly.needs_host_wake());
+        assert!(!Quiesced::No.needs_host_wake());
+
+        // It clears both bars: the guest told us it stopped, rather than us inferring it.
+        assert!(Quiesced::SystemSuspended.allows_snapshot());
+        assert!(Quiesced::SystemSuspended.survives_a_host_stop());
     }
 }
