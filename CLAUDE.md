@@ -358,11 +358,15 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   first.** `--no-net`/`--cpus`/`--ram-mib` and trailing `-- <extra limina flags>` map to the script's
   `LIMINA_NET`/`LIMINA_CPUS`/`LIMINA_RAM_MIB`/`LIMINA_EXTRA_ARGS`; the disk boots **in place**, so
   clone it first to keep it pristine — `cp -c` makes that free (APFS CoW, instant, no space).
-  **Always boot a poke VM with the debug channels already open**: `RUST_LOG=limina=info` and
-  `LIMINA_POINTER_WIRE_TRACE=1` (add the subsystem's own trace, e.g. `LIMINA_DISPLAY_TRACE`) so an
-  incident caught in passing is already recorded. Most of what we chase is intermittent and shows
-  up while doing something else; a boot without the channels turns a sighting into a re-run, and
-  some sightings do not come back. The supervisor and worker both default to `warn`, so the lines
+  **Always boot a poke VM with the debug channels already open**: `RUST_LOG=limina=info`,
+  `LIMINA_POINTER_WIRE_TRACE=1`, and `LIMINA_WINDOW_CAPTURE=<file>.png` (add the subsystem's own
+  trace, e.g. `LIMINA_DISPLAY_TRACE`) so an incident caught in passing is already recorded.
+  `LIMINA_WINDOW_CAPTURE` is a **single PNG file path, not a directory** — the presented scanout is
+  dumped there every 120 applies and overwritten, so a session always ends holding a recent frame,
+  and it needs no Screen Recording permission. Point it somewhere durable — a visual symptom is the
+  one kind that cannot be reconstructed from a log afterwards. Most of what we chase is intermittent
+  and shows up while doing something else; a boot without the channels turns a sighting into a
+  re-run, and some sightings do not come back. The supervisor and worker both default to `warn`, so the lines
   that explain a symptom are simply absent unless asked for — `display: the guest reports its
   monitors as …` is `info`. Both streams land in the worker log the boot vehicle names.
   The script sets all the host KK/zink env (VK_ICD_FILENAMES →
