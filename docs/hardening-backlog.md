@@ -986,6 +986,23 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
 
 ## M9 snapshot hardening (from the 2026-07-18 transport-restore removal)
 
+- **Every restore logs ~226 `ctx 0 "HOST" IOV data size exceeds resource capacity`.** Measured
+  2026-08-28 on a stock F44 guest, identical count across repeated restores of the same snapshot
+  pair, and present on restores that are otherwise completely healthy. They come from
+  `vrend_renderer_transfer_internal` during the classic content re-upload (task #19 phase C),
+  which re-uploads each backed resource level-0/full-box from its guest backing store — a
+  transfer whose IOV is smaller than the resource it is filling is rejected and that resource
+  keeps whatever the replay gave it. Nothing observably broken today, but this is silent
+  partial content restore, and it is the obvious next suspect for any "restored desktop looks
+  subtly wrong" report. Worth deciding whether the mismatch is a stride/level assumption in the
+  re-upload or genuinely unbacked resources that should be skipped rather than attempted.
+
+- **`gpu restore: … 0 scanout flips` on every restore.** Same measurements. Phase C is supposed
+  to re-bind the classic scanouts "so the first presented frame shows restored pixels"; the
+  count being zero every time means that leg does nothing, and the first frame instead comes
+  from whatever the guest redraws. Unexamined — it may be correct (blob scanouts taking a
+  different path) or it may be why a restored desktop needs a redraw before it looks right.
+
 - **Guest windows come back shrunk after a restore.** Observed 2026-08-28 on a stock F44 guest,
   EFI+venus, restoring into a freshly launched supervisor: Firefox and Nautilus returned
   vertically shrunk (~445 px → ~320 px tall), with the shell, wallpaper and every app otherwise
