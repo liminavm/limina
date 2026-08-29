@@ -228,6 +228,16 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     vmr.snd = spec.snd;
     // Mic capture is opt-in (default off, privacy); only acts when snd is also on.
     vmr.snd_capture = spec.mic;
+    // Tell the supervisor when the guest's playback stream comes and goes, so it can announce
+    // the VM to macOS as a media player while the guest holds the audio device open. Only
+    // possible with a window: the control socketpair is the supervisor's, and a headless VM
+    // has no media session to hold.
+    if spec.snd {
+        if let Some(DisplaySink::Window { control_fd, .. }) = spec.display.as_ref().map(|d| &d.sink)
+        {
+            vmr.snd_state_cb = crate::audio_state::control_writer(*control_fd);
+        }
+    }
     // Emulated xHCI USB controller (opt-in, default off). A stock guest binds it via
     // its own xhci-plat driver and enumerates any cold-plugged device models.
     vmr.usb = spec.usb;

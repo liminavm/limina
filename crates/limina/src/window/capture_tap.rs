@@ -41,7 +41,7 @@ use objc2_core_graphics::{
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSPoint, NSString};
 
 use limina_input::auxkey::{
-    decode_aux_data1, nx_key_bucket, nx_key_to_linux, route_aux_event_key, AuxBucket, GrabMode,
+    decode_aux_data1, nx_key_to_linux, route_aux_event_key, GrabMode,
     NX_SUBTYPE_AUX_CONTROL_BUTTONS,
 };
 use limina_input::constants::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_KEY};
@@ -682,27 +682,6 @@ extern "C" fn tap_callback(
 // window is focused. Ctrl-Opt (mute the soft grab) is the way to reach them. Promoting one to
 // the guest later is a `keymap.rs` entry, NOT an `auxkey` bucket edit.
 
-/// Say once per run that a media key went to the VM *under the soft grab*. That's the case
-/// worth explaining: the soft grab engages on mere focus, with no gesture from the user, and
-/// the failure mode is silent in both directions — if the guest has no media player listening,
-/// the key does nothing there AND the host player never sees it, which reads as a dead key
-/// rather than as a routing choice. Under a full grab the user explicitly took the keyboard
-/// (and Ctrl-Opt means something else there — it drops capture entirely), so the message would
-/// be both unsurprising and wrong about the way out.
-fn warn_once_on_media_capture(nx_key: u16, mode: GrabMode) {
-    static SAID: AtomicBool = AtomicBool::new(false);
-    if mode != GrabMode::Soft
-        || nx_key_bucket(nx_key) != AuxBucket::Media
-        || SAID.swap(true, Ordering::Relaxed)
-    {
-        return;
-    }
-    log::info!(
-        "media keys are going to the VM while its window is focused (Ctrl-Opt mutes the soft \
-         keyboard grab if you want them back on the host)"
-    );
-}
-
 /// Decide one `NX_SYSDEFINED` event: forward it to the guest as an evdev key and consume it, or
 /// hand it back for macOS to act on. Returning the event is the safe default at every step —
 /// a subtype we don't understand, a `data1` shape we can't decode, or a key whose bucket the
@@ -737,7 +716,6 @@ fn route_aux_event(ctx: &TapCtx, event: CGEventRef, mode: GrabMode) -> CGEventRe
     let Some(code) = route_aux_event_key(aux.nx_key, mode, aux.down, held) else {
         return event; // wrong bucket for this grab, or no guest equivalent — macOS keeps it
     };
-    warn_once_on_media_capture(aux.nx_key, mode);
     // Consume repeats without forwarding: the guest kernel repeats from the held-down state,
     // exactly as for ordinary keys. Still consumed, or macOS would act on the repeats alone.
     if !aux.repeat {

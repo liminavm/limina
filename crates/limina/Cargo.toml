@@ -74,6 +74,18 @@ objc2-foundation = { version = "0.3", features = [
     # The grab's screen-capture gate: the CG window list, read through its NSArray bridge.
     "NSArray",
 ] }
+# The VM's media session: announce it to macOS as a player while the guest holds its
+# virtio-snd stream open, so the transport keys, the Control Center buttons and the
+# headset gestures reach the guest through macOS's arbitration rather than a focus rule
+# (docs/design/media-keys-now-playing.md).
+objc2-media-player = { version = "0.3", features = [
+    "MPNowPlayingInfoCenter",
+    "MPRemoteCommandCenter",
+    "MPRemoteCommand",
+    "MPRemoteCommandEvent",
+    "MPMediaItem",
+    "block2",
+] }
 objc2-app-kit = { version = "0.3", features = [
     "NSApplication",
     "NSWindow",

@@ -17,16 +17,30 @@
 //!
 //! | bucket       | keys                          | goes to the guest        |
 //! |--------------|-------------------------------|--------------------------|
-//! | `Media`      | play/pause, next, prev, ff, rw | soft **or** full grab   |
+//! | `Media`      | play/pause, next, prev, ff, rw | full grab only           |
 //! | `Volume`     | volume up/down, mute          | full grab only           |
 //! | `Brightness` | screen brightness up/down     | never (host hardware)    |
 //! | `Other`      | eject, illumination, Launchpad, … | never (for now)      |
 //!
-//! Volume is deliberately stricter than media: our audio leaves through CoreAudio, so under a
-//! merely-focused window the physical knob the user expects to move is the *host* device volume
-//! (with the host HUD). Under an explicit full grab the VM owns the keyboard outright and the
-//! guest's own mixer + OSD is the right target. The buckets differ because the *hardware*
-//! differs — media has no host-side analog when the player is in the guest, volume does.
+//! Volume and media both stop at the full grab, for related but distinct reasons.
+//!
+//! Volume: our audio leaves through CoreAudio, so under a merely-focused window the physical knob
+//! the user expects to move is the *host* device volume (with the host HUD). Under an explicit full
+//! grab the VM owns the keyboard outright and the guest's own mixer + OSD is the right target.
+//!
+//! Media: focus is the wrong question for a transport key. "Who is focused" is a keyboard
+//! question; "who should receive a transport command" is a media-session question macOS already
+//! arbitrates system-wide — and routing on focus gets the common case backwards, denying the keys
+//! exactly when music plays in the guest while the user works in a host app. So a merely-focused
+//! window does not take them. limina instead announces the VM to macOS as a player while the guest
+//! holds its audio device open, and the remote commands come back as these same evdev keys
+//! (`docs/design/media-keys-now-playing.md`). That path also reaches the Control Center transport,
+//! Siri and the headset gestures, which no bucket rule can: they never enter the keyboard event
+//! stream at all.
+//!
+//! The full-grab entry stays, and does not double-deliver: with the window captured the tap consumes
+//! the `NX_SYSDEFINED` event and macOS mints no remote command for the session path to duplicate
+//! (measured — `spikes/now-playing-media-keys/RESULTS.md`).
 //!
 //! Known trap in that choice: under a full grab the volume keys move only the guest mixer,
 //! while loudness stays capped by whatever the host volume was at grab time. Grab at host 20%
@@ -108,7 +122,10 @@ impl AuxBucket {
     /// keeps them in every mode. This *is* the policy table.
     pub fn min_grab(self) -> Option<GrabMode> {
         match self {
-            AuxBucket::Media => Some(GrabMode::Soft),
+            // Full only. Focus is the wrong question for a transport key, so a merely-focused
+            // window no longer eats them: they go to macOS, which routes them to whoever holds
+            // the media session — us, while the guest is playing. See the header.
+            AuxBucket::Media => Some(GrabMode::Full),
             AuxBucket::Volume => Some(GrabMode::Full),
             AuxBucket::Brightness | AuxBucket::Other => None,
         }
@@ -230,15 +247,17 @@ mod tests {
     use crate::constants::SUPPORTED_KEYBOARD_KEYS;
 
     #[test]
-    fn media_reaches_the_guest_under_either_grab_but_never_unfocused() {
-        assert_eq!(
-            route_aux_key(NX_KEYTYPE_PLAY, GrabMode::Soft),
-            Some(KEY_PLAYPAUSE)
-        );
+    fn media_reaches_the_guest_only_under_an_explicit_capture() {
         assert_eq!(
             route_aux_key(NX_KEYTYPE_PLAY, GrabMode::Full),
             Some(KEY_PLAYPAUSE)
         );
+        // A merely-focused window does NOT take the transport keys. They go to macOS, which
+        // routes them to whoever holds the media session — limina included, while the guest is
+        // playing (docs/design/media-keys-now-playing.md). Eating them here would deny the key
+        // to a host player the user is actually listening to, and would take it from the guest
+        // in the case that matters most: music in the VM, work in a host app.
+        assert_eq!(route_aux_key(NX_KEYTYPE_PLAY, GrabMode::Soft), None);
         assert_eq!(route_aux_key(NX_KEYTYPE_PLAY, GrabMode::None), None);
     }
 
@@ -312,11 +331,11 @@ mod tests {
         // and REWIND(20) — NEXT(17)/PREVIOUS(18) never appear. Those physical keys are ⏭/⏮, so
         // they must reach the guest as track skip; KEY_FASTFORWARD/KEY_REWIND would be a dead
         // key in GNOME and read as "forwarding is broken".
-        assert_eq!(route_aux_key(19, GrabMode::Soft), Some(KEY_NEXTSONG));
-        assert_eq!(route_aux_key(20, GrabMode::Soft), Some(KEY_PREVIOUSSONG));
+        assert_eq!(route_aux_key(19, GrabMode::Full), Some(KEY_NEXTSONG));
+        assert_eq!(route_aux_key(20, GrabMode::Full), Some(KEY_PREVIOUSSONG));
         // A keyboard that does emit the NEXT/PREVIOUS codes lands on the same keys.
-        assert_eq!(route_aux_key(17, GrabMode::Soft), Some(KEY_NEXTSONG));
-        assert_eq!(route_aux_key(18, GrabMode::Soft), Some(KEY_PREVIOUSSONG));
+        assert_eq!(route_aux_key(17, GrabMode::Full), Some(KEY_NEXTSONG));
+        assert_eq!(route_aux_key(18, GrabMode::Full), Some(KEY_PREVIOUSSONG));
     }
 
     #[test]

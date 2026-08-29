@@ -11,6 +11,7 @@
 //! The binary MUST be codesigned with `com.apple.security.hypervisor` (see `sign.sh`)
 //! or `hv_vm_create` fails with `Error::VmCreate`.
 
+mod audio_state;
 mod bracket;
 mod config;
 mod fido_usb;

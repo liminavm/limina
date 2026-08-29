@@ -55,6 +55,8 @@ mod guestwindow;
 mod hostdisplay;
 mod input;
 mod lifecycle;
+mod media_policy;
+mod media_session;
 mod overlay;
 mod present;
 mod seams;
@@ -2114,6 +2116,17 @@ pub fn run(
         primary_slot.clone(),
         pointer_slot.clone(),
     ));
+    // Deliver a media key macOS routed to us as if it had come off the keyboard: the guest's own
+    // desktop already binds KEY_PLAYPAUSE and friends, so nothing guest-side is required. The
+    // press and release are synthesized together — a remote command is an event, not a key state,
+    // and there is no "release" for it to send later.
+    {
+        let sink_input = input_state.clone();
+        media_session::register_key_sink(std::rc::Rc::new(move |code: u16| {
+            sink_input.tap_aux_key(code, true);
+            sink_input.tap_aux_key(code, false);
+        }));
+    }
     let _capture_tap = capture_tap::install(
         conn.clone(),
         captured.clone(),
@@ -2991,6 +3004,11 @@ pub fn run(
     let timer_pointer_slot = pointer_slot.clone();
     let resume_clicked_at: Cell<std::time::Instant> = Cell::new(std::time::Instant::now());
     let resume_epoch_baseline: Cell<u64> = Cell::new(0);
+    // The VM's media session. The policy decides when we are a player; the session performs it.
+    // Both live on the main thread, driven from this timer, because MediaPlayer wants the main
+    // thread and the command handlers then fire there too.
+    let media_policy = RefCell::new(media_policy::MediaPolicy::new());
+    let media_session = RefCell::new(media_session::MediaSession::new(title.clone()));
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         // One-shot: the remembered fullscreen, taken on the first tick the window is actually on
         // screen. Not gated on the first frame — the guest is already sized for it, and waiting
@@ -3006,6 +3024,27 @@ pub fn run(
         // worth reclaiming (testcomp/supervisor-retention.sh).
         timer_windows.borrow().drain_releases(&timer_surface_map);
 
+        // The guest's audio stream lifetime, turned into whether the VM holds macOS's media
+        // session. Draining before the exit check below so a guest that stops playing on its way
+        // down still retires cleanly rather than through the Drop.
+        {
+            let queued = std::mem::take(&mut shared.lock().unwrap().audio_events);
+            let now = std::time::Instant::now();
+            let mut policy = media_policy.borrow_mut();
+            let mut actions: Vec<_> = queued
+                .into_iter()
+                .filter_map(|(stream, event)| policy.stream_event(stream, event, now))
+                .collect();
+            actions.extend(policy.tick(now));
+            drop(policy);
+            for action in actions {
+                match action {
+                    media_policy::Action::Announce => media_session.borrow_mut().announce(),
+                    media_policy::Action::Retire => media_session.borrow_mut().retire(),
+                }
+            }
+        }
+
         let (exited, worker_suspended, show_id, frames, worker_epoch, resume_dead) = {
             let s = shared.lock().unwrap();
             (
@@ -3017,6 +3056,15 @@ pub fn run(
                 s.resume_dead,
             )
         };
+
+        // A worker that has gone (powered off, crashed, suspended) is not playing anything, and
+        // there is nothing left for a media key to reach. Step aside at once rather than serving
+        // out the retire hold: the hold exists to ride out a track gap, and this is not one.
+        if exited || worker_suspended {
+            if let Some(media_policy::Action::Retire) = media_policy.borrow_mut().worker_gone() {
+                media_session.borrow_mut().retire();
+            }
+        }
 
         // Worker gone (guest powered off, orderly or not): net any process-group
         // stragglers and exit. (`conn.pid()` is the *current* worker — relaunch keeps it fresh.)
