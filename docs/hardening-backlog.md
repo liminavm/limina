@@ -1035,13 +1035,30 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   in-place would therefore be a regression, not a fix: the cycle is what gets mutter to lay out
   onto a known-good monitor again.
 
-  **Ruled out so far**, each by measurement: the hotplug policy; the mode; the monitor scale; the
-  logical screen size; and the XWayland screen size — 4096x2304 (2048x1152 at XWayland scale 2)
-  on a cold boot *and* after a restore, with the same client reporting the same natural size on
-  a cold boot as before the suspend. So the guest's whole display configuration is unchanged
-  across the bracket and the windows are still rescaled: the next place to look is what the guest
-  session does to window geometry in response to the resume itself, not to anything about the
-  display.
+  **The cause: the restored guest reads virtio-gpu's default EDID before ours arrives.** An
+  instrumented mutter (`G_MESSAGES_DEBUG=all MUTTER_DEBUG=all MUTTER_VERBOSE=1` in
+  `/etc/environment.d`, guest relogin, verified in `/proc/$(pgrep -x gnome-shell)/environ`) says
+  it outright, inside one second:
+
+      22:51:23  BACKEND: No backlight support for monitor Red Hat, Inc. 10"
+      22:51:23  GEOMETRY: screen/monitor constraint; region_spanning_rectangles: [0,32 +1024,544]
+      22:51:23  GEOMETRY: Sending synthetic configure notify to Home with x:354 y:57 w:1650 h:1290
+      22:51:24  COLOR: Generating ICC profile for 'xrandr-LMN-BenQ LCD-0x6c42fae5'
+
+  A fresh worker's virtio-gpu device boots carrying virtio's own default EDID, which claims a 10"
+  panel. The restored guest's driver never went away, so it re-probes at once: 2560x1440 on a 10"
+  screen is a 250% scale, i.e. a 1024x576 logical screen (2560/2.5, 1440/2.5). mutter constrains
+  every window into that work area — the synthetic configure above is exactly the geometry the
+  windows are measured to have afterwards — and a second later our real EDID lands, the scale
+  returns to 1.25 and the screen to 2048x1152, but nothing puts the windows back.
+
+  This is the same default-EDID hazard `CLAUDE.md` records for cold boot, where it is a race
+  ("which side of the driver's reset we land on is timing, which is why it only bit some boots").
+  On a restore it is not a race: the driver is already up and re-probes immediately, so it bites
+  every time. The fix belongs host-side — the restored device must carry the real EDID before the
+  guest can read it, rather than booting with virtio's default and being corrected a second later.
+  Note the display push order cannot fix this on its own: the bogus EDID is already there before
+  either push, which is why the hotplug policy makes no difference.
 
   Note when re-measuring: every earlier sighting of this was on a run whose gnome-shell context
   had been bricked by the sticky-`in_error` replay bug (fixed 2026-08-28). A compositor whose
