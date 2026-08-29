@@ -91,43 +91,64 @@ hypothesis, not a finding: it needs the aliased source identified in a live snap
 Note also what stayed green on the failing run: **colour diversity 4083 -> 4083**, every process
 alive. The content floor and every process oracle passed on a desktop with a black window in it.
 
-## The wedge probe: firefox CAN render after a restore here
+## The wedge, reproduced locally: an idle venus client poisons the restore
 
-Measured 2026-08-29 on a synoik poke session (`wedge-pre.png` / `wedge-post.png` /
-`wedge-nav.png`). After a restore, firefox was told to open a new tab on a second page; it
-rendered it correctly — solid fill, correct glyphs. So on this stack a restored firefox is not
-wedged, and "unchanged pixels" in the L2 gate was not hiding a dead client on that run.
+The dogfood symptom — firefox comes back dead and no repaint revives it — **reproduces on a
+local synoik poke VM**, and the trigger is not firefox. It is the presence of a **second venus
+context in the session that is not presenting**.
 
-Three limits on how far that goes. The dogfood report is about firefox **nightly**; this is the
-image's stock firefox. **That restore came back clean** — nautilus was not black — so what was
-tested is "can a client render after a healthy restore", not after one that lost content. And it
-is a single trial of a symptom the user describes as *always* occurring on their machine, which
-makes the version difference the first thing to vary.
+The controlled pair, same image (`Fedora-Workstation-44.enhanced.synoik.raw`), same host, same
+2560x1440 display, one suspend/restore each, both first-cycle on a fresh clone:
 
-Also learned from the same session, and it changes how any of these runs should be read: **the
-blank-window failure did not reproduce on this cycle at all.** A "Critical Updates" notification
-appeared during the restore, and its damage forced a repaint that healed the desktop before the
-capture. Whether a given cycle shows the fault therefore depends on whether anything happened to
-damage the screen first — so a clean cycle is not evidence of a fix, and any A/B here needs the
-capture taken before incidental damage, not merely after the restore.
+| session contents at snapshot | uncapturable allocations | after restore |
+| --- | --- | --- |
+| firefox (GL) on an animating WebGL page | 2 x 14745600 (the compositor's scanouts) | **healthy** — wallpaper, window and animation all continue |
+| the same, plus `vkstill` in idle mode | the same 2, plus 5 x 1966080 (vkstill's swapchain) | **wedged** |
 
-## Three failure shapes, and only one of them is explained
+Wedged means, precisely: synoik is alive and sleeping but never composites again; the host
+receives so few applies that `LIMINA_WINDOW_CAPTURE` never writes a file; firefox's Web Content
+process burns **0 CPU ticks in 10 s**, and still 0 after a new client is started to force damage;
+and a freshly launched `vkstill` gets far enough to be a running process but never reaches its
+own `device Virtio-GPU Venus` line — **no client can initialise Vulkan any more**. Nothing in
+the guest logs an error. `dmesg` ends at a clean `PM: suspend exit`.
 
-The mechanism above accounts for **content that comes back blank and heals on repaint**. It does
-not account for everything seen, and the shapes must not be collapsed:
+The one guest-side lead is in synoik's own log, right at the restore: the virtual connector is
+**disconnected and re-added** (`disconnecting connector: "Virtual-1"`, then `new connector`),
+with `ERROR ... missing surface in vblank callback for crtc crtc::Handle(42)` between them. After
+the re-add synoik logs nothing further. Whether the connector churn is the cause or another
+symptom is not established.
 
-- **Blank-but-healing.** Surfaces come back empty (transparent over whatever is behind; black
-  when the desktop root is behind them) and any repaint restores them. This is the missing
-  content capture above.
-- **Wedged.** On the dogfood Mac, firefox nightly comes back with rendering permanently broken
-  and **resizing its window does not fix it** — reported by the user, not reproduced here. A
-  resize forces a full redraw, so a symptom that survives one is not lost content: the client's
-  own GPU state did not survive. Separate fault, separate cause, unexplained.
-- **Whole-desktop blank until unrelated damage.** The poke-VM cycle above: an idle restored
-  session that painted nothing at all (`submits=+0` for minutes) until a new client arrived. The
-  user has not seen this on the dogfood Mac, where something is always repainting.
+A second cycle on the same session (idle vkstill again, second suspend) gives the same wedge with
+a fuller picture, because that restore did present a frame: `c2_post.png` — the whole desktop
+black, only firefox's CSD titlebar and the panel drawn. Starting a live client heals the
+**wallpaper and the compositor** (`c2_heal.png`) and leaves the idle vkstill window and firefox's
+page **still black**. So the two shapes coexist: compositor content is blank-but-healing, client
+content behind a wedged context is gone for good.
 
-A fix for the first shape must not be read as a fix for the other two.
+## What the dogfood Mac has that the local runs did not
+
+Read off `Dev.liminavm`'s supervisor log and the guest, 2026-08-29:
+
+- The dogfood session is **synoik**, not mutter (`/usr/local/bin/synoik --session`).
+- Its firefox is **Nightly 157.0a1 from `/opt/firefox`**, not the image's Fedora RPM — and on
+  that machine firefox maps `libvulkan_virtio`, i.e. it holds a venus context. The RPM firefox in
+  the local poke maps only GL. That is the single difference that best explains "the user's
+  firefox wedges and mine does not": on dogfood firefox *is* one of the venus clients.
+- Its snapshots skip **40** allocations, not 2 — spread over ~9 contexts, four identically sized
+  buffers each (a Vulkan WSI swapchain per client), every one of them 2048 pixels wide. The local
+  poke skips 2 (compositor) or 7 (compositor + vkstill).
+- Its restore drops wire entries in classes the local runs never hit: `recording`=41 and
+  `noted`=9 alongside the usual `free`. Every local restore drops in `free` alone. Those two
+  classes are logged per entry only at `debug`, so a dogfood run reproducing the wedge under
+  `RUST_LOG=...krun_devices=debug` would name exactly which state was lost.
+
+## What this changes for the L2 gates
+
+`l2_synoik_restore_landmarks` drives `vkstill` presenting continuously, and a client that
+presents every frame repaints itself — which hides the fault this gate exists to catch. The asset
+now takes `VKSTILL_IDLE_AFTER=<n>`: draw n frames, then stop submitting and only service the
+Wayland connection, leaving the last presented image as the compositor's only copy. That idle
+client is what turns a healthy restore into a wedged one, so it is what the gate should run.
 
 ## Also seen
 

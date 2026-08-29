@@ -487,9 +487,24 @@ int main(void) {
     vk_check(vkAllocateCommandBuffers(vk.device, &cbai, vk.cmds), "vkAllocateCommandBuffers");
     for (uint32_t i = 0; i < vk.image_count; i++) record(&vk, i);
 
+    /// A client that presents every frame REPAINTS ITSELF, and a repaint hides exactly the
+    /// fault this test exists to catch: content that did not survive the snapshot is redrawn
+    /// before anyone looks. The clients that stay broken on a real desktop are the idle ones —
+    /// a browser window nobody touched. `VKSTILL_IDLE_AFTER=<n>` models that: draw n frames,
+    /// then stop submitting and only service the Wayland connection, leaving the last
+    /// presented image as the compositor's only copy of this window.
+    const char *idle_env = getenv("VKSTILL_IDLE_AFTER");
+    long idle_after = idle_env ? strtol(idle_env, NULL, 10) : 0;
+    long presented = 0;
+
     while (!wl.closed) {
         if (wl_display_dispatch_pending(wl.display) == -1) break;
         wl_display_flush(wl.display);
+
+        if (idle_after > 0 && presented >= idle_after) {
+            if (wl_display_dispatch(wl.display) == -1) break;
+            continue;
+        }
 
         vkWaitForFences(vk.device, 1, &vk.in_flight, VK_TRUE, UINT64_MAX);
         uint32_t idx = 0;
@@ -534,6 +549,11 @@ int main(void) {
             for (uint32_t i = 0; i < vk.image_count; i++) record(&vk, i);
         } else {
             vk_check(r, "vkQueuePresentKHR");
+            presented++;
+            if (idle_after > 0 && presented == idle_after) {
+                fprintf(stderr, "vkstill: %ld frames presented; going idle\n", presented);
+                fflush(stderr);
+            }
         }
     }
     return 0;
