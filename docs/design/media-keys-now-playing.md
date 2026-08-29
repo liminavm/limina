@@ -175,11 +175,11 @@ leaving them at their defaults advertises capabilities no evdev key can service.
   guest is playing. Net behavior in the common case is unchanged, and the unfocused case starts
   working.
 - **`Media` stays at `GrabMode::Full`.** Under an explicit capture the VM owns the keyboard
-  outright, so the tap eats the `NX_SYSDEFINED` event and forwards the key directly. This is
-  expected to give no double delivery — an event consumed at a session tap should never reach the
-  system handler that mints the remote command — but that is reasoning, **not** a measurement
-  (see §9). If it turned out wrong the guest would receive every press twice and play/pause would
-  cancel itself out, so verify it at implementation.
+  outright, so the tap eats the `NX_SYSDEFINED` event and forwards the key directly, and macOS
+  mints no remote command for the session path to double-deliver. Measured against a booted VM,
+  not assumed: focused, the guest reacted and the session holder logged nothing; unfocused, the
+  same press arrived as `togglePlayPause` (arm 11). A wrong answer here would have meant every
+  press reaching the guest twice.
 - **`Volume` is untouched.** Volume is not a remote command, our audio leaves through CoreAudio,
   and the existing full-grab-only rule is already right for the reasons in `auxkey.rs`'s header.
 - **`Brightness` and `Other` are untouched.**
@@ -207,9 +207,5 @@ and cannot be overridden per VM. Artwork (enhanced tier) is the only per-content
 
 ## 9. Open before implementation
 
-**Does a full-grab tap consumption suppress the remote command?** §7 assumes it does. Cheap to
-check once the registration exists: capture the window, press fn+F8, and confirm exactly one key
-reaches the guest.
-
-Ranking is settled — see §2.2 and `spikes/now-playing-media-keys/RESULTS.md`; nothing about it
-gates implementation, and the §4 seam is unchanged by it.
+Nothing. Both premises (§2.1) and both follow-up questions — ranking (§2.2) and tap suppression
+(§7) — are measured in `spikes/now-playing-media-keys/RESULTS.md`.

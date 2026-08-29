@@ -1,0 +1,8 @@
+[  0.045] bundle: id=dev.noronha.limina.nowplaying-probe path=<repo>/spikes/now-playing-media-keys/NowPlayingProbe.app
+[  0.047] commands: registered (toggle/play/pause/stop/next/prev enabled, rest disabled)
+[  0.047] info: published title-only dict (no duration/elapsed/rate/artwork)
+[  0.048] info: playbackState = playing
+[  0.048] ready — press fn+F8 (and the Control Center transport buttons). Ctrl-C to stop.
+[  0.048]        this process is .accessory, so it is never frontmost: a delivered
+[  0.048]        command proves system-wide media-session routing, not focus.
+[171.547] >>> REMOTE COMMAND: togglePlayPause  (MPRemoteCommandEvent)

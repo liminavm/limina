@@ -62,6 +62,8 @@ Two things the probe is built to avoid confounding:
 | 8 | claim while a spawned **child** renders the tone, rival paused | → **us** | both listed |
 | 9 | claim with **no audio anywhere**, rival paused — the control | → **us** | both listed |
 | 10 | rival **resumed and actively playing**, then the key | → the rival | — |
+| 11 | a real VM window **focused** (Media at soft grab), then the key | → the guest only | — |
+| 11b | same VM, window **unfocused** | → us, `togglePlayPause` | — |
 
 The logical arms above do not map one-to-one onto the raw logs, because arm 3 was found by
 accident before it was isolated. `arm1-bundled-noaudio.log` is arm 1. `arm2-retire.log` is a first
@@ -161,9 +163,17 @@ Two implementation rules fall out, both in §5 and §7 of the design doc:
   the moment the VM has a claim to make, and the rule then gives it the keys unless a host player
   is mid-playback — in which case the host player should keep them.
 
+**10. Consuming the event at limina's tap does suppress the remote command.** Measured against a
+real booted VM rather than reasoned about, because a wrong answer here means the guest receives
+every press twice and play/pause cancels itself out. With the limina window **focused** — the
+`Media` bucket's soft grab consuming the `NX_SYSDEFINED` event — the guest reacted (its player
+raised a "nothing to play" notice) and the probe, which held the media session throughout, logged
+nothing at all. The same press with the window **unfocused** reached the probe as
+`togglePlayPause`. One press, one recipient, and the tap decides which.
+
+So `Media` can stay at `GrabMode::Full` safely: under an explicit capture the tap takes the key
+directly and macOS never mints a command for the session path to double-deliver.
+
 ## Still open
 
-Nothing on ranking. One item remains, and it belongs to implementation rather than to this spike:
-whether consuming the `NX_SYSDEFINED` event at the full-grab tap suppresses the remote command, so
-that a captured window delivers exactly one key to the guest rather than two. See §9 of
-`docs/design/media-keys-now-playing.md`.
+Nothing. Both premises and both follow-up questions are measured; implementation is unblocked.
