@@ -157,17 +157,27 @@ fn workload_procs(guest: &Guest, apps: &[String]) -> String {
     ssh_soft(guest, &probe)
 }
 
-/// Resources the restore could not push content back into, in the restoring worker's own words.
+/// Every way the classic (vrend) content path can lose a resource's pixels, in the workers'
+/// own words. Each line means at least one texture comes back empty until something repaints
+/// it — which is why this is asserted directly and not only through the frame diff.
 ///
-/// `transfer_write` returns an error whenever vrend refuses the transfer — a box that does not
-/// fit the resource, or an IOV that does not match the backing — and the resource then carries
-/// NO content until something repaints it. libkrun counts those and says so; a restore with a
-/// non-empty count here has lost pixels whether or not this run's frame happens to show it.
-fn reupload_failures(log: &str) -> Vec<&str> {
+/// Three mechanisms, deliberately covered together because each one alone has been the whole
+/// story at some point in this investigation and none of them was visible in a default log:
+///
+/// - `re-upload FAILED` — libkrun's guest-shadow transfers, which rebuild a full-level box
+///   from the resource's create dimensions and are refused when it does not fit the backing.
+/// - `content export ... SKIPPED` — the snapshot's own per-resource GL readback gave up on a
+///   resource, so the snapshot never carried its pixels at all.
+/// - `content restore ... DROPPED` — the restore had the pixels and could not put them back.
+///   `vrend_renderer_restore_ctx_contents` returns success regardless, so this log line is the
+///   only account of it.
+fn content_losses(log: &str) -> Vec<&str> {
     log.lines()
         .filter(|l| {
             l.contains("classic content re-upload FAILED")
                 || l.contains("classic content restore failed")
+                || l.contains("content export ctx") && l.contains("SKIPPED")
+                || l.contains("content restore ctx") && l.contains("DROPPED")
         })
         .collect()
 }
@@ -391,9 +401,17 @@ fn synoik_desktop_survives_snapshot_restore() {
     // log, since this is a restore-side failure. It is the one oracle here that does not
     // depend on the lost pixels happening to be visible in this run's frame.
     let g2_log = g2.supervisor_log();
-    let reupload_failed = reupload_failures(&g2_log);
-    for line in &reupload_failed {
-        eprintln!("RE-UPLOAD FAILED: {}", &line[..line.len().min(190)]);
+    let mut lost: Vec<String> = content_losses(&g1_log)
+        .iter()
+        .map(|l| format!("at snapshot: {l}"))
+        .collect();
+    lost.extend(
+        content_losses(&g2_log)
+            .iter()
+            .map(|l| format!("at restore: {l}")),
+    );
+    for line in &lost {
+        eprintln!("CONTENT LOST: {}", &line[..line.len().min(190)]);
     }
 
     let size_ok = (post.width, post.height) == (pre.width, pre.height);
@@ -407,20 +425,20 @@ fn synoik_desktop_survives_snapshot_restore() {
     let moved_share = moved.len() as f64 / means_pre.len() as f64;
     eprintln!(
         "post-restore: procs={procs_after} landmarks moved {}/{} ({:.1}%) colours \
-         {pre_colors} -> {post_colors}, {} allocation(s) skipped at snapshot, {} re-upload \
-         failure line(s)",
+         {pre_colors} -> {post_colors}, {} allocation(s) skipped at snapshot, {} content-loss \
+         line(s)",
         moved.len(),
         means_pre.len(),
         moved_share * 100.0,
         skipped.len(),
-        reupload_failed.len()
+        lost.len()
     );
 
     let verdict_ok = size_ok
         && moved_share <= CELL_MISMATCH_BUDGET
         && post_colors * 4 >= pre_colors
         && skipped.is_empty()
-        && reupload_failed.is_empty()
+        && lost.is_empty()
         && !procs_after.contains("=0");
     if !verdict_ok {
         let post_png = std::env::temp_dir().join(format!("limina-synoik-post-{pid}.png"));
@@ -440,7 +458,7 @@ fn synoik_desktop_survives_snapshot_restore() {
              landmarks:         {}/{} moved ({:.1}%, budget {:.0}%)\n\
              colour diversity:  {pre_colors} -> {post_colors} (post must keep >= 1/4)\n\
              skipped at capture: {} allocation(s) the snapshot could not read\n\
-             re-upload:         {} restore-side content failure line(s)\n\
+             content loss:      {} line(s) naming resources that lost their pixels\n\
              workload procs:    {procs_before} -> {procs_after}",
             pre.width,
             pre.height,
@@ -451,7 +469,7 @@ fn synoik_desktop_survives_snapshot_restore() {
             moved_share * 100.0,
             CELL_MISMATCH_BUDGET * 100.0,
             skipped.len(),
-            reupload_failed.len(),
+            lost.len(),
         );
     }
 
