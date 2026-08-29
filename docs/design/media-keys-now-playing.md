@@ -51,18 +51,26 @@ The registering process renders no audio. libkrun's CoreAudio sink lives in the 
 must live in the **AppKit** process. If macOS tied media-session eligibility to the registering
 process actually producing audio, this design would need a fork.
 
-It does not. A silent `.accessory` process holds the session and receives media keys system-wide,
-and a title-only info dict — no duration, elapsed time, rate or artwork — is enough to be routed
-to (measured 2026-08-27, macOS 26.5; `spikes/now-playing-media-keys/RESULTS.md`). The probe
-carries a near-silent in-process audio arm to isolate "must render audio" from "must merely
-register"; eligibility did not need it. Whether *ranking* does is the open question in §9.
+It does not, and audio turns out to play no part in the arbitration at all. A silent
+`.accessory` process holds the session and receives media keys system-wide; a title-only info
+dict — no duration, elapsed time, rate or artwork — is enough to be routed to; and a process
+rendering nothing wins the session from an idle rival exactly as well as one rendering a tone
+(measured 2026-08-27 and 2026-08-29, macOS 26.5; `spikes/now-playing-media-keys/RESULTS.md`).
+The probe was given in-process, child-process and no-audio arms precisely to find a fork here.
+There is none: **the supervisor registers, the worker supplies only the stream signal.**
 
 ### 2.2 The VM becomes a participant in macOS's rules
 
-macOS's arbitration is sticky to the app that most recently **rendered audio**, and it survives
-that app being paused. Registering handlers and publishing `.playing` while a host player is
-mid-playback does not displace it, and pausing that player does not hand the session over either
-(measured; arms 5-6 in `spikes/now-playing-media-keys/RESULTS.md`).
+The rule macOS arbitrates by, as measured:
+
+> Registered players rank by **when each last announced itself as playing**. Publishing
+> `.playing` is such an announcement and moves you to the front — unless a rival is *actively
+> playing right now*, which no amount of registering displaces. Pausing does not reorder, and
+> rendering audio is not part of it.
+
+So claiming while a host player is mid-playback does not displace it (arms 5-6), and that player
+takes the keys straight back the moment it resumes (arm 10) — while claiming once it has fallen
+idle does win, even against an app that is still open and was playing seconds ago (arms 7-9).
 
 **That is the design working, not a limitation.** The goal is to make the VM a peer subject to the
 same rules as any native player, not a privileged one — and "the transport keys drive whatever
@@ -71,8 +79,8 @@ be a worse citizen than iTunes: it would take the keys away from the app the use
 listening to, on the strength of a guest that is playing nothing.
 
 The reach of the feature follows from that, and is worth stating plainly: the guest opening its
-audio stream makes the VM the media-key target when the VM is what most recently played. A host
-player that is still running and played more recently keeps the keys. Both halves are correct.
+audio stream announces the VM, which then holds the media keys until some host player starts
+playing again. A host app actually playing keeps them. Both halves are correct.
 
 What this buys that key routing **cannot buy at any grab level**: the Control Center transport
 buttons, Siri, and headset gestures — a double-tap on the earbuds pausing whatever is playing in
@@ -128,6 +136,12 @@ guest that is not playing anything — invisible, permanent, and very hard to at
 
 > Wire the commands when the guest opens the stream; **unwire** them when it closes it. The
 > handler registration, not the info dict, is what holds the keys.
+
+**Announce on the transition, never on a timer.** Because publishing `.playing` re-claims the
+front of the ranking (§2.2), a limina that periodically re-asserted its state — a keepalive, a
+defensive refresh, a re-publish on every window event — would repeatedly and invisibly steal the
+media keys from whatever the user is actually listening to. Publish when the guest's stream opens
+and when the state genuinely changes; never refresh for its own sake.
 
 `playbackState` must also be maintained rather than set once: the Control Center button renders
 from it, so a stale `.playing` leaves the widget offering "pause" forever and sending `pause`
@@ -196,8 +210,5 @@ and cannot be overridden per VM. Artwork (enhanced tier) is the only per-content
 check once the registration exists: capture the window, press fn+F8, and confirm exactly one key
 reaches the guest.
 
-**Does claiming the session take it from an active rival?** Whether re-registering while a rival player is **actively playing** takes the session from it.
-The measurements show a rival wins while we are released; they do not show what happens when we
-claim during active rival playback. This decides whether "start music in the VM, press play/pause"
-works on the first press or only after the rival stops, and it is one probe run away
-(`spikes/now-playing-media-keys/`).
+Ranking is settled — see §2.2 and `spikes/now-playing-media-keys/RESULTS.md`; nothing about it
+gates implementation, and the §4 seam is unchanged by it.

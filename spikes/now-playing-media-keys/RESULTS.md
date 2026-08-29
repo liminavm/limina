@@ -33,7 +33,11 @@ spikes/now-playing-media-keys/NowPlayingProbe.app/Contents/MacOS/nowplaying
 ```
 
 `--audio` adds a near-silent in-process `AVAudioEngine` output, to separate "must render audio"
-from "must merely register". It was never needed — arm 1 passed without it.
+from "must merely register"; `--audio-only` renders and registers nothing, standing in for the
+worker; and `--audio-sibling` registers here while *spawning* an `--audio-only` child, which is
+limina's actual supervisor/worker shape. The child is spawned rather than launched from a second
+shell on purpose: a separately launched process would be the terminal's responsibility, not ours,
+and would not model limina.
 
 Two things the probe is built to avoid confounding:
 
@@ -54,6 +58,10 @@ Two things the probe is built to avoid confounding:
 | 4 | handlers `removeTarget` + `isEnabled = false` | → macOS default player | tile gone |
 | 5 | claim (wire + publish `.playing`) **while a rival is actively playing** | → the rival | tile stays the rival's |
 | 6 | same, after the rival has been **paused** | → the rival (it resumed) | tile stays the rival's |
+| 7 | claim **while rendering a tone in this process**, rival paused | → **us** | both listed |
+| 8 | claim while a spawned **child** renders the tone, rival paused | → **us** | both listed |
+| 9 | claim with **no audio anywhere**, rival paused — the control | → **us** | both listed |
+| 10 | rival **resumed and actively playing**, then the key | → the rival | — |
 
 The logical arms above do not map one-to-one onto the raw logs, because arm 3 was found by
 accident before it was isolated. `arm1-bundled-noaudio.log` is arm 1. `arm2-retire.log` is a first
@@ -112,15 +120,49 @@ app the user is actually listening to. The reach that follows — the guest gets
 VM is what most recently played, a still-running host player that played more recently keeps them
 — is correct on both halves. Arms 1–4 read so cleanly because they ran on an empty field.
 
+**7. The ranking key is the most recent claim, not the most recent audio.** Arms 7 and 8
+appeared to show that rendering audio wins the session — first from the registering process,
+then from a spawned child, which would have decided whether registration had to move into the
+worker. The control killed both: arm 9 claimed against the same paused rival while rendering
+**nothing at all**, and won just the same. What separates arms 7-9 from arms 5-6 is not audio but
+timing — 5 and 6 claimed *while the rival was still playing* and lost; 7-9 claimed *after* it had
+gone idle and won. Publishing `playbackState = .playing` is itself the event macOS ranks on, and a
+pause does not reorder anything.
+
+The design consequence is that the open question dissolves rather than being answered: limina
+needs no audio of its own, no token tone, and no registration in the worker. The supervisor
+registers, the worker's stream state supplies the trigger, and the topology in §4 of the design
+doc stands unchanged.
+
+**8. An actively playing rival still takes it straight back, and delivery is exclusive.** With the
+probe holding the session, resuming the rival and pressing the key paused the *rival*, and the
+probe logged nothing (arm 10). One press, one recipient — no evidence of a command being fanned
+out to every registered player.
+
+**9. The Control Center menu lists several sessions at once; the key still has one target.**
+Through arms 7-9 both the rival and the probe were listed. Being on the menu is eligibility;
+ranking is a separate question, and only the ranked-first player receives the key.
+
+## The rule, as measured
+
+> macOS ranks registered players by **when each last announced itself as playing**. Publishing
+> `.playing` counts as such an announcement and moves you to the front — unless a rival is
+> *actively playing right now*, which no amount of registering displaces. Pausing does not
+> reorder. Rendering audio is not part of it.
+
+Two implementation rules fall out, both in §5 and §7 of the design doc:
+
+- **Announce on the transition, never on a timer.** Because re-publishing `.playing` re-claims the
+  front of the ranking, a limina that periodically re-asserted its state would steal the media
+  keys from whatever the user is actually listening to, repeatedly and invisibly. Publish when the
+  guest's stream opens and when the state genuinely changes; never refresh for its own sake.
+- **The claim is cheap and correct at stream-open.** The guest opening its audio device is exactly
+  the moment the VM has a claim to make, and the rule then gives it the keys unless a host player
+  is mid-playback — in which case the host player should keep them.
+
 ## Still open
 
-**Can the VM take its turn when the turn is genuinely its own?** Participating in the arbitration
-means ranking by audio recency, so the VM must move to the front once the guest starts playing and
-the host player has gone quiet. Arm 1 proved audio is not needed for *eligibility* on an empty
-field; arms 5–6 show something else decides *ranking*, and "most recently rendered audio" is the
-obvious candidate. limina is structurally on the wrong side of that if so: its MediaPlayer process
-renders nothing while a *sibling* process (the worker) makes the sound. If macOS credits the
-worker, the VM is not a participant at all — just a last-place entry that only wins on an empty
-Mac. The `--audio` arm exists precisely for this: render a tone from the registering process,
-claim against an idle-but-recent rival, and see whether the session moves. A "yes" argues for
-registering from the worker rather than the supervisor.
+Nothing on ranking. One item remains, and it belongs to implementation rather than to this spike:
+whether consuming the `NX_SYSDEFINED` event at the full-grab tap suppresses the remote command, so
+that a captured window delivers exactly one key to the guest rather than two. See §9 of
+`docs/design/media-keys-now-playing.md`.

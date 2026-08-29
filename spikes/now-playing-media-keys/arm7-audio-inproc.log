@@ -1,0 +1,9 @@
+[  0.049] bundle: id=dev.noronha.limina.nowplaying-probe path=<repo>/spikes/now-playing-media-keys/NowPlayingProbe.app
+[  0.135] audio: AVAudioEngine started (48000.0 Hz, 2 ch, -80 dBFS tone)
+[  0.136] commands: registered (toggle/play/pause/stop/next/prev enabled, rest disabled)
+[  0.136] info: published title-only dict (no duration/elapsed/rate/artwork)
+[  0.137] info: playbackState = playing
+[  0.137] ready — press fn+F8 (and the Control Center transport buttons). Ctrl-C to stop.
+[  0.137]        this process is .accessory, so it is never frontmost: a delivered
+[  0.137]        command proves system-wide media-session routing, not focus.
+[ 19.996] >>> REMOTE COMMAND: togglePlayPause  (MPRemoteCommandEvent)
