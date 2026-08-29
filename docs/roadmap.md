@@ -921,7 +921,10 @@ Parallels replacement: fullscreen, keymap remap, multi-display, system-combo cap
      CGEventTap consumes keyDown/keyUp/flagsChanged while captured and forwards them to the guest,
      so system key-combos act in the guest, not the host. Re-enables on `kCGEventTapDisabledByTimeout`.
      **Limitation:** multi-finger trackpad gestures (Mission Control / Spaces swipe) are processed by
-     the WindowServer upstream of a session tap and are NOT interceptable (two-finger scroll is).
+     the WindowServer upstream of a session tap and are NOT interceptable *by a session tap*
+     (two-finger scroll is). A raw-multitouch alternative — reading the private
+     `MultitouchSupport` contact stream and attempting to suppress the recognizer — is under
+     evaluation; see §Alternative in `docs/design/trackpad-gestures.md`.
      Secure Input (password fields) can still suppress the tap — acceptable.
    - ~~**Pointer capture:**~~ **DONE** — `Cmd-Ctrl-G`. *(The design described in this paragraph
      was later superseded by the fullscreen pointer grab —
