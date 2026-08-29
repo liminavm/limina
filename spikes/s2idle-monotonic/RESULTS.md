@@ -87,6 +87,39 @@ DRM master and input leases, every new `gnome-shell` then fails `/dev/dri/card0`
 `EBUSY` → `Failed to setup: No GPUs found` → gdm respawns forever, and NetworkManager
 never receives `PrepareForSleep(false)` so the network stays down.
 
+## Resolution: verified on the failing configuration
+
+Measured 2026-08-28 on the Debian sid VM that suffered the original incident (stock guest,
+`WatchdogUSec=3min` on journald/udevd/logind, kernel 7.1.8+deb14.1-arm64), across a **real
+8.4-minute macOS sleep** — not the SIGSTOP vehicle above, which cannot answer whether the
+guest counter advances across genuine host sleep:
+
+      REALTIME  += 505.845 s
+      MONOTONIC +=   1.000 s     (one logger tick — nothing)
+      BOOTTIME  += 505.845 s
+
+Guest and host wall clocks agreed exactly afterwards (`1787961534` both). Zero watchdog
+kills; `systemd-logind` and `systemd-journald` both `NRestarts=0`; the seated session and
+`graphical.target` survived. The same VM's journal still carries the old failure from a
+previous boot (`systemd-journald.service: Watchdog timeout (limit 3min)!`), so this is a
+before/after on one machine.
+
+**The counter keeps running across real macOS sleep.** BOOTTIME advancing by exactly the
+REALTIME amount is the discriminator: a `guest-set-time` from the running `qemu-ga` (which
+IS present on this guest) moves REALTIME alone, so only the kernel's own sleeptime
+injection can move both — and with the arch counter flagged `CLOCK_SOURCE_SUSPEND_NONSTOP`,
+`timekeeping_resume` derives that injection from the counter delta and
+`timekeeping_rtc_skipresume()` suppresses the RTC rung entirely.
+
+**Therefore `arm,no-tick-in-suspend` must NOT be declared.** It would clear
+`CLOCK_SOURCE_SUSPEND_NONSTOP` to un-shadow an RTC rung that is not needed, and cost
+accuracy on ordinary s2idle where the counter is reliable. The planned four-cell
+(deep × s2idle, flag on/off) is moot: the cell that matters already reads correct.
+
+The guest reached this through PSCI deep suspend (`PM: suspend entry (deep)`, then
+`psci: CPU5..CPU1 killed`, then `PM: suspend exit`) — see [[limina-psci-system-suspend]] and
+`docs/design/host-sleep-s2idle.md`.
+
 ## Files
 
 - `clocklog.py` / `clocklog.service` — 1 Hz REALTIME/MONOTONIC/BOOTTIME logger.
