@@ -47,7 +47,10 @@ pub(crate) fn register_key_sink(sink: KeySink) {
 fn deliver(code: u16) {
     let sink = KEY_SINK.with(|s| s.borrow().clone());
     match sink {
-        Some(f) => f(code),
+        Some(f) => {
+            log::info!("media: macOS routed a command to us; delivering key {code} to the guest");
+            f(code)
+        }
         // The window is gone but macOS still thinks we are a player. Not fatal, but it means a
         // retire was missed somewhere, so say so rather than dropping the key in silence.
         None => log::warn!("media: remote command with no key sink; the key was dropped"),
