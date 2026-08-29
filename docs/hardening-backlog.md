@@ -986,6 +986,21 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
 
 ## M9 snapshot hardening (from the 2026-07-18 transport-restore removal)
 
+- **Guest windows come back shrunk after a restore.** Observed 2026-08-28 on a stock F44 guest,
+  EFI+venus, restoring into a freshly launched supervisor: Firefox and Nautilus returned
+  vertically shrunk (~445 px → ~320 px tall), with the shell, wallpaper and every app otherwise
+  healthy. Nothing on the host changed size across the bracket — the window stayed 1810x1050 and
+  the scanout 2560x1440 — so the resize is the guest re-laying-out its own windows.
+
+  The mechanism to check first: that restore pushed `display id=0 connected=0` and then
+  `connected=1` — a full monitor unplug/replug — where an in-place resume (same supervisor,
+  respawned worker) only re-asserts the mode. mutter evacuates and shrinks windows off a monitor
+  that disappears and does not restore their geometry when it comes back, so a restore that
+  re-runs the cold-boot display handshake instead of re-asserting would produce exactly this.
+  **Unverified**: an in-place resume that sent no disconnect *also* repositioned windows in the
+  same session, so either there is a second cause or the disconnect is not the whole story.
+  Reproduce with a paired disk+snapshot fixture and `LIMINA_DISPLAY_TRACE` before fixing.
+
 - ~~**A stock Debian 13 guest cannot suspend**~~ — **CLOSED 2026-08-23, both causes.** Two
   independent faults, and neither was ours. **(a)** The quiesce oracle counted a device no driver
   had ever taken as a holdout, so a guest without a driver for one of our devices could never be
