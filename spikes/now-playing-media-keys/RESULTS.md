@@ -126,8 +126,9 @@ then from a spawned child, which would have decided whether registration had to 
 worker. The control killed both: arm 9 claimed against the same paused rival while rendering
 **nothing at all**, and won just the same. What separates arms 7-9 from arms 5-6 is not audio but
 timing — 5 and 6 claimed *while the rival was still playing* and lost; 7-9 claimed *after* it had
-gone idle and won. Publishing `playbackState = .playing` is itself the event macOS ranks on, and a
-pause does not reorder anything.
+gone idle and won. Announcing yourself — wiring the handlers and publishing
+`playbackState = .playing`, which every arm did together and which this spike therefore cannot
+decompose — is itself the event macOS ranks on, and a pause does not reorder anything.
 
 The design consequence is that the open question dissolves rather than being answered: limina
 needs no audio of its own, no token tone, and no registration in the worker. The supervisor

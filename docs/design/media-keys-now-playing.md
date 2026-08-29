@@ -63,8 +63,9 @@ There is none: **the supervisor registers, the worker supplies only the stream s
 
 The rule macOS arbitrates by, as measured:
 
-> Registered players rank by **when each last announced itself as playing**. Publishing
-> `.playing` is such an announcement and moves you to the front — unless a rival is *actively
+> Registered players rank by **when each last announced itself as playing** — wiring the
+> handlers and publishing `.playing`, which the measurements only ever did together. Announcing
+> moves you to the front — unless a rival is *actively
 > playing right now*, which no amount of registering displaces. Pausing does not reorder, and
 > rendering audio is not part of it.
 
@@ -137,8 +138,8 @@ guest that is not playing anything — invisible, permanent, and very hard to at
 > Wire the commands when the guest opens the stream; **unwire** them when it closes it. The
 > handler registration, not the info dict, is what holds the keys.
 
-**Announce on the transition, never on a timer.** Because publishing `.playing` re-claims the
-front of the ranking (§2.2), a limina that periodically re-asserted its state — a keepalive, a
+**Announce on the transition, never on a timer.** Because announcing re-claims the front of the
+ranking (§2.2), a limina that periodically re-asserted its state — a keepalive, a
 defensive refresh, a re-publish on every window event — would repeatedly and invisibly steal the
 media keys from whatever the user is actually listening to. Publish when the guest's stream opens
 and when the state genuinely changes; never refresh for its own sake.
