@@ -171,6 +171,9 @@ fn workload_procs(guest: &Guest, apps: &[String]) -> String {
 /// - `content restore ... DROPPED` — the restore had the pixels and could not put them back.
 ///   `vrend_renderer_restore_ctx_contents` returns success regardless, so this log line is the
 ///   only account of it.
+/// - `vkMapMemory REFUSED` — a venus VkDeviceMemory the snapshot wanted and could not read. The
+///   client window buffers land here: the compositor samples them, so their absence is a blank
+///   window that only the client's own next repaint fills in.
 fn content_losses(log: &str) -> Vec<&str> {
     log.lines()
         .filter(|l| {
@@ -178,6 +181,7 @@ fn content_losses(log: &str) -> Vec<&str> {
                 || l.contains("classic content restore failed")
                 || l.contains("content export ctx") && l.contains("SKIPPED")
                 || l.contains("content restore ctx") && l.contains("DROPPED")
+                || l.contains("vkMapMemory REFUSED")
         })
         .collect()
 }

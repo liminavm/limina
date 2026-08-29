@@ -16,6 +16,17 @@ use objc2_io_surface::{
     IOSurfaceUnlock,
 };
 
+/// Applies between periodic capture dumps (`LIMINA_WINDOW_CAPTURE_EVERY`, default 120). A still
+/// desktop presents a handful of frames a minute, so a probe watching for a restore's pixels can
+/// sit for the whole session below the default cadence and end with no frame at all.
+pub(crate) fn capture_every_from_env() -> u64 {
+    std::env::var("LIMINA_WINDOW_CAPTURE_EVERY")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(120)
+}
+
 /// Parse `LIMINA_CAPTURE_IDS` — the ids to ALSO dump by global lookup each tick, regardless
 /// of what the window presents. Lets us peek the venus SET_SCANOUT_BLOB surface (e.g. id 38)
 /// even when a competing 2D ring is what's on screen. LIMINA_CAPTURE_IDS="33,38,39".
