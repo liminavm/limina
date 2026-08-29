@@ -1,9 +1,9 @@
 # Media keys as a media session, not a keyboard bucket
 
-Status: **designed, not implemented.** Companion material: the measurements in
-`spikes/now-playing-media-keys/RESULTS.md`, the current policy in
-`crates/limina-input/src/auxkey.rs`, and the input stack as a whole in
-`docs/input-and-windows.md`.
+Status: **shipped.** The policy is `crates/limina/src/window/media_policy.rs` (pure, unit-tested),
+the MediaPlayer side `crates/limina/src/window/media_session.rs`, the guest signal
+`crates/limina-vmm/src/audio_state.rs` over libkrun's snd `set_pcm_state_callback`, and the bucket
+table `crates/limina-input/src/auxkey.rs`. Measurements: `spikes/now-playing-media-keys/RESULTS.md`.
 
 ## 1. What the bucket rule gets wrong
 
