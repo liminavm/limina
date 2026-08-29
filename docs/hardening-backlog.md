@@ -1003,11 +1003,20 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   from whatever the guest redraws. Unexamined — it may be correct (blob scanouts taking a
   different path) or it may be why a restored desktop needs a redraw before it looks right.
 
-- **Guest windows come back shrunk after a restore.** Observed 2026-08-28 on a stock F44 guest,
-  EFI+venus, restoring into a freshly launched supervisor: Firefox and Nautilus returned
-  vertically shrunk (~445 px → ~320 px tall), with the shell, wallpaper and every app otherwise
-  healthy. Nothing on the host changed size across the bracket — the window stayed 1810x1050 and
-  the scanout 2560x1440 — so the resize is the guest re-laying-out its own windows.
+- **Guest windows are moved and resized by a restore.** Stock F44, EFI+venus, restoring into a
+  freshly launched supervisor. Measured 2026-08-28 with XWayland clients pinned to exact geometry
+  via `xdotool` (install it in the guest; `XAUTHORITY` is mutter's
+  `/run/user/1000/.mutter-Xwaylandauth.*`), on a restore whose GPU replay was clean, so this is
+  not the sticky-`in_error` bug:
+
+  | window | pinned | after restore |
+  |---|---|---|
+  | Calculator | 120,140 820x1332 | 122,352 820x1332 (moved 212 px) |
+  | Files | 800,300 1100x860 | 1412,674 1880x1188 (moved and resized) |
+
+  Restoring one frozen pair twice, the windows come back **1.5x wider** under both hotplug
+  policies, and land at identical positions (354,56) in both — so whatever re-fits them is
+  deterministic, and it is not the connector cycle.
 
   **It is not the connector cycle.** A restore pushes `display id=0 connected=0` then
   `connected=1` on slot 0 — the guest's only connector, so unlike a window migrating between
@@ -1021,11 +1030,18 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
     (clustered at the origin, the largest window clipped off the left edge).
 
   In both arms the guest's own monitor state came back *identical* to pre-suspend —
-  `2560x1440@59.994`, scale 1.25, at 0,0, primary — so nothing about the display config changed
-  and the windows moved regardless. Switching the restore to in-place would therefore be a
-  regression, not a fix: the cycle is what gets mutter to lay out onto a known-good monitor
-  again. The cause is elsewhere; look at what the guest session does with window geometry across
-  the bracket, not at the hotplug policy.
+  `2560x1440@59.994`, scale 1.25, at 0,0, primary, mutter's guard window 2048x1152 — so nothing
+  about the display config changed and the windows moved regardless. Switching the restore to
+  in-place would therefore be a regression, not a fix: the cycle is what gets mutter to lay out
+  onto a known-good monitor again.
+
+  **Ruled out so far**, each by measurement: the hotplug policy; the mode; the monitor scale; the
+  logical screen size; and the XWayland screen size — 4096x2304 (2048x1152 at XWayland scale 2)
+  on a cold boot *and* after a restore, with the same client reporting the same natural size on
+  a cold boot as before the suspend. So the guest's whole display configuration is unchanged
+  across the bracket and the windows are still rescaled: the next place to look is what the guest
+  session does to window geometry in response to the resume itself, not to anything about the
+  display.
 
   Note when re-measuring: every earlier sighting of this was on a run whose gnome-shell context
   had been bricked by the sticky-`in_error` replay bug (fixed 2026-08-28). A compositor whose
