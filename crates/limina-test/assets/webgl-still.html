@@ -1,0 +1,33 @@
+<!doctype html><meta charset=utf-8><title>webgl-still</title>
+<!-- A STILL WebGL frame. Deliberately not animated: the L2 restore test compares
+     pre/post landmarks cell by cell, so this page's pixels have to be a fixed
+     picture the comparison can hold against. Fixed canvas size (not viewport
+     relative) so the frame is identical on any window geometry, and one single
+     draw with no requestAnimationFrame loop. Rich enough to be a real landmark:
+     a shader with high-frequency colour structure, so a lost or re-uploaded
+     texture shows up as a changed cell rather than hiding in flat fill. -->
+<style>html,body{margin:0;background:#101020;display:grid;place-items:center;height:100vh}
+canvas{display:block;image-rendering:pixelated}</style>
+<canvas id=c width=640 height=480></canvas><script>
+const gl=document.getElementById('c').getContext('webgl',{preserveDrawingBuffer:true});
+const vs=`attribute vec2 p;varying vec2 v;void main(){v=p;gl_Position=vec4(p,0.,1.);}`;
+const fs=`precision highp float;varying vec2 v;
+void main(){
+  float r=.5+.5*sin(v.x*14.)*cos(v.y*11.);
+  float g=.5+.5*sin((v.x+v.y)*9.);
+  float b=.5+.5*cos(v.x*7.-v.y*13.);
+  float ring=step(.02,abs(length(v)-.55));
+  gl_FragColor=vec4(r*ring,g*ring,b*ring,1.);
+}`;
+function sh(k,s){const o=gl.createShader(k);gl.shaderSource(o,s);gl.compileShader(o);return o}
+const pr=gl.createProgram();gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs));
+gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(pr);gl.useProgram(pr);
+const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);
+gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+const l=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(l);
+gl.vertexAttribPointer(l,2,gl.FLOAT,false,0,0);
+gl.viewport(0,0,640,480);
+gl.clearColor(.06,.06,.13,1);gl.clear(gl.COLOR_BUFFER_BIT);
+gl.drawArrays(gl.TRIANGLES,0,3);gl.finish();
+document.title='webgl-still-drawn';
+</script>
