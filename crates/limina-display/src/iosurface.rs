@@ -200,9 +200,21 @@ fn slot_of(scanout_id: u32) -> Result<usize, DisplayBackendError> {
 }
 
 impl WindowBackend {
+    /// Write one protocol line to the supervisor, as a **single** `write` syscall.
+    ///
+    /// The newline is appended before the call rather than by `writeln!`, which formats in
+    /// fragments and so issues one syscall per fragment. That is not a style preference: the
+    /// control socketpair has more than one writer (the audio device announces the guest's
+    /// virtio-snd stream state on the same fd from its own thread), and small writes to a
+    /// socketpair only serialize per syscall. A torn line interleaves two senders into a
+    /// single unparseable one — `surface 12 13 800 600 0audio playing` — which would surface
+    /// as an intermittent display fault with nothing pointing at audio.
     fn send(&mut self, line: &str) {
         if let Some(f) = self.control.as_mut() {
-            if let Err(e) = writeln!(f, "{line}") {
+            let mut buf = String::with_capacity(line.len() + 1);
+            buf.push_str(line);
+            buf.push('\n');
+            if let Err(e) = f.write_all(buf.as_bytes()) {
                 log::error!("window: control write failed: {e}");
             }
         }
