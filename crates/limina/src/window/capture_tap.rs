@@ -377,7 +377,7 @@ extern "C" fn tap_callback(
 
     // Aux keys (the special/media top row, which arrives as NX_SYSDEFINED rather than as a
     // keycode — see `limina_input::auxkey`). Ownership is per BUCKET, not per grab mode alone:
-    // media follows either grab, volume needs the full grab, brightness never leaves the host.
+    // media and volume need the full grab, brightness never leaves the host.
     // Anything the policy doesn't claim is returned untouched, so macOS still dims the screen.
     if etype == SYS_DEFINED {
         let mode = match (captured, soft) {
