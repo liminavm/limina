@@ -173,7 +173,11 @@ leaving them at their defaults advertises capabilities no evdev key can service.
 - **`Media` leaves the soft grab.** With the window merely focused, media keys are no longer
   intercepted; they go to macOS, which routes them to whoever owns the session — us, when the
   guest is playing. Net behavior in the common case is unchanged, and the unfocused case starts
-  working.
+  working. Measured on a booted guest, with the session as the only variable: focused and
+  uncaptured, the key reached the guest while we held the session and reached **nothing** once
+  the session had retired. That null control is what distinguishes routing *through* macOS from
+  an interception that merely looks like it — a still-soft-grabbed key would have reached the
+  guest in both.
 - **`Media` stays at `GrabMode::Full`.** Under an explicit capture the VM owns the keyboard
   outright, so the tap eats the `NX_SYSDEFINED` event and forwards the key directly, and macOS
   mints no remote command for the session path to double-deliver. Measured against a booted VM,
