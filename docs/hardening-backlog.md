@@ -1009,14 +1009,29 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   healthy. Nothing on the host changed size across the bracket — the window stayed 1810x1050 and
   the scanout 2560x1440 — so the resize is the guest re-laying-out its own windows.
 
-  The mechanism to check first: that restore pushed `display id=0 connected=0` and then
-  `connected=1` — a full monitor unplug/replug — where an in-place resume (same supervisor,
-  respawned worker) only re-asserts the mode. mutter evacuates and shrinks windows off a monitor
-  that disappears and does not restore their geometry when it comes back, so a restore that
-  re-runs the cold-boot display handshake instead of re-asserting would produce exactly this.
-  **Unverified**: an in-place resume that sent no disconnect *also* repositioned windows in the
-  same session, so either there is a second cause or the disconnect is not the whole story.
-  Reproduce with a paired disk+snapshot fixture and `LIMINA_DISPLAY_TRACE` before fixing.
+  **It is not the connector cycle.** A restore pushes `display id=0 connected=0` then
+  `connected=1` on slot 0 — the guest's only connector, so unlike a window migrating between
+  panels (which disconnects one slot and connects *another*, per `slot_for`'s per-panel
+  assignment) the guest really does pass through zero monitors. That made a tempting cause, and
+  it is wrong. Measured 2026-08-28, restoring one frozen disk+snapshot pair twice into fresh
+  supervisors, `LIMINA_DISPLAY_HOTPLUG` the only difference:
+
+  - `cycle` (default): `connected=0` + `connected=1`; windows repositioned.
+  - `inplace`: one push, size+EDID, no disconnect — windows repositioned **anyway**, and worse
+    (clustered at the origin, the largest window clipped off the left edge).
+
+  In both arms the guest's own monitor state came back *identical* to pre-suspend —
+  `2560x1440@59.994`, scale 1.25, at 0,0, primary — so nothing about the display config changed
+  and the windows moved regardless. Switching the restore to in-place would therefore be a
+  regression, not a fix: the cycle is what gets mutter to lay out onto a known-good monitor
+  again. The cause is elsewhere; look at what the guest session does with window geometry across
+  the bracket, not at the hotplug policy.
+
+  Note when re-measuring: every earlier sighting of this was on a run whose gnome-shell context
+  had been bricked by the sticky-`in_error` replay bug (fixed 2026-08-28). A compositor whose
+  every submit was rejected is not a witness to window geometry, so treat pre-fix observations of
+  "windows came back smaller" as unreliable and re-establish the symptom first — including
+  whether windows are *resized* at all, or only moved.
 
 - ~~**A stock Debian 13 guest cannot suspend**~~ — **CLOSED 2026-08-23, both causes.** Two
   independent faults, and neither was ours. **(a)** The quiesce oracle counted a device no driver
