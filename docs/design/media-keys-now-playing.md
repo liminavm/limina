@@ -178,14 +178,31 @@ leaving them at their defaults advertises capabilities no evdev key can service.
   the session had retired. That null control is what distinguishes routing *through* macOS from
   an interception that merely looks like it — a still-soft-grabbed key would have reached the
   guest in both.
-- **`Media` stays at `GrabMode::Full`.** Under an explicit capture the VM owns the keyboard
-  outright, so the tap eats the `NX_SYSDEFINED` event and forwards the key directly, and macOS
-  mints no remote command for the session path to double-deliver. Measured against a booted VM,
-  not assumed: focused, the guest reacted and the session holder logged nothing; unfocused, the
-  same press arrived as `togglePlayPause` (arm 11). A wrong answer here would have meant every
-  press reaching the guest twice.
-- **`Volume` is untouched.** Volume is not a remote command, our audio leaves through CoreAudio,
-  and the existing full-grab-only rule is already right for the reasons in `auxkey.rs`'s header.
+- **`Media` requires `GrabMode::Hard`, and the full grab splits in two to say so.** A capture the
+  fullscreen policy took on the user's behalf is not the same claim as Cmd-Ctrl-G: one is a
+  request for a big window, the other is the user saying this VM owns the keyboard. Only the
+  second takes the keys that control what the user is listening to — which they may well have
+  started in a host app before going fullscreen. So `GrabMode` gains `Auto` between `Soft` and
+  `Hard`, and the tap tells them apart with `captured && !grab_state().holding()`.
+
+  Under `Hard` the tap eats the `NX_SYSDEFINED` event and forwards the key directly, and macOS
+  mints no remote command for the session path to double-deliver — measured against a booted VM,
+  not assumed (arm 11): captured, the guest reacted and the session holder logged nothing;
+  uncaptured, the same press arrived as `togglePlayPause`. A wrong answer there would have meant
+  every press reaching the guest twice.
+
+  That direct path is also the only delivery we can *guarantee*. A session-routed key arrives
+  while macOS still agrees we hold the session, and a rival started afterwards takes it; under
+  the hard grab the key is ours unconditionally. Reserving that for the explicit gesture is the
+  point of the split.
+- **`Volume` moves to `GrabMode::Hard` with it**, for the same reason and one of its own: the
+  documented whisper-trap (guest pinned to 100% under a host volume capped at grab time, with no
+  in-grab way to fix it) is a genuinely surprising state to land in, and confining it to the
+  explicit grab keeps it from ambushing anyone who merely went fullscreen. Volume is not a remote
+  command, so below `Hard` it simply stays with the host device and its HUD.
+- **Nothing sits at `Auto`.** That is the honest reading of the table rather than an oversight:
+  the tier exists so the two captures can mean different things, and so per-key config has
+  somewhere to put a key that a big window *should* claim.
 - **`Brightness` and `Other` are untouched.**
 
 **Multiple VMs.** `MPNowPlayingInfoCenter.default()` is process-wide, so one limina.app can

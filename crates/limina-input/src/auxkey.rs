@@ -17,16 +17,20 @@
 //!
 //! | bucket       | keys                          | goes to the guest        |
 //! |--------------|-------------------------------|--------------------------|
-//! | `Media`      | play/pause, next, prev, ff, rw | full grab only           |
-//! | `Volume`     | volume up/down, mute          | full grab only           |
+//! | `Media`      | play/pause, next, prev, ff, rw | hard grab only           |
+//! | `Volume`     | volume up/down, mute          | hard grab only           |
 //! | `Brightness` | screen brightness up/down     | never (host hardware)    |
 //! | `Other`      | eject, illumination, Launchpad, … | never (for now)      |
 //!
-//! Volume and media both stop at the full grab, for related but distinct reasons.
+//! Both audio buckets stop at the **hard** grab — the explicit Cmd-Ctrl-G, not the capture the
+//! fullscreen policy takes on its own. The two are different asks. Fullscreen is a request for a
+//! big window, and the capture that follows is a consequence of it; Cmd-Ctrl-G is the user saying
+//! this VM owns the keyboard. Only the second is a reason to take the keys that control what the
+//! user is listening to, which they may well have started in a host app before going fullscreen.
 //!
-//! Volume: our audio leaves through CoreAudio, so under a merely-focused window the physical knob
-//! the user expects to move is the *host* device volume (with the host HUD). Under an explicit full
-//! grab the VM owns the keyboard outright and the guest's own mixer + OSD is the right target.
+//! Volume: our audio leaves through CoreAudio, so short of that explicit claim the physical knob
+//! the user expects to move is the *host* device volume (with the host HUD). Under the hard grab
+//! the VM owns the keyboard outright and the guest's own mixer + OSD is the right target.
 //!
 //! Media: focus is the wrong question for a transport key. "Who is focused" is a keyboard
 //! question; "who should receive a transport command" is a media-session question macOS already
@@ -38,14 +42,18 @@
 //! Siri and the headset gestures, which no bucket rule can: they never enter the keyboard event
 //! stream at all.
 //!
-//! The full-grab entry stays, and does not double-deliver: with the window captured the tap consumes
+//! The hard-grab entry stays, and does not double-deliver: with the window captured the tap consumes
 //! the `NX_SYSDEFINED` event and macOS mints no remote command for the session path to duplicate
-//! (measured — `spikes/now-playing-media-keys/RESULTS.md`).
+//! (measured — `spikes/now-playing-media-keys/RESULTS.md`). It is also the one delivery we can
+//! *guarantee*: a session-routed key arrives only while macOS still agrees we hold the session,
+//! and a rival started afterwards takes it. Under the hard grab the key is ours unconditionally,
+//! which is what the gesture asked for.
 //!
-//! Known trap in that choice: under a full grab the volume keys move only the guest mixer,
+//! Known trap in that choice: under the hard grab the volume keys move only the guest mixer,
 //! while loudness stays capped by whatever the host volume was at grab time. Grab at host 20%
 //! and the guest pins to 100% sounding like a whisper, with no in-grab way to fix it (ungrab,
-//! or Ctrl-Opt, then use the host keys). Worth a hint in the UI eventually.
+//! or Ctrl-Opt, then use the host keys). Worth a hint in the UI eventually. Confining this to the
+//! explicit grab is what keeps it from ambushing anyone who merely went fullscreen.
 //!
 //! The `Other` bucket is the parking lot for keys worth revisiting one at a time (Mission
 //! Control → GNOME overview is a plausible future win; suspend/eject probably stay host-side
@@ -87,18 +95,24 @@ pub enum GrabMode {
     None,
     /// Soft keyboard grab (window is key, no explicit grab gesture).
     Soft,
-    /// Full pointer+keyboard capture (Cmd-Ctrl-G).
-    Full,
+    /// Pointer+keyboard capture the fullscreen policy took on the user's behalf. A capture, but
+    /// a *consequence* of wanting a big window rather than a claim on the keyboard.
+    Auto,
+    /// Pointer+keyboard capture the user asked for by name (Cmd-Ctrl-G, or a promotion out of
+    /// `Auto`). The only mode in which the user has said, in so many words, that this VM owns
+    /// the keyboard.
+    Hard,
 }
 
 impl GrabMode {
-    /// How much the VM owns, as an ordering — `None` < `Soft` < `Full`. Lets a bucket state
-    /// its threshold once ([`AuxBucket::min_grab`]) instead of enumerating mode pairs.
+    /// How much the VM owns, as an ordering — `None` < `Soft` < `Auto` < `Hard`. Lets a bucket
+    /// state its threshold once ([`AuxBucket::min_grab`]) instead of enumerating mode pairs.
     fn rank(self) -> u8 {
         match self {
             GrabMode::None => 0,
             GrabMode::Soft => 1,
-            GrabMode::Full => 2,
+            GrabMode::Auto => 2,
+            GrabMode::Hard => 3,
         }
     }
 }
@@ -122,11 +136,15 @@ impl AuxBucket {
     /// keeps them in every mode. This *is* the policy table.
     pub fn min_grab(self) -> Option<GrabMode> {
         match self {
-            // Full only. Focus is the wrong question for a transport key, so a merely-focused
-            // window no longer eats them: they go to macOS, which routes them to whoever holds
-            // the media session — us, while the guest is playing. See the header.
-            AuxBucket::Media => Some(GrabMode::Full),
-            AuxBucket::Volume => Some(GrabMode::Full),
+            // Both stop at the *explicit* capture. Neither focus nor a fullscreen auto-capture is
+            // a claim on these keys: one is a keyboard question and the other is a window-size
+            // one, while the keys themselves are about who owns the audio. See the header.
+            //
+            // Nothing sits at `Auto` today. That is the honest reading of the table, not an
+            // oversight — the tier exists so the two captures can mean different things, and so
+            // per-key config has somewhere to put a key that a big window *should* claim.
+            AuxBucket::Media => Some(GrabMode::Hard),
+            AuxBucket::Volume => Some(GrabMode::Hard),
             AuxBucket::Brightness | AuxBucket::Other => None,
         }
     }
@@ -247,9 +265,9 @@ mod tests {
     use crate::constants::SUPPORTED_KEYBOARD_KEYS;
 
     #[test]
-    fn media_reaches_the_guest_only_under_an_explicit_capture() {
+    fn media_reaches_the_guest_only_under_the_hard_grab() {
         assert_eq!(
-            route_aux_key(NX_KEYTYPE_PLAY, GrabMode::Full),
+            route_aux_key(NX_KEYTYPE_PLAY, GrabMode::Hard),
             Some(KEY_PLAYPAUSE)
         );
         // A merely-focused window does NOT take the transport keys. They go to macOS, which
@@ -262,9 +280,31 @@ mod tests {
     }
 
     #[test]
-    fn volume_needs_the_full_grab_so_a_focused_window_doesnt_steal_the_host_knob() {
+    fn a_fullscreen_auto_capture_is_not_a_claim_on_the_audio_keys() {
+        // The distinction the Auto tier exists for. Going fullscreen captures the pointer and
+        // keyboard, but the user asked for a big window, not for the keys that control what
+        // they are listening to — which may well be a host player they started first. So the
+        // auto-capture leaves both audio buckets alone and the session path decides, exactly as
+        // it does for an uncaptured window.
+        assert_eq!(route_aux_key(NX_KEYTYPE_PLAY, GrabMode::Auto), None);
+        assert_eq!(route_aux_key(NX_KEYTYPE_SOUND_UP, GrabMode::Auto), None);
+        assert_eq!(route_aux_key(NX_KEYTYPE_MUTE, GrabMode::Auto), None);
+        // Cmd-Ctrl-G — including as a promotion out of that same auto-capture — is the claim,
+        // and it takes both.
         assert_eq!(
-            route_aux_key(NX_KEYTYPE_SOUND_UP, GrabMode::Full),
+            route_aux_key(NX_KEYTYPE_PLAY, GrabMode::Hard),
+            Some(KEY_PLAYPAUSE)
+        );
+        assert_eq!(
+            route_aux_key(NX_KEYTYPE_SOUND_UP, GrabMode::Hard),
+            Some(KEY_VOLUMEUP)
+        );
+    }
+
+    #[test]
+    fn volume_needs_the_hard_grab_so_a_focused_window_doesnt_steal_the_host_knob() {
+        assert_eq!(
+            route_aux_key(NX_KEYTYPE_SOUND_UP, GrabMode::Hard),
             Some(KEY_VOLUMEUP)
         );
         // The load-bearing case: merely focusing the VM must NOT take volume from the host.
@@ -276,7 +316,7 @@ mod tests {
     fn a_release_always_follows_its_press_across_a_mid_press_mode_change() {
         // The press goes to the guest under a full grab...
         assert_eq!(
-            route_aux_key(NX_KEYTYPE_SOUND_UP, GrabMode::Full),
+            route_aux_key(NX_KEYTYPE_SOUND_UP, GrabMode::Hard),
             Some(KEY_VOLUMEUP)
         );
         // ...and then the user ungrabs (Cmd-Ctrl-G / Ctrl-Opt) while still holding the key.
@@ -320,7 +360,7 @@ mod tests {
             None
         );
         assert_eq!(
-            route_aux_event_key(NX_KEYTYPE_SOUND_UP, GrabMode::Full, false, false),
+            route_aux_event_key(NX_KEYTYPE_SOUND_UP, GrabMode::Hard, false, false),
             None
         );
     }
@@ -331,16 +371,21 @@ mod tests {
         // and REWIND(20) — NEXT(17)/PREVIOUS(18) never appear. Those physical keys are ⏭/⏮, so
         // they must reach the guest as track skip; KEY_FASTFORWARD/KEY_REWIND would be a dead
         // key in GNOME and read as "forwarding is broken".
-        assert_eq!(route_aux_key(19, GrabMode::Full), Some(KEY_NEXTSONG));
-        assert_eq!(route_aux_key(20, GrabMode::Full), Some(KEY_PREVIOUSSONG));
+        assert_eq!(route_aux_key(19, GrabMode::Hard), Some(KEY_NEXTSONG));
+        assert_eq!(route_aux_key(20, GrabMode::Hard), Some(KEY_PREVIOUSSONG));
         // A keyboard that does emit the NEXT/PREVIOUS codes lands on the same keys.
-        assert_eq!(route_aux_key(17, GrabMode::Full), Some(KEY_NEXTSONG));
-        assert_eq!(route_aux_key(18, GrabMode::Full), Some(KEY_PREVIOUSSONG));
+        assert_eq!(route_aux_key(17, GrabMode::Hard), Some(KEY_NEXTSONG));
+        assert_eq!(route_aux_key(18, GrabMode::Hard), Some(KEY_PREVIOUSSONG));
     }
 
     #[test]
     fn brightness_is_host_hardware_in_every_mode() {
-        for mode in [GrabMode::None, GrabMode::Soft, GrabMode::Full] {
+        for mode in [
+            GrabMode::None,
+            GrabMode::Soft,
+            GrabMode::Auto,
+            GrabMode::Hard,
+        ] {
             assert_eq!(route_aux_key(NX_KEYTYPE_BRIGHTNESS_UP, mode), None);
             assert_eq!(route_aux_key(NX_KEYTYPE_BRIGHTNESS_DOWN, mode), None);
         }
@@ -352,7 +397,7 @@ mod tests {
         // exist: all `Other`, all host-owned for now.
         for nx in [14, 21, 250] {
             assert_eq!(nx_key_bucket(nx), AuxBucket::Other);
-            assert_eq!(route_aux_key(nx, GrabMode::Full), None);
+            assert_eq!(route_aux_key(nx, GrabMode::Hard), None);
         }
     }
 

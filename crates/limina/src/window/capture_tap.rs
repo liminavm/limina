@@ -377,11 +377,17 @@ extern "C" fn tap_callback(
 
     // Aux keys (the special/media top row, which arrives as NX_SYSDEFINED rather than as a
     // keycode — see `limina_input::auxkey`). Ownership is per BUCKET, not per grab mode alone:
-    // media and volume need the full grab, brightness never leaves the host.
+    // media and volume need the hard grab, brightness never leaves the host.
     // Anything the policy doesn't claim is returned untouched, so macOS still dims the screen.
     if etype == SYS_DEFINED {
+        // The two captures are not the same claim, so they are not the same mode. `holding` is
+        // the policy's own flag, and it cannot go stale under a capture: the policy only takes
+        // the pointer from `uncaptured_edges` (gated on `!captured`), a promotion clears it
+        // (`release_by_user`), and `take_by_policy` refuses outright when the pointer is already
+        // ours. So while captured it answers exactly one question — did the user ask for this.
         let mode = match (captured, soft) {
-            (true, _) => GrabMode::Full,
+            (true, _) if ctx.input.grab_state().holding() => GrabMode::Auto,
+            (true, _) => GrabMode::Hard,
             (false, true) => GrabMode::Soft,
             (false, false) => GrabMode::None,
         };
