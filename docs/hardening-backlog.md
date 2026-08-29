@@ -1003,68 +1003,15 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   from whatever the guest redraws. Unexamined — it may be correct (blob scanouts taking a
   different path) or it may be why a restored desktop needs a redraw before it looks right.
 
-- **Guest windows are moved and resized by a restore.** Stock F44, EFI+venus, restoring into a
-  freshly launched supervisor. Measured 2026-08-28 with XWayland clients pinned to exact geometry
-  via `xdotool` (install it in the guest; `XAUTHORITY` is mutter's
-  `/run/user/1000/.mutter-Xwaylandauth.*`), on a restore whose GPU replay was clean, so this is
-  not the sticky-`in_error` bug:
-
-  | window | pinned | after restore |
-  |---|---|---|
-  | Calculator | 120,140 820x1332 | 122,352 820x1332 (moved 212 px) |
-  | Files | 800,300 1100x860 | 1412,674 1880x1188 (moved and resized) |
-
-  Restoring one frozen pair twice, the windows come back **1.5x wider** under both hotplug
-  policies, and land at identical positions (354,56) in both — so whatever re-fits them is
-  deterministic, and it is not the connector cycle.
-
-  **It is not the connector cycle.** A restore pushes `display id=0 connected=0` then
-  `connected=1` on slot 0 — the guest's only connector, so unlike a window migrating between
-  panels (which disconnects one slot and connects *another*, per `slot_for`'s per-panel
-  assignment) the guest really does pass through zero monitors. That made a tempting cause, and
-  it is wrong. Measured 2026-08-28, restoring one frozen disk+snapshot pair twice into fresh
-  supervisors, `LIMINA_DISPLAY_HOTPLUG` the only difference:
-
-  - `cycle` (default): `connected=0` + `connected=1`; windows repositioned.
-  - `inplace`: one push, size+EDID, no disconnect — windows repositioned **anyway**, and worse
-    (clustered at the origin, the largest window clipped off the left edge).
-
-  In both arms the guest's own monitor state came back *identical* to pre-suspend —
-  `2560x1440@59.994`, scale 1.25, at 0,0, primary, mutter's guard window 2048x1152 — so nothing
-  about the display config changed and the windows moved regardless. Switching the restore to
-  in-place would therefore be a regression, not a fix: the cycle is what gets mutter to lay out
-  onto a known-good monitor again.
-
-  **The cause: the restored guest reads virtio-gpu's default EDID before ours arrives.** An
-  instrumented mutter (`G_MESSAGES_DEBUG=all MUTTER_DEBUG=all MUTTER_VERBOSE=1` in
-  `/etc/environment.d`, guest relogin, verified in `/proc/$(pgrep -x gnome-shell)/environ`) says
-  it outright, inside one second:
-
-      22:51:23  BACKEND: No backlight support for monitor Red Hat, Inc. 10"
-      22:51:23  GEOMETRY: screen/monitor constraint; region_spanning_rectangles: [0,32 +1024,544]
-      22:51:23  GEOMETRY: Sending synthetic configure notify to Home with x:354 y:57 w:1650 h:1290
-      22:51:24  COLOR: Generating ICC profile for 'xrandr-LMN-BenQ LCD-0x6c42fae5'
-
-  A fresh worker's virtio-gpu device boots carrying virtio's own default EDID, which claims a 10"
-  panel. The restored guest's driver never went away, so it re-probes at once: 2560x1440 on a 10"
-  screen is a 250% scale, i.e. a 1024x576 logical screen (2560/2.5, 1440/2.5). mutter constrains
-  every window into that work area — the synthetic configure above is exactly the geometry the
-  windows are measured to have afterwards — and a second later our real EDID lands, the scale
-  returns to 1.25 and the screen to 2048x1152, but nothing puts the windows back.
-
-  This is the same default-EDID hazard `CLAUDE.md` records for cold boot, where it is a race
-  ("which side of the driver's reset we land on is timing, which is why it only bit some boots").
-  On a restore it is not a race: the driver is already up and re-probes immediately, so it bites
-  every time. The fix belongs host-side — the restored device must carry the real EDID before the
-  guest can read it, rather than booting with virtio's default and being corrected a second later.
-  Note the display push order cannot fix this on its own: the bogus EDID is already there before
-  either push, which is why the hotplug policy makes no difference.
-
-  Note when re-measuring: every earlier sighting of this was on a run whose gnome-shell context
-  had been bricked by the sticky-`in_error` replay bug (fixed 2026-08-28). A compositor whose
-  every submit was rejected is not a witness to window geometry, so treat pre-fix observations of
-  "windows came back smaller" as unreliable and re-establish the symptom first — including
-  whether windows are *resized* at all, or only moved.
+- ~~**Guest windows are moved and resized by a restore**~~ — **CLOSED 2026-08-28.** A fresh
+  worker's virtio-gpu carried virtio's default EDID, which claims a 10" panel: the restored
+  guest's driver never went away, re-probed at once, read 2560x1440 on a 10" screen as a 250%
+  scale, and mutter constrained every window into the resulting 1024x576 logical screen. Our real
+  EDID landed a second later and the scale returned, but nothing put the windows back. The GPU
+  snapshot now carries the per-scanout display configuration and restore re-applies it before the
+  guest resumes. The same default-EDID hazard on *cold* boot is a race (`CLAUDE.md`); on a restore
+  it was not, which is why it bit every time and why no display-push ordering could have fixed it
+  — the bogus EDID was already there before either push.
 
 - ~~**A stock Debian 13 guest cannot suspend**~~ — **CLOSED 2026-08-23, both causes.** Two
   independent faults, and neither was ours. **(a)** The quiesce oracle counted a device no driver
