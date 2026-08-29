@@ -79,6 +79,9 @@ pub struct SessionConfig {
     pub splash_save_path: Option<PathBuf>,
     /// Splash to show until the first presented frame (set when this boot restores and the
     /// file exists).
+    /// This boot consumes an armed snapshot: the guest's driver is already up when the window
+    /// opens, so the display path must not treat its first handover as a cold plug.
+    pub restoring: bool,
     pub restore_splash: Option<PathBuf>,
 }
 
@@ -251,6 +254,7 @@ pub struct WindowedSession {
     desired_size: Arc<AtomicU64>,
     on_window_close: crate::vmlib::schema::WindowCloseAction,
     splash_save_path: Option<PathBuf>,
+    restoring: bool,
     restore_splash: Option<PathBuf>,
     resume_worker: std::sync::mpsc::Sender<()>,
     menu_ctx: window::MenuCtx,
@@ -282,6 +286,7 @@ impl WindowedSession {
             snapshot_file,
             on_window_close,
             splash_save_path,
+            restoring,
             restore_splash,
             hidpi,
             notch,
@@ -539,6 +544,7 @@ impl WindowedSession {
             desired_size,
             on_window_close,
             splash_save_path,
+            restoring,
             restore_splash,
             resume_worker: resume_tx,
             menu_ctx,
@@ -576,6 +582,7 @@ impl WindowedSession {
                 desired_size: self.desired_size,
                 on_window_close: self.on_window_close,
                 splash_save_path: self.splash_save_path,
+                restoring: self.restoring,
                 restore_splash: self.restore_splash,
                 resume_worker: Some(self.resume_worker),
                 menu_ctx: self.menu_ctx,

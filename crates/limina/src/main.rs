@@ -1727,7 +1727,11 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                 }
             }),
             // A resume is pending iff the armed snapshot exists (a PEEK — the consume happens
-            // at worker spawn inside the session); show its splash until the first frame.
+            // at worker spawn inside the session). Separate from `restore_splash`, which is
+            // additionally conditioned on the splash FILE existing: a restore with no splash
+            // is still a restore, and the display path has to know.
+            restoring: cli.snapshot_file.as_ref().is_some_and(|p| p.exists()),
+            // Show its splash until the first frame.
             restore_splash: cli
                 .snapshot_file
                 .as_ref()

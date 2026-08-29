@@ -120,6 +120,10 @@ pub struct WindowOptions {
     /// Where the last-presented frame is saved when the worker suspends (the restore
     /// splash, next to the snapshot). None = flat-CLI VM, no splash.
     pub splash_save_path: Option<PathBuf>,
+    /// This boot consumes an armed snapshot. The guest's driver is already up when the window
+    /// opens, which changes what its first display handover MEANS — see the connector policy
+    /// where this is read.
+    pub restoring: bool,
     /// A splash to show from window creation until the first presented frame — set when
     /// this boot restores from a snapshot and the splash file exists.
     pub restore_splash: Option<PathBuf>,
@@ -1117,6 +1121,18 @@ pub(crate) fn should_park_on_suspend(
 /// counting from zero, and comparing against the count at the play click asks it to out-present
 /// the whole suspended session first. Rig 2026-08-22: the guest came back on both panels and the
 /// overlay stayed up regardless — on an idle desktop it need never come down at all.
+/// The hotplug policy for the next migration push, honouring a restore's one-shot exemption.
+/// See `restore_inplace` at its declaration for why a restore must not cycle the connector.
+fn restore_hotplug(restore_inplace: &Cell<bool>) -> hostdisplay::HotplugPolicy {
+    if restore_inplace.replace(false) {
+        log::info!(
+            "display: restored guest — re-announcing the identity in place, no connector cycle"
+        );
+        return hostdisplay::HotplugPolicy::InPlace;
+    }
+    hostdisplay::HotplugPolicy::from_env()
+}
+
 pub(crate) fn resume_first_frame(worker_epoch: u64, epoch_at_click: u64, frames: u64) -> bool {
     worker_epoch > epoch_at_click && frames > 0
 }
@@ -1883,6 +1899,7 @@ pub fn run(
         desired_size,
         on_window_close,
         splash_save_path,
+        restoring,
         restore_splash,
         resume_worker,
         menu_ctx,
@@ -2003,6 +2020,23 @@ pub fn run(
     // which no real display hashes to, so the first poll after the guest presents a frame
     // hands over the identity of whichever display it booted on.
     let identity_sent: Cell<u64> = Cell::new(0);
+    // A RESTORE's first identity re-announce must not cycle the connector.
+    //
+    // A fresh supervisor starts its table in the firmware phase even though the restored
+    // guest's driver has been up since before the suspend, so the handover that follows the
+    // re-probe nudge forgets what the guest was told — right after a cold boot, where a virtio
+    // driver's probe reset can eat an EDID pushed before it, and wrong here. The re-announce
+    // then goes out as a migration CYCLE, and the unplug reaches a compositor that is holding a
+    // live CRTC. Measured 2026-08-29 on synoik: `disconnecting connector "Virtual-1"` ->
+    // `missing surface in vblank callback` -> the session never composited again, while the
+    // same restore with the cycle replaced by an in-place push came back live. mutter survives
+    // it, which is why this hid behind a Vulkan compositor.
+    //
+    // Nothing about the connector actually changed across a suspend: same panel, same
+    // identity, and the in-place push carries that identity anyway — which is exactly what
+    // the in-process resume (the healthy path) does. Take-once: only the first re-announce
+    // of the restore is exempt; every later migration is a real one.
+    let restore_inplace: Cell<bool> = Cell::new(restoring);
     // What that display was last doing (refresh, and the VRR range derived from it). Separate
     // from the identity so the same panel changing rate is an in-place adjustment rather than a
     // connector cycle. Seeded to 0, which `refresh_of` never yields — it floors to 60 — so the
@@ -2790,7 +2824,7 @@ pub fn run(
                                         hostdisplay::migration_commands(
                                             host,
                                             true,
-                                            hostdisplay::HotplugPolicy::from_env(),
+                                            restore_hotplug(&restore_inplace),
                                             slot,
                                         ),
                                     );
@@ -2843,7 +2877,7 @@ pub fn run(
                                 hostdisplay::migration_commands(
                                     host,
                                     false,
-                                    hostdisplay::HotplugPolicy::from_env(),
+                                    restore_hotplug(&restore_inplace),
                                     slot,
                                 ),
                             );
