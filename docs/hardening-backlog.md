@@ -816,7 +816,7 @@ rects). Remaining:
 ## M2 / M8 polish wins (cheap, host-side)
 - **fn/aux-key buckets: settings UI + the Accessibility cliff** (added 2026-07-31, with the
   bucket policy in `crates/limina-input/src/auxkey.rs`). Two follow-ups the design review raised.
-  **(a)** The buckets (`Media` soft-grab, `Volume` full-grab-only, `Brightness`/`Other` host-only)
+  **(a)** The buckets (`Media`/`Volume` hard-grab-only, `Brightness`/`Other` host-only)
   are meant to become per-key runtime settings; shape that config as `nx_key -> Option<GrabMode>`
   with buckets as defaults, not per-bucket overrides, or the first split *within* a bucket forces
   a refactor. **(b) The settings UI must render these toggles disabled with a "requires
