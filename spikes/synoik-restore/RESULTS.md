@@ -36,22 +36,29 @@ is the early-boot console. It is presented for the moment before the saved frame
 all, present only where no saved frame follows. This was never the cold console of a fresh
 worker: it appears on a click resume in the same supervisor too.
 
-## Still open: a fresh supervisor's restore leaves the compositor not presenting
+## The fifth fault: a restore cycled the connector under a live compositor
 
-Reproduced twice on 2026-08-29 (with and without `LIMINA_RESTORE_SKIP_SCANOUT`), and **not** on
-the click resume of a parked window, which is healthy end to end.
+A VM resumed into a **fresh supervisor** left its compositor alive, sleeping, and never
+compositing again — while the in-process click resume was healthy end to end. The difference is
+one display push:
 
-The guest is alive — ssh, `top`, ghost and synoik at their pre-suspend pids — and synoik never
-composites again: no present reaches the host, so `LIMINA_WINDOW_CAPTURE` keeps whatever the
-restore put there. Repainting a client (writing to ghost's pty) does not revive it; neither does
-a notification. Its log ends at the restore, on the virtual connector being **disconnected and
-re-added**, with `ERROR ... missing surface in vblank callback for crtc crtc::Handle(42)` between
-them. One `wait_ring_seqno STUCK >500ms` accompanies it. Whether the connector churn is the cause
-or another symptom is not established — this is the page-flip completion still to chase.
+| fresh-supervisor restore | the guest's log | result |
+| --- | --- | --- |
+| connector cycle (the default) | `disconnecting connector "Virtual-1"` -> `missing surface in vblank callback` | 2 applies, none after; no repaint revives it |
+| in place | `device changed` -> `driving saved mode 2560x1440` | composites on demand, correct desktop |
 
-`LIMINA_RESTORE_SKIP_SCANOUT` is not a clean lever for it: with no frame re-presented there is
-also no flip completion, so the lever plausibly *causes* a stall of its own. Use it only where a
-composite is known to follow.
+The chain is ours from end to end. A fresh window starts its display table in the **firmware**
+phase although the restored guest's driver has been up since before the suspend. The restore's
+re-probe nudge produces a handover, the handover forgets what the guest was told — correct after a
+cold boot, where a virtio driver's probe reset can eat an EDID pushed before it — and the next tick
+therefore re-announces the identity as a MIGRATION, which cycles the connector. The unplug reaches
+a compositor holding a live CRTC.
+
+A restore has nothing to cycle: same panel, same identity, and the in-place push carries that
+identity anyway, which is what the in-process resume has always done. The exemption is take-once,
+so every later migration is still a real one. **mutter survives the cycle** — which is why this
+lived behind a Vulkan compositor, and the general rule it leaves: a path that only a stock guest
+exercises is a path whose faults only an enhanced guest will report.
 
 ## Facts worth keeping
 
