@@ -414,6 +414,15 @@ fn synoik_desktop_survives_snapshot_restore() {
         eprintln!("CONTENT LOST: {}", &line[..line.len().min(190)]);
     }
 
+    // Oracle 5: the venus rings still consume. A ring that went FATAL stops draining, the
+    // guest's vn_ring_wait_seqno never advances, and the compositor parks in it forever —
+    // holding the last frame it presented, which is a CORRECT picture. So this has to be
+    // asserted on its own: the landmark diff passes on exactly that dead session.
+    let stalls = limina_test::ring_stalls(&g2_log);
+    for line in &stalls {
+        eprintln!("RING STALLED: {}", &line[..line.len().min(190)]);
+    }
+
     let size_ok = (post.width, post.height) == (pre.width, pre.height);
     let moved: Vec<usize> = if size_ok {
         (0..means_pre.len())
@@ -439,6 +448,7 @@ fn synoik_desktop_survives_snapshot_restore() {
         && post_colors * 4 >= pre_colors
         && skipped.is_empty()
         && lost.is_empty()
+        && stalls.is_empty()
         && !procs_after.contains("=0");
     if !verdict_ok {
         let post_png = std::env::temp_dir().join(format!("limina-synoik-post-{pid}.png"));
@@ -459,6 +469,7 @@ fn synoik_desktop_survives_snapshot_restore() {
              colour diversity:  {pre_colors} -> {post_colors} (post must keep >= 1/4)\n\
              skipped at capture: {} allocation(s) the snapshot could not read\n\
              content loss:      {} line(s) naming resources that lost their pixels\n\
+             ring stalls:       {} venus ring(s) stopped consuming after the restore\n\
              workload procs:    {procs_before} -> {procs_after}",
             pre.width,
             pre.height,
@@ -470,6 +481,7 @@ fn synoik_desktop_survives_snapshot_restore() {
             CELL_MISMATCH_BUDGET * 100.0,
             skipped.len(),
             lost.len(),
+            stalls.len(),
         );
     }
 

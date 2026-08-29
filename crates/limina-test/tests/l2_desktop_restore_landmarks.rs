@@ -490,10 +490,22 @@ fn seated_gpu_workload_survives_restore_unchanged() {
         moved_share * 100.0
     );
 
+    // The venus rings must still be consuming. A ring that goes FATAL stops draining and the
+    // guest's vn_ring_wait_seqno never advances — the compositor parks in it holding the last
+    // frame it presented, which is a CORRECT picture, so every pixel oracle above passes on a
+    // comprehensively dead session. mutter composites through classic vrend, but its clients
+    // do not have to, so this belongs on both gates.
+    let g2_log = g2.supervisor_log();
+    let ring_stalls = limina_test::ring_stalls(&g2_log);
+    for line in &ring_stalls {
+        eprintln!("RING STALLED: {}", &line[..line.len().min(190)]);
+    }
+
     let verdict_ok = edid_after == edid_before
         && size_ok
         && moved_share <= CELL_MISMATCH_BUDGET
         && post_colors * 4 >= pre_colors
+        && ring_stalls.is_empty()
         && !procs_after.contains("=0");
     if !verdict_ok {
         let post_png = std::env::temp_dir().join(format!("limina-landmark-post-{pid}.png"));

@@ -2985,6 +2985,24 @@ fn mkfifo(path: &Path) -> Result<()> {
 
 /// Convenience: assert that a captured console contains all of `needles`, with a
 /// helpful message naming the first missing one.
+/// Venus rings that stopped consuming, in the worker's own words.
+///
+/// A vkr ring that goes FATAL stops draining its command stream, and the guest's
+/// `vn_ring_wait_seqno` then waits for a seqno that will never arrive. A compositor that hits
+/// this while allocating a buffer parks there forever: the desktop freezes with every process
+/// alive, nothing drawing, and no error anywhere in the guest. Before it was contained, one
+/// stale reference in a restored context did exactly that to a whole synoik session.
+///
+/// The host notices the stall and says so; that line is the oracle. It is worth asserting
+/// separately from any pixel comparison, because a frozen desktop still holds a *correct*
+/// picture — the last frame presented before the ring died — so a landmark diff can pass on a
+/// session that is comprehensively dead.
+pub fn ring_stalls(log: &str) -> Vec<&str> {
+    log.lines()
+        .filter(|l| l.contains("wait_ring_seqno STUCK"))
+        .collect()
+}
+
 pub fn assert_console_has(console: &str, needles: &[&str]) -> Result<()> {
     for n in needles {
         if !console.contains(n) {
