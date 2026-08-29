@@ -24,6 +24,12 @@
 //! class (icon atlases / glyph caches / wallpaper flat gray, host-GL-only textures)
 //! collapses distinct-color counts by orders of magnitude while every process and
 //! submit oracle stays green. RED lever: `VREND_CONTENT=0` (structure-only replay).
+//!
+//! The restore leg also arms `LIMINA_REPLAY_POISON=1`, which makes one replayed entry
+//! per context report a context error the way a stale retained reference does — so the
+//! sticky-`in_error` class is gated on every run instead of only when a journal happens
+//! to carry such an entry (RED lever for that half: revert the `in_error` test in
+//! `vrend_decode_ctx_replay_submit`).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -275,6 +281,17 @@ fn classic_vrend_world_survives_snapshot_restore() {
     };
 
     // --- Guest 2: fresh worker restoring against the preserved disk ---
+    // Poison the replay deterministically. A retained entry whose referent died before
+    // the snapshot makes vrend report a context error, which sets the STICKY in_error
+    // without failing the submit — vrend_check_no_error() reads glGetError(), never that
+    // flag — so the replayer's "did this entry fail?" test could not see the very flag it
+    // exists to clear. The flag then hides for the rest of the replay behind
+    // vrend_hw_switch_context's already-current fast path, and brands every post-restore
+    // guest submit EINVAL for the life of the context: a black desktop when the victim is
+    // gnome-shell, one blank window when it is an app. Whether a journal grows such an
+    // entry is chance (an 11-minute soak did, a 2-minute one did not), so the gate below
+    // is only honest with the lever forcing it.
+    std::env::set_var("LIMINA_REPLAY_POISON", "1");
     let mut cfg2 = devices(base_cfg.clone())
         .with_coexist_display(1280, 800)
         .with_net()
