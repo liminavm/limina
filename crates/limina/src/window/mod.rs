@@ -3066,7 +3066,11 @@ pub fn run(
                         }
                         if let Some(content) = window.contentView() {
                             if let Some(host_layer) = content.layer() {
-                                ov.replace(overlay::Overlay::resuming(&host_layer, &content));
+                                ov.replace(overlay::Overlay::resuming(
+                                    &host_layer,
+                                    &content,
+                                    splash_save_path.as_deref(),
+                                ));
                             }
                         }
                         window.setTitle(&NSString::from_str(&title));

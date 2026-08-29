@@ -15,8 +15,11 @@
 //!   scrim over the (still-presented) final frame with a centered play glyph. No spinner:
 //!   nothing is in flight; the window waits for a click to resume.
 //! - **Resuming** (`Overlay::resuming`): scrim + spinner + "Resuming…" after the play click,
-//!   over the same final frame (no splash needed — the dead worker's IOSurface is still on
-//!   the layer), until the respawned worker presents.
+//!   over the splash — the same last-frame PNG the Restore flavor uses, and for the same
+//!   reason. The dead worker's IOSurface is on the layer when the click lands, but it does not
+//!   survive the swap to the fresh worker: measured 2026-08-29 on the dogfood Mac, the window
+//!   goes BLACK from the swap until the restore's first present. The splash covers that gap
+//!   with the picture the session had.
 //!
 //! Everything is Core Animation: the scanout view is layer-HOSTING with redraw policy
 //! `Never`, so AppKit-drawn controls (NSProgressIndicator) never composite inside it — the
@@ -109,8 +112,8 @@ impl Overlay {
 
     /// Scrim + spinner + "Resuming…" over the final frame, after the play click, until the
     /// respawned worker presents its first frame.
-    pub(crate) fn resuming(host_layer: &CALayer, content: &NSView) -> Self {
-        Self::install(host_layer, content, None, Flavor::Resuming)
+    pub(crate) fn resuming(host_layer: &CALayer, content: &NSView, splash: Option<&Path>) -> Self {
+        Self::install(host_layer, content, splash, Flavor::Resuming)
     }
 
     fn install(

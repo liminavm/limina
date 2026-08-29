@@ -147,7 +147,11 @@ fn launch_workload(guest: &Guest, apps: &[String]) {
 fn workload_procs(guest: &Guest, apps: &[String]) -> String {
     let mut probe = String::from("echo");
     for app in apps {
-        probe.push_str(&format!(" {app}=$(pgrep -c {app} || true)"));
+        // -f, matching the whole command line: `pgrep NAME` compares against a comm field
+        // truncated to 15 characters, so `gnome-text-editor` and `gnome-calculator` matched
+        // NOTHING and reported 0 on both sides of the restore — a liveness oracle that could
+        // never see a client die, and a `=0` in the verdict string on every run.
+        probe.push_str(&format!(" {app}=$(pgrep -fc /usr/bin/{app} || true)"));
     }
     probe.push_str(
         " ff=$(pgrep -fc lib64/firefox/firefox || true) \
