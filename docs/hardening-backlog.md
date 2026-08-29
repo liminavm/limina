@@ -997,6 +997,27 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   subtly wrong" report. Worth deciding whether the mismatch is a stride/level assumption in the
   re-upload or genuinely unbacked resources that should be skipped rather than attempted.
 
+- **A Vulkan compositor's desktop comes back blank.** The venus content capture reads a
+  memory object with `vkMapMemory` (`vkr_device_memory_content_copy`), which device-local
+  allocations refuse — the read fails, the bytes are skipped, and the snapshot's summary line
+  still reads like a success. On a GL compositor nothing shows, because its compositing
+  textures are classic vrend resources covered by the v6 `classic_contents` dump. On synoik the
+  two skipped allocations are its double-buffered scanout images (`content read failed for
+  ctx 2 mem 66/204 (14745600 bytes)` = 2560×1440×4, twice) and the restored desktop is empty
+  until unrelated damage forces a full repaint. Device-local memory has to be copied through a
+  host-visible staging allocation per bound resource (`vkCmdCopyImageToBuffer` /
+  `vkCmdCopyBuffer`) with the symmetric path on restore. Two neighbouring shapes are NOT
+  explained by this and must not be folded into it: a client that comes back **wedged** and
+  stays broken through a resize (firefox nightly on the dogfood Mac), and a restored session
+  that paints **nothing at all** until a new client arrives. Dossier + frames:
+  `spikes/synoik-restore/RESULTS.md`.
+
+- **`limina suspend <disk>` leaves the supervisor running.** The worker snapshots and exits,
+  but the supervisor process stays alive holding its gvproxy (and its SSH port) and a stale
+  window; `SIGTERM` does not end it. The next `limina suspend` on that disk then refuses with
+  "multiple limina supervisors match". Reproduced on all three cycles of the 2026-08-29 synoik
+  poke session.
+
 - **`gpu restore: … 0 scanout flips` on every restore.** Same measurements. Phase C is supposed
   to re-bind the classic scanouts "so the first presented frame shows restored pixels"; the
   count being zero every time means that leg does nothing, and the first frame instead comes
