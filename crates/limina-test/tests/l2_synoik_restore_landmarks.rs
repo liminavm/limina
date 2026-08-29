@@ -5,59 +5,56 @@
 //!
 //! # The bug this is written against (OPEN — this test is expected to FAIL)
 //!
-//! The venus snapshot captures a `VkDeviceMemory` by `vkMapMemory` + `memcpy`
-//! (`vkr_device_memory_content_copy`). Whatever refuses the map is skipped with a `warn!`,
-//! next to a summary line that reads like a success. On a synoik session the two allocations
-//! that refuse are its double-buffered scanout images:
+//! A restore re-uploads each classic (vrend) resource's content by rebuilding its transfer box
+//! from the resource's *create* dimensions with a zero stride and offset, then pushing the
+//! guest backing store in. vrend refuses the transfer whenever that box does not fit the
+//! resource or the derived IOV does not match the backing — `resource_contains_box` /
+//! `check_iov_bounds` — and every refused resource comes back carrying **no content**:
 //!
 //! ```text
-//! gpu snapshot: content read failed for ctx 2 mem 66 (14745600 bytes)
-//! gpu snapshot: content read failed for ctx 2 mem 204 (14745600 bytes)
+//! vrend_renderer_transfer_internal: context error reported 0 "HOST" IOV data size exceeds \
+//!   resource capacity 328
 //! ```
 //!
-//! — 2560×1440×4, twice. Opening any new client heals the whole screen, which is what shows the
-//! textures were never lost.
+//! Measured on every restore of every session tried, healthy-looking ones included: 137–268
+//! refusals on a local poke VM, 244 on the dogfood Mac. The visible symptom is a window that
+//! is blank until something repaints it, which is why a cycle can look clean — anything that
+//! redraws itself hides its own loss, and incidental damage (a notification, a workspace
+//! switch) heals the rest before anyone looks.
 //!
-//! **The model is not settled, and this test is what showed that.** On its own runs seven
-//! allocations are skipped (the compositor's two scanout images and a client's five swapchain
-//! images) yet the compositor's scanout comes back *correct*; the only wrong region is an idle
-//! GTK window's strip, whose buffer is not in the skipped list. Nor is it known why that window
-//! lost its pixels and an equally idle firefox did not — both are still, so neither repaints,
-//! and unchanged pixels say only that the compositor still had a good buffer, never that the
-//! client could still render. So the capture gap is real and asserted below, but which skipped
-//! allocation produces which lost pixels is still open — do not write the fix from the summary
-//! alone. Dossier, frames and the leading hypothesis:
-//! `spikes/synoik-restore/RESULTS.md`.
+//! A second, narrower gap sits behind it: the venus snapshot captures a `VkDeviceMemory` by
+//! `vkMapMemory` + `memcpy` (`vkr_device_memory_content_copy`), so a device-local allocation —
+//! the compositor's own scanout images — is skipped with a `warn!`. Those pixels live only in
+//! host heaps, never in the RAM snapshot. Both are asserted here; the first is the one that has
+//! been costing windows. Dossier and frames: `spikes/synoik-restore/RESULTS.md`.
 //!
 //! # Why this cannot be folded into `l2_desktop_restore_landmarks`
 //!
-//! That test drives mutter, which composites through classic vrend — and vrend resources have
-//! their own content dump (payload v6 `classic_contents`), captured by GL readback, which needs
-//! no mappable memory. So the same snapshot is complete for one renderer and silently partial
-//! for the other, and the GL test passes on a guest carrying this bug. Measured, not assumed:
-//! on the same day, the mutter test restored 1000 of 1000 landmark cells unchanged while a
-//! synoik session went blank. Two compositors, two independent failure paths, two tests.
+//! That test drives mutter. Two compositors reach the same restore through different paths, and
+//! the same snapshot can be complete for one and partial for the other — measured on one day,
+//! the mutter test restored 1000 of 1000 landmark cells while a synoik session went blank. Two
+//! compositors, two tests.
 //!
 //! # What a failure here does and does not mean
 //!
-//! This gates ONE shape: content that comes back blank and heals on repaint. Two neighbouring
-//! shapes are real and are NOT covered — a client that comes back **wedged** and stays broken
-//! through a resize (firefox nightly on the dogfood Mac), and a restored session that paints
-//! nothing at all until a new client arrives. A fix that turns this test green is not evidence
-//! about either.
+//! This gates content that comes back missing and heals on repaint. It does NOT cover a client
+//! that comes back **wedged** and stays broken through a repaint, nor a restored session that
+//! paints nothing at all until a new client arrives — both have been seen. A fix that turns
+//! this test green is not evidence about either.
 //!
 //! # Oracles
 //!
-//! 1. **The landmarks are unchanged**, exactly as in the GL test: a still workload, a settled
-//!    frame each side, per-cell comparison. Measured on the failing path at 1280x800: 120 of
-//!    1000 cells, a 5-cell-wide full-height band — the idle nautilus window's visible strip,
-//!    come back black. NOT the whole desktop: on this run the compositor's own scanout was
-//!    fine and only the one client that never redraws lost its pixels. Sized for that, since a
-//!    12% move has to fail as surely as a 70% one does.
-//! 2. **Nothing was skipped at snapshot time.** `content read failed` in the worker log is the
-//!    mechanism itself, and it is worth asserting directly rather than only through its
-//!    symptom: a partial capture that happens not to show today is still a partial capture.
+//! 1. **The landmarks are unchanged.** A still workload, a settled frame each side, per-cell
+//!    comparison. The workload holds still on purpose so that every pixel of it is checkable.
+//! 2. **Nothing was skipped at snapshot time** — `content read failed` in the snapshotting
+//!    worker's log. A partial capture that happens not to show today is still partial.
 //! 3. **Colour diversity survives** — the content floor. A blanked desktop collapses it.
+//! 4. **Every classic resource got its content back** — the restoring worker's own count of
+//!    refused re-uploads. This is the only oracle here that does not depend on the lost pixels
+//!    landing somewhere visible in this run's frame, which is exactly why it belongs: the frame
+//!    diff alone called several genuinely broken restores clean.
+//! 5. **Every workload process is still alive**, on both sides. Weak on its own — a wedged
+//!    client stays alive — but it catches a client that died rather than lost its pixels.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -99,36 +96,80 @@ fn ssh_soft(guest: &Guest, cmd: &str) -> String {
     panic!("ssh `{cmd}` kept failing: {last_err}");
 }
 
-/// The same still workload as the GL sibling, on synoik's socket: an idle GTK window, a still
-/// WebGL frame, and our own Vulkan client redrawing one fixed triangle. Kept deliberately
-/// identical so a difference between the two tests is a difference between the compositors.
-fn launch_workload(guest: &Guest) {
-    let env = "export XDG_RUNTIME_DIR=/run/user/1000 \
-               DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus;";
-    ssh_soft(
-        guest,
-        &format!(
-            "{env} \
-             systemd-run --user --collect --unit l2s-naut \
-               env WAYLAND_DISPLAY={SOCKET} nautilus >/dev/null 2>&1; \
-             systemd-run --user --collect --unit l2s-ff \
-               env WAYLAND_DISPLAY={SOCKET} MOZ_ENABLE_WAYLAND=1 \
-               firefox --new-window file:///tmp/webgl-still.html >/dev/null 2>&1; \
-             systemd-run --user --collect --unit l2s-vkstill \
-               env WAYLAND_DISPLAY={SOCKET} /tmp/vkstill/vkstill >/dev/null 2>&1; \
-             echo launched"
-        ),
-    );
+/// GTK apps to seat alongside the browser windows. Each one is a **classic (vrend) context**
+/// whose window is drawn from textures uploaded once — icon atlases, glyph caches — which is
+/// the content class the restore's classic re-upload is responsible for. One app is a thin
+/// sample of that class; several, of different shapes, is a workload.
+const GTK_APPS: &[&str] = &["nautilus", "gnome-text-editor", "gnome-calculator"];
+
+/// Which of [`GTK_APPS`] this image actually ships. Discovered rather than assumed: a missing
+/// package must weaken the gate visibly, not silently.
+fn present_gtk_apps(guest: &Guest) -> Vec<String> {
+    GTK_APPS
+        .iter()
+        .filter(|a| !ssh_soft(guest, &format!("command -v {a} || true")).is_empty())
+        .map(|a| a.to_string())
+        .collect()
 }
 
-fn workload_procs(guest: &Guest) -> String {
-    ssh_soft(
-        guest,
-        "echo naut=$(pgrep -c nautilus || true) \
-             ff=$(pgrep -fc lib64/firefox/firefox || true) \
-             vkstill=$(pgrep -c vkstill || true) \
-             synoik=$(pgrep -x synoik || true)",
-    )
+/// A still desktop with something of every kind on it: GTK windows (classic contexts drawn
+/// from once-uploaded atlases), two browser windows — one holding a finished WebGL frame, one
+/// pure glyph-heavy text — and our own Vulkan client redrawing one fixed triangle. Everything
+/// holds still on purpose, so every pixel of it is a landmark.
+fn launch_workload(guest: &Guest, apps: &[String]) {
+    let env = "export XDG_RUNTIME_DIR=/run/user/1000 \
+               DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus;";
+    let mut cmd = String::from(env);
+    for app in apps {
+        cmd.push_str(&format!(
+            " systemd-run --user --collect --unit l2s-{app} \
+               env WAYLAND_DISPLAY={SOCKET} {app} >/dev/null 2>&1;"
+        ));
+    }
+    // Both browser windows belong to ONE firefox: the second `--new-window` joins the running
+    // instance. That is deliberate — two surfaces from one client is the shape that showed the
+    // fault is inside a client's compositing, not a lost buffer.
+    cmd.push_str(&format!(
+        " systemd-run --user --collect --unit l2s-ff \
+            env WAYLAND_DISPLAY={SOCKET} MOZ_ENABLE_WAYLAND=1 \
+            firefox --new-window file:///tmp/webgl-still.html >/dev/null 2>&1; \
+          sleep 20; \
+          systemd-run --user --collect --unit l2s-ff2 \
+            env WAYLAND_DISPLAY={SOCKET} MOZ_ENABLE_WAYLAND=1 \
+            firefox --new-window file:///tmp/still-blocks.html >/dev/null 2>&1; \
+          systemd-run --user --collect --unit l2s-vkstill \
+            env WAYLAND_DISPLAY={SOCKET} /tmp/vkstill/vkstill >/dev/null 2>&1; \
+          echo launched"
+    ));
+    ssh_soft(guest, &cmd);
+}
+
+fn workload_procs(guest: &Guest, apps: &[String]) -> String {
+    let mut probe = String::from("echo");
+    for app in apps {
+        probe.push_str(&format!(" {app}=$(pgrep -c {app} || true)"));
+    }
+    probe.push_str(
+        " ff=$(pgrep -fc lib64/firefox/firefox || true) \
+          vkstill=$(pgrep -c vkstill || true) \
+          synoik=$(pgrep -x synoik || true)",
+    );
+    ssh_soft(guest, &probe)
+}
+
+/// Resources the restore could not push content back into, in the restoring worker's own words.
+///
+/// `transfer_write` returns an error whenever vrend refuses the transfer — a box that does not
+/// fit the resource, or an IOV that does not match the backing — and the resource then carries
+/// NO content until something repaints it. libkrun counts those and says so; a restore with a
+/// non-empty count here has lost pixels whether or not this run's frame happens to show it.
+fn reupload_failures(log: &str) -> Vec<&str> {
+    log.lines()
+        .filter(|l| {
+            l.contains("classic content re-upload FAILED")
+                || l.contains("classic content restore failed")
+        })
+        .collect()
 }
 
 #[test]
@@ -191,8 +232,10 @@ fn synoik_desktop_survives_snapshot_restore() {
     eprintln!("synoik is serving on {SOCKET}");
 
     let assets = limina_test::repo_root().join("crates/limina-test/assets");
-    g1.scp_to_guest(&assets.join("webgl-still.html"), "/tmp/webgl-still.html")
-        .expect("pushing the WebGL page into the guest");
+    for page in ["webgl-still.html", "still-blocks.html"] {
+        g1.scp_to_guest(&assets.join(page), &format!("/tmp/{page}"))
+            .unwrap_or_else(|e| panic!("pushing {page} into the guest: {e}"));
+    }
     ssh_soft(&g1, "rm -rf /tmp/vkstill && mkdir -p /tmp/vkstill");
     for f in [
         "vkstill.c",
@@ -209,9 +252,16 @@ fn synoik_desktop_survives_snapshot_restore() {
         "vkstill did not build in the guest:\n{built}"
     );
 
-    launch_workload(&g1);
+    let apps = present_gtk_apps(&g1);
+    assert!(
+        apps.len() >= 2,
+        "this image ships only {apps:?} of {GTK_APPS:?} — the classic-context half of the \
+         workload would be a token one, and a pass would mean less than it claims"
+    );
+    eprintln!("GTK apps present: {apps:?}");
+    launch_workload(&g1, &apps);
     std::thread::sleep(SETTLE);
-    let procs_before = workload_procs(&g1);
+    let procs_before = workload_procs(&g1, &apps);
     let vk_device = ssh_soft(
         &g1,
         "journalctl --user -u l2s-vkstill --no-pager 2>/dev/null | grep -m1 'vkstill: device' \
@@ -320,7 +370,7 @@ fn synoik_desktop_survives_snapshot_restore() {
             panic!("restored guest never became reachable over SSH: {e}");
         });
 
-    let procs_after = workload_procs(&g2);
+    let procs_after = workload_procs(&g2, &apps);
     // A blank desktop is perfectly still, so this settles quickly on the failing path too —
     // it is not a proxy for health, only for "the frame we are about to judge is the frame the
     // guest means to show".
@@ -337,6 +387,15 @@ fn synoik_desktop_survives_snapshot_restore() {
     let means_post = cell_means(&post);
     let post_colors = color_diversity(&post);
 
+    // Oracle 4: every classic resource got its content back. Read from the RESTORING worker's
+    // log, since this is a restore-side failure. It is the one oracle here that does not
+    // depend on the lost pixels happening to be visible in this run's frame.
+    let g2_log = g2.supervisor_log();
+    let reupload_failed = reupload_failures(&g2_log);
+    for line in &reupload_failed {
+        eprintln!("RE-UPLOAD FAILED: {}", &line[..line.len().min(190)]);
+    }
+
     let size_ok = (post.width, post.height) == (pre.width, pre.height);
     let moved: Vec<usize> = if size_ok {
         (0..means_pre.len())
@@ -348,17 +407,20 @@ fn synoik_desktop_survives_snapshot_restore() {
     let moved_share = moved.len() as f64 / means_pre.len() as f64;
     eprintln!(
         "post-restore: procs={procs_after} landmarks moved {}/{} ({:.1}%) colours \
-         {pre_colors} -> {post_colors}, {} allocation(s) skipped at snapshot",
+         {pre_colors} -> {post_colors}, {} allocation(s) skipped at snapshot, {} re-upload \
+         failure line(s)",
         moved.len(),
         means_pre.len(),
         moved_share * 100.0,
-        skipped.len()
+        skipped.len(),
+        reupload_failed.len()
     );
 
     let verdict_ok = size_ok
         && moved_share <= CELL_MISMATCH_BUDGET
         && post_colors * 4 >= pre_colors
         && skipped.is_empty()
+        && reupload_failed.is_empty()
         && !procs_after.contains("=0");
     if !verdict_ok {
         let post_png = std::env::temp_dir().join(format!("limina-synoik-post-{pid}.png"));
@@ -378,6 +440,7 @@ fn synoik_desktop_survives_snapshot_restore() {
              landmarks:         {}/{} moved ({:.1}%, budget {:.0}%)\n\
              colour diversity:  {pre_colors} -> {post_colors} (post must keep >= 1/4)\n\
              skipped at capture: {} allocation(s) the snapshot could not read\n\
+             re-upload:         {} restore-side content failure line(s)\n\
              workload procs:    {procs_before} -> {procs_after}",
             pre.width,
             pre.height,
@@ -388,12 +451,14 @@ fn synoik_desktop_survives_snapshot_restore() {
             moved_share * 100.0,
             CELL_MISMATCH_BUDGET * 100.0,
             skipped.len(),
+            reupload_failed.len(),
         );
     }
 
     eprintln!(
         "the Vulkan compositor's desktop survived: {}/{} landmarks held, colours \
-         {pre_colors} -> {post_colors}, nothing skipped at capture",
+         {pre_colors} -> {post_colors}, nothing skipped at capture, every classic resource \
+         got its content back",
         means_pre.len() - moved.len(),
         means_pre.len()
     );

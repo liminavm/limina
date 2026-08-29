@@ -1,0 +1,21 @@
+<!doctype html><meta charset=utf-8><title>still-blocks</title>
+<!-- A deliberately GLYPH-HEAVY, GL-free page. firefox renders this through its classic
+     (vrend) path, and the text turns into glyph-atlas textures uploaded once and never
+     re-uploaded — the exact class of content a restore loses when the classic re-upload is
+     refused. Static by construction: no script, no animation, so it is a valid landmark. -->
+<style>
+html,body{margin:0;background:#12141c;color:#e8e8ef;font:16px/1.5 monospace}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:14px}
+.card{padding:10px;border-radius:8px}
+.card h2{margin:0 0 6px;font-size:15px}
+</style>
+<div class=grid>
+<div class=card style="background:#7a1f3d"><h2>alpha</h2>the quick brown fox jumps over the lazy dog 0123456789</div>
+<div class=card style="background:#1f5f7a"><h2>bravo</h2>sphinx of black quartz judge my vow ABCDEFGHIJKLM</div>
+<div class=card style="background:#2f7a1f"><h2>charlie</h2>pack my box with five dozen liquor jugs NOPQRSTUVWXYZ</div>
+<div class=card style="background:#7a5f1f"><h2>delta</h2>how vexingly quick daft zebras jump !@#$%^&amp;*()_+-=</div>
+<div class=card style="background:#4a1f7a"><h2>echo</h2>waltz bad nymph for quick jigs vex {}[]|\:;"'&lt;&gt;,.?/</div>
+<div class=card style="background:#7a1f1f"><h2>foxtrot</h2>jackdaws love my big sphinx of quartz 9876543210</div>
+<div class=card style="background:#1f7a6a"><h2>golf</h2>the five boxing wizards jump quickly abcdefghijklm</div>
+<div class=card style="background:#3d3d7a"><h2>hotel</h2>bright vixens jump dozy fowl quack nopqrstuvwxyz</div>
+</div>
