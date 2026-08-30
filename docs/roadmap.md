@@ -2603,6 +2603,91 @@ running GTK client alive.
 
 ---
 
+## Milestone 17 — Video codecs: finish decode (H.264 / HEVC / MJPEG), then encode
+
+VP9 decode ships (stock tier, host-side only) and AV1 decode is built to the point where a
+synthesized bitstream decodes bit-exact on real silicon. What follows is the rest of decode,
+then the encode direction, which nothing has touched yet.
+
+### What decides the cost: whether the guest keeps the bitstream
+
+The guest hands us a *parsed* picture descriptor plus slice data, never the original
+bitstream, and how much of the bitstream survives that trip is what sets the price of each
+codec. It differs sharply:
+
+- **AV1 — everything had to be rebuilt.** ffmpeg passes `raw_tile_group->tile_data.data`, so
+  the frame header is gone; a full serializer plus a reference-slot model was unavoidable.
+- **H.264 / HEVC — the slices arrive whole.** mesa's VA frontend prepends a `00 00 01` start
+  code and passes the buffer through verbatim (`frontends/va/decode.c:217`), so the host gets
+  complete Annex-B NALs *including slice headers*. Only **SPS and PPS** need synthesizing, and
+  the DPB is driven by `frame_num`/POC/MMCO inside those slice headers — so there is no
+  reference-slot model, no held frames, and no flush trigger. This is a few hundred lines, not
+  another AV1.
+- **MJPEG — nothing to rebuild.** Each picture is an independent JPEG with no references.
+
+Two fields the descriptor lacks, both derivable rather than guessed: `virgl_h264_sps` carries
+`level_idc` but **no `profile_idc`** (`virgl_video_hw.h:63`), and there is no frame cropping.
+Emitting High (100) is self-consistent — it obliges us to write `chroma_format_idc`, bit
+depths and scaling lists, all of which the descriptor carries — and cropping follows from the
+macroblock-padded size against the target surface.
+
+### The guest half, and why MJPEG comes first
+
+Mesa gates codecs at **build time**, in `auxiliary/vl/vl_codec.c`, shared by every gallium
+driver — so no host-side capability can conjure one the guest was not built with. The
+`video-codecs` option splits them (`meson.build:436`):
+
+    patent_codecs = vc1dec, h264dec, h264enc, h265dec, h265enc
+    free_codecs   = av1dec, av1enc, vp9dec, mpeg12dec, jpegdec
+
+Fedora builds the default `all_free`, so:
+
+- **MJPEG already works on a stock guest** — `jpegdec` is a free codec and is compiled in
+  today. It needs *zero* guest-side change, which makes it the cheapest of the three and the
+  only one that is stock-tier by construction.
+- **H.264/HEVC are absent from stock mesa.** The stock path is RPM Fusion's
+  `mesa-va-drivers-freeworld` (built `video-codecs=all`); libva already probes
+  `/usr/lib64/dri-freeworld/` ahead of `/usr/lib64/dri/`, so installing it takes over
+  cleanly. It pulls in no limina components, so it keeps the stock-tier promise — the guest
+  needs no custom kernel, driver or agent, only a repository the user enables.
+  Our own guest mesa is a separate lever for the enhanced tier: the VA driver in use is
+  `mesa-dri-drivers-*.limina.fc44`, so we can simply build it with the codecs enabled.
+
+Not the lever: `fedora-cisco-openh264` ships a **software** codec for Firefox and GStreamer.
+It registers no VA-API driver, so it bypasses the virtio path entirely and does nothing for
+hardware offload.
+
+Measured on the dogfood guest (2026-08-30): `vainfo` reports only `VAProfileVP9Profile0` and
+`VAProfileNone/VideoProc`, and `/usr/lib64/dri-freeworld/` is empty.
+
+### The host half
+
+H.264 decode is supported by VideoToolbox on **all** Apple Silicon including M1, so unlike
+AV1 — which needs M3 or later and forced every test onto a second machine — it is developable
+and testable on the dev Mac.
+
+Encode is already plumbed everywhere except our backend: the protocol carries
+`PIPE_VIDEO_ENTRYPOINT_ENCODE`, `virgl_video_hw.h` defines the H.264 and H.265 encode
+descriptors (`:221`, `:509`), the Linux VA backend implements
+`encode_upload_picture`/`encode_completed` (`virgl_video.c:438`), and the guest virgl driver
+drives it. Our VideoToolbox backend simply advertises no encode entrypoint and returns -1.
+
+The encode direction inverts the decode problem in a useful way — VideoToolbox *hands us* the
+parameter sets (`CMVideoFormatDescriptionGetH264ParameterSetAtIndex`), so no synthesis is
+needed. The real cost is lifecycle: `VTCompressionSession` is genuinely asynchronous, where
+the decode path leans on synchronous-in-order delivery, and the guest's rate-control and GOP
+descriptor has to be mapped onto VT properties. The consumers that matter — screen sharing
+via gnome-remote-desktop, and OBS — go through VA-API encode.
+
+### Order
+
+1. **MJPEG decode** — stock-tier already, host-side only, `virgl_mjpeg_picture_desc` exists.
+2. **H.264 decode** — SPS/PPS writer; reuses the AV1 harness unchanged (`submit_unit`,
+   `deliver_picture(target)`, `ensure_session(target)`, the `LIMINA_*_CAPTURE` fixtures and
+   the double-decode oracle). Testable on the dev Mac.
+3. **HEVC decode** — the same shape as H.264 with VPS/SPS/PPS; largely free once H.264 lands.
+4. **Encode** — a separate arc, sharing nothing with decode but the buffer plumbing.
+
 ## Summary of net-new code vs libkrun patches
 
 | Milestone | Net-new limina code | libkrun (or fw/virgl) patches |
