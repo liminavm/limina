@@ -291,6 +291,30 @@ int main(int argc, char **argv)
             if (!stream) return 1;
         }
 
+        /* The order the backend uses, and for the same reasons: the held frame is flushed
+         * as soon as the descriptor is known (the guest's first decode_bitstream), and this
+         * frame's own unit is built at end_frame once all its tile data has arrived. Each
+         * call's output is a separate temporal unit and reaches the decoder as its own
+         * sample -- they are adjacent here only because dav1d takes a byte stream. */
+        for (int call = 0; call < 2; call++) {
+            /* Twice on purpose. A frame's tile data can arrive over several
+             * decode_bitstream calls, each carrying the same descriptor, so the flush has
+             * to be idempotent within a frame -- a second unit here would be a second
+             * picture the guest never asked for. */
+            n = virgl_av1_flush_held(&state, &desc, stream + stream_len,
+                                     stream_cap - stream_len);
+            if (n < 0) {
+                fprintf(stderr, "frame %u: the serializer refused to flush the held frame\n", i);
+                return 1;
+            }
+            if (call && n) {
+                fprintf(stderr, "frame %u: flushing twice emitted a second temporal unit "
+                        "(%zd bytes)\n", i, n);
+                return 1;
+            }
+            stream_len += (size_t)n;
+        }
+
         n = virgl_av1_build_temporal_unit(&state, &desc, tiles, tiles_size,
                                           stream + stream_len, stream_cap - stream_len);
         free(tiles);
