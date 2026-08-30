@@ -1971,3 +1971,34 @@ what rules the serializer out.
 
 Must be resolved before the AV1 decode path is wired up. Worth checking whether the
 VP9 path, which takes the same buffers by the same route, has the same window.
+
+## AV1: VideoToolbox does not apply the superres upscale
+
+Measured 2026-08-30 on M4 Pro, macOS 26.5.2, driving the serializer's own output
+(`spikes/av1-obu-serializer/vt-oracle.c`). On a clip using super-resolution,
+VideoToolbox returns each frame at its **coded** width rather than the upscaled
+one:
+
+```
+465x360 x7   366x360 x5   341x360 x3   569x360 x7   512x360 x11   640x360 x6
+```
+
+Every value is exactly `640 * 8 / superres_denom`, and the only frames returned at
+the full 640 are the six with `use_superres = 0`.
+
+The upscale is part of AV1's *decoding* process, not a display step, so this is a
+conformance gap on VideoToolbox's side rather than something wrong with what we
+submit. The same rebuilt stream decodes bit-identically to the original clip under
+dav1d, and five of the six fixtures agree bit-exactly between dav1d and
+VideoToolbox — `superres` is the only one that diverges, on exactly the 27 frames
+that use it.
+
+It matters because `deliver_picture` copies planes into a guest surface sized at the
+**upscaled** dimensions. Left alone, a superres stream delivers a narrow picture into
+a wide surface: a horizontally squashed image beside a stale or black margin, with no
+error anywhere. Any fix must at least detect the mismatch; upscaling with the
+normative filter ourselves is the complete answer, and refusing superres streams so
+the guest falls back to software is the cheap one.
+
+Superres is rare in practice, which makes it likelier to be discovered as a
+mysterious "video looks squashed" report than as a decode failure.

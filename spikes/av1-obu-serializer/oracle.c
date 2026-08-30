@@ -242,6 +242,12 @@ int main(int argc, char **argv)
     uint8_t *original, *stream;
     size_t original_size, stream_len = 0, stream_cap = 1 << 22;
     unsigned frames = 0, mismatches = 0, compared = 0;
+    /* AV1_ORACLE_CONTRACT=1 drives the serializer the way a buggy backend would -- building
+     * each frame without ever flushing the held one -- and checks that it REFUSES rather
+     * than quietly losing a picture. Worth a mode of its own because the normal path always
+     * flushes, so nothing else here ever reaches that guard. */
+    const bool contract = getenv("AV1_ORACLE_CONTRACT") != NULL;
+    bool held_seen = false;
     const char *capture_dir, *clip_path;
 
     if (argc != 3) {
@@ -296,6 +302,30 @@ int main(int argc, char **argv)
          * frame's own unit is built at end_frame once all its tile data has arrived. Each
          * call's output is a separate temporal unit and reaches the decoder as its own
          * sample -- they are adjacent here only because dav1d takes a byte stream. */
+        if (contract) {
+            n = virgl_av1_build_temporal_unit(&state, &desc, tiles, tiles_size,
+                                              stream + stream_len, stream_cap - stream_len);
+            free(tiles);
+            if (n < 0) {
+                if (held_seen) {
+                    printf("PASS: the serializer refused to build over a held frame\n");
+                    return 0;
+                }
+                printf("FAIL: refused at frame %u with nothing held\n", i);
+                return 1;
+            }
+            if (!n)
+                held_seen = true;
+            else if (held_seen) {
+                printf("FAIL: frame %u built over a held frame instead of refusing -- the "
+                       "held picture is lost\n", i);
+                return 1;
+            }
+            stream_len += (size_t)n;
+            frames++;
+            continue;
+        }
+
         for (int call = 0; call < 2; call++) {
             /* Twice on purpose. A frame's tile data can arrive over several
              * decode_bitstream calls, each carrying the same descriptor, so the flush has
@@ -340,6 +370,11 @@ int main(int argc, char **argv)
         return 1;
     }
     stream_len += (size_t)tail;
+
+    if (contract) {
+        printf("SKIP: no frame was ever held, so the guard was not reached\n");
+        return 0;
+    }
 
     if (!frames) {
         fprintf(stderr, "no fixtures in %s\n", capture_dir);
@@ -390,6 +425,34 @@ int main(int argc, char **argv)
         printf("\n  picture %u differs (%s)\n", i, why);
         if (mismatches <= 3)
             diff_headers(ref.pics[r].frame_hdr, sub.pics[i].frame_hdr);
+    }
+
+    if (getenv("AV1_ORACLE_HASH")) {
+        /* Plane sums for cross-checking against vt-oracle on AV1 silicon. Printed for the
+         * REBUILT stream's pictures, which is what the backend will actually submit.
+         * VideoToolbox returns biplanar 4:2:0, so its chroma sum corresponds to plane 1 plus
+         * plane 2 here; the combined value is printed to make that comparison direct. */
+        printf("\nplane checksums (luma, chroma-combined):\n");
+        for (unsigned i = 0; i < sub.n; i++) {
+            const Dav1dPicture *p = &sub.pics[i];
+            uint64_t s[3] = { 0, 0, 0 };
+
+            for (int pl = 0; pl < 3; pl++) {
+                int ss_ver = p->p.layout == DAV1D_PIXEL_LAYOUT_I420 ? 1 : 0;
+                int ss_hor = p->p.layout != DAV1D_PIXEL_LAYOUT_I444 ? 1 : 0;
+                int w = pl ? (p->p.w + ss_hor) >> ss_hor : p->p.w;
+                int h = pl ? (p->p.h + ss_ver) >> ss_ver : p->p.h;
+                const uint8_t *base = p->data[pl];
+
+                if (!base)
+                    continue;
+                for (int y = 0; y < h; y++)
+                    for (int x = 0; x < w; x++)
+                        s[pl] += base[(ptrdiff_t)y * p->stride[pl > 0] + x];
+            }
+            printf("  oh=%-3d %016llx %016llx\n", p->frame_hdr->frame_offset,
+                   (unsigned long long)s[0], (unsigned long long)(s[1] + s[2]));
+        }
     }
 
     for (unsigned i = 0; i < ref.n; i++) dav1d_picture_unref(&ref.pics[i]);
