@@ -343,6 +343,29 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   the slot the pointer is really on) but it is a second cursor as far as `shape_slot` is concerned,
   which is the input to the undrawn-cursor fault above. Worth deciding whether the guest ought to
   hide it, or whether our echo should ignore a plane whose origin lies outside its scanout.
+### A recurring test defect: asserting on state that has not settled
+
+Three consecutive full-suite runs (2026-08-30) each failed one or two *different* tests, and
+every one of them passed on a standalone re-run. They are not unrelated flakes — they are the
+same mistake in three places: **wait for signal A, then immediately assert on B, where B
+lands slightly after A.** Under suite parallelism, or when a guest is slow, the gap opens and
+the test fails on a system that is working.
+
+The suite therefore has a background failure rate of ~1 test per run, which is corrosive well
+beyond the noise: it makes "did my change break anything?" unanswerable without a re-run, and
+it trains the reader to dismiss red — which is exactly how a real regression gets waved
+through. Worth fixing as a class rather than one at a time. The shape of the fix is the same
+every time: poll for the condition you actually mean, bounded by the deadline, instead of
+sampling once after a proxy for it.
+
+- **`l2_qemu_guest_agent::a_stock_guest_agent_corrects_a_skewed_clock` reads the supervisor
+  log for `qga: guest is ` immediately after waiting for the agent to answer.** But
+  `log_inventory` (`qga/client.rs:592`) is called *after* the "answered" line and makes three
+  further guest round-trips — `guest-get-osinfo`, `guest-network-get-interfaces`,
+  `guest-get-users` — before writing the line the test asserts on. Normally those are quick.
+  In the failing run the agent answered 40 s late (first probe timed out, the 30 s re-probe
+  won), and the assertion sampled the log before the inventory landed. Fix: wait for
+  `qga: guest is ` itself, rather than for a line that merely precedes it.
 - **`l1_edid`'s oracle accepts the first EDID that merely CHANGED, so it can latch a torn
   read.** Failed once in the 2026-08-30 suite with `the pushed EDID has a bad checksum:
   left: 60, right: 0`, and **passed on a standalone re-run** — so it is flaky, not a
