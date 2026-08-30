@@ -436,12 +436,21 @@ So VP9 (and MJPEG) everywhere, plus AV1 from M3 on. **Implemented today: VP9 pro
 - **Decode into the layout the guest allocated.** ffmpeg's VA-API path allocates I420 (three
   planes) decode targets while asking for NV12 elsewhere; VideoToolbox produces either, so ask
   it for the target's own layout instead of converting.
-- **`ffmpeg -hwaccel vaapi ... -vf hwdownload` still reads a stale surface.** mesa's guest
-  `virgl_video.c` never calls `virgl_resource_dirty()` on a decode target, unlike every other
-  host-writes-here path in that driver, so no `TRANSFER_FROM_HOST` is issued and the
-  application gets the cleared copy it allocated. Consumers that sample the planes instead —
-  GStreamer's `vavp9dec` — see the real pixels. The gap is guest-side and upstream's; fixing
-  it there would make hardware decode need a patched mesa, i.e. enhanced-tier only.
+- **Download in the surface's own format; any VA post-processing draw renders black.**
+  `ffmpeg -hwaccel vaapi ... -vf hwdownload,format=yuv420p` is byte-identical to a software
+  decode on a stock guest. Ask for a *different* format (`format=nv12`) and mesa allocates a
+  temporary surface, runs the VA post-proc compositor into it and reads that back — and the
+  result is uniformly zero. So is any `scale_vaapi`, for a plain BGRA source that never went
+  near a decoder, which is what places the fault in the compositor draw rather than anywhere
+  in the video path. `vl_compositor` issues the one `MESA_PRIM_QUADS` draw in this stack; the
+  KosmicKrisp index-promotion and zink triangle-fan levers are **exonerated** (measured with
+  the lever confirmed live in the worker log). Open — see the hardening backlog.
+
+  Not to be confused with a *separate*, real gap: mesa's guest `virgl_video.c` never calls
+  `virgl_resource_dirty()` on a decode target, unlike every other host-writes-here path in
+  that driver. It is still present in mesa main (checked 2026-08-30) and worth upstreaming,
+  but it is **not** what the black download was — patching it changes nothing observable,
+  measured both ways against an unpatched control.
 
 Verification: `cargo nextest run -p limina-test -E 'test(stock_guest_hardware_decodes_vp9)'`.
 VP9 is a normatively exact codec, so the test asserts the hardware decode is **byte-identical**

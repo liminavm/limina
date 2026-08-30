@@ -48,15 +48,14 @@
 //!    single luma value across the whole frame — so this is the assertion that failure
 //!    actually tripped.
 //!
-//! # Why GStreamer and not `ffmpeg -hwaccel vaapi`
+//! # A neighbouring bug this test must not be confused with
 //!
-//! `ffmpeg -hwaccel_output_format vaapi ... -vf hwdownload` reads the decoded surface back
-//! through `vaDeriveImage`, and on this stack that returns the guest's own cleared copy: the
-//! guest's `virgl_video.c` never calls `virgl_resource_dirty()` on a decode target, unlike
-//! every other host-writes-here path in mesa's virgl driver, so no `TRANSFER_FROM_HOST` is
-//! ever issued and the application gets a stale surface. GStreamer's `vavp9dec` consumes the
-//! planes as textures instead and sees the real pixels. The gap is guest-side and upstream's;
-//! fixing it there would make hardware decode need a patched mesa, i.e. enhanced-tier only.
+//! `ffmpeg -hwaccel_output_format vaapi ... -vf hwdownload,format=yuv420p` — a download in the
+//! surface's *own* format — is byte-identical to a software decode on a stock guest. Asking
+//! for a different one (`format=nv12`) returns uniform zeroes, because mesa then allocates a
+//! temporary surface, runs the VA post-proc compositor into it on the host, and reads that
+//! back: the compositor draw itself renders black. It does so for a plain BGRA source that
+//! never went near a decoder, so it is not a fault of this path. Tracked separately.
 //!
 //! Vehicle: the stock F44 autologin baseline on the coexist GPU with the zink-on-KK host-GL
 //! worker env — video rides the **virgl/vrend** context, the same one baseline 3D uses, so it
