@@ -20,9 +20,12 @@ original clip:
 | baseline  | 31                     | 29            |
 | filmgrain | 31                     | 29            |
 | tiles     | 31                     | 29            |
-| superres  | 31                     | 29            |
+| superres* | 31                     | 29            |
 | pan       | 31                     | 29            |
 | lowdelay  | 60                     | 0             |
+
+\* the `superres` capture carries a local repair: two of its tile payloads were
+recorded as zeros (see *Known defect* below) and were restored from the clip.
 
 Hidden frames are not compared directly — the rebuilt stream never shows them, so
 no decoder emits them. They are covered transitively: every shown picture is
