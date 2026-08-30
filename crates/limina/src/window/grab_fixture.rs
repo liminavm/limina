@@ -19,7 +19,7 @@
 use std::time::{Duration, Instant};
 
 use super::fit;
-use super::grab_policy::{free_step, press_step, Free, GrabState, Press, Release};
+use super::grab_policy::{capture_tier, free_step, press_step, Free, GrabState, Press, Release};
 
 /// One trace line this replay understands, in file order.
 #[derive(Debug)]
@@ -256,7 +256,8 @@ fn the_hidden_seam_trace_replays_to_a_release_through_the_seam() {
                     side: fit::SideTuning::default(),
                     fullscreen: true,
                 };
-                let out = press_step(&mut st, &s, reachable);
+                let tier = capture_tier(captured, &st);
+                let out = press_step(&mut st, tier, &s, reachable);
                 let p = out.pressing.expect("the recorded press must replay");
                 assert_eq!(p.edge, *edge, "edge at t={t}");
                 assert!((p.hold - rec_hold).abs() < 1e-9, "hold at t={t}");

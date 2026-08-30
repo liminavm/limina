@@ -24,6 +24,8 @@
 
 use std::time::{Duration, Instant};
 
+use limina_input::auxkey::GrabMode;
+
 use super::fit;
 
 /// A floor on the push, so a fast graze along an edge cannot satisfy the hold. Small — the hold is
@@ -95,14 +97,10 @@ pub(crate) fn key_loss_releases(captured: bool, facts: &[WindowFacts]) -> bool {
 /// A POLICY grab lives only in fullscreen. Leaving it — Cmd-Ctrl-F, or the Space being torn
 /// down — must hand the pointer back, because the edge-press release is itself gated on
 /// fullscreen: without this the pointer would be held in a windowed VM with no gesture that
-/// could free it but the chord. Gated on `holding`, unlike [`key_loss_releases`]: an explicit
-/// Cmd-Ctrl-G grab is the user's and survives the mode change.
-pub(crate) fn fullscreen_exit_releases(
-    holding: bool,
-    captured: bool,
-    primary: &WindowFacts,
-) -> bool {
-    holding && captured && !primary.fullscreen
+/// could free it but the chord. Only [`GrabMode::Auto`] is released, unlike [`key_loss_releases`]:
+/// an explicit Cmd-Ctrl-G grab is the user's and survives the mode change.
+pub(crate) fn fullscreen_exit_releases(mode: GrabMode, primary: &WindowFacts) -> bool {
+    matches!(mode, GrabMode::Auto) && !primary.fullscreen
 }
 
 /// Which path fed a reveal event. Both can be live at once and they do NOT agree about where
@@ -438,6 +436,10 @@ impl GrabState {
         self.inside_since = None;
     }
 
+    /// Whether the *policy* owns the current grab. Deliberately not the question the rest of the
+    /// code asks: a bare bool leaves each reader to remember that `holding` and `captured` are
+    /// two facts and that their combination is the tier. Go through [`grab_mode`] instead — this
+    /// is its input, and the fixtures'.
     pub(crate) fn holding(&self) -> bool {
         self.holding
     }
@@ -488,6 +490,32 @@ pub(crate) fn soft_keyboard_engaged(
     space_visible: bool,
 ) -> bool {
     !captured && enabled && is_key && space_visible && !muted
+}
+
+/// How much of the keyboard the VM owns right now — **the** answer, derived in one place.
+///
+/// Two captures are possible and they are not the same claim. The policy takes one on the user's
+/// behalf when the guest is fullscreen; the user takes the other by name with Cmd-Ctrl-G. Which
+/// one is live is `holding` — but only *together with* `captured`, and that pairing is exactly
+/// what every reader used to have to remember. They ask here instead and match on the answer.
+///
+/// Derived rather than stored, and that is load-bearing: a promotion changes the owner with no
+/// capture transition at all (see [`GrabState::release_by_user`]), and the no-Accessibility
+/// fallback path captures without touching this struct. A stored kind would be stale in both.
+pub(crate) fn grab_mode(captured: bool, soft: bool, st: &GrabState) -> GrabMode {
+    match (captured, soft) {
+        (true, _) if st.holding() => GrabMode::Auto,
+        (true, _) => GrabMode::Hard,
+        (false, true) => GrabMode::Soft,
+        (false, false) => GrabMode::None,
+    }
+}
+
+/// The capture tier alone, for the sites that only ask *whose* capture this is. Answers `None`
+/// whenever the pointer is free — a soft grab is not a capture, and no caller of this needs to
+/// tell the two apart.
+pub(crate) fn capture_tier(captured: bool, st: &GrabState) -> GrabMode {
+    grab_mode(captured, false, st)
 }
 
 /// Whether the ungrab chord should still be recognized **after it has muted the soft keyboard
@@ -850,12 +878,14 @@ pub(crate) struct PressOutcome {
 /// asked for, so it releases in place.
 pub(crate) fn press_step(
     st: &mut GrabState,
+    mode: GrabMode,
     s: &Press,
     reachable: impl Fn((f64, f64)) -> bool,
 ) -> PressOutcome {
-    // Only the policy's grab. An explicit Cmd-Ctrl-G is an unconditional hold — see
-    // `GrabState::holding` — and the chord is its way out.
-    if !st.holding || s.hold <= 0.0 || !s.fullscreen {
+    // Only the policy's grab. An explicit Cmd-Ctrl-G is an unconditional hold and the chord is
+    // its way out, so it ignores every edge. The mode comes from the caller because only the
+    // caller knows whether the pointer is captured at all — see [`grab_mode`].
+    if !matches!(mode, GrabMode::Auto) || s.hold <= 0.0 || !s.fullscreen {
         return PressOutcome::default();
     }
     // Mid-drag never releases: dragging a guest window against an edge would otherwise ungrab and
@@ -976,7 +1006,10 @@ mod tests {
         let mut last = None;
         for i in 1..=n {
             let s = press(pos, delta, t0 + Duration::from_millis(dt_ms * u64::from(i)));
-            let out = press_step(st, &s, reachable);
+            // Every lean is a captured pointer at an edge — the tier follows from whether the
+            // test put the policy in charge (`hold()`) or left it a hard grab.
+            let tier = capture_tier(true, st);
+            let out = press_step(st, tier, &s, reachable);
             last = out.pressing;
             if let Some((got, release)) = out.release {
                 assert_eq!(got, edge);
@@ -1059,7 +1092,8 @@ mod tests {
                 t0 + Duration::from_millis(16 * i),
             );
             s.buttons_down = true;
-            assert_eq!(press_step(&mut st, &s, anywhere).release, None);
+            let tier = capture_tier(true, &st);
+            assert_eq!(press_step(&mut st, tier, &s, anywhere).release, None);
         }
     }
 
@@ -1077,7 +1111,8 @@ mod tests {
                 (-6.0, -6.0),
                 t0 + Duration::from_millis(16 * i),
             );
-            let out = press_step(&mut st, &s, anywhere);
+            let tier = capture_tier(true, &st);
+            let out = press_step(&mut st, tier, &s, anywhere);
             assert_eq!(out.pressing, None, "a corner is not a press");
             assert_eq!(out.release, None);
         }
@@ -1610,20 +1645,52 @@ mod tests {
     }
 
     #[test]
+    fn the_tier_follows_the_owner_across_a_promotion() {
+        // The derivation is the single answer every reader takes, so the transitions it has to
+        // survive are the ones no capture event announces.
+        let mut st = GrabState::default();
+        assert_eq!(grab_mode(false, false, &st), GrabMode::None);
+        assert_eq!(grab_mode(false, true, &st), GrabMode::Soft);
+
+        // The policy takes the pointer: a capture, but not the user's.
+        st.hold();
+        assert_eq!(grab_mode(true, false, &st), GrabMode::Auto);
+        // Soft is irrelevant once captured — a capture owns the keyboard through its own path.
+        assert_eq!(grab_mode(true, true, &st), GrabMode::Auto);
+
+        // Cmd-Ctrl-G promotes it in place. THIS is why the tier is derived and not stored: the
+        // pointer never moved, no capture transition fired, and nothing but `holding` changed —
+        // a kind recorded at the capture site would still read `Auto` here.
+        st.release_by_user(false);
+        assert_eq!(grab_mode(true, false, &st), GrabMode::Hard);
+        assert!(!st.user_released(), "a promotion latches nothing");
+
+        // And the no-Accessibility fallback, which captures without touching this struct at all:
+        // a default state plus a live capture is a hard grab, which is what the user asked for.
+        assert_eq!(
+            grab_mode(true, false, &GrabState::default()),
+            GrabMode::Hard
+        );
+    }
+
+    #[test]
     fn leaving_fullscreen_releases_only_the_policys_grab() {
         // The edge-press release is gated on fullscreen, so a policy grab surviving into a
         // windowed VM would have no gesture out but the chord. The user's explicit grab is a
         // different tool — unconditional by design — and survives the mode change.
         let mut w = on_glass();
         w.fullscreen = false;
-        assert!(fullscreen_exit_releases(true, true, &w));
+        assert!(fullscreen_exit_releases(GrabMode::Auto, &w));
         assert!(
-            !fullscreen_exit_releases(false, true, &w),
+            !fullscreen_exit_releases(GrabMode::Hard, &w),
             "a hard grab is the user's; the mode change must not take it"
         );
-        assert!(!fullscreen_exit_releases(true, false, &w), "nothing held");
         assert!(
-            !fullscreen_exit_releases(true, true, &on_glass()),
+            !fullscreen_exit_releases(GrabMode::None, &w),
+            "nothing held"
+        );
+        assert!(
+            !fullscreen_exit_releases(GrabMode::Auto, &on_glass()),
             "still fullscreen"
         );
     }

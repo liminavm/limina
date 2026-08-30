@@ -303,8 +303,10 @@ extern "C" fn tap_callback(
     // A POLICY grab lives only in fullscreen — see `grab_policy::fullscreen_exit_releases`.
     // An explicit Cmd-Ctrl-G grab is the user's and survives.
     if grab_policy::fullscreen_exit_releases(
-        ctx.input.grab_state().holding(),
-        ctx.captured.load(Ordering::Acquire),
+        grab_policy::capture_tier(
+            ctx.captured.load(Ordering::Acquire),
+            &ctx.input.grab_state(),
+        ),
         &pf,
     ) {
         log::info!("pointer capture: released — no longer fullscreen");
@@ -334,7 +336,10 @@ extern "C" fn tap_callback(
             // press one meaning: from soft or policy-held it becomes a hard grab, from a hard grab
             // it lets go. (Ctrl-Opt still always releases.)
             let held = ctx.captured.load(Ordering::Acquire);
-            let hard = held && !ctx.input.grab_state().holding();
+            let hard = matches!(
+                grab_policy::capture_tier(held, &ctx.input.grab_state()),
+                GrabMode::Hard
+            );
             // GRAB only when our window is key: this is a SESSION tap, so it sees the combo
             // even while another app (or another VM) is focused — grabbing then steals the
             // user's mouse out from under whatever they were doing. Pass the combo through
@@ -380,17 +385,7 @@ extern "C" fn tap_callback(
     // media and volume need the hard grab, brightness never leaves the host.
     // Anything the policy doesn't claim is returned untouched, so macOS still dims the screen.
     if etype == SYS_DEFINED {
-        // The two captures are not the same claim, so they are not the same mode. `holding` is
-        // the policy's own flag, and it cannot go stale under a capture: the policy only takes
-        // the pointer from `uncaptured_edges` (gated on `!captured`), a promotion clears it
-        // (`release_by_user`), and `take_by_policy` refuses outright when the pointer is already
-        // ours. So while captured it answers exactly one question — did the user ask for this.
-        let mode = match (captured, soft) {
-            (true, _) if ctx.input.grab_state().holding() => GrabMode::Auto,
-            (true, _) => GrabMode::Hard,
-            (false, true) => GrabMode::Soft,
-            (false, false) => GrabMode::None,
-        };
+        let mode = grab_policy::grab_mode(captured, soft, &ctx.input.grab_state());
         return route_aux_event(ctx, event, mode);
     }
 
@@ -1198,8 +1193,14 @@ fn grab_release_edge(
         side: side_tuning(),
         fullscreen,
     };
-    let out =
-        ctx.with_grab(|st| grab_policy::press_step(st, &sample, |p| releasable(&step.view, p)));
+    // Read the capture flag rather than assuming this path implies it: the tier is the whole
+    // question here, and a `true` written in by hand is the assumption that used to be implicit.
+    let tier = grab_policy::capture_tier(
+        ctx.captured.load(Ordering::Acquire),
+        &ctx.input.grab_state(),
+    );
+    let out = ctx
+        .with_grab(|st| grab_policy::press_step(st, tier, &sample, |p| releasable(&step.view, p)));
     if let (true, Some(p)) = (edge_trace(), out.pressing) {
         eprintln!(
             "[GRAB] t={:.1} press {:?} at ({:.1},{:.1}) d=({dx:.1},{dy:.1}) \
