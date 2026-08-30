@@ -456,6 +456,36 @@ Verification: `cargo nextest run -p limina-test -E 'test(stock_guest_hardware_de
 VP9 is a normatively exact codec, so the test asserts the hardware decode is **byte-identical**
 to a software one, plus that the frame is not uniform.
 
+### AV1: the next codec, and what it costs
+
+Not implemented. AV1 is the only *other* codec a stock guest can ask for — the `all_free`
+gate above keeps H.264 and HEVC out of the guest driver regardless of the host — and the
+host half is already measured (`spikes/av1-vt-probe/`, M3-or-later only: no on M1 Max, yes
+on M4 Pro). VideoToolbox imposes no obstacle: it owns its DPB as it does for VP9, accepts a
+repeated sequence header per temporal unit, and returns a picture for every frame including
+the no-show ones — **but only when each frame is wrapped in its own temporal delimiter**. In
+a stream's natural framing one picture comes back for a no-show/display pair, so a run that
+silently drops a third of the frames reads as a clean 1:1 pass; count in the right unit.
+
+The entire remaining cost is the frame header. virgl hands over tile entries plus a fully
+parsed `virgl_av1_picture_desc`, while VideoToolbox wants real OBUs, so the backend must
+re-serialize a conformant `OBU_FRAME_HEADER` — plus a sequence header for the `av1C` box,
+unlike VP9's six-scalar `vpcC`. There is no prior art: ffmpeg's own VideoToolbox AV1 hwaccel
+(`libavcodec/videotoolbox_av1.c`) still holds the original packet and forwards untouched
+OBUs. ffmpeg's `cbs_av1` is the one bidirectional writer, and being bidirectional buys the
+oracle as much as the bit-packing — a synthesized header can be diffed field-by-field against
+one parsed from a real stream, as a unit test with no VM and no GPU. The irreducible part is
+a shadow DPB: `primary_ref_frame` inheritance and `global_motion_params()`'s subexp deltas
+mean header synthesis needs per-slot state that VP9 let us skip entirely.
+
+One decision to make deliberately rather than discover: **VideoToolbox applies film grain and
+returns no grain-free picture** (measured bit-identical to dav1d with grain on). The protocol
+carries both `target` and `film_grain_target` and expects a grain-free reference alongside.
+Harmless — VT owns the DPB, so decode correctness never needs one — but the backend must fill
+the grain-applied picture into whichever surface the guest *displays*, which is not
+necessarily `target`. Real AV1 web content leans on grain, so getting this backwards would
+present as a corruption bug.
+
 ## 5. Host GPU-memory budget
 
 Host memory allocated on the guest's behalf is invisible to the guest, so a guest-side leak ends
