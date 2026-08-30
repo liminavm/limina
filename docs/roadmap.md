@@ -2650,8 +2650,14 @@ Fedora builds the default `all_free`, so:
   `/usr/lib64/dri-freeworld/` ahead of `/usr/lib64/dri/`, so installing it takes over
   cleanly. It pulls in no limina components, so it keeps the stock-tier promise — the guest
   needs no custom kernel, driver or agent, only a repository the user enables.
-  Our own guest mesa is a separate lever for the enhanced tier: the VA driver in use is
-  `mesa-dri-drivers-*.limina.fc44`, so we can simply build it with the codecs enabled.
+- **Our own mesa must enable them too, and that is an obligation rather than an option.**
+  The VA driver in use on an enhanced guest is ours (`mesa-dri-drivers-*.limina.fc44`), and
+  it currently inherits Fedora's `all_free` default -- nothing in
+  `scripts/provision/f44/build-mesa-rpm.sh` overrides `video-codecs`. Left alone, a stock
+  guest that enabled RPM Fusion would decode H.264 and an *enhanced* guest would not:
+  installing our components would take a capability away, which the two-tier guarantee
+  forbids outright. Enhancements are additive. So the enhanced mesa is built with the patent
+  codecs on, and the tier stays a superset of stock rather than a trade.
 
 Not the lever: `fedora-cisco-openh264` ships a **software** codec for Firefox and GStreamer.
 It registers no VA-API driver, so it bypasses the virtio path entirely and does nothing for
@@ -2681,6 +2687,8 @@ via gnome-remote-desktop, and OBS — go through VA-API encode.
 
 ### Order
 
+0. **Build our guest mesa with `h264dec,h265dec` added** — cheap, and it keeps the enhanced
+   tier a superset the moment H.264 works anywhere.
 1. **MJPEG decode** — stock-tier already, host-side only, `virgl_mjpeg_picture_desc` exists.
 2. **H.264 decode** — SPS/PPS writer; reuses the AV1 harness unchanged (`submit_unit`,
    `deliver_picture(target)`, `ensure_session(target)`, the `LIMINA_*_CAPTURE` fixtures and
