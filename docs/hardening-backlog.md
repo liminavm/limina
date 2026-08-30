@@ -343,6 +343,22 @@ Done first (2026-06-23, with user): **runtime window resize** — ✅ SHIPPED, s
   the slot the pointer is really on) but it is a second cursor as far as `shape_slot` is concerned,
   which is the input to the undrawn-cursor fault above. Worth deciding whether the guest ought to
   hide it, or whether our echo should ignore a plane whose origin lies outside its scanout.
+- **`l1_edid`'s oracle accepts the first EDID that merely CHANGED, so it can latch a torn
+  read.** Failed once in the 2026-08-30 suite with `the pushed EDID has a bad checksum:
+  left: 60, right: 0`, and **passed on a standalone re-run** — so it is flaky, not a
+  regression. `wait_for_edid_change` returns as soon as the blob differs from the previous
+  one, and the identity push drives several successive reconfigures (the log shows the
+  scanout going 1024x768 → 900x650 → 1024x768-at-1280x800), so the read can land on a
+  half-written or intermediate blob. A checksum that is not zero is exactly what a torn
+  128-byte read looks like. Fix: wait for an EDID that is *valid and matches* (checksum 0
+  plus the expected vendor), with the deadline still governing, rather than for one that is
+  merely different. Same shape as the stale-capture bug fixed the same day — an oracle that
+  takes the first observation instead of a settled one.
+- **`venus_replay_matches_llvmpipe_reference` failed at 957 s in the same suite and passed
+  standalone in 151 s.** A 6x spread on the same test points at starvation under suite
+  parallelism rather than a GPU fault; it prints no assertion, which is its own problem —
+  a test that fails silently forces a re-run to learn anything. Worth giving it a verdict
+  line before chasing the timing.
 - **CapsLock/NumLock LED parity** — surface the statusq LED feedback (libkrun `worker.rs` no-op).
   Roadmap M8.
 
