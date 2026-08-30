@@ -2668,9 +2668,10 @@ Measured on the dogfood guest (2026-08-30): `vainfo` reports only `VAProfileVP9P
 
 ### The host half
 
-H.264 decode is supported by VideoToolbox on **all** Apple Silicon including M1, so unlike
-AV1 — which needs M3 or later and forced every test onto a second machine — it is developable
-and testable on the dev Mac.
+H.264 decode is supported by VideoToolbox on **all** Apple Silicon including M1, so its
+hardware path is developable and testable on the dev Mac. AV1's is not — that needs M3 or
+later — though AV1 itself now decodes on the dev Mac through the backend's dav1d fallback,
+which is exactly why an AV1 test passing there proves nothing about VideoToolbox.
 
 Encode is already plumbed everywhere except our backend: the protocol carries
 `PIPE_VIDEO_ENTRYPOINT_ENCODE`, `virgl_video_hw.h` defines the H.264 and H.265 encode

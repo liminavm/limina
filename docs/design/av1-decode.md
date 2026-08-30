@@ -37,10 +37,13 @@ every temporal unit, and returns **a picture per frame including no-show frames*
 when each frame is wrapped in its own temporal delimiter. That last point is the one the
 design rests on, and it matches the unit virgl submits.
 
-**AV1 silicon is M3-or-later.** The dev Mac (M1 Max) cannot decode AV1 at all, so the
-*VideoToolbox* end-to-end check has to run on an M3+ host and the L2 test must SKIP cleanly
-elsewhere. Everything up to that point — fixture capture, the serializer, and the dav1d
-oracle — runs locally; see the phases below.
+**AV1 silicon is M3-or-later, but AV1 decode is not.** The backend falls back to dav1d
+where there is no silicon, so an M1 or M2 host decodes AV1 through the ordinary VA-API path
+and the whole feature is exercisable locally, end to end — see §"A software decoder backs
+the hardware one". What still needs an M3+ host is verifying the **VideoToolbox** path
+specifically: a test that means to pin hardware behaviour must say so, because on lesser
+silicon the same guest-visible decode will quietly be served by dav1d and pass without
+touching VideoToolbox at all.
 
 ## Licence: the serializer is ours, and the oracle is dav1d
 
@@ -60,7 +63,9 @@ better instrument than the bitstream rewriter originally planned:
   is what keeps a wrong field from presenting only as wrong pixels far from its cause.
 - It carries **no GPL entanglement**, so nothing constrains where the oracle may live.
 - It is **pure software**, so the entire serializer can be developed and tested on a machine
-  with no AV1 silicon. VideoToolbox and M3+ hardware enter only at the end.
+  with no AV1 silicon. It earned a second job on the strength of that: the oracle is also the
+  shipped decoder wherever VideoToolbox cannot be relied on, so the reference implementation
+  and the fallback are the same code and cannot drift apart.
 
 `Dav1dFrameHeader` exposes `primary_ref_frame`, `refresh_frame_flags`, `segmentation`, and
 `gmv[]` as `Dav1dWarpedMotionParams` — *reconstructed* warp parameters, the same representation
@@ -74,10 +79,11 @@ inside a subexp symbol.
 records the `virgl_av1_picture_desc` and tile bytes for every frame, and decodes nothing,
 returning success. The descriptors are a pure function of the *guest's own* bitstream parse —
 `av1dec.c` parses every OBU itself and `vaapi_av1.c` fills the VA parameters from that parse,
-with no feedback from decoded output — so a local poke VM on the M1 produces exactly the
-fixtures an M3 would. Caps advertisement is env-forced past `vt_can_decode` for the capture
-build only. (The assumption to confirm in the first run: ffmpeg keeps submitting frames when
-the stub reports success and returns no picture.)
+with no feedback from decoded output — so a poke VM on a host with no AV1 silicon produces
+exactly the fixtures an M3 would. A capture build is one of the three things that make the
+backend advertise AV1 at all, alongside silicon and a software decoder. (The assumption to
+confirm in the first run: ffmpeg keeps submitting frames when the stub reports success and
+returns no picture.)
 
 This is what makes everything after it offline work: with real descriptors plus the matching
 real stream, the serializer and its dav1d oracle iterate at unit-test speed, on this machine,
@@ -151,7 +157,11 @@ needed for decode correctness — but the protocol carries two surfaces, `target
 **decide the mapping deliberately**: fill the grain-applied picture into whichever surface the
 guest displays, and do not assume that is `target`.
 
-**Phase 4 — an L2 test**, which can only assert end-to-end on M3+ hardware.
+**Phase 4 — an L2 test.** It can assert end-to-end anywhere, because a host with no AV1
+silicon decodes through dav1d rather than not at all. The corollary is the trap: passing
+proves *a* decode, not the hardware one, so a test meant to cover VideoToolbox has to
+establish that VideoToolbox actually served it — and skip, rather than pass, where it did
+not.
 
 ## The descriptor does not carry refresh_frame_flags, and cannot
 
