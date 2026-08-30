@@ -814,6 +814,15 @@ rects). Remaining:
   `limina-m3-networking`.
 
 ## M2 / M8 polish wins (cheap, host-side)
+- **`TapCtx::grab_mode` — assemble the tier once per event, in the adapter.** Today each site that
+  needs [`GrabMode`] assembles it from the `captured` atomic plus the event's `soft` predicate plus
+  `GrabState`. `captured` has one owner and `GrabState` is reachable, but `soft` is a predicate over
+  window facts sampled per event (`window_facts`, a window-server round trip), so it has no owner to
+  ask and **must not be cached** — a stale `space_visible` is exactly the bug that once left the
+  keyboard pointed at a guest that had left the screen. The shape that works: the tap samples facts
+  once, `TapCtx` assembles the tier from them, and the *answer* travels instead of the ingredients.
+  `grab_policy` stays pure and parameterized — that is what makes its assertions possible without
+  booting a VM, and it is not up for negotiation.
 - **fn/aux-key buckets: settings UI + the Accessibility cliff** (added 2026-07-31, with the
   bucket policy in `crates/limina-input/src/auxkey.rs`). Two follow-ups the design review raised.
   **(a)** The buckets (`Media`/`Volume` hard-grab-only, `Brightness`/`Other` host-only)
