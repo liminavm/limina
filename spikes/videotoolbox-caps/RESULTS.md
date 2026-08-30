@@ -95,6 +95,21 @@ implementation of that header is the core of the job, plus:
 Decode first. The protocol carries encode too (`virgl_video_encode_bitstream`, H.264/H.265
 encode descriptors) and VideoToolbox can do it, but browser playback is the pain.
 
+## No prior art: a VideoToolbox backend would be the first non-VA one
+
+The video feature has only ever had the one backend. `virgl_video.c`'s header floats VDPAU
+and "proprietary interfaces" as future options and the file marks itself an unstable API,
+but no second backend — VDPAU, DXVA, D3D12 or otherwise — has landed in the four years
+since. Nothing published implements one for macOS, and no VideoToolbox-backed libva driver
+exists for any purpose. Nor is there public documentation of guest hardware video decode on
+a macOS host from UTM, krunkit, Docker Desktop, OrbStack, or Parallels.
+
+So the unstable-API marking is the real cost signal, not the missing backend: we would be
+the second consumer of an interface that has had exactly one, and it can shift under us.
+Upstream attention since 2022 has gone to venus/vrend, not here. Secondary reporting that
+"VirGL is unmaintained" does not survive checking — the mesa 26.1.0 release notes and
+`docs/drivers/virgl.rst` carry no such notice.
+
 ## Alternatives, and why they lose
 
 - **Vulkan Video.** Nothing in KosmicKrisp (`grep -rn "VK_KHR_video" src/kosmickrisp/` →
