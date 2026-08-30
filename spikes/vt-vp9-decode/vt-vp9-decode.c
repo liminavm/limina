@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 struct frame_info {
     uint8_t profile;
@@ -147,6 +148,8 @@ struct decode_stats {
     int errors;
     int nonzero;
     OSType pixel_format;
+    int planes;
+    pthread_t cb_thread;
     size_t last_w, last_h;
 };
 
@@ -171,7 +174,9 @@ static void output_callback(void *decompression_output_ref_con, void *source_fra
     }
 
     st->outputs++;
+    st->cb_thread = pthread_self();
     st->pixel_format = CVPixelBufferGetPixelFormatType(image_buffer);
+    st->planes = (int)CVPixelBufferGetPlaneCount(image_buffer);
     st->last_w = CVPixelBufferGetWidth(image_buffer);
     st->last_h = CVPixelBufferGetHeight(image_buffer);
 
@@ -244,6 +249,10 @@ int main(int argc, char **argv)
     CFMutableDictionaryRef pixel_attrs = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     int32_t pixfmt = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+    if (argc > 2 && strcmp(argv[2], "i420") == 0)
+        pixfmt = kCVPixelFormatType_420YpCbCr8Planar;
+    if (argc > 2 && strcmp(argv[2], "nv12f") == 0)
+        pixfmt = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
     CFNumberRef pixfmt_num = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &pixfmt);
     CFDictionarySetValue(pixel_attrs, kCVPixelBufferPixelFormatTypeKey, pixfmt_num);
     CFDictionarySetValue(pixel_attrs, kCVPixelBufferIOSurfacePropertiesKey,
@@ -342,6 +351,10 @@ int main(int argc, char **argv)
     printf("  with real pixels     : %d\n", stats.nonzero);
     printf("  NULL image buffers   : %d\n", stats.null_images);
     printf("  errors               : %d\n", stats.errors);
+    printf("callback thread        : %s\n",
+           pthread_equal(stats.cb_thread, pthread_self()) ? "SAME as caller"
+                                                          : "DIFFERENT from caller");
+    printf("planes                 : %d\n", stats.planes);
     printf("pixel format           : %.4s  %zux%zu\n", (char *)&(OSType){CFSwapInt32HostToBig(stats.pixel_format)},
            stats.last_w, stats.last_h);
 

@@ -81,6 +81,7 @@ const VIRGLRENDERER_NO_VIRGL: u32 = 1 << 7;
 #[allow(dead_code)]
 const VIRGLRENDERER_USE_ASYNC_FENCE_CB: u32 = 1 << 8;
 const VIRGLRENDERER_RENDER_SERVER: u32 = 1 << 9;
+const VIRGLRENDERER_USE_VIDEO: u32 = 1 << 11;
 
 /// virgl_flags for the **coexist** virtio-gpu (tier-2, the default): venus (Vulkan) **and** vrend
 /// (GL via zink-on-KosmicKrisp) on top of the unconditional software-2D scanout.
@@ -103,6 +104,13 @@ const VIRGLRENDERER_RENDER_SERVER: u32 = 1 << 9;
 ///   ASYNCHRONOUSLY (fence eventfd + sync thread → `write_context_fence` → rutabaga → guest IRQ);
 ///   without them the guest hangs forever in `glFinish`/`vkQueueWaitIdle`.
 ///
+/// - `USE_VIDEO` (0x800): hardware video decode. The guest's own `virtio_gpu_drv_video.so` — which
+///   stock Fedora already ships — talks VA-API over the virgl command stream to a host backend;
+///   ours is VideoToolbox (`src/vrend/virgl_video_vt.c` in our virglrenderer fork), since upstream
+///   implements only libva. Costs nothing on a Mac without silicon for a codec: the backend then
+///   advertises no video caps and the guest driver reports no profiles, i.e. software decode, so
+///   there is nothing to gate. Needs a virglrenderer built `-Dvideo=true`.
+///
 /// The software-2D path still serves all 2D/scanout commands (unconditional); venus + vrend add 3D
 /// contexts on top. Two-tier safety: if renderer init fails, libkrun degrades to software-2D.
 /// Override at runtime with `LIMINA_VIRGL_FLAGS` (e.g. for experiments).
@@ -112,7 +120,8 @@ const GPU_COEXIST_FLAGS: u32 = VIRGLRENDERER_VENUS
     | VIRGLRENDERER_USE_SURFACELESS
     | VIRGLRENDERER_THREAD_SYNC
     | VIRGLRENDERER_USE_ASYNC_FENCE_CB
-    | VIRGLRENDERER_RENDER_SERVER;
+    | VIRGLRENDERER_RENDER_SERVER
+    | VIRGLRENDERER_USE_VIDEO;
 
 /// Translate a [`VmSpec`] into a libkrun [`VmResources`]. No VM is started yet.
 pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {

@@ -54,8 +54,13 @@ export PKG_CONFIG_PATH="$EPOXY_PREFIX/lib/pkgconfig:$MESA_PREFIX/lib/pkgconfig:$
 # strips DYLD_*), and /opt/homebrew/lib isn't on the default dyld search path, so a runtime
 # bare dlopen finds nothing and venus enumerates zero GPUs. Linking it (like the slp bottle
 # did with MoltenVK) makes the worker load it by recorded absolute path. See limina-tier2-venus.
+# video=true builds the VA-API-shaped codec protocol with our VideoToolbox backend
+# behind it (src/vrend/virgl_video_vt.c), which is what lets a stock guest's
+# virtio_gpu_drv_video.so hardware-decode VP9. On a Mac with no silicon for a codec
+# the backend advertises no caps and the guest falls back to software.
 MESON_ARGS=(
   -Dvenus=true
+  -Dvideo=true
   -Dvulkan-dload=false
   -Drender-server-mode=thread
   -Drender-server-worker=thread
