@@ -153,6 +153,32 @@ guest displays, and do not assume that is `target`.
 
 **Phase 4 — an L2 test**, which can only assert end-to-end on M3+ hardware.
 
+## The descriptor does not carry refresh_frame_flags, and cannot
+
+This is the structural finding, and it was not visible until a rebuilt stream was put
+through a decoder. **VA-API has no `refresh_frame_flags`** — mesa writes a constant 1
+(`src/gallium/frontends/va/picture_av1.c:224`). That is not an oversight: a VA driver never
+needs it, because the application hands it the complete reference list for every frame and
+manages the decoded-picture buffer itself. A *bitstream writer* does need it, and no amount
+of reading the descriptor will produce it.
+
+What the descriptor does carry is `ref[16]`, filled from VA's `ref_frame_map` — the surface
+occupying each of the guest's slots before this frame. That is enough, because we are not
+obliged to reproduce the original stream's slot numbering; we only have to emit *a* stream
+whose DPB satisfies the references that follow. So the serializer assigns its own slots and
+remaps `ref_frame_idx` onto them.
+
+The subtlety: which slot a frame refreshed becomes visible only in the **next** frame's
+`ref[]`, where its surface has appeared. So a slot is chosen immediately — emission cannot
+wait — and its occupant is learned one frame later. That is never too late, because a frame
+cannot reference itself.
+
+**Known gap.** A frame whose output the guest does not store in `ref_frame_map` leaves its
+slot looking permanently empty, so the slot is handed out again while the decoder still has
+a picture there. Currently 49 of 60 frames of a real clip rebuild into a stream dav1d
+decodes; the desync at frame 50 is this. The fix is to stop inferring occupancy from a
+`ref[]` diff and track it positively.
+
 ## Traps the serializer itself turned up
 
 These are cheap to get wrong, silent when wrong, and none of them are visible in the field
