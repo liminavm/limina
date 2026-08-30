@@ -452,7 +452,14 @@ So VP9 (and MJPEG) everywhere, plus AV1 from M3 on. **Implemented today: VP9 pro
     build the descriptor from the view and take only the coordinate count from the shader;
     GLSL cannot, and an incomplete sampler returns `(0,0,0,1)`.
 
-  Both are fixed host-side, so this needs nothing installed in the guest. Exonerated on the way,
+  Both are fixed host-side, so this needs nothing installed in the guest.
+
+  **Bridge the constants from the resource's iov, never by mapping the GL buffer.** The first
+  version mapped it on the draw path. It produced correct pixels and was still wrong: a map is
+  a synchronisation point, and a render thread parked in one does not answer the quiesce that
+  suspend waits for, so the whole suspend bracket hangs — long after the frame it belonged to
+  rendered perfectly. Right pixels are not evidence that a draw-path change is safe; the cost
+  showed up in a different subsystem entirely, with every frame around it looking flawless. Exonerated on the way,
   each with the lever confirmed live: KosmicKrisp index promotion, zink triangle-fan lowering,
   GL errors and shader compile failures.
 
