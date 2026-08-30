@@ -1952,3 +1952,22 @@ the rest of PSCI 1.x (`SYSTEM_RESET2`, `CPU_FREEZE`, `PSCI_FEATURES`, `CPU_SUSPE
 states), SMCCC/`ARCH_FEATURES`, PPTT/topology, and whatever else a guest probes and gets
 `NOT_SUPPORTED` for. Each declined feature is a guest behaviour we inherit by default rather
 than choose.
+
+## AV1: the slice buffer can read as zeros when the host copies it
+
+`av1_decode_bitstream()` (`virgl_video_vt.c`) recorded two of sixty `superres`
+fixtures with the correct tile *size* but all-zero *contents* — the guest's slice
+data was not visible to the host at the moment it was read. Intermittent: 2 of 360
+captured frames, and only in that one clip.
+
+It matters well beyond the fixtures. The capture path reads `buffers[i]` exactly as
+the real decode path will, so the same window corrupts a frame handed to
+VideoToolbox — silently, since a zeroed tile payload is still a structurally valid
+bitstream. It also mimics a serializer defect closely enough to cost real time: the
+stream fails to decode while every frame header is provably correct, which is the
+same signature as a lost reference slot (see `spikes/av1-obu-serializer/RESULTS.md`).
+Restoring the two payloads from the clip makes `superres` decode bit-exact, which is
+what rules the serializer out.
+
+Must be resolved before the AV1 decode path is wired up. Worth checking whether the
+VP9 path, which takes the same buffers by the same route, has the same window.
