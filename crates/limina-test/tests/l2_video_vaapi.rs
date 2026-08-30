@@ -47,15 +47,17 @@
 //!    blank frames. Before the plane upload worked, the guest read a cleared surface — a
 //!    single luma value across the whole frame — so this is the assertion that failure
 //!    actually tripped.
-//!
-//! # A neighbouring bug this test must not be confused with
-//!
-//! `ffmpeg -hwaccel_output_format vaapi ... -vf hwdownload,format=yuv420p` — a download in the
-//! surface's *own* format — is byte-identical to a software decode on a stock guest. Asking
-//! for a different one (`format=nv12`) returns uniform zeroes, because mesa then allocates a
-//! temporary surface, runs the VA post-proc compositor into it on the host, and reads that
-//! back: the compositor draw itself renders black. It does so for a plain BGRA source that
-//! never went near a decoder, so it is not a fault of this path. Tracked separately.
+//! 5. **A download in a format the surface does not have.** Asking libva for a *different*
+//!    format than the decode target's own sends the frame through mesa's VA post-processing
+//!    compositor on the host, a completely different draw from the decode itself. Oracles 3
+//!    and 4 do not cover it: they download in the surface's native layout, which is a plain
+//!    readback. Every VPP draw once rendered pure black, so this reads as a broken decoder
+//!    while the decode is in fact perfect — the assertion that separates the two.
+//! 6. **The same draw with no video anywhere in it.** A synthetic BGRA image, scaled by the
+//!    VA compositor and read straight back. It shares only the draw with oracle 5, so when
+//!    both fail the fault is the compositor and nothing codec-shaped. It has to *scale*: a
+//!    same-format, same-size `scale_vaapi` is serviced as a blit, never reaches the
+//!    compositor, and passes happily on a host where every real VPP draw renders black.
 //!
 //! Vehicle: the stock F44 autologin baseline on the coexist GPU with the zink-on-KK host-GL
 //! worker env — video rides the **virgl/vrend** context, the same one baseline 3D uses, so it
@@ -74,6 +76,10 @@ const CLIP: &str = "/tmp/limina-vp9-oracle.ivf";
 const CLIP_WEBM: &str = "/tmp/limina-vp9-oracle.webm";
 const HW_OUT: &str = "/tmp/limina-vp9-hw.i420";
 const SW_OUT: &str = "/tmp/limina-vp9-sw.i420";
+/// The post-processing oracles: a non-native download, and a scaled BGRA image.
+const VPP_NV12: &str = "/tmp/limina-vpp.nv12";
+const VPP_SRC: &str = "/tmp/limina-vpp-src.bgra";
+const VPP_DST: &str = "/tmp/limina-vpp-dst.bgra";
 
 /// One frame of 320x240 luma — the window the uniformity check looks at.
 const LUMA_BYTES: u32 = 320 * 240;
@@ -246,4 +252,62 @@ fn stock_guest_hardware_decodes_vp9_through_vaapi() {
         "VA-API VP9 decode matched the software decoder byte for byte across {} frames",
         CLIP_SECONDS * CLIP_FPS
     );
+
+    // ORACLE 5 + 6 — the VA post-processing draw. Both of these went through mesa's
+    // vl_compositor on the host, which is not the decode path and failed independently of it:
+    // the shader's colour-space matrix never reached it and its sampler declaration did not
+    // match the bound view, so every post-processed pixel came out black while the decode
+    // above was already bit-exact.
+    let vpp = guest
+        .ssh_exec_timeout(
+            &format!(
+                "export LIBVA_DRIVER_NAME=virtio_gpu; \
+                 ffmpeg -hide_banner -loglevel error -y -hwaccel vaapi \
+                   -hwaccel_output_format vaapi -i {CLIP_WEBM} -frames:v 1 \
+                   -vf hwdownload,format=nv12 -f rawvideo {VPP_NV12}; \
+                 echo \"nv12_distinct_luma=$(head -c {LUMA_BYTES} {VPP_NV12} \
+                     | od -An -tu1 -v | tr ' ' '\\n' | grep -v '^$' | sort -u | wc -l)\"; \
+                 ffmpeg -hide_banner -loglevel error -y -f lavfi \
+                   -i testsrc2=size=320x240:rate=1:duration=1 -frames:v 1 -pix_fmt bgra \
+                   -f rawvideo {VPP_SRC}; \
+                 ffmpeg -hide_banner -loglevel error -y -vaapi_device /dev/dri/renderD128 \
+                   -f rawvideo -pix_fmt bgra -s 320x240 -i {VPP_SRC} \
+                   -vf 'format=bgra,hwupload,scale_vaapi=w=160:h=120:format=bgra,\
+hwdownload,format=bgra' -frames:v 1 -f rawvideo {VPP_DST}; \
+                 echo \"bgra_distinct=$(od -An -tu1 -v < {VPP_DST} \
+                     | tr ' ' '\\n' | grep -v '^$' | sort -u | wc -l)\""
+            ),
+            Duration::from_secs(240),
+        )
+        .expect("the VA post-processing pipelines failed to run");
+    eprintln!("{vpp}");
+
+    let vpp_field = |name: &str| -> String {
+        vpp.lines()
+            .find_map(|l| l.trim().strip_prefix(&format!("{name}=")))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+
+    let nv12_distinct: u32 = vpp_field("nv12_distinct_luma").parse().unwrap_or(0);
+    assert!(
+        nv12_distinct > 16,
+        "downloading the decoded frame as NV12 gave only {nv12_distinct} distinct luma \
+         values — the post-processing draw cleared the surface instead of converting into \
+         it. The decode itself is fine; this is the compositor.\n{vpp}"
+    );
+
+    // The same draw reached without a codec anywhere: a scaled BGRA image. `testsrc2` is
+    // richly coloured, so a working compositor returns many byte values where a cleared
+    // surface returns one.
+    let bgra_distinct: u32 = vpp_field("bgra_distinct").parse().unwrap_or(0);
+    assert!(
+        bgra_distinct > 16,
+        "a BGRA image scaled by the VA compositor came back with only {bgra_distinct} distinct \
+         byte values — the draw cleared its target. Nothing in this pipeline is a codec, so \
+         the post-processing draw itself is at fault.\n{vpp}"
+    );
+
+    eprintln!("VA post-processing converted and scaled without clearing the surface");
 }

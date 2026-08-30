@@ -436,25 +436,44 @@ So VP9 (and MJPEG) everywhere, plus AV1 from M3 on. **Implemented today: VP9 pro
 - **Decode into the layout the guest allocated.** ffmpeg's VA-API path allocates I420 (three
   planes) decode targets while asking for NV12 elsewhere; VideoToolbox produces either, so ask
   it for the target's own layout instead of converting.
-- **Download in the surface's own format; any VA post-processing draw renders black.**
-  `ffmpeg -hwaccel vaapi ... -vf hwdownload,format=yuv420p` is byte-identical to a software
-  decode on a stock guest. Ask for a *different* format (`format=nv12`) and mesa allocates a
-  temporary surface, runs the VA post-proc compositor into it and reads that back — and the
-  result is uniformly zero. So is any `scale_vaapi`, for a plain BGRA source that never went
-  near a decoder, which is what places the fault in the compositor draw rather than anywhere
-  in the video path. `vl_compositor` issues the one `MESA_PRIM_QUADS` draw in this stack; the
-  KosmicKrisp index-promotion and zink triangle-fan levers are **exonerated** (measured with
-  the lever confirmed live in the worker log). Open — see the hardening backlog.
+- **Post-processing is a second, separate draw, and it is not covered by testing the decode.**
+  Asking libva for the surface's own format is a plain readback; asking for any *other* format,
+  or any `scale_vaapi`, routes the frame through mesa's `vl_compositor` on the host. That draw
+  failed for reasons entirely unrelated to video, so a perfect decode still reached the guest
+  black — which reads as a broken decoder and is why hardware VP9 looked like it was falling
+  back to software. Two faults, each on its own sufficient to blacken it, **neither visible
+  while the other stands** (fix one alone and the draw is still black, so each looked exonerated
+  when tested singly):
+  - `vl_compositor` declares a one-dimensional `DCL CONST[0..n]`, which vrend translates to a
+    plain `uniform uvec4` array, then supplies the data via `SET_UNIFORM_BUFFER`, which vrend
+    only ever binds as a GL uniform block. The two constant-delivery paths do not meet, nothing
+    rejects the combination, and the shader's colour-space matrix read as all zeroes.
+  - It samples `2D_ARRAY` while `vl_video_buffer` allocates plain 2D planes. Native drivers
+    build the descriptor from the view and take only the coordinate count from the shader;
+    GLSL cannot, and an incomplete sampler returns `(0,0,0,1)`.
 
-  Not to be confused with a *separate*, real gap: mesa's guest `virgl_video.c` never calls
-  `virgl_resource_dirty()` on a decode target, unlike every other host-writes-here path in
-  that driver. It is still present in mesa main (checked 2026-08-30) and worth upstreaming,
-  but it is **not** what the black download was — patching it changes nothing observable,
-  measured both ways against an unpatched control.
+  Both are fixed host-side, so this needs nothing installed in the guest. Exonerated on the way,
+  each with the lever confirmed live: KosmicKrisp index promotion, zink triangle-fan lowering,
+  GL errors and shader compile failures.
+
+- **An RGB → YUV post-processing conversion still comes out with permuted colours**, and that
+  one is guest-side: the traced matrix is a textbook BT.709 **YUV→RGB** matrix, and applying it
+  by hand to RGB inputs reproduces every measured output exactly (black → `Y=0 U=77 V=0`,
+  white → `255/184/255`, red → `48/255/7`). mesa binds the wrong-direction matrix for the
+  encode-side pass. Geometry is exact; only the colours are wrong. Nothing we decode uses this
+  direction.
+
+- **A separate, real gap, not to be confused with either:** mesa's guest `virgl_video.c` never
+  calls `virgl_resource_dirty()` on a decode target, unlike every other host-writes-here path in
+  that driver. Still present in mesa main (checked 2026-08-30) and worth upstreaming, but
+  patching it changes nothing observable — measured both ways against an unpatched control.
 
 Verification: `cargo nextest run -p limina-test -E 'test(stock_guest_hardware_decodes_vp9)'`.
 VP9 is a normatively exact codec, so the test asserts the hardware decode is **byte-identical**
-to a software one, plus that the frame is not uniform.
+to a software one, plus that the frame is not uniform. It also drives the post-processing draw
+twice over — a non-native download, and a scaled BGRA image with no codec in it at all. That
+second one has to *scale*: a same-format, same-size `scale_vaapi` is serviced as a blit, never
+reaches the compositor, and passes on a host where every real VPP draw renders black.
 
 ### AV1: the next codec, and what it costs
 

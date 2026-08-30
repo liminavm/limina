@@ -1210,6 +1210,26 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   a live balloon-hardening item (also on the upstreaming triage list) — `Queue::len`/`is_empty` should
   fail soft on a not-ready/invalid ring.
 
+## Video — mesa binds a YUV→RGB matrix for an RGB→YUV post-processing pass (guest-side)
+
+A VA post-processing conversion *into* a YUV format from an RGB source comes out with permuted
+colours. Geometry is exact and the pass was fully black before the host-side VPP fixes, so this
+is a residual, and it is in the guest.
+
+The traced colour-space matrix is a textbook BT.709 **YUV→RGB** matrix -- rows
+`(1.1644, 0, 1.7927, -0.9729)`, `(1.1644, -0.2132, -0.5329, 0.3015)`,
+`(1.1644, 2.1124, 0, -1.1334)`. Applying it by hand to RGB inputs, clamped to `[0,1]`, reproduces
+every measured output exactly: black → `Y=0 U=77 V=0`, white → `255/184/255`,
+red → `48/255/7`, blue → `209/0/0`, and ffmpeg's `green` (#008000, not lime)
+→ `0/49/0`. So the host delivers precisely what the guest bound; mesa picks the
+wrong-direction matrix for the encode-side pass. **Do not re-diagnose this from pixels** -- the
+arithmetic above already closes it, and the permutation is visually suggestive of a dozen other
+faults.
+
+Nothing we decode uses this direction (decode output is YUV and downloads either natively or via
+YUV→YUV), so it costs nothing today; it would matter for a VA-API *encode* or capture path.
+Fix belongs in mesa's `vl_compositor` and is upstreamable. See `docs/graphics.md` §4.5.
+
 ## GPU / venus ghost containment (from the 2026-08-13 totem crash)
 - **Host-side fault injection for the tombstone path** — 📋 open. `vkr_ghost_containment.rs`
   asserts the product invariant (a refused import leaves the context alive), but on an image
