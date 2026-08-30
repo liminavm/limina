@@ -20,10 +20,17 @@ coverage: coverage.c
 oracle: oracle.c $(VIRGL)/vrend/virgl_video_av1_obu.c
 	$(CC) $(CFLAGS) $(DAV1D_CFLAGS) -o $@ oracle.c $(VIRGL)/vrend/virgl_video_av1_obu.c $(DAV1D_LIBS)
 
+# The software fallback wrapper, built the way the backend builds it (HAVE_DAV1D on) but
+# without dragging in virglrenderer's util library -- sw-oracle.c stubs the one symbol it
+# needs.
+sw-oracle: sw-oracle.c $(VIRGL)/vrend/virgl_video_av1_obu.c $(VIRGL)/vrend/virgl_video_dav1d.c
+	$(CC) $(CFLAGS) $(DAV1D_CFLAGS) -DHAVE_DAV1D=1 -DVIRGL_DAV1D_STANDALONE=1 -o $@ sw-oracle.c \
+		$(VIRGL)/vrend/virgl_video_av1_obu.c $(VIRGL)/vrend/virgl_video_dav1d.c $(DAV1D_LIBS)
+
 vt-oracle: vt-oracle.c $(VIRGL)/vrend/virgl_video_av1_obu.c
 	$(CC) $(CFLAGS) -o $@ vt-oracle.c $(VIRGL)/vrend/virgl_video_av1_obu.c $(VT_LIBS)
 
 clean:
-	rm -f coverage oracle vt-oracle
+	rm -f coverage oracle vt-oracle sw-oracle
 
 .PHONY: all clean

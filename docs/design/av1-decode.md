@@ -289,3 +289,38 @@ list of the descriptor:
   `-auto-alt-ref` can silently produce none and leave only the easy path tested.
 - The same threading rule as VP9: VideoToolbox's callback is ordered-synchronous but on its
   own thread, which holds no GL context. Park the picture, deliver after `DecodeFrame` returns.
+
+## Super-resolution goes to a software decoder
+
+The one AV1 tool this backend does not deliver. VideoToolbox reconstructs
+super-resolution frames correctly — frames predicting from them come back
+bit-exact — but the picture it hands out for such a frame is not that frame: it is
+a coded-width buffer holding roughly the rightmost `coded_width` columns of the
+upscaled image. Neither of the two ways out survives measurement (upscaling it
+ourselves, because it is not the pre-upscale picture; requesting full-size output
+buffers, because the same wrong pixels come back stretched). Measurements and the
+disposition: `docs/hardening-backlog.md` §"AV1: VideoToolbox does not return
+super-resolution frames".
+
+So the first frame declaring `use_superres` switches the codec to dav1d for the
+rest of its life (`virgl_video_dav1d.c`). The switch replays every unit since the
+last **shown** key frame, because a decoder started mid-GOP has no references and
+one started on a gapped history produces pictures that are subtly wrong while every
+header still parses — the same silent-failure shape the reference-slot work already
+cost a day to. The units are the ones the serializer already builds, so both
+decoders are fed identical bytes.
+
+dav1d is asked for invisible frames as well (`output_invisible_frames`). The guest
+allocates a surface for every decoded frame, and a hidden one is displayed later by
+a `show_existing_frame` that never reaches us; without that setting its surface
+would simply never be written. That restores one-picture-per-unit, which is what
+the delivery path assumes — pinned by `spikes/av1-obu-serializer/sw-oracle.c`
+(6 fixtures, 60 units → 60 pictures each).
+
+Delivery reuses the hardware path's: dav1d's three planes are what mesa asks for on
+decode targets (IYUV), with the same plane swap for YV12; a biplanar NV12 target is
+the one case needing a chroma interleave first.
+
+Where the fallback cannot start — no dav1d, 10-bit, or no usable history — the frame
+is refused instead, keyed on the stream's `use_superres` rather than the returned
+width, so it does not quietly stop working if the host's output bug changes shape.

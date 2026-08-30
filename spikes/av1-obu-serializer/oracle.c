@@ -450,8 +450,42 @@ int main(int argc, char **argv)
                     for (int x = 0; x < w; x++)
                         s[pl] += base[(ptrdiff_t)y * p->stride[pl > 0] + x];
             }
-            printf("  oh=%-3d %016llx %016llx\n", p->frame_hdr->frame_offset,
-                   (unsigned long long)s[0], (unsigned long long)(s[1] + s[2]));
+            if (getenv("AV1_ORACLE_DUMP")) {
+                char path[512];
+                FILE *f;
+
+                snprintf(path, sizeof(path), "%s/oh%03d.pgm", getenv("AV1_ORACLE_DUMP"),
+                         p->frame_hdr->frame_offset);
+                f = fopen(path, "wb");
+                if (f) {
+                    fprintf(f, "P5\n%d %d\n255\n", p->p.w, p->p.h);
+                    for (int y = 0; y < p->p.h; y++)
+                        fwrite((const uint8_t *)p->data[0] + (ptrdiff_t)y * p->stride[0],
+                               1, (size_t)p->p.w, f);
+                    fclose(f);
+                }
+            }
+            if (getenv("AV1_ORACLE_LEFT")) {
+                /* Sum the leftmost N luma columns. VideoToolbox returns superres frames at
+                 * the CODED width; if what it returns is a left crop of the upscaled picture
+                 * rather than the un-upscaled one, this matches its checksum exactly. */
+                int n = atoi(getenv("AV1_ORACLE_LEFT"));
+                uint64_t l = 0;
+
+                if (n > p->p.w)
+                    n = p->p.w;
+                for (int y = 0; y < p->p.h; y++)
+                    for (int x = 0; x < n; x++)
+                        l += ((const uint8_t *)p->data[0])[(ptrdiff_t)y * p->stride[0] + x];
+                printf("  oh=%-3d left%-4d %016llx mean=%.4f\n",
+                       p->frame_hdr->frame_offset, n, (unsigned long long)l,
+                       (double)l / ((double)n * p->p.h));
+                continue;
+            }
+            printf("  oh=%-3d %016llx %016llx %dx%d mean=%.4f\n",
+                   p->frame_hdr->frame_offset,
+                   (unsigned long long)s[0], (unsigned long long)(s[1] + s[2]),
+                   p->p.w, p->p.h, (double)s[0] / ((double)p->p.w * p->p.h));
         }
     }
 

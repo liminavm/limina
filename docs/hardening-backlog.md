@@ -1972,33 +1972,82 @@ what rules the serializer out.
 Must be resolved before the AV1 decode path is wired up. Worth checking whether the
 VP9 path, which takes the same buffers by the same route, has the same window.
 
-## AV1: VideoToolbox does not apply the superres upscale
+## AV1: VideoToolbox does not return super-resolution frames
 
 Measured 2026-08-30 on M4 Pro, macOS 26.5.2, driving the serializer's own output
-(`spikes/av1-obu-serializer/vt-oracle.c`). On a clip using super-resolution,
-VideoToolbox returns each frame at its **coded** width rather than the upscaled
-one:
+(`spikes/av1-obu-serializer/vt-oracle.c`) against dav1d on the same rebuilt stream.
+
+**The host's decoding is correct; only its output is not.** Every frame coded
+without super-resolution comes back **bit-identical** to dav1d, and several of
+those predict from super-resolution reference frames — which they could not do if
+the references VideoToolbox holds were wrong. Five of the six fixtures agree
+bit-exactly end to end; `superres` is the only one that diverges, on exactly the
+frames that use it.
+
+What comes back for those frames is a buffer at the frame's **coded** width whose
+contents are, near enough, the **rightmost `coded_width` columns of the correctly
+upscaled picture**:
+
+| reading | pixels matching |
+|---|---|
+| the pre-upscale (un-upscaled) picture | **6.9 %**, mean abs diff 65 |
+| the rightmost `coded_width` columns, 1:1 | **76.3 %**, mean abs diff 5.6 |
+| the same, shifted one row up | **88.6 %** |
+
+The residual sits almost entirely in the last ~64 columns (mean abs diff 22 there
+against ~1 across the rest). A stride/base search over the correct frame finds
+stride 640 / base 320 — the plain right crop — as the unique best fit, so the
+geometry is a crop, not a resampling.
+
+**It is not our serializer, and it needs none of our code to reproduce.** Stock
+ffmpeg on the original clip, decoding the same file twice:
 
 ```
-465x360 x7   366x360 x5   341x360 x3   569x360 x7   512x360 x11   640x360 x6
+ffmpeg -hwaccel videotoolbox -i superres.mp4 -pix_fmt gray -f image2 vt/%03d.pgm
+ffmpeg -c:v libdav1d          -i superres.mp4 -pix_fmt gray -f image2 sw/%03d.pgm
 ```
 
-Every value is exactly `640 * 8 / superres_denom`, and the only frames returned at
-the full 640 are the six with `use_superres = 0`.
+dav1d's per-frame mean luma is flat across the clip (127.00..127.43); VideoToolbox's
+swings 110.44..142.76, low exactly on the super-resolution frames. That is a
+two-command Radar repro that mentions no part of this stack.
 
-The upscale is part of AV1's *decoding* process, not a display step, so this is a
-conformance gap on VideoToolbox's side rather than something wrong with what we
-submit. The same rebuilt stream decodes bit-identically to the original clip under
-dav1d, and five of the six fixtures agree bit-exactly between dav1d and
-VideoToolbox — `superres` is the only one that diverges, on exactly the 27 frames
-that use it.
+**Two escapes are measured dead, not assumed:**
 
-It matters because `deliver_picture` copies planes into a guest surface sized at the
-**upscaled** dimensions. Left alone, a superres stream delivers a narrow picture into
-a wide surface: a horizontally squashed image beside a stale or black margin, with no
-error anywhere. Any fix must at least detect the mismatch; upscaling with the
-normative filter ourselves is the complete answer, and refusing superres streams so
-the guest falls back to software is the cheap one.
+- *Upscale it ourselves.* Dead on geometry. The returned picture is not the
+  pre-upscale frame — a coded-width frame would carry the whole image at 2:1
+  (the clip's timecode box is simply absent from what comes back, and its bands
+  sit at 1:1 positions, not half). Roughly half the picture is not in the buffer
+  at all, so no filter can reconstruct it.
+- *Ask for output buffers at the sequence's size.* Dead by measurement. Passing
+  `kCVPixelBufferWidthKey`/`HeightKey` to `VTDecompressionSessionCreate` does
+  return 640-wide buffers — holding the same wrong pixels, stretched: the mean is
+  unchanged to four decimals (111.1663 vs 111.1662), while the non-superres frames
+  stay bit-exact.
 
-Superres is rare in practice, which makes it likelier to be discovered as a
-mysterious "video looks squashed" report than as a decode failure.
+**Disposition: decode it in software, and keep refusal as the floor.** On the
+first frame declaring `use_superres` the codec opens a dav1d decoder, replays
+every unit since the last shown key frame into it so the reference state matches,
+and stays on that decoder for the rest of the stream
+(`virgl_video_dav1d.c`, `av1_route_unit` in `virgl_video_vt.c`). Superres streams
+therefore play correctly, on both tiers, with no guest-side change.
+
+Where the fallback cannot start — no dav1d in the build, a 10-bit stream, or a
+frame history too long to have been kept — the frame is **refused** rather than
+delivered wrong (`submit_unit`). That refusal keys on the stream's own
+`use_superres`, never on the width that came back, so a host whose bug changes
+shape is still caught; the width mismatch is kept as a separate sanity error.
+A refused frame leaves the guest's surface untouched and the guest is not told,
+because the video protocol has no reply path — see the entry on decode errors
+being invisible to the guest.
+
+The frame is still **submitted and decoded** — only its *delivery* is refused.
+Because this host's internal reconstruction is correct, skipping the submission
+would break the reference chain and silently corrupt every later frame. Anything
+that "simplifies" this into skipping super-resolution frames at submit time is a
+regression.
+
+Super-resolution is rare in practice, which makes it likelier to surface as a
+mysterious "the video looks wrong" report than as a decode failure — hence the
+loud `virgl_error` and the fallback to software rather than a quiet drop. Worth an
+Apple Radar: the decoder is right and only the output copy is wrong, which is a
+small fix on their side.

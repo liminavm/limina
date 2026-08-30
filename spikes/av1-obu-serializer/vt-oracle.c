@@ -41,6 +41,7 @@ struct picture {
     unsigned order_hint;   /* filled in after the fact, from the submission order */
     bool shown;
     uint32_t width, height;
+    uint32_t plane_w, plane_h;
     unsigned planes;
 };
 
@@ -69,6 +70,11 @@ static void checksum(CVPixelBufferRef pixbuf, struct picture *out)
 
     out->width = (uint32_t)CVPixelBufferGetWidth(pixbuf);
     out->height = (uint32_t)CVPixelBufferGetHeight(pixbuf);
+    /* The mean below divides by these, so they have to be the area actually summed. A
+     * buffer whose plane dimensions disagree with the buffer's own would otherwise report
+     * a mean scaled by the ratio -- which reads exactly like a decode divergence. */
+    out->plane_w = (uint32_t)CVPixelBufferGetWidthOfPlane(pixbuf, 0);
+    out->plane_h = (uint32_t)CVPixelBufferGetHeightOfPlane(pixbuf, 0);
     out->planes = (unsigned)(n > 3 ? 3 : n);
 
     for (unsigned p = 0; p < out->planes; p++) {
@@ -87,6 +93,88 @@ static void checksum(CVPixelBufferRef pixbuf, struct picture *out)
             for (size_t x = 0; x < w * bpp; x++)
                 s += base[y * pitch + x];
         out->sum[p] = s;
+    }
+    CVPixelBufferUnlockBaseAddress(pixbuf, kCVPixelBufferLock_ReadOnly);
+}
+
+/* Write a shown picture's luma plane as a PGM. The only way to settle what a superres frame
+ * actually contains once the checksums say it is neither a squash nor a crop of the
+ * reference decode. */
+static void dump_luma(CVPixelBufferRef pixbuf, const char *dir, unsigned oh)
+{
+    char path[512];
+    FILE *f;
+    const uint8_t *base;
+    size_t pitch, w, h;
+
+    if (CVPixelBufferLockBaseAddress(pixbuf, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess)
+        return;
+    base = CVPixelBufferGetBaseAddressOfPlane(pixbuf, 0);
+    pitch = CVPixelBufferGetBytesPerRowOfPlane(pixbuf, 0);
+    w = CVPixelBufferGetWidthOfPlane(pixbuf, 0);
+    h = CVPixelBufferGetHeightOfPlane(pixbuf, 0);
+
+    /* AV1_VT_DUMP_PITCH dumps the whole row stride, not just the declared width: the only
+     * way to see whether wider content is sitting in the allocation unreported. */
+    if (getenv("AV1_VT_DUMP_PITCH"))
+        w = pitch;
+
+    snprintf(path, sizeof(path), "%s/oh%03u.pgm", dir, oh);
+    f = fopen(path, "wb");
+    if (f) {
+        fprintf(f, "P5\n%zu %zu\n255\n", w, h);
+        for (size_t y = 0; y < h; y++)
+            fwrite(base + y * pitch, 1, w, f);
+        fclose(f);
+    }
+    fprintf(stderr, "  dump oh%03u: buffer %zux%zu plane %zux%zu pitch %zu\n", oh,
+            CVPixelBufferGetWidth(pixbuf), CVPixelBufferGetHeight(pixbuf), w, h, pitch);
+    CVPixelBufferUnlockBaseAddress(pixbuf, kCVPixelBufferLock_ReadOnly);
+}
+
+/* Is there image beyond the width the buffer reports? Decides whether a superres frame came
+ * back un-upscaled (nothing past the coded width) or upscaled with a width that understates
+ * it (the row keeps going). Reported once, for the first picture narrower than the sequence's
+ * own width. */
+static void probe_beyond_width(CVPixelBufferRef pixbuf, unsigned declared_w)
+{
+    static bool done;
+    size_t w, h, pitch, y;
+    const uint8_t *base;
+
+    if (done)
+        return;
+    if (CVPixelBufferLockBaseAddress(pixbuf, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess)
+        return;
+    done = true;
+
+    base = CVPixelBufferGetBaseAddressOfPlane(pixbuf, 0);
+    w = CVPixelBufferGetWidthOfPlane(pixbuf, 0);
+    h = CVPixelBufferGetHeightOfPlane(pixbuf, 0);
+    pitch = CVPixelBufferGetBytesPerRowOfPlane(pixbuf, 0);
+    y = h / 2;
+
+    printf("\nbeyond-width probe: declared %ux, plane %zux%zu, pitch %zu (room for %zu px)\n",
+           declared_w, w, h, pitch, pitch);
+    printf("  row %zu bytes at x=%zu..%zu: ", y, w - 8, w + 23);
+    for (size_t x = w - 8; x < w + 24 && x < pitch; x++)
+        printf("%02x%s", base[y * pitch + x], x == w - 1 ? "|" : " ");
+    printf("\n  (a | marks the declared edge; image continuing past it means the frame is "
+           "upscaled and the width understates it)\n");
+
+    /* How far does non-constant data actually run? */
+    {
+        size_t last = 0;
+        uint8_t first_past = base[y * pitch + w];
+        bool varies = false;
+        for (size_t x = w; x < pitch; x++) {
+            if (base[y * pitch + x] != first_past)
+                varies = true;
+            if (base[y * pitch + x] != 0)
+                last = x;
+        }
+        printf("  past the edge: last non-zero byte at x=%zu, content varies: %s\n",
+               last, varies ? "YES (real image)" : "no (flat fill)");
     }
     CVPixelBufferUnlockBaseAddress(pixbuf, kCVPixelBufferLock_ReadOnly);
 }
@@ -110,9 +198,14 @@ static void on_picture(void *ctx, void *frame_ref, OSStatus status,
     if (num_pics >= MAX_PICS)
         return;
 
+    if (CVPixelBufferGetWidth((CVPixelBufferRef)image) < 640)
+        probe_beyond_width((CVPixelBufferRef)image,
+                           (unsigned)CVPixelBufferGetWidth((CVPixelBufferRef)image));
     checksum((CVPixelBufferRef)image, &pics[num_pics]);
     if (!pics[num_pics].sum[0])
         blank_pics++;
+    if (getenv("AV1_VT_DUMP"))
+        dump_luma((CVPixelBufferRef)image, getenv("AV1_VT_DUMP"), num_pics);
     num_pics++;
 }
 
@@ -144,8 +237,34 @@ static int make_session(const uint8_t *av1c, size_t av1c_len, uint32_t w, uint32
         return -1;
     }
 
-    status = VTDecompressionSessionCreate(kCFAllocatorDefault, format, NULL, NULL, &cb,
+    /* AV1_VT_DEST_SIZE asks VideoToolbox for output buffers at the sequence's own
+     * dimensions. The correctly upscaled superres frame demonstrably exists inside VT (the
+     * non-superres frames that predict from it come back bit-exact), so requesting the
+     * output size explicitly is the one remaining way to ask for it rather than for
+     * whatever the default output copy produces. */
+    CFMutableDictionaryRef dest = NULL;
+
+    if (getenv("AV1_VT_DEST_SIZE")) {
+        int dw = w, dh = h;
+        CFNumberRef nw, nh;
+
+        sscanf(getenv("AV1_VT_DEST_SIZE"), "%dx%d", &dw, &dh);
+        dest = CFDictionaryCreateMutable(kCFAllocatorDefault, 2,
+                                         &kCFTypeDictionaryKeyCallBacks,
+                                         &kCFTypeDictionaryValueCallBacks);
+        nw = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &dw);
+        nh = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &dh);
+        CFDictionarySetValue(dest, kCVPixelBufferWidthKey, nw);
+        CFDictionarySetValue(dest, kCVPixelBufferHeightKey, nh);
+        CFRelease(nw);
+        CFRelease(nh);
+        fprintf(stderr, "requesting destination buffers at %dx%d\n", dw, dh);
+    }
+
+    status = VTDecompressionSessionCreate(kCFAllocatorDefault, format, NULL, dest, &cb,
                                           &session);
+    if (dest)
+        CFRelease(dest);
     if (status != noErr) {
         fprintf(stderr, "VTDecompressionSessionCreate failed: %d\n", (int)status);
         return -1;
@@ -350,9 +469,12 @@ int main(int argc, char **argv)
            "dav1d oracle's AV1_ORACLE_HASH=1:\n");
     for (unsigned i = 0; i < num_pics && i < num_submitted; i++)
         if (sub_shown[i])
-            printf("  oh=%-3u %016llx %016llx\n", sub_hint[i],
+            printf("  oh=%-3u %016llx %016llx %ux%u plane %ux%u mean=%.4f\n", sub_hint[i],
                    (unsigned long long)pics[i].sum[0],
-                   (unsigned long long)pics[i].sum[1]);
+                   (unsigned long long)pics[i].sum[1],
+                   pics[i].width, pics[i].height,
+                   pics[i].plane_w, pics[i].plane_h,
+                   (double)pics[i].sum[0] / ((double)pics[i].plane_w * pics[i].plane_h));
 
     virgl_av1_obu_state_fini(&state);
     free(unit);

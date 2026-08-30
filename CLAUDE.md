@@ -368,7 +368,8 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   **even at `error!`**. That is how a snapshot-restore run read as "the host rejects the guest's 3D
   submissions silently" when the host was in fact naming the reason and being muted.
   `LIMINA_WINDOW_CAPTURE` is a **single PNG file path, not a directory** — the presented scanout is
-  dumped there every 120 applies and overwritten, so a session always ends holding a recent frame,
+  written there at most once a second and overwritten (`LIMINA_WINDOW_CAPTURE_INTERVAL_MS`), so a
+  session always ends holding a recent frame,
   and it needs no Screen Recording permission. Point it somewhere durable — a visual symptom is the
   one kind that cannot be reconstructed from a log afterwards. Most of what we chase is intermittent
   and shows up while doing something else; a boot without the channels turns a sighting into a
