@@ -242,10 +242,13 @@ pub(crate) struct PrimaryDisplay {
     /// `LIMINA_WINDOW_CAPTURE`.
     capture_path: Option<String>,
 
-    /// How many applies between capture dumps (`LIMINA_WINDOW_CAPTURE_EVERY`). A desktop
-    /// holding still presents rarely, so the default cadence can leave a probe with no frame
-    /// at all — which is exactly the case where the frame is the only oracle.
-    capture_every: u64,
+    /// Least time between capture dumps (`LIMINA_WINDOW_CAPTURE_INTERVAL_MS`), and when the
+    /// last one was written. Timed rather than counted in applies: a desktop holding still
+    /// presents rarely, so an apply-counted cadence leaves the file arbitrarily stale in
+    /// exactly the case where the frame is the only oracle — and stale is worse than absent,
+    /// because it still reads like a current frame.
+    capture_interval: std::time::Duration,
+    last_capture: Cell<Option<std::time::Instant>>,
     /// Diagnostic: ids to ALSO dump by global lookup each tick (`LIMINA_CAPTURE_IDS` — see
     /// `diag::capture_ids_from_env` for the format and why).
     capture_ids: Vec<u32>,
@@ -282,7 +285,8 @@ impl PrimaryDisplay {
             copy_idx: Cell::new(0),
             applies: Cell::new(0),
             capture_path: std::env::var("LIMINA_WINDOW_CAPTURE").ok(),
-            capture_every: super::diag::capture_every_from_env(),
+            capture_interval: super::diag::capture_interval_from_env(),
+            last_capture: Cell::new(None),
             capture_ids: super::diag::capture_ids_from_env(),
         }
     }
@@ -641,8 +645,14 @@ impl PrimaryDisplay {
         // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
         // long-running headless check ends with a recent frame, not just early boot.
         self.applies.set(self.applies.get() + 1);
-        if self.applies.get().is_multiple_of(self.capture_every) {
-            if let Some(path) = &self.capture_path {
+        if let Some(path) = &self.capture_path {
+            let now = std::time::Instant::now();
+            let due = self
+                .last_capture
+                .get()
+                .is_none_or(|t| now.duration_since(t) >= self.capture_interval);
+            if due {
+                self.last_capture.set(Some(now));
                 super::diag::capture_iosurface(surface, id, path);
             }
         }

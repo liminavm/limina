@@ -9,6 +9,8 @@ use objc2_core_foundation::{
     kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber,
     CFNumberType, CFRetained, CFString,
 };
+use std::time::Duration;
+
 use objc2_io_surface::{
     kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight, kIOSurfacePixelFormat,
     kIOSurfaceWidth, IOSurfaceCreate, IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow,
@@ -16,15 +18,36 @@ use objc2_io_surface::{
     IOSurfaceUnlock,
 };
 
-/// Applies between periodic capture dumps (`LIMINA_WINDOW_CAPTURE_EVERY`, default 120). A still
-/// desktop presents a handful of frames a minute, so a probe watching for a restore's pixels can
-/// sit for the whole session below the default cadence and end with no frame at all.
-pub(crate) fn capture_every_from_env() -> u64 {
-    std::env::var("LIMINA_WINDOW_CAPTURE_EVERY")
+/// Minimum time between periodic capture dumps (`LIMINA_WINDOW_CAPTURE_INTERVAL_MS`, default
+/// 1000).
+///
+/// Counted in TIME, not in applies, because the thing being watched is usually a desktop that
+/// is nearly still — and the stiller it is, the less often an apply-counted dump fires. A
+/// panel clock ticking once a minute is one apply a minute, so at the old default of 120
+/// applies the file on disk was two hours stale while looking perfectly current. That has
+/// caught us repeatedly: a probe ends a whole session with no frame, or worse, a test compares
+/// two reads of the same unchanged file and concludes the desktop settled.
+///
+/// A dump still needs something to be presented — a screen where truly nothing happens has
+/// nothing new to write — but any presented frame is now written within the interval of it.
+pub(crate) fn capture_interval_from_env() -> Duration {
+    // The old apply-counted knob, honoured so an existing invocation is not silently ignored.
+    // One apply is the useful setting of it, and that is what the time gate does by default.
+    if let Ok(v) = std::env::var("LIMINA_WINDOW_CAPTURE_EVERY") {
+        if v.trim().parse::<u64>().is_ok() {
+            log::warn!(
+                "LIMINA_WINDOW_CAPTURE_EVERY counts applies and is superseded by \
+                 LIMINA_WINDOW_CAPTURE_INTERVAL_MS, which counts milliseconds; treating it as \
+                 a request for the most frequent cadence"
+            );
+            return Duration::ZERO;
+        }
+    }
+    std::env::var("LIMINA_WINDOW_CAPTURE_INTERVAL_MS")
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(120)
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_millis(1000))
 }
 
 /// Parse `LIMINA_CAPTURE_IDS` — the ids to ALSO dump by global lookup each tick, regardless

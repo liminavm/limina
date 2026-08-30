@@ -36,10 +36,16 @@ pub const GRID_CELLS: usize = (GRID_COLS * GRID_ROWS) as usize;
 /// blanked surface makes.
 pub const CELL_TOL: i32 = 10;
 
-/// Share of cells that must agree between consecutive reads for a frame to count as settled.
-/// Not 100%: a panel clock ticks on its own schedule, and holding out for it would never settle
-/// on a desktop that is otherwise motionless.
+/// Share of cells that must agree for a frame to count as settled. Not 100%: a panel clock
+/// ticks on its own schedule, and holding out for it would never settle on a desktop that is
+/// otherwise motionless.
 const SETTLE_AGREE_PCT: usize = 99;
+
+/// How many reads back the comparison looks. Comparing against the READ BEFORE is not enough:
+/// a fade drifts by less than [`CELL_TOL`] from one second to the next while travelling far
+/// more than that in total, so every step agrees with its neighbour and the frame is declared
+/// settled in the middle of an animation. Comparing across several seconds sees the drift.
+const SETTLE_HISTORY: usize = 4;
 
 /// Mean RGB of every grid cell, row-major.
 pub fn cell_means(frame: &CapturedFrame) -> Vec<[i32; 3]> {
@@ -110,25 +116,55 @@ pub fn by_row(cells: &[usize]) -> std::collections::BTreeMap<u32, usize> {
 /// `clear` does exactly that), so a present-cadence test never settles on a desktop that is as
 /// still as it will ever be. What the comparison needs is stable pixels, so that is what this
 /// waits for.
+/// The cells that change with nothing but time passing.
+///
+/// A desktop holding still is not entirely still: a panel clock advances once a minute, and
+/// a comparison spanning that boundary sees those cells move for a reason that has nothing to
+/// do with what is being tested. Measured rather than excluded by geometry -- a hardcoded
+/// panel height would blind the test inside exactly the region it hardcodes, and would rot
+/// the moment the panel changed.
+///
+/// Captures either side of a minute boundary, so a clock is guaranteed to have moved between
+/// them. Takes up to a minute, which is why callers should reach for this only when a
+/// comparison has already failed: it distinguishes "the desktop came back wrong" from "the
+/// clock advanced", and only the first is worth a minute to establish.
+pub fn volatile_cells(guest: &Guest) -> anyhow::Result<Vec<usize>> {
+    // The guest's own clock is what the panel draws, so it is the one to ask. Land the first
+    // capture a few seconds before the minute rolls and the second just after.
+    let secs: u32 = guest
+        .ssh_exec("date +%S")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    std::thread::sleep(Duration::from_secs((54u32.wrapping_sub(secs) % 60) as u64));
+
+    let before = cell_means(&guest.read_capture()?);
+    std::thread::sleep(Duration::from_secs(10));
+    let after = cell_means(&guest.read_capture()?);
+
+    Ok(moved_cells(&before, &after))
+}
+
 pub fn settled_capture(guest: &Guest, timeout: Duration) -> anyhow::Result<CapturedFrame> {
     let deadline = Instant::now() + timeout;
-    let mut prev: Option<Vec<[i32; 3]>> = None;
+    let mut history: std::collections::VecDeque<Vec<[i32; 3]>> = Default::default();
     loop {
         if let Ok(frame) = guest.read_capture() {
             let means = cell_means(&frame);
-            if let Some(pmeans) = &prev {
-                let agree = GRID_CELLS - moved_cells(&means, pmeans).len();
+            if history.len() >= SETTLE_HISTORY {
+                let then = history.pop_front().expect("history is not empty");
+                let agree = GRID_CELLS - moved_cells(&means, &then).len();
                 if agree * 100 >= GRID_CELLS * SETTLE_AGREE_PCT {
                     return Ok(frame);
                 }
             }
-            prev = Some(means);
+            history.push_back(means);
         }
         if Instant::now() >= deadline {
             anyhow::bail!(
                 "the captured frame never held still ({SETTLE_AGREE_PCT}% of cells agreeing \
-                 with the previous read) within {timeout:?} — either nothing is being \
-                 presented, or something on this desktop is animating and a landmark \
+                 with the read {SETTLE_HISTORY}s earlier) within {timeout:?} — either nothing \
+                 is being presented, or something on this desktop is animating and a landmark \
                  comparison against it would be meaningless"
             );
         }

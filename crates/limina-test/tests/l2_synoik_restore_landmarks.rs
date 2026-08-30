@@ -249,6 +249,11 @@ fn synoik_desktop_survives_snapshot_restore() {
     }
     eprintln!("synoik is serving on {SOCKET}");
 
+    // Before anything is captured: stop the desktop doing things of its own accord. An
+    // update check that ends in a notification banner is drawn over the top of the screen,
+    // which is exactly where this test's landmarks are densest.
+    limina_test::quiesce_desktop(&g1);
+
     let assets = limina_test::repo_root().join("crates/limina-test/assets");
     for page in ["webgl-still.html", "still-blocks.html"] {
         g1.scp_to_guest(&assets.join(page), &format!("/tmp/{page}"))
@@ -439,6 +444,30 @@ fn synoik_desktop_survives_snapshot_restore() {
     } else {
         (0..means_pre.len()).collect()
     };
+    // A clock in the panel advances whether or not the restore worked, and this test runs
+    // long enough to cross a minute boundary. Rather than pay a minute measuring that every
+    // run, or blind the comparison over a hardcoded panel region, find out which cells move
+    // on their own only when the verdict would otherwise be a failure. A genuinely broken
+    // desktop moves cells that are not volatile, so it still fails.
+    let mut moved = moved;
+    let mut volatile_excluded = 0usize;
+    if moved.len() as f64 / means_pre.len() as f64 > CELL_MISMATCH_BUDGET {
+        match limina_test::landmarks::volatile_cells(&g2) {
+            Ok(volatile) => {
+                let before = moved.len();
+                moved.retain(|i| !volatile.contains(i));
+                volatile_excluded = before - moved.len();
+                eprintln!(
+                    "{} of {} moved cell(s) also move on a still desktop with only time \
+                     passing (a clock, most likely); judging on the remaining {}",
+                    volatile_excluded,
+                    before,
+                    moved.len()
+                );
+            }
+            Err(e) => eprintln!("could not measure which cells move on their own: {e}"),
+        }
+    }
     let moved_share = moved.len() as f64 / means_pre.len() as f64;
     eprintln!(
         "post-restore: procs={procs_after} landmarks moved {}/{} ({:.1}%) colours \
@@ -474,6 +503,7 @@ fn synoik_desktop_survives_snapshot_restore() {
             "the Vulkan compositor's desktop did not come back the way it went in:\n\
              capture size:      {}x{} -> {}x{}\n\
              landmarks:         {}/{} moved ({:.1}%, budget {:.0}%)\n\
+             self-moving cells: {} excluded (they move with only time passing)\n\
              colour diversity:  {pre_colors} -> {post_colors} (post must keep >= 1/4)\n\
              skipped at capture: {} allocation(s) the snapshot could not read\n\
              content loss:      {} line(s) naming resources that lost their pixels\n\
@@ -487,6 +517,7 @@ fn synoik_desktop_survives_snapshot_restore() {
             means_pre.len(),
             moved_share * 100.0,
             CELL_MISMATCH_BUDGET * 100.0,
+            volatile_excluded,
             skipped.len(),
             lost.len(),
             stalls.len(),

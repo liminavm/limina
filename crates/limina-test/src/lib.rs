@@ -2997,6 +2997,38 @@ fn mkfifo(path: &Path) -> Result<()> {
 /// separately from any pixel comparison, because a frozen desktop still holds a *correct*
 /// picture — the last frame presented before the ring died — so a landmark diff can pass on a
 /// session that is comprehensively dead.
+/// Quiet the things a desktop does on its own, so a test comparing two captures is
+/// comparing its own workload rather than the machine's background life.
+///
+/// Two sources, both of which have produced a failure that looks exactly like a rendering
+/// bug: PackageKit waking up to check for updates, which ends in a notification banner drawn
+/// over the desktop, and the shell's own notification banners generally. Both appear at the
+/// top of the screen, both are transient, and neither has anything to do with what these
+/// tests measure.
+///
+/// The commands are best-effort on purpose. A guest without PackageKit, or with no GNOME
+/// session behind the compositor under test, should not fail here -- the point is to remove
+/// a disturbance where one exists, not to require it.
+///
+/// This does NOT stop a clock. A panel clock advancing between two captures is a *correct*
+/// desktop, and a test whose landmarks cover the panel has to account for that itself.
+pub fn quiesce_desktop(guest: &Guest) {
+    let cmds = [
+        // Stopping alone is not enough: the service is socket- and timer-activated, so the
+        // next update check would start it again mid-test.
+        "sudo systemctl stop packagekit.service packagekit-offline-update.service 2>/dev/null || true",
+        "sudo systemctl mask packagekit.service 2>/dev/null || true",
+        "sudo systemctl stop dnf-makecache.timer 2>/dev/null || true",
+        // Do Not Disturb, for a session that has a GNOME shell to listen.
+        "export XDG_RUNTIME_DIR=/run/user/1000          DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus;          gsettings set org.gnome.desktop.notifications show-banners false 2>/dev/null || true",
+        "export XDG_RUNTIME_DIR=/run/user/1000          DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus;          gsettings set org.gnome.desktop.screensaver idle-activation-enabled false 2>/dev/null || true",
+        "export XDG_RUNTIME_DIR=/run/user/1000          DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus;          gsettings set org.gnome.desktop.session idle-delay 0 2>/dev/null || true",
+    ];
+    for c in cmds {
+        let _ = guest.ssh_exec(c);
+    }
+}
+
 pub fn ring_stalls(log: &str) -> Vec<&str> {
     log.lines()
         .filter(|l| l.contains("wait_ring_seqno STUCK"))

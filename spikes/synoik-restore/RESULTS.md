@@ -73,7 +73,7 @@ exercises is a path whose faults only an enhanced guest will report.
   `RUST_LOG=...krun_devices=debug` would name which state was lost.
 - **A still workload legitimately presents nothing.** A desktop that is as still as it will ever
   be reaches the host as a handful of frames a minute, so a capture cadence tuned for a live
-  session can end a whole probe with no frame — `LIMINA_WINDOW_CAPTURE_EVERY` exists for that.
+  session can end a whole probe with no frame — `LIMINA_WINDOW_CAPTURE_INTERVAL_MS` exists for that (the capture cadence is timed, not counted in applies).
 - **A `SIGSTOP`ped Vulkan client appears to hold out the suspend quiesce.** One uncontrolled A/B:
   the worker never reached exit 126 within 120 s where the unfrozen run suspended in seconds.
   Worth an explicit repro; it is the obvious suspect for "this guest will not suspend" where a
