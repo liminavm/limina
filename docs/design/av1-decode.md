@@ -201,14 +201,59 @@ Holding changes the serializer's contract, and the backend has to be built for t
   `virgl_av1_obu_state_fini()` releases the held tile payload.
 - A hidden frame is submitted to the decoder **one guest submission later** than it arrives.
 
-**Open: what triggers the flush in the real backend.** The offline oracle flushes at
-end-of-stream because it knows the stream ended; the decode path has no such signal, and two
-orderings can leave the guest waiting on the pixels of a frame we are still holding with no
-further decode call coming to release it — a `show_existing_frame` that follows its hidden
-frame with no intervening decode, and a stream that simply ends on held frames whose surfaces
-the guest then syncs. Candidate triggers are a sync on a held frame's target surface, and
-codec flush/destroy. This must be settled during integration; unsettled it is a hang, not a
-wrong picture.
+**When the held frame is emitted.** The serializer exposes the flush separately from
+building a frame's own unit, because the two cannot share a buffer: a decoder takes one
+sample per temporal unit, and two units in one sample lose a picture — the failure the hold
+exists to prevent. They also belong at different moments. A descriptor is known at the
+guest's **first `decode_bitstream`**, but a frame's tile data may arrive over several such
+calls, so its own unit cannot be built before `end_frame`.
+
+- `virgl_av1_flush_held(desc)` — on every `decode_bitstream`; idempotent within a frame.
+  Its unit is submitted as its own sample and delivered into the **held frame's** target.
+- `virgl_av1_build_temporal_unit(desc, tiles)` — at `end_frame`; refuses rather than
+  concatenating if a held frame was not flushed.
+- `virgl_av1_drop_held()` — at codec teardown. Discard rather than decode: a frame the
+  decoder never output cannot be read afterwards, so decoding it there is work nobody
+  collects, on a path where GL work is awkward.
+
+Flushing as early as the descriptor allows is not caution. Measured across the six fixtures
+with `spikes/av1-obu-serializer/dpb-check.py exposure`, the smallest gap between a hidden
+frame's decode and the `show_existing_frame` that displays it is **one decode call** — so
+the flush lands with no margin to spare.
+
+**A late picture is read as a stale surface, silently — it never blocks.** The guest's
+`vaSyncSurface` waits on a command-stream fence: mesa's `virgl_video_end_frame` flushes with
+a NULL fence and never populates `out_fence`, so the sync returns "no outstanding operation"
+and nothing waits on pixel delivery. `end_frame` on the host copies synchronously into that
+frame's `codec->target`, and there is no protocol sync or flush command to hook. This is why
+the flush point matters more than it would if a missed delivery announced itself.
+
+**What the backend must carry:** the held frame's **target buffer**, since `begin_frame` has
+already replaced `codec->target` by the time the flush runs. Three places key on
+`codec->target` and have to take it as a parameter — the delivered `dmabuf.buf`, the YV12
+chroma swap, and the decode session's target-format key — and `codec->pending` must be
+cleared after the held delivery, before the current frame's own decode.
+
+**Backstop, and it is a use-after-free guard rather than polish:** `destroy_video_buffer`
+frees the buffer with no notification to the codec, so a held target dangles. The host entry
+point takes no codec and keeps no registry, so this needs plumbing — `vrend_video.c` already
+keeps a per-context codec list, which is the natural place. Codec destruction is ordered
+before buffer destruction, so the teardown drop is safe on its own.
+
+**Rejected: hooking a resource read.** A transfer hook is buildable but wrong twice over. It
+fires *early*, without the next descriptor, so the flush would have to guess a refresh —
+and a frame read this way was by definition stored by the guest, so guessing loses later
+references, which is the original bug. It also misses the readers that matter: dmabuf export,
+sampling, and film-grain compositing all read the plane textures inside GL with no transfer.
+
+**Residual gap, booked with a counter and a loud trace.** A guest can only read a held
+frame's pixels if a `show_existing_frame` follows the hidden decode with no coded frame in
+between, or at end of stream. `show_existing_frame` generates no VA-API traffic at all —
+ffmpeg's `av1dec.c` refs the frame and outputs it, skipping the hwaccel entirely, and
+GStreamer's AV1 base class does the same — so any intervening coded frame flushes the hold.
+Encoders do not emit hidden-then-immediately-shown, since they would simply code
+`show_frame=1`. The plausible shape is a trimmed stream ending `[hidden][show_existing]`,
+whose last displayed frame would be stale.
 
 ## Traps the serializer itself turned up
 
