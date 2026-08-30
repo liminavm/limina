@@ -153,6 +153,30 @@ guest displays, and do not assume that is `target`.
 
 **Phase 4 — an L2 test**, which can only assert end-to-end on M3+ hardware.
 
+## Traps the serializer itself turned up
+
+These are cheap to get wrong, silent when wrong, and none of them are visible in the field
+list of the descriptor:
+
+- **The per-slot order hints are shadow state too**, and they were missed in the first
+  enumeration. `skip_mode_params()` searches the references for a forward and a backward one
+  and writes `skip_mode_present` only when that search succeeds. The bit is not merely wrong
+  if the search is wrong — it is *absent*, which shifts every bit after it. So the writer has
+  to reproduce a decision that looks like it belongs entirely to the decoder.
+- **The bitstream's `lr_type` is not the restoration-type enum.** It is remapped through
+  `Remap_Lr_Type = { NONE, SWITCHABLE, WIENER, SGRPROJ }` while the descriptor carries the
+  enum itself, so a straight copy silently swaps Wiener and self-guided filtering — a subtle
+  image difference, not a decode failure.
+- **Global motion parameters are not emitted in index order.** The two-by-two block (indices
+  2..5) precedes the translation pair (0, 1), and for a rot-zoom model indices 4 and 5 are not
+  coded at all because they are derived from 3 and 2.
+- **`error_resilient_mode` and `primary_ref_frame` are inferred rather than coded** for switch
+  frames, shown key frames, and every intra frame. Writing what the descriptor holds instead
+  of what the syntax infers puts bits on the wire that a decoder is not reading.
+- **Lossless has to be *derived*, not read.** It is not in the descriptor, and it gates
+  whether the loop-filter, CDEF and loop-restoration sections appear in the bitstream at all.
+  It depends on the base q-index, all six delta-q values, and the per-segment `ALT_Q` feature.
+
 ## Traps carried forward
 
 - **Name the unit when counting.** In a stream's natural framing a temporal unit bundles a
