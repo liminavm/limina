@@ -290,6 +290,22 @@ list of the descriptor:
 - The same threading rule as VP9: VideoToolbox's callback is ordered-synchronous but on its
   own thread, which holds no GL context. Park the picture, deliver after `DecodeFrame` returns.
 
+## A software decoder backs the hardware one
+
+`virgl_video_dav1d.c` wraps dav1d, and the backend routes to it for two permanent
+reasons, named in the log line because they arrive by different routes:
+
+- **the host has no AV1 silicon** (M1, M2) — the codec switches on its first unit,
+  where the replay is empty because nothing has been decoded yet. AV1 is advertised
+  whenever there is silicon *or* a software decoder, so these hosts gain an AV1
+  path they previously did not have at all;
+- **the stream uses super-resolution** — see below.
+
+Verified on an M1 Max, which has no AV1 decoder: `vainfo` reports
+`VAProfileAV1Profile0 : VAEntrypointVLD` (VP9 only, before), and decoding the
+super-resolution clip in the guest through VA-API against the guest's own
+libdav1d gives 60 frames of 640x360 with **0 differing bytes**.
+
 ## Super-resolution goes to a software decoder
 
 The one AV1 tool this backend does not deliver. VideoToolbox reconstructs

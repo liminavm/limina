@@ -418,10 +418,15 @@ Two independent gates, and only their intersection is reachable:
   *frontend* (`src/gallium/auxiliary/vl/vl_codec.c`) and therefore driver-independent: AV1,
   VP9, MPEG-2, JPEG. H.264 and HEVC are absent whatever the host offers. RPM Fusion's
   `mesa-va-drivers-freeworld`, or our own mesa RPM built `-Dvideo-codecs=all`, restores them.
-- **Host.** VideoToolbox on Apple silicon has no MPEG-2 path at all, and AV1 needs an M3 or
-  later. Measured matrix: `spikes/videotoolbox-caps/RESULTS.md`.
+- **Host.** VideoToolbox on Apple silicon has no MPEG-2 path at all, and AV1 *hardware*
+  decode needs an M3 or later. Measured matrix: `spikes/videotoolbox-caps/RESULTS.md`.
+- **Host, software.** AV1 does not stop at the silicon: the backend carries a dav1d decoder
+  and uses it where VideoToolbox cannot be relied on — on a host with no AV1 silicon at all,
+  and on any super-resolution stream, which AV1-capable silicon decodes correctly but hands
+  back wrong (`docs/design/av1-decode.md`, `docs/radar/videotoolbox-av1-superres.md`).
 
-So VP9 (and MJPEG) everywhere, plus AV1 from M3 on. **Implemented today: VP9 profile 0 decode.**
+So VP9 (and MJPEG) everywhere, plus **AV1 everywhere** — accelerated from M3 on, in software
+below that. **Implemented today: VP9 profile 0 and AV1 main decode.**
 
 ### Traps this path is shaped around
 
