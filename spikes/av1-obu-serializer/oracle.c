@@ -310,6 +310,12 @@ int main(int argc, char **argv)
     printf("rebuilt %u frames into %zu bytes (original clip: %zu)\n\n",
            frames, stream_len, original_size);
 
+    if (getenv("AV1_ORACLE_DUMP")) {
+        FILE *d = fopen(getenv("AV1_ORACLE_DUMP"), "wb");
+        if (d) { fwrite(stream, 1, stream_len, d); fclose(d);
+                 printf("wrote the rebuilt stream to %s\n\n", getenv("AV1_ORACLE_DUMP")); }
+    }
+
     if (decode_stream(original, original_size, &ref, "reference") < 0)
         return 1;
     if (decode_stream(stream, stream_len, &sub, "subject") < 0) {
