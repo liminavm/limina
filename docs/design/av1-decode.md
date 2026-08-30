@@ -169,15 +169,46 @@ whose DPB satisfies the references that follow. So the serializer assigns its ow
 remaps `ref_frame_idx` onto them.
 
 The subtlety: which slot a frame refreshed becomes visible only in the **next** frame's
-`ref[]`, where its surface has appeared. So a slot is chosen immediately — emission cannot
-wait — and its occupant is learned one frame later. That is never too late, because a frame
-cannot reference itself.
+`ref[]`, where its surface has appeared. That is not a detail. Once eight distinct pictures
+are live — which happens in any pyramid GOP — storing a ninth means evicting one, and
+evicting one a later frame still references loses it for good. There is no way to choose
+correctly at the moment the frame arrives.
 
-**Known gap.** A frame whose output the guest does not store in `ref_frame_map` leaves its
-slot looking permanently empty, so the slot is handed out again while the decoder still has
-a picture there. Currently 49 of 60 frames of a real clip rebuild into a stream dav1d
-decodes; the desync at frame 50 is this. The fix is to stop inferring occupancy from a
-`ref[]` diff and track it positively.
+So **hidden frames are held for one submission** and emitted once the following descriptor
+settles the question exactly. Only hidden frames: nothing waits on their pixels until a later
+`show_existing`, whereas holding a shown frame would stall a caller that reads its surface
+back before submitting the next one. Shown frames are emitted at once into a slot nothing
+live occupies — in a pyramid GOP they are never stored at all, and a low-delay stream, where
+they are, never fills eight slots.
+
+What a frame stored is read as a **set difference between consecutive reference maps**, never
+against our own slots and never per-slot. Surface ids are recycled, so a freshly reused id
+reads as one we already hold and teaches nothing; a per-slot diff has the mirror-image flaw,
+missing a frame that lands in a slot whose contents were seen elsewhere. Slots the guest
+stops listing are pruned for the same reason.
+
+All six fixtures now rebuild into streams dav1d decodes bit-identically to the original clip
+(`spikes/av1-obu-serializer/RESULTS.md`).
+
+### What this costs the backend interface
+
+Holding changes the serializer's contract, and the backend has to be built for the new shape:
+
+- `virgl_av1_build_temporal_unit()` writes **zero, one or two temporal units** per submission
+  — nothing when it takes a hidden frame in, two when it emits a held frame ahead of a shown
+  one. Decode order is preserved.
+- `virgl_av1_flush_temporal_unit()` emits whatever is still held, and
+  `virgl_av1_obu_state_fini()` releases the held tile payload.
+- A hidden frame is submitted to the decoder **one guest submission later** than it arrives.
+
+**Open: what triggers the flush in the real backend.** The offline oracle flushes at
+end-of-stream because it knows the stream ended; the decode path has no such signal, and two
+orderings can leave the guest waiting on the pixels of a frame we are still holding with no
+further decode call coming to release it — a `show_existing_frame` that follows its hidden
+frame with no intervening decode, and a stream that simply ends on held frames whose surfaces
+the guest then syncs. Candidate triggers are a sync on a held frame's target surface, and
+codec flush/destroy. This must be settled during integration; unsettled it is a hang, not a
+wrong picture.
 
 ## Traps the serializer itself turned up
 
