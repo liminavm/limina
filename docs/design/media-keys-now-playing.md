@@ -203,6 +203,18 @@ leaving them at their defaults advertises capabilities no evdev key can service.
 - **Nothing sits at `Auto`.** That is the honest reading of the table rather than an oversight:
   the tier exists so the two captures can mean different things, and so per-key config has
   somewhere to put a key that a big window *should* claim.
+
+Measured on a booted guest, with the mechanism read out of the worker log rather than inferred
+from the outcome — the `media:` line is what distinguishes the two delivery paths:
+
+| capture | session | fn+F8 reaches | what the log shows |
+|---|---|---|---|
+| `Auto` (fullscreen) | held | the guest | `taken — the guest gained the screen`, then `macOS routed a command to us` |
+| `Auto` | retired | nothing | no `media:` line, no reaction |
+| `Hard` (Cmd-Ctrl-G) | retired | the guest | no `media:` line — forwarded directly, macOS never saw the press |
+
+The first row is the load-bearing one: same outcome as before the split, opposite mechanism. An
+outcome-only check cannot tell those apart, which is why the round-trip is logged.
 - **`Brightness` and `Other` are untouched.**
 
 **Multiple VMs.** `MPNowPlayingInfoCenter.default()` is process-wide, so one limina.app can
