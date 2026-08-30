@@ -107,3 +107,8 @@ spikes/now-playing-media-keys/nowplaying
 spikes/now-playing-media-keys/nowplaying.dSYM/
 spikes/now-playing-media-keys/NowPlayingProbe.app/
 spikes/now-playing-media-keys/ctl.fifo
+
+# spikes/av1-obu-serializer build artefacts and generated clips
+spikes/av1-obu-serializer/coverage
+spikes/av1-obu-serializer/clips/
+spikes/av1-obu-serializer/capture/
