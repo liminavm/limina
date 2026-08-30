@@ -26,12 +26,19 @@ pixel format           : 420v  352x240
 - **1:1 in, 1:1 out.** Every submitted frame produces exactly one output frame carrying
   real pixels — the luma is read back and checked to vary, since "a buffer came back" is
   not "something decoded".
-- **Synchronous by default.** With decode flags `0` the output callback fires *before*
-  `VTDecompressionSessionDecodeFrame` returns (`arrived after return: 0`). The backend
-  needs no async plumbing and no `WaitForAsynchronousFrames`, and the GL work in the
-  callback runs on the caller's thread — which is the vrend thread. Async requires
-  `kVTDecodeFrame_EnableAsynchronousDecompression`, so simply not passing it is the
-  design.
+- **Synchronous in ORDER, but not on the caller's thread.** With decode flags `0` the
+  output callback always fires *before* `VTDecompressionSessionDecodeFrame` returns
+  (`arrived after return: 0`), so exactly one picture is outstanding per frame and the
+  backend needs no async plumbing and no `WaitForAsynchronousFrames`. It nonetheless runs
+  on one of VideoToolbox's own threads (`callback thread: DIFFERENT from caller`). **Do
+  not do GL work there.** That thread has no EGL context current, so every call is
+  silently dropped — Mesa logs `called without a rendering context`, `glGetError` returns
+  0 because it too is a no-op, and the guest reads an untouched surface. Park the
+  CVPixelBuffer in the callback and use it after `DecodeFrame` returns.
+
+  Ordering is not thread identity: the first version of this spike measured the former and
+  concluded the latter, and the backend built on that reported success while uploading
+  nothing.
 - **VideoToolbox owns the DPB.** Nothing here tells it about reference frames, and inter
   frames decode correctly regardless. The whole `desc->ref[16]` apparatus the VA-API
   backend has to maintain is dead weight on this path — feed frames in decode order and

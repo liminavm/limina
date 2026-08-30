@@ -391,6 +391,62 @@ Guest-side, the enhanced kernel advertises **no** format modifiers on the KMS si
 (`DRM_CAP_ADDFB2_MODIFIERS = 0`, primary plane `XR24` only, cursor `AR24`) — that is deliberate,
 post-r9, and unrelated to the Vulkan extension above.
 
+## 4.5 Hardware video decode: VA-API over virgl, VideoToolbox on the host
+
+A **stock** Fedora guest hardware-decodes VP9 with nothing of ours installed. The guest half
+already ships: `mesa-dri-drivers` contains `/usr/lib64/dri/virtio_gpu_drv_video.so` (mesa
+builds it from `src/gallium/targets/va` whenever `virgl` is in `gallium-drivers`), and libva
+selects a driver by DRM driver name — `virtio_gpu`. It talks VA-API over the **virgl command
+stream** (`VIRGL_CCMD_*_VIDEO`), so video rides vrend and is independent of which tier the
+guest's 3D is on.
+
+The host half is ours: upstream virglrenderer implements its codec backend only against libva,
+so `src/vrend/virgl_video_vt.c` in our fork implements the same `virgl_video.h` interface
+against VideoToolbox. `src/meson.build` picks one backend by host OS; they are never built
+together. Enabled by `-Dvideo=true` (`scripts/build-virglrenderer.sh`) plus
+`VIRGLRENDERER_USE_VIDEO` in the worker's virgl flags.
+
+**Nothing gates it.** Caps are negotiated: a Mac with no silicon for a codec advertises none,
+the guest's `virgl_get_video_param()` finds no matching entry, and the application falls back
+to software. The driver still loads and initialises either way.
+
+### What a stock guest can actually get
+
+Two independent gates, and only their intersection is reachable:
+
+- **Guest.** Fedora builds mesa with the default `-Dvideo-codecs=all_free`, enforced in the VA
+  *frontend* (`src/gallium/auxiliary/vl/vl_codec.c`) and therefore driver-independent: AV1,
+  VP9, MPEG-2, JPEG. H.264 and HEVC are absent whatever the host offers. RPM Fusion's
+  `mesa-va-drivers-freeworld`, or our own mesa RPM built `-Dvideo-codecs=all`, restores them.
+- **Host.** VideoToolbox on Apple silicon has no MPEG-2 path at all, and AV1 needs an M3 or
+  later. Measured matrix: `spikes/videotoolbox-caps/RESULTS.md`.
+
+So VP9 (and MJPEG) everywhere, plus AV1 from M3 on. **Implemented today: VP9 profile 0 decode.**
+
+### Traps this path is shaped around
+
+- **The profile enum travels raw.** `virgl_video_caps.profile` and every picture descriptor
+  carry the numeric value of mesa's `pipe_video_profile`, and virglrenderer's vendored copy of
+  that header must match the guest's. It had drifted, putting VP9_PROFILE0 on mesa's
+  JPEG_BASELINE — a host advertising VP9 made the guest publish a `vajpegdec`. Nothing fails
+  to build when this goes stale.
+- **VideoToolbox's decode callback is ordered-synchronous but on its own thread**, which holds
+  no EGL context. GL issued from it is dropped silently and the guest reads a cleared surface.
+  Park the picture; deliver it after `DecodeFrame` returns.
+- **Decode into the layout the guest allocated.** ffmpeg's VA-API path allocates I420 (three
+  planes) decode targets while asking for NV12 elsewhere; VideoToolbox produces either, so ask
+  it for the target's own layout instead of converting.
+- **`ffmpeg -hwaccel vaapi ... -vf hwdownload` still reads a stale surface.** mesa's guest
+  `virgl_video.c` never calls `virgl_resource_dirty()` on a decode target, unlike every other
+  host-writes-here path in that driver, so no `TRANSFER_FROM_HOST` is issued and the
+  application gets the cleared copy it allocated. Consumers that sample the planes instead —
+  GStreamer's `vavp9dec` — see the real pixels. The gap is guest-side and upstream's; fixing
+  it there would make hardware decode need a patched mesa, i.e. enhanced-tier only.
+
+Verification: `cargo nextest run -p limina-test -E 'test(stock_guest_hardware_decodes_vp9)'`.
+VP9 is a normatively exact codec, so the test asserts the hardware decode is **byte-identical**
+to a software one, plus that the frame is not uniform.
+
 ## 5. Host GPU-memory budget
 
 Host memory allocated on the guest's behalf is invisible to the guest, so a guest-side leak ends
