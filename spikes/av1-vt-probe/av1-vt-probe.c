@@ -133,6 +133,7 @@ struct decode_stats {
     int planes;
     pthread_t cb_thread;
     size_t last_w, last_h;
+    FILE *dump;   /* optional: every picture's luma plane, for an external diff */
 };
 
 static void output_callback(void *decompression_output_ref_con, void *source_frame_ref_con,
@@ -181,6 +182,14 @@ static void output_callback(void *decompression_output_ref_con, void *source_fra
                     break;
                 }
     }
+    /* Film grain is normative in AV1 but OPTIONAL to apply, and the protocol wants
+     * both a grain-free reference and a grain-applied picture. Which one VideoToolbox
+     * hands back is not something to reason about -- dump the luma and diff it
+     * against dav1d with grain applied and with grain off. */
+    if (st->dump && y) {
+        for (size_t row = 0; row < h; row++)
+            fwrite(y + row * stride, 1, w, st->dump);
+    }
     CVPixelBufferUnlockBaseAddress(image_buffer, kCVPixelBufferLock_ReadOnly);
     if (varies)
         st->nonzero++;
@@ -213,7 +222,7 @@ static uint8_t *slurp(const char *path, size_t *size)
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <stream.obu> <av1C.bin>\n", argv[0]);
+        fprintf(stderr, "usage: %s <stream.obu> <av1C.bin> [luma-dump.gray]\n", argv[0]);
         return 2;
     }
 
@@ -260,6 +269,14 @@ int main(int argc, char **argv)
     }
 
     struct decode_stats stats = {0};
+    if (argc > 3) {
+        stats.dump = fopen(argv[3], "wb");
+        if (!stats.dump) {
+            perror(argv[3]);
+            return 1;
+        }
+        printf("dumping luma planes to %s\n", argv[3]);
+    }
     VTDecompressionOutputCallbackRecord cb = {output_callback, &stats};
     CFMutableDictionaryRef pixel_attrs = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
@@ -348,6 +365,8 @@ int main(int argc, char **argv)
     else
         printf("  -> NOT 1:1 in either unit; the backend owes a reorder buffer.\n");
 
+    if (stats.dump)
+        fclose(stats.dump);
     VTDecompressionSessionInvalidate(session);
     CFRelease(session);
     CFRelease(fmt);
