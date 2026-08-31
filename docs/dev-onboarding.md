@@ -94,7 +94,7 @@ sandbox-disabled execution (it hits `hv_vm_*`).
 
 ```sh
 cargo xtask app        # full self-contained target/Limina.app (the shipping deliverable)
-cargo xtask bundle     # minimal Limina.app that boots the L1 guest (launch-path smoke test)
+cargo xtask bundle     # minimal Limina-smoke.app that boots the L1 guest (launch-path smoke test)
 ```
 
 `app` (= `scripts/build-app.sh`) vendors the whole host venus/GL dylib closure into the
@@ -102,6 +102,11 @@ bundle, relocated to `@rpath`, and signs with the Apple-Development identity whe
 the keychain (keeps TCC grants stable across redeploys). The dogfood deliverable is
 `target/Limina.app` copied to the *other* Mac — never installed into `/Applications` on the
 dev Mac.
+
+`bundle` writes a **different** path on purpose. It is debug-by-default and ad-hoc signed, so
+it cannot carry TCC grants (Accessibility is pinned to a CDHash); at `target/Limina.app` it
+would be indistinguishable from the deliverable. Anything a human is meant to run — poking a
+change, a dogfood drop — comes from `app`.
 
 ## Where things are
 

@@ -116,7 +116,7 @@ enum Cmd {
         #[arg(long)]
         debug: bool,
     },
-    /// Build + assemble + codesign a minimal `target/Limina.app` (launch-path smoke test).
+    /// Build + assemble + codesign a minimal `target/Limina-smoke.app` (launch-path smoke test).
     Bundle {
         /// Build in release mode.
         #[arg(long)]
@@ -481,8 +481,13 @@ fn bundle(release: bool, open: bool) -> Result<()> {
         bash_script(&repo, "scripts/build-test-guest.sh", &[] as &[&str])?;
     }
 
-    // 3. Assemble Limina.app/Contents/{MacOS,Info.plist}.
-    let app = target.join("Limina.app");
+    // 3. Assemble Limina-smoke.app/Contents/{MacOS,Info.plist}. Deliberately NOT
+    //    target/Limina.app: this bundle is debug-by-default and ad-hoc signed, and ad-hoc
+    //    pins TCC's grants to a CDHash (Accessibility dies, CGEventTap returns NULL). At the
+    //    deliverable's own path it would be indistinguishable from `xtask app`'s output, so
+    //    "run it from target/Limina.app" would mean two different things depending on which
+    //    command ran last.
+    let app = target.join("Limina-smoke.app");
     let macos = app.join("Contents/MacOS");
     if app.exists() {
         std::fs::remove_dir_all(&app).with_context(|| format!("rm {app:?}"))?;

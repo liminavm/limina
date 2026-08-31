@@ -2233,3 +2233,32 @@ mysterious "the video looks wrong" report than as a decode failure — hence the
 loud `virgl_error` and the fallback to software rather than a quiet drop. Worth an
 Apple Radar: the decoder is right and only the output copy is wrong, which is a
 small fix on their side.
+
+## `xtask bundle` and `xtask app` should be one command
+
+`bundle` was the fast path when `app` looked expensive. It isn't: measured 2026-08-31, `app`'s
+whole assemble + sign-13-dylibs + package-the-dmg phase is **25 s**; everything else in it is the
+cargo build, and `cargo xtask app --debug` buys that back. Every other reason to keep a second
+command has also evaporated — `build-app.sh` already takes `LIMINA_ALLOW_ADHOC=1` /
+`LIMINA_SIGN_IDENTITY=-` for a machine with no signing identity, and `LIMINA_NO_TIMESTAMP=1` for
+one with no network.
+
+What is actually left in `bundle` that `app` cannot do:
+
+- `--open`, which launches through LaunchServices booting the L1 `limina.hold` guest (and builds
+  the test guest first if it is missing). That is the Dock-launch path, where launchd's 256-fd
+  limit lived — worth keeping as a capability, cheap as a flag on `app`.
+- No `/Volumes/mesa-cs` dependency: `app` sources the KK/zink dylib closure off the sparse image.
+  Whether that matters depends on whether anyone smoke-tests the launch path without it mounted.
+
+The fix is to fold `--open` into `app` and delete `bundle`. The blast radius is two lines of
+prose (`docs/dev-onboarding.md`, `CLAUDE.md`); nothing in `scripts/`, `crates/`, or the test
+harness invokes it.
+
+The sharp edge was retargeted on 2026-08-31 as the cheap half: `bundle` writes
+`target/Limina-smoke.app` now, because it used to `remove_dir_all` `target/Limina.app` and
+replace the deliverable with a debug, ad-hoc-signed build. Ad-hoc pins TCC's grants to a CDHash,
+so Accessibility silently dies there (`limina-tcc-adhoc-accessibility`) — and "run it from
+`target/Limina.app`" meant two different things depending on which command ran last, with nothing
+at the path to say which. `docs/design/m9-suspend-resume.md` records the same failure family
+reaching the dogfood Mac twice through a profile mixup.
