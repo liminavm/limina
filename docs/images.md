@@ -83,7 +83,7 @@ release's stock GNOME Shell (same `libmutter-NN` ABI).
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r17.tar.zst`** (r17, 2026-08-31: kernel
+**Current payload: `payload/limina-guest-tools-f44-r17.tar.zst`** (r17, 2026-08-30: kernel
 `limina-kernel-16k-7.1.8-4` unchanged, mesa `26.1.7-4.limina` — virgl no longer offers
 three-plane 4:2:0 (YV12/IYUV) as a decode target. ffmpeg picks a VA surface format by exact
 match against `sw_pix_fmt`, so I420 and YV12 both outscored NV12 and the last advertised won;
