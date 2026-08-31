@@ -6,34 +6,37 @@ serializer — `third_party/virglrenderer/src/vrend/virgl_video_h264_ps.c` — a
 because a malformed parameter set does not announce itself: VideoToolbox either rejects the
 format description outright, or accepts it and decodes subtly wrong.
 
-## The test
+## The method
 
-`ref.264` is a 640×480 60-frame **High profile** clip (x264, `-bf 2`), so it exercises CABAC,
-B-frames, weighted prediction and the 8×8 transform rather than a trivial baseline path.
-Its own SPS/PPS field values were read with `ffmpeg -bsf:v trace_headers` and hand-entered
-into `synth.c` as the values mesa would put on the wire — the serializer never sees the
-original bytes.
-
-Then, the substitution:
+`./verify.sh <clip.264> <width> <height>` reads a stream's **own** SPS/PPS field values with
+`ffmpeg -bsf:v trace_headers`, feeds only those to the serializer, splices the synthesized
+sets in place of the stream's real ones, and decodes both:
 
 ```
-ffmpeg -i ref.264 -c copy -bsf:v "filter_units=remove_types=7|8" slices.264   # strip SPS/PPS
-cat ps.bin slices.264 > ours.264                                             # ours instead
+ffmpeg -i clip.264 -c copy -bsf:v "filter_units=remove_types=7|8" slices.264   # strip SPS/PPS
+cat ps.bin slices.264 > ours.264                                              # ours instead
 ```
 
-## Result
+H.264 is normatively exact, so `framemd5` agreement is a verdict rather than a smell test.
 
-```
-sps 10 bytes, pps 6 bytes
-ref frames: 60  ours frames: 60
-IDENTICAL — every frame bit-exact
-```
+**What is deliberately not handed over** is the point of the whole exercise:
+`pic_width_in_mbs_minus1`, `pic_height_in_map_units_minus1` and every `frame_crop_*` value.
+The serializer derives those from the display size; passing them in would test nothing.
 
-`framemd5` agrees on all 60 frames. Since H.264 is normatively exact, that is a real verdict
-and not a smell test: our synthesized parameter sets configure the decoder identically to the
-encoder's own.
+## Results — all bit-exact
 
-`check.c` covers the other two entry points against the same stream:
+| stream | encoder | exercises | frames |
+| --- | --- | --- | --- |
+| `ref.264` 640×480 | x264 High | CABAC, B-frames, weighted prediction, 8×8 transform | 60 ✓ |
+| `vt1080.264` 1920×1080 | **VideoToolbox hardware** | **cropping** (1080 → 68 MB rows, crop 4), a second encoder | 30 ✓ |
+| `base480.264` 640×480 | x264 Baseline | **`profile_idc` 66 → the chroma block must be absent**, `pic_order_cnt_type` 2, CABAC off | 30 ✓ |
+| `main854.264` 854×482 | x264 Main | cropping on **both** axes (crop right 5, bottom 7) | 30 ✓ |
+
+The last three are what a single x264 High clip could never have covered. Using the M1's own
+hardware encoder for one of them matters beyond convenience: it is a genuinely independent
+SPS writer, so agreeing with it is not agreeing with x264's conventions.
+
+`check.c` covers the other two entry points:
 
 ```
 slice pic_parameter_set_id = 0        # parsed back out of the first slice header
@@ -41,32 +44,42 @@ annexb 22882 -> avcc 22885, 65 NALs, exact fit
 undersized output refused
 ```
 
-The Annex-B → AVCC walk verifies every 4-byte length lands exactly on the next NAL, and that
-a one-byte-short output buffer is refused rather than truncated.
+## The harness bug worth remembering
+
+The first matrix run reported two of four streams failing, with `ref.264` — which had passed
+minutes earlier with hand-entered values — among them. The serializer was fine. `synth.c`
+had `MAX_KEYS 64` and **silently skipped** every key past the limit; the SPS and its VUI use
+~45, so the PPS keys were dropped and `get()` returned defaults. The synthesized PPS shrank
+from 6 bytes to 4 and decoding diverged.
+
+A truncating loader in the *test* is indistinguishable from a broken serializer, and the
+instinct was to go looking in the serializer. The tell was that a previously passing case
+regressed when only the harness had changed. The limit is now loud (`exit(1)`), which is what
+it should have been from the start: a test fixture that silently discards its input can only
+ever produce false verdicts.
 
 ## What this does not cover
 
-- **Custom scaling matrices.** The serializer refuses them today. The wire lists come from
-  VA-API's `VAIQMatrixBufferH264` and this spike has not established which scan order those
-  are in; emitting them wrongly decodes with subtly wrong dequantization and looks like a
-  driver bug elsewhere. Refusing is loud, guessing is not. Extending the spike with a
-  `--tune` encode that produces a non-flat matrix is what would settle it.
+- **Custom scaling matrices.** The serializer refuses them. The wire lists come from VA-API's
+  `VAIQMatrixBufferH264` and this spike has not established which scan order those are in;
+  emitting them wrongly decodes with subtly wrong dequantization and looks like a driver bug
+  elsewhere. Refusing is loud, guessing is not.
 - **Interlaced, 4:2:2/4:4:4, >8-bit** — all refused by the serializer, none tested.
+- **`pic_order_cnt_type == 1`**, which no encoder here emits by default. Types 0 and 2 are
+  covered.
 - **HEVC**, which additionally needs a VPS synthesized from nothing.
-- The clip is one encoder's output. x264 is representative but not exhaustive; a hardware
-  encoder's SPS (different `pic_order_cnt_type`, cropping, `pic_order_cnt_type == 1`) would
-  widen the coverage cheaply.
 
 ## Reproducing
 
 ```
 cc -O1 -Wall -Wextra -I shim -I <virgl>/src/vrend -I <virgl>/src -I <virgl>/src/gallium/include \
    synth.c <virgl>/src/vrend/virgl_video_h264_ps.c -o synth
-./synth ps.bin && ffmpeg -v error -i ref.264 -c copy -bsf:v "filter_units=remove_types=7|8" -f h264 -y slices.264
-cat ps.bin slices.264 > ours.264
-ffmpeg -v error -i ref.264 -f framemd5 -y ref.md5 && ffmpeg -v error -i ours.264 -f framemd5 -y ours.md5
-diff ref.md5 ours.md5
+./verify.sh ref.264 640 480
+./verify.sh vt1080.264 1920 1080
+./verify.sh base480.264 640 480
+./verify.sh main854.264 854 482
 ```
 
 `shim/virgl_util.h` stands in for the real header, which pulls in meson-generated config the
-serializer does not need.
+serializer does not need. The clips regenerate with the `ffmpeg -f lavfi -i testsrc` lines in
+this file's history; `vt1080.264` needs `-c:v h264_videotoolbox`.
