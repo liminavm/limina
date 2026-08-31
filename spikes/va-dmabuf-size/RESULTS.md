@@ -109,6 +109,40 @@ That makes this architectural rather than a sizing bug. Zero-copy needs the deco
 allocated as host-mappable blob resources (`VIRTGPU_BLOB_MEM_HOST3D`, which the winsys already
 knows how to create for other paths) so the exported fd names real, mappable memory.
 
+## Why the stub is one page, and why only video can hit it
+
+`virgl_resource_create_front` picks the guest BO size three ways
+(`drivers/virgl/virgl_resource.c`):
+
+```c
+res->use_staging = virgl_can_copy_transfer_from_host(vs, res, vbind);
+
+if (res->use_staging)
+   alloc_size = 1;                                   /* -> one page */
+else if (templ->bind & PIPE_BIND_SHARED)
+   alloc_size = virgl_resource_shared_tex_size(res); /* layout at a 256-aligned stride */
+else
+   alloc_size = res->metadata.total_size;
+```
+
+The 4096 is `alloc_size = 1` rounded up to a page. And `virgl_can_copy_transfer_from_host`
+begins `... && !(bind & VIRGL_BIND_SHARED)`, so **a resource created for sharing can never
+take that branch**. It takes the middle one, whose size is the layout recomputed at a stride
+aligned *up* to 256 — never smaller than `metadata.total_size`, which is what the export guard
+compares against.
+
+That bounds the guard exactly: it can only fire on a resource created *without*
+`PIPE_BIND_SHARED` that something exports as an fd anyway. Video decode targets are precisely
+that case — `drivers/virgl/virgl_video.c` allocates them unshared and
+`vlVaExportSurfaceHandle` exports them regardless. Wayland client buffers, EGL images and
+mutter's scanout buffers all carry `PIPE_BIND_SHARED` and are provably untouched.
+
+`virgl_resource_shared_tex_size`'s own comment says why that middle branch exists: *"Size of a
+shared buffer is validated by WSI. WSI retrieves BO size from resource's dmabuf with
+lseek()."* mesa already enforces this invariant for every buffer it knows will be shared. The
+guard is the same invariant, applied on the one path that exports a buffer mesa never expected
+to be shared.
+
 ## What was done, and what is still owed
 
 **Refuse the export.** `virgl_resource_get_handle` now returns false for an FD export whose

@@ -2310,6 +2310,12 @@ Two things to know before starting:
   now fall back to, so measure before assuming the blob work pays for itself.
 - **The refusal is load-bearing until then**, and removing it reintroduces a SIGBUS rather
   than a slow path. Keep the spike as its regression test: it needs no codec and no decoding.
+- **The refusal cannot reach anything but video.** `virgl_can_copy_transfer_from_host` — the
+  predicate that shrinks a resource's guest BO to one page — excludes `VIRGL_BIND_SHARED`, so
+  every resource created for sharing is sized from its own layout instead and can never be
+  short. Wayland client buffers, EGL images and mutter's scanout buffers are all in that class.
+  Only an unshared resource that something exports anyway can refuse, which is the decode
+  target and nothing else. Derivation in `spikes/va-dmabuf-size/RESULTS.md`.
 
 Upstreaming the refusal is what eventually fixes the stock tier — we do not ship patched mesa
 there, so stock stays broken until Fedora carries it.
