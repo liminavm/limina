@@ -50,14 +50,26 @@ pub fn rotate(p: &Path, generations: u32) {
 /// [`rotate`], with the per-generation byte cap spelled out (tests pass a small one).
 pub fn rotate_capped(p: &Path, generations: u32, cap: u64) {
     for n in (1..generations).rev() {
-        let _ = std::fs::rename(generation(p, n), generation(p, n + 1));
+        shift(&generation(p, n), &generation(p, n + 1), cap);
     }
-    if !p.exists() {
+    shift(p, &generation(p, 1), cap);
+}
+
+/// Move `from` to `to`, trimming to the last `cap` bytes if it is larger.
+///
+/// Every step of the shift goes through here, not just the live file. Capping only the first
+/// move left an already-oversized generation to ride along untouched for as many rotations as it
+/// took to age out — which is how 7.2 GB of superseded log was still on the dogfood Mac after
+/// the cap shipped.
+fn shift(from: &Path, to: &Path, cap: u64) {
+    if !from.exists() {
         return;
     }
-    let oversized = std::fs::metadata(p).map(|m| m.len() > cap).unwrap_or(false);
-    if !oversized || keep_tail(p, &generation(p, 1), cap).is_err() {
-        let _ = std::fs::rename(p, generation(p, 1));
+    let oversized = std::fs::metadata(from)
+        .map(|m| m.len() > cap)
+        .unwrap_or(false);
+    if !oversized || keep_tail(from, to, cap).is_err() {
+        let _ = std::fs::rename(from, to);
     }
 }
 
@@ -167,6 +179,49 @@ mod tests {
             &body[..20]
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An oversized file that is ALREADY a generation gets trimmed too. Capping only the live
+    /// file let one ride along untouched until it aged out, which left 7.2 GB on the dogfood
+    /// Mac after the cap had shipped.
+    #[test]
+    fn an_older_generation_is_capped_when_it_shifts() {
+        let dir = std::env::temp_dir().join(format!("limina-logrot-shift-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let live = dir.join("supervisor.log");
+        let cap = 1024u64;
+
+        // A fat .1 already on disk, as if written before the cap existed.
+        let mut fat = String::new();
+        for i in 0..2000 {
+            fat.push_str(&format!("old {i} padding padding padding padding\n"));
+        }
+        std::fs::write(dir.join("supervisor.1.log"), &fat).unwrap();
+        std::fs::write(&live, "new run\n").unwrap();
+
+        rotate_capped(&live, GENERATIONS, cap);
+
+        let shifted = std::fs::read_to_string(dir.join("supervisor.2.log")).unwrap();
+        assert!(
+            (shifted.len() as u64) < fat.len() as u64,
+            "the fat generation must be trimmed as it shifts, got {} bytes",
+            shifted.len()
+        );
+        assert!(shifted.contains("old 1999 "), "its tail is what survives");
+        assert!(
+            shifted
+                .lines()
+                .next()
+                .unwrap()
+                .contains("earlier bytes dropped"),
+            "and it says so"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("supervisor.1.log")).unwrap(),
+            "new run\n"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
