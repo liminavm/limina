@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Wed, 5 Aug 2026 18:54:24 -0300
-Subject: [PATCH 02/11] venus/wsi: drop the 16-bit-unorm wayland swapchain
+Subject: [PATCH 02/12] venus/wsi: drop the 16-bit-unorm wayland swapchain
  format
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

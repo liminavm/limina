@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Mon, 31 Aug 2026 13:39:51 -0300
+Subject: [PATCH 12/12] virgl: do not export a dmabuf smaller than the image it
+ describes
+
+A virgl resource whose storage lives on the host has a guest BO that is only a stub, so
+drmPrimeHandleToFD returns an fd naming 4096 bytes -- at 320x240 and at 3840x2160 alike --
+for a surface whose own layer geometry addresses megabytes. Nothing in the descriptor
+contradicts it: VADRMPRIMESurfaceDescriptor reports the geometry, which is right, and an
+object size the winsys never filled in, which reads as 0. Three numbers for one buffer and
+none of them agree.
+
+A consumer that trusts the geometry, maps the fd and copies the frame out walks off the end
+of the first page. GStreamer's dmabuf uploader does exactly that whenever no direct
+dmabuf-to-texture import is available, which is the case here, so GNOME Videos renders a
+black window and a bare vaXXXdec ! glimagesink dies with SIGBUS in memcpy. All three
+hardware-decoded codecs fail identically, and stock Fedora mesa reproduces it byte for byte,
+so this is not specific to a codec, a page size, or a downstream tree.
+
+Refuse the export instead. The caller then negotiates system memory, which costs a copy per
+frame and works. Exporting host-backed decode targets for real requires them to be
+host-mappable blobs; that is worth doing and is a much larger change.
+
+The predicate is the one virgl_resource_from_handle already uses to decide a resource needs
+staging -- the laid-out size exceeds the guest storage behind it -- so this refuses exactly
+the resources mesa already knows have no guest memory holding their pixels. Only a definite,
+too-small size refuses; an unknown (0) size on either side keeps the previous behaviour rather
+than breaking exports this cannot reason about. whandle->size is now filled in as well, so the
+size a consumer reads describes the memory it was actually handed.
+
+Repro: spikes/va-dmabuf-size in the limina tree, which needs no codec and no decoding.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ src/gallium/drivers/virgl/virgl_resource.c    | 29 +++++++++++++++++++
+ .../winsys/virgl/drm/virgl_drm_winsys.c       |  3 ++
+ 2 files changed, 32 insertions(+)
+
+diff --git a/src/gallium/drivers/virgl/virgl_resource.c b/src/gallium/drivers/virgl/virgl_resource.c
+index 9a163ff9c73..fe66c812c70 100644
+--- a/src/gallium/drivers/virgl/virgl_resource.c
++++ b/src/gallium/drivers/virgl/virgl_resource.c
+@@ -1104,6 +1104,35 @@ bool virgl_resource_get_handle(struct pipe_screen *screen,
+    else
+       stride = res->metadata.stride[0];
+ 
++   /*
++    * Never hand out a dmabuf smaller than the image it claims to describe.
++    *
++    * A virgl resource whose storage lives on the host has a guest BO that is only a stub --
++    * one page, whatever the resolution -- so drmPrimeHandleToFD below happily returns an fd
++    * naming 4096 bytes for a multi-megabyte surface. Nothing in the descriptor says so:
++    * VADRMPRIMESurfaceDescriptor reports the layer geometry, which is correct, and an object
++    * size the winsys never fills in, which reads as 0. A consumer that trusts the geometry,
++    * maps the fd and copies the frame out -- GStreamer's dmabuf uploader does exactly that
++    * whenever no direct dmabuf-to-texture import is available -- walks off the end of the
++    * first page and dies with SIGBUS.
++    *
++    * Refusing the export is the honest answer: the caller then negotiates system memory,
++    * which costs a copy per frame and works. Exporting host-backed decode targets for real
++    * requires them to be host-mappable blobs, which is a larger change.
++    *
++    * The predicate is the one virgl_resource_from_handle already uses to decide a resource
++    * needs staging: the laid-out size exceeds the guest storage behind it. A resource in that
++    * state has no guest memory holding its pixels, so there is nothing an fd can usefully
++    * name. Only a definite, too-small size refuses -- an unknown (0) size on either side keeps
++    * the previous behaviour rather than breaking exports this cannot reason about.
++    */
++   if (whandle->type == WINSYS_HANDLE_TYPE_FD && vs->vws->resource_get_storage_size) {
++      uint32_t storage = vs->vws->resource_get_storage_size(vs->vws, res->hw_res);
++
++      if (storage && res->metadata.total_size && res->metadata.total_size > storage)
++         return false;
++   }
++
+    return vs->vws->resource_get_handle(vs->vws, res->hw_res, stride, whandle);
+ }
+ 
+diff --git a/src/gallium/winsys/virgl/drm/virgl_drm_winsys.c b/src/gallium/winsys/virgl/drm/virgl_drm_winsys.c
+index 89fce3bebcf..5b5f6e58f4a 100644
+--- a/src/gallium/winsys/virgl/drm/virgl_drm_winsys.c
++++ b/src/gallium/winsys/virgl/drm/virgl_drm_winsys.c
+@@ -703,6 +703,9 @@ static bool virgl_drm_winsys_resource_get_handle(struct virgl_winsys *qws,
+    p_atomic_set(&res->external, true);
+ 
+    whandle->stride = stride;
++   /* VADRMPRIMESurfaceDescriptor.objects[].size is copied straight from here, and left at 0
++    * it tells a consumer nothing about how much memory the fd actually names. */
++   whandle->size = res->size;
+    return true;
+ }
+ 
