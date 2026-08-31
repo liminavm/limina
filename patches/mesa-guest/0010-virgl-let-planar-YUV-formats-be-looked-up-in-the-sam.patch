@@ -9,15 +9,16 @@ channels, so util_format_get_first_non_void_channel returns -1 and
 virgl_is_format_supported rejects NV12/I420/NV21/YV12 before it ever
 consults the host's capabilities.
 
-The gallium frontend reads that as "no native YUV sampling" and imports
-each plane as its own pipe_resource. Every plane of a single-fd dma-buf
-shares one virtio-gpu resource handle, and a sampler view carries only a
-format -- so I420's two chroma planes, identical in format and in size,
-are indistinguishable on the wire. That layout cannot be made to work;
-the native path, one resource and one view in the composite format, can.
+The gallium frontend reads that as "no native YUV sampling" and lowers the
+surface, importing each plane as its own pipe_resource in a component format.
+That path does work: the sampler view carries a plane index beside the format,
+which is what tells two chroma planes of identical format and size apart. But
+the composite path is the better one -- a single resource and a single view in
+the composite format, and no dependence on a plane index that a host can only
+act on where it has a per-plane image to select with.
 
-Ask the sampler bitmask instead, so a host that does advertise these
-formats gets used.
+Ask the sampler bitmask instead, so a host that does advertise these formats
+gets used. virglrenderer advertises them sampler-only for exactly this purpose.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
