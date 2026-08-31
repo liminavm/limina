@@ -95,7 +95,18 @@ GUEST
   # The verification that matters. An installed freeworld package proves nothing on its own:
   # libva picks a driver by searching its path list, and only the one it actually OPENS decides
   # which codecs the guest can see. vainfo names the file it opened.
-  local drv ok=1
+  #
+  # vainfo lives in libva-utils, which a stock Workstation does NOT ship — so this check used to
+  # read an empty string and report "could not tell", on an install that had in fact worked. Pull
+  # it in for the probe and take it back out again, so the compatibility-floor image is left
+  # exactly as stock as it was found: a tool we leave behind is drift, and the next reader cannot
+  # tell our leftovers from the distro's.
+  local drv ok=1 borrowed_vainfo=
+  if ! ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1" 'command -v vainfo >/dev/null'; then
+    ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1" \
+        'sudo dnf install -y libva-utils >/dev/null 2>&1' || true
+    borrowed_vainfo=1
+  fi
   drv="$(ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1" \
         'vainfo 2>&1 | sed -nE "s#.*Trying to open (/usr/lib64/dri[^ ]*virtio_gpu_drv_video\.so).*#\1#p" | tail -1' || true)"
   case "$drv" in
@@ -107,6 +118,9 @@ GUEST
   # that is expected — the guest-side gate is what this script removes.
   ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1" \
     'vainfo 2>/dev/null | grep -E "VAProfile.*VLD" | sed "s/^/   /"' || true
+
+  [ -z "$borrowed_vainfo" ] || ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1" \
+    'sudo dnf remove -y libva-utils >/dev/null 2>&1' || true
 
   ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1" 'sudo systemctl poweroff' || true
   wait "$boot" || true

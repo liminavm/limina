@@ -54,6 +54,7 @@ guest with `rpm -q`. Last verified in a booted F44 enhanced guest 2026-08-31, an
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F44 stock** (`*.raw`, `*.boot.raw`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
+| **F44 stock + freeworld VA** (`accessible`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.1.8-1.fc44` + `mesa-va-drivers-freeworld-26.1.8-1.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.8-5.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
 | **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.9-1` (running `7.1.9-limina16k`) | 16 KiB | `26.1.8-5.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
@@ -77,6 +78,24 @@ Two facts the table cannot show:
 Enhanced **mesa + kernel** are pinned to our version and `dnf versionlock`ed. Enhanced mutter,
 where it still exists, is the target distro's mutter SRPM rebuilt with our patches over that
 release's stock GNOME Shell (same `libmutter-NN` ABI).
+
+### Hardware decode on the stock tier
+
+Fedora builds mesa `-Dvideo-codecs=all_free`, and the VA frontend refuses H.264/HEVC in
+`vl_codec.c` *before* the driver is consulted — so no host advertisement can reach a stock guest.
+RPM Fusion's `mesa-va-drivers-freeworld` is the route a real Fedora user takes, and libva already
+probes `/usr/lib64/dri-freeworld/` ahead of `/usr/lib64/dri/`. `scripts/provision/install-freeworld-va.sh
+<image>...` installs it in place (CoW backup, boot, install, verify, poweroff).
+
+Applied 2026-08-31 to `Fedora-Workstation-44.accessible.raw` and
+`Fedora-Workstation-44.stock.test.raw`; verified on both that libva opens
+`/usr/lib64/dri-freeworld/virtio_gpu_drv_video.so` and that H.264 Constrained-Baseline/Main/High,
+HEVC Main and VP9 Profile 0 are advertised as `VAEntrypointVLD`.
+
+**It drags stock mesa forward as a side effect.** freeworld is built against the current Fedora
+mesa, so installing it upgraded these two images from `26.0.3-4.fc44` to `26.1.8-1.fc44`. They are
+therefore no longer byte-identical to a fresh Workstation install — which matters when one of them
+is standing in as the compatibility floor.
 
 ## Delivery
 
